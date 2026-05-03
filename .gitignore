@@ -1,0 +1,16 @@
+# Inner repos own their own history — don't double-track them
+apps/*/.git/
+apps/*/.git
+apps/*/node_modules/
+apps/*/.next/
+apps/*/.next
+apps/*/dist/
+apps/*/coverage/
+apps/*/.turbo/
+apps/server/data/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.log
