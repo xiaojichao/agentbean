@@ -42,28 +42,26 @@ Outer repo `/Users/shaw/AgentBean/` keeps `docs/` and a `.gitignore` that exclud
     │   │   ├── page.tsx                    (redirect → /agents)
     │   │   ├── agents/
     │   │   │   ├── page.tsx                [M1-7]
-    │   │   │   └── [agentId]/page.tsx      [M3-3]
+    │   │   │   └── [agentId]/page.tsx      [M3-4]
     │   │   ├── channels/
     │   │   │   ├── page.tsx                [M2-7]
-    │   │   │   └── [channelId]/page.tsx    [M2-7, M2-9]
+    │   │   │   └── [channelId]/page.tsx    [M2-7]
     │   │   └── api/
     │   ├── components/
     │   │   ├── sidebar.tsx                 [M0-6]
     │   │   ├── agent-card.tsx              [M1-7]
     │   │   ├── agent-status-badge.tsx      [M1-7]
-    │   │   ├── connect-command.tsx         [M3-3]
-    │   │   ├── new-channel-dialog.tsx      [M2-7]
-    │   │   ├── channel-message.tsx         [M2-9]
-    │   │   ├── channel-input.tsx           [M2-9]
-    │   │   └── connection-banner.tsx       [M0-6]
+    │   │   ├── new-channel-dialog.tsx      [M2-6]
+    │   │   ├── channel-message.tsx         [M2-7, polish M3-5]
+    │   │   ├── channel-input.tsx           [M2-7]
+    │   │   └── connection-banner.tsx       [M0-6, wired M3-5]
     │   ├── lib/
     │   │   ├── socket.ts                   [M1-6]
-    │   │   ├── store.ts                    [M1-6, M2-9]
+    │   │   ├── store.ts                    [M1-6, M2-6, selector M3-4]
     │   │   ├── format-time.ts              [M1-7]
-    │   │   └── schema.ts                   (shared event types)
+    │   │   └── schema.ts                   (shared event types, [M1-6, M2-6])
     │   └── tests/
-    │       ├── format-time.test.ts         [M1-7]
-    │       └── route-message.test.ts       [M3-1]
+    │       └── format-time.test.ts         [M1-7]
     │
     ├── server/                             (independent .git, [M0-2])
     │   ├── package.json
@@ -80,8 +78,7 @@ Outer repo `/Users/shaw/AgentBean/` keeps `docs/` and a `.gitignore` that exclud
     │   │   ├── heartbeat-scanner.ts        [M1-4]
     │   │   ├── connect-command.ts          [M1-3]
     │   │   ├── namespaces/
-    │   │   │   ├── web.ts                  [M1-5, M2-1, M2-3, M2-5]
-    │   │   │   └── agent.ts                [M1-3, M2-2, M2-4]
+    │   │   │   └── agent.ts                [M1-3, M2-2, M2-3]
     │   │   ├── channels.ts                 [M2-1]
     │   │   ├── routing.ts                  [M3-1]
     │   │   ├── intro.ts                    [M2-2]
@@ -93,8 +90,8 @@ Outer repo `/Users/shaw/AgentBean/` keeps `docs/` and a `.gitignore` that exclud
     │       ├── registry.test.ts            [M1-2]
     │       ├── heartbeat-scanner.test.ts   [M1-4]
     │       ├── connect-command.test.ts     [M1-3]
-    │       ├── agent-namespace.test.ts     [M1-3, M2-2]
-    │       ├── web-namespace.test.ts       [M1-5, M2-1]
+    │       ├── agent-namespace.test.ts     [M1-3, M2-3]
+    │       ├── web-namespace.test.ts       [M1-5, M2-4]
     │       ├── channels.test.ts            [M2-1]
     │       ├── routing.test.ts             [M3-1]
     │       └── intro.test.ts               [M2-2]
@@ -108,22 +105,22 @@ Outer repo `/Users/shaw/AgentBean/` keeps `docs/` and a `.gitignore` that exclud
         ├── examples/
         │   ├── agent.config.yaml.example   [M0-4]
         │   ├── codex-shaw.yaml.example     [M1-8]
-        │   └── claude-code-shaw.yaml.example  [M3-2]
+        │   └── claude-code-shaw.yaml.example  [M3-3]
         ├── src/
-        │   ├── index.ts                    [M0-5, M1-8]
+        │   ├── index.ts                    [M0-5, M2-5, M3-3, M4-1, M4-2]
         │   ├── config.ts                   [M0-4]
-        │   ├── connection.ts               [M0-5, M1-8, M2-6]
+        │   ├── connection.ts               [M0-5, M2-5]
         │   ├── log.ts                      [M0-4]
         │   └── adapters/
         │       ├── adapter.ts              [M0-5]
-        │       ├── codex.ts                [M2-6]
-        │       ├── claude-code.ts          [M3-2]
+        │       ├── codex.ts                [M2-5]
+        │       ├── claude-code.ts          [M3-3]
         │       ├── openclaw.ts             [M4-1] (optional)
         │       └── hermes.ts               [M4-1] (optional)
         └── tests/
             ├── config.test.ts              [M0-4]
-            ├── adapter.test.ts             [M2-6]
-            └── codex-stub.test.ts          [M2-6]
+            ├── adapter.test.ts             [M2-5]
+            └── codex-stub.test.ts          [M2-5]
 ```
 
 Bracketed labels (e.g. `[M0-2]`) point to the task that creates or first edits the file.
