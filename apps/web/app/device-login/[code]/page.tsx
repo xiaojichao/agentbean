@@ -1,0 +1,72 @@
+'use client';
+
+import { FormEvent, useState } from 'react';
+import { useParams, useRouter } from 'next/navigation';
+import { createInviteSocket, authEvents, resetWebSocket } from '@/lib/socket';
+import { useAgentBeanStore } from '@/lib/store';
+
+export default function DeviceLoginPage() {
+  const params = useParams();
+  const router = useRouter();
+  const inviteCode = params.code as string;
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    const socket = createInviteSocket();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.on('connect', () => resolve());
+        socket.on('connect_error', (err) => reject(err));
+      });
+      const res = await authEvents(socket).deviceLogin({ inviteCode, username, password });
+      if (!res.ok || !res.token) {
+        setError(res.error ?? 'LOGIN_FAILED');
+        return;
+      }
+      localStorage.setItem('agentbean.token', res.token);
+      useAgentBeanStore.getState().setAuthToken(res.token);
+      useAgentBeanStore.getState().setCurrentNetworkId(res.networkId ?? 'default');
+      useAgentBeanStore.getState().setCurrentUser({
+        id: res.userId!,
+        username: res.username ?? username,
+        email: null,
+            role: res.role ?? 'user',
+      });
+      resetWebSocket();
+      const np = res.networkPath ?? 'default';
+      router.push(`/${np}/dashboard`);
+    } catch (err: any) {
+      setError(err?.message ?? 'LOGIN_FAILED');
+    } finally {
+      socket.close();
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6">
+      <h1 className="mb-2 text-2xl font-semibold">添加设备到 AgentBean</h1>
+      <p className="mb-6 text-sm text-neutral-500">使用已有账号登录，将此设备添加到您的私有网络。</p>
+      <form onSubmit={onSubmit} className="space-y-4">
+        <label className="block">
+          <span className="mb-1 block text-sm text-neutral-600">用户名</span>
+          <input value={username} onChange={(e) => setUsername(e.target.value)} className="w-full rounded border border-neutral-300 px-3 py-2" required />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-sm text-neutral-600">密码</span>
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full rounded border border-neutral-300 px-3 py-2" required />
+        </label>
+        {error && <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+        <button disabled={submitting} className="w-full rounded bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
+          {submitting ? '登录中...' : '登录并添加设备'}
+        </button>
+      </form>
+    </main>
+  );
+}

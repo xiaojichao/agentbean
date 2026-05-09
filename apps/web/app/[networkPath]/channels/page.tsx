@@ -1,0 +1,68 @@
+'use client';
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { getWebSocket, agentEvents } from '@/lib/socket';
+import { useAgentBeanStore } from '@/lib/store';
+import { NewChannelDialog } from '@/components/new-channel-dialog';
+
+export default function ChannelsPage() {
+  const channels = useAgentBeanStore((s) => s.channels);
+  const applyAgentsSnapshot = useAgentBeanStore((s) => s.applyAgentsSnapshot);
+  const applyAgentStatus = useAgentBeanStore((s) => s.applyAgentStatus);
+  const applyChannelsSnapshot = useAgentBeanStore((s) => s.applyChannelsSnapshot);
+  const setConn = useAgentBeanStore((s) => s.setConn);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    const socket = getWebSocket();
+    setConn(socket.connected ? 'open' : 'connecting');
+    const onConnect = () => setConn('open');
+    const onDisconnect = () => setConn('lost');
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+
+    const ag = agentEvents(socket);
+    const offSnap = ag.onSnapshot(applyAgentsSnapshot);
+    const offStatus = ag.onStatus(applyAgentStatus);
+    ag.subscribe();
+
+    socket.on('channels:snapshot', applyChannelsSnapshot);
+    socket.emit('channels:subscribe', {});
+
+    return () => {
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+      offSnap(); offStatus();
+      socket.off('channels:snapshot', applyChannelsSnapshot);
+    };
+  }, [setConn, applyAgentsSnapshot, applyAgentStatus, applyChannelsSnapshot]);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-xl font-semibold">频道</h1>
+        <button
+          onClick={() => setOpen(true)}
+          className="rounded bg-neutral-900 text-white text-sm px-3 py-1.5"
+        >新建频道</button>
+      </div>
+      {channels.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-neutral-300 p-10 text-center text-neutral-500">
+          还没有频道。点击「新建频道」开始。
+        </div>
+      ) : (
+        <ul className="space-y-1">
+          {channels.map((c) => (
+            <li key={c.id}>
+              <Link
+                href={`/channels/${c.id}`}
+                className="block px-3 py-2 rounded border border-neutral-200 hover:bg-neutral-50"
+              >{c.name}</Link>
+            </li>
+          ))}
+        </ul>
+      )}
+      {open && <NewChannelDialog onClose={() => setOpen(false)} />}
+    </div>
+  );
+}

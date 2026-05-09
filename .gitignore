@@ -1,0 +1,43 @@
+.DS_Store
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Build outputs and caches
+dist/
+build/
+.next/
+.turbo/
+coverage/
+*.tsbuildinfo
+
+# Local app/tool caches
+.npm-cache/
+.vercel/
+.vercel-cli/
+.vercel-cli-cache/
+.vercel-cli-home/
+.worktrees/
+.omc/
+.omx/
+.claude/
+.remember/
+.playwright-mcp/
+
+# Runtime data
+data/
+docs/demo001/data/
+*.db
+*.db-shm
+*.db-wal
+
+# Local daemon config
+apps/agent/*.yaml
+
+# Packaged artifacts
+*.tgz

@@ -1,0 +1,40 @@
+deviceId: shaw-macbook
+networkId: default
+
+server:
+  url: ws://localhost:4000/agent
+  token: ${AGENT_BEAN_AGENT_TOKEN}
+
+heartbeatIntervalMs: 10000
+
+agents:
+  - id: codex-肖
+    name: Codex-肖
+    role: 图像生成与代码执行专家
+    visibility: public
+    adapter:
+      kind: codex
+      command: npx
+      args: ['codex']
+      workspace: /tmp/codex-workspace
+
+  - id: claude-code-肖
+    name: Claude-肖
+    role: 通用助手与代码审查
+    visibility: public
+    adapter:
+      kind: claude-code
+      command: claude
+      args: ['--dangerously-skip-permissions']
+      workspace: /tmp/claude-workspace
+      systemPrompt: |
+        你是一个乐于助人的 AI 助手。请用中文回复。
+
+  - id: local-coder
+    name: 本地编码器
+    role: 内部开发工具（仅本机可见）
+    visibility: private
+    adapter:
+      kind: hermes
+      command: echo
+      args: ['stub']

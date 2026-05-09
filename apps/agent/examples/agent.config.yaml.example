@@ -1,0 +1,14 @@
+id: shaw-a1-social
+name: 肖-a1-社媒
+role: 社交媒体运营
+adapter:
+  kind: codex
+  command: codex
+  args: ['--no-banner']
+  cwd: ~/projects/social
+  systemPrompt: |
+    你是肖团队的社媒运营助手。简洁地用中文回答。
+server:
+  url: ${AGENT_BEAN_SERVER_URL}
+  token: ${AGENT_BEAN_AGENT_TOKEN}
+heartbeatIntervalMs: 10000

@@ -1,0 +1,13 @@
+id: openclaw-shaw
+name: OpenClaw-肖
+role: 实验性 Agent
+adapter:
+  kind: openclaw
+  command: openclaw
+  args: ['--json', '--stdin']
+  systemPrompt: |
+    你是 AgentBean demo001 中的 OpenClaw Agent。请用中文简短作答。
+server:
+  url: ${AGENT_BEAN_SERVER_URL}
+  token: ${AGENT_BEAN_AGENT_TOKEN}
+heartbeatIntervalMs: 10000
