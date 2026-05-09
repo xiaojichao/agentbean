@@ -92,8 +92,9 @@ export class CodexAdapter implements CliAdapter {
         finished = true;
         if (signal.aborted) return reject(new Error('aborted'));
         const raw = chunks.join('');
-        if (exitCode !== 0 && raw.length === 0) {
-          return reject(new Error(`codex exit ${exitCode}`));
+        if (exitCode !== 0) {
+          const detail = stripAnsi(raw).trim();
+          return reject(new Error(detail ? `codex exit ${exitCode}: ${detail}` : `codex exit ${exitCode}`));
         }
         const reply = extractReply(raw);
         resolve(reply || '(Codex 已完成处理)');
