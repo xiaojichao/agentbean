@@ -140,15 +140,32 @@ Agent 通过 `/agent` Socket.IO 命名空间注册到服务端：
 
 ### 3.5 设备管理
 
-#### 3.5.1 设备注册
-- 设备端 Daemon 通过 `device:register` 事件注册
+#### 3.5.1 设备注册（邀请流程）
+1. 用户从 Web UI 创建设备邀请码（`invite:create`，purpose=device）
+2. 用户在目标设备上运行邀请命令（`npx tsx agent/src/bin.ts --invite <code>`）
+3. Daemon 连接到 `/web` 命名空间（invite auth），验证邀请码，等待 token
+4. 浏览器打开 `device-login/<code>` 页面，用户登录
+5. 服务器通过 `auth:token:deliver` 将用户 token 推送给 Daemon
+6. Daemon 断开 `/web`，携带 token 重新连接到 `/agent` 命名空间
+7. Daemon 扫描本地 Agent 运行时，注册到服务端
+
+**关键机制：**
+- `inviteSessions` Map 存储 Daemon socket（key: `device:<code>`）
+- 首次存储保护：浏览器验证不会覆盖 Daemon socket
 - 三截 token 认证：`userId:networkId:random`
-- 心跳机制：设备定期上报状态
+- Agent namespace middleware：legacy token 跳过 parseToken 检查
 
 #### 3.5.2 设备页面
 - 显示设备状态、hostname、Tailscale IP
 - 显示设备上运行的 Agent 列表
-- Agent 可见性配置
+- Agent 可见性配置（发布到多网络）
+
+#### 3.5.3 服务器端网络持久化
+- `users.current_network_id` 列表储用户当前工作网络
+- 登录时优先使用 `currentNetworkId`（需验证仍是网络成员）
+- `network:switch` 事件自动保存到数据库
+- 注册时自动将私有网络设为当前网络
+- 设备登录时自动将邀请网络设为当前网络
 
 ---
 
@@ -177,6 +194,17 @@ Agent 通过 `/agent` Socket.IO 命名空间注册到服务端：
 | `device:register` | C→S | 设备注册 |
 | `device:heartbeat` | C→S | 设备心跳 |
 | `device:save-name` | C→S | 保存设备名称 |
+| `device:list` | C→S | 列出设备 |
+| `device:get` | C→S | 获取设备详情 |
+| `device:scan` | C→S | 触发设备扫描 |
+| `device:agents:list` | C→S | 列出设备上的 Agent |
+| `invite:create` | C→S | 创建邀请码（user/device） |
+| `auth:invite:validate` | C→S | 验证邀请码 |
+| `auth:device-login` | C→S | 设备登录（用户名+密码+邀请码） |
+| `auth:token:deliver` | S→C | 向 Daemon 推送 token |
+| `auth:whoami` | C→S | 获取当前用户信息 |
+| `auth:change-password` | C→S | 修改密码 |
+| `network:switch` | C→S | 切换网络（自动保存到 DB） |
 
 ### 4.2 `/agent` 命名空间（设备端 Daemon）
 
@@ -213,11 +241,11 @@ Agent 通过 `/agent` Socket.IO 命名空间注册到服务端：
 
 ## 7. 待实现功能
 
-### 7.1 Phase 3: 自定义 Agent + 独立 Agent
-- 自定义 Agent 配置 UI（名称/命令/参数/工作目录/适配器类型）
-- Agent 详情页完整运行时配置
-- 独立 Agent 扫描器扩展（manus、anygen.io 等）
-- standalone 适配器实现
+### 7.1 Phase 3: 自定义 Agent + 独立 Agent（已完成 2026-05-10）
+- [x] 自定义 Agent 配置 UI（名称/命令/参数/工作目录/适配器类型）
+- [x] Agent 详情页完整运行时配置（source badge、device info、runtime config）
+- [x] 独立 Agent 扫描器扩展（manus、anygen.io）
+- [ ] standalone 适配器实现
 
 ### 7.2 Phase 4: 任务系统
 - 任务数据持久化
