@@ -84,6 +84,12 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       .run('system', 'system', Date.now(), Date.now());
   } catch {}
 
+  // Ensure 'default' user exists for legacy token compatibility
+  try {
+    globalDb.raw.prepare(`INSERT OR IGNORE INTO users (id, username, email, created_at, updated_at) VALUES (?, ?, null, ?, ?)`)
+      .run('default', 'default', Date.now(), Date.now());
+  } catch {}
+
   // Ensure default network exists in global DB
   if (!globalDb.networks.get(defaultNetworkId)) {
     globalDb.networks.create({
@@ -195,12 +201,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
     socket.on('agents:subscribe', () => {
       const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
-      const publicNetworkIds = new Set(
-        globalDb.networks.list().filter((n) => n.visibility === 'public').map((n) => n.id)
-      );
       const filtered = registry.all().filter((a) =>
         a.networkId === networkId ||
-        (publicNetworkIds.has(a.networkId) && a.visibility === 'public')
+        a.publishedNetworkIds.includes(networkId)
       );
       socket.emit('agents:snapshot', filtered.map(snapshotToDto));
     });
@@ -221,10 +224,36 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       ack?.({ ok: true, daemonCount });
     });
 
+    socket.on('device:scan', (payload: { deviceId: string }, ack?: (r: any) => void) => {
+      try {
+        const device = deviceRegistry.get(payload.deviceId);
+        if (!device || device.status === 'offline') return ack?.({ ok: false, error: 'DEVICE_OFFLINE' });
+        const agentSocket = io.of('/agent').sockets.get(device.socket.id);
+        if (!agentSocket) return ack?.({ ok: false, error: 'SOCKET_NOT_FOUND' });
+        agentSocket.emit('agents:discover');
+        ack?.({ ok: true });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
     socket.on('devices:subscribe', () => {
       const nid = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
       const devices = deviceRegistry.listByNetwork(nid).map(deviceToDto);
       socket.emit('devices:snapshot', devices);
+    });
+
+    socket.on('members:list', (_payload: {}, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const humans = globalDb.networkMembers.listByNetwork(networkId);
+        const agents = registry.all().filter((a) =>
+          a.networkId === networkId || a.publishedNetworkIds.includes(networkId)
+        ).map(snapshotToDto);
+        ack?.({ ok: true, humans, agents });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
     });
 
     socket.on('device:get', (payload: { id: string }, ack?: (r: any) => void) => {
@@ -241,7 +270,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     });
 
     function getVisibleNetworks(userId?: string) {
-      let networks = globalDb.networks.list();
+      let networks = globalDb.networks.list().filter((n) => n.type !== 'private');
       if (userId) {
         const memberOf = new Set(globalDb.networkMembers.listByUser(userId).map((m) => m.networkId));
         networks = networks.filter((n) => n.visibility === 'public' || memberOf.has(n.id));
@@ -279,9 +308,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         logger.info({ payload, userId: socket.data.userId }, 'network:create');
         const name = payload.name.trim();
         if (!name) return ack?.({ ok: false, error: 'EMPTY_NAME' });
-        const visibility = (payload.visibility === 'public' && socket.data.role === 'admin')
-          ? 'public' as const
-          : 'private' as const;
+        const isPublic = payload.visibility === 'public' && socket.data.role === 'admin';
+        const visibility = isPublic ? 'public' as const : 'private' as const;
+        const type = isPublic ? 'public' as const : 'local' as const;
         const id = newId();
         const rawPath = payload.path?.trim().toLowerCase().replace(/[^a-z0-9-]/g, '') || '';
         if (rawPath && RESERVED_PATHS.has(rawPath)) return ack?.({ ok: false, error: 'RESERVED_PATH' });
@@ -290,6 +319,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           id, ownerId: socket.data.userId ?? 'system', name, path,
           description: payload.description ?? null,
           visibility,
+          type,
           createdAt: Date.now(),
         });
         if (socket.data.userId) {
@@ -342,7 +372,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
     socket.on('channels:subscribe', () => {
       const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
-      socket.emit('channels:snapshot', channels.list(networkId));
+      const userId = socket.data.userId as string | undefined;
+      const list = userId ? channels.listForUser(networkId, userId) : channels.list(networkId);
+      socket.emit('channels:snapshot', list);
     });
 
     socket.on('channel:join', (payload: { channelId: string }) => {
@@ -367,12 +399,19 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       socket.emit('channel:history', { channelId: payload.channelId, messages: messagesWithArtifacts });
     });
 
-    socket.on('channel:create', async (payload: { name?: string; agentIds: string[] }, ack?: (r: any) => void) => {
+    socket.on('channel:create', async (payload: { name?: string; agentIds: string[]; userIds?: string[]; visibility?: 'public' | 'private' }, ack?: (r: any) => void) => {
       try {
         const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
-        const ch = channels.create(networkId, { name: payload.name ?? '', agentIds: payload.agentIds });
+        const userId = socket.data.userId as string | undefined;
+        const ch = channels.create(networkId, {
+          name: payload.name ?? '',
+          agentIds: payload.agentIds,
+          userIds: payload.userIds,
+          visibility: payload.visibility,
+          createdBy: userId,
+        });
         ack?.({ ok: true, channel: ch });
-        io.of('/web').emit('channels:snapshot', channels.list(networkId));
+        io.of('/web').emit('channels:snapshot', channels.list(networkId)); // broadcast full list, client filters
         const members = channels.membersOf(networkId, ch.id);
         const sp = storageManager.getSpace(networkId);
         const persist = makePersistMessage(sp, networkId);
@@ -401,7 +440,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       if (!ch) return ack?.({ ok: false, error: 'NO_CHANNEL' });
 
       const humanMsg = {
-        id: newId(), channelId: ch.id, senderKind: 'human' as const, senderId: null,
+        id: newId(), channelId: ch.id, senderKind: 'human' as const, senderId: (socket.data.userId as string) ?? null,
         body, createdAt: Date.now(),
         metaJson: JSON.stringify({ clientMsgId: payload.clientMsgId }),
       };
@@ -443,6 +482,30 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           body: `${recipient.name} 处理失败: ${reply.error ?? 'unknown'}`,
           createdAt: Date.now(), metaJson: JSON.stringify({ kind: 'reply-fail', agentId: recipient.id }),
         });
+      }
+    });
+
+    socket.on('channel:add-member', (payload: { channelId: string; userId: string }, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const ch = channels.get(networkId, payload.channelId);
+        if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        channels.addUserMember(networkId, payload.channelId, payload.userId);
+        ack?.({ ok: true });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('channel:remove-member', (payload: { channelId: string; userId: string }, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const ch = channels.get(networkId, payload.channelId);
+        if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        channels.removeUserMember(networkId, payload.channelId, payload.userId);
+        ack?.({ ok: true });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
       }
     });
 
@@ -527,6 +590,45 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       }
     });
 
+    socket.on('agent:publish', (payload: { agentId: string; networkId: string }, ack?: (r: any) => void) => {
+      try {
+        const userId = socket.data.userId as string | undefined;
+        if (!userId) return ack?.({ ok: false, error: 'UNAUTHORIZED' });
+        const rt = registry.snapshot(payload.agentId);
+        if (!rt) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        if (rt.ownerId && rt.ownerId !== userId) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        if (!globalDb.networkMembers.isMember(payload.networkId, userId)) {
+          return ack?.({ ok: false, error: 'NOT_NETWORK_MEMBER' });
+        }
+        globalDb.agentPublishes.publish(payload.agentId, payload.networkId, userId);
+        const publishes = globalDb.agentPublishes.listByAgent(payload.agentId);
+        registry.updatePublishedNetworks(payload.agentId, publishes.map((p: any) => p.networkId));
+        const updated = registry.snapshot(payload.agentId);
+        if (updated) io.of('/web').emit('agent:status', snapshotToDto(updated));
+        ack?.({ ok: true });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('agent:unpublish', (payload: { agentId: string; networkId: string }, ack?: (r: any) => void) => {
+      try {
+        const userId = socket.data.userId as string | undefined;
+        if (!userId) return ack?.({ ok: false, error: 'UNAUTHORIZED' });
+        const rt = registry.snapshot(payload.agentId);
+        if (!rt) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        if (rt.ownerId && rt.ownerId !== userId) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        globalDb.agentPublishes.unpublish(payload.agentId, payload.networkId);
+        const publishes = globalDb.agentPublishes.listByAgent(payload.agentId);
+        registry.updatePublishedNetworks(payload.agentId, publishes.map((p: any) => p.networkId));
+        const updated = registry.snapshot(payload.agentId);
+        if (updated) io.of('/web').emit('agent:status', snapshotToDto(updated));
+        ack?.({ ok: true });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
     socket.on('auth:invite:validate', (payload: { code: string }, ack?: (r: any) => void) => {
       try {
         const invite = globalDb.invites.getByCode(payload.code);
@@ -583,11 +685,20 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           name: `${username}-private`,
           path: privatePath,
           visibility: 'private',
+          type: 'private',
           createdAt: now,
         });
         globalDb.networkMembers.add(privateNetwork.id, userId, 'owner');
         storageManager.createSpace(privateNetwork.id);
         channels.ensureDefault(privateNetwork.id);
+
+        // Auto-join all public networks so the user can see the public mesh
+        const publicNetworks = globalDb.networks.list().filter(n => n.type === 'public');
+        for (const net of publicNetworks) {
+          if (!globalDb.networkMembers.isMember(net.id, userId)) {
+            globalDb.networkMembers.add(net.id, userId, 'member');
+          }
+        }
 
         if (invite?.networkId) {
           globalDb.networkMembers.add(invite.networkId, userId, 'member');
@@ -646,6 +757,14 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             if (updated && updated.maxUses !== null && updated.usesCount >= updated.maxUses) {
               globalDb.invites.markUsed(invite.code);
             }
+          }
+        }
+
+        // Ensure user is a member of all public networks
+        const publicNetworks = globalDb.networks.list().filter(n => n.type === 'public');
+        for (const net of publicNetworks) {
+          if (!globalDb.networkMembers.isMember(net.id, user.id)) {
+            globalDb.networkMembers.add(net.id, user.id, 'member');
           }
         }
 

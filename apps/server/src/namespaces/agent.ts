@@ -17,6 +17,14 @@ export interface AgentNamespaceDeps {
     users: { get(id: string): { id: string } | null };
     networkMembers: { isMember(networkId: string, userId: string): boolean };
     networks: { get(id: string): { id: string; visibility: 'public' | 'private' } | null };
+    agentPublishes: { listByAgent(agentId: string): { networkId: string }[] };
+    agents?: {
+      upsert(row: any): void;
+      get(id: string): any;
+    };
+    devices?: {
+      upsert(row: { id: string; userId: string; networkId: string; hostname?: string; tailscaleIp?: string; lastSeenAt: number }): void;
+    };
   };
   dispatchTimeoutMs?: number;
   metricsCollector?: AgentMetricsCollector;
@@ -51,6 +59,7 @@ export interface AgentSnapshotDto {
   args?: string[] | null;
   cwd?: string | null;
   deviceId?: string;
+  publishedNetworkIds?: string[];
 }
 
 export function snapshotToDto(rt: AgentRuntime): AgentSnapshotDto {
@@ -71,6 +80,7 @@ export function snapshotToDto(rt: AgentRuntime): AgentSnapshotDto {
     args: rt.args ?? null,
     cwd: rt.cwd ?? null,
     deviceId: rt.deviceId,
+    publishedNetworkIds: rt.publishedNetworkIds,
   };
 }
 
@@ -143,6 +153,8 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       // Register each public agent in AgentRegistry (for Web UI compatibility)
       const now = Date.now();
       for (const agentMeta of a.agents) {
+        const publishes = deps.globalDb?.agentPublishes?.listByAgent(agentMeta.id) ?? [];
+        const publishedNetworkIds = publishes.map((p: { networkId: string }) => p.networkId);
         const rt = deps.registry.register(socket.id, {
           id: agentMeta.id,
           name: agentMeta.name,
@@ -152,6 +164,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           networkId: a.networkId,
           visibility: agentMeta.visibility,
           deviceId: a.deviceId,
+          publishedNetworkIds,
         });
         deps.db.agents.upsert({
           id: rt.id, name: rt.name, role: rt.role, adapterKind: rt.adapterKind,
@@ -166,6 +179,17 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           cwd: rt.cwd ?? null,
         });
         deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
+      }
+
+      // Persist device to global DB
+      const userId = parseToken(a.token!)?.userId;
+      if (userId) {
+        deps.globalDb?.devices?.upsert({
+          id: a.deviceId,
+          userId,
+          networkId: a.networkId,
+          lastSeenAt: now,
+        });
       }
 
       // Register device in DeviceRegistry
@@ -216,6 +240,74 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
 
     socket.on('agents:discovered', (payload: { agents: any[] }) => {
       deps.io.of('/web').emit('agents:discovered', payload);
+    });
+
+    // Daemon registers scanned agents (runtimes, agentOS, standalone)
+    socket.on('device:register-agents', (payload: {
+      agents: { name: string; category: string; adapterKind: string; command: string; args: string[]; source?: string }[]
+    }, ack?: (r: any) => void) => {
+      try {
+        const now = Date.now();
+        const registered: any[] = [];
+        for (const ag of payload.agents) {
+          // Generate stable ID from deviceId + agent name for dedup
+          const agentId = `scan-${a.deviceId}-${ag.name.toLowerCase().replace(/\s+/g, '-')}`;
+          const existing = deps.globalDb?.agents?.get(agentId);
+
+          // Persist to global DB
+          deps.globalDb?.agents?.upsert({
+            id: agentId,
+            name: ag.name,
+            adapterKind: ag.adapterKind as AdapterKind,
+            deviceId: a.deviceId,
+            networkId: a.networkId,
+            category: (ag.category as AgentCategory) ?? 'executor-hosted',
+            source: (ag.source as any) ?? 'scanned',
+            firstSeenAt: existing ? (existing as any).firstSeenAt ?? now : now,
+            lastSeenAt: now,
+            command: ag.command,
+            args: ag.args ? JSON.stringify(ag.args) : undefined,
+          });
+
+          // Persist to per-network DB
+          deps.db.agents.upsert({
+            id: agentId,
+            name: ag.name,
+            role: null,
+            adapterKind: ag.adapterKind as AdapterKind,
+            deviceId: a.deviceId,
+            networkId: a.networkId,
+            visibility: 'public' as const,
+            category: (ag.category as AgentCategory) ?? 'executor-hosted',
+            source: (ag.source as any) ?? 'scanned',
+            firstSeenAt: existing ? (existing as any).firstSeenAt ?? now : now,
+            lastSeenAt: now,
+            lastError: null,
+            ownerId: null,
+            command: ag.command,
+            args: ag.args ? JSON.stringify(ag.args) : null,
+            cwd: null,
+          });
+
+          // Register in AgentRegistry (in-memory)
+          const publishes = deps.globalDb?.agentPublishes?.listByAgent(agentId) ?? [];
+          const rt = deps.registry.register(socket.id, {
+            id: agentId,
+            name: ag.name,
+            role: '',
+            adapterKind: ag.adapterKind as AdapterKind,
+            category: (ag.category as AgentCategory) ?? 'executor-hosted',
+            networkId: a.networkId,
+            deviceId: a.deviceId,
+            publishedNetworkIds: publishes.map((p: { networkId: string }) => p.networkId),
+          });
+          deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
+          registered.push({ id: agentId, name: ag.name, category: ag.category, status: 'online' });
+        }
+        ack?.({ ok: true, agents: registered });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
     });
 
     socket.on('disconnect', () => {

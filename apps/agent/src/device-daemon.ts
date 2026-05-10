@@ -9,6 +9,47 @@ export interface DeviceDaemonHandle {
   stop(): Promise<void>;
 }
 
+async function scanAll(): Promise<{ name: string; category: string; adapterKind: string; command: string; args: string[]; source: string }[]> {
+  const [runtimes, agentos, local] = await Promise.all([
+    scanRuntimes(),
+    scanAgentOSAgents(),
+    scanLocalAgents(),
+  ]);
+
+  const results: { name: string; category: string; adapterKind: string; command: string; args: string[]; source: string }[] = [];
+
+  // Runtimes (executor-hosted) — only installed ones
+  for (const rt of runtimes) {
+    if (rt.installed) {
+      results.push({
+        name: rt.name,
+        category: 'executor-hosted',
+        adapterKind: rt.adapterKind,
+        command: rt.command,
+        args: [],
+        source: 'scanned',
+      });
+    }
+  }
+
+  // AgentOS + standalone (from gateway and filesystem scans)
+  const seen = new Set<string>();
+  for (const ag of agentos) {
+    if (!seen.has(ag.command)) {
+      seen.add(ag.command);
+      results.push({ ...ag, source: 'scanned' });
+    }
+  }
+  for (const ag of local) {
+    if (!seen.has(ag.command)) {
+      seen.add(ag.command);
+      results.push({ ...ag, source: 'scanned' });
+    }
+  }
+
+  return results;
+}
+
 export function createDeviceDaemon(
   cfg: DeviceConfig,
   agents: Map<string, AgentInstance>,
@@ -21,6 +62,22 @@ export function createDeviceDaemon(
   const publicAgents = Array.from(agents.values())
     .filter((a) => a.visibility === 'public')
     .map((a) => a.publicMeta);
+
+  async function scanAndRegister(sock: Socket) {
+    try {
+      const scanned = await scanAll();
+      if (scanned.length === 0) return;
+      sock.emit('device:register-agents', { agents: scanned }, (ack: any) => {
+        if (ack?.ok) {
+          logger.info({ count: ack.agents?.length }, 'scanned agents registered');
+        } else {
+          logger.warn({ error: ack?.error }, 'failed to register scanned agents');
+        }
+      });
+    } catch (err: any) {
+      logger.error({ err: err?.message }, 'scan failed');
+    }
+  }
 
   return {
     async start() {
@@ -39,6 +96,10 @@ export function createDeviceDaemon(
       socket.on('connect', () => {
         logger.info({ deviceId: cfg.deviceId, sid: socket!.id }, 'device daemon connected');
         socket!.emit('register');
+
+        // Auto-scan and register all discovered agents/runtimes
+        scanAndRegister(socket!);
+
         if (heartbeatTimer) clearInterval(heartbeatTimer);
         heartbeatTimer = setInterval(() => {
           socket?.emit('heartbeat');
@@ -99,31 +160,7 @@ export function createDeviceDaemon(
       });
 
       socket.on('agents:discover', async () => {
-        const [runtimes, agentos, local] = await Promise.all([
-          scanRuntimes(),
-          scanAgentOSAgents(),
-          scanLocalAgents(),
-        ]);
-
-        const seen = new Set<string>();
-        const agents = [...agentos, ...local].filter((a) => {
-          if (seen.has(a.command)) return false;
-          seen.add(a.command);
-          return true;
-        });
-
-        socket!.emit('agents:discovered', {
-          runtimes,
-          agents: agents.map((a) => ({
-            name: a.name,
-            category: a.category,
-            adapterKind: a.adapterKind,
-            command: a.command,
-            args: a.args,
-            cwd: a.cwd,
-            source: a.source,
-          })),
-        });
+        await scanAndRegister(socket!);
       });
 
       socket.on('disconnect', (reason) => {

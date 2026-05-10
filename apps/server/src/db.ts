@@ -366,6 +366,14 @@ export interface GlobalDb {
     listByNetwork(networkId: string): { agentId: string; publishedBy: string; publishedAt: number }[];
     isPublished(agentId: string, networkId: string): boolean;
   };
+  agents: {
+    upsert(row: { id: string; name: string; role?: string; adapterKind: string; deviceId: string; networkId: string; visibility?: string; category?: string; source?: string; firstSeenAt: number; lastSeenAt: number; lastError?: string | null; command?: string; args?: string; cwd?: string; ownerId?: string }): void;
+    listByDevice(deviceId: string): { id: string; name: string; adapterKind: string; category: string; source: string; command: string | null; args: string | null; deviceId: string }[];
+    get(id: string): { id: string } | null;
+  };
+  devices: {
+    upsert(row: { id: string; userId: string; networkId: string; hostname?: string; tailscaleIp?: string; lastSeenAt: number }): void;
+  };
 }
 
 function rowToUser(r: any): UserRow {
@@ -513,6 +521,36 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
     SELECT 1 FROM agent_network_publish WHERE agent_id = ? AND network_id = ?
   `);
 
+  // Migration: add columns to global agents table if missing
+  try { raw.exec(`ALTER TABLE agents ADD COLUMN category TEXT NOT NULL DEFAULT 'executor-hosted'`); } catch {}
+  try { raw.exec(`ALTER TABLE agents ADD COLUMN source TEXT NOT NULL DEFAULT 'self-register'`); } catch {}
+  try { raw.exec(`ALTER TABLE agents ADD COLUMN command TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE agents ADD COLUMN args TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE agents ADD COLUMN cwd TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE agents ADD COLUMN owner_id TEXT`); } catch {}
+
+  const deviceUpsert = raw.prepare(`
+    INSERT INTO devices (id, user_id, network_id, hostname, tailscale_ip, last_seen_at)
+    VALUES (@id, @userId, @networkId, @hostname, @tailscaleIp, @lastSeenAt)
+    ON CONFLICT(id) DO UPDATE SET
+      hostname = excluded.hostname,
+      tailscale_ip = excluded.tailscale_ip,
+      last_seen_at = excluded.last_seen_at
+  `);
+
+  const globalAgentUpsert = raw.prepare(`
+    INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, command, args, cwd, owner_id)
+    VALUES (@id, @name, @role, @adapterKind, @deviceId, @networkId, @visibility, @category, @source, @firstSeenAt, @lastSeenAt, @lastError, @command, @args, @cwd, @ownerId)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      adapter_kind = excluded.adapter_kind,
+      command = excluded.command,
+      args = excluded.args,
+      last_seen_at = excluded.last_seen_at
+  `);
+  const globalAgentListByDevice = raw.prepare(`SELECT * FROM agents WHERE device_id = ? ORDER BY first_seen_at`);
+  const globalAgentGet = raw.prepare(`SELECT id FROM agents WHERE id = ?`);
+
   return {
     raw,
     close: () => raw.close(),
@@ -611,6 +649,42 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
       listByAgent: (agentId) => agentPublishByAgent.all(agentId) as { networkId: string; publishedBy: string; publishedAt: number }[],
       listByNetwork: (networkId) => agentPublishByNetwork.all(networkId) as { agentId: string; publishedBy: string; publishedAt: number }[],
       isPublished: (agentId, networkId) => Boolean(agentPublishGet.get(agentId, networkId)),
+    },
+    agents: {
+      upsert: (row) => {
+        globalAgentUpsert.run({
+          id: row.id,
+          name: row.name,
+          role: row.role ?? null,
+          adapterKind: row.adapterKind,
+          deviceId: row.deviceId,
+          networkId: row.networkId,
+          visibility: row.visibility ?? 'public',
+          category: row.category ?? 'executor-hosted',
+          source: row.source ?? 'self-register',
+          firstSeenAt: row.firstSeenAt,
+          lastSeenAt: row.lastSeenAt,
+          lastError: row.lastError ?? null,
+          command: row.command ?? null,
+          args: row.args ?? null,
+          cwd: row.cwd ?? null,
+          ownerId: row.ownerId ?? null,
+        });
+      },
+      listByDevice: (deviceId) => globalAgentListByDevice.all(deviceId) as any[],
+      get: (id) => (globalAgentGet.get(id) as any) ?? null,
+    },
+    devices: {
+      upsert: (row) => {
+        deviceUpsert.run({
+          id: row.id,
+          userId: row.userId,
+          networkId: row.networkId,
+          hostname: row.hostname ?? null,
+          tailscaleIp: row.tailscaleIp ?? null,
+          lastSeenAt: row.lastSeenAt,
+        });
+      },
     },
   };
 }

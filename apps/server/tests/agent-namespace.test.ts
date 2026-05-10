@@ -86,6 +86,84 @@ describe('/agent namespace', () => {
   });
 });
 
+describe('device:register-agents', () => {
+  it('persists scanned agents to DB and registers in AgentRegistry', async () => {
+    const ag = connect('default:default:tok', {
+      deviceId: 'd-scan1',
+      networkId: 'default',
+      agents: [],
+    });
+    await new Promise<void>((resolve) => ag.on('connect', () => resolve()));
+    ag.emit('register');
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Device registers scanned agents
+    const ackPromise = new Promise<any>((resolve) => {
+      ag.emit('device:register-agents', {
+        agents: [
+          { name: 'Claude Code', category: 'executor-hosted', adapterKind: 'claude-code', command: '/usr/bin/claude', args: [], source: 'scanned' },
+          { name: 'Hermes Agent', category: 'agentos-hosted', adapterKind: 'hermes', command: '/usr/bin/hermes', args: ['gateway', 'run'], source: 'scanned' },
+        ],
+      }, resolve);
+    });
+    const ack = await ackPromise;
+    expect(ack.ok).toBe(true);
+    expect(ack.agents).toHaveLength(2);
+
+    // Verify in DB
+    const dbAgents = app.db!.agents.listByDevice('d-scan1');
+    expect(dbAgents).toHaveLength(2);
+    expect(dbAgents.map((a) => a.name).sort()).toEqual(['Claude Code', 'Hermes Agent']);
+    expect(dbAgents.every((a) => a.source === 'scanned')).toBe(true);
+
+    // Verify in AgentRegistry
+    const claudeAgent = ack.agents.find((a: any) => a.name === 'Claude Code');
+    expect(claudeAgent).toBeDefined();
+    const rt = app.registry!.snapshot(claudeAgent.id);
+    expect(rt).toBeTruthy();
+    expect(rt!.status).toBe('online');
+
+    ag.close();
+  });
+
+  it('deduplicates agents by name+deviceId on re-scan', async () => {
+    const ag = connect('default:default:tok', {
+      deviceId: 'd-scan2',
+      networkId: 'default',
+      agents: [],
+    });
+    await new Promise<void>((resolve) => ag.on('connect', () => resolve()));
+    ag.emit('register');
+    await new Promise((r) => setTimeout(r, 50));
+
+    // First scan
+    await new Promise<any>((resolve) => {
+      ag.emit('device:register-agents', {
+        agents: [
+          { name: 'Claude Code', category: 'executor-hosted', adapterKind: 'claude-code', command: '/usr/bin/claude', args: [], source: 'scanned' },
+        ],
+      }, resolve);
+    });
+
+    // Second scan (same agent, different command path)
+    const ack2 = await new Promise<any>((resolve) => {
+      ag.emit('device:register-agents', {
+        agents: [
+          { name: 'Claude Code', category: 'executor-hosted', adapterKind: 'claude-code', command: '/opt/homebrew/bin/claude', args: [], source: 'scanned' },
+        ],
+      }, resolve);
+    });
+    expect(ack2).toMatchObject({ ok: true });
+
+    // Should still be 1 agent, not duplicated
+    const dbAgents = app.db!.agents.listByDevice('d-scan2');
+    expect(dbAgents).toHaveLength(1);
+    expect(dbAgents[0].command).toBe('/opt/homebrew/bin/claude'); // updated
+
+    ag.close();
+  });
+});
+
 describe('/agent dispatch round-trip', () => {
   it('routes server dispatch to daemon and resolves on reply', async () => {
     const local = await buildApp({ dbPath: ':memory:', agentToken: 'default:default:tok' });
