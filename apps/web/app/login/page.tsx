@@ -43,7 +43,8 @@ export default function LoginPage() {
           });
         }
         resetWebSocket();
-        const np = res.networkPath ?? 'default';
+        const savedNp = localStorage.getItem('agentbean.networkPath');
+        const np = savedNp || res.networkPath || 'default';
         router.replace(`/${np}/chat`);
       } else {
         setError(res.error ?? '登录失败');

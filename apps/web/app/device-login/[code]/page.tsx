@@ -39,7 +39,8 @@ export default function DeviceLoginPage() {
             role: res.role ?? 'user',
       });
       resetWebSocket();
-      const np = res.networkPath ?? 'default';
+      const savedNp = localStorage.getItem('agentbean.networkPath');
+      const np = savedNp || res.networkPath || 'default';
       router.push(`/${np}/devices`);
     } catch (err: any) {
       setError(err?.message ?? 'LOGIN_FAILED');

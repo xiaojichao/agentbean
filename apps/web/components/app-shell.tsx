@@ -54,9 +54,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!hydrated) return;
     if (authToken && marketing) {
+      const savedNp = localStorage.getItem('agentbean.networkPath');
       const s = useAgentBeanStore.getState();
       const net = s.networks.find((n) => n.id === s.currentNetworkId);
-      router.replace(`/${net?.path ?? 'default'}/chat`);
+      router.replace(`/${savedNp || net?.path || 'default'}/chat`);
     }
     if (!authToken && networked) {
       router.replace('/');

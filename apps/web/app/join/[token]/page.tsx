@@ -87,7 +87,8 @@ export default function JoinPage() {
           });
         }
         resetWebSocket();
-        const np = res.networkPath ?? 'default';
+        const savedNp = localStorage.getItem('agentbean.networkPath');
+        const np = savedNp || res.networkPath || 'default';
         router.replace(`/${np}/chat`);
       } else {
         setError(res.error ?? '注册失败');
@@ -127,7 +128,8 @@ export default function JoinPage() {
           });
         }
         resetWebSocket();
-        const np = res.networkPath ?? 'default';
+        const savedNp = localStorage.getItem('agentbean.networkPath');
+        const np = savedNp || res.networkPath || 'default';
         router.replace(`/${np}/chat`);
       } else {
         setError(res.error ?? '登录失败');

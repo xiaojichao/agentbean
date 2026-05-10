@@ -48,6 +48,7 @@ export function Sidebar() {
       setShowNetworks(false);
       const target = networks.find((n) => n.id === networkId);
       if (target) {
+        localStorage.setItem('agentbean.networkPath', target.path);
         const segments = pathname.split('/');
         const subPath = segments.length > 2 ? segments.slice(2).join('/') : 'chat';
         router.push(`/${target.path}/${subPath}`);
