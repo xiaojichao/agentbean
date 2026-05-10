@@ -236,6 +236,24 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
   };
 }
 
+export interface TaskEvents {
+  create(payload: { title: string; description?: string; status?: string; assigneeId?: string; channelId?: string; tags?: string[] }): Promise<{ ok: boolean; task?: any; error?: string }>;
+  list(channelId?: string): Promise<{ ok: boolean; tasks?: any[]; error?: string }>;
+  update(payload: { id: string; title?: string; description?: string; status?: string; assigneeId?: string | null; channelId?: string | null; tags?: string[] }): Promise<{ ok: boolean; task?: any; error?: string }>;
+  delete(id: string): Promise<{ ok: boolean; error?: string }>;
+  reorder(id: string, sortOrder: number): Promise<{ ok: boolean; error?: string }>;
+}
+
+export function taskEvents(socket: Socket = getWebSocket()): TaskEvents {
+  return {
+    create(payload) { return emitWithTimeout(socket, 'task:create', payload); },
+    list(channelId) { return emitWithTimeout(socket, 'task:list', { channelId }); },
+    update(payload) { return emitWithTimeout(socket, 'task:update', payload); },
+    delete(id) { return emitWithTimeout(socket, 'task:delete', { id }); },
+    reorder(id, sortOrder) { return emitWithTimeout(socket, 'task:reorder', { id, sortOrder }); },
+  };
+}
+
 export interface MemberEvents {
   list(): Promise<{ ok: boolean; humans?: { userId: string; role: string; username: string }[]; agents?: import('./schema').AgentSnapshot[]; error?: string }>;
 }

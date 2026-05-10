@@ -73,6 +73,22 @@ CREATE TABLE IF NOT EXISTS artifacts (
 );
 CREATE INDEX IF NOT EXISTS idx_artifacts_channel ON artifacts(channel_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_artifacts_message ON artifacts(message_id);
+CREATE TABLE IF NOT EXISTS tasks (
+  id          TEXT PRIMARY KEY,
+  title       TEXT NOT NULL,
+  description TEXT,
+  status      TEXT NOT NULL DEFAULT 'todo',
+  creator_id  TEXT NOT NULL,
+  assignee_id TEXT,
+  channel_id  TEXT,
+  tags        TEXT DEFAULT '[]',
+  sort_order  REAL NOT NULL DEFAULT 0,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_channel ON tasks(channel_id);
 `;
 
 export type AdapterKind = 'codex' | 'claude-code' | 'openclaw' | 'hermes' | 'standalone';
@@ -124,6 +140,22 @@ export interface ArtifactRow {
   metaJson: string | null;
 }
 
+export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done';
+
+export interface TaskRow {
+  id: string;
+  title: string;
+  description: string | null;
+  status: TaskStatus;
+  creatorId: string;
+  assigneeId: string | null;
+  channelId: string | null;
+  tags: string[];
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface Db {
   raw: Database.Database;
   close: () => void;
@@ -168,6 +200,15 @@ export interface Db {
     listByChannel(channelId: string, limit: number): ArtifactRow[];
     listByMessage(messageId: string): ArtifactRow[];
     bindMessageId(artifactIds: string[], messageId: string): void;
+  };
+  tasks: {
+    create(input: { id?: string; title: string; description?: string; status?: TaskStatus; creatorId: string; assigneeId?: string; channelId?: string; tags?: string[]; sortOrder?: number; createdAt: number }): TaskRow;
+    get(id: string): TaskRow | null;
+    list(channelId?: string): TaskRow[];
+    update(id: string, input: { title?: string; description?: string; status?: TaskStatus; assigneeId?: string | null; channelId?: string | null; tags?: string[]; sortOrder?: number }): void;
+    delete(id: string): void;
+    updateStatus(id: string, status: TaskStatus): void;
+    updateSort(id: string, sortOrder: number): void;
   };
 }
 
@@ -822,6 +863,39 @@ export function openDb(path: string): Db {
     UPDATE artifacts SET message_id = ? WHERE id = ?
   `);
 
+  // Task statements
+  const taskCreate = raw.prepare(`
+    INSERT INTO tasks (id, title, description, status, creator_id, assignee_id, channel_id, tags, sort_order, created_at, updated_at)
+    VALUES (@id, @title, @description, @status, @creatorId, @assigneeId, @channelId, @tags, @sortOrder, @createdAt, @updatedAt)
+  `);
+  const taskGet = raw.prepare(`SELECT * FROM tasks WHERE id = ?`);
+  const taskListAll = raw.prepare(`SELECT * FROM tasks ORDER BY sort_order ASC, created_at DESC`);
+  const taskListByChannel = raw.prepare(`SELECT * FROM tasks WHERE channel_id = ? ORDER BY sort_order ASC, created_at DESC`);
+  const taskUpdate = raw.prepare(`
+    UPDATE tasks SET title = @title, description = @description, status = @status,
+      assignee_id = @assigneeId, channel_id = @channelId, tags = @tags, sort_order = @sortOrder, updated_at = @updatedAt
+    WHERE id = @id
+  `);
+  const taskDelete = raw.prepare(`DELETE FROM tasks WHERE id = ?`);
+  const taskUpdateStatus = raw.prepare(`UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`);
+  const taskUpdateSort = raw.prepare(`UPDATE tasks SET sort_order = ?, updated_at = ? WHERE id = ?`);
+
+  function rowToTask(r: any): TaskRow {
+    return {
+      id: r.id,
+      title: r.title,
+      description: r.description ?? null,
+      status: r.status as TaskStatus,
+      creatorId: r.creator_id,
+      assigneeId: r.assignee_id ?? null,
+      channelId: r.channel_id ?? null,
+      tags: (() => { try { return JSON.parse(r.tags); } catch { return []; } })(),
+      sortOrder: r.sort_order,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    };
+  }
+
   return {
     raw,
     close: () => raw.close(),
@@ -882,6 +956,52 @@ export function openDb(path: string): Db {
       bindMessageId: (artifactIds, messageId) => {
         for (const id of artifactIds) artifactBindMessage.run(messageId, id);
       },
+    },
+    tasks: {
+      create: (input) => {
+        const id = input.id ?? newId();
+        const now = input.createdAt;
+        taskCreate.run({
+          id,
+          title: input.title,
+          description: input.description ?? null,
+          status: input.status ?? 'todo',
+          creatorId: input.creatorId,
+          assigneeId: input.assigneeId ?? null,
+          channelId: input.channelId ?? null,
+          tags: JSON.stringify(input.tags ?? []),
+          sortOrder: input.sortOrder ?? 0,
+          createdAt: now,
+          updatedAt: now,
+        });
+        return rowToTask(taskGet.get(id) as any);
+      },
+      get: (id) => {
+        const r = taskGet.get(id) as any;
+        return r ? rowToTask(r) : null;
+      },
+      list: (channelId) => {
+        const rows = channelId ? taskListByChannel.all(channelId) as any[] : taskListAll.all() as any[];
+        return rows.map(rowToTask);
+      },
+      update: (id, input) => {
+        const existing = taskGet.get(id) as any;
+        if (!existing) return;
+        taskUpdate.run({
+          id,
+          title: input.title ?? existing.title,
+          description: input.description !== undefined ? input.description : existing.description,
+          status: input.status ?? existing.status,
+          assigneeId: input.assigneeId !== undefined ? input.assigneeId : existing.assignee_id,
+          channelId: input.channelId !== undefined ? input.channelId : existing.channel_id,
+          tags: input.tags ? JSON.stringify(input.tags) : existing.tags,
+          sortOrder: input.sortOrder ?? existing.sort_order,
+          updatedAt: Date.now(),
+        });
+      },
+      delete: (id) => { taskDelete.run(id); },
+      updateStatus: (id, status) => { taskUpdateStatus.run(status, Date.now(), id); },
+      updateSort: (id, sortOrder) => { taskUpdateSort.run(sortOrder, Date.now(), id); },
     },
   };
 }

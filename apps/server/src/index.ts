@@ -312,6 +312,82 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       }
     });
 
+    // --- Task events ---
+    socket.on('task:create', (payload: { title: string; description?: string; status?: string; assigneeId?: string; channelId?: string; tags?: string[] }, ack?: (r: any) => void) => {
+      try {
+        const userId = socket.data.userId;
+        if (!userId) return ack?.({ ok: false, error: 'NOT_AUTHENTICATED' });
+        if (!payload.title?.trim()) return ack?.({ ok: false, error: 'EMPTY_TITLE' });
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const sp = storageManager.getSpace(networkId);
+        const task = sp.tasks.create({
+          title: payload.title.trim(),
+          description: payload.description,
+          status: payload.status as any,
+          creatorId: userId,
+          assigneeId: payload.assigneeId,
+          channelId: payload.channelId,
+          tags: payload.tags,
+          createdAt: Date.now(),
+        });
+        ack?.({ ok: true, task });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('task:list', (payload: { channelId?: string }, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const sp = storageManager.getSpace(networkId);
+        const tasks = sp.tasks.list(payload.channelId);
+        ack?.({ ok: true, tasks });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('task:update', (payload: { id: string; title?: string; description?: string; status?: string; assigneeId?: string | null; channelId?: string | null; tags?: string[] }, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const sp = storageManager.getSpace(networkId);
+        sp.tasks.update(payload.id, {
+          title: payload.title,
+          description: payload.description,
+          status: payload.status as any,
+          assigneeId: payload.assigneeId,
+          channelId: payload.channelId,
+          tags: payload.tags,
+        });
+        const task = sp.tasks.get(payload.id);
+        ack?.({ ok: true, task });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('task:delete', (payload: { id: string }, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const sp = storageManager.getSpace(networkId);
+        sp.tasks.delete(payload.id);
+        ack?.({ ok: true });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('task:reorder', (payload: { id: string; sortOrder: number }, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const sp = storageManager.getSpace(networkId);
+        sp.tasks.updateSort(payload.id, payload.sortOrder);
+        ack?.({ ok: true });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
     const RESERVED_PATHS = new Set(['login', 'signup', 'register', 'join', 'device-login', 'api', 'healthz']);
 
     function slugifyPath(name: string): string {
