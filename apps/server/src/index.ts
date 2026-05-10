@@ -730,6 +730,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
         const webUrl = process.env.WEB_URL ?? 'http://localhost:3100';
         if (invite.purpose === 'device') {
+          inviteSessions.set(`device:${payload.code}`, socket);
           ack?.({ ok: true, sessionId: null, registerUrl: `${webUrl}/device-login/${encodeURIComponent(payload.code)}` });
         } else {
           const sessionId = newId();
@@ -905,6 +906,13 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         socketNetworkMap.set(socket.id, networkId);
         const devNetRow = globalDb.networks.get(networkId);
         ack?.({ ok: true, token: userToken, networkId, networkPath: devNetRow?.path ?? 'default', userId: user.id, username: user.username, role: user.role });
+
+        // Deliver token to the daemon socket waiting on this invite code
+        const daemonSocket = inviteSessions.get(`device:${payload.inviteCode}`);
+        if (daemonSocket) {
+          daemonSocket.emit('auth:token:deliver', { token: userToken, userId: user.id, networkId });
+          inviteSessions.delete(`device:${payload.inviteCode}`);
+        }
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }
