@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, AlertTriangle, Copy, Check, Globe, Lock } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, Copy, Check, Globe, Lock, Monitor, Terminal, User } from 'lucide-react';
 import { agentEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { AgentStatusBadge } from '@/components/agent-status-badge';
@@ -152,11 +152,93 @@ export default function AgentDetailPage() {
           <dt className="text-neutral-500">Network ID</dt>
           <dd className="font-mono text-xs">{agent.networkId ?? 'default'}</dd>
         </div>
+        {agent.source && (
+          <div>
+            <dt className="text-neutral-500">来源</dt>
+            <dd>
+              <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                agent.source === 'custom' ? 'bg-violet-50 text-violet-600' :
+                agent.source === 'scanned' ? 'bg-cyan-50 text-cyan-600' :
+                'bg-amber-50 text-amber-600'
+              }`}>
+                {agent.source === 'custom' ? '自定义' : agent.source === 'scanned' ? '自动扫描' : '自注册'}
+              </span>
+            </dd>
+          </div>
+        )}
         <div className="sm:col-span-2">
           <dt className="text-neutral-500">Agent ID</dt>
           <dd className="font-mono text-xs break-all">{agent.id}</dd>
         </div>
       </dl>
+
+      {/* 设备信息 */}
+      <section className="rounded-lg border border-neutral-200 p-4">
+        <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500 flex items-center gap-1.5">
+          <Monitor size={14} />设备信息
+        </h3>
+        {agent.deviceId ? (
+          <dl className="grid grid-cols-1 gap-y-2 sm:grid-cols-2 sm:gap-x-6 text-sm">
+            <div>
+              <dt className="text-neutral-500">设备 ID</dt>
+              <dd>
+                <Link href={`/${np}/devices`} className="font-mono text-xs text-blue-600 hover:underline">
+                  {agent.deviceId}
+                </Link>
+              </dd>
+            </div>
+            <div>
+              <dt className="text-neutral-500">设备状态</dt>
+              <dd>
+                <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                  agent.status === 'online' || agent.status === 'busy' ? 'bg-emerald-50 text-emerald-600' :
+                  agent.status === 'error' ? 'bg-red-50 text-red-600' :
+                  'bg-neutral-100 text-neutral-500'
+                }`}>
+                  {agent.status === 'online' ? '在线' : agent.status === 'busy' ? '忙碌' : agent.status === 'error' ? '错误' : '离线'}
+                </span>
+              </dd>
+            </div>
+          </dl>
+        ) : (
+          <div className="text-xs text-neutral-400">此 Agent 未绑定设备（可能为自定义或虚拟 Agent）。</div>
+        )}
+      </section>
+
+      {/* 运行时配置 */}
+      {(agent.command || agent.ownerId) && (
+        <section className="rounded-lg border border-neutral-200 p-4">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500 flex items-center gap-1.5">
+            <Terminal size={14} />运行时配置
+          </h3>
+          <dl className="grid grid-cols-1 gap-y-2 sm:grid-cols-2 sm:gap-x-6 text-sm">
+            {agent.ownerId && (
+              <div>
+                <dt className="text-neutral-500 flex items-center gap-1"><User size={12} />Owner</dt>
+                <dd className="font-mono text-xs">{agent.ownerId}</dd>
+              </div>
+            )}
+            {agent.command && (
+              <div className="sm:col-span-2">
+                <dt className="text-neutral-500">命令</dt>
+                <dd className="font-mono text-xs break-all">{agent.command}</dd>
+              </div>
+            )}
+            {agent.args && agent.args.length > 0 && (
+              <div className="sm:col-span-2">
+                <dt className="text-neutral-500">参数</dt>
+                <dd className="font-mono text-xs break-all">{agent.args.join(' ')}</dd>
+              </div>
+            )}
+            {agent.cwd && (
+              <div>
+                <dt className="text-neutral-500">工作目录</dt>
+                <dd className="font-mono text-xs break-all">{agent.cwd}</dd>
+              </div>
+            )}
+          </dl>
+        </section>
+      )}
 
       {agent.lastError && (
         <div className="rounded border border-red-500/40 bg-red-500/10 p-3 text-sm">

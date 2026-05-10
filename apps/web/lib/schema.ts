@@ -20,6 +20,7 @@ export interface AgentSnapshot {
   cwd?: string | null;
   deviceId?: string;
   publishedNetworkIds?: string[];
+  source?: 'self-register' | 'scanned' | 'custom';
 }
 
 export interface DiscoveredAgent {
