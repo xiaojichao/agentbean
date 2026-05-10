@@ -372,6 +372,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         }
         socketNetworkMap.set(socket.id, payload.networkId);
         storageManager.getSpace(payload.networkId);
+        if (userId) globalDb.users.setCurrentNetwork(userId, payload.networkId);
         ack?.({ ok: true, network });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
@@ -782,6 +783,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           createdAt: now,
         });
         globalDb.networkMembers.add(privateNetwork.id, userId, 'owner');
+        globalDb.users.setCurrentNetwork(userId, privateNetwork.id);
         storageManager.createSpace(privateNetwork.id);
         channels.ensureDefault(privateNetwork.id);
 
@@ -862,7 +864,17 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         }
 
         const members = globalDb.networkMembers.listByUser(user.id);
-        const primaryNetwork = joinedNetworkId ?? members[0]?.networkId ?? defaultNetworkId;
+        const memberNetworkIds = members.map(m => m.networkId);
+
+        // Prefer: joined network > saved current > first member > default
+        let primaryNetwork = joinedNetworkId;
+        if (!primaryNetwork && user.currentNetworkId && memberNetworkIds.includes(user.currentNetworkId)) {
+          primaryNetwork = user.currentNetworkId;
+        }
+        if (!primaryNetwork) {
+          primaryNetwork = members[0]?.networkId ?? defaultNetworkId;
+        }
+
         const primaryNetRow = globalDb.networks.get(primaryNetwork);
         const userToken = generateToken(user.id, primaryNetwork);
         socket.data.userId = user.id;
@@ -900,6 +912,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const networkId = invite.networkId ?? defaultNetworkId;
         const userToken = generateToken(user.id, networkId);
         globalDb.invites.markUsed(invite.code);
+        globalDb.users.setCurrentNetwork(user.id, networkId);
         socket.data.userId = user.id;
         socket.data.networkId = networkId;
         socket.data.role = user.role;

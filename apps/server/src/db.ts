@@ -310,6 +310,7 @@ export interface UserRow {
   email: string | null;
   passwordHash: string | null;
   role: 'admin' | 'user';
+  currentNetworkId: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -337,6 +338,7 @@ export interface GlobalDb {
     getByEmail(email: string): UserRow | null;
     listAll(): UserRow[];
     delete(id: string): void;
+    setCurrentNetwork(userId: string, networkId: string | null): void;
   };
   networks: {
     create(input: { id?: string; ownerId: string; name: string; path?: string | null; description?: string | null; visibility?: 'public' | 'private'; type?: 'public' | 'local' | 'private'; createdAt: number }): NetworkRow;
@@ -383,6 +385,7 @@ function rowToUser(r: any): UserRow {
     email: r.email ?? null,
     passwordHash: r.password_hash ?? null,
     role: r.role ?? 'user',
+    currentNetworkId: r.current_network_id ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -528,6 +531,9 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   try { raw.exec(`ALTER TABLE agents ADD COLUMN args TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN cwd TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN owner_id TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE users ADD COLUMN current_network_id TEXT`); } catch {}
+
+  const userSetCurrentNetwork = raw.prepare(`UPDATE users SET current_network_id = ?, updated_at = ? WHERE id = ?`);
 
   const deviceUpsert = raw.prepare(`
     INSERT INTO devices (id, user_id, network_id, hostname, tailscale_ip, last_seen_at)
@@ -562,11 +568,15 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
           email: email ?? null,
           passwordHash: passwordHash ?? null,
           role: role ?? 'user' as const,
+          currentNetworkId: null,
           createdAt,
           updatedAt: createdAt,
         };
         userCreate.run(row);
         return row;
+      },
+      setCurrentNetwork: (userId: string, networkId: string | null) => {
+        userSetCurrentNetwork.run(networkId, Date.now(), userId);
       },
       get: (id) => {
         const r = userGet.get(id) as any;
