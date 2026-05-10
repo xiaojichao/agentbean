@@ -54,4 +54,19 @@ describe('AgentRegistry', () => {
     r.register('s2', { id: 'a1', name: 'A', role: 'r', adapterKind: 'codex' });
     expect(r.all().map((a) => a.id)).toEqual(['a1', 'b1']);
   });
+
+  it('registerVirtual creates offline agent with no socket', () => {
+    const r = new AgentRegistry();
+    const rt = r.registerVirtual({ id: 'v1', name: 'Virtual', role: '', adapterKind: 'codex', category: 'executor-hosted', networkId: 'default', source: 'custom' });
+    expect(rt.status).toBe('offline');
+    expect(rt.socketId).toBeNull();
+    expect(rt.source).toBe('custom');
+    expect(r.snapshot('v1')?.status).toBe('offline');
+  });
+
+  it('registerVirtual preserves publishedNetworkIds', () => {
+    const r = new AgentRegistry();
+    r.registerVirtual({ id: 'v1', name: 'V', role: '', adapterKind: 'codex', category: 'executor-hosted', networkId: 'default', publishedNetworkIds: ['net1', 'net2'] });
+    expect(r.snapshot('v1')?.publishedNetworkIds).toEqual(['net1', 'net2']);
+  });
 });

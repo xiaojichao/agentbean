@@ -7,8 +7,8 @@ export interface AgentRegisterInfo {
   name: string;
   role: string;
   adapterKind: AdapterKind;
-  category: AgentCategory;
-  networkId: string;
+  category?: AgentCategory;
+  networkId?: string;
   visibility?: 'public' | 'private';
   ownerId?: string | null;
   command?: string | null;
@@ -16,6 +16,7 @@ export interface AgentRegisterInfo {
   cwd?: string | null;
   deviceId?: string;
   publishedNetworkIds?: string[];
+  source?: 'self-register' | 'scanned' | 'custom';
 }
 
 export interface AgentRuntime extends AgentRegisterInfo {
@@ -44,6 +45,8 @@ export class AgentRegistry {
     }
     const next: AgentRuntime = {
       ...info,
+      category: info.category ?? existing?.category ?? 'executor-hosted',
+      networkId: info.networkId ?? existing?.networkId ?? 'default',
       status: 'online',
       socketId,
       lastHeartbeatAt: now,
@@ -123,6 +126,23 @@ export class AgentRegistry {
 
   snapshot(agentId: string): AgentRuntime | null {
     return this.byId.get(agentId) ?? null;
+  }
+
+  registerVirtual(info: AgentRegisterInfo): AgentRuntime {
+    const now = Date.now();
+    const existing = this.byId.get(info.id);
+    const next: AgentRuntime = {
+      ...info,
+      category: info.category ?? existing?.category ?? 'executor-hosted',
+      networkId: info.networkId ?? existing?.networkId ?? 'default',
+      status: 'offline',
+      socketId: null,
+      lastHeartbeatAt: now,
+      firstSeenAt: existing?.firstSeenAt ?? now,
+      publishedNetworkIds: info.publishedNetworkIds ?? existing?.publishedNetworkIds ?? [],
+    };
+    this.byId.set(info.id, next);
+    return next;
   }
 
   all(): AgentRuntime[] {

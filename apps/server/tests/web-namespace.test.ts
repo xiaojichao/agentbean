@@ -8,6 +8,7 @@ let baseUrl: string;
 
 beforeEach(async () => {
   process.env.AGENT_BEAN_AGENT_TOKEN = 'default:default:tok';
+  process.env.AGENT_BEAN_WEB_TOKEN = 'web-only-token';
   app = await buildApp({ dbPath: ':memory:', agentToken: 'default:default:tok' });
   await new Promise<void>((r) => app.http.listen(0, r));
   const port = (app.http.address() as AddressInfo).port;
@@ -116,5 +117,76 @@ describe('message:send', () => {
 
     ag.close(); web.close();
     await local.close();
+  });
+});
+
+describe('agent:create with publishedNetworkIds', () => {
+  it('creates agent and registers in registry', async () => {
+    const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const createRes = await new Promise<any>((resolve) => {
+      web.emit('agent:create', {
+        name: 'My Custom Agent',
+        adapterKind: 'claude-code',
+        command: 'echo hello',
+        category: 'executor-hosted',
+      }, resolve);
+    });
+    expect(createRes.ok).toBe(true);
+    expect(createRes.agent.name).toBe('My Custom Agent');
+    expect(createRes.agent.source).toBe('custom');
+
+    const snap = await new Promise<any[]>((resolve) => {
+      web.on('agents:snapshot', resolve);
+      web.emit('agents:subscribe', {});
+    });
+    const found = snap.find((a: any) => a.id === createRes.agent.id);
+    expect(found).toBeTruthy();
+    expect(found.name).toBe('My Custom Agent');
+    expect(found.source).toBe('custom');
+
+    web.close();
+  });
+
+  it('creates agent with publishedNetworkIds and auto-publishes', async () => {
+    const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    // Create a local network (user is auto-added as owner)
+    const netRes = await new Promise<any>((resolve) => {
+      web.emit('network:create', { name: 'TestNet', path: 'testnet' }, resolve);
+    });
+    expect(netRes.ok).toBe(true);
+    const testNetId = netRes.network.id;
+
+    // Create agent with publishedNetworkIds pointing to the new network
+    const createRes = await new Promise<any>((resolve) => {
+      web.emit('agent:create', {
+        name: 'Published Agent',
+        adapterKind: 'claude-code',
+        command: 'echo hello',
+        publishedNetworkIds: [testNetId],
+      }, resolve);
+    });
+    expect(createRes.ok).toBe(true);
+    const agentId = createRes.agent.id;
+
+    // Switch to test network
+    const switchRes = await new Promise<any>((resolve) => {
+      web.emit('network:switch', { networkId: testNetId }, resolve);
+    });
+    expect(switchRes.ok).toBe(true);
+
+    // Subscribe and verify agent appears via publishedNetworkIds
+    const snap = await new Promise<any[]>((resolve) => {
+      web.on('agents:snapshot', resolve);
+      web.emit('agents:subscribe', {});
+    });
+    const found = snap.find((a: any) => a.id === agentId);
+    expect(found).toBeTruthy();
+    expect(found.publishedNetworkIds).toContain(testNetId);
+
+    web.close();
   });
 });

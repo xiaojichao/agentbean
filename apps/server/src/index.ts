@@ -535,7 +535,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       }
     });
 
-    socket.on('agent:create', (payload: { name: string; role?: string; adapterKind: string; visibility?: 'public' | 'private'; networkId?: string; category?: string; ownerId?: string; command?: string; args?: string[]; cwd?: string }, ack?: (r: any) => void) => {
+    socket.on('agent:create', (payload: { name: string; role?: string; adapterKind: string; visibility?: 'public' | 'private'; networkId?: string; category?: string; ownerId?: string; command?: string; args?: string[]; cwd?: string; publishedNetworkIds?: string[] }, ack?: (r: any) => void) => {
       try {
         const name = payload.name.trim();
         if (!name) return ack?.({ ok: false, error: 'EMPTY_NAME' });
@@ -547,13 +547,14 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         }
         const id = newId();
         const now = Date.now();
+        const category = (payload.category as import('./db.js').AgentCategory) ?? 'executor-hosted';
         const row = {
           id, name, role: payload.role ?? null,
           adapterKind: payload.adapterKind as import('./db.js').AdapterKind,
           deviceId: null,
           networkId: targetNetworkId,
           visibility: payload.visibility ?? 'public',
-          category: (payload.category as import('./db.js').AgentCategory) ?? 'executor-hosted',
+          category,
           source: 'custom' as const,
           firstSeenAt: now, lastSeenAt: now, lastError: null,
           ownerId: payload.ownerId ?? userId ?? null,
@@ -562,6 +563,59 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           cwd: payload.cwd ?? null,
         };
         db.agents.create(row);
+
+        // Ensure virtual device exists in global DB for FK constraint
+        const virtualDeviceId = `virtual-${userId ?? 'system'}`;
+        globalDb.devices?.upsert({
+          id: virtualDeviceId,
+          userId: userId ?? 'system',
+          networkId: targetNetworkId,
+          lastSeenAt: now,
+        });
+
+        globalDb.agents.upsert({
+          id, name, role: payload.role ?? null,
+          adapterKind: payload.adapterKind as import('./db.js').AdapterKind,
+          deviceId: virtualDeviceId,
+          networkId: targetNetworkId,
+          visibility: payload.visibility ?? 'public',
+          category,
+          source: 'custom',
+          firstSeenAt: now, lastSeenAt: now,
+          lastError: undefined,
+          ownerId: payload.ownerId ?? userId ?? undefined,
+          command: payload.command ?? undefined,
+          args: payload.args ? JSON.stringify(payload.args) : undefined,
+          cwd: payload.cwd ?? undefined,
+        } as any);
+
+        // Register in registry as virtual (offline, no socket)
+        const rt = registry.registerVirtual({
+          id, name,
+          role: payload.role ?? '',
+          adapterKind: payload.adapterKind as import('./db.js').AdapterKind,
+          category,
+          networkId: targetNetworkId,
+          visibility: payload.visibility ?? 'public',
+          ownerId: payload.ownerId ?? userId ?? null,
+          command: payload.command ?? null,
+          args: payload.args ?? null,
+          cwd: payload.cwd ?? null,
+          publishedNetworkIds: [],
+          source: 'custom',
+        });
+
+        // Auto-publish to specified networks
+        if (payload.publishedNetworkIds?.length && userId) {
+          for (const netId of payload.publishedNetworkIds) {
+            if (globalDb.networkMembers.isMember(netId, userId)) {
+              globalDb.agentPublishes.publish(id, netId, userId);
+            }
+          }
+          const publishes = globalDb.agentPublishes.listByAgent(id);
+          rt.publishedNetworkIds = publishes.map((p: any) => p.networkId);
+        }
+
         ack?.({ ok: true, agent: row });
         io.of('/web').emit('agents:snapshot', registry.all().map(snapshotToDto));
       } catch (e: any) {

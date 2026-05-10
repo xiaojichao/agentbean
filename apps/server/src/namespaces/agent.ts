@@ -60,6 +60,7 @@ export interface AgentSnapshotDto {
   cwd?: string | null;
   deviceId?: string;
   publishedNetworkIds?: string[];
+  source?: 'self-register' | 'scanned' | 'custom';
 }
 
 export function snapshotToDto(rt: AgentRuntime): AgentSnapshotDto {
@@ -81,6 +82,7 @@ export function snapshotToDto(rt: AgentRuntime): AgentSnapshotDto {
     cwd: rt.cwd ?? null,
     deviceId: rt.deviceId,
     publishedNetworkIds: rt.publishedNetworkIds,
+    source: rt.source,
   };
 }
 
@@ -171,7 +173,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           deviceId: a.deviceId,
           networkId: a.networkId,
           visibility: rt.visibility ?? 'public',
-          category: rt.category,
+          category: rt.category ?? 'executor-hosted',
           firstSeenAt: rt.firstSeenAt, lastSeenAt: now, lastError: null,
           ownerId: rt.ownerId ?? null,
           command: rt.command ?? null,
