@@ -118,11 +118,11 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       legacyMatch = mismatch === 0;
     }
 
-    const parsed = legacyMatch ? parseToken(auth.token) : (deps.globalDb ? verifyUserToken(auth.token, deps.globalDb) : null);
-    if (!parsed || parsed.networkId !== auth.networkId) {
+    const parsed = legacyMatch ? null : (deps.globalDb ? verifyUserToken(auth.token, deps.globalDb) : null);
+    if (!legacyMatch && (!parsed || parsed.networkId !== auth.networkId)) {
       return next(new Error('auth: token network mismatch'));
     }
-    if (!legacyMatch && deps.globalDb) {
+    if (!legacyMatch && parsed && deps.globalDb) {
       const network = deps.globalDb.networks.get(auth.networkId);
       if (!network) return next(new Error('auth: network not found'));
       if (network.visibility !== 'public' && !deps.globalDb.networkMembers.isMember(auth.networkId, parsed.userId)) {

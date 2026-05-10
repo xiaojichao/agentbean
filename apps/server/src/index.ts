@@ -731,7 +731,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
         const webUrl = process.env.WEB_URL ?? 'http://localhost:3100';
         if (invite.purpose === 'device') {
-          inviteSessions.set(`device:${payload.code}`, socket);
+          // Only store the first socket (the daemon's) — don't let browser validation overwrite it
+          if (!inviteSessions.has(`device:${payload.code}`)) {
+            inviteSessions.set(`device:${payload.code}`, socket);
+          }
           ack?.({ ok: true, sessionId: null, registerUrl: `${webUrl}/device-login/${encodeURIComponent(payload.code)}` });
         } else {
           const sessionId = newId();
