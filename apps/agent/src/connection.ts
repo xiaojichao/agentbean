@@ -17,7 +17,8 @@ export function createConnection(cfg: AgentConfig, adapter: CliAdapter): Connect
 
   return {
     async start() {
-      socket = io(cfg.server.url, {
+      const agentUrl = cfg.server.url.endsWith('/agent') ? cfg.server.url : cfg.server.url + '/agent';
+      socket = io(agentUrl, {
         auth: {
           token: cfg.server.token,
           agentId: cfg.id,
