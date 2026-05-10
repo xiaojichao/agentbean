@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Monitor, Circle, Plus, Pencil, Copy, Zap } from 'lucide-react';
-import { authEvents, deviceEvents, getResolvedServerUrl, getWebSocket } from '@/lib/socket';
+import { Monitor, Circle, Plus, Pencil, Copy, Zap, Globe, Terminal, Server, RefreshCw, X, Check } from 'lucide-react';
+import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -24,7 +24,6 @@ const STATUS_BG: Record<string, string> = {
 export default function DevicesPage() {
   const conn = useAgentBeanStore((s) => s.conn);
   const devices = useAgentBeanStore((s) => s.devices);
-  const agents = useAgentBeanStore((s) => s.agents);
   const applyDevicesSnapshot = useAgentBeanStore((s) => s.applyDevicesSnapshot);
   const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
 
@@ -42,9 +41,7 @@ export default function DevicesPage() {
   }, [conn, applyDevicesSnapshot]);
 
   const deviceList = useMemo(() => Object.values(devices), [devices]);
-  const agentList = useMemo(() => Object.values(agents), [agents]);
   const selectedDevice = deviceList.find((d) => d.id === selectedId) ?? null;
-  const deviceAgents = selectedDevice ? agentList.filter((a) => a.deviceId === selectedDevice.id) : [];
 
   return (
     <div className="-m-6 flex h-[calc(100vh-40px)]">
@@ -89,7 +86,6 @@ export default function DevicesPage() {
         {selectedDevice && (
           <DeviceDetail
             device={selectedDevice}
-            agents={deviceAgents}
             editName={editName}
             setEditName={setEditName}
             deviceName={deviceName}
@@ -116,9 +112,8 @@ function EmptyState() {
   );
 }
 
-function DeviceDetail({ device, agents, editName, setEditName, deviceName, setDeviceName, showDeleteConfirm, setShowDeleteConfirm, currentNetworkId }: {
+function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName, showDeleteConfirm, setShowDeleteConfirm, currentNetworkId }: {
   device: { id: string; hostname?: string; status: string; tailscaleIp?: string; lastSeenAt: number; agentIds: string[] };
-  agents: { id: string; name: string; role: string; adapterKind: string; status: string; category?: string; visibility?: 'public' | 'private' }[];
   editName: boolean;
   setEditName: (v: boolean) => void;
   deviceName: string;
@@ -130,10 +125,34 @@ function DeviceDetail({ device, agents, editName, setEditName, deviceName, setDe
   const [inviteCommand, setInviteCommand] = useState('');
   const [copied, setCopied] = useState(false);
   const [genError, setGenError] = useState('');
-  const [togglingId, setTogglingId] = useState<string | null>(null);
-  const updateAgent = useAgentBeanStore((s) => s.updateAgent);
-
+  const [deviceAgents, setDeviceAgents] = useState<any[]>([]);
+  const [scanning, setScanning] = useState(false);
+  const [showAddCustom, setShowAddCustom] = useState(false);
+  const [selectNetworkAgent, setSelectNetworkAgent] = useState<any | null>(null);
   const displayName = device.hostname ?? device.id;
+
+  useEffect(() => {
+    if (!device) return;
+    deviceEvents().agentsList(device.id).then((res) => {
+      if (res.ok && res.agents) setDeviceAgents(res.agents);
+    });
+  }, [device?.id]);
+
+  const handleScan = async () => {
+    setScanning(true);
+    await deviceEvents().scan(device.id);
+    setTimeout(() => {
+      deviceEvents().agentsList(device.id).then((res) => {
+        if (res.ok && res.agents) setDeviceAgents(res.agents);
+        setScanning(false);
+      });
+    }, 2000);
+  };
+
+  const executorAgents = deviceAgents.filter((a) => a.category === 'executor-hosted');
+  const agentosAgents = deviceAgents.filter((a) => a.category === 'agentos-hosted');
+  const customAgents = deviceAgents.filter((a) => a.source === 'custom');
+  const standaloneAgents = deviceAgents.filter((a) => a.category === 'standalone-cli');
 
   const handleEditName = () => {
     setDeviceName(displayName);
@@ -142,7 +161,6 @@ function DeviceDetail({ device, agents, editName, setEditName, deviceName, setDe
 
   const saveName = () => {
     setEditName(false);
-    // TODO: persist name change
   };
 
   const generateConnect = async () => {
@@ -162,16 +180,6 @@ function DeviceDetail({ device, agents, editName, setEditName, deviceName, setDe
     navigator.clipboard.writeText(inviteCommand);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  };
-
-  const toggleVisibility = (agentId: string, current: 'public' | 'private' | undefined) => {
-    if (togglingId) return;
-    const next = current === 'public' ? 'private' : 'public';
-    setTogglingId(agentId);
-    getWebSocket().emit('agent:update', { id: agentId, visibility: next }, (res: { ok: boolean }) => {
-      setTogglingId(null);
-      if (res.ok) updateAgent(agentId, { visibility: next });
-    });
   };
 
   return (
@@ -221,7 +229,7 @@ function DeviceDetail({ device, agents, editName, setEditName, deviceName, setDe
           <div className="space-y-2">
             <InfoRow label="设备 ID" value={device.id} />
             <InfoRow label="最后在线" value={new Date(device.lastSeenAt).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })} />
-            <InfoRow label="Agent 数量" value={`${agents.length}`} />
+            <InfoRow label="Agent 数量" value={`${deviceAgents.length}`} />
           </div>
         </section>
 
@@ -242,45 +250,47 @@ function DeviceDetail({ device, agents, editName, setEditName, deviceName, setDe
           {genError && <p className="mt-2 text-sm text-red-600">{genError}</p>}
         </section>
 
-        {/* AGENTS ON THIS DEVICE */}
-        <section className="rounded-lg border border-neutral-200 p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">此设备上的 Agent ({agents.length})</h3>
-          </div>
-          {agents.length === 0 ? (
-            <div className="text-sm text-neutral-400">此设备暂无 Agent</div>
-          ) : (
-            <div className="space-y-1.5">
-              {agents.map((agent) => (
-                <div key={agent.id} className="flex items-center gap-3 rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50">
-                    <Zap size={14} className="text-amber-600" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">{agent.name}</div>
-                    <div className="text-xs text-neutral-400">{agent.adapterKind}</div>
-                  </div>
-                  <button
-                    onClick={() => toggleVisibility(agent.id, agent.visibility)}
-                    disabled={togglingId === agent.id}
-                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
-                      agent.visibility === 'public' ? 'bg-emerald-500' : 'bg-neutral-300'
-                    } ${togglingId === agent.id ? 'opacity-50' : ''}`}
-                    title={agent.visibility === 'public' ? '公开 — 点击设为私有' : '私有 — 点击设为公开'}
-                  >
-                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                      agent.visibility === 'public' ? 'translate-x-4' : 'translate-x-0.5'
-                    }`} />
-                  </button>
-                  <span className={`shrink-0 text-[10px] font-medium ${agent.visibility === 'public' ? 'text-emerald-600' : 'text-neutral-400'}`}>
-                    {agent.visibility === 'public' ? '公开' : '私有'}
-                  </span>
-                  <Circle size={6} className={`shrink-0 fill-current ${agent.status === 'online' ? 'text-emerald-500' : 'text-neutral-300'}`} />
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
+        {/* AGENT GROUPS */}
+        <AgentGroup
+          title="运行时 (executor-hosted)"
+          subtitle="Coding Agent CLIs"
+          icon={<Zap size={14} className="text-amber-600" />}
+          iconBg="bg-amber-50"
+          agents={executorAgents}
+          scanning={scanning}
+          onScan={handleScan}
+          onSelectNetwork={setSelectNetworkAgent}
+        />
+        <AgentGroup
+          title="AgentOS (agentos-hosted)"
+          subtitle="Gateway-managed agents"
+          icon={<Globe size={14} className="text-blue-600" />}
+          iconBg="bg-blue-50"
+          agents={agentosAgents}
+          scanning={scanning}
+          onScan={handleScan}
+          onSelectNetwork={setSelectNetworkAgent}
+        />
+        <AgentGroup
+          title="自定义 Agent"
+          subtitle="User-created agents"
+          icon={<Terminal size={14} className="text-violet-600" />}
+          iconBg="bg-violet-50"
+          agents={customAgents}
+          showAddButton
+          onAdd={() => setShowAddCustom(true)}
+          onSelectNetwork={setSelectNetworkAgent}
+        />
+        <AgentGroup
+          title="独立 Agent (standalone-cli)"
+          subtitle="Standalone agent apps"
+          icon={<Server size={14} className="text-teal-600" />}
+          iconBg="bg-teal-50"
+          agents={standaloneAgents}
+          scanning={scanning}
+          onScan={handleScan}
+          onSelectNetwork={setSelectNetworkAgent}
+        />
 
         {/* ACTIONS */}
         <section className="rounded-lg border border-red-200 p-4">
@@ -305,6 +315,24 @@ function DeviceDetail({ device, agents, editName, setEditName, deviceName, setDe
           )}
         </section>
       </div>
+
+      {selectNetworkAgent && (
+        <SelectNetworkDialog
+          agent={selectNetworkAgent}
+          onClose={() => setSelectNetworkAgent(null)}
+        />
+      )}
+      {showAddCustom && (
+        <AddCustomAgentDialog
+          onClose={() => setShowAddCustom(false)}
+          onCreated={() => {
+            setShowAddCustom(false);
+            deviceEvents().agentsList(device.id).then((res) => {
+              if (res.ok && res.agents) setDeviceAgents(res.agents);
+            });
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -369,6 +397,232 @@ function AddDeviceDialog({ onClose, currentNetworkId }: { onClose: () => void; c
 
         <div className="mt-6 flex justify-end">
           <button onClick={onClose} className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-50">关闭</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AgentGroup({ title, subtitle, icon, iconBg, agents, scanning, onScan, showAddButton, onAdd, onSelectNetwork }: {
+  title: string;
+  subtitle: string;
+  icon: React.ReactNode;
+  iconBg: string;
+  agents: any[];
+  scanning?: boolean;
+  onScan?: () => void;
+  showAddButton?: boolean;
+  onAdd?: () => void;
+  onSelectNetwork: (agent: any) => void;
+}) {
+  return (
+    <section className="rounded-lg border border-neutral-200 p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">{title}</h3>
+          <p className="text-[11px] text-neutral-400">{subtitle}</p>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {showAddButton && onAdd && (
+            <button onClick={onAdd} className="flex items-center gap-1 rounded-md border border-neutral-300 px-2.5 py-1 text-xs hover:bg-neutral-50">
+              <Plus size={12} /> 添加
+            </button>
+          )}
+          {onScan && (
+            <button onClick={onScan} disabled={scanning} className="flex items-center gap-1 rounded-md border border-neutral-300 px-2.5 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50">
+              <RefreshCw size={12} className={scanning ? 'animate-spin' : ''} /> 扫描
+            </button>
+          )}
+        </div>
+      </div>
+      {agents.length === 0 ? (
+        <div className="py-4 text-center text-xs text-neutral-400">暂无 Agent</div>
+      ) : (
+        <div className="space-y-1.5">
+          {agents.map((agent) => (
+            <AgentRow key={agent.id} agent={agent} icon={icon} iconBg={iconBg} onSelectNetwork={onSelectNetwork} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function AgentRow({ agent, icon, iconBg, onSelectNetwork }: {
+  agent: any;
+  icon: React.ReactNode;
+  iconBg: string;
+  onSelectNetwork: (agent: any) => void;
+}) {
+  const publishedCount = agent.publishedNetworkIds?.length ?? 0;
+  return (
+    <div className="flex items-center gap-3 rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
+      <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${iconBg}`}>
+        {icon}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium truncate">{agent.name}</div>
+        <div className="text-xs text-neutral-400">{agent.adapterKind}</div>
+      </div>
+      {publishedCount > 0 && (
+        <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+          已发布到 {publishedCount} 个网络
+        </span>
+      )}
+      <Circle size={6} className={`shrink-0 fill-current ${agent.status === 'online' ? 'text-emerald-500' : 'text-neutral-300'}`} />
+      <button onClick={() => onSelectNetwork(agent)} className="shrink-0 rounded-md border border-neutral-300 px-2 py-1 text-[11px] hover:bg-neutral-50">
+        选择网络
+      </button>
+    </div>
+  );
+}
+
+function SelectNetworkDialog({ agent, onClose }: { agent: any; onClose: () => void }) {
+  const networks = useAgentBeanStore((s) => s.networks);
+  const currentUser = useAgentBeanStore((s) => s.currentUser);
+  const [publishedIds, setPublishedIds] = useState<Set<string>>(new Set(agent.publishedNetworkIds ?? []));
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+
+  const isExecutor = agent.category === 'executor-hosted';
+  const visibleNetworks = isExecutor
+    ? networks.filter((n) => n.visibility === 'private' || n.ownerId === currentUser?.id)
+    : networks;
+
+  const toggle = async (networkId: string) => {
+    setLoadingId(networkId);
+    const isPublished = publishedIds.has(networkId);
+    if (isPublished) {
+      const res = await agentEvents().unpublish(agent.id, networkId);
+      if (res.ok) {
+        setPublishedIds((prev) => { const next = new Set(prev); next.delete(networkId); return next; });
+      }
+    } else {
+      const res = await agentEvents().publish(agent.id, networkId);
+      if (res.ok) {
+        setPublishedIds((prev) => new Set(prev).add(networkId));
+      }
+    }
+    setLoadingId(null);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="mx-4 w-full max-w-md rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">选择网络 — {agent.name}</h2>
+          <button onClick={onClose} className="rounded-md p-1 hover:bg-neutral-100"><X size={16} /></button>
+        </div>
+        {isExecutor && (
+          <p className="mt-2 text-xs text-neutral-500">运行时 Agent 仅可发布到私有网络或您拥有的网络。</p>
+        )}
+        <div className="mt-4 max-h-64 space-y-1 overflow-y-auto">
+          {visibleNetworks.map((net) => {
+            const checked = publishedIds.has(net.id);
+            return (
+              <label key={net.id} className="flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 hover:bg-neutral-50">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={loadingId === net.id}
+                  onChange={() => toggle(net.id)}
+                  className="h-4 w-4 rounded border-neutral-300"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium truncate">{net.name}</div>
+                  <div className="text-[11px] text-neutral-400">{net.visibility === 'private' ? '私有' : '公开'}</div>
+                </div>
+                {checked && <Check size={14} className="text-emerald-600" />}
+              </label>
+            );
+          })}
+          {visibleNetworks.length === 0 && (
+            <div className="py-4 text-center text-xs text-neutral-400">暂无可选网络</div>
+          )}
+        </div>
+        <div className="mt-6 flex justify-end">
+          <button onClick={onClose} className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white hover:bg-neutral-800">完成</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AddCustomAgentDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const [name, setName] = useState('');
+  const [adapterKind, setAdapterKind] = useState('claude-code');
+  const [command, setCommand] = useState('');
+  const [args, setArgs] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const categoryMap: Record<string, string> = {
+    codex: 'executor-hosted',
+    'claude-code': 'executor-hosted',
+    hermes: 'agentos-hosted',
+    openclaw: 'agentos-hosted',
+    standalone: 'standalone-cli',
+  };
+
+  const handleSubmit = async () => {
+    if (!name.trim() || !command.trim()) {
+      setError('名称和命令为必填项');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    const payload = {
+      name: name.trim(),
+      adapterKind,
+      command: command.trim(),
+      args: args.trim() ? args.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+      category: categoryMap[adapterKind] ?? 'executor-hosted',
+    };
+    const res = await agentEvents().create(payload);
+    setLoading(false);
+    if (res.ok) {
+      onCreated();
+    } else {
+      setError(res.error ?? '创建失败');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="mx-4 w-full max-w-md rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">添加自定义 Agent</h2>
+          <button onClick={onClose} className="rounded-md p-1 hover:bg-neutral-100"><X size={16} /></button>
+        </div>
+        <div className="mt-4 space-y-3">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600">名称 <span className="text-red-500">*</span></label>
+            <input value={name} onChange={(e) => setName(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="My Agent" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600">适配器</label>
+            <select value={adapterKind} onChange={(e) => setAdapterKind(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400">
+              <option value="codex">codex</option>
+              <option value="claude-code">claude-code</option>
+              <option value="hermes">hermes</option>
+              <option value="openclaw">openclaw</option>
+              <option value="standalone">standalone</option>
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600">命令 <span className="text-red-500">*</span></label>
+            <input value={command} onChange={(e) => setCommand(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="npx codex" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600">参数 (逗号分隔)</label>
+            <input value={args} onChange={(e) => setArgs(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="--verbose, --port, 3000" />
+          </div>
+        </div>
+        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+        <div className="mt-6 flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-50">取消</button>
+          <button onClick={handleSubmit} disabled={loading} className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white hover:bg-neutral-800 disabled:opacity-50">
+            {loading ? '创建中...' : '创建'}
+          </button>
         </div>
       </div>
     </div>

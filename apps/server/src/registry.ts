@@ -15,6 +15,7 @@ export interface AgentRegisterInfo {
   args?: string[] | null;
   cwd?: string | null;
   deviceId?: string;
+  publishedNetworkIds?: string[];
 }
 
 export interface AgentRuntime extends AgentRegisterInfo {
@@ -23,6 +24,7 @@ export interface AgentRuntime extends AgentRegisterInfo {
   lastHeartbeatAt: number;
   firstSeenAt: number;
   lastError?: { at: number; message: string };
+  publishedNetworkIds: string[];
 }
 
 type KickListener = (oldSocketId: string) => void;
@@ -46,6 +48,7 @@ export class AgentRegistry {
       socketId,
       lastHeartbeatAt: now,
       firstSeenAt: existing?.firstSeenAt ?? now,
+      publishedNetworkIds: info.publishedNetworkIds ?? existing?.publishedNetworkIds ?? [],
     };
     this.byId.set(info.id, next);
     return next;
@@ -108,6 +111,13 @@ export class AgentRegistry {
     const a = this.byId.get(agentId);
     if (!a) return null;
     a.networkId = networkId;
+    return a;
+  }
+
+  updatePublishedNetworks(agentId: string, networkIds: string[]): AgentRuntime | null {
+    const a = this.byId.get(agentId);
+    if (!a) return null;
+    a.publishedNetworkIds = networkIds;
     return a;
   }
 

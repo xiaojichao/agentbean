@@ -29,8 +29,9 @@ const NETWORK_SCHEMA = `
 CREATE TABLE IF NOT EXISTS channels (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  created_by TEXT
+  visibility TEXT NOT NULL DEFAULT 'public',
+  created_by TEXT,
+  created_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS channel_members (
@@ -41,6 +42,15 @@ CREATE TABLE IF NOT EXISTS channel_members (
 );
 
 CREATE INDEX IF NOT EXISTS idx_members_agent ON channel_members(agent_id);
+
+CREATE TABLE IF NOT EXISTS channel_user_members (
+  channel_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  joined_at INTEGER NOT NULL,
+  PRIMARY KEY (channel_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_members_user ON channel_user_members(user_id);
 
 CREATE TABLE IF NOT EXISTS messages (
   id          TEXT PRIMARY KEY,
@@ -161,6 +171,9 @@ export class StorageManager {
 
     const db = new Database(dbPath);
     db.exec(NETWORK_SCHEMA);
+    try { db.exec(`ALTER TABLE pipeline_runs ADD COLUMN name TEXT`); } catch {}
+    try { db.exec(`ALTER TABLE channels ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'`); } catch {}
+    try { db.exec(`ALTER TABLE channels ADD COLUMN created_by TEXT`); } catch {}
 
     const dao = createDao(db);
     const space: StorageSpace = { networkId, db, dbPath, artifactDir, ...dao };
@@ -183,6 +196,8 @@ export class StorageManager {
     const db = new Database(dbPath);
     db.exec(NETWORK_SCHEMA);
     try { db.exec(`ALTER TABLE pipeline_runs ADD COLUMN name TEXT`); } catch {}
+    try { db.exec(`ALTER TABLE channels ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'`); } catch {}
+    try { db.exec(`ALTER TABLE channels ADD COLUMN created_by TEXT`); } catch {}
     const dao = createDao(db);
     const space: StorageSpace = { networkId, db, dbPath, artifactDir, ...dao };
     this.spaces.set(networkId, space);

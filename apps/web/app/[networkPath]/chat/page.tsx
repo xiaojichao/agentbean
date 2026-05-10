@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Hash, Search, Plus, Inbox, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck } from 'lucide-react';
+import { Hash, Search, Plus, Inbox, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock } from 'lucide-react';
 import { getWebSocket } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import type { ChatMessage } from '@/lib/schema';
@@ -104,7 +104,7 @@ export default function ChatPage() {
           </div>
           {filteredChannels.map((ch) => (
             <button key={ch.id} onClick={() => setActiveChannel(ch.id)} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${activeChannel === ch.id ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
-              <Hash size={14} className="text-neutral-400 shrink-0" />
+              {ch.visibility === 'private' ? <Lock size={14} className="text-neutral-400 shrink-0" /> : <Hash size={14} className="text-neutral-400 shrink-0" />}
               <span className="truncate">{ch.name}</span>
             </button>
           ))}
@@ -124,7 +124,7 @@ export default function ChatPage() {
           <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-2">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <Hash size={14} className="text-neutral-400 shrink-0" />
+                {activeChannelObj?.visibility === 'private' ? <Lock size={14} className="text-neutral-400 shrink-0" /> : <Hash size={14} className="text-neutral-400 shrink-0" />}
                 <span className="text-sm font-semibold truncate">{activeName}</span>
               </div>
               <div className="mt-0.5 text-xs text-neutral-400 truncate">— 通用频道</div>

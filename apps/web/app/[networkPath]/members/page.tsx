@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Bot, Circle, ChevronRight, User, Check } from 'lucide-react';
-import { deviceEvents } from '@/lib/socket';
+import { Bot, Circle, ChevronRight, User, Check, Zap } from 'lucide-react';
+import { memberEvents, deviceEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import type { AgentSnapshot } from '@/lib/schema';
 
@@ -16,24 +16,35 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'activity', label: 'ACTIVITY' },
 ];
 
+interface HumanMember {
+  userId: string;
+  role: string;
+  username: string;
+}
+
 export default function MembersPage() {
   const conn = useAgentBeanStore((s) => s.conn);
   const devices = useAgentBeanStore((s) => s.devices);
   const agents = useAgentBeanStore((s) => s.agents);
-  const currentUser = useAgentBeanStore((s) => s.currentUser);
   const applyDevicesSnapshot = useAgentBeanStore((s) => s.applyDevicesSnapshot);
+  const applyAgentsSnapshot = useAgentBeanStore((s) => s.applyAgentsSnapshot);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('profile');
   const [agentsExpanded, setAgentsExpanded] = useState(true);
   const [humansExpanded, setHumansExpanded] = useState(true);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [humanMembers, setHumanMembers] = useState<HumanMember[]>([]);
 
   useEffect(() => {
     if (conn !== 'open') return;
     deviceEvents().subscribe();
     const unsub = deviceEvents().onSnapshot((list) => applyDevicesSnapshot(list));
+    memberEvents().list().then((res) => {
+      if (res.ok && res.humans) setHumanMembers(res.humans);
+      if (res.ok && res.agents) applyAgentsSnapshot(res.agents);
+    });
     return () => { unsub(); };
-  }, [conn, applyDevicesSnapshot]);
+  }, [conn, applyDevicesSnapshot, applyAgentsSnapshot]);
 
   const agentList = useMemo(() => Object.values(agents), [agents]);
   const toggleCheck = (id: string) => {
@@ -47,6 +58,7 @@ export default function MembersPage() {
 
   const selectedAgent = agentList.find((a) => a.id === selectedId);
   const selectedDevice = selectedAgent?.deviceId ? devices[selectedAgent.deviceId] : undefined;
+  const selectedHuman = selectedId?.startsWith('user:') ? humanMembers.find((h) => `user:${h.userId}` === selectedId) : undefined;
 
   return (
     <div className="-m-6 flex h-[calc(100vh-40px)]">
@@ -73,6 +85,11 @@ export default function MembersPage() {
                     </button>
                     <Circle size={8} className={`shrink-0 fill-current ${agent.status === 'online' ? 'text-emerald-500' : agent.status === 'busy' ? 'text-amber-500' : 'text-neutral-300'}`} />
                     <span className={`truncate text-sm ${selectedId === agent.id ? 'font-medium text-neutral-900' : 'text-neutral-700'}`}>{agent.name}</span>
+                    {(agent.publishedNetworkIds?.length ?? 0) > 0 && (
+                      <span className="ml-auto shrink-0 rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-medium text-blue-600">
+                        <Zap size={8} className="inline -mt-0.5" /> {agent.publishedNetworkIds!.length + 1}网
+                      </span>
+                    )}
                   </div>
                 ))}
                 {agentList.length === 0 && <div className="px-2 py-2 text-xs text-neutral-400">暂无 Agent</div>}
@@ -85,20 +102,20 @@ export default function MembersPage() {
             <button onClick={() => setHumansExpanded((v) => !v)} className="flex w-full items-center gap-1.5 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-neutral-500 hover:text-neutral-700">
               <ChevronRight size={12} className={`shrink-0 transition-transform ${humansExpanded ? 'rotate-90' : ''}`} />
               HUMANS
-              <span className="ml-auto rounded-full bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{currentUser ? 1 : 0}</span>
+              <span className="ml-auto rounded-full bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{humanMembers.length}</span>
             </button>
             {humansExpanded && (
               <div className="mt-0.5 space-y-0.5">
-                {currentUser && (
-                  <div onClick={() => setSelectedId(`user:${currentUser.id}`)} className={`flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer ${selectedId === `user:${currentUser.id}` ? 'bg-pink-100' : 'hover:bg-neutral-100'}`}>
-                    <button onClick={(e) => { e.stopPropagation(); toggleCheck(`user:${currentUser.id}`); }} className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-neutral-300">
-                      {checkedIds.has(`user:${currentUser.id}`) && <Check size={10} className="text-neutral-700" />}
+                {humanMembers.map((h) => (
+                  <div key={h.userId} onClick={() => setSelectedId(`user:${h.userId}`)} className={`flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer ${selectedId === `user:${h.userId}` ? 'bg-pink-100' : 'hover:bg-neutral-100'}`}>
+                    <button onClick={(e) => { e.stopPropagation(); toggleCheck(`user:${h.userId}`); }} className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-neutral-300">
+                      {checkedIds.has(`user:${h.userId}`) && <Check size={10} className="text-neutral-700" />}
                     </button>
                     <Circle size={8} className="shrink-0 fill-current text-purple-500" />
-                    <span className={`truncate text-sm ${selectedId === `user:${currentUser.id}` ? 'font-medium text-neutral-900' : 'text-neutral-700'}`}>{currentUser.username}</span>
+                    <span className={`truncate text-sm ${selectedId === `user:${h.userId}` ? 'font-medium text-neutral-900' : 'text-neutral-700'}`}>{h.username}</span>
                   </div>
-                )}
-                {!currentUser && <div className="px-2 py-2 text-xs text-neutral-400">暂无用户</div>}
+                ))}
+                {humanMembers.length === 0 && <div className="px-2 py-2 text-xs text-neutral-400">暂无用户</div>}
               </div>
             )}
           </div>
@@ -120,7 +137,7 @@ export default function MembersPage() {
         <div className="flex-1 overflow-y-auto p-6">
           {!selectedId && <EmptyState />}
           {selectedId && tab === 'profile' && selectedAgent && <AgentProfile agent={selectedAgent} device={selectedDevice} />}
-          {selectedId && tab === 'profile' && !selectedAgent && selectedId.startsWith('user:') && currentUser && <HumanProfile />}
+          {selectedId && tab === 'profile' && !selectedAgent && selectedId?.startsWith('user:') && selectedHuman && <HumanProfile human={selectedHuman} />}
           {tab !== 'profile' && <PlaceholderTab name={TABS.find((t) => t.id === tab)?.label ?? ''} />}
         </div>
       </div>
@@ -231,13 +248,10 @@ function AgentProfile({ agent, device }: { agent: AgentSnapshot; device?: { host
   );
 }
 
-function HumanProfile() {
+function HumanProfile({ human }: { human: HumanMember }) {
   const currentUser = useAgentBeanStore((s) => s.currentUser);
-  const networks = useAgentBeanStore((s) => s.networks);
   const agents = useAgentBeanStore((s) => s.agents);
-  const userAgents = Object.values(agents).filter((a) => a.ownerId === currentUser?.id);
-
-  if (!currentUser) return null;
+  const userAgents = Object.values(agents).filter((a) => a.ownerId === human.userId);
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -247,20 +261,22 @@ function HumanProfile() {
         </div>
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-lg font-semibold">{currentUser.username}</h1>
+            <h1 className="text-lg font-semibold">{human.username}</h1>
             <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
               <Circle size={6} className="fill-current" /> 在线
             </span>
           </div>
-          <div className="mt-0.5 text-sm text-neutral-500">@{currentUser.username}</div>
+          <div className="mt-0.5 text-sm text-neutral-500">@{human.username}</div>
         </div>
       </div>
 
       <Section title="信息">
-        <InfoRow label="用户名" value={currentUser.username} />
-        <InfoRow label="邮箱" value={currentUser.email ?? '未设置'} />
-        <InfoRow label="用户 ID" value={currentUser.id} />
-        <InfoRow label="网络数" value={`${networks.length}`} />
+        <InfoRow label="用户名" value={human.username} />
+        <InfoRow label="角色" value={human.role} />
+        <InfoRow label="用户 ID" value={human.userId} />
+        {currentUser?.id === human.userId && (
+          <InfoRow label="邮箱" value={currentUser.email ?? '未设置'} />
+        )}
       </Section>
 
       {userAgents.length > 0 && (

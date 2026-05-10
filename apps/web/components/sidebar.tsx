@@ -101,7 +101,7 @@ export function Sidebar() {
                       <span className={`truncate ${n.id === currentNetworkId ? 'font-medium text-neutral-900' : 'text-neutral-600'}`}>
                         {n.name}
                       </span>
-                      {n.visibility === 'public' ? (
+                      {n.type === 'public' ? (
                         <Globe size={10} className="shrink-0 text-neutral-400 ml-auto" />
                       ) : (
                         <Lock size={10} className="shrink-0 text-neutral-400 ml-auto" />
@@ -213,7 +213,7 @@ function CreateNetworkDialog({ onClose, onCreated }: { onClose: () => void; onCr
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
       <div className="mx-4 w-full max-w-sm rounded-xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-semibold">创建网络</h2>
-        <p className="mt-1 text-sm text-neutral-500">{isAdmin ? '创建一个新的网络。创建后将自动切换到该网络。' : '创建一个新的私有网络。创建后将自动切换到该网络。'}</p>
+        <p className="mt-1 text-sm text-neutral-500">{isAdmin ? '创建一个新的网络。创建后将自动切换到该网络。' : '创建一个本地网络。创建后将自动切换到该网络。'}</p>
 
         <div className="mt-4 space-y-3">
           <div>

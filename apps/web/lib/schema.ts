@@ -19,6 +19,7 @@ export interface AgentSnapshot {
   args?: string[] | null;
   cwd?: string | null;
   deviceId?: string;
+  publishedNetworkIds?: string[];
 }
 
 export interface DiscoveredAgent {
@@ -40,7 +41,7 @@ export interface RuntimeInfo {
 
 export type ConnState = 'connecting' | 'open' | 'lost';
 
-export interface ChannelSummary { id: string; name: string; createdAt: number; }
+export interface ChannelSummary { id: string; name: string; visibility?: 'public' | 'private'; createdBy?: string | null; createdAt: number; }
 
 export interface ChatMessage {
   id: string;
@@ -77,6 +78,7 @@ export interface NetworkSummary {
   path: string;
   description: string | null;
   visibility?: 'public' | 'private';
+  type?: 'public' | 'local' | 'private';
   createdAt: number;
 }
 
