@@ -33,6 +33,7 @@ export default function LoginPage() {
       if (res.ok && res.token) {
         localStorage.setItem('agentbean.token', res.token);
         useAgentBeanStore.getState().setAuthToken(res.token);
+        useAgentBeanStore.getState().setCurrentNetworkId(res.networkId ?? 'default');
         if (res.username) {
           useAgentBeanStore.getState().setCurrentUser({
             id: res.userId ?? '',

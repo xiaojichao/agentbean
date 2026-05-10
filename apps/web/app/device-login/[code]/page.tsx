@@ -40,7 +40,7 @@ export default function DeviceLoginPage() {
       });
       resetWebSocket();
       const np = res.networkPath ?? 'default';
-      router.push(`/${np}/dashboard`);
+      router.push(`/${np}/devices`);
     } catch (err: any) {
       setError(err?.message ?? 'LOGIN_FAILED');
     } finally {
