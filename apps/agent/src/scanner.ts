@@ -53,6 +53,8 @@ export async function scanRuntimes(): Promise<RuntimeInfo[]> {
     { bin: 'claude', name: 'Claude Code', adapterKind: 'claude-code' as AdapterKind },
     { bin: 'codex', name: 'Codex CLI', adapterKind: 'codex' as AdapterKind },
     { bin: 'kimi-cli', name: 'Kimi CLI', adapterKind: 'codex' as AdapterKind },
+    { bin: 'manus', name: 'Manus', adapterKind: 'standalone' as AdapterKind },
+    { bin: 'anygen', name: 'Anygen', adapterKind: 'standalone' as AdapterKind },
   ];
 
   const results: RuntimeInfo[] = [];
