@@ -256,6 +256,32 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       }
     });
 
+    socket.on('device:agents:list', (payload: { deviceId: string }, ack?: (r: any) => void) => {
+      try {
+        // Get agents from global DB (persisted scanned agents)
+        const globalAgents = globalDb.agents.listByDevice(payload.deviceId);
+        // Merge with live AgentRegistry data
+        const result = globalAgents.map((ga) => {
+          const rt = registry.snapshot(ga.id);
+          return {
+            id: ga.id,
+            name: ga.name,
+            adapterKind: ga.adapterKind,
+            category: ga.category,
+            source: ga.source,
+            command: ga.command,
+            args: ga.args,
+            deviceId: ga.deviceId,
+            status: rt?.status ?? 'offline',
+            publishedNetworkIds: rt?.publishedNetworkIds ?? [],
+          };
+        });
+        ack?.({ ok: true, agents: result });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
     socket.on('device:get', (payload: { id: string }, ack?: (r: any) => void) => {
       try {
         const d = deviceRegistry.get(payload.id);
@@ -528,6 +554,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           networkId: targetNetworkId,
           visibility: payload.visibility ?? 'public',
           category: (payload.category as import('./db.js').AgentCategory) ?? 'executor-hosted',
+          source: 'custom' as const,
           firstSeenAt: now, lastSeenAt: now, lastError: null,
           ownerId: payload.ownerId ?? userId ?? null,
           command: payload.command ?? null,
@@ -597,6 +624,17 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const rt = registry.snapshot(payload.agentId);
         if (!rt) return ack?.({ ok: false, error: 'NOT_FOUND' });
         if (rt.ownerId && rt.ownerId !== userId) return ack?.({ ok: false, error: 'FORBIDDEN' });
+
+        // Runtime (executor-hosted) can only be published to private or owned networks
+        const targetNetwork = globalDb.networks.get(payload.networkId);
+        if (rt.category === 'executor-hosted' && targetNetwork) {
+          const isPrivate = targetNetwork.type === 'private';
+          const isOwner = targetNetwork.ownerId === userId;
+          if (!isPrivate && !isOwner) {
+            return ack?.({ ok: false, error: 'RUNTIME_PUBLISH_FORBIDDEN' });
+          }
+        }
+
         if (!globalDb.networkMembers.isMember(payload.networkId, userId)) {
           return ack?.({ ok: false, error: 'NOT_NETWORK_MEMBER' });
         }

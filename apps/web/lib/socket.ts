@@ -57,6 +57,9 @@ export interface AgentEvents {
   onStatus(handler: (snap: AgentSnapshot) => void): () => void;
   onDiscovered(handler: (payload: { runtimes: RuntimeInfo[]; agents: DiscoveredAgent[] }) => void): () => void;
   metrics(): Promise<{ ok: boolean; summaries?: AgentMetricsSummary[]; error?: string }>;
+  publish(agentId: string, networkId: string): Promise<{ ok: boolean; error?: string }>;
+  unpublish(agentId: string, networkId: string): Promise<{ ok: boolean; error?: string }>;
+  create(payload: { name: string; adapterKind: string; command: string; args?: string[]; category?: string }): Promise<{ ok: boolean; agent?: any; error?: string }>;
   subscribe(): void;
 }
 
@@ -85,6 +88,15 @@ export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
       return emitWithTimeout(socket, 'agent:metrics', {});
     },
     subscribe() { socket.emit('agents:subscribe', {}); },
+    create(payload) {
+      return emitWithTimeout(socket, 'agent:create', payload);
+    },
+    publish(agentId, networkId) {
+      return emitWithTimeout(socket, 'agent:publish', { agentId, networkId });
+    },
+    unpublish(agentId, networkId) {
+      return emitWithTimeout(socket, 'agent:unpublish', { agentId, networkId });
+    },
   };
 }
 
@@ -175,9 +187,24 @@ export function joinEvents(socket: Socket = getWebSocket()): JoinEvents {
   };
 }
 
+export interface DeviceAgent {
+  id: string;
+  name: string;
+  adapterKind: string;
+  category: string;
+  source: string;
+  command: string | null;
+  args: string | null;
+  deviceId: string;
+  status: string;
+  publishedNetworkIds: string[];
+}
+
 export interface DeviceEvents {
   list(): Promise<{ ok: boolean; devices?: DeviceInfo[]; error?: string }>;
   get(payload: { id: string }): Promise<{ ok: boolean; device?: any; error?: string }>;
+  agentsList(deviceId: string): Promise<{ ok: boolean; agents?: DeviceAgent[]; error?: string }>;
+  scan(deviceId: string): Promise<{ ok: boolean; error?: string }>;
   onSnapshot(handler: (devices: DeviceInfo[]) => void): () => void;
   onStatus(handler: (device: DeviceInfo) => void): () => void;
   subscribe(): void;
@@ -191,6 +218,12 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
     get(payload) {
       return emitWithTimeout(socket, 'device:get', payload);
     },
+    agentsList(deviceId) {
+      return emitWithTimeout(socket, 'device:agents:list', { deviceId });
+    },
+    scan(deviceId) {
+      return emitWithTimeout(socket, 'device:scan', { deviceId });
+    },
     onSnapshot(handler) {
       socket.on('devices:snapshot', handler);
       return () => { socket.off('devices:snapshot', handler); };
@@ -200,5 +233,17 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
       return () => { socket.off('device:status', handler); };
     },
     subscribe() { socket.emit('devices:subscribe', {}); },
+  };
+}
+
+export interface MemberEvents {
+  list(): Promise<{ ok: boolean; humans?: { userId: string; role: string; username: string }[]; agents?: import('./schema').AgentSnapshot[]; error?: string }>;
+}
+
+export function memberEvents(socket: Socket = getWebSocket()): MemberEvents {
+  return {
+    list() {
+      return emitWithTimeout(socket, 'members:list', {});
+    },
   };
 }
