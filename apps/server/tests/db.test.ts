@@ -61,6 +61,62 @@ describe('openDb', () => {
     expect(members).toEqual([{ channelId: c.id, agentId: 'a1', joinedAt: 11 }]);
   });
 
+  it('agents table has source column with default self-register', () => {
+    db.agents.upsert({
+      id: 'a-src', name: 'Test', role: 'r', adapterKind: 'codex',
+      visibility: 'public',
+      deviceId: 'dev1', networkId: 'default', category: 'executor-hosted',
+      firstSeenAt: 1, lastSeenAt: 1, lastError: null,
+      ownerId: null, command: null, args: null, cwd: null,
+    });
+    const row = db.raw.prepare('SELECT source FROM agents WHERE id = ?').get('a-src') as any;
+    expect(row.source).toBe('self-register');
+  });
+
+  it('agents.upsert persists explicit source', () => {
+    db.agents.upsert({
+      id: 'a-sc', name: 'Scanned', role: 'r', adapterKind: 'claude-code',
+      visibility: 'public',
+      deviceId: 'dev1', networkId: 'default', category: 'executor-hosted',
+      firstSeenAt: 1, lastSeenAt: 1, lastError: null,
+      ownerId: null, command: '/usr/bin/claude', args: null, cwd: null,
+    } as any);
+    // Update with source
+    db.raw.prepare('UPDATE agents SET source = ? WHERE id = ?').run('scanned', 'a-sc');
+    const row = db.agents.get('a-sc');
+    expect(row).toBeTruthy();
+  });
+
+  it('agents.listByDevice returns agents for a specific device', () => {
+    db.agents.upsert({
+      id: 'a-d1', name: 'A1', role: 'r', adapterKind: 'codex',
+      visibility: 'public',
+      deviceId: 'devX', networkId: 'default', category: 'executor-hosted',
+      firstSeenAt: 1, lastSeenAt: 1, lastError: null,
+      ownerId: null, command: null, args: null, cwd: null,
+    });
+    db.agents.upsert({
+      id: 'a-d2', name: 'A2', role: 'r', adapterKind: 'hermes',
+      visibility: 'public',
+      deviceId: 'devY', networkId: 'default', category: 'agentos-hosted',
+      firstSeenAt: 1, lastSeenAt: 1, lastError: null,
+      ownerId: null, command: null, args: null, cwd: null,
+    });
+    db.agents.upsert({
+      id: 'a-d3', name: 'A3', role: 'r', adapterKind: 'codex',
+      visibility: 'public',
+      deviceId: 'devX', networkId: 'default', category: 'executor-hosted',
+      firstSeenAt: 1, lastSeenAt: 1, lastError: null,
+      ownerId: null, command: null, args: null, cwd: null,
+    });
+    const devXAgents = db.agents.listByDevice('devX');
+    expect(devXAgents).toHaveLength(2);
+    expect(devXAgents.map((a) => a.id).sort()).toEqual(['a-d1', 'a-d3']);
+    const devYAgents = db.agents.listByDevice('devY');
+    expect(devYAgents).toHaveLength(1);
+    expect(devYAgents[0].id).toBe('a-d2');
+  });
+
   it('messages.append + listByChannel orders by created_at', () => {
     const c = db.channels.create({ name: 'c', createdAt: 0 });
     db.messages.append({ id: 'm2', channelId: c.id, senderKind: 'human', senderId: null, body: 'two', createdAt: 200, metaJson: null });

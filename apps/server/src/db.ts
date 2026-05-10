@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS agents (
   network_id    TEXT NOT NULL DEFAULT 'default',
   visibility    TEXT NOT NULL DEFAULT 'public',
   category      TEXT NOT NULL DEFAULT 'executor-hosted',
+  source        TEXT NOT NULL DEFAULT 'self-register',
   first_seen_at INTEGER NOT NULL,
   last_seen_at  INTEGER NOT NULL,
   last_error    TEXT,
@@ -24,6 +25,8 @@ CREATE TABLE IF NOT EXISTS agents (
 CREATE TABLE IF NOT EXISTS channels (
   id         TEXT PRIMARY KEY,
   name       TEXT NOT NULL,
+  visibility TEXT NOT NULL DEFAULT 'public',
+  created_by TEXT,
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS channel_members (
@@ -35,6 +38,14 @@ CREATE TABLE IF NOT EXISTS channel_members (
   FOREIGN KEY (agent_id)   REFERENCES agents(id)   ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_members_agent ON channel_members(agent_id);
+CREATE TABLE IF NOT EXISTS channel_user_members (
+  channel_id TEXT NOT NULL,
+  user_id    TEXT NOT NULL,
+  joined_at  INTEGER NOT NULL,
+  PRIMARY KEY (channel_id, user_id),
+  FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_user_members_user ON channel_user_members(user_id);
 CREATE TABLE IF NOT EXISTS messages (
   id          TEXT PRIMARY KEY,
   channel_id  TEXT NOT NULL,
@@ -77,6 +88,7 @@ export interface AgentRow {
   networkId: string;
   visibility: 'public' | 'private';
   category: AgentCategory;
+  source?: 'self-register' | 'scanned' | 'custom';
   firstSeenAt: number;
   lastSeenAt: number;
   lastError: string | null;
@@ -86,7 +98,8 @@ export interface AgentRow {
   cwd: string | null;
 }
 
-export interface ChannelRow { id: string; name: string; createdAt: number; }
+export interface ChannelRow { id: string; name: string; visibility: 'public' | 'private'; createdBy: string | null; createdAt: number; }
+export interface ChannelUserMember { channelId: string; userId: string; joinedAt: number; }
 export interface ChannelMember { channelId: string; agentId: string; joinedAt: number; }
 export interface MessageRow {
   id: string;
@@ -121,16 +134,24 @@ export interface Db {
     updateNetworkId(id: string, networkId: string): void;
     getAll(): AgentRow[];
     get(id: string): AgentRow | null;
+    listByDevice(deviceId: string): AgentRow[];
   };
   channels: {
-    create(input: { name: string; createdAt: number; id?: string }): ChannelRow;
+    create(input: { name: string; visibility?: 'public' | 'private'; createdBy?: string; createdAt: number; id?: string }): ChannelRow;
     list(): ChannelRow[];
+    listForUser(userId: string): ChannelRow[];
     get(id: string): ChannelRow | null;
   };
   channelMembers: {
     add(m: ChannelMember): void;
     list(channelId: string): ChannelMember[];
     forAgent(agentId: string): ChannelMember[];
+  };
+  channelUserMembers: {
+    add(m: ChannelUserMember): void;
+    remove(channelId: string, userId: string): void;
+    list(channelId: string): ChannelUserMember[];
+    isMember(channelId: string, userId: string): boolean;
   };
   messages: {
     append(m: MessageRow): void;
@@ -157,6 +178,7 @@ function rowToAgent(r: any): AgentRow {
     networkId: r.network_id ?? 'default',
     visibility: r.visibility ?? 'public',
     category: r.category ?? 'executor-hosted',
+    source: r.source ?? 'self-register',
     firstSeenAt: r.first_seen_at, lastSeenAt: r.last_seen_at, lastError: r.last_error,
     ownerId: r.owner_id ?? null,
     command: r.command ?? null,
@@ -196,6 +218,7 @@ CREATE TABLE IF NOT EXISTS networks (
   path TEXT UNIQUE,
   description TEXT,
   visibility TEXT NOT NULL DEFAULT 'private',
+  type TEXT NOT NULL DEFAULT 'local',
   created_at INTEGER NOT NULL,
   FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
 );
@@ -229,9 +252,15 @@ CREATE TABLE IF NOT EXISTS agents (
   device_id TEXT NOT NULL,
   network_id TEXT NOT NULL,
   visibility TEXT NOT NULL DEFAULT 'public',
+  category TEXT NOT NULL DEFAULT 'executor-hosted',
+  source TEXT NOT NULL DEFAULT 'self-register',
   first_seen_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL,
   last_error TEXT,
+  command TEXT,
+  args TEXT,
+  cwd TEXT,
+  owner_id TEXT,
   FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
   FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE
 );
@@ -250,6 +279,18 @@ CREATE TABLE IF NOT EXISTS invites (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_invites_code ON invites(code);
+
+CREATE TABLE IF NOT EXISTS agent_network_publish (
+  agent_id     TEXT NOT NULL,
+  network_id   TEXT NOT NULL,
+  published_by TEXT NOT NULL,
+  published_at INTEGER NOT NULL,
+  PRIMARY KEY (agent_id, network_id),
+  FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+  FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_agent_publish_network ON agent_network_publish(network_id);
+CREATE INDEX IF NOT EXISTS idx_agent_publish_agent ON agent_network_publish(agent_id);
 `;
 
 export interface NetworkRow {
@@ -259,6 +300,7 @@ export interface NetworkRow {
   path: string | null;
   description: string | null;
   visibility: 'public' | 'private';
+  type: 'public' | 'local' | 'private';
   createdAt: number;
 }
 
@@ -297,7 +339,7 @@ export interface GlobalDb {
     delete(id: string): void;
   };
   networks: {
-    create(input: { id?: string; ownerId: string; name: string; path?: string | null; description?: string | null; visibility?: 'public' | 'private'; createdAt: number }): NetworkRow;
+    create(input: { id?: string; ownerId: string; name: string; path?: string | null; description?: string | null; visibility?: 'public' | 'private'; type?: 'public' | 'local' | 'private'; createdAt: number }): NetworkRow;
     list(): NetworkRow[];
     get(id: string): NetworkRow | null;
     getByPath(path: string): NetworkRow | null;
@@ -316,6 +358,13 @@ export interface GlobalDb {
     incrementUses(code: string): void;
     listByNetwork(networkId: string): InviteRow[];
     revoke(code: string): void;
+  };
+  agentPublishes: {
+    publish(agentId: string, networkId: string, publishedBy: string): void;
+    unpublish(agentId: string, networkId: string): void;
+    listByAgent(agentId: string): { networkId: string; publishedBy: string; publishedAt: number }[];
+    listByNetwork(networkId: string): { agentId: string; publishedBy: string; publishedAt: number }[];
+    isPublished(agentId: string, networkId: string): boolean;
   };
 }
 
@@ -339,6 +388,7 @@ function rowToNetwork(r: any): NetworkRow {
     path: r.path ?? null,
     description: r.description ?? null,
     visibility: r.visibility ?? 'private',
+    type: r.type ?? (r.visibility === 'public' ? 'public' : 'local'),
     createdAt: r.createdAt,
   };
 }
@@ -377,6 +427,9 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   try { raw.exec(`UPDATE networks SET path = (SELECT username FROM users WHERE id = networks.owner_id) || '-private' WHERE path IS NULL AND visibility = 'private'`); } catch {}
   try { raw.exec(`UPDATE networks SET path = id WHERE path IS NULL`); } catch {}
   try { raw.exec(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'`); } catch {}
+  try { raw.exec(`ALTER TABLE networks ADD COLUMN type TEXT NOT NULL DEFAULT 'local'`); } catch {}
+  try { raw.exec(`UPDATE networks SET type = 'public' WHERE id = 'default'`); } catch {}
+  try { raw.exec(`UPDATE networks SET type = 'public' WHERE visibility = 'public' AND type = 'local'`); } catch {}
 
   const userCreate = raw.prepare(`
     INSERT INTO users (id, username, email, password_hash, role, created_at, updated_at)
@@ -399,19 +452,19 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   `);
 
   const networkCreate = raw.prepare(`
-    INSERT INTO networks (id, owner_id, name, path, description, visibility, created_at)
-    VALUES (@id, @ownerId, @name, @path, @description, @visibility, @createdAt)
+    INSERT INTO networks (id, owner_id, name, path, description, visibility, type, created_at)
+    VALUES (@id, @ownerId, @name, @path, @description, @visibility, @type, @createdAt)
   `);
   const networkList = raw.prepare(`
-    SELECT id, owner_id AS ownerId, name, path, description, visibility, created_at AS createdAt
+    SELECT id, owner_id AS ownerId, name, path, description, visibility, type, created_at AS createdAt
     FROM networks ORDER BY created_at
   `);
   const networkGet = raw.prepare(`
-    SELECT id, owner_id AS ownerId, name, path, description, visibility, created_at AS createdAt
+    SELECT id, owner_id AS ownerId, name, path, description, visibility, type, created_at AS createdAt
     FROM networks WHERE id = ?
   `);
   const networkGetByPath = raw.prepare(`
-    SELECT id, owner_id AS ownerId, name, path, description, visibility, created_at AS createdAt
+    SELECT id, owner_id AS ownerId, name, path, description, visibility, type, created_at AS createdAt
     FROM networks WHERE path = ?
   `);
   const networkUpdateName = raw.prepare(`
@@ -440,6 +493,25 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   const inviteIncrementUses = raw.prepare(`UPDATE invites SET uses_count = uses_count + 1 WHERE code = ?`);
   const inviteListByNetwork = raw.prepare(`SELECT * FROM invites WHERE network_id = ? ORDER BY created_at DESC`);
   const inviteRevoke = raw.prepare(`UPDATE invites SET used_at = ? WHERE code = ? AND used_at IS NULL`);
+
+  const agentPublishInsert = raw.prepare(`
+    INSERT OR IGNORE INTO agent_network_publish (agent_id, network_id, published_by, published_at)
+    VALUES (?, ?, ?, ?)
+  `);
+  const agentPublishDelete = raw.prepare(`
+    DELETE FROM agent_network_publish WHERE agent_id = ? AND network_id = ?
+  `);
+  const agentPublishByAgent = raw.prepare(`
+    SELECT network_id AS networkId, published_by AS publishedBy, published_at AS publishedAt
+    FROM agent_network_publish WHERE agent_id = ?
+  `);
+  const agentPublishByNetwork = raw.prepare(`
+    SELECT agent_id AS agentId, published_by AS publishedBy, published_at AS publishedAt
+    FROM agent_network_publish WHERE network_id = ?
+  `);
+  const agentPublishGet = raw.prepare(`
+    SELECT 1 FROM agent_network_publish WHERE agent_id = ? AND network_id = ?
+  `);
 
   return {
     raw,
@@ -474,15 +546,17 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
       delete: (id) => { userDelete.run(id); },
     },
     networks: {
-      create: ({ id, ownerId, name, path, description, visibility, createdAt }) => {
+      create: ({ id, ownerId, name, path, description, visibility, type, createdAt }) => {
         const nid = id ?? newId();
+        const v = visibility ?? 'private' as const;
         const row = {
           id: nid,
           ownerId,
           name,
           path: path ?? null,
           description: description ?? null,
-          visibility: visibility ?? 'private' as const,
+          visibility: v,
+          type: type ?? (v === 'public' ? 'public' as const : 'local' as const),
           createdAt,
         };
         networkCreate.run(row);
@@ -531,6 +605,13 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
       listByNetwork: (networkId) => (inviteListByNetwork.all(networkId) as any[]).map(rowToInvite),
       revoke: (code) => { inviteRevoke.run(Date.now(), code); },
     },
+    agentPublishes: {
+      publish: (agentId, networkId, publishedBy) => { agentPublishInsert.run(agentId, networkId, publishedBy, Date.now()); },
+      unpublish: (agentId, networkId) => { agentPublishDelete.run(agentId, networkId); },
+      listByAgent: (agentId) => agentPublishByAgent.all(agentId) as { networkId: string; publishedBy: string; publishedAt: number }[],
+      listByNetwork: (networkId) => agentPublishByNetwork.all(networkId) as { agentId: string; publishedBy: string; publishedAt: number }[],
+      isPublished: (agentId, networkId) => Boolean(agentPublishGet.get(agentId, networkId)),
+    },
   };
 }
 
@@ -546,14 +627,19 @@ export function openDb(path: string): Db {
   try { raw.exec(`ALTER TABLE agents ADD COLUMN network_id TEXT NOT NULL DEFAULT 'default'`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN category TEXT NOT NULL DEFAULT 'executor-hosted'`); } catch {}
+  try { raw.exec(`ALTER TABLE agents ADD COLUMN source TEXT NOT NULL DEFAULT 'self-register'`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN owner_id TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN command TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN args TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN cwd TEXT`); } catch {}
 
+  // Channel visibility + user members migrations
+  try { raw.exec(`ALTER TABLE channels ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'`); } catch {}
+  try { raw.exec(`ALTER TABLE channels ADD COLUMN created_by TEXT`); } catch {}
+
   const agentUpsert = raw.prepare(`
-    INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, first_seen_at, last_seen_at, last_error, owner_id, command, args, cwd)
-    VALUES (@id, @name, @role, @adapterKind, @deviceId, @networkId, @visibility, @category, @firstSeenAt, @lastSeenAt, @lastError, @ownerId, @command, @args, @cwd)
+    INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, owner_id, command, args, cwd)
+    VALUES (@id, @name, @role, @adapterKind, @deviceId, @networkId, @visibility, @category, @source, @firstSeenAt, @lastSeenAt, @lastError, @ownerId, @command, @args, @cwd)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       role = excluded.role,
@@ -562,6 +648,7 @@ export function openDb(path: string): Db {
       network_id = excluded.network_id,
       visibility = excluded.visibility,
       category = excluded.category,
+      source = excluded.source,
       last_seen_at = excluded.last_seen_at,
       last_error   = excluded.last_error,
       owner_id     = excluded.owner_id,
@@ -570,8 +657,8 @@ export function openDb(path: string): Db {
       cwd          = excluded.cwd
   `);
   const agentCreate = raw.prepare(`
-    INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, first_seen_at, last_seen_at, last_error, owner_id, command, args, cwd)
-    VALUES (@id, @name, @role, @adapterKind, @deviceId, @networkId, @visibility, @category, @firstSeenAt, @lastSeenAt, @lastError, @ownerId, @command, @args, @cwd)
+    INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, owner_id, command, args, cwd)
+    VALUES (@id, @name, @role, @adapterKind, @deviceId, @networkId, @visibility, @category, @source, @firstSeenAt, @lastSeenAt, @lastError, @ownerId, @command, @args, @cwd)
   `);
   const agentUpdateVisibility = raw.prepare(`
     UPDATE agents SET visibility = ? WHERE id = ?
@@ -581,12 +668,20 @@ export function openDb(path: string): Db {
   `);
   const agentGetAll = raw.prepare(`SELECT * FROM agents ORDER BY first_seen_at`);
   const agentGet = raw.prepare(`SELECT * FROM agents WHERE id = ?`);
+  const agentListByDevice = raw.prepare(`SELECT * FROM agents WHERE device_id = ? ORDER BY first_seen_at`);
 
   const channelCreate = raw.prepare(`
-    INSERT INTO channels (id, name, created_at) VALUES (@id, @name, @createdAt)
+    INSERT INTO channels (id, name, visibility, created_by, created_at) VALUES (@id, @name, @visibility, @createdBy, @createdAt)
   `);
-  const channelList = raw.prepare(`SELECT id, name, created_at AS createdAt FROM channels ORDER BY created_at`);
-  const channelGet = raw.prepare(`SELECT id, name, created_at AS createdAt FROM channels WHERE id = ?`);
+  const channelList = raw.prepare(`SELECT id, name, visibility, created_by AS createdBy, created_at AS createdAt FROM channels ORDER BY created_at`);
+  const channelGet = raw.prepare(`SELECT id, name, visibility, created_by AS createdBy, created_at AS createdAt FROM channels WHERE id = ?`);
+  const channelListForUser = raw.prepare(`
+    SELECT c.id, c.name, c.visibility, c.created_by AS createdBy, c.created_at AS createdAt
+    FROM channels c
+    LEFT JOIN channel_user_members cum ON c.id = cum.channel_id AND cum.user_id = ?
+    WHERE c.visibility = 'public' OR cum.user_id IS NOT NULL
+    ORDER BY c.created_at
+  `);
 
   const memberAdd = raw.prepare(`
     INSERT OR IGNORE INTO channel_members (channel_id, agent_id, joined_at)
@@ -599,6 +694,21 @@ export function openDb(path: string): Db {
   const memberListByAgent = raw.prepare(`
     SELECT channel_id AS channelId, agent_id AS agentId, joined_at AS joinedAt
     FROM channel_members WHERE agent_id = ?
+  `);
+
+  const userMemberAdd = raw.prepare(`
+    INSERT OR IGNORE INTO channel_user_members (channel_id, user_id, joined_at)
+    VALUES (@channelId, @userId, @joinedAt)
+  `);
+  const userMemberRemove = raw.prepare(`
+    DELETE FROM channel_user_members WHERE channel_id = ? AND user_id = ?
+  `);
+  const userMemberListByChannel = raw.prepare(`
+    SELECT channel_id AS channelId, user_id AS userId, joined_at AS joinedAt
+    FROM channel_user_members WHERE channel_id = ? ORDER BY joined_at
+  `);
+  const userMemberIsMember = raw.prepare(`
+    SELECT 1 FROM channel_user_members WHERE channel_id = ? AND user_id = ?
   `);
 
   const messageAppend = raw.prepare(`
@@ -632,8 +742,8 @@ export function openDb(path: string): Db {
     raw,
     close: () => raw.close(),
     agents: {
-      upsert: (row) => { agentUpsert.run(row); },
-      create: (row) => { agentCreate.run(row); },
+      upsert: (row) => { agentUpsert.run({ ...row, source: row.source ?? 'self-register' }); },
+      create: (row) => { agentCreate.run({ ...row, source: row.source ?? 'self-register' }); },
       updateVisibility: (id, visibility) => { agentUpdateVisibility.run(visibility, id); },
       updateNetworkId: (id, networkId) => { agentUpdateNetworkId.run(networkId, id); },
       getAll: () => agentGetAll.all().map(rowToAgent),
@@ -641,20 +751,28 @@ export function openDb(path: string): Db {
         const r = agentGet.get(id) as any;
         return r ? rowToAgent(r) : null;
       },
+      listByDevice: (deviceId) => agentListByDevice.all(deviceId).map(rowToAgent),
     },
     channels: {
-      create: ({ name, createdAt, id }) => {
+      create: ({ name, visibility = 'public', createdBy = null, createdAt, id }) => {
         const cid = id ?? newId();
-        channelCreate.run({ id: cid, name, createdAt });
-        return { id: cid, name, createdAt };
+        channelCreate.run({ id: cid, name, visibility, createdBy, createdAt });
+        return { id: cid, name, visibility, createdBy, createdAt };
       },
       list: () => channelList.all() as ChannelRow[],
+      listForUser: (userId) => channelListForUser.all(userId) as ChannelRow[],
       get: (id) => (channelGet.get(id) as ChannelRow | undefined) ?? null,
     },
     channelMembers: {
       add: (m) => { memberAdd.run(m); },
       list: (channelId) => memberListByChannel.all(channelId) as ChannelMember[],
       forAgent: (agentId) => memberListByAgent.all(agentId) as ChannelMember[],
+    },
+    channelUserMembers: {
+      add: (m) => { userMemberAdd.run(m); },
+      remove: (channelId, userId) => { userMemberRemove.run(channelId, userId); },
+      list: (channelId) => userMemberListByChannel.all(channelId) as ChannelUserMember[],
+      isMember: (channelId, userId) => !!userMemberIsMember.get(channelId, userId),
     },
     messages: {
       append: (m) => { messageAppend.run(m); },
