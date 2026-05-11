@@ -1,5 +1,4 @@
 import { parseArgs } from 'node:util';
-import { hostname } from 'node:os';
 import { loadConfig, loadDeviceConfig } from './config.js';
 import { createConnection } from './connection.js';
 import { createDeviceDaemon } from './device-daemon.js';
@@ -11,7 +10,7 @@ import { HermesAdapter } from './adapters/hermes.js';
 import type { CliAdapter } from './adapters/adapter.js';
 import type { AgentConfigEntry, DeviceConfig } from './config.js';
 import { logger } from './log.js';
-import { scanRuntimes, scanAgentOSAgents, scanLocalAgents } from './scanner.js';
+import { scanRuntimes, scanAgentOSAgents, scanLocalAgents, getDeviceId } from './scanner.js';
 import { loadAuth, saveAuth } from './auth-store.js';
 
 function pickAdapter(cfg: AgentConfigEntry['adapter']): CliAdapter {
@@ -129,7 +128,7 @@ async function runDeviceMode(cfgPath: string) {
       };
     } catch { /* ignore */ }
     cfg = {
-      deviceId: fileSettings.deviceId ?? process.env.DEVICE_ID ?? 'unknown-device',
+      deviceId: fileSettings.deviceId ?? process.env.DEVICE_ID ?? await getDeviceId(),
       networkId: fileSettings.networkId ?? process.env.NETWORK_ID ?? 'default',
       server: fileSettings.server ?? {
         url: process.env.SERVER_URL ?? 'http://localhost:3000/agent',
@@ -185,7 +184,7 @@ async function runCliMode() {
 Options:
   --server-url   AgentBean Server URL (required)
   --token        Authentication token (required)
-  --device-id    Device ID (default: <hostname>-<random>)
+  --device-id    Device ID (default: auto-detected from hardware)
   --network-id   Network ID (default: default)
 `);
     process.exit(0);
@@ -219,7 +218,7 @@ Options:
     process.exit(1);
   }
 
-  const deviceId = values['device-id'] ?? `${hostname().toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Math.random().toString(36).slice(2, 8)}`;
+  const deviceId = values['device-id'] ?? await getDeviceId();
 
   logger.info({ serverUrl, deviceId, networkId }, 'CLI mode: auto-discovering agents');
   const agents = await discoverAgents();

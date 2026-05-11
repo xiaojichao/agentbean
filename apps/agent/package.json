@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "agentbean-daemon": "./dist/bin.js"
+    "agentbean-daemon": "./dist/bin.js",
+    "@agentbean/daemon": "./dist/bin.js"
   },
   "files": [
     "dist/**/*"

@@ -34,18 +34,6 @@ export interface AppHandle {
   close: () => Promise<void>;
 }
 
-function deviceToDto(d: import('./device-registry.js').DeviceRuntime) {
-  return {
-    id: d.id,
-    userId: d.userId,
-    networkId: d.networkId,
-    tailscaleIp: d.tailscaleIp,
-    agentIds: Array.from(d.agents.keys()),
-    lastSeenAt: d.lastSeenAt,
-    status: d.status,
-  };
-}
-
 function buildInviteCommand(code: string, serverUrl: string): string {
   const template = process.env.AGENT_BEAN_INVITE_COMMAND_TEMPLATE;
   if (template) {
@@ -62,18 +50,21 @@ function buildInviteCommand(code: string, serverUrl: string): string {
   return `npx @agentbean/daemon@latest --invite ${code} --server-url ${serverUrl}`;
 }
 
+// Fixed data directory relative to this source file (not cwd)
+const DATA_DIR = resolve(import.meta.dirname, '../data');
+
 export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
-  const dbPath = opts.dbPath ?? process.env.DATABASE_PATH ?? './data/agentbean.db';
+  const dbPath = opts.dbPath ?? process.env.DATABASE_PATH ?? resolve(DATA_DIR, 'agentbean.db');
   const token = opts.agentToken ?? process.env.AGENT_BEAN_AGENT_TOKEN;
   if (!token) throw new Error('AGENT_BEAN_AGENT_TOKEN is required');
-  const artifactDir = resolve(process.env.ARTIFACT_DIR ?? './data/artifacts');
+  const artifactDir = resolve(process.env.ARTIFACT_DIR ?? resolve(DATA_DIR, 'artifacts'));
 
   const db = openDb(dbPath);
-  const globalDbPath = process.env.GLOBAL_DB_PATH ?? resolve('./data/global.db');
+  const globalDbPath = process.env.GLOBAL_DB_PATH ?? resolve(DATA_DIR, 'global.db');
   const globalDb = initGlobalDb(globalDbPath);
   const registry = new AgentRegistry();
   const deviceRegistry = new DeviceRegistry();
-  const storageManager = new StorageManager(process.env.STORAGE_BASE_DIR ?? './data/storage');
+  const storageManager = new StorageManager(process.env.STORAGE_BASE_DIR ?? resolve(DATA_DIR, 'storage'));
   const defaultNetworkId = 'default';
   storageManager.createSpace(defaultNetworkId);
   const space = storageManager.getSpace(defaultNetworkId);
@@ -239,7 +230,24 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
     socket.on('devices:subscribe', () => {
       const nid = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
-      const devices = deviceRegistry.listByNetwork(nid).map(deviceToDto);
+      const userId = socket.data.userId as string | undefined;
+      // Load persisted devices from DB
+      const dbDevices = userId ? globalDb.devices.listByUser(userId) : globalDb.devices.listByNetwork(nid);
+      // Merge with live registry status
+      const devices = dbDevices.map((dbd) => {
+        const live = deviceRegistry.get(dbd.id);
+        return {
+          id: dbd.id,
+          userId: dbd.userId,
+          networkId: dbd.networkId,
+          hostname: dbd.hostname,
+          agentIds: live ? Array.from(live.agents.keys()) : [],
+          lastSeenAt: live ? live.lastSeenAt : dbd.lastSeenAt,
+          status: live ? live.status : 'offline',
+          connectCommand: dbd.connectCommand,
+          systemInfo: dbd.systemInfo,
+        };
+      });
       socket.emit('devices:snapshot', devices);
     });
 
@@ -284,12 +292,58 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
     socket.on('device:get', (payload: { id: string }, ack?: (r: any) => void) => {
       try {
-        const d = deviceRegistry.get(payload.id);
-        if (!d) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        const dbDevice = globalDb.devices.get(payload.id);
+        if (!dbDevice) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        const live = deviceRegistry.get(payload.id);
+        const agents = live ? Array.from(live.agents.values()) : [];
+        ack?.({
+          ok: true,
+          device: {
+            id: dbDevice.id,
+            userId: dbDevice.userId,
+            networkId: dbDevice.networkId,
+            hostname: dbDevice.hostname,
+            agentIds: live ? Array.from(live.agents.keys()) : [],
+            lastSeenAt: live ? live.lastSeenAt : dbDevice.lastSeenAt,
+            status: live ? live.status : 'offline',
+            connectCommand: dbDevice.connectCommand,
+            systemInfo: dbDevice.systemInfo,
+            agents,
+          },
+        });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('device:delete', (payload: { id: string }, ack?: (r: any) => void) => {
+      try {
+        globalDb.devices.delete(payload.id);
+        ack?.({ ok: true });
+        // Refresh device list for this user
         const nid = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
-        if (d.networkId !== nid && nid !== 'default') return ack?.({ ok: false, error: 'FORBIDDEN' });
-        const agents = Array.from(d.agents.values());
-        ack?.({ ok: true, device: { ...deviceToDto(d), agents } });
+        const userId = socket.data.userId as string | undefined;
+        const dbDevices = userId ? globalDb.devices.listByUser(userId) : globalDb.devices.listByNetwork(nid);
+        const devices = dbDevices.map((dbd) => {
+          const live = deviceRegistry.get(dbd.id);
+          return {
+            id: dbd.id, userId: dbd.userId, networkId: dbd.networkId, hostname: dbd.hostname,
+            agentIds: live ? Array.from(live.agents.keys()) : [],
+            lastSeenAt: live ? live.lastSeenAt : dbd.lastSeenAt,
+            status: live ? live.status : 'offline',
+            connectCommand: dbd.connectCommand,
+          };
+        });
+        socket.emit('devices:snapshot', devices);
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('device:rename', (payload: { id: string; hostname: string }, ack?: (r: any) => void) => {
+      try {
+        globalDb.devices.rename(payload.id, payload.hostname);
+        ack?.({ ok: true });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }
@@ -347,7 +401,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       }
     });
 
-    socket.on('task:update', (payload: { id: string; title?: string; description?: string; status?: string; assigneeId?: string | null; channelId?: string | null; tags?: string[] }, ack?: (r: any) => void) => {
+    socket.on('task:update', (payload: { id: string; title?: string; description?: string; status?: string; assigneeId?: string | null; channelId?: string | null; tags?: string[]; sortOrder?: number }, ack?: (r: any) => void) => {
       try {
         const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
         const sp = storageManager.getSpace(networkId);
@@ -358,6 +412,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           assigneeId: payload.assigneeId,
           channelId: payload.channelId,
           tags: payload.tags,
+          sortOrder: payload.sortOrder,
         });
         const task = sp.tasks.get(payload.id);
         ack?.({ ok: true, task });
@@ -478,6 +533,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       const userId = socket.data.userId as string | undefined;
       const list = userId ? channels.listForUser(networkId, userId) : channels.list(networkId);
       socket.emit('channels:snapshot', list);
+      if (userId) {
+        const dms = channels.listDms(networkId, userId);
+        socket.emit('dms:snapshot', dms);
+      }
     });
 
     socket.on('channel:join', (payload: { channelId: string }) => {
@@ -527,6 +586,32 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }
+    });
+
+    // DM events
+    socket.on('dm:start', (payload: { agentId: string }, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const userId = socket.data.userId as string;
+        if (!userId) return ack?.({ ok: false, error: 'NOT_AUTHENTICATED' });
+        const dm = channels.findOrCreateDm(networkId, userId, payload.agentId);
+        ack?.({ ok: true, dm });
+        // Refresh channel and DM lists for this user
+        const userChannels = channels.listForUser(networkId, userId);
+        socket.emit('channels:snapshot', userChannels);
+        const dms = channels.listDms(networkId, userId);
+        socket.emit('dms:snapshot', dms);
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('dm:list', (ack?: (r: any) => void) => {
+      const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+      const userId = socket.data.userId as string;
+      if (!userId) return ack?.({ ok: false, error: 'NOT_AUTHENTICATED' });
+      const dms = channels.listDms(networkId, userId);
+      ack?.({ ok: true, dms });
     });
 
     socket.on('message:send', async (
@@ -588,6 +673,19 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       }
     });
 
+    socket.on('message:search', (payload: { query: string; limit?: number }, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const sp = storageManager.getSpace(networkId);
+        const query = (payload?.query ?? '').trim();
+        if (!query) return ack?.({ ok: true, messages: [] });
+        const results = sp.messages.search(query, payload?.limit ?? 20);
+        ack?.({ ok: true, messages: results });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
     socket.on('channel:add-member', (payload: { channelId: string; userId: string }, ack?: (r: any) => void) => {
       try {
         const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
@@ -607,6 +705,21 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
         channels.removeUserMember(networkId, payload.channelId, payload.userId);
         ack?.({ ok: true });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('channel:update', (payload: { channelId: string; name?: string; visibility?: 'public' | 'private' }, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const ch = channels.get(networkId, payload.channelId);
+        if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        channels.update(networkId, payload.channelId, { name: payload.name, visibility: payload.visibility });
+        ack?.({ ok: true });
+        const userId = socket.data.userId as string | undefined;
+        const list = userId ? channels.listForUser(networkId, userId) : channels.list(networkId);
+        io.of('/web').emit('channels:snapshot', list);
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }

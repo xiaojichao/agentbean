@@ -1,4 +1,6 @@
 import type { Namespace, Server as IOServer } from 'socket.io';
+import { resolve } from 'node:path';
+import { existsSync } from 'node:fs';
 import type { Db, AdapterKind, AgentCategory } from '../db.js';
 import { AgentRegistry, type AgentRuntime } from '../registry.js';
 import { DeviceRegistry, type PublicAgentMeta } from '../device-registry.js';
@@ -23,7 +25,9 @@ export interface AgentNamespaceDeps {
       get(id: string): any;
     };
     devices?: {
-      upsert(row: { id: string; userId: string; networkId: string; hostname?: string; tailscaleIp?: string; lastSeenAt: number }): void;
+      upsert(row: { id: string; userId: string; networkId: string; hostname?: string; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): void;
+      get(id: string): { id: string; connectCommand?: string | null } | null;
+      setConnectCommand(id: string, command: string): void;
     };
   };
   dispatchTimeoutMs?: number;
@@ -145,8 +149,8 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       token: string;
       deviceId: string;
       networkId: string;
-      tailscaleIp?: string;
       agents: PublicAgentMeta[];
+      systemInfo?: Record<string, unknown>;
     };
     const a = auth;
     logger.info({ deviceId: a.deviceId, sid: socket.id }, '/agent connected');
@@ -184,23 +188,40 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       }
 
       // Persist device to global DB
-      const userId = parseToken(a.token!)?.userId;
-      if (userId) {
-        deps.globalDb?.devices?.upsert({
-          id: a.deviceId,
-          userId,
-          networkId: a.networkId,
-          lastSeenAt: now,
-        });
+      const parsed = parseToken(a.token!);
+      const userId = parsed?.userId ?? 'system';
+      const existingDevice = deps.globalDb?.devices?.get(a.deviceId);
+      deps.globalDb?.devices?.upsert({
+        id: a.deviceId,
+        userId,
+        networkId: a.networkId,
+        lastSeenAt: now,
+        systemInfo: a.systemInfo ?? null,
+      });
+      // Save connect command on first registration
+      if (!existingDevice?.connectCommand) {
+        const publicUrl = process.env.AGENT_BEAN_PUBLIC_SERVER_URL;
+        const localEntrypoint = resolve(process.cwd(), '../agent/src/bin.ts');
+        let cmd: string;
+        if (publicUrl) {
+          // Production: always use npm package with public URL
+          cmd = `npx @agentbean/daemon@latest --server-url ${publicUrl} --token ${a.token}`;
+        } else if (existsSync(localEntrypoint)) {
+          // Local dev: use tsx with local source
+          cmd = `npx tsx ${localEntrypoint} --server-url http://localhost:4000 --token ${a.token}`;
+        } else {
+          // Fallback: npm package with localhost
+          cmd = `npx @agentbean/daemon@latest --server-url http://localhost:4000 --token ${a.token}`;
+        }
+        deps.globalDb?.devices?.setConnectCommand(a.deviceId, cmd);
       }
 
       // Register device in DeviceRegistry
       deps.deviceRegistry.register({
         id: a.deviceId,
-        userId: parseToken(a.token!)!.userId,
+        userId: userId ?? 'system',
         networkId: a.networkId,
         socket,
-        tailscaleIp: a.tailscaleIp,
         agents: new Map(a.agents.map((ag) => [ag.id, ag])),
         lastSeenAt: now,
         status: 'online',

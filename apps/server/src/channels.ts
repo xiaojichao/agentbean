@@ -6,6 +6,7 @@ import { newId } from './ids.js';
 export interface ChannelServiceDeps { storageManager: StorageManager; registry: AgentRegistry; }
 
 export interface CreateChannelInput { name: string; agentIds: string[]; userIds?: string[]; visibility?: 'public' | 'private'; createdBy?: string; isDefault?: boolean; }
+export interface DmChannel { id: string; name: string; dmTargetId: string; createdAt: number; }
 
 export class ChannelService {
   constructor(private readonly deps: ChannelServiceDeps) {}
@@ -51,7 +52,7 @@ export class ChannelService {
       SELECT c.id, c.name, c.visibility, c.created_by AS createdBy, c.created_at AS createdAt
       FROM channels c
       LEFT JOIN channel_user_members cum ON c.id = cum.channel_id AND cum.user_id = ?
-      WHERE c.visibility = 'public' OR cum.user_id IS NOT NULL
+      WHERE (c.visibility = 'public' OR cum.user_id IS NOT NULL) AND (c.is_dm IS NULL OR c.is_dm = 0)
       ORDER BY c.created_at
     `).all(userId) as ChannelRow[];
   }
@@ -96,10 +97,64 @@ export class ChannelService {
       .run(channelId, userId);
   }
 
+  update(networkId: string, channelId: string, input: { name?: string; visibility?: 'public' | 'private' }): void {
+    const db = this.deps.storageManager.getSpace(networkId).db;
+    if (input.name !== undefined) {
+      db.prepare('UPDATE channels SET name = ? WHERE id = ?').run(input.name.trim(), channelId);
+    }
+    if (input.visibility !== undefined) {
+      db.prepare('UPDATE channels SET visibility = ? WHERE id = ?').run(input.visibility, channelId);
+    }
+  }
+
+  userMembers(networkId: string, channelId: string): string[] {
+    const db = this.deps.storageManager.getSpace(networkId).db;
+    const rows = db.prepare('SELECT user_id AS userId FROM channel_user_members WHERE channel_id = ? ORDER BY joined_at')
+      .all(channelId) as Array<{ userId: string }>;
+    return rows.map((m) => m.userId);
+  }
+
   ensureDefault(networkId: string): ChannelRow {
     const existing = this.list(networkId).find((c) => c.name === 'all');
     if (existing) return existing;
     return this.create(networkId, { name: 'all', agentIds: [], isDefault: true });
+  }
+
+  findOrCreateDm(networkId: string, userId: string, agentId: string): DmChannel {
+    const db = this.deps.storageManager.getSpace(networkId).db;
+    // Check for existing DM channel between this user and agent
+    const existing = db.prepare(`
+      SELECT c.id, c.name, c.dm_target_id AS dmTargetId, c.created_at AS createdAt
+      FROM channels c
+      JOIN channel_user_members cum ON c.id = cum.channel_id
+      JOIN channel_members cm ON c.id = cm.channel_id
+      WHERE c.is_dm = 1 AND cum.user_id = ? AND cm.agent_id = ?
+    `).get(userId, agentId) as DmChannel | undefined;
+    if (existing) return existing;
+
+    const agent = this.deps.registry.snapshot(agentId);
+    const agentName = agent?.name ?? agentId;
+    const now = Date.now();
+    const id = newId();
+    db.prepare('INSERT INTO channels (id, name, visibility, created_by, created_at, is_dm, dm_target_id) VALUES (?, ?, ?, ?, ?, 1, ?)')
+      .run(id, agentName, 'private', userId, now, agentId);
+    db.prepare('INSERT INTO channel_user_members (channel_id, user_id, joined_at) VALUES (?, ?, ?)')
+      .run(id, userId, now);
+    db.prepare('INSERT INTO channel_members (channel_id, agent_id, joined_at) VALUES (?, ?, ?)')
+      .run(id, agentId, now);
+
+    return { id, name: agentName, dmTargetId: agentId, createdAt: now };
+  }
+
+  listDms(networkId: string, userId: string): DmChannel[] {
+    const db = this.deps.storageManager.getSpace(networkId).db;
+    return db.prepare(`
+      SELECT c.id, c.name, c.dm_target_id AS dmTargetId, c.created_at AS createdAt
+      FROM channels c
+      JOIN channel_user_members cum ON c.id = cum.channel_id
+      WHERE c.is_dm = 1 AND cum.user_id = ?
+      ORDER BY c.created_at DESC
+    `).all(userId) as DmChannel[];
   }
 
   private nextDefaultName(networkId: string): string {

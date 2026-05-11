@@ -1,22 +1,48 @@
 import { io, type Socket } from 'socket.io-client';
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { logger } from './log.js';
 import type { DeviceConfig } from './config.js';
 import { AgentInstance } from './agent-instance.js';
-import { scanRuntimes, scanAgentOSAgents, scanLocalAgents } from './scanner.js';
+import { scanRuntimes, scanAgentOSAgents, scanLocalAgents, collectSystemInfo, type SystemInfo } from './scanner.js';
+
+type ScannedAgent = { name: string; category: string; adapterKind: string; command: string; args: string[]; source: string };
+
+const CACHE_DIR = join(homedir(), '.agentbean');
+const CACHE_FILE = join(CACHE_DIR, 'scanned-agents.json');
+
+function loadCache(): ScannedAgent[] | null {
+  try {
+    if (!existsSync(CACHE_FILE)) return null;
+    return JSON.parse(readFileSync(CACHE_FILE, 'utf-8')) as ScannedAgent[];
+  } catch {
+    return null;
+  }
+}
+
+function saveCache(agents: ScannedAgent[]): void {
+  try {
+    if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
+    writeFileSync(CACHE_FILE, JSON.stringify(agents, null, 2));
+  } catch (err: any) {
+    logger.warn({ err: err?.message }, 'failed to save scan cache');
+  }
+}
 
 export interface DeviceDaemonHandle {
   start(): Promise<void>;
   stop(): Promise<void>;
 }
 
-async function scanAll(): Promise<{ name: string; category: string; adapterKind: string; command: string; args: string[]; source: string }[]> {
+async function scanAll(): Promise<ScannedAgent[]> {
   const [runtimes, agentos, local] = await Promise.all([
     scanRuntimes(),
     scanAgentOSAgents(),
     scanLocalAgents(),
   ]);
 
-  const results: { name: string; category: string; adapterKind: string; command: string; args: string[]; source: string }[] = [];
+  const results: ScannedAgent[] = [];
 
   // Runtimes (executor-hosted) — only installed ones
   for (const rt of runtimes) {
@@ -58,22 +84,50 @@ export function createDeviceDaemon(
   let heartbeatTimer: NodeJS.Timeout | null = null;
   const queues = new Map<string, Promise<unknown>>();
   const httpBase = cfg.server.url.replace(/\/agent$/, '');
+  let firstConnect = true;
+  const systemInfo = collectSystemInfo();
 
   const publicAgents = Array.from(agents.values())
     .filter((a) => a.visibility === 'public')
     .map((a) => a.publicMeta);
 
-  async function scanAndRegister(sock: Socket) {
+  function emitRegister(sock: Socket, scanned: ScannedAgent[]) {
+    if (scanned.length === 0) return;
+    sock.emit('device:register-agents', { agents: scanned }, (ack: any) => {
+      if (ack?.ok) {
+        logger.info({ count: ack.agents?.length }, 'scanned agents registered');
+      } else {
+        logger.warn({ error: ack?.error }, 'failed to register scanned agents');
+      }
+    });
+  }
+
+  async function scanAndRegister(sock: Socket, useCache: boolean) {
+    if (useCache) {
+      const cached = loadCache();
+      if (cached) {
+        logger.info({ count: cached.length }, 'using cached scan results');
+        emitRegister(sock, cached);
+        // Background refresh — only emit if results differ
+        scanAll().then((fresh) => {
+          saveCache(fresh);
+          const cachedKey = JSON.stringify(cached.map((a) => a.command).sort());
+          const freshKey = JSON.stringify(fresh.map((a) => a.command).sort());
+          if (cachedKey !== freshKey) {
+            logger.info({ count: fresh.length }, 'scan results changed, updating');
+            emitRegister(sock, fresh);
+          }
+        }).catch((err: any) => {
+          logger.warn({ err: err?.message }, 'background scan failed');
+        });
+        return;
+      }
+    }
+    // Full scan (no cache or cache miss)
     try {
       const scanned = await scanAll();
-      if (scanned.length === 0) return;
-      sock.emit('device:register-agents', { agents: scanned }, (ack: any) => {
-        if (ack?.ok) {
-          logger.info({ count: ack.agents?.length }, 'scanned agents registered');
-        } else {
-          logger.warn({ error: ack?.error }, 'failed to register scanned agents');
-        }
-      });
+      saveCache(scanned);
+      emitRegister(sock, scanned);
     } catch (err: any) {
       logger.error({ err: err?.message }, 'scan failed');
     }
@@ -88,6 +142,7 @@ export function createDeviceDaemon(
           deviceId: cfg.deviceId,
           networkId: cfg.networkId,
           agents: publicAgents,
+          systemInfo,
         },
         transports: ['websocket'],
         reconnection: true,
@@ -95,11 +150,16 @@ export function createDeviceDaemon(
       });
 
       socket.on('connect', () => {
-        logger.info({ deviceId: cfg.deviceId, sid: socket!.id }, 'device daemon connected');
+        const reconnecting = !firstConnect;
+        firstConnect = false;
+        logger.info({ deviceId: cfg.deviceId, sid: socket!.id, reconnecting }, 'device daemon connected');
         socket!.emit('register');
 
-        // Auto-scan and register all discovered agents/runtimes
-        scanAndRegister(socket!);
+        // Reconnect: skip scan entirely (server already has our agents)
+        // First connect: use cache if available, otherwise full scan
+        if (!reconnecting) {
+          scanAndRegister(socket!, true);
+        }
 
         if (heartbeatTimer) clearInterval(heartbeatTimer);
         heartbeatTimer = setInterval(() => {
@@ -161,7 +221,7 @@ export function createDeviceDaemon(
       });
 
       socket.on('agents:discover', async () => {
-        await scanAndRegister(socket!);
+        await scanAndRegister(socket!, false);
       });
 
       socket.on('disconnect', (reason) => {

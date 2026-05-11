@@ -16,7 +16,6 @@ export interface DeviceRuntime {
   userId: string;
   networkId: string;
   socket: Socket;
-  tailscaleIp?: string;
   agents: Map<string, PublicAgentMeta>;
   lastSeenAt: number;
   status: AgentStatus;

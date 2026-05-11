@@ -12,6 +12,7 @@ export interface StorageSpace {
   messages: {
     append(m: MessageRow): void;
     listByChannel(channelId: string, limit: number): MessageRow[];
+    search(query: string, limit: number): MessageRow[];
   };
   artifacts: {
     create(input: {
@@ -41,7 +42,9 @@ CREATE TABLE IF NOT EXISTS channels (
   name TEXT NOT NULL,
   visibility TEXT NOT NULL DEFAULT 'public',
   created_by TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  is_dm INTEGER NOT NULL DEFAULT 0,
+  dm_target_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS channel_members (
@@ -132,6 +135,9 @@ function createDao(raw: Database.Database): Pick<StorageSpace, 'messages' | 'art
     ORDER BY created_at DESC, id DESC
     LIMIT ?
   `);
+  const messageSearch = raw.prepare(`
+    SELECT * FROM messages WHERE body LIKE ? ORDER BY created_at DESC LIMIT ?
+  `);
 
   const artifactCreate = raw.prepare(`
     INSERT INTO artifacts (id, message_id, uploader_id, filename, mime_type, size_bytes, storage_path, created_at, meta_json)
@@ -184,6 +190,8 @@ function createDao(raw: Database.Database): Pick<StorageSpace, 'messages' | 'art
       append: (m) => { messageAppend.run(m); },
       listByChannel: (channelId, limit) =>
         messageList.all(channelId, limit).map(rowToMessage).reverse(),
+      search: (query, limit) =>
+        messageSearch.all(`%${query}%`, limit).map(rowToMessage),
     },
     artifacts: {
       create: (input) => {
@@ -281,6 +289,8 @@ export class StorageManager {
     try { db.exec(`ALTER TABLE pipeline_runs ADD COLUMN name TEXT`); } catch {}
     try { db.exec(`ALTER TABLE channels ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'`); } catch {}
     try { db.exec(`ALTER TABLE channels ADD COLUMN created_by TEXT`); } catch {}
+    try { db.exec(`ALTER TABLE channels ADD COLUMN is_dm INTEGER NOT NULL DEFAULT 0`); } catch {}
+    try { db.exec(`ALTER TABLE channels ADD COLUMN dm_target_id TEXT`); } catch {}
 
     const dao = createDao(db);
     const space: StorageSpace = { networkId, db, dbPath, artifactDir, ...dao };
@@ -305,6 +315,8 @@ export class StorageManager {
     try { db.exec(`ALTER TABLE pipeline_runs ADD COLUMN name TEXT`); } catch {}
     try { db.exec(`ALTER TABLE channels ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'`); } catch {}
     try { db.exec(`ALTER TABLE channels ADD COLUMN created_by TEXT`); } catch {}
+    try { db.exec(`ALTER TABLE channels ADD COLUMN is_dm INTEGER NOT NULL DEFAULT 0`); } catch {}
+    try { db.exec(`ALTER TABLE channels ADD COLUMN dm_target_id TEXT`); } catch {}
     const dao = createDao(db);
     const space: StorageSpace = { networkId, db, dbPath, artifactDir, ...dao };
     this.spaces.set(networkId, space);

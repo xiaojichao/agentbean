@@ -278,9 +278,10 @@ CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   network_id TEXT NOT NULL,
-  tailscale_ip TEXT,
   hostname TEXT,
   last_seen_at INTEGER NOT NULL,
+  connect_command TEXT,
+  system_info TEXT,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE
 );
@@ -343,6 +344,16 @@ export interface NetworkRow {
   visibility: 'public' | 'private';
   type: 'public' | 'local' | 'private';
   createdAt: number;
+}
+
+export interface DeviceRow {
+  id: string;
+  userId: string;
+  networkId: string;
+  hostname: string | null;
+  lastSeenAt: number;
+  connectCommand: string | null;
+  systemInfo: Record<string, unknown> | null;
 }
 
 export interface UserRow {
@@ -415,7 +426,13 @@ export interface GlobalDb {
     get(id: string): { id: string } | null;
   };
   devices: {
-    upsert(row: { id: string; userId: string; networkId: string; hostname?: string; tailscaleIp?: string; lastSeenAt: number }): void;
+    upsert(row: { id: string; userId: string; networkId: string; hostname?: string; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): void;
+    get(id: string): DeviceRow | null;
+    listByNetwork(networkId: string): DeviceRow[];
+    listByUser(userId: string): DeviceRow[];
+    delete(id: string): void;
+    setConnectCommand(id: string, command: string): void;
+    rename(id: string, hostname: string): void;
   };
 }
 
@@ -457,6 +474,18 @@ function rowToInvite(r: any): InviteRow {
     maxUses: r.max_uses ?? null,
     usesCount: r.uses_count ?? 0,
     createdAt: r.created_at,
+  };
+}
+
+function rowToDevice(r: any): DeviceRow {
+  return {
+    id: r.id,
+    userId: r.user_id,
+    networkId: r.network_id,
+    hostname: r.hostname ?? null,
+    lastSeenAt: r.last_seen_at,
+    connectCommand: r.connect_command ?? null,
+    systemInfo: r.system_info ? JSON.parse(r.system_info) : null,
   };
 }
 
@@ -573,17 +602,25 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   try { raw.exec(`ALTER TABLE agents ADD COLUMN cwd TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN owner_id TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE users ADD COLUMN current_network_id TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE devices ADD COLUMN connect_command TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE devices ADD COLUMN system_info TEXT`); } catch {}
 
   const userSetCurrentNetwork = raw.prepare(`UPDATE users SET current_network_id = ?, updated_at = ? WHERE id = ?`);
 
   const deviceUpsert = raw.prepare(`
-    INSERT INTO devices (id, user_id, network_id, hostname, tailscale_ip, last_seen_at)
-    VALUES (@id, @userId, @networkId, @hostname, @tailscaleIp, @lastSeenAt)
+    INSERT INTO devices (id, user_id, network_id, hostname, last_seen_at, system_info)
+    VALUES (@id, @userId, @networkId, @hostname, @lastSeenAt, @systemInfo)
     ON CONFLICT(id) DO UPDATE SET
       hostname = excluded.hostname,
-      tailscale_ip = excluded.tailscale_ip,
-      last_seen_at = excluded.last_seen_at
+      last_seen_at = excluded.last_seen_at,
+      system_info = COALESCE(excluded.system_info, system_info)
   `);
+  const deviceGet = raw.prepare(`SELECT * FROM devices WHERE id = ?`);
+  const deviceListByNetwork = raw.prepare(`SELECT * FROM devices WHERE network_id = ? ORDER BY last_seen_at DESC`);
+  const deviceListByUser = raw.prepare(`SELECT * FROM devices WHERE user_id = ? ORDER BY last_seen_at DESC`);
+  const deviceDelete = raw.prepare(`DELETE FROM devices WHERE id = ?`);
+  const deviceSetConnectCommand = raw.prepare(`UPDATE devices SET connect_command = ? WHERE id = ?`);
+  const deviceRename = raw.prepare(`UPDATE devices SET hostname = ? WHERE id = ?`);
 
   const globalAgentUpsert = raw.prepare(`
     INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, command, args, cwd, owner_id)
@@ -732,10 +769,21 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
           userId: row.userId,
           networkId: row.networkId,
           hostname: row.hostname ?? null,
-          tailscaleIp: row.tailscaleIp ?? null,
           lastSeenAt: row.lastSeenAt,
+          systemInfo: row.systemInfo ? JSON.stringify(row.systemInfo) : null,
         });
       },
+      get: (id) => {
+        const r = deviceGet.get(id) as any;
+        return r ? rowToDevice(r) : null;
+      },
+      listByNetwork: (networkId) =>
+        (deviceListByNetwork.all(networkId) as any[]).map(rowToDevice),
+      listByUser: (userId) =>
+        (deviceListByUser.all(userId) as any[]).map(rowToDevice),
+      delete: (id) => { deviceDelete.run(id); },
+      setConnectCommand: (id, command) => { deviceSetConnectCommand.run(command, id); },
+      rename: (id, hostname) => { deviceRename.run(hostname, id); },
     },
   };
 }

@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
-import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
+import * as os from 'node:os';
 import type { AgentCategory, AdapterKind } from './config.js';
 import { logger } from './log.js';
 
@@ -44,6 +45,102 @@ function run(bin: string, args: string[]): Promise<string> {
     });
     child.on('error', () => resolve(''));
   });
+}
+
+// --- Machine ID (stable per-device identifier) ---
+
+const MACHINE_ID_FILE = join(os.homedir(), '.agentbean', 'device-id');
+
+function getFirstMacAddress(): string | null {
+  const ifaces = os.networkInterfaces();
+  for (const [name, addrs] of Object.entries(ifaces)) {
+    if (!addrs) continue;
+    for (const addr of addrs) {
+      // Skip internal (loopback) and zero MAC
+      if (addr.internal) continue;
+      if (addr.mac === '00:00:00:00:00:00') continue;
+      return addr.mac;
+    }
+  }
+  return null;
+}
+
+async function readPlatformMachineId(): Promise<string | null> {
+  const platform = os.platform();
+  try {
+    if (platform === 'linux') {
+      if (existsSync('/etc/machine-id')) {
+        return readFileSync('/etc/machine-id', 'utf-8').trim() || null;
+      }
+    } else if (platform === 'darwin') {
+      const output = await run('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice']);
+      const match = output.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/);
+      if (match) return match[1] ?? null;
+    } else if (platform === 'win32') {
+      const output = await run('reg', ['query', 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography', '/v', 'MachineGuid']);
+      const match = output.match(/MachineGuid\s+REG_SZ\s+(\S+)/);
+      if (match) return match[1] ?? null;
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
+/**
+ * Get a stable device ID unique to this machine.
+ * Priority: cached file > platform machine-id > MAC address > random UUID
+ * Result is cached to ~/.agentbean/device-id
+ */
+export async function getDeviceId(): Promise<string> {
+  // 1. Read cached ID
+  if (existsSync(MACHINE_ID_FILE)) {
+    const cached = readFileSync(MACHINE_ID_FILE, 'utf-8').trim();
+    if (cached) return cached;
+  }
+
+  // 2. Collect hardware fingerprint
+  const parts: string[] = [];
+
+  const platformId = await readPlatformMachineId();
+  if (platformId) parts.push(`platform:${platformId}`);
+
+  const mac = getFirstMacAddress();
+  if (mac) parts.push(`mac:${mac}`);
+
+  parts.push(`hostname:${os.hostname()}`);
+  parts.push(`arch:${os.arch()}`);
+  parts.push(`platform:${os.platform()}`);
+
+  let deviceId: string;
+
+  if (parts.length > 2) {
+    // We have enough hardware info — generate deterministic ID
+    const hash = createHash('sha256').update(parts.join('|')).digest('hex');
+    // Format as UUID: 8-4-4-4-12
+    deviceId = [
+      hash.slice(0, 8),
+      hash.slice(8, 12),
+      hash.slice(12, 16),
+      hash.slice(16, 20),
+      hash.slice(20, 32),
+    ].join('-');
+  } else {
+    // Fallback: random UUID
+    const { randomUUID } = await import('node:crypto');
+    deviceId = randomUUID();
+  }
+
+  // 3. Cache to file
+  try {
+    const dir = join(os.homedir(), '.agentbean');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(MACHINE_ID_FILE, deviceId);
+  } catch {
+    // non-fatal
+  }
+
+  return deviceId;
 }
 
 // --- Scan Coding Agent Runtimes (Claude Code, Codex, Kimi) ---
@@ -122,7 +219,7 @@ export async function scanAgentOSAgents(): Promise<ScannedAgent[]> {
 
 // --- Scan local agent definitions from filesystem ---
 
-export async function scanLocalAgents(scanDir = join(homedir(), '.agentbean', 'agents')): Promise<ScannedAgent[]> {
+export async function scanLocalAgents(scanDir = join(os.homedir(), '.agentbean', 'agents')): Promise<ScannedAgent[]> {
   if (!existsSync(scanDir)) {
     return [];
   }
@@ -208,4 +305,42 @@ export async function scanLocalAgents(scanDir = join(homedir(), '.agentbean', 'a
   }
 
   return results;
+}
+
+// --- System Info ---
+
+export interface SystemInfo {
+  platform: string;       // darwin, linux, win32
+  arch: string;           // arm64, x64
+  osVersion: string;      // e.g. "macOS 24.4.0" or "Linux 6.1.0"
+  hostname: string;
+  cpuModel: string;
+  cpuCores: number;
+  totalMemoryGB: number;
+  freeMemoryGB: number;
+  nodeVersion: string;
+}
+
+export function collectSystemInfo(): SystemInfo {
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const cpus = os.cpus();
+  const platform = os.platform();
+
+  let osVersion = `${os.type()} ${os.release()}`;
+  if (platform === 'darwin') {
+    osVersion = `macOS ${os.release()}`;
+  }
+
+  return {
+    platform,
+    arch: os.arch(),
+    osVersion,
+    hostname: os.hostname(),
+    cpuModel: cpus[0]?.model ?? 'unknown',
+    cpuCores: cpus.length,
+    totalMemoryGB: Math.round(totalMem / 1024 / 1024 / 1024 * 10) / 10,
+    freeMemoryGB: Math.round(freeMem / 1024 / 1024 / 1024 * 10) / 10,
+    nodeVersion: process.version,
+  };
 }
