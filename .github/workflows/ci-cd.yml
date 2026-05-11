@@ -114,3 +114,41 @@ jobs:
       - name: Skip Railway deploy
         if: env.RAILWAY_TOKEN == '' || env.RAILWAY_PROJECT_ID == '' || env.RAILWAY_SERVICE_ID == '' || env.RAILWAY_ENVIRONMENT == ''
         run: echo "::notice::Railway deployment secrets are incomplete; skipping Railway deploy."
+
+  publish:
+    name: Publish agent to npm
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 15
+
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+    steps:
+      - name: Check out repository
+        if: env.NPM_TOKEN != ''
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        if: env.NPM_TOKEN != ''
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: apps/agent/package-lock.json
+
+      - name: Install, build, and publish
+        if: env.NPM_TOKEN != ''
+        working-directory: apps/agent
+        run: |
+          npm ci
+          npm run build
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Skip npm publish
+        if: env.NPM_TOKEN == ''
+        run: echo "::notice::NPM_TOKEN is not configured; skipping npm publish."
