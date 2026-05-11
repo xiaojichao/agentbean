@@ -50,8 +50,14 @@ export default function TasksPage() {
   }, [selectedChannel]);
 
   const moveTo = async (taskId: string, col: ColumnId) => {
-    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: col } : t)));
-    await taskEvents().update({ id: taskId, status: col });
+    setTasks((prev) => {
+      const colTasks = prev.filter((t) => t.status === col && t.id !== taskId);
+      const maxSort = colTasks.reduce((max, t) => Math.max(max, t.sortOrder), 0);
+      const updated = prev.map((t) => (t.id === taskId ? { ...t, status: col, sortOrder: maxSort + 1 } : t));
+      // Persist both status and sort order
+      taskEvents().update({ id: taskId, status: col, sortOrder: maxSort + 1 });
+      return updated;
+    });
   };
 
   const handleCreate = async (e: FormEvent) => {

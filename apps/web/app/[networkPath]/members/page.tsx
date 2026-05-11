@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Bot, Circle, ChevronRight, User, Check, Zap } from 'lucide-react';
-import { memberEvents, deviceEvents } from '@/lib/socket';
+import { Bot, Circle, ChevronRight, User, Check, Zap, MessageSquare } from 'lucide-react';
+import { memberEvents, deviceEvents, dmEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import type { AgentSnapshot } from '@/lib/schema';
 
@@ -65,7 +65,7 @@ export default function MembersPage() {
       {/* Left sidebar */}
       <div className="flex w-60 shrink-0 flex-col border-r border-neutral-200 bg-neutral-50">
         <div className="border-b border-neutral-200 px-4 py-3">
-          <h2 className="text-sm font-semibold">Agents</h2>
+          <h2 className="text-sm font-semibold">成员</h2>
         </div>
 
         <div className="flex-1 overflow-y-auto p-2">
@@ -73,7 +73,7 @@ export default function MembersPage() {
           <div className="mb-2">
             <button onClick={() => setAgentsExpanded((v) => !v)} className="flex w-full items-center gap-1.5 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-neutral-500 hover:text-neutral-700">
               <ChevronRight size={12} className={`shrink-0 transition-transform ${agentsExpanded ? 'rotate-90' : ''}`} />
-              AGENTS
+              智能体成员
               <span className="ml-auto rounded-full bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{agentList.length}</span>
             </button>
             {agentsExpanded && (
@@ -101,7 +101,7 @@ export default function MembersPage() {
           <div className="mb-2">
             <button onClick={() => setHumansExpanded((v) => !v)} className="flex w-full items-center gap-1.5 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-neutral-500 hover:text-neutral-700">
               <ChevronRight size={12} className={`shrink-0 transition-transform ${humansExpanded ? 'rotate-90' : ''}`} />
-              HUMANS
+              人类成员
               <span className="ml-auto rounded-full bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{humanMembers.length}</span>
             </button>
             {humansExpanded && (
@@ -163,6 +163,17 @@ function PlaceholderTab({ name }: { name: string }) {
 function AgentProfile({ agent, device }: { agent: AgentSnapshot; device?: { hostname?: string; id: string; status: string } }) {
   const [displayName, setDisplayName] = useState(agent.name);
   const [description, setDescription] = useState('');
+  const [dmLoading, setDmLoading] = useState(false);
+
+  const startDm = async () => {
+    setDmLoading(true);
+    const res = await dmEvents().start(agent.id);
+    setDmLoading(false);
+    if (res.ok) {
+      // Navigate to chat - use router
+      window.location.href = window.location.pathname.replace('/members', '/chat');
+    }
+  };
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -180,69 +191,72 @@ function AgentProfile({ agent, device }: { agent: AgentSnapshot; device?: { host
           </div>
           <div className="mt-0.5 text-sm text-neutral-500">@{agent.name}</div>
         </div>
+        <button onClick={startDm} disabled={dmLoading} className="ml-auto flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-800 disabled:opacity-50">
+          <MessageSquare size={12} /> 发起私信
+        </button>
       </div>
 
       {/* Display Name & Description */}
       <section className="space-y-3">
         <div>
-          <label className="mb-1 block text-xs font-medium text-neutral-500">Display Name</label>
+          <label className="mb-1 block text-xs font-medium text-neutral-500">显示名称</label>
           <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400" />
         </div>
         <div>
-          <label className="mb-1 block text-xs font-medium text-neutral-500">Description</label>
-          <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="Add a description..." className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400 placeholder:text-neutral-400 resize-none" />
+          <label className="mb-1 block text-xs font-medium text-neutral-500">描述</label>
+          <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="添加描述..." className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400 placeholder:text-neutral-400 resize-none" />
         </div>
       </section>
 
       {/* INFO */}
-      <Section title="INFO">
+      <Section title="基本信息">
         {device && (
           <>
-            <InfoRow label="Computer" value={
+            <InfoRow label="设备" value={
               <span className="flex items-center gap-1.5">
                 <Bot size={12} className="text-neutral-400" />
                 <span>{device.hostname ?? device.id}</span>
-                <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700"><Circle size={5} className="fill-current" /> Connected</span>
+                <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700"><Circle size={5} className="fill-current" /> 已连接</span>
               </span>
             } />
-            <InfoRow label="Hostname" value={device.hostname ?? '—'} />
+            <InfoRow label="主机名" value={device.hostname ?? '—'} />
           </>
         )}
-        {!device && <InfoRow label="Computer" value={<span className="text-neutral-400">No device connected</span>} />}
-        <InfoRow label="Daemon" value={agent.adapterKind ? `v0.44.2 (${agent.adapterKind})` : '—'} />
-        <InfoRow label="Created" value={new Date(agent.lastSeenAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })} />
-        {agent.ownerId && <InfoRow label="Creator" value={<span className="rounded bg-purple-50 px-1.5 py-0.5 text-xs font-medium text-purple-700">{agent.ownerId}</span>} />}
-        <InfoRow label="Status" value={agent.status} />
-        <InfoRow label="Role" value={agent.role} />
+        {!device && <InfoRow label="设备" value={<span className="text-neutral-400">未连接设备</span>} />}
+        <InfoRow label="守护进程" value={agent.adapterKind ? `v0.44.2 (${agent.adapterKind})` : '—'} />
+        <InfoRow label="创建时间" value={new Date(agent.lastSeenAt).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })} />
+        {agent.ownerId && <InfoRow label="创建者" value={<span className="rounded bg-purple-50 px-1.5 py-0.5 text-xs font-medium text-purple-700">{agent.ownerId}</span>} />}
+        <InfoRow label="状态" value={agent.status} />
+        <InfoRow label="角色" value={agent.role} />
       </Section>
 
       {/* Runtime Configuration */}
-      <Section title="Runtime Configuration">
+      <Section title="运行时配置">
         <div className="space-y-3">
-          {agent.command && <InfoRow label="Command" value={<code className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs">{agent.command}</code>} />}
-          {agent.args && agent.args.length > 0 && <InfoRow label="Args" value={<code className="text-xs text-neutral-600">{agent.args.join(' ')}</code>} />}
-          {agent.cwd && <InfoRow label="Working Dir" value={<code className="text-xs text-neutral-600">{agent.cwd}</code>} />}
+          {agent.command && <InfoRow label="命令" value={<code className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs">{agent.command}</code>} />}
+          {agent.args && agent.args.length > 0 && <InfoRow label="参数" value={<code className="text-xs text-neutral-600">{agent.args.join(' ')}</code>} />}
+          {agent.cwd && <InfoRow label="工作目录" value={<code className="text-xs text-neutral-600">{agent.cwd}</code>} />}
           <div className="flex flex-wrap gap-2">
             <span className="inline-flex items-center rounded-md bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">{agent.adapterKind}</span>
             {agent.category && <span className="inline-flex items-center rounded-md bg-purple-50 px-2.5 py-1 text-xs font-medium text-purple-700">{agent.category}</span>}
           </div>
-          {!agent.command && !agent.args && !agent.cwd && <div className="text-sm text-neutral-400">No runtime configuration</div>}
+          {!agent.command && !agent.args && !agent.cwd && <div className="text-sm text-neutral-400">无运行时配置</div>}
         </div>
       </Section>
 
       {/* Environment Variables */}
-      <Section title="Environment Variables">
-        <div className="text-sm text-neutral-400">No environment variables configured</div>
+      <Section title="环境变量">
+        <div className="text-sm text-neutral-400">未配置环境变量</div>
       </Section>
 
       {/* Created Agents */}
-      <Section title={`Created Agents (${0})`}>
-        <div className="text-sm text-neutral-400">No created agents</div>
+      <Section title={`创建的 Agent (${0})`}>
+        <div className="text-sm text-neutral-400">暂无创建的 Agent</div>
       </Section>
 
       {/* Skills */}
-      <Section title={`Skills (Global: 0)`}>
-        <div className="text-sm text-neutral-400">No skills configured</div>
+      <Section title={`技能 (全局: 0)`}>
+        <div className="text-sm text-neutral-400">未配置技能</div>
       </Section>
     </div>
   );

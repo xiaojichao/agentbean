@@ -123,8 +123,19 @@ export interface DeviceInfo {
   userId: string;
   networkId: string;
   hostname?: string;
-  tailscaleIp?: string;
   lastSeenAt: number;
   status: AgentStatus;
   agentIds: string[];
+  connectCommand?: string | null;
+  systemInfo?: {
+    platform?: string;
+    arch?: string;
+    osVersion?: string;
+    hostname?: string;
+    cpuModel?: string;
+    cpuCores?: number;
+    totalMemoryGB?: number;
+    freeMemoryGB?: number;
+    nodeVersion?: string;
+  } | null;
 }

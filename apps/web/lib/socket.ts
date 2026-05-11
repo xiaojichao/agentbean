@@ -1,6 +1,6 @@
 'use client';
 import { io, type Socket } from 'socket.io-client';
-import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, NetworkSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo } from './schema.js';
+import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, NetworkSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage } from './schema.js';
 
 const configuredUrl = process.env.NEXT_PUBLIC_AGENT_BEAN_SERVER_URL ?? 'http://localhost:4000';
 const TOKEN_STORAGE_KEY = 'agentbean.token';
@@ -131,6 +131,22 @@ export function networkEvents(socket: Socket = getWebSocket()): NetworkEvents {
   };
 }
 
+export interface ChannelEvents {
+  update(payload: { channelId: string; name?: string; visibility?: 'public' | 'private' }): Promise<{ ok: boolean; error?: string }>;
+  addMember(channelId: string, userId: string): Promise<{ ok: boolean; error?: string }>;
+  removeMember(channelId: string, userId: string): Promise<{ ok: boolean; error?: string }>;
+  searchMessages(query: string, limit?: number): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
+}
+
+export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
+  return {
+    update(payload) { return emitWithTimeout(socket, 'channel:update', payload); },
+    addMember(channelId, userId) { return emitWithTimeout(socket, 'channel:add-member', { channelId, userId }); },
+    removeMember(channelId, userId) { return emitWithTimeout(socket, 'channel:remove-member', { channelId, userId }); },
+    searchMessages(query, limit) { return emitWithTimeout(socket, 'message:search', { query, limit }); },
+  };
+}
+
 export interface AuthEvents {
   register(payload: { username: string; password: string; email?: string; inviteToken?: string; sessionId?: string }): Promise<{ ok: boolean; token?: string; userId?: string; username?: string; email?: string | null; role?: 'admin' | 'user'; networkId?: string; networkPath?: string; error?: string }>;
   login(payload: { username: string; password: string; joinCode?: string }): Promise<{ ok: boolean; token?: string; userId?: string; username?: string; email?: string | null; role?: 'admin' | 'user'; networkId?: string; networkPath?: string; error?: string }>;
@@ -205,6 +221,8 @@ export interface DeviceEvents {
   get(payload: { id: string }): Promise<{ ok: boolean; device?: any; error?: string }>;
   agentsList(deviceId: string): Promise<{ ok: boolean; agents?: DeviceAgent[]; error?: string }>;
   scan(deviceId: string): Promise<{ ok: boolean; error?: string }>;
+  delete(id: string): Promise<{ ok: boolean; error?: string }>;
+  rename(id: string, hostname: string): Promise<{ ok: boolean; error?: string }>;
   onSnapshot(handler: (devices: DeviceInfo[]) => void): () => void;
   onStatus(handler: (device: DeviceInfo) => void): () => void;
   subscribe(): void;
@@ -224,6 +242,12 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
     scan(deviceId) {
       return emitWithTimeout(socket, 'device:scan', { deviceId });
     },
+    delete(id) {
+      return emitWithTimeout(socket, 'device:delete', { id });
+    },
+    rename(id, hostname) {
+      return emitWithTimeout(socket, 'device:rename', { id, hostname });
+    },
     onSnapshot(handler) {
       socket.on('devices:snapshot', handler);
       return () => { socket.off('devices:snapshot', handler); };
@@ -239,7 +263,7 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
 export interface TaskEvents {
   create(payload: { title: string; description?: string; status?: string; assigneeId?: string; channelId?: string; tags?: string[] }): Promise<{ ok: boolean; task?: any; error?: string }>;
   list(channelId?: string): Promise<{ ok: boolean; tasks?: any[]; error?: string }>;
-  update(payload: { id: string; title?: string; description?: string; status?: string; assigneeId?: string | null; channelId?: string | null; tags?: string[] }): Promise<{ ok: boolean; task?: any; error?: string }>;
+  update(payload: { id: string; title?: string; description?: string; status?: string; assigneeId?: string | null; channelId?: string | null; tags?: string[]; sortOrder?: number }): Promise<{ ok: boolean; task?: any; error?: string }>;
   delete(id: string): Promise<{ ok: boolean; error?: string }>;
   reorder(id: string, sortOrder: number): Promise<{ ok: boolean; error?: string }>;
 }
@@ -262,6 +286,25 @@ export function memberEvents(socket: Socket = getWebSocket()): MemberEvents {
   return {
     list() {
       return emitWithTimeout(socket, 'members:list', {});
+    },
+  };
+}
+
+export interface DmChannel { id: string; name: string; dmTargetId: string; createdAt: number; }
+
+export interface DmEvents {
+  start(agentId: string): Promise<{ ok: boolean; dm?: DmChannel; error?: string }>;
+  list(): Promise<{ ok: boolean; dms?: DmChannel[]; error?: string }>;
+  onSnapshot(handler: (dms: DmChannel[]) => void): () => void;
+}
+
+export function dmEvents(socket: Socket = getWebSocket()): DmEvents {
+  return {
+    start(agentId) { return emitWithTimeout(socket, 'dm:start', { agentId }); },
+    list() { return emitWithTimeout(socket, 'dm:list', {}); },
+    onSnapshot(handler) {
+      socket.on('dms:snapshot', handler);
+      return () => { socket.off('dms:snapshot', handler); };
     },
   };
 }

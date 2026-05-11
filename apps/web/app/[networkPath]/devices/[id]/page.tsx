@@ -92,7 +92,6 @@ export default function DeviceDetailPage() {
             <span className="text-xs text-neutral-500">{device.status}</span>
           </div>
           <div className="mt-0.5 text-sm text-neutral-500">
-            {device.tailscaleIp && <span>IP: {device.tailscaleIp} · </span>}
             最后在线: {new Date(device.lastSeenAt).toLocaleString()}
           </div>
         </div>
@@ -104,7 +103,6 @@ export default function DeviceDetailPage() {
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           <PropRow label="设备 ID" value={device.id} />
           <PropRow label="状态" value={device.status} />
-          <PropRow label="Tailscale IP" value={device.tailscaleIp ?? '—'} />
           <PropRow label="所属网络" value={device.networkId} />
           <PropRow label="Agent 数量" value={`${device.agentIds.length}`} />
           <PropRow label="最后心跳" value={new Date(device.lastSeenAt).toLocaleString()} />

@@ -1,11 +1,13 @@
 'use client';
 import { create } from 'zustand';
 import type { AgentSnapshot, ChannelSummary, ChatMessage, ConnState, OutboundMessage, DiscoveredAgent, RuntimeInfo, NetworkSummary, AgentMetricsSummary, UserInfo, DeviceInfo } from './schema.js';
+import type { DmChannel } from './socket.js';
 
 interface State {
   conn: ConnState;
   agents: Record<string, AgentSnapshot>;
   channels: ChannelSummary[];
+  dms: DmChannel[];
   messagesByChannel: Record<string, ChatMessage[]>;
   outbox: Record<string, OutboundMessage>;
   discovered: DiscoveredAgent[];
@@ -23,6 +25,7 @@ interface State {
   addAgent(agent: AgentSnapshot): void;
   updateAgent(id: string, patch: Partial<AgentSnapshot>): void;
   applyChannelsSnapshot(list: ChannelSummary[]): void;
+  applyDmsSnapshot(list: DmChannel[]): void;
   applyChannelHistory(channelId: string, msgs: ChatMessage[]): void;
   appendMessage(msg: ChatMessage): void;
   addOutbound(msg: OutboundMessage): void;
@@ -43,6 +46,7 @@ export const useAgentBeanStore = create<State>((set) => ({
   conn: 'connecting',
   agents: {},
   channels: [],
+  dms: [],
   messagesByChannel: {},
   outbox: {},
   discovered: [],
@@ -74,6 +78,7 @@ export const useAgentBeanStore = create<State>((set) => ({
     });
   },
   applyChannelsSnapshot(list) { set({ channels: list }); },
+  applyDmsSnapshot(list) { set({ dms: list }); },
   applyChannelHistory(channelId, msgs) {
     set((s) => ({ messagesByChannel: { ...s.messagesByChannel, [channelId]: msgs } }));
   },

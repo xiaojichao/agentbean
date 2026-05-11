@@ -113,7 +113,7 @@ function EmptyState() {
 }
 
 function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName, showDeleteConfirm, setShowDeleteConfirm, currentNetworkId }: {
-  device: { id: string; hostname?: string; status: string; tailscaleIp?: string; lastSeenAt: number; agentIds: string[] };
+  device: { id: string; hostname?: string; status: string; lastSeenAt: number; agentIds: string[]; connectCommand?: string | null; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string } | null };
   editName: boolean;
   setEditName: (v: boolean) => void;
   deviceName: string;
@@ -159,7 +159,9 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
     setEditName(true);
   };
 
-  const saveName = () => {
+  const saveName = async () => {
+    if (!deviceName.trim() || deviceName.trim() === displayName) { setEditName(false); return; }
+    await deviceEvents().rename(device.id, deviceName.trim());
     setEditName(false);
   };
 
@@ -197,7 +199,6 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
                 <Circle size={5} className="fill-current" />
                 {device.status === 'online' ? '在线' : device.status === 'busy' ? '忙碌' : device.status === 'offline' ? '离线' : device.status}
               </span>
-              {device.tailscaleIp && <span className="text-xs text-neutral-400">{device.tailscaleIp}</span>}
             </div>
           </div>
         </div>
@@ -233,21 +234,52 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           </div>
         </section>
 
+        {/* HARDWARE */}
+        {device.systemInfo && (
+          <section className="rounded-lg border border-neutral-200 p-4">
+            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">硬件信息</h3>
+            <div className="grid grid-cols-2 gap-2">
+              {device.systemInfo.osVersion && <InfoCard label="操作系统" value={device.systemInfo.osVersion} />}
+              {device.systemInfo.arch && <InfoCard label="架构" value={device.systemInfo.arch} />}
+              {device.systemInfo.cpuModel && <InfoCard label="CPU" value={device.systemInfo.cpuModel} />}
+              {device.systemInfo.cpuCores && <InfoCard label="CPU 核心" value={`${device.systemInfo.cpuCores} 核`} />}
+              {device.systemInfo.totalMemoryGB && <InfoCard label="总内存" value={`${device.systemInfo.totalMemoryGB} GB`} />}
+              {device.systemInfo.freeMemoryGB && <InfoCard label="可用内存" value={`${device.systemInfo.freeMemoryGB} GB`} />}
+              {device.systemInfo.nodeVersion && <InfoCard label="Node.js" value={device.systemInfo.nodeVersion} />}
+              {device.systemInfo.hostname && <InfoCard label="主机名" value={device.systemInfo.hostname} />}
+            </div>
+          </section>
+        )}
+
         {/* CONNECTION */}
         <section className="rounded-lg border border-neutral-200 p-4">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">连接</h3>
-          <button onClick={generateConnect} className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-50">
-            生成连接命令
-          </button>
-          {inviteCommand && (
-            <div className="mt-3 flex items-center gap-2">
-              <code className="flex-1 overflow-x-auto whitespace-nowrap rounded-md bg-neutral-900 px-3 py-2 text-xs text-emerald-400">{inviteCommand}</code>
-              <button onClick={copy} className="shrink-0 rounded-md border border-neutral-300 px-3 py-2 text-xs hover:bg-neutral-50 flex items-center gap-1">
-                <Copy size={10} /> {copied ? '已复制' : '复制'}
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">连接命令</h3>
+          {device.connectCommand ? (
+            <div className="space-y-2">
+              <p className="text-xs text-neutral-500">使用以下命令重新启动此设备上的 Daemon：</p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 overflow-x-auto whitespace-nowrap rounded-md bg-neutral-900 px-3 py-2 text-xs text-emerald-400">{device.connectCommand}</code>
+                <button onClick={() => { navigator.clipboard.writeText(device.connectCommand ?? ''); setCopied(true); setTimeout(() => setCopied(false), 2000); }} className="shrink-0 rounded-md border border-neutral-300 px-3 py-2 text-xs hover:bg-neutral-50 flex items-center gap-1">
+                  <Copy size={10} /> {copied ? '已复制' : '复制'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <button onClick={generateConnect} className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-50">
+                生成连接命令
               </button>
+              {inviteCommand && (
+                <div className="mt-3 flex items-center gap-2">
+                  <code className="flex-1 overflow-x-auto whitespace-nowrap rounded-md bg-neutral-900 px-3 py-2 text-xs text-emerald-400">{inviteCommand}</code>
+                  <button onClick={copy} className="shrink-0 rounded-md border border-neutral-300 px-3 py-2 text-xs hover:bg-neutral-50 flex items-center gap-1">
+                    <Copy size={10} /> {copied ? '已复制' : '复制'}
+                  </button>
+                </div>
+              )}
+              {genError && <p className="mt-2 text-sm text-red-600">{genError}</p>}
             </div>
           )}
-          {genError && <p className="mt-2 text-sm text-red-600">{genError}</p>}
         </section>
 
         {/* AGENT GROUPS */}
@@ -309,7 +341,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
               <p className="mb-3 text-sm text-red-700">确定要删除设备 <strong>{displayName}</strong> 吗？此操作不可撤销。</p>
               <div className="flex gap-2">
                 <button onClick={() => setShowDeleteConfirm(false)} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50">取消</button>
-                <button onClick={() => setShowDeleteConfirm(false)} className="rounded-md bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700">确认删除</button>
+                <button onClick={async () => { await deviceEvents().delete(device.id); setShowDeleteConfirm(false); }} className="rounded-md bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700">确认删除</button>
               </div>
             </div>
           )}
@@ -342,6 +374,15 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between border-b border-neutral-100 py-2 last:border-0">
       <span className="text-xs text-neutral-500">{label}</span>
       <span className="text-sm font-medium text-neutral-800 truncate max-w-[60%]">{value}</span>
+    </div>
+  );
+}
+
+function InfoCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
+      <div className="text-[10px] font-medium uppercase tracking-wider text-neutral-400">{label}</div>
+      <div className="mt-0.5 text-sm font-medium text-neutral-800 truncate">{value}</div>
     </div>
   );
 }
