@@ -134,7 +134,7 @@ describe('agent:create with publishedNetworkIds', () => {
       }, resolve);
     });
     expect(createRes.ok).toBe(true);
-    expect(createRes.agent.name).toBe('My Custom Agent');
+    expect(createRes.agent.name).toBe('My-Custom-Agent');
     expect(createRes.agent.source).toBe('custom');
 
     const snap = await new Promise<any[]>((resolve) => {
@@ -143,7 +143,7 @@ describe('agent:create with publishedNetworkIds', () => {
     });
     const found = snap.find((a: any) => a.id === createRes.agent.id);
     expect(found).toBeTruthy();
-    expect(found.name).toBe('My Custom Agent');
+    expect(found.name).toBe('My-Custom-Agent');
     expect(found.source).toBe('custom');
 
     web.close();

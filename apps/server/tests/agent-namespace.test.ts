@@ -113,11 +113,11 @@ describe('device:register-agents', () => {
     // Verify in DB
     const dbAgents = app.db!.agents.listByDevice('d-scan1');
     expect(dbAgents).toHaveLength(2);
-    expect(dbAgents.map((a) => a.name).sort()).toEqual(['Claude Code', 'Hermes Agent']);
+    expect(dbAgents.map((a) => a.name).sort()).toEqual(['Claude-Code', 'Hermes-Agent']);
     expect(dbAgents.every((a) => a.source === 'scanned')).toBe(true);
 
     // Verify in AgentRegistry
-    const claudeAgent = ack.agents.find((a: any) => a.name === 'Claude Code');
+    const claudeAgent = ack.agents.find((a: any) => a.name === 'Claude-Code');
     expect(claudeAgent).toBeDefined();
     const rt = app.registry!.snapshot(claudeAgent.id);
     expect(rt).toBeTruthy();

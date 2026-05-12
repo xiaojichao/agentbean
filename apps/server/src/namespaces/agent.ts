@@ -276,14 +276,15 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         const now = Date.now();
         const registered: any[] = [];
         for (const ag of payload.agents) {
+          const sanitizedName = ag.name.trim().replace(/\s+/g, '-');
           // Generate stable ID from deviceId + agent name for dedup
-          const agentId = `scan-${a.deviceId}-${ag.name.toLowerCase().replace(/\s+/g, '-')}`;
+          const agentId = `scan-${a.deviceId}-${sanitizedName.toLowerCase().replace(/[^a-z0-9-]+/g, '-')}`;
           const existing = deps.globalDb?.agents?.get(agentId);
 
           // Persist to global DB
           deps.globalDb?.agents?.upsert({
             id: agentId,
-            name: ag.name,
+            name: sanitizedName,
             adapterKind: ag.adapterKind as AdapterKind,
             deviceId: a.deviceId,
             networkId: a.networkId,
@@ -299,7 +300,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           // Persist to per-network DB
           deps.db.agents.upsert({
             id: agentId,
-            name: ag.name,
+            name: sanitizedName,
             role: null,
             adapterKind: ag.adapterKind as AdapterKind,
             deviceId: a.deviceId,
@@ -321,7 +322,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           const publishes = deps.globalDb?.agentPublishes?.listByAgent(agentId) ?? [];
           const rt = deps.registry.register(socket.id, {
             id: agentId,
-            name: ag.name,
+            name: sanitizedName,
             role: '',
             adapterKind: ag.adapterKind as AdapterKind,
             category: (ag.category as AgentCategory) ?? 'executor-hosted',
@@ -330,7 +331,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             publishedNetworkIds: publishes.map((p: { networkId: string }) => p.networkId),
           });
           deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
-          registered.push({ id: agentId, name: ag.name, category: ag.category, status: 'online' });
+          registered.push({ id: agentId, name: sanitizedName, category: ag.category, status: 'online' });
         }
         ack?.({ ok: true, agents: registered });
       } catch (e: any) {

@@ -342,7 +342,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
     socket.on('device:rename', (payload: { id: string; hostname: string }, ack?: (r: any) => void) => {
       try {
-        globalDb.devices.rename(payload.id, payload.hostname);
+        const hostname = payload.hostname.trim().replace(/\s+/g, '-');
+        globalDb.devices.rename(payload.id, hostname);
         ack?.({ ok: true });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
@@ -727,7 +728,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
     socket.on('agent:create', (payload: { name: string; role?: string; adapterKind: string; visibility?: 'public' | 'private'; networkId?: string; category?: string; ownerId?: string; command?: string; args?: string[]; cwd?: string; description?: string; publishedNetworkIds?: string[] }, ack?: (r: any) => void) => {
       try {
-        const name = payload.name.trim();
+        const name = payload.name.trim().replace(/\s+/g, '-');
         if (!name) return ack?.({ ok: false, error: 'EMPTY_NAME' });
         const targetNetworkId = payload.networkId ?? socket.data.networkId ?? socketNetworkMap.get(socket.id) ?? defaultNetworkId;
         const userId = socket.data.userId as string | undefined;
@@ -943,7 +944,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       ack?: (r: any) => void,
     ) => {
       try {
-        const username = payload.username.trim();
+        const username = payload.username.trim().replace(/\s+/g, '-');
         const email = payload.email?.trim() || null;
         if (!username || username.length < 2) return ack?.({ ok: false, error: 'USERNAME_TOO_SHORT' });
         if (!payload.password || payload.password.length < 6) return ack?.({ ok: false, error: 'PASSWORD_TOO_SHORT' });
