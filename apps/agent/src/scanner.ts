@@ -158,7 +158,7 @@ export async function scanRuntimes(): Promise<RuntimeInfo[]> {
   for (const s of checks) {
     const path = await which(s.bin);
     results.push({
-      name: s.name,
+      name: s.name.replace(/\s+/g, '-'),
       adapterKind: s.adapterKind,
       command: path ?? '',
       installed: path !== null,
@@ -179,7 +179,7 @@ async function checkHermesGateway(): Promise<ScannedAgent | null> {
   if (running) {
     return {
       category: 'agentos-hosted',
-      name: 'Hermes Agent',
+      name: 'Hermes-Agent',
       adapterKind: 'hermes',
       command: path,
       args: ['gateway', 'run'],
@@ -199,7 +199,7 @@ async function checkOpenClawGateway(): Promise<ScannedAgent | null> {
   if (running) {
     return {
       category: 'agentos-hosted',
-      name: 'OpenClaw Agent',
+      name: 'OpenClaw-Agent',
       adapterKind: 'openclaw',
       command: path,
       args: ['gateway', 'run'],
@@ -276,7 +276,7 @@ export async function scanLocalAgents(scanDir = join(os.homedir(), '.agentbean',
 
     if (!parsed || typeof parsed !== 'object') continue;
 
-    const name = typeof parsed.name === 'string' ? parsed.name : entry;
+    const name = (typeof parsed.name === 'string' ? parsed.name : entry).replace(/\s+/g, '-');
     const command = typeof parsed.command === 'string' ? parsed.command : '';
     const args = Array.isArray(parsed.args) ? (parsed.args as unknown[]).map(String) : [];
 

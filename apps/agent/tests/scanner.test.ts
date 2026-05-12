@@ -6,9 +6,9 @@ describe('scanRuntimes', () => {
     const runtimes = await scanRuntimes();
     expect(runtimes.length).toBeGreaterThanOrEqual(3);
     const names = runtimes.map((r) => r.name);
-    expect(names).toContain('Claude Code');
-    expect(names).toContain('Codex CLI');
-    expect(names).toContain('Kimi CLI');
+    expect(names).toContain('Claude-Code');
+    expect(names).toContain('Codex-CLI');
+    expect(names).toContain('Kimi-CLI');
     // Each runtime has required fields
     for (const rt of runtimes) {
       expect(rt).toHaveProperty('name');
