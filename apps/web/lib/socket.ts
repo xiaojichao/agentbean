@@ -17,7 +17,7 @@ function getServerUrl(): string {
   if (typeof window === 'undefined') return configuredUrl;
   const current = new URL(window.location.href);
   const configured = new URL(configuredUrl);
-  configured.hostname = current.hostname;
+  configured.hostname = current.hostname.replace(/^www\./, '');
   return configured.toString().replace(/\/$/, '');
 }
 
