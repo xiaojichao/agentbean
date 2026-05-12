@@ -73,7 +73,6 @@ jobs:
     timeout-minutes: 30
 
     env:
-      VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_PROJECT_ID: c6b70675-f7d5-47a1-a8e7-05b37d13e476
       RAILWAY_SERVICE_ID: 7b1dce9b-b7e7-4cfb-bb3f-ef86d10e8647
@@ -82,14 +81,6 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
-
-      - name: Trigger Vercel frontend deploy
-        if: env.VERCEL_DEPLOY_HOOK_URL != ''
-        run: curl -fsS -X POST "$VERCEL_DEPLOY_HOOK_URL"
-
-      - name: Skip Vercel deploy
-        if: env.VERCEL_DEPLOY_HOOK_URL == ''
-        run: echo "::notice::VERCEL_DEPLOY_HOOK_URL is not configured; skipping Vercel deploy."
 
       - name: Set up Node.js for Railway CLI
         if: env.RAILWAY_TOKEN != ''
