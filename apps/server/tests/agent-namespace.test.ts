@@ -58,7 +58,7 @@ describe('/agent namespace', () => {
     const status = await statusPromise;
     expect(status.id).toBe('a1');
     expect(status.status).toBe('online');
-    expect(status.connectCommand).toContain('codex');
+    expect(status.connectCommand).toContain('npx @agentbean/daemon@latest');
 
     const snapshotPromise = new Promise<any[]>((resolve) => web.once('agents:snapshot', resolve));
     web.emit('agents:subscribe', {});
