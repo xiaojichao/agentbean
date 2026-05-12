@@ -26,7 +26,7 @@ export interface AgentNamespaceDeps {
     };
     devices?: {
       upsert(row: { id: string; userId: string; networkId: string; hostname?: string; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): void;
-      get(id: string): { id: string; connectCommand?: string | null } | null;
+      get(id: string): { id: string; hostname?: string | null; connectCommand?: string | null } | null;
       setConnectCommand(id: string, command: string): void;
     };
   };
@@ -194,10 +194,12 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       const parsed = parseToken(a.token!);
       const userId = parsed?.userId ?? 'system';
       const existingDevice = deps.globalDb?.devices?.get(a.deviceId);
+      const sysHostname = a.systemInfo?.hostname ? String(a.systemInfo.hostname).replace(/\s+/g, '-') : undefined;
       deps.globalDb?.devices?.upsert({
         id: a.deviceId,
         userId,
         networkId: a.networkId,
+        hostname: existingDevice?.hostname ?? sysHostname,
         lastSeenAt: now,
         systemInfo: a.systemInfo ?? null,
       });

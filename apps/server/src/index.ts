@@ -345,6 +345,21 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const hostname = payload.hostname.trim().replace(/\s+/g, '-');
         globalDb.devices.rename(payload.id, hostname);
         ack?.({ ok: true });
+        // Refresh device list for all web clients
+        const nid = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const userId = socket.data.userId as string | undefined;
+        const dbDevices = userId ? globalDb.devices.listByUser(userId) : globalDb.devices.listByNetwork(nid);
+        const devices = dbDevices.map((dbd) => {
+          const live = deviceRegistry.get(dbd.id);
+          return {
+            id: dbd.id, userId: dbd.userId, networkId: dbd.networkId, hostname: dbd.hostname,
+            agentIds: live ? Array.from(live.agents.keys()) : [],
+            lastSeenAt: live ? live.lastSeenAt : dbd.lastSeenAt,
+            status: live ? live.status : 'offline',
+            connectCommand: dbd.connectCommand,
+          };
+        });
+        io.of('/web').emit('devices:snapshot', devices);
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }
