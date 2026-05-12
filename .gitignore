@@ -41,3 +41,5 @@ apps/agent/*.yaml
 
 # Packaged artifacts
 *.tgz
+
+Library/

@@ -75,9 +75,9 @@ jobs:
     env:
       VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
-      RAILWAY_SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID }}
-      RAILWAY_ENVIRONMENT: ${{ secrets.RAILWAY_ENVIRONMENT }}
+      RAILWAY_PROJECT_ID: c6b70675-f7d5-47a1-a8e7-05b37d13e476
+      RAILWAY_SERVICE_ID: 7b1dce9b-b7e7-4cfb-bb3f-ef86d10e8647
+      RAILWAY_ENVIRONMENT: e9c1a221-28b1-49c0-b279-be249a428737
 
     steps:
       - name: Check out repository
@@ -92,17 +92,17 @@ jobs:
         run: echo "::notice::VERCEL_DEPLOY_HOOK_URL is not configured; skipping Vercel deploy."
 
       - name: Set up Node.js for Railway CLI
-        if: env.RAILWAY_TOKEN != '' && env.RAILWAY_PROJECT_ID != '' && env.RAILWAY_SERVICE_ID != '' && env.RAILWAY_ENVIRONMENT != ''
+        if: env.RAILWAY_TOKEN != ''
         uses: actions/setup-node@v6
         with:
           node-version: 22
 
       - name: Install Railway CLI
-        if: env.RAILWAY_TOKEN != '' && env.RAILWAY_PROJECT_ID != '' && env.RAILWAY_SERVICE_ID != '' && env.RAILWAY_ENVIRONMENT != ''
+        if: env.RAILWAY_TOKEN != ''
         run: npm install -g @railway/cli
 
       - name: Deploy Railway backend
-        if: env.RAILWAY_TOKEN != '' && env.RAILWAY_PROJECT_ID != '' && env.RAILWAY_SERVICE_ID != '' && env.RAILWAY_ENVIRONMENT != ''
+        if: env.RAILWAY_TOKEN != ''
         run: >
           railway up apps/server
           --ci
@@ -112,8 +112,8 @@ jobs:
           --environment "$RAILWAY_ENVIRONMENT"
 
       - name: Skip Railway deploy
-        if: env.RAILWAY_TOKEN == '' || env.RAILWAY_PROJECT_ID == '' || env.RAILWAY_SERVICE_ID == '' || env.RAILWAY_ENVIRONMENT == ''
-        run: echo "::notice::Railway deployment secrets are incomplete; skipping Railway deploy."
+        if: env.RAILWAY_TOKEN == ''
+        run: echo "::notice::RAILWAY_TOKEN is not configured; skipping Railway deploy."
 
   publish:
     name: Publish agent to npm
@@ -140,12 +140,26 @@ jobs:
           cache-dependency-path: apps/agent/package-lock.json
 
       - name: Install, build, and publish
+        id: agent-package
         if: env.NPM_TOKEN != ''
         working-directory: apps/agent
         run: |
           npm ci
           npm run build
-          npm publish --access public
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if npm view "@agentbean/daemon@$PKG_VERSION" version >/dev/null 2>&1; then
+            echo "::notice::@agentbean/daemon@$PKG_VERSION is already published; skipping npm publish."
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish npm package
+        if: env.NPM_TOKEN != '' && steps.agent-package.outputs.should_publish == 'true'
+        working-directory: apps/agent
+        run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

@@ -112,6 +112,7 @@ export interface AgentRow {
   command: string | null;
   args: string | null;
   cwd: string | null;
+  description: string | null;
 }
 
 export interface ChannelRow { id: string; name: string; visibility: 'public' | 'private'; createdBy: string | null; createdAt: number; }
@@ -225,6 +226,7 @@ function rowToAgent(r: any): AgentRow {
     command: r.command ?? null,
     args: r.args ?? null,
     cwd: r.cwd ?? null,
+    description: r.description ?? null,
   };
 }
 function rowToMessage(r: any): MessageRow {
@@ -421,7 +423,7 @@ export interface GlobalDb {
     isPublished(agentId: string, networkId: string): boolean;
   };
   agents: {
-    upsert(row: { id: string; name: string; role?: string; adapterKind: string; deviceId: string; networkId: string; visibility?: string; category?: string; source?: string; firstSeenAt: number; lastSeenAt: number; lastError?: string | null; command?: string; args?: string; cwd?: string; ownerId?: string }): void;
+    upsert(row: { id: string; name: string; role?: string; adapterKind: string; deviceId: string; networkId: string; visibility?: string; category?: string; source?: string; firstSeenAt: number; lastSeenAt: number; lastError?: string | null; command?: string; args?: string; cwd?: string; ownerId?: string; description?: string | null }): void;
     listByDevice(deviceId: string): { id: string; name: string; adapterKind: string; category: string; source: string; command: string | null; args: string | null; deviceId: string }[];
     get(id: string): { id: string } | null;
   };
@@ -601,6 +603,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   try { raw.exec(`ALTER TABLE agents ADD COLUMN args TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN cwd TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN owner_id TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE agents ADD COLUMN description TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE users ADD COLUMN current_network_id TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE devices ADD COLUMN connect_command TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE devices ADD COLUMN system_info TEXT`); } catch {}
@@ -623,14 +626,15 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   const deviceRename = raw.prepare(`UPDATE devices SET hostname = ? WHERE id = ?`);
 
   const globalAgentUpsert = raw.prepare(`
-    INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, command, args, cwd, owner_id)
-    VALUES (@id, @name, @role, @adapterKind, @deviceId, @networkId, @visibility, @category, @source, @firstSeenAt, @lastSeenAt, @lastError, @command, @args, @cwd, @ownerId)
+    INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, command, args, cwd, owner_id, description)
+    VALUES (@id, @name, @role, @adapterKind, @deviceId, @networkId, @visibility, @category, @source, @firstSeenAt, @lastSeenAt, @lastError, @command, @args, @cwd, @ownerId, @description)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       adapter_kind = excluded.adapter_kind,
       command = excluded.command,
       args = excluded.args,
-      last_seen_at = excluded.last_seen_at
+      last_seen_at = excluded.last_seen_at,
+      description = excluded.description
   `);
   const globalAgentListByDevice = raw.prepare(`SELECT * FROM agents WHERE device_id = ? ORDER BY first_seen_at`);
   const globalAgentGet = raw.prepare(`SELECT id FROM agents WHERE id = ?`);
@@ -757,6 +761,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
           args: row.args ?? null,
           cwd: row.cwd ?? null,
           ownerId: row.ownerId ?? null,
+          description: row.description ?? null,
         });
       },
       listByDevice: (deviceId) => globalAgentListByDevice.all(deviceId) as any[],
@@ -805,6 +810,7 @@ export function openDb(path: string): Db {
   try { raw.exec(`ALTER TABLE agents ADD COLUMN command TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN args TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN cwd TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE agents ADD COLUMN description TEXT`); } catch {}
 
   // Channel visibility + user members migrations
   try { raw.exec(`ALTER TABLE channels ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'`); } catch {}
@@ -830,8 +836,8 @@ export function openDb(path: string): Db {
       cwd          = excluded.cwd
   `);
   const agentCreate = raw.prepare(`
-    INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, owner_id, command, args, cwd)
-    VALUES (@id, @name, @role, @adapterKind, @deviceId, @networkId, @visibility, @category, @source, @firstSeenAt, @lastSeenAt, @lastError, @ownerId, @command, @args, @cwd)
+    INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, owner_id, command, args, cwd, description)
+    VALUES (@id, @name, @role, @adapterKind, @deviceId, @networkId, @visibility, @category, @source, @firstSeenAt, @lastSeenAt, @lastError, @ownerId, @command, @args, @cwd, @description)
   `);
   const agentUpdateVisibility = raw.prepare(`
     UPDATE agents SET visibility = ? WHERE id = ?

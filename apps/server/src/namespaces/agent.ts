@@ -62,6 +62,7 @@ export interface AgentSnapshotDto {
   command?: string | null;
   args?: string[] | null;
   cwd?: string | null;
+  description?: string | null;
   deviceId?: string;
   publishedNetworkIds?: string[];
   source?: 'self-register' | 'scanned' | 'custom';
@@ -84,6 +85,7 @@ export function snapshotToDto(rt: AgentRuntime): AgentSnapshotDto {
     command: rt.command ?? null,
     args: rt.args ?? null,
     cwd: rt.cwd ?? null,
+    description: rt.description ?? null,
     deviceId: rt.deviceId,
     publishedNetworkIds: rt.publishedNetworkIds,
     source: rt.source,
@@ -183,6 +185,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           command: rt.command ?? null,
           args: rt.args ? JSON.stringify(rt.args) : null,
           cwd: rt.cwd ?? null,
+          description: rt.description ?? null,
         });
         deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
       }
@@ -290,6 +293,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             lastSeenAt: now,
             command: ag.command,
             args: ag.args ? JSON.stringify(ag.args) : undefined,
+            description: null,
           });
 
           // Persist to per-network DB
@@ -310,6 +314,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             command: ag.command,
             args: ag.args ? JSON.stringify(ag.args) : null,
             cwd: null,
+            description: null,
           });
 
           // Register in AgentRegistry (in-memory)

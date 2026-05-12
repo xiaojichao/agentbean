@@ -59,7 +59,7 @@ export interface AgentEvents {
   metrics(): Promise<{ ok: boolean; summaries?: AgentMetricsSummary[]; error?: string }>;
   publish(agentId: string, networkId: string): Promise<{ ok: boolean; error?: string }>;
   unpublish(agentId: string, networkId: string): Promise<{ ok: boolean; error?: string }>;
-  create(payload: { name: string; adapterKind: string; command: string; args?: string[]; category?: string }): Promise<{ ok: boolean; agent?: any; error?: string }>;
+  create(payload: { name: string; adapterKind: string; command: string; args?: string[]; category?: string; cwd?: string; description?: string }): Promise<{ ok: boolean; agent?: any; error?: string }>;
   subscribe(): void;
 }
 

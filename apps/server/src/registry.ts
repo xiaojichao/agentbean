@@ -14,6 +14,7 @@ export interface AgentRegisterInfo {
   command?: string | null;
   args?: string[] | null;
   cwd?: string | null;
+  description?: string | null;
   deviceId?: string;
   publishedNetworkIds?: string[];
   source?: 'self-register' | 'scanned' | 'custom';

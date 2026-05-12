@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Monitor, Circle, Plus, Pencil, Copy, Zap, Globe, Terminal, Server, RefreshCw, X, Check } from 'lucide-react';
+import { Monitor, Circle, Plus, Pencil, Copy, Zap, Globe, Terminal, Server, RefreshCw, X, Check, FolderOpen } from 'lucide-react';
 import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 
@@ -588,21 +588,22 @@ function SelectNetworkDialog({ agent, onClose }: { agent: any; onClose: () => vo
   );
 }
 
+const RUNTIME_OPTIONS = [
+  { value: 'claude-code', label: 'Claude Code', description: 'Anthropic 官方 CLI，擅长代码生成、调试和重构' },
+  { value: 'codex', label: 'Codex CLI', description: 'OpenAI Codex CLI，适合快速代码生成和脚本编写' },
+];
+
 function AddCustomAgentDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState('');
   const [adapterKind, setAdapterKind] = useState('claude-code');
   const [command, setCommand] = useState('');
   const [args, setArgs] = useState('');
+  const [cwd, setCwd] = useState('');
+  const [description, setDescription] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const categoryMap: Record<string, string> = {
-    codex: 'executor-hosted',
-    'claude-code': 'executor-hosted',
-    hermes: 'agentos-hosted',
-    openclaw: 'agentos-hosted',
-    standalone: 'standalone-cli',
-  };
+  const selectedRuntime = RUNTIME_OPTIONS.find((r) => r.value === adapterKind);
 
   const handleSubmit = async () => {
     if (!name.trim() || !command.trim()) {
@@ -616,7 +617,9 @@ function AddCustomAgentDialog({ onClose, onCreated }: { onClose: () => void; onC
       adapterKind,
       command: command.trim(),
       args: args.trim() ? args.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
-      category: categoryMap[adapterKind] ?? 'executor-hosted',
+      category: 'executor-hosted',
+      cwd: cwd.trim() || undefined,
+      description: description.trim() || undefined,
     };
     const res = await agentEvents().create(payload);
     setLoading(false);
@@ -629,7 +632,7 @@ function AddCustomAgentDialog({ onClose, onCreated }: { onClose: () => void; onC
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="mx-4 w-full max-w-md rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div className="mx-4 w-full max-w-lg rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">添加自定义 Agent</h2>
           <button onClick={onClose} className="rounded-md p-1 hover:bg-neutral-100"><X size={16} /></button>
@@ -640,22 +643,54 @@ function AddCustomAgentDialog({ onClose, onCreated }: { onClose: () => void; onC
             <input value={name} onChange={(e) => setName(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="My Agent" />
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">适配器</label>
+            <label className="mb-1 block text-xs font-medium text-neutral-600">Coding Agent 运行时 <span className="text-red-500">*</span></label>
             <select value={adapterKind} onChange={(e) => setAdapterKind(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400">
-              <option value="codex">codex</option>
-              <option value="claude-code">claude-code</option>
-              <option value="hermes">hermes</option>
-              <option value="openclaw">openclaw</option>
-              <option value="standalone">standalone</option>
+              {RUNTIME_OPTIONS.map((r) => (
+                <option key={r.value} value={r.value}>{r.label}</option>
+              ))}
             </select>
+            {selectedRuntime && (
+              <p className="mt-1 text-[11px] text-neutral-400">{selectedRuntime.description}</p>
+            )}
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600">项目目录</label>
+            <div className="flex gap-2">
+              <input value={cwd} onChange={(e) => setCwd(e.target.value)} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="/path/to/project（可选）" />
+              <label className="shrink-0 flex items-center gap-1 cursor-pointer rounded-md border border-neutral-200 px-3 py-1.5 text-xs text-neutral-600 hover:bg-neutral-50">
+                <FolderOpen size={12} /> 浏览
+                <input
+                  type="file"
+                  // @ts-expect-error webkitdirectory is non-standard
+                  webkitdirectory=""
+                  directory=""
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      const relativePath = (file as any).webkitRelativePath as string | undefined;
+                      if (relativePath) {
+                        const dirName = relativePath.split('/')[0];
+                        setCwd((prev) => prev || `~/projects/${dirName}`);
+                      }
+                    }
+                  }}
+                />
+              </label>
+            </div>
+            <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录，留空则使用默认路径</p>
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-neutral-600">命令 <span className="text-red-500">*</span></label>
-            <input value={command} onChange={(e) => setCommand(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="npx codex" />
+            <input value={command} onChange={(e) => setCommand(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="claude" />
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-neutral-600">参数 (逗号分隔)</label>
             <input value={args} onChange={(e) => setArgs(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="--verbose, --port, 3000" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600">功能介绍</label>
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 resize-none" placeholder="描述这个 Agent 的用途和能力（可选）" />
           </div>
         </div>
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}

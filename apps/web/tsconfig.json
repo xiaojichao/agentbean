@@ -17,6 +17,7 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "allowJs": true,
+    "baseUrl": ".",
     "plugins": [
       {
         "name": "next"

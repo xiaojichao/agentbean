@@ -725,7 +725,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       }
     });
 
-    socket.on('agent:create', (payload: { name: string; role?: string; adapterKind: string; visibility?: 'public' | 'private'; networkId?: string; category?: string; ownerId?: string; command?: string; args?: string[]; cwd?: string; publishedNetworkIds?: string[] }, ack?: (r: any) => void) => {
+    socket.on('agent:create', (payload: { name: string; role?: string; adapterKind: string; visibility?: 'public' | 'private'; networkId?: string; category?: string; ownerId?: string; command?: string; args?: string[]; cwd?: string; description?: string; publishedNetworkIds?: string[] }, ack?: (r: any) => void) => {
       try {
         const name = payload.name.trim();
         if (!name) return ack?.({ ok: false, error: 'EMPTY_NAME' });
@@ -751,6 +751,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           command: payload.command ?? null,
           args: payload.args ? JSON.stringify(payload.args) : null,
           cwd: payload.cwd ?? null,
+          description: payload.description ?? null,
         };
         db.agents.create(row);
 
@@ -777,6 +778,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           command: payload.command ?? undefined,
           args: payload.args ? JSON.stringify(payload.args) : undefined,
           cwd: payload.cwd ?? undefined,
+          description: payload.description ?? undefined,
         } as any);
 
         // Register in registry as virtual (offline, no socket)
@@ -791,6 +793,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           command: payload.command ?? null,
           args: payload.args ?? null,
           cwd: payload.cwd ?? null,
+          description: payload.description ?? null,
           publishedNetworkIds: [],
           source: 'custom',
         });
