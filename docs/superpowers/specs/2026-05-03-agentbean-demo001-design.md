@@ -45,7 +45,7 @@ status: 待用户复核
                               │                                                      │
               ┌───────────────▼──────────┐  ┌──────────────────┐  ┌──────────────────┐
               │  Agent daemon            │  │  Agent daemon    │  │  Agent daemon    │
-              │  apps/agent              │  │  ...             │  │  ...             │
+              │  apps/daemon              │  │  ...             │  │  ...             │
               │  agent.config.yaml       │  │                  │  │                  │
               │   ├ id / name / role     │  │                  │  │                  │
               │   └ adapter: codex|...   │  │                  │  │                  │
@@ -134,7 +134,7 @@ apps/server/data/
 页面:
 
 - `/agents` (默认入口) — Agent 池卡片网格。每张卡片展示 名称 / 角色标签 / 状态徽标 (在线/处理中/离线/异常)。空态展示「启动一个 Agent daemon 即可看到它出现」。
-- `/agents/[agentId]` — Agent 详情页。展示名称、角色摘要、状态、最近活跃时间、最近一次连接错误摘要 (若有),以及该 Agent 的接入命令 (例如 `cd apps/agent && AGENT_CONFIG=examples/codex-shaw.yaml npm run dev`)。
+- `/agents/[agentId]` — Agent 详情页。展示名称、角色摘要、状态、最近活跃时间、最近一次连接错误摘要 (若有),以及该 Agent 的接入命令 (例如 `cd apps/daemon && AGENT_CONFIG=examples/codex-shaw.yaml npm run dev`)。
 - `/channels/[channelId]` — 频道页。左侧导航 (`agents` / `频道` 两入口),主区为消息流 + 底部输入框。
 - 创建频道使用 modal/对话框,触发自 `/channels` 入口的「新建频道」按钮。表单: 频道名 (可选,不填默认 `频道 1`) + Agent 多选。
 
@@ -164,7 +164,7 @@ apps/server/data/
 - 心跳扫描器: 每 5 秒扫一次 `AgentRegistry`,把超过 30 秒未心跳的 Agent 标记为离线,广播 `agent:status` (`status=offline`, reason=`heartbeat-timeout`),并向受影响频道发系统消息。
 - 优雅关闭: SIGINT 时主动通知所有 Web 客户端 `server:shutdown` 并关闭 db。
 
-### 4.3 apps/agent (TypeScript daemon)
+### 4.3 apps/daemon (TypeScript daemon)
 
 启动流程:
 
@@ -317,7 +317,7 @@ Connection-time auth: `auth: { token, agentId, name, role, adapterKind }`。toke
 ## 7. CLI 适配层
 
 ```ts
-// apps/agent/src/adapters/adapter.ts
+// apps/daemon/src/adapters/adapter.ts
 export interface ChatTurn {
   role: 'user' | 'assistant' | 'system';
   speaker: string;        // 名字 (用户名 / Agent 名)

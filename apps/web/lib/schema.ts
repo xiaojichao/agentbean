@@ -1,6 +1,6 @@
 export type AdapterKind = 'codex' | 'claude-code' | 'openclaw' | 'hermes' | 'standalone';
 export type AgentStatus = 'connecting' | 'online' | 'busy' | 'offline' | 'error';
-export type AgentCategory = 'executor-hosted' | 'agentos-hosted' | 'standalone-cli';
+export type AgentCategory = 'executor-hosted' | 'agentos-hosted';
 
 export interface AgentSnapshot {
   id: string;

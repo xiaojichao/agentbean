@@ -37,7 +37,7 @@ docs/demo001/data/
 *.db-wal
 
 # Local daemon config
-apps/agent/*.yaml
+apps/daemon/*.yaml
 
 # Packaged artifacts
 *.tgz

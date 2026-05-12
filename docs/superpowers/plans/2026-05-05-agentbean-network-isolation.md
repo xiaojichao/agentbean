@@ -25,11 +25,11 @@
 | `apps/server/src/artifact-routes.ts` | **Modify** | Routes under `/api/networks/:networkId/artifacts/...` using StorageManager |
 | `apps/server/src/index.ts` | **Modify** | Init global.db, StorageManager, mount artifact routes with network prefix |
 | `apps/server/src/channels.ts` | **Modify** | All channel ops accept `networkId` and use `storage.getDb(networkId)` |
-| `apps/agent/src/config.ts` | **Modify** | Parse `device-agent.yaml` with `agents[]` array; validate each agent config |
-| `apps/agent/src/index.ts` | **Modify** | Load multi-agent config, instantiate DeviceDaemon |
-| `apps/agent/src/device-daemon.ts` | **Create** | Single process managing N Agent adapters; one Socket.IO connection to Server |
-| `apps/agent/src/agent-instance.ts` | **Create** | Lifecycle wrapper: idle → busy → reply; maps `agentId` → adapter instance |
-| `apps/agent/src/connection.ts` | **Modify** | Reduced to thin wrapper; DeviceDaemon owns the socket lifecycle |
+| `apps/daemon/src/config.ts` | **Modify** | Parse `device-agent.yaml` with `agents[]` array; validate each agent config |
+| `apps/daemon/src/index.ts` | **Modify** | Load multi-agent config, instantiate DeviceDaemon |
+| `apps/daemon/src/device-daemon.ts` | **Create** | Single process managing N Agent adapters; one Socket.IO connection to Server |
+| `apps/daemon/src/agent-instance.ts` | **Create** | Lifecycle wrapper: idle → busy → reply; maps `agentId` → adapter instance |
+| `apps/daemon/src/connection.ts` | **Modify** | Reduced to thin wrapper; DeviceDaemon owns the socket lifecycle |
 | `apps/web/lib/schema.ts` | **Modify** | Add `DeviceSnapshot`, `NetworkSummary`, extend `AgentSnapshot` with `deviceId`/`visibility` |
 | `apps/web/lib/store.ts` | **Modify** | Add `networks`, `devices`, `currentNetworkId` to Zustand store |
 | `apps/web/components/network-selector.tsx` | **Create** | Dropdown to switch active network; displays network name + online agent count |
@@ -584,15 +584,15 @@ git commit -m "feat(server): artifact routes scoped by networkId"
 ## Task 6: Refactor Agent Daemon — Multi-Agent Config + DeviceDaemon
 
 **Files:**
-- Modify: `apps/agent/src/config.ts`
-- Create: `apps/agent/src/device-daemon.ts`
-- Create: `apps/agent/src/agent-instance.ts`
-- Modify: `apps/agent/src/index.ts`
+- Modify: `apps/daemon/src/config.ts`
+- Create: `apps/daemon/src/device-daemon.ts`
+- Create: `apps/daemon/src/agent-instance.ts`
+- Modify: `apps/daemon/src/index.ts`
 
 - [ ] **Step 1: Update config.ts to parse device-agent.yaml**
 
 ```typescript
-// apps/agent/src/config.ts
+// apps/daemon/src/config.ts
 import { readFileSync } from 'fs';
 import YAML from 'yaml';
 
@@ -640,7 +640,7 @@ export function loadDeviceConfig(path: string): DeviceConfig {
 - [ ] **Step 2: Implement AgentInstance**
 
 ```typescript
-// apps/agent/src/agent-instance.ts
+// apps/daemon/src/agent-instance.ts
 import type { CliAdapter } from './adapters/adapter.js';
 import type { AgentConfigEntry } from './config.js';
 
@@ -659,7 +659,7 @@ export function createAgentInstance(config: AgentConfigEntry, adapter: CliAdapte
 - [ ] **Step 3: Implement DeviceDaemon**
 
 ```typescript
-// apps/agent/src/device-daemon.ts
+// apps/daemon/src/device-daemon.ts
 import { io, type Socket } from 'socket.io-client';
 import type { DeviceConfig, AgentConfigEntry } from './config.js';
 import type { CliAdapter, ChatTurn } from './adapters/adapter.js';
@@ -762,7 +762,7 @@ export class DeviceDaemon {
 - [ ] **Step 4: Update index.ts to launch DeviceDaemon**
 
 ```typescript
-// apps/agent/src/index.ts
+// apps/daemon/src/index.ts
 import { loadDeviceConfig } from './config.js';
 import { DeviceDaemon } from './device-daemon.js';
 import { createAdapter } from './adapters/index.js'; // assumes an adapter factory exists
@@ -787,7 +787,7 @@ process.on('SIGINT', async () => {
 - [ ] **Step 5: Commit**
 
 ```bash
-cd apps/agent
+cd apps/daemon
 git add src/config.ts src/device-daemon.ts src/agent-instance.ts src/index.ts
 git commit -m "feat(agent): DeviceDaemon manages multiple agents, single socket to server"
 ```
@@ -1218,7 +1218,7 @@ git commit -m "test(server): network isolation e2e test"
 Before marking Phase 2 complete, run through:
 
 - [ ] `apps/server` tests pass: `npm test`
-- [ ] `apps/agent` compiles: `npm run build`
+- [ ] `apps/daemon` compiles: `npm run build`
 - [ ] `apps/web` compiles: `npm run build`
 - [ ] Server starts with `global.db` + `storage/` directory structure
 - [ ] Agent Daemon starts with `device-agent.yaml` and connects as Device

@@ -4,16 +4,15 @@ import { useEffect, useState } from 'react';
 import { Search, Bot } from 'lucide-react';
 import { useAgentBeanStore } from '@/lib/store';
 import { getWebSocket, agentEvents } from '@/lib/socket';
-import type { DiscoveredAgent, AgentCategory } from '@/lib/schema';
+import type { DiscoveredAgent } from '@/lib/schema';
 import { RegisterAgentModal } from '@/components/register-agent-modal';
 
-const CATEGORY_LABEL: Record<AgentCategory, string> = {
+const CATEGORY_LABEL: Record<string, string> = {
   'executor-hosted': '执行器托管',
   'agentos-hosted': 'AgentOS 托管',
-  'standalone-cli': '独立 CLI',
 };
 
-const CATEGORY_ORDER: AgentCategory[] = ['executor-hosted', 'agentos-hosted', 'standalone-cli'];
+const CATEGORY_ORDER = ['executor-hosted', 'agentos-hosted'];
 
 const SOURCE_LABEL: Record<DiscoveredAgent['source'], string> = {
   gateway: 'gateway',

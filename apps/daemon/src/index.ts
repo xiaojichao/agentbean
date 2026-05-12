@@ -66,7 +66,7 @@ async function discoverAgents(): Promise<AgentConfigEntry[]> {
     results.push({
       id,
       name: s.name,
-      role: s.category === 'executor-hosted' ? 'executor-agent' : s.category === 'agentos-hosted' ? 'gateway-agent' : 'standalone-agent',
+      role: s.category === 'executor-hosted' ? 'executor-agent' : 'gateway-agent',
       category: s.category,
       adapter: {
         kind: s.adapterKind,

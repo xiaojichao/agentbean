@@ -4,12 +4,12 @@ This repository uses GitHub Actions for validation and production deployment.
 
 ## Pipeline
 
-- Pull requests to `main` run tests and builds for `apps/web`, `apps/server`, and `apps/agent`.
+- Pull requests to `main` run tests and builds for `apps/web`, `apps/server`, and `apps/daemon`.
 - Pushes to `main` run the same validation first.
 - After validation passes on `main`, the workflow triggers production deployments:
   - `apps/web` deploys through a Vercel Deploy Hook.
   - `apps/server` deploys through the Railway CLI in CI mode.
-  - `apps/agent` publishes to npm as `@agentbean/daemon`.
+  - `apps/daemon` publishes to npm as `@agentbean/daemon`.
 
 ## Required GitHub Secrets
 

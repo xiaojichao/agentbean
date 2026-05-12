@@ -87,12 +87,17 @@ export default function ChatPage() {
     });
   }, [conn]);
 
+  const activeChannelObj = channels.find((c) => c.id === activeChannel);
+  const activeName = activeChannelObj?.name ?? '';
+  const activeDm = dms.find((d) => d.id === activeChannel);
+  const isDm = !!activeDm;
+
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     setInput(val);
     const cursor = e.target.selectionStart ?? val.length;
     const before = val.slice(0, cursor);
-    const atMatch = before.match(/@(\w*)$/);
+    const atMatch = before.match(/@([\w-]*)$/);
     if (atMatch) {
       setShowMention(true);
       setMentionQuery(atMatch[1].toLowerCase());
@@ -102,15 +107,22 @@ export default function ChatPage() {
     }
   };
 
-  const filteredMentionMembers = mentionQuery
-    ? mentionMembers.filter((m) => m.name.toLowerCase().includes(mentionQuery))
-    : mentionMembers;
+  // In DM channels, only show the DM target in mention dropdown
+  const dmTargetMember = isDm && activeDm
+    ? mentionMembers.find((m) => m.id === activeDm.dmTargetId)
+    : null;
+
+  const filteredMentionMembers = isDm
+    ? (dmTargetMember ? [dmTargetMember] : [])
+    : (mentionQuery
+        ? mentionMembers.filter((m) => m.name.toLowerCase().includes(mentionQuery))
+        : mentionMembers);
 
   const selectMention = (member: { id: string; name: string; kind: 'human' | 'agent' }) => {
     const cursor = textareaRef.current?.selectionStart ?? input.length;
     const before = input.slice(0, cursor);
     const after = input.slice(cursor);
-    const newBefore = before.replace(/@\w*$/, `@${member.name} `);
+    const newBefore = before.replace(/@[\w-]*$/, `@${member.name} `);
     setInput(newBefore + after);
     setShowMention(false);
     setTimeout(() => {
@@ -170,8 +182,6 @@ export default function ChatPage() {
     }, 300);
     return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
   }, [search]);
-  const activeChannelObj = channels.find((c) => c.id === activeChannel);
-  const activeName = activeChannelObj?.name ?? '';
 
   const toggleSave = (msgId: string) => {
     setSavedIds((prev) => {
@@ -325,7 +335,7 @@ export default function ChatPage() {
                     onChange={handleInputChange}
                     onKeyDown={handleInputKeyDown}
                     rows={2}
-                    placeholder={`Message #${activeName}  (输入 @ 提及成员)`}
+                    placeholder={isDm ? `私信 ${activeDm?.name ?? ''}` : `Message #${activeName}  (输入 @ 提及成员)`}
                     className="w-full resize-none px-3 pt-2.5 pb-1 text-sm outline-none placeholder:text-neutral-400"
                   />
                   <div className="flex items-center justify-between px-2 pb-2">
@@ -472,7 +482,7 @@ function formatTime(ts: number): string {
 }
 
 function parseMentions(body: string): { type: 'text' | 'mention'; text: string }[] {
-  const regex = /@(\w+)/g;
+  const regex = /@([\w-]+)/g;
   const parts: { type: 'text' | 'mention'; text: string }[] = [];
   let lastIndex = 0;
   let match;

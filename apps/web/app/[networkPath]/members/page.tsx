@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Bot, Circle, ChevronRight, User, Check, Zap, MessageSquare } from 'lucide-react';
-import { memberEvents, deviceEvents, dmEvents } from '@/lib/socket';
+import { Bot, Circle, ChevronRight, User, Check, MessageSquare } from 'lucide-react';
+import { memberEvents, deviceEvents, dmEvents, agentEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import type { AgentSnapshot } from '@/lib/schema';
 
@@ -28,6 +28,7 @@ export default function MembersPage() {
   const agents = useAgentBeanStore((s) => s.agents);
   const applyDevicesSnapshot = useAgentBeanStore((s) => s.applyDevicesSnapshot);
   const applyAgentsSnapshot = useAgentBeanStore((s) => s.applyAgentsSnapshot);
+  const applyAgentStatus = useAgentBeanStore((s) => s.applyAgentStatus);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('profile');
   const [agentsExpanded, setAgentsExpanded] = useState(true);
@@ -38,13 +39,14 @@ export default function MembersPage() {
   useEffect(() => {
     if (conn !== 'open') return;
     deviceEvents().subscribe();
-    const unsub = deviceEvents().onSnapshot((list) => applyDevicesSnapshot(list));
+    const unsubDevices = deviceEvents().onSnapshot((list) => applyDevicesSnapshot(list));
+    const unsubStatus = agentEvents().onStatus((snap) => applyAgentStatus(snap));
     memberEvents().list().then((res) => {
       if (res.ok && res.humans) setHumanMembers(res.humans);
       if (res.ok && res.agents) applyAgentsSnapshot(res.agents);
     });
-    return () => { unsub(); };
-  }, [conn, applyDevicesSnapshot, applyAgentsSnapshot]);
+    return () => { unsubDevices(); unsubStatus(); };
+  }, [conn, applyDevicesSnapshot, applyAgentsSnapshot, applyAgentStatus]);
 
   const agentList = useMemo(() => Object.values(agents), [agents]);
   const toggleCheck = (id: string) => {
@@ -85,11 +87,6 @@ export default function MembersPage() {
                     </button>
                     <Circle size={8} className={`shrink-0 fill-current ${agent.status === 'online' ? 'text-emerald-500' : agent.status === 'busy' ? 'text-amber-500' : 'text-neutral-300'}`} />
                     <span className={`truncate text-sm ${selectedId === agent.id ? 'font-medium text-neutral-900' : 'text-neutral-700'}`}>{agent.name}</span>
-                    {(agent.publishedNetworkIds?.length ?? 0) > 0 && (
-                      <span className="ml-auto shrink-0 rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-medium text-blue-600">
-                        <Zap size={8} className="inline -mt-0.5" /> {agent.publishedNetworkIds!.length + 1}网
-                      </span>
-                    )}
                   </div>
                 ))}
                 {agentList.length === 0 && <div className="px-2 py-2 text-xs text-neutral-400">暂无 Agent</div>}
@@ -219,11 +216,10 @@ function AgentProfile({ agent, device }: { agent: AgentSnapshot; device?: { host
                 <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700"><Circle size={5} className="fill-current" /> 已连接</span>
               </span>
             } />
-            <InfoRow label="主机名" value={device.hostname ?? '—'} />
           </>
         )}
         {!device && <InfoRow label="设备" value={<span className="text-neutral-400">未连接设备</span>} />}
-        <InfoRow label="守护进程" value={agent.adapterKind ? `v0.44.2 (${agent.adapterKind})` : '—'} />
+        <InfoRow label="适配器" value={agent.adapterKind ?? '—'} />
         <InfoRow label="创建时间" value={new Date(agent.lastSeenAt).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })} />
         {agent.ownerId && <InfoRow label="创建者" value={<span className="rounded bg-purple-50 px-1.5 py-0.5 text-xs font-medium text-purple-700">{agent.ownerId}</span>} />}
         <InfoRow label="状态" value={agent.status} />

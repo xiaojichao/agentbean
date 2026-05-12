@@ -4,7 +4,7 @@ import { load as parseYaml } from 'js-yaml';
 export type AdapterKind = 'codex' | 'claude-code' | 'openclaw' | 'hermes' | 'standalone';
 const KINDS: AdapterKind[] = ['codex', 'claude-code', 'openclaw', 'hermes', 'standalone'];
 
-export type AgentCategory = 'executor-hosted' | 'agentos-hosted' | 'standalone-cli';
+export type AgentCategory = 'executor-hosted' | 'agentos-hosted';
 
 export interface AgentConfig {
   id: string;
@@ -94,10 +94,9 @@ export function loadConfig(path: string): AgentConfig {
 
   const inferredCategory: AgentCategory =
     a.kind === 'codex' || a.kind === 'claude-code' ? 'executor-hosted' :
-    a.kind === 'openclaw' || a.kind === 'hermes' ? 'agentos-hosted' :
-    'standalone-cli';
+    'agentos-hosted';
   const category: AgentCategory =
-    typeof interp.category === 'string' && ['executor-hosted', 'agentos-hosted', 'standalone-cli'].includes(interp.category)
+    typeof interp.category === 'string' && ['executor-hosted', 'agentos-hosted'].includes(interp.category)
       ? (interp.category as AgentCategory)
       : inferredCategory;
 
@@ -162,10 +161,9 @@ export function loadDeviceConfig(path: string): DeviceConfig {
     }
     const inferredCategory: AgentCategory =
       ad.kind === 'codex' || ad.kind === 'claude-code' ? 'executor-hosted' :
-      ad.kind === 'openclaw' || ad.kind === 'hermes' ? 'agentos-hosted' :
-      'standalone-cli';
+      'agentos-hosted';
     const category: AgentCategory =
-      typeof a.category === 'string' && ['executor-hosted', 'agentos-hosted', 'standalone-cli'].includes(a.category)
+      typeof a.category === 'string' && ['executor-hosted', 'agentos-hosted'].includes(a.category)
         ? a.category
         : inferredCategory;
     parsedAgents.push({

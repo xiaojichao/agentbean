@@ -42,7 +42,7 @@ function buildInviteCommand(code: string, serverUrl: string): string {
       .replaceAll('{serverUrl}', serverUrl);
   }
 
-  const localAgentEntrypoint = resolve(process.cwd(), '../agent/src/bin.ts');
+  const localAgentEntrypoint = resolve(process.cwd(), '../daemon/src/bin.ts');
   if (existsSync(localAgentEntrypoint)) {
     return `npx --yes tsx ${localAgentEntrypoint} --invite ${code} --server-url ${serverUrl}`;
   }

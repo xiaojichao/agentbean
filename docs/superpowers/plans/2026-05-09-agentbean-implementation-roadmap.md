@@ -9,7 +9,7 @@
 ## 项目概况
 
 - **项目名称：** AgentBean — 多 Agent 协作平台
-- **仓库结构：** `apps/server`（服务端）、`apps/web`（前端）、`apps/agent`（设备端 Daemon）
+- **仓库结构：** `apps/server`（服务端）、`apps/web`（前端）、`apps/daemon`（设备端 Daemon）
 - **技术栈：** Express + Socket.IO + better-sqlite3 + Next.js 14 + Zustand + TypeScript + vitest
 - **当前状态：** 56/56 测试通过，Phase 2（多网络可见性 + 频道系统）+ Phase 3（设备管理 + Agent 扫描器）已完成
 
@@ -22,7 +22,7 @@
 **关键文件：**
 - `apps/server/src/index.ts` — Server 主入口
 - `apps/server/src/db.ts` — 全局数据库
-- `apps/agent/src/bin.ts` — Daemon CLI 入口
+- `apps/daemon/src/bin.ts` — Daemon CLI 入口
 - `apps/web/app/page.tsx` — Web 根页面
 
 **功能点：**
@@ -40,7 +40,7 @@
 - `apps/server/src/storage.ts` — StorageManager + per-network SQLite
 - `apps/server/src/registry.ts` — AgentRegistry 扩展
 - `apps/server/src/namespaces/agent.ts` — /agent namespace 认证
-- `apps/agent/src/scanner.ts` — 三层 Agent 扫描器
+- `apps/daemon/src/scanner.ts` — 三层 Agent 扫描器
 
 **功能点：**
 - 全局数据库：用户、网络、成员、邀请码
@@ -84,9 +84,9 @@
 - `apps/server/src/db.ts` — `users.current_network_id` 列
 - `apps/server/src/invite.ts` — 邀请码生成与管理
 - `apps/server/src/password.ts` — bcrypt 密码加密
-- `apps/agent/src/scanner.ts` — manus、anygen 运行时检测
-- `apps/agent/src/device-daemon.ts` — `/agent` 命名空间连接修复
-- `apps/agent/src/connection.ts` — `/agent` 命名空间连接修复
+- `apps/daemon/src/scanner.ts` — manus、anygen 运行时检测
+- `apps/daemon/src/device-daemon.ts` — `/agent` 命名空间连接修复
+- `apps/daemon/src/connection.ts` — `/agent` 命名空间连接修复
 - `apps/web/lib/schema.ts` — `AgentSnapshot.source` 字段
 - `apps/web/app/[networkPath]/agents/[agentId]/page.tsx` — source badge、device info、runtime config
 - `apps/web/app/login/page.tsx` — localStorage 网络持久化
@@ -124,7 +124,7 @@ Phase 3 已完成。下一步待确认。
 - `apps/web/app/[networkPath]/agents/` — 新建"创建自定义 Agent"表单
 - `apps/web/app/[networkPath]/agents/[agentId]/page.tsx` — 完整运行时配置
 - `apps/server/src/index.ts` — 扩展 `agent:create` 事件
-- `apps/agent/src/scanner.ts` — 扩展独立 Agent 检测
+- `apps/daemon/src/scanner.ts` — 扩展独立 Agent 检测
 
 **功能点：**
 - 自定义 Agent 配置 UI（名称、命令、参数、工作目录、适配器类型）
@@ -174,7 +174,7 @@ Phase 3 已完成。下一步待确认。
 
 **涉及文件：**
 - `apps/server/src/` — 日志聚合、备份恢复
-- `apps/agent/src/` — Tailscale 集成
+- `apps/daemon/src/` — Tailscale 集成
 - `apps/web/` — 性能看板 UI
 
 **功能点：**
@@ -211,14 +211,14 @@ Phase 3 已完成。下一步待确认。
 | `apps/server/src/artifact-routes.ts` | 文件上传下载 | 1 |
 | `apps/server/src/connect-command.ts` | CLI 连接命令渲染 | 0 |
 | `apps/server/src/heartbeat-scanner.ts` | 心跳超时扫描 | 0 |
-| `apps/agent/src/index.ts` | Daemon 主入口 | 0 |
-| `apps/agent/src/scanner.ts` | 三层 Agent 扫描 | 1 |
-| `apps/agent/src/adapters/codex.ts` | Codex 适配器 | 0 |
-| `apps/agent/src/adapters/claude-code.ts` | Claude Code 适配器 | 0 |
-| `apps/agent/src/adapters/openclaw.ts` | OpenClaw 适配器 | 0 |
-| `apps/agent/src/adapters/hermes.ts` | Hermes 适配器 | 0 |
-| `apps/agent/src/sandbox.ts` | macOS sandbox-exec | 1 |
-| `apps/agent/src/config.ts` | YAML 配置加载 | 0 |
+| `apps/daemon/src/index.ts` | Daemon 主入口 | 0 |
+| `apps/daemon/src/scanner.ts` | 三层 Agent 扫描 | 1 |
+| `apps/daemon/src/adapters/codex.ts` | Codex 适配器 | 0 |
+| `apps/daemon/src/adapters/claude-code.ts` | Claude Code 适配器 | 0 |
+| `apps/daemon/src/adapters/openclaw.ts` | OpenClaw 适配器 | 0 |
+| `apps/daemon/src/adapters/hermes.ts` | Hermes 适配器 | 0 |
+| `apps/daemon/src/sandbox.ts` | macOS sandbox-exec | 1 |
+| `apps/daemon/src/config.ts` | YAML 配置加载 | 0 |
 | `apps/web/lib/schema.ts` | TypeScript 类型定义 | 0, 1, 2 |
 | `apps/web/lib/store.ts` | Zustand 状态管理 | 0, 1, 2 |
 | `apps/web/lib/socket.ts` | Socket.IO 客户端 | 0, 2 |

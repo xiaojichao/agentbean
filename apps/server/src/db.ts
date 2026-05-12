@@ -92,7 +92,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_channel ON tasks(channel_id);
 `;
 
 export type AdapterKind = 'codex' | 'claude-code' | 'openclaw' | 'hermes' | 'standalone';
-export type AgentCategory = 'executor-hosted' | 'agentos-hosted' | 'standalone-cli';
+export type AgentCategory = 'executor-hosted' | 'agentos-hosted';
 export type SenderKind = 'human' | 'agent' | 'system';
 
 export interface AgentRow {

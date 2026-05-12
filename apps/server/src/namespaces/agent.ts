@@ -206,7 +206,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       // Save connect command on first registration
       if (!existingDevice?.connectCommand) {
         const publicUrl = process.env.AGENT_BEAN_PUBLIC_SERVER_URL;
-        const localEntrypoint = resolve(process.cwd(), '../agent/src/bin.ts');
+        const localEntrypoint = resolve(process.cwd(), '../daemon/src/bin.ts');
         let cmd: string;
         if (publicUrl) {
           // Production: always use npm package with public URL
@@ -279,6 +279,40 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         const registered: any[] = [];
         for (const ag of payload.agents) {
           const sanitizedName = ag.name.trim().replace(/\s+/g, '-');
+
+          // Check if already registered via daemon's 'register' event
+          const existingRt = deps.registry.findByDeviceAndName(a.deviceId, sanitizedName);
+          if (existingRt) {
+            // Clean up old scan-prefix entry if it exists
+            const staleScanId = `scan-${a.deviceId}-${sanitizedName.toLowerCase().replace(/[^a-z0-9-]+/g, '-')}`;
+            try { deps.db.raw.prepare('DELETE FROM agents WHERE id = ?').run(staleScanId); } catch {}
+            try { deps.db.raw.prepare('DELETE FROM channel_members WHERE agent_id = ?').run(staleScanId); } catch {}
+
+            // Still update DB with latest scan info, but don't create a duplicate registry entry
+            deps.globalDb?.agents?.upsert({
+              id: existingRt.id, name: sanitizedName, adapterKind: ag.adapterKind as AdapterKind,
+              deviceId: a.deviceId, networkId: a.networkId,
+              category: (ag.category as AgentCategory) ?? 'executor-hosted',
+              source: (ag.source as any) ?? 'scanned',
+              firstSeenAt: existingRt.firstSeenAt, lastSeenAt: now,
+              command: ag.command, args: ag.args ? JSON.stringify(ag.args) : undefined,
+            });
+            deps.db.agents.upsert({
+              id: existingRt.id, name: sanitizedName, role: null,
+              adapterKind: ag.adapterKind as AdapterKind,
+              deviceId: a.deviceId, networkId: a.networkId,
+              visibility: 'public' as const,
+              category: (ag.category as AgentCategory) ?? 'executor-hosted',
+              source: (ag.source as any) ?? 'scanned',
+              firstSeenAt: existingRt.firstSeenAt, lastSeenAt: now,
+              lastError: null, ownerId: null,
+              command: ag.command, args: ag.args ? JSON.stringify(ag.args) : null,
+              cwd: null, description: null,
+            });
+            registered.push({ id: existingRt.id, name: existingRt.name, category: existingRt.category, status: 'online' });
+            continue;
+          }
+
           // Generate stable ID from deviceId + agent name for dedup
           const agentId = `scan-${a.deviceId}-${sanitizedName.toLowerCase().replace(/[^a-z0-9-]+/g, '-')}`;
           const existing = deps.globalDb?.agents?.get(agentId);
@@ -335,6 +369,18 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
           registered.push({ id: agentId, name: sanitizedName, category: ag.category, status: 'online' });
         }
+
+        // Mark agents missing from this scan as offline
+        const scannedNames = new Set(payload.agents.map((ag) => ag.name.trim().replace(/\s+/g, '-').toLowerCase()));
+        for (const rt of deps.registry.all()) {
+          if (rt.deviceId === a.deviceId && rt.status !== 'offline') {
+            if (!scannedNames.has(rt.name.toLowerCase())) {
+              const offRt = deps.registry.markOffline(rt.id, 'scan-missing');
+              if (offRt) deps.io.of('/web').emit('agent:status', snapshotToDto(offRt));
+            }
+          }
+        }
+
         ack?.({ ok: true, agents: registered });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });

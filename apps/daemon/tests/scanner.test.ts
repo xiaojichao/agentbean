@@ -18,11 +18,4 @@ describe('scanRuntimes', () => {
       expect(typeof rt.installed).toBe('boolean');
     }
   });
-
-  it('includes manus and anygen in runtime checks', async () => {
-    const runtimes = await scanRuntimes();
-    const names = runtimes.map((r) => r.name);
-    expect(names).toContain('Manus');
-    expect(names).toContain('Anygen');
-  });
 });

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Monitor, Circle, Plus, Pencil, Copy, Zap, Globe, Terminal, Server, RefreshCw, X, Check, FolderOpen } from 'lucide-react';
+import { Monitor, Circle, Plus, Pencil, Copy, Zap, Globe, Terminal, RefreshCw, X, Check, FolderOpen } from 'lucide-react';
 import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 
@@ -152,7 +152,6 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const executorAgents = deviceAgents.filter((a) => a.category === 'executor-hosted');
   const agentosAgents = deviceAgents.filter((a) => a.category === 'agentos-hosted');
   const customAgents = deviceAgents.filter((a) => a.source === 'custom');
-  const standaloneAgents = deviceAgents.filter((a) => a.category === 'standalone-cli');
 
   const handleEditName = () => {
     setDeviceName(displayName);
@@ -311,16 +310,6 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           agents={customAgents}
           showAddButton
           onAdd={() => setShowAddCustom(true)}
-          onSelectNetwork={setSelectNetworkAgent}
-        />
-        <AgentGroup
-          title="独立 Agent (standalone-cli)"
-          subtitle="Standalone agent apps"
-          icon={<Server size={14} className="text-teal-600" />}
-          iconBg="bg-teal-50"
-          agents={standaloneAgents}
-          scanning={scanning}
-          onScan={handleScan}
           onSelectNetwork={setSelectNetworkAgent}
         />
 

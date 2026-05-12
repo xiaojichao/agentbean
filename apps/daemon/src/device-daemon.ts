@@ -82,6 +82,8 @@ export function createDeviceDaemon(
 ): DeviceDaemonHandle {
   let socket: Socket | null = null;
   let heartbeatTimer: NodeJS.Timeout | null = null;
+  let rescanTimer: NodeJS.Timeout | null = null;
+  const RESCAN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
   const queues = new Map<string, Promise<unknown>>();
   const httpBase = cfg.server.url.replace(/\/agent$/, '');
   let firstConnect = true;
@@ -165,6 +167,13 @@ export function createDeviceDaemon(
         heartbeatTimer = setInterval(() => {
           socket?.emit('heartbeat');
         }, cfg.heartbeatIntervalMs);
+
+        // Periodic re-scan to update agent availability
+        if (rescanTimer) clearInterval(rescanTimer);
+        rescanTimer = setInterval(() => {
+          if (!socket?.connected) return;
+          scanAndRegister(socket, false);
+        }, RESCAN_INTERVAL_MS);
       });
 
       socket.on('connect_error', (err) => {
@@ -226,18 +235,14 @@ export function createDeviceDaemon(
 
       socket.on('disconnect', (reason) => {
         logger.warn({ reason }, 'device daemon disconnected');
-        if (heartbeatTimer) {
-          clearInterval(heartbeatTimer);
-          heartbeatTimer = null;
-        }
+        if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+        if (rescanTimer) { clearInterval(rescanTimer); rescanTimer = null; }
       });
     },
 
     async stop() {
-      if (heartbeatTimer) {
-        clearInterval(heartbeatTimer);
-        heartbeatTimer = null;
-      }
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+      if (rescanTimer) { clearInterval(rescanTimer); rescanTimer = null; }
       socket?.close();
       socket = null;
     },

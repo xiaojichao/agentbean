@@ -21,7 +21,6 @@ const RUNTIME_ADAPTERS: Record<AgentCategory, { value: AdapterKind; label: strin
     { value: 'openclaw', label: 'OpenClaw' },
     { value: 'hermes', label: 'Hermes' },
   ],
-  'standalone-cli': [],
 };
 
 const CATEGORY_ADAPTER_DEFAULT: Partial<Record<AgentCategory, AdapterKind>> = {
@@ -32,7 +31,6 @@ const CATEGORY_ADAPTER_DEFAULT: Partial<Record<AgentCategory, AdapterKind>> = {
 const CATEGORY_OPTIONS: { value: AgentCategory; label: string }[] = [
   { value: 'executor-hosted', label: '执行器托管' },
   { value: 'agentos-hosted', label: 'AgentOS 托管' },
-  { value: 'standalone-cli', label: '独立 CLI' },
 ];
 
 export function AddAgentModal({ open, onClose }: Props) {
@@ -81,7 +79,7 @@ export function AddAgentModal({ open, onClose }: Props) {
     setError('');
 
     const parsedArgs = argsStr.trim().split(/\s+/).filter(Boolean);
-    const effectiveAdapter = adapterKind || 'standalone';
+    const effectiveAdapter = adapterKind || 'claude-code';
     const socket = getWebSocket();
     socket.emit(
       'agent:create',

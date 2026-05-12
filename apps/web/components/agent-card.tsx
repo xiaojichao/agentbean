@@ -4,16 +4,14 @@ import type { AgentSnapshot, AgentCategory } from '@/lib/schema';
 import { formatRelative } from '@/lib/format-time';
 import { AgentStatusBadge } from './agent-status-badge';
 
-const CATEGORY_LABEL: Record<AgentCategory, string> = {
+const CATEGORY_LABEL: Record<string, string> = {
   'executor-hosted': '执行器',
   'agentos-hosted': 'AgentOS',
-  'standalone-cli': 'CLI',
 };
 
-const CATEGORY_STYLE: Record<AgentCategory, string> = {
+const CATEGORY_STYLE: Record<string, string> = {
   'executor-hosted': 'bg-orange-50 text-orange-600 border-orange-100',
   'agentos-hosted': 'bg-purple-50 text-purple-600 border-purple-100',
-  'standalone-cli': 'bg-gray-50 text-gray-600 border-gray-200',
 };
 
 export function AgentCard({ agent }: { agent: AgentSnapshot }) {

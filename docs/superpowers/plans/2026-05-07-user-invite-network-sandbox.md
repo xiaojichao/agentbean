@@ -25,11 +25,11 @@
 - `apps/server/src/index.ts` — add `auth:register`, `auth:login`, `auth:whoami` socket events, network visibility filtering, invite generation event
 
 ### Agent — Modify
-- `apps/agent/src/index.ts` — add `--invite` CLI flag, `runInviteMode()` function
-- `apps/agent/src/device-daemon.ts` — add `auth:token:deliver` handler, support token persistence to `~/.agentbean/auth.json`
-- `apps/agent/src/agent-instance.ts` — add sandbox wrapping logic in `handleDispatch()`
-- `apps/agent/src/sandbox.ts` — new file: sandbox profile generator + sandbox-exec spawn wrapper
-- `apps/agent/src/config.ts` — add `sandboxed` field to AgentConfigEntry
+- `apps/daemon/src/index.ts` — add `--invite` CLI flag, `runInviteMode()` function
+- `apps/daemon/src/device-daemon.ts` — add `auth:token:deliver` handler, support token persistence to `~/.agentbean/auth.json`
+- `apps/daemon/src/agent-instance.ts` — add sandbox wrapping logic in `handleDispatch()`
+- `apps/daemon/src/sandbox.ts` — new file: sandbox profile generator + sandbox-exec spawn wrapper
+- `apps/daemon/src/config.ts` — add `sandboxed` field to AgentConfigEntry
 
 ### Web — Create
 - `apps/web/app/join/[token]/page.tsx` — registration page
@@ -498,13 +498,13 @@ git commit -m "feat(server): per-user web auth and network visibility filtering"
 ### Task 6: Agent daemon —invite mode
 
 **Files:**
-- Modify: `apps/agent/src/index.ts` — add `--invite` flag and `runInviteMode()`
-- Create: `apps/agent/src/auth-store.ts` — token persistence to `~/.agentbean/auth.json`
+- Modify: `apps/daemon/src/index.ts` — add `--invite` flag and `runInviteMode()`
+- Create: `apps/daemon/src/auth-store.ts` — token persistence to `~/.agentbean/auth.json`
 
 - [ ] **Step 1: Create auth-store.ts**
 
 ```typescript
-// apps/agent/src/auth-store.ts
+// apps/daemon/src/auth-store.ts
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -616,13 +616,13 @@ if (inviteCode) {
 
 - [ ] **Step 5: Build and verify**
 
-Run: `cd apps/agent && npx tsc && npm test`
+Run: `cd apps/daemon && npx tsc && npm test`
 Expected: Build succeeds, 10/10 tests pass
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd apps/agent
+cd apps/daemon
 git add src/auth-store.ts src/index.ts
 git commit -m "feat(agent): --invite mode with browser registration flow"
 ```
@@ -929,12 +929,12 @@ git commit -m "feat(web): sidebar with dashboard, agents page public-only"
 ### Task 14: Sandbox profile generator
 
 **Files:**
-- Create: `apps/agent/src/sandbox.ts`
+- Create: `apps/daemon/src/sandbox.ts`
 
 - [ ] **Step 1: Create sandbox.ts**
 
 ```typescript
-// apps/agent/src/sandbox.ts
+// apps/daemon/src/sandbox.ts
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -976,7 +976,7 @@ export function isSandboxAvailable(): boolean {
 - [ ] **Step 2: Commit**
 
 ```bash
-cd apps/agent
+cd apps/daemon
 git add src/sandbox.ts
 git commit -m "feat(agent): macOS sandbox profile generator"
 ```
@@ -986,8 +986,8 @@ git commit -m "feat(agent): macOS sandbox profile generator"
 ### Task 15: Sandbox-wrapped dispatch in agent-instance
 
 **Files:**
-- Modify: `apps/agent/src/agent-instance.ts`
-- Modify: `apps/agent/src/config.ts`
+- Modify: `apps/daemon/src/agent-instance.ts`
+- Modify: `apps/daemon/src/config.ts`
 
 - [ ] **Step 1: Add sandboxed field to AgentConfigEntry**
 
@@ -1020,13 +1020,13 @@ In `device-daemon.ts`, when receiving a `dispatch` event, set `sandboxed` on the
 
 - [ ] **Step 4: Build and test**
 
-Run: `cd apps/agent && npx tsc && npm test`
+Run: `cd apps/daemon && npx tsc && npm test`
 Expected: Build succeeds, tests pass
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd apps/agent
+cd apps/daemon
 git add src/agent-instance.ts src/config.ts src/device-daemon.ts src/index.ts
 git commit -m "feat(agent): sandbox-exec wrapping for public agents"
 ```
@@ -1065,7 +1065,7 @@ git commit -m "test(server): integration test for user auth flow"
 ## Verification Checklist
 
 - [ ] `cd apps/server && npx vitest run` — all tests pass
-- [ ] `cd apps/agent && npm test` — all tests pass
+- [ ] `cd apps/daemon && npm test` — all tests pass
 - [ ] `cd apps/web && npx next build` — build succeeds
 - [ ] `npx @agentbean/daemon@latest --invite <code> --server-url <url>` — opens browser
 - [ ] Registration form creates user + private network

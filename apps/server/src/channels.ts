@@ -74,7 +74,12 @@ export class ChannelService {
   membersOf(networkId: string, channelId: string): AgentRuntime[] {
     const ids = this.memberIds(networkId, channelId);
     return ids
-      .map((id) => this.deps.registry.snapshot(id))
+      .map((id) => {
+        const rt = this.deps.registry.snapshot(id);
+        if (rt) return rt;
+        // Resolve stale scan-prefix IDs by device+name lookup
+        return this.deps.registry.resolveScanId(id);
+      })
       .filter((rt): rt is AgentRuntime => rt !== null);
   }
 

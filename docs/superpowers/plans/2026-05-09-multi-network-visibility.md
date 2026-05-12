@@ -172,7 +172,7 @@ ALTER TABLE channels ADD COLUMN created_by TEXT;
 
 ### Task 3.2: 独立 Agent 扫描扩展
 
-**文件:** `apps/agent/src/scanner.ts`
+**文件:** `apps/daemon/src/scanner.ts`
 - `scanRuntimes()` 添加 manus、anygen.io 等检测
 - 识别为 `category: 'standalone-cli'`, `adapterKind: 'standalone'`
 
@@ -206,4 +206,4 @@ ALTER TABLE channels ADD COLUMN created_by TEXT;
 | `apps/web/app/[networkPath]/members/page.tsx` | 2 | 展示公开 agent |
 | `apps/web/components/new-channel-dialog.tsx` | 2 | 可见性 + 用户选择 |
 | `apps/web/app/[networkPath]/chat/page.tsx` | 2 | 私有频道标识 |
-| `apps/agent/src/scanner.ts` | 3 | 独立 agent 检测 |
+| `apps/daemon/src/scanner.ts` | 3 | 独立 agent 检测 |

@@ -318,7 +318,7 @@ agents:
 ### 5.3 Agent Instance 生命周期
 
 ```typescript
-// apps/agent/src/agent-instance.ts
+// apps/daemon/src/agent-instance.ts
 interface AgentInstance {
   id: string;
   config: AgentConfig;        // 来自 device-agent.yaml

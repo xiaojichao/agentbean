@@ -1,10 +1,17 @@
-import { execFile } from 'node:child_process';
-import { readdirSync, readFileSync, statSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { createHash } from 'node:crypto';
-import * as os from 'node:os';
-import type { AgentCategory, AdapterKind } from './config.js';
-import { logger } from './log.js';
+import { execFile } from "node:child_process";
+import {
+  readdirSync,
+  readFileSync,
+  statSync,
+  existsSync,
+  writeFileSync,
+  mkdirSync,
+} from "node:fs";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
+import * as os from "node:os";
+import type { AgentCategory, AdapterKind } from "./config.js";
+import { logger } from "./log.js";
 
 // --- Runtime (not an Agent, just an installed CLI tool) ---
 
@@ -24,32 +31,50 @@ export interface ScannedAgent {
   command: string;
   args: string[];
   cwd?: string;
-  source: 'gateway' | 'filesystem';
+  source: "gateway" | "filesystem";
 }
 
 function which(bin: string): Promise<string | null> {
   return new Promise((resolve) => {
-    const child = execFile('which', [bin], { timeout: 5_000 }, (err, stdout) => {
-      if (err) { resolve(null); return; }
-      const path = stdout.trim();
-      resolve(path.length > 0 ? path : null);
-    });
+    const child = execFile(
+      'which',
+      [bin],
+      { timeout: 5_000, env: { ...process.env, PATH: [
+        process.env.PATH,
+        '/usr/local/bin',
+        '/opt/homebrew/bin',
+        join(os.homedir(), '.nvm/versions/node', ...getAllNodeVersions(), 'bin'),
+      ].filter(Boolean).join(':') } },
+      (err, stdout) => {
+        if (err) { resolve(null); return; }
+        const path = stdout.trim();
+        resolve(path.length > 0 ? path : null);
+      },
+    );
     child.on('error', () => resolve(null));
   });
+}
+
+function getAllNodeVersions(): string[] {
+  try {
+    const nvmDir = join(os.homedir(), '.nvm/versions/node');
+    if (!existsSync(nvmDir)) return [];
+    return readdirSync(nvmDir);
+  } catch { return []; }
 }
 
 function run(bin: string, args: string[]): Promise<string> {
   return new Promise((resolve) => {
     const child = execFile(bin, args, { timeout: 10_000 }, (err, stdout) => {
-      resolve(stdout?.trim() ?? '');
+      resolve(stdout?.trim() ?? "");
     });
-    child.on('error', () => resolve(''));
+    child.on("error", () => resolve(""));
   });
 }
 
 // --- Machine ID (stable per-device identifier) ---
 
-const MACHINE_ID_FILE = join(os.homedir(), '.agentbean', 'device-id');
+const MACHINE_ID_FILE = join(os.homedir(), ".agentbean", "device-id");
 
 function getFirstMacAddress(): string | null {
   const ifaces = os.networkInterfaces();
@@ -58,7 +83,7 @@ function getFirstMacAddress(): string | null {
     for (const addr of addrs) {
       // Skip internal (loopback) and zero MAC
       if (addr.internal) continue;
-      if (addr.mac === '00:00:00:00:00:00') continue;
+      if (addr.mac === "00:00:00:00:00:00") continue;
       return addr.mac;
     }
   }
@@ -68,16 +93,25 @@ function getFirstMacAddress(): string | null {
 async function readPlatformMachineId(): Promise<string | null> {
   const platform = os.platform();
   try {
-    if (platform === 'linux') {
-      if (existsSync('/etc/machine-id')) {
-        return readFileSync('/etc/machine-id', 'utf-8').trim() || null;
+    if (platform === "linux") {
+      if (existsSync("/etc/machine-id")) {
+        return readFileSync("/etc/machine-id", "utf-8").trim() || null;
       }
-    } else if (platform === 'darwin') {
-      const output = await run('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice']);
+    } else if (platform === "darwin") {
+      const output = await run("ioreg", [
+        "-rd1",
+        "-c",
+        "IOPlatformExpertDevice",
+      ]);
       const match = output.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/);
       if (match) return match[1] ?? null;
-    } else if (platform === 'win32') {
-      const output = await run('reg', ['query', 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography', '/v', 'MachineGuid']);
+    } else if (platform === "win32") {
+      const output = await run("reg", [
+        "query",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography",
+        "/v",
+        "MachineGuid",
+      ]);
       const match = output.match(/MachineGuid\s+REG_SZ\s+(\S+)/);
       if (match) return match[1] ?? null;
     }
@@ -95,7 +129,7 @@ async function readPlatformMachineId(): Promise<string | null> {
 export async function getDeviceId(): Promise<string> {
   // 1. Read cached ID
   if (existsSync(MACHINE_ID_FILE)) {
-    const cached = readFileSync(MACHINE_ID_FILE, 'utf-8').trim();
+    const cached = readFileSync(MACHINE_ID_FILE, "utf-8").trim();
     if (cached) return cached;
   }
 
@@ -116,7 +150,7 @@ export async function getDeviceId(): Promise<string> {
 
   if (parts.length > 2) {
     // We have enough hardware info — generate deterministic ID
-    const hash = createHash('sha256').update(parts.join('|')).digest('hex');
+    const hash = createHash("sha256").update(parts.join("|")).digest("hex");
     // Format as UUID: 8-4-4-4-12
     deviceId = [
       hash.slice(0, 8),
@@ -124,16 +158,16 @@ export async function getDeviceId(): Promise<string> {
       hash.slice(12, 16),
       hash.slice(16, 20),
       hash.slice(20, 32),
-    ].join('-');
+    ].join("-");
   } else {
     // Fallback: random UUID
-    const { randomUUID } = await import('node:crypto');
+    const { randomUUID } = await import("node:crypto");
     deviceId = randomUUID();
   }
 
   // 3. Cache to file
   try {
-    const dir = join(os.homedir(), '.agentbean');
+    const dir = join(os.homedir(), ".agentbean");
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(MACHINE_ID_FILE, deviceId);
   } catch {
@@ -147,20 +181,26 @@ export async function getDeviceId(): Promise<string> {
 
 export async function scanRuntimes(): Promise<RuntimeInfo[]> {
   const checks = [
-    { bin: 'claude', name: 'Claude Code', adapterKind: 'claude-code' as AdapterKind },
-    { bin: 'codex', name: 'Codex CLI', adapterKind: 'codex' as AdapterKind },
-    { bin: 'kimi-cli', name: 'Kimi CLI', adapterKind: 'codex' as AdapterKind },
-    { bin: 'manus', name: 'Manus', adapterKind: 'standalone' as AdapterKind },
-    { bin: 'anygen', name: 'Anygen', adapterKind: 'standalone' as AdapterKind },
+    {
+      bin: "claude",
+      name: "Claude Code",
+      adapterKind: "claude-code" as AdapterKind,
+    },
+    { bin: "codex", name: "Codex CLI", adapterKind: "codex" as AdapterKind },
+    {
+      bin: "kimi-cli",
+      name: "Kimi CLI",
+      adapterKind: "Kimi-cli" as AdapterKind,
+    },
   ];
 
   const results: RuntimeInfo[] = [];
   for (const s of checks) {
     const path = await which(s.bin);
     results.push({
-      name: s.name.replace(/\s+/g, '-'),
+      name: s.name.replace(/\s+/g, "-"),
       adapterKind: s.adapterKind,
-      command: path ?? '',
+      command: path ?? "",
       installed: path !== null,
     });
   }
@@ -170,40 +210,40 @@ export async function scanRuntimes(): Promise<RuntimeInfo[]> {
 // --- Scan AgentOS Gateways (Hermes, OpenClaw) ---
 
 async function checkHermesGateway(): Promise<ScannedAgent | null> {
-  const path = await which('hermes');
+  const path = await which("hermes");
   if (!path) return null;
 
-  const status = await run('hermes', ['gateway', 'status']);
-  const running = status.includes('running') || status.includes('✓');
+  const status = await run("hermes", ["gateway", "status"]);
+  const running = status.includes("running") || status.includes("✓");
 
   if (running) {
     return {
-      category: 'agentos-hosted',
-      name: 'Hermes-Agent',
-      adapterKind: 'hermes',
+      category: "agentos-hosted",
+      name: "Hermes-Agent",
+      adapterKind: "hermes",
       command: path,
-      args: ['gateway', 'run'],
-      source: 'gateway',
+      args: ["gateway", "run"],
+      source: "gateway",
     };
   }
   return null;
 }
 
 async function checkOpenClawGateway(): Promise<ScannedAgent | null> {
-  const path = await which('openclaw');
+  const path = await which("openclaw");
   if (!path) return null;
 
-  const status = await run('openclaw', ['gateway', 'status']);
-  const running = status.includes('running') || status.includes('✓');
+  const status = await run("openclaw", ["gateway", "status"]);
+  const running = status.includes("running") || status.includes("✓");
 
   if (running) {
     return {
-      category: 'agentos-hosted',
-      name: 'OpenClaw-Agent',
-      adapterKind: 'openclaw',
+      category: "agentos-hosted",
+      name: "OpenClaw-Agent",
+      adapterKind: "openclaw",
       command: path,
-      args: ['gateway', 'run'],
-      source: 'gateway',
+      args: ["gateway", "run"],
+      source: "gateway",
     };
   }
   return null;
@@ -219,7 +259,9 @@ export async function scanAgentOSAgents(): Promise<ScannedAgent[]> {
 
 // --- Scan local agent definitions from filesystem ---
 
-export async function scanLocalAgents(scanDir = join(os.homedir(), '.agentbean', 'agents')): Promise<ScannedAgent[]> {
+export async function scanLocalAgents(
+  scanDir = join(os.homedir(), ".agentbean", "agents"),
+): Promise<ScannedAgent[]> {
   if (!existsSync(scanDir)) {
     return [];
   }
@@ -229,7 +271,7 @@ export async function scanLocalAgents(scanDir = join(os.homedir(), '.agentbean',
   try {
     entries = readdirSync(scanDir);
   } catch (err: any) {
-    logger?.warn?.({ err: err?.message }, 'scan failed');
+    logger?.warn?.({ err: err?.message }, "scan failed");
     return [];
   }
 
@@ -243,56 +285,66 @@ export async function scanLocalAgents(scanDir = join(os.homedir(), '.agentbean',
     }
     if (!st.isDirectory()) continue;
 
-    const jsonPath = join(subdir, 'agent.json');
-    const yamlPath = join(subdir, 'agent.yaml');
-    const ymlPath = join(subdir, 'agent.yml');
+    const jsonPath = join(subdir, "agent.json");
+    const yamlPath = join(subdir, "agent.yaml");
+    const ymlPath = join(subdir, "agent.yml");
 
     let raw: string | null = null;
-    let ext: 'json' | 'yaml' | null = null;
+    let ext: "json" | "yaml" | null = null;
     if (existsSync(jsonPath)) {
-      raw = readFileSync(jsonPath, 'utf8');
-      ext = 'json';
+      raw = readFileSync(jsonPath, "utf8");
+      ext = "json";
     } else if (existsSync(yamlPath)) {
-      raw = readFileSync(yamlPath, 'utf8');
-      ext = 'yaml';
+      raw = readFileSync(yamlPath, "utf8");
+      ext = "yaml";
     } else if (existsSync(ymlPath)) {
-      raw = readFileSync(ymlPath, 'utf8');
-      ext = 'yaml';
+      raw = readFileSync(ymlPath, "utf8");
+      ext = "yaml";
     }
 
     if (raw === null || ext === null) continue;
 
     let parsed: Record<string, unknown> | null = null;
     try {
-      if (ext === 'json') {
+      if (ext === "json") {
         parsed = JSON.parse(raw) as Record<string, unknown>;
       } else {
-        const { load: parseYaml } = await import('js-yaml');
+        const { load: parseYaml } = await import("js-yaml");
         parsed = parseYaml(raw) as Record<string, unknown> | null;
       }
     } catch {
       continue;
     }
 
-    if (!parsed || typeof parsed !== 'object') continue;
+    if (!parsed || typeof parsed !== "object") continue;
 
-    const name = (typeof parsed.name === 'string' ? parsed.name : entry).replace(/\s+/g, '-');
-    const command = typeof parsed.command === 'string' ? parsed.command : '';
-    const args = Array.isArray(parsed.args) ? (parsed.args as unknown[]).map(String) : [];
+    const name = (
+      typeof parsed.name === "string" ? parsed.name : entry
+    ).replace(/\s+/g, "-");
+    const command = typeof parsed.command === "string" ? parsed.command : "";
+    const args = Array.isArray(parsed.args)
+      ? (parsed.args as unknown[]).map(String)
+      : [];
 
     let category: AgentCategory;
-    if (typeof parsed.category === 'string' && ['executor-hosted', 'agentos-hosted', 'standalone-cli'].includes(parsed.category)) {
+    if (
+      typeof parsed.category === "string" &&
+      ["executor-hosted", "agentos-hosted"].includes(parsed.category)
+    ) {
       category = parsed.category as AgentCategory;
-    } else if ('executor' in parsed) {
-      category = 'executor-hosted';
+    } else if ("executor" in parsed) {
+      category = "executor-hosted";
     } else {
-      category = 'standalone-cli';
+      category = "executor-hosted";
     }
 
     const adapterKind =
-      typeof parsed.adapterKind === 'string' && ['codex', 'claude-code', 'openclaw', 'hermes', 'standalone'].includes(parsed.adapterKind)
+      typeof parsed.adapterKind === "string" &&
+      ["codex", "claude-code", "openclaw", "hermes"].includes(
+        parsed.adapterKind,
+      )
         ? (parsed.adapterKind as AdapterKind)
-        : 'standalone';
+        : "codex";
 
     results.push({
       category,
@@ -300,7 +352,7 @@ export async function scanLocalAgents(scanDir = join(os.homedir(), '.agentbean',
       adapterKind,
       command,
       args,
-      source: 'filesystem',
+      source: "filesystem",
     });
   }
 
@@ -310,9 +362,9 @@ export async function scanLocalAgents(scanDir = join(os.homedir(), '.agentbean',
 // --- System Info ---
 
 export interface SystemInfo {
-  platform: string;       // darwin, linux, win32
-  arch: string;           // arm64, x64
-  osVersion: string;      // e.g. "macOS 24.4.0" or "Linux 6.1.0"
+  platform: string; // darwin, linux, win32
+  arch: string; // arm64, x64
+  osVersion: string; // e.g. "macOS 24.4.0" or "Linux 6.1.0"
   hostname: string;
   cpuModel: string;
   cpuCores: number;
@@ -328,7 +380,7 @@ export function collectSystemInfo(): SystemInfo {
   const platform = os.platform();
 
   let osVersion = `${os.type()} ${os.release()}`;
-  if (platform === 'darwin') {
+  if (platform === "darwin") {
     osVersion = `macOS ${os.release()}`;
   }
 
@@ -337,10 +389,10 @@ export function collectSystemInfo(): SystemInfo {
     arch: os.arch(),
     osVersion,
     hostname: os.hostname(),
-    cpuModel: cpus[0]?.model ?? 'unknown',
+    cpuModel: cpus[0]?.model ?? "unknown",
     cpuCores: cpus.length,
-    totalMemoryGB: Math.round(totalMem / 1024 / 1024 / 1024 * 10) / 10,
-    freeMemoryGB: Math.round(freeMem / 1024 / 1024 / 1024 * 10) / 10,
+    totalMemoryGB: Math.round((totalMem / 1024 / 1024 / 1024) * 10) / 10,
+    freeMemoryGB: Math.round((freeMem / 1024 / 1024 / 1024) * 10) / 10,
     nodeVersion: process.version,
   };
 }

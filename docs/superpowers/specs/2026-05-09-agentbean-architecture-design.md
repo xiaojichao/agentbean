@@ -295,7 +295,7 @@ function channelEvents(): {
 
 ---
 
-## 4. Agent Daemon 架构 (apps/agent)
+## 4. Agent Daemon 架构 (apps/daemon)
 
 ### 4.1 启动流程
 
@@ -424,9 +424,9 @@ Daemon 启动 → scanRuntimes()
 | `apps/server/src/namespaces/agent.ts` | /agent namespace | `setupAgentNamespace()` |
 | `apps/server/src/auth.ts` | 用户认证 | `setupAuthRoutes()` |
 | `apps/server/src/device-registry.ts` | 设备注册 | `DeviceRegistry` |
-| `apps/agent/src/index.ts` | Daemon 主入口 | `main()` |
-| `apps/agent/src/scanner.ts` | Agent 扫描器 | `scanRuntimes()` |
-| `apps/agent/src/adapters/*.ts` | CLI 适配器 | `CodexAdapter`, `ClaudeCodeAdapter`, etc. |
+| `apps/daemon/src/index.ts` | Daemon 主入口 | `main()` |
+| `apps/daemon/src/scanner.ts` | Agent 扫描器 | `scanRuntimes()` |
+| `apps/daemon/src/adapters/*.ts` | CLI 适配器 | `CodexAdapter`, `ClaudeCodeAdapter`, etc. |
 | `apps/web/lib/schema.ts` | TypeScript 类型定义 | `AgentSnapshot`, `ChatMessage`, etc. |
 | `apps/web/lib/store.ts` | Zustand 状态管理 | `useAgentBeanStore` |
 | `apps/web/lib/socket.ts` | Socket.IO 客户端 | `getWebSocket()`, `agentEvents()` |

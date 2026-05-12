@@ -154,4 +154,21 @@ export class AgentRegistry {
     for (const v of this.byId.values()) if (v.socketId === socketId) return v;
     return null;
   }
+
+  findByDeviceAndName(deviceId: string, name: string): AgentRuntime | null {
+    const norm = name.trim().toLowerCase().replace(/\s+/g, '-');
+    for (const v of this.byId.values()) {
+      if (v.deviceId === deviceId && v.name.trim().toLowerCase().replace(/\s+/g, '-') === norm) {
+        return v;
+      }
+    }
+    return null;
+  }
+
+  /** Resolve a stale scan-prefix ID (scan-{uuid}-{name}) to the current registry entry */
+  resolveScanId(scanId: string): AgentRuntime | null {
+    const match = scanId.match(/^scan-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-(.+)$/i);
+    if (!match) return null;
+    return this.findByDeviceAndName(match[1]!, match[2]!);
+  }
 }

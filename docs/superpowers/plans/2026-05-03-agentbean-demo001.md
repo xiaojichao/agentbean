@@ -4,7 +4,7 @@
 
 **Goal:** Deliver the AgentBean demo001 minimum viable loop — user opens `/agents`, sees real CLI-backed agents, creates a channel with selected agents, agents self-introduce, and the user chats with at least one agent in that channel.
 
-**Architecture:** Three long-lived processes — `apps/web` (Next.js 14 + Tailwind + shadcn-style components), `apps/server` (Node + Express + Socket.IO + better-sqlite3), and N × `apps/agent` daemons (Node + socket.io-client + js-yaml). Server is the single state authority; daemons spawn real CLIs (Codex, Claude Code, OpenClaw, Hermes) per request via `child_process.spawn`. Two Socket.IO namespaces: `/web` (anonymous) and `/agent` (token auth).
+**Architecture:** Three long-lived processes — `apps/web` (Next.js 14 + Tailwind + shadcn-style components), `apps/server` (Node + Express + Socket.IO + better-sqlite3), and N × `apps/daemon` daemons (Node + socket.io-client + js-yaml). Server is the single state authority; daemons spawn real CLIs (Codex, Claude Code, OpenClaw, Hermes) per request via `child_process.spawn`. Two Socket.IO namespaces: `/web` (anonymous) and `/agent` (token auth).
 
 **Tech Stack:** TypeScript (strict), Node 20+, Next.js 14 App Router, Tailwind CSS 3.4, Zustand, Socket.IO 4.7, better-sqlite3 11, pino, ulid, vitest, supertest, tsx, js-yaml.
 
@@ -722,14 +722,14 @@ git commit -m "feat(server): SQLite schema, DAOs, and ULID helper"
 
 ---
 
-### Task M0-4: `apps/agent` scaffold + config loader
+### Task M0-4: `apps/daemon` scaffold + config loader
 
 **Files:**
-- Init: `apps/agent/.git/`
-- Create: `apps/agent/package.json`, `apps/agent/tsconfig.json`, `apps/agent/vitest.config.ts`, `apps/agent/.env.example`, `apps/agent/.gitignore`
-- Create: `apps/agent/src/log.ts`, `apps/agent/src/config.ts`
-- Create: `apps/agent/examples/agent.config.yaml.example`
-- Test: `apps/agent/tests/config.test.ts`
+- Init: `apps/daemon/.git/`
+- Create: `apps/daemon/package.json`, `apps/daemon/tsconfig.json`, `apps/daemon/vitest.config.ts`, `apps/daemon/.env.example`, `apps/daemon/.gitignore`
+- Create: `apps/daemon/src/log.ts`, `apps/daemon/src/config.ts`
+- Create: `apps/daemon/examples/agent.config.yaml.example`
+- Test: `apps/daemon/tests/config.test.ts`
 
 - [ ] **Step 1: Init the inner repo and seed configs**
 
@@ -826,7 +826,7 @@ coverage/
 - [ ] **Step 4: Install deps**
 
 ```bash
-cd /Users/shaw/AgentBean/apps/agent
+cd /Users/shaw/AgentBean/apps/daemon
 npm install
 ```
 
@@ -1030,9 +1030,9 @@ git commit -m "feat(agent): scaffold daemon with config loader and YAML example"
 ### Task M0-5: Adapter interface + connection skeleton
 
 **Files:**
-- Create: `apps/agent/src/adapters/adapter.ts`
-- Create: `apps/agent/src/connection.ts`
-- Create: `apps/agent/src/index.ts`
+- Create: `apps/daemon/src/adapters/adapter.ts`
+- Create: `apps/daemon/src/connection.ts`
+- Create: `apps/daemon/src/index.ts`
 
 - [ ] **Step 1: Implement `src/adapters/adapter.ts`**
 
@@ -1166,7 +1166,7 @@ cd /Users/shaw/AgentBean/apps/server && npm run dev
 In another:
 
 ```bash
-cd /Users/shaw/AgentBean/apps/agent
+cd /Users/shaw/AgentBean/apps/daemon
 cp examples/agent.config.yaml.example /tmp/cfg.yaml
 AGENT_BEAN_SERVER_URL=http://localhost:4000/agent \
 AGENT_BEAN_AGENT_TOKEN=dev-token-change-me \
@@ -1181,7 +1181,7 @@ Expected: server log shows `/agent client connected`; agent log shows `connected
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/shaw/AgentBean/apps/agent
+cd /Users/shaw/AgentBean/apps/daemon
 git add src/ index.ts || git add src/
 git commit -m "feat(agent): add CliAdapter interface, stub adapter, connection skeleton"
 ```
@@ -1471,7 +1471,7 @@ In three separate shells:
 # server
 cd /Users/shaw/AgentBean/apps/server && npm run dev
 # agent (with example config)
-cd /Users/shaw/AgentBean/apps/agent
+cd /Users/shaw/AgentBean/apps/daemon
 AGENT_CONFIG=examples/agent.config.yaml.example \
 AGENT_BEAN_SERVER_URL=http://localhost:4000/agent \
 AGENT_BEAN_AGENT_TOKEN=dev-token-change-me npm run dev
@@ -1512,7 +1512,7 @@ Expected: two new commits on `docs/demo001` (plan + scaffold marker).
 
 ## M1 — First Real Agent Visible
 
-By the end of M1: a real `apps/agent` daemon connects, registers, and heartbeats; the web `/agents` page renders one card; killing the daemon flips the card to offline within 30 seconds.
+By the end of M1: a real `apps/daemon` daemon connects, registers, and heartbeats; the web `/agents` page renders one card; killing the daemon flips the card to offline within 30 seconds.
 
 ### Task M1-1: Wire SQLite into server bootstrap
 
@@ -1844,7 +1844,7 @@ describe('renderConnectCommand', () => {
   it('uses adapterKind to pick a config example', () => {
     const out = renderConnectCommand({ adapterKind: 'codex' });
     expect(out).toContain('AGENT_CONFIG=examples/codex-shaw.yaml.example');
-    expect(out).toContain('cd apps/agent');
+    expect(out).toContain('cd apps/daemon');
   });
 
   it('falls back to the generic example for unknown kinds', () => {
@@ -1873,7 +1873,7 @@ export function renderConnectCommand(input: { adapterKind: AdapterKind }): strin
   const cfg = KNOWN[input.adapterKind] ?? 'examples/agent.config.yaml.example';
   return [
     '# 启动一个真实 Agent daemon (确保已 cp .env.example .env 并填好 token)',
-    'cd apps/agent',
+    'cd apps/daemon',
     `AGENT_CONFIG=${cfg} npm run dev`,
   ].join('\n');
 }
@@ -2680,7 +2680,7 @@ git commit -m "feat(web): /agents page with live agent cards and offline detecti
 ### Task M1-8: First real `codex` daemon config + manual offline verification
 
 **Files:**
-- Create: `apps/agent/examples/codex-shaw.yaml.example`
+- Create: `apps/daemon/examples/codex-shaw.yaml.example`
 
 - [ ] **Step 1: Write `examples/codex-shaw.yaml.example`**
 
@@ -2709,7 +2709,7 @@ In three shells:
 cd /Users/shaw/AgentBean/apps/server && npm run dev
 
 # Shell 2
-cd /Users/shaw/AgentBean/apps/agent
+cd /Users/shaw/AgentBean/apps/daemon
 AGENT_CONFIG=examples/codex-shaw.yaml.example \
 AGENT_BEAN_SERVER_URL=http://localhost:4000/agent \
 AGENT_BEAN_AGENT_TOKEN=dev-token-change-me \
@@ -3576,15 +3576,15 @@ git commit -m "feat(server): message:send routes to first online channel member"
 ### Task M2-5: Real codex CLI adapter
 
 **Files:**
-- Create: `apps/agent/src/adapters/codex.ts`
-- Modify: `apps/agent/src/connection.ts` (handle dispatch via adapter)
-- Modify: `apps/agent/src/index.ts` (select adapter by kind)
-- Test: `apps/agent/tests/adapter.test.ts`
-- Test: `apps/agent/tests/codex-stub.test.ts`
+- Create: `apps/daemon/src/adapters/codex.ts`
+- Modify: `apps/daemon/src/connection.ts` (handle dispatch via adapter)
+- Modify: `apps/daemon/src/index.ts` (select adapter by kind)
+- Test: `apps/daemon/tests/adapter.test.ts`
+- Test: `apps/daemon/tests/codex-stub.test.ts`
 
 - [ ] **Step 1: Write failing adapter contract test**
 
-`apps/agent/tests/adapter.test.ts`:
+`apps/daemon/tests/adapter.test.ts`:
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -3834,7 +3834,7 @@ main().catch((err) => {
 
 - [ ] **Step 7: Add a stub-CLI integration test for the connection layer**
 
-`apps/agent/tests/codex-stub.test.ts`:
+`apps/daemon/tests/codex-stub.test.ts`:
 
 ```ts
 import { describe, it, expect, afterEach } from 'vitest';
@@ -3870,13 +3870,13 @@ describe('CodexAdapter against a node stub', () => {
 
 - [ ] **Step 8: Run all agent tests**
 
-Run: `cd /Users/shaw/AgentBean/apps/agent && npm test`
+Run: `cd /Users/shaw/AgentBean/apps/daemon && npm test`
 Expected: PASS — config + adapter + codex-stub.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-cd /Users/shaw/AgentBean/apps/agent
+cd /Users/shaw/AgentBean/apps/daemon
 git add .
 git commit -m "feat(agent): codex adapter + dispatch handling in connection"
 ```
@@ -4685,14 +4685,14 @@ git commit -m "feat(server): wire @-mention routing into message:send with syste
 ### Task M3-3: Add `claude-code` adapter
 
 **Files:**
-- Create: `apps/agent/src/adapters/claude-code.ts`
-- Create: `apps/agent/examples/claude-code-shaw.yaml.example`
-- Modify: `apps/agent/src/adapters/adapter.contract.test.ts`
-- Modify: `apps/agent/src/index.ts`
+- Create: `apps/daemon/src/adapters/claude-code.ts`
+- Create: `apps/daemon/examples/claude-code-shaw.yaml.example`
+- Modify: `apps/daemon/src/adapters/adapter.contract.test.ts`
+- Modify: `apps/daemon/src/index.ts`
 
 - [ ] **Step 1: Append the failing adapter contract test**
 
-Append to `apps/agent/src/adapters/adapter.contract.test.ts` (created in M2-5):
+Append to `apps/daemon/src/adapters/adapter.contract.test.ts` (created in M2-5):
 
 ```ts
 import { ClaudeCodeAdapter } from './claude-code.js';
@@ -4722,12 +4722,12 @@ describe('ClaudeCodeAdapter', () => {
 
 - [ ] **Step 2: Run the failing test**
 
-Run: `cd /Users/shaw/AgentBean/apps/agent && npx vitest run src/adapters/adapter.contract.test.ts`
+Run: `cd /Users/shaw/AgentBean/apps/daemon && npx vitest run src/adapters/adapter.contract.test.ts`
 Expected: FAIL with "Cannot find module './claude-code.js'".
 
 - [ ] **Step 3: Implement `ClaudeCodeAdapter`**
 
-Create `apps/agent/src/adapters/claude-code.ts`. Most logic mirrors `CodexAdapter`; only the payload format differs (XML-style turn tags).
+Create `apps/daemon/src/adapters/claude-code.ts`. Most logic mirrors `CodexAdapter`; only the payload format differs (XML-style turn tags).
 
 ```ts
 import { spawn } from 'node:child_process';
@@ -4787,7 +4787,7 @@ export class ClaudeCodeAdapter implements CliAdapter {
 
 - [ ] **Step 4: Register in `pickAdapter`**
 
-In `apps/agent/src/index.ts`, extend the switch:
+In `apps/daemon/src/index.ts`, extend the switch:
 
 ```ts
 import { ClaudeCodeAdapter } from './adapters/claude-code.js';
@@ -4805,7 +4805,7 @@ function pickAdapter(cfg: AppConfig): CliAdapter {
 
 - [ ] **Step 5: Add example config**
 
-Create `apps/agent/examples/claude-code-shaw.yaml.example`:
+Create `apps/daemon/examples/claude-code-shaw.yaml.example`:
 
 ```yaml
 id: claude-code-shaw
@@ -5050,12 +5050,12 @@ cd /Users/shaw/AgentBean/apps/server && npm run dev
 
 Terminal B — Codex daemon:
 ```bash
-cd /Users/shaw/AgentBean/apps/agent && AGENT_CONFIG=examples/codex-shaw.yaml.example npm run dev
+cd /Users/shaw/AgentBean/apps/daemon && AGENT_CONFIG=examples/codex-shaw.yaml.example npm run dev
 ```
 
 Terminal C — Claude daemon:
 ```bash
-cd /Users/shaw/AgentBean/apps/agent && AGENT_CONFIG=examples/claude-code-shaw.yaml.example npm run dev
+cd /Users/shaw/AgentBean/apps/daemon && AGENT_CONFIG=examples/claude-code-shaw.yaml.example npm run dev
 ```
 
 Terminal D — web:
@@ -5098,14 +5098,14 @@ git commit --allow-empty -m "chore: M3 — multi-agent + @-mention + detail page
 ### Task M4-1: `OpenClawAdapter`
 
 **Files:**
-- Create: `apps/agent/src/adapters/openclaw.ts`
-- Create: `apps/agent/examples/openclaw-shaw.yaml.example`
-- Modify: `apps/agent/src/adapters/adapter.contract.test.ts`
-- Modify: `apps/agent/src/index.ts`
+- Create: `apps/daemon/src/adapters/openclaw.ts`
+- Create: `apps/daemon/examples/openclaw-shaw.yaml.example`
+- Modify: `apps/daemon/src/adapters/adapter.contract.test.ts`
+- Modify: `apps/daemon/src/index.ts`
 
 - [ ] **Step 1: Append the failing contract test**
 
-Append to `apps/agent/src/adapters/adapter.contract.test.ts`:
+Append to `apps/daemon/src/adapters/adapter.contract.test.ts`:
 
 ```ts
 import { OpenClawAdapter } from './openclaw.js';
@@ -5138,12 +5138,12 @@ describe('OpenClawAdapter', () => {
 
 - [ ] **Step 2: Run the failing test**
 
-Run: `cd /Users/shaw/AgentBean/apps/agent && npx vitest run src/adapters/adapter.contract.test.ts`
+Run: `cd /Users/shaw/AgentBean/apps/daemon && npx vitest run src/adapters/adapter.contract.test.ts`
 Expected: FAIL — "Cannot find module './openclaw.js'".
 
 - [ ] **Step 3: Implement `OpenClawAdapter`**
 
-Create `apps/agent/src/adapters/openclaw.ts`:
+Create `apps/daemon/src/adapters/openclaw.ts`:
 
 ```ts
 import { spawn } from 'node:child_process';
@@ -5210,7 +5210,7 @@ export class OpenClawAdapter implements CliAdapter {
 
 - [ ] **Step 4: Register in `pickAdapter`**
 
-In `apps/agent/src/index.ts`:
+In `apps/daemon/src/index.ts`:
 
 ```ts
 import { OpenClawAdapter } from './adapters/openclaw.js';
@@ -5228,7 +5228,7 @@ function pickAdapter(cfg: AppConfig): CliAdapter {
 
 - [ ] **Step 5: Add example config**
 
-Create `apps/agent/examples/openclaw-shaw.yaml.example`:
+Create `apps/daemon/examples/openclaw-shaw.yaml.example`:
 
 ```yaml
 id: openclaw-shaw
@@ -5264,14 +5264,14 @@ git commit -m "feat(agent): openclaw CLI adapter (JSON stdin/stdout)"
 ### Task M4-2: `HermesAdapter`
 
 **Files:**
-- Create: `apps/agent/src/adapters/hermes.ts`
-- Create: `apps/agent/examples/hermes-shaw.yaml.example`
-- Modify: `apps/agent/src/adapters/adapter.contract.test.ts`
-- Modify: `apps/agent/src/index.ts`
+- Create: `apps/daemon/src/adapters/hermes.ts`
+- Create: `apps/daemon/examples/hermes-shaw.yaml.example`
+- Modify: `apps/daemon/src/adapters/adapter.contract.test.ts`
+- Modify: `apps/daemon/src/index.ts`
 
 - [ ] **Step 1: Append the failing contract test**
 
-Append to `apps/agent/src/adapters/adapter.contract.test.ts`:
+Append to `apps/daemon/src/adapters/adapter.contract.test.ts`:
 
 ```ts
 import { HermesAdapter } from './hermes.js';
@@ -5306,7 +5306,7 @@ Expected: FAIL — "Cannot find module './hermes.js'".
 
 - [ ] **Step 3: Implement `HermesAdapter`**
 
-Create `apps/agent/src/adapters/hermes.ts`:
+Create `apps/daemon/src/adapters/hermes.ts`:
 
 ```ts
 import { spawn } from 'node:child_process';
@@ -5359,7 +5359,7 @@ export class HermesAdapter implements CliAdapter {
 
 - [ ] **Step 4: Register in `pickAdapter`**
 
-In `apps/agent/src/index.ts`:
+In `apps/daemon/src/index.ts`:
 
 ```ts
 import { HermesAdapter } from './adapters/hermes.js';
@@ -5376,7 +5376,7 @@ function pickAdapter(cfg: AppConfig): CliAdapter {
 
 - [ ] **Step 5: Add example config**
 
-Create `apps/agent/examples/hermes-shaw.yaml.example`:
+Create `apps/daemon/examples/hermes-shaw.yaml.example`:
 
 ```yaml
 id: hermes-shaw

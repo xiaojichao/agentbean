@@ -573,7 +573,7 @@ AGENT_BEAN_AGENT_TOKEN=default:default:dev-token-change-me npx tsx src/index.ts
 - [ ] **Step 2: Start device daemon**
 
 ```bash
-cd /Users/shaw/AgentBean/apps/agent
+cd /Users/shaw/AgentBean/apps/daemon
 export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" && nvm use 22
 export AGENT_BEAN_SERVER_URL=http://localhost:4000/agent
 export AGENT_BEAN_AGENT_TOKEN=default:default:dev-token-change-me
