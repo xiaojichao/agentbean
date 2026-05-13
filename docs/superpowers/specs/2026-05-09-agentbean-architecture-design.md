@@ -1,8 +1,9 @@
 # AgentBean 架构设计文档
 
 **日期:** 2026-05-09
-**版本:** 1.0
-**状态:** 已完成 Phase 0-2，持续迭代中
+**版本:** 1.2
+**状态:** Phase 0-3.5 已完成，持续迭代中
+**更新:** 2026-05-12 — Agent 去重、scanner PATH 扩展、周期重扫、DM 过滤、standalone-cli 移除
 
 ---
 
@@ -102,8 +103,8 @@ interface AgentRuntime {
   id: string
   name: string
   role: string
-  adapterKind: AdapterKind      // codex | claude-code | openclaw | hermes | standalone
-  category: AgentCategory       // executor-hosted | agentos-hosted | standalone-cli
+  adapterKind: AdapterKind      // codex | claude-code | openclaw | hermes | Kimi-cli
+  category: AgentCategory       // executor-hosted | agentos-hosted
   networkId: string             // 主网络 ID
   visibility: 'public' | 'private'
   ownerId: string | null
@@ -118,11 +119,16 @@ interface AgentRuntime {
 class AgentRegistry {
   register(socketId, info): AgentRuntime   // 注册 agent，替换同 ID 的旧 socket
   updatePublishedNetworks(agentId, ids)    // 更新多网络发布列表
-  markOffline(socketId)                    // 标记离线
-  heartbeat(socketId)                      // 更新心跳时间
-  markError(socketId, message)             // 记录错误
-  snapshot(networkId): AgentRuntime[]       // 获取网络内 agent 快照
-  all(): AgentRuntime[]                     // 获取所有 agent
+  markOffline(agentId, reason)             // 标记离线
+  markOnline(agentId)                      // 恢复在线
+  heartbeat(agentId)                       // 更新心跳时间
+  markError(agentId, message)              // 记录错误
+  markBusy(agentId)                        // 标记忙碌
+  snapshot(agentId): AgentRuntime | null   // 获取单个 agent 快照
+  all(): AgentRuntime[]                    // 获取所有 agent
+  findByDeviceAndName(deviceId, name)      // 按设备+名称查找（去重用）
+  resolveScanId(scanId)                    // 解析 scan-prefix ID（回退查找）
+  onKick(callback)                         // 踢掉旧 socket 回调
 }
 ```
 
@@ -141,7 +147,7 @@ function routeHumanMessage(
 ```
 
 **路由逻辑：**
-1. 解析 `@AgentName` 提及 → 匹配 agent name
+1. 解析 `@AgentName` 提及 → 匹配 agent name（正则 `[\w-]*` 支持连字符）
 2. 匹配到 → 返回该 agent（直接提及）
 3. 未匹配到 → fallback 到第一个在线 agent
 4. 无在线 agent → 返回 null
@@ -165,6 +171,7 @@ class ChannelService {
   addUserMember(channelId: string, userId: string): void
   removeUserMember(channelId: string, userId: string): void
   isUserMember(channelId: string, userId: string): boolean
+  membersOf(networkId: string, channelId: string): AgentRuntime[]  // 含 resolveScanId 回退
 }
 ```
 
@@ -195,13 +202,15 @@ class ChannelService {
 - 使用 `crypto.timingSafeEqual` 进行时间安全比较
 
 主要事件：
-- `register` — agent 注册
-- `heartbeat` — 心跳
+- `register` — agent 注册（含去重检查）
+- `heartbeat` — 心跳（驱动设备+Agent 状态更新）
+- `device:register-agents` — 扫描结果批量注册（含去重+离线标记）
+- `reply` — agent 执行结果回复
+- `error_event` — agent 错误上报
+- `agents:discovered` — 扫描结果广播到 /web
+- `agents:discover` ← server 触发重新扫描
+- `dispatch` ← server 分发执行任务
 - `message` — agent 消息
-- `response` — agent 执行结果
-- `error` — agent 错误
-- `token` ← server 分发执行任务
-- `cancel` ← server 取消执行
 
 ---
 
@@ -331,9 +340,14 @@ interface CliAdapter {
 
 `scanner.ts` 的 `scanRuntimes()` 方法：
 
-1. **PATH 运行时扫描**：检查 `$PATH` 中是否存在 codex、claude-code 等命令
-2. **AgentOS 网关扫描**：读取 AgentOS 配置文件，发现注册的 Agent
-3. **本地文件系统扫描**：读取配置目录中的 Agent 定义文件
+1. **PATH 运行时扫描**：检查 claude-code、codex、kimi-cli 等命令是否已安装
+   - PATH 扩展：自动包含所有 nvm Node 版本的 `bin` 目录（`getAllNodeVersions()` 扫描 `~/.nvm/versions/node/` 下所有版本）
+2. **AgentOS 网关扫描**：检测 Hermes、OpenClaw 等网关注册的 Agent
+3. **本地文件系统扫描**：读取 `~/.agentbean/agents/` 目录中的 Agent 定义文件
+
+**扫描缓存：** 结果缓存到 `~/.agentbean/scanned-agents.json`，首次使用缓存+后台刷新，重连时跳过扫描。
+
+**周期重扫：** `device-daemon.ts` 每 5 分钟触发 `scanAndRegister()`，服务端标记消失的 Agent 为离线。
 
 ---
 
@@ -418,14 +432,15 @@ Daemon 启动 → scanRuntimes()
 | `apps/server/src/index.ts` | 主入口，Socket.IO 事件注册 | `buildApp()`, 所有 socket handler |
 | `apps/server/src/db.ts` | 全局数据库 schema + DAO | `openDb()`, `initGlobalDb()`, DAO 接口 |
 | `apps/server/src/storage.ts` | per-network 存储管理 | `StorageManager`, `StorageSpace` |
-| `apps/server/src/registry.ts` | Agent 注册中心 | `AgentRegistry`, `AgentRuntime` |
+| `apps/server/src/registry.ts` | Agent 注册中心 | `AgentRegistry`, `AgentRuntime`, `findByDeviceAndName`, `resolveScanId` |
 | `apps/server/src/channels.ts` | 频道服务 | `ChannelService`, `CreateChannelInput` |
 | `apps/server/src/routing.ts` | 消息路由 | `routeHumanMessage()` |
 | `apps/server/src/namespaces/agent.ts` | /agent namespace | `setupAgentNamespace()` |
 | `apps/server/src/auth.ts` | 用户认证 | `setupAuthRoutes()` |
 | `apps/server/src/device-registry.ts` | 设备注册 | `DeviceRegistry` |
 | `apps/daemon/src/index.ts` | Daemon 主入口 | `main()` |
-| `apps/daemon/src/scanner.ts` | Agent 扫描器 | `scanRuntimes()` |
+| `apps/daemon/src/scanner.ts` | Agent 扫描器 | `scanRuntimes()`, `getAllNodeVersions()`, `getDeviceId()` |
+| `apps/daemon/src/device-daemon.ts` | 设备 Daemon | `createDeviceDaemon()`, 周期重扫 |
 | `apps/daemon/src/adapters/*.ts` | CLI 适配器 | `CodexAdapter`, `ClaudeCodeAdapter`, etc. |
 | `apps/web/lib/schema.ts` | TypeScript 类型定义 | `AgentSnapshot`, `ChatMessage`, etc. |
 | `apps/web/lib/store.ts` | Zustand 状态管理 | `useAgentBeanStore` |

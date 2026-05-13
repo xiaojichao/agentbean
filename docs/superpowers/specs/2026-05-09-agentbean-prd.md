@@ -1,8 +1,9 @@
 # AgentBean 产品需求文档 (PRD)
 
 **日期:** 2026-05-09
-**版本:** 1.0
-**状态:** 已完成基础功能，持续迭代中
+**版本:** 1.2
+**状态:** Phase 0-3 已完成，Phase 4+ 进行中
+**更新:** 2026-05-12 — 移除 standalone-cli、Agent 去重、scanner PATH 扩展、周期重扫
 
 ---
 
@@ -33,7 +34,7 @@ AgentBean/
 ├── apps/
 │   ├── server/     # Express + Socket.IO 服务端
 │   ├── web/        # Next.js 前端
-│   └── agent/      # 设备端 Daemon
+│   └── daemon/     # 设备端 Daemon（原 agent/，2026-05-12 重命名）
 └── docs/superpowers/  # PRD/Specs/Plans
 ```
 
@@ -94,9 +95,10 @@ Agent 通过 `/agent` Socket.IO 命名空间注册到服务端：
 - 支持断线重连（同 agentId 替换旧 socket）
 
 #### 3.2.2 Agent 分类
-- `executor-hosted`：codex (node-pty)、openclaw (JSON)
-- `agentos-hosted`：claude-code (spawn)、hermes (-z flag)
-- `standalone-cli`：独立 CLI 工具
+- `executor-hosted`：codex (node-pty)、claude-code (spawn)、kimi-cli (spawn)
+- `agentos-hosted`：hermes (gateway)、openclaw (gateway)
+
+> 注：`standalone-cli` 分类已于 2026-05-12 移除，所有 Agent 统一归入上述两类。
 
 #### 3.2.3 多网络发布
 - Agent 属于创建者的私有网络（主网络）
@@ -106,9 +108,18 @@ Agent 通过 `/agent` Socket.IO 命名空间注册到服务端：
 
 #### 3.2.4 Agent 扫描
 设备端 Daemon 的三层扫描器：
-- PATH 运行时扫描：检测 codex、claude-code 等 CLI 是否已安装
-- AgentOS 网关扫描：检测 AgentOS 注册的 Agent
-- 本地文件系统扫描：检测配置文件中定义的 Agent
+- PATH 运行时扫描：检测 claude-code、codex、kimi-cli 等 CLI 是否已安装
+  - PATH 扩展：自动包含所有 nvm Node 版本的 bin 目录（解决跨版本 CLI 检测）
+- AgentOS 网关扫描：检测 Hermes、OpenClaw 等网关注册的 Agent
+- 本地文件系统扫描：检测 `~/.agentbean/agents/` 配置文件中定义的 Agent
+
+**周期重扫：** Daemon 每 5 分钟自动重新扫描，服务端标记消失的 Agent 为离线。
+
+#### 3.2.5 Agent 去重
+两条注册路径可能注册同一 Agent（`register` 事件使用 Daemon 自定义 ID，`device:register-agents` 使用 `scan-{deviceId}-{name}` ID）：
+- `findByDeviceAndName(deviceId, name)` 按设备+名称查找已有注册
+- 已存在则更新 DB 而不创建重复条目
+- `resolveScanId(scanId)` 解析旧的 scan-prefix ID，用于 channel_members 回退查找
 
 ### 3.3 频道系统
 
@@ -125,7 +136,12 @@ Agent 通过 `/agent` Socket.IO 命名空间注册到服务端：
 #### 3.3.3 频道-Agent 关联
 - 频道中可添加 Agent 参与者
 - Agent 自动回复频道消息（通过 Pipeline 编排）
-- `@AgentName` 提及触发 Agent 响应
+- `@AgentName` 提及触发 Agent 响应（正则 `[\w-]*` 支持连字符名称）
+
+#### 3.3.4 私信 (DM)
+- 用户可向 Agent 发起私信（创建 DM 频道）
+- DM 中 @mention 下拉仅显示私聊目标成员，不列出其他成员
+- DM 输入框 placeholder 显示目标 Agent 名称
 
 ### 3.4 任务系统
 
@@ -159,6 +175,8 @@ Agent 通过 `/agent` Socket.IO 命名空间注册到服务端：
 - 显示设备状态、hostname、Tailscale IP
 - 显示设备上运行的 Agent 列表
 - Agent 可见性配置（发布到多网络）
+- 设备状态：在线/离线取决于 Daemon 是否运行（心跳机制）
+- Agent 状态：在线/离线/忙碌，通过 `agent:status` 实时推送到 Web 端
 
 #### 3.5.3 服务器端网络持久化
 - `users.current_network_id` 列表储用户当前工作网络
@@ -210,7 +228,14 @@ Agent 通过 `/agent` Socket.IO 命名空间注册到服务端：
 
 | 事件 | 方向 | 用途 |
 |------|------|------|
-| `register` | C→S | Agent 注册 |
+| `register` | C→S | Agent 注册（含去重检查） |
+| `heartbeat` | C→S | 心跳（驱动设备+Agent 状态更新） |
+| `device:register-agents` | C→S | 扫描结果批量注册（含去重+离线标记） |
+| `reply` | C→S | Agent 执行结果回复 |
+| `error_event` | C→S | Agent 错误上报 |
+| `agents:discovered` | S→C | 扫描发现的 Agent 广播 |
+| `agents:discover` | S→C | 服务端触发重新扫描 |
+| `dispatch` | S→C | 服务端分发执行任务 |
 | `message` | C→S | Agent 发送消息 |
 | `response` | C→S | Agent 执行结果 |
 | `error` | C→S | Agent 错误上报 |
@@ -241,11 +266,21 @@ Agent 通过 `/agent` Socket.IO 命名空间注册到服务端：
 
 ## 7. 待实现功能
 
-### 7.1 Phase 3: 自定义 Agent + 独立 Agent（已完成 2026-05-10）
+### 7.1 Phase 3: 自定义 Agent（已完成 2026-05-10）
 - [x] 自定义 Agent 配置 UI（名称/命令/参数/工作目录/适配器类型）
 - [x] Agent 详情页完整运行时配置（source badge、device info、runtime config）
-- [x] 独立 Agent 扫描器扩展（manus、anygen.io）
-- [ ] standalone 适配器实现
+- [x] standalone-cli 分类已移除（2026-05-12）
+
+### 7.1.5 Phase 3.5: Agent 稳定性修复（已完成 2026-05-12）
+- [x] Agent 去重：findByDeviceAndName + resolveScanId
+- [x] @mention 正则修复（支持连字符 Agent 名）
+- [x] NO_ONLINE 路由修复（channel_members scan-prefix 回退）
+- [x] DM 私聊 @mention 过滤（仅显示目标成员）
+- [x] 成员页实时 Agent 状态更新（agent:status 订阅）
+- [x] 成员页 UI 修复（去掉"2网"badge、修复详情页显示）
+- [x] Scanner PATH 扩展（nvm 全版本 bin 目录）
+- [x] Daemon 周期重扫（5 分钟间隔）
+- [x] apps/agent → apps/daemon 重命名
 
 ### 7.2 Phase 4: 任务系统
 - 任务数据持久化
@@ -254,10 +289,10 @@ Agent 通过 `/agent` Socket.IO 命名空间注册到服务端：
 - 任务拖拽排序
 
 ### 7.3 Phase 5: 用户体验
-- 设备名称持久化
+- ~~设备名称持久化~~ (已完成 2026-05-12)
 - 频道编辑功能
 - 消息搜索
-- 私信系统
+- ~~私信系统~~ (已完成 2026-05-12)
 - 收藏功能对接
 - Agent DMs/Reminders/Workspace/Activity 标签页
 

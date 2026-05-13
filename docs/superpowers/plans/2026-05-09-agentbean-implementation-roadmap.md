@@ -1,8 +1,9 @@
 # AgentBean 实现路线图
 
 **日期:** 2026-05-09
-**版本:** 1.0
-**状态:** 已完成 Phase 0-2，Phase 3+ 待实现
+**版本:** 1.2
+**状态:** Phase 0-3.5 已完成，Phase 4+ 待实现
+**更新:** 2026-05-12 — 新增 Phase 3.5 稳定性修复里程碑
 
 ---
 
@@ -11,7 +12,7 @@
 - **项目名称：** AgentBean — 多 Agent 协作平台
 - **仓库结构：** `apps/server`（服务端）、`apps/web`（前端）、`apps/daemon`（设备端 Daemon）
 - **技术栈：** Express + Socket.IO + better-sqlite3 + Next.js 14 + Zustand + TypeScript + vitest
-- **当前状态：** 56/56 测试通过，Phase 2（多网络可见性 + 频道系统）+ Phase 3（设备管理 + Agent 扫描器）已完成
+- **当前状态：** Phase 0-3 已完成，Phase 3.5（稳定性修复）已完成
 
 ---
 
@@ -46,7 +47,7 @@
 - 全局数据库：用户、网络、成员、邀请码
 - 每网络独立 SQLite 隔离
 - 设备注册 + 三截 token 认证
-- Agent 四类分类：executor-hosted/agentos-hosted/standalone-cli
+- Agent 四类分类：executor-hosted/agentos-hosted/standalone-cli（standalone-cli 后续移除）
 - macOS sandbox-exec 隔离公开 Agent
 - 安全加固：scrypt 密码、timing-safe 比较
 - 测试覆盖：59/59 通过
@@ -112,13 +113,57 @@
 
 ## 进行中工作
 
-Phase 3 已完成。下一步待确认。
+Phase 3.5 已完成。下一步：Phase 4 任务系统。
+
+---
+
+### Phase 3.5: Agent 稳定性修复 (2026-05-12)
+
+**关键文件：**
+- `apps/server/src/registry.ts` — `findByDeviceAndName()`, `resolveScanId()` 新方法
+- `apps/server/src/channels.ts` — `membersOf()` 增加 scan-prefix ID 回退
+- `apps/server/src/namespaces/agent.ts` — 去重检查、离线标记、scan-prefix 清理
+- `apps/daemon/src/scanner.ts` — PATH 扩展（nvm 全版本）、移除 standalone-cli
+- `apps/daemon/src/device-daemon.ts` — 周期重扫（5 分钟）、扫描缓存
+- `apps/daemon/src/config.ts` — AgentCategory 移除 standalone-cli
+- `apps/web/app/[networkPath]/chat/page.tsx` — @mention 正则修复、DM 过滤
+- `apps/web/app/[networkPath]/members/page.tsx` — 实时状态、UI 修复
+- `apps/web/lib/schema.ts` — AgentCategory 类型更新
+
+**功能点：**
+- **Agent 去重：** `findByDeviceAndName(deviceId, name)` 按设备+名称查找，`register` 和 `device:register-agents` 两条路径不再创建重复条目
+- **Scan-prefix 回退：** `resolveScanId()` 解析 `scan-{deviceId}-{name}` 格式 ID，`membersOf()` 用它回退查找 channel_members 中的旧 ID
+- **@mention 正则修复：** `\w*` → `[\w-]*`，Agent 名含连字符时完整匹配
+- **DM 私聊过滤：** DM 频道 @mention 下拉仅显示目标成员
+- **成员页实时状态：** 订阅 `agent:status` 事件，Agent 状态变更即时反映
+- **成员页 UI 修复：** 去掉"2网"badge、详情页显示"适配器"而非硬编码版本号
+- **Scanner PATH 扩展：** `getAllNodeVersions()` 扫描 `~/.nvm/versions/node/` 所有版本目录
+- **周期重扫：** Daemon 每 5 分钟触发 `scanAndRegister()`，服务端标记消失 Agent 为离线
+- **standalone-cli 移除：** 类型定义、UI、服务端、Daemon 全面删除
+- **apps/agent → apps/daemon：** 目录重命名，CI/CD、引用路径全部更新
+
+### Phase 3.6: CI/CD + 部署 (2026-05-12)
+
+**关键文件：**
+- `.github/workflows/ci-cd.yml` — CI/CD 流水线（matrix: server, web, daemon）
+- `apps/daemon/package.json` — npm 发布配置 `@agentbean/daemon`
+- `CI_CD.md` — 部署文档
+- `.nvmrc` — Node 22 版本锁定
+
+**功能点：**
+- GitHub Actions CI：lint + build + test（server/web/daemon 矩阵）
+- npm publish 步骤：main 分支推送时自动发布 `@agentbean/daemon`
+- Vercel 自动部署 Web（Git integration）
+- Railway 自动部署 Server
+- `.nvmrc` 锁定 Node 22
 
 ---
 
 ## 待实现功能
 
 ### Phase 3: 自定义 Agent + 独立 Agent (优先级：高) — ✅ 已完成 2026-05-10
+### Phase 3.5: Agent 稳定性修复 — ✅ 已完成 2026-05-12
+### Phase 3.6: CI/CD + 部署 — ✅ 已完成 2026-05-12
 
 **涉及文件：**
 - `apps/web/app/[networkPath]/agents/` — 新建"创建自定义 Agent"表单
@@ -196,13 +241,13 @@ Phase 3 已完成。下一步待确认。
 | `apps/server/src/index.ts` | Server 主入口 + Socket.IO 事件 | 0, 1, 2, 3 |
 | `apps/server/src/db.ts` | 全局数据库 schema + DAO | 0, 1, 2, 3 |
 | `apps/server/src/storage.ts` | per-network SQLite 管理 | 1 |
-| `apps/server/src/registry.ts` | Agent 注册中心 | 0, 1, 2 |
+| `apps/server/src/registry.ts` | Agent 注册中心 | 0, 1, 2, 3.5 |
 | `apps/server/src/channels.ts` | 频道服务 | 0, 2 |
 | `apps/server/src/routing.ts` | 消息路由 | 0 |
 | `apps/server/src/auth.ts` | 用户认证 | 1 |
 | `apps/server/src/password.ts` | 密码加密 | 1 |
 | `apps/server/src/invite.ts` | 邀请码 | 1 |
-| `apps/server/src/namespaces/agent.ts` | /agent namespace | 0, 1, 3 |
+| `apps/server/src/namespaces/agent.ts` | /agent namespace | 0, 1, 3, 3.5 |
 | `apps/server/src/device-registry.ts` | 设备注册 | 1 |
 | `apps/server/src/invite.ts` | 邀请码管理 | 1, 3 |
 | `apps/server/src/password.ts` | 密码加密 (bcrypt) | 1, 3 |
@@ -212,7 +257,8 @@ Phase 3 已完成。下一步待确认。
 | `apps/server/src/connect-command.ts` | CLI 连接命令渲染 | 0 |
 | `apps/server/src/heartbeat-scanner.ts` | 心跳超时扫描 | 0 |
 | `apps/daemon/src/index.ts` | Daemon 主入口 | 0 |
-| `apps/daemon/src/scanner.ts` | 三层 Agent 扫描 | 1 |
+| `apps/daemon/src/scanner.ts` | 三层 Agent 扫描 + PATH 扩展 | 1, 3.5 |
+| `apps/daemon/src/device-daemon.ts` | 设备 Daemon + 周期重扫 | 0, 3.5 |
 | `apps/daemon/src/adapters/codex.ts` | Codex 适配器 | 0 |
 | `apps/daemon/src/adapters/claude-code.ts` | Claude Code 适配器 | 0 |
 | `apps/daemon/src/adapters/openclaw.ts` | OpenClaw 适配器 | 0 |
@@ -222,9 +268,9 @@ Phase 3 已完成。下一步待确认。
 | `apps/web/lib/schema.ts` | TypeScript 类型定义 | 0, 1, 2 |
 | `apps/web/lib/store.ts` | Zustand 状态管理 | 0, 1, 2 |
 | `apps/web/lib/socket.ts` | Socket.IO 客户端 | 0, 2 |
-| `apps/web/app/[networkPath]/chat/page.tsx` | 频道聊天页 | 0, 2 |
+| `apps/web/app/[networkPath]/chat/page.tsx` | 频道聊天页 | 0, 2, 3.5 |
 | `apps/web/app/[networkPath]/agents/[agentId]/page.tsx` | Agent 详情页 | 1, 2 |
-| `apps/web/app/[networkPath]/members/page.tsx` | 网络成员页 | 2 |
+| `apps/web/app/[networkPath]/members/page.tsx` | 网络成员页 | 2, 3.5 |
 | `apps/web/app/[networkPath]/devices/page.tsx` | 设备管理页 | 1 |
 | `apps/web/app/[networkPath]/tasks/page.tsx` | 任务看板 | 0（Mock） |
 | `apps/web/components/new-channel-dialog.tsx` | 新建频道对话框 | 2 |
