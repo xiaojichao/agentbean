@@ -75,15 +75,20 @@ export default function AdminDashboardPage() {
 
   if (!currentUser || currentUser.role !== 'admin') {
     return (
-      <div className="p-6">
-        <ConnectionBanner />
-        <div className="text-sm text-red-600">仅管理员可访问此页面。</div>
+      <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex h-14 items-center border-b border-neutral-200 px-4 text-sm font-semibold">仪表盘</div>
+        <div className="flex-1 overflow-y-auto p-6">
+          <ConnectionBanner />
+          <div className="text-sm text-red-600">仅管理员可访问此页面。</div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="p-6">
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex h-14 items-center border-b border-neutral-200 px-4 text-sm font-semibold">管理仪表盘</div>
+      <div className="flex-1 overflow-y-auto p-6">
       <ConnectionBanner />
 
       <div className="mb-6 flex items-center justify-between">
@@ -111,6 +116,7 @@ export default function AdminDashboardPage() {
       {!loading && tab === 'users' && <UsersTable users={users} onDelete={(id) => handleDelete('user', id)} />}
       {!loading && tab === 'devices' && <DevicesTable devices={devices} />}
       {!loading && tab === 'agents' && <AgentsTable agents={agents} onDelete={(id) => handleDelete('agent', id)} />}
+      </div>
     </div>
   );
 }

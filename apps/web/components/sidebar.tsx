@@ -62,7 +62,7 @@ export function Sidebar() {
   return (
     <aside className="flex w-52 shrink-0 flex-col border-r border-neutral-200 bg-neutral-50">
       {/* Brand */}
-      <div className="flex items-center gap-2.5 px-4 py-4">
+      <div className="flex h-14 items-center gap-2.5 border-b border-neutral-200 px-4">
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-neutral-900 text-white">
           <Bot size={16} />
         </div>
@@ -70,10 +70,10 @@ export function Sidebar() {
       </div>
 
       {/* Network Switcher + Add */}
-      <div className="border-t border-neutral-200 px-3 py-2 flex items-center gap-1.5">
+      <div className="px-3 py-2 flex items-center gap-1.5">
         <div className="relative flex-1 min-w-0">
           <button
-            onClick={(e) => { e.stopPropagation(); setShowNetworks((v) => !v); }}
+            onClick={() => { setShowNetworks((v) => !v); }}
             className="flex w-full items-center justify-between gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 py-1.5 text-xs hover:bg-neutral-50 transition-colors"
           >
             <span className="truncate font-medium">{currentNetwork?.name ?? currentNetworkId}</span>

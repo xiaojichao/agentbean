@@ -160,6 +160,15 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
   const socketNetworkMap = new Map<string, string>();
 
+  function emitChannelsSnapshotForNetwork(networkId: string): void {
+    for (const s of io.of('/web').sockets.values()) {
+      if ((socketNetworkMap.get(s.id) ?? defaultNetworkId) !== networkId) continue;
+      const userId = s.data.userId as string | undefined;
+      const list = userId ? channels.listForUser(networkId, userId) : channels.list(networkId);
+      s.emit('channels:snapshot', list);
+    }
+  }
+
   const webToken = process.env.AGENT_BEAN_WEB_TOKEN ?? token;
   io.of('/web').use((socket, next) => {
     const clientToken = socket.handshake.auth.token ?? socket.handshake.query.token;
@@ -589,7 +598,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           createdBy: userId,
         });
         ack?.({ ok: true, channel: ch });
-        io.of('/web').emit('channels:snapshot', channels.list(networkId)); // broadcast full list, client filters
+        emitChannelsSnapshotForNetwork(networkId);
         const members = channels.membersOf(networkId, ch.id);
         const sp = storageManager.getSpace(networkId);
         const persist = makePersistMessage(sp, networkId);
@@ -733,9 +742,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
         channels.update(networkId, payload.channelId, { name: payload.name, visibility: payload.visibility });
         ack?.({ ok: true });
-        const userId = socket.data.userId as string | undefined;
-        const list = userId ? channels.listForUser(networkId, userId) : channels.list(networkId);
-        io.of('/web').emit('channels:snapshot', list);
+        emitChannelsSnapshotForNetwork(networkId);
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }

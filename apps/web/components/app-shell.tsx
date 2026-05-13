@@ -70,11 +70,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (authToken && networked) {
     return (
-      <div className="flex min-h-screen">
+      <div className="flex h-screen overflow-hidden">
         <Sidebar />
-        <main className="flex-1 flex flex-col">
+        <main className="flex-1 flex flex-col overflow-hidden">
           <ConnectionBanner />
-          <div className="flex-1 p-6">{children}</div>
+          <div className="flex-1 flex flex-col overflow-hidden">{children}</div>
         </main>
       </div>
     );

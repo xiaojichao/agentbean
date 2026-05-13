@@ -21,11 +21,11 @@ export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>('account');
 
   return (
-    <div className="-m-6 flex h-[calc(100vh-40px)]">
+    <div className="flex flex-1 overflow-hidden">
       {/* Left tab nav — beige background */}
-      <div className="flex w-52 shrink-0 flex-col border-r border-neutral-200 bg-[#FFF8E7] p-4">
-        <div className="mb-6 text-lg font-semibold">设置</div>
-        <nav className="space-y-0.5">
+      <div className="flex w-52 shrink-0 flex-col border-r border-neutral-200 bg-[#FFF8E7]">
+        <div className="flex h-14 items-center border-b border-neutral-200 px-4 text-sm font-semibold">设置</div>
+        <nav className="flex-1 overflow-y-auto p-2 space-y-0.5">
           {TABS.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)} className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm ${tab === t.id ? 'bg-pink-100 font-medium text-pink-800' : 'text-neutral-600 hover:bg-white/50'}`}>
               {t.icon}
@@ -36,12 +36,15 @@ export default function SettingsPage() {
       </div>
 
       {/* Right content */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex flex-1 flex-col">
+        <div className="flex h-14 items-center border-b border-neutral-200 px-4 text-sm font-semibold">{TABS.find((t) => t.id === tab)?.label ?? '设置'}</div>
+        <div className="flex-1 overflow-y-auto p-6">
         <ConnectionBanner />
         {tab === 'account' && <AccountPanel />}
         {tab === 'browser' && <BrowserPanel />}
         {tab === 'server' && <ServerPanel />}
         {tab === 'releases' && <ReleasesPanel />}
+        </div>
       </div>
     </div>
   );

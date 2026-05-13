@@ -79,9 +79,9 @@ export default function TasksPage() {
   };
 
   return (
-    <div className="-m-6 flex h-[calc(100vh-40px)] flex-col">
+    <div className="flex flex-1 flex-col overflow-hidden">
       {/* Top toolbar */}
-      <div className="flex items-center gap-3 border-b border-neutral-200 px-4 py-2.5">
+      <div className="flex h-14 items-center gap-3 border-b border-neutral-200 px-4">
         <div className="relative">
           <button onClick={() => setShowChannelDrop((v) => !v)} className="flex items-center gap-1.5 rounded-md border border-neutral-200 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50">
             <span>{selectedChannel ? channels.find((c) => c.id === selectedChannel)?.name ?? '频道' : '全部任务'}</span>

@@ -310,6 +310,19 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
               cwd: null, description: null,
             });
             registered.push({ id: existingRt.id, name: existingRt.name, category: existingRt.category, status: 'online' });
+
+            // Also ensure agent is in DeviceRegistry for heartbeats + dispatch
+            const dev = deps.deviceRegistry.get(a.deviceId);
+            if (dev && !dev.agents.has(existingRt.id)) {
+              dev.agents.set(existingRt.id, {
+                id: existingRt.id,
+                name: existingRt.name,
+                role: existingRt.role,
+                adapterKind: existingRt.adapterKind,
+                category: existingRt.category,
+                visibility: existingRt.visibility,
+              });
+            }
             continue;
           }
 
@@ -368,6 +381,19 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           });
           deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
           registered.push({ id: agentId, name: sanitizedName, category: ag.category, status: 'online' });
+
+          // Also add to DeviceRegistry so heartbeats + dispatch can find this agent
+          const dev = deps.deviceRegistry.get(a.deviceId);
+          if (dev) {
+            dev.agents.set(agentId, {
+              id: agentId,
+              name: sanitizedName,
+              role: '',
+              adapterKind: ag.adapterKind as AdapterKind,
+              category: (ag.category as AgentCategory) ?? 'executor-hosted',
+              visibility: 'public' as const,
+            });
+          }
         }
 
         // Mark agents missing from this scan as offline
@@ -377,6 +403,9 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             if (!scannedNames.has(rt.name.toLowerCase())) {
               const offRt = deps.registry.markOffline(rt.id, 'scan-missing');
               if (offRt) deps.io.of('/web').emit('agent:status', snapshotToDto(offRt));
+              // Remove from DeviceRegistry agents map too
+              const dev = deps.deviceRegistry.get(a.deviceId);
+              if (dev) dev.agents.delete(rt.id);
             }
           }
         }

@@ -32,7 +32,9 @@ export default function AgentsPage() {
   };
 
   return (
-    <div className="p-6">
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex h-14 items-center border-b border-neutral-200 px-4 text-sm font-semibold">Agent</div>
+      <div className="flex-1 overflow-y-auto p-6">
       <ConnectionBanner />
 
       <div className="mb-6 rounded-lg border border-neutral-200 bg-neutral-50 p-4">
@@ -72,6 +74,7 @@ export default function AgentsPage() {
           ))}
         </div>
       )}
+      </div>
     </div>
   );
 }

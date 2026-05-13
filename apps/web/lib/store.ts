@@ -65,7 +65,10 @@ export const useAgentBeanStore = create<State>((set) => ({
     set({ agents: map });
   },
   applyAgentStatus(snap) {
-    set((s) => ({ agents: { ...s.agents, [snap.id]: snap } }));
+    set((s) => {
+      if (!(snap.id in s.agents)) return s;
+      return { agents: { ...s.agents, [snap.id]: snap } };
+    });
   },
   addAgent(agent) {
     set((s) => ({ agents: { ...s.agents, [agent.id]: agent } }));

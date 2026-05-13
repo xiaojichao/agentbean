@@ -20,7 +20,8 @@ export class ChannelService {
     const now = Date.now();
     const db = this.deps.storageManager.getSpace(networkId).db;
 
-    const name = input.name.trim() || this.nextDefaultName(networkId);
+    const name = this.normalizeChannelName(input.name) || this.nextDefaultName(networkId);
+    this.assertNameAvailable(networkId, name);
     const id = newId();
     const visibility = input.visibility ?? 'public';
     const createdBy = input.createdBy ?? null;
@@ -105,7 +106,10 @@ export class ChannelService {
   update(networkId: string, channelId: string, input: { name?: string; visibility?: 'public' | 'private' }): void {
     const db = this.deps.storageManager.getSpace(networkId).db;
     if (input.name !== undefined) {
-      db.prepare('UPDATE channels SET name = ? WHERE id = ?').run(input.name.trim(), channelId);
+      const name = this.normalizeChannelName(input.name);
+      if (!name) throw new Error('EMPTY_NAME');
+      this.assertNameAvailable(networkId, name, channelId);
+      db.prepare('UPDATE channels SET name = ? WHERE id = ?').run(name, channelId);
     }
     if (input.visibility !== undefined) {
       db.prepare('UPDATE channels SET visibility = ? WHERE id = ?').run(input.visibility, channelId);
@@ -163,7 +167,33 @@ export class ChannelService {
   }
 
   private nextDefaultName(networkId: string): string {
-    const count = this.list(networkId).length;
-    return `频道 ${count + 1}`;
+    const db = this.deps.storageManager.getSpace(networkId).db;
+    let index = this.list(networkId).length + 1;
+    while (true) {
+      const candidate = `频道 ${index}`;
+      const existing = db.prepare(`
+        SELECT id FROM channels
+        WHERE COALESCE(is_dm, 0) = 0 AND lower(name) = lower(?)
+        LIMIT 1
+      `).get(candidate);
+      if (!existing) return candidate;
+      index += 1;
+    }
+  }
+
+  private normalizeChannelName(name: string): string {
+    return name.trim().replace(/\s+/g, ' ');
+  }
+
+  private assertNameAvailable(networkId: string, name: string, exceptId?: string): void {
+    const db = this.deps.storageManager.getSpace(networkId).db;
+    const existing = db.prepare(`
+      SELECT id FROM channels
+      WHERE COALESCE(is_dm, 0) = 0
+        AND lower(name) = lower(?)
+        AND (? IS NULL OR id != ?)
+      LIMIT 1
+    `).get(name, exceptId ?? null, exceptId ?? null) as { id: string } | undefined;
+    if (existing) throw new Error('CHANNEL_NAME_EXISTS');
   }
 }

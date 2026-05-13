@@ -44,6 +44,31 @@ describe('ChannelService', () => {
     expect(c2.name).toBe('频道 2');
   });
 
+  it('rejects duplicate channel names in the same network', () => {
+    svc.create('test-net', { name: 'general', agentIds: ['a1'] });
+
+    expect(() => svc.create('test-net', { name: ' general ', agentIds: ['a2'] }))
+      .toThrow(/CHANNEL_NAME_EXISTS/);
+  });
+
+  it('allows the same channel name in different networks', () => {
+    storage.createSpace('other-net');
+
+    const first = svc.create('test-net', { name: 'general', agentIds: ['a1'] });
+    const second = svc.create('other-net', { name: 'general', agentIds: ['a2'] });
+
+    expect(first.name).toBe(second.name);
+    expect(first.id).not.toBe(second.id);
+  });
+
+  it('rejects renaming a channel to an existing channel name', () => {
+    svc.create('test-net', { name: 'general', agentIds: ['a1'] });
+    const random = svc.create('test-net', { name: 'random', agentIds: ['a2'] });
+
+    expect(() => svc.update('test-net', random.id, { name: 'GENERAL' }))
+      .toThrow(/CHANNEL_NAME_EXISTS/);
+  });
+
   it('list returns channels in created order', () => {
     const a = svc.create('test-net', { name: 'foo', agentIds: ['a1'] });
     const b = svc.create('test-net', { name: 'bar', agentIds: ['a1'] });

@@ -109,6 +109,58 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_channel ON tasks(channel_id);
 `;
 
+function migrateChannelUniqueness(db: Database.Database): void {
+  const rows = db.prepare(`
+    SELECT id, name, created_at AS createdAt
+    FROM channels
+    WHERE COALESCE(is_dm, 0) = 0
+    ORDER BY lower(trim(name)), created_at, id
+  `).all() as Array<{ id: string; name: string; createdAt: number }>;
+
+  const canonicalByName = new Map<string, string>();
+  const mergeMember = db.prepare(`
+    INSERT OR IGNORE INTO channel_members (channel_id, agent_id, joined_at)
+    SELECT ?, agent_id, joined_at FROM channel_members WHERE channel_id = ?
+  `);
+  const mergeUserMember = db.prepare(`
+    INSERT OR IGNORE INTO channel_user_members (channel_id, user_id, joined_at)
+    SELECT ?, user_id, joined_at FROM channel_user_members WHERE channel_id = ?
+  `);
+  const moveMessages = db.prepare(`UPDATE messages SET channel_id = ? WHERE channel_id = ?`);
+  const moveTasks = db.prepare(`UPDATE tasks SET channel_id = ? WHERE channel_id = ?`);
+  const deleteMembers = db.prepare(`DELETE FROM channel_members WHERE channel_id = ?`);
+  const deleteUserMembers = db.prepare(`DELETE FROM channel_user_members WHERE channel_id = ?`);
+  const deleteChannel = db.prepare(`DELETE FROM channels WHERE id = ?`);
+  const trimChannelName = db.prepare(`UPDATE channels SET name = trim(name) WHERE id = ?`);
+
+  const mergeDuplicate = db.transaction((keepId: string, duplicateId: string) => {
+    mergeMember.run(keepId, duplicateId);
+    mergeUserMember.run(keepId, duplicateId);
+    moveMessages.run(keepId, duplicateId);
+    moveTasks.run(keepId, duplicateId);
+    deleteMembers.run(duplicateId);
+    deleteUserMembers.run(duplicateId);
+    deleteChannel.run(duplicateId);
+  });
+
+  for (const row of rows) {
+    const key = row.name.trim().toLowerCase();
+    const existing = canonicalByName.get(key);
+    if (!existing) {
+      canonicalByName.set(key, row.id);
+      trimChannelName.run(row.id);
+      continue;
+    }
+    mergeDuplicate(existing, row.id);
+  }
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_regular_name_unique
+    ON channels (lower(name))
+    WHERE COALESCE(is_dm, 0) = 0
+  `);
+}
+
 function rowToMessage(r: any): MessageRow {
   return {
     id: r.id, channelId: r.channel_id, senderKind: r.sender_kind,
@@ -291,6 +343,7 @@ export class StorageManager {
     try { db.exec(`ALTER TABLE channels ADD COLUMN created_by TEXT`); } catch {}
     try { db.exec(`ALTER TABLE channels ADD COLUMN is_dm INTEGER NOT NULL DEFAULT 0`); } catch {}
     try { db.exec(`ALTER TABLE channels ADD COLUMN dm_target_id TEXT`); } catch {}
+    migrateChannelUniqueness(db);
 
     const dao = createDao(db);
     const space: StorageSpace = { networkId, db, dbPath, artifactDir, ...dao };
@@ -317,6 +370,7 @@ export class StorageManager {
     try { db.exec(`ALTER TABLE channels ADD COLUMN created_by TEXT`); } catch {}
     try { db.exec(`ALTER TABLE channels ADD COLUMN is_dm INTEGER NOT NULL DEFAULT 0`); } catch {}
     try { db.exec(`ALTER TABLE channels ADD COLUMN dm_target_id TEXT`); } catch {}
+    migrateChannelUniqueness(db);
     const dao = createDao(db);
     const space: StorageSpace = { networkId, db, dbPath, artifactDir, ...dao };
     this.spaces.set(networkId, space);

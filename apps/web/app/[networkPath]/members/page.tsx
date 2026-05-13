@@ -63,10 +63,10 @@ export default function MembersPage() {
   const selectedHuman = selectedId?.startsWith('user:') ? humanMembers.find((h) => `user:${h.userId}` === selectedId) : undefined;
 
   return (
-    <div className="-m-6 flex h-[calc(100vh-40px)]">
+    <div className="flex flex-1 overflow-hidden">
       {/* Left sidebar */}
       <div className="flex w-60 shrink-0 flex-col border-r border-neutral-200 bg-neutral-50">
-        <div className="border-b border-neutral-200 px-4 py-3">
+        <div className="flex h-14 items-center border-b border-neutral-200 px-4">
           <h2 className="text-sm font-semibold">成员</h2>
         </div>
 
@@ -122,9 +122,9 @@ export default function MembersPage() {
       {/* Right panel */}
       <div className="flex flex-1 flex-col">
         {/* Tab bar */}
-        <div className="flex border-b border-neutral-200">
+        <div className="flex h-14 items-center border-b border-neutral-200">
           {TABS.map((t) => (
-            <button key={t.id} onClick={() => setTab(t.id)} className={`border-b-2 px-4 py-2.5 text-xs font-medium tracking-wide ${tab === t.id ? 'border-amber-400 text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}>
+            <button key={t.id} onClick={() => setTab(t.id)} className={`border-b-2 px-4 text-xs font-medium tracking-wide ${tab === t.id ? 'border-amber-400 text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}>
               {t.label}
             </button>
           ))}
@@ -166,9 +166,9 @@ function AgentProfile({ agent, device }: { agent: AgentSnapshot; device?: { host
     setDmLoading(true);
     const res = await dmEvents().start(agent.id);
     setDmLoading(false);
-    if (res.ok) {
-      // Navigate to chat - use router
-      window.location.href = window.location.pathname.replace('/members', '/chat');
+    if (res.ok && res.dm?.id) {
+      const chatBase = window.location.pathname.replace(/\/members.*$/, '/chat');
+      window.location.href = `${chatBase}?dm=${res.dm.id}`;
     }
   };
 
@@ -189,7 +189,7 @@ function AgentProfile({ agent, device }: { agent: AgentSnapshot; device?: { host
           <div className="mt-0.5 text-sm text-neutral-500">@{agent.name}</div>
         </div>
         <button onClick={startDm} disabled={dmLoading} className="ml-auto flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-800 disabled:opacity-50">
-          <MessageSquare size={12} /> 发起私信
+          <MessageSquare size={12} /> 私聊
         </button>
       </div>
 

@@ -45,8 +45,9 @@ export default function NetworksPage() {
   };
 
   return (
-    <div>
-      <h1 className="text-xl font-semibold mb-4">网络管理</h1>
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex h-14 items-center border-b border-neutral-200 px-4 text-sm font-semibold">网络管理</div>
+      <div className="flex-1 overflow-y-auto p-6">
 
       <form onSubmit={handleCreate} className="rounded border border-neutral-200 p-4 mb-6">
         <div className="text-sm font-medium mb-2">创建新网络</div>
@@ -109,6 +110,7 @@ export default function NetworksPage() {
           ))}
         </ul>
       )}
+      </div>
     </div>
   );
 }

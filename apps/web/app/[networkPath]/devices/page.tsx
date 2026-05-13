@@ -44,11 +44,10 @@ export default function DevicesPage() {
   const selectedDevice = deviceList.find((d) => d.id === selectedId) ?? null;
 
   return (
-    <div className="-m-6 flex h-[calc(100vh-40px)]">
+    <div className="flex flex-1 overflow-hidden">
       {/* Left — device list */}
       <div className="flex w-60 shrink-0 flex-col border-r border-neutral-200 bg-neutral-50">
-        <div className="border-b border-neutral-200 px-4 py-3">
-          <div className="flex items-center justify-between">
+        <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
             <div className="flex items-center gap-1">
               <span className="text-xs font-semibold uppercase tracking-wider text-neutral-500">设备</span>
               <span className="text-xs text-neutral-400">{deviceList.length}</span>
@@ -57,7 +56,6 @@ export default function DevicesPage() {
               <Plus size={16} />
             </button>
           </div>
-        </div>
         <div className="flex-1 overflow-y-auto p-1.5">
           {deviceList.map((device) => (
             <button key={device.id} onClick={() => { setSelectedId(device.id); setEditName(false); setShowDeleteConfirm(false); }} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left ${selectedId === device.id ? 'bg-white shadow-sm ring-1 ring-neutral-200' : 'hover:bg-white/60'}`}>
@@ -81,7 +79,9 @@ export default function DevicesPage() {
       </div>
 
       {/* Right — detail / empty state */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex flex-1 flex-col">
+        <div className="flex h-14 items-center border-b border-neutral-200 px-4 text-sm font-semibold">{selectedDevice ? (selectedDevice.hostname ?? selectedDevice.id) : '设备详情'}</div>
+        <div className="flex-1 overflow-y-auto">
         {!selectedDevice && <EmptyState />}
         {selectedDevice && (
           <DeviceDetail
@@ -95,6 +95,7 @@ export default function DevicesPage() {
             currentNetworkId={currentNetworkId}
           />
         )}
+        </div>
       </div>
 
       {/* Add Device Dialog */}

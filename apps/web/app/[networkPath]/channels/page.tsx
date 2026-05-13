@@ -38,14 +38,15 @@ export default function ChannelsPage() {
   }, [setConn, applyAgentsSnapshot, applyAgentStatus, applyChannelsSnapshot]);
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold">频道</h1>
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
+        <span className="text-sm font-semibold">频道</span>
         <button
           onClick={() => setOpen(true)}
           className="rounded bg-neutral-900 text-white text-sm px-3 py-1.5"
         >新建频道</button>
       </div>
+      <div className="flex-1 overflow-y-auto p-6">
       {channels.length === 0 ? (
         <div className="rounded-lg border border-dashed border-neutral-300 p-10 text-center text-neutral-500">
           还没有频道。点击「新建频道」开始。
@@ -62,6 +63,7 @@ export default function ChannelsPage() {
           ))}
         </ul>
       )}
+      </div>
       {open && <NewChannelDialog onClose={() => setOpen(false)} />}
     </div>
   );
