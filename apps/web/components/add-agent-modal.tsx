@@ -29,8 +29,8 @@ const CATEGORY_ADAPTER_DEFAULT: Partial<Record<AgentCategory, AdapterKind>> = {
 };
 
 const CATEGORY_OPTIONS: { value: AgentCategory; label: string }[] = [
-  { value: 'executor-hosted', label: '执行器托管' },
-  { value: 'agentos-hosted', label: 'AgentOS 托管' },
+  { value: 'executor-hosted', label: '自定义 Agent' },
+  { value: 'agentos-hosted', label: 'AgentOS 托管型 Agent' },
 ];
 
 export function AddAgentModal({ open, onClose }: Props) {

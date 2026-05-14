@@ -127,6 +127,7 @@ export interface DeviceInfo {
   lastSeenAt: number;
   status: AgentStatus;
   agentIds: string[];
+  runtimes?: RuntimeInfo[];
   connectCommand?: string | null;
   systemInfo?: {
     platform?: string;

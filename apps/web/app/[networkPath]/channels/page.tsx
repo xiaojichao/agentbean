@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getWebSocket, agentEvents } from '@/lib/socket';
-import { useAgentBeanStore } from '@/lib/store';
+import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 
 export default function ChannelsPage() {
@@ -11,6 +11,7 @@ export default function ChannelsPage() {
   const applyAgentStatus = useAgentBeanStore((s) => s.applyAgentStatus);
   const applyChannelsSnapshot = useAgentBeanStore((s) => s.applyChannelsSnapshot);
   const setConn = useAgentBeanStore((s) => s.setConn);
+  const np = useCurrentNetworkPath();
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -56,7 +57,7 @@ export default function ChannelsPage() {
           {channels.map((c) => (
             <li key={c.id}>
               <Link
-                href={`/channels/${c.id}`}
+                href={`/${np}/channel/${c.id}`}
                 className="block px-3 py-2 rounded border border-neutral-200 hover:bg-neutral-50"
               >{c.name}</Link>
             </li>

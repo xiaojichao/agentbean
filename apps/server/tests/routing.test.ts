@@ -29,6 +29,17 @@ describe('routeHumanMessage', () => {
     expect(result.reason).toBe('MENTION');
   });
 
+  it('routes mentioned global online candidate even when channel has no online members', () => {
+    const hermes = make('h', 'Hermes-Agent');
+    const result = routeHumanMessage({
+      body: '@Hermes-Agent 你好',
+      members: [],
+      candidates: [hermes],
+    });
+    expect(result.targets.map((m) => m.id)).toEqual(['h']);
+    expect(result.reason).toBe('MENTION');
+  });
+
   it('falls back to first online member when no mention', () => {
     const a = make('a', '肖');
     const b = make('b', 'Codex');

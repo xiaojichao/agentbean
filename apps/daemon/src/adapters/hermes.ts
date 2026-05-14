@@ -8,6 +8,24 @@ export interface HermesAdapterOpts {
   systemPrompt?: string;
 }
 
+function runtimeArgs(args: string[] = []): string[] {
+  if (args[0] === 'gateway' && args[1] === 'run') {
+    return args.slice(2);
+  }
+  return args;
+}
+
+function buildArgs(baseArgs: string[], prompt: string): string[] {
+  // If user already configured args with chat -q, just append the prompt
+  // Otherwise default to: hermes chat -q "<prompt>"
+  const hasChat = baseArgs.includes('chat');
+  const hasQ = baseArgs.includes('-q');
+  if (hasChat && hasQ) {
+    return [...baseArgs, prompt];
+  }
+  return [...baseArgs, 'chat', '-q', prompt];
+}
+
 function buildPrompt(input: AskInput, systemPrompt?: string): string {
   const parts: string[] = [];
   if (systemPrompt) parts.push(systemPrompt);
@@ -26,7 +44,7 @@ export class HermesAdapter implements CliAdapter {
     return new Promise<string>((resolve, reject) => {
       const prompt = buildPrompt(input, this.opts.systemPrompt ?? input.systemPrompt);
       const cwd = input.workspace ?? this.opts.cwd ?? process.cwd();
-      const child = spawn(this.opts.command, ['-z', prompt, ...(this.opts.args ?? [])], {
+      const child = spawn(this.opts.command, buildArgs(runtimeArgs(this.opts.args), prompt), {
         cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -66,10 +84,17 @@ export class HermesAdapter implements CliAdapter {
         if (signal.aborted) return reject(new Error('aborted'));
         const out = Buffer.concat(stdoutChunks).toString('utf8');
         const err = Buffer.concat(stderrChunks).toString('utf8');
-        if (code !== 0 && out.length === 0) {
-          return reject(new Error(`hermes exit ${code}: ${err.slice(0, 400)}`));
+        const stdout = out.trim();
+        const stderr = err.trim();
+        if (code !== 0 && stdout.length === 0) {
+          const detail = stderr.length > 0 ? stderr.slice(0, 400) : 'no stderr';
+          return reject(new Error(`hermes exit ${code}: ${detail}`));
         }
-        resolve(out.trim() || err.trim());
+        const reply = stdout || stderr;
+        if (!reply) {
+          return reject(new Error('hermes produced empty output'));
+        }
+        resolve(reply);
       });
     });
   }

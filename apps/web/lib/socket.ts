@@ -212,10 +212,17 @@ export interface DeviceAgent {
   publishedNetworkIds: string[];
 }
 
+export interface DeviceRuntime {
+  name: string;
+  adapterKind: string;
+  command: string;
+  installed: boolean;
+}
+
 export interface DeviceEvents {
   list(): Promise<{ ok: boolean; devices?: DeviceInfo[]; error?: string }>;
   get(payload: { id: string }): Promise<{ ok: boolean; device?: any; error?: string }>;
-  agentsList(deviceId: string): Promise<{ ok: boolean; agents?: DeviceAgent[]; error?: string }>;
+  agentsList(deviceId: string): Promise<{ ok: boolean; agents?: DeviceAgent[]; runtimes?: DeviceRuntime[]; error?: string }>;
   scan(deviceId: string): Promise<{ ok: boolean; error?: string }>;
   delete(id: string): Promise<{ ok: boolean; error?: string }>;
   rename(id: string, hostname: string): Promise<{ ok: boolean; error?: string }>;

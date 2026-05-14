@@ -2,7 +2,7 @@ import type { Namespace, Server as IOServer } from 'socket.io';
 import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { Db, AdapterKind, AgentCategory } from '../db.js';
-import { AgentRegistry, type AgentRuntime } from '../registry.js';
+import { AgentRegistry, normalizeAgentName, type AgentRuntime } from '../registry.js';
 import { DeviceRegistry, type PublicAgentMeta } from '../device-registry.js';
 import { parseToken, verifyUserToken } from '../auth.js';
 import { renderConnectCommand } from '../connect-command.js';
@@ -71,7 +71,7 @@ export interface AgentSnapshotDto {
 export function snapshotToDto(rt: AgentRuntime): AgentSnapshotDto {
   return {
     id: rt.id,
-    name: rt.name,
+    name: normalizeAgentName(rt.name),
     role: rt.role,
     adapterKind: rt.adapterKind,
     status: rt.status,
@@ -165,7 +165,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         const publishedNetworkIds = publishes.map((p: { networkId: string }) => p.networkId);
         const rt = deps.registry.register(socket.id, {
           id: agentMeta.id,
-          name: agentMeta.name,
+          name: normalizeAgentName(agentMeta.name),
           role: agentMeta.role,
           adapterKind: agentMeta.adapterKind as AdapterKind,
           category: (agentMeta.category as AgentCategory) ?? 'executor-hosted',
@@ -227,7 +227,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         userId: userId ?? 'system',
         networkId: a.networkId,
         socket,
-        agents: new Map(a.agents.map((ag) => [ag.id, ag])),
+        agents: new Map(a.agents.map((ag) => [ag.id, { ...ag, name: normalizeAgentName(ag.name) }])),
         lastSeenAt: now,
         status: 'online',
       });
@@ -259,10 +259,11 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         const p = pending.get(payload.requestId)!;
         clearTimeout(p.timer);
         pending.delete(payload.requestId);
-        p.resolve({ ok: false, error: payload.message ?? 'unknown' });
-        deps.metricsCollector?.resolve(payload.requestId, false, payload.message ?? 'unknown');
+        const message = payload.message?.trim() || 'agent reported an error without details';
+        p.resolve({ ok: false, error: message });
+        deps.metricsCollector?.resolve(payload.requestId, false, message);
       }
-      const rt = deps.registry.markError(payload.agentId, payload?.message ?? 'unknown error');
+      const rt = deps.registry.markError(payload.agentId, payload?.message?.trim() || 'agent reported an error without details');
       if (rt) deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
     });
 
@@ -277,8 +278,11 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       try {
         const now = Date.now();
         const registered: any[] = [];
-        for (const ag of payload.agents) {
-          const sanitizedName = ag.name.trim().replace(/\s+/g, '-');
+        const agentPayload = payload.agents.filter((ag) =>
+          ag.category === 'agentos-hosted' || ag.source === 'custom'
+        );
+        for (const ag of agentPayload) {
+          const sanitizedName = normalizeAgentName(ag.name);
 
           // Check if already registered via daemon's 'register' event
           const existingRt = deps.registry.findByDeviceAndName(a.deviceId, sanitizedName);
@@ -397,9 +401,9 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         }
 
         // Mark agents missing from this scan as offline
-        const scannedNames = new Set(payload.agents.map((ag) => ag.name.trim().replace(/\s+/g, '-').toLowerCase()));
+        const scannedNames = new Set(agentPayload.map((ag) => normalizeAgentName(ag.name).toLowerCase()));
         for (const rt of deps.registry.all()) {
-          if (rt.deviceId === a.deviceId && rt.status !== 'offline') {
+          if (rt.deviceId === a.deviceId && rt.status !== 'offline' && (rt.source === 'scanned' || rt.id.startsWith(`scan-${a.deviceId}-`))) {
             if (!scannedNames.has(rt.name.toLowerCase())) {
               const offRt = deps.registry.markOffline(rt.id, 'scan-missing');
               if (offRt) deps.io.of('/web').emit('agent:status', snapshotToDto(offRt));
@@ -411,6 +415,33 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         }
 
         ack?.({ ok: true, agents: registered });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('device:register-runtimes', (payload: {
+      runtimes: { name: string; adapterKind: string; command: string; installed: boolean }[]
+    }, ack?: (r: any) => void) => {
+      try {
+        const dev = deps.deviceRegistry.get(a.deviceId);
+        if (dev) {
+          dev.runtimes = payload.runtimes.map((rt) => ({
+            ...rt,
+            name: normalizeAgentName(rt.name),
+          }));
+          dev.lastSeenAt = Date.now();
+          deps.io.of('/web').emit('device:status', {
+            id: dev.id,
+            userId: dev.userId,
+            networkId: dev.networkId,
+            agentIds: Array.from(dev.agents.keys()),
+            runtimes: dev.runtimes,
+            lastSeenAt: dev.lastSeenAt,
+            status: dev.status,
+          });
+        }
+        ack?.({ ok: true });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }

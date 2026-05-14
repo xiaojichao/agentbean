@@ -3,52 +3,13 @@ import { loadConfig, loadDeviceConfig } from './config.js';
 import { createConnection } from './connection.js';
 import { createDeviceDaemon } from './device-daemon.js';
 import { AgentInstance } from './agent-instance.js';
-import { CodexAdapter } from './adapters/codex.js';
-import { ClaudeCodeAdapter } from './adapters/claude-code.js';
-import { OpenClawAdapter } from './adapters/openclaw.js';
-import { HermesAdapter } from './adapters/hermes.js';
-import type { CliAdapter } from './adapters/adapter.js';
+import { pickAdapter } from './adapters/factory.js';
 import type { AgentConfigEntry, DeviceConfig } from './config.js';
 import { logger } from './log.js';
 import { scanRuntimes, scanAgentOSAgents, scanLocalAgents, getDeviceId } from './scanner.js';
 import { loadAuth, saveAuth } from './auth-store.js';
 
-function pickAdapter(cfg: AgentConfigEntry['adapter']): CliAdapter {
-  switch (cfg.kind) {
-    case 'codex':
-      return new CodexAdapter({
-        command: cfg.command,
-        args: cfg.args,
-        cwd: cfg.cwd,
-        systemPrompt: cfg.systemPrompt,
-      });
-    case 'claude-code':
-      return new ClaudeCodeAdapter({
-        command: cfg.command,
-        args: cfg.args,
-        cwd: cfg.cwd,
-        systemPrompt: cfg.systemPrompt,
-      });
-    case 'openclaw':
-      return new OpenClawAdapter({
-        command: cfg.command,
-        args: cfg.args,
-        cwd: cfg.cwd,
-        systemPrompt: cfg.systemPrompt,
-      });
-    case 'hermes':
-      return new HermesAdapter({
-        command: cfg.command,
-        args: cfg.args,
-        cwd: cfg.cwd,
-        systemPrompt: cfg.systemPrompt,
-      });
-    default:
-      throw new Error(`adapter '${(cfg as any).kind}' not yet implemented`);
-  }
-}
-
-async function discoverAgents(): Promise<AgentConfigEntry[]> {
+async function discoverAgents(deviceId?: string): Promise<AgentConfigEntry[]> {
   const [_runtimes, agentos, local] = await Promise.all([
     scanRuntimes(),
     scanAgentOSAgents(),
@@ -62,9 +23,8 @@ async function discoverAgents(): Promise<AgentConfigEntry[]> {
     if (seen.has(s.command)) continue;
     seen.add(s.command);
 
-    const id = s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     results.push({
-      id,
+      id: s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
       name: s.name,
       role: s.category === 'executor-hosted' ? 'executor-agent' : 'gateway-agent',
       category: s.category,
@@ -111,10 +71,6 @@ async function runDeviceMode(cfgPath: string) {
   } catch (err: any) {
     const shouldScan = err.message?.includes('agents array is required');
     if (!shouldScan) throw err;
-    scannedEntries = await discoverAgents();
-    if (scannedEntries.length === 0) {
-      throw new Error('device config missing and no agents discovered via scanning');
-    }
     let fileSettings: Partial<DeviceConfig> = {};
     try {
       const { readFileSync } = await import('node:fs');
@@ -127,8 +83,13 @@ async function runDeviceMode(cfgPath: string) {
         heartbeatIntervalMs: raw.heartbeatIntervalMs,
       };
     } catch { /* ignore */ }
+    const deviceId = fileSettings.deviceId ?? process.env.DEVICE_ID ?? await getDeviceId();
+    scannedEntries = await discoverAgents(deviceId);
+    if (scannedEntries.length === 0) {
+      throw new Error('device config missing and no agents discovered via scanning');
+    }
     cfg = {
-      deviceId: fileSettings.deviceId ?? process.env.DEVICE_ID ?? await getDeviceId(),
+      deviceId,
       networkId: fileSettings.networkId ?? process.env.NETWORK_ID ?? 'default',
       server: fileSettings.server ?? {
         url: process.env.SERVER_URL ?? 'http://localhost:3000/agent',
@@ -140,7 +101,7 @@ async function runDeviceMode(cfgPath: string) {
   }
 
   if ((cfg as any).scan === true) {
-    scannedEntries = await discoverAgents();
+    scannedEntries = await discoverAgents(cfg.deviceId);
     if (scannedEntries.length > 0) {
       cfg = { ...cfg, agents: scannedEntries };
     }
@@ -221,7 +182,7 @@ Options:
   const deviceId = values['device-id'] ?? await getDeviceId();
 
   logger.info({ serverUrl, deviceId, networkId }, 'CLI mode: auto-discovering agents');
-  const agents = await discoverAgents();
+  const agents = await discoverAgents(deviceId);
 
   if (agents.length === 0) {
     logger.warn('no agents discovered on this machine. Daemon will start with no agents.');

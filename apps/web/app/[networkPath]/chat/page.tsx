@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Inbox, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, MoreHorizontal, Copy, Trash2, Circle, FolderOpen, ChevronRight } from 'lucide-react';
 import { getWebSocket, dmEvents, channelEvents, memberEvents } from '@/lib/socket';
-import { useAgentBeanStore } from '@/lib/store';
+import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { ChatMessage } from '@/lib/schema';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 
@@ -19,10 +19,15 @@ export default function ChatPage() {
   const applyDmsSnapshot = useAgentBeanStore((s) => s.applyDmsSnapshot);
   const applyChannelHistory = useAgentBeanStore((s) => s.applyChannelHistory);
   const appendMessage = useAgentBeanStore((s) => s.appendMessage);
+  const router = useRouter();
+  const params = useParams();
+  const np = useCurrentNetworkPath();
 
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
   const searchParams = useSearchParams();
   const dmParam = searchParams.get('dm');
+  const routeChannelId = typeof params.channelId === 'string' ? params.channelId : null;
+  const routeDmId = typeof params.dmId === 'string' ? params.dmId : null;
   const [input, setInput] = useState('');
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState<'chat' | 'tasks' | 'files'>('chat');
@@ -51,6 +56,7 @@ export default function ChatPage() {
     const handler = (list: any[]) => {
       applyChannelsSnapshot(list);
       setActiveChannel((prev) => {
+        if (routeChannelId && list.some((c) => c.id === routeChannelId)) return routeChannelId;
         if (prev && list.some((c) => c.id === prev)) return prev;
         return list.length > 0 ? list[0].id : null;
       });
@@ -58,12 +64,15 @@ export default function ChatPage() {
     socket.on('channels:snapshot', handler);
     const unsubDm = dmEvents().onSnapshot((list) => {
       applyDmsSnapshot(list);
+      if (routeDmId && list.some((d) => d.id === routeDmId)) {
+        setActiveChannel(routeDmId);
+      }
       if (dmParam && list.some((d) => d.id === dmParam)) {
         setActiveChannel(dmParam);
       }
     });
     return () => { socket.off('channels:snapshot', handler); unsubDm(); };
-  }, [conn, applyChannelsSnapshot, applyDmsSnapshot]);
+  }, [conn, applyChannelsSnapshot, applyDmsSnapshot, dmParam, routeChannelId, routeDmId]);
 
   const handleMessage = useCallback((msg: ChatMessage) => {
     appendMessage(msg);
@@ -245,7 +254,7 @@ export default function ChatPage() {
           {channelsExpanded && (
             <div className="space-y-0.5">
               {filteredChannels.map((ch) => (
-                <button key={ch.id} onClick={() => { setActiveChannel(ch.id); setSidebarView('channels'); }} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${activeChannel === ch.id && sidebarView === 'channels' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
+                <button key={ch.id} onClick={() => { setActiveChannel(ch.id); setSidebarView('channels'); router.push(`/${np}/channel/${ch.id}`); }} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${activeChannel === ch.id && sidebarView === 'channels' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
                   {ch.visibility === 'private' ? <Lock size={14} className="text-neutral-400 shrink-0" /> : <Hash size={14} className="text-neutral-400 shrink-0" />}
                   <span className="truncate">{ch.name}</span>
                 </button>
@@ -268,7 +277,7 @@ export default function ChatPage() {
                 const dmAgent = agents[dm.dmTargetId];
                 const dmStatus = dmAgent?.status;
                 return (
-                  <button key={dm.id} onClick={() => { setActiveChannel(dm.id); setSidebarView('channels'); }} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${activeChannel === dm.id && sidebarView === 'channels' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
+                  <button key={dm.id} onClick={() => { setActiveChannel(dm.id); setSidebarView('channels'); router.push(`/${np}/dm/${dm.id}`); }} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${activeChannel === dm.id && sidebarView === 'channels' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
                     <MessageSquare size={14} className="text-neutral-400 shrink-0" />
                     <span className="truncate">{dm.name}</span>
                     {dmStatus && (
@@ -286,7 +295,7 @@ export default function ChatPage() {
       {/* Right panel */}
       <div className="flex flex-1 flex-col min-w-0">
         {sidebarView === 'search' ? (
-          <SearchView onClose={() => setSidebarView('channels')} onJump={(chId) => { setActiveChannel(chId); setSidebarView('channels'); }} />
+          <SearchView onClose={() => setSidebarView('channels')} onJump={(chId) => { router.push(`/${np}/channel/${chId}`); }} />
         ) : sidebarView === 'inbox' ? (
           <InboxView />
         ) : sidebarView === 'saved' ? (

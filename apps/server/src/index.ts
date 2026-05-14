@@ -251,6 +251,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           networkId: dbd.networkId,
           hostname: dbd.hostname,
           agentIds: live ? Array.from(live.agents.keys()) : [],
+          runtimes: live?.runtimes ?? [],
           lastSeenAt: live ? live.lastSeenAt : dbd.lastSeenAt,
           status: live ? live.status : 'offline',
           connectCommand: dbd.connectCommand,
@@ -293,7 +294,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             publishedNetworkIds: rt?.publishedNetworkIds ?? [],
           };
         });
-        ack?.({ ok: true, agents: result });
+        const live = deviceRegistry.get(payload.deviceId);
+        ack?.({ ok: true, agents: result, runtimes: live?.runtimes ?? [] });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }
@@ -313,6 +315,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             networkId: dbDevice.networkId,
             hostname: dbDevice.hostname,
             agentIds: live ? Array.from(live.agents.keys()) : [],
+            runtimes: live?.runtimes ?? [],
             lastSeenAt: live ? live.lastSeenAt : dbDevice.lastSeenAt,
             status: live ? live.status : 'offline',
             connectCommand: dbDevice.connectCommand,
@@ -661,8 +664,11 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       ack?.({ ok: true, id: humanMsg.id });
 
       const members = channels.membersOf(networkId, ch.id);
+      const candidates = registry.all().filter((a) =>
+        a.networkId === networkId || a.publishedNetworkIds.includes(networkId)
+      );
 
-      const route = routeHumanMessage({ body, members });
+      const route = routeHumanMessage({ body, members, candidates });
 
       if (route.reason === 'NO_ONLINE') {
         persist({
@@ -681,18 +687,19 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         prompt: body,
         requestId: reqId,
       });
-      if (reply.ok && reply.body) {
+      if (reply.ok && reply.body?.trim()) {
         const artifactIds = reply.artifactIds;
         persist({
           id: newId(), channelId: ch.id, senderKind: 'agent', senderId: recipient.id,
-          body: reply.body, createdAt: Date.now(),
+          body: reply.body.trim(), createdAt: Date.now(),
           metaJson: JSON.stringify({ inReplyTo: humanMsg.id, requestId: reqId }),
           artifactIds: artifactIds?.length ? artifactIds : undefined,
         });
       } else {
+        const error = reply.error ?? (reply.ok ? 'Agent 返回了空响应' : 'unknown');
         persist({
           id: newId(), channelId: ch.id, senderKind: 'system', senderId: null,
-          body: `${recipient.name} 处理失败: ${reply.error ?? 'unknown'}`,
+          body: `${recipient.name} 处理失败: ${error}`,
           createdAt: Date.now(), metaJson: JSON.stringify({ kind: 'reply-fail', agentId: recipient.id }),
         });
       }

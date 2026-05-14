@@ -5,6 +5,7 @@ export type RouteReason = 'MENTION' | 'FALLBACK' | 'UNKNOWN_MENTION' | 'NO_ONLIN
 export interface RouteInput {
   body: string;
   members: AgentRuntime[];
+  candidates?: AgentRuntime[];
 }
 
 export interface RouteResult {
@@ -17,7 +18,8 @@ export interface RouteResult {
  *
  * Specification (per design §8.2):
  *  - If the message starts with "@<name>" and <name> matches an online member's name
- *    (case-sensitive, trimmed), route only to that member; reason = 'MENTION'.
+ *    or an online global candidate's name (case-sensitive, trimmed), route only to that
+ *    member/candidate; reason = 'MENTION'.
  *  - If "@<name>" is present but no online member matches, fall back to the first online
  *    member; reason = 'UNKNOWN_MENTION'.
  *  - If no mention is present, route to the first online member; reason = 'FALLBACK'.
@@ -25,16 +27,23 @@ export interface RouteResult {
  */
 export function routeHumanMessage(input: RouteInput): RouteResult {
   const online = input.members.filter((m) => m.status === 'online' || m.status === 'busy');
-  if (online.length === 0) {
-    return { targets: [], reason: 'NO_ONLINE' };
-  }
-
   const m = /^\s*@(\S+)/.exec(input.body);
   if (m) {
     const name = m[1];
     const found = online.find((x) => x.name === name);
     if (found) return { targets: [found], reason: 'MENTION' };
+    const onlineCandidates = (input.candidates ?? []).filter((candidate) =>
+      candidate.status === 'online' || candidate.status === 'busy'
+    );
+    const candidate = onlineCandidates.find((x) => x.name === name);
+    if (candidate) return { targets: [candidate], reason: 'MENTION' };
+    if (online.length === 0) {
+      return { targets: [], reason: 'NO_ONLINE' };
+    }
     return { targets: [online[0]!], reason: 'UNKNOWN_MENTION' };
+  }
+  if (online.length === 0) {
+    return { targets: [], reason: 'NO_ONLINE' };
   }
   return { targets: [online[0]!], reason: 'FALLBACK' };
 }

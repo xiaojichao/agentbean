@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useParams, useRouter } from 'next/navigation';
 import { Monitor, Circle, Plus, Pencil, Copy, Zap, Globe, Terminal, RefreshCw, X, Check, FolderOpen } from 'lucide-react';
 import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl } from '@/lib/socket';
-import { useAgentBeanStore } from '@/lib/store';
+import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 
 const STATUS_COLORS: Record<string, string> = {
   online: 'text-emerald-500',
@@ -22,10 +23,14 @@ const STATUS_BG: Record<string, string> = {
 };
 
 export default function DevicesPage() {
+  const params = useParams();
+  const router = useRouter();
+  const np = useCurrentNetworkPath();
   const conn = useAgentBeanStore((s) => s.conn);
   const devices = useAgentBeanStore((s) => s.devices);
   const applyDevicesSnapshot = useAgentBeanStore((s) => s.applyDevicesSnapshot);
   const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
+  const routeDeviceId = typeof params.id === 'string' ? params.id : null;
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showAddDialog, setShowAddDialog] = useState(false);
@@ -41,6 +46,15 @@ export default function DevicesPage() {
   }, [conn, applyDevicesSnapshot]);
 
   const deviceList = useMemo(() => Object.values(devices), [devices]);
+
+  useEffect(() => {
+    if (routeDeviceId) {
+      setSelectedId(routeDeviceId);
+      setEditName(false);
+      setShowDeleteConfirm(false);
+    }
+  }, [routeDeviceId]);
+
   const selectedDevice = deviceList.find((d) => d.id === selectedId) ?? null;
 
   return (
@@ -58,7 +72,7 @@ export default function DevicesPage() {
           </div>
         <div className="flex-1 overflow-y-auto p-1.5">
           {deviceList.map((device) => (
-            <button key={device.id} onClick={() => { setSelectedId(device.id); setEditName(false); setShowDeleteConfirm(false); }} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left ${selectedId === device.id ? 'bg-white shadow-sm ring-1 ring-neutral-200' : 'hover:bg-white/60'}`}>
+            <button key={device.id} onClick={() => { setSelectedId(device.id); setEditName(false); setShowDeleteConfirm(false); router.push(`/${np}/computer/${device.id}`); }} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left ${selectedId === device.id ? 'bg-white shadow-sm ring-1 ring-neutral-200' : 'hover:bg-white/60'}`}>
               <div className="relative shrink-0">
                 <Monitor size={16} className="text-neutral-500" />
                 <Circle size={6} className={`absolute -right-0.5 -top-0.5 fill-current ${STATUS_COLORS[device.status] ?? 'text-neutral-300'}`} />
@@ -114,7 +128,7 @@ function EmptyState() {
 }
 
 function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName, showDeleteConfirm, setShowDeleteConfirm, currentNetworkId }: {
-  device: { id: string; hostname?: string; status: string; lastSeenAt: number; agentIds: string[]; connectCommand?: string | null; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string } | null };
+  device: { id: string; hostname?: string; status: string; lastSeenAt: number; agentIds: string[]; runtimes?: any[]; connectCommand?: string | null; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string } | null };
   editName: boolean;
   setEditName: (v: boolean) => void;
   deviceName: string;
@@ -127,6 +141,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const [copied, setCopied] = useState(false);
   const [genError, setGenError] = useState('');
   const [deviceAgents, setDeviceAgents] = useState<any[]>([]);
+  const [deviceRuntimes, setDeviceRuntimes] = useState<any[]>(device.runtimes ?? []);
   const [scanning, setScanning] = useState(false);
   const [showAddCustom, setShowAddCustom] = useState(false);
   const [selectNetworkAgent, setSelectNetworkAgent] = useState<any | null>(null);
@@ -136,6 +151,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
     if (!device) return;
     deviceEvents().agentsList(device.id).then((res) => {
       if (res.ok && res.agents) setDeviceAgents(res.agents);
+      if (res.ok && res.runtimes) setDeviceRuntimes(res.runtimes);
     });
   }, [device?.id]);
 
@@ -145,14 +161,17 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
     setTimeout(() => {
       deviceEvents().agentsList(device.id).then((res) => {
         if (res.ok && res.agents) setDeviceAgents(res.agents);
+        if (res.ok && res.runtimes) setDeviceRuntimes(res.runtimes);
         setScanning(false);
       });
     }, 2000);
   };
 
-  const executorAgents = deviceAgents.filter((a) => a.category === 'executor-hosted');
   const agentosAgents = deviceAgents.filter((a) => a.category === 'agentos-hosted');
   const customAgents = deviceAgents.filter((a) => a.source === 'custom');
+  // Scanned executor-hosted runtimes not already in deviceRuntimes
+  const scannedRuntimes = deviceAgents.filter((a) => a.source === 'scanned' && a.category === 'executor-hosted');
+  const runtimeList = [...deviceRuntimes, ...scannedRuntimes.filter((sr) => !deviceRuntimes.some((r) => r.name === sr.name || r.command === sr.command))];
 
   const handleEditName = () => {
     setDeviceName(displayName);
@@ -230,6 +249,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           <div className="space-y-2">
             <InfoRow label="设备 ID" value={device.id} />
             <InfoRow label="最后在线" value={new Date(device.lastSeenAt).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })} />
+            <InfoRow label="运行时数量" value={`${deviceRuntimes.length}`} />
             <InfoRow label="Agent 数量" value={`${deviceAgents.length}`} />
           </div>
         </section>
@@ -283,19 +303,14 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
         </section>
 
         {/* AGENT GROUPS */}
-        <AgentGroup
-          title="运行时 (executor-hosted)"
-          subtitle="Coding Agent CLIs"
-          icon={<Zap size={14} className="text-amber-600" />}
-          iconBg="bg-amber-50"
-          agents={executorAgents}
+        <RuntimeGroup
+          runtimes={runtimeList}
           scanning={scanning}
           onScan={handleScan}
-          onSelectNetwork={setSelectNetworkAgent}
         />
         <AgentGroup
-          title="AgentOS (agentos-hosted)"
-          subtitle="Gateway-managed agents"
+          title="AgentOS 托管型 Agent"
+          subtitle="由 OpenClaw、Hermes 等 AgentOS 网关托管"
           icon={<Globe size={14} className="text-blue-600" />}
           iconBg="bg-blue-50"
           agents={agentosAgents}
@@ -305,7 +320,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
         />
         <AgentGroup
           title="自定义 Agent"
-          subtitle="User-created agents"
+          subtitle="使用 Claude Code、Codex CLI、Kimi CLI 等运行时创建"
           icon={<Terminal size={14} className="text-violet-600" />}
           iconBg="bg-violet-50"
           agents={customAgents}
@@ -479,6 +494,47 @@ function AgentGroup({ title, subtitle, icon, iconBg, agents, scanning, onScan, s
   );
 }
 
+function RuntimeGroup({ runtimes, scanning, onScan }: {
+  runtimes: any[];
+  scanning?: boolean;
+  onScan?: () => void;
+}) {
+  return (
+    <section className="rounded-lg border border-neutral-200 p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">Coding Agent 运行时</h3>
+          <p className="text-[11px] text-neutral-400">仅作为创建自定义 Agent 的运行环境，不作为 Agent 成员出现</p>
+        </div>
+        {onScan && (
+          <button onClick={onScan} disabled={scanning} className="flex items-center gap-1 rounded-md border border-neutral-300 px-2.5 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50">
+            <RefreshCw size={12} className={scanning ? 'animate-spin' : ''} /> 扫描
+          </button>
+        )}
+      </div>
+      {runtimes.length === 0 ? (
+        <div className="py-4 text-center text-xs text-neutral-400">暂无可用运行时</div>
+      ) : (
+        <div className="space-y-1.5">
+          {runtimes.map((runtime) => (
+            <div key={`${runtime.adapterKind}-${runtime.command}`} className="flex items-center gap-3 rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50">
+                <Zap size={14} className="text-amber-600" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium truncate">{runtime.name}</div>
+                <div className="truncate text-xs text-neutral-400">{runtime.command || runtime.adapterKind}</div>
+              </div>
+              <span className="shrink-0 rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500">Runtime</span>
+              <Circle size={6} className={`shrink-0 fill-current ${runtime.installed ? 'text-emerald-500' : 'text-neutral-300'}`} />
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function AgentRow({ agent, icon, iconBg, onSelectNetwork }: {
   agent: any;
   icon: React.ReactNode;
@@ -514,8 +570,8 @@ function SelectNetworkDialog({ agent, onClose }: { agent: any; onClose: () => vo
   const [publishedIds, setPublishedIds] = useState<Set<string>>(new Set(agent.publishedNetworkIds ?? []));
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
-  const isExecutor = agent.category === 'executor-hosted';
-  const visibleNetworks = isExecutor
+  const isCustom = agent.source === 'custom' || agent.category === 'executor-hosted';
+  const visibleNetworks = isCustom
     ? networks.filter((n) => n.visibility === 'private' || n.ownerId === currentUser?.id)
     : networks;
 
@@ -543,8 +599,8 @@ function SelectNetworkDialog({ agent, onClose }: { agent: any; onClose: () => vo
           <h2 className="text-lg font-semibold">选择网络 — {agent.name}</h2>
           <button onClick={onClose} className="rounded-md p-1 hover:bg-neutral-100"><X size={16} /></button>
         </div>
-        {isExecutor && (
-          <p className="mt-2 text-xs text-neutral-500">运行时 Agent 仅可发布到私有网络或您拥有的网络。</p>
+        {isCustom && (
+          <p className="mt-2 text-xs text-neutral-500">自定义 Agent 使用本机 Coding Agent 运行时，仅可发布到私有网络或您拥有的网络。</p>
         )}
         <div className="mt-4 max-h-64 space-y-1 overflow-y-auto">
           {visibleNetworks.map((net) => {

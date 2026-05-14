@@ -65,12 +65,12 @@ export default function AgentDetailPage() {
   const categoryColor: Record<string, string> = {
     coding: 'bg-blue-50 text-blue-600 border-blue-100',
     'agentos-hosted': 'bg-purple-50 text-purple-600 border-purple-100',
-    'executor-hosted': 'bg-orange-50 text-orange-600 border-orange-100',
+    'executor-hosted': 'bg-violet-50 text-violet-600 border-violet-100',
   };
   const categoryLabel: Record<string, string> = {
     coding: '编程助手',
     'agentos-hosted': 'AgentOS 托管',
-    'executor-hosted': '执行器托管',
+    'executor-hosted': '自定义 Agent',
   };
 
   return (

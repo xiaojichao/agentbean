@@ -8,9 +8,25 @@ export interface OpenClawAdapterOpts {
   systemPrompt?: string;
 }
 
-interface OpenClawReply {
-  reply?: string;
-  error?: string;
+function buildArgs(baseArgs: string[], prompt: string): string[] {
+  // If user already configured args with chat send --message, just append the prompt
+  // Otherwise default to: openclaw chat send --message "<prompt>"
+  const hasSend = baseArgs.includes('send');
+  const hasMessage = baseArgs.includes('--message');
+  if (hasSend && hasMessage) {
+    return [...baseArgs, prompt];
+  }
+  return [...baseArgs, 'chat', 'send', '--message', prompt];
+}
+
+function buildPrompt(input: AskInput, systemPrompt?: string): string {
+  const parts: string[] = [];
+  if (systemPrompt) parts.push(systemPrompt);
+  for (const h of input.history.slice(-10)) {
+    parts.push(`${h.speaker} (${h.role}): ${h.body}`);
+  }
+  parts.push(input.prompt);
+  return parts.join('\n\n---\n\n');
 }
 
 export class OpenClawAdapter implements CliAdapter {
@@ -19,26 +35,27 @@ export class OpenClawAdapter implements CliAdapter {
 
   async ask(input: AskInput, signal: AbortSignal): Promise<string> {
     return new Promise<string>((resolve, reject) => {
-      const payload = JSON.stringify({
-        system: this.opts.systemPrompt ?? input.systemPrompt,
-        history: input.history.slice(-10),
-        user: input.prompt,
-      });
-
-      const child = spawn(this.opts.command, this.opts.args ?? [], {
-        cwd: this.opts.cwd,
-        stdio: ['pipe', 'pipe', 'pipe'],
+      const prompt = buildPrompt(input, this.opts.systemPrompt ?? input.systemPrompt);
+      const cwd = input.workspace ?? this.opts.cwd ?? process.cwd();
+      const child = spawn(this.opts.command, buildArgs(this.opts.args ?? [], prompt), {
+        cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];
+      let finished = false;
       const MAX_EXEC_MS = 600_000;
 
       const onAbort = () => {
+        if (finished) return;
+        finished = true;
         child.kill('SIGTERM');
-        setTimeout(() => child.kill('SIGKILL'), 2_000).unref();
+        setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 2_000).unref();
       };
       signal.addEventListener('abort', onAbort);
       const maxTimer = setTimeout(() => {
+        if (finished) return;
+        finished = true;
         child.kill('SIGKILL');
         signal.removeEventListener('abort', onAbort);
         reject(new Error('openclaw adapter timeout'));
@@ -46,7 +63,6 @@ export class OpenClawAdapter implements CliAdapter {
 
       child.stdout.on('data', (b: Buffer) => stdoutChunks.push(b));
       child.stderr.on('data', (b: Buffer) => stderrChunks.push(b));
-      child.stdin.end(payload);
 
       child.on('error', (err) => {
         clearTimeout(maxTimer);
@@ -56,20 +72,22 @@ export class OpenClawAdapter implements CliAdapter {
       child.on('exit', (code) => {
         clearTimeout(maxTimer);
         signal.removeEventListener('abort', onAbort);
+        if (finished) return;
+        finished = true;
         if (signal.aborted) return reject(new Error('aborted'));
         const out = Buffer.concat(stdoutChunks).toString('utf8');
         const err = Buffer.concat(stderrChunks).toString('utf8');
-        if (code !== 0) {
-          return reject(new Error(`openclaw exit ${code}: ${err.slice(0, 400)}`));
+        const stdout = out.trim();
+        const stderr = err.trim();
+        if (code !== 0 && stdout.length === 0) {
+          const detail = stderr.length > 0 ? stderr.slice(0, 400) : 'no stderr';
+          return reject(new Error(`openclaw exit ${code}: ${detail}`));
         }
-        let parsed: OpenClawReply;
-        try {
-          parsed = JSON.parse(out);
-        } catch {
-          return reject(new Error(`openclaw produced non-JSON output: ${out.slice(0, 200)}`));
+        const reply = stdout || stderr;
+        if (!reply) {
+          return reject(new Error('openclaw produced empty output'));
         }
-        if (parsed.error) return reject(new Error(parsed.error));
-        resolve((parsed.reply ?? '').trim());
+        resolve(reply);
       });
     });
   }

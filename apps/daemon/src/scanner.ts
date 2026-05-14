@@ -222,7 +222,7 @@ async function checkHermesGateway(): Promise<ScannedAgent | null> {
       name: "Hermes-Agent",
       adapterKind: "hermes",
       command: path,
-      args: ["gateway", "run"],
+      args: [],
       source: "gateway",
     };
   }

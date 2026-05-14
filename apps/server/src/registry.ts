@@ -31,6 +31,10 @@ export interface AgentRuntime extends AgentRegisterInfo {
 
 type KickListener = (oldSocketId: string) => void;
 
+export function normalizeAgentName(name: string): string {
+  return name.trim().replace(/\s+/g, '-');
+}
+
 export class AgentRegistry {
   private byId = new Map<string, AgentRuntime>();
   private kickListeners: KickListener[] = [];
@@ -46,6 +50,7 @@ export class AgentRegistry {
     }
     const next: AgentRuntime = {
       ...info,
+      name: normalizeAgentName(info.name),
       category: info.category ?? existing?.category ?? 'executor-hosted',
       networkId: info.networkId ?? existing?.networkId ?? 'default',
       status: 'online',
@@ -134,6 +139,7 @@ export class AgentRegistry {
     const existing = this.byId.get(info.id);
     const next: AgentRuntime = {
       ...info,
+      name: normalizeAgentName(info.name),
       category: info.category ?? existing?.category ?? 'executor-hosted',
       networkId: info.networkId ?? existing?.networkId ?? 'default',
       status: 'offline',
@@ -156,13 +162,22 @@ export class AgentRegistry {
   }
 
   findByDeviceAndName(deviceId: string, name: string): AgentRuntime | null {
-    const norm = name.trim().toLowerCase().replace(/\s+/g, '-');
+    const norm = normalizeAgentName(name).toLowerCase();
+    const matches: AgentRuntime[] = [];
     for (const v of this.byId.values()) {
-      if (v.deviceId === deviceId && v.name.trim().toLowerCase().replace(/\s+/g, '-') === norm) {
-        return v;
+      if (v.deviceId === deviceId && normalizeAgentName(v.name).toLowerCase() === norm) {
+        matches.push(v);
       }
     }
-    return null;
+    return matches.sort((a, b) => {
+      const aOnline = a.status === 'online' || a.status === 'busy';
+      const bOnline = b.status === 'online' || b.status === 'busy';
+      if (aOnline !== bOnline) return aOnline ? -1 : 1;
+      const aScan = a.id.startsWith(`scan-${deviceId}-`);
+      const bScan = b.id.startsWith(`scan-${deviceId}-`);
+      if (aScan !== bScan) return aScan ? 1 : -1;
+      return b.lastHeartbeatAt - a.lastHeartbeatAt;
+    })[0] ?? null;
   }
 
   /** Resolve a stale scan-prefix ID (scan-{uuid}-{name}) to the current registry entry */

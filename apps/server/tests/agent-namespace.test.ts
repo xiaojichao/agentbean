@@ -87,7 +87,7 @@ describe('/agent namespace', () => {
 });
 
 describe('device:register-agents', () => {
-  it('persists scanned agents to DB and registers in AgentRegistry', async () => {
+  it('persists only scanned AgentOS agents and keeps runtimes out of AgentRegistry', async () => {
     const ag = connect('default:default:tok', {
       deviceId: 'd-scan1',
       networkId: 'default',
@@ -108,25 +108,26 @@ describe('device:register-agents', () => {
     });
     const ack = await ackPromise;
     expect(ack.ok).toBe(true);
-    expect(ack.agents).toHaveLength(2);
+    expect(ack.agents).toHaveLength(1);
 
     // Verify in DB
     const dbAgents = app.db!.agents.listByDevice('d-scan1');
-    expect(dbAgents).toHaveLength(2);
-    expect(dbAgents.map((a) => a.name).sort()).toEqual(['Claude-Code', 'Hermes-Agent']);
+    expect(dbAgents).toHaveLength(1);
+    expect(dbAgents.map((a) => a.name).sort()).toEqual(['Hermes-Agent']);
     expect(dbAgents.every((a) => a.source === 'scanned')).toBe(true);
 
     // Verify in AgentRegistry
-    const claudeAgent = ack.agents.find((a: any) => a.name === 'Claude-Code');
-    expect(claudeAgent).toBeDefined();
-    const rt = app.registry!.snapshot(claudeAgent.id);
+    expect(app.registry!.all().some((a) => a.name === 'Claude-Code')).toBe(false);
+    const hermesAgent = ack.agents.find((a: any) => a.name === 'Hermes-Agent');
+    expect(hermesAgent).toBeDefined();
+    const rt = app.registry!.snapshot(hermesAgent.id);
     expect(rt).toBeTruthy();
     expect(rt!.status).toBe('online');
 
     ag.close();
   });
 
-  it('deduplicates agents by name+deviceId on re-scan', async () => {
+  it('ignores scanned Coding Agent runtimes in agent registration', async () => {
     const ag = connect('default:default:tok', {
       deviceId: 'd-scan2',
       networkId: 'default',
@@ -155,10 +156,10 @@ describe('device:register-agents', () => {
     });
     expect(ack2).toMatchObject({ ok: true });
 
-    // Should still be 1 agent, not duplicated
+    // Runtime scans should not create Agent records.
     const dbAgents = app.db!.agents.listByDevice('d-scan2');
-    expect(dbAgents).toHaveLength(1);
-    expect(dbAgents[0].command).toBe('/opt/homebrew/bin/claude'); // updated
+    expect(dbAgents).toHaveLength(0);
+    expect(app.registry!.all().some((a) => a.name === 'Claude-Code')).toBe(false);
 
     ag.close();
   });

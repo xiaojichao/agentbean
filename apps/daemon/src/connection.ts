@@ -5,6 +5,16 @@ import type { CliAdapter, ChatTurn } from './adapters/adapter.js';
 import { uploadArtifact } from './uploader.js';
 import { postProcess } from './post-process.js';
 
+function errorMessage(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === 'string' && err.trim()) return err;
+  try {
+    const serialized = JSON.stringify(err);
+    if (serialized && serialized !== '{}') return serialized;
+  } catch {}
+  return 'unknown error';
+}
+
 export interface ConnectionHandle {
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -95,11 +105,12 @@ export function createConnection(cfg: AgentConfig, adapter: CliAdapter): Connect
               requestId: req.requestId,
               artifactIds: artifactIds.length > 0 ? artifactIds : undefined,
             });
-          } catch (err: any) {
-            logger.error({ err: err.message, requestId: req.requestId }, 'dispatch failed');
+          } catch (err: unknown) {
+            const message = errorMessage(err);
+            logger.error({ err: message, requestId: req.requestId }, 'dispatch failed');
             currentSocket.emit('error_event', {
               at: Date.now(),
-              message: err.message ?? 'unknown',
+              message,
               scope: 'reply',
               requestId: req.requestId,
             });

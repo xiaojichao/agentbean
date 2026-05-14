@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { CodexAdapter } from '../src/adapters/codex.js';
 import { ClaudeCodeAdapter } from '../src/adapters/claude-code.js';
@@ -6,7 +9,6 @@ import { HermesAdapter } from '../src/adapters/hermes.js';
 
 describe('CodexAdapter', () => {
   it('passes payload as command-line argument via PTY', async () => {
-    // CodexAdapter passes payload as the last CLI arg, not via stdin
     const adapter = new CodexAdapter({
       command: 'node',
       args: ['-e', 'process.stdout.write("OK:" + process.argv.length)'],
@@ -30,20 +32,7 @@ describe('CodexAdapter', () => {
 });
 
 describe('ClaudeCodeAdapter', () => {
-  it('passes prompt via stdin and captures stdout', async () => {
-    // ClaudeCodeAdapter writes prompt to stdin and appends --bare --add-dir flags.
-    // Use a script file to avoid node rejecting unknown flags.
-    const adapter = new ClaudeCodeAdapter({
-      command: 'node',
-      // ClaudeCodeAdapter prepends ['-p', '--bare'] before opts.args, then appends '--add-dir' per workspace.
-      // A .cjs script file won't be confused by unknown flags.
-      args: [],
-      cwd: '/tmp',
-    });
-    // We can't easily pass a script via -e because --bare is prepended.
-    // Instead, test that the adapter constructs and spawns without crashing
-    // when given a valid command. The real test is integration.
-    // For unit test, just verify rejection on bad command:
+  it('rejects on bad command', async () => {
     const badAdapter = new ClaudeCodeAdapter({ command: '/nonexistent/binary' });
     await expect(
       badAdapter.ask({ prompt: 'hi', history: [] }, new AbortController().signal),
@@ -52,28 +41,82 @@ describe('ClaudeCodeAdapter', () => {
 });
 
 describe('OpenClawAdapter', () => {
-  it('forwards prompt as JSON via stdin', async () => {
-    const adapter = new OpenClawAdapter({
-      command: 'node',
-      args: ['-e', "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.stringify({reply:'OC:'+JSON.parse(s).user})))"],
-      systemPrompt: 'sp',
-    });
+  it('invokes openclaw chat send --message <prompt>', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentbean-openclaw-test-'));
+    const script = join(dir, 'fake-openclaw.cjs');
+    writeFileSync(script, `
+      const args = process.argv.slice(1);
+      const msgIdx = args.indexOf('--message');
+      if (msgIdx >= 0 && args[msgIdx + 1]) {
+        process.stdout.write('OC:' + args[msgIdx + 1]);
+      } else {
+        process.stderr.write('missing --message');
+        process.exit(1);
+      }
+    `);
+    const adapter = new OpenClawAdapter({ command: process.execPath, args: [script] });
     const out = await adapter.ask({ prompt: 'hi-oc', history: [] }, new AbortController().signal);
-    expect(out).toContain('hi-oc');
-    expect(out.startsWith('OC:')).toBe(true);
+    expect(out).toBe('OC:hi-oc');
+  });
+
+  it('rejects empty openclaw output', async () => {
+    const adapter = new OpenClawAdapter({
+      command: '/bin/sh',
+      args: ['-c', 'exit 0'],
+    });
+    await expect(
+      adapter.ask({ prompt: 'hi-oc', history: [] }, new AbortController().signal),
+    ).rejects.toThrow('openclaw produced empty output');
   });
 });
 
 describe('HermesAdapter', () => {
-  it('passes prompt as command-line argument and captures stdout', async () => {
-    // HermesAdapter prepends ['-z', prompt] before opts.args.
-    // node doesn't support -z, so use echo via sh as a workaround.
-    // The adapter uses spawn(command, ['-z', prompt, ...opts.args]).
-    // We test with a script that ignores argv[0] (the -z flag) and reads argv[1].
-    // But since -z is the first arg, node will fail. Instead test error handling:
-    const badAdapter = new HermesAdapter({ command: '/nonexistent/binary' });
+  it('invokes hermes chat -q <prompt>', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentbean-hermes-test-'));
+    const script = join(dir, 'fake-hermes.cjs');
+    writeFileSync(script, `
+      const args = process.argv.slice(1);
+      const qIdx = args.indexOf('-q');
+      if (qIdx >= 0 && args[qIdx + 1]) {
+        process.stdout.write(args[qIdx + 1]);
+      } else {
+        process.stderr.write('missing -q');
+        process.exit(1);
+      }
+    `);
+    const adapter = new HermesAdapter({ command: process.execPath, args: [script] });
+    const out = await adapter.ask({ prompt: 'hi-h', history: [] }, new AbortController().signal);
+    expect(out).toBe('hi-h');
+  });
+
+  it('drops gateway-run args before invoking chat -q', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentbean-hermes-test-'));
+    const script = join(dir, 'fake-hermes.cjs');
+    writeFileSync(script, `
+      if (process.argv.includes('gateway') || process.argv.includes('run')) {
+        process.exit(7);
+      }
+      const args = process.argv.slice(1);
+      const qIdx = args.indexOf('-q');
+      if (qIdx >= 0 && args[qIdx + 1]) {
+        process.stdout.write(args[qIdx + 1]);
+      } else {
+        process.stderr.write('missing -q');
+        process.exit(1);
+      }
+    `);
+    const adapter = new HermesAdapter({ command: process.execPath, args: ['gateway', 'run', script] });
+    const out = await adapter.ask({ prompt: 'hi-h', history: [] }, new AbortController().signal);
+    expect(out).toBe('hi-h');
+  });
+
+  it('rejects empty hermes output with a useful error', async () => {
+    const adapter = new HermesAdapter({
+      command: '/bin/sh',
+      args: ['-c', 'exit 0'],
+    });
     await expect(
-      badAdapter.ask({ prompt: 'hi-h', history: [] }, new AbortController().signal),
-    ).rejects.toThrow();
+      adapter.ask({ prompt: 'hi-h', history: [] }, new AbortController().signal),
+    ).rejects.toThrow('hermes produced empty output');
   });
 });

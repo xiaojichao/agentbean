@@ -11,12 +11,20 @@ export interface PublicAgentMeta {
   visibility?: 'public' | 'private';
 }
 
+export interface RuntimeMeta {
+  name: string;
+  adapterKind: string;
+  command: string;
+  installed: boolean;
+}
+
 export interface DeviceRuntime {
   id: string;
   userId: string;
   networkId: string;
   socket: Socket;
   agents: Map<string, PublicAgentMeta>;
+  runtimes?: RuntimeMeta[];
   lastSeenAt: number;
   status: AgentStatus;
 }

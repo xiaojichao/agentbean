@@ -8,7 +8,7 @@
     ],
     "module": "esnext",
     "moduleResolution": "bundler",
-    "jsx": "react-jsx",
+    "jsx": "preserve",
     "strict": true,
     "noEmit": true,
     "incremental": true,

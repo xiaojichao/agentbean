@@ -2,6 +2,6 @@
 
 import ChatPage from '../../chat/page';
 
-export default function LegacyChannelPage() {
+export default function DmPage() {
   return <ChatPage />;
 }

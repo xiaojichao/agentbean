@@ -5,12 +5,12 @@ import { formatRelative } from '@/lib/format-time';
 import { AgentStatusBadge } from './agent-status-badge';
 
 const CATEGORY_LABEL: Record<string, string> = {
-  'executor-hosted': '执行器',
-  'agentos-hosted': 'AgentOS',
+  'executor-hosted': '自定义 Agent',
+  'agentos-hosted': 'AgentOS 托管',
 };
 
 const CATEGORY_STYLE: Record<string, string> = {
-  'executor-hosted': 'bg-orange-50 text-orange-600 border-orange-100',
+  'executor-hosted': 'bg-violet-50 text-violet-600 border-violet-100',
   'agentos-hosted': 'bg-purple-50 text-purple-600 border-purple-100',
 };
 
