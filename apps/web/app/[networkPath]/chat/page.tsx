@@ -264,10 +264,11 @@ export default function ChatPage() {
           )}
 
           {/* DMs */}
-          <div className="mt-3 mb-1">
+          <div className="mx-2 my-3 border-t border-neutral-300/50" />
+          <div className="mb-1">
             <button onClick={() => setDmsExpanded((v) => !v)} className="flex w-full items-center gap-1.5 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-500 hover:text-neutral-700">
               <ChevronRight size={10} className={`shrink-0 transition-transform ${dmsExpanded ? 'rotate-90' : ''}`} />
-              私信
+              私聊
               <span className="ml-1 rounded-full bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{dms.length}</span>
             </button>
           </div>
@@ -286,7 +287,7 @@ export default function ChatPage() {
                   </button>
                 );
               })}
-              {dms.length === 0 && <div className="px-2 text-xs text-neutral-400">暂无私信</div>}
+              {dms.length === 0 && <div className="px-2 text-xs text-neutral-400">暂无私聊</div>}
             </div>
           )}
         </div>
@@ -398,7 +399,7 @@ export default function ChatPage() {
                       ))}
                     </div>
                   )}
-                  <textarea ref={textareaRef} value={input} onChange={handleInputChange} onKeyDown={handleInputKeyDown} rows={2} placeholder={isDm ? `私信 ${activeDm?.name ?? ''}` : `Message #${activeName}  (输入 @ 提及成员)`} className="w-full resize-none px-3 pt-2.5 pb-1 text-sm outline-none placeholder:text-neutral-400" />
+                  <textarea ref={textareaRef} value={input} onChange={handleInputChange} onKeyDown={handleInputKeyDown} rows={2} placeholder={isDm ? `私聊 ${activeDm?.name ?? ''}` : `Message #${activeName}  (输入 @ 提及成员)`} className="w-full resize-none px-3 pt-2.5 pb-1 text-sm outline-none placeholder:text-neutral-400" />
                   <div className="flex items-center justify-between px-2 pb-2">
                     <div className="flex items-center gap-1">
                       <button className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600" title="附件图片"><Image size={16} /></button>
@@ -610,7 +611,7 @@ function SearchView({ onClose, onJump }: { onClose: () => void; onJump: (channel
       <div className="flex h-14 items-center border-b border-neutral-200 px-6">
         <div className="flex w-full items-center gap-3">
           <Search size={18} className="text-neutral-400" />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} autoFocus placeholder="搜索频道、私信、消息..." className="flex-1 text-sm outline-none placeholder:text-neutral-400" />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} autoFocus placeholder="搜索频道、私聊、消息..." className="flex-1 text-sm outline-none placeholder:text-neutral-400" />
           <button onClick={onClose} className="rounded bg-neutral-100 px-2 py-0.5 text-[10px] text-neutral-500">ESC</button>
         </div>
       </div>
@@ -622,7 +623,7 @@ function SearchView({ onClose, onJump }: { onClose: () => void; onJump: (channel
           <div className="flex flex-col items-center justify-center py-16 text-neutral-400">
             <Search size={32} strokeWidth={1.5} />
             <p className="mt-2 text-sm font-medium">搜索一切</p>
-            <p className="text-xs">搜索频道、私信、成员和消息历史</p>
+            <p className="text-xs">搜索频道、私聊、成员和消息历史</p>
           </div>
         )}
         {results !== null && results.length === 0 && (
