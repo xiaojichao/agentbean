@@ -196,6 +196,53 @@ describe('/agent dispatch round-trip', () => {
     await local.close();
   });
 
+  it('does not fail an in-flight dispatch when another daemon disconnects', async () => {
+    const local = await buildApp({ dbPath: ':memory:', globalDbPath: ':memory:', agentToken: 'default:default:tok' });
+    await new Promise<void>((r) => local.http.listen(0, r));
+    const port = (local.http.address() as AddressInfo).port;
+    const lurl = `http://localhost:${port}/agent`;
+
+    const ag1 = ioClient(lurl, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'd1',
+        networkId: 'default',
+        agents: [{ id: 'a1', name: 'A1', role: 'r', adapterKind: 'codex', category: 'agentos-hosted', visibility: 'public' }],
+      },
+      reconnection: false, transports: ['websocket'],
+    });
+    const ag2 = ioClient(lurl, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'd2',
+        networkId: 'default',
+        agents: [{ id: 'a2', name: 'A2', role: 'r', adapterKind: 'codex', category: 'agentos-hosted', visibility: 'public' }],
+      },
+      reconnection: false, transports: ['websocket'],
+    });
+    await Promise.all([
+      new Promise<void>((r) => ag1.on('connect', () => r())),
+      new Promise<void>((r) => ag2.on('connect', () => r())),
+    ]);
+    ag1.emit('register');
+    ag2.emit('register');
+    await new Promise((r) => setTimeout(r, 50));
+
+    ag1.on('dispatch', (req: any) => {
+      ag2.close();
+      setTimeout(() => {
+        ag1.emit('reply', { agentId: 'a1', channelId: req.channelId, body: 'still alive', requestId: req.requestId });
+      }, 25);
+    });
+
+    const requestId = newId();
+    const reply = await local.dispatch!({ agentId: 'a1', channelId: 'c1', prompt: 'hi', requestId });
+    expect(reply).toEqual({ ok: true, body: 'still alive' });
+
+    ag1.close();
+    await local.close();
+  });
+
   it('dispatches persisted custom agents with their config even if a stale device agent has the same id', async () => {
     const local = await buildApp({ dbPath: ':memory:', globalDbPath: ':memory:', agentToken: 'default:default:tok' });
     await new Promise<void>((r) => local.http.listen(0, r));

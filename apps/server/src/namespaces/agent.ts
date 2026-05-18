@@ -111,6 +111,8 @@ export function snapshotToDto(rt: AgentRuntime): AgentSnapshotDto {
 interface PendingDispatch {
   resolve: (result: DispatchResolution) => void;
   timer: NodeJS.Timeout;
+  socketId: string;
+  agentId: string;
 }
 
 export interface AgentNamespaceHandle {
@@ -486,6 +488,14 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
     });
 
     socket.on('disconnect', () => {
+      for (const [reqId, p] of pending.entries()) {
+        if (p.socketId !== socket.id) continue;
+        clearTimeout(p.timer);
+        p.resolve({ ok: false, error: 'agent disconnected' });
+        deps.metricsCollector?.resolve(reqId, false, 'agent disconnected');
+        pending.delete(reqId);
+      }
+
       const currentDevice = deps.deviceRegistry.get(a.deviceId);
       if (currentDevice && currentDevice.socket.id !== socket.id) return;
       const device = deps.deviceRegistry.markOffline(a.deviceId);
@@ -494,12 +504,6 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           const rt = deps.registry.markOffline(agentMeta.id, 'device-disconnect');
           if (rt) deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
         }
-      }
-      for (const [reqId, p] of pending.entries()) {
-        clearTimeout(p.timer);
-        p.resolve({ ok: false, error: 'agent disconnected' });
-        deps.metricsCollector?.resolve(reqId, false, 'agent disconnected');
-        pending.delete(reqId);
       }
     });
   });
@@ -557,7 +561,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       deps.registry.markOnline(req.agentId);
       deps.io.of('/web').emit('agent:status', snapshotToDto(deps.registry.snapshot(req.agentId)!));
     }, timeoutMs);
-    pending.set(req.requestId, { resolve, timer });
+    pending.set(req.requestId, { resolve, timer, socketId: sock.id, agentId: req.agentId });
 
     const agentRuntime = deps.registry.snapshot(req.agentId);
     const sandboxed = agentRuntime?.visibility === 'public' && agentRuntime.category !== 'agentos-hosted' && !customAgent;
