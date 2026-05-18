@@ -223,7 +223,7 @@ export function AddAgentModal({ open, onClose }: Props) {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium">网络</label>
+            <label className="mb-1 block text-sm font-medium">团队</label>
             <select
               value={networkId}
               onChange={(e) => setNetworkId(e.target.value)}

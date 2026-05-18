@@ -69,7 +69,7 @@ export function Sidebar() {
         <span className="text-sm font-semibold tracking-tight">AgentBean</span>
       </div>
 
-      {/* Network Switcher + Add */}
+      {/* Team Switcher + Add */}
       <div className="px-3 py-2 flex items-center gap-1.5">
         <div className="relative flex-1 min-w-0">
           <button
@@ -86,7 +86,7 @@ export function Sidebar() {
             >
               <div className="p-1.5">
                 {networks.length === 0 ? (
-                  <div className="px-3 py-2 text-xs text-neutral-400">没有可用网络</div>
+                  <div className="px-3 py-2 text-xs text-neutral-400">没有可用团队</div>
                 ) : (
                   networks.map((n) => (
                     <button
@@ -117,7 +117,7 @@ export function Sidebar() {
         <button
           onClick={() => setShowCreateDialog(true)}
           className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-white text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700 transition-colors"
-          title="创建网络"
+          title="创建团队"
         >
           <Plus size={14} />
         </button>
@@ -139,7 +139,7 @@ export function Sidebar() {
         <NavItem href={`/${np}/settings`} icon={<Settings size={16} />} label="设置" active={isActive(`/${np}/settings`)} />
       </div>
 
-      {/* Create Network Dialog */}
+      {/* Create Team Dialog */}
       {showCreateDialog && (
         <CreateNetworkDialog
           onClose={() => setShowCreateDialog(false)}
@@ -190,7 +190,7 @@ function CreateNetworkDialog({ onClose, onCreated }: { onClose: () => void; onCr
 
   const handleCreate = async () => {
     const trimmedName = name.trim();
-    if (!trimmedName) { setError('请输入网络名称'); return; }
+    if (!trimmedName) { setError('请输入团队名称'); return; }
     const trimmedPath = path.trim();
     if (trimmedPath && !/^[a-z][a-z0-9-]*$/.test(trimmedPath)) { setError('路径必须以英文字母开头，只能包含小写字母、数字和连字符'); return; }
     setPending(true);
@@ -213,12 +213,12 @@ function CreateNetworkDialog({ onClose, onCreated }: { onClose: () => void; onCr
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
       <div className="mx-4 w-full max-w-sm rounded-xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-lg font-semibold">创建网络</h2>
-        <p className="mt-1 text-sm text-neutral-500">{isAdmin ? '创建一个新的网络。创建后将自动切换到该网络。' : '创建一个本地网络。创建后将自动切换到该网络。'}</p>
+        <h2 className="text-lg font-semibold">创建团队</h2>
+        <p className="mt-1 text-sm text-neutral-500">{isAdmin ? '创建一个新的团队。创建后将自动切换到该团队。' : '创建一个本地团队。创建后将自动切换到该团队。'}</p>
 
         <div className="mt-4 space-y-3">
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-neutral-500">网络名称</label>
+            <label className="mb-1.5 block text-xs font-medium text-neutral-500">团队名称</label>
             <input
               ref={nameRef}
               value={name}
@@ -260,7 +260,7 @@ function CreateNetworkDialog({ onClose, onCreated }: { onClose: () => void; onCr
                   <Globe size={14} /> 公有
                 </button>
               </div>
-              <p className="mt-1 text-[11px] text-neutral-400">{visibility === 'public' ? '所有注册用户均可查看和使用该网络' : '仅已加入的成员可查看该网络'}</p>
+              <p className="mt-1 text-[11px] text-neutral-400">{visibility === 'public' ? '所有注册用户均可查看和使用该团队' : '仅已加入的成员可查看该团队'}</p>
             </div>
           )}
         </div>

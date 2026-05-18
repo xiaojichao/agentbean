@@ -14,7 +14,7 @@ npm test       # 运行测试
 ### 带配置文件启动
 
 ```bash
-npx tsx src/index.ts ~/.agentbean/device-agent.yaml
+npx tsx src/bin.ts ~/.agentbean/device-agent.yaml
 ```
 
 ### 自动扫描模式
@@ -22,7 +22,7 @@ npx tsx src/index.ts ~/.agentbean/device-agent.yaml
 如果不提供配置文件，或配置文件中 `agents` 数组为空，Daemon 会自动扫描本机 Agent：
 
 ```bash
-npx tsx src/index.ts
+npx tsx src/bin.ts
 # 扫描 Coding Agent (which claude-code, codex, kimi...)
 # 扫描 AgentOS Gateway (localhost:PORT)
 # 扫描 ~/.agentbean/agents/ 目录
@@ -34,7 +34,7 @@ npx tsx src/index.ts
 
 ```yaml
 deviceId: my-macbook-pro      # 设备标识
-networkId: default            # 所属网络
+networkId: default            # 所属团队
 server:
   url: http://localhost:3000/agent    # Server Socket.IO 地址
   token: default:default:dev-token-change-me    # 三截 token
@@ -155,4 +155,4 @@ interface CliAdapter {
 | `SERVER_URL` | Server WebSocket 地址 |
 | `SERVER_TOKEN` | 接入令牌 |
 | `DEVICE_ID` | 设备标识 |
-| `NETWORK_ID` | 所属网络 |
+| `NETWORK_ID` | 所属团队 |

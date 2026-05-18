@@ -13,7 +13,7 @@ type Tab = 'account' | 'browser' | 'server' | 'releases';
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'account', label: '账号', icon: <User size={16} /> },
   { id: 'browser', label: '浏览器', icon: <Globe size={16} /> },
-  { id: 'server', label: '网络', icon: <Server size={16} /> },
+  { id: 'server', label: '团队', icon: <Server size={16} /> },
   { id: 'releases', label: '更新日志', icon: <FileText size={16} /> },
 ];
 
@@ -268,11 +268,11 @@ function ServerPanel() {
 
   return (
     <div className="mx-auto max-w-xl space-y-6">
-      <h2 className="text-xl font-semibold">网络</h2>
+      <h2 className="text-xl font-semibold">团队</h2>
 
       {/* PROFILE */}
       <section className="rounded-lg border border-neutral-200 p-5">
-        <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">网络资料</h3>
+        <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">团队资料</h3>
         <div className="space-y-3">
           <div>
             <label className="mb-1 block text-xs font-medium text-neutral-500">名称</label>
@@ -374,16 +374,16 @@ function ServerPanel() {
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-red-500">危险区域</h3>
         <div className="flex items-center justify-between">
           <div>
-            <div className="text-sm font-medium text-red-700">删除网络</div>
-            <div className="text-xs text-red-400">永久删除此网络及所有关联数据，此操作不可撤销。</div>
+            <div className="text-sm font-medium text-red-700">删除团队</div>
+            <div className="text-xs text-red-400">永久删除此团队及所有关联数据，此操作不可撤销。</div>
           </div>
           <button onClick={() => setShowDeleteConfirm(true)} className="rounded-md border border-red-300 px-4 py-2 text-sm text-red-600 hover:bg-red-50">
-            删除网络
+            删除团队
           </button>
         </div>
         {showDeleteConfirm && (
           <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-4">
-            <p className="mb-3 text-sm text-red-700">确定要删除网络 <strong>{currentNetwork?.name ?? currentNetworkId}</strong> 吗？此操作不可撤销。</p>
+            <p className="mb-3 text-sm text-red-700">确定要删除团队 <strong>{currentNetwork?.name ?? currentNetworkId}</strong> 吗？此操作不可撤销。</p>
             <div className="flex gap-2">
               <button onClick={() => setShowDeleteConfirm(false)} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50">取消</button>
               <button onClick={() => setShowDeleteConfirm(false)} className="rounded-md bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700">确认删除</button>

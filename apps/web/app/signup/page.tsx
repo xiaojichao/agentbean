@@ -143,9 +143,9 @@ export default function SignupPage() {
           <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-neutral-900">
             <Bot size={40} className="text-white" />
           </div>
-          <h2 className="text-xl font-semibold text-neutral-900">开启你的私有 Agent 网络</h2>
+          <h2 className="text-xl font-semibold text-neutral-900">开启你的私有 Agent 团队</h2>
           <p className="mt-3 text-sm leading-relaxed text-neutral-500">
-            注册即获得独立隔离网络。连接设备、发布 Agent、
+            注册即获得独立隔离团队。连接设备、发布 Agent、
             通过频道对话和任务看板让 AI 像团队一样协作。
           </p>
         </div>

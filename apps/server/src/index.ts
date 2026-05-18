@@ -1,6 +1,6 @@
 import express from 'express';
 import http from 'node:http';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import multer from 'multer';
 import { Server as IOServer } from 'socket.io';
@@ -50,6 +50,44 @@ function buildInviteCommand(code: string, serverUrl: string): string {
   return `npx @agentbean/daemon@latest --invite ${code} --server-url ${serverUrl}`;
 }
 
+function isTeamAgent(agent: { category?: string | null; source?: string | null }): boolean {
+  return agent.category === 'agentos-hosted' || agent.source === 'custom';
+}
+
+function normalizeKind(kind?: string | null): string {
+  return (kind ?? '').trim().toLowerCase();
+}
+
+function runtimeMatchesAgent(runtime: { adapterKind?: string | null; command?: string | null; installed?: boolean }, agent: { adapterKind?: string | null; command?: string | null }): boolean {
+  if (!runtime.installed) return false;
+  const runtimeCommand = runtime.command?.trim();
+  const agentCommand = agent.command?.trim();
+  if (runtimeCommand && agentCommand && runtimeCommand === agentCommand) return true;
+  const runtimeKind = normalizeKind(runtime.adapterKind);
+  const agentKind = normalizeKind(agent.adapterKind);
+  if (!runtimeKind || !agentKind) return false;
+  if (runtimeKind === agentKind) return true;
+  return runtimeKind === 'kimi-cli' && agentKind === 'codex' && Boolean(agentCommand?.includes('kimi-cli'));
+}
+
+function isOnlineStatus(status?: string | null): boolean {
+  return status === 'online' || status === 'busy';
+}
+
+function isVirtualDeviceId(id?: string | null): boolean {
+  return Boolean(id?.startsWith('virtual-'));
+}
+
+function projectDirectoryExists(cwd?: string | null): boolean {
+  if (!cwd?.trim()) return false;
+  const normalized = cwd.trim().replace(/^~(?=$|\/)/, process.env.HOME ?? '');
+  try {
+    return statSync(normalized).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 // Fixed data directory relative to this source file (not cwd)
 const DATA_DIR = resolve(import.meta.dirname, '../data');
 
@@ -69,6 +107,59 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
   storageManager.createSpace(defaultNetworkId);
   const space = storageManager.getSpace(defaultNetworkId);
 
+  const resolveCustomAgentStatus = (agent: { id: string; source?: string | null; adapterKind?: string | null; command?: string | null; cwd?: string | null; deviceId?: string | null }) => {
+    const rt = registry.snapshot(agent.id);
+    if (agent.source !== 'custom') {
+      return {
+        status: rt?.status ?? 'offline',
+        lastSeenAt: rt?.lastHeartbeatAt,
+        lastError: rt?.lastError?.message,
+      };
+    }
+
+    if (!projectDirectoryExists(agent.cwd)) {
+      return { status: 'offline' as const, lastSeenAt: rt?.lastHeartbeatAt, lastError: undefined };
+    }
+
+    const primaryDevice = agent.deviceId ? deviceRegistry.get(agent.deviceId) : undefined;
+    const candidateDevices = primaryDevice
+      ? [primaryDevice]
+      : agent.deviceId?.startsWith('virtual-')
+        ? deviceRegistry.all()
+        : [];
+    for (const device of candidateDevices) {
+      if (!device || !isOnlineStatus(device.status)) continue;
+      const hasRuntime = (device.runtimes ?? []).some((runtime) => runtimeMatchesAgent(runtime, agent));
+      if (hasRuntime) {
+        return { status: 'online' as const, lastSeenAt: device.lastSeenAt, lastError: undefined };
+      }
+    }
+    return {
+      status: rt?.status ?? 'offline',
+      lastSeenAt: rt?.lastHeartbeatAt,
+      lastError: rt?.lastError?.message,
+    };
+  };
+
+  const visibleDeviceRows = (rows: ReturnType<GlobalDb['devices']['listByUser']>) =>
+    rows.filter((device) => !isVirtualDeviceId(device.id));
+
+  const toDeviceDto = (dbd: ReturnType<GlobalDb['devices']['listByUser']>[number]) => {
+    const live = deviceRegistry.get(dbd.id);
+    return {
+      id: dbd.id,
+      userId: dbd.userId,
+      networkId: dbd.networkId,
+      hostname: dbd.hostname,
+      agentIds: live ? Array.from(live.agents.keys()) : [],
+      runtimes: live?.runtimes ?? dbd.runtimes,
+      lastSeenAt: live ? live.lastSeenAt : dbd.lastSeenAt,
+      status: live ? live.status : 'offline',
+      connectCommand: dbd.connectCommand,
+      systemInfo: dbd.systemInfo,
+    };
+  };
+
   // Ensure system user exists for foreign key constraints
   try {
     globalDb.raw.prepare(`INSERT OR IGNORE INTO users (id, username, email, created_at, updated_at) VALUES (?, ?, null, ?, ?)`)
@@ -82,16 +173,19 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
   } catch {}
 
   // Ensure default network exists in global DB
-  if (!globalDb.networks.get(defaultNetworkId)) {
+  const defaultNetwork = globalDb.networks.get(defaultNetworkId);
+  if (!defaultNetwork) {
     globalDb.networks.create({
       id: defaultNetworkId,
       ownerId: 'system',
-      name: 'Default Network',
+      name: 'Default Team',
       path: 'default',
       description: null,
       visibility: 'public',
       createdAt: Date.now(),
     });
+  } else if (defaultNetwork.name === 'Default Network') {
+    globalDb.networks.updateName(defaultNetworkId, 'Default Team');
   }
 
   // Ensure admin account exists after the default network so membership FK checks pass.
@@ -202,8 +296,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     socket.on('agents:subscribe', () => {
       const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
       const filtered = registry.all().filter((a) =>
-        a.networkId === networkId ||
-        a.publishedNetworkIds.includes(networkId)
+        isTeamAgent(a) &&
+        (a.networkId === networkId || a.publishedNetworkIds.includes(networkId))
       );
       socket.emit('agents:snapshot', filtered.map(snapshotToDto));
     });
@@ -241,23 +335,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       const nid = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
       const userId = socket.data.userId as string | undefined;
       // Load persisted devices from DB
-      const dbDevices = userId ? globalDb.devices.listByUser(userId) : globalDb.devices.listByNetwork(nid);
+      const dbDevices = visibleDeviceRows(userId ? globalDb.devices.listByUser(userId) : globalDb.devices.listByNetwork(nid));
       // Merge with live registry status
-      const devices = dbDevices.map((dbd) => {
-        const live = deviceRegistry.get(dbd.id);
-        return {
-          id: dbd.id,
-          userId: dbd.userId,
-          networkId: dbd.networkId,
-          hostname: dbd.hostname,
-          agentIds: live ? Array.from(live.agents.keys()) : [],
-          runtimes: live?.runtimes ?? [],
-          lastSeenAt: live ? live.lastSeenAt : dbd.lastSeenAt,
-          status: live ? live.status : 'offline',
-          connectCommand: dbd.connectCommand,
-          systemInfo: dbd.systemInfo,
-        };
-      });
+      const devices = dbDevices.map(toDeviceDto);
       socket.emit('devices:snapshot', devices);
     });
 
@@ -265,9 +345,53 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       try {
         const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
         const humans = globalDb.networkMembers.listByNetwork(networkId);
-        const agents = registry.all().filter((a) =>
-          a.networkId === networkId || a.publishedNetworkIds.includes(networkId)
-        ).map(snapshotToDto);
+        const registryAgents = registry.all().filter((a) =>
+          isTeamAgent(a) &&
+          (a.networkId === networkId || a.publishedNetworkIds.includes(networkId))
+        ).map((agent) => {
+          const dto = snapshotToDto(agent);
+          if (agent.source !== 'custom') return dto;
+          const resolved = resolveCustomAgentStatus(agent);
+          return {
+            ...dto,
+            status: resolved.status,
+            lastSeenAt: resolved.lastSeenAt ?? dto.lastSeenAt,
+            lastError: resolved.lastError,
+          };
+        });
+        const seen = new Set(registryAgents.map((agent) => agent.id));
+        const persistedAgents = globalDb.agents.listVisibleInNetwork(networkId)
+          .filter(isTeamAgent)
+          .filter((agent) => !seen.has(agent.id))
+          .map((agent) => {
+            let parsedArgs: string[] | null = null;
+            if (agent.args) {
+              try { parsedArgs = JSON.parse(agent.args); } catch { parsedArgs = [agent.args]; }
+            }
+            const resolved = resolveCustomAgentStatus(agent);
+            return {
+              id: agent.id,
+              name: agent.name,
+              role: agent.role ?? '',
+              adapterKind: agent.adapterKind,
+              category: agent.category,
+              source: agent.source,
+              command: agent.command,
+              args: parsedArgs,
+              cwd: agent.cwd,
+              deviceId: agent.deviceId ?? undefined,
+              networkId: agent.networkId,
+              visibility: agent.visibility,
+              ownerId: agent.ownerId,
+              description: agent.description,
+              status: resolved.status,
+              lastSeenAt: resolved.lastSeenAt ?? agent.lastSeenAt,
+              lastError: resolved.lastError ?? agent.lastError ?? undefined,
+              publishedNetworkIds: globalDb.agentPublishes.listByAgent(agent.id).map((p) => p.networkId),
+              connectCommand: renderConnectCommand({ adapterKind: agent.adapterKind as any }),
+            };
+          });
+        const agents = [...registryAgents, ...persistedAgents];
         ack?.({ ok: true, humans, agents });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
@@ -279,7 +403,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         // Get agents from global DB (persisted scanned agents)
         const globalAgents = globalDb.agents.listByDevice(payload.deviceId);
         // Merge with live AgentRegistry data
-        const result = globalAgents.map((ga) => {
+        const result = globalAgents
+          .filter((ga) => !(ga.source === 'scanned' && ga.category === 'executor-hosted'))
+          .map((ga) => {
           const rt = registry.snapshot(ga.id);
           return {
             id: ga.id,
@@ -289,13 +415,64 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             source: ga.source,
             command: ga.command,
             args: ga.args,
+            cwd: ga.cwd,
             deviceId: ga.deviceId,
+            networkId: ga.networkId,
+            visibility: ga.visibility,
+            ownerId: ga.ownerId,
+            description: ga.description,
             status: rt?.status ?? 'offline',
-            publishedNetworkIds: rt?.publishedNetworkIds ?? [],
+            publishedNetworkIds: rt?.publishedNetworkIds ?? globalDb.agentPublishes.listByAgent(ga.id).map((p) => p.networkId),
+            lastSeenAt: rt?.lastHeartbeatAt ?? ga.lastSeenAt,
+            lastError: rt?.lastError ?? ga.lastError ?? undefined,
           };
         });
         const live = deviceRegistry.get(payload.deviceId);
-        ack?.({ ok: true, agents: result, runtimes: live?.runtimes ?? [] });
+        const dbDevice = globalDb.devices.get(payload.deviceId);
+        ack?.({ ok: true, agents: result, runtimes: live?.runtimes ?? dbDevice?.runtimes ?? [] });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('agent:custom:list', (payload: { deviceId?: string } = {}, ack?: (r: any) => void) => {
+      try {
+        const userId = socket.data.userId as string | undefined;
+        if (!userId) return ack?.({ ok: false, error: 'UNAUTHENTICATED' });
+        const agents = globalDb.agents.listCustomByOwner(userId)
+          .filter((agent) => !payload.deviceId || agent.deviceId === payload.deviceId)
+          .map((agent) => {
+          const rt = registry.snapshot(agent.id);
+          const resolved = resolveCustomAgentStatus(agent);
+          let parsedArgs: string[] | null = null;
+          if (Array.isArray((agent as any).args)) {
+            parsedArgs = (agent as any).args;
+          } else if (agent.args) {
+            try { parsedArgs = JSON.parse(agent.args); } catch { parsedArgs = [agent.args]; }
+          }
+          return {
+            id: agent.id,
+            name: agent.name,
+            role: agent.role ?? '',
+            adapterKind: agent.adapterKind,
+            category: agent.category,
+            source: agent.source,
+            command: agent.command,
+            args: parsedArgs,
+            cwd: agent.cwd,
+            deviceId: agent.deviceId ?? undefined,
+            networkId: agent.networkId,
+            visibility: agent.visibility,
+            ownerId: agent.ownerId,
+            description: agent.description,
+            status: resolved.status,
+            lastSeenAt: resolved.lastSeenAt ?? rt?.lastHeartbeatAt ?? agent.lastSeenAt,
+            lastError: resolved.lastError ?? rt?.lastError?.message ?? agent.lastError ?? undefined,
+            publishedNetworkIds: rt?.publishedNetworkIds ?? globalDb.agentPublishes.listByAgent(agent.id).map((p) => p.networkId),
+            connectCommand: renderConnectCommand({ adapterKind: agent.adapterKind as any }),
+          };
+        });
+        ack?.({ ok: true, agents });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }
@@ -335,17 +512,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         // Refresh device list for this user
         const nid = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
         const userId = socket.data.userId as string | undefined;
-        const dbDevices = userId ? globalDb.devices.listByUser(userId) : globalDb.devices.listByNetwork(nid);
-        const devices = dbDevices.map((dbd) => {
-          const live = deviceRegistry.get(dbd.id);
-          return {
-            id: dbd.id, userId: dbd.userId, networkId: dbd.networkId, hostname: dbd.hostname,
-            agentIds: live ? Array.from(live.agents.keys()) : [],
-            lastSeenAt: live ? live.lastSeenAt : dbd.lastSeenAt,
-            status: live ? live.status : 'offline',
-            connectCommand: dbd.connectCommand,
-          };
-        });
+        const dbDevices = visibleDeviceRows(userId ? globalDb.devices.listByUser(userId) : globalDb.devices.listByNetwork(nid));
+        const devices = dbDevices.map(toDeviceDto);
         socket.emit('devices:snapshot', devices);
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
@@ -360,17 +528,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         // Refresh device list for all web clients
         const nid = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
         const userId = socket.data.userId as string | undefined;
-        const dbDevices = userId ? globalDb.devices.listByUser(userId) : globalDb.devices.listByNetwork(nid);
-        const devices = dbDevices.map((dbd) => {
-          const live = deviceRegistry.get(dbd.id);
-          return {
-            id: dbd.id, userId: dbd.userId, networkId: dbd.networkId, hostname: dbd.hostname,
-            agentIds: live ? Array.from(live.agents.keys()) : [],
-            lastSeenAt: live ? live.lastSeenAt : dbd.lastSeenAt,
-            status: live ? live.status : 'offline',
-            connectCommand: dbd.connectCommand,
-          };
-        });
+        const dbDevices = visibleDeviceRows(userId ? globalDb.devices.listByUser(userId) : globalDb.devices.listByNetwork(nid));
+        const devices = dbDevices.map(toDeviceDto);
         io.of('/web').emit('devices:snapshot', devices);
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
@@ -665,7 +824,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
       const members = channels.membersOf(networkId, ch.id);
       const candidates = registry.all().filter((a) =>
-        a.networkId === networkId || a.publishedNetworkIds.includes(networkId)
+        isTeamAgent(a) &&
+        (a.networkId === networkId || a.publishedNetworkIds.includes(networkId))
       );
 
       const route = routeHumanMessage({ body, members, candidates });
@@ -755,7 +915,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       }
     });
 
-    socket.on('agent:create', (payload: { name: string; role?: string; adapterKind: string; visibility?: 'public' | 'private'; networkId?: string; category?: string; ownerId?: string; command?: string; args?: string[]; cwd?: string; description?: string; publishedNetworkIds?: string[] }, ack?: (r: any) => void) => {
+    socket.on('agent:create', (payload: { name: string; role?: string; adapterKind: string; visibility?: 'public' | 'private'; networkId?: string; category?: string; ownerId?: string; command?: string; args?: string[]; cwd?: string; description?: string; deviceId?: string; publishedNetworkIds?: string[] }, ack?: (r: any) => void) => {
       try {
         const name = payload.name.trim().replace(/\s+/g, '-');
         if (!name) return ack?.({ ok: false, error: 'EMPTY_NAME' });
@@ -768,10 +928,24 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const id = newId();
         const now = Date.now();
         const category = (payload.category as import('./db.js').AgentCategory) ?? 'executor-hosted';
+        const requestedDevice = payload.deviceId ? globalDb.devices.get(payload.deviceId) as any : null;
+        const useRequestedDevice = Boolean(requestedDevice && (!userId || requestedDevice.userId === userId));
+        const deviceId = useRequestedDevice
+          ? payload.deviceId!
+          : `virtual-${userId ?? 'system'}`;
+        if (!useRequestedDevice) {
+          globalDb.devices?.upsert({
+            id: deviceId,
+            userId: userId ?? 'system',
+            networkId: targetNetworkId,
+            lastSeenAt: now,
+          });
+        }
+
         const row = {
           id, name, role: payload.role ?? null,
           adapterKind: payload.adapterKind as import('./db.js').AdapterKind,
-          deviceId: null,
+          deviceId,
           networkId: targetNetworkId,
           visibility: payload.visibility ?? 'public',
           category,
@@ -785,19 +959,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         };
         db.agents.create(row);
 
-        // Ensure virtual device exists in global DB for FK constraint
-        const virtualDeviceId = `virtual-${userId ?? 'system'}`;
-        globalDb.devices?.upsert({
-          id: virtualDeviceId,
-          userId: userId ?? 'system',
-          networkId: targetNetworkId,
-          lastSeenAt: now,
-        });
-
         globalDb.agents.upsert({
           id, name, role: payload.role ?? null,
           adapterKind: payload.adapterKind as import('./db.js').AdapterKind,
-          deviceId: virtualDeviceId,
+          deviceId,
           networkId: targetNetworkId,
           visibility: payload.visibility ?? 'public',
           category,
@@ -840,7 +1005,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         }
 
         ack?.({ ok: true, agent: row });
-        io.of('/web').emit('agents:snapshot', registry.all().map(snapshotToDto));
+        io.of('/web').emit('agents:snapshot', registry.all().filter(isTeamAgent).map(snapshotToDto));
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }
@@ -894,17 +1059,66 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       }
     });
 
+    socket.on('agent:config:update', (payload: { id: string; name: string; adapterKind?: string; command?: string; cwd?: string | null; description?: string | null }, ack?: (r: any) => void) => {
+      try {
+        const userId = socket.data.userId as string | undefined;
+        if (!userId) return ack?.({ ok: false, error: 'UNAUTHORIZED' });
+        const existing = globalDb.agents.getFull(payload.id);
+        if (!existing) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        const isCustom = existing.source === 'custom';
+        const isAgentOS = existing.category === 'agentos-hosted';
+        if (!isCustom && !isAgentOS) return ack?.({ ok: false, error: 'NOT_CONFIGURABLE_AGENT' });
+        if (existing.ownerId && existing.ownerId !== userId) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        const name = payload.name.trim();
+        if (!name) return ack?.({ ok: false, error: 'EMPTY_NAME' });
+        if (/\s/.test(name)) return ack?.({ ok: false, error: 'NAME_HAS_SPACE' });
+        const adapterKind = isCustom ? payload.adapterKind?.trim() : undefined;
+        const command = isCustom ? payload.command?.trim() : undefined;
+        if (isCustom && !adapterKind) return ack?.({ ok: false, error: 'EMPTY_RUNTIME' });
+        if (isCustom && !command) return ack?.({ ok: false, error: 'EMPTY_COMMAND' });
+        const cwd = payload.cwd?.trim() || null;
+        const description = payload.description?.trim() || null;
+        const updatedAt = Date.now();
+        globalDb.agents.updateConfig(payload.id, {
+          name,
+          adapterKind: adapterKind ?? null,
+          command: command ?? null,
+          cwd,
+          description,
+          updatedAt,
+        });
+        const rt = registry.updateConfig(payload.id, {
+          name,
+          adapterKind: adapterKind as import('./db.js').AdapterKind | undefined,
+          command,
+          cwd,
+          description,
+        });
+        if (rt) io.of('/web').emit('agent:status', snapshotToDto(rt));
+        ack?.({ ok: true, agent: globalDb.agents.getFull(payload.id) });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
     socket.on('agent:publish', (payload: { agentId: string; networkId: string }, ack?: (r: any) => void) => {
       try {
         const userId = socket.data.userId as string | undefined;
         if (!userId) return ack?.({ ok: false, error: 'UNAUTHORIZED' });
         const rt = registry.snapshot(payload.agentId);
-        if (!rt) return ack?.({ ok: false, error: 'NOT_FOUND' });
-        if (rt.ownerId && rt.ownerId !== userId) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        const persisted = rt ? null : globalDb.agents.getFull(payload.agentId);
+        if (!rt && !persisted) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        const ownerId = rt?.ownerId ?? persisted?.ownerId;
+        if (ownerId && ownerId !== userId) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        const category = rt?.category ?? persisted?.category;
+        const source = rt?.source ?? persisted?.source;
+        if (!isTeamAgent({ category, source })) {
+          return ack?.({ ok: false, error: 'RUNTIME_NOT_AGENT' });
+        }
 
         // Runtime (executor-hosted) can only be published to private or owned networks
         const targetNetwork = globalDb.networks.get(payload.networkId);
-        if (rt.category === 'executor-hosted' && targetNetwork) {
+        if (category === 'executor-hosted' && targetNetwork) {
           const isPrivate = targetNetwork.type === 'private';
           const isOwner = targetNetwork.ownerId === userId;
           if (!isPrivate && !isOwner) {
@@ -931,8 +1145,15 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const userId = socket.data.userId as string | undefined;
         if (!userId) return ack?.({ ok: false, error: 'UNAUTHORIZED' });
         const rt = registry.snapshot(payload.agentId);
-        if (!rt) return ack?.({ ok: false, error: 'NOT_FOUND' });
-        if (rt.ownerId && rt.ownerId !== userId) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        const persisted = rt ? null : globalDb.agents.getFull(payload.agentId);
+        if (!rt && !persisted) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        const ownerId = rt?.ownerId ?? persisted?.ownerId;
+        if (ownerId && ownerId !== userId) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        const category = rt?.category ?? persisted?.category;
+        const source = rt?.source ?? persisted?.source;
+        if (!isTeamAgent({ category, source })) {
+          return ack?.({ ok: false, error: 'RUNTIME_NOT_AGENT' });
+        }
         globalDb.agentPublishes.unpublish(payload.agentId, payload.networkId);
         const publishes = globalDb.agentPublishes.listByAgent(payload.agentId);
         registry.updatePublishedNetworks(payload.agentId, publishes.map((p: any) => p.networkId));
@@ -1299,7 +1520,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const network = invite.networkId ? globalDb.networks.get(invite.networkId) : null;
         ack?.({
           ok: true,
-          networkName: network?.name ?? '未知网络',
+          networkName: network?.name ?? '未知团队',
           expiresAt: invite.expiresAt,
         });
       } catch (e: any) {

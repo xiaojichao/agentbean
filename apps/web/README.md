@@ -1,6 +1,6 @@
 # AgentBean Web
 
-Web 前端 —— 基于 Next.js 14 的 React 应用，提供 Agent 管理、频道聊天、网络管理和性能监控。
+Web 前端 —— 基于 Next.js 14 的 React 应用，提供 Agent 管理、频道聊天、团队管理和性能监控。
 
 ## 启动
 
@@ -22,7 +22,7 @@ npm test          # 运行测试
 | `/agents/metrics` | 性能看板 — 实时请求统计、成功率、P95 延迟 |
 | `/channels` | 频道列表页 — 创建/进入频道 |
 | `/channels/[channelId]` | 频道聊天页 — 消息流、成员列表、Artifact 上传 |
-| `/networks` | 网络管理页 — 创建/切换网络 |
+| `/networks` | 团队管理页 — 创建/切换团队 |
 | `/register` | Agent 注册向导 — 展示扫描结果并注册 Agent |
 
 ## 核心模块
@@ -37,8 +37,8 @@ interface State {
   agents: Record<string, AgentSnapshot>;    // Agent 映射表
   channels: ChannelSummary[];               // 频道列表
   messagesByChannel: Record<string, ChatMessage[]>;  // 频道消息
-  networks: NetworkSummary[];               // 网络列表
-  currentNetworkId: string;                 // 当前网络
+  networks: NetworkSummary[];               // 团队列表
+  currentNetworkId: string;                 // 当前团队
   agentMetrics: Record<string, AgentMetricsSummary>; // 性能指标
 }
 ```
@@ -54,12 +54,12 @@ interface State {
 ```typescript
 const socket = getWebSocket();  // 单例 Socket.IO 客户端
 const ev = agentEvents(socket); // Agent 相关事件
-const nets = networkEvents(socket); // 网络相关事件
+const nets = networkEvents(socket); // 团队相关事件
 ```
 
 事件封装：
 - `agentEvents()` — Agent 订阅、状态监听、指标查询
-- `networkEvents()` — 网络列表、创建、切换
+- `networkEvents()` — 团队列表、创建、切换
 
 ### 共享类型 (`lib/schema.ts`)
 
@@ -69,7 +69,7 @@ const nets = networkEvents(socket); // 网络相关事件
 - `ChannelSummary` — 频道摘要
 - `ChatMessage` — 消息（human/agent/system）
 - `AgentMetricsSummary` — 性能指标摘要
-- `NetworkSummary` — 网络信息
+- `NetworkSummary` — 团队信息
 
 ## 组件清单
 
@@ -77,7 +77,7 @@ const nets = networkEvents(socket); // 网络相关事件
 
 | 组件 | 文件 | 说明 |
 |------|------|------|
-| `Sidebar` | `components/sidebar.tsx` | 左侧导航栏（Agent、频道、网络） |
+| `Sidebar` | `components/sidebar.tsx` | 左侧导航栏（Agent、频道、团队） |
 | `ConnectionBanner` | `components/connection-banner.tsx` | WebSocket 连接状态提示 |
 
 ### Agent 组件

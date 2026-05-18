@@ -40,7 +40,7 @@ export default function JoinPage() {
       socket.disconnect();
       setValidating(false);
       if (res.ok) {
-        setNetworkName(res.networkName ?? '网络');
+        setNetworkName(res.networkName ?? '团队');
       } else {
         setValidateError(
           res.error === 'INVALID_CODE' ? '无效的邀请链接' :
@@ -184,7 +184,7 @@ export default function JoinPage() {
             <span className="text-lg font-semibold tracking-tight text-white">AgentBean</span>
           </div>
 
-          <h1 className="text-2xl font-bold text-white">加入网络</h1>
+          <h1 className="text-2xl font-bold text-white">加入团队</h1>
           <p className="mt-2 text-sm text-neutral-400">
             你已被邀请加入 <span className="text-white font-medium">{networkName}</span>。登录或注册账号即可加入。
           </p>
@@ -249,7 +249,7 @@ export default function JoinPage() {
           </div>
           <h2 className="text-xl font-semibold text-white">加入 {networkName}</h2>
           <p className="mt-3 text-sm leading-relaxed text-neutral-400">
-            注册或登录后，你将自动加入此网络，开始与 Agent 协作。
+            注册或登录后，你将自动加入此团队，开始与 Agent 协作。
           </p>
         </div>
       </div>

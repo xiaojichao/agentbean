@@ -86,7 +86,7 @@ export function NewChannelDialog({ onClose }: { onClose: () => void }) {
             </button>
           </div>
           <div className="text-[11px] text-neutral-400 mt-1">
-            {visibility === 'public' ? '网络所有用户可见' : '仅被邀请的用户可见'}
+            {visibility === 'public' ? '团队所有用户可见' : '仅被邀请的用户可见'}
           </div>
         </div>
 

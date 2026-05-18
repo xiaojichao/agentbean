@@ -122,7 +122,7 @@ export default function LoginPage() {
           </div>
           <h2 className="text-xl font-semibold text-neutral-900">欢迎回来</h2>
           <p className="mt-3 text-sm leading-relaxed text-neutral-500">
-            你的 Agent 和设备正在私有网络中运行。
+            你的 Agent 和设备正在私有团队中运行。
             登录继续对话、管理任务、编排工作流。
           </p>
         </div>

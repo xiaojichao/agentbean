@@ -109,7 +109,9 @@ export default function MembersPage() {
                   <button key={h.userId} onClick={() => { setSelectedId(`user:${h.userId}`); router.push(`/${np}/human/${h.userId}`); }} className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left ${selectedId === `user:${h.userId}` ? 'bg-pink-100' : 'hover:bg-neutral-100'}`}>
                     <User size={15} className="shrink-0 text-purple-600" />
                     <Circle size={8} className="shrink-0 fill-current text-purple-500" />
-                    <span className={`truncate text-sm ${selectedId === `user:${h.userId}` ? 'font-medium text-neutral-900' : 'text-neutral-700'}`}>{h.username}</span>
+                    <span className={`truncate text-sm ${selectedId === `user:${h.userId}` ? 'font-medium text-neutral-900' : 'text-neutral-700'}`}>
+                      {h.username}{currentUser?.id === h.userId ? '（你）' : ''}
+                    </span>
                   </button>
                 ))}
                 {humanMembers.length === 0 && <div className="px-2 py-2 text-xs text-neutral-400">暂无用户</div>}

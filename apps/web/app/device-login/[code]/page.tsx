@@ -53,7 +53,7 @@ export default function DeviceLoginPage() {
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6">
       <h1 className="mb-2 text-2xl font-semibold">添加设备到 AgentBean</h1>
-      <p className="mb-6 text-sm text-neutral-500">使用已有账号登录，将此设备添加到您的私有网络。</p>
+      <p className="mb-6 text-sm text-neutral-500">使用已有账号登录，将此设备添加到您的私有团队。</p>
       <form onSubmit={onSubmit} className="space-y-4">
         <label className="block">
           <span className="mb-1 block text-sm text-neutral-600">用户名</span>

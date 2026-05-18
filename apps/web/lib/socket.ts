@@ -55,7 +55,9 @@ export interface AgentEvents {
   metrics(): Promise<{ ok: boolean; summaries?: AgentMetricsSummary[]; error?: string }>;
   publish(agentId: string, networkId: string): Promise<{ ok: boolean; error?: string }>;
   unpublish(agentId: string, networkId: string): Promise<{ ok: boolean; error?: string }>;
-  create(payload: { name: string; adapterKind: string; command: string; args?: string[]; category?: string; cwd?: string; description?: string }): Promise<{ ok: boolean; agent?: any; error?: string }>;
+  create(payload: { name: string; adapterKind: string; command: string; args?: string[]; category?: string; cwd?: string; description?: string; deviceId?: string }): Promise<{ ok: boolean; agent?: any; error?: string }>;
+  updateConfig(payload: { id: string; name: string; adapterKind?: string; command?: string; cwd?: string | null; description?: string | null }): Promise<{ ok: boolean; agent?: any; error?: string }>;
+  listCustom(payload?: { deviceId?: string }): Promise<{ ok: boolean; agents?: AgentSnapshot[]; error?: string }>;
   subscribe(): void;
 }
 
@@ -86,6 +88,12 @@ export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
     subscribe() { socket.emit('agents:subscribe', {}); },
     create(payload) {
       return emitWithTimeout(socket, 'agent:create', payload);
+    },
+    listCustom(payload = {}) {
+      return emitWithTimeout(socket, 'agent:custom:list', payload);
+    },
+    updateConfig(payload) {
+      return emitWithTimeout(socket, 'agent:config:update', payload);
     },
     publish(agentId, networkId) {
       return emitWithTimeout(socket, 'agent:publish', { agentId, networkId });

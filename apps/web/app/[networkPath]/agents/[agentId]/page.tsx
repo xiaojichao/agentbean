@@ -94,9 +94,9 @@ export default function AgentDetailPage() {
         <AgentStatusBadge status={agent.status} />
       </div>
 
-      {/* 网络发布 */}
+      {/* 团队发布 */}
       <section className="rounded-lg border border-neutral-200 p-4">
-        <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">网络发布</h3>
+        <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">团队发布</h3>
         <div className="space-y-2">
           {networks.map((net) => {
             const isHome = net.id === agent.networkId;
@@ -112,7 +112,7 @@ export default function AgentDetailPage() {
                   )}
                   <span className="text-sm font-medium truncate">{net.name}</span>
                   {isHome && (
-                    <span className="shrink-0 rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600">主网络</span>
+                    <span className="shrink-0 rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600">主团队</span>
                   )}
                 </div>
                 {isHome ? (
@@ -132,7 +132,7 @@ export default function AgentDetailPage() {
             );
           })}
           {networks.length <= 1 && (
-            <div className="text-xs text-neutral-400 py-2">仅有一个网络，无需发布管理。</div>
+            <div className="text-xs text-neutral-400 py-2">仅有一个团队，无需发布管理。</div>
           )}
         </div>
       </section>
@@ -147,7 +147,7 @@ export default function AgentDetailPage() {
           <dd className="font-mono text-xs">{agent.adapterKind}</dd>
         </div>
         <div>
-          <dt className="text-neutral-500">Network ID</dt>
+          <dt className="text-neutral-500">Team ID</dt>
           <dd className="font-mono text-xs">{agent.networkId ?? 'default'}</dd>
         </div>
         {agent.source && (

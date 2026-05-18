@@ -146,7 +146,7 @@ Options:
   --server-url   AgentBean Server URL (required)
   --token        Authentication token (required)
   --device-id    Device ID (default: auto-detected from hardware)
-  --network-id   Network ID (default: default)
+  --network-id   Team ID (default: default)
 `);
     process.exit(0);
   }

@@ -123,7 +123,7 @@ export function HumanDetail({ human, currentUser }: { human: HumanMember; curren
       <Section title="个人信息" icon={<User size={15} />}>
         <InfoRow label="用户 ID" value={human.userId} mono />
         <InfoRow label="用户名" value={human.username} />
-        <InfoRow label="网络角色" value={human.role} />
+        <InfoRow label="团队角色" value={human.role} />
         {currentUser?.id === human.userId && <InfoRow label="邮箱" value={currentUser.email ?? '未设置'} />}
       </Section>
 

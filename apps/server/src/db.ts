@@ -284,6 +284,7 @@ CREATE TABLE IF NOT EXISTS devices (
   last_seen_at INTEGER NOT NULL,
   connect_command TEXT,
   system_info TEXT,
+  runtimes TEXT,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE
 );
@@ -356,6 +357,7 @@ export interface DeviceRow {
   lastSeenAt: number;
   connectCommand: string | null;
   systemInfo: Record<string, unknown> | null;
+  runtimes: { name: string; adapterKind: string; command: string; installed: boolean }[];
 }
 
 export interface UserRow {
@@ -424,7 +426,11 @@ export interface GlobalDb {
   };
   agents: {
     upsert(row: { id: string; name: string; role?: string; adapterKind: string; deviceId: string; networkId: string; visibility?: string; category?: string; source?: string; firstSeenAt: number; lastSeenAt: number; lastError?: string | null; command?: string; args?: string; cwd?: string; ownerId?: string; description?: string | null }): void;
-    listByDevice(deviceId: string): { id: string; name: string; adapterKind: string; category: string; source: string; command: string | null; args: string | null; deviceId: string }[];
+    listByDevice(deviceId: string): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null }[];
+    listCustomByOwner(ownerId: string): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null }[];
+    listVisibleInNetwork(networkId: string): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null }[];
+    getFull(id: string): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null } | null;
+    updateConfig(id: string, input: { name: string; adapterKind?: string | null; command?: string | null; cwd?: string | null; description?: string | null; updatedAt: number }): void;
     get(id: string): { id: string } | null;
   };
   devices: {
@@ -434,6 +440,7 @@ export interface GlobalDb {
     listByUser(userId: string): DeviceRow[];
     delete(id: string): void;
     setConnectCommand(id: string, command: string): void;
+    setRuntimes(id: string, runtimes: { name: string; adapterKind: string; command: string; installed: boolean }[]): void;
     rename(id: string, hostname: string): void;
   };
 }
@@ -488,6 +495,7 @@ function rowToDevice(r: any): DeviceRow {
     lastSeenAt: r.last_seen_at,
     connectCommand: r.connect_command ?? null,
     systemInfo: r.system_info ? JSON.parse(r.system_info) : null,
+    runtimes: r.runtimes ? JSON.parse(r.runtimes) : [],
   };
 }
 
@@ -607,6 +615,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   try { raw.exec(`ALTER TABLE users ADD COLUMN current_network_id TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE devices ADD COLUMN connect_command TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE devices ADD COLUMN system_info TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE devices ADD COLUMN runtimes TEXT`); } catch {}
 
   const userSetCurrentNetwork = raw.prepare(`UPDATE users SET current_network_id = ?, updated_at = ? WHERE id = ?`);
 
@@ -623,6 +632,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   const deviceListByUser = raw.prepare(`SELECT * FROM devices WHERE user_id = ? ORDER BY last_seen_at DESC`);
   const deviceDelete = raw.prepare(`DELETE FROM devices WHERE id = ?`);
   const deviceSetConnectCommand = raw.prepare(`UPDATE devices SET connect_command = ? WHERE id = ?`);
+  const deviceSetRuntimes = raw.prepare(`UPDATE devices SET runtimes = ?, last_seen_at = ? WHERE id = ?`);
   const deviceRename = raw.prepare(`UPDATE devices SET hostname = ? WHERE id = ?`);
 
   const globalAgentUpsert = raw.prepare(`
@@ -636,7 +646,47 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
       last_seen_at = excluded.last_seen_at,
       description = excluded.description
   `);
-  const globalAgentListByDevice = raw.prepare(`SELECT * FROM agents WHERE device_id = ? ORDER BY first_seen_at`);
+  const globalAgentListByDevice = raw.prepare(`
+    SELECT id, name, role, adapter_kind AS adapterKind, category, source, command, args, cwd, device_id AS deviceId,
+           network_id AS networkId, visibility, owner_id AS ownerId, description,
+           first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, last_error AS lastError
+    FROM agents
+    WHERE device_id = ?
+    ORDER BY first_seen_at
+  `);
+  const globalAgentListCustomByOwner = raw.prepare(`
+    SELECT id, name, role, adapter_kind AS adapterKind, category, source, command, args, cwd, device_id AS deviceId,
+           network_id AS networkId, visibility, owner_id AS ownerId, description,
+           first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, last_error AS lastError
+    FROM agents
+    WHERE source = 'custom' AND owner_id = ?
+    ORDER BY first_seen_at DESC
+  `);
+  const globalAgentListVisibleInNetwork = raw.prepare(`
+    SELECT DISTINCT a.id, a.name, a.role, a.adapter_kind AS adapterKind, a.category, a.source,
+           a.command, a.args, a.cwd, a.device_id AS deviceId,
+           a.network_id AS networkId, a.visibility, a.owner_id AS ownerId, a.description,
+           a.first_seen_at AS firstSeenAt, a.last_seen_at AS lastSeenAt, a.last_error AS lastError
+    FROM agents a
+    LEFT JOIN agent_network_publish p ON p.agent_id = a.id
+    WHERE (a.category = 'agentos-hosted' OR a.source = 'custom')
+      AND (a.network_id = ? OR p.network_id = ?)
+    ORDER BY a.first_seen_at DESC
+  `);
+  const globalAgentGetFull = raw.prepare(`
+    SELECT id, name, role, adapter_kind AS adapterKind, category, source, command, args, cwd, device_id AS deviceId,
+           network_id AS networkId, visibility, owner_id AS ownerId, description,
+           first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, last_error AS lastError
+    FROM agents WHERE id = ?
+  `);
+  const globalAgentUpdateConfig = raw.prepare(`
+    UPDATE agents
+    SET name = @name,
+        adapter_kind = COALESCE(@adapterKind, adapter_kind),
+        command = COALESCE(@command, command),
+        cwd = @cwd, description = @description, last_seen_at = @updatedAt
+    WHERE id = @id AND (source = 'custom' OR category = 'agentos-hosted')
+  `);
   const globalAgentGet = raw.prepare(`SELECT id FROM agents WHERE id = ?`);
 
   return {
@@ -765,6 +815,10 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
         });
       },
       listByDevice: (deviceId) => globalAgentListByDevice.all(deviceId) as any[],
+      listCustomByOwner: (ownerId) => globalAgentListCustomByOwner.all(ownerId) as any[],
+      listVisibleInNetwork: (networkId) => globalAgentListVisibleInNetwork.all(networkId, networkId) as any[],
+      getFull: (id) => (globalAgentGetFull.get(id) as any) ?? null,
+      updateConfig: (id, input) => { globalAgentUpdateConfig.run({ id, ...input }); },
       get: (id) => (globalAgentGet.get(id) as any) ?? null,
     },
     devices: {
@@ -788,6 +842,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
         (deviceListByUser.all(userId) as any[]).map(rowToDevice),
       delete: (id) => { deviceDelete.run(id); },
       setConnectCommand: (id, command) => { deviceSetConnectCommand.run(command, id); },
+      setRuntimes: (id, runtimes) => { deviceSetRuntimes.run(JSON.stringify(runtimes), Date.now(), id); },
       rename: (id, hostname) => { deviceRename.run(hostname, id); },
     },
   };

@@ -34,11 +34,11 @@ export default function LandingPage() {
           连接你的 AI Agent，
           <br />
           <span className="bg-gradient-to-r from-purple-600 via-pink-500 to-amber-500 bg-clip-text text-transparent">
-            在私有网络中协作
+            在私有团队中协作
           </span>
         </h1>
         <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-neutral-500">
-          AgentBean 是一个 Mesh 架构的 Agent 编排平台。每个用户拥有独立私有网络，
+          AgentBean 是一个 Mesh 架构的 Agent 编排平台。每个用户拥有独立私有团队，
           通过频道对话、任务看板和设备管理，让分散的 AI Agent 像团队一样协作。
         </p>
         <div className="mt-10 flex items-center justify-center gap-4">
@@ -67,19 +67,19 @@ export default function LandingPage() {
           <FeatureCard
             icon={<Monitor size={20} className="text-purple-500" />}
             title="设备管理"
-            desc="通过邀请码注册设备，自动扫描本机 Agent。一个设备运行多个 Agent，跨网络发布。"
+            desc="通过邀请码注册设备，自动扫描本机 Agent。一个设备运行多个 Agent，跨团队发布。"
           />
         </div>
         <div className="mt-6 grid gap-6 sm:grid-cols-3">
           <FeatureCard
             icon={<Shield size={20} className="text-blue-500" />}
-            title="私有网络隔离"
-            desc="每个用户注册即获得独立网络。设备、Agent、频道、消息全部隔离，安全可控。"
+            title="私有团队隔离"
+            desc="每个用户注册即获得独立团队。设备、Agent、频道、消息全部隔离，安全可控。"
           />
           <FeatureCard
             icon={<Network size={20} className="text-pink-500" />}
-            title="多网络发布"
-            desc="Agent 可发布到多个网络，在不同团队间共享能力。一键发布、一键撤回。"
+            title="多团队发布"
+            desc="Agent 可发布到多个团队，在不同团队间共享能力。一键发布、一键撤回。"
           />
           <FeatureCard
             icon={<Bot size={20} className="text-orange-500" />}

@@ -130,6 +130,18 @@ export class AgentRegistry {
     return a;
   }
 
+  updateConfig(agentId: string, input: { name: string; adapterKind?: AdapterKind; command?: string | null; cwd?: string | null; description?: string | null }): AgentRuntime | null {
+    const a = this.byId.get(agentId);
+    if (!a) return null;
+    a.name = normalizeAgentName(input.name);
+    if (input.adapterKind) a.adapterKind = input.adapterKind;
+    if (input.command !== undefined) a.command = input.command;
+    a.cwd = input.cwd ?? null;
+    a.description = input.description ?? null;
+    a.lastHeartbeatAt = Date.now();
+    return a;
+  }
+
   snapshot(agentId: string): AgentRuntime | null {
     return this.byId.get(agentId) ?? null;
   }

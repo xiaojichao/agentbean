@@ -28,6 +28,7 @@ export interface AgentNamespaceDeps {
       upsert(row: { id: string; userId: string; networkId: string; hostname?: string; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): void;
       get(id: string): { id: string; hostname?: string | null; connectCommand?: string | null } | null;
       setConnectCommand(id: string, command: string): void;
+      setRuntimes(id: string, runtimes: { name: string; adapterKind: string; command: string; installed: boolean }[]): void;
     };
   };
   dispatchTimeoutMs?: number;
@@ -425,12 +426,15 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
     }, ack?: (r: any) => void) => {
       try {
         const dev = deps.deviceRegistry.get(a.deviceId);
+        const normalizedRuntimes = payload.runtimes.map((rt) => ({
+          ...rt,
+          name: rt.name.trim(),
+        }));
+        deps.globalDb?.devices?.setRuntimes(a.deviceId, normalizedRuntimes);
         if (dev) {
-          dev.runtimes = payload.runtimes.map((rt) => ({
-            ...rt,
-            name: normalizeAgentName(rt.name),
-          }));
+          dev.runtimes = normalizedRuntimes;
           dev.lastSeenAt = Date.now();
+          dev.status = 'online';
           deps.io.of('/web').emit('device:status', {
             id: dev.id,
             userId: dev.userId,
@@ -448,6 +452,8 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
     });
 
     socket.on('disconnect', () => {
+      const currentDevice = deps.deviceRegistry.get(a.deviceId);
+      if (currentDevice && currentDevice.socket.id !== socket.id) return;
       const device = deps.deviceRegistry.markOffline(a.deviceId);
       if (device) {
         for (const agentMeta of device.agents.values()) {

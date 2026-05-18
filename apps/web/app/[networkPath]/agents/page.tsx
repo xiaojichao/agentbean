@@ -41,7 +41,7 @@ export default function AgentsPage() {
         <div className="mb-2 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Terminal size={16} className="text-neutral-500" />
-            <span className="text-sm font-medium text-neutral-700">邀请设备加入网络</span>
+            <span className="text-sm font-medium text-neutral-700">邀请设备加入团队</span>
           </div>
           <button onClick={createInvite} className="rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">
             生成设备邀请
@@ -57,14 +57,14 @@ export default function AgentsPage() {
             </button>
           </div>
         ) : (
-          <p className="text-xs text-neutral-500">生成后在新设备上执行命令，登录即可加入 AgentBean 网络。</p>
+          <p className="text-xs text-neutral-500">生成后在新设备上执行命令，登录即可加入 AgentBean 团队。</p>
         )}
         {inviteError && <p className="mt-2 text-sm text-red-600">{inviteError}</p>}
       </div>
 
       <h1 className="mb-4 text-2xl font-bold">公开 Agents</h1>
       {publicAgents.length === 0 ? (
-        <div className="text-sm text-neutral-500">暂无公开 Agent。可在 Dashboard 中将私有 Agent 发布到公开网络。</div>
+        <div className="text-sm text-neutral-500">暂无公开 Agent。可在 Dashboard 中将私有 Agent 发布到公开团队。</div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {publicAgents.map((agent) => (

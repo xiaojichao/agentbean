@@ -34,17 +34,39 @@ export interface ScannedAgent {
   source: "gateway" | "filesystem";
 }
 
-function which(bin: string): Promise<string | null> {
+function isExecutableFile(path: string): boolean {
+  try {
+    return existsSync(path) && statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function getExtraPathEntries(): string[] {
+  return [
+    '/usr/local/bin',
+    '/opt/homebrew/bin',
+    join(os.homedir(), '.local/bin'),
+    join(os.homedir(), '.bun/bin'),
+    join(os.homedir(), '.npm-global/bin'),
+    join(os.homedir(), '.asdf/shims'),
+    join(os.homedir(), '.local/share/mise/shims'),
+    ...getAllNodeVersions().map((version) => join(os.homedir(), '.nvm/versions/node', version, 'bin')),
+  ];
+}
+
+function which(bin: string, candidatePaths: string[] = []): Promise<string | null> {
   return new Promise((resolve) => {
+    for (const candidate of candidatePaths) {
+      if (isExecutableFile(candidate)) {
+        resolve(candidate);
+        return;
+      }
+    }
     const child = execFile(
       'which',
       [bin],
-      { timeout: 5_000, env: { ...process.env, PATH: [
-        process.env.PATH,
-        '/usr/local/bin',
-        '/opt/homebrew/bin',
-        join(os.homedir(), '.nvm/versions/node', ...getAllNodeVersions(), 'bin'),
-      ].filter(Boolean).join(':') } },
+      { timeout: 5_000, env: { ...process.env, PATH: [process.env.PATH, ...getExtraPathEntries()].filter(Boolean).join(':') } },
       (err, stdout) => {
         if (err) { resolve(null); return; }
         const path = stdout.trim();
@@ -61,6 +83,29 @@ function getAllNodeVersions(): string[] {
     if (!existsSync(nvmDir)) return [];
     return readdirSync(nvmDir);
   } catch { return []; }
+}
+
+function getClaudeCodeCandidates(): string[] {
+  const latestDir = join(os.homedir(), '.local/share/claude-latest');
+  const legacyDir = join(os.homedir(), '.local/share/claude');
+  const candidates = [
+    join(latestDir, 'current/claude'),
+    join(legacyDir, 'current/claude'),
+    '/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js',
+    '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js',
+  ];
+
+  for (const base of [latestDir, legacyDir]) {
+    const versionsDir = join(base, 'versions');
+    try {
+      if (!existsSync(versionsDir)) continue;
+      const versions = readdirSync(versionsDir).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+      for (const version of versions) candidates.push(join(versionsDir, version, 'claude'));
+    } catch {
+      // Ignore unreadable version directories and continue with other candidates.
+    }
+  }
+  return candidates;
 }
 
 function run(bin: string, args: string[]): Promise<string> {
@@ -185,20 +230,22 @@ export async function scanRuntimes(): Promise<RuntimeInfo[]> {
       bin: "claude",
       name: "Claude Code",
       adapterKind: "claude-code" as AdapterKind,
+      candidates: getClaudeCodeCandidates(),
     },
-    { bin: "codex", name: "Codex CLI", adapterKind: "codex" as AdapterKind },
+    { bin: "codex", name: "Codex CLI", adapterKind: "codex" as AdapterKind, candidates: [] },
     {
       bin: "kimi-cli",
       name: "Kimi CLI",
       adapterKind: "Kimi-cli" as AdapterKind,
+      candidates: [],
     },
   ];
 
   const results: RuntimeInfo[] = [];
   for (const s of checks) {
-    const path = await which(s.bin);
+    const path = await which(s.bin, s.candidates);
     results.push({
-      name: s.name.replace(/\s+/g, "-"),
+      name: s.name,
       adapterKind: s.adapterKind,
       command: path ?? "",
       installed: path !== null,

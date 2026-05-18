@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch src/bin.ts",
     "start": "node dist/bin.js",
     "test": "vitest run",
     "test:watch": "vitest",

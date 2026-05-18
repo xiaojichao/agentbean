@@ -46,17 +46,17 @@ export default function NetworksPage() {
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      <div className="flex h-14 items-center border-b border-neutral-200 px-4 text-sm font-semibold">网络管理</div>
+      <div className="flex h-14 items-center border-b border-neutral-200 px-4 text-sm font-semibold">团队管理</div>
       <div className="flex-1 overflow-y-auto p-6">
 
       <form onSubmit={handleCreate} className="rounded border border-neutral-200 p-4 mb-6">
-        <div className="text-sm font-medium mb-2">创建新网络</div>
+        <div className="text-sm font-medium mb-2">创建新团队</div>
         <div className="flex gap-2">
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="网络名称"
+            placeholder="团队名称"
             className="flex-1 rounded border border-neutral-300 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-900"
           />
           <input
@@ -78,7 +78,7 @@ export default function NetworksPage() {
         <div className="text-sm text-neutral-500">加载中...</div>
       ) : networks.length === 0 ? (
         <div className="rounded-lg border border-dashed border-neutral-300 p-10 text-center text-neutral-500">
-          还没有网络。
+          还没有团队。
         </div>
       ) : (
         <ul className="space-y-2">
@@ -98,7 +98,7 @@ export default function NetworksPage() {
               </div>
               <div className="shrink-0 ml-4">
                 {n.id === currentNetworkId ? (
-                  <span className="text-xs rounded bg-neutral-900 text-white px-2 py-1">当前网络</span>
+                  <span className="text-xs rounded bg-neutral-900 text-white px-2 py-1">当前团队</span>
                 ) : (
                   <button
                     onClick={() => handleSwitch(n.id)}

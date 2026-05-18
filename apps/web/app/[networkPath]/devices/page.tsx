@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { Monitor, Circle, Plus, Pencil, Copy, Zap, Globe, Terminal, RefreshCw, X, Check, FolderOpen } from 'lucide-react';
+import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, Check, FolderOpen } from 'lucide-react';
 import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 
@@ -72,7 +72,7 @@ export default function DevicesPage() {
           </div>
         <div className="flex-1 overflow-y-auto p-1.5">
           {deviceList.map((device) => (
-            <button key={device.id} onClick={() => { setSelectedId(device.id); setEditName(false); setShowDeleteConfirm(false); router.push(`/${np}/computer/${device.id}`); }} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left ${selectedId === device.id ? 'bg-white shadow-sm ring-1 ring-neutral-200' : 'hover:bg-white/60'}`}>
+            <button key={device.id} onClick={() => { setSelectedId(device.id); setEditName(false); setShowDeleteConfirm(false); router.push(`/${np}/devices/${device.id}`); }} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left ${selectedId === device.id ? 'bg-white shadow-sm ring-1 ring-neutral-200' : 'hover:bg-white/60'}`}>
               <div className="relative shrink-0">
                 <Monitor size={16} className="text-neutral-500" />
                 <Circle size={6} className={`absolute -right-0.5 -top-0.5 fill-current ${STATUS_COLORS[device.status] ?? 'text-neutral-300'}`} />
@@ -142,36 +142,42 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const [genError, setGenError] = useState('');
   const [deviceAgents, setDeviceAgents] = useState<any[]>([]);
   const [deviceRuntimes, setDeviceRuntimes] = useState<any[]>(device.runtimes ?? []);
+  const [customAgents, setCustomAgents] = useState<any[]>([]);
   const [scanning, setScanning] = useState(false);
   const [showAddCustom, setShowAddCustom] = useState(false);
   const [selectNetworkAgent, setSelectNetworkAgent] = useState<any | null>(null);
+  const [configAgent, setConfigAgent] = useState<any | null>(null);
   const displayName = device.hostname ?? device.id;
 
-  useEffect(() => {
-    if (!device) return;
-    deviceEvents().agentsList(device.id).then((res) => {
+  const refreshDeviceAgents = () => {
+    return deviceEvents().agentsList(device.id).then((res) => {
       if (res.ok && res.agents) setDeviceAgents(res.agents);
       if (res.ok && res.runtimes) setDeviceRuntimes(res.runtimes);
     });
+  };
+
+  const refreshCustomAgents = () => {
+    return agentEvents().listCustom({ deviceId: device.id }).then((res) => {
+      if (res.ok && res.agents) setCustomAgents(res.agents);
+    });
+  };
+
+  useEffect(() => {
+    if (!device) return;
+    refreshDeviceAgents();
+    refreshCustomAgents();
   }, [device?.id]);
 
   const handleScan = async () => {
     setScanning(true);
     await deviceEvents().scan(device.id);
     setTimeout(() => {
-      deviceEvents().agentsList(device.id).then((res) => {
-        if (res.ok && res.agents) setDeviceAgents(res.agents);
-        if (res.ok && res.runtimes) setDeviceRuntimes(res.runtimes);
-        setScanning(false);
-      });
+      refreshDeviceAgents().finally(() => setScanning(false));
     }, 2000);
   };
 
   const agentosAgents = deviceAgents.filter((a) => a.category === 'agentos-hosted');
-  const customAgents = deviceAgents.filter((a) => a.source === 'custom');
-  // Scanned executor-hosted runtimes not already in deviceRuntimes
-  const scannedRuntimes = deviceAgents.filter((a) => a.source === 'scanned' && a.category === 'executor-hosted');
-  const runtimeList = [...deviceRuntimes, ...scannedRuntimes.filter((sr) => !deviceRuntimes.some((r) => r.name === sr.name || r.command === sr.command))];
+  const runtimeList = deviceRuntimes;
 
   const handleEditName = () => {
     setDeviceName(displayName);
@@ -222,54 +228,49 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           </div>
         </div>
 
-        {/* NAME */}
+        {/* DEVICE INFO */}
         <section className="rounded-lg border border-neutral-200 p-4">
-          <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">名称</h3>
-            {!editName && (
-              <button onClick={handleEditName} className="text-xs text-neutral-400 hover:text-neutral-700 flex items-center gap-1">
-                <Pencil size={10} /> 编辑
-              </button>
-            )}
-          </div>
-          {editName ? (
-            <div className="flex items-center gap-2">
-              <input value={deviceName} onChange={(e) => setDeviceName(e.target.value)} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" autoFocus onKeyDown={(e) => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') setEditName(false); }} />
-              <button onClick={saveName} className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs text-white hover:bg-neutral-800">保存</button>
-              <button onClick={() => setEditName(false)} className="rounded-md border border-neutral-200 px-3 py-1.5 text-xs hover:bg-neutral-50">取消</button>
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">设备信息</h3>
+          <div className="space-y-4">
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-xs font-medium text-neutral-500">名称</span>
+                {!editName && (
+                  <button onClick={handleEditName} className="text-xs text-neutral-400 hover:text-neutral-700 flex items-center gap-1">
+                    <Pencil size={10} /> 编辑
+                  </button>
+                )}
+              </div>
+              {editName ? (
+                <div className="flex items-center gap-2">
+                  <input value={deviceName} onChange={(e) => setDeviceName(e.target.value)} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" autoFocus onKeyDown={(e) => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') setEditName(false); }} />
+                  <button onClick={saveName} className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs text-white hover:bg-neutral-800">保存</button>
+                  <button onClick={() => setEditName(false)} className="rounded-md border border-neutral-200 px-3 py-1.5 text-xs hover:bg-neutral-50">取消</button>
+                </div>
+              ) : (
+                <p className="text-sm">{displayName}</p>
+              )}
             </div>
-          ) : (
-            <p className="text-sm">{displayName}</p>
-          )}
-        </section>
 
-        {/* INFO */}
-        <section className="rounded-lg border border-neutral-200 p-4">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">信息</h3>
-          <div className="space-y-2">
-            <InfoRow label="设备 ID" value={device.id} />
-            <InfoRow label="最后在线" value={new Date(device.lastSeenAt).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })} />
-            <InfoRow label="运行时数量" value={`${deviceRuntimes.length}`} />
-            <InfoRow label="Agent 数量" value={`${deviceAgents.length}`} />
+            <div className="border-t border-neutral-100 pt-4">
+              <div className="grid grid-cols-3 gap-2">
+                <InfoCard label="最后在线" value={new Date(device.lastSeenAt).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })} />
+                {device.systemInfo && (
+                  <>
+                  {device.systemInfo.osVersion && <InfoCard label="操作系统" value={device.systemInfo.osVersion} />}
+                  {device.systemInfo.arch && <InfoCard label="架构" value={device.systemInfo.arch} />}
+                  {device.systemInfo.cpuModel && <InfoCard label="CPU" value={device.systemInfo.cpuModel} />}
+                  {device.systemInfo.cpuCores && <InfoCard label="CPU 核心" value={`${device.systemInfo.cpuCores} 核`} />}
+                  {device.systemInfo.totalMemoryGB && <InfoCard label="总内存" value={`${device.systemInfo.totalMemoryGB} GB`} />}
+                  {device.systemInfo.freeMemoryGB && <InfoCard label="可用内存" value={`${device.systemInfo.freeMemoryGB} GB`} />}
+                  {device.systemInfo.nodeVersion && <InfoCard label="Node.js" value={device.systemInfo.nodeVersion} />}
+                  {device.systemInfo.hostname && <InfoCard label="主机名" value={device.systemInfo.hostname} />}
+                  </>
+                )}
+              </div>
+            </div>
           </div>
         </section>
-
-        {/* HARDWARE */}
-        {device.systemInfo && (
-          <section className="rounded-lg border border-neutral-200 p-4">
-            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">硬件信息</h3>
-            <div className="grid grid-cols-2 gap-2">
-              {device.systemInfo.osVersion && <InfoCard label="操作系统" value={device.systemInfo.osVersion} />}
-              {device.systemInfo.arch && <InfoCard label="架构" value={device.systemInfo.arch} />}
-              {device.systemInfo.cpuModel && <InfoCard label="CPU" value={device.systemInfo.cpuModel} />}
-              {device.systemInfo.cpuCores && <InfoCard label="CPU 核心" value={`${device.systemInfo.cpuCores} 核`} />}
-              {device.systemInfo.totalMemoryGB && <InfoCard label="总内存" value={`${device.systemInfo.totalMemoryGB} GB`} />}
-              {device.systemInfo.freeMemoryGB && <InfoCard label="可用内存" value={`${device.systemInfo.freeMemoryGB} GB`} />}
-              {device.systemInfo.nodeVersion && <InfoCard label="Node.js" value={device.systemInfo.nodeVersion} />}
-              {device.systemInfo.hostname && <InfoCard label="主机名" value={device.systemInfo.hostname} />}
-            </div>
-          </section>
-        )}
 
         {/* CONNECTION */}
         <section className="rounded-lg border border-neutral-200 p-4">
@@ -317,6 +318,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           scanning={scanning}
           onScan={handleScan}
           onSelectNetwork={setSelectNetworkAgent}
+          onSelectAgent={setConfigAgent}
         />
         <AgentGroup
           title="自定义 Agent"
@@ -327,6 +329,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           showAddButton
           onAdd={() => setShowAddCustom(true)}
           onSelectNetwork={setSelectNetworkAgent}
+          onSelectAgent={setConfigAgent}
         />
 
         {/* ACTIONS */}
@@ -359,13 +362,26 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           onClose={() => setSelectNetworkAgent(null)}
         />
       )}
+      {configAgent && (
+        <AgentConfigDialog
+          agent={configAgent}
+          runtimes={runtimeList}
+          onClose={() => setConfigAgent(null)}
+          onSaved={() => {
+            refreshDeviceAgents();
+            refreshCustomAgents();
+          }}
+        />
+      )}
       {showAddCustom && (
         <AddCustomAgentDialog
+          deviceId={device.id}
+          runtimes={runtimeList}
           onClose={() => setShowAddCustom(false)}
           onCreated={() => {
             setShowAddCustom(false);
-            deviceEvents().agentsList(device.id).then((res) => {
-              if (res.ok && res.agents) setDeviceAgents(res.agents);
+            agentEvents().listCustom({ deviceId: device.id }).then((res) => {
+              if (res.ok && res.agents) setCustomAgents(res.agents);
             });
           }}
         />
@@ -422,7 +438,7 @@ function AddDeviceDialog({ onClose, currentNetworkId }: { onClose: () => void; c
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
       <div className="mx-4 w-full max-w-md rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-semibold">添加设备</h2>
-        <p className="mt-2 text-sm text-neutral-500">在新设备上运行以下命令，将其连接到当前网络。</p>
+        <p className="mt-2 text-sm text-neutral-500">在新设备上运行以下命令，将其连接到当前团队。</p>
 
         {!inviteCommand && (
           <button onClick={generateCommand} disabled={loading} className="mt-4 rounded-md bg-neutral-900 px-4 py-2 text-sm text-white hover:bg-neutral-800 disabled:opacity-50">
@@ -449,7 +465,7 @@ function AddDeviceDialog({ onClose, currentNetworkId }: { onClose: () => void; c
   );
 }
 
-function AgentGroup({ title, subtitle, icon, iconBg, agents, scanning, onScan, showAddButton, onAdd, onSelectNetwork }: {
+function AgentGroup({ title, subtitle, icon, iconBg, agents, scanning, onScan, showAddButton, onAdd, onSelectNetwork, onSelectAgent }: {
   title: string;
   subtitle: string;
   icon: React.ReactNode;
@@ -460,6 +476,7 @@ function AgentGroup({ title, subtitle, icon, iconBg, agents, scanning, onScan, s
   showAddButton?: boolean;
   onAdd?: () => void;
   onSelectNetwork: (agent: any) => void;
+  onSelectAgent: (agent: any) => void;
 }) {
   return (
     <section className="rounded-lg border border-neutral-200 p-4">
@@ -486,7 +503,7 @@ function AgentGroup({ title, subtitle, icon, iconBg, agents, scanning, onScan, s
       ) : (
         <div className="space-y-1.5">
           {agents.map((agent) => (
-            <AgentRow key={agent.id} agent={agent} icon={icon} iconBg={iconBg} onSelectNetwork={onSelectNetwork} />
+            <AgentRow key={agent.id} agent={agent} icon={icon} iconBg={iconBg} onSelectNetwork={onSelectNetwork} onSelectAgent={onSelectAgent} />
           ))}
         </div>
       )}
@@ -503,8 +520,7 @@ function RuntimeGroup({ runtimes, scanning, onScan }: {
     <section className="rounded-lg border border-neutral-200 p-4">
       <div className="mb-3 flex items-center justify-between">
         <div>
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">Coding Agent 运行时</h3>
-          <p className="text-[11px] text-neutral-400">仅作为创建自定义 Agent 的运行环境，不作为 Agent 成员出现</p>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">检测到的编程智能体运行时</h3>
         </div>
         {onScan && (
           <button onClick={onScan} disabled={scanning} className="flex items-center gap-1 rounded-md border border-neutral-300 px-2.5 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50">
@@ -515,19 +531,19 @@ function RuntimeGroup({ runtimes, scanning, onScan }: {
       {runtimes.length === 0 ? (
         <div className="py-4 text-center text-xs text-neutral-400">暂无可用运行时</div>
       ) : (
-        <div className="space-y-1.5">
+        <div className="flex flex-wrap gap-1.5">
           {runtimes.map((runtime) => (
-            <div key={`${runtime.adapterKind}-${runtime.command}`} className="flex items-center gap-3 rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50">
-                <Zap size={14} className="text-amber-600" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium truncate">{runtime.name}</div>
-                <div className="truncate text-xs text-neutral-400">{runtime.command || runtime.adapterKind}</div>
-              </div>
-              <span className="shrink-0 rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500">Runtime</span>
-              <Circle size={6} className={`shrink-0 fill-current ${runtime.installed ? 'text-emerald-500' : 'text-neutral-300'}`} />
-            </div>
+            <span
+              key={`${runtime.adapterKind}-${runtime.command}`}
+              title={runtime.command || runtime.adapterKind}
+              className={`inline-flex h-6 items-center border px-2 text-[11px] font-medium leading-none ${
+                runtime.installed
+                  ? 'border-neutral-400 bg-white text-neutral-800'
+                  : 'border-neutral-300 bg-neutral-50 text-neutral-500'
+              }`}
+            >
+              {runtimeLabel(runtime)}{runtime.installed ? '' : '（未安装）'}
+            </span>
           ))}
         </div>
       )}
@@ -535,15 +551,16 @@ function RuntimeGroup({ runtimes, scanning, onScan }: {
   );
 }
 
-function AgentRow({ agent, icon, iconBg, onSelectNetwork }: {
+function AgentRow({ agent, icon, iconBg, onSelectNetwork, onSelectAgent }: {
   agent: any;
   icon: React.ReactNode;
   iconBg: string;
   onSelectNetwork: (agent: any) => void;
+  onSelectAgent: (agent: any) => void;
 }) {
   const publishedCount = agent.publishedNetworkIds?.length ?? 0;
   return (
-    <div className="flex items-center gap-3 rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
+    <div onClick={() => onSelectAgent(agent)} className="flex w-full cursor-pointer items-center gap-3 rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2 text-left hover:bg-white">
       <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${iconBg}`}>
         {icon}
       </div>
@@ -553,12 +570,12 @@ function AgentRow({ agent, icon, iconBg, onSelectNetwork }: {
       </div>
       {publishedCount > 0 && (
         <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
-          已发布到 {publishedCount} 个网络
+          已发布到 {publishedCount} 个团队
         </span>
       )}
       <Circle size={6} className={`shrink-0 fill-current ${agent.status === 'online' ? 'text-emerald-500' : 'text-neutral-300'}`} />
-      <button onClick={() => onSelectNetwork(agent)} className="shrink-0 rounded-md border border-neutral-300 px-2 py-1 text-[11px] hover:bg-neutral-50">
-        选择网络
+      <button onClick={(e) => { e.stopPropagation(); onSelectNetwork(agent); }} className="shrink-0 rounded-md border border-neutral-300 px-2 py-1 text-[11px] hover:bg-neutral-50">
+        选择团队
       </button>
     </div>
   );
@@ -596,11 +613,11 @@ function SelectNetworkDialog({ agent, onClose }: { agent: any; onClose: () => vo
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
       <div className="mx-4 w-full max-w-md rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">选择网络 — {agent.name}</h2>
+          <h2 className="text-lg font-semibold">选择团队 — {agent.name}</h2>
           <button onClick={onClose} className="rounded-md p-1 hover:bg-neutral-100"><X size={16} /></button>
         </div>
         {isCustom && (
-          <p className="mt-2 text-xs text-neutral-500">自定义 Agent 使用本机 Coding Agent 运行时，仅可发布到私有网络或您拥有的网络。</p>
+          <p className="mt-2 text-xs text-neutral-500">自定义 Agent 使用本机 Coding Agent 运行时，仅可发布到私有团队或您拥有的团队。</p>
         )}
         <div className="mt-4 max-h-64 space-y-1 overflow-y-auto">
           {visibleNetworks.map((net) => {
@@ -623,7 +640,7 @@ function SelectNetworkDialog({ agent, onClose }: { agent: any; onClose: () => vo
             );
           })}
           {visibleNetworks.length === 0 && (
-            <div className="py-4 text-center text-xs text-neutral-400">暂无可选网络</div>
+            <div className="py-4 text-center text-xs text-neutral-400">暂无可选团队</div>
           )}
         </div>
         <div className="mt-6 flex justify-end">
@@ -635,35 +652,200 @@ function SelectNetworkDialog({ agent, onClose }: { agent: any; onClose: () => vo
 }
 
 const RUNTIME_OPTIONS = [
-  { value: 'claude-code', label: 'Claude Code', description: 'Anthropic 官方 CLI，擅长代码生成、调试和重构' },
-  { value: 'codex', label: 'Codex CLI', description: 'OpenAI Codex CLI，适合快速代码生成和脚本编写' },
+  { key: 'claude-code', adapterKind: 'claude-code', command: 'claude', label: 'Claude Code', description: 'Anthropic 官方 CLI，擅长代码生成、调试和重构' },
+  { key: 'codex', adapterKind: 'codex', command: 'codex', label: 'Codex CLI', description: 'OpenAI Codex CLI，适合快速代码生成和脚本编写' },
+  { key: 'kimi-cli', adapterKind: 'codex', command: 'kimi-cli', label: 'Kimi CLI', description: 'Kimi CLI，适合使用本机 Kimi Coding Agent 运行时' },
 ];
 
-function AddCustomAgentDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+function normalizeRuntimeKind(value?: string) {
+  return (value || '').trim().toLowerCase();
+}
+
+function runtimeKey(runtime: any) {
+  const kind = normalizeRuntimeKind(runtime.adapterKind);
+  const command = (runtime.command || '').toLowerCase();
+  const name = (runtime.name || '').toLowerCase();
+  if (kind === 'claude-code' || command.includes('/claude') || command === 'claude') return 'claude-code';
+  if (kind === 'kimi-cli' || command.includes('kimi-cli') || name.includes('kimi')) return 'kimi-cli';
+  if (kind === 'codex' || command.includes('/codex') || command === 'codex') return 'codex';
+  return kind || command || name || 'unknown-runtime';
+}
+
+function adapterKindForRuntime(runtime: any) {
+  const key = runtimeKey(runtime);
+  if (key === 'claude-code') return 'claude-code';
+  return 'codex';
+}
+
+function runtimeLabel(runtime: any) {
+  const key = runtimeKey(runtime);
+  if (key === 'claude-code') return 'Claude Code';
+  if (key === 'codex') return 'Codex CLI';
+  if (key === 'kimi-cli') return 'Kimi CLI';
+  return runtime.name || runtime.command || runtime.adapterKind || '未知运行时';
+}
+
+function buildRuntimeOptions(runtimes: any[]) {
+  const discovered = runtimes.map((runtime) => ({
+    key: runtimeKey(runtime),
+    adapterKind: adapterKindForRuntime(runtime),
+    command: runtime.command || runtime.name?.toLowerCase() || 'codex',
+    label: runtimeLabel(runtime),
+    description: runtime.command || runtime.adapterKind,
+  }));
+  const merged = [...discovered, ...RUNTIME_OPTIONS];
+  const seen = new Set<string>();
+  return merged.filter((runtime) => {
+    const key = runtime.key || runtimeKey(runtime);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function AgentConfigDialog({ agent, runtimes, onClose, onSaved }: { agent: any; runtimes: any[]; onClose: () => void; onSaved: () => void }) {
+  const isCustom = agent.source === 'custom';
+  const isAgentOS = agent.category === 'agentos-hosted';
+  const editable = isCustom || isAgentOS;
+  const runtimeOptions = useMemo(() => buildRuntimeOptions(runtimes), [runtimes]);
+  const initialRuntimeIndex = Math.max(0, runtimeOptions.findIndex((runtime) => runtime.adapterKind === agent.adapterKind && runtime.command === agent.command));
+  const [name, setName] = useState<string>(agent.name ?? '');
+  const [description, setDescription] = useState<string>(agent.description ?? '');
+  const [runtimeIndex, setRuntimeIndex] = useState(String(initialRuntimeIndex));
+  const [cwd, setCwd] = useState<string>(agent.cwd ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const selectedRuntime = runtimeOptions[Number(runtimeIndex)] ?? runtimeOptions[0] ?? RUNTIME_OPTIONS[0];
+
+  const save = async () => {
+    const trimmedName = name.trim();
+    if (!trimmedName) { setError('名称为必填项'); return; }
+    if (/\s/.test(trimmedName)) { setError('名称不能包含空格，请使用连字符（-）'); return; }
+    setSaving(true);
+    setError('');
+    const payload: { id: string; name: string; adapterKind?: string; command?: string; cwd?: string | null; description?: string | null } = {
+      id: agent.id,
+      name: trimmedName,
+      cwd: cwd.trim() || null,
+      description: description.trim() || null,
+    };
+    if (isCustom) {
+      payload.adapterKind = selectedRuntime.adapterKind;
+      payload.command = selectedRuntime.command;
+    }
+    const res = await agentEvents().updateConfig(payload);
+    setSaving(false);
+    if (res.ok) {
+      onSaved();
+      onClose();
+    } else {
+      setError(res.error === 'NAME_HAS_SPACE' ? '名称不能包含空格，请使用连字符（-）' : res.error ?? '保存失败');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="mx-4 w-full max-w-lg rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">{isCustom ? '自定义 Agent 配置' : 'AgentOS Agent 配置'}</h2>
+          <button onClick={onClose} className="rounded-md p-1 hover:bg-neutral-100"><X size={16} /></button>
+        </div>
+        <div className="mt-4 space-y-3">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600">名称</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} disabled={!editable} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50" />
+            <p className="mt-1 text-[11px] text-neutral-400">名称不能包含空格，可使用连字符（-）。</p>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600">功能介绍</label>
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} disabled={!editable} rows={3} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 resize-none disabled:bg-neutral-50" placeholder="描述这个 Agent 的用途和能力" />
+          </div>
+          {isCustom && (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-600">Code Agent 运行时</label>
+              <select value={runtimeIndex} onChange={(e) => setRuntimeIndex(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400">
+                {runtimeOptions.map((runtime, index) => (
+                  <option key={`${runtime.adapterKind}-${runtime.command}-${index}`} value={String(index)}>{runtime.label}</option>
+                ))}
+              </select>
+              {selectedRuntime && (
+                <p className="mt-1 text-[11px] text-neutral-400">{selectedRuntime.description}</p>
+              )}
+            </div>
+          )}
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600">{isCustom ? '项目目录' : '目录'}</label>
+            <div className="flex gap-2">
+              <input value={cwd} onChange={(e) => setCwd(e.target.value)} disabled={!editable} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50" placeholder="/path/to/project（可选）" />
+              {editable && (
+                <label className="shrink-0 flex cursor-pointer items-center gap-1 rounded-md border border-neutral-200 px-3 py-1.5 text-xs text-neutral-600 hover:bg-neutral-50">
+                  <FolderOpen size={12} /> 浏览
+                  <input
+                    type="file"
+                    // @ts-expect-error webkitdirectory is non-standard
+                    webkitdirectory=""
+                    directory=""
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const relativePath = (file as any).webkitRelativePath as string | undefined;
+                        if (relativePath) {
+                          const dirName = relativePath.split('/')[0];
+                          setCwd((prev) => prev || `~/projects/${dirName}`);
+                        }
+                      }
+                    }}
+                  />
+                </label>
+              )}
+            </div>
+            <p className="mt-1 text-[11px] text-neutral-400">{isCustom ? 'Agent 启动时的工作目录，留空则使用默认路径' : 'AgentOS Agent 所在目录，留空则保持未配置状态'}</p>
+          </div>
+        </div>
+        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+        <div className="mt-6 flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-50">关闭</button>
+          {editable && (
+            <button onClick={save} disabled={saving} className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white hover:bg-neutral-800 disabled:opacity-50">
+              {saving ? '保存中...' : '保存'}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AddCustomAgentDialog({ deviceId, runtimes, onClose, onCreated }: { deviceId: string; runtimes: any[]; onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState('');
-  const [adapterKind, setAdapterKind] = useState('claude-code');
-  const [command, setCommand] = useState('');
-  const [args, setArgs] = useState('');
+  const runtimeOptions = useMemo(() => buildRuntimeOptions(runtimes), [runtimes]);
+  const [runtimeIndex, setRuntimeIndex] = useState('0');
   const [cwd, setCwd] = useState('');
   const [description, setDescription] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const selectedRuntime = RUNTIME_OPTIONS.find((r) => r.value === adapterKind);
+  const selectedRuntime = runtimeOptions[Number(runtimeIndex)] ?? runtimeOptions[0] ?? RUNTIME_OPTIONS[0];
 
   const handleSubmit = async () => {
-    if (!name.trim() || !command.trim()) {
-      setError('名称和命令为必填项');
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      setError('名称为必填项');
+      return;
+    }
+    if (/\s/.test(trimmedName)) {
+      setError('名称不能包含空格，请使用连字符（-）');
       return;
     }
     setLoading(true);
     setError('');
     const payload = {
-      name: name.trim(),
-      adapterKind,
-      command: command.trim(),
-      args: args.trim() ? args.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+      name: trimmedName,
+      adapterKind: selectedRuntime.adapterKind,
+      command: selectedRuntime.command,
       category: 'executor-hosted',
+      deviceId,
       cwd: cwd.trim() || undefined,
       description: description.trim() || undefined,
     };
@@ -686,13 +868,18 @@ function AddCustomAgentDialog({ onClose, onCreated }: { onClose: () => void; onC
         <div className="mt-4 space-y-3">
           <div>
             <label className="mb-1 block text-xs font-medium text-neutral-600">名称 <span className="text-red-500">*</span></label>
-            <input value={name} onChange={(e) => setName(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="My Agent" />
+            <input value={name} onChange={(e) => setName(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="my-agent" />
+            <p className="mt-1 text-[11px] text-neutral-400">名称不能包含空格，可使用连字符（-）。</p>
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">Coding Agent 运行时 <span className="text-red-500">*</span></label>
-            <select value={adapterKind} onChange={(e) => setAdapterKind(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400">
-              {RUNTIME_OPTIONS.map((r) => (
-                <option key={r.value} value={r.value}>{r.label}</option>
+            <label className="mb-1 block text-xs font-medium text-neutral-600">功能介绍</label>
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 resize-none" placeholder="描述这个 Agent 的用途和能力（可选）" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600">Code Agent 运行时 <span className="text-red-500">*</span></label>
+            <select value={runtimeIndex} onChange={(e) => setRuntimeIndex(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400">
+              {runtimeOptions.map((r, index) => (
+                <option key={`${r.adapterKind}-${r.command}-${index}`} value={String(index)}>{r.label}</option>
               ))}
             </select>
             {selectedRuntime && (
@@ -725,18 +912,6 @@ function AddCustomAgentDialog({ onClose, onCreated }: { onClose: () => void; onC
               </label>
             </div>
             <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录，留空则使用默认路径</p>
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">命令 <span className="text-red-500">*</span></label>
-            <input value={command} onChange={(e) => setCommand(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="claude" />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">参数 (逗号分隔)</label>
-            <input value={args} onChange={(e) => setArgs(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="--verbose, --port, 3000" />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">功能介绍</label>
-            <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 resize-none" placeholder="描述这个 Agent 的用途和能力（可选）" />
           </div>
         </div>
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}

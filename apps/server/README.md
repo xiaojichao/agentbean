@@ -16,7 +16,7 @@ npm test          # 运行测试
 
 ### 数据库层 (`db.ts`)
 
-每个网络拥有独立的 SQLite 数据库，包含以下表：
+每个团队拥有独立的 SQLite 数据库，包含以下表：
 
 | 表名 | 说明 |
 |------|------|
@@ -27,9 +27,9 @@ npm test          # 运行测试
 | `artifacts` | 文件元数据（存储路径引用） |
 
 全局数据库 (`global.db`) 包含：
-- `networks` — 网络定义
+- `networks` — 团队定义
 - `devices` — 设备注册信息
-- `network_members` — 网络成员关系
+- `network_members` — 团队成员关系
 
 ### 运行时注册表 (`registry.ts`)
 
@@ -43,19 +43,19 @@ npm test          # 运行测试
 三截 token 格式：`{networkId}:{deviceId}:{secret}`
 - Device Daemon 连接时携带 token
 - Server 验证 deviceId 和 secret 是否匹配全局数据库记录
-- 通过后在 `socketNetworkMap` 中记录 socket 与网络的关联
+- 通过后在 `socketNetworkMap` 中记录 socket 与团队的关联
 
-### 网络隔离存储 (`storage.ts`)
+### 团队隔离存储 (`storage.ts`)
 
 `StorageManager` 按 networkId 创建隔离的存储空间：
-- `createSpace(networkId)` — 创建网络专属目录和数据库
-- `getSpace(networkId)` — 获取网络的 DAO 集合
+- `createSpace(networkId)` — 创建团队专属目录和数据库
+- `getSpace(networkId)` — 获取团队的 DAO 集合
 - 每个 space 包含：messages DAO、artifacts DAO、agents DAO
 
 ### 频道服务 (`channels.ts`)
 
 - 频道 CRUD（创建、列表、成员管理）
-- 消息持久化到对应网络的 SQLite
+- 消息持久化到对应团队的 SQLite
 - 系统消息生成（Agent 上线/离线/加入频道）
 - 历史消息分页加载
 
@@ -112,7 +112,7 @@ Express 路由：
 | `message:send` | Web → Server | 人类发送消息 |
 | `channel:message` | Server → Web | 新消息广播 |
 | `agent:metrics` | Web → Server | 查询性能指标 |
-| `network:list` | Web ↔ Server | 网络列表/创建/切换 |
+| `network:list` | Web ↔ Server | 团队列表/创建/切换 |
 
 ## 环境变量
 

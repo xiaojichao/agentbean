@@ -14,7 +14,7 @@ interface AdminDevice { id: string; status: string; agentCount: number; lastSeen
 interface AdminAgent { id: string; name: string; role: string; adapterKind: string; status: string; visibility?: string; networkId?: string; deviceId?: string; }
 
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
-  { key: 'networks', label: '网络', icon: <Globe size={14} /> },
+  { key: 'networks', label: '团队', icon: <Globe size={14} /> },
   { key: 'users', label: '用户', icon: <Users size={14} /> },
   { key: 'devices', label: '设备', icon: <Monitor size={14} /> },
   { key: 'agents', label: 'Agent', icon: <Bot size={14} /> },
@@ -155,7 +155,7 @@ function DeleteButton({ onClick, disabled, label }: { onClick: () => void; disab
 
 function NetworksTable({ networks, onDelete }: { networks: AdminNetwork[]; onDelete: (id: string) => void }) {
   const [expanded, setExpanded] = useState<string | null>(null);
-  if (networks.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无网络</div>;
+  if (networks.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无团队</div>;
   return (
     <div className="space-y-3">
       {networks.map((n) => (
@@ -173,7 +173,7 @@ function NetworksTable({ networks, onDelete }: { networks: AdminNetwork[]; onDel
               <button onClick={() => setExpanded(expanded === n.id ? null : n.id)} className="text-xs text-neutral-500 hover:text-neutral-700 flex items-center gap-1">
                 <Users size={12} /> {n.members?.length ?? 0} 成员
               </button>
-              <DeleteButton onClick={() => onDelete(n.id)} disabled={n.id === 'default'} label="网络" />
+              <DeleteButton onClick={() => onDelete(n.id)} disabled={n.id === 'default'} label="团队" />
             </div>
           </div>
           {expanded === n.id && (
@@ -218,7 +218,7 @@ function UsersTable({ users, onDelete }: { users: AdminUser[]; onDelete: (id: st
 function DevicesTable({ devices }: { devices: AdminDevice[] }) {
   if (devices.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无在线设备</div>;
   return (
-    <Table headers={['设备 ID', '状态', 'Agent 数', '网络', '最后心跳']}>
+    <Table headers={['设备 ID', '状态', 'Agent 数', '团队', '最后心跳']}>
       {devices.map((d) => (
         <tr key={d.id} className="hover:bg-neutral-50">
           <td className="px-4 py-2.5 font-mono text-xs">{d.id.slice(0, 12)}...</td>
@@ -235,7 +235,7 @@ function DevicesTable({ devices }: { devices: AdminDevice[] }) {
 function AgentsTable({ agents, onDelete }: { agents: AdminAgent[]; onDelete: (id: string) => void }) {
   if (agents.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无 Agent</div>;
   return (
-    <Table headers={['名称', '角色', '适配器', '状态', '可见性', '网络', '']}>
+    <Table headers={['名称', '角色', '适配器', '状态', '可见性', '团队', '']}>
       {agents.map((a) => (
         <tr key={a.id} className="hover:bg-neutral-50">
           <td className="px-4 py-2.5 font-medium">{a.name}</td>
