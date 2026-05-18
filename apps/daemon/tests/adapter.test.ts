@@ -29,7 +29,11 @@ describe('CodexAdapter', () => {
         process.stdout.write('BAD:' + JSON.stringify(args));
         process.exit(2);
       }
-      process.stdout.write('OK:' + args[1]);
+      if (args[1] !== '--skip-git-repo-check') {
+        process.stdout.write('BAD:' + JSON.stringify(args));
+        process.exit(3);
+      }
+      process.stdout.write('OK:' + args[2]);
     `);
     chmodSync(script, 0o755);
 
@@ -38,6 +42,20 @@ describe('CodexAdapter', () => {
     expect(out).toContain('OK:');
     expect(out).toContain('# user');
     expect(out).toContain('hi-codex');
+  });
+
+  it('adds the trusted-directory bypass to configured codex exec args', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentbean-codex-test-'));
+    const script = join(dir, 'fake-codex.cjs');
+    writeFileSync(script, `#!/usr/bin/env node
+      const args = process.argv.slice(2);
+      process.stdout.write(JSON.stringify(args));
+    `);
+    chmodSync(script, 0o755);
+
+    const adapter = new CodexAdapter({ command: script, args: ['exec', '--json'] });
+    const out = await adapter.ask({ prompt: 'hi-codex', history: [] }, new AbortController().signal);
+    expect(out).toContain('["exec","--skip-git-repo-check","--json"');
   });
 
   it('aborts the child process on signal', async () => {

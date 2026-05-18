@@ -36,6 +36,15 @@ function extractReply(output: string): string {
   return clean.trim();
 }
 
+function normalizeExecArgs(args?: string[]): string[] {
+  const baseArgs = args && args.length > 0 ? args : ['exec'];
+  const subcommand = baseArgs[0];
+  if ((subcommand === 'exec' || subcommand === 'e') && !baseArgs.includes('--skip-git-repo-check')) {
+    return [subcommand, '--skip-git-repo-check', ...baseArgs.slice(1)];
+  }
+  return baseArgs;
+}
+
 export class CodexAdapter implements CliAdapter {
   readonly kind = 'codex' as const;
   constructor(private readonly opts: CodexAdapterOpts) {}
@@ -45,7 +54,7 @@ export class CodexAdapter implements CliAdapter {
       const payload = renderPayload(input, this.opts.systemPrompt ?? input.systemPrompt);
       const cwd = input.workspace ?? this.opts.cwd ?? process.cwd();
       const baseCommand = this.opts.command || 'codex';
-      const configuredArgs = this.opts.args && this.opts.args.length > 0 ? this.opts.args : ['exec'];
+      const configuredArgs = normalizeExecArgs(this.opts.args);
       const baseArgs = [...configuredArgs, payload];
       const command = input.sandboxProfilePath ? 'sandbox-exec' : baseCommand;
       const args = input.sandboxProfilePath
