@@ -48,10 +48,10 @@ describe('routeHumanMessage', () => {
     expect(result.reason).toBe('FALLBACK');
   });
 
-  it('reports unknown mention but still picks fallback', () => {
+  it('reports unknown mention without falling back to another agent', () => {
     const a = make('a', '肖');
     const result = routeHumanMessage({ body: '@Nobody 看', members: [a] });
-    expect(result.targets.map((m) => m.id)).toEqual(['a']);
+    expect(result.targets).toEqual([]);
     expect(result.reason).toBe('UNKNOWN_MENTION');
   });
 });
