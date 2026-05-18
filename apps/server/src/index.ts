@@ -854,7 +854,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     });
 
     socket.on('message:send', async (
-      payload: { channelId: string; body: string; clientMsgId: string },
+      payload: { channelId: string; body: string; clientMsgId?: string; asTask?: boolean },
       ack?: (r: any) => void,
     ) => {
       const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
@@ -865,13 +865,32 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       if (!body) return ack?.({ ok: false, error: 'EMPTY' });
       const ch = channels.get(networkId, payload.channelId);
       if (!ch) return ack?.({ ok: false, error: 'NO_CHANNEL' });
+      const userId = socket.data.userId as string | undefined;
+      if (!userId) return ack?.({ ok: false, error: 'NOT_AUTHENTICATED' });
 
       const humanMsg = {
-        id: newId(), channelId: ch.id, senderKind: 'human' as const, senderId: (socket.data.userId as string) ?? null,
+        id: newId(), channelId: ch.id, senderKind: 'human' as const, senderId: userId,
         body, createdAt: Date.now(),
         metaJson: JSON.stringify({ clientMsgId: payload.clientMsgId }),
       };
       persist(humanMsg);
+      if (payload.asTask) {
+        const title = body.split(/\r?\n/)[0]?.trim().slice(0, 80) || '未命名任务';
+        const task = sp.tasks.create({
+          title,
+          description: body,
+          status: 'todo',
+          creatorId: userId,
+          channelId: ch.id,
+          tags: ['聊天'],
+          createdAt: Date.now(),
+        });
+        persist({
+          id: newId(), channelId: ch.id, senderKind: 'system', senderId: null,
+          body: `已创建任务：#${task.id.slice(-6)} "${task.title}"`,
+          createdAt: Date.now(), metaJson: JSON.stringify({ kind: 'task-created', taskId: task.id }),
+        });
+      }
       ack?.({ ok: true, id: humanMsg.id });
 
       const visibleAgents = buildVisibleAgentDtos(networkId);

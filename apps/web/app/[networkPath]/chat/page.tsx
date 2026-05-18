@@ -5,7 +5,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Inbox, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, MoreHorizontal, Copy, Trash2, Circle, FolderOpen, ChevronRight } from 'lucide-react';
 import { getWebSocket, dmEvents, channelEvents, memberEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
-import type { ChatMessage } from '@/lib/schema';
+import type { AgentStatus, ChatMessage } from '@/lib/schema';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 
 export default function ChatPage() {
@@ -114,6 +114,9 @@ export default function ChatPage() {
   const activeName = activeChannelObj?.name ?? '';
   const activeDm = dms.find((d) => d.id === activeChannel);
   const isDm = !!activeDm;
+  const activeDmAgent = activeDm ? agents[activeDm.dmTargetId] : undefined;
+  const activeDmName = activeDmAgent?.name ?? activeDm?.name ?? '';
+  const activeDmSubtitle = activeDmAgent?.description?.trim() || activeDmAgent?.role || '智能体私聊';
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
@@ -188,8 +191,9 @@ export default function ChatPage() {
 
   const sendMessage = () => {
     if (!input.trim() || !activeChannel) return;
-    getWebSocket().emit('message:send', { channelId: activeChannel, body: input.trim() });
+    getWebSocket().emit('message:send', { channelId: activeChannel, body: input.trim(), asTask });
     setInput('');
+    setAsTask(false);
   };
 
   const messages = activeChannel ? (messagesByChannel[activeChannel] ?? []) : [];
@@ -277,13 +281,18 @@ export default function ChatPage() {
               {dms.map((dm) => {
                 const dmAgent = agents[dm.dmTargetId];
                 const dmStatus = dmAgent?.status;
+                const dmName = dmAgent?.name ?? dm.name;
+                const dmSubtitle = dmAgent?.description?.trim() || dmAgent?.role || '智能体私聊';
                 return (
                   <button key={dm.id} onClick={() => { setActiveChannel(dm.id); setSidebarView('channels'); router.push(`/${np}/dm/${dm.id}`); }} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${activeChannel === dm.id && sidebarView === 'channels' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
-                    <MessageSquare size={14} className="text-neutral-400 shrink-0" />
-                    <span className="truncate">{dm.name}</span>
-                    {dmStatus && (
-                      <span className={`ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${dmStatus === 'online' ? 'bg-emerald-50 text-emerald-600' : dmStatus === 'busy' ? 'bg-amber-50 text-amber-600' : 'bg-neutral-100 text-neutral-400'}`}>{dmStatus === 'online' ? '在线' : dmStatus === 'busy' ? '忙碌' : '离线'}</span>
-                    )}
+                    <div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-purple-100 text-[10px] font-semibold text-purple-700">
+                      {dmName[0]?.toUpperCase() ?? 'A'}
+                      <span className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border border-[#F8F5E6] ${statusDotClass(dmStatus)}`} />
+                    </div>
+                    <div className="min-w-0 flex-1 text-left">
+                      <div className="truncate text-sm leading-4">{dmName}</div>
+                      <div className="truncate text-[10px] leading-3 text-neutral-400">{dmSubtitle}</div>
+                    </div>
                   </button>
                 );
               })}
@@ -303,14 +312,35 @@ export default function ChatPage() {
           <SavedView savedIds={savedIds} />
         ) : (
         <>
-        {/* Channel header */}
+        {/* Conversation header */}
         {activeChannel && (
           <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
-            <div className="flex items-center gap-2 min-w-0 flex-1">
-              {activeChannelObj?.visibility === 'private' ? <Lock size={14} className="text-neutral-400 shrink-0" /> : <Hash size={14} className="text-neutral-400 shrink-0" />}
-              <span className="text-sm font-semibold truncate">{activeName}</span>
+            <div className="flex min-w-0 flex-1 items-center gap-3">
+              {isDm ? (
+                <>
+                  <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-purple-100 text-xs font-semibold text-purple-700">
+                    {activeDmName[0]?.toUpperCase() ?? 'A'}
+                    <span className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-white ${statusDotClass(activeDmAgent?.status)}`} />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-neutral-900">{activeDmName}</div>
+                    <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-neutral-400">
+                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusDotClass(activeDmAgent?.status)}`} />
+                      <span className="shrink-0">{statusLabel(activeDmAgent?.status)}</span>
+                      <span className="text-neutral-300">·</span>
+                      <span className="truncate">{activeDmSubtitle}</span>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {activeChannelObj?.visibility === 'private' ? <Lock size={14} className="shrink-0 text-neutral-400" /> : <Hash size={14} className="shrink-0 text-neutral-400" />}
+                  <span className="truncate text-sm font-semibold">{activeName}</span>
+                </>
+              )}
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            {!isDm && (
+            <div className="flex shrink-0 items-center gap-2">
               <div className="relative">
                 <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400" />
                 <input
@@ -352,6 +382,7 @@ export default function ChatPage() {
                 )}
               </div>
             </div>
+            )}
           </div>
         )}
 
@@ -367,7 +398,7 @@ export default function ChatPage() {
         {tab === 'chat' ? (
           <>
             <div className="flex-1 overflow-y-auto px-4 py-3">
-              {!activeChannel && <div className="py-12 text-center text-sm text-neutral-400">选择一个频道开始聊天</div>}
+              {!activeChannel && <div className="py-12 text-center text-sm text-neutral-400">选择一个频道或私聊开始聊天</div>}
               {activeChannel && messages.length === 0 && (
                 <div className="py-8 text-center text-xs text-neutral-400">
                   <div className="mb-1">消息的开头</div>
@@ -399,12 +430,12 @@ export default function ChatPage() {
                       ))}
                     </div>
                   )}
-                  <textarea ref={textareaRef} value={input} onChange={handleInputChange} onKeyDown={handleInputKeyDown} rows={2} placeholder={isDm ? `私聊 ${activeDm?.name ?? ''}` : `Message #${activeName}  (输入 @ 提及成员)`} className="w-full resize-none px-3 pt-2.5 pb-1 text-sm outline-none placeholder:text-neutral-400" />
+                  <textarea ref={textareaRef} value={input} onChange={handleInputChange} onKeyDown={handleInputKeyDown} rows={2} placeholder={isDm ? `私聊 @${activeDmName}` : `发送到 #${activeName}  (输入 @ 提及成员)`} className="w-full resize-none px-3 pt-2.5 pb-1 text-sm outline-none placeholder:text-neutral-400" />
                   <div className="flex items-center justify-between px-2 pb-2">
                     <div className="flex items-center gap-1">
                       <button className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600" title="附件图片"><Image size={16} /></button>
                       <button className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600" title="附件文件"><Paperclip size={16} /></button>
-                      <label className="flex items-center gap-1 ml-1 cursor-pointer text-neutral-400 hover:text-neutral-600"><input type="checkbox" checked={asTask} onChange={(e) => setAsTask(e.target.checked)} className="rounded border-neutral-300" /><span className="text-xs">As Task</span></label>
+                      <label className="ml-1 flex cursor-pointer items-center gap-1 text-neutral-400 hover:text-neutral-600"><input type="checkbox" checked={asTask} onChange={(e) => setAsTask(e.target.checked)} className="rounded border-neutral-300" /><span className="text-xs">作为任务</span></label>
                     </div>
                     <button onClick={sendMessage} disabled={!input.trim()} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40"><Send size={14} /></button>
                   </div>
@@ -570,6 +601,22 @@ function formatTime(ts: number): string {
     return `${diffDays}天前`;
   }
   return `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')} ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+function statusLabel(status?: AgentStatus): string {
+  if (status === 'online') return '在线';
+  if (status === 'busy') return '忙碌';
+  if (status === 'connecting') return '连接中';
+  if (status === 'error') return '异常';
+  return '离线';
+}
+
+function statusDotClass(status?: AgentStatus): string {
+  if (status === 'online') return 'bg-emerald-500';
+  if (status === 'busy') return 'bg-amber-500';
+  if (status === 'connecting') return 'bg-sky-500';
+  if (status === 'error') return 'bg-red-500';
+  return 'bg-neutral-300';
 }
 
 function parseMentions(body: string): { type: 'text' | 'mention'; text: string }[] {
