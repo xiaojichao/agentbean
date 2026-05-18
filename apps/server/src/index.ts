@@ -951,7 +951,6 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
         const sp = storageManager.getSpace(networkId);
         const query = (payload?.query ?? '').trim();
-        if (!query) return ack?.({ ok: true, messages: [] });
         const results = sp.messages.search(query, payload?.limit ?? 20);
         ack?.({ ok: true, messages: results });
       } catch (e: any) {

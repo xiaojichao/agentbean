@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Hash, Search, Plus, Inbox, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, MoreHorizontal, Copy, Trash2, Circle, FolderOpen, ChevronRight } from 'lucide-react';
+import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, MoreHorizontal, Copy, Trash2, Circle, FolderOpen, ChevronRight } from 'lucide-react';
 import { getWebSocket, dmEvents, channelEvents, memberEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentStatus, ChatMessage } from '@/lib/schema';
@@ -39,6 +39,7 @@ export default function ChatPage() {
   const [channelsExpanded, setChannelsExpanded] = useState(true);
   const [dmsExpanded, setDmsExpanded] = useState(true);
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
+  const [savedLoaded, setSavedLoaded] = useState(false);
   const [_searchResults, setSearchResults] = useState<ChatMessage[] | null>(null);
   const [showMention, setShowMention] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -47,6 +48,7 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const savedKey = `agentbean:chat:saved:${np}`;
 
   // Subscribe to channels + DMs
   useEffect(() => {
@@ -93,6 +95,23 @@ export default function ChatPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messagesByChannel]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(savedKey);
+      setSavedIds(new Set(raw ? JSON.parse(raw) : []));
+    } catch {
+      setSavedIds(new Set());
+    }
+    setSavedLoaded(true);
+  }, [savedKey]);
+
+  useEffect(() => {
+    if (!savedLoaded) return;
+    try {
+      window.localStorage.setItem(savedKey, JSON.stringify([...savedIds]));
+    } catch {}
+  }, [savedIds, savedKey, savedLoaded]);
 
   // Fetch members for @mention
   useEffect(() => {
@@ -225,7 +244,7 @@ export default function ChatPage() {
         {/* Chat label */}
         <div className="flex h-14 items-center border-b border-neutral-300/40 px-4 text-xs font-semibold uppercase tracking-wider text-neutral-500">聊天</div>
 
-        {/* Search / Inbox / Saved buttons */}
+        {/* Search / Activity / Saved buttons */}
         <div className="px-2 py-2 space-y-0.5">
           <button onClick={() => { setSidebarView(sidebarView === 'search' ? 'channels' : 'search'); setSearch(''); setSearchResults(null); }} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'search' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
             <Search size={14} className="text-neutral-400 shrink-0" />
@@ -233,12 +252,13 @@ export default function ChatPage() {
             <span className="ml-auto text-[10px] text-neutral-400">⌘K</span>
           </button>
           <button onClick={() => setSidebarView(sidebarView === 'inbox' ? 'channels' : 'inbox')} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'inbox' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
-            <Inbox size={14} className="text-neutral-400 shrink-0" />
-            <span>收件箱</span>
+            <Activity size={14} className="text-neutral-400 shrink-0" />
+            <span>活动</span>
+            <span className="ml-auto rounded bg-pink-100 px-1.5 py-0.5 text-[10px] font-medium text-pink-600">{Object.values(messagesByChannel).flat().filter((m) => m.senderKind !== 'system').length}</span>
           </button>
           <button onClick={() => setSidebarView(sidebarView === 'saved' ? 'channels' : 'saved')} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'saved' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
             <Bookmark size={14} className="text-neutral-400 shrink-0" />
-            <span>已收藏</span>
+            <span>收藏</span>
           </button>
         </div>
 
@@ -305,11 +325,26 @@ export default function ChatPage() {
       {/* Right panel */}
       <div className="flex flex-1 flex-col min-w-0">
         {sidebarView === 'search' ? (
-          <SearchView onClose={() => setSidebarView('channels')} onJump={(chId) => { router.push(`/${np}/channel/${chId}`); }} />
+          <SearchView onClose={() => setSidebarView('channels')} onJump={(chId) => {
+            setActiveChannel(chId);
+            setSidebarView('channels');
+            const dm = dms.find((item) => item.id === chId);
+            router.push(dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`);
+          }} />
         ) : sidebarView === 'inbox' ? (
-          <InboxView />
+          <ActivityView onJump={(chId) => {
+            setActiveChannel(chId);
+            setSidebarView('channels');
+            const dm = dms.find((item) => item.id === chId);
+            router.push(dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`);
+          }} />
         ) : sidebarView === 'saved' ? (
-          <SavedView savedIds={savedIds} />
+          <SavedView savedIds={savedIds} onUnsave={(msgId) => toggleSave(msgId)} onJump={(chId) => {
+            setActiveChannel(chId);
+            setSidebarView('channels');
+            const dm = dms.find((item) => item.id === chId);
+            router.push(dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`);
+          }} />
         ) : (
         <>
         {/* Conversation header */}
@@ -619,6 +654,30 @@ function statusDotClass(status?: AgentStatus): string {
   return 'bg-neutral-300';
 }
 
+function uniqueMessages(messages: ChatMessage[]): ChatMessage[] {
+  const map = new Map<string, ChatMessage>();
+  for (const msg of messages) map.set(msg.id, msg);
+  return [...map.values()];
+}
+
+function conversationLabel(
+  channelId: string,
+  channels: Array<{ id: string; name: string }>,
+  dms: Array<{ id: string; name: string; dmTargetId: string }>,
+  agents: Record<string, { name: string }>,
+): string {
+  const dm = dms.find((item) => item.id === channelId);
+  if (dm) return `@${agents[dm.dmTargetId]?.name ?? dm.name}`;
+  const channel = channels.find((item) => item.id === channelId);
+  return channel ? `#${channel.name}` : channelId;
+}
+
+function speakerName(msg: ChatMessage, agents: Record<string, { name: string }>, currentUsername?: string): string {
+  if (msg.senderKind === 'human') return currentUsername ?? '用户';
+  if (msg.senderKind === 'agent') return agents[msg.senderId ?? '']?.name ?? msg.senderId ?? 'Agent';
+  return '系统';
+}
+
 function parseMentions(body: string): { type: 'text' | 'mention'; text: string }[] {
   const regex = /@([\w-]+)/g;
   const parts: { type: 'text' | 'mention'; text: string }[] = [];
@@ -639,8 +698,14 @@ function parseMentions(body: string): { type: 'text' | 'mention'; text: string }
 
 function SearchView({ onClose, onJump }: { onClose: () => void; onJump: (channelId: string) => void }) {
   const [query, setQuery] = useState('');
+  const [mineOnly, setMineOnly] = useState(false);
+  const [scope, setScope] = useState<'all' | 'channels' | 'dms'>('all');
+  const [sort, setSort] = useState<'relevant' | 'recent'>('relevant');
   const [results, setResults] = useState<ChatMessage[] | null>(null);
   const channels = useAgentBeanStore((s) => s.channels);
+  const dms = useAgentBeanStore((s) => s.dms);
+  const agents = useAgentBeanStore((s) => s.agents);
+  const currentUser = useAgentBeanStore((s) => s.currentUser);
 
   useEffect(() => {
     if (!query.trim()) { setResults(null); return; }
@@ -651,19 +716,66 @@ function SearchView({ onClose, onJump }: { onClose: () => void; onJump: (channel
     return () => clearTimeout(timer);
   }, [query]);
 
-  const getChannelName = (chId: string) => channels.find((c) => c.id === chId)?.name ?? chId;
+  const q = query.trim().toLowerCase();
+  const channelMatches = q && scope !== 'dms'
+    ? channels.filter((c) => c.name.toLowerCase().includes(q)).map((c) => ({
+        id: c.id,
+        title: c.name,
+        label: '频道',
+        subtitle: c.visibility === 'private' ? '私有频道' : '频道',
+      }))
+    : [];
+  const dmMatches = q && scope !== 'channels'
+    ? dms.filter((dm) => {
+        const agent = agents[dm.dmTargetId];
+        const name = agent?.name ?? dm.name;
+        const subtitle = agent?.description ?? agent?.role ?? '';
+        return `${name} ${subtitle}`.toLowerCase().includes(q);
+      }).map((dm) => {
+        const agent = agents[dm.dmTargetId];
+        return {
+          id: dm.id,
+          title: agent?.name ?? dm.name,
+          label: '私聊',
+          subtitle: agent?.description?.trim() || agent?.role || '智能体私聊',
+        };
+      })
+    : [];
+  const messageMatches = (results ?? [])
+    .filter((msg) => !mineOnly || msg.senderId === currentUser?.id)
+    .filter((msg) => {
+      if (scope === 'channels') return !dms.some((dm) => dm.id === msg.channelId);
+      if (scope === 'dms') return dms.some((dm) => dm.id === msg.channelId);
+      return true;
+    })
+    .sort((a, b) => {
+      if (sort === 'recent') return b.createdAt - a.createdAt;
+      const aPos = a.body.toLowerCase().indexOf(q);
+      const bPos = b.body.toLowerCase().indexOf(q);
+      return (aPos < 0 ? 9999 : aPos) - (bPos < 0 ? 9999 : bPos);
+    });
+  const total = channelMatches.length + dmMatches.length + messageMatches.length;
 
   return (
     <div className="flex flex-1 flex-col">
       <div className="flex h-14 items-center border-b border-neutral-200 px-6">
         <div className="flex w-full items-center gap-3">
           <Search size={18} className="text-neutral-400" />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} autoFocus placeholder="搜索频道、私聊、消息..." className="flex-1 text-sm outline-none placeholder:text-neutral-400" />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} autoFocus placeholder="搜索频道、私聊、成员、消息..." className="flex-1 text-sm outline-none placeholder:text-neutral-400" />
           <button onClick={onClose} className="rounded bg-neutral-100 px-2 py-0.5 text-[10px] text-neutral-500">ESC</button>
         </div>
       </div>
-      <div className="flex gap-2 border-b border-neutral-200 px-6 py-2">
-        <button className="rounded-full bg-neutral-900 px-3 py-1 text-xs text-white">我的消息</button>
+      <div className="flex items-center gap-2 border-b border-neutral-200 px-6 py-2">
+        <button onClick={() => setMineOnly((v) => !v)} className={`rounded-full px-3 py-1 text-xs font-medium ${mineOnly ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'}`}>我的消息</button>
+        <button onClick={() => setScope(scope === 'all' ? 'channels' : scope === 'channels' ? 'dms' : 'all')} className="rounded-full bg-neutral-100 px-3 py-1 text-xs font-medium text-neutral-600 hover:bg-neutral-200">
+          {scope === 'all' ? '全部位置' : scope === 'channels' ? '频道' : '私聊'}
+        </button>
+        <button className="rounded-full bg-neutral-100 px-3 py-1 text-xs font-medium text-neutral-500">任意时间</button>
+        <div className="ml-auto flex items-center gap-2 text-xs text-neutral-500">
+          <span>排序</span>
+          <label className="flex items-center gap-1"><input type="radio" checked={sort === 'relevant'} onChange={() => setSort('relevant')} />相关</label>
+          <label className="flex items-center gap-1"><input type="radio" checked={sort === 'recent'} onChange={() => setSort('recent')} />最新</label>
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {results === null && !query.trim() && (
@@ -673,61 +785,128 @@ function SearchView({ onClose, onJump }: { onClose: () => void; onJump: (channel
             <p className="text-xs">搜索频道、私聊、成员和消息历史</p>
           </div>
         )}
-        {results !== null && results.length === 0 && (
+        {query.trim() && total === 0 && (
           <div className="py-8 text-center text-sm text-neutral-400">没有找到匹配的结果</div>
         )}
-        {results && results.map((msg) => (
-          <button key={msg.id} onClick={() => onJump(msg.channelId)} className="mb-2 w-full rounded-lg border border-neutral-100 p-3 text-left hover:bg-neutral-50">
-            <div className="flex items-center gap-2 text-xs text-neutral-400">
-              <Hash size={12} /> <span>{getChannelName(msg.channelId)}</span>
-              <span>· {formatTime(msg.createdAt)}</span>
-            </div>
-            <div className="mt-1 truncate text-sm text-neutral-700">{msg.body.slice(0, 120)}</div>
-          </button>
-        ))}
+        {query.trim() && total > 0 && (
+          <div className="mb-3 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">{total} 个结果</div>
+        )}
+        {(channelMatches.length > 0 || dmMatches.length > 0) && (
+          <div className="mb-5">
+            <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">频道与私聊</div>
+            {[...channelMatches, ...dmMatches].map((item) => (
+              <button key={`${item.label}-${item.id}`} onClick={() => onJump(item.id)} className="mb-1 flex w-full items-center gap-3 rounded-lg border border-neutral-100 px-3 py-2 text-left hover:bg-neutral-50">
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-neutral-100 text-neutral-500">
+                  {item.label === '频道' ? <Hash size={14} /> : <MessageSquare size={14} />}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-neutral-900">{item.title}</div>
+                  <div className="truncate text-xs text-neutral-400">{item.subtitle}</div>
+                </div>
+                <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500">{item.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        {messageMatches.length > 0 && (
+          <div>
+            <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">消息</div>
+            {messageMatches.map((msg) => (
+              <button key={msg.id} onClick={() => onJump(msg.channelId)} className="mb-2 w-full rounded-lg border border-neutral-100 p-3 text-left hover:bg-neutral-50">
+                <div className="flex items-center gap-2 text-xs text-neutral-400">
+                  <span>{conversationLabel(msg.channelId, channels, dms, agents)}</span>
+                  <span>· {speakerName(msg, agents, currentUser?.username)}</span>
+                  <span>· {formatTime(msg.createdAt)}</span>
+                </div>
+                <div className="mt-1 line-clamp-2 text-sm text-neutral-700">{msg.body.slice(0, 180)}</div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-function InboxView() {
+function ActivityView({ onJump }: { onJump: (channelId: string) => void }) {
+  const [filter, setFilter] = useState<'all' | 'unread' | 'mentions'>('all');
+  const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
+  const [recent, setRecent] = useState<ChatMessage[]>([]);
   const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
+  const channels = useAgentBeanStore((s) => s.channels);
+  const dms = useAgentBeanStore((s) => s.dms);
+  const agents = useAgentBeanStore((s) => s.agents);
+  const currentUser = useAgentBeanStore((s) => s.currentUser);
 
-  const allMessages = Object.values(messagesByChannel).flat();
-  const recentMessages = allMessages
+  useEffect(() => {
+    channelEvents().searchMessages('', 100).then((res) => {
+      if (res.ok && res.messages) setRecent(res.messages);
+    });
+  }, []);
+
+  const allMessages = uniqueMessages([...recent, ...Object.values(messagesByChannel).flat()])
     .filter((m) => m.senderKind !== 'system')
     .sort((a, b) => b.createdAt - a.createdAt)
-    .slice(0, 20);
+    .slice(0, 80);
+  const unreadCount = allMessages.filter((m) => !doneIds.has(m.id)).length;
+  const visible = allMessages.filter((m) => {
+    if (filter === 'unread') return !doneIds.has(m.id);
+    if (filter === 'mentions') return m.body.includes(`@${currentUser?.username ?? ''}`) || m.body.includes('@');
+    return true;
+  });
 
   return (
     <div className="flex flex-1 flex-col">
-      <div className="flex h-14 flex-col justify-center border-b border-neutral-200 px-6">
-        <h2 className="text-lg font-semibold">收件箱</h2>
-        <p className="text-xs text-neutral-400">{recentMessages.length} 条消息</p>
+      <div className="flex h-16 items-center justify-between border-b border-neutral-200 px-6">
+        <div>
+          <h2 className="text-lg font-semibold">活动</h2>
+          <p className="text-xs text-neutral-400">{allMessages.length} 条活动 · {unreadCount} 条未读</p>
+        </div>
+        <button onClick={() => setDoneIds(new Set(allMessages.map((m) => m.id)))} className="rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50">全部标记已读</button>
       </div>
       <div className="flex gap-2 border-b border-neutral-200 px-6 py-2">
-        <button className="rounded-full bg-neutral-900 px-3 py-1 text-xs text-white">全部</button>
-        <button className="rounded-full bg-neutral-100 px-3 py-1 text-xs text-neutral-600">未读</button>
-        <button className="rounded-full bg-neutral-100 px-3 py-1 text-xs text-neutral-600">提及</button>
+        {(['all', 'unread', 'mentions'] as const).map((item) => (
+          <button key={item} onClick={() => setFilter(item)} className={`rounded-full px-3 py-1 text-xs font-medium ${filter === item ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'}`}>
+            {item === 'all' ? '全部' : item === 'unread' ? '未读' : '提及'}
+          </button>
+        ))}
       </div>
       <div className="flex-1 overflow-y-auto">
-        {recentMessages.length === 0 && (
-          <div className="py-12 text-center text-sm text-neutral-400">暂无消息</div>
+        {visible.length === 0 && (
+          <div className="py-12 text-center text-sm text-neutral-400">暂无活动</div>
         )}
-        {recentMessages.map((msg) => {
-          const agent = useAgentBeanStore.getState().agents[msg.senderId ?? ''];
-          const speaker = msg.senderKind === 'human' ? (useAgentBeanStore.getState().currentUser?.username ?? '用户') : (agent?.name ?? msg.senderId ?? 'Agent');
+        {visible.map((msg) => {
+          const done = doneIds.has(msg.id);
           return (
-            <div key={msg.id} className="flex items-start gap-3 border-b border-neutral-100 px-6 py-3 hover:bg-neutral-50">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-100 text-xs font-semibold text-purple-700">{speaker[0]?.toUpperCase()}</div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-neutral-900">{speaker}</span>
-                  <span className="text-[10px] text-neutral-400">{formatTime(msg.createdAt)}</span>
-                </div>
-                <div className="truncate text-sm text-neutral-600">{msg.body.slice(0, 100)}</div>
+            <button key={msg.id} onClick={() => onJump(msg.channelId)} className={`group flex w-full items-start gap-3 border-b border-neutral-100 px-6 py-3 text-left hover:bg-neutral-50 ${done ? 'opacity-60' : ''}`}>
+              <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-purple-100 text-xs font-semibold text-purple-700">
+                {speakerName(msg, agents, currentUser?.username)[0]?.toUpperCase() ?? 'A'}
               </div>
-            </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 text-xs text-neutral-400">
+                  <span className="font-medium text-neutral-700">{conversationLabel(msg.channelId, channels, dms, agents)}</span>
+                  <span>{formatTime(msg.createdAt)}</span>
+                  {!done && <span className="rounded bg-pink-100 px-1.5 py-0.5 text-[10px] font-medium text-pink-600">新</span>}
+                </div>
+                <div className="mt-1 line-clamp-2 text-sm text-neutral-700">
+                  <span className="font-medium text-neutral-900">{speakerName(msg, agents, currentUser?.username)}：</span>
+                  {msg.body}
+                </div>
+              </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setDoneIds((prev) => {
+                    const next = new Set(prev);
+                    next.add(msg.id);
+                    return next;
+                  });
+                }}
+                className="shrink-0 rounded-md border border-neutral-200 px-2 py-1 text-[10px] font-medium text-neutral-500 opacity-0 hover:bg-white group-hover:opacity-100"
+              >
+                标记完成
+              </button>
+            </button>
           );
         })}
       </div>
@@ -735,42 +914,70 @@ function InboxView() {
   );
 }
 
-function SavedView({ savedIds }: { savedIds: Set<string> }) {
+function SavedView({ savedIds, onUnsave, onJump }: { savedIds: Set<string>; onUnsave: (msgId: string) => void; onJump: (channelId: string) => void }) {
+  const [query, setQuery] = useState('');
+  const [recent, setRecent] = useState<ChatMessage[]>([]);
   const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
+  const channels = useAgentBeanStore((s) => s.channels);
+  const dms = useAgentBeanStore((s) => s.dms);
+  const agents = useAgentBeanStore((s) => s.agents);
+  const currentUser = useAgentBeanStore((s) => s.currentUser);
 
-  const allMessages = Object.values(messagesByChannel).flat();
-  const savedMessages = allMessages.filter((m) => savedIds.has(m.id));
+  useEffect(() => {
+    channelEvents().searchMessages('', 200).then((res) => {
+      if (res.ok && res.messages) setRecent(res.messages);
+    });
+  }, []);
+
+  const savedMessages = uniqueMessages([...recent, ...Object.values(messagesByChannel).flat()])
+    .filter((m) => savedIds.has(m.id))
+    .filter((m) => !query.trim() || m.body.toLowerCase().includes(query.trim().toLowerCase()) || conversationLabel(m.channelId, channels, dms, agents).toLowerCase().includes(query.trim().toLowerCase()))
+    .sort((a, b) => b.createdAt - a.createdAt);
 
   return (
     <div className="flex flex-1 flex-col">
-      <div className="flex h-14 flex-col justify-center border-b border-neutral-200 px-6">
-        <h2 className="text-lg font-semibold">已收藏</h2>
+      <div className="flex h-16 flex-col justify-center border-b border-neutral-200 px-6">
+        <h2 className="text-lg font-semibold">收藏</h2>
         <p className="text-xs text-neutral-400">{savedIds.size} 条收藏</p>
+      </div>
+      <div className="border-b border-neutral-200 px-6 py-2">
+        <div className="relative">
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400" />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索收藏..." className="h-8 w-full rounded-md border border-neutral-200 bg-neutral-50 pl-8 pr-3 text-sm outline-none focus:border-neutral-400 placeholder:text-neutral-400" />
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto">
         {savedMessages.length === 0 && (
           <div className="flex flex-col items-center justify-center py-16 text-neutral-400">
             <Bookmark size={32} strokeWidth={1.5} />
-            <p className="mt-2 text-sm">暂无收藏消息</p>
+            <p className="mt-2 text-sm">{query.trim() ? '没有匹配的收藏' : '暂无收藏消息'}</p>
             <p className="text-xs">点击消息旁的书签图标收藏消息</p>
           </div>
         )}
-        {savedMessages.map((msg) => {
-          const agent = useAgentBeanStore.getState().agents[msg.senderId ?? ''];
-          const speaker = msg.senderKind === 'human' ? (useAgentBeanStore.getState().currentUser?.username ?? '用户') : (agent?.name ?? msg.senderId ?? 'Agent');
-          return (
-            <div key={msg.id} className="flex items-start gap-3 border-b border-neutral-100 px-6 py-3 hover:bg-neutral-50">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-100 text-xs font-semibold text-purple-700">{speaker[0]?.toUpperCase()}</div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-neutral-900">{speaker}</span>
-                  <span className="text-[10px] text-neutral-400">{formatTime(msg.createdAt)}</span>
-                </div>
-                <div className="mt-1 whitespace-pre-wrap text-sm text-neutral-700">{msg.body.slice(0, 200)}</div>
-              </div>
+        {savedMessages.map((msg) => (
+          <button key={msg.id} onClick={() => onJump(msg.channelId)} className="group flex w-full items-start gap-3 border-b border-neutral-100 px-6 py-3 text-left hover:bg-neutral-50">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-amber-100 text-xs font-semibold text-amber-700">
+              <Bookmark size={14} />
             </div>
-          );
-        })}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 text-xs text-neutral-400">
+                <span className="font-medium text-neutral-700">{conversationLabel(msg.channelId, channels, dms, agents)}</span>
+                <span>{speakerName(msg, agents, currentUser?.username)}</span>
+                <span>{formatTime(msg.createdAt)}</span>
+              </div>
+              <div className="mt-1 line-clamp-3 text-sm text-neutral-700">{msg.body}</div>
+            </div>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onUnsave(msg.id);
+              }}
+              className="shrink-0 rounded-md border border-neutral-200 px-2 py-1 text-[10px] font-medium text-neutral-500 opacity-0 hover:bg-white group-hover:opacity-100"
+            >
+              取消收藏
+            </button>
+          </button>
+        ))}
       </div>
     </div>
   );
