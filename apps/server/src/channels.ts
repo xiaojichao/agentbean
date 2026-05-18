@@ -77,6 +77,13 @@ export class ChannelService {
     return r ?? null;
   }
 
+  dmTargetId(networkId: string, channelId: string): string | null {
+    const db = this.deps.storageManager.getSpace(networkId).db;
+    const r = db.prepare('SELECT dm_target_id AS dmTargetId FROM channels WHERE id = ? AND is_dm = 1')
+      .get(channelId) as { dmTargetId: string | null } | undefined;
+    return r?.dmTargetId ?? null;
+  }
+
   memberIds(networkId: string, channelId: string): string[] {
     const db = this.deps.storageManager.getSpace(networkId).db;
     const rows = db.prepare('SELECT agent_id AS agentId FROM channel_members WHERE channel_id = ? ORDER BY joined_at')

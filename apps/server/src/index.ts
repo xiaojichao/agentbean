@@ -895,7 +895,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
       const visibleAgents = buildVisibleAgentDtos(networkId);
       const agentById = new Map(visibleAgents.map((agent) => [agent.id, agent]));
-      const members = channels.memberIds(networkId, ch.id)
+      const dmTargetId = channels.dmTargetId(networkId, ch.id);
+      const memberIds = dmTargetId ? [dmTargetId] : channels.memberIds(networkId, ch.id);
+      const members = memberIds
         .map((id) => agentById.get(id))
         .filter((agent): agent is NonNullable<typeof agent> => Boolean(agent))
         .map((agent) => ({ id: agent.id, name: agent.name, status: agent.status }));

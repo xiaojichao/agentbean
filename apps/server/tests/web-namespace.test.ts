@@ -93,7 +93,7 @@ describe('message:send', () => {
     const web = ioClient(`${lbase}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
     await new Promise<void>((r) => web.on('connect', () => r()));
     const ch = await new Promise<any>((resolve) => {
-      web.emit('channel:create', { name: 'demo', agentIds: ['a1'] }, resolve);
+      web.emit('channel:create', { name: `demo-${Date.now()}`, agentIds: ['a1'] }, resolve);
     });
     expect(ch.ok).toBe(true);
 
@@ -117,6 +117,92 @@ describe('message:send', () => {
 
     ag.close(); web.close();
     await local.close();
+  });
+
+  it('routes DM messages directly to the custom agent target', async () => {
+    const now = Date.now();
+    const owner = app.globalDb.users.listAll()[0]!;
+    app.globalDb.devices.upsert({
+      id: 'd-custom',
+      userId: owner.id,
+      networkId: 'default',
+      hostname: 'test-device',
+      lastSeenAt: now,
+      systemInfo: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'custom-drama',
+      name: 'drama',
+      role: 'executor-agent',
+      adapterKind: 'codex',
+      deviceId: 'd-custom',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      command: '/opt/homebrew/bin/codex',
+      args: JSON.stringify([]),
+      cwd: '/private/tmp',
+      ownerId: null,
+      description: 'Drama agent',
+    });
+
+    const ag = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'd-custom',
+        networkId: 'default',
+        capabilities: { customAgentDispatch: true },
+        agents: [],
+      },
+      reconnection: false, transports: ['websocket'],
+    });
+    await new Promise<void>((r) => ag.on('connect', () => r()));
+    ag.emit('register');
+    await new Promise<any>((resolve) => {
+      ag.emit('device:register-runtimes', {
+        runtimes: [{ name: 'Codex CLI', adapterKind: 'codex', command: '/opt/homebrew/bin/codex', installed: true }],
+      }, resolve);
+    });
+
+    const dispatchSeen = new Promise<any>((resolve) => {
+      ag.on('dispatch', (req: any) => {
+        resolve(req);
+        ag.emit('reply', {
+          agentId: req.agentId,
+          channelId: req.channelId,
+          body: 'custom dm ok',
+          requestId: req.requestId,
+        });
+      });
+    });
+
+    const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    const dmRes = await new Promise<any>((resolve) => {
+      web.emit('dm:start', { agentId: 'custom-drama' }, resolve);
+    });
+    expect(dmRes.ok).toBe(true);
+
+    const messages: any[] = [];
+    web.emit('channel:join', { channelId: dmRes.dm.id });
+    web.on('channel:message', (m: any) => messages.push(m));
+    await new Promise((r) => setTimeout(r, 50));
+
+    const ack = await new Promise<any>((resolve) => {
+      web.emit('message:send', { channelId: dmRes.dm.id, body: 'hello drama', clientMsgId: 'dm-1' }, resolve);
+    });
+    expect(ack.ok).toBe(true);
+
+    const req = await dispatchSeen;
+    expect(req.agentId).toBe('custom-drama');
+    expect(req.customAgent).toMatchObject({ id: 'custom-drama', name: 'drama', adapterKind: 'codex' });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(messages.some((m) => m.senderKind === 'agent' && m.senderId === 'custom-drama' && m.body === 'custom dm ok')).toBe(true);
+
+    ag.close(); web.close();
   });
 });
 

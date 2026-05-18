@@ -48,7 +48,12 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const dmsRef = useRef(dms);
   const savedKey = `agentbean:chat:saved:${np}`;
+
+  useEffect(() => {
+    dmsRef.current = dms;
+  }, [dms]);
 
   // Subscribe to channels + DMs
   useEffect(() => {
@@ -59,6 +64,8 @@ export default function ChatPage() {
       applyChannelsSnapshot(list);
       setActiveChannel((prev) => {
         if (routeChannelId && list.some((c) => c.id === routeChannelId)) return routeChannelId;
+        if (routeDmId || dmParam) return prev;
+        if (prev && dmsRef.current.some((d) => d.id === prev)) return prev;
         if (prev && list.some((c) => c.id === prev)) return prev;
         return list.length > 0 ? list[0].id : null;
       });
@@ -210,7 +217,20 @@ export default function ChatPage() {
 
   const sendMessage = () => {
     if (!input.trim() || !activeChannel) return;
-    getWebSocket().emit('message:send', { channelId: activeChannel, body: input.trim(), asTask });
+    const channelId = activeChannel;
+    const body = input.trim();
+    getWebSocket().emit('message:send', { channelId, body, asTask }, (res?: { ok?: boolean; error?: string }) => {
+      if (res?.ok) return;
+      appendMessage({
+        id: `local-error-${Date.now()}`,
+        channelId,
+        senderKind: 'system',
+        senderId: null,
+        body: `发送失败：${res?.error ?? 'unknown'}`,
+        createdAt: Date.now(),
+        metaJson: JSON.stringify({ kind: 'send-fail' }),
+      });
+    });
     setInput('');
     setAsTask(false);
   };
