@@ -45,7 +45,8 @@ export class CodexAdapter implements CliAdapter {
       const payload = renderPayload(input, this.opts.systemPrompt ?? input.systemPrompt);
       const cwd = input.workspace ?? this.opts.cwd ?? process.cwd();
       const baseCommand = this.opts.command || 'codex';
-      const baseArgs = [...(this.opts.args ?? ['exec']), payload];
+      const configuredArgs = this.opts.args && this.opts.args.length > 0 ? this.opts.args : ['exec'];
+      const baseArgs = [...configuredArgs, payload];
       const command = input.sandboxProfilePath ? 'sandbox-exec' : baseCommand;
       const args = input.sandboxProfilePath
         ? ['-f', input.sandboxProfilePath, '--', baseCommand, ...baseArgs]

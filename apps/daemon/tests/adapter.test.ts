@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
@@ -18,6 +18,26 @@ describe('CodexAdapter', () => {
       history: [{ role: 'user', speaker: 'shaw', body: 'prev', at: 0 }],
     }, new AbortController().signal);
     expect(out).toContain('OK:');
+  });
+
+  it('uses codex exec when configured args are empty', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentbean-codex-test-'));
+    const script = join(dir, 'fake-codex.cjs');
+    writeFileSync(script, `#!/usr/bin/env node
+      const args = process.argv.slice(2);
+      if (args[0] !== 'exec') {
+        process.stdout.write('BAD:' + JSON.stringify(args));
+        process.exit(2);
+      }
+      process.stdout.write('OK:' + args[1]);
+    `);
+    chmodSync(script, 0o755);
+
+    const adapter = new CodexAdapter({ command: script, args: [] });
+    const out = await adapter.ask({ prompt: 'hi-codex', history: [] }, new AbortController().signal);
+    expect(out).toContain('OK:');
+    expect(out).toContain('# user');
+    expect(out).toContain('hi-codex');
   });
 
   it('aborts the child process on signal', async () => {
