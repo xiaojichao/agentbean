@@ -3,7 +3,19 @@ import { AgentRegistry, type AgentRuntime } from './registry.js';
 import { StorageManager } from './storage.js';
 import { newId } from './ids.js';
 
-export interface ChannelServiceDeps { storageManager: StorageManager; registry: AgentRegistry; }
+interface PersistedAgentLookup {
+  id: string;
+  name: string;
+  adapterKind: string;
+  category: string;
+  source: string;
+}
+
+export interface ChannelServiceDeps {
+  storageManager: StorageManager;
+  registry: AgentRegistry;
+  getPersistedAgent?: (agentId: string) => PersistedAgentLookup | null;
+}
 
 export interface CreateChannelInput { name: string; agentIds: string[]; userIds?: string[]; visibility?: 'public' | 'private'; createdBy?: string; isDefault?: boolean; }
 export interface DmChannel { id: string; name: string; dmTargetId: string; createdAt: number; }
@@ -131,6 +143,8 @@ export class ChannelService {
 
   findOrCreateDm(networkId: string, userId: string, agentId: string): DmChannel {
     const db = this.deps.storageManager.getSpace(networkId).db;
+    const agentName = this.resolveDmAgentName(agentId);
+    if (!agentName) throw new Error('INVALID_DM_TARGET');
     // Check for existing DM channel between this user and agent
     const existing = db.prepare(`
       SELECT c.id, c.name, c.dm_target_id AS dmTargetId, c.created_at AS createdAt
@@ -139,10 +153,13 @@ export class ChannelService {
       JOIN channel_members cm ON c.id = cm.channel_id
       WHERE c.is_dm = 1 AND cum.user_id = ? AND cm.agent_id = ?
     `).get(userId, agentId) as DmChannel | undefined;
-    if (existing) return existing;
+    if (existing) {
+      if (existing.name !== agentName) {
+        db.prepare('UPDATE channels SET name = ? WHERE id = ?').run(agentName, existing.id);
+      }
+      return { ...existing, name: agentName };
+    }
 
-    const agent = this.deps.registry.snapshot(agentId);
-    const agentName = agent?.name ?? agentId;
     const now = Date.now();
     const id = newId();
     db.prepare('INSERT INTO channels (id, name, visibility, created_by, created_at, is_dm, dm_target_id) VALUES (?, ?, ?, ?, ?, 1, ?)')
@@ -157,13 +174,56 @@ export class ChannelService {
 
   listDms(networkId: string, userId: string): DmChannel[] {
     const db = this.deps.storageManager.getSpace(networkId).db;
-    return db.prepare(`
+    const rows = db.prepare(`
       SELECT c.id, c.name, c.dm_target_id AS dmTargetId, c.created_at AS createdAt
       FROM channels c
       JOIN channel_user_members cum ON c.id = cum.channel_id
       WHERE c.is_dm = 1 AND cum.user_id = ?
       ORDER BY c.created_at DESC
     `).all(userId) as DmChannel[];
+    const valid: DmChannel[] = [];
+    for (const row of rows) {
+      const agentName = this.resolveDmAgentName(row.dmTargetId);
+      if (!agentName) {
+        this.deleteChannel(networkId, row.id);
+        continue;
+      }
+      if (row.name !== agentName) {
+        db.prepare('UPDATE channels SET name = ? WHERE id = ?').run(agentName, row.id);
+      }
+      valid.push({ ...row, name: agentName });
+    }
+    return valid;
+  }
+
+  private resolveDmAgentName(agentId: string): string | null {
+    const runtime = this.deps.registry.snapshot(agentId);
+    if (runtime && (runtime.category === 'agentos-hosted' || runtime.source === 'custom')) return runtime.name;
+    const persisted = this.deps.getPersistedAgent?.(agentId);
+    if (!persisted) return null;
+    if (persisted.category === 'agentos-hosted' || persisted.source === 'custom') return persisted.name;
+    return null;
+  }
+
+  private deleteChannel(networkId: string, channelId: string): void {
+    const db = this.deps.storageManager.getSpace(networkId).db;
+    const artifactIds = db.prepare(`
+      SELECT a.id
+      FROM artifacts a
+      JOIN messages m ON a.message_id = m.id
+      WHERE m.channel_id = ?
+    `).all(channelId) as Array<{ id: string }>;
+    const tx = db.transaction(() => {
+      if (artifactIds.length > 0) {
+        const deleteArtifact = db.prepare('DELETE FROM artifacts WHERE id = ?');
+        for (const artifact of artifactIds) deleteArtifact.run(artifact.id);
+      }
+      db.prepare('DELETE FROM messages WHERE channel_id = ?').run(channelId);
+      db.prepare('DELETE FROM channel_members WHERE channel_id = ?').run(channelId);
+      db.prepare('DELETE FROM channel_user_members WHERE channel_id = ?').run(channelId);
+      db.prepare('DELETE FROM channels WHERE id = ?').run(channelId);
+    });
+    tx();
   }
 
   private nextDefaultName(networkId: string): string {

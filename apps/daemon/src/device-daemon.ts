@@ -12,6 +12,17 @@ import { scanRuntimes, scanAgentOSAgents, scanLocalAgents, collectSystemInfo, ty
 type ScannedAgent = { name: string; category: string; adapterKind: string; command: string; args: string[]; cwd?: string; source: string };
 type RuntimeMeta = { name: string; adapterKind: string; command: string; installed: boolean };
 type ScanPayload = { agents: ScannedAgent[]; runtimes: RuntimeMeta[] };
+type CustomDispatchAgent = {
+  id: string;
+  name: string;
+  role?: string | null;
+  adapterKind: AgentConfigEntry['adapter']['kind'];
+  command: string;
+  args?: string[] | null;
+  cwd?: string | null;
+  description?: string | null;
+  category?: string | null;
+};
 
 function errorMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
@@ -216,6 +227,9 @@ export function createDeviceDaemon(
           networkId: cfg.networkId,
           agents: publicAgents,
           systemInfo,
+          capabilities: {
+            customAgentDispatch: true,
+          },
         },
         transports: ['websocket'],
         reconnection: true,
@@ -257,9 +271,35 @@ export function createDeviceDaemon(
         channelId: string;
         prompt: string;
         sandboxed?: boolean;
+        customAgent?: CustomDispatchAgent;
         history?: Parameters<AgentInstance['handleDispatch']>[0]['req']['history'];
       }) => {
-        const agent = agents.get(req.agentId);
+        let agent = agents.get(req.agentId);
+        if (!agent && req.customAgent) {
+          const custom = req.customAgent;
+          const entry: AgentConfigEntry = {
+            id: custom.id,
+            name: custom.name,
+            role: custom.role ?? 'executor-agent',
+            category: 'executor-hosted',
+            adapter: {
+              kind: custom.adapterKind,
+              command: custom.command,
+              args: custom.args ?? [],
+              cwd: custom.cwd ?? undefined,
+              workspace: custom.cwd ?? undefined,
+              systemPrompt: custom.description ?? undefined,
+            },
+            visibility: 'public',
+          };
+          try {
+            agent = new AgentInstance(entry, pickAdapter(entry.adapter));
+            agents.set(req.agentId, agent);
+            logger.info({ agentId: req.agentId, kind: entry.adapter.kind, cwd: entry.adapter.cwd }, 'custom agent instance created for dispatch');
+          } catch (err: unknown) {
+            logger.warn({ agentId: req.agentId, err: errorMessage(err) }, 'failed to create custom dispatch agent');
+          }
+        }
         if (!agent) {
           logger.warn({ agentId: req.agentId, requestId: req.requestId }, 'dispatch for unknown agent');
           socket?.emit('error_event', {

@@ -35,6 +35,7 @@ function statusClass(status?: string): string {
 export function AgentDetail({ agent, device }: { agent: AgentSnapshot; device?: DeviceInfo }) {
   const np = useCurrentNetworkPath();
   const [dmLoading, setDmLoading] = useState(false);
+  const isCustomAgent = agent.category === 'executor-hosted' || agent.source === 'custom';
 
   const startDm = async () => {
     setDmLoading(true);
@@ -68,17 +69,17 @@ export function AgentDetail({ agent, device }: { agent: AgentSnapshot; device?: 
         </button>
       </div>
 
-      <Section title="基本信息" icon={<Shield size={15} />}>
-        <InfoRow label="Agent ID" value={agent.id} mono />
-        <InfoRow label="角色" value={agent.role || '未设置'} />
-        <InfoRow label="适配器" value={agent.adapterKind} />
+      <Section title="基本信息" icon={<Shield size={15} />} compactGrid>
+        {!isCustomAgent && <InfoRow label="Agent ID" value={agent.id} mono />}
+        {!isCustomAgent && <InfoRow label="角色" value={agent.role || '未设置'} />}
+        <InfoRow label={isCustomAgent ? 'Coding Agent 运行时' : '适配器'} value={agent.adapterKind} />
         <InfoRow label="类型" value={CATEGORY_LABEL[agent.category ?? 'executor-hosted'] ?? '自定义 Agent'} />
-        <InfoRow label="可见性" value={agent.visibility === 'private' ? '私有' : '公开'} />
+        {!isCustomAgent && <InfoRow label="可见性" value={agent.visibility === 'private' ? '私有' : '公开'} />}
         <InfoRow label="最后在线" value={new Date(agent.lastSeenAt).toLocaleString('zh-CN')} />
-        {agent.ownerId && <InfoRow label="创建者" value={agent.ownerId} mono />}
+        {(agent.ownerName || agent.ownerId) && <InfoRow label="创建者" value={agent.ownerName ?? agent.ownerId} mono={!agent.ownerName} />}
       </Section>
 
-      <Section title="运行环境" icon={<Cpu size={15} />}>
+      <Section title="运行环境" icon={<Cpu size={15} />} compactGrid>
         <InfoRow label="设备" value={device?.hostname ?? device?.id ?? '未关联设备'} />
         <InfoRow label="设备状态" value={device ? (STATUS_LABEL[device.status] ?? device.status) : '未知'} />
         <InfoRow label="系统" value={[device?.systemInfo?.platform, device?.systemInfo?.arch].filter(Boolean).join(' / ') || '未上报'} />
@@ -151,14 +152,16 @@ export function HumanDetail({ human, currentUser }: { human: HumanMember; curren
   );
 }
 
-function Section({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+function Section({ title, icon, children, compactGrid = false }: { title: string; icon: React.ReactNode; children: React.ReactNode; compactGrid?: boolean }) {
   return (
     <section className="rounded-lg border border-neutral-200 bg-white p-4">
       <h2 className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">
         {icon}
         {title}
       </h2>
-      {children}
+      <div className={compactGrid ? 'grid grid-cols-1 gap-x-8 sm:grid-cols-2' : ''}>
+        {children}
+      </div>
     </section>
   );
 }

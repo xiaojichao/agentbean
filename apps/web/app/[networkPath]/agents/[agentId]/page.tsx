@@ -212,8 +212,8 @@ export default function AgentDetailPage() {
           <dl className="grid grid-cols-1 gap-y-2 sm:grid-cols-2 sm:gap-x-6 text-sm">
             {agent.ownerId && (
               <div>
-                <dt className="text-neutral-500 flex items-center gap-1"><User size={12} />Owner</dt>
-                <dd className="font-mono text-xs">{agent.ownerId}</dd>
+                <dt className="text-neutral-500 flex items-center gap-1"><User size={12} />创建者</dt>
+                <dd className={agent.ownerName ? '' : 'font-mono text-xs'}>{agent.ownerName ?? agent.ownerId}</dd>
               </div>
             )}
             {agent.command && (

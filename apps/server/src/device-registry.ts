@@ -25,6 +25,9 @@ export interface DeviceRuntime {
   socket: Socket;
   agents: Map<string, PublicAgentMeta>;
   runtimes?: RuntimeMeta[];
+  capabilities?: {
+    customAgentDispatch?: boolean;
+  };
   lastSeenAt: number;
   status: AgentStatus;
 }
@@ -41,6 +44,9 @@ export class DeviceRegistry {
     const existing = this.devices.get(device.id);
     if (existing && existing.socket.id !== device.socket.id) {
       for (const fn of this.kickListeners) fn(existing.socket.id);
+    }
+    if (!device.runtimes?.length && existing?.runtimes?.length) {
+      device.runtimes = existing.runtimes;
     }
     this.devices.set(device.id, device);
     return device;

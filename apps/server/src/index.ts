@@ -22,7 +22,7 @@ import { generateToken, parseToken, verifyUserToken } from './auth.js';
 import { hashPassword, verifyPassword } from './password.js';
 import { generateInviteCode } from './invite.js';
 
-export interface AppOptions { port?: number; dbPath?: string; agentToken?: string }
+export interface AppOptions { port?: number; dbPath?: string; globalDbPath?: string; agentToken?: string }
 export interface AppHandle {
   http: http.Server;
   io: IOServer;
@@ -55,7 +55,11 @@ function isTeamAgent(agent: { category?: string | null; source?: string | null }
 }
 
 function normalizeKind(kind?: string | null): string {
-  return (kind ?? '').trim().toLowerCase();
+  const normalized = (kind ?? '').trim().toLowerCase().replace(/[_\s]+/g, '-');
+  if (normalized === 'kimi-cli' || normalized === 'kimi') return 'kimi-cli';
+  if (normalized === 'claude' || normalized === 'claude-code') return 'claude-code';
+  if (normalized === 'codex' || normalized === 'codex-cli') return 'codex';
+  return normalized;
 }
 
 function runtimeMatchesAgent(runtime: { adapterKind?: string | null; command?: string | null; installed?: boolean }, agent: { adapterKind?: string | null; command?: string | null }): boolean {
@@ -88,6 +92,11 @@ function projectDirectoryExists(cwd?: string | null): boolean {
   }
 }
 
+function isRecentlySeen(lastSeenAt?: number | null): boolean {
+  if (!lastSeenAt) return false;
+  return Date.now() - lastSeenAt < 45_000;
+}
+
 // Fixed data directory relative to this source file (not cwd)
 const DATA_DIR = resolve(import.meta.dirname, '../data');
 
@@ -98,7 +107,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
   const artifactDir = resolve(process.env.ARTIFACT_DIR ?? resolve(DATA_DIR, 'artifacts'));
 
   const db = openDb(dbPath);
-  const globalDbPath = process.env.GLOBAL_DB_PATH ?? resolve(DATA_DIR, 'global.db');
+  const globalDbPath = opts.globalDbPath ?? process.env.GLOBAL_DB_PATH ?? resolve(DATA_DIR, 'global.db');
   const globalDb = initGlobalDb(globalDbPath);
   const registry = new AgentRegistry();
   const deviceRegistry = new DeviceRegistry();
@@ -107,7 +116,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
   storageManager.createSpace(defaultNetworkId);
   const space = storageManager.getSpace(defaultNetworkId);
 
-  const resolveCustomAgentStatus = (agent: { id: string; source?: string | null; adapterKind?: string | null; command?: string | null; cwd?: string | null; deviceId?: string | null }) => {
+  const resolveCustomAgentStatus = (agent: { id: string; source?: string | null; adapterKind?: string | null; command?: string | null; cwd?: string | null; deviceId?: string | null; networkId?: string | null }) => {
     const rt = registry.snapshot(agent.id);
     if (agent.source !== 'custom') {
       return {
@@ -121,12 +130,30 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       return { status: 'offline' as const, lastSeenAt: rt?.lastHeartbeatAt, lastError: undefined };
     }
 
-    const primaryDevice = agent.deviceId ? deviceRegistry.get(agent.deviceId) : undefined;
-    const candidateDevices = primaryDevice
-      ? [primaryDevice]
+    const liveDevice = agent.deviceId ? deviceRegistry.get(agent.deviceId) : undefined;
+    const persistedDevice = agent.deviceId ? globalDb.devices.get(agent.deviceId) : null;
+    const liveCandidates = liveDevice
+      ? [liveDevice]
       : agent.deviceId?.startsWith('virtual-')
         ? deviceRegistry.all()
         : [];
+    const persistedCandidates = persistedDevice
+      ? [persistedDevice]
+      : agent.deviceId?.startsWith('virtual-')
+        ? globalDb.devices.listByNetwork(agent.networkId ?? defaultNetworkId)
+        : [];
+    const candidateDevices = [
+      ...liveCandidates.map((device) => ({
+        lastSeenAt: device.lastSeenAt,
+        status: device.status,
+        runtimes: device.runtimes ?? [],
+      })),
+      ...persistedCandidates.map((device) => ({
+        lastSeenAt: device.lastSeenAt,
+        status: isRecentlySeen(device.lastSeenAt) ? 'online' : 'offline',
+        runtimes: device.runtimes ?? [],
+      })),
+    ];
     for (const device of candidateDevices) {
       if (!device || !isOnlineStatus(device.status)) continue;
       const hasRuntime = (device.runtimes ?? []).some((runtime) => runtimeMatchesAgent(runtime, agent));
@@ -139,6 +166,64 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       lastSeenAt: rt?.lastHeartbeatAt,
       lastError: rt?.lastError?.message,
     };
+  };
+
+  const resolveOwnerName = (ownerId?: string | null) => {
+    if (!ownerId) return null;
+    return globalDb.users.get(ownerId)?.username ?? null;
+  };
+
+  const buildVisibleAgentDtos = (networkId: string) => {
+    const registryAgents = registry.all().filter((a) =>
+      isTeamAgent(a) &&
+      (a.networkId === networkId || a.publishedNetworkIds.includes(networkId))
+    ).map((agent) => {
+      const dto = snapshotToDto(agent);
+      const ownerName = resolveOwnerName(dto.ownerId);
+      if (agent.source !== 'custom') return { ...dto, ownerName };
+      const resolved = resolveCustomAgentStatus(agent);
+      return {
+        ...dto,
+        ownerName,
+        status: resolved.status,
+        lastSeenAt: resolved.lastSeenAt ?? dto.lastSeenAt,
+        lastError: resolved.lastError,
+      };
+    });
+    const seen = new Set(registryAgents.map((agent) => agent.id));
+    const persistedAgents = globalDb.agents.listVisibleInNetwork(networkId)
+      .filter(isTeamAgent)
+      .filter((agent) => !seen.has(agent.id))
+      .map((agent) => {
+        let parsedArgs: string[] | null = null;
+        if (agent.args) {
+          try { parsedArgs = JSON.parse(agent.args); } catch { parsedArgs = [agent.args]; }
+        }
+        const resolved = resolveCustomAgentStatus(agent);
+        return {
+          id: agent.id,
+          name: agent.name,
+          role: agent.role ?? '',
+          adapterKind: agent.adapterKind,
+          category: agent.category,
+          source: agent.source,
+          command: agent.command,
+          args: parsedArgs,
+          cwd: agent.cwd,
+          deviceId: agent.deviceId ?? undefined,
+          networkId: agent.networkId,
+          visibility: agent.visibility,
+          ownerId: agent.ownerId,
+          ownerName: resolveOwnerName(agent.ownerId),
+          description: agent.description,
+          status: resolved.status,
+          lastSeenAt: resolved.lastSeenAt ?? agent.lastSeenAt,
+          lastError: resolved.lastError ?? agent.lastError ?? undefined,
+          publishedNetworkIds: globalDb.agentPublishes.listByAgent(agent.id).map((p) => p.networkId),
+          connectCommand: renderConnectCommand({ adapterKind: agent.adapterKind as any }),
+        };
+      });
+    return [...registryAgents, ...persistedAgents];
   };
 
   const visibleDeviceRows = (rows: ReturnType<GlobalDb['devices']['listByUser']>) =>
@@ -198,7 +283,22 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     }
     globalDb.networkMembers.add(defaultNetworkId, 'admin', 'owner');
   }
-  const channels = new ChannelService({ storageManager, registry });
+  const channels = new ChannelService({
+    storageManager,
+    registry,
+    getPersistedAgent: (agentId) => {
+      const agent = globalDb.agents.getFull(agentId);
+      return agent
+        ? {
+            id: agent.id,
+            name: agent.name,
+            adapterKind: agent.adapterKind,
+            category: agent.category,
+            source: agent.source,
+          }
+        : null;
+    },
+  });
   channels.ensureDefault(defaultNetworkId);
   const metricsCollector = new AgentMetricsCollector();
   const inviteSessions = new Map<string, import('socket.io').Socket>();
@@ -295,11 +395,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
     socket.on('agents:subscribe', () => {
       const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
-      const filtered = registry.all().filter((a) =>
-        isTeamAgent(a) &&
-        (a.networkId === networkId || a.publishedNetworkIds.includes(networkId))
-      );
-      socket.emit('agents:snapshot', filtered.map(snapshotToDto));
+      socket.emit('agents:snapshot', buildVisibleAgentDtos(networkId));
     });
 
     socket.on('agent:metrics', (_payload: {}, ack?: (r: any) => void) => {
@@ -345,53 +441,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       try {
         const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
         const humans = globalDb.networkMembers.listByNetwork(networkId);
-        const registryAgents = registry.all().filter((a) =>
-          isTeamAgent(a) &&
-          (a.networkId === networkId || a.publishedNetworkIds.includes(networkId))
-        ).map((agent) => {
-          const dto = snapshotToDto(agent);
-          if (agent.source !== 'custom') return dto;
-          const resolved = resolveCustomAgentStatus(agent);
-          return {
-            ...dto,
-            status: resolved.status,
-            lastSeenAt: resolved.lastSeenAt ?? dto.lastSeenAt,
-            lastError: resolved.lastError,
-          };
-        });
-        const seen = new Set(registryAgents.map((agent) => agent.id));
-        const persistedAgents = globalDb.agents.listVisibleInNetwork(networkId)
-          .filter(isTeamAgent)
-          .filter((agent) => !seen.has(agent.id))
-          .map((agent) => {
-            let parsedArgs: string[] | null = null;
-            if (agent.args) {
-              try { parsedArgs = JSON.parse(agent.args); } catch { parsedArgs = [agent.args]; }
-            }
-            const resolved = resolveCustomAgentStatus(agent);
-            return {
-              id: agent.id,
-              name: agent.name,
-              role: agent.role ?? '',
-              adapterKind: agent.adapterKind,
-              category: agent.category,
-              source: agent.source,
-              command: agent.command,
-              args: parsedArgs,
-              cwd: agent.cwd,
-              deviceId: agent.deviceId ?? undefined,
-              networkId: agent.networkId,
-              visibility: agent.visibility,
-              ownerId: agent.ownerId,
-              description: agent.description,
-              status: resolved.status,
-              lastSeenAt: resolved.lastSeenAt ?? agent.lastSeenAt,
-              lastError: resolved.lastError ?? agent.lastError ?? undefined,
-              publishedNetworkIds: globalDb.agentPublishes.listByAgent(agent.id).map((p) => p.networkId),
-              connectCommand: renderConnectCommand({ adapterKind: agent.adapterKind as any }),
-            };
-          });
-        const agents = [...registryAgents, ...persistedAgents];
+        const agents = buildVisibleAgentDtos(networkId);
         ack?.({ ok: true, humans, agents });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
@@ -420,6 +470,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             networkId: ga.networkId,
             visibility: ga.visibility,
             ownerId: ga.ownerId,
+            ownerName: resolveOwnerName(ga.ownerId),
             description: ga.description,
             status: rt?.status ?? 'offline',
             publishedNetworkIds: rt?.publishedNetworkIds ?? globalDb.agentPublishes.listByAgent(ga.id).map((p) => p.networkId),
@@ -464,6 +515,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             networkId: agent.networkId,
             visibility: agent.visibility,
             ownerId: agent.ownerId,
+            ownerName: resolveOwnerName(agent.ownerId),
             description: agent.description,
             status: resolved.status,
             lastSeenAt: resolved.lastSeenAt ?? rt?.lastHeartbeatAt ?? agent.lastSeenAt,
@@ -822,11 +874,13 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       persist(humanMsg);
       ack?.({ ok: true, id: humanMsg.id });
 
-      const members = channels.membersOf(networkId, ch.id);
-      const candidates = registry.all().filter((a) =>
-        isTeamAgent(a) &&
-        (a.networkId === networkId || a.publishedNetworkIds.includes(networkId))
-      );
+      const visibleAgents = buildVisibleAgentDtos(networkId);
+      const agentById = new Map(visibleAgents.map((agent) => [agent.id, agent]));
+      const members = channels.memberIds(networkId, ch.id)
+        .map((id) => agentById.get(id))
+        .filter((agent): agent is NonNullable<typeof agent> => Boolean(agent))
+        .map((agent) => ({ id: agent.id, name: agent.name, status: agent.status }));
+      const candidates = visibleAgents.map((agent) => ({ id: agent.id, name: agent.name, status: agent.status }));
 
       const route = routeHumanMessage({ body, members, candidates });
 
@@ -835,6 +889,14 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           id: newId(), channelId: ch.id, senderKind: 'system', senderId: null,
           body: '当前没有在线 Agent 可响应,消息已保存。',
           createdAt: Date.now(), metaJson: JSON.stringify({ kind: 'no-online-agent' }),
+        });
+        return;
+      }
+      if (route.reason === 'UNKNOWN_MENTION' || route.targets.length === 0) {
+        persist({
+          id: newId(), channelId: ch.id, senderKind: 'system', senderId: null,
+          body: '未找到被 @ 的在线 Agent，消息已保存。',
+          createdAt: Date.now(), metaJson: JSON.stringify({ kind: 'unknown-mention' }),
         });
         return;
       }
@@ -1005,7 +1067,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         }
 
         ack?.({ ok: true, agent: row });
-        io.of('/web').emit('agents:snapshot', registry.all().filter(isTeamAgent).map(snapshotToDto));
+        for (const s of io.of('/web').sockets.values()) {
+          const sidNetworkId = socketNetworkMap.get(s.id) ?? defaultNetworkId;
+          s.emit('agents:snapshot', buildVisibleAgentDtos(sidNetworkId));
+        }
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }

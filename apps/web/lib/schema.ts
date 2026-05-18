@@ -15,6 +15,7 @@ export interface AgentSnapshot {
   category?: AgentCategory;
   networkId?: string;
   ownerId?: string | null;
+  ownerName?: string | null;
   command?: string | null;
   args?: string[] | null;
   cwd?: string | null;

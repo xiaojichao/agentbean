@@ -36,6 +36,36 @@ function buildPrompt(input: AskInput, systemPrompt?: string): string {
   return parts.join('\n\n---\n\n');
 }
 
+const ANSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+const BOX_ONLY_RE = /^[\s─━═╭╮╰╯│┃┌┐└┘├┤┬┴┼]+$/;
+
+export function extractHermesReply(output: string): string {
+  const lines = output
+    .replace(ANSI_RE, '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n');
+
+  const cleaned = lines
+    .map((line) => line.trimEnd())
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return true;
+      if (trimmed.startsWith('Query:')) return false;
+      if (trimmed === 'Initializing agent...' || trimmed === 'Initializing agent…') return false;
+      if (trimmed.startsWith('Resume this session with:')) return false;
+      if (/^hermes\s+--resume\b/.test(trimmed)) return false;
+      if (/^(Session|Duration|Messages):\s+/.test(trimmed)) return false;
+      if (trimmed.startsWith('╭') || trimmed.startsWith('╰')) return false;
+      if (BOX_ONLY_RE.test(trimmed)) return false;
+      return true;
+    })
+    .map((line) => line.replace(/^[│┃]\s?/, '').replace(/\s?[│┃]$/, '').replace(/^\s{2,}/, ''))
+    .join('\n')
+    .trim();
+
+  return cleaned || output.trim();
+}
+
 export class HermesAdapter implements CliAdapter {
   readonly kind = 'hermes' as const;
   constructor(private readonly opts: HermesAdapterOpts) {}
@@ -90,7 +120,7 @@ export class HermesAdapter implements CliAdapter {
           const detail = stderr.length > 0 ? stderr.slice(0, 400) : 'no stderr';
           return reject(new Error(`hermes exit ${code}: ${detail}`));
         }
-        const reply = stdout || stderr;
+        const reply = extractHermesReply(stdout || stderr);
         if (!reply) {
           return reject(new Error('hermes produced empty output'));
         }

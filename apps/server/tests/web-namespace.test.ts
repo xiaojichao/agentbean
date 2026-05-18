@@ -9,7 +9,7 @@ let baseUrl: string;
 beforeEach(async () => {
   process.env.AGENT_BEAN_AGENT_TOKEN = 'default:default:tok';
   process.env.AGENT_BEAN_WEB_TOKEN = 'web-only-token';
-  app = await buildApp({ dbPath: ':memory:', agentToken: 'default:default:tok' });
+  app = await buildApp({ dbPath: ':memory:', globalDbPath: ':memory:', agentToken: 'default:default:tok' });
   await new Promise<void>((r) => app.http.listen(0, r));
   const port = (app.http.address() as AddressInfo).port;
   baseUrl = `http://localhost:${port}`;
@@ -39,7 +39,7 @@ describe('/web namespace', () => {
         token: 'default:default:tok',
         deviceId: 'd1',
         networkId: 'default',
-        agents: [{ id: 'a1', name: 'A1', role: 'r', adapterKind: 'codex', visibility: 'public' }],
+        agents: [{ id: 'a1', name: 'A1', role: 'r', adapterKind: 'codex', category: 'agentos-hosted', visibility: 'public' }],
       },
       reconnection: false, transports: ['websocket'],
     });
@@ -66,7 +66,7 @@ describe('message:send', () => {
   });
 
   it('persists the human message and dispatches to the first online member', async () => {
-    const local = await buildApp({ dbPath: ':memory:', agentToken: 'default:default:tok' });
+    const local = await buildApp({ dbPath: ':memory:', globalDbPath: ':memory:', agentToken: 'default:default:tok' });
     await new Promise<void>((r) => local.http.listen(0, r));
     const port = (local.http.address() as AddressInfo).port;
     const lbase = `http://localhost:${port}`;
@@ -76,7 +76,7 @@ describe('message:send', () => {
         token: 'default:default:tok',
         deviceId: 'd1',
         networkId: 'default',
-        agents: [{ id: 'a1', name: 'A1', role: 'r', adapterKind: 'codex', visibility: 'public' }],
+        agents: [{ id: 'a1', name: 'A1', role: 'r', adapterKind: 'codex', category: 'agentos-hosted', visibility: 'public' }],
       },
       reconnection: false, transports: ['websocket'],
     });

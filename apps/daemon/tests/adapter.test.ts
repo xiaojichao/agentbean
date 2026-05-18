@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { CodexAdapter } from '../src/adapters/codex.js';
 import { ClaudeCodeAdapter } from '../src/adapters/claude-code.js';
 import { OpenClawAdapter } from '../src/adapters/openclaw.js';
-import { HermesAdapter } from '../src/adapters/hermes.js';
+import { HermesAdapter, extractHermesReply } from '../src/adapters/hermes.js';
 
 describe('CodexAdapter', () => {
   it('passes payload as command-line argument via PTY', async () => {
@@ -118,5 +118,32 @@ describe('HermesAdapter', () => {
     await expect(
       adapter.ask({ prompt: 'hi-h', history: [] }, new AbortController().signal),
     ).rejects.toThrow('hermes produced empty output');
+  });
+
+  it('extracts the assistant reply from Hermes terminal output', () => {
+    const raw = `Query: @Hermes-Agent hello, 你牛叉。
+Initializing agent...
+────────────────────────────────────────
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+    哈喽！谢谢夸奖 😎
+
+    我是 OpenSNS，OpenCompany 的社媒运营专员，随时待命！
+
+    - 内容选题 / 文案撰写 / 多平台改写
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Resume this session with:
+  hermes --resume 20260518_165640_752445
+
+Session:        20260518_165640_752445
+Duration:       14s
+Messages:       2 (1 user, 0 tool calls)`;
+
+    expect(extractHermesReply(raw)).toBe(`哈喽！谢谢夸奖 😎
+
+我是 OpenSNS，OpenCompany 的社媒运营专员，随时待命！
+
+- 内容选题 / 文案撰写 / 多平台改写`);
   });
 });

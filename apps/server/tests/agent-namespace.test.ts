@@ -10,7 +10,7 @@ let url: string;
 
 beforeEach(async () => {
   process.env.AGENT_BEAN_AGENT_TOKEN = 'default:default:tok';
-  app = await buildApp({ dbPath: ':memory:', agentToken: 'default:default:tok' });
+  app = await buildApp({ dbPath: ':memory:', globalDbPath: ':memory:', agentToken: 'default:default:tok' });
   await new Promise<void>((resolve) => app.http.listen(0, resolve));
   const port = (app.http.address() as AddressInfo).port;
   url = `http://localhost:${port}/agent`;
@@ -48,7 +48,7 @@ describe('/agent namespace', () => {
     const ag = connect('default:default:tok', {
       deviceId: 'd1',
       networkId: 'default',
-      agents: [{ id: 'a1', name: 'A1', role: 'r', adapterKind: 'codex', visibility: 'public' }],
+      agents: [{ id: 'a1', name: 'A1', role: 'r', adapterKind: 'codex', category: 'agentos-hosted', visibility: 'public' }],
     });
     await new Promise<void>((resolve) => ag.on('connect', () => resolve()));
 
@@ -72,7 +72,7 @@ describe('/agent namespace', () => {
     const ag = connect('default:default:tok', {
       deviceId: 'd1',
       networkId: 'default',
-      agents: [{ id: 'a1', name: 'A1', role: 'r', adapterKind: 'codex', visibility: 'public' }],
+      agents: [{ id: 'a1', name: 'A1', role: 'r', adapterKind: 'codex', category: 'agentos-hosted', visibility: 'public' }],
     });
     await new Promise<void>((resolve) => ag.on('connect', () => resolve()));
     ag.emit('register');
@@ -167,7 +167,7 @@ describe('device:register-agents', () => {
 
 describe('/agent dispatch round-trip', () => {
   it('routes server dispatch to daemon and resolves on reply', async () => {
-    const local = await buildApp({ dbPath: ':memory:', agentToken: 'default:default:tok' });
+    const local = await buildApp({ dbPath: ':memory:', globalDbPath: ':memory:', agentToken: 'default:default:tok' });
     await new Promise<void>((r) => local.http.listen(0, r));
     const port = (local.http.address() as AddressInfo).port;
     const lurl = `http://localhost:${port}/agent`;
@@ -177,7 +177,7 @@ describe('/agent dispatch round-trip', () => {
         token: 'default:default:tok',
         deviceId: 'd1',
         networkId: 'default',
-        agents: [{ id: 'a1', name: 'A1', role: 'r', adapterKind: 'codex', visibility: 'public' }],
+        agents: [{ id: 'a1', name: 'A1', role: 'r', adapterKind: 'codex', category: 'agentos-hosted', visibility: 'public' }],
       },
       reconnection: false, transports: ['websocket'],
     });
@@ -191,6 +191,71 @@ describe('/agent dispatch round-trip', () => {
     const requestId = newId();
     const reply = await local.dispatch!({ agentId: 'a1', channelId: 'c1', prompt: 'hi', requestId });
     expect(reply).toEqual({ ok: true, body: 'hello-reply' });
+
+    ag.close();
+    await local.close();
+  });
+
+  it('dispatches persisted custom agents with their config even if a stale device agent has the same id', async () => {
+    const local = await buildApp({ dbPath: ':memory:', globalDbPath: ':memory:', agentToken: 'default:default:tok' });
+    await new Promise<void>((r) => local.http.listen(0, r));
+    const port = (local.http.address() as AddressInfo).port;
+    const lurl = `http://localhost:${port}/agent`;
+    const now = Date.now();
+
+    const ag = ioClient(lurl, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'd1',
+        networkId: 'default',
+        capabilities: { customAgentDispatch: true },
+        agents: [{ id: 'custom-drama', name: 'Stale Drama', role: 'gateway', adapterKind: 'hermes', category: 'agentos-hosted', visibility: 'public' }],
+      },
+      reconnection: false, transports: ['websocket'],
+    });
+    await new Promise<void>((r) => ag.on('connect', () => r()));
+    ag.emit('register');
+    await new Promise((r) => setTimeout(r, 50));
+
+    local.globalDb.agents.upsert({
+      id: 'custom-drama',
+      name: 'drama',
+      role: 'executor-agent',
+      adapterKind: 'codex',
+      deviceId: 'd1',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      command: '/opt/homebrew/bin/codex',
+      args: JSON.stringify(['--foo']),
+      cwd: '/Users/shaw/drama',
+      ownerId: 'default',
+      description: 'Drama agent',
+    });
+
+    const dispatchSeen = new Promise<any>((resolve) => {
+      ag.on('dispatch', (req: any) => {
+        resolve(req);
+        ag.emit('reply', { agentId: req.agentId, channelId: req.channelId, body: 'custom ok', requestId: req.requestId });
+      });
+    });
+
+    const requestId = newId();
+    const reply = await local.dispatch!({ agentId: 'custom-drama', channelId: 'c1', prompt: 'hi', requestId });
+    const req = await dispatchSeen;
+
+    expect(reply).toEqual({ ok: true, body: 'custom ok' });
+    expect(req.customAgent).toMatchObject({
+      id: 'custom-drama',
+      name: 'drama',
+      adapterKind: 'codex',
+      command: '/opt/homebrew/bin/codex',
+      cwd: '/Users/shaw/drama',
+    });
+    expect(req.customAgent.args).toEqual(['--foo']);
 
     ag.close();
     await local.close();

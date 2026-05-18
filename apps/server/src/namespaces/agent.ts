@@ -23,12 +23,14 @@ export interface AgentNamespaceDeps {
     agents?: {
       upsert(row: any): void;
       get(id: string): any;
+      getFull(id: string): any;
     };
     devices?: {
       upsert(row: { id: string; userId: string; networkId: string; hostname?: string; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): void;
-      get(id: string): { id: string; hostname?: string | null; connectCommand?: string | null } | null;
+      get(id: string): { id: string; hostname?: string | null; connectCommand?: string | null; runtimes?: { name: string; adapterKind: string; command: string; installed: boolean }[] } | null;
       setConnectCommand(id: string, command: string): void;
       setRuntimes(id: string, runtimes: { name: string; adapterKind: string; command: string; installed: boolean }[]): void;
+      touch(id: string, lastSeenAt: number): void;
     };
   };
   dispatchTimeoutMs?: number;
@@ -41,6 +43,18 @@ export interface DispatchRequest {
   prompt: string;
   requestId: string;
   history?: Array<{ role: 'user' | 'assistant' | 'system'; speaker: string; body: string; at: number }>;
+}
+
+interface DispatchCustomAgent {
+  id: string;
+  name: string;
+  role?: string | null;
+  adapterKind: AdapterKind;
+  command: string;
+  args?: string[] | null;
+  cwd?: string | null;
+  description?: string | null;
+  category?: AgentCategory | string | null;
 }
 
 export interface DispatchResolution { ok: boolean; body?: string; error?: string; artifactIds?: string[]; }
@@ -60,6 +74,7 @@ export interface AgentSnapshotDto {
   category?: AgentCategory;
   networkId?: string;
   ownerId?: string | null;
+  ownerName?: string | null;
   command?: string | null;
   args?: string[] | null;
   cwd?: string | null;
@@ -101,6 +116,22 @@ interface PendingDispatch {
 export interface AgentNamespaceHandle {
   ns: Namespace;
   dispatch: DispatchFn;
+}
+
+function isAgentOSHosted(meta: { category?: string | null }): boolean {
+  return meta.category === 'agentos-hosted';
+}
+
+function parseArgs(value: unknown): string[] | null {
+  if (Array.isArray(value)) return value.map(String);
+  if (!value) return null;
+  if (typeof value !== 'string') return [String(value)];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map(String) : [String(value)];
+  } catch {
+    return [String(value)];
+  }
 }
 
 export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHandle {
@@ -154,14 +185,17 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       networkId: string;
       agents: PublicAgentMeta[];
       systemInfo?: Record<string, unknown>;
+      capabilities?: { customAgentDispatch?: boolean };
     };
     const a = auth;
     logger.info({ deviceId: a.deviceId, sid: socket.id }, '/agent connected');
 
     socket.on('register', () => {
-      // Register each public agent in AgentRegistry (for Web UI compatibility)
+      // Only AgentOS-hosted agents are device-level members. Custom Agents are
+      // persisted configs and are dispatched through their selected runtime.
       const now = Date.now();
-      for (const agentMeta of a.agents) {
+      const deviceAgents = (a.agents ?? []).filter(isAgentOSHosted);
+      for (const agentMeta of deviceAgents) {
         const publishes = deps.globalDb?.agentPublishes?.listByAgent(agentMeta.id) ?? [];
         const publishedNetworkIds = publishes.map((p: { networkId: string }) => p.networkId);
         const rt = deps.registry.register(socket.id, {
@@ -228,7 +262,8 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         userId: userId ?? 'system',
         networkId: a.networkId,
         socket,
-        agents: new Map(a.agents.map((ag) => [ag.id, { ...ag, name: normalizeAgentName(ag.name) }])),
+        agents: new Map(deviceAgents.map((ag) => [ag.id, { ...ag, name: normalizeAgentName(ag.name) }])),
+        capabilities: a.capabilities,
         lastSeenAt: now,
         status: 'online',
       });
@@ -237,6 +272,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
     socket.on('heartbeat', () => {
       const device = deps.deviceRegistry.heartbeat(a.deviceId);
       if (device) {
+        deps.globalDb?.devices?.touch(a.deviceId, device.lastSeenAt);
         for (const agentMeta of device.agents.values()) {
           const rt = deps.registry.heartbeat(agentMeta.id);
           if (rt) deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
@@ -279,9 +315,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       try {
         const now = Date.now();
         const registered: any[] = [];
-        const agentPayload = payload.agents.filter((ag) =>
-          ag.category === 'agentos-hosted' || ag.source === 'custom'
-        );
+        const agentPayload = payload.agents.filter(isAgentOSHosted);
         for (const ag of agentPayload) {
           const sanitizedName = normalizeAgentName(ag.name);
 
@@ -471,10 +505,38 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
   });
 
   const dispatch: DispatchFn = (req) => new Promise<DispatchResolution>((resolve) => {
-    // Find the device that hosts this agent
-    const device = deps.deviceRegistry.getAgentDevice(req.agentId);
+    // Custom Agents are persisted configs that run through a device runtime.
+    // Resolve them first so stale/legacy daemon registrations cannot make the
+    // server dispatch them as normal device-level agents.
+    const persisted = deps.globalDb?.agents?.getFull(req.agentId);
+    let customAgent: DispatchCustomAgent | undefined;
+    let device = undefined as ReturnType<DeviceRegistry['getAgentDevice']>;
+    if (persisted?.source === 'custom' && persisted.deviceId) {
+      device = deps.deviceRegistry.get(persisted.deviceId);
+      customAgent = {
+        id: persisted.id,
+        name: persisted.name,
+        role: persisted.role,
+        adapterKind: persisted.adapterKind,
+        command: persisted.command,
+        args: parseArgs(persisted.args),
+        cwd: persisted.cwd,
+        description: persisted.description,
+        category: persisted.category,
+      };
+    } else {
+      device = deps.deviceRegistry.getAgentDevice(req.agentId);
+    }
     if (!device || device.status === 'offline') {
       resolve({ ok: false, error: `${req.agentId} 不在线` });
+      return;
+    }
+    if (customAgent && !customAgent.command?.trim()) {
+      resolve({ ok: false, error: `${customAgent.name} 未配置运行时命令` });
+      return;
+    }
+    if (customAgent && !device.capabilities?.customAgentDispatch) {
+      resolve({ ok: false, error: `${customAgent.name} 所在设备上的 AgentBean Daemon 版本过旧，请重启本地新版 daemon` });
       return;
     }
     const sock = ns.sockets.get(device.socket.id);
@@ -498,8 +560,8 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
     pending.set(req.requestId, { resolve, timer });
 
     const agentRuntime = deps.registry.snapshot(req.agentId);
-    const sandboxed = agentRuntime?.visibility === 'public' && agentRuntime.category !== 'agentos-hosted';
-    sock.emit('dispatch', { ...req, sandboxed });
+    const sandboxed = agentRuntime?.visibility === 'public' && agentRuntime.category !== 'agentos-hosted' && !customAgent;
+    sock.emit('dispatch', { ...req, sandboxed, customAgent });
   });
 
   return { ns, dispatch };

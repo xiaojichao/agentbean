@@ -441,6 +441,7 @@ export interface GlobalDb {
     delete(id: string): void;
     setConnectCommand(id: string, command: string): void;
     setRuntimes(id: string, runtimes: { name: string; adapterKind: string; command: string; installed: boolean }[]): void;
+    touch(id: string, lastSeenAt: number): void;
     rename(id: string, hostname: string): void;
   };
 }
@@ -633,6 +634,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   const deviceDelete = raw.prepare(`DELETE FROM devices WHERE id = ?`);
   const deviceSetConnectCommand = raw.prepare(`UPDATE devices SET connect_command = ? WHERE id = ?`);
   const deviceSetRuntimes = raw.prepare(`UPDATE devices SET runtimes = ?, last_seen_at = ? WHERE id = ?`);
+  const deviceTouch = raw.prepare(`UPDATE devices SET last_seen_at = ? WHERE id = ?`);
   const deviceRename = raw.prepare(`UPDATE devices SET hostname = ? WHERE id = ?`);
 
   const globalAgentUpsert = raw.prepare(`
@@ -843,6 +845,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
       delete: (id) => { deviceDelete.run(id); },
       setConnectCommand: (id, command) => { deviceSetConnectCommand.run(command, id); },
       setRuntimes: (id, runtimes) => { deviceSetRuntimes.run(JSON.stringify(runtimes), Date.now(), id); },
+      touch: (id, lastSeenAt) => { deviceTouch.run(lastSeenAt, id); },
       rename: (id, hostname) => { deviceRename.run(hostname, id); },
     },
   };
