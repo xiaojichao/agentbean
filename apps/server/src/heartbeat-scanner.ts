@@ -12,6 +12,7 @@ export function startHeartbeatScanner(opts: HeartbeatScannerOptions): () => void
     const now = Date.now();
     for (const a of opts.registry.all()) {
       if (a.status === 'offline') continue;
+      if (a.source === 'custom' && a.socketId === null) continue;
       if (now - a.lastHeartbeatAt > opts.timeoutMs) {
         opts.registry.markOffline(a.id, 'heartbeat-timeout');
         opts.onTimeout(a.id);

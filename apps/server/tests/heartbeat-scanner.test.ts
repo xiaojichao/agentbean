@@ -38,4 +38,27 @@ describe('startHeartbeatScanner', () => {
     expect(events).toEqual(['a1']);
     stop();
   });
+
+  it('does not mark virtual custom agents offline by heartbeat timeout', () => {
+    const r = new AgentRegistry();
+    r.registerVirtual({
+      id: 'custom-drama',
+      name: 'drama',
+      role: 'executor-agent',
+      adapterKind: 'codex',
+      source: 'custom',
+      deviceId: 'device-1',
+    });
+    r.setStatus('custom-drama', 'online');
+    const events: string[] = [];
+    const stop = startHeartbeatScanner({
+      registry: r, timeoutMs: 30_000, intervalMs: 5_000,
+      onTimeout: (id) => events.push(id),
+    });
+    vi.setSystemTime(60_000);
+    vi.advanceTimersByTime(5_000);
+    expect(r.snapshot('custom-drama')?.status).toBe('online');
+    expect(events).toEqual([]);
+    stop();
+  });
 });
