@@ -381,6 +381,42 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     });
   };
 
+  const artifactDtos = (sp: typeof space, netId: string, artifactIds: string[] = []) =>
+    artifactIds
+      .map((id) => sp.artifacts.get(id))
+      .filter((a): a is NonNullable<typeof a> => Boolean(a))
+      .map(a => ({
+        id: a.id, filename: a.filename, mimeType: a.mimeType,
+        sizeBytes: a.sizeBytes, createdAt: a.createdAt,
+        downloadUrl: `/api/networks/${netId}/artifacts/${a.id}/download`,
+        previewUrl: `/api/networks/${netId}/artifacts/${a.id}/preview`,
+      }));
+
+  const parseMessageMeta = (raw?: string | null): Record<string, any> => {
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const buildDispatchHistory = (messages: ReturnType<typeof space.messages.listByChannel>, parentMessageId?: string) => {
+    const selected = parentMessageId
+      ? messages.filter((m) => {
+          const meta = parseMessageMeta(m.metaJson);
+          return m.id === parentMessageId || meta.parentMessageId === parentMessageId || meta.inReplyTo === parentMessageId;
+        })
+      : messages.slice(-20);
+    return selected.slice(-20).map((m) => ({
+      role: m.senderKind === 'agent' ? 'assistant' as const : m.senderKind === 'system' ? 'system' as const : 'user' as const,
+      speaker: m.senderId ?? m.senderKind,
+      body: m.body,
+      at: m.createdAt,
+    }));
+  };
+
   const socketNetworkMap = new Map<string, string>();
 
   function emitChannelsSnapshotForNetwork(networkId: string): void {
@@ -883,7 +919,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     });
 
     socket.on('message:send', async (
-      payload: { channelId: string; body: string; clientMsgId?: string; asTask?: boolean },
+      payload: { channelId: string; body: string; clientMsgId?: string; asTask?: boolean; artifactIds?: string[]; parentMessageId?: string },
       ack?: (r: any) => void,
     ) => {
       const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
@@ -897,16 +933,16 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       const userId = socket.data.userId as string | undefined;
       if (!userId) return ack?.({ ok: false, error: 'NOT_AUTHENTICATED' });
 
-      const humanMsg = {
-        id: newId(), channelId: ch.id, senderKind: 'human' as const, senderId: userId,
-        body, createdAt: Date.now(),
-        metaJson: JSON.stringify({ clientMsgId: payload.clientMsgId }),
-      };
-      persist(humanMsg);
+      const attachmentIds = [...new Set((payload.artifactIds ?? []).filter((id) => typeof id === 'string' && id.trim()))];
+      const parentMessageId = typeof payload.parentMessageId === 'string' && payload.parentMessageId.trim()
+        ? payload.parentMessageId.trim()
+        : undefined;
+      let taskId: string | undefined;
+      let taskTitle: string | undefined;
       if (payload.asTask) {
-        const title = body.split(/\r?\n/)[0]?.trim().slice(0, 80) || '未命名任务';
+        taskTitle = body.split(/\r?\n/)[0]?.trim().slice(0, 80) || '未命名任务';
         const task = sp.tasks.create({
-          title,
+          title: taskTitle,
           description: body,
           status: 'todo',
           creatorId: userId,
@@ -914,10 +950,24 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           tags: ['聊天'],
           createdAt: Date.now(),
         });
+        taskId = task.id;
+      }
+      const humanMsg = {
+        id: newId(), channelId: ch.id, senderKind: 'human' as const, senderId: userId,
+        body, createdAt: Date.now(),
+        metaJson: JSON.stringify({
+          clientMsgId: payload.clientMsgId,
+          parentMessageId,
+          taskId,
+          taskTitle,
+        }),
+      };
+      persist({ ...humanMsg, artifactIds: attachmentIds.length ? attachmentIds : undefined });
+      if (taskId && taskTitle) {
         persist({
           id: newId(), channelId: ch.id, senderKind: 'system', senderId: null,
-          body: `已创建任务：#${task.id.slice(-6)} "${task.title}"`,
-          createdAt: Date.now(), metaJson: JSON.stringify({ kind: 'task-created', taskId: task.id }),
+          body: `已创建任务：#${taskId.slice(-6)} "${taskTitle}"`,
+          createdAt: Date.now(), metaJson: JSON.stringify({ kind: 'task-created', taskId, parentMessageId: humanMsg.id }),
         });
       }
       ack?.({ ok: true, id: humanMsg.id });
@@ -931,8 +981,19 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         .filter((agent): agent is NonNullable<typeof agent> => Boolean(agent))
         .map((agent) => ({ id: agent.id, name: agent.name, status: agent.status }));
       const candidates = visibleAgents.map((agent) => ({ id: agent.id, name: agent.name, status: agent.status }));
+      const currentHistory = sp.messages.listByChannel(ch.id, 200);
+      const threadAgent = parentMessageId && !/^\s*@(\S+)/.test(body)
+        ? [...currentHistory].reverse()
+            .find((m) => {
+              const meta = parseMessageMeta(m.metaJson);
+              return m.senderKind === 'agent' && (meta.inReplyTo === parentMessageId || meta.parentMessageId === parentMessageId);
+            })
+        : null;
+      const threadTarget = threadAgent?.senderId ? agentById.get(threadAgent.senderId) : undefined;
 
-      const route = routeHumanMessage({ body, members, candidates });
+      const route = threadTarget && (threadTarget.status === 'online' || threadTarget.status === 'busy')
+        ? { targets: [{ id: threadTarget.id, name: threadTarget.name, status: threadTarget.status }], reason: 'FALLBACK' as const }
+        : routeHumanMessage({ body, members, candidates });
 
       if (route.reason === 'NO_ONLINE') {
         persist({
@@ -953,19 +1014,22 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
       const recipient = route.targets[0]!;
       const reqId = newId();
+      const attachments = artifactDtos(sp, networkId, attachmentIds);
       const reply = await dispatch({
         agentId: recipient.id,
         channelId: ch.id,
         prompt: body,
         requestId: reqId,
         networkId,
+        history: buildDispatchHistory(currentHistory, parentMessageId ?? humanMsg.id),
+        attachments,
       });
       if (reply.ok && reply.body?.trim()) {
         const artifactIds = reply.artifactIds;
         persist({
           id: newId(), channelId: ch.id, senderKind: 'agent', senderId: recipient.id,
           body: reply.body.trim(), createdAt: Date.now(),
-          metaJson: JSON.stringify({ inReplyTo: humanMsg.id, requestId: reqId }),
+          metaJson: JSON.stringify({ inReplyTo: parentMessageId ?? humanMsg.id, requestId: reqId }),
           artifactIds: artifactIds?.length ? artifactIds : undefined,
         });
       } else {

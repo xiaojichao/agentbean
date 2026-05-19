@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, type RefObject } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, MoreHorizontal, Copy, Trash2, Circle, FolderOpen, ChevronRight, Smile } from 'lucide-react';
 import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents } from '@/lib/socket';
@@ -13,6 +13,7 @@ export default function ChatPage() {
   const channels = useAgentBeanStore((s) => s.channels);
   const agents = useAgentBeanStore((s) => s.agents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
+  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
   const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
   const applyChannelsSnapshot = useAgentBeanStore((s) => s.applyChannelsSnapshot);
   const dms = useAgentBeanStore((s) => s.dms);
@@ -47,9 +48,17 @@ export default function ChatPage() {
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionMembers, setMentionMembers] = useState<{ id: string; name: string; kind: 'human' | 'agent' }[]>([]);
   const [mentionIndex, setMentionIndex] = useState(0);
+  const [pendingAttachments, setPendingAttachments] = useState<Artifact[]>([]);
+  const [threadAttachments, setThreadAttachments] = useState<Artifact[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [threadRootId, setThreadRootId] = useState<string | null>(null);
+  const [threadInput, setThreadInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const threadFileInputRef = useRef<HTMLInputElement>(null);
   const dmsRef = useRef(dms);
   const savedKey = `agentbean:chat:saved:${np}`;
   const reactionsKey = `agentbean:chat:reactions:${np}`;
@@ -235,11 +244,47 @@ export default function ChatPage() {
     }
   };
 
+  const uploadFiles = async (files: FileList | File[], target: 'main' | 'thread') => {
+    if (!activeChannel || !currentUser || files.length === 0) return;
+    setUploading(true);
+    try {
+      const uploaded: Artifact[] = [];
+      for (const file of Array.from(files)) {
+        const form = new FormData();
+        form.append('channelId', activeChannel);
+        form.append('uploaderId', currentUser.id);
+        form.append('file', file);
+        const res = await fetch(`${getResolvedServerUrl()}/api/networks/${encodeURIComponent(currentNetworkId)}/artifacts/upload`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${getStoredAuthToken()}` },
+          body: form,
+        });
+        if (!res.ok) throw new Error(await res.text());
+        uploaded.push(await res.json());
+      }
+      if (target === 'thread') setThreadAttachments((prev) => [...prev, ...uploaded]);
+      else setPendingAttachments((prev) => [...prev, ...uploaded]);
+    } catch (err) {
+      appendMessage({
+        id: `local-upload-error-${Date.now()}`,
+        channelId: activeChannel,
+        senderKind: 'system',
+        senderId: null,
+        body: `附件上传失败：${err instanceof Error ? err.message : 'unknown'}`,
+        createdAt: Date.now(),
+        metaJson: JSON.stringify({ kind: 'upload-fail' }),
+      });
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const sendMessage = () => {
-    if (!input.trim() || !activeChannel) return;
+    if ((!input.trim() && pendingAttachments.length === 0) || !activeChannel) return;
     const channelId = activeChannel;
     const body = input.trim();
-    getWebSocket().emit('message:send', { channelId, body, asTask }, (res?: { ok?: boolean; error?: string }) => {
+    const artifactIds = pendingAttachments.map((a) => a.id);
+    getWebSocket().emit('message:send', { channelId, body: body || '附件', asTask, artifactIds }, (res?: { ok?: boolean; error?: string }) => {
       if (res?.ok) return;
       appendMessage({
         id: `local-error-${Date.now()}`,
@@ -252,10 +297,35 @@ export default function ChatPage() {
       });
     });
     setInput('');
+    setPendingAttachments([]);
     setAsTask(false);
   };
 
+  const sendThreadMessage = () => {
+    if ((!threadInput.trim() && threadAttachments.length === 0) || !activeChannel || !threadRootId) return;
+    const channelId = activeChannel;
+    const body = threadInput.trim() || '附件';
+    const artifactIds = threadAttachments.map((a) => a.id);
+    getWebSocket().emit('message:send', { channelId, body, parentMessageId: threadRootId, artifactIds }, (res?: { ok?: boolean; error?: string }) => {
+      if (res?.ok) return;
+      appendMessage({
+        id: `local-thread-error-${Date.now()}`,
+        channelId,
+        senderKind: 'system',
+        senderId: null,
+        body: `发送失败：${res?.error ?? 'unknown'}`,
+        createdAt: Date.now(),
+        metaJson: JSON.stringify({ kind: 'send-fail' }),
+      });
+    });
+    setThreadInput('');
+    setThreadAttachments([]);
+  };
+
   const messages = activeChannel ? (messagesByChannel[activeChannel] ?? []) : [];
+  const threadRoot = threadRootId ? messages.find((msg) => msg.id === threadRootId) ?? null : null;
+  const rootMessages = messages.filter((msg) => !parentMessageId(msg));
+  const threadReplies = threadRootId ? messages.filter((msg) => parentMessageId(msg) === threadRootId) : [];
   const filteredChannels = search ? channels.filter((c) => c.name.toLowerCase().includes(search.toLowerCase())) : channels;
 
   // Debounced message search
@@ -287,11 +357,11 @@ export default function ChatPage() {
 
   const handleReply = (msg: ChatMessage) => {
     const speaker = resolveMessageSpeaker(msg, currentUser?.username, agents);
-    setInput((prev) => {
+    setThreadRootId(msg.id);
+    setThreadInput((prev) => {
       const prefix = `回复 ${speaker}: `;
       return prev.trim() ? `${prev}\n${prefix}` : prefix;
     });
-    setTimeout(() => textareaRef.current?.focus(), 0);
   };
 
   return (
@@ -491,25 +561,27 @@ export default function ChatPage() {
           <>
             <div className="flex-1 overflow-y-auto px-4 py-3">
               {!activeChannel && <div className="py-12 text-center text-sm text-neutral-400">选择一个频道或私聊开始聊天</div>}
-              {activeChannel && messages.length === 0 && (
+              {activeChannel && rootMessages.length === 0 && (
                 <div className="py-8 text-center text-xs text-neutral-400">
                   <div className="mb-1">消息的开头</div>
                   <div className="text-neutral-300">发送第一条消息开始对话</div>
                 </div>
               )}
-              {activeChannel && messages.length > 0 && (
+              {activeChannel && rootMessages.length > 0 && (
                 <div className="mb-4 text-center text-xs text-neutral-300">消息的开头</div>
               )}
               <div className="space-y-4">
-                {messages.map((msg) => (
+                {rootMessages.map((msg) => (
                   <ChatBubble
                     key={msg.id}
                     msg={msg}
                     saved={savedIds.has(msg.id)}
                     reacted={reactionIds.has(msg.id)}
                     onReply={() => handleReply(msg)}
+                    onOpenThread={() => setThreadRootId(msg.id)}
                     onToggleReaction={() => toggleReaction(msg.id)}
                     onToggleSave={() => toggleSave(msg.id)}
+                    replyCount={messages.filter((item) => parentMessageId(item) === msg.id).length}
                   />
                 ))}
               </div>
@@ -531,13 +603,21 @@ export default function ChatPage() {
                     </div>
                   )}
                   <textarea ref={textareaRef} value={input} onChange={handleInputChange} onKeyDown={handleInputKeyDown} rows={2} placeholder={isDm ? `私聊 @${activeDmName}` : `发送到 #${activeName}  (输入 @ 提及成员)`} className="w-full resize-none px-3 pt-2.5 pb-1 text-sm outline-none placeholder:text-neutral-400" />
+                  {pendingAttachments.length > 0 && (
+                    <AttachmentStrip
+                      attachments={pendingAttachments}
+                      onRemove={(id) => setPendingAttachments((prev) => prev.filter((item) => item.id !== id))}
+                    />
+                  )}
                   <div className="flex items-center justify-between px-2 pb-2">
                     <div className="flex items-center gap-1">
-                      <button className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600" title="附件图片"><Image size={16} /></button>
-                      <button className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600" title="附件文件"><Paperclip size={16} /></button>
+                      <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => { if (e.target.files) uploadFiles(e.target.files, 'main'); e.currentTarget.value = ''; }} />
+                      <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => { if (e.target.files) uploadFiles(e.target.files, 'main'); e.currentTarget.value = ''; }} />
+                      <button onClick={() => imageInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-40" title="附件图片"><Image size={16} /></button>
+                      <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-40" title="附件文件"><Paperclip size={16} /></button>
                       <label className="ml-1 flex cursor-pointer items-center gap-1 text-neutral-400 hover:text-neutral-600"><input type="checkbox" checked={asTask} onChange={(e) => setAsTask(e.target.checked)} className="rounded border-neutral-300" /><span className="text-xs">作为任务</span></label>
                     </div>
-                    <button onClick={sendMessage} disabled={!input.trim()} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40"><Send size={14} /></button>
+                    <button onClick={sendMessage} disabled={uploading || (!input.trim() && pendingAttachments.length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40"><Send size={14} /></button>
                   </div>
                 </div>
               </div>
@@ -552,8 +632,30 @@ export default function ChatPage() {
           </div>
         )}
         </>
-        )}
-      </div>
+      )}
+    </div>
+
+      {threadRoot && activeChannel && (
+        <ThreadPanel
+          root={threadRoot}
+          replies={threadReplies}
+          agents={agents}
+          currentUsername={currentUser?.username}
+          input={threadInput}
+          attachments={threadAttachments}
+          uploading={uploading}
+          fileInputRef={threadFileInputRef}
+          onInput={setThreadInput}
+          onSend={sendThreadMessage}
+          onUpload={(files) => uploadFiles(files, 'thread')}
+          onRemoveAttachment={(id) => setThreadAttachments((prev) => prev.filter((item) => item.id !== id))}
+          onClose={() => {
+            setThreadRootId(null);
+            setThreadInput('');
+            setThreadAttachments([]);
+          }}
+        />
+      )}
 
       {showNewChannel && <NewChannelDialog onClose={() => setShowNewChannel(false)} />}
       {showEditChannel && activeChannelObj && (
@@ -607,20 +709,147 @@ function ChannelEditDialog({ channel, onClose, onSaved }: { channel: { id: strin
   );
 }
 
+function ThreadPanel({
+  root,
+  replies,
+  agents,
+  currentUsername,
+  input,
+  attachments,
+  uploading,
+  fileInputRef,
+  onInput,
+  onSend,
+  onUpload,
+  onRemoveAttachment,
+  onClose,
+}: {
+  root: ChatMessage;
+  replies: ChatMessage[];
+  agents: Record<string, AgentSnapshot>;
+  currentUsername?: string;
+  input: string;
+  attachments: Artifact[];
+  uploading: boolean;
+  fileInputRef: RefObject<HTMLInputElement>;
+  onInput: (value: string) => void;
+  onSend: () => void;
+  onUpload: (files: FileList | File[]) => void;
+  onRemoveAttachment: (id: string) => void;
+  onClose: () => void;
+}) {
+  const title = taskLabel(root) ?? `线程 - ${resolveMessageSpeaker(root, currentUsername, agents)}`;
+  return (
+    <aside className="flex w-96 shrink-0 flex-col border-l border-neutral-200 bg-white">
+      <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
+        <div>
+          <div className="text-sm font-semibold text-neutral-900">线程</div>
+          <div className="text-xs text-neutral-400">{title}</div>
+        </div>
+        <button onClick={onClose} className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="关闭线程">
+          <X size={16} />
+        </button>
+      </div>
+      <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
+        <ThreadMessage msg={root} agents={agents} currentUsername={currentUsername} root />
+        <div className="border-t border-neutral-100 pt-3 text-center text-[11px] text-neutral-400">
+          {replies.length === 0 ? '暂无回复' : `${replies.length} 条回复`}
+        </div>
+        {replies.map((msg) => (
+          <ThreadMessage key={msg.id} msg={msg} agents={agents} currentUsername={currentUsername} />
+        ))}
+      </div>
+      <div className="border-t border-neutral-200 p-3">
+        <div className="rounded-lg border border-neutral-300 bg-white">
+          <textarea
+            value={input}
+            onChange={(e) => onInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                onSend();
+              }
+            }}
+            rows={2}
+            placeholder="回复线程"
+            className="w-full resize-none px-3 pt-2.5 pb-1 text-sm outline-none placeholder:text-neutral-400"
+          />
+          {attachments.length > 0 && <AttachmentStrip attachments={attachments} onRemove={onRemoveAttachment} />}
+          <div className="flex items-center justify-between px-2 pb-2">
+            <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => { if (e.target.files) onUpload(e.target.files); e.currentTarget.value = ''; }} />
+            <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-40" title="附件">
+              <Paperclip size={16} />
+            </button>
+            <button onClick={onSend} disabled={uploading || (!input.trim() && attachments.length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40">
+              <Send size={14} />
+            </button>
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function ThreadMessage({ msg, agents, currentUsername, root = false }: { msg: ChatMessage; agents: Record<string, AgentSnapshot>; currentUsername?: string; root?: boolean }) {
+  if (msg.senderKind === 'system') {
+    return <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">{msg.body}</div>;
+  }
+  const speaker = resolveMessageSpeaker(msg, currentUsername, agents);
+  return (
+    <div className={`flex gap-2 ${root ? 'rounded-md border border-neutral-200 bg-neutral-50 p-2' : ''}`}>
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-100 text-[10px] font-semibold text-purple-700">
+        {speaker[0]?.toUpperCase() ?? 'A'}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-neutral-900">{speaker}</span>
+          <span className="text-[10px] text-neutral-400">{formatTime(msg.createdAt)}</span>
+        </div>
+        <div className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-neutral-700">{msg.body}</div>
+        {msg.artifacts && msg.artifacts.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {msg.artifacts.map((artifact) => <ChatArtifactPreview key={artifact.id} artifact={artifact} />)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AttachmentStrip({ attachments, onRemove }: { attachments: Artifact[]; onRemove: (id: string) => void }) {
+  return (
+    <div className="flex flex-wrap gap-1.5 border-t border-neutral-100 px-2 py-2">
+      {attachments.map((artifact) => (
+        <div key={artifact.id} className="inline-flex max-w-56 items-center gap-1.5 rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1 text-xs text-neutral-600">
+          {artifact.mimeType.startsWith('image/') ? <Image size={12} /> : <Paperclip size={12} />}
+          <span className="truncate">{artifact.filename}</span>
+          <button onClick={() => onRemove(artifact.id)} className="text-neutral-400 hover:text-neutral-700" title="移除附件">
+            <X size={12} />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ChatBubble({
   msg,
   saved,
   reacted,
   onReply,
+  onOpenThread,
   onToggleReaction,
   onToggleSave,
+  replyCount,
 }: {
   msg: ChatMessage;
   saved: boolean;
   reacted: boolean;
   onReply: () => void;
+  onOpenThread: () => void;
   onToggleReaction: () => void;
   onToggleSave: () => void;
+  replyCount: number;
 }) {
   const agent = useAgentBeanStore((s) => msg.senderId ? s.agents[msg.senderId] : undefined);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
@@ -642,6 +871,8 @@ function ChatBubble({
   const time = formatTime(msg.createdAt);
   const isOwner = isHuman && currentUser?.id === msg.senderId;
   const parts = parseMentions(msg.body);
+  const meta = parseMeta(msg);
+  const taskId = typeof meta.taskId === 'string' ? meta.taskId : null;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(msg.body);
@@ -705,8 +936,20 @@ function ChatBubble({
             ))}
           </div>
         )}
-        {(reacted || saved) && (
+        {(taskId || replyCount > 0 || reacted || saved) && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {taskId && (
+              <button onClick={onOpenThread} className="inline-flex h-5 items-center gap-1 border border-purple-200 bg-purple-50 px-1.5 text-[11px] font-medium text-purple-700 hover:bg-purple-100" title="查看任务线程">
+                <span>#</span>
+                <span>{taskId.slice(-6)}</span>
+              </button>
+            )}
+            {replyCount > 0 && (
+              <button onClick={onOpenThread} className="inline-flex h-5 items-center gap-1 border border-sky-200 bg-sky-50 px-1.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100" title="打开线程">
+                <MessageSquare size={11} />
+                <span>{replyCount} 条回复</span>
+              </button>
+            )}
             {reacted && (
               <button onClick={onToggleReaction} className="inline-flex h-5 items-center gap-1 border border-pink-200 bg-pink-50 px-1.5 text-[11px] font-medium text-pink-700 hover:bg-pink-100" title="取消表情">
                 <span>❤️</span>
@@ -730,6 +973,31 @@ function artifactUrl(path: string): string {
   const token = getStoredAuthToken();
   const sep = path.includes('?') ? '&' : '?';
   return `${getResolvedServerUrl()}${path}${sep}token=${encodeURIComponent(token)}`;
+}
+
+function parseMeta(msg: ChatMessage): Record<string, any> {
+  if (!msg.metaJson) return {};
+  try {
+    const parsed = JSON.parse(msg.metaJson);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function parentMessageId(msg: ChatMessage): string | null {
+  const meta = parseMeta(msg);
+  return typeof meta.parentMessageId === 'string'
+    ? meta.parentMessageId
+    : typeof meta.inReplyTo === 'string'
+      ? meta.inReplyTo
+      : null;
+}
+
+function taskLabel(msg: ChatMessage): string | null {
+  const meta = parseMeta(msg);
+  if (typeof meta.taskId !== 'string') return null;
+  return `#${meta.taskId.slice(-6)} ${typeof meta.taskTitle === 'string' ? meta.taskTitle : '任务'}`;
 }
 
 function ChatArtifactPreview({ artifact }: { artifact: Artifact }) {

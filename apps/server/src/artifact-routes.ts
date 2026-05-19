@@ -136,16 +136,18 @@ export function attachArtifactRoutes(deps: ArtifactRoutesDeps): void {
     const uploaderId = (req.body.uploaderId as string) ?? 'unknown';
     const metaJson = (req.body.metaJson as string) ?? null;
 
+    const createdAt = Date.now();
     space.artifacts.create({
       id, messageId: null, uploaderId, filename, mimeType,
-      sizeBytes: file.size, storagePath, createdAt: Date.now(), metaJson,
+      sizeBytes: file.size, storagePath, createdAt, metaJson,
     });
 
     logger.info({ id, filename, channelId, sizeBytes: file.size }, 'artifact uploaded');
 
     res.status(201).json({
-      id, filename, mimeType, sizeBytes: file.size,
+      id, filename, mimeType, sizeBytes: file.size, createdAt,
       downloadUrl: `/api/networks/${networkId}/artifacts/${id}/download`,
+      previewUrl: `/api/networks/${networkId}/artifacts/${id}/preview`,
     });
   });
 

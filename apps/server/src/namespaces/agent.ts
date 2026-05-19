@@ -46,6 +46,14 @@ export interface DispatchRequest {
   teamId?: string;
   teamName?: string;
   history?: Array<{ role: 'user' | 'assistant' | 'system'; speaker: string; body: string; at: number }>;
+  attachments?: Array<{
+    id: string;
+    filename: string;
+    mimeType: string;
+    sizeBytes: number;
+    downloadUrl: string;
+    previewUrl: string;
+  }>;
 }
 
 interface DispatchCustomAgent {

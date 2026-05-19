@@ -286,6 +286,7 @@ export function createDeviceDaemon(
         teamName?: string;
         customAgent?: CustomDispatchAgent;
         history?: Parameters<AgentInstance['handleDispatch']>[0]['req']['history'];
+        attachments?: Parameters<AgentInstance['handleDispatch']>[0]['req']['attachments'];
       }) => {
         let agent = agents.get(req.agentId);
         if (!agent && req.customAgent) {

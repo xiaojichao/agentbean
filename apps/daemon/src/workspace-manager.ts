@@ -9,6 +9,7 @@ export interface AgentWorkspaceRun {
   runId: string;
   agentDir: string;
   runDir: string;
+  inputDir: string;
   outputDir: string;
   intermediateDir: string;
   logDir: string;
@@ -85,6 +86,7 @@ export function beginAgentWorkspaceRun(input: {
   const teamDir = ensureDir(join(rootDir(), 'teams', teamId));
   const agentDir = ensureDir(join(teamDir, 'agents', agentId));
   const runDir = ensureDir(join(agentDir, 'runs', runId));
+  const inputDir = ensureDir(join(runDir, 'inputs'));
   const outputDir = ensureDir(join(runDir, 'outputs'));
   const intermediateDir = ensureDir(join(runDir, 'intermediates'));
   const logDir = ensureDir(join(runDir, 'logs'));
@@ -110,7 +112,7 @@ export function beginAgentWorkspaceRun(input: {
     files: [],
   });
 
-  return { teamId: input.teamId, agentId: input.agentId, runId: input.runId, agentDir, runDir, outputDir, intermediateDir, logDir };
+  return { teamId: input.teamId, agentId: input.agentId, runId: input.runId, agentDir, runDir, inputDir, outputDir, intermediateDir, logDir };
 }
 
 export function workspaceEnv(run: AgentWorkspaceRun): Record<string, string> {
@@ -119,6 +121,7 @@ export function workspaceEnv(run: AgentWorkspaceRun): Record<string, string> {
     AGENTBEAN_AGENT_ID: run.agentId,
     AGENTBEAN_RUN_ID: run.runId,
     AGENTBEAN_WORKSPACE: run.agentDir,
+    AGENTBEAN_INPUT_DIR: run.inputDir,
     AGENTBEAN_OUTPUT_DIR: run.outputDir,
     AGENTBEAN_INTERMEDIATE_DIR: run.intermediateDir,
     AGENT_BEAN_OUTPUT_DIRS: [run.outputDir, run.intermediateDir].join(','),

@@ -233,13 +233,18 @@ describe('message:send', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     const ack = await new Promise<any>((resolve) => {
-      web.emit('message:send', { channelId: dmRes.dm.id, body: 'hello drama', clientMsgId: 'dm-1' }, resolve);
+      web.emit('message:send', { channelId: dmRes.dm.id, body: 'hello drama', clientMsgId: 'dm-1', artifactIds: [uploadedArtifactId] }, resolve);
     });
     expect(ack.ok).toBe(true);
 
     const req = await dispatchSeen;
     expect(req.agentId).toBe('custom-drama');
     expect(req.customAgent).toMatchObject({ id: 'custom-drama', name: 'drama', adapterKind: 'codex' });
+    expect(req.attachments?.[0]).toMatchObject({
+      id: uploadedArtifactId,
+      filename: 'drama.png',
+      downloadUrl: `/api/networks/default/artifacts/${uploadedArtifactId}/download`,
+    });
     expect(statuses.some((s) => s.id === 'custom-drama' && s.status === 'busy')).toBe(true);
 
     ag.emit('reply', {
@@ -252,8 +257,12 @@ describe('message:send', () => {
 
     await new Promise((r) => setTimeout(r, 100));
     expect(statuses.some((s) => s.id === 'custom-drama' && s.status === 'online')).toBe(true);
+    const human = messages.find((m) => m.senderKind === 'human' && m.body === 'hello drama');
+    expect(human).toBeTruthy();
+    expect(human?.artifacts?.[0]?.id).toBe(uploadedArtifactId);
     const reply = messages.find((m) => m.senderKind === 'agent' && m.senderId === 'custom-drama' && m.body === 'custom dm ok');
     expect(reply).toBeTruthy();
+    expect(JSON.parse(reply.metaJson).inReplyTo).toBe(human!.id);
     expect(reply.artifacts?.[0]).toMatchObject({
       id: uploadedArtifactId,
       filename: 'drama.png',

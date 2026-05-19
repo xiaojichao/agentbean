@@ -1,4 +1,6 @@
 import type { Socket } from 'socket.io-client';
+import { writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { logger } from './log.js';
 import type { AgentConfigEntry } from './config.js';
 import type { CliAdapter, ChatTurn } from './adapters/adapter.js';
@@ -22,6 +24,54 @@ function errorMessage(err: unknown): string {
     if (serialized && serialized !== '{}') return serialized;
   } catch {}
   return 'unknown error';
+}
+
+interface DispatchAttachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  downloadUrl: string;
+  previewUrl: string;
+}
+
+function safeFilename(value: string): string {
+  return basename(value).replace(/[^a-zA-Z0-9._-]/g, '-').replace(/^-+|-+$/g, '') || 'attachment';
+}
+
+async function downloadAttachments(input: {
+  serverUrl: string;
+  token: string;
+  run: ReturnType<typeof beginAgentWorkspaceRun>;
+  attachments?: DispatchAttachment[];
+}): Promise<Array<DispatchAttachment & { localPath: string }>> {
+  const downloaded: Array<DispatchAttachment & { localPath: string }> = [];
+  for (const attachment of input.attachments ?? []) {
+    const sep = attachment.downloadUrl.includes('?') ? '&' : '?';
+    const url = `${input.serverUrl}${attachment.downloadUrl}${sep}token=${encodeURIComponent(input.token)}`;
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        logger.warn({ id: attachment.id, status: resp.status }, 'attachment download rejected');
+        continue;
+      }
+      const bytes = Buffer.from(await resp.arrayBuffer());
+      const localPath = join(input.run.inputDir, `${attachment.id}-${safeFilename(attachment.filename)}`);
+      writeFileSync(localPath, bytes);
+      downloaded.push({ ...attachment, localPath });
+    } catch (err: any) {
+      logger.warn({ id: attachment.id, err: err?.message }, 'attachment download failed');
+    }
+  }
+  return downloaded;
+}
+
+function promptWithAttachments(prompt: string, attachments: Array<DispatchAttachment & { localPath: string }>): string {
+  if (attachments.length === 0) return prompt;
+  const list = attachments
+    .map((file) => `- ${file.filename} (${file.mimeType}, ${file.sizeBytes} bytes): ${file.localPath}`)
+    .join('\n');
+  return `${prompt}\n\n用户随消息附加了以下本地文件，请在需要时读取并使用：\n${list}`;
 }
 
 export class AgentInstance {
@@ -62,6 +112,7 @@ export class AgentInstance {
       networkId?: string;
       teamId?: string;
       teamName?: string;
+      attachments?: DispatchAttachment[];
     };
     serverUrl: string;
     token: string;
@@ -84,8 +135,10 @@ export class AgentInstance {
     });
     let archivedFiles: ArchivedWorkspaceFile[] = [];
     try {
+      const downloadedAttachments = await downloadAttachments({ serverUrl, token, run, attachments: req.attachments });
+      const prompt = promptWithAttachments(req.prompt, downloadedAttachments);
       const rawBody = await this.adapter.ask({
-        prompt: req.prompt,
+        prompt,
         history: req.history ?? [],
         systemPrompt: this.config.adapter.systemPrompt,
         workspace: projectWorkspace,
