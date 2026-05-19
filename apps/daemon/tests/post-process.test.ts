@@ -21,7 +21,7 @@ describe('postProcess', () => {
     expect(result.replyText).toContain('已生成文件');
   });
 
-  it('detects new image files created in nested workspace output directories', async () => {
+  it('detects new image files created in explicit workspace output directories', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'agentbean-post-process-'));
     const outputDir = join(workspace, 'outputs', 'covers');
     mkdirSync(outputDir, { recursive: true });
@@ -29,9 +29,20 @@ describe('postProcess', () => {
     const dispatchStart = Date.now() - 1000;
     writeFileSync(filePath, 'fake image');
 
-    const result = await postProcess('(Codex 已完成处理)', workspace, 'codex', dispatchStart);
+    const result = await postProcess('(Codex 已完成处理)', workspace, 'codex', dispatchStart, { outputDirs: ['outputs'] });
 
     expect(result.outputFiles).toContain(realpathSync(filePath));
+  });
+
+  it('does not scan the whole project workspace for unmentioned files', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'agentbean-post-process-'));
+    const filePath = join(workspace, 'unmentioned.png');
+    const dispatchStart = Date.now() - 1000;
+    writeFileSync(filePath, 'fake image');
+
+    const result = await postProcess('(Codex 已完成处理)', workspace, 'codex', dispatchStart);
+
+    expect(result.outputFiles).not.toContain(realpathSync(filePath));
   });
 
   it('detects new files in explicit daemon output directories', async () => {

@@ -95,9 +95,9 @@ function canonicalPath(path: string): string {
   }
 }
 
-function resolveOutputRoots(workspace?: string, outputDirs: string[] = []): string[] {
+function resolveOutputRoots(workspace?: string, outputDirs: string[] = [], includeWorkspace = false): string[] {
   const roots = new Set<string>();
-  if (workspace) roots.add(resolve(workspace));
+  if (workspace && includeWorkspace) roots.add(resolve(workspace));
 
   for (const raw of [...outputDirs, ...outputDirsFromEnv()]) {
     const expanded = raw.replace(/^~(?=$|\/)/, homedir());
@@ -139,7 +139,7 @@ export async function postProcess(
   workspace: string | undefined,
   kind: string,
   dispatchStart: number,
-  options: { outputDirs?: string[] } = {},
+  options: { outputDirs?: string[]; scanWorkspace?: boolean } = {},
 ): Promise<PostProcessResult> {
   const outputFiles = new Set<string>();
 
@@ -161,7 +161,7 @@ export async function postProcess(
     outputFiles.add(canonicalPath(filePath));
   }
 
-  for (const filePath of collectRecentOutputFiles(resolveOutputRoots(workspace, options.outputDirs), dispatchStart)) {
+  for (const filePath of collectRecentOutputFiles(resolveOutputRoots(workspace, options.outputDirs, options.scanWorkspace), dispatchStart)) {
     outputFiles.add(filePath);
   }
 
