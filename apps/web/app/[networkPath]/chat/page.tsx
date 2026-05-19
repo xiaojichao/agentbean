@@ -2,10 +2,10 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, MoreHorizontal, Copy, Trash2, Circle, FolderOpen, ChevronRight } from 'lucide-react';
+import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, MoreHorizontal, Copy, Trash2, Circle, FolderOpen, ChevronRight, Smile } from 'lucide-react';
 import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
-import type { AgentStatus, Artifact, ChatMessage } from '@/lib/schema';
+import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage } from '@/lib/schema';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 
 export default function ChatPage() {
@@ -40,6 +40,8 @@ export default function ChatPage() {
   const [dmsExpanded, setDmsExpanded] = useState(true);
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const [savedLoaded, setSavedLoaded] = useState(false);
+  const [reactionIds, setReactionIds] = useState<Set<string>>(new Set());
+  const [reactionsLoaded, setReactionsLoaded] = useState(false);
   const [_searchResults, setSearchResults] = useState<ChatMessage[] | null>(null);
   const [showMention, setShowMention] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -50,6 +52,7 @@ export default function ChatPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dmsRef = useRef(dms);
   const savedKey = `agentbean:chat:saved:${np}`;
+  const reactionsKey = `agentbean:chat:reactions:${np}`;
 
   useEffect(() => {
     dmsRef.current = dms;
@@ -119,6 +122,23 @@ export default function ChatPage() {
       window.localStorage.setItem(savedKey, JSON.stringify([...savedIds]));
     } catch {}
   }, [savedIds, savedKey, savedLoaded]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(reactionsKey);
+      setReactionIds(new Set(raw ? JSON.parse(raw) : []));
+    } catch {
+      setReactionIds(new Set());
+    }
+    setReactionsLoaded(true);
+  }, [reactionsKey]);
+
+  useEffect(() => {
+    if (!reactionsLoaded) return;
+    try {
+      window.localStorage.setItem(reactionsKey, JSON.stringify([...reactionIds]));
+    } catch {}
+  }, [reactionIds, reactionsKey, reactionsLoaded]);
 
   // Fetch members for @mention
   useEffect(() => {
@@ -255,6 +275,23 @@ export default function ChatPage() {
       if (next.has(msgId)) next.delete(msgId); else next.add(msgId);
       return next;
     });
+  };
+
+  const toggleReaction = (msgId: string) => {
+    setReactionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(msgId)) next.delete(msgId); else next.add(msgId);
+      return next;
+    });
+  };
+
+  const handleReply = (msg: ChatMessage) => {
+    const speaker = resolveMessageSpeaker(msg, currentUser?.username, agents);
+    setInput((prev) => {
+      const prefix = `回复 ${speaker}: `;
+      return prev.trim() ? `${prev}\n${prefix}` : prefix;
+    });
+    setTimeout(() => textareaRef.current?.focus(), 0);
   };
 
   return (
@@ -465,7 +502,15 @@ export default function ChatPage() {
               )}
               <div className="space-y-4">
                 {messages.map((msg) => (
-                  <ChatBubble key={msg.id} msg={msg} saved={savedIds.has(msg.id)} onToggleSave={() => toggleSave(msg.id)} />
+                  <ChatBubble
+                    key={msg.id}
+                    msg={msg}
+                    saved={savedIds.has(msg.id)}
+                    reacted={reactionIds.has(msg.id)}
+                    onReply={() => handleReply(msg)}
+                    onToggleReaction={() => toggleReaction(msg.id)}
+                    onToggleSave={() => toggleSave(msg.id)}
+                  />
                 ))}
               </div>
               <div ref={messagesEndRef} />
@@ -562,7 +607,21 @@ function ChannelEditDialog({ channel, onClose, onSaved }: { channel: { id: strin
   );
 }
 
-function ChatBubble({ msg, saved, onToggleSave }: { msg: ChatMessage; saved: boolean; onToggleSave: () => void }) {
+function ChatBubble({
+  msg,
+  saved,
+  reacted,
+  onReply,
+  onToggleReaction,
+  onToggleSave,
+}: {
+  msg: ChatMessage;
+  saved: boolean;
+  reacted: boolean;
+  onReply: () => void;
+  onToggleReaction: () => void;
+  onToggleSave: () => void;
+}) {
   const agent = useAgentBeanStore((s) => msg.senderId ? s.agents[msg.senderId] : undefined);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const [showMenu, setShowMenu] = useState(false);
@@ -592,18 +651,23 @@ function ChatBubble({ msg, saved, onToggleSave }: { msg: ChatMessage; saved: boo
   };
 
   return (
-    <div className="group relative flex gap-1">
-      {/* Left action buttons — show on hover */}
-      <div className="flex shrink-0 flex-col items-center gap-0.5 pt-0.5 opacity-0 group-hover:opacity-100 transition-opacity w-6">
-        <button onClick={onToggleSave} className={`flex h-5 w-5 items-center justify-center rounded ${saved ? 'text-amber-500' : 'text-neutral-300 hover:text-neutral-500'}`}>
+    <div className="group relative flex gap-2 rounded-md border border-transparent px-2 py-2 transition-colors hover:border-neutral-900 hover:bg-white">
+      <div className="pointer-events-none absolute right-2 top-1 z-10 flex items-center gap-0.5 border border-neutral-300 bg-white opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+        <button onClick={onReply} className="flex h-6 w-6 items-center justify-center border-r border-neutral-200 text-neutral-500 hover:bg-amber-50 hover:text-neutral-900" title="回复线程">
+          <MessageSquare size={13} />
+        </button>
+        <button onClick={onToggleReaction} className={`flex h-6 w-6 items-center justify-center border-r border-neutral-200 hover:bg-amber-50 ${reacted ? 'text-pink-600' : 'text-neutral-500 hover:text-neutral-900'}`} title={reacted ? '取消表情' : '添加表情'}>
+          <Smile size={13} />
+        </button>
+        <button onClick={onToggleSave} className={`flex h-6 w-6 items-center justify-center border-r border-neutral-200 hover:bg-amber-50 ${saved ? 'text-amber-500' : 'text-neutral-500 hover:text-neutral-900'}`} title={saved ? '取消收藏' : '收藏消息'}>
           {saved ? <BookmarkCheck size={13} /> : <Bookmark size={13} />}
         </button>
         <div className="relative">
-          <button onClick={() => setShowMenu((v) => !v)} className="flex h-5 w-5 items-center justify-center rounded text-neutral-300 hover:text-neutral-500">
+          <button onClick={() => setShowMenu((v) => !v)} className="flex h-6 w-6 items-center justify-center text-neutral-500 hover:bg-amber-50 hover:text-neutral-900" title="更多操作">
             <MoreHorizontal size={13} />
           </button>
           {showMenu && (
-            <div className="absolute left-0 top-6 z-10 w-28 rounded-md border border-neutral-200 bg-white py-1 shadow-lg">
+            <div className="absolute right-0 top-7 z-20 w-28 rounded-md border border-neutral-200 bg-white py-1 shadow-lg">
               <button onClick={handleCopy} className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-neutral-600 hover:bg-neutral-50">
                 <Copy size={12} /> {copied ? '已复制' : '复制'}
               </button>
@@ -616,7 +680,6 @@ function ChatBubble({ msg, saved, onToggleSave }: { msg: ChatMessage; saved: boo
           )}
         </div>
       </div>
-
       {/* Avatar */}
       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-purple-100 text-xs font-semibold text-purple-700">
         {speaker[0].toUpperCase()}
@@ -640,6 +703,22 @@ function ChatBubble({ msg, saved, onToggleSave }: { msg: ChatMessage; saved: boo
             {msg.artifacts.map((artifact) => (
               <ChatArtifactPreview key={artifact.id} artifact={artifact} />
             ))}
+          </div>
+        )}
+        {(reacted || saved) && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {reacted && (
+              <button onClick={onToggleReaction} className="inline-flex h-5 items-center gap-1 border border-pink-200 bg-pink-50 px-1.5 text-[11px] font-medium text-pink-700 hover:bg-pink-100" title="取消表情">
+                <span>❤️</span>
+                <span>1</span>
+              </button>
+            )}
+            {saved && (
+              <span className="inline-flex h-5 items-center gap-1 border border-amber-200 bg-amber-50 px-1.5 text-[11px] font-medium text-amber-700">
+                <BookmarkCheck size={11} />
+                已收藏
+              </span>
+            )}
           </div>
         )}
       </div>
@@ -697,6 +776,16 @@ function formatTime(ts: number): string {
     return `${diffDays}天前`;
   }
   return `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')} ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+function resolveMessageSpeaker(
+  msg: ChatMessage,
+  currentUsername: string | undefined,
+  agents: Record<string, AgentSnapshot>,
+): string {
+  if (msg.senderKind === 'agent') return msg.senderId ? (agents[msg.senderId]?.name ?? msg.senderId) : 'Agent';
+  if (msg.senderKind === 'human') return currentUsername ?? '你';
+  return '系统';
 }
 
 function statusLabel(status?: AgentStatus): string {
