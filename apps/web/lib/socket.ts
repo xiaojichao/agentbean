@@ -31,9 +31,13 @@ export function authedApiUrl(path: string): string {
 }
 
 export async function fetchAgentWorkspace(networkId: string, agentId: string): Promise<{ ok: boolean; runs?: AgentWorkspaceRun[]; error?: string }> {
-  const res = await fetch(authedApiUrl(`/api/networks/${encodeURIComponent(networkId)}/agents/${encodeURIComponent(agentId)}/workspace`));
-  if (!res.ok) return { ok: false, error: await res.text() };
-  return await res.json();
+  try {
+    const res = await fetch(authedApiUrl(`/api/networks/${encodeURIComponent(networkId)}/agents/${encodeURIComponent(agentId)}/workspace`));
+    if (!res.ok) return { ok: false, error: await res.text() };
+    return await res.json();
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to fetch workspace' };
+  }
 }
 
 export function getWebSocket(): Socket {

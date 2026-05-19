@@ -15,6 +15,16 @@ describe('GET /healthz', () => {
     expect(res.body).toEqual({ status: 'ok' });
   });
 
+  it('allows browser REST preflight from the web app origin', async () => {
+    const res = await request(app.http)
+      .options('/api/networks/default/agents/a1/workspace')
+      .set('Origin', 'http://localhost:3100')
+      .set('Access-Control-Request-Method', 'GET');
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-origin']).toBe('http://localhost:3100');
+    expect(res.headers['access-control-allow-methods']).toContain('GET');
+  });
+
   it('exposes a Db handle', () => {
     expect(app.db).toBeTruthy();
     const tables = app.db.raw

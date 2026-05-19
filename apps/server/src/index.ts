@@ -92,6 +92,26 @@ function projectDirectoryExists(cwd?: string | null): boolean {
   }
 }
 
+function resolveCorsOrigin(): string | false {
+  return process.env.CORS_ORIGIN ?? (process.env.NODE_ENV === 'production' ? false : 'http://localhost:3100');
+}
+
+function attachRestCors(app: express.Express, origin: string | false): void {
+  app.use((req, res, next) => {
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    }
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+}
+
 function isRecentlySeen(lastSeenAt?: number | null): boolean {
   if (!lastSeenAt) return false;
   return Date.now() - lastSeenAt < 45_000;
@@ -315,6 +335,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
   const app = express();
   app.disable('x-powered-by');
+  const corsOrigin = resolveCorsOrigin();
+  attachRestCors(app, corsOrigin);
   app.use(express.json());
   app.get('/healthz', (_req, res) => res.json({ status: 'ok' }));
 
@@ -327,7 +349,6 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
   });
 
   const server = http.createServer(app);
-  const corsOrigin = process.env.CORS_ORIGIN ?? (process.env.NODE_ENV === 'production' ? false : 'http://localhost:3100');
   const io = new IOServer(server, { cors: { origin: corsOrigin } });
 
   const { dispatch } = attachAgentNamespace({ io, db, registry, deviceRegistry, token, globalDb, metricsCollector });
