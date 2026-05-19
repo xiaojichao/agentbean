@@ -157,7 +157,7 @@ describe('message:send', () => {
       lastSeenAt: now,
       command: '/opt/homebrew/bin/codex',
       args: JSON.stringify([]),
-      cwd: '/private/tmp',
+      cwd: storageBaseDir,
       ownerId: null,
       description: 'Drama agent',
     });
@@ -271,7 +271,7 @@ describe('message:send', () => {
       lastSeenAt: now,
       command: '/opt/homebrew/bin/codex',
       args: JSON.stringify([]),
-      cwd: '/private/tmp',
+      cwd: storageBaseDir,
       ownerId: null,
       description: 'Drama agent',
     });
