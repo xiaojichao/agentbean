@@ -827,7 +827,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         await runIntros({
           channel: ch,
           members,
-          dispatch: (req) => dispatch({ agentId: req.agentId, channelId: req.channelId, prompt: req.prompt, requestId: req.requestId }),
+          dispatch: (req) => dispatch({ agentId: req.agentId, channelId: req.channelId, prompt: req.prompt, requestId: req.requestId, networkId }),
           onMessage: persist,
         });
       } catch (e: any) {
@@ -937,6 +937,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         channelId: ch.id,
         prompt: body,
         requestId: reqId,
+        networkId,
       });
       if (reply.ok && reply.body?.trim()) {
         const artifactIds = reply.artifactIds;

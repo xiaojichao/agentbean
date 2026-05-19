@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
-import { Bot, Circle, Code2, Cpu, Folder, MessageSquare, Shield, User, Users } from 'lucide-react';
-import { dmEvents } from '@/lib/socket';
+import { useEffect, useState } from 'react';
+import { Bot, Circle, Code2, Cpu, MessageSquare, Shield, User, Users } from 'lucide-react';
+import { dmEvents, fetchAgentWorkspace } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
-import type { AgentSnapshot, DeviceInfo, UserInfo } from '@/lib/schema';
+import type { AgentSnapshot, AgentWorkspaceRun, DeviceInfo, UserInfo } from '@/lib/schema';
+import { AgentWorkspaceSection } from '@/components/agent-workspace-section';
 
 export interface HumanMember {
   userId: string;
@@ -34,8 +35,25 @@ function statusClass(status?: string): string {
 
 export function AgentDetail({ agent, device }: { agent: AgentSnapshot; device?: DeviceInfo }) {
   const np = useCurrentNetworkPath();
+  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
   const [dmLoading, setDmLoading] = useState(false);
+  const [workspaceRuns, setWorkspaceRuns] = useState<AgentWorkspaceRun[]>([]);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const isCustomAgent = agent.category === 'executor-hosted' || agent.source === 'custom';
+
+  useEffect(() => {
+    if (!agent.id || !currentNetworkId) return;
+    let cancelled = false;
+    setWorkspaceLoading(true);
+    fetchAgentWorkspace(currentNetworkId, agent.id)
+      .then((res) => {
+        if (!cancelled && res.ok) setWorkspaceRuns(res.runs ?? []);
+      })
+      .finally(() => {
+        if (!cancelled) setWorkspaceLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [agent.id, currentNetworkId]);
 
   const startDm = async () => {
     setDmLoading(true);
@@ -92,9 +110,7 @@ export function AgentDetail({ agent, device }: { agent: AgentSnapshot; device?: 
         <InfoRow label="工作目录" value={agent.cwd ?? '未配置'} mono={Boolean(agent.cwd)} />
       </Section>
 
-      <Section title="技能与资源" icon={<Folder size={15} />}>
-        <div className="text-sm text-neutral-500">当前未上报技能、知识库或工作区资源。</div>
-      </Section>
+      <AgentWorkspaceSection runs={workspaceRuns} loading={workspaceLoading} />
     </div>
   );
 }

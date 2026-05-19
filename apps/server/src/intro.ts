@@ -11,6 +11,7 @@ export type DispatchFn = (req: {
   channelId: string;
   prompt: string;
   requestId: string;
+  networkId?: string;
 }) => Promise<DispatchResult>;
 
 export interface IntroMessage {

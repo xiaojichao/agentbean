@@ -39,6 +39,7 @@ export class ClaudeCodeAdapter implements CliAdapter {
       const child = spawn(command, args, {
         cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, ...(input.env ?? {}) },
       });
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];

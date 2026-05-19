@@ -11,6 +11,7 @@ export interface AskInput {
   systemPrompt?: string;
   workspace?: string;
   sandboxProfilePath?: string;
+  env?: Record<string, string>;
 }
 
 export interface CliAdapter {

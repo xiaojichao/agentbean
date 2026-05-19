@@ -66,7 +66,7 @@ export class CodexAdapter implements CliAdapter {
         cols: 80,
         rows: 30,
         cwd,
-        env: process.env as { [key: string]: string },
+        env: { ...(process.env as { [key: string]: string }), ...(input.env ?? {}) },
       });
 
       const chunks: string[] = [];

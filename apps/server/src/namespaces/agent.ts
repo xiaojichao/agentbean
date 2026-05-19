@@ -42,6 +42,9 @@ export interface DispatchRequest {
   channelId: string;
   prompt: string;
   requestId: string;
+  networkId?: string;
+  teamId?: string;
+  teamName?: string;
   history?: Array<{ role: 'user' | 'assistant' | 'system'; speaker: string; body: string; at: number }>;
 }
 
@@ -629,7 +632,9 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
 
     const agentRuntime = deps.registry.snapshot(req.agentId);
     const sandboxed = agentRuntime?.visibility === 'public' && agentRuntime.category !== 'agentos-hosted' && !customAgent;
-    sock.emit('dispatch', { ...req, sandboxed, customAgent });
+    const teamId = req.teamId ?? req.networkId ?? 'default';
+    const teamName = req.teamName ?? teamId;
+    sock.emit('dispatch', { ...req, networkId: req.networkId, teamId, teamName, sandboxed, customAgent });
   });
 
   return { ns, dispatch };

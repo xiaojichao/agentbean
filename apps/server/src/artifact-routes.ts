@@ -31,11 +31,57 @@ export interface ArtifactRoutesDeps {
     users: { get(id: string): { id: string } | null };
     networks: { get(id: string): { id: string; visibility: 'public' | 'private' } | null };
     networkMembers: { isMember(networkId: string, userId: string): boolean };
+    agents?: { listVisibleInNetwork(networkId: string): { id: string; name: string }[] };
   };
 }
 
 function validateNetworkId(id: string): boolean {
   return /^[a-zA-Z0-9_-]+$/.test(id);
+}
+
+function parseMetaJson(raw?: string | null): Record<string, any> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function workspaceRunsForAgent(space: ReturnType<StorageManager['getSpace']>, networkId: string, agentId: string) {
+  const rows = space.artifacts.listByUploader(agentId, 500);
+  const runs = new Map<string, { runId: string; createdAt: number; updatedAt: number; files: any[] }>();
+
+  for (const row of rows) {
+    const meta = parseMetaJson(row.metaJson);
+    if (meta.kind !== 'agent-workspace-file') continue;
+    if (meta.teamId && meta.teamId !== networkId) continue;
+    if (meta.agentId && meta.agentId !== agentId) continue;
+    const runId = typeof meta.runId === 'string' && meta.runId.trim() ? meta.runId : 'unknown';
+    const current = runs.get(runId) ?? { runId, createdAt: row.createdAt, updatedAt: row.createdAt, files: [] };
+    current.createdAt = Math.min(current.createdAt, row.createdAt);
+    current.updatedAt = Math.max(current.updatedAt, row.createdAt);
+    current.files.push({
+      id: row.id,
+      filename: row.filename,
+      mimeType: row.mimeType,
+      sizeBytes: row.sizeBytes,
+      createdAt: row.createdAt,
+      pathKind: meta.pathKind ?? 'output',
+      relativePath: meta.relativePath ?? row.filename,
+      originalPath: meta.originalPath ?? null,
+      sha256: meta.sha256 ?? null,
+      deviceId: meta.deviceId ?? null,
+      downloadUrl: `/api/networks/${networkId}/artifacts/${row.id}/download`,
+      previewUrl: `/api/networks/${networkId}/artifacts/${row.id}/preview`,
+    });
+    runs.set(runId, current);
+  }
+
+  return [...runs.values()]
+    .map((run) => ({ ...run, files: run.files.sort((a, b) => a.createdAt - b.createdAt) }))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export function attachArtifactRoutes(deps: ArtifactRoutesDeps): void {
@@ -128,5 +174,27 @@ export function attachArtifactRoutes(deps: ArtifactRoutesDeps): void {
     res.setHeader('Content-Disposition', 'inline');
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.sendFile(absPath);
+  });
+
+  app.get('/api/networks/:networkId/agents/:agentId/workspace', auth, (req: Request<{ networkId: string; agentId: string }>, res: Response) => {
+    const { networkId, agentId } = req.params;
+    if (!validateNetworkId(networkId)) return res.status(400).json({ error: 'invalid networkId' });
+    const space = storageManager.getSpace(networkId);
+    res.json({ ok: true, networkId, agentId, runs: workspaceRunsForAgent(space, networkId, agentId) });
+  });
+
+  app.get('/api/networks/:networkId/workspace', auth, (req: Request<{ networkId: string }>, res: Response) => {
+    const { networkId } = req.params;
+    if (!validateNetworkId(networkId)) return res.status(400).json({ error: 'invalid networkId' });
+    const space = storageManager.getSpace(networkId);
+    const agents = globalDb?.agents?.listVisibleInNetwork(networkId) ?? [];
+    const payload = agents
+      .map((agent) => ({
+        id: agent.id,
+        name: agent.name,
+        runs: workspaceRunsForAgent(space, networkId, agent.id),
+      }))
+      .filter((agent) => agent.runs.length > 0);
+    res.json({ ok: true, networkId, agents: payload });
   });
 }

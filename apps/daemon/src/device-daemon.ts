@@ -8,6 +8,7 @@ import type { AgentConfigEntry } from './config.js';
 import { AgentInstance } from './agent-instance.js';
 import { pickAdapter } from './adapters/factory.js';
 import { scanRuntimes, scanAgentOSAgents, scanLocalAgents, collectSystemInfo, type SystemInfo } from './scanner.js';
+import { syncWorkspaceArtifacts } from './workspace-sync.js';
 
 type ScannedAgent = { name: string; category: string; adapterKind: string; command: string; args: string[]; cwd?: string; source: string };
 type RuntimeMeta = { name: string; adapterKind: string; command: string; installed: boolean };
@@ -131,7 +132,9 @@ export function createDeviceDaemon(
   let socket: Socket | null = null;
   let heartbeatTimer: NodeJS.Timeout | null = null;
   let rescanTimer: NodeJS.Timeout | null = null;
+  let workspaceSyncTimer: NodeJS.Timeout | null = null;
   const RESCAN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+  const WORKSPACE_SYNC_INTERVAL_MS = 2 * 60 * 1000;
   const queues = new Map<string, Promise<unknown>>();
   const httpBase = cfg.server.url.replace(/\/agent$/, '');
   let firstConnect = true;
@@ -259,6 +262,13 @@ export function createDeviceDaemon(
           if (!socket?.connected) return;
           scanAndRegister(socket, false);
         }, RESCAN_INTERVAL_MS);
+
+        syncWorkspaceArtifacts({ serverUrl: httpBase, token: cfg.server.token, networkId: cfg.networkId });
+        if (workspaceSyncTimer) clearInterval(workspaceSyncTimer);
+        workspaceSyncTimer = setInterval(() => {
+          if (!socket?.connected) return;
+          syncWorkspaceArtifacts({ serverUrl: httpBase, token: cfg.server.token, networkId: cfg.networkId });
+        }, WORKSPACE_SYNC_INTERVAL_MS);
       });
 
       socket.on('connect_error', (err) => {
@@ -271,6 +281,9 @@ export function createDeviceDaemon(
         channelId: string;
         prompt: string;
         sandboxed?: boolean;
+        networkId?: string;
+        teamId?: string;
+        teamName?: string;
         customAgent?: CustomDispatchAgent;
         history?: Parameters<AgentInstance['handleDispatch']>[0]['req']['history'];
       }) => {
@@ -325,7 +338,8 @@ export function createDeviceDaemon(
             req,
             serverUrl: httpBase,
             token: cfg.server.token,
-            networkId: cfg.networkId,
+            networkId: req.teamId ?? req.networkId ?? cfg.networkId,
+            deviceId: cfg.deviceId,
           });
         }).catch((err: unknown) => {
           const message = errorMessage(err);
@@ -349,12 +363,14 @@ export function createDeviceDaemon(
         logger.warn({ reason }, 'device daemon disconnected');
         if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
         if (rescanTimer) { clearInterval(rescanTimer); rescanTimer = null; }
+        if (workspaceSyncTimer) { clearInterval(workspaceSyncTimer); workspaceSyncTimer = null; }
       });
     },
 
     async stop() {
       if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
       if (rescanTimer) { clearInterval(rescanTimer); rescanTimer = null; }
+      if (workspaceSyncTimer) { clearInterval(workspaceSyncTimer); workspaceSyncTimer = null; }
       socket?.close();
       socket = null;
     },

@@ -40,6 +40,7 @@ export class OpenClawAdapter implements CliAdapter {
       const child = spawn(this.opts.command, buildArgs(this.opts.args ?? [], prompt), {
         cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, ...(input.env ?? {}) },
       });
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];

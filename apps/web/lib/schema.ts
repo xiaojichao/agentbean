@@ -67,6 +67,21 @@ export interface Artifact {
   previewUrl: string;
 }
 
+export interface AgentWorkspaceFile extends Artifact {
+  pathKind: string;
+  relativePath: string;
+  originalPath?: string | null;
+  sha256?: string | null;
+  deviceId?: string | null;
+}
+
+export interface AgentWorkspaceRun {
+  runId: string;
+  createdAt: number;
+  updatedAt: number;
+  files: AgentWorkspaceFile[];
+}
+
 export interface OutboundMessage {
   id: string;
   channelId: string;

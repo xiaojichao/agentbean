@@ -23,6 +23,7 @@ export interface StorageSpace {
     }): void;
     get(id: string): ArtifactRow | null;
     listByMessage(messageId: string): ArtifactRow[];
+    listByUploader(uploaderId: string, limit: number): ArtifactRow[];
     bindMessageId(artifactIds: string[], messageId: string): void;
   };
   tasks: {
@@ -90,6 +91,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_artifacts_message ON artifacts(message_id);
+CREATE INDEX IF NOT EXISTS idx_artifacts_uploader_created ON artifacts(uploader_id, created_at);
 
 CREATE TABLE IF NOT EXISTS tasks (
   id          TEXT PRIMARY KEY,
@@ -200,6 +202,11 @@ function createDao(raw: Database.Database): Pick<StorageSpace, 'messages' | 'art
     SELECT * FROM artifacts WHERE message_id = ?
     ORDER BY created_at ASC
   `);
+  const artifactListByUploader = raw.prepare(`
+    SELECT * FROM artifacts WHERE uploader_id = ?
+    ORDER BY created_at DESC
+    LIMIT ?
+  `);
   const artifactBindMessage = raw.prepare(`
     UPDATE artifacts SET message_id = ? WHERE id = ?
   `);
@@ -259,6 +266,8 @@ function createDao(raw: Database.Database): Pick<StorageSpace, 'messages' | 'art
       },
       listByMessage: (messageId) =>
         artifactListByMessage.all(messageId).map(rowToArtifact),
+      listByUploader: (uploaderId, limit) =>
+        artifactListByUploader.all(uploaderId, limit).map(rowToArtifact),
       bindMessageId: (artifactIds, messageId) => {
         for (const id of artifactIds) artifactBindMessage.run(messageId, id);
       },

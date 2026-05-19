@@ -4,6 +4,13 @@ import type { AgentConfig } from './config.js';
 import type { CliAdapter, ChatTurn } from './adapters/adapter.js';
 import { uploadArtifact } from './uploader.js';
 import { postProcess } from './post-process.js';
+import {
+  archiveOutputFiles,
+  beginAgentWorkspaceRun,
+  finishAgentWorkspaceRun,
+  workspaceEnv,
+  type ArchivedWorkspaceFile,
+} from './workspace-manager.js';
 
 function errorMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
@@ -70,31 +77,56 @@ export function createConnection(cfg: AgentConfig, adapter: CliAdapter): Connect
         queue = queue.then(async () => {
           const ctl = new AbortController();
           const dispatchStart = Date.now();
+          const teamId = 'default';
+          const run = beginAgentWorkspaceRun({
+            teamId,
+            agentId: cfg.id,
+            agentName: cfg.name,
+            runId: req.requestId,
+            prompt: req.prompt,
+            projectDir: cfg.adapter.workspace,
+          });
+          let archivedFiles: ArchivedWorkspaceFile[] = [];
           try {
             const rawBody = await adapter.ask({
               prompt: req.prompt,
               history: req.history ?? [],
               systemPrompt: cfg.adapter.systemPrompt,
               workspace: cfg.adapter.workspace,
+              env: workspaceEnv(run),
             }, ctl.signal);
-            const processed = await postProcess(rawBody, cfg.adapter.workspace, cfg.adapter.kind, dispatchStart);
+            const processed = await postProcess(rawBody, cfg.adapter.workspace, cfg.adapter.kind, dispatchStart, {
+              outputDirs: [run.outputDir, run.intermediateDir],
+            });
+            archivedFiles = archiveOutputFiles(run, processed.outputFiles);
+            finishAgentWorkspaceRun(run, { replyText: processed.replyText, files: archivedFiles, status: 'completed' });
 
             const artifactIds: string[] = [];
-            if (processed.outputFiles.length > 0) {
+            if (archivedFiles.length > 0) {
               const httpBase = cfg.server.url.replace(/\/agent$/, '');
-              for (const filePath of processed.outputFiles) {
+              for (const file of archivedFiles) {
                 try {
                   const result = await uploadArtifact({
                     serverUrl: httpBase,
                     token: cfg.server.token,
-                    networkId: 'default',
-                    filePath,
+                    networkId: teamId,
+                    filePath: file.archivedPath,
                     channelId: req.channelId,
                     uploaderId: cfg.id,
+                    metaJson: JSON.stringify({
+                      kind: 'agent-workspace-file',
+                      teamId,
+                      agentId: cfg.id,
+                      runId: req.requestId,
+                      pathKind: file.pathKind,
+                      relativePath: file.relativePath,
+                      originalPath: file.originalPath,
+                      sha256: file.sha256,
+                    }),
                   });
                   if (result) artifactIds.push(result.id);
                 } catch (err: any) {
-                  logger.warn({ err: err.message, filePath }, 'artifact upload failed');
+                  logger.warn({ err: err.message, filePath: file.archivedPath }, 'artifact upload failed');
                 }
               }
             }
@@ -107,6 +139,7 @@ export function createConnection(cfg: AgentConfig, adapter: CliAdapter): Connect
             });
           } catch (err: unknown) {
             const message = errorMessage(err);
+            finishAgentWorkspaceRun(run, { files: archivedFiles, status: 'failed', error: message });
             logger.error({ err: message, requestId: req.requestId }, 'dispatch failed');
             currentSocket.emit('error_event', {
               at: Date.now(),

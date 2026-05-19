@@ -1,6 +1,6 @@
 'use client';
 import { io, type Socket } from 'socket.io-client';
-import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, NetworkSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage } from './schema.js';
+import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, NetworkSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun } from './schema.js';
 
 const configuredUrl = process.env.NEXT_PUBLIC_AGENT_BEAN_SERVER_URL ?? 'http://localhost:4000';
 const TOKEN_STORAGE_KEY = 'agentbean.token';
@@ -23,6 +23,17 @@ function getServerUrl(): string {
 
 export function getResolvedServerUrl(): string {
   return getServerUrl();
+}
+
+export function authedApiUrl(path: string): string {
+  const sep = path.includes('?') ? '&' : '?';
+  return `${getServerUrl()}${path}${sep}token=${encodeURIComponent(getStoredAuthToken())}`;
+}
+
+export async function fetchAgentWorkspace(networkId: string, agentId: string): Promise<{ ok: boolean; runs?: AgentWorkspaceRun[]; error?: string }> {
+  const res = await fetch(authedApiUrl(`/api/networks/${encodeURIComponent(networkId)}/agents/${encodeURIComponent(agentId)}/workspace`));
+  if (!res.ok) return { ok: false, error: await res.text() };
+  return await res.json();
 }
 
 export function getWebSocket(): Socket {

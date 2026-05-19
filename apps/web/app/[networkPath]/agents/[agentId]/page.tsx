@@ -4,10 +4,12 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, AlertTriangle, Copy, Check, Globe, Lock, Monitor, Terminal, User } from 'lucide-react';
-import { agentEvents } from '@/lib/socket';
+import { agentEvents, fetchAgentWorkspace } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { AgentStatusBadge } from '@/components/agent-status-badge';
 import { formatRelative } from '@/lib/format-time';
+import type { AgentWorkspaceRun } from '@/lib/schema';
+import { AgentWorkspaceSection } from '@/components/agent-workspace-section';
 
 export default function AgentDetailPage() {
   const params = useParams<{ agentId: string }>();
@@ -18,6 +20,9 @@ export default function AgentDetailPage() {
   const [publishing, setPublishing] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const networks = useAgentBeanStore((s) => s.networks);
+  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
+  const [workspaceRuns, setWorkspaceRuns] = useState<AgentWorkspaceRun[]>([]);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
 
   useEffect(() => {
     const ev = agentEvents();
@@ -29,6 +34,20 @@ export default function AgentDetailPage() {
       unsubStatus();
     };
   }, [setAgents, upsert]);
+
+  useEffect(() => {
+    if (!agent?.id || !currentNetworkId) return;
+    let cancelled = false;
+    setWorkspaceLoading(true);
+    fetchAgentWorkspace(currentNetworkId, agent.id)
+      .then((res) => {
+        if (!cancelled && res.ok) setWorkspaceRuns(res.runs ?? []);
+      })
+      .finally(() => {
+        if (!cancelled) setWorkspaceLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [agent?.id, currentNetworkId]);
 
   const handleTogglePublish = async (networkId: string) => {
     if (!agent || publishing) return;
@@ -246,6 +265,8 @@ export default function AgentDetailPage() {
           <div className="font-mono text-xs whitespace-pre-wrap break-all">{agent.lastError}</div>
         </div>
       )}
+
+      <AgentWorkspaceSection runs={workspaceRuns} loading={workspaceLoading} />
 
       <section>
         <div className="mb-1 text-sm text-neutral-700 font-medium">接入命令</div>

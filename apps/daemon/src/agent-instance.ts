@@ -5,6 +5,13 @@ import type { CliAdapter, ChatTurn } from './adapters/adapter.js';
 import { uploadArtifact } from './uploader.js';
 import { postProcess } from './post-process.js';
 import { generateSandboxProfile, getWorkspaceDir, isSandboxAvailable } from './sandbox.js';
+import {
+  archiveOutputFiles,
+  beginAgentWorkspaceRun,
+  finishAgentWorkspaceRun,
+  workspaceEnv,
+  type ArchivedWorkspaceFile,
+} from './workspace-manager.js';
 
 function errorMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
@@ -51,41 +58,73 @@ export class AgentInstance {
       prompt: string;
       history?: ChatTurn[];
       sandboxed?: boolean;
+      networkId?: string;
+      teamId?: string;
+      teamName?: string;
     };
     serverUrl: string;
     token: string;
     networkId: string;
+    deviceId?: string;
   }): Promise<void> {
-    const { socket, req, serverUrl, token, networkId } = opts;
+    const { socket, req, serverUrl, token, networkId, deviceId } = opts;
     const ctl = new AbortController();
     const dispatchStart = Date.now();
+    const teamId = req.teamId ?? req.networkId ?? networkId;
+    const projectWorkspace = req.sandboxed ? getWorkspaceDir(this.id) : this.config.adapter.workspace;
+    const run = beginAgentWorkspaceRun({
+      teamId,
+      teamName: req.teamName,
+      agentId: this.id,
+      agentName: this.name,
+      runId: req.requestId,
+      prompt: req.prompt,
+      projectDir: projectWorkspace,
+    });
+    let archivedFiles: ArchivedWorkspaceFile[] = [];
     try {
       const rawBody = await this.adapter.ask({
         prompt: req.prompt,
         history: req.history ?? [],
         systemPrompt: this.config.adapter.systemPrompt,
-        workspace: req.sandboxed ? getWorkspaceDir(this.id) : this.config.adapter.workspace,
+        workspace: projectWorkspace,
         sandboxProfilePath: req.sandboxed && isSandboxAvailable()
           ? generateSandboxProfile(this.id, this.config.adapter.command)
           : undefined,
+        env: workspaceEnv(run),
       }, ctl.signal);
-      const processed = await postProcess(rawBody, req.sandboxed ? getWorkspaceDir(this.id) : this.config.adapter.workspace, this.adapter.kind, dispatchStart);
+      const processed = await postProcess(rawBody, projectWorkspace, this.adapter.kind, dispatchStart, {
+        outputDirs: [run.outputDir, run.intermediateDir],
+      });
+      archivedFiles = archiveOutputFiles(run, processed.outputFiles);
+      finishAgentWorkspaceRun(run, { replyText: processed.replyText, files: archivedFiles, status: 'completed' });
 
       const artifactIds: string[] = [];
-      if (processed.outputFiles.length > 0) {
-        for (const filePath of processed.outputFiles) {
+      if (archivedFiles.length > 0) {
+        for (const file of archivedFiles) {
           try {
             const result = await uploadArtifact({
               serverUrl,
               token,
-              networkId,
-              filePath,
+              networkId: teamId,
+              filePath: file.archivedPath,
               channelId: req.channelId,
               uploaderId: this.id,
+              metaJson: JSON.stringify({
+                kind: 'agent-workspace-file',
+                teamId,
+                agentId: this.id,
+                runId: req.requestId,
+                deviceId: deviceId ?? null,
+                pathKind: file.pathKind,
+                relativePath: file.relativePath,
+                originalPath: file.originalPath,
+                sha256: file.sha256,
+              }),
             });
             if (result) artifactIds.push(result.id);
           } catch (err: any) {
-            logger.warn({ err: err.message, filePath }, 'artifact upload failed');
+            logger.warn({ err: err.message, filePath: file.archivedPath }, 'artifact upload failed');
           }
         }
       }
@@ -99,6 +138,7 @@ export class AgentInstance {
       });
     } catch (err: unknown) {
       const message = errorMessage(err);
+      finishAgentWorkspaceRun(run, { files: archivedFiles, status: 'failed', error: message });
       logger.error({ err: message, requestId: req.requestId, agentId: this.id }, 'dispatch failed');
       socket.emit('error_event', {
         agentId: this.id,

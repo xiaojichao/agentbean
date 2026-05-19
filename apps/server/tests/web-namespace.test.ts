@@ -199,6 +199,15 @@ describe('message:send', () => {
     const form = new FormData();
     form.append('channelId', dmRes.dm.id);
     form.append('uploaderId', 'custom-drama');
+    form.append('metaJson', JSON.stringify({
+      kind: 'agent-workspace-file',
+      teamId: 'default',
+      agentId: 'custom-drama',
+      runId: 'run-test',
+      pathKind: 'output',
+      relativePath: 'runs/run-test/outputs/drama.png',
+      sha256: 'fake-sha',
+    }));
     form.append('file', new Blob(['fake image']), 'drama.png');
     const uploadRes = await fetch(`${baseUrl}/api/networks/default/artifacts/upload`, {
       method: 'POST',
@@ -210,6 +219,13 @@ describe('message:send', () => {
     uploadedArtifactId = uploaded.id;
     const previewRes = await fetch(`${baseUrl}/api/networks/default/artifacts/${uploadedArtifactId}/preview?token=${encodeURIComponent('default:default:user-token')}`);
     expect(previewRes.status).toBe(200);
+    const workspaceRes = await fetch(`${baseUrl}/api/networks/default/agents/custom-drama/workspace?token=${encodeURIComponent('default:default:user-token')}`);
+    expect(workspaceRes.status).toBe(200);
+    const workspace = await workspaceRes.json() as any;
+    expect(workspace.runs?.[0]).toMatchObject({
+      runId: 'run-test',
+      files: [{ id: uploadedArtifactId, relativePath: 'runs/run-test/outputs/drama.png' }],
+    });
 
     const messages: any[] = [];
     web.emit('channel:join', { channelId: dmRes.dm.id });
