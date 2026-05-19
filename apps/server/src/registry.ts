@@ -102,6 +102,19 @@ export class AgentRegistry {
     return a;
   }
 
+  setStatus(agentId: string, status: AgentStatus, message?: string): AgentRuntime | null {
+    const a = this.byId.get(agentId);
+    if (!a) return null;
+    a.status = status;
+    a.lastHeartbeatAt = Date.now();
+    if (message) {
+      a.lastError = { at: Date.now(), message };
+    } else if (status !== 'error') {
+      a.lastError = undefined;
+    }
+    return a;
+  }
+
   updateVisibility(agentId: string, visibility: 'public' | 'private'): AgentRuntime | null {
     const a = this.byId.get(agentId);
     if (!a) return null;

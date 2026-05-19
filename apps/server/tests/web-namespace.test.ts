@@ -167,24 +167,34 @@ describe('message:send', () => {
       }, resolve);
     });
 
+    let uploadedArtifactId = '';
     const dispatchSeen = new Promise<any>((resolve) => {
       ag.on('dispatch', (req: any) => {
         resolve(req);
-        ag.emit('reply', {
-          agentId: req.agentId,
-          channelId: req.channelId,
-          body: 'custom dm ok',
-          requestId: req.requestId,
-        });
       });
     });
 
     const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
     await new Promise<void>((r) => web.on('connect', () => r()));
+    const statuses: any[] = [];
+    web.on('agent:status', (status: any) => statuses.push(status));
     const dmRes = await new Promise<any>((resolve) => {
       web.emit('dm:start', { agentId: 'custom-drama' }, resolve);
     });
     expect(dmRes.ok).toBe(true);
+
+    const form = new FormData();
+    form.append('channelId', dmRes.dm.id);
+    form.append('uploaderId', 'custom-drama');
+    form.append('file', new Blob(['fake image']), 'drama.png');
+    const uploadRes = await fetch(`${baseUrl}/api/networks/default/artifacts/upload`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer default:default:tok' },
+      body: form,
+    });
+    expect(uploadRes.status).toBe(201);
+    const uploaded = await uploadRes.json() as { id: string };
+    uploadedArtifactId = uploaded.id;
 
     const messages: any[] = [];
     web.emit('channel:join', { channelId: dmRes.dm.id });
@@ -199,10 +209,122 @@ describe('message:send', () => {
     const req = await dispatchSeen;
     expect(req.agentId).toBe('custom-drama');
     expect(req.customAgent).toMatchObject({ id: 'custom-drama', name: 'drama', adapterKind: 'codex' });
+    expect(statuses.some((s) => s.id === 'custom-drama' && s.status === 'busy')).toBe(true);
+
+    ag.emit('reply', {
+      agentId: req.agentId,
+      channelId: req.channelId,
+      body: 'custom dm ok',
+      requestId: req.requestId,
+      artifactIds: [uploadedArtifactId],
+    });
+
     await new Promise((r) => setTimeout(r, 100));
-    expect(messages.some((m) => m.senderKind === 'agent' && m.senderId === 'custom-drama' && m.body === 'custom dm ok')).toBe(true);
+    expect(statuses.some((s) => s.id === 'custom-drama' && s.status === 'online')).toBe(true);
+    const reply = messages.find((m) => m.senderKind === 'agent' && m.senderId === 'custom-drama' && m.body === 'custom dm ok');
+    expect(reply).toBeTruthy();
+    expect(reply.artifacts?.[0]).toMatchObject({
+      id: uploadedArtifactId,
+      filename: 'drama.png',
+      previewUrl: `/api/networks/default/artifacts/${uploadedArtifactId}/preview`,
+      downloadUrl: `/api/networks/default/artifacts/${uploadedArtifactId}/download`,
+    });
 
     ag.close(); web.close();
+  });
+
+  it('routes channel mentions to online custom agent candidates', async () => {
+    const now = Date.now();
+    const owner = app.globalDb.users.listAll()[0]!;
+    app.globalDb.devices.upsert({
+      id: 'd-custom-mention',
+      userId: owner.id,
+      networkId: 'default',
+      hostname: 'custom-mention-device',
+      lastSeenAt: now,
+      systemInfo: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'custom-drama-mention',
+      name: 'drama',
+      role: 'executor-agent',
+      adapterKind: 'codex',
+      deviceId: 'd-custom-mention',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      command: '/opt/homebrew/bin/codex',
+      args: JSON.stringify([]),
+      cwd: '/private/tmp',
+      ownerId: null,
+      description: 'Drama agent',
+    });
+
+    const agentos = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'd-agentos',
+        networkId: 'default',
+        agents: [{ id: 'hermes-agent', name: 'Hermes-Agent', role: 'r', adapterKind: 'hermes', category: 'agentos-hosted', visibility: 'public' }],
+      },
+      reconnection: false, transports: ['websocket'],
+    });
+    await new Promise<void>((r) => agentos.on('connect', () => r()));
+    agentos.emit('register');
+    let hermesDispatches = 0;
+    agentos.on('dispatch', (req: any) => {
+      hermesDispatches += 1;
+      agentos.emit('reply', { agentId: 'hermes-agent', channelId: req.channelId, body: 'hermes reply', requestId: req.requestId });
+    });
+
+    const custom = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'd-custom-mention',
+        networkId: 'default',
+        capabilities: { customAgentDispatch: true },
+        agents: [],
+      },
+      reconnection: false, transports: ['websocket'],
+    });
+    await new Promise<void>((r) => custom.on('connect', () => r()));
+    custom.emit('register');
+    await new Promise<any>((resolve) => {
+      custom.emit('device:register-runtimes', {
+        runtimes: [{ name: 'Codex CLI', adapterKind: 'codex', command: '/opt/homebrew/bin/codex', installed: true }],
+      }, resolve);
+    });
+    const dispatchSeen = new Promise<any>((resolve) => {
+      custom.on('dispatch', (req: any) => {
+        resolve(req);
+        custom.emit('reply', { agentId: req.agentId, channelId: req.channelId, body: 'custom mention ok', requestId: req.requestId });
+      });
+    });
+
+    const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    const ch = app.channels.ensureDefault('default');
+    web.emit('channel:join', { channelId: ch.id });
+    const messages: any[] = [];
+    web.on('channel:message', (m: any) => messages.push(m));
+    await new Promise((r) => setTimeout(r, 50));
+
+    const ack = await new Promise<any>((resolve) => {
+      web.emit('message:send', { channelId: ch.id, body: '@drama 生成一张图', clientMsgId: 'mention-1' }, resolve);
+    });
+    expect(ack.ok).toBe(true);
+
+    const req = await dispatchSeen;
+    expect(req.agentId).toBe('custom-drama-mention');
+    expect(req.customAgent).toMatchObject({ id: 'custom-drama-mention', name: 'drama', adapterKind: 'codex' });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(hermesDispatches).toBe(0);
+    expect(messages.some((m) => m.senderKind === 'agent' && m.senderId === 'custom-drama-mention' && m.body === 'custom mention ok')).toBe(true);
+
+    custom.close(); agentos.close(); web.close();
   });
 });
 

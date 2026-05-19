@@ -1,7 +1,6 @@
 import type { ChatMessage, Artifact } from '@/lib/schema';
 import { useAgentBeanStore } from '@/lib/store';
-
-const SERVER_BASE = process.env.NEXT_PUBLIC_AGENT_BEAN_SERVER_URL ?? 'http://localhost:4000';
+import { getResolvedServerUrl, getStoredAuthToken } from '@/lib/socket';
 
 const KIND_LABEL: Record<ChatMessage['senderKind'], string> = {
   human: '你',
@@ -9,12 +8,18 @@ const KIND_LABEL: Record<ChatMessage['senderKind'], string> = {
   system: '系统',
 };
 
+function artifactUrl(path: string): string {
+  const token = getStoredAuthToken();
+  const sep = path.includes('?') ? '&' : '?';
+  return `${getResolvedServerUrl()}${path}${sep}token=${encodeURIComponent(token)}`;
+}
+
 function ArtifactPreview({ artifact }: { artifact: Artifact }) {
   if (artifact.mimeType.startsWith('image/')) {
     return (
-      <a href={`${SERVER_BASE}${artifact.downloadUrl}`} target="_blank" rel="noreferrer">
+      <a href={artifactUrl(artifact.downloadUrl)} target="_blank" rel="noreferrer">
         <img
-          src={`${SERVER_BASE}${artifact.previewUrl}`}
+          src={artifactUrl(artifact.previewUrl)}
           alt={artifact.filename}
           className="max-h-48 rounded border border-neutral-100"
         />
@@ -23,7 +28,7 @@ function ArtifactPreview({ artifact }: { artifact: Artifact }) {
   }
   return (
     <a
-      href={`${SERVER_BASE}${artifact.downloadUrl}`}
+      href={artifactUrl(artifact.downloadUrl)}
       target="_blank"
       rel="noreferrer"
       className="inline-flex items-center gap-1 rounded border border-neutral-200 bg-neutral-50 px-2 py-1 text-xs text-blue-600 hover:underline"

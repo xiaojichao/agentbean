@@ -13,6 +13,10 @@ function getStoredToken(): string {
   return window.localStorage.getItem(TOKEN_STORAGE_KEY) ?? webToken;
 }
 
+export function getStoredAuthToken(): string {
+  return getStoredToken();
+}
+
 function getServerUrl(): string {
   return configuredUrl;
 }

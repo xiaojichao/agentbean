@@ -37,7 +37,8 @@ export function attachArtifactRoutes(deps: ArtifactRoutesDeps): void {
 
   const auth = (req: Request, res: Response, next: NextFunction) => {
     const hdr = req.headers.authorization;
-    if (hdr !== `Bearer ${token}`) return res.status(401).json({ error: 'unauthorized' });
+    const queryToken = typeof req.query.token === 'string' ? req.query.token : undefined;
+    if (hdr !== `Bearer ${token}` && queryToken !== token) return res.status(401).json({ error: 'unauthorized' });
     next();
   };
 

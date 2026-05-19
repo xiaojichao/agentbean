@@ -1,10 +1,11 @@
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { logger } from './log.js';
 
 const CODE_BLOCK_RE = /```python\n([\s\S]*?)```/g;
 const CODEX_IMG_DIR = join(homedir(), '.codex', 'generated_images');
+const OUTPUT_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|pdf|txt|csv|json|md|mp4|mov|zip)$/i;
 
 export interface PostProcessResult {
   replyText: string;
@@ -23,13 +24,50 @@ export function listAllFiles(dir: string, maxDepth = 10, depth = 0): string[] {
   return results;
 }
 
+function normalizeCandidatePath(raw: string): string | null {
+  const cleaned = raw
+    .trim()
+    .replace(/^file:\/\//, '')
+    .replace(/^["'`<({\[]+/, '')
+    .replace(/["'`>)}\].,;:]+$/, '');
+  if (!cleaned || !OUTPUT_FILE_EXT_RE.test(cleaned)) return null;
+  return cleaned.replace(/^~(?=$|\/)/, homedir());
+}
+
+function extractMentionedFiles(reply: string, workspace: string | undefined, dispatchStart: number): string[] {
+  const candidates = new Set<string>();
+  const markdownLinkRe = /!?\[[^\]]*]\(([^)\s]+)\)/g;
+  const plainPathRe = /(?:^|[\s"'`(<])((?:~?\/|\.{1,2}\/)?[\w@%+=:,./-]+\.(?:png|jpe?g|gif|webp|svg|pdf|txt|csv|json|md|mp4|mov|zip))(?:$|[\s"'`)>.,;:])/gim;
+
+  let match: RegExpExecArray | null;
+  while ((match = markdownLinkRe.exec(reply)) !== null) {
+    const normalized = normalizeCandidatePath(match[1]!);
+    if (normalized) candidates.add(normalized);
+  }
+  while ((match = plainPathRe.exec(reply)) !== null) {
+    const normalized = normalizeCandidatePath(match[1]!);
+    if (normalized) candidates.add(normalized);
+  }
+
+  const files: string[] = [];
+  for (const candidate of candidates) {
+    const abs = isAbsolute(candidate) ? candidate : workspace ? resolve(workspace, candidate) : null;
+    if (!abs) continue;
+    try {
+      const st = statSync(abs);
+      if (st.isFile() && st.mtimeMs > dispatchStart) files.push(abs);
+    } catch {}
+  }
+  return files;
+}
+
 export async function postProcess(
   reply: string,
   workspace: string | undefined,
   kind: string,
   dispatchStart: number,
 ): Promise<PostProcessResult> {
-  const outputFiles: string[] = [];
+  const outputFiles = new Set<string>();
 
   // Codex native image detection
   if (kind === 'codex') {
@@ -38,10 +76,14 @@ export async function postProcess(
       try {
         const st = statSync(f);
         if (st.mtimeMs > dispatchStart) {
-          outputFiles.push(f);
+          outputFiles.add(f);
         }
       } catch {}
     }
+  }
+
+  for (const filePath of extractMentionedFiles(reply, workspace, dispatchStart)) {
+    outputFiles.add(filePath);
   }
 
   // Detect files created during this dispatch
@@ -53,7 +95,7 @@ export async function postProcess(
       try {
         const st = statSync(f);
         if (st.mtimeMs > dispatchStart) {
-          outputFiles.push(f);
+          outputFiles.add(f);
         }
       } catch {}
     }
@@ -73,8 +115,9 @@ export async function postProcess(
   }
 
   let replyText = reply;
-  if (outputFiles.length > 0) {
-    replyText += '\n\n已生成文件:\n' + outputFiles.map((f) => `- ${f}`).join('\n');
+  const files = [...outputFiles];
+  if (files.length > 0) {
+    replyText += '\n\n已生成文件:\n' + files.map((f) => `- ${f}`).join('\n');
   }
-  return { replyText, outputFiles };
+  return { replyText, outputFiles: files };
 }

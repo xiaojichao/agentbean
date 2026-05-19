@@ -126,6 +126,14 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       };
     }
 
+    if (rt?.status === 'busy' || rt?.status === 'error' || rt?.status === 'connecting') {
+      return {
+        status: rt.status,
+        lastSeenAt: rt.lastHeartbeatAt,
+        lastError: rt.lastError?.message,
+      };
+    }
+
     if (!projectDirectoryExists(agent.cwd)) {
       return { status: 'offline' as const, lastSeenAt: rt?.lastHeartbeatAt, lastError: undefined };
     }

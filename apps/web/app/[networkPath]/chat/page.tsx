@@ -3,9 +3,9 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, MoreHorizontal, Copy, Trash2, Circle, FolderOpen, ChevronRight } from 'lucide-react';
-import { getWebSocket, dmEvents, channelEvents, memberEvents } from '@/lib/socket';
+import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
-import type { AgentStatus, ChatMessage } from '@/lib/schema';
+import type { AgentStatus, Artifact, ChatMessage } from '@/lib/schema';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 
 export default function ChatPage() {
@@ -635,8 +635,49 @@ function ChatBubble({ msg, saved, onToggleSave }: { msg: ChatMessage; saved: boo
               : <span key={i}>{part.text}</span>
           )}
         </div>
+        {msg.artifacts && msg.artifacts.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {msg.artifacts.map((artifact) => (
+              <ChatArtifactPreview key={artifact.id} artifact={artifact} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+function artifactUrl(path: string): string {
+  const token = getStoredAuthToken();
+  const sep = path.includes('?') ? '&' : '?';
+  return `${getResolvedServerUrl()}${path}${sep}token=${encodeURIComponent(token)}`;
+}
+
+function ChatArtifactPreview({ artifact }: { artifact: Artifact }) {
+  const sizeKb = Math.max(0.1, artifact.sizeBytes / 1024).toFixed(1);
+  if (artifact.mimeType.startsWith('image/')) {
+    return (
+      <a href={artifactUrl(artifact.downloadUrl)} target="_blank" rel="noreferrer" className="block max-w-80">
+        <img
+          src={artifactUrl(artifact.previewUrl)}
+          alt={artifact.filename}
+          className="max-h-64 rounded-md border border-neutral-200 object-contain"
+        />
+        <div className="mt-1 truncate text-xs text-neutral-500">{artifact.filename}</div>
+      </a>
+    );
+  }
+  return (
+    <a
+      href={artifactUrl(artifact.downloadUrl)}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex max-w-80 items-center gap-2 rounded-md border border-neutral-200 bg-neutral-50 px-2.5 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
+    >
+      <Paperclip size={13} className="shrink-0 text-neutral-400" />
+      <span className="truncate">{artifact.filename}</span>
+      <span className="shrink-0 text-neutral-400">{sizeKb} KB</span>
+    </a>
   );
 }
 

@@ -136,10 +136,60 @@ function parseArgs(value: unknown): string[] | null {
   }
 }
 
+function customAgentToDto(agent: any, status: AgentSnapshotDto['status'], lastError?: string): AgentSnapshotDto {
+  return {
+    id: agent.id,
+    name: agent.name,
+    role: agent.role ?? 'executor-agent',
+    adapterKind: agent.adapterKind,
+    status,
+    lastSeenAt: Date.now(),
+    lastError,
+    connectCommand: renderConnectCommand({ adapterKind: agent.adapterKind }),
+    visibility: agent.visibility ?? 'public',
+    category: agent.category ?? 'executor-hosted',
+    networkId: agent.networkId,
+    ownerId: agent.ownerId ?? null,
+    command: agent.command ?? null,
+    args: parseArgs(agent.args),
+    cwd: agent.cwd ?? null,
+    description: agent.description ?? null,
+    deviceId: agent.deviceId,
+    source: 'custom',
+  };
+}
+
 export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHandle {
   const ns = deps.io.of('/agent');
   const pending = new Map<string, PendingDispatch>();
   const timeoutMs = deps.dispatchTimeoutMs ?? 300_000;
+
+  const emitCustomAgentStatus = (agentId: string, status: AgentSnapshotDto['status'], lastError?: string): boolean => {
+    const persisted = deps.globalDb?.agents?.getFull(agentId);
+    if (persisted?.source !== 'custom') return false;
+    if (!deps.registry.snapshot(agentId)) {
+      deps.registry.registerVirtual({
+        id: persisted.id,
+        name: persisted.name,
+        role: persisted.role ?? 'executor-agent',
+        adapterKind: persisted.adapterKind,
+        category: persisted.category,
+        networkId: persisted.networkId,
+        visibility: persisted.visibility,
+        ownerId: persisted.ownerId ?? null,
+        command: persisted.command ?? null,
+        args: parseArgs(persisted.args),
+        cwd: persisted.cwd ?? null,
+        description: persisted.description ?? null,
+        deviceId: persisted.deviceId,
+        publishedNetworkIds: deps.globalDb?.agentPublishes.listByAgent(agentId).map((p) => p.networkId) ?? [],
+        source: 'custom',
+      });
+    }
+    const rt = deps.registry.setStatus(agentId, status, lastError);
+    deps.io.of('/web').emit('agent:status', rt ? snapshotToDto(rt) : customAgentToDto(persisted, status, lastError));
+    return true;
+  };
 
   ns.use((socket, next) => {
     const auth = socket.handshake.auth ?? {};
@@ -291,19 +341,27 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       deps.metricsCollector?.resolve(payload.requestId, true);
       const rt = deps.registry.markOnline(payload.agentId);
       if (rt) deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
+      else emitCustomAgentStatus(payload.agentId, 'online');
     });
 
     socket.on('error_event', (payload: { agentId: string; at?: number; message?: string; scope?: string; requestId?: string }) => {
+      const message = payload.message?.trim() || 'agent reported an error without details';
+      let resolvedRequest = false;
       if (payload?.requestId && pending.has(payload.requestId)) {
         const p = pending.get(payload.requestId)!;
         clearTimeout(p.timer);
         pending.delete(payload.requestId);
-        const message = payload.message?.trim() || 'agent reported an error without details';
         p.resolve({ ok: false, error: message });
         deps.metricsCollector?.resolve(payload.requestId, false, message);
+        resolvedRequest = true;
       }
-      const rt = deps.registry.markError(payload.agentId, payload?.message?.trim() || 'agent reported an error without details');
-      if (rt) deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
+      const rt = resolvedRequest ? deps.registry.markOnline(payload.agentId) : deps.registry.markError(payload.agentId, message);
+      if (rt) {
+        const dto = snapshotToDto(rt);
+        deps.io.of('/web').emit('agent:status', resolvedRequest ? { ...dto, lastError: message } : dto);
+      } else {
+        emitCustomAgentStatus(payload.agentId, resolvedRequest ? 'online' : 'error', message);
+      }
     });
 
     socket.on('agents:discovered', (payload: { agents: any[] }) => {
@@ -551,6 +609,8 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
     const busyRt = deps.registry.markBusy(req.agentId);
     if (busyRt) {
       deps.io.of('/web').emit('agent:status', snapshotToDto(busyRt));
+    } else if (customAgent) {
+      emitCustomAgentStatus(req.agentId, 'busy');
     }
     deps.metricsCollector?.start(req.agentId, req.requestId);
 
@@ -558,8 +618,9 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       pending.delete(req.requestId);
       resolve({ ok: false, error: `超时 (${timeoutMs / 1000}s)` });
       deps.metricsCollector?.resolve(req.requestId, false, `超时 (${timeoutMs / 1000}s)`);
-      deps.registry.markOnline(req.agentId);
-      deps.io.of('/web').emit('agent:status', snapshotToDto(deps.registry.snapshot(req.agentId)!));
+      const onlineRt = deps.registry.markOnline(req.agentId);
+      if (onlineRt) deps.io.of('/web').emit('agent:status', snapshotToDto(onlineRt));
+      else emitCustomAgentStatus(req.agentId, 'online', `超时 (${timeoutMs / 1000}s)`);
     }, timeoutMs);
     pending.set(req.requestId, { resolve, timer, socketId: sock.id, agentId: req.agentId });
 
