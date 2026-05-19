@@ -248,6 +248,87 @@ describe('message:send', () => {
     ag.close(); web.close();
   });
 
+  it('restores custom agent status when daemon reply omits agentId', async () => {
+    const now = Date.now();
+    const owner = app.globalDb.users.listAll()[0]!;
+    app.globalDb.devices.upsert({
+      id: 'd-custom-legacy',
+      userId: owner.id,
+      networkId: 'default',
+      hostname: 'legacy-device',
+      lastSeenAt: now,
+      systemInfo: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'custom-legacy-drama',
+      name: 'drama',
+      role: 'executor-agent',
+      adapterKind: 'codex',
+      deviceId: 'd-custom-legacy',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      command: '/opt/homebrew/bin/codex',
+      args: JSON.stringify([]),
+      cwd: storageBaseDir,
+      ownerId: null,
+      description: 'Drama agent',
+    });
+
+    const ag = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'd-custom-legacy',
+        networkId: 'default',
+        capabilities: { customAgentDispatch: true },
+        agents: [],
+      },
+      reconnection: false, transports: ['websocket'],
+    });
+    await new Promise<void>((r) => ag.on('connect', () => r()));
+    ag.emit('register');
+    await new Promise<any>((resolve) => {
+      ag.emit('device:register-runtimes', {
+        runtimes: [{ name: 'Codex CLI', adapterKind: 'codex', command: '/opt/homebrew/bin/codex', installed: true }],
+      }, resolve);
+    });
+
+    const dispatchSeen = new Promise<any>((resolve) => {
+      ag.on('dispatch', (req: any) => resolve(req));
+    });
+    const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    const statuses: any[] = [];
+    web.on('agent:status', (status: any) => statuses.push(status));
+    const dmRes = await new Promise<any>((resolve) => {
+      web.emit('dm:start', { agentId: 'custom-legacy-drama' }, resolve);
+    });
+    expect(dmRes.ok).toBe(true);
+    web.emit('channel:join', { channelId: dmRes.dm.id });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const ack = await new Promise<any>((resolve) => {
+      web.emit('message:send', { channelId: dmRes.dm.id, body: 'legacy reply', clientMsgId: 'legacy-1' }, resolve);
+    });
+    expect(ack.ok).toBe(true);
+    const req = await dispatchSeen;
+    expect(statuses.some((s) => s.id === 'custom-legacy-drama' && s.status === 'busy')).toBe(true);
+
+    ag.emit('reply', {
+      channelId: req.channelId,
+      body: 'legacy custom ok',
+      requestId: req.requestId,
+    });
+
+    await new Promise((r) => setTimeout(r, 100));
+    expect(statuses.some((s) => s.id === 'custom-legacy-drama' && s.status === 'online')).toBe(true);
+
+    ag.close(); web.close();
+  });
+
   it('routes channel mentions to online custom agent candidates', async () => {
     const now = Date.now();
     const owner = app.globalDb.users.listAll()[0]!;

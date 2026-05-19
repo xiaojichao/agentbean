@@ -332,35 +332,38 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       }
     });
 
-    socket.on('reply', (payload: { agentId: string; channelId: string; body: string; requestId: string; artifactIds?: string[] }) => {
+    socket.on('reply', (payload: { agentId?: string; channelId: string; body: string; requestId: string; artifactIds?: string[] }) => {
       const p = pending.get(payload.requestId);
       if (!p) return;
       clearTimeout(p.timer);
       pending.delete(payload.requestId);
       p.resolve({ ok: true, body: payload.body, artifactIds: payload.artifactIds });
       deps.metricsCollector?.resolve(payload.requestId, true);
-      const rt = deps.registry.markOnline(payload.agentId);
+      const agentId = p.agentId;
+      const rt = deps.registry.markOnline(agentId);
       if (rt) deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
-      else emitCustomAgentStatus(payload.agentId, 'online');
+      else emitCustomAgentStatus(agentId, 'online');
     });
 
     socket.on('error_event', (payload: { agentId: string; at?: number; message?: string; scope?: string; requestId?: string }) => {
       const message = payload.message?.trim() || 'agent reported an error without details';
       let resolvedRequest = false;
+      let agentId = payload.agentId;
       if (payload?.requestId && pending.has(payload.requestId)) {
         const p = pending.get(payload.requestId)!;
         clearTimeout(p.timer);
         pending.delete(payload.requestId);
         p.resolve({ ok: false, error: message });
         deps.metricsCollector?.resolve(payload.requestId, false, message);
+        agentId = p.agentId;
         resolvedRequest = true;
       }
-      const rt = resolvedRequest ? deps.registry.markOnline(payload.agentId) : deps.registry.markError(payload.agentId, message);
+      const rt = resolvedRequest ? deps.registry.markOnline(agentId) : deps.registry.markError(agentId, message);
       if (rt) {
         const dto = snapshotToDto(rt);
         deps.io.of('/web').emit('agent:status', resolvedRequest ? { ...dto, lastError: message } : dto);
       } else {
-        emitCustomAgentStatus(payload.agentId, resolvedRequest ? 'online' : 'error', message);
+        emitCustomAgentStatus(agentId, resolvedRequest ? 'online' : 'error', message);
       }
     });
 
