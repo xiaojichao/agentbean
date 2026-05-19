@@ -9,6 +9,7 @@ import {
   archiveOutputFiles,
   beginAgentWorkspaceRun,
   finishAgentWorkspaceRun,
+  formatWorkspaceReply,
   workspaceEnv,
   type ArchivedWorkspaceFile,
 } from './workspace-manager.js';
@@ -97,7 +98,8 @@ export class AgentInstance {
         outputDirs: [run.outputDir, run.intermediateDir],
       });
       archivedFiles = archiveOutputFiles(run, processed.outputFiles);
-      finishAgentWorkspaceRun(run, { replyText: processed.replyText, files: archivedFiles, status: 'completed' });
+      const replyText = formatWorkspaceReply(rawBody, archivedFiles);
+      finishAgentWorkspaceRun(run, { replyText, files: archivedFiles, status: 'completed' });
 
       const artifactIds: string[] = [];
       if (archivedFiles.length > 0) {
@@ -118,7 +120,6 @@ export class AgentInstance {
                 deviceId: deviceId ?? null,
                 pathKind: file.pathKind,
                 relativePath: file.relativePath,
-                originalPath: file.originalPath,
                 sha256: file.sha256,
               }),
             });
@@ -132,7 +133,7 @@ export class AgentInstance {
       socket.emit('reply', {
         agentId: this.id,
         channelId: req.channelId,
-        body: processed.replyText,
+        body: replyText,
         requestId: req.requestId,
         artifactIds: artifactIds.length > 0 ? artifactIds : undefined,
       });

@@ -8,6 +8,7 @@ import {
   archiveOutputFiles,
   beginAgentWorkspaceRun,
   finishAgentWorkspaceRun,
+  formatWorkspaceReply,
   workspaceEnv,
   type ArchivedWorkspaceFile,
 } from './workspace-manager.js';
@@ -99,7 +100,8 @@ export function createConnection(cfg: AgentConfig, adapter: CliAdapter): Connect
               outputDirs: [run.outputDir, run.intermediateDir],
             });
             archivedFiles = archiveOutputFiles(run, processed.outputFiles);
-            finishAgentWorkspaceRun(run, { replyText: processed.replyText, files: archivedFiles, status: 'completed' });
+            const replyText = formatWorkspaceReply(rawBody, archivedFiles);
+            finishAgentWorkspaceRun(run, { replyText, files: archivedFiles, status: 'completed' });
 
             const artifactIds: string[] = [];
             if (archivedFiles.length > 0) {
@@ -120,7 +122,6 @@ export function createConnection(cfg: AgentConfig, adapter: CliAdapter): Connect
                       runId: req.requestId,
                       pathKind: file.pathKind,
                       relativePath: file.relativePath,
-                      originalPath: file.originalPath,
                       sha256: file.sha256,
                     }),
                   });
@@ -133,7 +134,7 @@ export function createConnection(cfg: AgentConfig, adapter: CliAdapter): Connect
 
             currentSocket.emit('reply', {
               channelId: req.channelId,
-              body: processed.replyText,
+              body: replyText,
               requestId: req.requestId,
               artifactIds: artifactIds.length > 0 ? artifactIds : undefined,
             });

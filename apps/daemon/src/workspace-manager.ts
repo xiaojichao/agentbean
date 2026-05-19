@@ -61,6 +61,15 @@ function uniqueDestination(dir: string, filename: string): string {
   return candidate;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function replaceAllLiteral(value: string, search: string, replacement: string): string {
+  if (!search || search === replacement) return value;
+  return value.replace(new RegExp(escapeRegExp(search), 'g'), replacement);
+}
+
 export function beginAgentWorkspaceRun(input: {
   teamId: string;
   teamName?: string | null;
@@ -147,6 +156,25 @@ export function archiveOutputFiles(run: AgentWorkspaceRun, files: string[]): Arc
     });
   }
   return archived;
+}
+
+export function formatWorkspaceReply(reply: string, files: ArchivedWorkspaceFile[]): string {
+  let body = reply;
+
+  for (const file of files) {
+    body = replaceAllLiteral(body, `file://${file.originalPath}`, `file://${file.archivedPath}`);
+    body = replaceAllLiteral(body, file.originalPath, file.archivedPath);
+  }
+
+  const missingPaths = files
+    .map((file) => file.archivedPath)
+    .filter((path) => !body.includes(path));
+
+  if (missingPaths.length > 0) {
+    body += '\n\n已生成文件:\n' + missingPaths.map((path) => `- ${path}`).join('\n');
+  }
+
+  return body;
 }
 
 export function finishAgentWorkspaceRun(run: AgentWorkspaceRun, input: {
