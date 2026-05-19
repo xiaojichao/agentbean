@@ -5,6 +5,7 @@ import { join, basename } from 'node:path';
 import { StorageManager } from './storage.js';
 import { newId } from './ids.js';
 import { logger } from './log.js';
+import { verifyUserToken } from './auth.js';
 
 type MulterUpload = ReturnType<typeof multer>;
 interface MulterRequest extends Request { file?: Express.Multer.File; }
@@ -26,6 +27,11 @@ export interface ArtifactRoutesDeps {
   storageManager: StorageManager;
   upload: MulterUpload;
   token: string;
+  globalDb?: {
+    users: { get(id: string): { id: string } | null };
+    networks: { get(id: string): { id: string; visibility: 'public' | 'private' } | null };
+    networkMembers: { isMember(networkId: string, userId: string): boolean };
+  };
 }
 
 function validateNetworkId(id: string): boolean {
@@ -33,13 +39,26 @@ function validateNetworkId(id: string): boolean {
 }
 
 export function attachArtifactRoutes(deps: ArtifactRoutesDeps): void {
-  const { app, storageManager, upload, token } = deps;
+  const { app, storageManager, upload, token, globalDb } = deps;
 
   const auth = (req: Request, res: Response, next: NextFunction) => {
+    const networkId = req.params.networkId;
     const hdr = req.headers.authorization;
     const queryToken = typeof req.query.token === 'string' ? req.query.token : undefined;
-    if (hdr !== `Bearer ${token}` && queryToken !== token) return res.status(401).json({ error: 'unauthorized' });
-    next();
+    const bearer = hdr?.startsWith('Bearer ') ? hdr.slice('Bearer '.length) : undefined;
+    const provided = bearer ?? queryToken;
+    if (!networkId || !validateNetworkId(networkId)) return res.status(400).json({ error: 'invalid networkId' });
+    if (provided === token) return next();
+    if (provided && globalDb) {
+      const parsed = verifyUserToken(provided, globalDb);
+      if (parsed?.networkId === networkId) {
+        const network = globalDb.networks.get(networkId);
+        if (network?.visibility === 'public' || globalDb.networkMembers.isMember(networkId, parsed.userId)) {
+          return next();
+        }
+      }
+    }
+    return res.status(401).json({ error: 'unauthorized' });
   };
 
   app.post('/api/networks/:networkId/artifacts/upload', auth, upload.single('file'), (req: MulterRequest, res: Response) => {

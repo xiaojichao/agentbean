@@ -319,7 +319,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
   app.get('/healthz', (_req, res) => res.json({ status: 'ok' }));
 
   const upload = multer({ dest: '/tmp/agentbean-uploads/', limits: { fileSize: 50 * 1024 * 1024 } });
-  attachArtifactRoutes({ app, storageManager, upload, token });
+  attachArtifactRoutes({ app, storageManager, upload, token, globalDb });
 
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     logger.error({ err: err?.message, stack: err?.stack }, 'express error');

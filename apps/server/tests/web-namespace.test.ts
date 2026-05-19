@@ -202,12 +202,14 @@ describe('message:send', () => {
     form.append('file', new Blob(['fake image']), 'drama.png');
     const uploadRes = await fetch(`${baseUrl}/api/networks/default/artifacts/upload`, {
       method: 'POST',
-      headers: { Authorization: 'Bearer default:default:tok' },
+      headers: { Authorization: 'Bearer default:default:user-token' },
       body: form,
     });
     expect(uploadRes.status).toBe(201);
     const uploaded = await uploadRes.json() as { id: string };
     uploadedArtifactId = uploaded.id;
+    const previewRes = await fetch(`${baseUrl}/api/networks/default/artifacts/${uploadedArtifactId}/preview?token=${encodeURIComponent('default:default:user-token')}`);
+    expect(previewRes.status).toBe(200);
 
     const messages: any[] = [];
     web.emit('channel:join', { channelId: dmRes.dm.id });
