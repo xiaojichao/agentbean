@@ -2,11 +2,19 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { buildApp, type AppHandle } from '../src/index.js';
 import { io as ioClient } from 'socket.io-client';
 import { AddressInfo } from 'node:net';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 let app: AppHandle;
 let baseUrl: string;
+let storageBaseDir: string;
+let previousStorageBaseDir: string | undefined;
 
 beforeEach(async () => {
+  previousStorageBaseDir = process.env.STORAGE_BASE_DIR;
+  storageBaseDir = mkdtempSync(join(tmpdir(), 'agentbean-web-namespace-'));
+  process.env.STORAGE_BASE_DIR = storageBaseDir;
   process.env.AGENT_BEAN_AGENT_TOKEN = 'default:default:tok';
   process.env.AGENT_BEAN_WEB_TOKEN = 'web-only-token';
   app = await buildApp({ dbPath: ':memory:', globalDbPath: ':memory:', agentToken: 'default:default:tok' });
@@ -15,7 +23,12 @@ beforeEach(async () => {
   baseUrl = `http://localhost:${port}`;
 });
 
-afterEach(async () => { await app.close(); });
+afterEach(async () => {
+  await app.close();
+  if (previousStorageBaseDir === undefined) delete process.env.STORAGE_BASE_DIR;
+  else process.env.STORAGE_BASE_DIR = previousStorageBaseDir;
+  rmSync(storageBaseDir, { recursive: true, force: true });
+});
 
 describe('/web namespace', () => {
   it('emits empty snapshot when no agents are registered', async () => {
