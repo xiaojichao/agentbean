@@ -13,6 +13,17 @@ import * as os from "node:os";
 import type { AgentCategory, AdapterKind } from "./config.js";
 import { logger } from "./log.js";
 
+function readDaemonVersion(): string {
+  try {
+    const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
+    return typeof packageJson.version === "string" ? packageJson.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+const DAEMON_VERSION = readDaemonVersion();
+
 // --- Runtime (not an Agent, just an installed CLI tool) ---
 
 export interface RuntimeInfo {
@@ -418,6 +429,7 @@ export interface SystemInfo {
   totalMemoryGB: number;
   freeMemoryGB: number;
   nodeVersion: string;
+  daemonVersion: string;
 }
 
 export function collectSystemInfo(): SystemInfo {
@@ -441,5 +453,6 @@ export function collectSystemInfo(): SystemInfo {
     totalMemoryGB: Math.round((totalMem / 1024 / 1024 / 1024) * 10) / 10,
     freeMemoryGB: Math.round((freeMem / 1024 / 1024 / 1024) * 10) / 10,
     nodeVersion: process.version,
+    daemonVersion: DAEMON_VERSION,
   };
 }

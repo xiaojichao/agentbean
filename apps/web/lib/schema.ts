@@ -155,5 +155,6 @@ export interface DeviceInfo {
     totalMemoryGB?: number;
     freeMemoryGB?: number;
     nodeVersion?: string;
+    daemonVersion?: string;
   } | null;
 }

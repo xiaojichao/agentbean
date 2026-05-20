@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { scanRuntimes } from '../src/scanner.js';
+import { collectSystemInfo, scanRuntimes } from '../src/scanner.js';
+import packageJson from '../package.json';
 
 describe('scanRuntimes', () => {
   it('returns known runtimes with installed flag', async () => {
@@ -17,5 +18,11 @@ describe('scanRuntimes', () => {
       expect(rt).toHaveProperty('installed');
       expect(typeof rt.installed).toBe('boolean');
     }
+  });
+});
+
+describe('collectSystemInfo', () => {
+  it('reports the daemon package version', () => {
+    expect(collectSystemInfo().daemonVersion).toBe(packageJson.version);
   });
 });

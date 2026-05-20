@@ -22,6 +22,12 @@ const STATUS_BG: Record<string, string> = {
   connecting: 'bg-blue-50 text-blue-700',
 };
 
+function formatDaemonVersion(device: { status: string; systemInfo?: { daemonVersion?: string } | null }) {
+  const version = device.systemInfo?.daemonVersion?.trim();
+  if (version && version !== 'unknown') return version.startsWith('v') ? version : `v${version}`;
+  return device.status === 'offline' ? '离线' : '版本未知';
+}
+
 export default function DevicesPage() {
   const params = useParams();
   const router = useRouter();
@@ -81,7 +87,7 @@ export default function DevicesPage() {
                 <div className="truncate text-sm font-medium leading-tight">{device.hostname ?? device.id}</div>
                 <div className="flex items-center gap-1 text-[11px] text-neutral-400">
                   <span>daemon</span>
-                  <span className={device.status === 'online' ? 'text-neutral-600' : ''}>{device.status === 'online' ? 'v0.44.2' : '离线'}</span>
+                  <span className={device.status === 'online' ? 'text-neutral-600' : ''}>{formatDaemonVersion(device)}</span>
                 </div>
               </div>
             </button>
@@ -128,7 +134,7 @@ function EmptyState() {
 }
 
 function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName, showDeleteConfirm, setShowDeleteConfirm, currentNetworkId }: {
-  device: { id: string; hostname?: string; status: string; lastSeenAt: number; agentIds: string[]; runtimes?: any[]; connectCommand?: string | null; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string } | null };
+  device: { id: string; hostname?: string; status: string; lastSeenAt: number; agentIds: string[]; runtimes?: any[]; connectCommand?: string | null; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string; daemonVersion?: string } | null };
   editName: boolean;
   setEditName: (v: boolean) => void;
   deviceName: string;
@@ -264,6 +270,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
                   {device.systemInfo.totalMemoryGB && <InfoCard label="总内存" value={`${device.systemInfo.totalMemoryGB} GB`} />}
                   {device.systemInfo.freeMemoryGB && <InfoCard label="可用内存" value={`${device.systemInfo.freeMemoryGB} GB`} />}
                   {device.systemInfo.nodeVersion && <InfoCard label="Node.js" value={device.systemInfo.nodeVersion} />}
+                  {device.systemInfo.daemonVersion && <InfoCard label="Daemon" value={formatDaemonVersion(device)} />}
                   {device.systemInfo.hostname && <InfoCard label="主机名" value={device.systemInfo.hostname} />}
                   </>
                 )}
