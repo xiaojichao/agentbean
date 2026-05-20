@@ -8,12 +8,12 @@ import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { AgentDetail, AgentTopBar, HumanDetail, type AgentMemberTab, type HumanMember } from '@/components/member-detail';
 
 const TABS: { id: AgentMemberTab; label: string }[] = [
-  { id: 'profile', label: 'PROFILE' },
-  { id: 'permissions', label: 'PERMISSIONS' },
-  { id: 'dms', label: 'AGENT DMS' },
-  { id: 'reminders', label: 'REMINDERS' },
-  { id: 'workspace', label: 'WORKSPACE' },
-  { id: 'activity', label: 'ACTIVITY' },
+  { id: 'profile', label: '资料' },
+  { id: 'permissions', label: '权限' },
+  { id: 'dms', label: '智能体私聊' },
+  { id: 'reminders', label: '提醒' },
+  { id: 'workspace', label: '工作区' },
+  { id: 'activity', label: '动态' },
 ];
 
 export default function MembersPage() {

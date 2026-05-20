@@ -132,7 +132,7 @@ export function AgentTopBar({ agent }: { agent: AgentSnapshot }) {
       <div className="flex shrink-0 items-center gap-2">
         <button onClick={startDm} disabled={dmLoading} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-3 text-xs font-medium text-neutral-800 hover:bg-neutral-50 disabled:opacity-50">
           <MessageSquare size={14} />
-          Message
+          私聊
         </button>
         <button disabled title="由设备 Daemon 自动管理" className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-400">
           <Play size={14} />
@@ -247,7 +247,7 @@ function AgentProfile({ agent, device, applyAgentStatus }: { agent: AgentSnapsho
         </div>
       </section>
 
-      <Section title="Display Name" icon={<User size={15} />}>
+      <Section title="显示名称" icon={<User size={15} />}>
         {editing === 'name' ? (
           <InlineEditor value={name} onChange={setName} onCancel={() => { setName(agent.name); setEditing(null); }} onSave={saveProfile} saving={saving} />
         ) : (
@@ -255,7 +255,7 @@ function AgentProfile({ agent, device, applyAgentStatus }: { agent: AgentSnapsho
         )}
       </Section>
 
-      <Section title="Description" icon={<FileText size={15} />}>
+      <Section title="功能介绍" icon={<FileText size={15} />}>
         {editing === 'description' ? (
           <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={4} className="w-full resize-none rounded-md border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-amber-300" />
         ) : (
@@ -270,34 +270,34 @@ function AgentProfile({ agent, device, applyAgentStatus }: { agent: AgentSnapsho
         {saveError && <div className="mt-2 text-xs text-rose-600">{saveError}</div>}
       </Section>
 
-      <Section title="Info" icon={<Shield size={15} />} compactGrid>
+      <Section title="基本信息" icon={<Shield size={15} />} compactGrid>
         <InfoRow label="类型" value={CATEGORY_LABEL[agent.category ?? 'executor-hosted'] ?? '自定义 Agent'} />
         <InfoRow label="创建者" value={agent.ownerName ?? agent.ownerId ?? '未知'} mono={Boolean(agent.ownerId && !agent.ownerName)} />
         <InfoRow label="设备" value={device?.hostname ?? device?.id ?? '未关联设备'} />
         <InfoRow label="最近活跃" value={formatRelative(agent.lastSeenAt)} />
       </Section>
 
-      <Section title="Runtime Configuration" icon={<Cpu size={15} />} compactGrid>
+      <Section title="运行时配置" icon={<Cpu size={15} />} compactGrid>
         <InfoRow label={isCustomAgent ? 'Coding Agent 运行时' : '运行时'} value={RUNTIME_LABEL[agent.adapterKind] ?? agent.adapterKind} />
         <InfoRow label="状态" value={STATUS_LABEL[agent.status] ?? agent.status} />
         <InfoRow label="命令" value={agent.command ?? '未配置'} mono={Boolean(agent.command)} />
         <InfoRow label="工作目录" value={agent.cwd ?? '未配置'} mono={Boolean(agent.cwd)} />
       </Section>
 
-      <Section title="Environment Variables" icon={<Code2 size={15} />}>
+      <Section title="环境变量" icon={<Code2 size={15} />}>
         <div className="text-sm text-neutral-500">暂无已公开的环境变量。</div>
       </Section>
 
-      <Section title="Created Agents" icon={<Users size={15} />}>
+      <Section title="创建的智能体" icon={<Users size={15} />}>
         <div className="text-sm text-neutral-500">0 个由该 Agent 创建的子 Agent。</div>
       </Section>
 
-      <Section title="Actions" icon={<Zap size={15} />}>
+      <Section title="操作" icon={<Zap size={15} />}>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-          <ActionButton icon={<Play size={14} />} label="Start Agent" disabled />
-          <ActionButton icon={<RefreshCw size={14} />} label="Restart / Reset" disabled />
+          <ActionButton icon={<Play size={14} />} label="启动 Agent" disabled />
+          <ActionButton icon={<RefreshCw size={14} />} label="重启 / 重置" disabled />
           <CopyDiagnosticButton agent={agent} device={device} />
-          <ActionButton icon={<Trash2 size={14} />} label="Delete Agent" danger disabled />
+          <ActionButton icon={<Trash2 size={14} />} label="删除 Agent" danger disabled />
         </div>
         <div className="mt-2 text-xs text-neutral-400">启动、重启和删除动作当前由设备 Daemon 与配置页管理。</div>
       </Section>
@@ -454,7 +454,7 @@ function AgentActivity({ agent, device, metrics, runs }: { agent: AgentSnapshot;
     <div className="mx-auto max-w-5xl space-y-4">
       <section className="rounded-lg border border-neutral-200 bg-white">
         <div className="flex items-center justify-between border-b border-neutral-100 px-4 py-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">Activity Diagnostics</h2>
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">动态诊断</h2>
           <CopyDiagnosticButton agent={agent} device={device} />
         </div>
         {metrics && (
@@ -609,7 +609,7 @@ function CopyDiagnosticButton({ agent, device }: { agent: AgentSnapshot; device?
   return (
     <button onClick={copy} className="inline-flex items-center justify-center gap-2 rounded-md border border-neutral-200 px-3 py-2 text-xs font-medium text-neutral-700 hover:bg-neutral-50">
       {copied ? <Check size={14} className="text-emerald-600" /> : <Copy size={14} />}
-      Copy Diagnostic Info
+      复制诊断信息
     </button>
   );
 }
