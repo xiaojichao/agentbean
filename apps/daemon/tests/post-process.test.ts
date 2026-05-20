@@ -21,6 +21,17 @@ describe('postProcess', () => {
     expect(result.replyText).toContain('已生成文件');
   });
 
+  it('detects explicitly mentioned files even when their mtime is before dispatch start', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'agentbean-post-process-'));
+    const filePath = join(workspace, 'existing-output.png');
+    writeFileSync(filePath, 'fake image');
+    const dispatchStart = Date.now() + 1000;
+
+    const result = await postProcess(`已生成文件:\n- ${filePath}`, workspace, 'codex', dispatchStart);
+
+    expect(result.outputFiles).toContain(realpathSync(filePath));
+  });
+
   it('detects new image files created in explicit workspace output directories', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'agentbean-post-process-'));
     const outputDir = join(workspace, 'outputs', 'covers');

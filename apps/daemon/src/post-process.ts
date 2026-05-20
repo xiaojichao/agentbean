@@ -72,7 +72,7 @@ function extractMentionedFiles(reply: string, workspace: string | undefined, dis
     if (!abs) continue;
     try {
       const st = statSync(abs);
-      if (st.isFile() && st.mtimeMs > dispatchStart) files.push(abs);
+      if (st.isFile()) files.push(abs);
     } catch {}
   }
   return files;

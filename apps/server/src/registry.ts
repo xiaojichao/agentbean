@@ -75,14 +75,18 @@ export class AgentRegistry {
   markBusy(agentId: string): AgentRuntime | null {
     const a = this.byId.get(agentId);
     if (!a) return null;
-    if (a.status === 'online') a.status = 'busy';
+    a.status = 'busy';
+    a.lastHeartbeatAt = Date.now();
+    a.lastError = undefined;
     return a;
   }
 
   markOnline(agentId: string): AgentRuntime | null {
     const a = this.byId.get(agentId);
     if (!a) return null;
-    if (a.status === 'busy' || a.status === 'error') a.status = 'online';
+    a.status = 'online';
+    a.lastHeartbeatAt = Date.now();
+    a.lastError = undefined;
     return a;
   }
 

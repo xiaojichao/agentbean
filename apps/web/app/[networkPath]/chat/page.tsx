@@ -58,6 +58,7 @@ export default function ChatPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const threadImageInputRef = useRef<HTMLInputElement>(null);
   const threadFileInputRef = useRef<HTMLInputElement>(null);
   const dmsRef = useRef(dms);
   const savedKey = `agentbean:chat:saved:${np}`;
@@ -364,6 +365,14 @@ export default function ChatPage() {
     });
   };
 
+  const handleThreadReply = (msg: ChatMessage) => {
+    const speaker = resolveMessageSpeaker(msg, currentUser?.username, agents);
+    setThreadInput((prev) => {
+      const prefix = `回复 ${speaker}: `;
+      return prev.trim() ? `${prev}\n${prefix}` : prefix;
+    });
+  };
+
   return (
     <div className="flex flex-1 overflow-hidden">
       {/* Left sidebar — channel list */}
@@ -386,6 +395,7 @@ export default function ChatPage() {
           <button onClick={() => setSidebarView(sidebarView === 'saved' ? 'channels' : 'saved')} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'saved' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
             <Bookmark size={14} className="text-neutral-400 shrink-0" />
             <span>收藏</span>
+            <span className="ml-auto rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{savedIds.size}</span>
           </button>
         </div>
 
@@ -644,11 +654,17 @@ export default function ChatPage() {
           input={threadInput}
           attachments={threadAttachments}
           uploading={uploading}
+          imageInputRef={threadImageInputRef}
           fileInputRef={threadFileInputRef}
+          savedIds={savedIds}
+          reactionIds={reactionIds}
           onInput={setThreadInput}
           onSend={sendThreadMessage}
           onUpload={(files) => uploadFiles(files, 'thread')}
           onRemoveAttachment={(id) => setThreadAttachments((prev) => prev.filter((item) => item.id !== id))}
+          onReply={handleThreadReply}
+          onToggleSave={toggleSave}
+          onToggleReaction={toggleReaction}
           onClose={() => {
             setThreadRootId(null);
             setThreadInput('');
@@ -717,11 +733,17 @@ function ThreadPanel({
   input,
   attachments,
   uploading,
+  imageInputRef,
   fileInputRef,
+  savedIds,
+  reactionIds,
   onInput,
   onSend,
   onUpload,
   onRemoveAttachment,
+  onReply,
+  onToggleSave,
+  onToggleReaction,
   onClose,
 }: {
   root: ChatMessage;
@@ -731,14 +753,33 @@ function ThreadPanel({
   input: string;
   attachments: Artifact[];
   uploading: boolean;
+  imageInputRef: RefObject<HTMLInputElement>;
   fileInputRef: RefObject<HTMLInputElement>;
+  savedIds: Set<string>;
+  reactionIds: Set<string>;
   onInput: (value: string) => void;
   onSend: () => void;
   onUpload: (files: FileList | File[]) => void;
   onRemoveAttachment: (id: string) => void;
+  onReply: (msg: ChatMessage) => void;
+  onToggleSave: (msgId: string) => void;
+  onToggleReaction: (msgId: string) => void;
   onClose: () => void;
 }) {
   const title = taskLabel(root) ?? `线程 - ${resolveMessageSpeaker(root, currentUsername, agents)}`;
+  const renderThreadBubble = (msg: ChatMessage, replyCount = 0) => (
+    <ChatBubble
+      key={msg.id}
+      msg={msg}
+      saved={savedIds.has(msg.id)}
+      reacted={reactionIds.has(msg.id)}
+      onReply={() => onReply(msg)}
+      onOpenThread={() => {}}
+      onToggleReaction={() => onToggleReaction(msg.id)}
+      onToggleSave={() => onToggleSave(msg.id)}
+      replyCount={replyCount}
+    />
+  );
   return (
     <aside className="flex w-96 shrink-0 flex-col border-l border-neutral-200 bg-white">
       <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
@@ -751,13 +792,11 @@ function ThreadPanel({
         </button>
       </div>
       <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
-        <ThreadMessage msg={root} agents={agents} currentUsername={currentUsername} root />
+        {renderThreadBubble(root, replies.length)}
         <div className="border-t border-neutral-100 pt-3 text-center text-[11px] text-neutral-400">
           {replies.length === 0 ? '暂无回复' : `${replies.length} 条回复`}
         </div>
-        {replies.map((msg) => (
-          <ThreadMessage key={msg.id} msg={msg} agents={agents} currentUsername={currentUsername} />
-        ))}
+        {replies.map((msg) => renderThreadBubble(msg))}
       </div>
       <div className="border-t border-neutral-200 p-3">
         <div className="rounded-lg border border-neutral-300 bg-white">
@@ -776,10 +815,16 @@ function ThreadPanel({
           />
           {attachments.length > 0 && <AttachmentStrip attachments={attachments} onRemove={onRemoveAttachment} />}
           <div className="flex items-center justify-between px-2 pb-2">
-            <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => { if (e.target.files) onUpload(e.target.files); e.currentTarget.value = ''; }} />
-            <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-40" title="附件">
-              <Paperclip size={16} />
-            </button>
+            <div className="flex items-center gap-1">
+              <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => { if (e.target.files) onUpload(e.target.files); e.currentTarget.value = ''; }} />
+              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => { if (e.target.files) onUpload(e.target.files); e.currentTarget.value = ''; }} />
+              <button onClick={() => imageInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-40" title="附件图片">
+                <Image size={16} />
+              </button>
+              <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-40" title="附件文件">
+                <Paperclip size={16} />
+              </button>
+            </div>
             <button onClick={onSend} disabled={uploading || (!input.trim() && attachments.length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40">
               <Send size={14} />
             </button>
@@ -787,32 +832,6 @@ function ThreadPanel({
         </div>
       </div>
     </aside>
-  );
-}
-
-function ThreadMessage({ msg, agents, currentUsername, root = false }: { msg: ChatMessage; agents: Record<string, AgentSnapshot>; currentUsername?: string; root?: boolean }) {
-  if (msg.senderKind === 'system') {
-    return <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">{msg.body}</div>;
-  }
-  const speaker = resolveMessageSpeaker(msg, currentUsername, agents);
-  return (
-    <div className={`flex gap-2 ${root ? 'rounded-md border border-neutral-200 bg-neutral-50 p-2' : ''}`}>
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-100 text-[10px] font-semibold text-purple-700">
-        {speaker[0]?.toUpperCase() ?? 'A'}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-neutral-900">{speaker}</span>
-          <span className="text-[10px] text-neutral-400">{formatTime(msg.createdAt)}</span>
-        </div>
-        <div className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-neutral-700">{msg.body}</div>
-        {msg.artifacts && msg.artifacts.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-2">
-            {msg.artifacts.map((artifact) => <ChatArtifactPreview key={artifact.id} artifact={artifact} />)}
-          </div>
-        )}
-      </div>
-    </div>
   );
 }
 

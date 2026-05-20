@@ -64,6 +64,17 @@ describe('AgentRegistry', () => {
     expect(r.snapshot('v1')?.status).toBe('offline');
   });
 
+  it('can mark a virtual custom agent busy and then online during device dispatch', () => {
+    const r = new AgentRegistry();
+    r.registerVirtual({ id: 'v1', name: 'Virtual', role: '', adapterKind: 'codex', category: 'executor-hosted', networkId: 'default', source: 'custom' });
+
+    r.markBusy('v1');
+    expect(r.snapshot('v1')?.status).toBe('busy');
+
+    r.markOnline('v1');
+    expect(r.snapshot('v1')?.status).toBe('online');
+  });
+
   it('registerVirtual preserves publishedNetworkIds', () => {
     const r = new AgentRegistry();
     r.registerVirtual({ id: 'v1', name: 'V', role: '', adapterKind: 'codex', category: 'executor-hosted', networkId: 'default', publishedNetworkIds: ['net1', 'net2'] });

@@ -66,7 +66,6 @@ export const useAgentBeanStore = create<State>((set) => ({
   },
   applyAgentStatus(snap) {
     set((s) => {
-      if (!(snap.id in s.agents)) return s;
       return { agents: { ...s.agents, [snap.id]: snap } };
     });
   },
