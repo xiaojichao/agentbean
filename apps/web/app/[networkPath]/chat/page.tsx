@@ -62,6 +62,7 @@ export default function ChatPage() {
   const searchParams = useSearchParams();
   const dmParam = searchParams.get('dm');
   const chatTabParam = searchParams.get('chatTab');
+  const threadParam = searchParams.get('thread');
   const routeChannelId = typeof params.channelId === 'string' ? params.channelId : null;
   const routeDmId = typeof params.dmId === 'string' ? params.dmId : null;
   const [input, setInput] = useState('');
@@ -238,6 +239,26 @@ export default function ChatPage() {
     router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
   };
 
+  const setThreadUrl = useCallback((messageId: string | null) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (messageId && activeChannel) params.set('thread', `${activeChannel}:${messageId}`);
+    else params.delete('thread');
+    const query = params.toString();
+    router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
+  }, [activeChannel, router, searchParams]);
+
+  const openThread = useCallback((messageId: string) => {
+    setThreadRootId(messageId);
+    setThreadUrl(messageId);
+  }, [setThreadUrl]);
+
+  const closeThread = useCallback(() => {
+    setThreadRootId(null);
+    setThreadInput('');
+    setThreadAttachments([]);
+    setThreadUrl(null);
+  }, [setThreadUrl]);
+
   const loadTasks = useCallback(async () => {
     if (!activeChannel || conn !== 'open') return;
     setTasksLoading(true);
@@ -253,6 +274,15 @@ export default function ChatPage() {
     if (tab !== 'tasks') return;
     loadTasks();
   }, [tab, loadTasks]);
+
+  useEffect(() => {
+    if (!activeChannel) return;
+    const nextThreadRootId = parseThreadMessageId(threadParam, activeChannel);
+    setThreadRootId((prev) => {
+      if (nextThreadRootId) return nextThreadRootId;
+      return threadParam === null ? null : prev;
+    });
+  }, [activeChannel, threadParam]);
 
   useEffect(() => {
     setTaskCreatorFilter('all');
@@ -457,7 +487,7 @@ export default function ChatPage() {
 
   const handleReply = (msg: ChatMessage) => {
     const speaker = resolveMessageSpeaker(msg, currentUser?.username, agents);
-    setThreadRootId(msg.id);
+    openThread(msg.id);
     setThreadInput((prev) => {
       const prefix = `回复 ${speaker}: `;
       return prev.trim() ? `${prev}\n${prefix}` : prefix;
@@ -473,10 +503,25 @@ export default function ChatPage() {
   };
 
   const jumpToMessage = (messageId: string) => {
-    switchTab('chat');
+    setTab('chat');
     setThreadRootId(null);
+    setThreadInput('');
+    setThreadAttachments([]);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('chatTab');
+    params.delete('thread');
+    const query = params.toString();
+    router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
     setTimeout(() => {
       document.getElementById(`message-${messageId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 100);
+  };
+
+  const viewThreadRootInChannel = () => {
+    if (!threadRootId) return;
+    switchTab('chat');
+    setTimeout(() => {
+      document.getElementById(`message-${threadRootId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 100);
   };
 
@@ -695,7 +740,7 @@ export default function ChatPage() {
                     saved={savedIds.has(msg.id)}
                     reacted={reactionIds.has(msg.id)}
                     onReply={() => handleReply(msg)}
-                    onOpenThread={() => setThreadRootId(msg.id)}
+                    onOpenThread={() => openThread(msg.id)}
                     onToggleReaction={() => toggleReaction(msg.id)}
                     onToggleSave={() => toggleSave(msg.id)}
                     replyCount={messages.filter((item) => parentMessageId(item) === msg.id).length}
@@ -797,6 +842,7 @@ export default function ChatPage() {
           replies={threadReplies}
           agents={agents}
           currentUsername={currentUser?.username}
+          title={`线程 — ${isDm ? `@${activeDmName}` : `#${activeName}`}`}
           input={threadInput}
           attachments={threadAttachments}
           uploading={uploading}
@@ -811,11 +857,8 @@ export default function ChatPage() {
           onReply={handleThreadReply}
           onToggleSave={toggleSave}
           onToggleReaction={toggleReaction}
-          onClose={() => {
-            setThreadRootId(null);
-            setThreadInput('');
-            setThreadAttachments([]);
-          }}
+          onViewInChannel={viewThreadRootInChannel}
+          onClose={closeThread}
         />
       )}
 
@@ -1285,6 +1328,7 @@ function ThreadPanel({
   replies,
   agents,
   currentUsername,
+  title,
   input,
   attachments,
   uploading,
@@ -1299,12 +1343,14 @@ function ThreadPanel({
   onReply,
   onToggleSave,
   onToggleReaction,
+  onViewInChannel,
   onClose,
 }: {
   root: ChatMessage;
   replies: ChatMessage[];
   agents: Record<string, AgentSnapshot>;
   currentUsername?: string;
+  title: string;
   input: string;
   attachments: Artifact[];
   uploading: boolean;
@@ -1319,9 +1365,10 @@ function ThreadPanel({
   onReply: (msg: ChatMessage) => void;
   onToggleSave: (msgId: string) => void;
   onToggleReaction: (msgId: string) => void;
+  onViewInChannel: () => void;
   onClose: () => void;
 }) {
-  const title = taskLabel(root) ?? `线程 - ${resolveMessageSpeaker(root, currentUsername, agents)}`;
+  const subtitle = taskLabel(root) ?? resolveMessageSpeaker(root, currentUsername, agents);
   const renderThreadBubble = (msg: ChatMessage, replyCount = 0) => (
     <ChatBubble
       key={msg.id}
@@ -1338,18 +1385,25 @@ function ThreadPanel({
   return (
     <aside className="flex w-96 shrink-0 flex-col border-l border-neutral-200 bg-white">
       <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
-        <div>
-          <div className="text-sm font-semibold text-neutral-900">线程</div>
-          <div className="text-xs text-neutral-400">{title}</div>
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold text-neutral-900">{title}</div>
+          <div className="truncate text-xs text-neutral-400">{subtitle}</div>
         </div>
-        <button onClick={onClose} className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="关闭线程">
-          <X size={16} />
-        </button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button onClick={onViewInChannel} className="inline-flex h-8 items-center gap-1 rounded-md border border-neutral-200 px-2 text-xs font-medium text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900" title="在频道中查看">
+            <ExternalLink size={13} />
+            <span>在频道中查看</span>
+          </button>
+          <button onClick={onClose} className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="关闭线程">
+            <X size={16} />
+          </button>
+        </div>
       </div>
       <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
         {renderThreadBubble(root, replies.length)}
         <div className="border-t border-neutral-100 pt-3 text-center text-[11px] text-neutral-400">
-          {replies.length === 0 ? '暂无回复' : `${replies.length} 条回复`}
+          <div>回复的开头</div>
+          <div>{replies.length === 0 ? '暂无回复' : `${replies.length} 条回复`}</div>
         </div>
         {replies.map((msg) => renderThreadBubble(msg))}
       </div>
@@ -1807,6 +1861,19 @@ function parentMessageId(msg: ChatMessage): string | null {
     : typeof meta.inReplyTo === 'string'
       ? meta.inReplyTo
       : null;
+}
+
+function parseThreadMessageId(raw: string | null, channelId: string): string | null {
+  if (!raw) return null;
+  let decoded = raw;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {}
+  const separatorIndex = decoded.indexOf(':');
+  if (separatorIndex === -1) return decoded || null;
+  const left = decoded.slice(0, separatorIndex);
+  const right = decoded.slice(separatorIndex + 1);
+  return left === channelId && right ? right : null;
 }
 
 function taskLabel(msg: ChatMessage): string | null {
