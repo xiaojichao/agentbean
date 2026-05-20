@@ -2,11 +2,45 @@
 
 import { useEffect, useState, useRef, useCallback, type RefObject } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, MoreHorizontal, Copy, Trash2, Circle, FolderOpen, ChevronRight, Smile } from 'lucide-react';
-import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents } from '@/lib/socket';
+import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, MoreHorizontal, Copy, Trash2, Circle, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download } from 'lucide-react';
+import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage } from '@/lib/schema';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
+
+type ChatTab = 'chat' | 'tasks' | 'files';
+type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
+type TaskViewMode = 'board' | 'list';
+
+interface TaskItem {
+  id: string;
+  title: string;
+  description: string | null;
+  status: TaskStatus;
+  creatorId: string;
+  assigneeId: string | null;
+  channelId: string | null;
+  tags: string[];
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface ConversationFile {
+  artifact: Artifact;
+  messageId: string;
+  createdAt: number;
+  senderKind: ChatMessage['senderKind'];
+  senderId: string | null;
+}
+
+const TASK_COLUMNS: { id: TaskStatus; label: string; empty: string; badge: string; collapsedByDefault?: boolean }[] = [
+  { id: 'todo', label: '待办', empty: '暂无待办任务。', badge: 'border-orange-200 bg-orange-100 text-orange-700' },
+  { id: 'in_progress', label: '进行中', empty: '暂无进行中任务。', badge: 'border-cyan-200 bg-cyan-100 text-cyan-700' },
+  { id: 'in_review', label: '待审核', empty: '暂无待审核任务。', badge: 'border-purple-200 bg-purple-100 text-purple-700' },
+  { id: 'done', label: '已完成', empty: '暂无已完成任务。', badge: 'border-emerald-200 bg-emerald-100 text-emerald-700', collapsedByDefault: true },
+  { id: 'closed', label: '已关闭', empty: '暂无已关闭任务。', badge: 'border-neutral-300 bg-neutral-100 text-neutral-600', collapsedByDefault: true },
+];
 
 export default function ChatPage() {
   const conn = useAgentBeanStore((s) => s.conn);
@@ -27,11 +61,12 @@ export default function ChatPage() {
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
   const searchParams = useSearchParams();
   const dmParam = searchParams.get('dm');
+  const chatTabParam = searchParams.get('chatTab');
   const routeChannelId = typeof params.channelId === 'string' ? params.channelId : null;
   const routeDmId = typeof params.dmId === 'string' ? params.dmId : null;
   const [input, setInput] = useState('');
   const [search, setSearch] = useState('');
-  const [tab, setTab] = useState<'chat' | 'tasks' | 'files'>('chat');
+  const [tab, setTab] = useState<ChatTab>('chat');
   const [asTask, setAsTask] = useState(false);
   const [showNewChannel, setShowNewChannel] = useState(false);
   const [showEditChannel, setShowEditChannel] = useState(false);
@@ -53,6 +88,16 @@ export default function ChatPage() {
   const [uploading, setUploading] = useState(false);
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
   const [threadInput, setThreadInput] = useState('');
+  const [tasks, setTasks] = useState<TaskItem[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [taskView, setTaskView] = useState<TaskViewMode>('board');
+  const [taskCreatorFilter, setTaskCreatorFilter] = useState<string>('all');
+  const [taskAssigneeFilter, setTaskAssigneeFilter] = useState<string>('all');
+  const [showCreatorFilter, setShowCreatorFilter] = useState(false);
+  const [showAssigneeFilter, setShowAssigneeFilter] = useState(false);
+  const [showCreateTask, setShowCreateTask] = useState(false);
+  const [dragTaskId, setDragTaskId] = useState<string | null>(null);
+  const [collapsedTaskColumns, setCollapsedTaskColumns] = useState<Set<TaskStatus>>(() => new Set(TASK_COLUMNS.filter((col) => col.collapsedByDefault).map((col) => col.id)));
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -67,6 +112,12 @@ export default function ChatPage() {
   useEffect(() => {
     dmsRef.current = dms;
   }, [dms]);
+
+  useEffect(() => {
+    if (chatTabParam === 'chat' || chatTabParam === 'tasks' || chatTabParam === 'files') {
+      setTab(chatTabParam);
+    }
+  }, [chatTabParam]);
 
   // Subscribe to channels + DMs
   useEffect(() => {
@@ -173,6 +224,41 @@ export default function ChatPage() {
   const activeDmAgent = activeDm ? agents[activeDm.dmTargetId] : undefined;
   const activeDmName = activeDmAgent?.name ?? activeDm?.name ?? '';
   const activeDmSubtitle = activeDmAgent?.description?.trim() || activeDmAgent?.role || '智能体私聊';
+  const taskParticipants = [
+    ...(currentUser ? [{ id: currentUser.id, name: `${currentUser.username}（你）`, kind: 'human' as const }] : []),
+    ...Object.values(agents).map((agent) => ({ id: agent.id, name: agent.name, kind: 'agent' as const })),
+  ];
+
+  const switchTab = (nextTab: ChatTab) => {
+    setTab(nextTab);
+    const params = new URLSearchParams(searchParams.toString());
+    if (nextTab === 'chat') params.delete('chatTab');
+    else params.set('chatTab', nextTab);
+    const query = params.toString();
+    router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
+  };
+
+  const loadTasks = useCallback(async () => {
+    if (!activeChannel || conn !== 'open') return;
+    setTasksLoading(true);
+    try {
+      const res = await taskEvents().list(activeChannel);
+      if (res.ok && res.tasks) setTasks(res.tasks as TaskItem[]);
+    } finally {
+      setTasksLoading(false);
+    }
+  }, [activeChannel, conn]);
+
+  useEffect(() => {
+    if (tab !== 'tasks') return;
+    loadTasks();
+  }, [tab, loadTasks]);
+
+  useEffect(() => {
+    setTaskCreatorFilter('all');
+    setTaskAssigneeFilter('all');
+    setShowCreateTask(false);
+  }, [activeChannel]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
@@ -285,8 +371,12 @@ export default function ChatPage() {
     const channelId = activeChannel;
     const body = input.trim();
     const artifactIds = pendingAttachments.map((a) => a.id);
+    const createTask = asTask;
     getWebSocket().emit('message:send', { channelId, body: body || '附件', asTask, artifactIds }, (res?: { ok?: boolean; error?: string }) => {
-      if (res?.ok) return;
+      if (res?.ok) {
+        if (createTask && tab === 'tasks') loadTasks();
+        return;
+      }
       appendMessage({
         id: `local-error-${Date.now()}`,
         channelId,
@@ -327,6 +417,15 @@ export default function ChatPage() {
   const threadRoot = threadRootId ? messages.find((msg) => msg.id === threadRootId) ?? null : null;
   const rootMessages = messages.filter((msg) => !parentMessageId(msg));
   const threadReplies = threadRootId ? messages.filter((msg) => parentMessageId(msg) === threadRootId) : [];
+  const conversationFiles = messages
+    .flatMap((msg) => (msg.artifacts ?? []).map((artifact) => ({
+      artifact,
+      messageId: msg.id,
+      createdAt: artifact.createdAt || msg.createdAt,
+      senderKind: msg.senderKind,
+      senderId: msg.senderId,
+    } satisfies ConversationFile)))
+    .sort((a, b) => b.createdAt - a.createdAt);
   const filteredChannels = search ? channels.filter((c) => c.name.toLowerCase().includes(search.toLowerCase())) : channels;
 
   // Debounced message search
@@ -371,6 +470,14 @@ export default function ChatPage() {
       const prefix = `回复 ${speaker}: `;
       return prev.trim() ? `${prev}\n${prefix}` : prefix;
     });
+  };
+
+  const jumpToMessage = (messageId: string) => {
+    switchTab('chat');
+    setThreadRootId(null);
+    setTimeout(() => {
+      document.getElementById(`message-${messageId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 100);
   };
 
   return (
@@ -561,9 +668,9 @@ export default function ChatPage() {
         {/* Tabs */}
         {activeChannel && (
           <div className="flex border-b border-neutral-200">
-            <button onClick={() => setTab('chat')} className={`border-b-2 px-4 py-2 text-xs font-medium tracking-wide ${tab === 'chat' ? 'border-amber-400 text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}>聊天</button>
-            <button onClick={() => setTab('tasks')} className={`border-b-2 px-4 py-2 text-xs tracking-wide ${tab === 'tasks' ? 'border-amber-400 font-medium text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}>任务</button>
-            <button onClick={() => setTab('files')} className={`border-b-2 px-4 py-2 text-xs tracking-wide ${tab === 'files' ? 'border-amber-400 font-medium text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}>文件</button>
+            <button onClick={() => switchTab('chat')} className={`border-b-2 px-4 py-2 text-xs font-medium tracking-wide ${tab === 'chat' ? 'border-amber-400 text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}>聊天</button>
+            <button onClick={() => switchTab('tasks')} className={`border-b-2 px-4 py-2 text-xs tracking-wide ${tab === 'tasks' ? 'border-amber-400 font-medium text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}>任务</button>
+            <button onClick={() => switchTab('files')} className={`border-b-2 px-4 py-2 text-xs tracking-wide ${tab === 'files' ? 'border-amber-400 font-medium text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}>文件</button>
           </div>
         )}
 
@@ -634,12 +741,51 @@ export default function ChatPage() {
             )}
           </>
         ) : tab === 'tasks' ? (
-          <div className="flex flex-1 items-center justify-center text-sm text-neutral-400">任务看板开发中...</div>
+          activeChannel ? (
+            <ConversationTasks
+              tasks={tasks}
+              loading={tasksLoading}
+              view={taskView}
+              creatorFilter={taskCreatorFilter}
+              assigneeFilter={taskAssigneeFilter}
+              participants={taskParticipants}
+              currentUserId={currentUser?.id}
+              defaultAssigneeId={activeDm?.dmTargetId ?? null}
+              channelId={activeChannel}
+              dragTaskId={dragTaskId}
+              collapsedColumns={collapsedTaskColumns}
+              showCreatorFilter={showCreatorFilter}
+              showAssigneeFilter={showAssigneeFilter}
+              showCreate={showCreateTask}
+              onViewChange={setTaskView}
+              onCreatorFilterChange={setTaskCreatorFilter}
+              onAssigneeFilterChange={setTaskAssigneeFilter}
+              onToggleCreatorFilter={() => setShowCreatorFilter((v) => !v)}
+              onToggleAssigneeFilter={() => setShowAssigneeFilter((v) => !v)}
+              onCloseFilters={() => { setShowCreatorFilter(false); setShowAssigneeFilter(false); }}
+              onToggleCreate={() => setShowCreateTask((v) => !v)}
+              onCloseCreate={() => setShowCreateTask(false)}
+              onCreate={(task) => setTasks((prev) => [task, ...prev])}
+              onDelete={(taskId) => setTasks((prev) => prev.filter((task) => task.id !== taskId))}
+              onDragStart={setDragTaskId}
+              onDragEnd={() => setDragTaskId(null)}
+              onToggleColumn={(status) => setCollapsedTaskColumns((prev) => {
+                const next = new Set(prev);
+                if (next.has(status)) next.delete(status); else next.add(status);
+                return next;
+              })}
+              onTaskUpdate={(updated) => setTasks((prev) => prev.map((task) => task.id === updated.id ? updated : task))}
+            />
+          ) : (
+            <div className="flex flex-1 items-center justify-center text-sm text-neutral-400">选择一个频道或私聊查看任务</div>
+          )
         ) : (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-neutral-400">
-            <FolderOpen size={32} strokeWidth={1.5} />
-            <span className="text-sm">文件管理开发中...</span>
-          </div>
+          <ConversationFiles
+            files={conversationFiles}
+            agents={agents}
+            currentUsername={currentUser?.username}
+            onJump={jumpToMessage}
+          />
         )}
         </>
       )}
@@ -721,6 +867,415 @@ function ChannelEditDialog({ channel, onClose, onSaved }: { channel: { id: strin
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ConversationTasks({
+  tasks,
+  loading,
+  view,
+  creatorFilter,
+  assigneeFilter,
+  participants,
+  currentUserId,
+  defaultAssigneeId,
+  channelId,
+  dragTaskId,
+  collapsedColumns,
+  showCreatorFilter,
+  showAssigneeFilter,
+  showCreate,
+  onViewChange,
+  onCreatorFilterChange,
+  onAssigneeFilterChange,
+  onToggleCreatorFilter,
+  onToggleAssigneeFilter,
+  onCloseFilters,
+  onToggleCreate,
+  onCloseCreate,
+  onCreate,
+  onDelete,
+  onDragStart,
+  onDragEnd,
+  onToggleColumn,
+  onTaskUpdate,
+}: {
+  tasks: TaskItem[];
+  loading: boolean;
+  view: TaskViewMode;
+  creatorFilter: string;
+  assigneeFilter: string;
+  participants: { id: string; name: string; kind: 'human' | 'agent' }[];
+  currentUserId?: string;
+  defaultAssigneeId: string | null;
+  channelId: string;
+  dragTaskId: string | null;
+  collapsedColumns: Set<TaskStatus>;
+  showCreatorFilter: boolean;
+  showAssigneeFilter: boolean;
+  showCreate: boolean;
+  onViewChange: (view: TaskViewMode) => void;
+  onCreatorFilterChange: (id: string) => void;
+  onAssigneeFilterChange: (id: string) => void;
+  onToggleCreatorFilter: () => void;
+  onToggleAssigneeFilter: () => void;
+  onCloseFilters: () => void;
+  onToggleCreate: () => void;
+  onCloseCreate: () => void;
+  onCreate: (task: TaskItem) => void;
+  onDelete: (taskId: string) => void;
+  onDragStart: (taskId: string) => void;
+  onDragEnd: () => void;
+  onToggleColumn: (status: TaskStatus) => void;
+  onTaskUpdate: (task: TaskItem) => void;
+}) {
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [assigneeId, setAssigneeId] = useState(defaultAssigneeId ?? '');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (showCreate) setAssigneeId(defaultAssigneeId ?? '');
+  }, [defaultAssigneeId, showCreate]);
+
+  const filteredTasks = tasks.filter((task) => {
+    if (creatorFilter !== 'all' && task.creatorId !== creatorFilter) return false;
+    if (assigneeFilter === 'unassigned' && task.assigneeId) return false;
+    if (assigneeFilter !== 'all' && assigneeFilter !== 'unassigned' && task.assigneeId !== assigneeFilter) return false;
+    return true;
+  });
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim()) return;
+    setSaving(true);
+    try {
+      const res = await taskEvents().create({
+        title: title.trim(),
+        description: description.trim() || undefined,
+        status: 'todo',
+        assigneeId: assigneeId || undefined,
+        channelId,
+        tags: ['聊天'],
+      });
+      if (res.ok && res.task) {
+        onCreate(res.task as TaskItem);
+        setTitle('');
+        setDescription('');
+        onCloseCreate();
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const moveTask = async (task: TaskItem, status: TaskStatus) => {
+    const maxSort = tasks.filter((item) => item.status === status && item.id !== task.id).reduce((max, item) => Math.max(max, item.sortOrder), 0);
+    const optimistic = { ...task, status, sortOrder: maxSort + 1, updatedAt: Date.now() };
+    onTaskUpdate(optimistic);
+    const res = await taskEvents().update({ id: task.id, status, sortOrder: maxSort + 1 });
+    if (res.ok && res.task) onTaskUpdate(res.task as TaskItem);
+  };
+
+  const deleteTask = async (taskId: string) => {
+    onDelete(taskId);
+    await taskEvents().delete(taskId);
+  };
+
+  const creatorLabel = creatorFilter === 'all' ? '创建者' : participantName(creatorFilter, participants, currentUserId);
+  const assigneeLabel = assigneeFilter === 'all'
+    ? '负责人'
+    : assigneeFilter === 'unassigned'
+      ? '未分配'
+      : participantName(assigneeFilter, participants, currentUserId);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col bg-white">
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-neutral-200 px-4">
+        <div className="relative">
+          <button onClick={() => { onToggleCreatorFilter(); if (showAssigneeFilter) onToggleAssigneeFilter(); }} className="flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-600 hover:bg-neutral-50">
+            <User size={13} />
+            <span>{creatorLabel}</span>
+            <ChevronDown size={13} />
+          </button>
+          {showCreatorFilter && (
+            <TaskFilterMenu
+              title="创建者"
+              value={creatorFilter}
+              options={[{ id: 'all', name: '全部创建者' }, ...participants]}
+              onSelect={(id) => { onCreatorFilterChange(id); onCloseFilters(); }}
+            />
+          )}
+        </div>
+        <div className="relative">
+          <button onClick={() => { onToggleAssigneeFilter(); if (showCreatorFilter) onToggleCreatorFilter(); }} className="flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-600 hover:bg-neutral-50">
+            <User size={13} />
+            <span>{assigneeLabel}</span>
+            <ChevronDown size={13} />
+          </button>
+          {showAssigneeFilter && (
+            <TaskFilterMenu
+              title="负责人"
+              value={assigneeFilter}
+              options={[{ id: 'all', name: '全部负责人' }, { id: 'unassigned', name: '未分配' }, ...participants]}
+              onSelect={(id) => { onAssigneeFilterChange(id); onCloseFilters(); }}
+            />
+          )}
+        </div>
+        <button onClick={onToggleCreate} className="flex h-8 items-center gap-1 rounded-md bg-pink-500 px-3 text-xs font-semibold text-white hover:bg-pink-600">
+          <Plus size={13} />
+          新建任务
+        </button>
+        <div className="flex-1" />
+        <div className="flex overflow-hidden rounded-md border border-neutral-300">
+          <button onClick={() => onViewChange('board')} className={`flex h-8 items-center gap-1 border-r border-neutral-300 px-2.5 text-xs font-medium ${view === 'board' ? 'bg-amber-300 text-neutral-900' : 'bg-white text-neutral-500 hover:bg-neutral-50'}`} title="看板">
+            <LayoutGrid size={13} />
+            看板
+          </button>
+          <button onClick={() => onViewChange('list')} className={`flex h-8 items-center gap-1 px-2.5 text-xs font-medium ${view === 'list' ? 'bg-amber-300 text-neutral-900' : 'bg-white text-neutral-500 hover:bg-neutral-50'}`} title="列表">
+            <List size={13} />
+            列表
+          </button>
+        </div>
+      </div>
+
+      {showCreate && (
+        <form onSubmit={handleCreate} className="grid shrink-0 grid-cols-[minmax(180px,1.2fr)_minmax(180px,1.5fr)_180px_auto] items-end gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-3">
+          <label className="min-w-0">
+            <span className="mb-1 block text-xs font-medium text-neutral-500">标题</span>
+            <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus placeholder="任务标题" className="h-9 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm outline-none focus:border-neutral-500" />
+          </label>
+          <label className="min-w-0">
+            <span className="mb-1 block text-xs font-medium text-neutral-500">描述</span>
+            <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="补充说明" className="h-9 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm outline-none focus:border-neutral-500" />
+          </label>
+          <label>
+            <span className="mb-1 block text-xs font-medium text-neutral-500">负责人</span>
+            <select value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)} className="h-9 w-full rounded-md border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-neutral-500">
+              <option value="">未分配</option>
+              {participants.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
+            </select>
+          </label>
+          <div className="flex items-center gap-2">
+            <button type="submit" disabled={!title.trim() || saving} className="h-9 rounded-md bg-neutral-900 px-3 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-50">{saving ? '创建中...' : '创建'}</button>
+            <button type="button" onClick={onCloseCreate} className="flex h-9 w-9 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-200" title="取消"><X size={15} /></button>
+          </div>
+        </form>
+      )}
+
+      {view === 'board' ? (
+        <div className="flex min-h-0 flex-1 gap-4 overflow-x-auto p-4">
+          {TASK_COLUMNS.map((column) => {
+            const colTasks = filteredTasks.filter((task) => task.status === column.id);
+            const collapsed = collapsedColumns.has(column.id);
+            return (
+              <section key={column.id} className="flex w-72 shrink-0 flex-col border border-neutral-200 bg-neutral-50">
+                <button onClick={() => onToggleColumn(column.id)} className="flex h-10 items-center gap-2 border-b border-neutral-200 bg-white px-3 text-left">
+                  <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase ${column.badge}`}>{column.label}</span>
+                  <span className="text-[11px] text-neutral-400">{colTasks.length}</span>
+                  <ChevronDown size={14} className={`ml-auto text-neutral-400 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+                </button>
+                {!collapsed && (
+                  <div
+                    className="min-h-32 flex-1 space-y-2 overflow-y-auto p-2"
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={() => {
+                      const task = tasks.find((item) => item.id === dragTaskId);
+                      if (task) moveTask(task, column.id);
+                      onDragEnd();
+                    }}
+                  >
+                    {colTasks.map((task) => (
+                      <TaskCard
+                        key={task.id}
+                        task={task}
+                        participants={participants}
+                        currentUserId={currentUserId}
+                        onDelete={() => deleteTask(task.id)}
+                        onMove={(status) => moveTask(task, status)}
+                        onDragStart={() => onDragStart(task.id)}
+                        onDragEnd={onDragEnd}
+                      />
+                    ))}
+                    {colTasks.length === 0 && (
+                      <div className="flex h-16 items-center justify-center border border-dashed border-neutral-300 bg-white text-xs text-neutral-400">
+                        {loading ? '加载中...' : column.empty}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-neutral-200 text-left text-xs text-neutral-500">
+                <th className="pb-2 pr-4 font-medium">编号</th>
+                <th className="pb-2 pr-4 font-medium">标题</th>
+                <th className="pb-2 pr-4 font-medium">状态</th>
+                <th className="pb-2 pr-4 font-medium">创建者</th>
+                <th className="pb-2 pr-4 font-medium">负责人</th>
+                <th className="pb-2 font-medium">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredTasks.map((task) => (
+                <tr key={task.id} className="border-b border-neutral-100">
+                  <td className="py-2 pr-4 text-xs text-neutral-400">#{task.id.slice(-6)}</td>
+                  <td className="max-w-lg py-2 pr-4">
+                    <div className="font-medium text-neutral-900">{task.title}</div>
+                    {task.description && <div className="mt-0.5 truncate text-xs text-neutral-500">{task.description}</div>}
+                  </td>
+                  <td className="py-2 pr-4">
+                    <select value={task.status} onChange={(e) => moveTask(task, e.target.value as TaskStatus)} className="h-7 rounded-md border border-neutral-200 bg-white px-2 text-xs">
+                      {TASK_COLUMNS.map((column) => <option key={column.id} value={column.id}>{column.label}</option>)}
+                    </select>
+                  </td>
+                  <td className="py-2 pr-4 text-xs text-neutral-600">{participantName(task.creatorId, participants, currentUserId)}</td>
+                  <td className="py-2 pr-4 text-xs text-neutral-600">{task.assigneeId ? participantName(task.assigneeId, participants, currentUserId) : '未分配'}</td>
+                  <td className="py-2">
+                    <button onClick={() => deleteTask(task.id)} className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-red-50 hover:text-red-500" title="删除任务">
+                      <Trash2 size={14} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {filteredTasks.length === 0 && (
+                <tr><td colSpan={6} className="py-10 text-center text-sm text-neutral-400">{loading ? '加载中...' : '暂无任务'}</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TaskFilterMenu({ title, value, options, onSelect }: { title: string; value: string; options: { id: string; name: string }[]; onSelect: (id: string) => void }) {
+  return (
+    <div className="absolute left-0 top-9 z-20 w-48 rounded-md border border-neutral-200 bg-white py-1 shadow-lg">
+      <div className="px-3 py-1 text-[10px] font-semibold text-neutral-400">{title}</div>
+      {options.map((option) => (
+        <button key={option.id} onClick={() => onSelect(option.id)} className={`flex w-full items-center px-3 py-1.5 text-left text-sm hover:bg-neutral-50 ${value === option.id ? 'font-medium text-neutral-900' : 'text-neutral-600'}`}>
+          <span className="truncate">{option.name}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function TaskCard({
+  task,
+  participants,
+  currentUserId,
+  onDelete,
+  onMove,
+  onDragStart,
+  onDragEnd,
+}: {
+  task: TaskItem;
+  participants: { id: string; name: string; kind: 'human' | 'agent' }[];
+  currentUserId?: string;
+  onDelete: () => void;
+  onMove: (status: TaskStatus) => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+}) {
+  return (
+    <article draggable onDragStart={onDragStart} onDragEnd={onDragEnd} className="group cursor-grab border-2 border-neutral-900 bg-white p-3 shadow-sm active:cursor-grabbing">
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] text-neutral-400">#{task.id.slice(-6)}</div>
+          <div className="mt-1 whitespace-pre-wrap text-sm font-semibold leading-5 text-neutral-900">{task.title}</div>
+        </div>
+        <button onClick={onDelete} className="flex h-6 w-6 shrink-0 items-center justify-center text-neutral-300 opacity-0 hover:bg-red-50 hover:text-red-500 group-hover:opacity-100" title="删除任务">
+          <Trash2 size={13} />
+        </button>
+      </div>
+      {task.description && <div className="mt-2 line-clamp-3 text-xs leading-5 text-neutral-500">{task.description}</div>}
+      <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-neutral-500">
+        <span className="inline-flex items-center gap-1 border border-neutral-200 bg-neutral-50 px-1.5 py-0.5">
+          <User size={10} />
+          {participantName(task.creatorId, participants, currentUserId)}
+        </span>
+        <span className="inline-flex items-center gap-1 border border-neutral-200 bg-neutral-50 px-1.5 py-0.5">
+          <User size={10} />
+          {task.assigneeId ? participantName(task.assigneeId, participants, currentUserId) : '未分配'}
+        </span>
+        {task.tags.map((tag) => (
+          <span key={tag} className="inline-flex items-center gap-1 border border-neutral-200 bg-neutral-50 px-1.5 py-0.5">
+            <Tag size={9} />
+            {tag}
+          </span>
+        ))}
+      </div>
+      <select value={task.status} onChange={(e) => onMove(e.target.value as TaskStatus)} className="mt-3 h-7 w-full border border-neutral-300 bg-white px-2 text-xs font-medium text-neutral-700">
+        {TASK_COLUMNS.map((column) => <option key={column.id} value={column.id}>{column.label}</option>)}
+      </select>
+    </article>
+  );
+}
+
+function ConversationFiles({
+  files,
+  agents,
+  currentUsername,
+  onJump,
+}: {
+  files: ConversationFile[];
+  agents: Record<string, AgentSnapshot>;
+  currentUsername?: string;
+  onJump: (messageId: string) => void;
+}) {
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto bg-white p-4">
+      {files.length === 0 ? (
+        <div className="flex h-full flex-col items-center justify-center gap-2 text-neutral-400">
+          <FolderOpen size={32} strokeWidth={1.5} />
+          <span className="text-sm">暂无文件</span>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {files.map((file) => {
+            const isImage = file.artifact.mimeType.startsWith('image/');
+            const previewUrl = artifactUrl(isImage ? file.artifact.previewUrl : file.artifact.downloadUrl);
+            const downloadUrl = artifactUrl(file.artifact.downloadUrl);
+            return (
+              <div key={`${file.messageId}-${file.artifact.id}`} className="flex min-h-20 items-center gap-3 border border-neutral-300 bg-white px-3 py-2 hover:border-neutral-900">
+                <a href={previewUrl} target="_blank" rel="noreferrer" className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden border border-neutral-200 bg-neutral-50" title="预览文件">
+                  {isImage ? (
+                    <img src={artifactUrl(file.artifact.previewUrl)} alt={file.artifact.filename} className="h-full w-full object-cover" />
+                  ) : (
+                    <Paperclip size={20} className="text-neutral-400" />
+                  )}
+                </a>
+                <a href={previewUrl} target="_blank" rel="noreferrer" className="min-w-0 flex-1" title="预览文件">
+                  <div className="truncate text-sm font-semibold text-neutral-900">{file.artifact.filename}</div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
+                    <span>{formatFileSize(file.artifact.sizeBytes)}</span>
+                    <span className="text-neutral-300">·</span>
+                    <span>{formatDateTime(file.createdAt)}</span>
+                    <span className="text-neutral-300">·</span>
+                    <span>{speakerName({ id: file.messageId, channelId: '', senderKind: file.senderKind, senderId: file.senderId, body: '', createdAt: file.createdAt }, agents, currentUsername)}</span>
+                  </div>
+                </a>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button onClick={() => onJump(file.messageId)} className="flex h-8 w-8 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="跳转到原消息">
+                    <ExternalLink size={15} />
+                  </button>
+                  <a href={downloadUrl} target="_blank" rel="noreferrer" className="flex h-8 w-8 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="下载文件">
+                    <Download size={15} />
+                  </a>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -901,7 +1456,7 @@ function ChatBubble({
   };
 
   return (
-    <div className="group relative flex gap-2 rounded-md border border-transparent px-2 py-2 transition-colors hover:border-neutral-900 hover:bg-white">
+    <div id={`message-${msg.id}`} className="group relative flex gap-2 rounded-md border border-transparent px-2 py-2 transition-colors hover:border-neutral-900 hover:bg-white">
       <div className="pointer-events-none absolute right-2 top-1 z-10 flex items-center gap-0.5 border border-neutral-300 bg-white opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
         <button onClick={onReply} className="flex h-6 w-6 items-center justify-center border-r border-neutral-200 text-neutral-500 hover:bg-amber-50 hover:text-neutral-900" title="回复线程">
           <MessageSquare size={13} />
@@ -1113,6 +1668,21 @@ function speakerName(msg: ChatMessage, agents: Record<string, { name: string }>,
   if (msg.senderKind === 'human') return currentUsername ?? '用户';
   if (msg.senderKind === 'agent') return agents[msg.senderId ?? '']?.name ?? msg.senderId ?? 'Agent';
   return '系统';
+}
+
+function participantName(id: string, participants: { id: string; name: string }[], currentUserId?: string): string {
+  if (id === currentUserId) return '你';
+  return participants.find((person) => person.id === id)?.name ?? id.slice(0, 8);
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+
+function formatDateTime(ts: number): string {
+  return new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function parseMentions(body: string): { type: 'text' | 'mention'; text: string }[] {

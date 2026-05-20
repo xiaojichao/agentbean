@@ -19,7 +19,7 @@ interface Task {
   updatedAt: number;
 }
 
-type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done';
+type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
 type ColumnId = TaskStatus;
 
 const COLUMNS: { id: ColumnId; label: string; color: string; headerBg: string }[] = [
@@ -27,6 +27,7 @@ const COLUMNS: { id: ColumnId; label: string; color: string; headerBg: string }[
   { id: 'in_progress', label: 'In Progress', color: 'text-cyan-700', headerBg: 'bg-cyan-100 border-cyan-200' },
   { id: 'in_review', label: 'In Review', color: 'text-purple-700', headerBg: 'bg-purple-100 border-purple-200' },
   { id: 'done', label: 'Done', color: 'text-green-700', headerBg: 'bg-green-100 border-green-200' },
+  { id: 'closed', label: 'Closed', color: 'text-neutral-700', headerBg: 'bg-neutral-100 border-neutral-200' },
 ];
 
 export default function TasksPage() {

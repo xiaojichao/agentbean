@@ -141,7 +141,7 @@ export interface ArtifactRow {
   metaJson: string | null;
 }
 
-export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done';
+export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
 
 export interface TaskRow {
   id: string;
