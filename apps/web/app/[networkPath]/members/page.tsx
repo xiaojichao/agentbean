@@ -1,25 +1,25 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Bot, Circle, ChevronRight, User } from 'lucide-react';
 import { memberEvents, deviceEvents, agentEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
-import { AgentDetail, HumanDetail, type HumanMember } from '@/components/member-detail';
+import { AgentDetail, AgentTopBar, HumanDetail, type AgentMemberTab, type HumanMember } from '@/components/member-detail';
 
-type Tab = 'profile' | 'dms' | 'reminders' | 'workspace' | 'activity';
-
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'profile', label: '资料' },
-  { id: 'dms', label: '智能体私聊' },
-  { id: 'reminders', label: '提醒' },
-  { id: 'workspace', label: '工作区' },
-  { id: 'activity', label: '动态' },
+const TABS: { id: AgentMemberTab; label: string }[] = [
+  { id: 'profile', label: 'PROFILE' },
+  { id: 'permissions', label: 'PERMISSIONS' },
+  { id: 'dms', label: 'AGENT DMS' },
+  { id: 'reminders', label: 'REMINDERS' },
+  { id: 'workspace', label: 'WORKSPACE' },
+  { id: 'activity', label: 'ACTIVITY' },
 ];
 
 export default function MembersPage() {
   const router = useRouter();
   const params = useParams();
+  const searchParams = useSearchParams();
   const np = useCurrentNetworkPath();
   const conn = useAgentBeanStore((s) => s.conn);
   const devices = useAgentBeanStore((s) => s.devices);
@@ -29,12 +29,13 @@ export default function MembersPage() {
   const applyAgentsSnapshot = useAgentBeanStore((s) => s.applyAgentsSnapshot);
   const applyAgentStatus = useAgentBeanStore((s) => s.applyAgentStatus);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>('profile');
+  const [tab, setTab] = useState<AgentMemberTab>('profile');
   const [agentsExpanded, setAgentsExpanded] = useState(true);
   const [humansExpanded, setHumansExpanded] = useState(true);
   const [humanMembers, setHumanMembers] = useState<HumanMember[]>([]);
   const routeAgentId = typeof params.agentId === 'string' ? params.agentId : null;
   const routeUserId = typeof params.userId === 'string' ? params.userId : null;
+  const routeTab = searchParams.get('agentTab') as AgentMemberTab | null;
 
   useEffect(() => {
     if (conn !== 'open') return;
@@ -53,18 +54,22 @@ export default function MembersPage() {
   useEffect(() => {
     if (routeAgentId) {
       setSelectedId(routeAgentId);
-      setTab('profile');
+      setTab(TABS.some((t) => t.id === routeTab) ? routeTab! : 'profile');
       return;
     }
     if (routeUserId) {
       setSelectedId(`user:${routeUserId}`);
       setTab('profile');
     }
-  }, [routeAgentId, routeUserId]);
+  }, [routeAgentId, routeUserId, routeTab]);
 
   const selectedAgent = agentList.find((a) => a.id === selectedId);
   const selectedDevice = selectedAgent?.deviceId ? devices[selectedAgent.deviceId] : undefined;
   const selectedHuman = selectedId?.startsWith('user:') ? humanMembers.find((h) => `user:${h.userId}` === selectedId) : undefined;
+  const setAgentTab = (nextTab: AgentMemberTab) => {
+    setTab(nextTab);
+    if (selectedAgent) router.replace(`/${np}/agent/${selectedAgent.id}?agentTab=${nextTab}`);
+  };
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -85,7 +90,7 @@ export default function MembersPage() {
             {agentsExpanded && (
               <div className="mt-0.5 space-y-0.5">
                 {agentList.map((agent) => (
-                  <button key={agent.id} onClick={() => { setSelectedId(agent.id); router.push(`/${np}/agent/${agent.id}`); }} className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left ${selectedId === agent.id ? 'bg-pink-100' : 'hover:bg-neutral-100'}`}>
+                  <button key={agent.id} onClick={() => { setSelectedId(agent.id); setTab('profile'); router.push(`/${np}/agent/${agent.id}?agentTab=profile`); }} className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left ${selectedId === agent.id ? 'bg-pink-100' : 'hover:bg-neutral-100'}`}>
                     <Bot size={15} className="shrink-0 text-amber-600" />
                     <Circle size={8} className={`shrink-0 fill-current ${agent.status === 'online' ? 'text-emerald-500' : agent.status === 'busy' ? 'text-amber-500' : 'text-neutral-300'}`} />
                     <span className={`truncate text-sm ${selectedId === agent.id ? 'font-medium text-neutral-900' : 'text-neutral-700'}`}>{agent.name}</span>
@@ -123,21 +128,25 @@ export default function MembersPage() {
 
       {/* Right panel */}
       <div className="flex flex-1 flex-col">
+        {selectedAgent && <AgentTopBar agent={selectedAgent} />}
+
         {/* Tab bar */}
-        <div className="flex h-14 items-center border-b border-neutral-200">
-          {TABS.map((t) => (
-            <button key={t.id} onClick={() => setTab(t.id)} className={`border-b-2 px-4 text-xs font-medium tracking-wide ${tab === t.id ? 'border-amber-400 text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}>
-              {t.label}
-            </button>
-          ))}
-        </div>
+        {selectedAgent && (
+          <div className="flex h-10 shrink-0 items-center border-b border-neutral-200 bg-white">
+            {TABS.map((t) => (
+              <button key={t.id} onClick={() => setAgentTab(t.id)} className={`flex h-full items-center border-b-2 px-4 text-[11px] font-semibold tracking-wide ${tab === t.id ? 'border-amber-400 bg-amber-50 text-neutral-900' : 'border-transparent text-neutral-500 hover:bg-neutral-50 hover:text-neutral-700'}`}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Tab content */}
         <div className="flex-1 overflow-y-auto p-6">
           {!selectedId && <EmptyState />}
-          {selectedId && tab === 'profile' && selectedAgent && <AgentDetail agent={selectedAgent} device={selectedDevice} />}
+          {selectedId && selectedAgent && <AgentDetail agent={selectedAgent} device={selectedDevice} tab={tab} />}
           {selectedId && tab === 'profile' && !selectedAgent && selectedId?.startsWith('user:') && selectedHuman && <HumanDetail human={selectedHuman} currentUser={currentUser} />}
-          {tab !== 'profile' && <PlaceholderTab name={TABS.find((t) => t.id === tab)?.label ?? ''} />}
+          {selectedId && !selectedAgent && tab !== 'profile' && <PlaceholderTab name={TABS.find((t) => t.id === tab)?.label ?? ''} />}
         </div>
       </div>
     </div>
