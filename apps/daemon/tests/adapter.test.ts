@@ -184,4 +184,34 @@ Messages:       2 (1 user, 0 tool calls)`;
 
 - 内容选题 / 文案撰写 / 多平台改写`);
   });
+
+  it('drops multiline Query history from Hermes terminal output', () => {
+    const raw = `Query: 你装了哪些 Skills？
+
+---
+
+hermes-agent (assistant): 今天你在用什么模型？
+
+---
+
+@Hermes-Agent hello, 今天你在用什么模型？
+
+Initializing agent...
+────────────────────────────────────────
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+    我现在加载了以下 Skills：
+
+    - architecture-diagram
+    - baoyu-infographic
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Resume this session with:
+  hermes --resume 20260520_123456`;
+
+    expect(extractHermesReply(raw)).toBe(`我现在加载了以下 Skills：
+
+- architecture-diagram
+- baoyu-infographic`);
+  });
 });

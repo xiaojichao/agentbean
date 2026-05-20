@@ -447,6 +447,55 @@ describe('message:send', () => {
 
     custom.close(); agentos.close(); web.close();
   });
+
+  it('does not duplicate the current thread message in dispatch history', async () => {
+    const agentos = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'd-thread-hermes',
+        networkId: 'default',
+        agents: [{ id: 'hermes-thread', name: 'Hermes-Agent', role: 'r', adapterKind: 'hermes', category: 'agentos-hosted', visibility: 'public' }],
+      },
+      reconnection: false, transports: ['websocket'],
+    });
+    await new Promise<void>((r) => agentos.on('connect', () => r()));
+    agentos.emit('register');
+
+    const requests: any[] = [];
+    agentos.on('dispatch', (req: any) => {
+      requests.push(req);
+      const body = requests.length === 1 ? 'first reply' : 'thread reply';
+      agentos.emit('reply', { agentId: 'hermes-thread', channelId: req.channelId, body, requestId: req.requestId });
+    });
+
+    const ch = app.channels.create('default', { name: `thread-${Date.now()}`, agentIds: ['hermes-thread'] });
+    const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    web.emit('channel:join', { channelId: ch.id });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const rootAck = await new Promise<any>((resolve) => {
+      web.emit('message:send', { channelId: ch.id, body: '@Hermes-Agent hello', clientMsgId: 'thread-root' }, resolve);
+    });
+    expect(rootAck.ok).toBe(true);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(requests[0].prompt).toBe('@Hermes-Agent hello');
+    expect(requests[0].history.some((turn: any) => turn.body === '@Hermes-Agent hello')).toBe(false);
+
+    const replyAck = await new Promise<any>((resolve) => {
+      web.emit('message:send', { channelId: ch.id, body: '你装了哪些 Skills？', parentMessageId: rootAck.id, clientMsgId: 'thread-reply' }, resolve);
+    });
+    expect(replyAck.ok).toBe(true);
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(requests[1].agentId).toBe('hermes-thread');
+    expect(requests[1].prompt).toBe('你装了哪些 Skills？');
+    expect(requests[1].history.some((turn: any) => turn.body === '你装了哪些 Skills？')).toBe(false);
+    expect(requests[1].history.some((turn: any) => turn.body === '@Hermes-Agent hello')).toBe(true);
+    expect(requests[1].history.some((turn: any) => turn.body === 'first reply')).toBe(true);
+
+    agentos.close(); web.close();
+  });
 });
 
 describe('agent:create with publishedNetworkIds', () => {

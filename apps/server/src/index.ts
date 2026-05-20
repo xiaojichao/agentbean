@@ -1015,13 +1015,14 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       const recipient = route.targets[0]!;
       const reqId = newId();
       const attachments = artifactDtos(sp, networkId, attachmentIds);
+      const historyMessages = currentHistory.filter((m) => m.id !== humanMsg.id);
       const reply = await dispatch({
         agentId: recipient.id,
         channelId: ch.id,
         prompt: body,
         requestId: reqId,
         networkId,
-        history: buildDispatchHistory(currentHistory, parentMessageId ?? humanMsg.id),
+        history: buildDispatchHistory(historyMessages, parentMessageId),
         attachments,
       });
       if (reply.ok && reply.body?.trim()) {

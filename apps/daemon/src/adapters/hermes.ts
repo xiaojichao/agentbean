@@ -45,6 +45,33 @@ export function extractHermesReply(output: string): string {
     .replace(/\r\n?/g, '\n')
     .split('\n');
 
+  let boxStart = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (lines[i]?.trim().startsWith('╭')) {
+      boxStart = i;
+      break;
+    }
+  }
+  if (boxStart >= 0) {
+    const boxLines: string[] = [];
+    for (const line of lines.slice(boxStart + 1)) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('╰')) break;
+      if (BOX_ONLY_RE.test(trimmed)) continue;
+      boxLines.push(line);
+    }
+    const boxedReply = boxLines
+      .map((line) => line.trimEnd())
+      .filter((line) => {
+        const trimmed = line.trim();
+        return !(trimmed.startsWith('╭') || trimmed.startsWith('╰') || BOX_ONLY_RE.test(trimmed));
+      })
+      .map((line) => line.replace(/^[│┃]\s?/, '').replace(/\s?[│┃]$/, '').replace(/^\s{2,}/, ''))
+      .join('\n')
+      .trim();
+    if (boxedReply) return boxedReply;
+  }
+
   const cleaned = lines
     .map((line) => line.trimEnd())
     .filter((line) => {
