@@ -81,6 +81,7 @@ export function createConnection(cfg: AgentConfig, adapter: CliAdapter): Connect
   let socket: Socket | null = null;
   let heartbeatTimer: NodeJS.Timeout | null = null;
   let queue: Promise<unknown> = Promise.resolve();
+  const activeControllers = new Map<string, AbortController>();
 
   return {
     async start() {
@@ -127,6 +128,7 @@ export function createConnection(cfg: AgentConfig, adapter: CliAdapter): Connect
         }
         queue = queue.then(async () => {
           const ctl = new AbortController();
+          activeControllers.set(req.requestId, ctl);
           const dispatchStart = Date.now();
           const teamId = 'default';
           const run = beginAgentWorkspaceRun({
@@ -158,7 +160,7 @@ export function createConnection(cfg: AgentConfig, adapter: CliAdapter): Connect
               outputDirs: [run.outputDir, run.intermediateDir],
             });
             archivedFiles = archiveOutputFiles(run, processed.outputFiles);
-            const replyText = formatWorkspaceReply(rawBody, archivedFiles);
+            const replyText = formatWorkspaceReply(rawBody, archivedFiles, { exposeLocalPaths: false });
             finishAgentWorkspaceRun(run, { replyText, files: archivedFiles, status: 'completed' });
 
             const artifactIds: string[] = [];
@@ -205,10 +207,20 @@ export function createConnection(cfg: AgentConfig, adapter: CliAdapter): Connect
               scope: 'reply',
               requestId: req.requestId,
             });
+          } finally {
+            activeControllers.delete(req.requestId);
           }
         }).catch((err: any) => {
           logger.error({ err: err?.message, requestId: req.requestId }, 'dispatch queue error');
         });
+      });
+
+      socket.on('dispatch:cancel', (payload: { requestId?: string; reason?: string }) => {
+        const entries = payload.requestId
+          ? [...activeControllers.entries()].filter(([id]) => id === payload.requestId)
+          : [...activeControllers.entries()];
+        for (const [, ctl] of entries) ctl.abort();
+        logger.info({ requestId: payload.requestId, cancelled: entries.length, reason: payload.reason }, 'dispatch cancel requested');
       });
 
       socket.on('disconnect', (reason) => {

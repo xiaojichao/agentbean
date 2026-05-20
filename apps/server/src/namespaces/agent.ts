@@ -71,6 +71,7 @@ interface DispatchCustomAgent {
 export interface DispatchResolution { ok: boolean; body?: string; error?: string; artifactIds?: string[]; }
 
 export type DispatchFn = (req: DispatchRequest) => Promise<DispatchResolution>;
+export type StopAgentsFn = (agentIds: string[], reason?: string) => { stopped: number };
 
 export interface AgentSnapshotDto {
   id: string;
@@ -129,6 +130,7 @@ interface PendingDispatch {
 export interface AgentNamespaceHandle {
   ns: Namespace;
   dispatch: DispatchFn;
+  stopAgents: StopAgentsFn;
 }
 
 function isAgentOSHosted(meta: { category?: string | null }): boolean {
@@ -173,7 +175,7 @@ function customAgentToDto(agent: any, status: AgentSnapshotDto['status'], lastEr
 export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHandle {
   const ns = deps.io.of('/agent');
   const pending = new Map<string, PendingDispatch>();
-  const timeoutMs = deps.dispatchTimeoutMs ?? 300_000;
+  const timeoutMs = deps.dispatchTimeoutMs ?? 960_000;
 
   const emitCustomAgentStatus = (agentId: string, status: AgentSnapshotDto['status'], lastError?: string): boolean => {
     const persisted = deps.globalDb?.agents?.getFull(agentId);
@@ -645,5 +647,24 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
     sock.emit('dispatch', { ...req, networkId: req.networkId, teamId, teamName, sandboxed, customAgent });
   });
 
-  return { ns, dispatch };
+  const stopAgents: StopAgentsFn = (agentIds, reason = '已停止') => {
+    const targets = new Set(agentIds.filter(Boolean));
+    if (targets.size === 0) return { stopped: 0 };
+    let stopped = 0;
+    for (const [requestId, p] of [...pending.entries()]) {
+      if (!targets.has(p.agentId)) continue;
+      clearTimeout(p.timer);
+      pending.delete(requestId);
+      stopped += 1;
+      p.resolve({ ok: false, error: reason });
+      deps.metricsCollector?.resolve(requestId, false, reason);
+      const rt = deps.registry.markOnline(p.agentId);
+      if (rt) deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
+      else emitCustomAgentStatus(p.agentId, 'online');
+      ns.sockets.get(p.socketId)?.emit('dispatch:cancel', { requestId, agentId: p.agentId, reason });
+    }
+    return { stopped };
+  };
+
+  return { ns, dispatch, stopAgents };
 }

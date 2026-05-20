@@ -22,7 +22,7 @@ export function AgentWorkspaceSection({ runs, loading }: { runs: AgentWorkspaceR
             <div key={run.runId} className="border-t border-neutral-100 pt-3 first:border-t-0 first:pt-0">
               <div className="mb-2 flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="truncate font-mono text-xs text-neutral-600">{run.runId}</div>
+                  <div className="truncate text-xs font-medium text-neutral-600">同步记录</div>
                   <div className="text-[11px] text-neutral-400">{formatRelative(run.updatedAt)}</div>
                 </div>
                 <span className="shrink-0 rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-500">

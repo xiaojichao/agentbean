@@ -351,7 +351,17 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
   const server = http.createServer(app);
   const io = new IOServer(server, { cors: { origin: corsOrigin } });
 
-  const { dispatch } = attachAgentNamespace({ io, db, registry, deviceRegistry, token, globalDb, metricsCollector });
+  const dispatchTimeoutMs = Number.parseInt(process.env.AGENTBEAN_DISPATCH_TIMEOUT_MS ?? '', 10);
+  const { dispatch, stopAgents } = attachAgentNamespace({
+    io,
+    db,
+    registry,
+    deviceRegistry,
+    token,
+    globalDb,
+    metricsCollector,
+    dispatchTimeoutMs: Number.isFinite(dispatchTimeoutMs) && dispatchTimeoutMs > 0 ? dispatchTimeoutMs : undefined,
+  });
 
   const stopScanner = startHeartbeatScanner({
     registry, timeoutMs: 30_000, intervalMs: 5_000,
@@ -402,19 +412,45 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     }
   };
 
-  const buildDispatchHistory = (messages: ReturnType<typeof space.messages.listByChannel>, parentMessageId?: string) => {
+  const publishTaskStatusChange = (sp: typeof space, taskId: string, status: string) => {
+    const before = sp.tasks.get(taskId);
+    if (!before || before.status === status) return before ?? null;
+    sp.tasks.update(taskId, { status: status as any });
+    const task = sp.tasks.get(taskId);
+    if (!task?.channelId) return task ?? null;
+    io.of('/web').to(`channel:${task.channelId}`).emit('task:updated', task);
+    return task;
+  };
+
+  const resolveDispatchSpeaker = (networkId: string, message: ReturnType<typeof space.messages.listByChannel>[number]) => {
+    if (message.senderKind === 'human') {
+      return message.senderId ? (globalDb.users.get(message.senderId)?.username ?? '用户') : '用户';
+    }
+    if (message.senderKind === 'agent') {
+      const agentId = message.senderId ?? '';
+      return buildVisibleAgentDtos(networkId).find((agent) => agent.id === agentId)?.name
+        ?? globalDb.agents.getFull(agentId)?.name
+        ?? 'Agent';
+    }
+    return 'system';
+  };
+
+  const buildDispatchHistory = (networkId: string, messages: ReturnType<typeof space.messages.listByChannel>, parentMessageId?: string) => {
     const selected = parentMessageId
       ? messages.filter((m) => {
           const meta = parseMessageMeta(m.metaJson);
           return m.id === parentMessageId || meta.parentMessageId === parentMessageId || meta.inReplyTo === parentMessageId;
         })
       : messages.slice(-20);
-    return selected.slice(-20).map((m) => ({
-      role: m.senderKind === 'agent' ? 'assistant' as const : m.senderKind === 'system' ? 'system' as const : 'user' as const,
-      speaker: m.senderId ?? m.senderKind,
-      body: m.body,
-      at: m.createdAt,
-    }));
+    return selected
+      .filter((m) => m.senderKind === 'human' || m.senderKind === 'agent')
+      .slice(-20)
+      .map((m) => ({
+        role: m.senderKind === 'agent' ? 'assistant' as const : 'user' as const,
+        speaker: resolveDispatchSpeaker(networkId, m),
+        body: m.body,
+        at: m.createdAt,
+      }));
   };
 
   const socketNetworkMap = new Map<string, string>();
@@ -709,6 +745,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       try {
         const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
         const sp = storageManager.getSpace(networkId);
+        const before = sp.tasks.get(payload.id);
         sp.tasks.update(payload.id, {
           title: payload.title,
           description: payload.description,
@@ -719,6 +756,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           sortOrder: payload.sortOrder,
         });
         const task = sp.tasks.get(payload.id);
+        if (task?.channelId) {
+          io.of('/web').to(`channel:${task.channelId}`).emit('task:updated', task);
+        }
         ack?.({ ok: true, task });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
@@ -932,20 +972,54 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       if (!ch) return ack?.({ ok: false, error: 'NO_CHANNEL' });
       const userId = socket.data.userId as string | undefined;
       if (!userId) return ack?.({ ok: false, error: 'NOT_AUTHENTICATED' });
+      const visibleAgents = buildVisibleAgentDtos(networkId);
+      const agentById = new Map(visibleAgents.map((agent) => [agent.id, agent]));
+      const dmTargetId = channels.dmTargetId(networkId, ch.id);
+      if (!dmTargetId && channels.userHasLeft(networkId, ch.id, userId)) {
+        return ack?.({ ok: false, error: 'CHANNEL_LEFT' });
+      }
 
       const attachmentIds = [...new Set((payload.artifactIds ?? []).filter((id) => typeof id === 'string' && id.trim()))];
       const parentMessageId = typeof payload.parentMessageId === 'string' && payload.parentMessageId.trim()
         ? payload.parentMessageId.trim()
         : undefined;
+      const explicitMention = /^\s*@(\S+)/.test(body);
+      const memberIds = dmTargetId ? [dmTargetId] : channels.memberIds(networkId, ch.id);
+      const members = memberIds
+        .map((id) => agentById.get(id))
+        .filter((agent): agent is NonNullable<typeof agent> => Boolean(agent))
+        .map((agent) => ({ id: agent.id, name: agent.name, status: agent.status }));
+      const candidates = visibleAgents.map((agent) => ({ id: agent.id, name: agent.name, status: agent.status }));
+      const currentHistory = sp.messages.listByChannel(ch.id, 200);
+      const threadAgent = parentMessageId && !explicitMention
+        ? [...currentHistory].reverse()
+            .find((m) => {
+              const meta = parseMessageMeta(m.metaJson);
+              return m.senderKind === 'agent' && (meta.inReplyTo === parentMessageId || meta.parentMessageId === parentMessageId);
+            })
+        : null;
+      const threadTarget = threadAgent?.senderId ? agentById.get(threadAgent.senderId) : undefined;
+
+      const route = threadTarget && (threadTarget.status === 'online' || threadTarget.status === 'busy')
+        ? { targets: [{ id: threadTarget.id, name: threadTarget.name, status: threadTarget.status }], reason: 'FALLBACK' as const }
+        : routeHumanMessage({ body, members, candidates });
+      const recipient = route.targets[0];
+      const shouldCreateTask = Boolean(
+        payload.asTask ||
+        (recipient && (dmTargetId || explicitMention || threadTarget)),
+      );
       let taskId: string | undefined;
       let taskTitle: string | undefined;
-      if (payload.asTask) {
+      let taskAssigneeName: string | undefined;
+      if (shouldCreateTask) {
         taskTitle = body.split(/\r?\n/)[0]?.trim().slice(0, 80) || '未命名任务';
+        taskAssigneeName = recipient?.name;
         const task = sp.tasks.create({
           title: taskTitle,
           description: body,
           status: 'todo',
           creatorId: userId,
+          assigneeId: dmTargetId ?? recipient?.id,
           channelId: ch.id,
           tags: ['聊天'],
           createdAt: Date.now(),
@@ -960,40 +1034,11 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           parentMessageId,
           taskId,
           taskTitle,
+          taskAssigneeName,
         }),
       };
       persist({ ...humanMsg, artifactIds: attachmentIds.length ? attachmentIds : undefined });
-      if (taskId && taskTitle) {
-        persist({
-          id: newId(), channelId: ch.id, senderKind: 'system', senderId: null,
-          body: `已创建任务：#${taskId.slice(-6)} "${taskTitle}"`,
-          createdAt: Date.now(), metaJson: JSON.stringify({ kind: 'task-created', taskId, parentMessageId: humanMsg.id }),
-        });
-      }
       ack?.({ ok: true, id: humanMsg.id });
-
-      const visibleAgents = buildVisibleAgentDtos(networkId);
-      const agentById = new Map(visibleAgents.map((agent) => [agent.id, agent]));
-      const dmTargetId = channels.dmTargetId(networkId, ch.id);
-      const memberIds = dmTargetId ? [dmTargetId] : channels.memberIds(networkId, ch.id);
-      const members = memberIds
-        .map((id) => agentById.get(id))
-        .filter((agent): agent is NonNullable<typeof agent> => Boolean(agent))
-        .map((agent) => ({ id: agent.id, name: agent.name, status: agent.status }));
-      const candidates = visibleAgents.map((agent) => ({ id: agent.id, name: agent.name, status: agent.status }));
-      const currentHistory = sp.messages.listByChannel(ch.id, 200);
-      const threadAgent = parentMessageId && !/^\s*@(\S+)/.test(body)
-        ? [...currentHistory].reverse()
-            .find((m) => {
-              const meta = parseMessageMeta(m.metaJson);
-              return m.senderKind === 'agent' && (meta.inReplyTo === parentMessageId || meta.parentMessageId === parentMessageId);
-            })
-        : null;
-      const threadTarget = threadAgent?.senderId ? agentById.get(threadAgent.senderId) : undefined;
-
-      const route = threadTarget && (threadTarget.status === 'online' || threadTarget.status === 'busy')
-        ? { targets: [{ id: threadTarget.id, name: threadTarget.name, status: threadTarget.status }], reason: 'FALLBACK' as const }
-        : routeHumanMessage({ body, members, candidates });
 
       if (route.reason === 'NO_ONLINE') {
         persist({
@@ -1012,34 +1057,36 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         return;
       }
 
-      const recipient = route.targets[0]!;
+      const dispatchRecipient = recipient!;
       const reqId = newId();
       const attachments = artifactDtos(sp, networkId, attachmentIds);
-      const historyMessages = currentHistory.filter((m) => m.id !== humanMsg.id);
+      if (taskId) publishTaskStatusChange(sp, taskId, 'in_progress');
       const reply = await dispatch({
-        agentId: recipient.id,
+        agentId: dispatchRecipient.id,
         channelId: ch.id,
         prompt: body,
         requestId: reqId,
         networkId,
-        history: buildDispatchHistory(historyMessages, parentMessageId),
+        history: buildDispatchHistory(networkId, currentHistory, parentMessageId),
         attachments,
       });
       if (reply.ok && reply.body?.trim()) {
         const artifactIds = reply.artifactIds;
         persist({
-          id: newId(), channelId: ch.id, senderKind: 'agent', senderId: recipient.id,
+          id: newId(), channelId: ch.id, senderKind: 'agent', senderId: dispatchRecipient.id,
           body: reply.body.trim(), createdAt: Date.now(),
           metaJson: JSON.stringify({ inReplyTo: parentMessageId ?? humanMsg.id, requestId: reqId }),
           artifactIds: artifactIds?.length ? artifactIds : undefined,
         });
+        if (taskId) publishTaskStatusChange(sp, taskId, 'done');
       } else {
         const error = reply.error ?? (reply.ok ? 'Agent 返回了空响应' : 'unknown');
         persist({
           id: newId(), channelId: ch.id, senderKind: 'system', senderId: null,
-          body: `${recipient.name} 处理失败: ${error}`,
-          createdAt: Date.now(), metaJson: JSON.stringify({ kind: 'reply-fail', agentId: recipient.id }),
+          body: `${dispatchRecipient.name} 处理失败: ${error}`,
+          createdAt: Date.now(), metaJson: JSON.stringify({ kind: 'reply-fail', agentId: dispatchRecipient.id }),
         });
+        if (taskId) publishTaskStatusChange(sp, taskId, 'in_review');
       }
     });
 
@@ -1067,6 +1114,20 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       }
     });
 
+    socket.on('channel:add-agent', (payload: { channelId: string; agentId: string }, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const ch = channels.get(networkId, payload.channelId);
+        if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        const agent = buildVisibleAgentDtos(networkId).find((item) => item.id === payload.agentId);
+        if (!agent) return ack?.({ ok: false, error: 'AGENT_NOT_FOUND' });
+        channels.addAgentMember(networkId, payload.channelId, payload.agentId);
+        ack?.({ ok: true });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
     socket.on('channel:remove-member', (payload: { channelId: string; userId: string }, ack?: (r: any) => void) => {
       try {
         const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
@@ -1079,14 +1140,90 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       }
     });
 
-    socket.on('channel:update', (payload: { channelId: string; name?: string; visibility?: 'public' | 'private' }, ack?: (r: any) => void) => {
+    socket.on('channel:members', (payload: { channelId: string }, ack?: (r: any) => void) => {
       try {
         const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
         const ch = channels.get(networkId, payload.channelId);
         if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
-        channels.update(networkId, payload.channelId, { name: payload.name, visibility: payload.visibility });
+        const visibleAgents = buildVisibleAgentDtos(networkId);
+        const agentIds = new Set(channels.memberIds(networkId, payload.channelId));
+        const agents = visibleAgents.filter((agent) => agentIds.has(agent.id));
+        const networkHumans = globalDb.networkMembers.listByNetwork(networkId);
+        const userIds = ch.visibility === 'private'
+          ? new Set(channels.userMembers(networkId, payload.channelId))
+          : null;
+        const humans = networkHumans.filter((human) => {
+          if (channels.userHasLeft(networkId, payload.channelId, human.userId)) return false;
+          return !userIds || userIds.has(human.userId);
+        });
+        ack?.({ ok: true, humans, agents });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('channel:update', (payload: { channelId: string; name?: string; description?: string | null; visibility?: 'public' | 'private' }, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const ch = channels.get(networkId, payload.channelId);
+        if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        channels.update(networkId, payload.channelId, { name: payload.name, description: payload.description, visibility: payload.visibility });
         ack?.({ ok: true });
         emitChannelsSnapshotForNetwork(networkId);
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('channel:leave', (payload: { channelId: string }, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const userId = socket.data.userId as string | undefined;
+        if (!userId) return ack?.({ ok: false, error: 'UNAUTHORIZED' });
+        const ch = channels.get(networkId, payload.channelId);
+        if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        channels.leaveUser(networkId, payload.channelId, userId);
+        ack?.({ ok: true });
+        socket.emit('channels:snapshot', channels.listForUser(networkId, userId));
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('channel:archive', (payload: { channelId: string }, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const ch = channels.get(networkId, payload.channelId);
+        if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        channels.archive(networkId, payload.channelId);
+        ack?.({ ok: true });
+        emitChannelsSnapshotForNetwork(networkId);
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('channel:delete', (payload: { channelId: string }, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const ch = channels.get(networkId, payload.channelId);
+        if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        channels.delete(networkId, payload.channelId);
+        ack?.({ ok: true });
+        emitChannelsSnapshotForNetwork(networkId);
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('channel:stop-agents', (payload: { channelId: string }, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const ch = channels.get(networkId, payload.channelId);
+        if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        const agentIds = channels.memberIds(networkId, payload.channelId);
+        const result = stopAgents(agentIds, `频道 #${ch.name} 已停止运行中的 Agent`);
+        ack?.({ ok: true, stopped: result.stopped });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }

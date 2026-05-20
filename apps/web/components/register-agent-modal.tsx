@@ -152,8 +152,8 @@ export function RegisterAgentModal({ open, onClose, discoveredAgent, mode = 'cre
               onChange={(e) => setNetworkId(e.target.value)}
               className="w-full rounded border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none"
             >
-              <option value="default">default</option>
-              <option value="public">public</option>
+              <option value="default">默认团队</option>
+              <option value="public">公开团队</option>
             </select>
           </div>
 

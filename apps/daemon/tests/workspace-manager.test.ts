@@ -86,4 +86,27 @@ describe('workspace-manager', () => {
     expect(reply).toContain(archived[0]!.archivedPath);
     expect(reply).not.toContain(sourceFile);
   });
+
+  it('can format public chat replies without exposing local device paths', () => {
+    home = mkdtempSync(join(tmpdir(), 'agentbean-home-'));
+    process.env.AGENTBEAN_HOME = home;
+    const sourceDir = mkdtempSync(join(tmpdir(), 'agentbean-output-source-'));
+    const sourceFile = join(sourceDir, 'cover.png');
+    writeFileSync(sourceFile, 'fake image');
+
+    const run = beginAgentWorkspaceRun({
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      runId: 'run-1',
+      prompt: '生成封面图',
+      projectDir: sourceDir,
+    });
+    const archived = archiveOutputFiles(run, [sourceFile]);
+
+    const reply = formatWorkspaceReply(`已生成文件:\n- ${sourceFile}`, archived, { exposeLocalPaths: false });
+
+    expect(reply).not.toContain(sourceFile);
+    expect(reply).not.toContain(archived[0]!.archivedPath);
+    expect(reply).toContain('cover.png');
+  });
 });

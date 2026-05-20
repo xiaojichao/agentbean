@@ -272,8 +272,8 @@ function AgentProfile({ agent, device, applyAgentStatus }: { agent: AgentSnapsho
 
       <Section title="基本信息" icon={<Shield size={15} />} compactGrid>
         <InfoRow label="类型" value={CATEGORY_LABEL[agent.category ?? 'executor-hosted'] ?? '自定义 Agent'} />
-        <InfoRow label="创建者" value={agent.ownerName ?? agent.ownerId ?? '未知'} mono={Boolean(agent.ownerId && !agent.ownerName)} />
-        <InfoRow label="设备" value={device?.hostname ?? device?.id ?? '未关联设备'} />
+        <InfoRow label="创建者" value={agent.ownerName ?? '未知'} />
+        <InfoRow label="设备" value={device?.hostname ?? '未关联设备'} />
         <InfoRow label="最近活跃" value={formatRelative(agent.lastSeenAt)} />
       </Section>
 
@@ -355,10 +355,7 @@ function AgentPermissions({ agentId }: { agentId: string }) {
                 <label key={item.id} className="flex cursor-pointer items-start gap-3 py-3">
                   <input type="checkbox" checked={selected.has(item.id)} onChange={() => toggle(item.id)} className="mt-0.5 h-4 w-4 rounded border-neutral-300 text-amber-500 focus:ring-amber-400" />
                   <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-medium text-neutral-900">{item.label}</span>
-                      <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] text-neutral-500">{item.id}</code>
-                    </div>
+                    <div className="text-sm font-medium text-neutral-900">{item.label}</div>
                     <p className="mt-1 text-xs text-neutral-500">{item.description}</p>
                   </div>
                 </label>
@@ -420,7 +417,7 @@ function AgentReminders() {
 
 function AgentWorkspaceTab({ agent, runs, loading }: { agent: AgentSnapshot; runs: AgentWorkspaceRun[]; loading: boolean }) {
   const [copied, setCopied] = useState(false);
-  const workspacePath = agent.cwd ? `${agent.cwd}/.agentbean/${agent.networkId ?? 'team'}/${agent.id}` : `~/.agentbean/${agent.networkId ?? 'team'}/${agent.id}`;
+  const workspacePath = agent.cwd ? `${agent.cwd}/.agentbean/${agent.name}` : `~/.agentbean/${agent.name}`;
   const copyPath = () => {
     navigator.clipboard.writeText(workspacePath);
     setCopied(true);
@@ -445,8 +442,8 @@ function AgentWorkspaceTab({ agent, runs, loading }: { agent: AgentSnapshot; run
 function AgentActivity({ agent, device, metrics, runs }: { agent: AgentSnapshot; device?: DeviceInfo; metrics: AgentMetricsSummary | null; runs: AgentWorkspaceRun[] }) {
   const events = [
     { time: agent.lastSeenAt, status: agent.status, title: STATUS_LABEL[agent.status] ?? agent.status, detail: agent.lastError ?? 'Agent 状态已同步。' },
-    ...(device ? [{ time: device.lastSeenAt, status: device.status, title: `设备 ${STATUS_LABEL[device.status] ?? device.status}`, detail: device.hostname ?? device.id }] : []),
-    ...runs.slice(0, 4).map((run) => ({ time: run.updatedAt, status: 'online', title: '工作区已同步', detail: `${run.files.length} 个文件，run ${run.runId}` })),
+    ...(device ? [{ time: device.lastSeenAt, status: device.status, title: `设备 ${STATUS_LABEL[device.status] ?? device.status}`, detail: device.hostname ?? '关联设备' }] : []),
+    ...runs.slice(0, 4).map((run) => ({ time: run.updatedAt, status: 'online', title: '工作区已同步', detail: `${run.files.length} 个文件` })),
     ...(metrics?.lastErrorAt ? [{ time: metrics.lastErrorAt, status: 'error', title: '最近错误', detail: metrics.lastError ?? '未知错误' }] : []),
   ].sort((a, b) => b.time - a.time);
 
@@ -509,7 +506,6 @@ export function HumanDetail({ human, currentUser }: { human: HumanMember; curren
       </div>
 
       <Section title="个人信息" icon={<User size={15} />}>
-        <InfoRow label="用户 ID" value={human.userId} mono />
         <InfoRow label="用户名" value={human.username} />
         <InfoRow label="团队角色" value={human.role} />
         {currentUser?.id === human.userId && <InfoRow label="邮箱" value={currentUser.email ?? '未设置'} />}

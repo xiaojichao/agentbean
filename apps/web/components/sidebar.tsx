@@ -76,7 +76,7 @@ export function Sidebar() {
             onClick={() => { setShowNetworks((v) => !v); }}
             className="flex w-full items-center justify-between gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 py-1.5 text-xs hover:bg-neutral-50 transition-colors"
           >
-            <span className="truncate font-medium">{currentNetwork?.name ?? currentNetworkId}</span>
+            <span className="truncate font-medium">{currentNetwork?.name ?? '当前团队'}</span>
             <ChevronDown size={12} className={`shrink-0 text-neutral-400 transition-transform ${showNetworks ? 'rotate-180' : ''}`} />
           </button>
           {showNetworks && (
@@ -199,7 +199,7 @@ function CreateNetworkDialog({ onClose, onCreated }: { onClose: () => void; onCr
       const res = await networkEvents().create({ name: trimmedName, path: trimmedPath || undefined, visibility });
       if (res.ok && res.network) {
         onClose();
-        onCreated(res.network.id, res.network.path ?? res.network.id);
+        onCreated(res.network.id, res.network.path ?? 'default');
       } else {
         setError(res.error === 'RESERVED_PATH' ? '该路径为系统保留路径，请使用其他名称' : (res.error ?? '创建失败'));
       }

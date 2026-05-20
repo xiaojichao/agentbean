@@ -84,7 +84,7 @@ export default function DevicesPage() {
                 <Circle size={6} className={`absolute -right-0.5 -top-0.5 fill-current ${STATUS_COLORS[device.status] ?? 'text-neutral-300'}`} />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium leading-tight">{device.hostname ?? device.id}</div>
+                <div className="truncate text-sm font-medium leading-tight">{device.hostname ?? '未命名设备'}</div>
                 <div className="flex items-center gap-1 text-[11px] text-neutral-400">
                   <span>daemon</span>
                   <span className={device.status === 'online' ? 'text-neutral-600' : ''}>{formatDaemonVersion(device)}</span>
@@ -100,7 +100,7 @@ export default function DevicesPage() {
 
       {/* Right — detail / empty state */}
       <div className="flex flex-1 flex-col">
-        <div className="flex h-14 items-center border-b border-neutral-200 px-4 text-sm font-semibold">{selectedDevice ? (selectedDevice.hostname ?? selectedDevice.id) : '设备详情'}</div>
+        <div className="flex h-14 items-center border-b border-neutral-200 px-4 text-sm font-semibold">{selectedDevice ? (selectedDevice.hostname ?? '未命名设备') : '设备详情'}</div>
         <div className="flex-1 overflow-y-auto">
         {!selectedDevice && <EmptyState />}
         {selectedDevice && (
@@ -153,7 +153,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const [showAddCustom, setShowAddCustom] = useState(false);
   const [selectNetworkAgent, setSelectNetworkAgent] = useState<any | null>(null);
   const [configAgent, setConfigAgent] = useState<any | null>(null);
-  const displayName = device.hostname ?? device.id;
+  const displayName = device.hostname ?? '未命名设备';
 
   const refreshDeviceAgents = () => {
     return deviceEvents().agentsList(device.id).then((res) => {

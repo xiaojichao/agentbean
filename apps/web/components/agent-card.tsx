@@ -41,11 +41,6 @@ export function AgentCard({ agent }: { agent: AgentSnapshot }) {
                   {CATEGORY_LABEL[agent.category]}
                 </span>
               )}
-              {agent.networkId && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-neutral-100 text-neutral-500 border border-neutral-200">
-                  {agent.networkId}
-                </span>
-              )}
             </div>
             <div className="text-xs text-neutral-500">{agent.role}</div>
           </div>

@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback, type ReactNode, type RefObject } from 'react';
+import { useEffect, useState, useRef, useCallback, type MouseEvent, type ReactNode, type RefObject } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, MoreHorizontal, Copy, Trash2, Circle, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download } from 'lucide-react';
+import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2 } from 'lucide-react';
 import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage } from '@/lib/schema';
@@ -11,6 +11,8 @@ import { NewChannelDialog } from '@/components/new-channel-dialog';
 type ChatTab = 'chat' | 'tasks' | 'files';
 type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
 type TaskViewMode = 'board' | 'list';
+type SidebarSortMode = 'manual' | 'recent' | 'az';
+type ProfileTarget = { kind: 'human' | 'agent'; id: string };
 
 interface TaskItem {
   id: string;
@@ -32,6 +34,21 @@ interface ConversationFile {
   createdAt: number;
   senderKind: ChatMessage['senderKind'];
   senderId: string | null;
+}
+
+interface ChannelMemberEntry {
+  id: string;
+  name: string;
+  kind: 'human' | 'agent';
+  role?: string;
+  status?: AgentStatus;
+}
+
+interface HumanProfile {
+  id: string;
+  username: string;
+  role?: string;
+  email?: string | null;
 }
 
 const TASK_COLUMNS: { id: TaskStatus; label: string; empty: string; badge: string; collapsedByDefault?: boolean }[] = [
@@ -63,23 +80,31 @@ export default function ChatPage() {
   const dmParam = searchParams.get('dm');
   const chatTabParam = searchParams.get('chatTab');
   const threadParam = searchParams.get('thread');
+  const profileParam = searchParams.get('profile');
   const routeChannelId = typeof params.channelId === 'string' ? params.channelId : null;
   const routeDmId = typeof params.dmId === 'string' ? params.dmId : null;
   const [input, setInput] = useState('');
-  const [search, setSearch] = useState('');
   const [tab, setTab] = useState<ChatTab>('chat');
   const [asTask, setAsTask] = useState(false);
   const [showNewChannel, setShowNewChannel] = useState(false);
   const [showEditChannel, setShowEditChannel] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
+  const [showStopAgents, setShowStopAgents] = useState(false);
+  const [showLeaveChannel, setShowLeaveChannel] = useState(false);
+  const [channelMembers, setChannelMembers] = useState<ChannelMemberEntry[]>([]);
+  const [humanProfiles, setHumanProfiles] = useState<HumanProfile[]>([]);
+  const [channelActionError, setChannelActionError] = useState<string | null>(null);
+  const [channelActionPending, setChannelActionPending] = useState(false);
   const [sidebarView, setSidebarView] = useState<'channels' | 'search' | 'inbox' | 'saved'>('channels');
   const [channelsExpanded, setChannelsExpanded] = useState(true);
   const [dmsExpanded, setDmsExpanded] = useState(true);
+  const [channelSort, setChannelSort] = useState<SidebarSortMode>('manual');
+  const [dmSort, setDmSort] = useState<SidebarSortMode>('manual');
+  const [openSortMenu, setOpenSortMenu] = useState<'channels' | 'dms' | null>(null);
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const [savedLoaded, setSavedLoaded] = useState(false);
   const [reactionIds, setReactionIds] = useState<Set<string>>(new Set());
   const [reactionsLoaded, setReactionsLoaded] = useState(false);
-  const [_searchResults, setSearchResults] = useState<ChatMessage[] | null>(null);
   const [showMention, setShowMention] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionMembers, setMentionMembers] = useState<{ id: string; name: string; kind: 'human' | 'agent' }[]>([]);
@@ -89,6 +114,7 @@ export default function ChatPage() {
   const [uploading, setUploading] = useState(false);
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
   const [threadInput, setThreadInput] = useState('');
+  const [showBackToBottom, setShowBackToBottom] = useState(false);
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
   const [taskView, setTaskView] = useState<TaskViewMode>('board');
@@ -99,8 +125,9 @@ export default function ChatPage() {
   const [showCreateTask, setShowCreateTask] = useState(false);
   const [dragTaskId, setDragTaskId] = useState<string | null>(null);
   const [collapsedTaskColumns, setCollapsedTaskColumns] = useState<Set<TaskStatus>>(() => new Set(TASK_COLUMNS.filter((col) => col.collapsedByDefault).map((col) => col.id)));
+  const [chatTaskMenuFor, setChatTaskMenuFor] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const messageListRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -210,13 +237,55 @@ export default function ChatPage() {
       const members: { id: string; name: string; kind: 'human' | 'agent' }[] = [];
       if (res.humans) {
         for (const h of res.humans) members.push({ id: h.userId, name: h.username, kind: 'human' });
+        setHumanProfiles(res.humans.map((human) => ({
+          id: human.userId,
+          username: human.username,
+          role: human.role,
+          email: human.userId === currentUser?.id ? currentUser.email : null,
+        })));
       }
       if (res.agents) {
         for (const a of res.agents) members.push({ id: a.id, name: a.name, kind: 'agent' });
       }
       setMentionMembers(members);
     });
-  }, [conn]);
+  }, [conn, currentUser]);
+
+  const loadChannelMembers = useCallback(async (channelId: string | null) => {
+    if (!channelId || conn !== 'open') {
+      setChannelMembers([]);
+      return;
+    }
+    const dm = dmsRef.current.find((item) => item.id === channelId);
+    if (dm) {
+      const dmAgent = agents[dm.dmTargetId];
+      setChannelMembers([
+        ...(currentUser ? [{ id: currentUser.id, name: `${currentUser.username}（你）`, kind: 'human' as const, role: currentUser.role }] : []),
+        { id: dm.dmTargetId, name: dmAgent?.name ?? dm.name, kind: 'agent' as const, role: dmAgent?.role, status: dmAgent?.status },
+      ]);
+      return;
+    }
+    const res = await channelEvents().members(channelId);
+    if (!res.ok) return;
+    const humans = (res.humans ?? []).map((human) => ({
+      id: human.userId,
+      name: currentUser?.id === human.userId ? `${human.username}（你）` : human.username,
+      kind: 'human' as const,
+      role: human.role,
+    }));
+    const agentMembers = (res.agents ?? []).map((agent) => ({
+      id: agent.id,
+      name: agent.name,
+      kind: 'agent' as const,
+      role: agent.role,
+      status: agents[agent.id]?.status ?? agent.status,
+    }));
+    setChannelMembers([...agentMembers, ...humans]);
+  }, [agents, conn, currentUser]);
+
+  useEffect(() => {
+    loadChannelMembers(activeChannel);
+  }, [activeChannel, loadChannelMembers]);
 
   const activeChannelObj = channels.find((c) => c.id === activeChannel);
   const activeName = activeChannelObj?.name ?? '';
@@ -225,10 +294,24 @@ export default function ChatPage() {
   const activeDmAgent = activeDm ? agents[activeDm.dmTargetId] : undefined;
   const activeDmName = activeDmAgent?.name ?? activeDm?.name ?? '';
   const activeDmSubtitle = activeDmAgent?.description?.trim() || activeDmAgent?.role || '智能体私聊';
-  const taskParticipants = [
-    ...(currentUser ? [{ id: currentUser.id, name: `${currentUser.username}（你）`, kind: 'human' as const }] : []),
-    ...Object.values(agents).map((agent) => ({ id: agent.id, name: agent.name, kind: 'agent' as const })),
-  ];
+  const taskParticipants = channelMembers.length > 0
+    ? channelMembers.map((member) => ({ id: member.id, name: member.name, kind: member.kind }))
+    : [
+        ...(currentUser ? [{ id: currentUser.id, name: `${currentUser.username}（你）`, kind: 'human' as const }] : []),
+        ...Object.values(agents).map((agent) => ({ id: agent.id, name: agent.name, kind: 'agent' as const })),
+      ];
+  const visibleMentionMembers = isDm
+    ? mentionMembers
+    : (channelMembers.length > 0 ? channelMembers.map((member) => ({ id: member.id, name: member.name.replace(/（你）$/, ''), kind: member.kind })) : mentionMembers);
+  const channelMemberCount = isDm ? 2 : channelMembers.length;
+  const orderedChannels = sortChannels(channels, channelSort, messagesByChannel);
+  const orderedDms = sortDms(dms, dmSort, messagesByChannel, agents);
+  const profileTarget = parseProfileParam(profileParam);
+  const profileHuman = profileTarget?.kind === 'human'
+    ? resolveHumanProfile(profileTarget.id, humanProfiles, currentUser, channelMembers, mentionMembers)
+    : null;
+  const profileAgent = profileTarget?.kind === 'agent' ? agents[profileTarget.id] : null;
+  const taskNumbers = buildTaskNumberMap(tasks);
 
   const switchTab = (nextTab: ChatTab) => {
     setTab(nextTab);
@@ -237,6 +320,68 @@ export default function ChatPage() {
     else params.set('chatTab', nextTab);
     const query = params.toString();
     router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
+  };
+
+  const handleStopAgents = async () => {
+    if (!activeChannel) return;
+    setChannelActionPending(true);
+    setChannelActionError(null);
+    const res = await channelEvents().stopAgents(activeChannel);
+    setChannelActionPending(false);
+    if (!res.ok) {
+      setChannelActionError(res.error ?? '停止失败');
+      return;
+    }
+    setShowStopAgents(false);
+  };
+
+  const handleLeaveChannel = async () => {
+    if (!activeChannel) return;
+    setChannelActionPending(true);
+    setChannelActionError(null);
+    const leavingId = activeChannel;
+    const res = await channelEvents().leave(leavingId);
+    setChannelActionPending(false);
+    if (!res.ok) {
+      setChannelActionError(res.error ?? '离开失败');
+      return;
+    }
+    setShowLeaveChannel(false);
+    const fallback = channels.find((channel) => channel.id !== leavingId);
+    if (fallback) {
+      setActiveChannel(fallback.id);
+      router.push(`/${np}/channel/${fallback.id}`);
+    } else {
+      setActiveChannel(null);
+      router.push(`/${np}/chat`);
+    }
+  };
+
+  const handleArchiveChannel = async (channelId: string) => {
+    const res = await channelEvents().archive(channelId);
+    if (!res.ok) return res;
+    const fallback = channels.find((channel) => channel.id !== channelId);
+    if (fallback) router.push(`/${np}/channel/${fallback.id}`);
+    else router.push(`/${np}/chat`);
+    return res;
+  };
+
+  const handleDeleteChannel = async (channelId: string) => {
+    const res = await channelEvents().delete(channelId);
+    if (!res.ok) return res;
+    const fallback = channels.find((channel) => channel.id !== channelId);
+    if (fallback) router.push(`/${np}/channel/${fallback.id}`);
+    else router.push(`/${np}/chat`);
+    return res;
+  };
+
+  const handleAddChannelMember = async (member: ChannelMemberEntry) => {
+    if (!activeChannel) return { ok: false, error: 'NO_CHANNEL' };
+    const res = member.kind === 'agent'
+      ? await channelEvents().addAgent(activeChannel, member.id)
+      : await channelEvents().addMember(activeChannel, member.id);
+    if (res.ok) await loadChannelMembers(activeChannel);
+    return res;
   };
 
   const setThreadUrl = useCallback((messageId: string | null) => {
@@ -259,6 +404,20 @@ export default function ChatPage() {
     setThreadUrl(null);
   }, [setThreadUrl]);
 
+  const openProfile = useCallback((target: ProfileTarget) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('profile', `${target.kind}:${target.id}`);
+    const query = params.toString();
+    router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
+  }, [router, searchParams]);
+
+  const closeProfile = useCallback(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('profile');
+    const query = params.toString();
+    router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
+  }, [router, searchParams]);
+
   const loadTasks = useCallback(async () => {
     if (!activeChannel || conn !== 'open') return;
     setTasksLoading(true);
@@ -271,9 +430,24 @@ export default function ChatPage() {
   }, [activeChannel, conn]);
 
   useEffect(() => {
-    if (tab !== 'tasks') return;
     loadTasks();
-  }, [tab, loadTasks]);
+  }, [loadTasks]);
+
+  useEffect(() => {
+    if (!activeChannel || conn !== 'open') return;
+    const socket = getWebSocket();
+    const onTaskUpdated = (task: TaskItem) => {
+      if (task.channelId !== activeChannel) return;
+      setTasks((prev) => {
+        if (prev.some((item) => item.id === task.id)) {
+          return prev.map((item) => item.id === task.id ? task : item);
+        }
+        return [...prev, task];
+      });
+    };
+    socket.on('task:updated', onTaskUpdated);
+    return () => { socket.off('task:updated', onTaskUpdated); };
+  }, [activeChannel, conn]);
 
   useEffect(() => {
     if (!activeChannel) return;
@@ -307,14 +481,14 @@ export default function ChatPage() {
 
   // In DM channels, only show the DM target in mention dropdown
   const dmTargetMember = isDm && activeDm
-    ? mentionMembers.find((m) => m.id === activeDm.dmTargetId)
+    ? visibleMentionMembers.find((m) => m.id === activeDm.dmTargetId)
     : null;
 
   const filteredMentionMembers = isDm
     ? (dmTargetMember ? [dmTargetMember] : [])
     : (mentionQuery
-        ? mentionMembers.filter((m) => m.name.toLowerCase().includes(mentionQuery))
-        : mentionMembers);
+        ? visibleMentionMembers.filter((m) => m.name.toLowerCase().includes(mentionQuery))
+        : visibleMentionMembers);
 
   const selectMention = (member: { id: string; name: string; kind: 'human' | 'agent' }) => {
     const cursor = textareaRef.current?.selectionStart ?? input.length;
@@ -404,7 +578,7 @@ export default function ChatPage() {
     const createTask = asTask;
     getWebSocket().emit('message:send', { channelId, body: body || '附件', asTask, artifactIds }, (res?: { ok?: boolean; error?: string }) => {
       if (res?.ok) {
-        if (createTask && tab === 'tasks') loadTasks();
+        if (createTask) setTimeout(() => loadTasks(), 150);
         return;
       }
       appendMessage({
@@ -444,9 +618,10 @@ export default function ChatPage() {
   };
 
   const messages = activeChannel ? (messagesByChannel[activeChannel] ?? []) : [];
-  const threadRoot = threadRootId ? messages.find((msg) => msg.id === threadRootId) ?? null : null;
-  const rootMessages = messages.filter((msg) => !parentMessageId(msg));
-  const threadReplies = threadRootId ? messages.filter((msg) => parentMessageId(msg) === threadRootId) : [];
+  const visibleMessages = messages.filter((msg) => !isTaskSystemMessage(msg));
+  const threadRoot = threadRootId ? visibleMessages.find((msg) => msg.id === threadRootId) ?? null : null;
+  const rootMessages = visibleMessages.filter((msg) => !parentMessageId(msg));
+  const threadReplies = threadRootId ? visibleMessages.filter((msg) => parentMessageId(msg) === threadRootId) : [];
   const conversationFiles = messages
     .flatMap((msg) => (msg.artifacts ?? []).map((artifact) => ({
       artifact,
@@ -456,19 +631,6 @@ export default function ChatPage() {
       senderId: msg.senderId,
     } satisfies ConversationFile)))
     .sort((a, b) => b.createdAt - a.createdAt);
-  const filteredChannels = search ? channels.filter((c) => c.name.toLowerCase().includes(search.toLowerCase())) : channels;
-
-  // Debounced message search
-  useEffect(() => {
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    if (!search.trim()) { setSearchResults(null); return; }
-    searchTimerRef.current = setTimeout(async () => {
-      const res = await channelEvents().searchMessages(search.trim(), 20);
-      if (res.ok && res.messages) setSearchResults(res.messages);
-    }, 300);
-    return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
-  }, [search]);
-
   const toggleSave = (msgId: string) => {
     setSavedIds((prev) => {
       const next = new Set(prev);
@@ -483,6 +645,17 @@ export default function ChatPage() {
       if (next.has(msgId)) next.delete(msgId); else next.add(msgId);
       return next;
     });
+  };
+
+  const updateTaskStatus = async (task: TaskItem, status: TaskStatus) => {
+    const maxSort = tasks.filter((item) => item.status === status && item.id !== task.id).reduce((max, item) => Math.max(max, item.sortOrder), 0);
+    const optimistic = { ...task, status, sortOrder: maxSort + 1, updatedAt: Date.now() };
+    setTasks((prev) => prev.map((item) => item.id === task.id ? optimistic : item));
+    setChatTaskMenuFor(null);
+    const res = await taskEvents().update({ id: task.id, status, sortOrder: maxSort + 1 });
+    if (res.ok && res.task) {
+      setTasks((prev) => prev.map((item) => item.id === task.id ? res.task as TaskItem : item));
+    }
   };
 
   const handleReply = (msg: ChatMessage) => {
@@ -525,6 +698,17 @@ export default function ChatPage() {
     }, 100);
   };
 
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    setShowBackToBottom(false);
+  };
+
+  const handleMessageListScroll = () => {
+    const el = messageListRef.current;
+    if (!el) return;
+    setShowBackToBottom(el.scrollHeight - el.scrollTop - el.clientHeight > 160);
+  };
+
   return (
     <div className="flex flex-1 overflow-hidden">
       {/* Left sidebar — channel list */}
@@ -534,7 +718,7 @@ export default function ChatPage() {
 
         {/* Search / Activity / Saved buttons */}
         <div className="px-2 py-2 space-y-0.5">
-          <button onClick={() => { setSidebarView(sidebarView === 'search' ? 'channels' : 'search'); setSearch(''); setSearchResults(null); }} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'search' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
+          <button onClick={() => setSidebarView(sidebarView === 'search' ? 'channels' : 'search')} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'search' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
             <Search size={14} className="text-neutral-400 shrink-0" />
             <span>搜索</span>
             <span className="ml-auto text-[10px] text-neutral-400">⌘K</span>
@@ -561,37 +745,50 @@ export default function ChatPage() {
               <ChevronRight size={10} className={`shrink-0 transition-transform ${channelsExpanded ? 'rotate-90' : ''}`} />
               频道
               <span className="ml-1 rounded-full bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{channels.length}</span>
-              <button onClick={(e) => { e.stopPropagation(); setShowNewChannel(true); }} className="ml-auto text-neutral-400 hover:text-neutral-700"><Plus size={13} /></button>
+              <SidebarSortButton
+                mode={channelSort}
+                open={openSortMenu === 'channels'}
+                onToggle={(e) => { e.stopPropagation(); setOpenSortMenu(openSortMenu === 'channels' ? null : 'channels'); }}
+                onSelect={(mode) => { setChannelSort(mode); setOpenSortMenu(null); }}
+              />
+              <button onClick={(e) => { e.stopPropagation(); setShowNewChannel(true); }} className="text-neutral-400 hover:text-neutral-700"><Plus size={13} /></button>
             </div>
           </div>
           {channelsExpanded && (
             <div className="space-y-0.5">
-              {filteredChannels.map((ch) => (
+              {orderedChannels.map((ch) => (
                 <button key={ch.id} onClick={() => { setActiveChannel(ch.id); setSidebarView('channels'); router.push(`/${np}/channel/${ch.id}`); }} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${activeChannel === ch.id && sidebarView === 'channels' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
                   {ch.visibility === 'private' ? <Lock size={14} className="text-neutral-400 shrink-0" /> : <Hash size={14} className="text-neutral-400 shrink-0" />}
                   <span className="truncate">{ch.name}</span>
                 </button>
               ))}
-              {filteredChannels.length === 0 && <div className="px-2 py-2 text-center text-xs text-neutral-400">暂无频道</div>}
+              {channels.length === 0 && <div className="px-2 py-2 text-center text-xs text-neutral-400">暂无频道</div>}
             </div>
           )}
 
           {/* DMs */}
           <div className="mx-2 my-3 border-t border-neutral-300/50" />
           <div className="mb-1">
-            <button onClick={() => setDmsExpanded((v) => !v)} className="flex w-full items-center gap-1.5 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-500 hover:text-neutral-700">
+            <div onClick={() => setDmsExpanded((v) => !v)} className="flex w-full cursor-pointer items-center gap-1.5 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-500 hover:text-neutral-700">
               <ChevronRight size={10} className={`shrink-0 transition-transform ${dmsExpanded ? 'rotate-90' : ''}`} />
               私聊
               <span className="ml-1 rounded-full bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{dms.length}</span>
-            </button>
+              <SidebarSortButton
+                mode={dmSort}
+                open={openSortMenu === 'dms'}
+                onToggle={(e) => { e.stopPropagation(); setOpenSortMenu(openSortMenu === 'dms' ? null : 'dms'); }}
+                onSelect={(mode) => { setDmSort(mode); setOpenSortMenu(null); }}
+              />
+            </div>
           </div>
           {dmsExpanded && (
             <div className="space-y-0.5">
-              {dms.map((dm) => {
+              {orderedDms.map((dm) => {
                 const dmAgent = agents[dm.dmTargetId];
                 const dmStatus = dmAgent?.status;
                 const dmName = dmAgent?.name ?? dm.name;
-                const dmSubtitle = dmAgent?.description?.trim() || dmAgent?.role || '智能体私聊';
+                const dmLastMessage = lastLoadedMessage(messagesByChannel[dm.id]);
+                const dmSubtitle = dmLastMessage ? displayMessageBody(dmLastMessage) : (dmAgent?.description?.trim() || dmAgent?.role || '智能体私聊');
                 return (
                   <button key={dm.id} onClick={() => { setActiveChannel(dm.id); setSidebarView('channels'); router.push(`/${np}/dm/${dm.id}`); }} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${activeChannel === dm.id && sidebarView === 'channels' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
                     <div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-purple-100 text-[10px] font-semibold text-purple-700">
@@ -642,12 +839,12 @@ export default function ChatPage() {
             <div className="flex min-w-0 flex-1 items-center gap-3">
               {isDm ? (
                 <>
-                  <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-purple-100 text-xs font-semibold text-purple-700">
+                  <button onClick={() => activeDm && openProfile({ kind: 'agent', id: activeDm.dmTargetId })} className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-purple-100 text-xs font-semibold text-purple-700 hover:ring-2 hover:ring-neutral-900" title="查看智能体资料">
                     {activeDmName[0]?.toUpperCase() ?? 'A'}
                     <span className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-white ${statusDotClass(activeDmAgent?.status)}`} />
-                  </div>
+                  </button>
                   <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-neutral-900">{activeDmName}</div>
+                    <button onClick={() => activeDm && openProfile({ kind: 'agent', id: activeDm.dmTargetId })} className="block truncate text-left text-sm font-semibold text-neutral-900 hover:underline">{activeDmName}</button>
                     <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-neutral-400">
                       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusDotClass(activeDmAgent?.status)}`} />
                       <span className="shrink-0">{statusLabel(activeDmAgent?.status)}</span>
@@ -665,46 +862,20 @@ export default function ChatPage() {
             </div>
             {!isDm && (
             <div className="flex shrink-0 items-center gap-2">
-              <div className="relative">
-                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400" />
-                <input
-                  placeholder="搜索消息..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="h-8 w-48 rounded-md border border-neutral-200 bg-neutral-50 pl-8 pr-3 text-sm outline-none focus:border-neutral-400 placeholder:text-neutral-400"
-                />
-              </div>
-              <button className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="停止所有 Agent">
+              <button onClick={() => { setChannelActionError(null); setShowStopAgents(true); }} className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="停止所有 Agent">
                 <SquareDot size={14} />
               </button>
               <button onClick={() => setShowEditChannel(true)} className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="编辑频道">
                 <Pencil size={14} />
               </button>
-              <div className="relative">
-                <button onClick={() => setShowMembers((v) => !v)} className="flex h-7 items-center gap-1 rounded-md px-2 text-xs text-neutral-500 hover:bg-neutral-100" title="查看参与者">
-                  <Users size={14} />
-                  <span>{Object.keys(agents).length + (currentUser ? 1 : 0)}</span>
-                </button>
-                {showMembers && (
-                  <div className="absolute right-0 top-9 z-20 w-56 rounded-lg border border-neutral-200 bg-white py-2 shadow-lg">
-                    <div className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">成员</div>
-                    {currentUser && (
-                      <div className="flex items-center gap-2 px-3 py-1.5 text-sm">
-                        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-semibold text-emerald-700">{currentUser.username[0]?.toUpperCase()}</div>
-                        <span className="truncate">{currentUser.username}</span>
-                        <span className="ml-auto rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700">你</span>
-                      </div>
-                    )}
-                    {Object.values(agents).map((a) => (
-                      <div key={a.id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
-                        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-purple-100 text-[10px] font-semibold text-purple-700">{a.name[0]?.toUpperCase()}</div>
-                        <span className="truncate">{a.name}</span>
-                        <Circle size={6} className={`ml-auto shrink-0 fill-current ${a.status === 'online' ? 'text-emerald-500' : a.status === 'busy' ? 'text-amber-500' : 'text-neutral-300'}`} />
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <button onClick={() => { setChannelActionError(null); setShowLeaveChannel(true); }} className="flex h-7 items-center gap-1 rounded-md px-2 text-xs text-neutral-500 hover:bg-neutral-100" title="离开频道">
+                <ExternalLink size={13} />
+                <span>离开</span>
+              </button>
+              <button onClick={() => { loadChannelMembers(activeChannel); setShowMembers(true); }} className="flex h-7 items-center gap-1 rounded-md px-2 text-xs text-neutral-500 hover:bg-neutral-100" title="查看参与者">
+                <Users size={14} />
+                <span>{channelMemberCount}</span>
+              </button>
             </div>
             )}
           </div>
@@ -721,33 +892,52 @@ export default function ChatPage() {
 
         {tab === 'chat' ? (
           <>
-            <div className="flex-1 overflow-y-auto px-4 py-3">
-              {!activeChannel && <div className="py-12 text-center text-sm text-neutral-400">选择一个频道或私聊开始聊天</div>}
-              {activeChannel && rootMessages.length === 0 && (
-                <div className="py-8 text-center text-xs text-neutral-400">
-                  <div className="mb-1">消息的开头</div>
-                  <div className="text-neutral-300">发送第一条消息开始对话</div>
+            <div className="relative min-h-0 flex-1">
+      <div ref={messageListRef} onScroll={handleMessageListScroll} className="h-full overflow-y-auto px-4 py-3">
+                {!activeChannel && <div className="py-12 text-center text-sm text-neutral-400">选择一个频道或私聊开始聊天</div>}
+                {activeChannel && rootMessages.length === 0 && (
+                  <div className="py-8 text-center text-xs text-neutral-400">
+                    <div className="mb-1">消息的开头</div>
+                    <div className="text-neutral-300">发送第一条消息开始对话</div>
+                  </div>
+                )}
+                {activeChannel && rootMessages.length > 0 && (
+                  <div className="mb-4 text-center text-xs text-neutral-300">消息的开头</div>
+                )}
+                <div className="space-y-4">
+                  {rootMessages.map((msg) => {
+                    const taskId = metaTaskId(msg);
+                    const task = taskId ? tasks.find((item) => item.id === taskId) ?? null : null;
+                    return (
+                      <ChatBubble
+                        key={msg.id}
+                        msg={msg}
+                        task={task}
+                        taskNumber={task ? taskNumbers.get(task.id) : undefined}
+                        taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
+                        taskMenuOpen={task ? chatTaskMenuFor === task.id : false}
+                        saved={savedIds.has(msg.id)}
+                        reacted={reactionIds.has(msg.id)}
+                        onReply={() => handleReply(msg)}
+                        onOpenThread={() => openThread(msg.id)}
+                        onOpenProfile={openProfile}
+                        onToggleReaction={() => toggleReaction(msg.id)}
+                        onToggleSave={() => toggleSave(msg.id)}
+                        onTaskMenu={(open) => setChatTaskMenuFor(open && task ? task.id : null)}
+                        onTaskStatus={(status) => { if (task) updateTaskStatus(task, status); }}
+                        replyCount={messages.filter((item) => parentMessageId(item) === msg.id).length}
+                      />
+                    );
+                  })}
                 </div>
-              )}
-              {activeChannel && rootMessages.length > 0 && (
-                <div className="mb-4 text-center text-xs text-neutral-300">消息的开头</div>
-              )}
-              <div className="space-y-4">
-                {rootMessages.map((msg) => (
-                  <ChatBubble
-                    key={msg.id}
-                    msg={msg}
-                    saved={savedIds.has(msg.id)}
-                    reacted={reactionIds.has(msg.id)}
-                    onReply={() => handleReply(msg)}
-                    onOpenThread={() => openThread(msg.id)}
-                    onToggleReaction={() => toggleReaction(msg.id)}
-                    onToggleSave={() => toggleSave(msg.id)}
-                    replyCount={messages.filter((item) => parentMessageId(item) === msg.id).length}
-                  />
-                ))}
+                <div ref={messagesEndRef} />
               </div>
-              <div ref={messagesEndRef} />
+              {showBackToBottom && (
+                <button onClick={scrollToBottom} className="absolute bottom-3 left-1/2 inline-flex -translate-x-1/2 items-center gap-1 rounded-md border-2 border-neutral-900 bg-white px-3 py-1.5 text-xs font-semibold text-neutral-700 shadow-sm hover:bg-amber-50">
+                  <ChevronDown size={13} />
+                  回到底部
+                </button>
+              )}
             </div>
 
             {activeChannel && (
@@ -789,6 +979,7 @@ export default function ChatPage() {
           activeChannel ? (
             <ConversationTasks
               tasks={tasks}
+              taskNumbers={taskNumbers}
               loading={tasksLoading}
               view={taskView}
               creatorFilter={taskCreatorFilter}
@@ -836,7 +1027,19 @@ export default function ChatPage() {
       )}
     </div>
 
-      {threadRoot && activeChannel && (
+      {profileTarget && (
+        <ProfilePanel
+          target={profileTarget}
+          human={profileHuman}
+          agent={profileAgent}
+          currentUserId={currentUser?.id}
+          agents={agents}
+          onClose={closeProfile}
+          onOpenAgent={(agentId) => openProfile({ kind: 'agent', id: agentId })}
+        />
+      )}
+
+      {!profileTarget && threadRoot && activeChannel && (
         <ThreadPanel
           root={threadRoot}
           replies={threadReplies}
@@ -850,13 +1053,21 @@ export default function ChatPage() {
           fileInputRef={threadFileInputRef}
           savedIds={savedIds}
           reactionIds={reactionIds}
+          tasks={tasks}
+          taskNumbers={taskNumbers}
+          activeDmAgent={activeDmAgent}
+          channelMembers={channelMembers}
+          chatTaskMenuFor={chatTaskMenuFor}
           onInput={setThreadInput}
           onSend={sendThreadMessage}
           onUpload={(files) => uploadFiles(files, 'thread')}
           onRemoveAttachment={(id) => setThreadAttachments((prev) => prev.filter((item) => item.id !== id))}
           onReply={handleThreadReply}
+          onOpenProfile={openProfile}
           onToggleSave={toggleSave}
           onToggleReaction={toggleReaction}
+          onTaskMenu={(taskId) => setChatTaskMenuFor(taskId)}
+          onTaskStatus={updateTaskStatus}
           onViewInChannel={viewThreadRootInChannel}
           onClose={closeThread}
         />
@@ -868,45 +1079,185 @@ export default function ChatPage() {
           channel={activeChannelObj}
           onClose={() => setShowEditChannel(false)}
           onSaved={() => setShowEditChannel(false)}
+          onArchive={handleArchiveChannel}
+          onDelete={handleDeleteChannel}
+        />
+      )}
+      {showStopAgents && activeChannelObj && (
+        <ConfirmChannelActionDialog
+          title="停止所有 Agent"
+          message={`这会立即停止 #${activeChannelObj.name} 中正在运行的 Agent。你之后仍然可以继续发送新的指令。`}
+          confirmLabel="停止所有 Agent"
+          confirmTone="danger"
+          pending={channelActionPending}
+          error={channelActionError}
+          onClose={() => { setShowStopAgents(false); setChannelActionError(null); }}
+          onConfirm={handleStopAgents}
+        />
+      )}
+      {showLeaveChannel && activeChannelObj && (
+        <ConfirmChannelActionDialog
+          title="离开频道"
+          message={`确定要离开 #${activeChannelObj.name} 吗？离开后你不会再看到它，也不能继续发送消息，除非之后重新加入。`}
+          confirmLabel="离开频道"
+          confirmTone="warning"
+          pending={channelActionPending}
+          error={channelActionError}
+          onClose={() => { setShowLeaveChannel(false); setChannelActionError(null); }}
+          onConfirm={handleLeaveChannel}
+        />
+      )}
+      {showMembers && activeChannelObj && (
+        <ChannelMembersDialog
+          channelName={activeChannelObj.name}
+          members={channelMembers}
+          candidates={mentionMembers.map((member) => ({ id: member.id, name: member.name, kind: member.kind }))}
+          onAddMember={handleAddChannelMember}
+          onClose={() => setShowMembers(false)}
         />
       )}
     </div>
   );
 }
 
-function ChannelEditDialog({ channel, onClose, onSaved }: { channel: { id: string; name: string; visibility?: string }; onClose: () => void; onSaved: () => void }) {
+function ChannelEditDialog({
+  channel,
+  onClose,
+  onSaved,
+  onArchive,
+  onDelete,
+}: {
+  channel: { id: string; name: string; description?: string | null; visibility?: string };
+  onClose: () => void;
+  onSaved: () => void;
+  onArchive: (channelId: string) => Promise<{ ok: boolean; error?: string }>;
+  onDelete: (channelId: string) => Promise<{ ok: boolean; error?: string }>;
+}) {
   const [name, setName] = useState(channel.name);
+  const [description, setDescription] = useState(channel.description ?? '');
+  const [visibility, setVisibility] = useState<'public' | 'private'>(channel.visibility === 'private' ? 'private' : 'public');
   const [saving, setSaving] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<'archive' | 'delete' | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSave = async () => {
-    if (!name.trim() || name.trim() === channel.name) return onSaved();
+    if (!name.trim()) return;
     setSaving(true);
-    await channelEvents().update({ channelId: channel.id, name: name.trim() });
+    setError(null);
+    const res = await channelEvents().update({
+      channelId: channel.id,
+      name: name.trim(),
+      description: description.trim() || null,
+      visibility,
+    });
     setSaving(false);
+    if (!res.ok) {
+      setError(res.error ?? '保存失败');
+      return;
+    }
+    onSaved();
+  };
+
+  const runDestructiveAction = async () => {
+    if (!confirmAction) return;
+    setSaving(true);
+    setError(null);
+    const res = confirmAction === 'archive' ? await onArchive(channel.id) : await onDelete(channel.id);
+    setSaving(false);
+    if (!res.ok) {
+      setError(res.error ?? '操作失败');
+      return;
+    }
     onSaved();
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-      <div className="w-96 rounded-lg bg-white p-5 shadow-xl">
+      <div className="w-[420px] rounded-lg border border-neutral-200 bg-white p-5 shadow-xl">
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-sm font-semibold">编辑频道</h3>
           <button onClick={onClose} className="text-neutral-400 hover:text-neutral-600"><X size={16} /></button>
         </div>
-        <div className="space-y-3">
+        <div className="space-y-4">
           <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-500">频道名称</label>
+            <label className="mb-1 block text-xs font-medium text-neutral-500">名称 *</label>
             <input value={name} onChange={(e) => setName(e.target.value)} autoFocus className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400" />
           </div>
-          <div className="flex items-center gap-2 text-xs text-neutral-400">
-            {channel.visibility === 'private' ? <Lock size={12} /> : <Hash size={12} />}
-            <span>{channel.visibility === 'private' ? '私有频道' : '公开频道'}</span>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-500">描述（可选）</label>
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} placeholder="这个频道用于什么？" className="w-full resize-none rounded-md border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400" />
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setVisibility('public')} className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs ${visibility === 'public' ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-neutral-200 text-neutral-500 hover:bg-neutral-50'}`}>
+              <Hash size={12} /> 公开
+            </button>
+            <button onClick={() => setVisibility('private')} className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs ${visibility === 'private' ? 'border-purple-300 bg-purple-50 text-purple-700' : 'border-neutral-200 text-neutral-500 hover:bg-neutral-50'}`}>
+              <Lock size={12} /> 私有
+            </button>
           </div>
         </div>
-        <div className="mt-4 flex justify-end gap-2">
+        {error && <div className="mt-3 rounded-md bg-rose-50 px-3 py-2 text-xs text-rose-600">{error}</div>}
+        <div className="mt-5 flex items-center justify-between border-t border-neutral-100 pt-4">
+          <div className="flex gap-2">
+            <button onClick={() => setConfirmAction('archive')} className="rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50">归档频道</button>
+            <button onClick={() => setConfirmAction('delete')} className="rounded-md border border-rose-200 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50">删除频道</button>
+          </div>
+          <div className="flex gap-2">
           <button onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-neutral-600 hover:bg-neutral-100">取消</button>
           <button onClick={handleSave} disabled={saving || !name.trim()} className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-50">
             {saving ? '保存中...' : '保存'}
+          </button>
+          </div>
+        </div>
+        {confirmAction && (
+          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <div className="text-xs font-medium text-amber-900">{confirmAction === 'archive' ? '确认归档这个频道？' : '确认永久删除这个频道？'}</div>
+            <div className="mt-2 flex gap-2">
+              <button onClick={() => setConfirmAction(null)} className="rounded-md border border-amber-200 bg-white px-2.5 py-1 text-xs text-amber-700">取消</button>
+              <button onClick={runDestructiveAction} disabled={saving} className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50">确认</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ConfirmChannelActionDialog({
+  title,
+  message,
+  confirmLabel,
+  confirmTone,
+  pending,
+  error,
+  onClose,
+  onConfirm,
+}: {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  confirmTone: 'danger' | 'warning';
+  pending: boolean;
+  error: string | null;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const confirmClass = confirmTone === 'danger'
+    ? 'bg-rose-600 hover:bg-rose-700'
+    : 'bg-orange-500 hover:bg-orange-600';
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35">
+      <div className="w-[400px] rounded-lg border border-neutral-200 bg-white p-5 shadow-xl">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-sm font-semibold">{title}</h3>
+          <button onClick={onClose} className="text-neutral-400 hover:text-neutral-600"><X size={16} /></button>
+        </div>
+        <div className="rounded-md border border-orange-100 bg-orange-50 px-3 py-3 text-sm leading-6 text-neutral-700">{message}</div>
+        {error && <div className="mt-3 rounded-md bg-rose-50 px-3 py-2 text-xs text-rose-600">{error}</div>}
+        <div className="mt-5 flex justify-end gap-2">
+          <button onClick={onClose} disabled={pending} className="rounded-md border border-neutral-200 px-3 py-1.5 text-sm text-neutral-600 hover:bg-neutral-50 disabled:opacity-50">取消</button>
+          <button onClick={onConfirm} disabled={pending} className={`rounded-md px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50 ${confirmClass}`}>
+            {pending ? '处理中...' : confirmLabel}
           </button>
         </div>
       </div>
@@ -914,8 +1265,101 @@ function ChannelEditDialog({ channel, onClose, onSaved }: { channel: { id: strin
   );
 }
 
+function ChannelMembersDialog({
+  channelName,
+  members,
+  candidates,
+  onAddMember,
+  onClose,
+}: {
+  channelName: string;
+  members: ChannelMemberEntry[];
+  candidates: ChannelMemberEntry[];
+  onAddMember: (member: ChannelMemberEntry) => Promise<{ ok: boolean; error?: string }>;
+  onClose: () => void;
+}) {
+  const agentMembers = members.filter((member) => member.kind === 'agent');
+  const humanMembers = members.filter((member) => member.kind === 'human');
+  const [showAdd, setShowAdd] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const memberKeys = new Set(members.map((member) => `${member.kind}:${member.id}`));
+  const addable = candidates.filter((candidate) => !memberKeys.has(`${candidate.kind}:${candidate.id}`));
+  const add = async (member: ChannelMemberEntry) => {
+    setAdding(true);
+    setError(null);
+    const res = await onAddMember(member);
+    setAdding(false);
+    if (!res.ok) {
+      setError(res.error ?? '添加失败');
+      return;
+    }
+    setShowAdd(false);
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35">
+      <div className="w-[380px] rounded-lg border border-neutral-200 bg-white p-5 shadow-xl">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-sm font-semibold">成员（{members.length}）</h3>
+          <button onClick={onClose} className="text-neutral-400 hover:text-neutral-600"><X size={16} /></button>
+        </div>
+        <div className="rounded-lg border border-neutral-200 p-3">
+          <MemberGroup title="智能体" members={agentMembers} />
+          <MemberGroup title="人类" members={humanMembers} />
+          {members.length === 0 && <div className="py-6 text-center text-sm text-neutral-400">#{channelName} 暂无成员</div>}
+        </div>
+        {error && <div className="mt-3 rounded-md bg-rose-50 px-3 py-2 text-xs text-rose-600">{error}</div>}
+        {showAdd && (
+          <div className="mt-3 max-h-44 overflow-y-auto rounded-lg border border-neutral-200 p-2">
+            {addable.length === 0 ? (
+              <div className="py-4 text-center text-xs text-neutral-400">没有可添加的成员</div>
+            ) : addable.map((member) => (
+              <button key={`${member.kind}:${member.id}`} onClick={() => add(member)} disabled={adding} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-50">
+                <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[10px] font-semibold ${member.kind === 'agent' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'}`}>{member.kind === 'agent' ? 'A' : '人'}</span>
+                <span className="truncate">{member.name}</span>
+                <span className="ml-auto text-[10px] text-neutral-400">{member.kind === 'agent' ? '智能体' : '人类'}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <button onClick={() => setShowAdd((v) => !v)} disabled={adding} className="mt-3 flex w-full items-center justify-center gap-2 rounded-md bg-pink-500 px-3 py-2 text-sm font-medium text-white hover:bg-pink-600 disabled:opacity-50">
+          <Plus size={14} /> 添加成员
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MemberGroup({ title, members }: { title: string; members: ChannelMemberEntry[] }) {
+  if (members.length === 0) return null;
+  return (
+    <div className="mb-3 last:mb-0">
+      <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">{title}</div>
+      <div className="space-y-2">
+        {members.map((member) => (
+          <div key={`${member.kind}:${member.id}`} className="flex items-center gap-2">
+            <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[11px] font-semibold ${member.kind === 'agent' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'}`}>
+              {member.kind === 'agent' ? 'A' : '人'}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-medium text-neutral-800">{member.name}</div>
+              {member.kind === 'agent' && (
+                <div className="flex items-center gap-1 text-[11px] text-neutral-400">
+                  <span className={`h-1.5 w-1.5 rounded-full ${statusDotClass(member.status)}`} />
+                  <span>{statusLabel(member.status)}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ConversationTasks({
   tasks,
+  taskNumbers,
   loading,
   view,
   creatorFilter,
@@ -945,6 +1389,7 @@ function ConversationTasks({
   onTaskUpdate,
 }: {
   tasks: TaskItem[];
+  taskNumbers: Map<string, number>;
   loading: boolean;
   view: TaskViewMode;
   creatorFilter: string;
@@ -1168,7 +1613,7 @@ function ConversationTasks({
             <tbody>
               {filteredTasks.map((task) => (
                 <tr key={task.id} className="border-b border-neutral-100">
-                  <td className="py-2 pr-4 text-xs text-neutral-400">#{task.id.slice(-6)}</td>
+                  <td className="py-2 pr-4 text-xs text-neutral-400">#{taskNumbers.get(task.id) ?? '任务'}</td>
                   <td className="max-w-lg py-2 pr-4">
                     <div className="font-medium text-neutral-900">{task.title}</div>
                     {task.description && <div className="mt-0.5 truncate text-xs text-neutral-500">{task.description}</div>}
@@ -1232,7 +1677,7 @@ function TaskCard({
     <article draggable onDragStart={onDragStart} onDragEnd={onDragEnd} className="group cursor-grab border-2 border-neutral-900 bg-white p-3 shadow-sm active:cursor-grabbing">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <div className="text-[11px] text-neutral-400">#{task.id.slice(-6)}</div>
+          <div className="text-[11px] text-neutral-400">任务</div>
           <div className="mt-1 whitespace-pre-wrap text-sm font-semibold leading-5 text-neutral-900">{task.title}</div>
         </div>
         <button onClick={onDelete} className="flex h-6 w-6 shrink-0 items-center justify-center text-neutral-300 opacity-0 hover:bg-red-50 hover:text-red-500 group-hover:opacity-100" title="删除任务">
@@ -1336,13 +1781,21 @@ function ThreadPanel({
   fileInputRef,
   savedIds,
   reactionIds,
+  tasks,
+  taskNumbers,
+  activeDmAgent,
+  channelMembers,
+  chatTaskMenuFor,
   onInput,
   onSend,
   onUpload,
   onRemoveAttachment,
   onReply,
+  onOpenProfile,
   onToggleSave,
   onToggleReaction,
+  onTaskMenu,
+  onTaskStatus,
   onViewInChannel,
   onClose,
 }: {
@@ -1358,30 +1811,55 @@ function ThreadPanel({
   fileInputRef: RefObject<HTMLInputElement>;
   savedIds: Set<string>;
   reactionIds: Set<string>;
+  tasks: TaskItem[];
+  taskNumbers: Map<string, number>;
+  activeDmAgent?: AgentSnapshot;
+  channelMembers: ChannelMemberEntry[];
+  chatTaskMenuFor: string | null;
   onInput: (value: string) => void;
   onSend: () => void;
   onUpload: (files: FileList | File[]) => void;
   onRemoveAttachment: (id: string) => void;
   onReply: (msg: ChatMessage) => void;
+  onOpenProfile: (target: ProfileTarget) => void;
   onToggleSave: (msgId: string) => void;
   onToggleReaction: (msgId: string) => void;
+  onTaskMenu: (taskId: string | null) => void;
+  onTaskStatus: (task: TaskItem, status: TaskStatus) => void;
   onViewInChannel: () => void;
   onClose: () => void;
 }) {
-  const subtitle = taskLabel(root) ?? resolveMessageSpeaker(root, currentUsername, agents);
-  const renderThreadBubble = (msg: ChatMessage, replyCount = 0) => (
-    <ChatBubble
-      key={msg.id}
-      msg={msg}
-      saved={savedIds.has(msg.id)}
-      reacted={reactionIds.has(msg.id)}
-      onReply={() => onReply(msg)}
-      onOpenThread={() => {}}
-      onToggleReaction={() => onToggleReaction(msg.id)}
-      onToggleSave={() => onToggleSave(msg.id)}
-      replyCount={replyCount}
-    />
-  );
+  const rootTaskId = metaTaskId(root);
+  const rootTask = rootTaskId ? tasks.find((task) => task.id === rootTaskId) ?? null : null;
+  const subtitle = rootTask
+    ? `#${taskNumbers.get(rootTask.id) ?? '任务'} ${rootTask.title}`
+    : resolveMessageSpeaker(root, currentUsername, agents);
+  const renderThreadBubble = (msg: ChatMessage, replyCount = 0) => {
+    const taskId = metaTaskId(msg);
+    const task = taskId ? tasks.find((item) => item.id === taskId) ?? null : null;
+    return (
+      <ChatBubble
+        key={msg.id}
+        msg={msg}
+        task={task}
+        taskNumber={task ? taskNumbers.get(task.id) : undefined}
+        taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
+        taskMenuOpen={task ? chatTaskMenuFor === task.id : false}
+        saved={savedIds.has(msg.id)}
+        reacted={reactionIds.has(msg.id)}
+        onReply={() => onReply(msg)}
+        onOpenThread={() => {}}
+        onOpenProfile={onOpenProfile}
+        onToggleReaction={() => onToggleReaction(msg.id)}
+        onToggleSave={() => onToggleSave(msg.id)}
+        onTaskMenu={(open) => onTaskMenu(open && task ? task.id : null)}
+        onTaskStatus={(status) => { if (task) onTaskStatus(task, status); }}
+        replyCount={replyCount}
+        showReplyAction={false}
+        showReplyCount={false}
+      />
+    );
+  };
   return (
     <aside className="flex w-96 shrink-0 flex-col border-l border-neutral-200 bg-white">
       <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
@@ -1444,6 +1922,182 @@ function ThreadPanel({
   );
 }
 
+function ProfilePanel({
+  target,
+  human,
+  agent,
+  currentUserId,
+  agents,
+  onClose,
+  onOpenAgent,
+}: {
+  target: ProfileTarget;
+  human: HumanProfile | null;
+  agent: AgentSnapshot | null | undefined;
+  currentUserId?: string;
+  agents: Record<string, AgentSnapshot>;
+  onClose: () => void;
+  onOpenAgent: (agentId: string) => void;
+}) {
+  const title = target.kind === 'agent'
+    ? (agent?.name ?? 'Agent')
+    : (human?.username ?? '成员');
+  const createdAgents = target.kind === 'human'
+    ? Object.values(agents).filter((item) => item.ownerId === target.id)
+    : [];
+
+  return (
+    <aside className="flex w-96 shrink-0 flex-col border-l border-neutral-200 bg-white">
+      <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
+        <div className="flex min-w-0 items-center gap-2">
+          <ProfileAvatar label={title} kind={target.kind} status={agent?.status} />
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-neutral-900">{title}</div>
+            <div className="truncate text-xs text-neutral-400">
+              {target.kind === 'agent' ? statusLabel(agent?.status) : target.id === currentUserId ? '你' : '成员'}
+            </div>
+          </div>
+        </div>
+        <button onClick={onClose} className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="关闭资料">
+          <X size={16} />
+        </button>
+      </div>
+
+      {target.kind === 'agent' ? (
+        <div className="flex-1 overflow-y-auto px-5 py-5">
+          <div className="flex items-center gap-4">
+            <ProfileAvatar label={title} kind="agent" status={agent?.status} large />
+            <div className="min-w-0">
+              <div className="truncate text-lg font-semibold text-neutral-950">{title}</div>
+              <div className="mt-1 inline-flex items-center gap-1.5 rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600">
+                <span className={`h-1.5 w-1.5 rounded-full ${statusDotClass(agent?.status)}`} />
+                {statusLabel(agent?.status)}
+              </div>
+            </div>
+          </div>
+          <ProfileSection title="功能介绍">
+            <p className="text-sm leading-6 text-neutral-600">{agent?.description?.trim() || agent?.role || '暂无介绍'}</p>
+          </ProfileSection>
+          <ProfileSection title="信息">
+            <ProfileInfo label="类型" value={agent?.category === 'agentos-hosted' ? 'AgentOS 托管型 Agent' : '自定义 Agent'} />
+            <ProfileInfo label="Coding Agent 运行时" value={agent?.adapterKind ?? '未知'} />
+            <ProfileInfo label="目录" value={agent?.cwd || '未配置'} />
+            <ProfileInfo label="创建者" value={agent?.ownerName || '未知'} />
+          </ProfileSection>
+          <ProfileSection title="状态">
+            <ProfileInfo label="最近在线" value={agent?.lastSeenAt ? formatDateTime(agent.lastSeenAt) : '未知'} />
+            {agent?.lastError && <ProfileInfo label="最近错误" value={agent.lastError} />}
+          </ProfileSection>
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto px-5 py-5">
+          <div className="flex items-center gap-4">
+            <ProfileAvatar label={title} kind="human" large />
+            <div className="min-w-0">
+              <div className="truncate text-lg font-semibold text-neutral-950">{title}{target.id === currentUserId ? '（你）' : ''}</div>
+              <div className="text-xs text-neutral-400">{human?.role === 'admin' ? '所有者' : human?.role || '成员'}</div>
+            </div>
+          </div>
+          <ProfileSection title="描述">
+            <p className="text-sm italic text-neutral-400">暂无描述</p>
+          </ProfileSection>
+          <ProfileSection title="信息">
+            <ProfileInfo label="角色" value={human?.role === 'admin' ? '所有者' : human?.role || '成员'} />
+            <ProfileInfo label="邮箱" value={human?.email || '未公开'} />
+          </ProfileSection>
+          <ProfileSection title={`创建的 Agent ${createdAgents.length}`}>
+            {createdAgents.length === 0 ? (
+              <p className="text-sm text-neutral-400">暂无创建的 Agent</p>
+            ) : (
+              <div className="space-y-2">
+                {createdAgents.map((item) => (
+                  <button key={item.id} onClick={() => onOpenAgent(item.id)} className="flex w-full items-center gap-3 border border-neutral-300 bg-white px-3 py-2 text-left hover:border-neutral-900 hover:bg-amber-50/40">
+                    <ProfileAvatar label={item.name} kind="agent" status={item.status} />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold text-neutral-900">{item.name}</div>
+                      <div className="truncate text-xs text-neutral-400">{item.adapterKind}</div>
+                    </div>
+                    <span className={`h-2 w-2 rounded-full ${statusDotClass(item.status)}`} />
+                  </button>
+                ))}
+              </div>
+            )}
+          </ProfileSection>
+        </div>
+      )}
+    </aside>
+  );
+}
+
+function ProfileAvatar({ label, kind, status, large }: { label: string; kind: ProfileTarget['kind']; status?: AgentStatus; large?: boolean }) {
+  return (
+    <div className={`relative flex shrink-0 items-center justify-center border border-neutral-900 font-semibold ${large ? 'h-16 w-16 text-xl' : 'h-8 w-8 text-xs'} ${kind === 'agent' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'}`}>
+      {label[0]?.toUpperCase() ?? (kind === 'agent' ? 'A' : 'H')}
+      {kind === 'agent' && <span className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border border-white ${statusDotClass(status)}`} />}
+    </div>
+  );
+}
+
+function ProfileSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="mt-6 border-t border-neutral-200 pt-4">
+      <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">{title}</div>
+      {children}
+    </section>
+  );
+}
+
+function ProfileInfo({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-3 py-1.5 text-sm">
+      <div className="text-xs text-neutral-400">{label}</div>
+      <div className="min-w-0 break-words text-neutral-700">{value}</div>
+    </div>
+  );
+}
+
+function SidebarSortButton({
+  mode,
+  open,
+  onToggle,
+  onSelect,
+}: {
+  mode: SidebarSortMode;
+  open: boolean;
+  onToggle: (event: MouseEvent<HTMLButtonElement>) => void;
+  onSelect: (mode: SidebarSortMode) => void;
+}) {
+  const options: { id: SidebarSortMode; label: string }[] = [
+    { id: 'manual', label: '手动' },
+    { id: 'recent', label: '最近' },
+    { id: 'az', label: 'A-Z' },
+  ];
+  return (
+    <div className="relative ml-auto">
+      <button onClick={onToggle} className="flex h-5 w-5 items-center justify-center rounded text-neutral-400 hover:bg-white/70 hover:text-neutral-700" title={`会话排序：${sortModeLabel(mode)}`}>
+        <ArrowUpDown size={12} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-6 z-30 w-28 rounded-md border border-neutral-200 bg-white py-1 shadow-lg">
+          {options.map((option) => (
+            <button
+              key={option.id}
+              onClick={(event) => {
+                event.stopPropagation();
+                onSelect(option.id);
+              }}
+              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-neutral-50 ${mode === option.id ? 'font-semibold text-neutral-900' : 'text-neutral-600'}`}
+            >
+              <Check size={12} className={mode === option.id ? 'opacity-100' : 'opacity-0'} />
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AttachmentStrip({ attachments, onRemove }: { attachments: Artifact[]; onRemove: (id: string) => void }) {
   return (
     <div className="flex flex-wrap gap-1.5 border-t border-neutral-100 px-2 py-2">
@@ -1462,29 +2116,56 @@ function AttachmentStrip({ attachments, onRemove }: { attachments: Artifact[]; o
 
 function ChatBubble({
   msg,
+  task,
+  taskNumber,
+  taskAssigneeName,
+  taskMenuOpen = false,
   saved,
   reacted,
   onReply,
   onOpenThread,
+  onOpenProfile,
   onToggleReaction,
   onToggleSave,
+  onTaskMenu,
+  onTaskStatus,
   replyCount,
+  showReplyAction = true,
+  showReplyCount = true,
 }: {
   msg: ChatMessage;
+  task?: TaskItem | null;
+  taskNumber?: number;
+  taskAssigneeName?: string;
+  taskMenuOpen?: boolean;
   saved: boolean;
   reacted: boolean;
   onReply: () => void;
   onOpenThread: () => void;
+  onOpenProfile: (target: ProfileTarget) => void;
   onToggleReaction: () => void;
   onToggleSave: () => void;
+  onTaskMenu?: (open: boolean) => void;
+  onTaskStatus?: (status: TaskStatus) => void;
   replyCount: number;
+  showReplyAction?: boolean;
+  showReplyCount?: boolean;
 }) {
   const agent = useAgentBeanStore((s) => msg.senderId ? s.agents[msg.senderId] : undefined);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
-  const [showMenu, setShowMenu] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const meta = parseMeta(msg);
 
   if (msg.senderKind === 'system') {
+    if (meta.kind === 'task-status-updated') {
+      const status = isTaskStatus(meta.status) ? meta.status : 'todo';
+      const taskLabel = typeof meta.taskNumber === 'number' ? `#${meta.taskNumber}` : '#任务';
+      return (
+        <div className="mx-auto my-2 flex max-w-fit items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-xs text-neutral-600 shadow-sm">
+          <span className={`h-2 w-2 rounded-full ${taskStatusDotClass(status)}`} />
+          <span>任务 {taskLabel} 状态更新为 {taskStatusText(status)}</span>
+        </div>
+      );
+    }
     return (
       <div className="mx-auto my-1 max-w-prose rounded border border-amber-200 bg-amber-50 px-3 py-1.5 text-center text-xs text-amber-700">
         {msg.body}
@@ -1495,61 +2176,46 @@ function ChatBubble({
   const isHuman = msg.senderKind === 'human';
   const speaker = isHuman
     ? (currentUser?.username ?? '你')
-    : (agent?.name ?? msg.senderId ?? 'Agent');
+    : (agent?.name ?? 'Agent');
   const time = formatTime(msg.createdAt);
   const isOwner = isHuman && currentUser?.id === msg.senderId;
-  const meta = parseMeta(msg);
   const taskId = typeof meta.taskId === 'string' ? meta.taskId : null;
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(msg.body);
-    setCopied(true);
-    setShowMenu(false);
-    setTimeout(() => setCopied(false), 1500);
-  };
+  const canOpenProfile = Boolean(msg.senderId && (msg.senderKind === 'human' || msg.senderKind === 'agent'));
+  const profileTarget = msg.senderKind === 'agent'
+    ? { kind: 'agent' as const, id: msg.senderId ?? '' }
+    : { kind: 'human' as const, id: msg.senderId ?? '' };
 
   return (
     <div id={`message-${msg.id}`} className="group relative flex gap-2 rounded-md border border-transparent px-2 py-2 transition-colors hover:border-neutral-900 hover:bg-white">
       <div className="pointer-events-none absolute right-2 top-1 z-10 flex items-center gap-0.5 border border-neutral-300 bg-white opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-        <button onClick={onReply} className="flex h-6 w-6 items-center justify-center border-r border-neutral-200 text-neutral-500 hover:bg-amber-50 hover:text-neutral-900" title="回复线程">
-          <MessageSquare size={13} />
-        </button>
-        <button onClick={onToggleReaction} className={`flex h-6 w-6 items-center justify-center border-r border-neutral-200 hover:bg-amber-50 ${reacted ? 'text-pink-600' : 'text-neutral-500 hover:text-neutral-900'}`} title={reacted ? '取消表情' : '添加表情'}>
+        {showReplyAction && (
+          <button onClick={onReply} className="flex h-6 w-6 items-center justify-center border-r border-neutral-200 text-neutral-500 hover:bg-amber-50 hover:text-neutral-900" title="回复线程">
+            <MessageSquare size={13} />
+          </button>
+        )}
+        <button onClick={onToggleReaction} className={`flex h-6 w-6 items-center justify-center ${showReplyAction ? 'border-r' : ''} border-neutral-200 hover:bg-amber-50 ${reacted ? 'text-pink-600' : 'text-neutral-500 hover:text-neutral-900'}`} title={reacted ? '取消表情' : '添加表情'}>
           <Smile size={13} />
         </button>
-        <button onClick={onToggleSave} className={`flex h-6 w-6 items-center justify-center border-r border-neutral-200 hover:bg-amber-50 ${saved ? 'text-amber-500' : 'text-neutral-500 hover:text-neutral-900'}`} title={saved ? '取消收藏' : '收藏消息'}>
+        <button onClick={onToggleSave} className={`flex h-6 w-6 items-center justify-center hover:bg-amber-50 ${saved ? 'text-amber-500' : 'text-neutral-500 hover:text-neutral-900'}`} title={saved ? '取消收藏' : '收藏消息'}>
           {saved ? <BookmarkCheck size={13} /> : <Bookmark size={13} />}
         </button>
-        <div className="relative">
-          <button onClick={() => setShowMenu((v) => !v)} className="flex h-6 w-6 items-center justify-center text-neutral-500 hover:bg-amber-50 hover:text-neutral-900" title="更多操作">
-            <MoreHorizontal size={13} />
-          </button>
-          {showMenu && (
-            <div className="absolute right-0 top-7 z-20 w-28 rounded-md border border-neutral-200 bg-white py-1 shadow-lg">
-              <button onClick={handleCopy} className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-neutral-600 hover:bg-neutral-50">
-                <Copy size={12} /> {copied ? '已复制' : '复制'}
-              </button>
-              {isOwner && (
-                <button onClick={() => { setShowMenu(false); }} className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-red-500 hover:bg-red-50">
-                  <Trash2 size={12} /> 删除
-                </button>
-              )}
-            </div>
-          )}
-        </div>
       </div>
       {/* Avatar */}
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-purple-100 text-xs font-semibold text-purple-700">
+      <button
+        onClick={() => { if (canOpenProfile) onOpenProfile(profileTarget); }}
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-purple-100 text-xs font-semibold text-purple-700 hover:ring-2 hover:ring-neutral-900"
+        title="查看资料"
+      >
         {speaker[0].toUpperCase()}
-      </div>
+      </button>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-neutral-900">{speaker}</span>
-          {isOwner && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700">owner</span>}
+          <button onClick={() => { if (canOpenProfile) onOpenProfile(profileTarget); }} className="text-sm font-semibold text-neutral-900 hover:underline">{speaker}</button>
+          {isOwner && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700">你</span>}
           {!isHuman && agent?.role && <span className="text-xs text-neutral-400">{agent.role}</span>}
           <span className="text-[10px] text-neutral-400">{time}</span>
         </div>
-        <MarkdownMessage body={msg.body} />
+        <MarkdownMessage body={displayMessageBody(msg)} />
         {msg.artifacts && msg.artifacts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">
             {msg.artifacts.map((artifact) => (
@@ -1557,15 +2223,19 @@ function ChatBubble({
             ))}
           </div>
         )}
-        {(taskId || replyCount > 0 || reacted || saved) && (
+        {(taskId || (showReplyCount && replyCount > 0) || reacted || saved) && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             {taskId && (
-              <button onClick={onOpenThread} className="inline-flex h-5 items-center gap-1 border border-purple-200 bg-purple-50 px-1.5 text-[11px] font-medium text-purple-700 hover:bg-purple-100" title="查看任务线程">
-                <span>#</span>
-                <span>{taskId.slice(-6)}</span>
-              </button>
+              <ChatTaskBadge
+                task={task}
+                taskNumber={taskNumber}
+                assigneeName={taskAssigneeName ?? (agent?.name ?? speaker)}
+                open={taskMenuOpen}
+                onOpen={onTaskMenu}
+                onStatus={onTaskStatus}
+              />
             )}
-            {replyCount > 0 && (
+            {showReplyCount && replyCount > 0 && (
               <button onClick={onOpenThread} className="inline-flex h-5 items-center gap-1 border border-sky-200 bg-sky-50 px-1.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100" title="打开线程">
                 <MessageSquare size={11} />
                 <span>{replyCount} 条回复</span>
@@ -1588,6 +2258,109 @@ function ChatBubble({
       </div>
     </div>
   );
+}
+
+function ChatTaskBadge({
+  task,
+  taskNumber,
+  assigneeName,
+  open,
+  onOpen,
+  onStatus,
+}: {
+  task?: TaskItem | null;
+  taskNumber?: number;
+  assigneeName: string;
+  open: boolean;
+  onOpen?: (open: boolean) => void;
+  onStatus?: (status: TaskStatus) => void;
+}) {
+  const column = TASK_COLUMNS.find((item) => item.id === task?.status) ?? TASK_COLUMNS[0]!;
+  const label = taskNumber ? `#${taskNumber}` : '#任务';
+  const canChange = Boolean(task && onStatus);
+  const visual = taskBadgeVisual(task?.status ?? 'todo');
+  return (
+    <span className="relative inline-flex">
+      <button
+        onClick={(event) => {
+          event.stopPropagation();
+          if (canChange) onOpen?.(!open);
+        }}
+        className={`inline-flex h-5 items-center gap-1 rounded-full border px-2 text-[11px] font-semibold leading-none transition-colors ${visual.badge} ${canChange ? 'hover:brightness-105' : ''}`}
+        title={canChange ? `${column.label} · 更改任务状态` : `${column.label} · 查看任务`}
+      >
+        {visual.icon}
+        <span>{label}</span>
+        <span>@{assigneeName}</span>
+      </button>
+      {open && canChange && (
+        <div className="absolute left-0 top-6 z-30 w-40 rounded-lg border border-neutral-200 bg-white py-1 shadow-lg">
+          {TASK_COLUMNS.map((status) => (
+            <button
+              key={status.id}
+              onClick={(event) => {
+                event.stopPropagation();
+                onStatus?.(status.id);
+              }}
+              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-amber-50 ${task?.status === status.id ? 'font-semibold text-neutral-900' : 'text-neutral-600'}`}
+            >
+              <span className={`inline-flex h-4 w-4 items-center justify-center rounded-sm ${taskBadgeVisual(status.id).menuIconBg}`}>
+                {taskBadgeVisual(status.id).menuIcon}
+              </span>
+              <span className="flex-1">{status.label}</span>
+              {task?.status === status.id && <Check size={12} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+function taskBadgeVisual(status: TaskStatus): {
+  badge: string;
+  icon: ReactNode;
+  menuIconBg: string;
+  menuIcon: ReactNode;
+} {
+  if (status === 'done' || status === 'closed') {
+    return {
+      badge: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+      icon: <CheckCircle2 size={11} strokeWidth={2.5} />,
+      menuIconBg: 'bg-emerald-100 text-emerald-700',
+      menuIcon: <CheckCircle2 size={12} strokeWidth={2.5} />,
+    };
+  }
+  if (status === 'in_progress') {
+    return {
+      badge: 'border-cyan-200 bg-cyan-50 text-cyan-700',
+      icon: <SquareDot size={11} strokeWidth={2.5} />,
+      menuIconBg: 'bg-cyan-100 text-cyan-700',
+      menuIcon: <SquareDot size={12} strokeWidth={2.5} />,
+    };
+  }
+  return {
+    badge: 'border-purple-200 bg-purple-50 text-purple-700',
+    icon: <Eye size={11} strokeWidth={2.5} />,
+    menuIconBg: 'bg-purple-100 text-purple-700',
+    menuIcon: <Eye size={12} strokeWidth={2.5} />,
+  };
+}
+
+function taskStatusText(status: TaskStatus): string {
+  return TASK_COLUMNS.find((column) => column.id === status)?.label ?? status;
+}
+
+function isTaskStatus(value: unknown): value is TaskStatus {
+  return value === 'todo' || value === 'in_progress' || value === 'in_review' || value === 'done' || value === 'closed';
+}
+
+function taskStatusDotClass(status: TaskStatus): string {
+  if (status === 'done') return 'bg-emerald-500';
+  if (status === 'closed') return 'bg-neutral-400';
+  if (status === 'in_progress') return 'bg-cyan-500';
+  if (status === 'in_review') return 'bg-purple-500';
+  return 'bg-orange-400';
 }
 
 function MarkdownMessage({ body }: { body: string }) {
@@ -1838,6 +2611,24 @@ function safeMarkdownHref(href: string): string | null {
   return null;
 }
 
+function stripEchoedDispatchHistory(body: string): string {
+  const normalized = body.replace(/\r\n/g, '\n');
+  const marker = normalized.search(/(?:^|\n)\s*#?\s*(?:user|assistant|system):\s+(?:[0-9A-Z]{10,}|system)\b/i);
+  if (marker > 0) return normalized.slice(0, marker).trim();
+  return normalized;
+}
+
+function displayMessageBody(msg: ChatMessage): string {
+  const body = stripEchoedDispatchHistory(msg.body);
+  if (!msg.artifacts || msg.artifacts.length === 0) return body;
+  const filenameByLower = new Map(msg.artifacts.map((artifact) => [artifact.filename.toLowerCase(), artifact.filename]));
+  const fileExt = '(?:png|jpe?g|gif|webp|svg|pdf|txt|csv|json|md|mp4|mov|zip)';
+  const localPathRe = new RegExp(`(?:file://)?(?:~|/Users/[^\\s)\\]}>,;:]+|/private/[^\\s)\\]}>,;:]+|/var/[^\\s)\\]}>,;:]+|/tmp/[^\\s)\\]}>,;:]+)[^\\s)\\]}>,;:]*?\\/([^/\\s)\\]}>,;:]+\\.${fileExt})`, 'gi');
+  return body.replace(localPathRe, (match, filename: string) => {
+    return filenameByLower.get(filename.toLowerCase()) ?? filename ?? match;
+  });
+}
+
 function artifactUrl(path: string): string {
   const token = getStoredAuthToken();
   const sep = path.includes('?') ? '&' : '?';
@@ -1852,6 +2643,17 @@ function parseMeta(msg: ChatMessage): Record<string, any> {
   } catch {
     return {};
   }
+}
+
+function metaTaskId(msg: ChatMessage): string | null {
+  const meta = parseMeta(msg);
+  return typeof meta.taskId === 'string' ? meta.taskId : null;
+}
+
+function isTaskSystemMessage(msg: ChatMessage): boolean {
+  if (msg.senderKind !== 'system') return false;
+  const meta = parseMeta(msg);
+  return meta.kind === 'task-created' || meta.kind === 'task-status-updated';
 }
 
 function parentMessageId(msg: ChatMessage): string | null {
@@ -1876,62 +2678,291 @@ function parseThreadMessageId(raw: string | null, channelId: string): string | n
   return left === channelId && right ? right : null;
 }
 
-function taskLabel(msg: ChatMessage): string | null {
+function buildTaskNumberMap(tasks: TaskItem[]): Map<string, number> {
+  const ordered = [...tasks].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  return new Map(ordered.map((task, index) => [task.id, index + 1]));
+}
+
+function taskAssigneeLabel(
+  msg: ChatMessage,
+  task: TaskItem | null,
+  agents: Record<string, AgentSnapshot>,
+  activeDmAgent?: AgentSnapshot,
+  channelMembers: ChannelMemberEntry[] = [],
+): string {
   const meta = parseMeta(msg);
-  if (typeof meta.taskId !== 'string') return null;
-  return `#${meta.taskId.slice(-6)} ${typeof meta.taskTitle === 'string' ? meta.taskTitle : '任务'}`;
+  const metaAssigneeName = typeof meta.taskAssigneeName === 'string' && meta.taskAssigneeName.trim()
+    ? meta.taskAssigneeName.trim()
+    : null;
+  if (task?.assigneeId) {
+    const channelMember = channelMembers.find((member) => member.kind === 'agent' && member.id === task.assigneeId);
+    return agents[task.assigneeId]?.name
+      ?? (activeDmAgent?.id === task.assigneeId ? activeDmAgent.name : undefined)
+      ?? channelMember?.name
+      ?? metaAssigneeName
+      ?? 'Agent';
+  }
+  if (activeDmAgent) return activeDmAgent.name;
+  if (metaAssigneeName) return metaAssigneeName;
+  const mention = msg.body.match(/@([\w-]+)/);
+  if (mention?.[1]) return mention[1];
+  if (msg.senderKind === 'agent' && msg.senderId) return agents[msg.senderId]?.name ?? 'Agent';
+  return 'Agent';
+}
+
+function parseProfileParam(raw: string | null): ProfileTarget | null {
+  if (!raw) return null;
+  let decoded = raw;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {}
+  const separatorIndex = decoded.indexOf(':');
+  if (separatorIndex === -1) return null;
+  const kind = decoded.slice(0, separatorIndex);
+  const id = decoded.slice(separatorIndex + 1);
+  if ((kind !== 'human' && kind !== 'agent') || !id) return null;
+  return { kind, id };
+}
+
+function resolveHumanProfile(
+  id: string,
+  humans: HumanProfile[],
+  currentUser: { id: string; username: string; email: string | null; role: 'admin' | 'user' } | null,
+  channelMembers: ChannelMemberEntry[],
+  mentionMembers: { id: string; name: string; kind: 'human' | 'agent' }[],
+): HumanProfile {
+  const human = humans.find((item) => item.id === id);
+  if (human) return human;
+  if (currentUser?.id === id) {
+    return {
+      id,
+      username: currentUser.username,
+      email: currentUser.email,
+      role: currentUser.role,
+    };
+  }
+  const channelMember = channelMembers.find((item) => item.kind === 'human' && item.id === id);
+  if (channelMember) return { id, username: channelMember.name.replace(/（你）$/, ''), role: channelMember.role };
+  const mentionMember = mentionMembers.find((item) => item.kind === 'human' && item.id === id);
+  if (mentionMember) return { id, username: mentionMember.name };
+  return { id, username: '成员' };
+}
+
+function latestLoadedMessageAt(channelId: string, messagesByChannel: Record<string, ChatMessage[]>): number {
+  return lastLoadedMessage(messagesByChannel[channelId])?.createdAt ?? 0;
+}
+
+function lastLoadedMessage(messages?: ChatMessage[]): ChatMessage | null {
+  if (!messages || messages.length === 0) return null;
+  return messages.reduce((latest, item) => item.createdAt > latest.createdAt ? item : latest, messages[0]!);
+}
+
+function sortChannels<T extends { id: string; name: string; createdAt?: number }>(
+  channels: T[],
+  mode: SidebarSortMode,
+  messagesByChannel: Record<string, ChatMessage[]>,
+): T[] {
+  if (mode === 'manual') return channels;
+  return [...channels].sort((a, b) => {
+    if (mode === 'az') return a.name.localeCompare(b.name, 'zh-CN', { sensitivity: 'base' });
+    return latestLoadedMessageAt(b.id, messagesByChannel) - latestLoadedMessageAt(a.id, messagesByChannel)
+      || (b.createdAt ?? 0) - (a.createdAt ?? 0)
+      || a.name.localeCompare(b.name, 'zh-CN', { sensitivity: 'base' });
+  });
+}
+
+function sortDms<T extends { id: string; name: string; dmTargetId: string }>(
+  dms: T[],
+  mode: SidebarSortMode,
+  messagesByChannel: Record<string, ChatMessage[]>,
+  agents: Record<string, { name: string }>,
+): T[] {
+  if (mode === 'manual') return dms;
+  return [...dms].sort((a, b) => {
+    const aName = agents[a.dmTargetId]?.name ?? a.name;
+    const bName = agents[b.dmTargetId]?.name ?? b.name;
+    if (mode === 'az') return aName.localeCompare(bName, 'zh-CN', { sensitivity: 'base' });
+    return latestLoadedMessageAt(b.id, messagesByChannel) - latestLoadedMessageAt(a.id, messagesByChannel)
+      || aName.localeCompare(bName, 'zh-CN', { sensitivity: 'base' });
+  });
+}
+
+function sortModeLabel(mode: SidebarSortMode): string {
+  if (mode === 'recent') return '最近';
+  if (mode === 'az') return 'A-Z';
+  return '手动';
 }
 
 function ChatArtifactPreview({ artifact }: { artifact: Artifact }) {
+  const [viewerOpen, setViewerOpen] = useState(false);
   const sizeLabel = formatFileSize(artifact.sizeBytes);
+  const previewUrl = artifactUrl(artifact.previewUrl);
+  const downloadUrl = artifactUrl(artifact.downloadUrl);
   if (artifact.mimeType.startsWith('image/')) {
     return (
-      <a href={artifactUrl(artifact.downloadUrl)} target="_blank" rel="noreferrer" className="block max-w-80">
-        <img
-          src={artifactUrl(artifact.previewUrl)}
-          alt={artifact.filename}
-          className="max-h-64 rounded-md border border-neutral-200 object-contain"
-        />
-        <div className="mt-1 truncate text-xs text-neutral-500">{artifact.filename}</div>
-      </a>
+      <>
+        <div className="group relative block max-w-80">
+          <button onClick={() => setViewerOpen(true)} className="block text-left" title="预览图片">
+            <img
+              src={previewUrl}
+              alt={artifact.filename}
+              className="max-h-64 rounded-md border border-neutral-200 object-contain transition group-hover:border-neutral-400"
+            />
+          </button>
+          <div className="pointer-events-none absolute right-2 top-2 flex gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+            <button onClick={() => setViewerOpen(true)} className="flex h-7 w-7 items-center justify-center rounded-md bg-white/95 text-neutral-700 shadow-sm hover:bg-neutral-100" title="打开图片">
+              <Eye size={14} />
+            </button>
+            <a href={downloadUrl} target="_blank" rel="noreferrer" className="flex h-7 w-7 items-center justify-center rounded-md bg-white/95 text-neutral-700 shadow-sm hover:bg-neutral-100" title="下载图片">
+              <Download size={14} />
+            </a>
+          </div>
+          <div className="mt-1 truncate text-xs text-neutral-500">{artifact.filename}</div>
+        </div>
+        {viewerOpen && <ArtifactViewer artifact={artifact} onClose={() => setViewerOpen(false)} />}
+      </>
     );
   }
   const fileKind = artifactKind(artifact);
   return (
-    <a
-      href={artifactUrl(artifact.downloadUrl)}
-      target="_blank"
-      rel="noreferrer"
-      className="group inline-flex min-h-16 max-w-96 items-center gap-3 border border-neutral-300 bg-white px-3 py-2 text-xs text-neutral-700 hover:border-neutral-900 hover:bg-amber-50/40"
-    >
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center border border-neutral-300 bg-neutral-50 text-neutral-500 group-hover:border-neutral-900 group-hover:bg-white">
-        <Paperclip size={15} />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate font-medium text-neutral-900">{artifact.filename}</span>
-        <span className="mt-0.5 block truncate text-[11px] text-neutral-500">{fileKind.previewLabel} · {sizeLabel}</span>
-        <span className="mt-0.5 block truncate text-[11px] text-neutral-400">{fileKind.documentLabel}</span>
-      </span>
-      <Download size={14} className="shrink-0 text-neutral-400 group-hover:text-neutral-700" />
-    </a>
+    <>
+      <div className="group relative inline-flex min-h-16 max-w-96 border border-neutral-300 bg-white text-xs text-neutral-700 transition hover:border-neutral-500 hover:bg-neutral-50">
+        <button onClick={() => setViewerOpen(true)} className="inline-flex min-w-0 flex-1 items-center gap-3 px-3 py-2 pr-20 text-left" title="预览文件">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-neutral-50 text-neutral-500 group-hover:bg-white">
+            <Paperclip size={15} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-medium text-neutral-900">{artifact.filename}</span>
+            <span className="mt-0.5 block truncate text-[11px] text-neutral-500">{fileKind.previewLabel} · {sizeLabel}</span>
+            <span className="mt-0.5 block truncate text-[11px] text-neutral-400">{fileKind.documentLabel}</span>
+          </span>
+        </button>
+        <div className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+          <button onClick={() => setViewerOpen(true)} className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-neutral-700 shadow-sm hover:bg-neutral-100" title="预览文件">
+            <Eye size={14} />
+          </button>
+          <a href={downloadUrl} target="_blank" rel="noreferrer" className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-neutral-700 shadow-sm hover:bg-neutral-100" title="下载文件">
+            <Download size={14} />
+          </a>
+        </div>
+      </div>
+      {viewerOpen && <ArtifactViewer artifact={artifact} onClose={() => setViewerOpen(false)} />}
+    </>
   );
+}
+
+function ArtifactViewer({ artifact, onClose }: { artifact: Artifact; onClose: () => void }) {
+  const [content, setContent] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const previewUrl = artifactUrl(artifact.previewUrl);
+  const downloadUrl = artifactUrl(artifact.downloadUrl);
+  const fileKind = artifactKind(artifact);
+  const inlineText = isInlineTextArtifact(artifact);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!inlineText) return;
+    let cancelled = false;
+    setContent(null);
+    setError(null);
+    fetch(previewUrl)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(await res.text());
+        return res.text();
+      })
+      .then((text) => {
+        if (!cancelled) setContent(formatArtifactTextPreview(artifact, text));
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : '预览失败');
+      });
+    return () => { cancelled = true; };
+  }, [artifact, inlineText, previewUrl]);
+
+  return (
+    <div className="fixed inset-0 z-[60] flex flex-col bg-neutral-950/65">
+      <div className="flex h-14 shrink-0 items-center gap-3 bg-white px-4 shadow-sm">
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-semibold text-neutral-900">{artifact.filename}</div>
+          <div className="text-[11px] text-neutral-400">{fileKind.previewLabel} · {formatFileSize(artifact.sizeBytes)}</div>
+        </div>
+        <a href={downloadUrl} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 px-2.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50" title="下载">
+          <Download size={14} />
+          下载
+        </a>
+        <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900" title="关闭预览">
+          <X size={16} />
+        </button>
+      </div>
+      <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+        {artifact.mimeType.startsWith('image/') ? (
+          <img src={previewUrl} alt={artifact.filename} className="max-h-full max-w-full rounded-lg bg-white object-contain shadow-2xl" />
+        ) : inlineText ? (
+          <div className="h-full w-full max-w-5xl overflow-y-auto rounded-lg bg-white p-6 shadow-2xl">
+            {error ? (
+              <div className="rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</div>
+            ) : content === null ? (
+              <div className="text-sm text-neutral-400">正在加载预览...</div>
+            ) : isMarkdownArtifact(artifact) ? (
+              <MarkdownMessage body={content} />
+            ) : (
+              <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-neutral-700">{content}</pre>
+            )}
+          </div>
+        ) : (
+          <iframe src={previewUrl} title={artifact.filename} className="h-full w-full max-w-5xl rounded-lg border-0 bg-white shadow-2xl" />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function isMarkdownArtifact(artifact: Artifact): boolean {
+  const name = artifact.filename.toLowerCase();
+  return artifact.mimeType === 'text/markdown' || name.endsWith('.md') || name.endsWith('.markdown');
+}
+
+function isInlineTextArtifact(artifact: Artifact): boolean {
+  const name = artifact.filename.toLowerCase();
+  return isMarkdownArtifact(artifact)
+    || artifact.mimeType.startsWith('text/')
+    || artifact.mimeType === 'application/json'
+    || name.endsWith('.txt')
+    || name.endsWith('.json')
+    || name.endsWith('.csv');
+}
+
+function formatArtifactTextPreview(artifact: Artifact, text: string): string {
+  if (artifact.mimeType !== 'application/json' && !artifact.filename.toLowerCase().endsWith('.json')) return text;
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
 }
 
 function artifactKind(artifact: Artifact): { previewLabel: string; documentLabel: string } {
   const name = artifact.filename.toLowerCase();
   if (artifact.mimeType === 'text/markdown' || name.endsWith('.md') || name.endsWith('.markdown')) {
-    return { previewLabel: 'Markdown preview', documentLabel: 'Markdown document' };
+    return { previewLabel: 'Markdown 预览', documentLabel: 'Markdown 文档' };
   }
   if (artifact.mimeType.startsWith('text/') || name.endsWith('.txt')) {
-    return { previewLabel: 'Text preview', documentLabel: 'Text document' };
+    return { previewLabel: '文本预览', documentLabel: '文本文件' };
   }
   if (artifact.mimeType === 'application/pdf' || name.endsWith('.pdf')) {
-    return { previewLabel: 'PDF preview', documentLabel: 'PDF document' };
+    return { previewLabel: 'PDF 预览', documentLabel: 'PDF 文件' };
   }
   if (name.endsWith('.json') || artifact.mimeType === 'application/json') {
-    return { previewLabel: 'JSON preview', documentLabel: 'JSON document' };
+    return { previewLabel: 'JSON 预览', documentLabel: 'JSON 文件' };
   }
-  return { previewLabel: 'File preview', documentLabel: 'File attachment' };
+  return { previewLabel: '文件预览', documentLabel: '附件文件' };
 }
 
 function formatTime(ts: number): string {
@@ -1957,7 +2988,7 @@ function resolveMessageSpeaker(
   currentUsername: string | undefined,
   agents: Record<string, AgentSnapshot>,
 ): string {
-  if (msg.senderKind === 'agent') return msg.senderId ? (agents[msg.senderId]?.name ?? msg.senderId) : 'Agent';
+  if (msg.senderKind === 'agent') return msg.senderId ? (agents[msg.senderId]?.name ?? 'Agent') : 'Agent';
   if (msg.senderKind === 'human') return currentUsername ?? '你';
   return '系统';
 }
@@ -1978,6 +3009,14 @@ function statusDotClass(status?: AgentStatus): string {
   return 'bg-neutral-300';
 }
 
+function taskStatusDot(status: TaskStatus): string {
+  if (status === 'todo') return 'bg-orange-500';
+  if (status === 'in_progress') return 'bg-cyan-500';
+  if (status === 'in_review') return 'bg-purple-500';
+  if (status === 'done') return 'bg-emerald-500';
+  return 'bg-neutral-400';
+}
+
 function uniqueMessages(messages: ChatMessage[]): ChatMessage[] {
   const map = new Map<string, ChatMessage>();
   for (const msg of messages) map.set(msg.id, msg);
@@ -1993,18 +3032,18 @@ function conversationLabel(
   const dm = dms.find((item) => item.id === channelId);
   if (dm) return `@${agents[dm.dmTargetId]?.name ?? dm.name}`;
   const channel = channels.find((item) => item.id === channelId);
-  return channel ? `#${channel.name}` : channelId;
+  return channel ? `#${channel.name}` : '会话';
 }
 
 function speakerName(msg: ChatMessage, agents: Record<string, { name: string }>, currentUsername?: string): string {
   if (msg.senderKind === 'human') return currentUsername ?? '用户';
-  if (msg.senderKind === 'agent') return agents[msg.senderId ?? '']?.name ?? msg.senderId ?? 'Agent';
+  if (msg.senderKind === 'agent') return agents[msg.senderId ?? '']?.name ?? 'Agent';
   return '系统';
 }
 
 function participantName(id: string, participants: { id: string; name: string }[], currentUserId?: string): string {
   if (id === currentUserId) return '你';
-  return participants.find((person) => person.id === id)?.name ?? id.slice(0, 8);
+  return participants.find((person) => person.id === id)?.name ?? '未命名成员';
 }
 
 function formatFileSize(bytes: number): string {
@@ -2139,7 +3178,7 @@ function SearchView({ onClose, onJump }: { onClose: () => void; onJump: (channel
                   <span>· {speakerName(msg, agents, currentUser?.username)}</span>
                   <span>· {formatTime(msg.createdAt)}</span>
                 </div>
-                <div className="mt-1 line-clamp-2 text-sm text-neutral-700">{msg.body.slice(0, 180)}</div>
+                <div className="mt-1 line-clamp-2 text-sm text-neutral-700">{displayMessageBody(msg).slice(0, 180)}</div>
               </button>
             ))}
           </div>
@@ -2211,7 +3250,7 @@ function ActivityView({ onJump }: { onJump: (channelId: string) => void }) {
                 </div>
                 <div className="mt-1 line-clamp-2 text-sm text-neutral-700">
                   <span className="font-medium text-neutral-900">{speakerName(msg, agents, currentUser?.username)}：</span>
-                  {msg.body}
+                  {displayMessageBody(msg)}
                 </div>
               </div>
               <button
@@ -2286,7 +3325,7 @@ function SavedView({ savedIds, onUnsave, onJump }: { savedIds: Set<string>; onUn
                 <span>{speakerName(msg, agents, currentUser?.username)}</span>
                 <span>{formatTime(msg.createdAt)}</span>
               </div>
-              <div className="mt-1 line-clamp-3 text-sm text-neutral-700">{msg.body}</div>
+              <div className="mt-1 line-clamp-3 text-sm text-neutral-700">{displayMessageBody(msg)}</div>
             </div>
             <button
               onClick={(e) => {

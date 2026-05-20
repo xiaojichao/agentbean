@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { CodexAdapter } from '../src/adapters/codex.js';
+import { CodexAdapter, extractCodexReply } from '../src/adapters/codex.js';
 import { ClaudeCodeAdapter } from '../src/adapters/claude-code.js';
 import { OpenClawAdapter } from '../src/adapters/openclaw.js';
 import { HermesAdapter, extractHermesReply } from '../src/adapters/hermes.js';
@@ -56,6 +56,25 @@ describe('CodexAdapter', () => {
     const adapter = new CodexAdapter({ command: script, args: ['exec', '--json'] });
     const out = await adapter.ask({ prompt: 'hi-codex', history: [] }, new AbortController().signal);
     expect(out).toContain('["exec","--skip-git-repo-check","--json"');
+  });
+
+  it('drops echoed prompt history from Codex terminal output', () => {
+    const payload = [
+      '# user: shaw',
+      '上一轮用户消息',
+      '',
+      '# assistant: drama',
+      '上一轮回复',
+      '',
+      '# system',
+      '历史运行错误',
+      '',
+      '# user',
+      '调用 GPT Image 2，给我生成一张图，图中有4框桃子',
+    ].join('\n');
+    const raw = `${payload}\n\n已生成文件:\n- /Users/shaw/.agentbean/team/drama/outputs/peach.png`;
+
+    expect(extractCodexReply(raw, payload)).toBe('已生成文件:\n- /Users/shaw/.agentbean/team/drama/outputs/peach.png');
   });
 
   it('aborts the child process on signal', async () => {

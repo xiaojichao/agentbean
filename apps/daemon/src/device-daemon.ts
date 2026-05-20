@@ -356,6 +356,17 @@ export function createDeviceDaemon(
         queues.set(req.agentId, next);
       });
 
+      socket.on('dispatch:cancel', (payload: { requestId?: string; agentId?: string; reason?: string }) => {
+        const targets = payload.agentId ? [payload.agentId] : [...agents.keys()];
+        let cancelled = 0;
+        for (const agentId of targets) {
+          const agent = agents.get(agentId);
+          if (!agent) continue;
+          cancelled += agent.cancelDispatch(payload.requestId);
+        }
+        logger.info({ agentId: payload.agentId, requestId: payload.requestId, cancelled, reason: payload.reason }, 'dispatch cancel requested');
+      });
+
       socket.on('agents:discover', async () => {
         await scanAndRegister(socket!, false);
       });

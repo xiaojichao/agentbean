@@ -71,6 +71,12 @@ function replaceAllLiteral(value: string, search: string, replacement: string): 
   return value.replace(new RegExp(escapeRegExp(search), 'g'), replacement);
 }
 
+function stripDevicePath(value: string, replacement: string): string {
+  let body = replaceAllLiteral(value, `file://${replacement}`, basename(replacement));
+  body = replaceAllLiteral(body, replacement, basename(replacement));
+  return body;
+}
+
 export function beginAgentWorkspaceRun(input: {
   teamId: string;
   teamName?: string | null;
@@ -161,20 +167,27 @@ export function archiveOutputFiles(run: AgentWorkspaceRun, files: string[]): Arc
   return archived;
 }
 
-export function formatWorkspaceReply(reply: string, files: ArchivedWorkspaceFile[]): string {
+export function formatWorkspaceReply(reply: string, files: ArchivedWorkspaceFile[], options: { exposeLocalPaths?: boolean } = {}): string {
+  const exposeLocalPaths = options.exposeLocalPaths ?? true;
   let body = reply;
 
   for (const file of files) {
-    body = replaceAllLiteral(body, `file://${file.originalPath}`, `file://${file.archivedPath}`);
-    body = replaceAllLiteral(body, file.originalPath, file.archivedPath);
+    if (exposeLocalPaths) {
+      body = replaceAllLiteral(body, `file://${file.originalPath}`, `file://${file.archivedPath}`);
+      body = replaceAllLiteral(body, file.originalPath, file.archivedPath);
+    } else {
+      body = stripDevicePath(body, file.originalPath);
+      body = stripDevicePath(body, file.archivedPath);
+    }
   }
 
-  const missingPaths = files
-    .map((file) => file.archivedPath)
-    .filter((path) => !body.includes(path));
+  const missingPaths = files.filter((file) => {
+    const marker = exposeLocalPaths ? file.archivedPath : basename(file.archivedPath);
+    return !body.includes(marker);
+  });
 
   if (missingPaths.length > 0) {
-    body += '\n\n已生成文件:\n' + missingPaths.map((path) => `- ${path}`).join('\n');
+    body += '\n\n已生成文件:\n' + missingPaths.map((file) => `- ${exposeLocalPaths ? file.archivedPath : basename(file.archivedPath)}`).join('\n');
   }
 
   return body;

@@ -17,7 +17,7 @@ export interface ChannelServiceDeps {
   getPersistedAgent?: (agentId: string) => PersistedAgentLookup | null;
 }
 
-export interface CreateChannelInput { name: string; agentIds: string[]; userIds?: string[]; visibility?: 'public' | 'private'; createdBy?: string; isDefault?: boolean; }
+export interface CreateChannelInput { name: string; agentIds: string[]; userIds?: string[]; visibility?: 'public' | 'private'; createdBy?: string; isDefault?: boolean; description?: string; }
 export interface DmChannel { id: string; name: string; dmTargetId: string; createdAt: number; }
 
 export class ChannelService {
@@ -37,8 +37,8 @@ export class ChannelService {
     const id = newId();
     const visibility = input.visibility ?? 'public';
     const createdBy = input.createdBy ?? null;
-    db.prepare('INSERT INTO channels (id, name, visibility, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(id, name, visibility, createdBy, now);
+    db.prepare('INSERT INTO channels (id, name, description, visibility, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, name, input.description?.trim() || null, visibility, createdBy, now);
 
     const memberStmt = db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, agent_id, joined_at) VALUES (?, ?, ?)');
     for (const agentId of agentIds) {
@@ -50,29 +50,30 @@ export class ChannelService {
       userMemberStmt.run(id, uid, now);
     }
 
-    return { id, name, visibility, createdBy, createdAt: now };
+    return { id, name, description: input.description?.trim() || null, visibility, createdBy, createdAt: now, archivedAt: null };
   }
 
   list(networkId: string): ChannelRow[] {
     const db = this.deps.storageManager.getSpace(networkId).db;
-    return db.prepare('SELECT id, name, visibility, created_by AS createdBy, created_at AS createdAt FROM channels ORDER BY created_at')
+    return db.prepare('SELECT id, name, description, visibility, created_by AS createdBy, created_at AS createdAt, archived_at AS archivedAt FROM channels WHERE archived_at IS NULL ORDER BY created_at')
       .all() as ChannelRow[];
   }
 
   listForUser(networkId: string, userId: string): ChannelRow[] {
     const db = this.deps.storageManager.getSpace(networkId).db;
     return db.prepare(`
-      SELECT c.id, c.name, c.visibility, c.created_by AS createdBy, c.created_at AS createdAt
+      SELECT c.id, c.name, c.description, c.visibility, c.created_by AS createdBy, c.created_at AS createdAt, c.archived_at AS archivedAt
       FROM channels c
       LEFT JOIN channel_user_members cum ON c.id = cum.channel_id AND cum.user_id = ?
-      WHERE (c.visibility = 'public' OR cum.user_id IS NOT NULL) AND (c.is_dm IS NULL OR c.is_dm = 0)
+      LEFT JOIN channel_user_leaves cul ON c.id = cul.channel_id AND cul.user_id = ?
+      WHERE c.archived_at IS NULL AND cul.user_id IS NULL AND (c.visibility = 'public' OR cum.user_id IS NOT NULL) AND (c.is_dm IS NULL OR c.is_dm = 0)
       ORDER BY c.created_at
-    `).all(userId) as ChannelRow[];
+    `).all(userId, userId) as ChannelRow[];
   }
 
   get(networkId: string, id: string): ChannelRow | null {
     const db = this.deps.storageManager.getSpace(networkId).db;
-    const r = db.prepare('SELECT id, name, visibility, created_by AS createdBy, created_at AS createdAt FROM channels WHERE id = ?')
+    const r = db.prepare('SELECT id, name, description, visibility, created_by AS createdBy, created_at AS createdAt, archived_at AS archivedAt FROM channels WHERE id = ?')
       .get(id) as ChannelRow | undefined;
     return r ?? null;
   }
@@ -110,8 +111,16 @@ export class ChannelService {
     return rows.map((m) => m.channelId);
   }
 
+  addAgentMember(networkId: string, channelId: string, agentId: string): void {
+    const db = this.deps.storageManager.getSpace(networkId).db;
+    db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, agent_id, joined_at) VALUES (?, ?, ?)')
+      .run(channelId, agentId, Date.now());
+  }
+
   addUserMember(networkId: string, channelId: string, userId: string): void {
     const db = this.deps.storageManager.getSpace(networkId).db;
+    db.prepare('DELETE FROM channel_user_leaves WHERE channel_id = ? AND user_id = ?')
+      .run(channelId, userId);
     db.prepare('INSERT OR IGNORE INTO channel_user_members (channel_id, user_id, joined_at) VALUES (?, ?, ?)')
       .run(channelId, userId, Date.now());
   }
@@ -122,7 +131,21 @@ export class ChannelService {
       .run(channelId, userId);
   }
 
-  update(networkId: string, channelId: string, input: { name?: string; visibility?: 'public' | 'private' }): void {
+  leaveUser(networkId: string, channelId: string, userId: string): void {
+    const db = this.deps.storageManager.getSpace(networkId).db;
+    const ch = this.get(networkId, channelId);
+    if (!ch || ch.name === 'all') throw new Error('CANNOT_LEAVE_DEFAULT_CHANNEL');
+    this.removeUserMember(networkId, channelId, userId);
+    db.prepare('INSERT OR REPLACE INTO channel_user_leaves (channel_id, user_id, left_at) VALUES (?, ?, ?)')
+      .run(channelId, userId, Date.now());
+  }
+
+  userHasLeft(networkId: string, channelId: string, userId: string): boolean {
+    const db = this.deps.storageManager.getSpace(networkId).db;
+    return Boolean(db.prepare('SELECT 1 FROM channel_user_leaves WHERE channel_id = ? AND user_id = ?').get(channelId, userId));
+  }
+
+  update(networkId: string, channelId: string, input: { name?: string; description?: string | null; visibility?: 'public' | 'private' }): void {
     const db = this.deps.storageManager.getSpace(networkId).db;
     if (input.name !== undefined) {
       const name = this.normalizeChannelName(input.name);
@@ -130,9 +153,23 @@ export class ChannelService {
       this.assertNameAvailable(networkId, name, channelId);
       db.prepare('UPDATE channels SET name = ? WHERE id = ?').run(name, channelId);
     }
+    if (input.description !== undefined) {
+      db.prepare('UPDATE channels SET description = ? WHERE id = ?').run(input.description?.trim() || null, channelId);
+    }
     if (input.visibility !== undefined) {
       db.prepare('UPDATE channels SET visibility = ? WHERE id = ?').run(input.visibility, channelId);
     }
+  }
+
+  archive(networkId: string, channelId: string): void {
+    const db = this.deps.storageManager.getSpace(networkId).db;
+    db.prepare('UPDATE channels SET archived_at = ? WHERE id = ? AND name != ?').run(Date.now(), channelId, 'all');
+  }
+
+  delete(networkId: string, channelId: string): void {
+    const ch = this.get(networkId, channelId);
+    if (!ch || ch.name === 'all') throw new Error('CANNOT_DELETE_DEFAULT_CHANNEL');
+    this.deleteChannel(networkId, channelId);
   }
 
   userMembers(networkId: string, channelId: string): string[] {
@@ -257,6 +294,7 @@ export class ChannelService {
     const existing = db.prepare(`
       SELECT id FROM channels
       WHERE COALESCE(is_dm, 0) = 0
+        AND archived_at IS NULL
         AND lower(name) = lower(?)
         AND (? IS NULL OR id != ?)
       LIMIT 1

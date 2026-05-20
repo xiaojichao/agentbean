@@ -155,17 +155,29 @@ export function networkEvents(socket: Socket = getWebSocket()): NetworkEvents {
 }
 
 export interface ChannelEvents {
-  update(payload: { channelId: string; name?: string; visibility?: 'public' | 'private' }): Promise<{ ok: boolean; error?: string }>;
+  update(payload: { channelId: string; name?: string; description?: string | null; visibility?: 'public' | 'private' }): Promise<{ ok: boolean; error?: string }>;
+  members(channelId: string): Promise<{ ok: boolean; humans?: { userId: string; role: string; username: string }[]; agents?: import('./schema').AgentSnapshot[]; error?: string }>;
+  addAgent(channelId: string, agentId: string): Promise<{ ok: boolean; error?: string }>;
   addMember(channelId: string, userId: string): Promise<{ ok: boolean; error?: string }>;
   removeMember(channelId: string, userId: string): Promise<{ ok: boolean; error?: string }>;
+  leave(channelId: string): Promise<{ ok: boolean; error?: string }>;
+  archive(channelId: string): Promise<{ ok: boolean; error?: string }>;
+  delete(channelId: string): Promise<{ ok: boolean; error?: string }>;
+  stopAgents(channelId: string): Promise<{ ok: boolean; stopped?: number; error?: string }>;
   searchMessages(query: string, limit?: number): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
 }
 
 export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
   return {
     update(payload) { return emitWithTimeout(socket, 'channel:update', payload); },
+    members(channelId) { return emitWithTimeout(socket, 'channel:members', { channelId }); },
+    addAgent(channelId, agentId) { return emitWithTimeout(socket, 'channel:add-agent', { channelId, agentId }); },
     addMember(channelId, userId) { return emitWithTimeout(socket, 'channel:add-member', { channelId, userId }); },
     removeMember(channelId, userId) { return emitWithTimeout(socket, 'channel:remove-member', { channelId, userId }); },
+    leave(channelId) { return emitWithTimeout(socket, 'channel:leave', { channelId }); },
+    archive(channelId) { return emitWithTimeout(socket, 'channel:archive', { channelId }); },
+    delete(channelId) { return emitWithTimeout(socket, 'channel:delete', { channelId }); },
+    stopAgents(channelId) { return emitWithTimeout(socket, 'channel:stop-agents', { channelId }); },
     searchMessages(query, limit) { return emitWithTimeout(socket, 'message:search', { query, limit }); },
   };
 }

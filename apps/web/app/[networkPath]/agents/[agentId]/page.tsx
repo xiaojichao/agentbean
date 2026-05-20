@@ -166,8 +166,8 @@ export default function AgentDetailPage() {
           <dd className="font-mono text-xs">{agent.adapterKind}</dd>
         </div>
         <div>
-          <dt className="text-neutral-500">Team ID</dt>
-          <dd className="font-mono text-xs">{agent.networkId ?? 'default'}</dd>
+          <dt className="text-neutral-500">团队</dt>
+          <dd>{networks.find((net) => net.id === agent.networkId)?.name ?? '默认团队'}</dd>
         </div>
         {agent.source && (
           <div>
@@ -183,10 +183,6 @@ export default function AgentDetailPage() {
             </dd>
           </div>
         )}
-        <div className="sm:col-span-2">
-          <dt className="text-neutral-500">Agent ID</dt>
-          <dd className="font-mono text-xs break-all">{agent.id}</dd>
-        </div>
       </dl>
 
       {/* 设备信息 */}
@@ -197,10 +193,10 @@ export default function AgentDetailPage() {
         {agent.deviceId ? (
           <dl className="grid grid-cols-1 gap-y-2 sm:grid-cols-2 sm:gap-x-6 text-sm">
             <div>
-              <dt className="text-neutral-500">设备 ID</dt>
+              <dt className="text-neutral-500">设备</dt>
               <dd>
-                <Link href={`/${np}/devices`} className="font-mono text-xs text-blue-600 hover:underline">
-                  {agent.deviceId}
+                <Link href={`/${np}/devices`} className="text-blue-600 hover:underline">
+                  查看关联设备
                 </Link>
               </dd>
             </div>
@@ -232,7 +228,7 @@ export default function AgentDetailPage() {
             {agent.ownerId && (
               <div>
                 <dt className="text-neutral-500 flex items-center gap-1"><User size={12} />创建者</dt>
-                <dd className={agent.ownerName ? '' : 'font-mono text-xs'}>{agent.ownerName ?? agent.ownerId}</dd>
+                <dd>{agent.ownerName ?? '未知'}</dd>
               </div>
             )}
             {agent.command && (

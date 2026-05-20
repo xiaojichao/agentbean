@@ -25,9 +25,11 @@ CREATE TABLE IF NOT EXISTS agents (
 CREATE TABLE IF NOT EXISTS channels (
   id         TEXT PRIMARY KEY,
   name       TEXT NOT NULL,
+  description TEXT,
   visibility TEXT NOT NULL DEFAULT 'public',
   created_by TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  archived_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS channel_members (
   channel_id TEXT NOT NULL,
@@ -46,6 +48,14 @@ CREATE TABLE IF NOT EXISTS channel_user_members (
   FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_user_members_user ON channel_user_members(user_id);
+CREATE TABLE IF NOT EXISTS channel_user_leaves (
+  channel_id TEXT NOT NULL,
+  user_id    TEXT NOT NULL,
+  left_at    INTEGER NOT NULL,
+  PRIMARY KEY (channel_id, user_id),
+  FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_user_leaves_user ON channel_user_leaves(user_id);
 CREATE TABLE IF NOT EXISTS messages (
   id          TEXT PRIMARY KEY,
   channel_id  TEXT NOT NULL,
@@ -115,7 +125,7 @@ export interface AgentRow {
   description: string | null;
 }
 
-export interface ChannelRow { id: string; name: string; visibility: 'public' | 'private'; createdBy: string | null; createdAt: number; }
+export interface ChannelRow { id: string; name: string; description: string | null; visibility: 'public' | 'private'; createdBy: string | null; createdAt: number; archivedAt?: number | null; }
 export interface ChannelUserMember { channelId: string; userId: string; joinedAt: number; }
 export interface ChannelMember { channelId: string; agentId: string; joinedAt: number; }
 export interface MessageRow {
@@ -170,7 +180,7 @@ export interface Db {
     listByDevice(deviceId: string): AgentRow[];
   };
   channels: {
-    create(input: { name: string; visibility?: 'public' | 'private'; createdBy?: string; createdAt: number; id?: string }): ChannelRow;
+    create(input: { name: string; description?: string | null; visibility?: 'public' | 'private'; createdBy?: string; createdAt: number; id?: string }): ChannelRow;
     list(): ChannelRow[];
     listForUser(userId: string): ChannelRow[];
     get(id: string): ChannelRow | null;
@@ -872,7 +882,9 @@ export function openDb(path: string): Db {
 
   // Channel visibility + user members migrations
   try { raw.exec(`ALTER TABLE channels ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'`); } catch {}
+  try { raw.exec(`ALTER TABLE channels ADD COLUMN description TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE channels ADD COLUMN created_by TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE channels ADD COLUMN archived_at INTEGER`); } catch {}
 
   const agentUpsert = raw.prepare(`
     INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, owner_id, command, args, cwd)
@@ -908,15 +920,15 @@ export function openDb(path: string): Db {
   const agentListByDevice = raw.prepare(`SELECT * FROM agents WHERE device_id = ? ORDER BY first_seen_at`);
 
   const channelCreate = raw.prepare(`
-    INSERT INTO channels (id, name, visibility, created_by, created_at) VALUES (@id, @name, @visibility, @createdBy, @createdAt)
+    INSERT INTO channels (id, name, description, visibility, created_by, created_at) VALUES (@id, @name, @description, @visibility, @createdBy, @createdAt)
   `);
-  const channelList = raw.prepare(`SELECT id, name, visibility, created_by AS createdBy, created_at AS createdAt FROM channels ORDER BY created_at`);
-  const channelGet = raw.prepare(`SELECT id, name, visibility, created_by AS createdBy, created_at AS createdAt FROM channels WHERE id = ?`);
+  const channelList = raw.prepare(`SELECT id, name, description, visibility, created_by AS createdBy, created_at AS createdAt, archived_at AS archivedAt FROM channels WHERE archived_at IS NULL ORDER BY created_at`);
+  const channelGet = raw.prepare(`SELECT id, name, description, visibility, created_by AS createdBy, created_at AS createdAt, archived_at AS archivedAt FROM channels WHERE id = ?`);
   const channelListForUser = raw.prepare(`
-    SELECT c.id, c.name, c.visibility, c.created_by AS createdBy, c.created_at AS createdAt
+    SELECT c.id, c.name, c.description, c.visibility, c.created_by AS createdBy, c.created_at AS createdAt, c.archived_at AS archivedAt
     FROM channels c
     LEFT JOIN channel_user_members cum ON c.id = cum.channel_id AND cum.user_id = ?
-    WHERE c.visibility = 'public' OR cum.user_id IS NOT NULL
+    WHERE c.archived_at IS NULL AND (c.visibility = 'public' OR cum.user_id IS NOT NULL)
     ORDER BY c.created_at
   `);
 
@@ -1024,10 +1036,10 @@ export function openDb(path: string): Db {
       listByDevice: (deviceId) => agentListByDevice.all(deviceId).map(rowToAgent),
     },
     channels: {
-      create: ({ name, visibility = 'public', createdBy = null, createdAt, id }) => {
+      create: ({ name, description = null, visibility = 'public', createdBy = null, createdAt, id }) => {
         const cid = id ?? newId();
-        channelCreate.run({ id: cid, name, visibility, createdBy, createdAt });
-        return { id: cid, name, visibility, createdBy, createdAt };
+        channelCreate.run({ id: cid, name, description, visibility, createdBy, createdAt });
+        return { id: cid, name, description, visibility, createdBy, createdAt, archivedAt: null };
       },
       list: () => channelList.all() as ChannelRow[],
       listForUser: (userId) => channelListForUser.all(userId) as ChannelRow[],

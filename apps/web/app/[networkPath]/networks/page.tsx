@@ -94,7 +94,6 @@ export default function NetworksPage() {
                 {n.description && (
                   <div className="text-xs text-neutral-500 truncate max-w-md">{n.description}</div>
                 )}
-                <div className="text-xs text-neutral-400">ID: {n.id}</div>
               </div>
               <div className="shrink-0 ml-4">
                 {n.id === currentNetworkId ? (

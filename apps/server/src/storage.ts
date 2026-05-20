@@ -41,9 +41,11 @@ const NETWORK_SCHEMA = `
 CREATE TABLE IF NOT EXISTS channels (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
+  description TEXT,
   visibility TEXT NOT NULL DEFAULT 'public',
   created_by TEXT,
   created_at INTEGER NOT NULL,
+  archived_at INTEGER,
   is_dm INTEGER NOT NULL DEFAULT 0,
   dm_target_id TEXT
 );
@@ -65,6 +67,15 @@ CREATE TABLE IF NOT EXISTS channel_user_members (
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_members_user ON channel_user_members(user_id);
+
+CREATE TABLE IF NOT EXISTS channel_user_leaves (
+  channel_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  left_at INTEGER NOT NULL,
+  PRIMARY KEY (channel_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_leaves_user ON channel_user_leaves(user_id);
 
 CREATE TABLE IF NOT EXISTS messages (
   id          TEXT PRIMARY KEY,
@@ -157,9 +168,10 @@ function migrateChannelUniqueness(db: Database.Database): void {
   }
 
   db.exec(`
+    DROP INDEX IF EXISTS idx_channels_regular_name_unique;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_regular_name_unique
     ON channels (lower(name))
-    WHERE COALESCE(is_dm, 0) = 0
+    WHERE COALESCE(is_dm, 0) = 0 AND archived_at IS NULL
   `);
 }
 
@@ -349,7 +361,9 @@ export class StorageManager {
     db.exec(NETWORK_SCHEMA);
     try { db.exec(`ALTER TABLE pipeline_runs ADD COLUMN name TEXT`); } catch {}
     try { db.exec(`ALTER TABLE channels ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'`); } catch {}
+    try { db.exec(`ALTER TABLE channels ADD COLUMN description TEXT`); } catch {}
     try { db.exec(`ALTER TABLE channels ADD COLUMN created_by TEXT`); } catch {}
+    try { db.exec(`ALTER TABLE channels ADD COLUMN archived_at INTEGER`); } catch {}
     try { db.exec(`ALTER TABLE channels ADD COLUMN is_dm INTEGER NOT NULL DEFAULT 0`); } catch {}
     try { db.exec(`ALTER TABLE channels ADD COLUMN dm_target_id TEXT`); } catch {}
     migrateChannelUniqueness(db);
@@ -376,7 +390,9 @@ export class StorageManager {
     db.exec(NETWORK_SCHEMA);
     try { db.exec(`ALTER TABLE pipeline_runs ADD COLUMN name TEXT`); } catch {}
     try { db.exec(`ALTER TABLE channels ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'`); } catch {}
+    try { db.exec(`ALTER TABLE channels ADD COLUMN description TEXT`); } catch {}
     try { db.exec(`ALTER TABLE channels ADD COLUMN created_by TEXT`); } catch {}
+    try { db.exec(`ALTER TABLE channels ADD COLUMN archived_at INTEGER`); } catch {}
     try { db.exec(`ALTER TABLE channels ADD COLUMN is_dm INTEGER NOT NULL DEFAULT 0`); } catch {}
     try { db.exec(`ALTER TABLE channels ADD COLUMN dm_target_id TEXT`); } catch {}
     migrateChannelUniqueness(db);

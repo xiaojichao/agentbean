@@ -79,6 +79,7 @@ export class AgentInstance {
   readonly name: string;
   readonly role: string;
   readonly visibility: 'public' | 'private';
+  private readonly activeControllers = new Map<string, AbortController>();
 
   constructor(
     public readonly config: AgentConfigEntry,
@@ -121,6 +122,7 @@ export class AgentInstance {
   }): Promise<void> {
     const { socket, req, serverUrl, token, networkId, deviceId } = opts;
     const ctl = new AbortController();
+    this.activeControllers.set(req.requestId, ctl);
     const dispatchStart = Date.now();
     const teamId = req.teamId ?? req.networkId ?? networkId;
     const projectWorkspace = req.sandboxed ? getWorkspaceDir(this.id) : this.config.adapter.workspace;
@@ -151,7 +153,7 @@ export class AgentInstance {
         outputDirs: [run.outputDir, run.intermediateDir],
       });
       archivedFiles = archiveOutputFiles(run, processed.outputFiles);
-      const replyText = formatWorkspaceReply(rawBody, archivedFiles);
+      const replyText = formatWorkspaceReply(rawBody, archivedFiles, { exposeLocalPaths: false });
       finishAgentWorkspaceRun(run, { replyText, files: archivedFiles, status: 'completed' });
 
       const artifactIds: string[] = [];
@@ -201,6 +203,16 @@ export class AgentInstance {
         scope: 'reply',
         requestId: req.requestId,
       });
+    } finally {
+      this.activeControllers.delete(req.requestId);
     }
+  }
+
+  cancelDispatch(requestId?: string): number {
+    const entries = requestId
+      ? [...this.activeControllers.entries()].filter(([id]) => id === requestId)
+      : [...this.activeControllers.entries()];
+    for (const [, ctl] of entries) ctl.abort();
+    return entries.length;
   }
 }

@@ -41,7 +41,7 @@ function ArtifactPreview({ artifact }: { artifact: Artifact }) {
 export function ChannelMessage({ msg }: { msg: ChatMessage }) {
   const agent = useAgentBeanStore((s) => msg.senderId ? s.agents[msg.senderId] : undefined);
   const speaker = msg.senderKind === 'agent'
-    ? (agent?.name ?? msg.senderId ?? 'Agent')
+    ? (agent?.name ?? 'Agent')
     : KIND_LABEL[msg.senderKind];
   const time = new Date(msg.createdAt).toLocaleTimeString('zh-CN');
 

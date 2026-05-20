@@ -114,8 +114,8 @@ export default function AdminDashboardPage() {
 
       {!loading && tab === 'networks' && <NetworksTable networks={networks} onDelete={(id) => handleDelete('network', id)} />}
       {!loading && tab === 'users' && <UsersTable users={users} onDelete={(id) => handleDelete('user', id)} />}
-      {!loading && tab === 'devices' && <DevicesTable devices={devices} />}
-      {!loading && tab === 'agents' && <AgentsTable agents={agents} onDelete={(id) => handleDelete('agent', id)} />}
+      {!loading && tab === 'devices' && <DevicesTable devices={devices} networks={networks} />}
+      {!loading && tab === 'agents' && <AgentsTable agents={agents} networks={networks} onDelete={(id) => handleDelete('agent', id)} />}
       </div>
     </div>
   );
@@ -165,7 +165,7 @@ function NetworksTable({ networks, onDelete }: { networks: AdminNetwork[]; onDel
               <Globe size={16} className="text-neutral-400" />
               <div>
                 <span className="font-medium text-sm">{n.name}</span>
-                <span className="ml-2 font-mono text-xs text-neutral-400">{n.path ?? n.id}</span>
+                {n.path && <span className="ml-2 text-xs text-neutral-400">/{n.path}</span>}
               </div>
               <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${n.visibility === 'public' ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-200 text-neutral-500'}`}>{n.visibility === 'public' ? '公开' : '私有'}</span>
             </div>
@@ -215,16 +215,16 @@ function UsersTable({ users, onDelete }: { users: AdminUser[]; onDelete: (id: st
   );
 }
 
-function DevicesTable({ devices }: { devices: AdminDevice[] }) {
+function DevicesTable({ devices, networks }: { devices: AdminDevice[]; networks: AdminNetwork[] }) {
   if (devices.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无在线设备</div>;
   return (
-    <Table headers={['设备 ID', '状态', 'Agent 数', '团队', '最后心跳']}>
+    <Table headers={['设备', '状态', 'Agent 数', '团队', '最后心跳']}>
       {devices.map((d) => (
         <tr key={d.id} className="hover:bg-neutral-50">
-          <td className="px-4 py-2.5 font-mono text-xs">{d.id.slice(0, 12)}...</td>
+          <td className="px-4 py-2.5 text-sm">设备</td>
           <td className="px-4 py-2.5"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${d.status === 'online' ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'}`}>{d.status}</span></td>
           <td className="px-4 py-2.5">{d.agentCount}</td>
-          <td className="px-4 py-2.5 text-xs text-neutral-500">{d.networkId}</td>
+          <td className="px-4 py-2.5 text-xs text-neutral-500">{networks.find((n) => n.id === d.networkId)?.name ?? '未知团队'}</td>
           <td className="px-4 py-2.5 text-xs text-neutral-500">{d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString() : '—'}</td>
         </tr>
       ))}
@@ -232,7 +232,7 @@ function DevicesTable({ devices }: { devices: AdminDevice[] }) {
   );
 }
 
-function AgentsTable({ agents, onDelete }: { agents: AdminAgent[]; onDelete: (id: string) => void }) {
+function AgentsTable({ agents, networks, onDelete }: { agents: AdminAgent[]; networks: AdminNetwork[]; onDelete: (id: string) => void }) {
   if (agents.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无 Agent</div>;
   return (
     <Table headers={['名称', '角色', '适配器', '状态', '可见性', '团队', '']}>
@@ -243,7 +243,7 @@ function AgentsTable({ agents, onDelete }: { agents: AdminAgent[]; onDelete: (id
           <td className="px-4 py-2.5 font-mono text-xs text-neutral-500">{a.adapterKind}</td>
           <td className="px-4 py-2.5"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${a.status === 'online' ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'}`}>{a.status}</span></td>
           <td className="px-4 py-2.5"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${a.visibility === 'public' ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'}`}>{a.visibility === 'public' ? '公开' : '私有'}</span></td>
-          <td className="px-4 py-2.5 text-xs text-neutral-500">{a.networkId ?? 'default'}</td>
+          <td className="px-4 py-2.5 text-xs text-neutral-500">{networks.find((n) => n.id === a.networkId)?.name ?? '默认团队'}</td>
           <td className="px-4 py-2.5"><DeleteButton onClick={() => onDelete(a.id)} label="Agent" /></td>
         </tr>
       ))}

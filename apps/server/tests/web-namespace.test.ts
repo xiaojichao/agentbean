@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { buildApp, type AppHandle } from '../src/index.js';
+import { generateToken } from '../src/auth.js';
 import { io as ioClient } from 'socket.io-client';
 import { AddressInfo } from 'node:net';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -228,8 +229,10 @@ describe('message:send', () => {
     });
 
     const messages: any[] = [];
+    const taskUpdates: any[] = [];
     web.emit('channel:join', { channelId: dmRes.dm.id });
     web.on('channel:message', (m: any) => messages.push(m));
+    web.on('task:updated', (task: any) => taskUpdates.push(task));
     await new Promise((r) => setTimeout(r, 50));
 
     const ack = await new Promise<any>((resolve) => {
@@ -260,6 +263,29 @@ describe('message:send', () => {
     const human = messages.find((m) => m.senderKind === 'human' && m.body === 'hello drama');
     expect(human).toBeTruthy();
     expect(human?.artifacts?.[0]?.id).toBe(uploadedArtifactId);
+    const humanMeta = JSON.parse(human!.metaJson);
+    expect(humanMeta.taskId).toBeTruthy();
+    expect(humanMeta.taskAssigneeName).toBe('drama');
+    const taskList = await new Promise<any>((resolve) => {
+      web.emit('task:list', { channelId: dmRes.dm.id }, resolve);
+    });
+    expect(taskList.ok).toBe(true);
+    expect(taskList.tasks.find((task: any) => task.id === humanMeta.taskId)).toMatchObject({
+      title: 'hello drama',
+      assigneeId: 'custom-drama',
+      channelId: dmRes.dm.id,
+      status: 'done',
+    });
+    expect(taskUpdates.filter((task) => task.id === humanMeta.taskId).map((task) => task.status)).toEqual(expect.arrayContaining(['in_progress', 'done']));
+    const messageCountBeforeTaskUpdate = messages.length;
+    const taskUpdate = await new Promise<any>((resolve) => {
+      web.emit('task:update', { id: humanMeta.taskId, status: 'closed' }, resolve);
+    });
+    expect(taskUpdate.ok).toBe(true);
+    expect(taskUpdate.task).toMatchObject({ id: humanMeta.taskId, status: 'closed' });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(messages).toHaveLength(messageCountBeforeTaskUpdate);
+    expect(taskUpdates.some((task) => task.id === humanMeta.taskId && task.status === 'closed')).toBe(true);
     const reply = messages.find((m) => m.senderKind === 'agent' && m.senderId === 'custom-drama' && m.body === 'custom dm ok');
     expect(reply).toBeTruthy();
     expect(JSON.parse(reply.metaJson).inReplyTo).toBe(human!.id);
@@ -493,6 +519,66 @@ describe('message:send', () => {
     expect(requests[1].history.some((turn: any) => turn.body === '你装了哪些 Skills？')).toBe(false);
     expect(requests[1].history.some((turn: any) => turn.body === '@Hermes-Agent hello')).toBe(true);
     expect(requests[1].history.some((turn: any) => turn.body === 'first reply')).toBe(true);
+
+    agentos.close(); web.close();
+  });
+
+  it('sends display names and skips system events in agent dispatch history', async () => {
+    app.globalDb.users.create({
+      id: 'raw-user-id',
+      username: 'shaw',
+      passwordHash: null,
+      createdAt: Date.now(),
+    });
+    app.globalDb.networkMembers.add('default', 'raw-user-id', 'member');
+
+    const agentos = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'd-history-hermes',
+        networkId: 'default',
+        agents: [{ id: 'hermes-history', name: 'Hermes-Agent', role: 'r', adapterKind: 'hermes', category: 'agentos-hosted', visibility: 'public' }],
+      },
+      reconnection: false, transports: ['websocket'],
+    });
+    await new Promise<void>((r) => agentos.on('connect', () => r()));
+    agentos.emit('register');
+
+    const requests: any[] = [];
+    agentos.on('dispatch', (req: any) => {
+      requests.push(req);
+      agentos.emit('reply', { agentId: 'hermes-history', channelId: req.channelId, body: requests.length === 1 ? 'first reply' : 'second reply', requestId: req.requestId });
+    });
+
+    const ch = app.channels.create('default', { name: `history-${Date.now()}`, agentIds: ['hermes-history'] });
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('raw-user-id', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    web.emit('channel:join', { channelId: ch.id });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const firstAck = await new Promise<any>((resolve) => {
+      web.emit('message:send', { channelId: ch.id, body: '@Hermes-Agent 第一条', asTask: true, clientMsgId: 'history-1' }, resolve);
+    });
+    expect(firstAck.ok).toBe(true);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(requests[0].history.some((turn: any) => turn.role === 'system' || turn.body.includes('已创建任务'))).toBe(false);
+
+    const secondAck = await new Promise<any>((resolve) => {
+      web.emit('message:send', { channelId: ch.id, body: '@Hermes-Agent 第二条', clientMsgId: 'history-2' }, resolve);
+    });
+    expect(secondAck.ok).toBe(true);
+    await new Promise((r) => setTimeout(r, 100));
+
+    const firstHumanTurn = requests[1].history.find((turn: any) => turn.body === '@Hermes-Agent 第一条');
+    const firstAgentTurn = requests[1].history.find((turn: any) => turn.body === 'first reply');
+    expect(firstHumanTurn).toMatchObject({ role: 'user', speaker: 'shaw' });
+    expect(firstAgentTurn).toMatchObject({ role: 'assistant', speaker: 'Hermes-Agent' });
+    expect(requests[1].history.some((turn: any) => turn.speaker === 'raw-user-id')).toBe(false);
+    expect(requests[1].history.some((turn: any) => turn.role === 'system' || turn.body.includes('已创建任务'))).toBe(false);
 
     agentos.close(); web.close();
   });

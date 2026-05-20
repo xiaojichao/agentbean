@@ -187,7 +187,7 @@ export default function AgentMetricsPage() {
           {metricsList.map((m) => (
             <AgentMetricsPanel
               key={m.agentId}
-              agentName={agents[m.agentId]?.name ?? m.agentId}
+              agentName={agents[m.agentId]?.name ?? 'Agent'}
               metrics={m}
             />
           ))}

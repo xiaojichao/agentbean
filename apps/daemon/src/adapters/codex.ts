@@ -22,10 +22,22 @@ function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
-function extractReply(output: string): string {
-  const clean = stripAnsi(output).replace(/\r\n/g, '\n');
+function removeEchoedPayload(output: string, payload?: string): string {
+  if (!payload) return output;
+  const normalizedPayload = payload.replace(/\r\n/g, '\n');
+  const idx = output.lastIndexOf(normalizedPayload);
+  if (idx < 0) return output;
+
+  const boundaryBefore = idx === 0 || output[idx - 1] === '\n' || output[idx - 1] === '\r';
+  if (!boundaryBefore) return output;
+  const tail = output.slice(idx + normalizedPayload.length).trim();
+  return tail || output;
+}
+
+export function extractCodexReply(output: string, payload?: string): string {
+  const clean = removeEchoedPayload(stripAnsi(output).replace(/\r\n/g, '\n'), payload);
   // Match "codex" label followed by reply content, ending before next hook or end
-  const match = clean.match(/\ncodex\n([\s\S]*?)(?:\nhook:|$)/i);
+  const match = clean.match(/(?:^|\n)codex\n([\s\S]*?)(?:\nhook:|$)/i);
   if (match) return match[1]!.trim();
   // Fallback: everything after last "user" prompt
   const userIdx = clean.lastIndexOf('\nuser\n');
@@ -43,6 +55,11 @@ function normalizeExecArgs(args?: string[]): string[] {
     return [subcommand, '--skip-git-repo-check', ...baseArgs.slice(1)];
   }
   return baseArgs;
+}
+
+function adapterTimeoutMs(): number {
+  const fromEnv = Number.parseInt(process.env.AGENTBEAN_CODEX_TIMEOUT_MS ?? '', 10);
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 900_000;
 }
 
 export class CodexAdapter implements CliAdapter {
@@ -71,7 +88,7 @@ export class CodexAdapter implements CliAdapter {
 
       const chunks: string[] = [];
       let finished = false;
-      const MAX_EXEC_MS = 600_000;
+      const MAX_EXEC_MS = adapterTimeoutMs();
 
       const onAbort = () => {
         if (finished) return;
@@ -106,7 +123,7 @@ export class CodexAdapter implements CliAdapter {
           const detail = stripAnsi(raw).trim();
           return reject(new Error(detail ? `codex exit ${exitCode}: ${detail}` : `codex exit ${exitCode}`));
         }
-        const reply = extractReply(raw);
+        const reply = extractCodexReply(raw, payload);
         resolve(reply || '(Codex 已完成处理)');
       });
     });
