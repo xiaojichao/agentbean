@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback, type RefObject } from 'react';
+import { useEffect, useState, useRef, useCallback, type ReactNode, type RefObject } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, MoreHorizontal, Copy, Trash2, Circle, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download } from 'lucide-react';
 import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents } from '@/lib/socket';
@@ -1444,7 +1444,6 @@ function ChatBubble({
     : (agent?.name ?? msg.senderId ?? 'Agent');
   const time = formatTime(msg.createdAt);
   const isOwner = isHuman && currentUser?.id === msg.senderId;
-  const parts = parseMentions(msg.body);
   const meta = parseMeta(msg);
   const taskId = typeof meta.taskId === 'string' ? meta.taskId : null;
 
@@ -1496,13 +1495,7 @@ function ChatBubble({
           {!isHuman && agent?.role && <span className="text-xs text-neutral-400">{agent.role}</span>}
           <span className="text-[10px] text-neutral-400">{time}</span>
         </div>
-        <div className="mt-1 whitespace-pre-wrap text-sm text-neutral-700 leading-relaxed">
-          {parts.map((part, i) =>
-            part.type === 'mention'
-              ? <span key={i} className="font-medium text-blue-600 hover:underline cursor-pointer">{part.text}</span>
-              : <span key={i}>{part.text}</span>
-          )}
-        </div>
+        <MarkdownMessage body={msg.body} />
         {msg.artifacts && msg.artifacts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">
             {msg.artifacts.map((artifact) => (
@@ -1541,6 +1534,192 @@ function ChatBubble({
       </div>
     </div>
   );
+}
+
+function MarkdownMessage({ body }: { body: string }) {
+  return (
+    <div className="mt-1 space-y-2 break-words text-sm leading-relaxed text-neutral-700">
+      {renderMarkdownBlocks(body)}
+    </div>
+  );
+}
+
+function renderMarkdownBlocks(body: string): ReactNode[] {
+  const lines = body.replace(/\r\n/g, '\n').split('\n');
+  const nodes: ReactNode[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i] ?? '';
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      i += 1;
+      continue;
+    }
+
+    const fence = trimmed.match(/^```(\w+)?\s*$/);
+    if (fence) {
+      const codeLines: string[] = [];
+      i += 1;
+      while (i < lines.length && !(lines[i] ?? '').trim().startsWith('```')) {
+        codeLines.push(lines[i] ?? '');
+        i += 1;
+      }
+      if (i < lines.length) i += 1;
+      nodes.push(
+        <pre key={`code-${nodes.length}`} className="overflow-x-auto rounded-md border border-neutral-200 bg-neutral-950 px-3 py-2 text-xs leading-relaxed text-neutral-100">
+          {fence[1] && <div className="mb-1 text-[10px] uppercase tracking-wide text-neutral-400">{fence[1]}</div>}
+          <code>{codeLines.join('\n')}</code>
+        </pre>,
+      );
+      continue;
+    }
+
+    const heading = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1]!.length;
+      const className = level === 1
+        ? 'text-base font-semibold text-neutral-950'
+        : 'text-sm font-semibold text-neutral-900';
+      nodes.push(<div key={`heading-${nodes.length}`} className={className}>{renderInlineMarkdown(heading[2]!)}</div>);
+      i += 1;
+      continue;
+    }
+
+    if (/^([-*_])\s*\1\s*\1\s*$/.test(trimmed)) {
+      nodes.push(<div key={`rule-${nodes.length}`} className="my-2 border-t border-neutral-200" />);
+      i += 1;
+      continue;
+    }
+
+    if (/^>\s?/.test(trimmed)) {
+      const quoteLines: string[] = [];
+      while (i < lines.length && /^>\s?/.test((lines[i] ?? '').trim())) {
+        quoteLines.push((lines[i] ?? '').trim().replace(/^>\s?/, ''));
+        i += 1;
+      }
+      nodes.push(
+        <blockquote key={`quote-${nodes.length}`} className="border-l-2 border-neutral-300 pl-3 text-neutral-600">
+          {quoteLines.map((quote, idx) => (
+            <p key={idx}>{renderInlineMarkdown(quote)}</p>
+          ))}
+        </blockquote>,
+      );
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(trimmed)) {
+      const items: string[] = [];
+      while (i < lines.length && /^[-*]\s+/.test((lines[i] ?? '').trim())) {
+        items.push((lines[i] ?? '').trim().replace(/^[-*]\s+/, ''));
+        i += 1;
+      }
+      nodes.push(
+        <ul key={`ul-${nodes.length}`} className="list-disc space-y-1 pl-5">
+          {items.map((item, idx) => <li key={idx}>{renderInlineMarkdown(item)}</li>)}
+        </ul>,
+      );
+      continue;
+    }
+
+    if (/^\d+[.)]\s+/.test(trimmed)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\d+[.)]\s+/.test((lines[i] ?? '').trim())) {
+        items.push((lines[i] ?? '').trim().replace(/^\d+[.)]\s+/, ''));
+        i += 1;
+      }
+      nodes.push(
+        <ol key={`ol-${nodes.length}`} className="list-decimal space-y-1 pl-5">
+          {items.map((item, idx) => <li key={idx}>{renderInlineMarkdown(item)}</li>)}
+        </ol>,
+      );
+      continue;
+    }
+
+    const paragraph: string[] = [];
+    while (
+      i < lines.length &&
+      (lines[i] ?? '').trim() &&
+      !/^```/.test((lines[i] ?? '').trim()) &&
+      !/^(#{1,4})\s+/.test((lines[i] ?? '').trim()) &&
+      !/^([-*_])\s*\1\s*\1\s*$/.test((lines[i] ?? '').trim()) &&
+      !/^>\s?/.test((lines[i] ?? '').trim()) &&
+      !/^[-*]\s+/.test((lines[i] ?? '').trim()) &&
+      !/^\d+[.)]\s+/.test((lines[i] ?? '').trim())
+    ) {
+      paragraph.push((lines[i] ?? '').trim());
+      i += 1;
+    }
+    nodes.push(<p key={`p-${nodes.length}`}>{renderParagraphLines(paragraph)}</p>);
+  }
+
+  return nodes.length > 0 ? nodes : [<p key="empty" />];
+}
+
+function renderParagraphLines(lines: string[]): ReactNode[] {
+  return lines.flatMap((line, index) => {
+    const inline = renderInlineMarkdown(line);
+    return index < lines.length - 1
+      ? [...inline, <br key={`br-${index}`} />]
+      : inline;
+  });
+}
+
+function renderInlineMarkdown(text: string): ReactNode[] {
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+]\([^)]+\)|https?:\/\/[^\s)]+|@[\w-]+)/g;
+  const nodes: ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index));
+    }
+
+    const token = match[0];
+    if (token.startsWith('`') && token.endsWith('`')) {
+      nodes.push(
+        <code key={`inline-code-${match.index}`} className="rounded bg-neutral-100 px-1 py-0.5 font-mono text-[0.92em] text-neutral-900">
+          {token.slice(1, -1)}
+        </code>,
+      );
+    } else if (token.startsWith('**') && token.endsWith('**')) {
+      nodes.push(<strong key={`strong-${match.index}`} className="font-semibold text-neutral-950">{renderInlineMarkdown(token.slice(2, -2))}</strong>);
+    } else if (token.startsWith('[')) {
+      const link = token.match(/^\[([^\]]+)]\(([^)]+)\)$/);
+      const href = link ? safeMarkdownHref(link[2]!) : null;
+      nodes.push(href ? (
+        <a key={`link-${match.index}`} href={href} target="_blank" rel="noreferrer" className="font-medium text-blue-600 underline-offset-2 hover:underline">
+          {renderInlineMarkdown(link![1]!)}
+        </a>
+      ) : token);
+    } else if (token.startsWith('http://') || token.startsWith('https://')) {
+      nodes.push(
+        <a key={`url-${match.index}`} href={token} target="_blank" rel="noreferrer" className="font-medium text-blue-600 underline-offset-2 hover:underline">
+          {token}
+        </a>,
+      );
+    } else {
+      nodes.push(<span key={`mention-${match.index}`} className="cursor-pointer font-medium text-blue-600 hover:underline">{token}</span>);
+    }
+
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+
+  return nodes;
+}
+
+function safeMarkdownHref(href: string): string | null {
+  const trimmed = href.trim();
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/^mailto:/i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith('/api/')) return artifactUrl(trimmed);
+  return null;
 }
 
 function artifactUrl(path: string): string {
@@ -1683,24 +1862,6 @@ function formatFileSize(bytes: number): string {
 
 function formatDateTime(ts: number): string {
   return new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
-
-function parseMentions(body: string): { type: 'text' | 'mention'; text: string }[] {
-  const regex = /@([\w-]+)/g;
-  const parts: { type: 'text' | 'mention'; text: string }[] = [];
-  let lastIndex = 0;
-  let match;
-  while ((match = regex.exec(body)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push({ type: 'text', text: body.slice(lastIndex, match.index) });
-    }
-    parts.push({ type: 'mention', text: match[0] });
-    lastIndex = match.index + match[0].length;
-  }
-  if (lastIndex < body.length) {
-    parts.push({ type: 'text', text: body.slice(lastIndex) });
-  }
-  return parts.length > 0 ? parts : [{ type: 'text', text: body }];
 }
 
 function SearchView({ onClose, onJump }: { onClose: () => void; onJump: (channelId: string) => void }) {
