@@ -1579,9 +1579,7 @@ function renderMarkdownBlocks(body: string): ReactNode[] {
     const heading = trimmed.match(/^(#{1,4})\s+(.+)$/);
     if (heading) {
       const level = heading[1]!.length;
-      const className = level === 1
-        ? 'text-base font-semibold text-neutral-950'
-        : 'text-sm font-semibold text-neutral-900';
+      const className = headingClassName(level);
       nodes.push(<div key={`heading-${nodes.length}`} className={className}>{renderInlineMarkdown(heading[2]!)}</div>);
       i += 1;
       continue;
@@ -1637,6 +1635,16 @@ function renderMarkdownBlocks(body: string): ReactNode[] {
       continue;
     }
 
+    if (isMarkdownTableStart(lines, i)) {
+      const tableLines: string[] = [];
+      while (i < lines.length && isMarkdownTableLine(lines[i] ?? '')) {
+        tableLines.push(lines[i] ?? '');
+        i += 1;
+      }
+      nodes.push(renderMarkdownTable(tableLines, `table-${nodes.length}`));
+      continue;
+    }
+
     const paragraph: string[] = [];
     while (
       i < lines.length &&
@@ -1646,7 +1654,8 @@ function renderMarkdownBlocks(body: string): ReactNode[] {
       !/^([-*_])\s*\1\s*\1\s*$/.test((lines[i] ?? '').trim()) &&
       !/^>\s?/.test((lines[i] ?? '').trim()) &&
       !/^[-*]\s+/.test((lines[i] ?? '').trim()) &&
-      !/^\d+[.)]\s+/.test((lines[i] ?? '').trim())
+      !/^\d+[.)]\s+/.test((lines[i] ?? '').trim()) &&
+      !isMarkdownTableStart(lines, i)
     ) {
       paragraph.push((lines[i] ?? '').trim());
       i += 1;
@@ -1655,6 +1664,59 @@ function renderMarkdownBlocks(body: string): ReactNode[] {
   }
 
   return nodes.length > 0 ? nodes : [<p key="empty" />];
+}
+
+function headingClassName(level: number): string {
+  if (level === 1) return 'pt-1 text-base font-semibold text-neutral-950';
+  if (level === 2) return 'pt-1 text-sm font-semibold text-neutral-950';
+  return 'text-sm font-semibold text-neutral-900';
+}
+
+function isMarkdownTableLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.includes('|') && trimmed.split('|').filter((cell) => cell.trim()).length >= 2;
+}
+
+function isMarkdownTableStart(lines: string[], index: number): boolean {
+  const header = lines[index] ?? '';
+  const separator = lines[index + 1] ?? '';
+  return isMarkdownTableLine(header) && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(separator);
+}
+
+function parseMarkdownTableRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  return trimmed.split('|').map((cell) => cell.trim());
+}
+
+function renderMarkdownTable(lines: string[], key: string): ReactNode {
+  const header = parseMarkdownTableRow(lines[0] ?? '');
+  const rows = lines.slice(2).map(parseMarkdownTableRow);
+  return (
+    <div key={key} className="overflow-x-auto rounded-md border border-neutral-200">
+      <table className="min-w-full border-collapse text-left text-xs">
+        <thead className="bg-neutral-50 text-neutral-900">
+          <tr>
+            {header.map((cell, index) => (
+              <th key={index} className="border-b border-neutral-200 px-2 py-1.5 font-semibold">
+                {renderInlineMarkdown(cell)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, rowIndex) => (
+            <tr key={rowIndex} className="border-t border-neutral-100 align-top">
+              {header.map((_, cellIndex) => (
+                <td key={cellIndex} className="px-2 py-1.5 text-neutral-700">
+                  {renderInlineMarkdown(row[cellIndex] ?? '')}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function renderParagraphLines(lines: string[]): ReactNode[] {
@@ -1754,7 +1816,7 @@ function taskLabel(msg: ChatMessage): string | null {
 }
 
 function ChatArtifactPreview({ artifact }: { artifact: Artifact }) {
-  const sizeKb = Math.max(0.1, artifact.sizeBytes / 1024).toFixed(1);
+  const sizeLabel = formatFileSize(artifact.sizeBytes);
   if (artifact.mimeType.startsWith('image/')) {
     return (
       <a href={artifactUrl(artifact.downloadUrl)} target="_blank" rel="noreferrer" className="block max-w-80">
@@ -1767,18 +1829,42 @@ function ChatArtifactPreview({ artifact }: { artifact: Artifact }) {
       </a>
     );
   }
+  const fileKind = artifactKind(artifact);
   return (
     <a
       href={artifactUrl(artifact.downloadUrl)}
       target="_blank"
       rel="noreferrer"
-      className="inline-flex max-w-80 items-center gap-2 rounded-md border border-neutral-200 bg-neutral-50 px-2.5 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
+      className="group inline-flex min-h-16 max-w-96 items-center gap-3 border border-neutral-300 bg-white px-3 py-2 text-xs text-neutral-700 hover:border-neutral-900 hover:bg-amber-50/40"
     >
-      <Paperclip size={13} className="shrink-0 text-neutral-400" />
-      <span className="truncate">{artifact.filename}</span>
-      <span className="shrink-0 text-neutral-400">{sizeKb} KB</span>
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center border border-neutral-300 bg-neutral-50 text-neutral-500 group-hover:border-neutral-900 group-hover:bg-white">
+        <Paperclip size={15} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-medium text-neutral-900">{artifact.filename}</span>
+        <span className="mt-0.5 block truncate text-[11px] text-neutral-500">{fileKind.previewLabel} · {sizeLabel}</span>
+        <span className="mt-0.5 block truncate text-[11px] text-neutral-400">{fileKind.documentLabel}</span>
+      </span>
+      <Download size={14} className="shrink-0 text-neutral-400 group-hover:text-neutral-700" />
     </a>
   );
+}
+
+function artifactKind(artifact: Artifact): { previewLabel: string; documentLabel: string } {
+  const name = artifact.filename.toLowerCase();
+  if (artifact.mimeType === 'text/markdown' || name.endsWith('.md') || name.endsWith('.markdown')) {
+    return { previewLabel: 'Markdown preview', documentLabel: 'Markdown document' };
+  }
+  if (artifact.mimeType.startsWith('text/') || name.endsWith('.txt')) {
+    return { previewLabel: 'Text preview', documentLabel: 'Text document' };
+  }
+  if (artifact.mimeType === 'application/pdf' || name.endsWith('.pdf')) {
+    return { previewLabel: 'PDF preview', documentLabel: 'PDF document' };
+  }
+  if (name.endsWith('.json') || artifact.mimeType === 'application/json') {
+    return { previewLabel: 'JSON preview', documentLabel: 'JSON document' };
+  }
+  return { previewLabel: 'File preview', documentLabel: 'File attachment' };
 }
 
 function formatTime(ts: number): string {

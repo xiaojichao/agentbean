@@ -15,6 +15,7 @@ const MIME_MAP: Record<string, string> = {
   '.gif': 'image/gif', '.webp': 'image/webp',
   '.mp4': 'video/mp4', '.mov': 'video/quicktime',
   '.txt': 'text/plain', '.csv': 'text/csv', '.json': 'application/json',
+  '.md': 'text/markdown', '.markdown': 'text/markdown',
 };
 
 function guessMime(filename: string): string {
