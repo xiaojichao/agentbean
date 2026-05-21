@@ -13,6 +13,7 @@ type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
 type TaskViewMode = 'board' | 'list';
 type SidebarSortMode = 'manual' | 'recent' | 'az';
 type ProfileTarget = { kind: 'human' | 'agent'; id: string };
+type ChatTaskMenuTarget = { surface: 'main' | 'thread'; messageId: string } | null;
 
 interface TaskItem {
   id: string;
@@ -80,6 +81,7 @@ export default function ChatPage() {
   const dmParam = searchParams.get('dm');
   const chatTabParam = searchParams.get('chatTab');
   const threadParam = searchParams.get('thread');
+  const messageParam = searchParams.get('message');
   const profileParam = searchParams.get('profile');
   const routeChannelId = typeof params.channelId === 'string' ? params.channelId : null;
   const routeDmId = typeof params.dmId === 'string' ? params.dmId : null;
@@ -113,6 +115,7 @@ export default function ChatPage() {
   const [threadAttachments, setThreadAttachments] = useState<Artifact[]>([]);
   const [uploading, setUploading] = useState(false);
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
+  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [threadInput, setThreadInput] = useState('');
   const [showBackToBottom, setShowBackToBottom] = useState(false);
   const [tasks, setTasks] = useState<TaskItem[]>([]);
@@ -125,7 +128,7 @@ export default function ChatPage() {
   const [showCreateTask, setShowCreateTask] = useState(false);
   const [dragTaskId, setDragTaskId] = useState<string | null>(null);
   const [collapsedTaskColumns, setCollapsedTaskColumns] = useState<Set<TaskStatus>>(() => new Set(TASK_COLUMNS.filter((col) => col.collapsedByDefault).map((col) => col.id)));
-  const [chatTaskMenuFor, setChatTaskMenuFor] = useState<string | null>(null);
+  const [chatTaskMenuTarget, setChatTaskMenuTarget] = useState<ChatTaskMenuTarget>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -291,6 +294,7 @@ export default function ChatPage() {
   const activeName = activeChannelObj?.name ?? '';
   const activeDm = dms.find((d) => d.id === activeChannel);
   const isDm = !!activeDm;
+  const isDefaultPublicChannel = !isDm && activeChannelObj?.name === 'all';
   const activeDmAgent = activeDm ? agents[activeDm.dmTargetId] : undefined;
   const activeDmName = activeDmAgent?.name ?? activeDm?.name ?? '';
   const activeDmSubtitle = activeDmAgent?.description?.trim() || activeDmAgent?.role || '智能体私聊';
@@ -386,14 +390,19 @@ export default function ChatPage() {
 
   const setThreadUrl = useCallback((messageId: string | null) => {
     const params = new URLSearchParams(searchParams.toString());
-    if (messageId && activeChannel) params.set('thread', `${activeChannel}:${messageId}`);
-    else params.delete('thread');
+    if (messageId && activeChannel) {
+      params.set('thread', `${activeChannel}:${messageId}`);
+      params.delete('message');
+    } else {
+      params.delete('thread');
+    }
     const query = params.toString();
     router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
   }, [activeChannel, router, searchParams]);
 
   const openThread = useCallback((messageId: string) => {
     setThreadRootId(messageId);
+    setChatTaskMenuTarget(null);
     setThreadUrl(messageId);
   }, [setThreadUrl]);
 
@@ -401,6 +410,7 @@ export default function ChatPage() {
     setThreadRootId(null);
     setThreadInput('');
     setThreadAttachments([]);
+    setChatTaskMenuTarget(null);
     setThreadUrl(null);
   }, [setThreadUrl]);
 
@@ -622,6 +632,25 @@ export default function ChatPage() {
   const threadRoot = threadRootId ? visibleMessages.find((msg) => msg.id === threadRootId) ?? null : null;
   const rootMessages = visibleMessages.filter((msg) => !parentMessageId(msg));
   const threadReplies = threadRootId ? visibleMessages.filter((msg) => parentMessageId(msg) === threadRootId) : [];
+
+  useEffect(() => {
+    if (!activeChannel) return;
+    const targetMessageId = parseScopedMessageId(messageParam, activeChannel);
+    if (!targetMessageId) {
+      if (messageParam === null) setSelectedMessageId(null);
+      return;
+    }
+    setTab('chat');
+    setThreadRootId(null);
+    setThreadInput('');
+    setThreadAttachments([]);
+    setSelectedMessageId(targetMessageId);
+    setChatTaskMenuTarget(null);
+    const timer = window.setTimeout(() => {
+      document.getElementById(`message-${targetMessageId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [activeChannel, messageParam, visibleMessages.length]);
   const conversationFiles = messages
     .flatMap((msg) => (msg.artifacts ?? []).map((artifact) => ({
       artifact,
@@ -651,7 +680,7 @@ export default function ChatPage() {
     const maxSort = tasks.filter((item) => item.status === status && item.id !== task.id).reduce((max, item) => Math.max(max, item.sortOrder), 0);
     const optimistic = { ...task, status, sortOrder: maxSort + 1, updatedAt: Date.now() };
     setTasks((prev) => prev.map((item) => item.id === task.id ? optimistic : item));
-    setChatTaskMenuFor(null);
+    setChatTaskMenuTarget(null);
     const res = await taskEvents().update({ id: task.id, status, sortOrder: maxSort + 1 });
     if (res.ok && res.task) {
       setTasks((prev) => prev.map((item) => item.id === task.id ? res.task as TaskItem : item));
@@ -680,9 +709,12 @@ export default function ChatPage() {
     setThreadRootId(null);
     setThreadInput('');
     setThreadAttachments([]);
+    setSelectedMessageId(messageId);
+    setChatTaskMenuTarget(null);
     const params = new URLSearchParams(searchParams.toString());
     params.delete('chatTab');
     params.delete('thread');
+    if (activeChannel) params.set('message', `${activeChannel}:${messageId}`);
     const query = params.toString();
     router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
     setTimeout(() => {
@@ -692,10 +724,7 @@ export default function ChatPage() {
 
   const viewThreadRootInChannel = () => {
     if (!threadRootId) return;
-    switchTab('chat');
-    setTimeout(() => {
-      document.getElementById(`message-${threadRootId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 100);
+    jumpToMessage(threadRootId);
   };
 
   const scrollToBottom = () => {
@@ -868,10 +897,12 @@ export default function ChatPage() {
               <button onClick={() => setShowEditChannel(true)} className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="编辑频道">
                 <Pencil size={14} />
               </button>
-              <button onClick={() => { setChannelActionError(null); setShowLeaveChannel(true); }} className="flex h-7 items-center gap-1 rounded-md px-2 text-xs text-neutral-500 hover:bg-neutral-100" title="离开频道">
-                <ExternalLink size={13} />
-                <span>离开</span>
-              </button>
+              {!isDefaultPublicChannel && (
+                <button onClick={() => { setChannelActionError(null); setShowLeaveChannel(true); }} className="flex h-7 items-center gap-1 rounded-md px-2 text-xs text-neutral-500 hover:bg-neutral-100" title="离开频道">
+                  <ExternalLink size={13} />
+                  <span>离开</span>
+                </button>
+              )}
               <button onClick={() => { loadChannelMembers(activeChannel); setShowMembers(true); }} className="flex h-7 items-center gap-1 rounded-md px-2 text-xs text-neutral-500 hover:bg-neutral-100" title="查看参与者">
                 <Users size={14} />
                 <span>{channelMemberCount}</span>
@@ -915,7 +946,8 @@ export default function ChatPage() {
                         task={task}
                         taskNumber={task ? taskNumbers.get(task.id) : undefined}
                         taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
-                        taskMenuOpen={task ? chatTaskMenuFor === task.id : false}
+                        taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'main' && chatTaskMenuTarget.messageId === msg.id : false}
+                        selected={selectedMessageId === msg.id}
                         saved={savedIds.has(msg.id)}
                         reacted={reactionIds.has(msg.id)}
                         onReply={() => handleReply(msg)}
@@ -923,7 +955,7 @@ export default function ChatPage() {
                         onOpenProfile={openProfile}
                         onToggleReaction={() => toggleReaction(msg.id)}
                         onToggleSave={() => toggleSave(msg.id)}
-                        onTaskMenu={(open) => setChatTaskMenuFor(open && task ? task.id : null)}
+                        onTaskMenu={(open) => setChatTaskMenuTarget(open && task ? { surface: 'main', messageId: msg.id } : null)}
                         onTaskStatus={(status) => { if (task) updateTaskStatus(task, status); }}
                         replyCount={messages.filter((item) => parentMessageId(item) === msg.id).length}
                       />
@@ -1045,7 +1077,7 @@ export default function ChatPage() {
           replies={threadReplies}
           agents={agents}
           currentUsername={currentUser?.username}
-          title={`线程 — ${isDm ? `@${activeDmName}` : `#${activeName}`}`}
+          title={`讨论串 — ${isDm ? `@${activeDmName}` : `#${activeName}`}`}
           input={threadInput}
           attachments={threadAttachments}
           uploading={uploading}
@@ -1057,7 +1089,7 @@ export default function ChatPage() {
           taskNumbers={taskNumbers}
           activeDmAgent={activeDmAgent}
           channelMembers={channelMembers}
-          chatTaskMenuFor={chatTaskMenuFor}
+          chatTaskMenuTarget={chatTaskMenuTarget}
           onInput={setThreadInput}
           onSend={sendThreadMessage}
           onUpload={(files) => uploadFiles(files, 'thread')}
@@ -1066,7 +1098,7 @@ export default function ChatPage() {
           onOpenProfile={openProfile}
           onToggleSave={toggleSave}
           onToggleReaction={toggleReaction}
-          onTaskMenu={(taskId) => setChatTaskMenuFor(taskId)}
+          onTaskMenu={(messageId) => setChatTaskMenuTarget(messageId ? { surface: 'thread', messageId } : null)}
           onTaskStatus={updateTaskStatus}
           onViewInChannel={viewThreadRootInChannel}
           onClose={closeThread}
@@ -1095,7 +1127,7 @@ export default function ChatPage() {
           onConfirm={handleStopAgents}
         />
       )}
-      {showLeaveChannel && activeChannelObj && (
+      {showLeaveChannel && activeChannelObj && !isDefaultPublicChannel && (
         <ConfirmChannelActionDialog
           title="离开频道"
           message={`确定要离开 #${activeChannelObj.name} 吗？离开后你不会再看到它，也不能继续发送消息，除非之后重新加入。`}
@@ -1785,7 +1817,7 @@ function ThreadPanel({
   taskNumbers,
   activeDmAgent,
   channelMembers,
-  chatTaskMenuFor,
+  chatTaskMenuTarget,
   onInput,
   onSend,
   onUpload,
@@ -1815,7 +1847,7 @@ function ThreadPanel({
   taskNumbers: Map<string, number>;
   activeDmAgent?: AgentSnapshot;
   channelMembers: ChannelMemberEntry[];
-  chatTaskMenuFor: string | null;
+  chatTaskMenuTarget: ChatTaskMenuTarget;
   onInput: (value: string) => void;
   onSend: () => void;
   onUpload: (files: FileList | File[]) => void;
@@ -1844,7 +1876,7 @@ function ThreadPanel({
         task={task}
         taskNumber={task ? taskNumbers.get(task.id) : undefined}
         taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
-        taskMenuOpen={task ? chatTaskMenuFor === task.id : false}
+        taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'thread' && chatTaskMenuTarget.messageId === msg.id : false}
         saved={savedIds.has(msg.id)}
         reacted={reactionIds.has(msg.id)}
         onReply={() => onReply(msg)}
@@ -1852,7 +1884,7 @@ function ThreadPanel({
         onOpenProfile={onOpenProfile}
         onToggleReaction={() => onToggleReaction(msg.id)}
         onToggleSave={() => onToggleSave(msg.id)}
-        onTaskMenu={(open) => onTaskMenu(open && task ? task.id : null)}
+        onTaskMenu={(open) => onTaskMenu(open && task ? msg.id : null)}
         onTaskStatus={(status) => { if (task) onTaskStatus(task, status); }}
         replyCount={replyCount}
         showReplyAction={false}
@@ -1872,7 +1904,7 @@ function ThreadPanel({
             <ExternalLink size={13} />
             <span>在频道中查看</span>
           </button>
-          <button onClick={onClose} className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="关闭线程">
+          <button onClick={onClose} className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="关闭讨论串">
             <X size={16} />
           </button>
         </div>
@@ -1897,7 +1929,7 @@ function ThreadPanel({
               }
             }}
             rows={2}
-            placeholder="回复线程"
+            placeholder="回复讨论串"
             className="w-full resize-none px-3 pt-2.5 pb-1 text-sm outline-none placeholder:text-neutral-400"
           />
           {attachments.length > 0 && <AttachmentStrip attachments={attachments} onRemove={onRemoveAttachment} />}
@@ -2120,6 +2152,7 @@ function ChatBubble({
   taskNumber,
   taskAssigneeName,
   taskMenuOpen = false,
+  selected = false,
   saved,
   reacted,
   onReply,
@@ -2138,6 +2171,7 @@ function ChatBubble({
   taskNumber?: number;
   taskAssigneeName?: string;
   taskMenuOpen?: boolean;
+  selected?: boolean;
   saved: boolean;
   reacted: boolean;
   onReply: () => void;
@@ -2186,10 +2220,17 @@ function ChatBubble({
     : { kind: 'human' as const, id: msg.senderId ?? '' };
 
   return (
-    <div id={`message-${msg.id}`} className="group relative flex gap-2 rounded-md border border-transparent px-2 py-2 transition-colors hover:border-neutral-900 hover:bg-white">
+    <div
+      id={`message-${msg.id}`}
+      className={`group relative flex gap-2 rounded-md border px-2 py-2 transition-colors ${
+        selected
+          ? 'border-amber-400 bg-amber-50/70 shadow-[inset_3px_0_0_#f59e0b]'
+          : 'border-transparent hover:border-neutral-900 hover:bg-white'
+      }`}
+    >
       <div className="pointer-events-none absolute right-2 top-1 z-10 flex items-center gap-0.5 border border-neutral-300 bg-white opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
         {showReplyAction && (
-          <button onClick={onReply} className="flex h-6 w-6 items-center justify-center border-r border-neutral-200 text-neutral-500 hover:bg-amber-50 hover:text-neutral-900" title="回复线程">
+          <button onClick={onReply} className="flex h-6 w-6 items-center justify-center border-r border-neutral-200 text-neutral-500 hover:bg-amber-50 hover:text-neutral-900" title="回复讨论串">
             <MessageSquare size={13} />
           </button>
         )}
@@ -2236,7 +2277,7 @@ function ChatBubble({
               />
             )}
             {showReplyCount && replyCount > 0 && (
-              <button onClick={onOpenThread} className="inline-flex h-5 items-center gap-1 border border-sky-200 bg-sky-50 px-1.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100" title="打开线程">
+              <button onClick={onOpenThread} className="inline-flex h-5 items-center gap-1 border border-sky-200 bg-sky-50 px-1.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100" title="打开讨论串">
                 <MessageSquare size={11} />
                 <span>{replyCount} 条回复</span>
               </button>
@@ -2294,7 +2335,7 @@ function ChatTaskBadge({
         <span>@{assigneeName}</span>
       </button>
       {open && canChange && (
-        <div className="absolute left-0 top-6 z-30 w-40 rounded-lg border border-neutral-200 bg-white py-1 shadow-lg">
+        <div className="absolute left-0 top-6 z-30 w-40 rounded-md border border-neutral-200 bg-white py-1 shadow-lg">
           {TASK_COLUMNS.map((status) => (
             <button
               key={status.id}
@@ -2302,13 +2343,11 @@ function ChatTaskBadge({
                 event.stopPropagation();
                 onStatus?.(status.id);
               }}
-              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-amber-50 ${task?.status === status.id ? 'font-semibold text-neutral-900' : 'text-neutral-600'}`}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-neutral-700 hover:bg-neutral-50"
             >
-              <span className={`inline-flex h-4 w-4 items-center justify-center rounded-sm ${taskBadgeVisual(status.id).menuIconBg}`}>
-                {taskBadgeVisual(status.id).menuIcon}
-              </span>
+              <span className={`h-2 w-2 rounded-full ${taskStatusDotClass(status.id)}`} />
               <span className="flex-1">{status.label}</span>
-              {task?.status === status.id && <Check size={12} />}
+              {task?.status === status.id && <Check size={12} className="text-neutral-500" />}
             </button>
           ))}
         </div>
@@ -2666,6 +2705,10 @@ function parentMessageId(msg: ChatMessage): string | null {
 }
 
 function parseThreadMessageId(raw: string | null, channelId: string): string | null {
+  return parseScopedMessageId(raw, channelId);
+}
+
+function parseScopedMessageId(raw: string | null, channelId: string): string | null {
   if (!raw) return null;
   let decoded = raw;
   try {

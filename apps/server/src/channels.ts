@@ -66,7 +66,10 @@ export class ChannelService {
       FROM channels c
       LEFT JOIN channel_user_members cum ON c.id = cum.channel_id AND cum.user_id = ?
       LEFT JOIN channel_user_leaves cul ON c.id = cul.channel_id AND cul.user_id = ?
-      WHERE c.archived_at IS NULL AND cul.user_id IS NULL AND (c.visibility = 'public' OR cum.user_id IS NOT NULL) AND (c.is_dm IS NULL OR c.is_dm = 0)
+      WHERE c.archived_at IS NULL
+        AND (c.name = 'all' OR cul.user_id IS NULL)
+        AND (c.visibility = 'public' OR c.name = 'all' OR cum.user_id IS NOT NULL)
+        AND (c.is_dm IS NULL OR c.is_dm = 0)
       ORDER BY c.created_at
     `).all(userId, userId) as ChannelRow[];
   }
@@ -76,6 +79,11 @@ export class ChannelService {
     const r = db.prepare('SELECT id, name, description, visibility, created_by AS createdBy, created_at AS createdAt, archived_at AS archivedAt FROM channels WHERE id = ?')
       .get(id) as ChannelRow | undefined;
     return r ?? null;
+  }
+
+  isDefaultChannel(networkId: string, channelId: string): boolean {
+    const ch = this.get(networkId, channelId);
+    return Boolean(ch && ch.name === 'all');
   }
 
   dmTargetId(networkId: string, channelId: string): string | null {
@@ -181,7 +189,12 @@ export class ChannelService {
 
   ensureDefault(networkId: string): ChannelRow {
     const existing = this.list(networkId).find((c) => c.name === 'all');
-    if (existing) return existing;
+    if (existing) {
+      const db = this.deps.storageManager.getSpace(networkId).db;
+      db.prepare('UPDATE channels SET visibility = ? WHERE id = ?').run('public', existing.id);
+      db.prepare('DELETE FROM channel_user_leaves WHERE channel_id = ?').run(existing.id);
+      return { ...existing, visibility: 'public' };
+    }
     return this.create(networkId, { name: 'all', agentIds: [], isDefault: true });
   }
 

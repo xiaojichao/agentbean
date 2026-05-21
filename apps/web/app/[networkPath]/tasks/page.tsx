@@ -27,7 +27,7 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, memberEvents, taskEvents } from '@/lib/socket';
+import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, memberEvents, taskEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, Artifact, ChannelSummary, ChatMessage } from '@/lib/schema';
 
@@ -62,11 +62,11 @@ interface FilterOption {
 }
 
 const STATUS_COLUMNS: { id: TaskStatus; label: string; menuLabel: string; empty: string; badge: string; dot: string; collapsedByDefault?: boolean }[] = [
-  { id: 'todo', label: '待办', menuLabel: 'Todo', empty: '暂无待办任务。', badge: 'border-orange-200 bg-orange-100 text-orange-700', dot: 'bg-orange-500' },
-  { id: 'in_progress', label: '进行中', menuLabel: 'In Progress', empty: '暂无进行中任务。', badge: 'border-cyan-200 bg-cyan-100 text-cyan-700', dot: 'bg-cyan-500' },
-  { id: 'in_review', label: '待审核', menuLabel: 'In Review', empty: '暂无待审核任务。', badge: 'border-purple-200 bg-purple-100 text-purple-700', dot: 'bg-purple-500' },
-  { id: 'done', label: '已完成', menuLabel: 'Done', empty: '暂无已完成任务。', badge: 'border-emerald-200 bg-emerald-100 text-emerald-700', dot: 'bg-emerald-500', collapsedByDefault: true },
-  { id: 'closed', label: '已关闭', menuLabel: 'Closed', empty: '暂无已关闭任务。', badge: 'border-neutral-300 bg-neutral-100 text-neutral-600', dot: 'bg-neutral-500', collapsedByDefault: true },
+  { id: 'todo', label: '待办', menuLabel: '待办', empty: '暂无待办任务。', badge: 'border-orange-200 bg-orange-100 text-orange-700', dot: 'bg-orange-500' },
+  { id: 'in_progress', label: '进行中', menuLabel: '进行中', empty: '暂无进行中任务。', badge: 'border-cyan-200 bg-cyan-100 text-cyan-700', dot: 'bg-cyan-500' },
+  { id: 'in_review', label: '待审核', menuLabel: '待审核', empty: '暂无待审核任务。', badge: 'border-purple-200 bg-purple-100 text-purple-700', dot: 'bg-purple-500' },
+  { id: 'done', label: '已完成', menuLabel: '已完成', empty: '暂无已完成任务。', badge: 'border-emerald-200 bg-emerald-100 text-emerald-700', dot: 'bg-emerald-500', collapsedByDefault: true },
+  { id: 'closed', label: '已关闭', menuLabel: '已关闭', empty: '暂无已关闭任务。', badge: 'border-neutral-300 bg-neutral-100 text-neutral-600', dot: 'bg-neutral-500', collapsedByDefault: true },
 ];
 
 const STATUS_BY_ID = Object.fromEntries(STATUS_COLUMNS.map((column) => [column.id, column])) as Record<TaskStatus, typeof STATUS_COLUMNS[number]>;
@@ -76,11 +76,13 @@ const UNASSIGNED_FILTER = '__unassigned__';
 export default function TasksPage() {
   const conn = useAgentBeanStore((s) => s.conn);
   const channels = useAgentBeanStore((s) => s.channels);
+  const dms = useAgentBeanStore((s) => s.dms);
   const agents = useAgentBeanStore((s) => s.agents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
   const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
   const applyChannelsSnapshot = useAgentBeanStore((s) => s.applyChannelsSnapshot);
+  const applyDmsSnapshot = useAgentBeanStore((s) => s.applyDmsSnapshot);
   const applyChannelHistory = useAgentBeanStore((s) => s.applyChannelHistory);
   const appendMessage = useAgentBeanStore((s) => s.appendMessage);
   const np = useCurrentNetworkPath();
@@ -134,14 +136,18 @@ export default function TasksPage() {
     socket.emit('channels:subscribe', {});
     const onChannels = (list: ChannelSummary[]) => applyChannelsSnapshot(list);
     socket.on('channels:snapshot', onChannels);
+    const unsubscribeDms = dmEvents(socket).onSnapshot(applyDmsSnapshot);
     loadTasks();
     memberEvents().list().then((res) => {
       if (!res.ok) return;
       const members = (res.humans ?? []).map((member) => ({ id: member.userId, name: member.username, kind: 'human' as const }));
       setHumans(members);
     });
-    return () => { socket.off('channels:snapshot', onChannels); };
-  }, [conn, applyChannelsSnapshot, loadTasks]);
+    return () => {
+      socket.off('channels:snapshot', onChannels);
+      unsubscribeDms();
+    };
+  }, [conn, applyChannelsSnapshot, applyDmsSnapshot, loadTasks]);
 
   useEffect(() => {
     const next = searchParams.get('view') === 'list' ? 'list' : 'board';
@@ -399,7 +405,7 @@ export default function TasksPage() {
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200 px-4">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center border-2 border-neutral-900 bg-amber-300">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-white text-neutral-600">
               <Check size={16} />
             </div>
             <div className="min-w-0">
@@ -407,7 +413,7 @@ export default function TasksPage() {
               <p className="truncate text-xs text-neutral-400">{channelTaskCount} 个频道任务</p>
             </div>
           </div>
-          <button onClick={() => setShowCreate((value) => !value)} className="inline-flex h-8 items-center gap-1.5 rounded-md bg-neutral-900 px-3 text-xs font-semibold text-white hover:bg-neutral-800">
+          <button onClick={() => setShowCreate((value) => !value)} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-3 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 hover:text-neutral-900">
             <Plus size={13} />
             新建任务
           </button>
@@ -445,12 +451,12 @@ export default function TasksPage() {
             summary={filterSummary('执行人', selectedAssignees, assigneeOptions)}
           />
           <div className="flex-1" />
-          <div className="flex overflow-hidden rounded-md border border-neutral-300">
-            <button onClick={() => setViewParam('board')} className={`inline-flex h-8 items-center gap-1 border-r border-neutral-300 px-2.5 text-xs font-medium ${view === 'board' ? 'bg-amber-300 text-neutral-900' : 'bg-white text-neutral-500 hover:bg-neutral-50'}`}>
+          <div className="flex overflow-hidden rounded-md border border-neutral-200 bg-white">
+            <button onClick={() => setViewParam('board')} className={`inline-flex h-8 items-center gap-1 border-r border-neutral-200 px-2.5 text-xs font-medium ${view === 'board' ? 'bg-neutral-100 text-neutral-900' : 'bg-white text-neutral-500 hover:bg-neutral-50'}`}>
               <LayoutGrid size={13} />
               看板
             </button>
-            <button onClick={() => setViewParam('list')} className={`inline-flex h-8 items-center gap-1 px-2.5 text-xs font-medium ${view === 'list' ? 'bg-amber-300 text-neutral-900' : 'bg-white text-neutral-500 hover:bg-neutral-50'}`}>
+            <button onClick={() => setViewParam('list')} className={`inline-flex h-8 items-center gap-1 px-2.5 text-xs font-medium ${view === 'list' ? 'bg-neutral-100 text-neutral-900' : 'bg-white text-neutral-500 hover:bg-neutral-50'}`}>
               <List size={13} />
               列表
             </button>
@@ -550,9 +556,9 @@ export default function TasksPage() {
           onReply={(msg) => setThreadInput((prev) => appendReplyPrefix(prev, speakerName(msg, agents, currentUser?.username)))}
           onClose={closeThread}
           onViewInChannel={() => {
-            if (!selectedTask.channelId) return;
-            const id = threadRoot?.id ?? selectedTask.id;
-            router.push(`/${np}/channel/${selectedTask.channelId}?thread=${encodeURIComponent(`${selectedTask.channelId}:${id}`)}`);
+            if (!selectedTask.channelId || !threadRoot?.id) return;
+            const routeKind = dms.some((dm) => dm.id === selectedTask.channelId) ? 'dm' : 'channel';
+            router.push(`/${np}/${routeKind}/${selectedTask.channelId}?message=${encodeURIComponent(`${selectedTask.channelId}:${threadRoot.id}`)}`);
           }}
         />
       )}
@@ -598,13 +604,13 @@ function TaskBoard({
   onStatusMenu: (id: string | null) => void;
 }) {
   return (
-    <div className="flex min-h-0 flex-1 gap-4 overflow-x-auto p-4">
+    <div className="flex min-h-0 flex-1 gap-4 overflow-x-auto bg-neutral-50/60 p-4">
       {STATUS_COLUMNS.map((column) => {
         const colTasks = tasks.filter((task) => task.status === column.id);
         const collapsed = collapsedColumns.has(column.id);
         return (
-          <section key={column.id} className={`${collapsed ? 'w-72' : 'w-72'} shrink-0 border-2 border-neutral-900 bg-neutral-50`}>
-            <button onClick={() => onToggleColumn(column.id)} className="flex h-10 w-full items-center gap-2 border-b-2 border-neutral-900 bg-white px-3 text-left">
+          <section key={column.id} className={`${collapsed ? 'w-72' : 'w-72'} shrink-0 rounded-lg border border-neutral-200 bg-white shadow-sm`}>
+            <button onClick={() => onToggleColumn(column.id)} className="flex h-10 w-full items-center gap-2 border-b border-neutral-100 bg-white px-3 text-left hover:bg-neutral-50">
               <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase ${column.badge}`}>{column.label}</span>
               <span className="text-[11px] text-neutral-400">{colTasks.length}</span>
               <ChevronDown size={14} className={`ml-auto text-neutral-500 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
@@ -637,7 +643,7 @@ function TaskBoard({
                   />
                 ))}
                 {colTasks.length === 0 && (
-                  <div className="flex h-20 items-center justify-center border border-dashed border-neutral-300 bg-white text-xs text-neutral-400">
+                  <div className="flex h-20 items-center justify-center rounded-md border border-dashed border-neutral-200 bg-neutral-50/70 text-xs text-neutral-400">
                     {loading ? '加载中...' : column.empty}
                   </div>
                 )}
@@ -680,14 +686,14 @@ function TaskList({
   onStatusMenu: (id: string | null) => void;
 }) {
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-4">
+    <div className="min-h-0 flex-1 overflow-y-auto bg-neutral-50/60 p-4">
       <div className="space-y-3">
         {STATUS_COLUMNS.map((column) => {
           const colTasks = tasks.filter((task) => task.status === column.id);
           const collapsed = collapsedColumns.has(column.id);
           return (
-            <section key={column.id} className="border-2 border-neutral-900 bg-white">
-              <button onClick={() => onToggleColumn(column.id)} className="flex h-10 w-full items-center gap-2 border-b-2 border-neutral-900 px-3 text-left">
+            <section key={column.id} className="overflow-visible rounded-lg border border-neutral-200 bg-white shadow-sm">
+              <button onClick={() => onToggleColumn(column.id)} className="flex h-10 w-full items-center gap-2 border-b border-neutral-100 px-3 text-left hover:bg-neutral-50">
                 <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase ${column.badge}`}>{column.label}</span>
                 <span className="text-[11px] text-neutral-400">{colTasks.length}</span>
                 <ChevronDown size={14} className={`ml-auto text-neutral-500 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
@@ -740,7 +746,7 @@ function TaskCard(props: {
 }) {
   const channelName = channelLabel(props.task.channelId, props.channels);
   return (
-    <article draggable onClick={props.onOpen} onDragStart={props.onDragStart} onDragEnd={props.onDragEnd} className="group cursor-pointer border-2 border-neutral-900 bg-white p-3 shadow-sm hover:bg-amber-50/40 active:cursor-grabbing">
+    <article draggable onClick={props.onOpen} onDragStart={props.onDragStart} onDragEnd={props.onDragEnd} className="group cursor-pointer rounded-md border border-neutral-200 bg-white p-3 shadow-sm transition-colors hover:border-neutral-300 hover:bg-neutral-50 active:cursor-grabbing">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="truncate text-[11px] font-medium text-neutral-400">{channelName} #{props.number}</div>
@@ -770,7 +776,7 @@ function TaskRow(props: {
   onStatusMenu: (open: boolean) => void;
 }) {
   return (
-    <article onClick={props.onOpen} className="group grid cursor-pointer grid-cols-[minmax(220px,1fr)_180px_140px_120px_32px] items-center gap-3 bg-white px-3 py-2 hover:bg-amber-50/40">
+    <article onClick={props.onOpen} className="group grid cursor-pointer grid-cols-[minmax(220px,1fr)_180px_140px_120px_32px] items-center gap-3 bg-white px-3 py-2 transition-colors hover:bg-neutral-50">
       <div className="min-w-0">
         <div className="truncate text-[11px] font-medium text-neutral-400">{channelLabel(props.task.channelId, props.channels)} #{props.number}</div>
         <div className="truncate text-sm font-semibold text-neutral-900">{props.task.title}</div>
@@ -854,7 +860,7 @@ function FilterButton({
   const visible = options.filter((option) => option.name.toLowerCase().includes(query.trim().toLowerCase()));
   return (
     <div className="relative">
-      <button onClick={onToggle} className={`flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs font-medium ${selected.size > 0 ? 'border-neutral-900 bg-amber-50 text-neutral-900' : 'border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-50'}`}>
+      <button onClick={onToggle} className={`flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs font-medium ${selected.size > 0 ? 'border-neutral-300 bg-neutral-100 text-neutral-900' : 'border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-50'}`}>
         {icon}
         <span>{summary}</span>
         <ChevronDown size={13} />
@@ -939,15 +945,15 @@ function TaskThreadPanel({
     <aside className="flex w-[420px] shrink-0 flex-col border-l border-neutral-200 bg-white">
       <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-neutral-900">线程 — {channel ? `#${channel.name}` : '任务'}</div>
+          <div className="truncate text-sm font-semibold text-neutral-900">讨论串 — {channel ? `#${channel.name}` : '任务'}</div>
           <div className="truncate text-xs text-neutral-400">{task.title}</div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <button onClick={onViewInChannel} disabled={!task.channelId} className="inline-flex h-8 items-center gap-1 rounded-md border border-neutral-200 px-2 text-xs font-medium text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900 disabled:opacity-40" title="在频道中查看">
+          <button onClick={onViewInChannel} disabled={!task.channelId || !root} className="inline-flex h-8 items-center gap-1 rounded-md border border-neutral-200 px-2 text-xs font-medium text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900 disabled:opacity-40" title="在频道中查看">
             <ExternalLink size={13} />
             <span>在频道中查看</span>
           </button>
-          <button onClick={onClose} className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="关闭线程">
+          <button onClick={onClose} className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="关闭讨论串">
             <X size={16} />
           </button>
         </div>
@@ -999,7 +1005,7 @@ function TaskThreadPanel({
               }
             }}
             rows={2}
-            placeholder="回复线程"
+            placeholder="回复讨论串"
             className="w-full resize-none px-3 pt-2.5 pb-1 text-sm outline-none placeholder:text-neutral-400"
           />
           {attachments.length > 0 && <AttachmentStrip attachments={attachments} onRemove={onRemoveAttachment} />}
@@ -1056,7 +1062,7 @@ function ThreadMessage({
   return (
     <div className="group relative flex gap-2 rounded-md border border-transparent px-2 py-2 transition-colors hover:border-neutral-900 hover:bg-white">
       <div className="pointer-events-none absolute right-2 top-1 z-10 flex items-center gap-0.5 border border-neutral-300 bg-white opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-        <button onClick={onReply} className="flex h-6 w-6 items-center justify-center border-r border-neutral-200 text-neutral-500 hover:bg-amber-50 hover:text-neutral-900" title="回复线程"><MessageSquare size={13} /></button>
+        <button onClick={onReply} className="flex h-6 w-6 items-center justify-center border-r border-neutral-200 text-neutral-500 hover:bg-amber-50 hover:text-neutral-900" title="回复讨论串"><MessageSquare size={13} /></button>
         <button onClick={onToggleReaction} className={`flex h-6 w-6 items-center justify-center border-r border-neutral-200 hover:bg-amber-50 ${reacted ? 'text-pink-600' : 'text-neutral-500 hover:text-neutral-900'}`} title={reacted ? '取消表情' : '添加表情'}><Smile size={13} /></button>
         <button onClick={onToggleSave} className={`flex h-6 w-6 items-center justify-center border-r border-neutral-200 hover:bg-amber-50 ${saved ? 'text-amber-500' : 'text-neutral-500 hover:text-neutral-900'}`} title={saved ? '取消收藏' : '收藏消息'}>
           {saved ? <BookmarkCheck size={13} /> : <Bookmark size={13} />}
@@ -1096,7 +1102,7 @@ function ThreadMessage({
 
 function TaskThreadRoot({ task }: { task: Task }) {
   return (
-    <div className="rounded-md border-2 border-neutral-900 bg-white p-3">
+    <div className="rounded-md border border-neutral-200 bg-white p-3 shadow-sm">
       <div className="text-[11px] font-medium text-neutral-400">任务根消息</div>
       <div className="mt-1 text-sm font-semibold text-neutral-900">{task.title}</div>
       {task.description && <div className="mt-2 text-sm leading-6 text-neutral-600">{task.description}</div>}
@@ -1219,8 +1225,8 @@ function ArtifactPreview({ artifact }: { artifact: Artifact }) {
     );
   }
   return (
-    <a href={downloadUrl} target="_blank" rel="noreferrer" className="group inline-flex min-h-16 max-w-96 items-center gap-3 border border-neutral-300 bg-white px-3 py-2 text-xs text-neutral-700 hover:border-neutral-900 hover:bg-amber-50/40">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center border border-neutral-300 bg-neutral-50 text-neutral-500 group-hover:border-neutral-900 group-hover:bg-white"><FileText size={15} /></span>
+    <a href={downloadUrl} target="_blank" rel="noreferrer" className="group inline-flex min-h-16 max-w-96 items-center gap-3 rounded-md border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-700 hover:border-neutral-300 hover:bg-neutral-50">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-neutral-50 text-neutral-500 group-hover:bg-white"><FileText size={15} /></span>
       <span className="min-w-0 flex-1">
         <span className="block truncate font-medium text-neutral-900">{artifact.filename}</span>
         <span className="mt-0.5 block truncate text-[11px] text-neutral-500">{formatFileSize(artifact.sizeBytes)}</span>

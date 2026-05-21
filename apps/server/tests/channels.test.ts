@@ -84,4 +84,24 @@ describe('ChannelService', () => {
     expect(sorted[0]!.status).toBe('online');
     expect(sorted[1]!.status).toBe('offline');
   });
+
+  it('prevents users from leaving the default all channel', () => {
+    const ch = svc.ensureDefault('test-net');
+
+    expect(() => svc.leaveUser('test-net', ch.id, 'u1')).toThrow(/CANNOT_LEAVE_DEFAULT_CHANNEL/);
+  });
+
+  it('keeps the default all channel public and visible despite stale leave rows', () => {
+    const ch = svc.ensureDefault('test-net');
+    const db = storage.getSpace('test-net').db;
+    db.prepare('UPDATE channels SET visibility = ? WHERE id = ?').run('private', ch.id);
+    db.prepare('INSERT OR REPLACE INTO channel_user_leaves (channel_id, user_id, left_at) VALUES (?, ?, ?)')
+      .run(ch.id, 'u1', Date.now());
+
+    const restored = svc.ensureDefault('test-net');
+
+    expect(restored.visibility).toBe('public');
+    expect(svc.listForUser('test-net', 'u1').map((item) => item.id)).toContain(ch.id);
+    expect(svc.userHasLeft('test-net', ch.id, 'u1')).toBe(false);
+  });
 });

@@ -975,7 +975,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       const visibleAgents = buildVisibleAgentDtos(networkId);
       const agentById = new Map(visibleAgents.map((agent) => [agent.id, agent]));
       const dmTargetId = channels.dmTargetId(networkId, ch.id);
-      if (!dmTargetId && channels.userHasLeft(networkId, ch.id, userId)) {
+      const isDefaultChannel = channels.isDefaultChannel(networkId, ch.id);
+      if (!dmTargetId && !isDefaultChannel && channels.userHasLeft(networkId, ch.id, userId)) {
         return ack?.({ ok: false, error: 'CHANNEL_LEFT' });
       }
 
@@ -984,7 +985,11 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         ? payload.parentMessageId.trim()
         : undefined;
       const explicitMention = /^\s*@(\S+)/.test(body);
-      const memberIds = dmTargetId ? [dmTargetId] : channels.memberIds(networkId, ch.id);
+      const memberIds = dmTargetId
+        ? [dmTargetId]
+        : isDefaultChannel
+          ? visibleAgents.map((agent) => agent.id)
+          : channels.memberIds(networkId, ch.id);
       const members = memberIds
         .map((id) => agentById.get(id))
         .filter((agent): agent is NonNullable<typeof agent> => Boolean(agent))
@@ -1146,14 +1151,15 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const ch = channels.get(networkId, payload.channelId);
         if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
         const visibleAgents = buildVisibleAgentDtos(networkId);
-        const agentIds = new Set(channels.memberIds(networkId, payload.channelId));
-        const agents = visibleAgents.filter((agent) => agentIds.has(agent.id));
+        const isDefaultChannel = channels.isDefaultChannel(networkId, payload.channelId);
+        const agentIds = isDefaultChannel ? null : new Set(channels.memberIds(networkId, payload.channelId));
+        const agents = visibleAgents.filter((agent) => !agentIds || agentIds.has(agent.id));
         const networkHumans = globalDb.networkMembers.listByNetwork(networkId);
-        const userIds = ch.visibility === 'private'
+        const userIds = ch.visibility === 'private' && !isDefaultChannel
           ? new Set(channels.userMembers(networkId, payload.channelId))
           : null;
         const humans = networkHumans.filter((human) => {
-          if (channels.userHasLeft(networkId, payload.channelId, human.userId)) return false;
+          if (!isDefaultChannel && channels.userHasLeft(networkId, payload.channelId, human.userId)) return false;
           return !userIds || userIds.has(human.userId);
         });
         ack?.({ ok: true, humans, agents });
@@ -1221,7 +1227,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
         const ch = channels.get(networkId, payload.channelId);
         if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
-        const agentIds = channels.memberIds(networkId, payload.channelId);
+        const agentIds = channels.isDefaultChannel(networkId, payload.channelId)
+          ? buildVisibleAgentDtos(networkId).map((agent) => agent.id)
+          : channels.memberIds(networkId, payload.channelId);
         const result = stopAgents(agentIds, `频道 #${ch.name} 已停止运行中的 Agent`);
         ack?.({ ok: true, stopped: result.stopped });
       } catch (e: any) {

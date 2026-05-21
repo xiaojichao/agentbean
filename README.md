@@ -1,13 +1,13 @@
 # AgentBean
 
-AgentBean 是一个面向 AI 员工与人类协作的本地优先团队平台。它把运行在用户设备上的 Agent、AgentOS 网关、Coding Agent CLI 运行时、团队聊天、任务、文件产物和设备状态连接到同一个协作界面中。
+AgentBean 是一个面向人类与 Agent 协作的本地优先团队平台。它最大的特点是：人类成员、本机上的 Agent、远程设备上的 Agent 都可以在同一个 Team 中无缝协作。
 
-当前系统只把 Agent 分为两类：
+在 AgentBean 中，频道、私聊、讨论串、任务、文件产物、成员和设备状态都归属于 Team。Agent 可以运行在当前用户的设备上，也可以运行在其他在线设备上；用户只需要在同一个协作界面里 @ 它、私聊它、查看它的任务和产物。
 
-- **AgentOS 托管型 Agent**：由 OpenClaw、Hermes 等 AgentOS / Gateway 托管，例如 Openclaw、Hermes。
-- **自定义 Agent**：用户创建的 Agent，使用 Claude Code、Codex CLI、Kimi CLI 等 Coding Agent 作为运行时。
+产品层的 Agent 主要有两种形态：
 
-Coding Agent 不再作为 Agent 类型出现，它只是自定义 Agent 的运行时。
+- **AgentOS 托管型 Agent**：由 OpenClaw、Hermes 等 AgentOS / Gateway 托管，可以作为团队成员响应频道或私聊消息。
+- **自定义 Agent**：用户创建的专属 Agent，连接某台设备上的项目目录和本地工具，把个人工作流转化为团队可协作的能力。
 
 ## 仓库结构
 
@@ -16,7 +16,7 @@ AgentBean/
   apps/
     web/       Next.js 前端，提供聊天、成员、设备、任务和设置页面
     server/    Express + Socket.IO 协作中枢，负责认证、路由、存储和文件 API
-    daemon/    运行在用户设备上的 Daemon，扫描运行时并执行 Agent 任务
+    daemon/    运行在用户设备上的 Daemon，连接设备、执行 Agent 任务并同步产物
 ```
 
 ## 总体架构
@@ -27,9 +27,9 @@ flowchart LR
   W <-->|"/web Socket.IO"| S["apps/server<br/>协作中枢"]
   W -->|"HTTP Artifact API"| S
 
-  S <-->|"/agent Socket.IO"| D["apps/daemon<br/>设备守护进程"]
-  D --> R1["AgentOS 运行时<br/>Hermes / OpenClaw"]
-  D --> R2["Coding Agent 运行时<br/>Codex CLI / Claude Code / Kimi CLI"]
+  S <-->|"/agent Socket.IO"| D["apps/daemon<br/>本机/远程设备守护进程"]
+  D --> R1["AgentOS 托管 Agent<br/>Hermes / OpenClaw"]
+  D --> R2["自定义 Agent 执行环境<br/>项目目录 / 本地工具"]
   D --> FS["本地 .agentbean 工作区"]
 
   S --> DB["SQLite<br/>全局库 + 团队空间库"]
@@ -38,9 +38,9 @@ flowchart LR
 
 核心设计：
 
-- **Web 只负责交互**：频道、私聊、线程、任务、文件、成员、设备页面都通过 Socket.IO 和 HTTP API 与 Server 通信。
+- **Web 只负责交互**：频道、私聊、讨论串、任务、文件、成员、设备页面都通过 Socket.IO 和 HTTP API 与 Server 通信。
 - **Server 是协作中枢**：管理团队、成员、频道、消息、DM、Agent 状态、任务、Artifact 元数据和消息路由。
-- **Daemon 是运行时桥梁**：在用户设备上扫描运行时，执行自定义 Agent 或 AgentOS 托管型 Agent，并把输出、文件、状态同步回 Server。
+- **Daemon 是设备桥梁**：连接本机或远程设备，执行自定义 Agent 或 AgentOS 托管型 Agent，并把输出、文件、状态同步回 Server。
 - **团队隔离存储**：每个 Team 有独立的消息、频道、任务、Artifact 空间；全局库保存用户、团队、设备和 Agent 配置。
 - **本地工作区优先**：每个设备会为 Team/Agent 创建本地 `.agentbean` 工作区，用于存放生成物、中间产物和同步文件。
 
@@ -50,8 +50,8 @@ flowchart LR
 
 - 频道聊天和 Agent 私聊。
 - 支持 `@Agent` 提及。
-- 支持消息线程。
-- 支持线程中继续与 Agent 交互。
+- 支持消息讨论串。
+- 支持讨论串中继续与 Agent 交互。
 - 支持图片和文件附件上传。
 - 支持收藏消息、活动视图、搜索、任务视图和文件视图。
 - Agent 回复可以携带生成文件，图片可预览，文件可下载。
@@ -70,14 +70,14 @@ flowchart LR
   - 动态
 - 自定义 Agent 在线状态基于：
   - 所在设备在线
-  - 所选 Coding Agent 运行时在设备上被检测到
+  - 所选执行环境在设备上可用
   - 项目目录存在
 
 ### 设备
 
 - 设备列表和设备详情页。
-- 设备详情显示 Daemon 版本、系统信息和运行时检测结果。
-- “检测到的编程智能体运行时”用于列出 Claude Code、Codex CLI、Kimi CLI 等本机运行时。
+- 设备详情显示 Daemon 版本、系统信息和执行环境检测结果。
+- 设备能力检测区域用于列出该设备上可用于执行自定义 Agent 的本地工具。
 - AgentOS 托管型 Agent 和自定义 Agent 分区展示。
 - 可查看和编辑自定义 Agent 基本配置。
 
@@ -87,17 +87,17 @@ flowchart LR
 - 创建字段：
   - 名称
   - 功能介绍
-  - Code Agent 运行时
+  - 执行环境
   - 项目目录
 - 自定义 Agent 可以发布到 Team。
-- Coding Agent 运行时本身不会加入 Team，也不会出现在智能体成员列表。
+- 自定义 Agent 发布到 Team 后，会作为团队里的 Agent 成员出现；它背后的设备和工具只负责执行任务。
 
 ### 工作区与文件产物
 
 - Daemon 会为 Agent 任务创建运行工作区。
 - Agent 生成的图片、文档等文件会通过 Daemon 上传到 Server Artifact API。
 - Server 保存 Artifact 元数据和下载/预览地址。
-- Web 在消息、线程、文件视图和 Agent 工作区中展示这些产物。
+- Web 在消息、讨论串、文件视图和 Agent 工作区中展示这些产物。
 - Daemon 会同步 Team 工作区中的产物，便于不同设备上的同一 Team 成员查看。
 
 ## 关键流程
@@ -111,18 +111,18 @@ sequenceDiagram
   participant W as Web
 
   D->>S: 连接 /agent namespace
-  D->>S: register(deviceId, networkId, capabilities)
-  D->>S: 上报系统信息、Daemon 版本、运行时列表
+  D->>S: register(deviceId, teamId, capabilities)
+  D->>S: 上报系统信息、Daemon 版本、可用执行环境
   S->>W: agent:status / devices:snapshot
   D->>S: heartbeat
 ```
 
-### 运行时扫描流程
+### 设备能力扫描流程
 
 ```mermaid
 flowchart TD
   A["Daemon 启动"] --> B["读取设备配置"]
-  B --> C["扫描 Coding Agent 运行时"]
+  B --> C["扫描本机可用工具"]
   B --> D["扫描 AgentOS Gateway"]
   B --> E["扫描本地 Agent 配置"]
   C --> F["合并去重"]
@@ -140,21 +140,21 @@ sequenceDiagram
   participant W as Web
   participant S as Server
   participant D as Daemon
-  participant A as Agent Runtime
+  participant A as Agent 执行环境
 
   U->>W: 在频道发送消息或 @Agent
   W->>S: message:send
   S->>S: 保存 human message
-  S->>S: 解析 @ 提及或线程目标
+  S->>S: 解析 @ 提及或讨论串目标
   S->>D: dispatch(prompt, history, attachments)
-  D->>A: 调用 Hermes/OpenClaw/Codex/Claude Code 等运行时
+  D->>A: 调用目标 Agent 的执行环境
   A-->>D: 返回文本和生成文件
   D->>S: reply(body, artifactIds)
   S->>S: 保存 Agent 回复
   S->>W: channel:message
 ```
 
-线程中特别注意：当前用户输入只作为 `prompt` 发送，历史 `history` 不再重复包含当前消息，避免 Hermes 等 CLI 把上下文原样回显进回复。
+讨论串中特别注意：当前用户输入只作为 `prompt` 发送，历史 `history` 不再重复包含当前消息，避免 Hermes 等 CLI 把上下文原样回显进回复。
 
 ### 自定义 Agent Dispatch
 
@@ -164,7 +164,7 @@ flowchart TD
   R --> C{"是否自定义 Agent?"}
   C -- 是 --> D["找到 Agent 所在设备"]
   D --> E["检查设备在线"]
-  E --> F["检查 runtime 已检测"]
+  E --> F["检查执行环境可用"]
   F --> G["检查项目目录存在"]
   G --> H["向该设备 Daemon 发送 customAgent dispatch"]
   C -- 否 --> I["按 AgentOS 托管型 Agent socket dispatch"]
@@ -174,7 +174,7 @@ flowchart TD
 
 ```mermaid
 sequenceDiagram
-  participant A as Agent Runtime
+  participant A as Agent 执行环境
   participant D as Daemon
   participant S as Server
   participant W as Web
@@ -197,7 +197,7 @@ sequenceDiagram
 - 用户、Team、设备和 Agent 配置管理。
 - Socket.IO `/web` namespace：面向前端。
 - Socket.IO `/agent` namespace：面向 Daemon。
-- 频道、DM、线程和任务消息持久化。
+- 频道、DM、讨论串和任务消息持久化。
 - Agent 路由与 dispatch。
 - Agent 状态和性能指标收集。
 - Artifact 上传、下载、预览和工作区查询。
@@ -230,11 +230,11 @@ sequenceDiagram
 
 ## Daemon 设计
 
-`apps/daemon` 运行在用户本机，npm 包名为 `@agentbean/daemon`。
+`apps/daemon` 运行在用户设备上，npm 包名为 `@agentbean/daemon`。
 
 核心职责：
 
-- 扫描本机运行时：
+- 扫描本机可用执行环境：
   - Claude Code
   - Codex CLI
   - Kimi CLI
@@ -243,7 +243,7 @@ sequenceDiagram
 - 向 Server 注册设备和能力。
 - 维护心跳和在线状态。
 - 执行 Server 下发的 dispatch。
-- 为自定义 Agent 切换到项目目录执行所选运行时。
+- 为自定义 Agent 切换到项目目录并调用所选执行环境。
 - 处理附件下载和生成文件上传。
 - 同步 `.agentbean` 工作区产物。
 

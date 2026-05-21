@@ -66,6 +66,34 @@ describe('/web namespace', () => {
 
     ag.close(); web.close();
   });
+
+  it('returns every team member for the default all channel', async () => {
+    app.globalDb.users.create({
+      id: 'u-all',
+      username: 'all-user',
+      passwordHash: null,
+      createdAt: Date.now(),
+    });
+    app.globalDb.networkMembers.add('default', 'u-all', 'member');
+    app.registry.register('s-all-1', { id: 'all-a1', name: 'All A1', role: 'r', adapterKind: 'codex', category: 'agentos-hosted', networkId: 'default' });
+    app.registry.register('s-all-2', { id: 'all-a2', name: 'All A2', role: 'r', adapterKind: 'codex', category: 'agentos-hosted', networkId: 'default' });
+    const ch = app.channels.ensureDefault('default');
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('u-all', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    const res = await new Promise<any>((resolve) => {
+      web.emit('channel:members', { channelId: ch.id }, resolve);
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.humans.map((human: any) => human.userId)).toContain('u-all');
+    expect(res.agents.map((agent: any) => agent.id).sort()).toEqual(['all-a1', 'all-a2']);
+    web.close();
+  });
 });
 
 describe('message:send', () => {
