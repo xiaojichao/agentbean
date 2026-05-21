@@ -249,7 +249,7 @@ sequenceDiagram
 
 当前发布状态：
 
-- 官方 npm registry 中 `@agentbean/daemon@0.1.16` 已发布。
+- 官方 npm registry 中 `@agentbean/daemon@0.1.17` 已发布。
 - 如果本机 npm registry 使用 `npmmirror`，可能会暂时只看到旧版本；以 `https://registry.npmjs.org` 为准。
 
 ## 本地开发
