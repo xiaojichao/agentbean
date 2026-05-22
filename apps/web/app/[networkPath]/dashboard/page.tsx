@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Globe, Users, Monitor, Bot, Trash2, RefreshCw } from 'lucide-react';
+import { Globe, Users, Monitor, Bot, Trash2, RefreshCw, X } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { getWebSocket } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
@@ -10,8 +10,56 @@ type Tab = 'networks' | 'users' | 'devices' | 'agents';
 
 interface AdminNetwork { id: string; ownerId: string; name: string; path: string | null; visibility: string; createdAt: number; members: { userId: string; role: string; username: string }[]; }
 interface AdminUser { id: string; username: string; email: string | null; role: string; createdAt: number; }
-interface AdminDevice { id: string; status: string; agentCount: number; lastSeenAt: number; networkId: string; }
-interface AdminAgent { id: string; name: string; role: string; adapterKind: string; status: string; visibility?: string; networkId?: string; deviceId?: string; }
+interface AdminDevice {
+  id: string;
+  name: string;
+  hostname?: string | null;
+  status: string;
+  agentCount: number;
+  lastSeenAt: number;
+  networkId: string;
+  networkName?: string;
+  userId: string;
+  userName: string;
+  runtimes?: { name: string; adapterKind: string; command: string; installed: boolean }[];
+  connectCommand?: string | null;
+  systemInfo?: {
+    platform?: string;
+    arch?: string;
+    osVersion?: string;
+    hostname?: string;
+    cpuModel?: string;
+    cpuCores?: number;
+    totalMemoryGB?: number;
+    freeMemoryGB?: number;
+    nodeVersion?: string;
+    daemonVersion?: string;
+  } | null;
+}
+interface AdminAgent {
+  id: string;
+  name: string;
+  role: string;
+  adapterKind: string;
+  status: string;
+  visibility?: string;
+  networkId?: string;
+  networkName?: string;
+  deviceId?: string;
+  deviceName?: string;
+  deviceUserName?: string | null;
+  ownerName?: string | null;
+  userName?: string | null;
+  category?: string;
+  source?: string;
+  command?: string | null;
+  args?: string[] | null;
+  cwd?: string | null;
+  description?: string | null;
+  lastSeenAt?: number;
+  lastError?: string;
+  publishedNetworkIds?: string[];
+}
 
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: 'networks', label: '团队', icon: <Globe size={14} /> },
@@ -35,6 +83,8 @@ export default function AdminDashboardPage() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [devices, setDevices] = useState<AdminDevice[]>([]);
   const [agents, setAgents] = useState<AdminAgent[]>([]);
+  const [selectedDevice, setSelectedDevice] = useState<AdminDevice | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState<AdminAgent | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -114,8 +164,10 @@ export default function AdminDashboardPage() {
 
       {!loading && tab === 'networks' && <NetworksTable networks={networks} onDelete={(id) => handleDelete('network', id)} />}
       {!loading && tab === 'users' && <UsersTable users={users} onDelete={(id) => handleDelete('user', id)} />}
-      {!loading && tab === 'devices' && <DevicesTable devices={devices} networks={networks} />}
-      {!loading && tab === 'agents' && <AgentsTable agents={agents} networks={networks} onDelete={(id) => handleDelete('agent', id)} />}
+      {!loading && tab === 'devices' && <DevicesTable devices={devices} networks={networks} onSelect={setSelectedDevice} />}
+      {!loading && tab === 'agents' && <AgentsTable agents={agents} networks={networks} onSelect={setSelectedAgent} onDelete={(id) => handleDelete('agent', id)} />}
+      {selectedDevice && <DeviceDetailDialog device={selectedDevice} onClose={() => setSelectedDevice(null)} />}
+      {selectedAgent && <AgentDetailDialog agent={selectedAgent} onClose={() => setSelectedAgent(null)} />}
       </div>
     </div>
   );
@@ -127,11 +179,75 @@ function Table({ headers, children }: { headers: string[]; children: React.React
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-neutral-200 bg-neutral-50">
-            {headers.map((h) => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-neutral-500">{h}</th>)}
+            {headers.map((h) => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-neutral-500">{h}</th>)}
           </tr>
         </thead>
         <tbody className="divide-y divide-neutral-100">{children}</tbody>
       </table>
+    </div>
+  );
+}
+
+function StatusPill({ status }: { status: string }) {
+  const label = status === 'online' ? '在线' : status === 'busy' ? '忙碌' : status === 'offline' ? '离线' : status === 'error' ? '异常' : status;
+  const color = status === 'online'
+    ? 'bg-emerald-50 text-emerald-700'
+    : status === 'busy'
+      ? 'bg-amber-50 text-amber-700'
+      : status === 'error'
+        ? 'bg-red-50 text-red-700'
+        : 'bg-neutral-100 text-neutral-500';
+  return <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${color}`}>{label}</span>;
+}
+
+function visibilityLabel(visibility?: string) {
+  return visibility === 'public' ? '公开' : '私有';
+}
+
+function agentTypeLabel(agent: AdminAgent) {
+  if (agent.category === 'agentos-hosted') return 'AgentOS 托管型 Agent';
+  if (agent.source === 'custom') return '自定义 Agent';
+  return 'Agent';
+}
+
+function formatDateTime(value?: number | null) {
+  return value ? new Date(value).toLocaleString('zh-CN') : '—';
+}
+
+function formatDaemonVersion(device: AdminDevice) {
+  const version = device.systemInfo?.daemonVersion?.trim();
+  if (version && version !== 'unknown') return version.startsWith('v') ? version : `v${version}`;
+  return device.status === 'offline' ? '离线' : '版本未知';
+}
+
+function DialogShell({ title, icon, onClose, children }: { title: string; icon: React.ReactNode; onClose: () => void; children: React.ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4" onClick={onClose}>
+      <div className="w-full max-w-2xl overflow-hidden rounded-lg bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-5">
+          <div className="flex min-w-0 items-center gap-2">
+            {icon}
+            <h2 className="truncate text-sm font-semibold text-neutral-900">{title}</h2>
+          </div>
+          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800" title="关闭">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="max-h-[72vh] overflow-y-auto p-5">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function DetailGrid({ children }: { children: React.ReactNode }) {
+  return <div className="grid gap-3 sm:grid-cols-2">{children}</div>;
+}
+
+function DetailItem({ label, value, mono = false }: { label: string; value?: React.ReactNode; mono?: boolean }) {
+  return (
+    <div className="rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
+      <div className="text-[11px] font-medium text-neutral-500">{label}</div>
+      <div className={`mt-1 min-h-5 break-words text-sm text-neutral-900 ${mono ? 'font-mono text-xs' : 'font-medium'}`}>{value || '—'}</div>
     </div>
   );
 }
@@ -215,38 +331,158 @@ function UsersTable({ users, onDelete }: { users: AdminUser[]; onDelete: (id: st
   );
 }
 
-function DevicesTable({ devices, networks }: { devices: AdminDevice[]; networks: AdminNetwork[] }) {
-  if (devices.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无在线设备</div>;
+function DevicesTable({ devices, networks, onSelect }: { devices: AdminDevice[]; networks: AdminNetwork[]; onSelect: (device: AdminDevice) => void }) {
+  if (devices.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无设备</div>;
   return (
-    <Table headers={['设备', '状态', 'Agent 数', '团队', '最后心跳']}>
+    <Table headers={['设备名称', '所属用户', '状态', 'Agent 数', '团队', '最后心跳']}>
       {devices.map((d) => (
         <tr key={d.id} className="hover:bg-neutral-50">
-          <td className="px-4 py-2.5 text-sm">设备</td>
-          <td className="px-4 py-2.5"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${d.status === 'online' ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'}`}>{d.status}</span></td>
+          <td className="px-4 py-2.5 text-sm">
+            <button onClick={() => onSelect(d)} className="font-medium text-blue-600 hover:text-blue-700 hover:underline">
+              {d.name || d.hostname || '未命名设备'}
+            </button>
+          </td>
+          <td className="px-4 py-2.5 text-xs text-neutral-600">{d.userName ?? '未知用户'}</td>
+          <td className="px-4 py-2.5"><StatusPill status={d.status} /></td>
           <td className="px-4 py-2.5">{d.agentCount}</td>
-          <td className="px-4 py-2.5 text-xs text-neutral-500">{networks.find((n) => n.id === d.networkId)?.name ?? '未知团队'}</td>
-          <td className="px-4 py-2.5 text-xs text-neutral-500">{d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString() : '—'}</td>
+          <td className="px-4 py-2.5 text-xs text-neutral-500">{d.networkName ?? networks.find((n) => n.id === d.networkId)?.name ?? '未知团队'}</td>
+          <td className="px-4 py-2.5 text-xs text-neutral-500">{formatDateTime(d.lastSeenAt)}</td>
         </tr>
       ))}
     </Table>
   );
 }
 
-function AgentsTable({ agents, networks, onDelete }: { agents: AdminAgent[]; networks: AdminNetwork[]; onDelete: (id: string) => void }) {
+function AgentsTable({ agents, networks, onSelect, onDelete }: { agents: AdminAgent[]; networks: AdminNetwork[]; onSelect: (agent: AdminAgent) => void; onDelete: (id: string) => void }) {
   if (agents.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无 Agent</div>;
   return (
-    <Table headers={['名称', '角色', '适配器', '状态', '可见性', '团队', '']}>
+    <Table headers={['名称', '所属设备', '所属用户', '适配器', '状态', '可见性', '团队', '']}>
       {agents.map((a) => (
         <tr key={a.id} className="hover:bg-neutral-50">
-          <td className="px-4 py-2.5 font-medium">{a.name}</td>
-          <td className="px-4 py-2.5 text-xs text-neutral-500">{a.role}</td>
+          <td className="px-4 py-2.5">
+            <button onClick={() => onSelect(a)} className="font-medium text-blue-600 hover:text-blue-700 hover:underline">
+              {a.name}
+            </button>
+          </td>
+          <td className="px-4 py-2.5 text-xs text-neutral-600">{a.deviceName ?? '未分配设备'}</td>
+          <td className="px-4 py-2.5 text-xs text-neutral-600">{a.userName ?? a.ownerName ?? a.deviceUserName ?? '未知用户'}</td>
           <td className="px-4 py-2.5 font-mono text-xs text-neutral-500">{a.adapterKind}</td>
-          <td className="px-4 py-2.5"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${a.status === 'online' ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'}`}>{a.status}</span></td>
-          <td className="px-4 py-2.5"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${a.visibility === 'public' ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'}`}>{a.visibility === 'public' ? '公开' : '私有'}</span></td>
-          <td className="px-4 py-2.5 text-xs text-neutral-500">{networks.find((n) => n.id === a.networkId)?.name ?? '默认团队'}</td>
+          <td className="px-4 py-2.5"><StatusPill status={a.status} /></td>
+          <td className="px-4 py-2.5"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${a.visibility === 'public' ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'}`}>{visibilityLabel(a.visibility)}</span></td>
+          <td className="px-4 py-2.5 text-xs text-neutral-500">{a.networkName ?? networks.find((n) => n.id === a.networkId)?.name ?? '默认团队'}</td>
           <td className="px-4 py-2.5"><DeleteButton onClick={() => onDelete(a.id)} label="Agent" /></td>
         </tr>
       ))}
     </Table>
+  );
+}
+
+function DeviceDetailDialog({ device, onClose }: { device: AdminDevice; onClose: () => void }) {
+  const runtimes = device.runtimes ?? [];
+  return (
+    <DialogShell title={device.name || device.hostname || '未命名设备'} icon={<Monitor size={17} className="text-neutral-600" />} onClose={onClose}>
+      <div className="space-y-5">
+        <div className="flex items-center justify-between rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
+          <div>
+            <div className="text-sm font-semibold text-neutral-900">{device.name || device.hostname || '未命名设备'}</div>
+            <div className="mt-0.5 text-xs text-neutral-500">{device.userName ?? '未知用户'} · {device.networkName ?? '未知团队'}</div>
+          </div>
+          <StatusPill status={device.status} />
+        </div>
+
+        <section>
+          <h3 className="mb-2 text-xs font-semibold text-neutral-500">基本信息</h3>
+          <DetailGrid>
+            <DetailItem label="设备名称" value={device.name || device.hostname || '未命名设备'} />
+            <DetailItem label="所属用户" value={device.userName ?? '未知用户'} />
+            <DetailItem label="所属团队" value={device.networkName ?? '未知团队'} />
+            <DetailItem label="最后心跳" value={formatDateTime(device.lastSeenAt)} />
+            <DetailItem label="Agent 数量" value={`${device.agentCount}`} />
+            <DetailItem label="Daemon 版本" value={formatDaemonVersion(device)} />
+          </DetailGrid>
+        </section>
+
+        <section>
+          <h3 className="mb-2 text-xs font-semibold text-neutral-500">设备信息</h3>
+          <DetailGrid>
+            <DetailItem label="操作系统" value={device.systemInfo?.osVersion ?? device.systemInfo?.platform} />
+            <DetailItem label="架构" value={device.systemInfo?.arch} />
+            <DetailItem label="CPU" value={device.systemInfo?.cpuModel} />
+            <DetailItem label="CPU 核心" value={device.systemInfo?.cpuCores ? `${device.systemInfo.cpuCores} 核` : undefined} />
+            <DetailItem label="总内存" value={device.systemInfo?.totalMemoryGB ? `${device.systemInfo.totalMemoryGB} GB` : undefined} />
+            <DetailItem label="Node.js" value={device.systemInfo?.nodeVersion} />
+          </DetailGrid>
+        </section>
+
+        <section>
+          <h3 className="mb-2 text-xs font-semibold text-neutral-500">检测到的编程智能体运行时</h3>
+          {runtimes.length === 0 ? (
+            <div className="rounded-md border border-neutral-100 bg-neutral-50 px-3 py-3 text-sm text-neutral-400">暂无运行时信息</div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {runtimes.map((runtime) => (
+                <span key={`${runtime.adapterKind}-${runtime.command}`} className={`inline-flex items-center rounded-md border px-2.5 py-1 text-xs ${runtime.installed ? 'border-neutral-300 bg-white text-neutral-800' : 'border-neutral-200 bg-neutral-50 text-neutral-400'}`}>
+                  {runtime.name || runtime.adapterKind}{runtime.installed ? '' : '（未安装）'}
+                </span>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+    </DialogShell>
+  );
+}
+
+function AgentDetailDialog({ agent, onClose }: { agent: AdminAgent; onClose: () => void }) {
+  return (
+    <DialogShell title={agent.name} icon={<Bot size={17} className="text-neutral-600" />} onClose={onClose}>
+      <div className="space-y-5">
+        <div className="flex items-center justify-between rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
+          <div>
+            <div className="text-sm font-semibold text-neutral-900">{agent.name}</div>
+            <div className="mt-0.5 text-xs text-neutral-500">{agentTypeLabel(agent)} · {agent.userName ?? agent.ownerName ?? agent.deviceUserName ?? '未知用户'}</div>
+          </div>
+          <StatusPill status={agent.status} />
+        </div>
+
+        {agent.description && (
+          <section>
+            <h3 className="mb-2 text-xs font-semibold text-neutral-500">功能介绍</h3>
+            <div className="rounded-md border border-neutral-100 bg-neutral-50 px-3 py-3 text-sm leading-6 text-neutral-700">{agent.description}</div>
+          </section>
+        )}
+
+        <section>
+          <h3 className="mb-2 text-xs font-semibold text-neutral-500">基本信息</h3>
+          <DetailGrid>
+            <DetailItem label="名称" value={agent.name} />
+            <DetailItem label="类型" value={agentTypeLabel(agent)} />
+            <DetailItem label="所属设备" value={agent.deviceName ?? '未分配设备'} />
+            <DetailItem label="所属用户" value={agent.userName ?? agent.ownerName ?? agent.deviceUserName ?? '未知用户'} />
+            <DetailItem label="所属团队" value={agent.networkName ?? '默认团队'} />
+            <DetailItem label="可见性" value={visibilityLabel(agent.visibility)} />
+            <DetailItem label="最后在线" value={formatDateTime(agent.lastSeenAt)} />
+            <DetailItem label="发布团队数" value={`${agent.publishedNetworkIds?.length ?? 0}`} />
+          </DetailGrid>
+        </section>
+
+        <section>
+          <h3 className="mb-2 text-xs font-semibold text-neutral-500">运行配置</h3>
+          <DetailGrid>
+            <DetailItem label="适配器" value={agent.adapterKind} />
+            <DetailItem label="目录" value={agent.cwd} mono />
+            <DetailItem label="命令" value={agent.command} mono />
+            <DetailItem label="参数" value={agent.args?.length ? agent.args.join(' ') : undefined} mono />
+          </DetailGrid>
+        </section>
+
+        {agent.lastError && (
+          <section>
+            <h3 className="mb-2 text-xs font-semibold text-red-500">最近错误</h3>
+            <div className="rounded-md border border-red-100 bg-red-50 px-3 py-3 text-sm leading-6 text-red-700">{agent.lastError}</div>
+          </section>
+        )}
+      </div>
+    </DialogShell>
   );
 }

@@ -94,6 +94,62 @@ describe('/web namespace', () => {
     expect(res.agents.map((agent: any) => agent.id).sort()).toEqual(['all-a1', 'all-a2']);
     web.close();
   });
+
+  it('returns admin dashboard device and agent ownership fields', async () => {
+    app.globalDb.devices.upsert({
+      id: 'admin-dev-1',
+      userId: 'admin',
+      networkId: 'default',
+      hostname: 'Mac Studio',
+      lastSeenAt: Date.now(),
+      systemInfo: { daemonVersion: '0.1.19', hostname: 'mac-studio.local' },
+    });
+    app.globalDb.agents.upsert({
+      id: 'admin-agent-1',
+      name: 'Drama',
+      role: 'writer',
+      adapterKind: 'codex',
+      deviceId: 'admin-dev-1',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: Date.now(),
+      lastSeenAt: Date.now(),
+      ownerId: 'admin',
+      command: 'codex',
+      cwd: '/tmp/drama',
+      description: '写作 Agent',
+    });
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    const deviceRes = await new Promise<any>((resolve) => {
+      web.emit('admin:list-devices', {}, resolve);
+    });
+    const agentRes = await new Promise<any>((resolve) => {
+      web.emit('admin:list-agents', {}, resolve);
+    });
+
+    expect(deviceRes.ok).toBe(true);
+    expect(deviceRes.devices[0]).toMatchObject({
+      name: 'Mac Studio',
+      userName: 'admin',
+      networkName: 'Default Team',
+    });
+    expect(agentRes.ok).toBe(true);
+    expect(agentRes.agents[0]).toMatchObject({
+      name: 'Drama',
+      deviceName: 'Mac Studio',
+      userName: 'admin',
+      networkName: 'Default Team',
+    });
+    web.close();
+  });
 });
 
 describe('message:send', () => {

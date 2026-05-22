@@ -436,6 +436,7 @@ export interface GlobalDb {
   };
   agents: {
     upsert(row: { id: string; name: string; role?: string; adapterKind: string; deviceId: string; networkId: string; visibility?: string; category?: string; source?: string; firstSeenAt: number; lastSeenAt: number; lastError?: string | null; command?: string; args?: string; cwd?: string; ownerId?: string; description?: string | null }): void;
+    listAll(): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null }[];
     listByDevice(deviceId: string): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null }[];
     listCustomByOwner(ownerId: string): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null }[];
     listVisibleInNetwork(networkId: string): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null }[];
@@ -446,6 +447,7 @@ export interface GlobalDb {
   devices: {
     upsert(row: { id: string; userId: string; networkId: string; hostname?: string; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): void;
     get(id: string): DeviceRow | null;
+    listAll(): DeviceRow[];
     listByNetwork(networkId: string): DeviceRow[];
     listByUser(userId: string): DeviceRow[];
     delete(id: string): void;
@@ -666,6 +668,13 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
     WHERE device_id = ?
     ORDER BY first_seen_at
   `);
+  const globalAgentListAll = raw.prepare(`
+    SELECT id, name, role, adapter_kind AS adapterKind, category, source, command, args, cwd, device_id AS deviceId,
+           network_id AS networkId, visibility, owner_id AS ownerId, description,
+           first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, last_error AS lastError
+    FROM agents
+    ORDER BY first_seen_at DESC
+  `);
   const globalAgentListCustomByOwner = raw.prepare(`
     SELECT id, name, role, adapter_kind AS adapterKind, category, source, command, args, cwd, device_id AS deviceId,
            network_id AS networkId, visibility, owner_id AS ownerId, description,
@@ -826,6 +835,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
           description: row.description ?? null,
         });
       },
+      listAll: () => globalAgentListAll.all() as any[],
       listByDevice: (deviceId) => globalAgentListByDevice.all(deviceId) as any[],
       listCustomByOwner: (ownerId) => globalAgentListCustomByOwner.all(ownerId) as any[],
       listVisibleInNetwork: (networkId) => globalAgentListVisibleInNetwork.all(networkId, networkId) as any[],
@@ -848,6 +858,8 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
         const r = deviceGet.get(id) as any;
         return r ? rowToDevice(r) : null;
       },
+      listAll: () =>
+        (raw.prepare(`SELECT * FROM devices ORDER BY last_seen_at DESC`).all() as any[]).map(rowToDevice),
       listByNetwork: (networkId) =>
         (deviceListByNetwork.all(networkId) as any[]).map(rowToDevice),
       listByUser: (userId) =>
