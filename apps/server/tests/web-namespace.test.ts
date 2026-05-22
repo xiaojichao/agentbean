@@ -141,6 +141,12 @@ describe('/web namespace', () => {
       userName: 'admin',
       networkName: 'Default Team',
     });
+    expect(deviceRes.devices[0].publicAgents[0]).toMatchObject({
+      name: 'Drama',
+      deviceName: 'Mac Studio',
+      userName: 'admin',
+      networkName: 'Default Team',
+    });
     expect(agentRes.ok).toBe(true);
     expect(agentRes.agents[0]).toMatchObject({
       name: 'Drama',

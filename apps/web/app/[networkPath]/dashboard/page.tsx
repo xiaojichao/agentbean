@@ -22,6 +22,7 @@ interface AdminDevice {
   userId: string;
   userName: string;
   runtimes?: { name: string; adapterKind: string; command: string; installed: boolean }[];
+  publicAgents?: AdminAgent[];
   connectCommand?: string | null;
   systemInfo?: {
     platform?: string;
@@ -379,6 +380,7 @@ function AgentsTable({ agents, networks, onSelect, onDelete }: { agents: AdminAg
 
 function DeviceDetailDialog({ device, onClose }: { device: AdminDevice; onClose: () => void }) {
   const runtimes = device.runtimes ?? [];
+  const publicAgents = device.publicAgents ?? [];
   return (
     <DialogShell title={device.name || device.hostname || '未命名设备'} icon={<Monitor size={17} className="text-neutral-600" />} onClose={onClose}>
       <div className="space-y-5">
@@ -415,15 +417,48 @@ function DeviceDetailDialog({ device, onClose }: { device: AdminDevice; onClose:
         </section>
 
         <section>
-          <h3 className="mb-2 text-xs font-semibold text-neutral-500">检测到的编程智能体运行时</h3>
+          <h3 className="mb-2 text-xs font-semibold text-neutral-500">智能体运行时</h3>
           {runtimes.length === 0 ? (
             <div className="rounded-md border border-neutral-100 bg-neutral-50 px-3 py-3 text-sm text-neutral-400">暂无运行时信息</div>
           ) : (
-            <div className="flex flex-wrap gap-2">
+            <div className="grid gap-2 sm:grid-cols-2">
               {runtimes.map((runtime) => (
-                <span key={`${runtime.adapterKind}-${runtime.command}`} className={`inline-flex items-center rounded-md border px-2.5 py-1 text-xs ${runtime.installed ? 'border-neutral-300 bg-white text-neutral-800' : 'border-neutral-200 bg-neutral-50 text-neutral-400'}`}>
-                  {runtime.name || runtime.adapterKind}{runtime.installed ? '' : '（未安装）'}
-                </span>
+                <div key={`${runtime.adapterKind}-${runtime.command}`} className={`rounded-md border px-3 py-2 ${runtime.installed ? 'border-neutral-200 bg-white' : 'border-neutral-100 bg-neutral-50'}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-medium text-neutral-900">{runtime.name || runtime.adapterKind}</span>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${runtime.installed ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'}`}>
+                      {runtime.installed ? '已安装' : '未安装'}
+                    </span>
+                  </div>
+                  <div className="mt-1 truncate font-mono text-[11px] text-neutral-400">{runtime.command || runtime.adapterKind}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section>
+          <h3 className="mb-2 text-xs font-semibold text-neutral-500">公开智能体</h3>
+          {publicAgents.length === 0 ? (
+            <div className="rounded-md border border-neutral-100 bg-neutral-50 px-3 py-3 text-sm text-neutral-400">暂无公开智能体</div>
+          ) : (
+            <div className="space-y-2">
+              {publicAgents.map((agent) => (
+                <div key={agent.id} className="rounded-md border border-neutral-100 bg-white px-3 py-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-neutral-900">{agent.name}</div>
+                      <div className="mt-0.5 text-[11px] text-neutral-500">{agentTypeLabel(agent)} · {agent.adapterKind}</div>
+                    </div>
+                    <StatusPill status={agent.status} />
+                  </div>
+                  <div className="mt-2 grid gap-2 text-[11px] text-neutral-500 sm:grid-cols-2">
+                    <div className="truncate">所属团队：{agent.networkName ?? '未知团队'}</div>
+                    <div className="truncate">所属用户：{agent.userName ?? agent.ownerName ?? agent.deviceUserName ?? '未知用户'}</div>
+                    {agent.cwd && <div className="truncate sm:col-span-2">目录：<span className="font-mono">{agent.cwd}</span></div>}
+                    {agent.description && <div className="line-clamp-2 sm:col-span-2">功能介绍：{agent.description}</div>}
+                  </div>
+                </div>
               ))}
             </div>
           )}

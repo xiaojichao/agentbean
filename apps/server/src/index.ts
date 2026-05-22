@@ -1894,9 +1894,53 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       if (!requireAdmin(ack)) return;
       const usersById = new Map(globalDb.users.listAll().map((user) => [user.id, user.username]));
       const networksById = new Map(globalDb.networks.list().map((network) => [network.id, network.name]));
+      const parseArgs = (args?: string[] | string | null) => {
+        if (Array.isArray(args)) return args;
+        if (!args) return null;
+        try {
+          const parsed = JSON.parse(args);
+          return Array.isArray(parsed) ? parsed : [String(args)];
+        } catch {
+          return [args];
+        }
+      };
       const devices = visibleDeviceRows(globalDb.devices.listAll()).map((device) => {
         const live = deviceRegistry.get(device.id);
-        const agentCount = globalDb.agents.listByDevice(device.id).filter(isTeamAgent).length;
+        const deviceAgents = globalDb.agents.listByDevice(device.id).filter(isTeamAgent);
+        const publicAgents = deviceAgents
+          .filter((agent) => agent.visibility === 'public')
+          .map((agent) => {
+            const liveAgent = registry.snapshot(agent.id);
+            const resolved = agent.source === 'custom' ? resolveCustomAgentStatus(agent) : null;
+            const ownerName = resolveOwnerName(agent.ownerId) ?? usersById.get(device.userId) ?? '未知用户';
+            return {
+              id: agent.id,
+              name: agent.name,
+              role: agent.role ?? '',
+              adapterKind: agent.adapterKind,
+              category: agent.category,
+              source: agent.source,
+              command: agent.command,
+              args: parseArgs(agent.args),
+              cwd: agent.cwd,
+              description: agent.description,
+              status: liveAgent?.status ?? resolved?.status ?? 'offline',
+              lastSeenAt: liveAgent?.lastHeartbeatAt ?? resolved?.lastSeenAt ?? agent.lastSeenAt,
+              lastError: liveAgent?.lastError?.message ?? resolved?.lastError ?? agent.lastError ?? undefined,
+              visibility: agent.visibility,
+              networkId: agent.networkId,
+              networkName: networksById.get(agent.networkId) ?? '未知团队',
+              ownerId: agent.ownerId,
+              ownerName,
+              userName: ownerName,
+              deviceId: agent.deviceId ?? undefined,
+              deviceName: device.hostname ?? (typeof device.systemInfo?.hostname === 'string' ? device.systemInfo.hostname : null) ?? '未命名设备',
+              deviceUserId: device.userId,
+              deviceUserName: usersById.get(device.userId) ?? '未知用户',
+              publishedNetworkIds: globalDb.agentPublishes.listByAgent(agent.id).map((p) => p.networkId),
+              connectCommand: renderConnectCommand({ adapterKind: agent.adapterKind as any }),
+            };
+          });
         const systemName = typeof device.systemInfo?.hostname === 'string' ? device.systemInfo.hostname : null;
         return {
           id: device.id,
@@ -1907,11 +1951,12 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           networkId: device.networkId,
           networkName: networksById.get(device.networkId) ?? '未知团队',
           status: live ? live.status : (isRecentlySeen(device.lastSeenAt) ? 'online' : 'offline'),
-          agentCount: live ? Math.max(live.agents.size, agentCount) : agentCount,
+          agentCount: live ? Math.max(live.agents.size, deviceAgents.length) : deviceAgents.length,
           lastSeenAt: live ? live.lastSeenAt : device.lastSeenAt,
           connectCommand: device.connectCommand,
           systemInfo: device.systemInfo,
           runtimes: live?.runtimes ?? device.runtimes ?? [],
+          publicAgents,
         };
       });
       ack?.({ ok: true, devices });
