@@ -15,15 +15,20 @@ function runtimeArgs(args: string[] = []): string[] {
   return args;
 }
 
+function hasMessageFlag(args: string[]): boolean {
+  return args.includes('--message') || args.includes('-m');
+}
+
 function buildArgs(baseArgs: string[], prompt: string): string[] {
-  // If user already configured args with chat send --message, just append the prompt
-  // Otherwise default to: openclaw chat send --message "<prompt>"
-  const hasSend = baseArgs.includes('send');
-  const hasMessage = baseArgs.includes('--message');
-  if (hasSend && hasMessage) {
+  // Current OpenClaw one-shot agent turns use: openclaw agent --message "<prompt>".
+  // Preserve explicit custom args when the message flag is already configured.
+  if (hasMessageFlag(baseArgs)) {
     return [...baseArgs, prompt];
   }
-  return [...baseArgs, 'chat', 'send', '--message', prompt];
+  if (baseArgs.includes('agent')) {
+    return [...baseArgs, '--message', prompt];
+  }
+  return [...baseArgs, 'agent', '--message', prompt];
 }
 
 function buildPrompt(input: AskInput, systemPrompt?: string): string {

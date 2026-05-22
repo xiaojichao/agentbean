@@ -300,7 +300,7 @@ async function checkOpenClawGateway(): Promise<ScannedAgent | null> {
       name: "OpenClaw-Agent",
       adapterKind: "openclaw",
       command: path,
-      args: ["gateway", "run"],
+      args: [],
       source: "gateway",
     };
   }
