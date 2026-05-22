@@ -125,6 +125,27 @@ describe('OpenClawAdapter', () => {
       adapter.ask({ prompt: 'hi-oc', history: [] }, new AbortController().signal),
     ).rejects.toThrow('openclaw produced empty output');
   });
+
+  it('drops gateway-run args before invoking chat send', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentbean-openclaw-test-'));
+    const script = join(dir, 'fake-openclaw.cjs');
+    writeFileSync(script, `
+      if (process.argv.includes('gateway') || process.argv.includes('run')) {
+        process.exit(7);
+      }
+      const args = process.argv.slice(1);
+      const msgIdx = args.indexOf('--message');
+      if (msgIdx >= 0 && args[msgIdx + 1]) {
+        process.stdout.write(args[msgIdx + 1]);
+      } else {
+        process.stderr.write('missing --message');
+        process.exit(1);
+      }
+    `);
+    const adapter = new OpenClawAdapter({ command: process.execPath, args: ['gateway', 'run', script] });
+    const out = await adapter.ask({ prompt: 'hi-oc', history: [] }, new AbortController().signal);
+    expect(out).toBe('hi-oc');
+  });
 });
 
 describe('HermesAdapter', () => {

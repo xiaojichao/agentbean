@@ -8,6 +8,13 @@ export interface OpenClawAdapterOpts {
   systemPrompt?: string;
 }
 
+function runtimeArgs(args: string[] = []): string[] {
+  if (args[0] === 'gateway' && args[1] === 'run') {
+    return args.slice(2);
+  }
+  return args;
+}
+
 function buildArgs(baseArgs: string[], prompt: string): string[] {
   // If user already configured args with chat send --message, just append the prompt
   // Otherwise default to: openclaw chat send --message "<prompt>"
@@ -37,7 +44,7 @@ export class OpenClawAdapter implements CliAdapter {
     return new Promise<string>((resolve, reject) => {
       const prompt = buildPrompt(input, this.opts.systemPrompt ?? input.systemPrompt);
       const cwd = input.workspace ?? this.opts.cwd ?? process.cwd();
-      const child = spawn(this.opts.command, buildArgs(this.opts.args ?? [], prompt), {
+      const child = spawn(this.opts.command, buildArgs(runtimeArgs(this.opts.args), prompt), {
         cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env, ...(input.env ?? {}) },
