@@ -25,7 +25,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { agentEvents, dmEvents, fetchAgentWorkspace } from '@/lib/socket';
+import { agentEvents, dmEvents, fetchAgentWorkspace, memberEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { formatRelative } from '@/lib/format-time';
 import type { AgentMetricsSummary, AgentSnapshot, AgentWorkspaceRun, DeviceInfo, UserInfo } from '@/lib/schema';
@@ -35,6 +35,10 @@ export interface HumanMember {
   userId: string;
   role: string;
   username: string;
+  email?: string | null;
+  description?: string | null;
+  joinedAt?: number;
+  createdAt?: number;
 }
 
 export type AgentMemberTab = 'profile' | 'permissions' | 'dms' | 'reminders' | 'workspace' | 'activity';
@@ -483,50 +487,107 @@ function AgentActivity({ agent, device, metrics, runs }: { agent: AgentSnapshot;
   );
 }
 
-export function HumanDetail({ human, currentUser }: { human: HumanMember; currentUser?: UserInfo | null }) {
+export function HumanDetail({ human, currentUser, onUpdated }: { human: HumanMember; currentUser?: UserInfo | null; onUpdated?: (human: HumanMember) => void }) {
+  const np = useCurrentNetworkPath();
   const agents = useAgentBeanStore((s) => s.agents);
   const ownedAgents = Object.values(agents).filter((a) => a.ownerId === human.userId);
+  const isSelf = currentUser?.id === human.userId;
+  const canEdit = isSelf || currentUser?.role === 'admin';
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [description, setDescription] = useState(human.description ?? '');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDescription(human.description ?? '');
+    setEditingDescription(false);
+    setSaveError(null);
+  }, [human.userId, human.description]);
+
+  const joinedAt = human.joinedAt ?? human.createdAt;
+  const saveDescription = async () => {
+    setSaving(true);
+    setSaveError(null);
+    const res = await memberEvents().updateHuman({ userId: human.userId, description: description.trim() || null });
+    setSaving(false);
+    if (!res.ok) {
+      setSaveError(res.error ?? '保存失败');
+      return;
+    }
+    if (res.human) onUpdated?.(res.human);
+    setEditingDescription(false);
+  };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5 p-6">
-      <div className="flex items-start gap-4">
-        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-purple-50">
-          <User size={28} className="text-purple-600" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="truncate text-xl font-semibold text-neutral-900">{human.username}</h1>
-            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
-              <Circle size={6} className="fill-current" />
-              成员
-            </span>
+    <div className="mx-auto max-w-4xl space-y-4">
+      <section className="rounded-lg border border-neutral-200 bg-white p-5">
+        <div className="flex items-start gap-4">
+          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg bg-purple-50">
+            <User size={32} className="text-purple-600" />
           </div>
-          <div className="mt-1 text-sm text-neutral-500">@{human.username}</div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="truncate text-xl font-semibold text-neutral-900">{human.username}</h1>
+              {isSelf && <span className="text-sm font-medium text-neutral-500">（你）</span>}
+              <span className="inline-flex items-center rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-medium text-neutral-600">
+                人类成员
+              </span>
+            </div>
+            <div className="mt-1 text-sm text-neutral-500">@{human.username}</div>
+          </div>
         </div>
-      </div>
+      </section>
 
-      <Section title="个人信息" icon={<User size={15} />}>
-        <InfoRow label="用户名" value={human.username} />
-        <InfoRow label="团队角色" value={human.role} />
-        {currentUser?.id === human.userId && <InfoRow label="邮箱" value={currentUser.email ?? '未设置'} />}
+      <Section title="描述" icon={<FileText size={15} />}>
+        {editingDescription ? (
+          <div className="space-y-3">
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={4} className="w-full resize-none rounded-md border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-amber-300" placeholder="写一点这个成员在团队中的职责、偏好或背景。" />
+            <div className="flex items-center gap-2">
+              <button onClick={saveDescription} disabled={saving} className="inline-flex items-center gap-1 rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50">
+                <Check size={13} />
+                {saving ? '保存中...' : '保存'}
+              </button>
+              <button onClick={() => { setDescription(human.description ?? ''); setEditingDescription(false); }} className="rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50">取消</button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-start justify-between gap-3">
+            <p className={`min-w-0 whitespace-pre-wrap text-sm leading-6 ${human.description?.trim() ? 'text-neutral-700' : 'italic text-neutral-400'}`}>
+              {human.description?.trim() || '暂无描述。'}
+            </p>
+            {canEdit && (
+              <button onClick={() => setEditingDescription(true)} className="inline-flex shrink-0 items-center gap-1 rounded-md border border-neutral-200 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50">
+                <Edit3 size={13} />
+                编辑
+              </button>
+            )}
+          </div>
+        )}
+        {saveError && <div className="mt-2 text-xs text-rose-600">{saveError}</div>}
       </Section>
 
-      <Section title={`创建的智能体 (${ownedAgents.length})`} icon={<Users size={15} />}>
+      <Section title="信息" icon={<User size={15} />} compactGrid>
+        <InfoRow label="角色" value={<span className="rounded-md bg-orange-50 px-2 py-0.5 text-xs font-semibold text-orange-700">{human.role === 'owner' ? '所有者' : '成员'}</span>} />
+        <InfoRow label="邮箱" value={human.email ?? (isSelf ? currentUser?.email ?? '未设置' : '未设置')} />
+        <InfoRow label="加入时间" value={joinedAt ? new Date(joinedAt).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }) : '未知'} />
+      </Section>
+
+      <Section title={`创建的智能体 ${ownedAgents.length}`} icon={<Users size={15} />}>
         {ownedAgents.length === 0 ? (
           <div className="text-sm text-neutral-500">暂未创建智能体。</div>
         ) : (
-          <div className="space-y-2">
+          <div className="divide-y divide-neutral-100 overflow-hidden rounded-md border border-neutral-200">
             {ownedAgents.map((agent) => (
-              <div key={agent.id} className="flex items-center gap-3 rounded-md border border-neutral-200 px-3 py-2">
-                <Bot size={16} className="text-amber-600" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium text-neutral-900">{agent.name}</div>
-                  <div className="text-xs text-neutral-500">{agent.adapterKind} · {agent.role || '未设置角色'}</div>
+              <Link key={agent.id} href={`/${np}/agent/${agent.id}?agentTab=profile`} className="flex items-center gap-3 bg-white px-3 py-3 hover:bg-neutral-50">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-amber-200 bg-amber-50">
+                  <Bot size={18} className="text-amber-600" />
                 </div>
-                <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusClass(agent.status)}`}>
-                  {STATUS_LABEL[agent.status] ?? agent.status}
-                </span>
-              </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-semibold text-neutral-900">{agent.name}</div>
+                  <div className="truncate text-xs text-neutral-500">{RUNTIME_LABEL[agent.adapterKind] ?? agent.adapterKind}</div>
+                </div>
+                <Circle size={9} className={`shrink-0 fill-current ${statusDotClass(agent.status)}`} />
+              </Link>
             ))}
           </div>
         )}

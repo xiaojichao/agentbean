@@ -259,6 +259,7 @@ CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL UNIQUE,
   email TEXT UNIQUE,
+  description TEXT,
   password_hash TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
@@ -374,6 +375,7 @@ export interface UserRow {
   id: string;
   username: string;
   email: string | null;
+  description: string | null;
   passwordHash: string | null;
   role: 'admin' | 'user';
   currentNetworkId: string | null;
@@ -398,13 +400,14 @@ export interface GlobalDb {
   raw: Database.Database;
   close: () => void;
   users: {
-    create(input: { id: string; username: string; email?: string | null; passwordHash?: string | null; role?: 'admin' | 'user'; createdAt: number }): UserRow;
+    create(input: { id: string; username: string; email?: string | null; description?: string | null; passwordHash?: string | null; role?: 'admin' | 'user'; createdAt: number }): UserRow;
     get(id: string): UserRow | null;
     getByName(username: string): UserRow | null;
     getByEmail(email: string): UserRow | null;
     listAll(): UserRow[];
     delete(id: string): void;
     setCurrentNetwork(userId: string, networkId: string | null): void;
+    updateDescription(userId: string, description: string | null, updatedAt: number): void;
   };
   networks: {
     create(input: { id?: string; ownerId: string; name: string; path?: string | null; description?: string | null; visibility?: 'public' | 'private'; type?: 'public' | 'local' | 'private'; createdAt: number }): NetworkRow;
@@ -416,7 +419,7 @@ export interface GlobalDb {
   networkMembers: {
     add(networkId: string, userId: string, role: string): void;
     listByUser(userId: string): { networkId: string; role: string }[];
-    listByNetwork(networkId: string): { userId: string; role: string; username: string }[];
+    listByNetwork(networkId: string): { userId: string; role: string; username: string; email: string | null; description: string | null; joinedAt: number; createdAt: number }[];
     isMember(networkId: string, userId: string): boolean;
   };
   invites: {
@@ -463,6 +466,7 @@ function rowToUser(r: any): UserRow {
     id: r.id,
     username: r.username,
     email: r.email ?? null,
+    description: r.description ?? null,
     passwordHash: r.password_hash ?? null,
     role: r.role ?? 'user',
     currentNetworkId: r.current_network_id ?? null,
@@ -521,6 +525,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   raw.exec(GLOBAL_SCHEMA);
 
   try { raw.exec(`ALTER TABLE users ADD COLUMN password_hash TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE users ADD COLUMN description TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE networks ADD COLUMN visibility TEXT NOT NULL DEFAULT 'private'`); } catch {}
   try { raw.exec(`ALTER TABLE invites ADD COLUMN purpose TEXT NOT NULL DEFAULT 'user'`); } catch {}
   try { raw.exec(`ALTER TABLE invites ADD COLUMN max_uses INTEGER`); } catch {}
@@ -536,8 +541,8 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   try { raw.exec(`UPDATE networks SET type = 'public' WHERE visibility = 'public' AND type = 'local'`); } catch {}
 
   const userCreate = raw.prepare(`
-    INSERT INTO users (id, username, email, password_hash, role, created_at, updated_at)
-    VALUES (@id, @username, @email, @passwordHash, @role, @createdAt, @updatedAt)
+    INSERT INTO users (id, username, email, description, password_hash, role, created_at, updated_at)
+    VALUES (@id, @username, @email, @description, @passwordHash, @role, @createdAt, @updatedAt)
   `);
   const userGet = raw.prepare(`
     SELECT * FROM users WHERE id = ?
@@ -553,6 +558,9 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   `);
   const userDelete = raw.prepare(`
     DELETE FROM users WHERE id = ?
+  `);
+  const userUpdateDescription = raw.prepare(`
+    UPDATE users SET description = ?, updated_at = ? WHERE id = ?
   `);
 
   const networkCreate = raw.prepare(`
@@ -585,7 +593,18 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
     SELECT 1 FROM network_members WHERE network_id = ? AND user_id = ?
   `);
   const networkMembersByNetwork = raw.prepare(`
-    SELECT nm.user_id AS userId, nm.role, u.username FROM network_members nm JOIN users u ON u.id = nm.user_id WHERE nm.network_id = ? ORDER BY nm.joined_at
+    SELECT
+      nm.user_id AS userId,
+      nm.role,
+      nm.joined_at AS joinedAt,
+      u.username,
+      u.email,
+      u.description,
+      u.created_at AS createdAt
+    FROM network_members nm
+    JOIN users u ON u.id = nm.user_id
+    WHERE nm.network_id = ?
+    ORDER BY nm.joined_at
   `);
 
   const inviteCreate = raw.prepare(`
@@ -714,11 +733,12 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
     raw,
     close: () => raw.close(),
     users: {
-      create: ({ id, username, email, passwordHash, role, createdAt }) => {
+      create: ({ id, username, email, description, passwordHash, role, createdAt }) => {
         const row = {
           id,
           username,
           email: email ?? null,
+          description: description ?? null,
           passwordHash: passwordHash ?? null,
           role: role ?? 'user' as const,
           currentNetworkId: null,
@@ -745,6 +765,9 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
       },
       listAll: () => (userListAll.all() as any[]).map(rowToUser),
       delete: (id) => { userDelete.run(id); },
+      updateDescription: (userId, description, updatedAt) => {
+        userUpdateDescription.run(description, updatedAt, userId);
+      },
     },
     networks: {
       create: ({ id, ownerId, name, path, description, visibility, type, createdAt }) => {
@@ -777,7 +800,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
     networkMembers: {
       add: (networkId, userId, role) => { networkMemberAdd.run(networkId, userId, role, Date.now()); },
       listByUser: (userId) => networkMembersByUser.all(userId) as { networkId: string; role: string }[],
-      listByNetwork: (networkId) => networkMembersByNetwork.all(networkId) as { userId: string; role: string; username: string }[],
+      listByNetwork: (networkId) => networkMembersByNetwork.all(networkId) as { userId: string; role: string; username: string; email: string | null; description: string | null; joinedAt: number; createdAt: number }[],
       isMember: (networkId, userId) => Boolean(networkMemberGet.get(networkId, userId)),
     },
     invites: {

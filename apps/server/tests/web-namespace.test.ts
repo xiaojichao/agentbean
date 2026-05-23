@@ -95,6 +95,52 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('returns and updates human member profile fields', async () => {
+    const createdAt = Date.now() - 10_000;
+    app.globalDb.users.create({
+      id: 'human-profile-1',
+      username: 'profile-user',
+      email: 'profile@example.com',
+      createdAt,
+    });
+    app.globalDb.networkMembers.add('default', 'human-profile-1', 'member');
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('human-profile-1', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const listBefore = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+    const humanBefore = listBefore.humans.find((human: any) => human.userId === 'human-profile-1');
+    expect(humanBefore).toMatchObject({
+      username: 'profile-user',
+      email: 'profile@example.com',
+      description: null,
+      role: 'member',
+    });
+    expect(typeof humanBefore.joinedAt).toBe('number');
+    expect(humanBefore.createdAt).toBe(createdAt);
+
+    const update = await new Promise<any>((resolve) => {
+      web.emit('member:update-human', { userId: 'human-profile-1', description: '负责内容运营' }, resolve);
+    });
+    expect(update.ok).toBe(true);
+    expect(update.human).toMatchObject({
+      userId: 'human-profile-1',
+      description: '负责内容运营',
+    });
+
+    const listAfter = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+    expect(listAfter.humans.find((human: any) => human.userId === 'human-profile-1').description).toBe('负责内容运营');
+    web.close();
+  });
+
   it('returns admin dashboard device and agent ownership fields', async () => {
     app.globalDb.devices.upsert({
       id: 'admin-dev-1',

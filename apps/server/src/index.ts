@@ -549,6 +549,25 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       }
     });
 
+    socket.on('member:update-human', (payload: { userId: string; description?: string | null }, ack?: (r: any) => void) => {
+      try {
+        const actorId = socket.data.userId as string | undefined;
+        if (!actorId) return ack?.({ ok: false, error: 'NOT_AUTHENTICATED' });
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const actor = globalDb.users.get(actorId);
+        if (!actor) return ack?.({ ok: false, error: 'NOT_AUTHENTICATED' });
+        if (!globalDb.networkMembers.isMember(networkId, payload.userId)) return ack?.({ ok: false, error: 'MEMBER_NOT_FOUND' });
+        if (actorId !== payload.userId && actor.role !== 'admin') return ack?.({ ok: false, error: 'FORBIDDEN' });
+
+        const description = payload.description?.trim() || null;
+        globalDb.users.updateDescription(payload.userId, description, Date.now());
+        const human = globalDb.networkMembers.listByNetwork(networkId).find((item) => item.userId === payload.userId);
+        ack?.({ ok: true, human });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
     socket.on('device:agents:list', (payload: { deviceId: string }, ack?: (r: any) => void) => {
       try {
         // Get agents from global DB (persisted scanned agents)

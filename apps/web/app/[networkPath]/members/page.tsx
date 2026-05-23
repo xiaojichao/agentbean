@@ -145,7 +145,13 @@ export default function MembersPage() {
         <div className="flex-1 overflow-y-auto p-6">
           {!selectedId && <EmptyState />}
           {selectedId && selectedAgent && <AgentDetail agent={selectedAgent} device={selectedDevice} tab={tab} />}
-          {selectedId && tab === 'profile' && !selectedAgent && selectedId?.startsWith('user:') && selectedHuman && <HumanDetail human={selectedHuman} currentUser={currentUser} />}
+          {selectedId && tab === 'profile' && !selectedAgent && selectedId?.startsWith('user:') && selectedHuman && (
+            <HumanDetail
+              human={selectedHuman}
+              currentUser={currentUser}
+              onUpdated={(next) => setHumanMembers((members) => members.map((member) => member.userId === next.userId ? { ...member, ...next } : member))}
+            />
+          )}
           {selectedId && !selectedAgent && tab !== 'profile' && <PlaceholderTab name={TABS.find((t) => t.id === tab)?.label ?? ''} />}
         </div>
       </div>

@@ -321,13 +321,17 @@ export function taskEvents(socket: Socket = getWebSocket()): TaskEvents {
 }
 
 export interface MemberEvents {
-  list(): Promise<{ ok: boolean; humans?: { userId: string; role: string; username: string }[]; agents?: import('./schema').AgentSnapshot[]; error?: string }>;
+  list(): Promise<{ ok: boolean; humans?: { userId: string; role: string; username: string; email?: string | null; description?: string | null; joinedAt?: number; createdAt?: number }[]; agents?: import('./schema').AgentSnapshot[]; error?: string }>;
+  updateHuman(payload: { userId: string; description?: string | null }): Promise<{ ok: boolean; human?: { userId: string; role: string; username: string; email?: string | null; description?: string | null; joinedAt?: number; createdAt?: number }; error?: string }>;
 }
 
 export function memberEvents(socket: Socket = getWebSocket()): MemberEvents {
   return {
     list() {
       return emitWithTimeout(socket, 'members:list', {});
+    },
+    updateHuman(payload) {
+      return emitWithTimeout(socket, 'member:update-human', payload);
     },
   };
 }
