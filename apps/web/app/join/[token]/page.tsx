@@ -78,6 +78,7 @@ export default function JoinPage() {
       if (res.ok && res.token) {
         localStorage.setItem('agentbean.token', res.token);
         useAgentBeanStore.getState().setAuthToken(res.token);
+        if (res.networkId) useAgentBeanStore.getState().setCurrentNetworkId(res.networkId);
         if (res.username) {
           useAgentBeanStore.getState().setCurrentUser({
             id: res.userId ?? '',
@@ -87,8 +88,8 @@ export default function JoinPage() {
           });
         }
         resetWebSocket();
-        const savedNp = localStorage.getItem('agentbean.networkPath');
-        const np = savedNp || res.networkPath || 'default';
+        const np = res.networkPath || 'default';
+        localStorage.setItem('agentbean.networkPath', np);
         router.replace(`/${np}/chat`);
       } else {
         setError(res.error ?? '注册失败');
@@ -119,6 +120,7 @@ export default function JoinPage() {
       if (res.ok && res.token) {
         localStorage.setItem('agentbean.token', res.token);
         useAgentBeanStore.getState().setAuthToken(res.token);
+        if (res.networkId) useAgentBeanStore.getState().setCurrentNetworkId(res.networkId);
         if (res.username) {
           useAgentBeanStore.getState().setCurrentUser({
             id: res.userId ?? '',
@@ -128,8 +130,8 @@ export default function JoinPage() {
           });
         }
         resetWebSocket();
-        const savedNp = localStorage.getItem('agentbean.networkPath');
-        const np = savedNp || res.networkPath || 'default';
+        const np = res.networkPath || 'default';
+        localStorage.setItem('agentbean.networkPath', np);
         router.replace(`/${np}/chat`);
       } else {
         setError(res.error ?? '登录失败');

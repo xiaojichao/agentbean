@@ -145,6 +145,14 @@ export interface DeviceInfo {
   agentIds: string[];
   runtimes?: RuntimeInfo[];
   connectCommand?: string | null;
+  latestDaemonVersion?: string | null;
+  daemonUpdateAvailable?: boolean;
+  daemonVersionInfo?: {
+    current: string | null;
+    latest: string | null;
+    updateAvailable: boolean;
+    status: 'current' | 'update-available' | 'unknown';
+  };
   systemInfo?: {
     platform?: string;
     arch?: string;

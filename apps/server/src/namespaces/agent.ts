@@ -8,6 +8,7 @@ import { parseToken, verifyUserToken } from '../auth.js';
 import { renderConnectCommand } from '../connect-command.js';
 import { logger } from '../log.js';
 import { AgentMetricsCollector } from '../agent-metrics.js';
+import { buildDaemonVersionInfo } from '../daemon-version.js';
 
 export interface AgentNamespaceDeps {
   io: IOServer;
@@ -251,6 +252,8 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       agents: PublicAgentMeta[];
       systemInfo?: Record<string, unknown>;
       capabilities?: { customAgentDispatch?: boolean };
+      protocolVersion?: number;
+      daemonVersion?: string;
     };
     const a = auth;
     logger.info({ deviceId: a.deviceId, sid: socket.id }, '/agent connected');
@@ -329,6 +332,8 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         socket,
         agents: new Map(deviceAgents.map((ag) => [ag.id, { ...ag, name: normalizeAgentName(ag.name) }])),
         capabilities: a.capabilities,
+        protocolVersion: typeof a.protocolVersion === 'number' ? a.protocolVersion : undefined,
+        daemonVersion: typeof a.daemonVersion === 'string' ? a.daemonVersion : typeof a.systemInfo?.daemonVersion === 'string' ? a.systemInfo.daemonVersion : null,
         lastSeenAt: now,
         status: 'online',
       });
@@ -545,6 +550,8 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           dev.runtimes = normalizedRuntimes;
           dev.lastSeenAt = Date.now();
           dev.status = 'online';
+          const persisted = deps.globalDb?.devices?.get(a.deviceId);
+          const daemonVersionInfo = buildDaemonVersionInfo(a.systemInfo ?? null);
           deps.io.of('/web').emit('device:status', {
             id: dev.id,
             userId: dev.userId,
@@ -553,6 +560,12 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             runtimes: dev.runtimes,
             lastSeenAt: dev.lastSeenAt,
             status: dev.status,
+            hostname: persisted?.hostname,
+            connectCommand: persisted?.connectCommand,
+            systemInfo: a.systemInfo ?? null,
+            daemonVersionInfo,
+            latestDaemonVersion: daemonVersionInfo.latest,
+            daemonUpdateAvailable: daemonVersionInfo.updateAvailable,
           });
         }
         ack?.({ ok: true });

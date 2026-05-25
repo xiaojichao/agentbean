@@ -5,6 +5,7 @@ import { Globe, Users, Monitor, Bot, Trash2, RefreshCw, X } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { getWebSocket } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
+import { daemonVersionDisplay } from '@/lib/daemon-version';
 
 type Tab = 'networks' | 'users' | 'devices' | 'agents';
 
@@ -24,6 +25,14 @@ interface AdminDevice {
   runtimes?: { name: string; adapterKind: string; command: string; installed: boolean }[];
   publicAgents?: AdminAgent[];
   connectCommand?: string | null;
+  latestDaemonVersion?: string | null;
+  daemonUpdateAvailable?: boolean;
+  daemonVersionInfo?: {
+    current: string | null;
+    latest: string | null;
+    updateAvailable: boolean;
+    status: 'current' | 'update-available' | 'unknown';
+  };
   systemInfo?: {
     platform?: string;
     arch?: string;
@@ -215,10 +224,18 @@ function formatDateTime(value?: number | null) {
   return value ? new Date(value).toLocaleString('zh-CN') : '—';
 }
 
-function formatDaemonVersion(device: AdminDevice) {
-  const version = device.systemInfo?.daemonVersion?.trim();
-  if (version && version !== 'unknown') return version.startsWith('v') ? version : `v${version}`;
-  return device.status === 'offline' ? '离线' : '版本未知';
+function DaemonVersionValue({ device }: { device: AdminDevice }) {
+  const info = daemonVersionDisplay(device);
+  return (
+    <div>
+      <div>{info.currentLabel}</div>
+      {info.updateAvailable && info.latestLabel && (
+        <div className="mt-1 inline-flex rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700">
+          可升级到 {info.latestLabel}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function DialogShell({ title, icon, onClose, children }: { title: string; icon: React.ReactNode; onClose: () => void; children: React.ReactNode }) {
@@ -400,7 +417,7 @@ function DeviceDetailDialog({ device, onClose }: { device: AdminDevice; onClose:
             <DetailItem label="所属团队" value={device.networkName ?? '未知团队'} />
             <DetailItem label="最后心跳" value={formatDateTime(device.lastSeenAt)} />
             <DetailItem label="Agent 数量" value={`${device.agentCount}`} />
-            <DetailItem label="Daemon 版本" value={formatDaemonVersion(device)} />
+            <DetailItem label="Daemon 版本" value={<DaemonVersionValue device={device} />} />
           </DetailGrid>
         </section>
 
