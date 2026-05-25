@@ -179,6 +179,29 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
   const pending = new Map<string, PendingDispatch>();
   const timeoutMs = deps.dispatchTimeoutMs ?? 960_000;
 
+  const runtimeStatusDto = (rt: AgentRuntime): AgentSnapshotDto => {
+    const dto = snapshotToDto(rt);
+    const persisted = deps.globalDb?.agents?.getFull(rt.id);
+    const publishedNetworkIds = new Set<string>(dto.publishedNetworkIds ?? []);
+    for (const publish of deps.globalDb?.agentPublishes?.listByAgent(rt.id) ?? []) {
+      publishedNetworkIds.add(publish.networkId);
+    }
+    return {
+      ...dto,
+      networkId: persisted?.networkId ?? dto.networkId,
+      visibility: persisted?.visibility ?? dto.visibility,
+      category: persisted?.category ?? dto.category,
+      source: persisted?.source ?? dto.source,
+      ownerId: persisted?.ownerId ?? dto.ownerId,
+      command: persisted?.command ?? dto.command,
+      args: parseArgs(persisted?.args ?? dto.args),
+      cwd: persisted?.cwd ?? dto.cwd,
+      description: persisted?.description ?? dto.description,
+      deviceId: persisted?.deviceId ?? dto.deviceId,
+      publishedNetworkIds: [...publishedNetworkIds],
+    };
+  };
+
   const emitCustomAgentStatus = (agentId: string, status: AgentSnapshotDto['status'], lastError?: string): boolean => {
     const persisted = deps.globalDb?.agents?.getFull(agentId);
     if (persisted?.source !== 'custom') return false;
@@ -202,7 +225,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       });
     }
     const rt = deps.registry.setStatus(agentId, status, lastError);
-    deps.io.of('/web').emit('agent:status', rt ? snapshotToDto(rt) : customAgentToDto(persisted, status, lastError));
+    deps.io.of('/web').emit('agent:status', rt ? runtimeStatusDto(rt) : customAgentToDto(persisted, status, lastError));
     return true;
   };
 
@@ -313,7 +336,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           cwd: rt.cwd ?? null,
           description: rt.description ?? null,
         });
-        deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
+        deps.io.of('/web').emit('agent:status', runtimeStatusDto(rt));
       }
 
       // Persist device to global DB
@@ -369,7 +392,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         deps.globalDb?.devices?.touch(a.deviceId, device.lastSeenAt);
         for (const agentMeta of device.agents.values()) {
           const rt = deps.registry.heartbeat(agentMeta.id);
-          if (rt) deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
+          if (rt) deps.io.of('/web').emit('agent:status', runtimeStatusDto(rt));
         }
       }
     });
@@ -383,7 +406,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       deps.metricsCollector?.resolve(payload.requestId, true);
       const agentId = p.agentId;
       const rt = deps.registry.markOnline(agentId);
-      if (rt) deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
+      if (rt) deps.io.of('/web').emit('agent:status', runtimeStatusDto(rt));
       else emitCustomAgentStatus(agentId, 'online');
     });
 
@@ -402,7 +425,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       }
       const rt = resolvedRequest ? deps.registry.markOnline(agentId) : deps.registry.markError(agentId, message);
       if (rt) {
-        const dto = snapshotToDto(rt);
+        const dto = runtimeStatusDto(rt);
         deps.io.of('/web').emit('agent:status', resolvedRequest ? { ...dto, lastError: message } : dto);
       } else {
         emitCustomAgentStatus(agentId, resolvedRequest ? 'online' : 'error', message);
@@ -523,7 +546,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             deviceId: a.deviceId,
             publishedNetworkIds: publishes.map((p: { networkId: string }) => p.networkId),
           });
-          deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
+          deps.io.of('/web').emit('agent:status', runtimeStatusDto(rt));
           registered.push({ id: agentId, name: sanitizedName, category: ag.category, status: 'online' });
 
           // Also add to DeviceRegistry so heartbeats + dispatch can find this agent
@@ -546,7 +569,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           if (rt.deviceId === a.deviceId && rt.status !== 'offline' && (rt.source === 'scanned' || rt.id.startsWith(`scan-${a.deviceId}-`))) {
             if (!scannedNames.has(rt.name.toLowerCase())) {
               const offRt = deps.registry.markOffline(rt.id, 'scan-missing');
-              if (offRt) deps.io.of('/web').emit('agent:status', snapshotToDto(offRt));
+              if (offRt) deps.io.of('/web').emit('agent:status', runtimeStatusDto(offRt));
               // Remove from DeviceRegistry agents map too
               const dev = deps.deviceRegistry.get(a.deviceId);
               if (dev) dev.agents.delete(rt.id);
@@ -597,7 +620,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       if (device) {
         for (const agentMeta of device.agents.values()) {
           const rt = deps.registry.markOffline(agentMeta.id, 'device-disconnect');
-          if (rt) deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
+          if (rt) deps.io.of('/web').emit('agent:status', runtimeStatusDto(rt));
         }
       }
     });
@@ -645,7 +668,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
     }
     const busyRt = deps.registry.markBusy(req.agentId);
     if (busyRt) {
-      deps.io.of('/web').emit('agent:status', snapshotToDto(busyRt));
+      deps.io.of('/web').emit('agent:status', runtimeStatusDto(busyRt));
     } else if (customAgent) {
       emitCustomAgentStatus(req.agentId, 'busy');
     }
@@ -656,7 +679,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       resolve({ ok: false, error: `超时 (${timeoutMs / 1000}s)` });
       deps.metricsCollector?.resolve(req.requestId, false, `超时 (${timeoutMs / 1000}s)`);
       const onlineRt = deps.registry.markOnline(req.agentId);
-      if (onlineRt) deps.io.of('/web').emit('agent:status', snapshotToDto(onlineRt));
+      if (onlineRt) deps.io.of('/web').emit('agent:status', runtimeStatusDto(onlineRt));
       else emitCustomAgentStatus(req.agentId, 'online', `超时 (${timeoutMs / 1000}s)`);
     }, timeoutMs);
     pending.set(req.requestId, { resolve, timer, socketId: sock.id, agentId: req.agentId });
@@ -680,7 +703,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       p.resolve({ ok: false, error: reason });
       deps.metricsCollector?.resolve(requestId, false, reason);
       const rt = deps.registry.markOnline(p.agentId);
-      if (rt) deps.io.of('/web').emit('agent:status', snapshotToDto(rt));
+      if (rt) deps.io.of('/web').emit('agent:status', runtimeStatusDto(rt));
       else emitCustomAgentStatus(p.agentId, 'online');
       ns.sockets.get(p.socketId)?.emit('dispatch:cancel', { requestId, agentId: p.agentId, reason });
     }

@@ -343,6 +343,192 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('reports AgentOS agents as busy in member lists while dispatch is running', async () => {
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    const statuses: any[] = [];
+    web.on('agent:status', (status: any) => statuses.push(status));
+
+    const ag = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'my-mbp-hermes-device',
+        networkId: 'default',
+        agents: [{
+          id: 'scan-my-mbp-hermes-device-hermes-agent',
+          name: 'Hermes-Agent',
+          role: 'gateway-agent',
+          adapterKind: 'hermes',
+          category: 'agentos-hosted',
+          visibility: 'public',
+        }],
+        systemInfo: { hostname: 'MyMBP' },
+      },
+      reconnection: false,
+      transports: ['websocket'],
+    });
+    await new Promise<void>((r) => ag.on('connect', () => r()));
+    ag.emit('register');
+
+    const dmRes = await new Promise<any>((resolve) => {
+      web.emit('dm:start', { agentId: 'scan-my-mbp-hermes-device-hermes-agent' }, resolve);
+    });
+    expect(dmRes.ok).toBe(true);
+
+    const dispatchSeen = new Promise<any>((resolve) => {
+      ag.once('dispatch', resolve);
+    });
+    const sendAck = await new Promise<any>((resolve) => {
+      web.emit('message:send', {
+        channelId: dmRes.dm.id,
+        body: '介绍一下你自己',
+        clientMsgId: 'hermes-busy-1',
+      }, resolve);
+    });
+    expect(sendAck.ok).toBe(true);
+
+    const req = await dispatchSeen;
+    expect(req.agentId).toBe('scan-my-mbp-hermes-device-hermes-agent');
+    expect(statuses.some((status: any) =>
+      status.id === 'scan-my-mbp-hermes-device-hermes-agent' && status.status === 'busy'
+    )).toBe(true);
+
+    const membersWhileBusy = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+    expect(membersWhileBusy.ok).toBe(true);
+    expect(membersWhileBusy.agents.find((agent: any) => agent.id === 'scan-my-mbp-hermes-device-hermes-agent')).toMatchObject({
+      name: 'Hermes-Agent',
+      deviceName: 'MyMBP',
+      status: 'busy',
+    });
+
+    ag.emit('reply', {
+      agentId: req.agentId,
+      channelId: req.channelId,
+      body: 'Hermes ok',
+      requestId: req.requestId,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    ag.close();
+    web.close();
+  });
+
+  it('keeps published AgentOS status events visible in the target team', async () => {
+    const setupSocket = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => setupSocket.on('connect', () => r()));
+    const created = await new Promise<any>((resolve) => {
+      setupSocket.emit('network:create', { name: 'OpenSNS Team', path: 'opensns-status' }, resolve);
+    });
+    expect(created.ok).toBe(true);
+    const targetNetworkId = created.network.id;
+
+    const registeredStatus = new Promise<any>((resolve) => {
+      setupSocket.once('agent:status', resolve);
+    });
+    const ag = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'published-hermes-device',
+        networkId: 'default',
+        agents: [{
+          id: 'scan-published-hermes-device-hermes-agent',
+          name: 'Hermes-Agent',
+          role: 'gateway-agent',
+          adapterKind: 'hermes',
+          category: 'agentos-hosted',
+          visibility: 'public',
+        }],
+        systemInfo: { hostname: 'MyMBP' },
+      },
+      reconnection: false,
+      transports: ['websocket'],
+    });
+    await new Promise<void>((r) => ag.on('connect', () => r()));
+    ag.emit('register');
+    await registeredStatus;
+    const scanned = await new Promise<any>((resolve) => {
+      ag.emit('device:register-agents', {
+        agents: [{
+          name: 'Hermes-Agent',
+          category: 'agentos-hosted',
+          adapterKind: 'hermes',
+          command: 'hermes',
+          args: [],
+          source: 'scanned',
+        }],
+      }, resolve);
+    });
+    expect(scanned.ok).toBe(true);
+    expect(app.globalDb.agents.getFull('scan-published-hermes-device-hermes-agent')).toBeTruthy();
+    app.globalDb.agentPublishes.publish('scan-published-hermes-device-hermes-agent', targetNetworkId, 'admin');
+    app.registry.updatePublishedNetworks('scan-published-hermes-device-hermes-agent', [targetNetworkId]);
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', targetNetworkId) },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    const statuses: any[] = [];
+    web.on('agent:status', (status: any) => statuses.push(status));
+
+    const dmRes = await new Promise<any>((resolve) => {
+      web.emit('dm:start', { agentId: 'scan-published-hermes-device-hermes-agent' }, resolve);
+    });
+    expect(dmRes.ok).toBe(true);
+
+    const dispatchSeen = new Promise<any>((resolve) => {
+      ag.once('dispatch', resolve);
+    });
+    const sendAck = await new Promise<any>((resolve) => {
+      web.emit('message:send', {
+        channelId: dmRes.dm.id,
+        body: '介绍一下你自己',
+        clientMsgId: 'published-hermes-busy-1',
+      }, resolve);
+    });
+    expect(sendAck.ok).toBe(true);
+
+    const req = await dispatchSeen;
+    const busyStatus = statuses.find((status: any) =>
+      status.id === 'scan-published-hermes-device-hermes-agent' && status.status === 'busy'
+    );
+    expect(busyStatus).toMatchObject({
+      networkId: 'default',
+      status: 'busy',
+    });
+    expect(busyStatus.publishedNetworkIds).toContain(targetNetworkId);
+
+    const membersWhileBusy = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+    expect(membersWhileBusy.ok).toBe(true);
+    expect(membersWhileBusy.agents.find((agent: any) => agent.id === 'scan-published-hermes-device-hermes-agent')).toMatchObject({
+      name: 'Hermes-Agent',
+      status: 'busy',
+    });
+
+    ag.emit('reply', {
+      agentId: req.agentId,
+      channelId: req.channelId,
+      body: 'Hermes ok',
+      requestId: req.requestId,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    ag.close();
+    web.close();
+    setupSocket.close();
+  });
+
   it('returns every team member for the default all channel', async () => {
     app.globalDb.users.create({
       id: 'u-all',
