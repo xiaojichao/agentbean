@@ -97,6 +97,33 @@ export interface DeviceDaemonHandle {
   stop(): Promise<void>;
 }
 
+export function createDeviceSocketOptions(input: {
+  token: string;
+  deviceId: string;
+  networkId: string;
+  agents: Array<AgentInstance['publicMeta']>;
+  systemInfo: SystemInfo;
+}) {
+  return {
+    auth: {
+      token: input.token,
+      deviceId: input.deviceId,
+      networkId: input.networkId,
+      agents: input.agents,
+      systemInfo: input.systemInfo,
+      daemonVersion: input.systemInfo.daemonVersion,
+      protocolVersion: 1,
+      capabilities: {
+        customAgentDispatch: true,
+      },
+    },
+    reconnection: true,
+    reconnectionDelay: 1_000,
+    reconnectionDelayMax: 10_000,
+    timeout: 20_000,
+  };
+}
+
 async function scanAll(): Promise<ScanPayload> {
   const [runtimes, agentos, local] = await Promise.all([
     scanRuntimes(),
@@ -223,23 +250,13 @@ export function createDeviceDaemon(
   return {
     async start() {
       const agentUrl = cfg.server.url.endsWith('/agent') ? cfg.server.url : cfg.server.url + '/agent';
-      socket = io(agentUrl, {
-        auth: {
-          token: cfg.server.token,
-          deviceId: cfg.deviceId,
-          networkId: cfg.networkId,
-          agents: publicAgents,
-          systemInfo,
-          daemonVersion: systemInfo.daemonVersion,
-          protocolVersion: 1,
-          capabilities: {
-            customAgentDispatch: true,
-          },
-        },
-        transports: ['websocket'],
-        reconnection: true,
-        reconnectionDelay: 1_000,
-      });
+      socket = io(agentUrl, createDeviceSocketOptions({
+        token: cfg.server.token,
+        deviceId: cfg.deviceId,
+        networkId: cfg.networkId,
+        agents: publicAgents,
+        systemInfo,
+      }));
 
       socket.on('connect', () => {
         const reconnecting = !firstConnect;
@@ -275,6 +292,18 @@ export function createDeviceDaemon(
 
       socket.on('connect_error', (err) => {
         logger.error({ err: err.message }, 'connect_error');
+      });
+
+      socket.io.on('reconnect_attempt', (attempt) => {
+        logger.info({ attempt }, 'device daemon reconnect attempt');
+      });
+
+      socket.io.on('reconnect', (attempt) => {
+        logger.info({ attempt }, 'device daemon reconnected');
+      });
+
+      socket.io.on('reconnect_error', (err) => {
+        logger.warn({ err: errorMessage(err) }, 'device daemon reconnect failed');
       });
 
       socket.on('dispatch', (req: {
