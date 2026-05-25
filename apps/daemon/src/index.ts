@@ -209,32 +209,60 @@ function normalizeAgentUrl(serverUrl: string): string {
   return `${base}/agent`;
 }
 
+export const INVITE_CONNECTION_TIMEOUT_MS = 20_000;
+
+export function createInviteSocketOptions() {
+  return {
+    auth: { invite: true },
+    reconnection: false,
+    timeout: INVITE_CONNECTION_TIMEOUT_MS,
+  };
+}
+
+export function socketErrorMessage(err: any): string {
+  const details = [
+    err?.message,
+    err?.description?.message,
+    err?.context?.statusText?.code,
+    err?.context?.statusText?.message,
+    err?.context?.responseText,
+  ]
+    .filter((value) => typeof value === 'string' && value.trim())
+    .map((value) => value.trim());
+  return [...new Set(details)].join(': ') || 'unknown socket error';
+}
+
 async function runInviteMode(serverUrl: string, inviteCode: string) {
   const { io } = await import('socket.io-client');
   const { execFile } = await import('node:child_process');
   const baseUrl = normalizeBaseUrl(serverUrl);
   const webSocketUrl = `${baseUrl}/web`;
 
+  console.log(`Connecting to AgentBean at ${baseUrl}...`);
   logger.info({ serverUrl: baseUrl, inviteCode }, 'invite mode: connecting to server');
-  const socket = io(webSocketUrl, {
-    auth: { invite: true },
-    transports: ['websocket'],
-    reconnection: false,
-  });
+  const socket = io(webSocketUrl, createInviteSocketOptions());
 
   return new Promise<{ token: string; serverUrl: string; userId?: string; networkId?: string }>((resolve, reject) => {
+    let connectTimer: NodeJS.Timeout;
     const fail = (err: Error) => {
+      clearTimeout(connectTimer);
       socket.disconnect();
       reject(err);
     };
+    connectTimer = setTimeout(() => {
+      fail(new Error(`connection timed out after 20s. Check network access to ${baseUrl} and try again.`));
+    }, INVITE_CONNECTION_TIMEOUT_MS);
 
     socket.on('connect_error', (err) => {
-      logger.error({ err: err.message }, 'invite mode: connection failed');
-      fail(new Error(`connection failed: ${err.message}`));
+      const message = socketErrorMessage(err);
+      logger.error({ err: message }, 'invite mode: connection failed');
+      fail(new Error(`connection failed: ${message}`));
     });
 
     socket.on('connect', () => {
+      clearTimeout(connectTimer);
       logger.info('invite mode: connected, validating invite code');
+      console.log('Connected. Validating invite code...');
       socket.emit('auth:invite:validate', { code: inviteCode }, (res: any) => {
         if (!res?.ok) {
           fail(new Error(res?.error ?? 'invalid invite code'));
