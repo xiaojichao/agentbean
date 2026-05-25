@@ -68,6 +68,36 @@ describe('/web namespace', () => {
     ag.close(); web.close();
   });
 
+  it('includes device names in member agent rows so duplicate names can be distinguished', async () => {
+    const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const ag = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'members-device-1',
+        networkId: 'default',
+        agents: [{ id: 'members-a1', name: 'SameName', role: 'r', adapterKind: 'codex', category: 'agentos-hosted', visibility: 'public' }],
+        systemInfo: { hostname: 'Studio-Mini' },
+      },
+      reconnection: false, transports: ['websocket'],
+    });
+    await new Promise<void>((r) => ag.on('connect', () => r()));
+    ag.emit('register');
+
+    const members = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+    expect(members.ok).toBe(true);
+    expect(members.agents.find((agent: any) => agent.id === 'members-a1')).toMatchObject({
+      name: 'SameName',
+      deviceId: 'members-device-1',
+      deviceName: 'Studio-Mini',
+    });
+
+    ag.close(); web.close();
+  });
+
   it('returns every team member for the default all channel', async () => {
     app.globalDb.users.create({
       id: 'u-all',

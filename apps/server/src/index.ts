@@ -220,6 +220,14 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     return globalDb.users.get(ownerId)?.username ?? null;
   };
 
+  const resolveDeviceName = (deviceId?: string | null) => {
+    if (!deviceId) return null;
+    const live = deviceRegistry.get(deviceId);
+    const persisted = globalDb.devices.get(deviceId);
+    const systemName = persisted?.systemInfo && typeof persisted.systemInfo.hostname === 'string' ? persisted.systemInfo.hostname : null;
+    return persisted?.hostname ?? systemName ?? live?.id ?? null;
+  };
+
   const buildVisibleAgentDtos = (networkId: string) => {
     const registryAgents = registry.all().filter((a) =>
       isTeamAgent(a) &&
@@ -227,11 +235,13 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     ).map((agent) => {
       const dto = snapshotToDto(agent);
       const ownerName = resolveOwnerName(dto.ownerId);
-      if (agent.source !== 'custom') return { ...dto, ownerName };
+      const deviceName = resolveDeviceName(dto.deviceId);
+      if (agent.source !== 'custom') return { ...dto, ownerName, deviceName };
       const resolved = resolveCustomAgentStatus(agent);
       return {
         ...dto,
         ownerName,
+        deviceName,
         status: resolved.status,
         lastSeenAt: resolved.lastSeenAt ?? dto.lastSeenAt,
         lastError: resolved.lastError,
@@ -263,6 +273,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           ownerId: agent.ownerId,
           ownerName: resolveOwnerName(agent.ownerId),
           description: agent.description,
+          deviceName: resolveDeviceName(agent.deviceId),
           status: resolved.status,
           lastSeenAt: resolved.lastSeenAt ?? agent.lastSeenAt,
           lastError: resolved.lastError ?? agent.lastError ?? undefined,

@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Bot, Circle, ChevronRight, User } from 'lucide-react';
+import { Bot, Circle, ChevronRight, Monitor, User } from 'lucide-react';
 import { memberEvents, deviceEvents, agentEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { AgentDetail, AgentTopBar, HumanDetail, type AgentMemberTab, type HumanMember } from '@/components/member-detail';
+import type { AgentSnapshot } from '@/lib/schema';
 
 const TABS: { id: AgentMemberTab; label: string }[] = [
   { id: 'profile', label: '资料' },
@@ -15,6 +16,28 @@ const TABS: { id: AgentMemberTab; label: string }[] = [
   { id: 'workspace', label: '工作区' },
   { id: 'activity', label: '动态' },
 ];
+
+const RUNTIME_LABEL: Record<string, string> = {
+  codex: 'Codex CLI',
+  'claude-code': 'Claude Code',
+  openclaw: 'OpenClaw',
+  hermes: 'Hermes',
+  standalone: 'Standalone',
+};
+
+function agentStatusClass(status?: string): string {
+  if (status === 'online') return 'text-emerald-500';
+  if (status === 'busy') return 'text-amber-500';
+  if (status === 'error') return 'text-rose-500';
+  return 'text-neutral-300';
+}
+
+function agentSubtitle(agent: AgentSnapshot): string {
+  return agent.description?.trim()
+    || RUNTIME_LABEL[agent.adapterKind]
+    || agent.role
+    || 'Agent';
+}
 
 export default function MembersPage() {
   const router = useRouter();
@@ -68,6 +91,23 @@ export default function MembersPage() {
   const selectedAgent = agentList.find((a) => a.id === selectedId);
   const selectedDevice = selectedAgent?.deviceId ? devices[selectedAgent.deviceId] : undefined;
   const selectedHuman = selectedId?.startsWith('user:') ? humanMembers.find((h) => `user:${h.userId}` === selectedId) : undefined;
+  const agentGroups = useMemo(() => {
+    const groups = new Map<string, { key: string; label: string; agents: AgentSnapshot[] }>();
+    for (const agent of [...agentList].sort((a, b) => {
+      const aDevice = (a.deviceName ?? (a.deviceId ? devices[a.deviceId]?.hostname : '') ?? '').toLowerCase();
+      const bDevice = (b.deviceName ?? (b.deviceId ? devices[b.deviceId]?.hostname : '') ?? '').toLowerCase();
+      return aDevice.localeCompare(bDevice) || a.name.localeCompare(b.name);
+    })) {
+      const label = agent.deviceName?.trim()
+        || (agent.deviceId ? devices[agent.deviceId]?.hostname : undefined)
+        || '未关联设备';
+      const key = agent.deviceId ?? `unknown:${label}`;
+      const group = groups.get(key) ?? { key, label, agents: [] };
+      group.agents.push(agent);
+      groups.set(key, group);
+    }
+    return Array.from(groups.values());
+  }, [agentList, devices]);
   const setAgentTab = (nextTab: AgentMemberTab) => {
     setTab(nextTab);
     if (selectedAgent) router.replace(`/${np}/agent/${selectedAgent.id}?agentTab=${nextTab}`);
@@ -90,13 +130,28 @@ export default function MembersPage() {
               <span className="ml-auto rounded-full bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{agentList.length}</span>
             </button>
             {agentsExpanded && (
-              <div className="mt-0.5 space-y-0.5">
-                {agentList.map((agent) => (
-                  <button key={agent.id} onClick={() => { setSelectedId(agent.id); setTab('profile'); router.push(`/${np}/agent/${agent.id}?agentTab=profile`); }} className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left ${selectedId === agent.id ? 'bg-pink-100' : 'hover:bg-neutral-100'}`}>
-                    <Bot size={15} className="shrink-0 text-amber-600" />
-                    <Circle size={8} className={`shrink-0 fill-current ${agent.status === 'online' ? 'text-emerald-500' : agent.status === 'busy' ? 'text-amber-500' : 'text-neutral-300'}`} />
-                    <span className={`truncate text-sm ${selectedId === agent.id ? 'font-medium text-neutral-900' : 'text-neutral-700'}`}>{agent.name}</span>
-                  </button>
+              <div className="mt-0.5 space-y-2">
+                {agentGroups.map((group) => (
+                  <div key={group.key}>
+                    <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium text-neutral-400">
+                      <Monitor size={11} className="shrink-0" />
+                      <span className="truncate">{group.label}</span>
+                    </div>
+                    <div className="space-y-0.5">
+                      {group.agents.map((agent) => (
+                        <button key={agent.id} onClick={() => { setSelectedId(agent.id); setTab('profile'); router.push(`/${np}/agent/${agent.id}?agentTab=profile`); }} className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left ${selectedId === agent.id ? 'bg-pink-100' : 'hover:bg-neutral-100'}`}>
+                          <Bot size={15} className="shrink-0 text-amber-600" />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex min-w-0 items-center gap-1.5">
+                              <span className={`truncate text-sm ${selectedId === agent.id ? 'font-medium text-neutral-900' : 'text-neutral-700'}`}>{agent.name}</span>
+                              <Circle size={7} className={`shrink-0 fill-current ${agentStatusClass(agent.status)}`} />
+                            </div>
+                            <div className="truncate text-[11px] leading-tight text-neutral-400">{agentSubtitle(agent)}</div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 ))}
                 {agentList.length === 0 && <div className="px-2 py-2 text-xs text-neutral-400">暂无 Agent</div>}
               </div>

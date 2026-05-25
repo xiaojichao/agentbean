@@ -74,7 +74,7 @@ export const useAgentBeanStore = create<State>((set) => ({
         delete next[snap.id];
         return { agents: next };
       }
-      return { agents: { ...s.agents, [snap.id]: snap } };
+      return { agents: { ...s.agents, [snap.id]: { ...s.agents[snap.id], ...snap } } };
     });
   },
   addAgent(agent) {

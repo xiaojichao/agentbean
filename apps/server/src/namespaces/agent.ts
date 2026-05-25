@@ -93,6 +93,7 @@ export interface AgentSnapshotDto {
   cwd?: string | null;
   description?: string | null;
   deviceId?: string;
+  deviceName?: string | null;
   publishedNetworkIds?: string[];
   source?: 'self-register' | 'scanned' | 'custom';
 }
