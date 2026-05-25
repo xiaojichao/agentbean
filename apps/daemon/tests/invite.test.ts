@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import packageJson from '../package.json';
 import { createInviteSocketOptions, INVITE_CONNECTION_TIMEOUT_MS, socketErrorMessage } from '../src/index.js';
 
 describe('invite CLI connection behavior', () => {
@@ -16,5 +17,12 @@ describe('invite CLI connection behavior', () => {
       message: 'xhr poll error',
       description: { message: 'getaddrinfo ENOTFOUND api.agentbean.dev' },
     })).toBe('xhr poll error: getaddrinfo ENOTFOUND api.agentbean.dev');
+  });
+
+  it('keeps a daemon bin alias for npx @agentbean/daemon', () => {
+    expect(packageJson.bin).toMatchObject({
+      daemon: 'dist/bin.js',
+      'agentbean-daemon': 'dist/bin.js',
+    });
   });
 });

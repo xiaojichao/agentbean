@@ -1,10 +1,11 @@
 {
   "name": "@agentbean/daemon",
   "private": false,
-  "version": "0.1.20",
+  "version": "0.1.21",
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
+    "daemon": "dist/bin.js",
     "agentbean-daemon": "dist/bin.js"
   },
   "files": [
