@@ -252,7 +252,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       networkId: string;
       agents: PublicAgentMeta[];
       systemInfo?: Record<string, unknown>;
-      capabilities?: { customAgentDispatch?: boolean };
+      capabilities?: { customAgentDispatch?: boolean; directoryPicker?: boolean };
       protocolVersion?: number;
       daemonVersion?: string;
     };

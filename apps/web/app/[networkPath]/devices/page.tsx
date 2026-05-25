@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, Check, FolderOpen } from 'lucide-react';
 import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl } from '@/lib/socket';
@@ -25,6 +25,99 @@ const STATUS_BG: Record<string, string> = {
 
 function formatDaemonVersion(device: Parameters<typeof daemonVersionDisplay>[0]) {
   return daemonVersionDisplay(device).currentLabel;
+}
+
+function deviceDisplayName(device: { id: string; hostname?: string | null; systemInfo?: { hostname?: string } | null }): string {
+  return (device.hostname ?? device.systemInfo?.hostname ?? '').trim() || device.id;
+}
+
+function compareDevices(a: { id: string; hostname?: string | null; networkId?: string; systemInfo?: { hostname?: string } | null }, b: { id: string; hostname?: string | null; networkId?: string; systemInfo?: { hostname?: string } | null }): number {
+  return deviceDisplayName(a).localeCompare(deviceDisplayName(b), 'zh-CN', { sensitivity: 'base', numeric: true }) ||
+    (a.networkId ?? '').localeCompare(b.networkId ?? '', 'zh-CN', { sensitivity: 'base', numeric: true }) ||
+    a.id.localeCompare(b.id);
+}
+
+function directoryFallbackPath(name: string): string {
+  return `~/projects/${name}`;
+}
+
+function directoryPickerErrorMessage(error?: string): string {
+  if (error === 'CANCELLED') return '';
+  if (error === 'DEVICE_OFFLINE') return '目标设备不在线，无法在该设备上选择项目目录';
+  if (error === 'DAEMON_UPGRADE_REQUIRED') return '该设备的 Daemon 版本过旧，请升级后再使用目录浏览';
+  if (error === 'DIRECTORY_PICKER_TIMEOUT') return '目录选择超时，请确认目标设备上已打开选择窗口';
+  if (error === 'DEVICE_NOT_IN_TEAM') return '该设备不属于当前团队';
+  return error || '无法打开目录浏览窗口';
+}
+
+function DirectoryBrowseButton({
+  onSelect,
+  onError,
+  deviceId,
+  disabled = false,
+}: {
+  onSelect: (path: string) => void;
+  onError?: (message: string) => void;
+  deviceId?: string;
+  disabled?: boolean;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const browse = async () => {
+    onError?.('');
+    if (deviceId) {
+      try {
+        const res = await deviceEvents().selectDirectory(deviceId);
+        if (res.ok && res.path) {
+          onSelect(res.path);
+          return;
+        }
+        const message = directoryPickerErrorMessage(res.error);
+        if (message) onError?.(message);
+      } catch (error) {
+        onError?.(error instanceof Error ? error.message : '无法打开目录浏览窗口');
+      }
+      return;
+    }
+
+    const picker = (window as any).showDirectoryPicker as undefined | (() => Promise<{ name?: string }>);
+    if (picker) {
+      try {
+        const handle = await picker();
+        if (handle?.name) onSelect(directoryFallbackPath(handle.name));
+        return;
+      } catch (error: any) {
+        if (error?.name === 'AbortError') return;
+      }
+    }
+    inputRef.current?.click();
+  };
+
+  return (
+    <>
+      <button type="button" disabled={disabled} onClick={browse} className="shrink-0 flex items-center gap-1 rounded-md border border-neutral-200 px-3 py-1.5 text-xs text-neutral-600 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50">
+        <FolderOpen size={12} /> 浏览
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        // @ts-expect-error webkitdirectory is non-standard
+        webkitdirectory=""
+        directory=""
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            const relativePath = (file as any).webkitRelativePath as string | undefined;
+            const dirName = relativePath?.split('/')[0] || file.name;
+            if (dirName) onSelect(directoryFallbackPath(dirName));
+          }
+          e.currentTarget.value = '';
+        }}
+      />
+    </>
+  );
 }
 
 export default function DevicesPage() {
@@ -52,7 +145,7 @@ export default function DevicesPage() {
     return () => { unsub(); unsubStatus(); };
   }, [conn, applyDevicesSnapshot, applyDeviceStatus]);
 
-  const deviceList = useMemo(() => Object.values(devices), [devices]);
+  const deviceList = useMemo(() => Object.values(devices).sort(compareDevices), [devices]);
 
   useEffect(() => {
     if (routeDeviceId) {
@@ -798,26 +891,7 @@ function AgentConfigDialog({ agent, runtimes, onClose, onSaved }: { agent: any; 
             <div className="flex gap-2">
               <input value={cwd} onChange={(e) => setCwd(e.target.value)} disabled={!editable} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50" placeholder="/path/to/project（可选）" />
               {editable && (
-                <label className="shrink-0 flex cursor-pointer items-center gap-1 rounded-md border border-neutral-200 px-3 py-1.5 text-xs text-neutral-600 hover:bg-neutral-50">
-                  <FolderOpen size={12} /> 浏览
-                  <input
-                    type="file"
-                    // @ts-expect-error webkitdirectory is non-standard
-                    webkitdirectory=""
-                    directory=""
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) {
-                        const relativePath = (file as any).webkitRelativePath as string | undefined;
-                        if (relativePath) {
-                          const dirName = relativePath.split('/')[0];
-                          setCwd((prev) => prev || `~/projects/${dirName}`);
-                        }
-                      }
-                    }}
-                  />
-                </label>
+                <DirectoryBrowseButton deviceId={agent.deviceId} onSelect={setCwd} onError={setError} />
               )}
             </div>
             <p className="mt-1 text-[11px] text-neutral-400">{isCustom ? 'Agent 启动时的工作目录，留空则使用默认路径' : 'AgentOS Agent 所在目录，留空则保持未配置状态'}</p>
@@ -910,26 +984,7 @@ function AddCustomAgentDialog({ deviceId, runtimes, onClose, onCreated }: { devi
             <label className="mb-1 block text-xs font-medium text-neutral-600">项目目录</label>
             <div className="flex gap-2">
               <input value={cwd} onChange={(e) => setCwd(e.target.value)} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="/path/to/project（可选）" />
-              <label className="shrink-0 flex items-center gap-1 cursor-pointer rounded-md border border-neutral-200 px-3 py-1.5 text-xs text-neutral-600 hover:bg-neutral-50">
-                <FolderOpen size={12} /> 浏览
-                <input
-                  type="file"
-                  // @ts-expect-error webkitdirectory is non-standard
-                  webkitdirectory=""
-                  directory=""
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) {
-                      const relativePath = (file as any).webkitRelativePath as string | undefined;
-                      if (relativePath) {
-                        const dirName = relativePath.split('/')[0];
-                        setCwd((prev) => prev || `~/projects/${dirName}`);
-                      }
-                    }
-                  }}
-                />
-              </label>
+              <DirectoryBrowseButton deviceId={deviceId} onSelect={setCwd} onError={setError} />
             </div>
             <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录，留空则使用默认路径</p>
           </div>

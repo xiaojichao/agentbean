@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createDeviceSocketOptions } from '../src/device-daemon.js';
+import { createDeviceSocketOptions, nativeDirectoryPickerCommands } from '../src/device-daemon.js';
 
 describe('device daemon socket options', () => {
   it('allows Socket.IO transport fallback for long-running device connections', () => {
@@ -31,7 +31,13 @@ describe('device daemon socket options', () => {
       deviceId: 'device-1',
       networkId: 'team-1',
       daemonVersion: '0.0.0-test',
-      capabilities: { customAgentDispatch: true },
+      capabilities: { customAgentDispatch: true, directoryPicker: true },
     });
+  });
+
+  it('uses native folder chooser commands for supported desktop platforms', () => {
+    expect(nativeDirectoryPickerCommands('darwin')[0]).toMatchObject({ command: 'osascript' });
+    expect(nativeDirectoryPickerCommands('win32')[0]).toMatchObject({ command: 'powershell.exe' });
+    expect(nativeDirectoryPickerCommands('linux').map((cmd) => cmd.command)).toEqual(['zenity', 'kdialog']);
   });
 });

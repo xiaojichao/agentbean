@@ -284,8 +284,22 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     return [...registryAgents, ...persistedAgents];
   };
 
+  function deviceDisplayName(device: ReturnType<GlobalDb['devices']['listByUser']>[number]): string {
+    const systemName = typeof device.systemInfo?.hostname === 'string' ? device.systemInfo.hostname : '';
+    return (device.hostname ?? systemName ?? '').trim() || device.id;
+  }
+
+  function compareDeviceRows(
+    a: ReturnType<GlobalDb['devices']['listByUser']>[number],
+    b: ReturnType<GlobalDb['devices']['listByUser']>[number],
+  ): number {
+    return deviceDisplayName(a).localeCompare(deviceDisplayName(b), 'zh-CN', { sensitivity: 'base', numeric: true }) ||
+      a.networkId.localeCompare(b.networkId, 'zh-CN', { sensitivity: 'base', numeric: true }) ||
+      a.id.localeCompare(b.id);
+  }
+
   const visibleDeviceRows = (rows: ReturnType<GlobalDb['devices']['listByUser']>) =>
-    rows.filter((device) => !isVirtualDeviceId(device.id));
+    rows.filter((device) => !isVirtualDeviceId(device.id)).sort(compareDeviceRows);
 
   const toDeviceDto = (dbd: ReturnType<GlobalDb['devices']['listByUser']>[number]) => {
     const live = deviceRegistry.get(dbd.id);
@@ -558,6 +572,38 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         if (!agentSocket) return ack?.({ ok: false, error: 'SOCKET_NOT_FOUND' });
         agentSocket.emit('agents:discover');
         ack?.({ ok: true });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('device:select-directory', (payload: { deviceId: string }, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const device = deviceRegistry.get(payload.deviceId);
+        if (!device || device.status === 'offline') return ack?.({ ok: false, error: 'DEVICE_OFFLINE' });
+        if (device.networkId !== networkId) return ack?.({ ok: false, error: 'DEVICE_NOT_IN_TEAM' });
+        if (!device.capabilities?.directoryPicker) return ack?.({ ok: false, error: 'DAEMON_UPGRADE_REQUIRED' });
+        const agentSocket = io.of('/agent').sockets.get(device.socket.id);
+        if (!agentSocket) return ack?.({ ok: false, error: 'SOCKET_NOT_FOUND' });
+
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          ack?.({ ok: false, error: 'DIRECTORY_PICKER_TIMEOUT' });
+        }, 130_000);
+
+        agentSocket.emit('device:select-directory', {}, (res: any) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (res?.ok && typeof res.path === 'string' && res.path.trim()) {
+            ack?.({ ok: true, path: res.path.trim() });
+          } else {
+            ack?.({ ok: false, error: res?.error ?? 'DIRECTORY_PICKER_FAILED' });
+          }
+        });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }

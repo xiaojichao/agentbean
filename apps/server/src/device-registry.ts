@@ -27,6 +27,7 @@ export interface DeviceRuntime {
   runtimes?: RuntimeMeta[];
   capabilities?: {
     customAgentDispatch?: boolean;
+    directoryPicker?: boolean;
   };
   protocolVersion?: number;
   daemonVersion?: string | null;

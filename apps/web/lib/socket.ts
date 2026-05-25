@@ -263,6 +263,7 @@ export interface DeviceEvents {
   get(payload: { id: string }): Promise<{ ok: boolean; device?: any; error?: string }>;
   agentsList(deviceId: string): Promise<{ ok: boolean; agents?: DeviceAgent[]; runtimes?: DeviceRuntime[]; error?: string }>;
   scan(deviceId: string): Promise<{ ok: boolean; error?: string }>;
+  selectDirectory(deviceId: string): Promise<{ ok: boolean; path?: string; error?: string }>;
   delete(id: string): Promise<{ ok: boolean; error?: string }>;
   rename(id: string, hostname: string): Promise<{ ok: boolean; error?: string }>;
   onSnapshot(handler: (devices: DeviceInfo[]) => void): () => void;
@@ -283,6 +284,9 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
     },
     scan(deviceId) {
       return emitWithTimeout(socket, 'device:scan', { deviceId });
+    },
+    selectDirectory(deviceId) {
+      return emitWithTimeout(socket, 'device:select-directory', { deviceId }, 140000);
     },
     delete(id) {
       return emitWithTimeout(socket, 'device:delete', { id });

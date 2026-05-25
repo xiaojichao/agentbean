@@ -98,6 +98,93 @@ describe('/web namespace', () => {
     ag.close(); web.close();
   });
 
+  it('forwards directory selection requests to the target device daemon', async () => {
+    const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const ag = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'directory-device-1',
+        networkId: 'default',
+        agents: [],
+        capabilities: { customAgentDispatch: true, directoryPicker: true },
+      },
+      reconnection: false,
+      transports: ['websocket'],
+    });
+    await new Promise<void>((r) => ag.on('connect', () => r()));
+    ag.emit('register');
+    ag.on('device:select-directory', (_payload, ack) => {
+      ack({ ok: true, path: '/Users/shaw/projects/drama' });
+    });
+
+    const selected = await new Promise<any>((resolve) => {
+      web.emit('device:select-directory', { deviceId: 'directory-device-1' }, resolve);
+    });
+
+    expect(selected).toEqual({ ok: true, path: '/Users/shaw/projects/drama' });
+    ag.close();
+    web.close();
+  });
+
+  it('asks users to upgrade the daemon before remote directory browsing on old devices', async () => {
+    const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const ag = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'old-directory-device',
+        networkId: 'default',
+        agents: [],
+        capabilities: { customAgentDispatch: true },
+      },
+      reconnection: false,
+      transports: ['websocket'],
+    });
+    await new Promise<void>((r) => ag.on('connect', () => r()));
+    ag.emit('register');
+
+    const selected = await new Promise<any>((resolve) => {
+      web.emit('device:select-directory', { deviceId: 'old-directory-device' }, resolve);
+    });
+
+    expect(selected).toEqual({ ok: false, error: 'DAEMON_UPGRADE_REQUIRED' });
+    ag.close();
+    web.close();
+  });
+
+  it('keeps device snapshots sorted by device name instead of last heartbeat time', async () => {
+    const now = Date.now();
+    app.globalDb.devices.upsert({
+      id: 'stable-z',
+      userId: 'admin',
+      networkId: 'default',
+      hostname: 'Zeta',
+      lastSeenAt: now + 10_000,
+      systemInfo: null,
+    });
+    app.globalDb.devices.upsert({
+      id: 'stable-a',
+      userId: 'admin',
+      networkId: 'default',
+      hostname: 'Alpha',
+      lastSeenAt: now,
+      systemInfo: null,
+    });
+
+    const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: generateToken('admin', 'default') } });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    const snap = await new Promise<any[]>((resolve) => {
+      web.emit('devices:subscribe', {});
+      web.on('devices:snapshot', resolve);
+    });
+
+    expect(snap.map((device: any) => device.hostname)).toEqual(['Alpha', 'Zeta']);
+    web.close();
+  });
+
   it('returns every team member for the default all channel', async () => {
     app.globalDb.users.create({
       id: 'u-all',
