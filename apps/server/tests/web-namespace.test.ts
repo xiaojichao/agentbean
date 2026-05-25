@@ -585,6 +585,29 @@ describe('/web namespace', () => {
     });
     ownerWeb.close();
 
+    app.globalDb.users.create({
+      id: 'same-team-viewer',
+      username: 'same-team-viewer',
+      passwordHash: null,
+      createdAt: Date.now(),
+    });
+    app.globalDb.networkMembers.add('default', 'same-team-viewer', 'member');
+    const viewerWeb = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('same-team-viewer', 'default') },
+    });
+    await new Promise<void>((r) => viewerWeb.on('connect', () => r()));
+    const viewerCustomList = await new Promise<any>((resolve) => {
+      viewerWeb.emit('agent:custom:list', { deviceId: 'remote-device-1' }, resolve);
+    });
+    expect(viewerCustomList.ok).toBe(true);
+    expect(viewerCustomList.agents.find((agent: any) => agent.id === createRes.agent.id)).toMatchObject({
+      deviceId: 'remote-device-1',
+      deviceName: 'Remote Studio',
+    });
+    viewerWeb.close();
+
     const snap = await new Promise<any[]>((resolve) => {
       web.on('agents:snapshot', resolve);
       web.emit('agents:subscribe', {});

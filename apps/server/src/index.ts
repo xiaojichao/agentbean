@@ -565,6 +565,13 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     const canManageDevice = (device: { userId?: string | null } | null | undefined, userId?: string | null) =>
       canManageDeviceRow(device, userId);
 
+    const canViewDevice = (device: { userId?: string | null; networkId?: string | null } | null | undefined, userId?: string | null, networkId?: string | null) => {
+      if (!userId || !device || !networkId || device.networkId !== networkId) return false;
+      if (canManageDevice(device, userId)) return true;
+      const network = globalDb.networks.get(networkId);
+      return network?.visibility === 'public' || globalDb.networkMembers.isMember(networkId, userId);
+    };
+
     const canManageAgent = (agent: { ownerId?: string | null; deviceId?: string | null } | null | undefined, userId?: string | null) => {
       if (!userId || !agent) return false;
       if (isSystemAdmin(userId)) return true;
@@ -746,10 +753,17 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const requestedDevice = payload.deviceId ? globalDb.devices.get(payload.deviceId) : null;
         if (payload.deviceId) {
           if (!requestedDevice || requestedDevice.networkId !== networkId) return ack?.({ ok: false, error: 'DEVICE_NOT_IN_TEAM' });
-          if (!canManageDevice(requestedDevice, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
+          if (!canViewDevice(requestedDevice, userId, networkId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
         }
+        const visibleAgentIds = payload.deviceId && requestedDevice && !canManageDevice(requestedDevice, userId)
+          ? new Set(globalDb.agents.listVisibleInNetwork(networkId).filter(isTeamAgent).map((agent) => agent.id))
+          : null;
         const sourceAgents = payload.deviceId
-          ? globalDb.agents.listAll().filter((agent) => agent.source === 'custom' && agent.deviceId === payload.deviceId)
+          ? globalDb.agents.listAll().filter((agent) =>
+              agent.source === 'custom' &&
+              agent.deviceId === payload.deviceId &&
+              (!visibleAgentIds || visibleAgentIds.has(agent.id))
+            )
           : globalDb.agents.listCustomByOwner(userId);
         const agents = sourceAgents
           .map((agent) => {

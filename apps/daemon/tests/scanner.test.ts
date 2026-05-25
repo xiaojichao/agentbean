@@ -68,4 +68,34 @@ process.exit(1);
       process.env.PATH = oldPath;
     }
   });
+
+  it('discovers OpenClaw agents even when the legacy gateway is not running', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentbean-openclaw-scan-'));
+    const fakeOpenClaw = join(dir, 'openclaw');
+    writeFileSync(fakeOpenClaw, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === 'gateway' && args[1] === 'status') {
+  process.stdout.write('stopped');
+  process.exit(0);
+}
+if (args[0] === 'agents' && args[1] === 'list' && args.includes('--json')) {
+  process.stdout.write(JSON.stringify([{ agentId: 'local-ops' }]));
+  process.exit(0);
+}
+process.exit(1);
+`);
+    chmodSync(fakeOpenClaw, 0o755);
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${dir}:${oldPath ?? ''}`;
+    try {
+      const agents = await scanAgentOSAgents();
+      const openclaw = agents.find((agent) => agent.adapterKind === 'openclaw');
+      expect(openclaw).toMatchObject({
+        name: 'OpenClaw-Agent',
+        args: ['agent', '--agent', 'local-ops'],
+      });
+    } finally {
+      process.env.PATH = oldPath;
+    }
+  });
 });

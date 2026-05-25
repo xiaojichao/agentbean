@@ -1,7 +1,7 @@
 import { io, type Socket } from 'socket.io-client';
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 import { homedir } from 'node:os';
 import { promisify } from 'node:util';
 import { logger } from './log.js';
@@ -45,6 +45,51 @@ function agentSlug(name: string): string {
 
 function scannedAgentId(deviceId: string, name: string): string {
   return `scan-${deviceId}-${agentSlug(name)}`;
+}
+
+function normalizeAdapterKind(kind?: string | null): string {
+  const normalized = (kind ?? '').trim().toLowerCase().replace(/[_\s]+/g, '-');
+  if (normalized === 'claude' || normalized === 'claude-code') return 'claude-code';
+  if (normalized === 'codex' || normalized === 'codex-cli') return 'codex';
+  if (normalized === 'kimi' || normalized === 'kimi-cli') return 'kimi-cli';
+  return normalized;
+}
+
+function runtimeScoreForCustomAgent(runtime: RuntimeMeta, custom: CustomDispatchAgent): number {
+  if (!runtime.installed || !runtime.command?.trim()) return 0;
+  const runtimeCommand = runtime.command.trim();
+  const customCommand = custom.command?.trim() ?? '';
+  if (runtimeCommand && customCommand && runtimeCommand === customCommand) return 100;
+
+  const runtimeBase = basename(runtimeCommand).toLowerCase();
+  const customBase = customCommand ? basename(customCommand).toLowerCase() : '';
+  if (runtimeBase && customBase && runtimeBase === customBase) return 90;
+
+  const runtimeKind = normalizeAdapterKind(runtime.adapterKind);
+  const customKind = normalizeAdapterKind(custom.adapterKind);
+  if (runtimeKind === 'kimi-cli' && customKind === 'codex' && customCommand.toLowerCase().includes('kimi')) return 85;
+  if (runtimeKind && customKind && runtimeKind === customKind) return 70;
+  return 0;
+}
+
+export function resolveCustomAgentRuntime(
+  custom: CustomDispatchAgent,
+  runtimes: RuntimeMeta[],
+): { command: string; runtime?: RuntimeMeta } {
+  const configured = custom.command?.trim() ?? '';
+  const configuredAbsoluteExists = configured && isAbsolute(configured) && existsSync(configured);
+  const bestRuntime = [...runtimes]
+    .map((runtime) => ({ runtime, score: runtimeScoreForCustomAgent(runtime, custom) }))
+    .filter((candidate) => candidate.score > 0)
+    .sort((a, b) => b.score - a.score)[0]?.runtime;
+
+  if (configuredAbsoluteExists) {
+    return { command: configured, runtime: bestRuntime };
+  }
+  if (bestRuntime?.command?.trim()) {
+    return { command: bestRuntime.command.trim(), runtime: bestRuntime };
+  }
+  return { command: configured };
 }
 
 type DirectoryPickerCommand = { command: string; args: string[] };
@@ -223,12 +268,14 @@ export function createDeviceDaemon(
   const httpBase = cfg.server.url.replace(/\/agent$/, '');
   let firstConnect = true;
   const systemInfo = collectSystemInfo();
+  let latestRuntimes: RuntimeMeta[] = [];
 
   const publicAgents = Array.from(agents.values())
     .filter((a) => a.visibility === 'public')
     .map((a) => a.publicMeta);
 
   function emitRegister(sock: Socket, payload: ScanPayload) {
+    latestRuntimes = payload.runtimes.filter((runtime) => runtime.installed);
     if (payload.runtimes.length > 0) {
       sock.emit('device:register-runtimes', { runtimes: payload.runtimes }, (ack: any) => {
         if (!ack?.ok) logger.warn({ error: ack?.error }, 'failed to register runtimes');
@@ -377,8 +424,9 @@ export function createDeviceDaemon(
         attachments?: Parameters<AgentInstance['handleDispatch']>[0]['req']['attachments'];
       }) => {
         let agent = agents.get(req.agentId);
-        if (!agent && req.customAgent) {
+        if (req.customAgent) {
           const custom = req.customAgent;
+          const resolvedRuntime = resolveCustomAgentRuntime(custom, latestRuntimes);
           const entry: AgentConfigEntry = {
             id: custom.id,
             name: custom.name,
@@ -386,7 +434,7 @@ export function createDeviceDaemon(
             category: 'executor-hosted',
             adapter: {
               kind: custom.adapterKind,
-              command: custom.command,
+              command: resolvedRuntime.command,
               args: custom.args ?? [],
               cwd: custom.cwd ?? undefined,
               workspace: custom.cwd ?? undefined,
@@ -397,7 +445,14 @@ export function createDeviceDaemon(
           try {
             agent = new AgentInstance(entry, pickAdapter(entry.adapter));
             agents.set(req.agentId, agent);
-            logger.info({ agentId: req.agentId, kind: entry.adapter.kind, cwd: entry.adapter.cwd }, 'custom agent instance created for dispatch');
+            logger.info({
+              agentId: req.agentId,
+              kind: entry.adapter.kind,
+              command: entry.adapter.command,
+              configuredCommand: custom.command,
+              runtimeCommand: resolvedRuntime.runtime?.command,
+              cwd: entry.adapter.cwd,
+            }, 'custom agent instance created for dispatch');
           } catch (err: unknown) {
             logger.warn({ agentId: req.agentId, err: errorMessage(err) }, 'failed to create custom dispatch agent');
           }

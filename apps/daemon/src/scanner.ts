@@ -320,15 +320,15 @@ async function checkOpenClawGateway(): Promise<ScannedAgent | null> {
 
   const status = await run(path, ["gateway", "status"]);
   const running = status.includes("running") || status.includes("✓");
+  const agentId = parseOpenClawAgentId(await run(path, ["agents", "list", "--json"]));
 
-  if (running) {
-    const agentId = parseOpenClawAgentId(await run(path, ["agents", "list", "--json"])) ?? "main";
+  if (running || agentId) {
     return {
       category: "agentos-hosted",
       name: "OpenClaw-Agent",
       adapterKind: "openclaw",
       command: path,
-      args: ["agent", "--agent", agentId],
+      args: ["agent", "--agent", agentId ?? "main"],
       source: "gateway",
     };
   }
