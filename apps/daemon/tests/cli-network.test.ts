@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { networkIdFromToken, resolveCliNetworkId } from '../src/index.js';
+import { discoveredAgentId, networkIdFromToken, resolveCliNetworkId } from '../src/index.js';
 
 describe('CLI network selection', () => {
   it('extracts the bound team from generated auth tokens', () => {
@@ -25,5 +25,16 @@ describe('CLI network selection', () => {
       savedNetworkId: 'saved-team',
       fallbackNetworkId: 'default',
     })).toBe('explicit-team');
+  });
+});
+
+describe('CLI discovered agent IDs', () => {
+  it('scopes discovered agent IDs by device to avoid cross-device kicks', () => {
+    expect(discoveredAgentId('Hermes Agent', 'device-1')).toBe('scan-device-1-hermes-agent');
+    expect(discoveredAgentId('OpenClaw-Agent', 'device-2')).toBe('scan-device-2-openclaw-agent');
+  });
+
+  it('keeps the legacy slug only when no device ID is available', () => {
+    expect(discoveredAgentId('Hermes Agent')).toBe('hermes-agent');
   });
 });

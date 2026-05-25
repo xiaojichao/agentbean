@@ -10,6 +10,11 @@ import { logger } from './log.js';
 import { scanRuntimes, scanAgentOSAgents, scanLocalAgents, getDeviceId } from './scanner.js';
 import { loadAuth, saveAuth, type AuthData } from './auth-store.js';
 
+export function discoveredAgentId(name: string, deviceId?: string): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return deviceId ? `scan-${deviceId}-${slug}` : slug;
+}
+
 async function discoverAgents(deviceId?: string): Promise<AgentConfigEntry[]> {
   const [_runtimes, agentos, local] = await Promise.all([
     scanRuntimes(),
@@ -25,7 +30,7 @@ async function discoverAgents(deviceId?: string): Promise<AgentConfigEntry[]> {
     seen.add(s.command);
 
     results.push({
-      id: s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+      id: discoveredAgentId(s.name, deviceId),
       name: s.name,
       role: s.category === 'executor-hosted' ? 'executor-agent' : 'gateway-agent',
       category: s.category,
@@ -33,6 +38,7 @@ async function discoverAgents(deviceId?: string): Promise<AgentConfigEntry[]> {
         kind: s.adapterKind,
         command: s.command,
         args: s.args,
+        cwd: s.cwd,
       },
       visibility: 'public',
     });
