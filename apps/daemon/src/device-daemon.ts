@@ -89,6 +89,13 @@ export function resolveCustomAgentRuntime(
   if (bestRuntime?.command?.trim()) {
     return { command: bestRuntime.command.trim(), runtime: bestRuntime };
   }
+  if (configured && isAbsolute(configured) && !configuredAbsoluteExists) {
+    const fallback = basename(configured).trim();
+    if (fallback) return { command: fallback };
+  }
+  if (!configured && normalizeAdapterKind(custom.adapterKind) === 'codex') {
+    return { command: 'codex' };
+  }
   return { command: configured };
 }
 

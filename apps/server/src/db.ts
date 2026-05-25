@@ -655,7 +655,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
     INSERT INTO devices (id, user_id, network_id, hostname, last_seen_at, system_info)
     VALUES (@id, @userId, @networkId, @hostname, @lastSeenAt, @systemInfo)
     ON CONFLICT(id) DO UPDATE SET
-      user_id = excluded.user_id,
+      user_id = devices.user_id,
       network_id = excluded.network_id,
       hostname = excluded.hostname,
       last_seen_at = excluded.last_seen_at,

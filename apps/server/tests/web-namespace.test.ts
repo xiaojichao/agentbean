@@ -690,6 +690,60 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('marks custom agents offline when their device daemon is not running', async () => {
+    const now = Date.now();
+    const owner = app.globalDb.users.listAll()[0]!;
+    app.globalDb.devices.upsert({
+      id: 'stopped-custom-device',
+      userId: owner.id,
+      networkId: 'default',
+      hostname: 'Stopped Device',
+      lastSeenAt: now,
+      systemInfo: { hostname: 'Stopped Device' },
+    });
+    app.globalDb.devices.setRuntimes('stopped-custom-device', [
+      { name: 'Codex CLI', adapterKind: 'codex', command: '/opt/homebrew/bin/codex', installed: true },
+    ]);
+    app.globalDb.agents.upsert({
+      id: 'stopped-custom-agent',
+      name: 'stopped-agent',
+      role: 'executor-agent',
+      adapterKind: 'codex',
+      deviceId: 'stopped-custom-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      command: '/opt/homebrew/bin/codex',
+      args: JSON.stringify([]),
+      cwd: '/Users/shaw/drama',
+      ownerId: owner.id,
+      description: 'Custom agent on stopped daemon',
+    });
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const members = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+
+    expect(members.ok).toBe(true);
+    expect(members.agents.find((agent: any) => agent.id === 'stopped-custom-agent')).toMatchObject({
+      name: 'stopped-agent',
+      deviceName: 'Stopped Device',
+      status: 'offline',
+    });
+
+    web.close();
+  });
+
   it('reports AgentOS agents as busy in member lists while dispatch is running', async () => {
     const web = ioClient(`${baseUrl}/web`, {
       reconnection: false,

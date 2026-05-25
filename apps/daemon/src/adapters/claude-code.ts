@@ -20,6 +20,11 @@ function buildPrompt(input: AskInput, systemPrompt?: string): string {
   return parts.join('\n\n---\n\n');
 }
 
+function normalizeClaudeArgs(args?: string[]): string[] {
+  const filtered = (args ?? []).filter((arg) => arg !== '--bare');
+  return ['-p', ...filtered];
+}
+
 export class ClaudeCodeAdapter implements CliAdapter {
   readonly kind = 'claude-code' as const;
   constructor(private readonly opts: ClaudeCodeAdapterOpts) {}
@@ -28,7 +33,7 @@ export class ClaudeCodeAdapter implements CliAdapter {
     return new Promise<string>((resolve, reject) => {
       const prompt = buildPrompt(input, this.opts.systemPrompt ?? input.systemPrompt);
       const cwd = input.workspace ?? this.opts.cwd ?? process.cwd();
-      const baseArgs = ['-p', '--bare', ...(this.opts.args ?? [])];
+      const baseArgs = normalizeClaudeArgs(this.opts.args);
       if (input.workspace) baseArgs.push('--add-dir', input.workspace);
       baseArgs.push('--add-dir', join(homedir(), '.codex', 'generated_images'));
       const command = input.sandboxProfilePath ? 'sandbox-exec' : this.opts.command;

@@ -84,6 +84,59 @@ describe('/agent namespace', () => {
     expect(app.registry!.snapshot('a1')!.lastHeartbeatAt).toBeGreaterThan(before);
     ag.close();
   });
+
+  it('marks a disconnected device and all agents on that device offline', async () => {
+    const webUrl = url.replace('/agent', '/web');
+    const web = ioClient(webUrl, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
+    await new Promise<void>((resolve) => web.on('connect', () => resolve()));
+
+    const ag = connect('default:default:tok', {
+      deviceId: 'd-offline',
+      networkId: 'default',
+      capabilities: { customAgentDispatch: true },
+      agents: [{ id: 'agentos-1', name: 'AgentOS 1', role: 'r', adapterKind: 'hermes', category: 'agentos-hosted', visibility: 'public' }],
+    });
+    await new Promise<void>((resolve) => ag.on('connect', () => resolve()));
+    ag.emit('register');
+    await new Promise((r) => setTimeout(r, 50));
+
+    const now = Date.now();
+    app.globalDb.agents.upsert({
+      id: 'custom-1',
+      name: 'custom-one',
+      role: 'executor-agent',
+      adapterKind: 'codex',
+      deviceId: 'd-offline',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      command: '/usr/bin/codex',
+      args: null,
+      cwd: '/tmp/custom-one',
+      ownerId: 'default',
+      description: 'custom agent',
+    });
+
+    const statuses: any[] = [];
+    let offlineDevice: any = null;
+    web.on('agent:status', (status: any) => statuses.push(status));
+    web.on('device:status', (device: any) => { if (device.id === 'd-offline') offlineDevice = device; });
+
+    ag.close();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(app.registry!.snapshot('agentos-1')?.status).toBe('offline');
+    expect(statuses).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'agentos-1', status: 'offline' }),
+      expect.objectContaining({ id: 'custom-1', status: 'offline' }),
+    ]));
+    expect(offlineDevice).toMatchObject({ id: 'd-offline', status: 'offline' });
+
+    web.close();
+  });
 });
 
 describe('device:register-agents', () => {

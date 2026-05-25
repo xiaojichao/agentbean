@@ -66,4 +66,15 @@ describe('device daemon socket options', () => {
 
     expect(resolved.command).toBe(process.execPath);
   });
+
+  it('falls back to the basename when a saved absolute custom agent command is missing', () => {
+    const resolved = resolveCustomAgentRuntime({
+      id: 'custom-3',
+      name: 'test-Agent',
+      adapterKind: 'codex',
+      command: '/old/node/bin/codex',
+    }, []);
+
+    expect(resolved.command).toBe('codex');
+  });
 });

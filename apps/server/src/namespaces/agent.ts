@@ -25,6 +25,7 @@ export interface AgentNamespaceDeps {
       upsert(row: any): void;
       get(id: string): any;
       getFull(id: string): any;
+      listAll(): any[];
     };
     devices?: {
       upsert(row: { id: string; userId: string; networkId: string; hostname?: string; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): void;
@@ -36,6 +37,7 @@ export interface AgentNamespaceDeps {
   };
   dispatchTimeoutMs?: number;
   metricsCollector?: AgentMetricsCollector;
+  onDeviceOffline?: (deviceId: string, reason: string) => void;
 }
 
 export interface DispatchRequest {
@@ -344,8 +346,9 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
 
       // Persist device to global DB
       const parsed = parseToken(a.token!);
-      const userId = parsed?.userId ?? 'system';
+      const tokenUserId = parsed?.userId ?? 'system';
       const existingDevice = deps.globalDb?.devices?.get(a.deviceId);
+      const userId = existingDevice?.userId ?? tokenUserId;
       const sysHostname = a.systemInfo?.hostname ? String(a.systemInfo.hostname).replace(/\s+/g, '-') : undefined;
       deps.globalDb?.devices?.upsert({
         id: a.deviceId,
@@ -619,13 +622,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
 
       const currentDevice = deps.deviceRegistry.get(a.deviceId);
       if (currentDevice && currentDevice.socket.id !== socket.id) return;
-      const device = deps.deviceRegistry.markOffline(a.deviceId);
-      if (device) {
-        for (const agentMeta of device.agents.values()) {
-          const rt = deps.registry.markOffline(agentMeta.id, 'device-disconnect');
-          if (rt) deps.io.of('/web').emit('agent:status', runtimeStatusDto(rt));
-        }
-      }
+      deps.onDeviceOffline?.(a.deviceId, 'device-disconnect');
     });
   });
 

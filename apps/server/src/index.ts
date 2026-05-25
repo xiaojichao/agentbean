@@ -12,7 +12,7 @@ import { StorageManager } from './storage.js';
 import { attachAgentNamespace, snapshotToDto, type DispatchFn } from './namespaces/agent.js';
 import { AgentMetricsCollector } from './agent-metrics.js';
 import { renderConnectCommand } from './connect-command.js';
-import { startHeartbeatScanner } from './heartbeat-scanner.js';
+import { startDeviceHeartbeatScanner, startHeartbeatScanner } from './heartbeat-scanner.js';
 import { ChannelService } from './channels.js';
 import { runIntros } from './intro.js';
 import { routeHumanMessage } from './routing.js';
@@ -172,26 +172,15 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     }
 
     const liveDevice = agent.deviceId ? deviceRegistry.get(agent.deviceId) : undefined;
-    const persistedDevice = agent.deviceId ? globalDb.devices.get(agent.deviceId) : null;
     const liveCandidates = liveDevice
       ? [liveDevice]
       : agent.deviceId?.startsWith('virtual-')
         ? deviceRegistry.all()
         : [];
-    const persistedCandidates = persistedDevice
-      ? [persistedDevice]
-      : agent.deviceId?.startsWith('virtual-')
-        ? globalDb.devices.listByNetwork(agent.networkId ?? defaultNetworkId)
-        : [];
     const candidateDevices = [
       ...liveCandidates.map((device) => ({
         lastSeenAt: device.lastSeenAt,
         status: device.status,
-        runtimes: device.runtimes ?? [],
-      })),
-      ...persistedCandidates.map((device) => ({
-        lastSeenAt: device.lastSeenAt,
-        status: isRecentlySeen(device.lastSeenAt) ? 'online' : 'offline',
         runtimes: device.runtimes ?? [],
       })),
     ];
@@ -338,6 +327,89 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     return visibleDeviceRows([...rowsById.values()]).map((device) => toDeviceDto(device, viewerId));
   };
 
+  const parsePersistedArgs = (args?: string[] | string | null) => {
+    if (Array.isArray(args)) return args;
+    if (!args) return null;
+    try {
+      const parsed = JSON.parse(args);
+      return Array.isArray(parsed) ? parsed.map(String) : [args];
+    } catch {
+      return [args];
+    }
+  };
+
+  const persistedAgentStatusDto = (
+    agent: ReturnType<GlobalDb['agents']['listAll']>[number],
+    status: 'connecting' | 'online' | 'busy' | 'offline' | 'error',
+    lastSeenAt = Date.now(),
+    lastError?: string,
+  ) => ({
+    id: agent.id,
+    name: agent.name,
+    role: agent.role ?? '',
+    adapterKind: agent.adapterKind,
+    category: agent.category,
+    source: agent.source,
+    command: agent.command,
+    args: parsePersistedArgs(agent.args),
+    cwd: agent.cwd,
+    deviceId: agent.deviceId ?? undefined,
+    networkId: agent.networkId,
+    visibility: agent.visibility,
+    ownerId: agent.ownerId,
+    ownerName: resolveOwnerName(agent.ownerId),
+    description: agent.description,
+    deviceName: resolveDeviceName(agent.deviceId),
+    status,
+    lastSeenAt,
+    lastError,
+    publishedNetworkIds: globalDb.agentPublishes.listByAgent(agent.id).map((p) => p.networkId),
+    connectCommand: renderConnectCommand({ adapterKind: agent.adapterKind as any }),
+  });
+
+  const markDeviceAndAgentsOffline = (deviceId: string, reason: string) => {
+    const device = deviceRegistry.markOffline(deviceId);
+    const persistedDevice = globalDb.devices.get(deviceId);
+    const networkId = device?.networkId ?? persistedDevice?.networkId;
+
+    if (persistedDevice) {
+      io.of('/web').emit('device:status', toDeviceDto(persistedDevice));
+    } else if (device) {
+      io.of('/web').emit('device:status', {
+        id: device.id,
+        userId: device.userId,
+        ownerName: resolveOwnerName(device.userId) ?? '未知用户',
+        userName: resolveOwnerName(device.userId) ?? '未知用户',
+        networkId: device.networkId,
+        hostname: undefined,
+        agentIds: Array.from(device.agents.keys()),
+        runtimes: device.runtimes ?? [],
+        lastSeenAt: device.lastSeenAt,
+        status: 'offline',
+        canManage: false,
+      });
+    }
+
+    const offlineAgentIds = new Set<string>();
+    for (const rt of registry.all()) {
+      if (rt.deviceId !== deviceId || rt.status === 'offline') continue;
+      const offRt = registry.markOffline(rt.id, reason);
+      if (offRt) {
+        offlineAgentIds.add(offRt.id);
+        io.of('/web').emit('agent:status', snapshotToDto(offRt));
+      }
+    }
+
+    for (const agent of globalDb.agents.listAll()) {
+      if (agent.deviceId !== deviceId || agent.source !== 'custom' || offlineAgentIds.has(agent.id)) continue;
+      io.of('/web').emit('agent:status', persistedAgentStatusDto(agent, 'offline', Date.now()));
+    }
+
+    if (networkId) {
+      emitDevicesSnapshotForNetwork(networkId);
+    }
+  };
+
   // Ensure system user exists for foreign key constraints
   try {
     globalDb.raw.prepare(`INSERT OR IGNORE INTO users (id, username, email, created_at, updated_at) VALUES (?, ?, null, ?, ?)`)
@@ -426,6 +498,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     globalDb,
     metricsCollector,
     dispatchTimeoutMs: Number.isFinite(dispatchTimeoutMs) && dispatchTimeoutMs > 0 ? dispatchTimeoutMs : undefined,
+    onDeviceOffline: markDeviceAndAgentsOffline,
   });
 
   const stopScanner = startHeartbeatScanner({
@@ -434,6 +507,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       const rt = registry.snapshot(id);
       if (rt) io.of('/web').emit('agent:status', snapshotToDto(rt));
     },
+  });
+  const stopDeviceScanner = startDeviceHeartbeatScanner({
+    deviceRegistry, timeoutMs: 30_000, intervalMs: 5_000,
+    onTimeout: (deviceId) => markDeviceAndAgentsOffline(deviceId, 'heartbeat-timeout'),
   });
 
   const makePersistMessage = (sp: typeof space, netId: string) => (m: {
@@ -2232,6 +2309,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     http: server, io, db, globalDb, registry, channels, dispatch,
     async close() {
       stopScanner();
+      stopDeviceScanner();
       await new Promise<void>((resolve) => io.close(() => resolve()));
       await new Promise<void>((resolve) => server.close(() => resolve()));
       db.close();

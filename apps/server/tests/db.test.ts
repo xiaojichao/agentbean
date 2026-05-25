@@ -117,7 +117,7 @@ describe('openDb', () => {
     expect(devYAgents[0].id).toBe('a-d2');
   });
 
-  it('devices.upsert moves a stable device id to the latest invite owner and team', () => {
+  it('devices.upsert preserves the original owner for a stable device id', () => {
     const globalPath = join(tmpdir(), `agentbean-global-test-${Date.now()}-${Math.random()}.db`);
     const global = initGlobalDb(globalPath);
     const now = Date.now();
@@ -147,7 +147,7 @@ describe('openDb', () => {
       expect(global.devices.listByNetwork('team-1')).toHaveLength(0);
       expect(global.devices.listByNetwork('team-2')).toHaveLength(1);
       expect(global.devices.get('stable-device')).toMatchObject({
-        userId: 'u2',
+        userId: 'u1',
         networkId: 'team-2',
         lastSeenAt: now + 1,
       });

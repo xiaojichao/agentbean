@@ -1,4 +1,6 @@
 import { spawn } from 'node-pty';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { CliAdapter, AskInput } from './adapter.js';
 
 export interface CodexAdapterOpts {
@@ -62,6 +64,20 @@ function adapterTimeoutMs(): number {
   return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 900_000;
 }
 
+function buildRuntimeEnv(extra?: Record<string, string>): { [key: string]: string } {
+  const pathEntries = [
+    process.env.PATH,
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    join(homedir(), '.local/bin'),
+    join(homedir(), '.bun/bin'),
+    join(homedir(), '.npm-global/bin'),
+    join(homedir(), '.asdf/shims'),
+    join(homedir(), '.local/share/mise/shims'),
+  ].filter(Boolean).join(':');
+  return { ...(process.env as { [key: string]: string }), PATH: pathEntries, ...(extra ?? {}) };
+}
+
 export class CodexAdapter implements CliAdapter {
   readonly kind = 'codex' as const;
   constructor(private readonly opts: CodexAdapterOpts) {}
@@ -83,7 +99,7 @@ export class CodexAdapter implements CliAdapter {
         cols: 80,
         rows: 30,
         cwd,
-        env: { ...(process.env as { [key: string]: string }), ...(input.env ?? {}) },
+        env: buildRuntimeEnv(input.env),
       });
 
       const chunks: string[] = [];
@@ -135,7 +151,7 @@ export class CodexAdapter implements CliAdapter {
         const pty = spawn('bash', ['-c', 'codex --version'], {
           name: 'xterm-color', cols: 80, rows: 30,
           cwd: this.opts.cwd ?? process.cwd(),
-          env: process.env as { [key: string]: string },
+          env: buildRuntimeEnv(),
         });
         pty.onExit(({ exitCode }) => resolve({ ok: exitCode === 0, detail: exitCode === 0 ? undefined : `exit ${exitCode}` }));
       } catch (err: any) {
