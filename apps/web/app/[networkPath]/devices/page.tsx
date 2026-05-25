@@ -37,6 +37,28 @@ function compareDevices(a: { id: string; hostname?: string | null; networkId?: s
     a.id.localeCompare(b.id);
 }
 
+const DIRECTORY_PICKER_MIN_DAEMON_VERSION = '0.1.27';
+
+function parseVersionParts(version?: string | null): number[] | null {
+  const match = version?.match(/\d+(?:\.\d+)*/);
+  if (!match) return null;
+  return match[0].split('.').map((part) => Number(part) || 0);
+}
+
+function versionAtLeast(version: string | null | undefined, minimum: string): boolean {
+  const current = parseVersionParts(version);
+  const required = parseVersionParts(minimum);
+  if (!current || !required) return true;
+  const len = Math.max(current.length, required.length);
+  for (let i = 0; i < len; i += 1) {
+    const a = current[i] ?? 0;
+    const b = required[i] ?? 0;
+    if (a > b) return true;
+    if (a < b) return false;
+  }
+  return true;
+}
+
 function directoryFallbackPath(name: string): string {
   return `~/projects/${name}`;
 }
@@ -54,17 +76,26 @@ function DirectoryBrowseButton({
   onSelect,
   onError,
   deviceId,
+  daemonVersion,
   disabled = false,
 }: {
   onSelect: (path: string) => void;
   onError?: (message: string) => void;
   deviceId?: string;
+  daemonVersion?: string | null;
   disabled?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [browsing, setBrowsing] = useState(false);
 
   const browse = async () => {
+    if (browsing) return;
     onError?.('');
+    if (daemonVersion && !versionAtLeast(daemonVersion, DIRECTORY_PICKER_MIN_DAEMON_VERSION)) {
+      onError?.(`该设备的 Daemon 是 v${daemonVersion.replace(/^v/, '')}，目录浏览需要 v${DIRECTORY_PICKER_MIN_DAEMON_VERSION} 或更高版本。请用连接命令重启/升级 Daemon。`);
+      return;
+    }
+    setBrowsing(true);
     if (deviceId) {
       try {
         const res = await deviceEvents().selectDirectory(deviceId);
@@ -76,6 +107,8 @@ function DirectoryBrowseButton({
         if (message) onError?.(message);
       } catch (error) {
         onError?.(error instanceof Error ? error.message : '无法打开目录浏览窗口');
+      } finally {
+        setBrowsing(false);
       }
       return;
     }
@@ -88,15 +121,18 @@ function DirectoryBrowseButton({
         return;
       } catch (error: any) {
         if (error?.name === 'AbortError') return;
+      } finally {
+        setBrowsing(false);
       }
     }
     inputRef.current?.click();
+    setBrowsing(false);
   };
 
   return (
     <>
-      <button type="button" disabled={disabled} onClick={browse} className="shrink-0 flex items-center gap-1 rounded-md border border-neutral-200 px-3 py-1.5 text-xs text-neutral-600 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50">
-        <FolderOpen size={12} /> 浏览
+      <button type="button" disabled={disabled || browsing} onClick={browse} className="shrink-0 flex items-center gap-1 rounded-md border border-neutral-200 px-3 py-1.5 text-xs text-neutral-600 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50">
+        <FolderOpen size={12} /> {browsing ? '等待选择...' : '浏览'}
       </button>
       <input
         ref={inputRef}
@@ -114,6 +150,7 @@ function DirectoryBrowseButton({
             if (dirName) onSelect(directoryFallbackPath(dirName));
           }
           e.currentTarget.value = '';
+          setBrowsing(false);
         }}
       />
     </>
@@ -477,6 +514,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
       {configAgent && (
         <AgentConfigDialog
           agent={configAgent}
+          device={device}
           runtimes={runtimeList}
           onClose={() => setConfigAgent(null)}
           onSaved={() => {
@@ -488,6 +526,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
       {showAddCustom && (
         <AddCustomAgentDialog
           deviceId={device.id}
+          daemonVersion={device.systemInfo?.daemonVersion ?? device.daemonVersionInfo?.current ?? null}
           runtimes={runtimeList}
           onClose={() => setShowAddCustom(false)}
           onCreated={() => {
@@ -816,7 +855,7 @@ function buildRuntimeOptions(runtimes: any[]) {
   });
 }
 
-function AgentConfigDialog({ agent, runtimes, onClose, onSaved }: { agent: any; runtimes: any[]; onClose: () => void; onSaved: () => void }) {
+function AgentConfigDialog({ agent, device, runtimes, onClose, onSaved }: { agent: any; device?: { systemInfo?: { daemonVersion?: string } | null; daemonVersionInfo?: { current: string | null } }; runtimes: any[]; onClose: () => void; onSaved: () => void }) {
   const isCustom = agent.source === 'custom';
   const isAgentOS = agent.category === 'agentos-hosted';
   const editable = isCustom || isAgentOS;
@@ -891,7 +930,7 @@ function AgentConfigDialog({ agent, runtimes, onClose, onSaved }: { agent: any; 
             <div className="flex gap-2">
               <input value={cwd} onChange={(e) => setCwd(e.target.value)} disabled={!editable} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50" placeholder="/path/to/project（可选）" />
               {editable && (
-                <DirectoryBrowseButton deviceId={agent.deviceId} onSelect={setCwd} onError={setError} />
+                <DirectoryBrowseButton deviceId={agent.deviceId} daemonVersion={device?.systemInfo?.daemonVersion ?? device?.daemonVersionInfo?.current ?? null} onSelect={setCwd} onError={setError} />
               )}
             </div>
             <p className="mt-1 text-[11px] text-neutral-400">{isCustom ? 'Agent 启动时的工作目录，留空则使用默认路径' : 'AgentOS Agent 所在目录，留空则保持未配置状态'}</p>
@@ -911,7 +950,7 @@ function AgentConfigDialog({ agent, runtimes, onClose, onSaved }: { agent: any; 
   );
 }
 
-function AddCustomAgentDialog({ deviceId, runtimes, onClose, onCreated }: { deviceId: string; runtimes: any[]; onClose: () => void; onCreated: () => void }) {
+function AddCustomAgentDialog({ deviceId, daemonVersion, runtimes, onClose, onCreated }: { deviceId: string; daemonVersion?: string | null; runtimes: any[]; onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState('');
   const runtimeOptions = useMemo(() => buildRuntimeOptions(runtimes), [runtimes]);
   const [runtimeIndex, setRuntimeIndex] = useState('0');
@@ -984,7 +1023,7 @@ function AddCustomAgentDialog({ deviceId, runtimes, onClose, onCreated }: { devi
             <label className="mb-1 block text-xs font-medium text-neutral-600">项目目录</label>
             <div className="flex gap-2">
               <input value={cwd} onChange={(e) => setCwd(e.target.value)} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="/path/to/project（可选）" />
-              <DirectoryBrowseButton deviceId={deviceId} onSelect={setCwd} onError={setError} />
+              <DirectoryBrowseButton deviceId={deviceId} daemonVersion={daemonVersion} onSelect={setCwd} onError={setError} />
             </div>
             <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录，留空则使用默认路径</p>
           </div>
