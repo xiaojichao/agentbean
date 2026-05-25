@@ -26,6 +26,7 @@ export default function MembersPage() {
   const agents = useAgentBeanStore((s) => s.agents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const applyDevicesSnapshot = useAgentBeanStore((s) => s.applyDevicesSnapshot);
+  const applyDeviceStatus = useAgentBeanStore((s) => s.applyDeviceStatus);
   const applyAgentsSnapshot = useAgentBeanStore((s) => s.applyAgentsSnapshot);
   const applyAgentStatus = useAgentBeanStore((s) => s.applyAgentStatus);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -41,13 +42,14 @@ export default function MembersPage() {
     if (conn !== 'open') return;
     deviceEvents().subscribe();
     const unsubDevices = deviceEvents().onSnapshot((list) => applyDevicesSnapshot(list));
+    const unsubDeviceStatus = deviceEvents().onStatus((device) => applyDeviceStatus(device));
     const unsubStatus = agentEvents().onStatus((snap) => applyAgentStatus(snap));
     memberEvents().list().then((res) => {
       if (res.ok && res.humans) setHumanMembers(res.humans);
       if (res.ok && res.agents) applyAgentsSnapshot(res.agents);
     });
-    return () => { unsubDevices(); unsubStatus(); };
-  }, [conn, applyDevicesSnapshot, applyAgentsSnapshot, applyAgentStatus]);
+    return () => { unsubDevices(); unsubDeviceStatus(); unsubStatus(); };
+  }, [conn, applyDevicesSnapshot, applyDeviceStatus, applyAgentsSnapshot, applyAgentStatus]);
 
   const agentList = useMemo(() => Object.values(agents), [agents]);
 

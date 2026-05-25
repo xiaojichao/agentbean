@@ -18,10 +18,11 @@ beforeEach(async () => {
   process.env.STORAGE_BASE_DIR = storageBaseDir;
   process.env.AGENT_BEAN_AGENT_TOKEN = 'default:default:tok';
   process.env.AGENT_BEAN_WEB_TOKEN = 'web-only-token';
+  process.env.AGENT_BEAN_DAEMON_LATEST_VERSION = '0.1.19';
   app = await buildApp({ dbPath: ':memory:', globalDbPath: ':memory:', agentToken: 'default:default:tok' });
   await new Promise<void>((r) => app.http.listen(0, r));
   const port = (app.http.address() as AddressInfo).port;
-  baseUrl = `http://localhost:${port}`;
+  baseUrl = `http://127.0.0.1:${port}`;
 });
 
 afterEach(async () => {
@@ -95,6 +96,181 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('keeps existing default all members after a new user registers', async () => {
+    const registerSocket = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: 'web-only-token' },
+    });
+    await new Promise<void>((r) => registerSocket.on('connect', () => r()));
+    const registerRes = await new Promise<any>((resolve) => {
+      registerSocket.emit('auth:register', {
+        username: 'fresh-user',
+        password: 'secret123',
+        email: 'fresh@example.com',
+      }, resolve);
+    });
+    expect(registerRes.ok).toBe(true);
+
+    const all = app.channels.ensureDefault('default');
+    const adminSocket = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => adminSocket.on('connect', () => r()));
+    const membersRes = await new Promise<any>((resolve) => {
+      adminSocket.emit('channel:members', { channelId: all.id }, resolve);
+    });
+
+    expect(membersRes.ok).toBe(true);
+    expect(membersRes.humans.map((human: any) => human.username).sort()).toEqual(['admin', 'fresh-user']);
+    registerSocket.close();
+    adminSocket.close();
+  });
+
+  it('does not list default team agents in a newly created private team', async () => {
+    app.registry.register('socket-default-agent', {
+      id: 'default-only-agent',
+      name: 'Default Agent',
+      role: 'r',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      networkId: 'default',
+    });
+    const adminSocket = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => adminSocket.on('connect', () => r()));
+    const created = await new Promise<any>((resolve) => {
+      adminSocket.emit('network:create', { name: 'Clean Team', path: 'clean-team' }, resolve);
+    });
+    expect(created.ok).toBe(true);
+    const switched = await new Promise<any>((resolve) => {
+      adminSocket.emit('network:switch', { networkId: created.network.id }, resolve);
+    });
+    expect(switched.ok).toBe(true);
+    const members = await new Promise<any>((resolve) => {
+      adminSocket.emit('members:list', {}, resolve);
+    });
+
+    expect(members.ok).toBe(true);
+    expect(members.agents).toEqual([]);
+    expect(members.humans.map((human: any) => human.username)).toEqual(['admin']);
+    adminSocket.close();
+  });
+
+  it('registers a new user into the team from a join link and returns that team', async () => {
+    const adminSocket = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => adminSocket.on('connect', () => r()));
+    const created = await new Promise<any>((resolve) => {
+      adminSocket.emit('network:create', { name: 'Invite Team', path: 'invite-team' }, resolve);
+    });
+    expect(created.ok).toBe(true);
+    const targetNetwork = created.network;
+    const switched = await new Promise<any>((resolve) => {
+      adminSocket.emit('network:switch', { networkId: targetNetwork.id }, resolve);
+    });
+    expect(switched.ok).toBe(true);
+    const linkRes = await new Promise<any>((resolve) => {
+      adminSocket.emit('join:create', { maxUses: 5 }, resolve);
+    });
+    expect(linkRes.ok).toBe(true);
+
+    const inviteSocket = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { invite: true },
+    });
+    await new Promise<void>((r) => inviteSocket.on('connect', () => r()));
+    const registerRes = await new Promise<any>((resolve) => {
+      inviteSocket.emit('auth:register', {
+        username: 'new-joiner',
+        password: 'secret123',
+        email: 'new-joiner@example.com',
+        inviteToken: linkRes.link.code,
+      }, resolve);
+    });
+
+    expect(registerRes.ok).toBe(true);
+    expect(registerRes.networkId).toBe(targetNetwork.id);
+    expect(registerRes.networkPath).toBe(targetNetwork.path);
+    const user = app.globalDb.users.getByName('new-joiner');
+    expect(user?.currentNetworkId).toBe(targetNetwork.id);
+    expect(app.globalDb.networkMembers.isMember(targetNetwork.id, user!.id)).toBe(true);
+
+    adminSocket.close();
+    inviteSocket.close();
+  });
+
+  it('adds an existing registered user to the team from a join link and returns that team', async () => {
+    const adminSocket = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => adminSocket.on('connect', () => r()));
+    const created = await new Promise<any>((resolve) => {
+      adminSocket.emit('network:create', { name: 'Existing Invite Team', path: 'existing-invite' }, resolve);
+    });
+    expect(created.ok).toBe(true);
+    const targetNetwork = created.network;
+    const switched = await new Promise<any>((resolve) => {
+      adminSocket.emit('network:switch', { networkId: targetNetwork.id }, resolve);
+    });
+    expect(switched.ok).toBe(true);
+    const linkRes = await new Promise<any>((resolve) => {
+      adminSocket.emit('join:create', { maxUses: 5 }, resolve);
+    });
+    expect(linkRes.ok).toBe(true);
+
+    const registerSocket = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { invite: true },
+    });
+    await new Promise<void>((r) => registerSocket.on('connect', () => r()));
+    const registerRes = await new Promise<any>((resolve) => {
+      registerSocket.emit('auth:register', {
+        username: 'existing-joiner',
+        password: 'secret123',
+        email: 'existing-joiner@example.com',
+      }, resolve);
+    });
+    expect(registerRes.ok).toBe(true);
+
+    const loginSocket = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { invite: true },
+    });
+    await new Promise<void>((r) => loginSocket.on('connect', () => r()));
+    const loginRes = await new Promise<any>((resolve) => {
+      loginSocket.emit('auth:login', {
+        username: 'existing-joiner',
+        password: 'secret123',
+        joinCode: linkRes.link.code,
+      }, resolve);
+    });
+
+    expect(loginRes.ok).toBe(true);
+    expect(loginRes.networkId).toBe(targetNetwork.id);
+    expect(loginRes.networkPath).toBe(targetNetwork.path);
+    const user = app.globalDb.users.getByName('existing-joiner');
+    expect(user?.currentNetworkId).toBe(targetNetwork.id);
+    expect(app.globalDb.networkMembers.isMember(targetNetwork.id, user!.id)).toBe(true);
+
+    adminSocket.close();
+    registerSocket.close();
+    loginSocket.close();
+  });
+
   it('returns and updates human member profile fields', async () => {
     const createdAt = Date.now() - 10_000;
     app.globalDb.users.create({
@@ -148,7 +324,7 @@ describe('/web namespace', () => {
       networkId: 'default',
       hostname: 'Mac Studio',
       lastSeenAt: Date.now(),
-      systemInfo: { daemonVersion: '0.1.19', hostname: 'mac-studio.local' },
+      systemInfo: { daemonVersion: '0.1.13', hostname: 'mac-studio.local' },
     });
     app.globalDb.agents.upsert({
       id: 'admin-agent-1',
@@ -186,6 +362,12 @@ describe('/web namespace', () => {
       name: 'Mac Studio',
       userName: 'admin',
       networkName: 'Default Team',
+      daemonUpdateAvailable: true,
+      daemonVersionInfo: {
+        current: '0.1.13',
+        updateAvailable: true,
+        status: 'update-available',
+      },
     });
     expect(deviceRes.devices[0].publicAgents[0]).toMatchObject({
       name: 'Drama',
@@ -219,7 +401,7 @@ describe('message:send', () => {
     const local = await buildApp({ dbPath: ':memory:', globalDbPath: ':memory:', agentToken: 'default:default:tok' });
     await new Promise<void>((r) => local.http.listen(0, r));
     const port = (local.http.address() as AddressInfo).port;
-    const lbase = `http://localhost:${port}`;
+    const lbase = `http://127.0.0.1:${port}`;
 
     const ag = ioClient(`${lbase}/agent`, {
       auth: {

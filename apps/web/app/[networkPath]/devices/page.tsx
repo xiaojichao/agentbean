@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, Check, FolderOpen } from 'lucide-react';
 import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { daemonVersionDisplay } from '@/lib/daemon-version';
 
 const STATUS_COLORS: Record<string, string> = {
   online: 'text-emerald-500',
@@ -22,10 +23,8 @@ const STATUS_BG: Record<string, string> = {
   connecting: 'bg-blue-50 text-blue-700',
 };
 
-function formatDaemonVersion(device: { status: string; systemInfo?: { daemonVersion?: string } | null }) {
-  const version = device.systemInfo?.daemonVersion?.trim();
-  if (version && version !== 'unknown') return version.startsWith('v') ? version : `v${version}`;
-  return device.status === 'offline' ? '离线' : '版本未知';
+function formatDaemonVersion(device: Parameters<typeof daemonVersionDisplay>[0]) {
+  return daemonVersionDisplay(device).currentLabel;
 }
 
 export default function DevicesPage() {
@@ -35,6 +34,7 @@ export default function DevicesPage() {
   const conn = useAgentBeanStore((s) => s.conn);
   const devices = useAgentBeanStore((s) => s.devices);
   const applyDevicesSnapshot = useAgentBeanStore((s) => s.applyDevicesSnapshot);
+  const applyDeviceStatus = useAgentBeanStore((s) => s.applyDeviceStatus);
   const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
   const routeDeviceId = typeof params.id === 'string' ? params.id : null;
 
@@ -48,8 +48,9 @@ export default function DevicesPage() {
     if (conn !== 'open') return;
     deviceEvents().subscribe();
     const unsub = deviceEvents().onSnapshot((list) => applyDevicesSnapshot(list));
-    return () => { unsub(); };
-  }, [conn, applyDevicesSnapshot]);
+    const unsubStatus = deviceEvents().onStatus((device) => applyDeviceStatus(device));
+    return () => { unsub(); unsubStatus(); };
+  }, [conn, applyDevicesSnapshot, applyDeviceStatus]);
 
   const deviceList = useMemo(() => Object.values(devices), [devices]);
 
@@ -88,6 +89,9 @@ export default function DevicesPage() {
                 <div className="flex items-center gap-1 text-[11px] text-neutral-400">
                   <span>daemon</span>
                   <span className={device.status === 'online' ? 'text-neutral-600' : ''}>{formatDaemonVersion(device)}</span>
+                  {device.daemonUpdateAvailable && (
+                    <span className="rounded bg-amber-50 px-1 text-[10px] font-medium text-amber-700">可升级</span>
+                  )}
                 </div>
               </div>
             </button>
@@ -134,7 +138,7 @@ function EmptyState() {
 }
 
 function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName, showDeleteConfirm, setShowDeleteConfirm, currentNetworkId }: {
-  device: { id: string; hostname?: string; status: string; lastSeenAt: number; agentIds: string[]; runtimes?: any[]; connectCommand?: string | null; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string; daemonVersion?: string } | null };
+  device: { id: string; hostname?: string; status: string; lastSeenAt: number; agentIds: string[]; runtimes?: any[]; connectCommand?: string | null; latestDaemonVersion?: string | null; daemonUpdateAvailable?: boolean; daemonVersionInfo?: { current: string | null; latest: string | null; updateAvailable: boolean; status: 'current' | 'update-available' | 'unknown' }; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string; daemonVersion?: string } | null };
   editName: boolean;
   setEditName: (v: boolean) => void;
   deviceName: string;
@@ -154,6 +158,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const [selectNetworkAgent, setSelectNetworkAgent] = useState<any | null>(null);
   const [configAgent, setConfigAgent] = useState<any | null>(null);
   const displayName = device.hostname ?? '未命名设备';
+  const daemonVersion = daemonVersionDisplay(device);
 
   const refreshDeviceAgents = () => {
     return deviceEvents().agentsList(device.id).then((res) => {
@@ -270,7 +275,14 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
                   {device.systemInfo.totalMemoryGB && <InfoCard label="总内存" value={`${device.systemInfo.totalMemoryGB} GB`} />}
                   {device.systemInfo.freeMemoryGB && <InfoCard label="可用内存" value={`${device.systemInfo.freeMemoryGB} GB`} />}
                   {device.systemInfo.nodeVersion && <InfoCard label="Node.js" value={device.systemInfo.nodeVersion} />}
-                  {device.systemInfo.daemonVersion && <InfoCard label="Daemon" value={formatDaemonVersion(device)} />}
+                  {(device.systemInfo.daemonVersion || daemonVersion.latestLabel) && (
+                    <InfoCard
+                      label="Daemon"
+                      value={daemonVersion.currentLabel}
+                      hint={daemonVersion.updateAvailable && daemonVersion.latestLabel ? `可升级到 ${daemonVersion.latestLabel}` : undefined}
+                      tone={daemonVersion.updateAvailable ? 'warning' : undefined}
+                    />
+                  )}
                   {device.systemInfo.hostname && <InfoCard label="主机名" value={device.systemInfo.hostname} />}
                   </>
                 )}
@@ -406,11 +418,12 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function InfoCard({ label, value }: { label: string; value: string }) {
+function InfoCard({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone?: 'warning' }) {
   return (
-    <div className="rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
-      <div className="text-[10px] font-medium uppercase tracking-wider text-neutral-400">{label}</div>
+    <div className={`rounded-md border px-3 py-2 ${tone === 'warning' ? 'border-amber-200 bg-amber-50' : 'border-neutral-100 bg-neutral-50'}`}>
+      <div className={`text-[10px] font-medium uppercase tracking-wider ${tone === 'warning' ? 'text-amber-600' : 'text-neutral-400'}`}>{label}</div>
       <div className="mt-0.5 text-sm font-medium text-neutral-800 truncate">{value}</div>
+      {hint && <div className="mt-0.5 truncate text-[11px] font-medium text-amber-700">{hint}</div>}
     </div>
   );
 }

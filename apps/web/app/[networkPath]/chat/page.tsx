@@ -6,6 +6,8 @@ import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareD
 import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage } from '@/lib/schema';
+import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
+import { messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 
 type ChatTab = 'chat' | 'tasks' | 'files';
@@ -75,6 +77,7 @@ export default function ChatPage() {
   const router = useRouter();
   const params = useParams();
   const np = useCurrentNetworkPath();
+  const routeNetworkPath = typeof params.networkPath === 'string' ? params.networkPath : np;
 
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
   const searchParams = useSearchParams();
@@ -104,9 +107,9 @@ export default function ChatPage() {
   const [dmSort, setDmSort] = useState<SidebarSortMode>('manual');
   const [openSortMenu, setOpenSortMenu] = useState<'channels' | 'dms' | null>(null);
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
-  const [savedLoaded, setSavedLoaded] = useState(false);
+  const [loadedSavedKey, setLoadedSavedKey] = useState<string | null>(null);
   const [reactionIds, setReactionIds] = useState<Set<string>>(new Set());
-  const [reactionsLoaded, setReactionsLoaded] = useState(false);
+  const [loadedReactionsKey, setLoadedReactionsKey] = useState<string | null>(null);
   const [showMention, setShowMention] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionMembers, setMentionMembers] = useState<{ id: string; name: string; kind: 'human' | 'agent' }[]>([]);
@@ -137,8 +140,8 @@ export default function ChatPage() {
   const threadImageInputRef = useRef<HTMLInputElement>(null);
   const threadFileInputRef = useRef<HTMLInputElement>(null);
   const dmsRef = useRef(dms);
-  const savedKey = `agentbean:chat:saved:${np}`;
-  const reactionsKey = `agentbean:chat:reactions:${np}`;
+  const savedKey = `agentbean:chat:saved:${routeNetworkPath}`;
+  const reactionsKey = `agentbean:chat:reactions:${routeNetworkPath}`;
 
   useEffect(() => {
     dmsRef.current = dms;
@@ -205,15 +208,15 @@ export default function ChatPage() {
     } catch {
       setSavedIds(new Set());
     }
-    setSavedLoaded(true);
+    setLoadedSavedKey(savedKey);
   }, [savedKey]);
 
   useEffect(() => {
-    if (!savedLoaded) return;
+    if (loadedSavedKey !== savedKey) return;
     try {
       window.localStorage.setItem(savedKey, JSON.stringify([...savedIds]));
     } catch {}
-  }, [savedIds, savedKey, savedLoaded]);
+  }, [savedIds, savedKey, loadedSavedKey]);
 
   useEffect(() => {
     try {
@@ -222,15 +225,15 @@ export default function ChatPage() {
     } catch {
       setReactionIds(new Set());
     }
-    setReactionsLoaded(true);
+    setLoadedReactionsKey(reactionsKey);
   }, [reactionsKey]);
 
   useEffect(() => {
-    if (!reactionsLoaded) return;
+    if (loadedReactionsKey !== reactionsKey) return;
     try {
       window.localStorage.setItem(reactionsKey, JSON.stringify([...reactionIds]));
     } catch {}
-  }, [reactionIds, reactionsKey, reactionsLoaded]);
+  }, [reactionIds, reactionsKey, loadedReactionsKey]);
 
   // Fetch members for @mention
   useEffect(() => {
@@ -688,7 +691,7 @@ export default function ChatPage() {
   };
 
   const handleReply = (msg: ChatMessage) => {
-    const speaker = resolveMessageSpeaker(msg, currentUser?.username, agents);
+    const speaker = resolveMessageSpeaker(msg, agents, { currentUser, humanProfiles, channelMembers, mentionMembers });
     openThread(msg.id);
     setThreadInput((prev) => {
       const prefix = `回复 ${speaker}: `;
@@ -697,7 +700,7 @@ export default function ChatPage() {
   };
 
   const handleThreadReply = (msg: ChatMessage) => {
-    const speaker = resolveMessageSpeaker(msg, currentUser?.username, agents);
+    const speaker = resolveMessageSpeaker(msg, agents, { currentUser, humanProfiles, channelMembers, mentionMembers });
     setThreadInput((prev) => {
       const prefix = `回复 ${speaker}: `;
       return prev.trim() ? `${prev}\n${prefix}` : prefix;
@@ -845,21 +848,21 @@ export default function ChatPage() {
             setSidebarView('channels');
             const dm = dms.find((item) => item.id === chId);
             router.push(dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`);
-          }} />
+          }} humanProfiles={humanProfiles} />
         ) : sidebarView === 'inbox' ? (
           <ActivityView onJump={(chId) => {
             setActiveChannel(chId);
             setSidebarView('channels');
             const dm = dms.find((item) => item.id === chId);
             router.push(dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`);
-          }} />
+          }} humanProfiles={humanProfiles} />
         ) : sidebarView === 'saved' ? (
           <SavedView savedIds={savedIds} onUnsave={(msgId) => toggleSave(msgId)} onJump={(chId) => {
             setActiveChannel(chId);
             setSidebarView('channels');
             const dm = dms.find((item) => item.id === chId);
             router.push(dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`);
-          }} />
+          }} humanProfiles={humanProfiles} />
         ) : (
         <>
         {/* Conversation header */}
@@ -950,6 +953,8 @@ export default function ChatPage() {
                         selected={selectedMessageId === msg.id}
                         saved={savedIds.has(msg.id)}
                         reacted={reactionIds.has(msg.id)}
+                        humanProfiles={humanProfiles}
+                        channelMembers={channelMembers}
                         onReply={() => handleReply(msg)}
                         onOpenThread={() => openThread(msg.id)}
                         onOpenProfile={openProfile}
@@ -1048,10 +1053,11 @@ export default function ChatPage() {
             <div className="flex flex-1 items-center justify-center text-sm text-neutral-400">选择一个频道或私聊查看任务</div>
           )
         ) : (
-          <ConversationFiles
+            <ConversationFiles
             files={conversationFiles}
             agents={agents}
-            currentUsername={currentUser?.username}
+            humanProfiles={humanProfiles}
+            channelMembers={channelMembers}
             onJump={jumpToMessage}
           />
         )}
@@ -1076,7 +1082,7 @@ export default function ChatPage() {
           root={threadRoot}
           replies={threadReplies}
           agents={agents}
-          currentUsername={currentUser?.username}
+          humanProfiles={humanProfiles}
           title={`讨论串 — ${isDm ? `@${activeDmName}` : `#${activeName}`}`}
           input={threadInput}
           attachments={threadAttachments}
@@ -1743,14 +1749,17 @@ function TaskCard({
 function ConversationFiles({
   files,
   agents,
-  currentUsername,
+  humanProfiles,
+  channelMembers,
   onJump,
 }: {
   files: ConversationFile[];
   agents: Record<string, AgentSnapshot>;
-  currentUsername?: string;
+  humanProfiles: HumanProfile[];
+  channelMembers: ChannelMemberEntry[];
   onJump: (messageId: string) => void;
 }) {
+  const currentUser = useAgentBeanStore((s) => s.currentUser);
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-white p-4">
       {files.length === 0 ? (
@@ -1780,7 +1789,7 @@ function ConversationFiles({
                     <span className="text-neutral-300">·</span>
                     <span>{formatDateTime(file.createdAt)}</span>
                     <span className="text-neutral-300">·</span>
-                    <span>{speakerName({ id: file.messageId, channelId: '', senderKind: file.senderKind, senderId: file.senderId, body: '', createdAt: file.createdAt }, agents, currentUsername)}</span>
+                    <span>{speakerName({ id: file.messageId, channelId: '', senderKind: file.senderKind, senderId: file.senderId, body: '', createdAt: file.createdAt }, agents, { currentUser, humanProfiles, channelMembers })}</span>
                   </div>
                 </a>
                 <div className="flex shrink-0 items-center gap-2">
@@ -1804,7 +1813,7 @@ function ThreadPanel({
   root,
   replies,
   agents,
-  currentUsername,
+  humanProfiles,
   title,
   input,
   attachments,
@@ -1834,7 +1843,7 @@ function ThreadPanel({
   root: ChatMessage;
   replies: ChatMessage[];
   agents: Record<string, AgentSnapshot>;
-  currentUsername?: string;
+  humanProfiles: HumanProfile[];
   title: string;
   input: string;
   attachments: Artifact[];
@@ -1863,9 +1872,10 @@ function ThreadPanel({
 }) {
   const rootTaskId = metaTaskId(root);
   const rootTask = rootTaskId ? tasks.find((task) => task.id === rootTaskId) ?? null : null;
+  const currentUser = useAgentBeanStore((s) => s.currentUser);
   const subtitle = rootTask
     ? `#${taskNumbers.get(rootTask.id) ?? '任务'} ${rootTask.title}`
-    : resolveMessageSpeaker(root, currentUsername, agents);
+    : resolveMessageSpeaker(root, agents, { currentUser, humanProfiles, channelMembers });
   const renderThreadBubble = (msg: ChatMessage, replyCount = 0) => {
     const taskId = metaTaskId(msg);
     const task = taskId ? tasks.find((item) => item.id === taskId) ?? null : null;
@@ -1879,6 +1889,8 @@ function ThreadPanel({
         taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'thread' && chatTaskMenuTarget.messageId === msg.id : false}
         saved={savedIds.has(msg.id)}
         reacted={reactionIds.has(msg.id)}
+        humanProfiles={humanProfiles}
+        channelMembers={channelMembers}
         onReply={() => onReply(msg)}
         onOpenThread={() => {}}
         onOpenProfile={onOpenProfile}
@@ -2155,6 +2167,8 @@ function ChatBubble({
   selected = false,
   saved,
   reacted,
+  humanProfiles = [],
+  channelMembers = [],
   onReply,
   onOpenThread,
   onOpenProfile,
@@ -2174,6 +2188,8 @@ function ChatBubble({
   selected?: boolean;
   saved: boolean;
   reacted: boolean;
+  humanProfiles?: HumanProfile[];
+  channelMembers?: ChannelMemberEntry[];
   onReply: () => void;
   onOpenThread: () => void;
   onOpenProfile: (target: ProfileTarget) => void;
@@ -2209,7 +2225,7 @@ function ChatBubble({
 
   const isHuman = msg.senderKind === 'human';
   const speaker = isHuman
-    ? (currentUser?.username ?? '你')
+    ? messageSpeakerName(msg, {}, { currentUser, humanProfiles, channelMembers })
     : (agent?.name ?? 'Agent');
   const time = formatTime(msg.createdAt);
   const isOwner = isHuman && currentUser?.id === msg.senderId;
@@ -3028,12 +3044,10 @@ function formatTime(ts: number): string {
 
 function resolveMessageSpeaker(
   msg: ChatMessage,
-  currentUsername: string | undefined,
   agents: Record<string, AgentSnapshot>,
+  sources: SpeakerSources = {},
 ): string {
-  if (msg.senderKind === 'agent') return msg.senderId ? (agents[msg.senderId]?.name ?? 'Agent') : 'Agent';
-  if (msg.senderKind === 'human') return currentUsername ?? '你';
-  return '系统';
+  return messageSpeakerName(msg, agents, sources);
 }
 
 function statusLabel(status?: AgentStatus): string {
@@ -3078,10 +3092,8 @@ function conversationLabel(
   return channel ? `#${channel.name}` : '会话';
 }
 
-function speakerName(msg: ChatMessage, agents: Record<string, { name: string }>, currentUsername?: string): string {
-  if (msg.senderKind === 'human') return currentUsername ?? '用户';
-  if (msg.senderKind === 'agent') return agents[msg.senderId ?? '']?.name ?? 'Agent';
-  return '系统';
+function speakerName(msg: ChatMessage, agents: Record<string, { name: string }>, sources: SpeakerSources = {}): string {
+  return messageSpeakerName(msg, agents, sources);
 }
 
 function participantName(id: string, participants: { id: string; name: string }[], currentUserId?: string): string {
@@ -3099,7 +3111,7 @@ function formatDateTime(ts: number): string {
   return new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-function SearchView({ onClose, onJump }: { onClose: () => void; onJump: (channelId: string) => void }) {
+function SearchView({ onClose, onJump, humanProfiles }: { onClose: () => void; onJump: (channelId: string) => void; humanProfiles: HumanProfile[] }) {
   const [query, setQuery] = useState('');
   const [mineOnly, setMineOnly] = useState(false);
   const [scope, setScope] = useState<'all' | 'channels' | 'dms'>('all');
@@ -3218,7 +3230,7 @@ function SearchView({ onClose, onJump }: { onClose: () => void; onJump: (channel
               <button key={msg.id} onClick={() => onJump(msg.channelId)} className="mb-2 w-full rounded-lg border border-neutral-100 p-3 text-left hover:bg-neutral-50">
                 <div className="flex items-center gap-2 text-xs text-neutral-400">
                   <span>{conversationLabel(msg.channelId, channels, dms, agents)}</span>
-                  <span>· {speakerName(msg, agents, currentUser?.username)}</span>
+                  <span>· {speakerName(msg, agents, { currentUser, humanProfiles })}</span>
                   <span>· {formatTime(msg.createdAt)}</span>
                 </div>
                 <div className="mt-1 line-clamp-2 text-sm text-neutral-700">{displayMessageBody(msg).slice(0, 180)}</div>
@@ -3231,7 +3243,7 @@ function SearchView({ onClose, onJump }: { onClose: () => void; onJump: (channel
   );
 }
 
-function ActivityView({ onJump }: { onJump: (channelId: string) => void }) {
+function ActivityView({ onJump, humanProfiles }: { onJump: (channelId: string) => void; humanProfiles: HumanProfile[] }) {
   const [filter, setFilter] = useState<'all' | 'unread' | 'mentions'>('all');
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
   const [recent, setRecent] = useState<ChatMessage[]>([]);
@@ -3240,14 +3252,16 @@ function ActivityView({ onJump }: { onJump: (channelId: string) => void }) {
   const dms = useAgentBeanStore((s) => s.dms);
   const agents = useAgentBeanStore((s) => s.agents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
+  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
+  const visibleIds = visibleConversationIds(channels, dms);
 
   useEffect(() => {
     channelEvents().searchMessages('', 100).then((res) => {
       if (res.ok && res.messages) setRecent(res.messages);
     });
-  }, []);
+  }, [currentNetworkId]);
 
-  const allMessages = uniqueMessages([...recent, ...Object.values(messagesByChannel).flat()])
+  const allMessages = messagesForVisibleConversations(uniqueMessages([...recent, ...Object.values(messagesByChannel).flat()]), visibleIds)
     .filter((m) => m.senderKind !== 'system')
     .sort((a, b) => b.createdAt - a.createdAt)
     .slice(0, 80);
@@ -3283,7 +3297,7 @@ function ActivityView({ onJump }: { onJump: (channelId: string) => void }) {
           return (
             <button key={msg.id} onClick={() => onJump(msg.channelId)} className={`group flex w-full items-start gap-3 border-b border-neutral-100 px-6 py-3 text-left hover:bg-neutral-50 ${done ? 'opacity-60' : ''}`}>
               <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-purple-100 text-xs font-semibold text-purple-700">
-                {speakerName(msg, agents, currentUser?.username)[0]?.toUpperCase() ?? 'A'}
+                {speakerName(msg, agents, { currentUser, humanProfiles })[0]?.toUpperCase() ?? 'A'}
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 text-xs text-neutral-400">
@@ -3292,7 +3306,7 @@ function ActivityView({ onJump }: { onJump: (channelId: string) => void }) {
                   {!done && <span className="rounded bg-pink-100 px-1.5 py-0.5 text-[10px] font-medium text-pink-600">新</span>}
                 </div>
                 <div className="mt-1 line-clamp-2 text-sm text-neutral-700">
-                  <span className="font-medium text-neutral-900">{speakerName(msg, agents, currentUser?.username)}：</span>
+                  <span className="font-medium text-neutral-900">{speakerName(msg, agents, { currentUser, humanProfiles })}：</span>
                   {displayMessageBody(msg)}
                 </div>
               </div>
@@ -3317,7 +3331,7 @@ function ActivityView({ onJump }: { onJump: (channelId: string) => void }) {
   );
 }
 
-function SavedView({ savedIds, onUnsave, onJump }: { savedIds: Set<string>; onUnsave: (msgId: string) => void; onJump: (channelId: string) => void }) {
+function SavedView({ savedIds, onUnsave, onJump, humanProfiles }: { savedIds: Set<string>; onUnsave: (msgId: string) => void; onJump: (channelId: string) => void; humanProfiles: HumanProfile[] }) {
   const [query, setQuery] = useState('');
   const [recent, setRecent] = useState<ChatMessage[]>([]);
   const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
@@ -3325,14 +3339,16 @@ function SavedView({ savedIds, onUnsave, onJump }: { savedIds: Set<string>; onUn
   const dms = useAgentBeanStore((s) => s.dms);
   const agents = useAgentBeanStore((s) => s.agents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
+  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
+  const visibleIds = visibleConversationIds(channels, dms);
 
   useEffect(() => {
     channelEvents().searchMessages('', 200).then((res) => {
       if (res.ok && res.messages) setRecent(res.messages);
     });
-  }, []);
+  }, [currentNetworkId]);
 
-  const savedMessages = uniqueMessages([...recent, ...Object.values(messagesByChannel).flat()])
+  const savedMessages = messagesForVisibleConversations(uniqueMessages([...recent, ...Object.values(messagesByChannel).flat()]), visibleIds)
     .filter((m) => savedIds.has(m.id))
     .filter((m) => !query.trim() || m.body.toLowerCase().includes(query.trim().toLowerCase()) || conversationLabel(m.channelId, channels, dms, agents).toLowerCase().includes(query.trim().toLowerCase()))
     .sort((a, b) => b.createdAt - a.createdAt);
@@ -3341,7 +3357,7 @@ function SavedView({ savedIds, onUnsave, onJump }: { savedIds: Set<string>; onUn
     <div className="flex flex-1 flex-col">
       <div className="flex h-16 flex-col justify-center border-b border-neutral-200 px-6">
         <h2 className="text-lg font-semibold">收藏</h2>
-        <p className="text-xs text-neutral-400">{savedIds.size} 条收藏</p>
+        <p className="text-xs text-neutral-400">{savedMessages.length} 条收藏</p>
       </div>
       <div className="border-b border-neutral-200 px-6 py-2">
         <div className="relative">
@@ -3365,7 +3381,7 @@ function SavedView({ savedIds, onUnsave, onJump }: { savedIds: Set<string>; onUn
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-xs text-neutral-400">
                 <span className="font-medium text-neutral-700">{conversationLabel(msg.channelId, channels, dms, agents)}</span>
-                <span>{speakerName(msg, agents, currentUser?.username)}</span>
+                <span>{speakerName(msg, agents, { currentUser, humanProfiles })}</span>
                 <span>{formatTime(msg.createdAt)}</span>
               </div>
               <div className="mt-1 line-clamp-3 text-sm text-neutral-700">{displayMessageBody(msg)}</div>

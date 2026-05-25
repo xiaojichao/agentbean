@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import multer from 'multer';
 import { Server as IOServer } from 'socket.io';
 import { logger } from './log.js';
-import { openDb, initGlobalDb, type Db, type GlobalDb } from './db.js';
+import { openDb, initGlobalDb, type Db, type GlobalDb, type InviteRow } from './db.js';
 import { AgentRegistry } from './registry.js';
 import { DeviceRegistry } from './device-registry.js';
 import { StorageManager } from './storage.js';
@@ -21,6 +21,7 @@ import { newId } from './ids.js';
 import { generateToken, parseToken, verifyUserToken } from './auth.js';
 import { hashPassword, verifyPassword } from './password.js';
 import { generateInviteCode } from './invite.js';
+import { buildDaemonVersionInfo } from './daemon-version.js';
 
 export interface AppOptions { port?: number; dbPath?: string; globalDbPath?: string; agentToken?: string }
 export interface AppHandle {
@@ -48,6 +49,24 @@ function buildInviteCommand(code: string, serverUrl: string): string {
   }
 
   return `npx @agentbean/daemon@latest --invite ${code} --server-url ${serverUrl}`;
+}
+
+function validateUserJoinInvite(globalDb: GlobalDb, code: string): { ok: true; invite: InviteRow } | { ok: false; error: string } {
+  const invite = globalDb.invites.getByCode(code);
+  if (!invite || invite.purpose !== 'user') return { ok: false, error: 'INVALID_CODE' };
+  if (invite.usedAt) return { ok: false, error: 'ALREADY_USED' };
+  if (invite.expiresAt && invite.expiresAt < Date.now()) return { ok: false, error: 'EXPIRED' };
+  if (invite.maxUses !== null && invite.usesCount >= invite.maxUses) return { ok: false, error: 'MAX_USES_REACHED' };
+  if (invite.networkId && !globalDb.networks.get(invite.networkId)) return { ok: false, error: 'NETWORK_NOT_FOUND' };
+  return { ok: true, invite };
+}
+
+function consumeJoinInvite(globalDb: GlobalDb, invite: InviteRow): void {
+  globalDb.invites.incrementUses(invite.code);
+  const updated = globalDb.invites.getByCode(invite.code);
+  if (updated && updated.maxUses !== null && updated.usesCount >= updated.maxUses) {
+    globalDb.invites.markUsed(invite.code);
+  }
 }
 
 function isTeamAgent(agent: { category?: string | null; source?: string | null }): boolean {
@@ -259,6 +278,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
   const toDeviceDto = (dbd: ReturnType<GlobalDb['devices']['listByUser']>[number]) => {
     const live = deviceRegistry.get(dbd.id);
+    const systemInfo = dbd.systemInfo;
+    const daemonVersionInfo = buildDaemonVersionInfo(systemInfo);
     return {
       id: dbd.id,
       userId: dbd.userId,
@@ -269,7 +290,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       lastSeenAt: live ? live.lastSeenAt : dbd.lastSeenAt,
       status: live ? live.status : 'offline',
       connectCommand: dbd.connectCommand,
-      systemInfo: dbd.systemInfo,
+      systemInfo,
+      daemonVersionInfo,
+      latestDaemonVersion: daemonVersionInfo.latest,
+      daemonUpdateAvailable: daemonVersionInfo.updateAvailable,
     };
   };
 
@@ -656,6 +680,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         if (!dbDevice) return ack?.({ ok: false, error: 'NOT_FOUND' });
         const live = deviceRegistry.get(payload.id);
         const agents = live ? Array.from(live.agents.values()) : [];
+        const daemonVersionInfo = buildDaemonVersionInfo(dbDevice.systemInfo);
         ack?.({
           ok: true,
           device: {
@@ -669,6 +694,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             status: live ? live.status : 'offline',
             connectCommand: dbDevice.connectCommand,
             systemInfo: dbDevice.systemInfo,
+            daemonVersionInfo,
+            latestDaemonVersion: daemonVersionInfo.latest,
+            daemonUpdateAvailable: daemonVersionInfo.updateAvailable,
             agents,
           },
         });
@@ -1545,17 +1573,11 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         if (globalDb.users.getByName(username)) return ack?.({ ok: false, error: 'USERNAME_TAKEN' });
         if (email && globalDb.users.getByEmail(email)) return ack?.({ ok: false, error: 'EMAIL_TAKEN' });
 
-        const invite = payload.inviteToken ? globalDb.invites.getByCode(payload.inviteToken) : null;
+        let invite: InviteRow | null = null;
         if (payload.inviteToken) {
-          if (!invite) return ack?.({ ok: false, error: 'INVALID_CODE' });
-          if (invite.maxUses === null) {
-            // Single-use invite (legacy)
-            if (invite.usedAt) return ack?.({ ok: false, error: 'ALREADY_USED' });
-          } else {
-            // Multi-use join link
-            if (invite.usesCount >= invite.maxUses) return ack?.({ ok: false, error: 'MAX_USES_REACHED' });
-          }
-          if (invite.expiresAt && invite.expiresAt < Date.now()) return ack?.({ ok: false, error: 'EXPIRED' });
+          const checked = validateUserJoinInvite(globalDb, payload.inviteToken);
+          if (!checked.ok) return ack?.({ ok: false, error: checked.error });
+          invite = checked.invite;
         }
 
         const userId = newId();
@@ -1589,28 +1611,24 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           globalDb.networkMembers.add(invite.networkId, userId, 'member');
         }
         if (invite) {
-          if (invite.maxUses === null) {
-            globalDb.invites.incrementUses(invite.code);
-          } else {
-            globalDb.invites.incrementUses(invite.code);
-            const updated = globalDb.invites.getByCode(invite.code);
-            if (updated && updated.maxUses !== null && updated.usesCount >= updated.maxUses) {
-              globalDb.invites.markUsed(invite.code);
-            }
-          }
+          consumeJoinInvite(globalDb, invite);
         }
 
-        const userToken = generateToken(userId, privateNetwork.id);
-        socket.data.userId = userId;
-        socket.data.networkId = privateNetwork.id;
-        socket.data.role = user.role;
-        socketNetworkMap.set(socket.id, privateNetwork.id);
+        const joinedNetwork = invite?.networkId ? globalDb.networks.get(invite.networkId) : null;
+        const primaryNetwork = joinedNetwork ?? privateNetwork;
+        globalDb.users.setCurrentNetwork(userId, primaryNetwork.id);
 
-        ack?.({ ok: true, userId, username: user.username, email: user.email, role: user.role, token: userToken, networkId: privateNetwork.id, networkPath: privateNetwork.path, network: privateNetwork });
+        const userToken = generateToken(userId, primaryNetwork.id);
+        socket.data.userId = userId;
+        socket.data.networkId = primaryNetwork.id;
+        socket.data.role = user.role;
+        socketNetworkMap.set(socket.id, primaryNetwork.id);
+
+        ack?.({ ok: true, userId, username: user.username, email: user.email, role: user.role, token: userToken, networkId: primaryNetwork.id, networkPath: primaryNetwork.path, network: primaryNetwork });
 
         const sessionSocket = payload.sessionId ? inviteSessions.get(payload.sessionId) : undefined;
         if (payload.sessionId && sessionSocket) {
-          sessionSocket.emit('auth:token:deliver', { sessionId: payload.sessionId, token: userToken, userId, networkId: privateNetwork.id });
+          sessionSocket.emit('auth:token:deliver', { sessionId: payload.sessionId, token: userToken, userId, networkId: primaryNetwork.id });
           inviteSessions.delete(payload.sessionId);
         }
       } catch (e: any) {
@@ -1631,18 +1649,16 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         // Handle join link — add user to the invite's network
         let joinedNetworkId: string | undefined;
         if (payload.joinCode) {
-          const invite = globalDb.invites.getByCode(payload.joinCode);
-          if (invite && !invite.usedAt && (!invite.expiresAt || invite.expiresAt > Date.now())) {
-            if (invite.networkId && !globalDb.networkMembers.isMember(invite.networkId, user.id)) {
+          const checked = validateUserJoinInvite(globalDb, payload.joinCode);
+          if (!checked.ok) return ack?.({ ok: false, error: checked.error });
+          const invite = checked.invite;
+          if (invite.networkId) {
+            if (!globalDb.networkMembers.isMember(invite.networkId, user.id)) {
               globalDb.networkMembers.add(invite.networkId, user.id, 'member');
-              joinedNetworkId = invite.networkId;
             }
-            globalDb.invites.incrementUses(invite.code);
-            const updated = globalDb.invites.getByCode(invite.code);
-            if (updated && updated.maxUses !== null && updated.usesCount >= updated.maxUses) {
-              globalDb.invites.markUsed(invite.code);
-            }
+            joinedNetworkId = invite.networkId;
           }
+          consumeJoinInvite(globalDb, invite);
         }
 
         // Ensure user is a member of all public networks
@@ -1667,6 +1683,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
         const primaryNetRow = globalDb.networks.get(primaryNetwork);
         const userToken = generateToken(user.id, primaryNetwork);
+        globalDb.users.setCurrentNetwork(user.id, primaryNetwork);
         socket.data.userId = user.id;
         socket.data.networkId = primaryNetwork;
         socket.data.role = user.role;
@@ -1856,11 +1873,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
     socket.on('auth:join:validate', (payload: { code: string }, ack?: (r: any) => void) => {
       try {
-        const invite = globalDb.invites.getByCode(payload.code);
-        if (!invite || invite.purpose !== 'user') return ack?.({ ok: false, error: 'INVALID_CODE' });
-        if (invite.usedAt) return ack?.({ ok: false, error: 'ALREADY_USED' });
-        if (invite.expiresAt && invite.expiresAt < Date.now()) return ack?.({ ok: false, error: 'EXPIRED' });
-        if (invite.maxUses !== null && invite.usesCount >= invite.maxUses) return ack?.({ ok: false, error: 'MAX_USES_REACHED' });
+        const checked = validateUserJoinInvite(globalDb, payload.code);
+        if (!checked.ok) return ack?.({ ok: false, error: checked.error });
+        const invite = checked.invite;
         const network = invite.networkId ? globalDb.networks.get(invite.networkId) : null;
         ack?.({
           ok: true,
@@ -1926,6 +1941,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       const devices = visibleDeviceRows(globalDb.devices.listAll()).map((device) => {
         const live = deviceRegistry.get(device.id);
         const deviceAgents = globalDb.agents.listByDevice(device.id).filter(isTeamAgent);
+        const daemonVersionInfo = buildDaemonVersionInfo(device.systemInfo);
         const publicAgents = deviceAgents
           .filter((agent) => agent.visibility === 'public')
           .map((agent) => {
@@ -1974,6 +1990,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           lastSeenAt: live ? live.lastSeenAt : device.lastSeenAt,
           connectCommand: device.connectCommand,
           systemInfo: device.systemInfo,
+          daemonVersionInfo,
+          latestDaemonVersion: daemonVersionInfo.latest,
+          daemonUpdateAvailable: daemonVersionInfo.updateAvailable,
           runtimes: live?.runtimes ?? device.runtimes ?? [],
           publicAgents,
         };

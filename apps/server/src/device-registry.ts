@@ -28,6 +28,8 @@ export interface DeviceRuntime {
   capabilities?: {
     customAgentDispatch?: boolean;
   };
+  protocolVersion?: number;
+  daemonVersion?: string | null;
   lastSeenAt: number;
   status: AgentStatus;
 }

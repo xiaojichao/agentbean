@@ -230,6 +230,8 @@ export function createDeviceDaemon(
           networkId: cfg.networkId,
           agents: publicAgents,
           systemInfo,
+          daemonVersion: systemInfo.daemonVersion,
+          protocolVersion: 1,
           capabilities: {
             customAgentDispatch: true,
           },

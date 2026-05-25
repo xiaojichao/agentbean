@@ -2,6 +2,7 @@
 import { create } from 'zustand';
 import type { AgentSnapshot, ChannelSummary, ChatMessage, ConnState, OutboundMessage, DiscoveredAgent, RuntimeInfo, NetworkSummary, AgentMetricsSummary, UserInfo, DeviceInfo } from './schema.js';
 import type { DmChannel } from './socket.js';
+import { agentVisibleInNetwork } from './agent-scope';
 
 interface State {
   conn: ConnState;
@@ -40,6 +41,7 @@ interface State {
   addNetwork(n: NetworkSummary): void;
   applyAgentMetrics(list: AgentMetricsSummary[]): void;
   applyDevicesSnapshot(list: DeviceInfo[]): void;
+  applyDeviceStatus(device: DeviceInfo): void;
 }
 
 export const useAgentBeanStore = create<State>((set) => ({
@@ -66,6 +68,12 @@ export const useAgentBeanStore = create<State>((set) => ({
   },
   applyAgentStatus(snap) {
     set((s) => {
+      if (!agentVisibleInNetwork(snap, s.currentNetworkId)) {
+        if (!s.agents[snap.id]) return s;
+        const next = { ...s.agents };
+        delete next[snap.id];
+        return { agents: next };
+      }
       return { agents: { ...s.agents, [snap.id]: snap } };
     });
   },
@@ -102,7 +110,21 @@ export const useAgentBeanStore = create<State>((set) => ({
   setRuntimes(list) { set({ runtimes: list }); },
   setDiscovering(v) { set({ discovering: v }); },
   applyNetworksSnapshot(list) { set({ networks: list }); },
-  setCurrentNetworkId(id) { set({ currentNetworkId: id }); },
+  setCurrentNetworkId(id) {
+    set((s) => {
+      if (s.currentNetworkId === id) return s;
+      return {
+        currentNetworkId: id,
+        agents: {},
+        channels: [],
+        dms: [],
+        messagesByChannel: {},
+        outbox: {},
+        agentMetrics: {},
+        devices: {},
+      };
+    });
+  },
   setCurrentUser(user) { set({ currentUser: user }); },
   setAuthToken(token) { set({ authToken: token }); },
   addNetwork(n) { set((s) => ({ networks: [...s.networks, n] })); },
@@ -115,6 +137,9 @@ export const useAgentBeanStore = create<State>((set) => ({
     const map: Record<string, DeviceInfo> = {};
     for (const d of list) map[d.id] = d;
     set({ devices: map });
+  },
+  applyDeviceStatus(device) {
+    set((s) => ({ devices: { ...s.devices, [device.id]: { ...s.devices[device.id], ...device } } }));
   },
 }));
 
