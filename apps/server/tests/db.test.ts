@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { openDb, type Db } from '../src/db.js';
+import { initGlobalDb, openDb, type Db } from '../src/db.js';
 
 let dbPath: string;
 let db: Db;
@@ -115,6 +115,46 @@ describe('openDb', () => {
     const devYAgents = db.agents.listByDevice('devY');
     expect(devYAgents).toHaveLength(1);
     expect(devYAgents[0].id).toBe('a-d2');
+  });
+
+  it('devices.upsert moves a stable device id to the latest invite owner and team', () => {
+    const globalPath = join(tmpdir(), `agentbean-global-test-${Date.now()}-${Math.random()}.db`);
+    const global = initGlobalDb(globalPath);
+    const now = Date.now();
+    try {
+      global.users.create({ id: 'u1', username: 'u1', createdAt: now });
+      global.users.create({ id: 'u2', username: 'u2', createdAt: now });
+      global.networks.create({ id: 'team-1', ownerId: 'u1', name: 'Team 1', path: 'team-1', visibility: 'public', createdAt: now });
+      global.networks.create({ id: 'team-2', ownerId: 'u2', name: 'Team 2', path: 'team-2', visibility: 'public', createdAt: now });
+
+      global.devices.upsert({
+        id: 'stable-device',
+        userId: 'u1',
+        networkId: 'team-1',
+        hostname: 'My-Mac',
+        lastSeenAt: now,
+        systemInfo: { daemonVersion: '0.1.24' },
+      });
+      global.devices.upsert({
+        id: 'stable-device',
+        userId: 'u2',
+        networkId: 'team-2',
+        hostname: 'My-Mac',
+        lastSeenAt: now + 1,
+        systemInfo: { daemonVersion: '0.1.25' },
+      });
+
+      expect(global.devices.listByNetwork('team-1')).toHaveLength(0);
+      expect(global.devices.listByNetwork('team-2')).toHaveLength(1);
+      expect(global.devices.get('stable-device')).toMatchObject({
+        userId: 'u2',
+        networkId: 'team-2',
+        lastSeenAt: now + 1,
+      });
+    } finally {
+      global.close();
+      try { unlinkSync(globalPath); } catch {}
+    }
   });
 
   it('messages.append + listByChannel orders by created_at', () => {

@@ -139,7 +139,15 @@ export const useAgentBeanStore = create<State>((set) => ({
     set({ devices: map });
   },
   applyDeviceStatus(device) {
-    set((s) => ({ devices: { ...s.devices, [device.id]: { ...s.devices[device.id], ...device } } }));
+    set((s) => {
+      if (device.networkId && device.networkId !== s.currentNetworkId) {
+        if (!s.devices[device.id]) return s;
+        const next = { ...s.devices };
+        delete next[device.id];
+        return { devices: next };
+      }
+      return { devices: { ...s.devices, [device.id]: { ...s.devices[device.id], ...device } } };
+    });
   },
 }));
 
