@@ -72,6 +72,10 @@ function promptWithAttachments(prompt: string, attachments: Array<DispatchAttach
   return `${prompt}\n\n用户随消息附加了以下本地文件，请在需要时读取并使用：\n${list}`;
 }
 
+function promptWithWorkspaceOutput(prompt: string, outputDir: string): string {
+  return `${prompt}\n\n如果本次任务会生成图片、文档、数据或其他文件，请把最终产物保存到这个 AgentBean 输出目录：\n${outputDir}\n保存后在回复中说明文件名即可，系统会自动同步并在聊天中展示预览。`;
+}
+
 export interface ConnectionHandle {
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -148,7 +152,7 @@ export function createConnection(cfg: AgentConfig, adapter: CliAdapter): Connect
               run,
               attachments: req.attachments,
             });
-            const prompt = promptWithAttachments(req.prompt, downloadedAttachments);
+            const prompt = promptWithWorkspaceOutput(promptWithAttachments(req.prompt, downloadedAttachments), run.outputDir);
             const rawBody = await adapter.ask({
               prompt,
               history: req.history ?? [],

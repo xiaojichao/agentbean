@@ -32,6 +32,17 @@ describe('postProcess', () => {
     expect(result.outputFiles).toContain(realpathSync(filePath));
   });
 
+  it('detects absolute files after Chinese path labels', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'agentbean-post-process-'));
+    const filePath = join(workspace, 'longquan-peaches.png');
+    writeFileSync(filePath, 'fake image');
+    const dispatchStart = Date.now() + 1000;
+
+    const result = await postProcess(`文件路径：${filePath}\n大小：120KB`, workspace, 'hermes', dispatchStart);
+
+    expect(result.outputFiles).toContain(realpathSync(filePath));
+  });
+
   it('detects new image files created in explicit workspace output directories', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'agentbean-post-process-'));
     const outputDir = join(workspace, 'outputs', 'covers');

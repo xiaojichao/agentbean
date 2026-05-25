@@ -54,7 +54,7 @@ function normalizeCandidatePath(raw: string): string | null {
 function extractMentionedFiles(reply: string, workspace: string | undefined, dispatchStart: number): string[] {
   const candidates = new Set<string>();
   const markdownLinkRe = /!?\[[^\]]*]\(([^)\s]+)\)/g;
-  const plainPathRe = /(?:^|[\s"'`(<])((?:~?\/|\.{1,2}\/)?[\w@%+=:,./-]+\.(?:png|jpe?g|gif|webp|svg|pdf|txt|csv|json|md|mp4|mov|zip))(?:$|[\s"'`)>.,;:])/gim;
+  const plainPathRe = /(?:^|[\s"'`(<:：])((?:~?\/|\.{1,2}\/)?[\w@%+=:,./-]+\.(?:png|jpe?g|gif|webp|svg|pdf|txt|csv|json|md|mp4|mov|zip))(?:$|[\s"'`)>.,;:：])/gim;
 
   let match: RegExpExecArray | null;
   while ((match = markdownLinkRe.exec(reply)) !== null) {
