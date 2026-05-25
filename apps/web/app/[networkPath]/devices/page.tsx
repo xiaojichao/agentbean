@@ -268,7 +268,7 @@ function EmptyState() {
 }
 
 function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName, showDeleteConfirm, setShowDeleteConfirm, currentNetworkId }: {
-  device: { id: string; userId?: string | null; hostname?: string; status: string; lastSeenAt: number; agentIds: string[]; runtimes?: any[]; connectCommand?: string | null; latestDaemonVersion?: string | null; daemonUpdateAvailable?: boolean; daemonVersionInfo?: { current: string | null; latest: string | null; updateAvailable: boolean; status: 'current' | 'update-available' | 'unknown' }; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string; daemonVersion?: string } | null };
+  device: { id: string; userId?: string | null; ownerName?: string | null; userName?: string | null; canManage?: boolean; hostname?: string; status: string; lastSeenAt: number; agentIds: string[]; runtimes?: any[]; connectCommand?: string | null; latestDaemonVersion?: string | null; daemonUpdateAvailable?: boolean; daemonVersionInfo?: { current: string | null; latest: string | null; updateAvailable: boolean; status: 'current' | 'update-available' | 'unknown' }; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string; daemonVersion?: string } | null };
   editName: boolean;
   setEditName: (v: boolean) => void;
   deviceName: string;
@@ -289,8 +289,9 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const [configAgent, setConfigAgent] = useState<any | null>(null);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const displayName = device.hostname ?? '未命名设备';
+  const ownerName = device.ownerName ?? device.userName ?? '未知用户';
   const daemonVersion = daemonVersionDisplay(device);
-  const canManageDevice = currentUser?.role === 'admin' || Boolean(currentUser?.id && currentUser.id === device.userId);
+  const canManageDevice = device.canManage ?? (currentUser?.role === 'admin' || Boolean(currentUser?.id && currentUser.id === device.userId));
 
   const refreshDeviceAgents = () => {
     return deviceEvents().agentsList(device.id).then((res) => {
@@ -397,6 +398,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
 
             <div className="border-t border-neutral-100 pt-4">
               <div className="grid grid-cols-3 gap-2">
+                <InfoCard label="所有者" value={ownerName} />
                 <InfoCard label="最后在线" value={new Date(device.lastSeenAt).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })} />
                 {device.systemInfo && (
                   <>

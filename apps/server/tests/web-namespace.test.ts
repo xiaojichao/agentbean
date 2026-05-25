@@ -220,12 +220,18 @@ describe('/web namespace', () => {
       hostname: 'Member Laptop',
       networkId: 'default',
       userId: 'team-device-owner',
+      ownerName: 'team-device-owner',
+      userName: 'team-device-owner',
+      canManage: true,
     });
     expect(listed.ok).toBe(true);
     expect(listed.devices.find((device: any) => device.id === 'owned-by-team-member')).toMatchObject({
       hostname: 'Member Laptop',
       networkId: 'default',
       userId: 'team-device-owner',
+      ownerName: 'team-device-owner',
+      userName: 'team-device-owner',
+      canManage: true,
     });
     web.close();
   });
@@ -407,6 +413,8 @@ describe('/web namespace', () => {
     expect(status).toMatchObject({
       id: 'fresh-live-device',
       userId: 'daemon-device-owner',
+      ownerName: 'daemon-device-owner',
+      userName: 'daemon-device-owner',
       networkId: 'default',
       hostname: 'Fresh-Live-Device',
       status: 'online',
@@ -418,8 +426,11 @@ describe('/web namespace', () => {
     });
     expect(snap.find((device: any) => device.id === 'fresh-live-device')).toMatchObject({
       userId: 'daemon-device-owner',
+      ownerName: 'daemon-device-owner',
+      userName: 'daemon-device-owner',
       networkId: 'default',
       status: 'online',
+      canManage: true,
     });
     ag.close();
     web.close();
@@ -474,6 +485,22 @@ describe('/web namespace', () => {
       deviceId: 'remote-device-1',
       deviceName: 'Remote Studio',
     });
+
+    const ownerWeb = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('remote-device-owner', 'default') },
+    });
+    await new Promise<void>((r) => ownerWeb.on('connect', () => r()));
+    const ownerCustomList = await new Promise<any>((resolve) => {
+      ownerWeb.emit('agent:custom:list', { deviceId: 'remote-device-1' }, resolve);
+    });
+    expect(ownerCustomList.ok).toBe(true);
+    expect(ownerCustomList.agents.find((agent: any) => agent.id === createRes.agent.id)).toMatchObject({
+      deviceId: 'remote-device-1',
+      deviceName: 'Remote Studio',
+    });
+    ownerWeb.close();
 
     const snap = await new Promise<any[]>((resolve) => {
       web.on('agents:snapshot', resolve);

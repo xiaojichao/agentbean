@@ -139,11 +139,14 @@ export interface AgentMetricsSummary {
 export interface DeviceInfo {
   id: string;
   userId: string;
+  ownerName?: string | null;
+  userName?: string | null;
   networkId: string;
   hostname?: string;
   lastSeenAt: number;
   status: AgentStatus;
   agentIds: string[];
+  canManage?: boolean;
   runtimes?: RuntimeInfo[];
   connectCommand?: string | null;
   latestDaemonVersion?: string | null;

@@ -214,6 +214,11 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     return globalDb.users.get(ownerId)?.username ?? null;
   };
 
+  const canManageDeviceRow = (
+    device: { userId?: string | null } | null | undefined,
+    userId?: string | null,
+  ) => Boolean(userId && device && (device.userId === userId || globalDb.users.get(userId)?.role === 'admin'));
+
   const resolveDeviceName = (deviceId?: string | null) => {
     if (!deviceId) return null;
     const live = deviceRegistry.get(deviceId);
@@ -295,13 +300,16 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
   const visibleDeviceRows = (rows: ReturnType<GlobalDb['devices']['listByUser']>) =>
     rows.filter((device) => !isVirtualDeviceId(device.id)).sort(compareDeviceRows);
 
-  const toDeviceDto = (dbd: ReturnType<GlobalDb['devices']['listByUser']>[number]) => {
+  const toDeviceDto = (dbd: ReturnType<GlobalDb['devices']['listByUser']>[number], viewerId?: string | null) => {
     const live = deviceRegistry.get(dbd.id);
     const systemInfo = dbd.systemInfo;
     const daemonVersionInfo = buildDaemonVersionInfo(systemInfo);
+    const ownerName = resolveOwnerName(dbd.userId) ?? '未知用户';
     return {
       id: dbd.id,
       userId: dbd.userId,
+      ownerName,
+      userName: ownerName,
       networkId: dbd.networkId,
       hostname: dbd.hostname,
       agentIds: live ? Array.from(live.agents.keys()) : [],
@@ -313,10 +321,11 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       daemonVersionInfo,
       latestDaemonVersion: daemonVersionInfo.latest,
       daemonUpdateAvailable: daemonVersionInfo.updateAvailable,
+      canManage: canManageDeviceRow(dbd, viewerId),
     };
   };
 
-  const devicesForNetwork = (networkId: string) => {
+  const devicesForNetwork = (networkId: string, viewerId?: string | null) => {
     const rowsById = new Map<string, ReturnType<GlobalDb['devices']['listByUser']>[number]>();
     for (const device of globalDb.devices.listByNetwork(networkId)) {
       rowsById.set(device.id, device);
@@ -326,7 +335,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       const device = globalDb.devices.get(agent.deviceId);
       if (device) rowsById.set(device.id, device);
     }
-    return visibleDeviceRows([...rowsById.values()]).map(toDeviceDto);
+    return visibleDeviceRows([...rowsById.values()]).map((device) => toDeviceDto(device, viewerId));
   };
 
   // Ensure system user exists for foreign key constraints
@@ -514,7 +523,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
   function emitDevicesSnapshotForNetwork(networkId: string): void {
     for (const s of io.of('/web').sockets.values()) {
       if ((socketNetworkMap.get(s.id) ?? defaultNetworkId) !== networkId) continue;
-      s.emit('devices:snapshot', devicesForNetwork(networkId));
+      s.emit('devices:snapshot', devicesForNetwork(networkId, s.data.userId as string | undefined));
     }
   }
 
@@ -554,7 +563,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       Boolean(userId && globalDb.users.get(userId)?.role === 'admin');
 
     const canManageDevice = (device: { userId?: string | null } | null | undefined, userId?: string | null) =>
-      Boolean(userId && device && (device.userId === userId || isSystemAdmin(userId)));
+      canManageDeviceRow(device, userId);
 
     const canManageAgent = (agent: { ownerId?: string | null; deviceId?: string | null } | null | undefined, userId?: string | null) => {
       if (!userId || !agent) return false;
@@ -650,13 +659,13 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
     socket.on('devices:subscribe', () => {
       const nid = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
-      socket.emit('devices:snapshot', devicesForNetwork(nid));
+      socket.emit('devices:snapshot', devicesForNetwork(nid, socket.data.userId as string | undefined));
     });
 
     socket.on('devices:list', (_payload: {}, ack?: (r: any) => void) => {
       try {
         const nid = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
-        ack?.({ ok: true, devices: devicesForNetwork(nid) });
+        ack?.({ ok: true, devices: devicesForNetwork(nid, socket.data.userId as string | undefined) });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }
@@ -734,8 +743,16 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       try {
         const userId = socket.data.userId as string | undefined;
         if (!userId) return ack?.({ ok: false, error: 'UNAUTHENTICATED' });
-        const agents = globalDb.agents.listCustomByOwner(userId)
-          .filter((agent) => !payload.deviceId || agent.deviceId === payload.deviceId)
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const requestedDevice = payload.deviceId ? globalDb.devices.get(payload.deviceId) : null;
+        if (payload.deviceId) {
+          if (!requestedDevice || requestedDevice.networkId !== networkId) return ack?.({ ok: false, error: 'DEVICE_NOT_IN_TEAM' });
+          if (!canManageDevice(requestedDevice, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        }
+        const sourceAgents = payload.deviceId
+          ? globalDb.agents.listAll().filter((agent) => agent.source === 'custom' && agent.deviceId === payload.deviceId)
+          : globalDb.agents.listCustomByOwner(userId);
+        const agents = sourceAgents
           .map((agent) => {
           const rt = registry.snapshot(agent.id);
           const resolved = resolveCustomAgentStatus(agent);
@@ -782,11 +799,14 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const live = deviceRegistry.get(payload.id);
         const agents = live ? Array.from(live.agents.values()) : [];
         const daemonVersionInfo = buildDaemonVersionInfo(dbDevice.systemInfo);
+        const ownerName = resolveOwnerName(dbDevice.userId) ?? '未知用户';
         ack?.({
           ok: true,
           device: {
             id: dbDevice.id,
             userId: dbDevice.userId,
+            ownerName,
+            userName: ownerName,
             networkId: dbDevice.networkId,
             hostname: dbDevice.hostname,
             agentIds: live ? Array.from(live.agents.keys()) : [],
@@ -798,6 +818,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             daemonVersionInfo,
             latestDaemonVersion: daemonVersionInfo.latest,
             daemonUpdateAvailable: daemonVersionInfo.updateAvailable,
+            canManage: canManageDevice(dbDevice, socket.data.userId as string | undefined),
             agents,
           },
         });

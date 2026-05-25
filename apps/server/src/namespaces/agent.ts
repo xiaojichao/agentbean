@@ -17,7 +17,7 @@ export interface AgentNamespaceDeps {
   deviceRegistry: DeviceRegistry;
   token: string;
   globalDb?: {
-    users: { get(id: string): { id: string } | null };
+    users: { get(id: string): { id: string; username?: string | null } | null };
     networkMembers: { isMember(networkId: string, userId: string): boolean };
     networks: { get(id: string): { id: string; visibility: 'public' | 'private' } | null };
     agentPublishes: { listByAgent(agentId: string): { networkId: string }[] };
@@ -28,7 +28,7 @@ export interface AgentNamespaceDeps {
     };
     devices?: {
       upsert(row: { id: string; userId: string; networkId: string; hostname?: string; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): void;
-      get(id: string): { id: string; hostname?: string | null; connectCommand?: string | null; runtimes?: { name: string; adapterKind: string; command: string; installed: boolean }[] } | null;
+      get(id: string): { id: string; userId?: string | null; hostname?: string | null; connectCommand?: string | null; runtimes?: { name: string; adapterKind: string; command: string; installed: boolean }[] } | null;
       setConnectCommand(id: string, command: string): void;
       setRuntimes(id: string, runtimes: { name: string; adapterKind: string; command: string; installed: boolean }[]): void;
       touch(id: string, lastSeenAt: number): void;
@@ -286,10 +286,13 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       const dev = deps.deviceRegistry.get(a.deviceId);
       if (!dev) return;
       const persisted = deps.globalDb?.devices?.get(a.deviceId);
+      const ownerName = deps.globalDb?.users?.get(dev.userId)?.username ?? '未知用户';
       const daemonVersionInfo = buildDaemonVersionInfo(a.systemInfo ?? null);
       deps.io.of('/web').emit('device:status', {
         id: dev.id,
         userId: dev.userId,
+        ownerName,
+        userName: ownerName,
         networkId: dev.networkId,
         agentIds: Array.from(dev.agents.keys()),
         runtimes: dev.runtimes ?? persisted?.runtimes ?? [],
