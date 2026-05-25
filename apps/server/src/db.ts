@@ -458,6 +458,7 @@ export interface GlobalDb {
     setRuntimes(id: string, runtimes: { name: string; adapterKind: string; command: string; installed: boolean }[]): void;
     touch(id: string, lastSeenAt: number): void;
     rename(id: string, hostname: string): void;
+    transferOwner(id: string, userId: string): void;
   };
 }
 
@@ -669,6 +670,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   const deviceSetRuntimes = raw.prepare(`UPDATE devices SET runtimes = ?, last_seen_at = ? WHERE id = ?`);
   const deviceTouch = raw.prepare(`UPDATE devices SET last_seen_at = ? WHERE id = ?`);
   const deviceRename = raw.prepare(`UPDATE devices SET hostname = ? WHERE id = ?`);
+  const deviceTransferOwner = raw.prepare(`UPDATE devices SET user_id = ? WHERE id = ?`);
 
   const globalAgentUpsert = raw.prepare(`
     INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, command, args, cwd, owner_id, description)
@@ -894,6 +896,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
       setRuntimes: (id, runtimes) => { deviceSetRuntimes.run(JSON.stringify(runtimes), Date.now(), id); },
       touch: (id, lastSeenAt) => { deviceTouch.run(lastSeenAt, id); },
       rename: (id, hostname) => { deviceRename.run(hostname, id); },
+      transferOwner: (id, userId) => { deviceTransferOwner.run(userId, id); },
     },
   };
 }

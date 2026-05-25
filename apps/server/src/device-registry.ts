@@ -9,6 +9,7 @@ export interface PublicAgentMeta {
   adapterKind: string;
   category?: string;
   visibility?: 'public' | 'private';
+  ownerId?: string | null;
 }
 
 export interface RuntimeMeta {

@@ -44,6 +44,50 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('fills missing agent creator names from the owning device user in member lists', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({ id: 'creator-device-user', username: 'creator-device-user', passwordHash: null, createdAt: now });
+    app.globalDb.networkMembers.add('default', 'creator-device-user', 'member');
+    app.globalDb.devices.upsert({
+      id: 'creator-device',
+      userId: 'creator-device-user',
+      networkId: 'default',
+      hostname: 'Creator Device',
+      lastSeenAt: now,
+      systemInfo: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'agent-without-owner',
+      name: 'Agent Without Owner',
+      role: 'assistant',
+      adapterKind: 'hermes',
+      deviceId: 'creator-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      ownerId: null,
+      command: 'hermes',
+      cwd: null,
+      description: null,
+    });
+
+    const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    const members = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+    expect(members.ok).toBe(true);
+    expect(members.agents.find((agent: any) => agent.id === 'agent-without-owner')).toMatchObject({
+      ownerId: 'creator-device-user',
+      ownerName: 'creator-device-user',
+      deviceName: 'Creator Device',
+    });
+    web.close();
+  });
+
   it('emits agent:status when a daemon registers', async () => {
     const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
     await new Promise<void>((r) => web.on('connect', () => r()));
@@ -379,7 +423,7 @@ describe('/web namespace', () => {
     owner.close();
   });
 
-  it('allows agent config changes only from the owning device user or an admin', async () => {
+  it('allows agent config changes only from the agent owner or an admin', async () => {
     const now = Date.now();
     app.globalDb.users.create({
       id: 'agent-config-device-owner',
@@ -427,18 +471,18 @@ describe('/web namespace', () => {
       auth: { token: generateToken('agent-config-creator', 'default') },
     });
     await new Promise<void>((r) => creator.on('connect', () => r()));
-    const denied = await new Promise<any>((resolve) => {
+    const allowed = await new Promise<any>((resolve) => {
       creator.emit('agent:config:update', {
         id: 'agent-config-on-other-device',
         name: 'Creator-Agent-Changed',
         adapterKind: 'codex',
         command: 'codex',
         cwd: '/Users/device/project',
-        description: 'Attempted by creator',
+        description: 'Changed by creator',
       }, resolve);
     });
-    expect(denied).toEqual({ ok: false, error: 'FORBIDDEN' });
-    expect(app.globalDb.agents.getFull('agent-config-on-other-device')?.name).toBe('Creator-Agent');
+    expect(allowed.ok).toBe(true);
+    expect(app.globalDb.agents.getFull('agent-config-on-other-device')?.name).toBe('Creator-Agent-Changed');
     creator.close();
 
     const deviceOwner = ioClient(`${baseUrl}/web`, {
@@ -447,7 +491,7 @@ describe('/web namespace', () => {
       auth: { token: generateToken('agent-config-device-owner', 'default') },
     });
     await new Promise<void>((r) => deviceOwner.on('connect', () => r()));
-    const allowed = await new Promise<any>((resolve) => {
+    const denied = await new Promise<any>((resolve) => {
       deviceOwner.emit('agent:config:update', {
         id: 'agent-config-on-other-device',
         name: 'Device-Agent',
@@ -457,8 +501,8 @@ describe('/web namespace', () => {
         description: 'Changed by device owner',
       }, resolve);
     });
-    expect(allowed.ok).toBe(true);
-    expect(app.globalDb.agents.getFull('agent-config-on-other-device')?.name).toBe('Device-Agent');
+    expect(denied).toEqual({ ok: false, error: 'FORBIDDEN' });
+    expect(app.globalDb.agents.getFull('agent-config-on-other-device')?.name).toBe('Creator-Agent-Changed');
     deviceOwner.close();
   });
 

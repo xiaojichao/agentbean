@@ -192,6 +192,7 @@ export function AgentDetail({ agent, device, tab }: { agent: AgentSnapshot; devi
 }
 
 function AgentProfile({ agent, device, applyAgentStatus }: { agent: AgentSnapshot; device?: DeviceInfo; applyAgentStatus: (snap: AgentSnapshot) => void }) {
+  const currentUser = useAgentBeanStore((s) => s.currentUser);
   const [editing, setEditing] = useState<'name' | 'description' | null>(null);
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description ?? '');
@@ -199,6 +200,7 @@ function AgentProfile({ agent, device, applyAgentStatus }: { agent: AgentSnapsho
   const [saveError, setSaveError] = useState<string | null>(null);
   const isCustomAgent = agent.category === 'executor-hosted' || agent.source === 'custom';
   const deviceName = agentDeviceDisplayName(agent, device);
+  const canEditProfile = Boolean(currentUser?.id && (agent.ownerId === currentUser.id || (!agent.ownerId && device?.userId === currentUser.id)));
 
   useEffect(() => {
     setName(agent.name);
@@ -207,7 +209,12 @@ function AgentProfile({ agent, device, applyAgentStatus }: { agent: AgentSnapsho
     setSaveError(null);
   }, [agent.id, agent.name, agent.description]);
 
+  useEffect(() => {
+    if (!canEditProfile && editing) setEditing(null);
+  }, [canEditProfile, editing]);
+
   const saveProfile = async () => {
+    if (!canEditProfile) return;
     const normalizedName = name.trim().replace(/\s+/g, '-');
     if (!normalizedName) {
       setSaveError('名称不能为空。');
@@ -256,16 +263,20 @@ function AgentProfile({ agent, device, applyAgentStatus }: { agent: AgentSnapsho
       <Section title="显示名称" icon={<User size={15} />}>
         {editing === 'name' ? (
           <InlineEditor value={name} onChange={setName} onCancel={() => { setName(agent.name); setEditing(null); }} onSave={saveProfile} saving={saving} />
-        ) : (
+        ) : canEditProfile ? (
           <EditableLine value={agent.name} onEdit={() => setEditing('name')} />
+        ) : (
+          <ReadOnlyLine value={agent.name} />
         )}
       </Section>
 
       <Section title="功能介绍" icon={<FileText size={15} />}>
         {editing === 'description' ? (
           <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={4} className="w-full resize-none rounded-md border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-amber-300" />
-        ) : (
+        ) : canEditProfile ? (
           <EditableLine value={agent.description?.trim() || '暂无功能介绍。'} onEdit={() => setEditing('description')} />
+        ) : (
+          <ReadOnlyLine value={agent.description?.trim() || '暂无功能介绍。'} />
         )}
         {editing === 'description' && (
           <div className="mt-3 flex items-center gap-2">
@@ -647,6 +658,10 @@ function EditableLine({ value, onEdit }: { value: string; onEdit: () => void }) 
       </button>
     </div>
   );
+}
+
+function ReadOnlyLine({ value }: { value: string }) {
+  return <div className="min-w-0 whitespace-pre-wrap text-sm text-neutral-800">{value}</div>;
 }
 
 function ActionButton({ icon, label, disabled, danger }: { icon: React.ReactNode; label: string; disabled?: boolean; danger?: boolean }) {

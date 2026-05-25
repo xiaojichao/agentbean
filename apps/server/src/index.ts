@@ -6,7 +6,7 @@ import multer from 'multer';
 import { Server as IOServer } from 'socket.io';
 import { logger } from './log.js';
 import { openDb, initGlobalDb, type Db, type GlobalDb, type InviteRow } from './db.js';
-import { AgentRegistry } from './registry.js';
+import { AgentRegistry, type AgentRuntime } from './registry.js';
 import { DeviceRegistry } from './device-registry.js';
 import { StorageManager } from './storage.js';
 import { attachAgentNamespace, snapshotToDto, type DispatchFn } from './namespaces/agent.js';
@@ -203,6 +203,25 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     return globalDb.users.get(ownerId)?.username ?? null;
   };
 
+  const resolveAgentOwnerId = (agent: { ownerId?: string | null; deviceId?: string | null }) => {
+    if (agent.ownerId) return agent.ownerId;
+    if (!agent.deviceId) return null;
+    return globalDb.devices.get(agent.deviceId)?.userId ?? null;
+  };
+
+  const enrichAgentOwnership = <T extends { ownerId?: string | null; ownerName?: string | null; deviceId?: string | null; deviceName?: string | null }>(agent: T): T => {
+    const ownerId = resolveAgentOwnerId(agent);
+    return {
+      ...agent,
+      ownerId,
+      ownerName: resolveOwnerName(ownerId),
+      deviceName: agent.deviceName ?? resolveDeviceName(agent.deviceId),
+    };
+  };
+
+  const runtimeAgentStatusDto = (rt: AgentRuntime) =>
+    enrichAgentOwnership(snapshotToDto(rt));
+
   const canManageDeviceRow = (
     device: { userId?: string | null } | null | undefined,
     userId?: string | null,
@@ -222,18 +241,14 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       (a.networkId === networkId || a.publishedNetworkIds.includes(networkId))
     ).map((agent) => {
       const dto = snapshotToDto(agent);
-      const ownerName = resolveOwnerName(dto.ownerId);
-      const deviceName = resolveDeviceName(dto.deviceId);
-      if (agent.source !== 'custom') return { ...dto, ownerName, deviceName };
+      if (agent.source !== 'custom') return enrichAgentOwnership(dto);
       const resolved = resolveCustomAgentStatus(agent);
-      return {
+      return enrichAgentOwnership({
         ...dto,
-        ownerName,
-        deviceName,
         status: resolved.status,
         lastSeenAt: resolved.lastSeenAt ?? dto.lastSeenAt,
         lastError: resolved.lastError,
-      };
+      });
     });
     const seen = new Set(registryAgents.map((agent) => agent.id));
     const persistedAgents = globalDb.agents.listVisibleInNetwork(networkId)
@@ -245,7 +260,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           try { parsedArgs = JSON.parse(agent.args); } catch { parsedArgs = [agent.args]; }
         }
         const resolved = resolveCustomAgentStatus(agent);
-        return {
+        return enrichAgentOwnership({
           id: agent.id,
           name: agent.name,
           role: agent.role ?? '',
@@ -259,15 +274,13 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           networkId: agent.networkId,
           visibility: agent.visibility,
           ownerId: agent.ownerId,
-          ownerName: resolveOwnerName(agent.ownerId),
           description: agent.description,
-          deviceName: resolveDeviceName(agent.deviceId),
           status: resolved.status,
           lastSeenAt: resolved.lastSeenAt ?? agent.lastSeenAt,
           lastError: resolved.lastError ?? agent.lastError ?? undefined,
           publishedNetworkIds: globalDb.agentPublishes.listByAgent(agent.id).map((p) => p.networkId),
           connectCommand: renderConnectCommand({ adapterKind: agent.adapterKind as any }),
-        };
+        });
       });
     return [...registryAgents, ...persistedAgents];
   };
@@ -343,7 +356,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     status: 'connecting' | 'online' | 'busy' | 'offline' | 'error',
     lastSeenAt = Date.now(),
     lastError?: string,
-  ) => ({
+  ) => enrichAgentOwnership({
     id: agent.id,
     name: agent.name,
     role: agent.role ?? '',
@@ -357,9 +370,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     networkId: agent.networkId,
     visibility: agent.visibility,
     ownerId: agent.ownerId,
-    ownerName: resolveOwnerName(agent.ownerId),
     description: agent.description,
-    deviceName: resolveDeviceName(agent.deviceId),
     status,
     lastSeenAt,
     lastError,
@@ -396,7 +407,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       const offRt = registry.markOffline(rt.id, reason);
       if (offRt) {
         offlineAgentIds.add(offRt.id);
-        io.of('/web').emit('agent:status', snapshotToDto(offRt));
+        io.of('/web').emit('agent:status', runtimeAgentStatusDto(offRt));
       }
     }
 
@@ -448,6 +459,30 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     }
     globalDb.networkMembers.add(defaultNetworkId, 'admin', 'owner');
   }
+
+  const extractTokenFromConnectCommand = (command?: string | null): string | null => {
+    if (!command) return null;
+    const match = command.match(/(?:^|\s)--token(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s]+))/);
+    return match?.[1] ?? match?.[2] ?? match?.[3] ?? null;
+  };
+
+  for (const device of globalDb.devices.listAll()) {
+    const tokenFromCommand = extractTokenFromConnectCommand(device.connectCommand);
+    const parsed = tokenFromCommand ? parseToken(tokenFromCommand) : null;
+    if (!parsed || !globalDb.users.get(parsed.userId) || device.userId === parsed.userId) continue;
+    globalDb.devices.transferOwner(device.id, parsed.userId);
+    logger.info({ deviceId: device.id, fromUserId: device.userId, toUserId: parsed.userId }, 'device owner repaired from connect command');
+  }
+
+  const repairAgentOwner = globalDb.raw.prepare(`UPDATE agents SET owner_id = ? WHERE id = ? AND owner_id IS NULL`);
+  for (const agent of globalDb.agents.listAll()) {
+    if (agent.ownerId || !agent.deviceId) continue;
+    const device = globalDb.devices.get(agent.deviceId);
+    if (!device?.userId || !globalDb.users.get(device.userId)) continue;
+    repairAgentOwner.run(device.userId, agent.id);
+    logger.info({ agentId: agent.id, deviceId: agent.deviceId, ownerId: device.userId }, 'agent owner repaired from device owner');
+  }
+
   const channels = new ChannelService({
     storageManager,
     registry,
@@ -505,7 +540,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     registry, timeoutMs: 30_000, intervalMs: 5_000,
     onTimeout: (id) => {
       const rt = registry.snapshot(id);
-      if (rt) io.of('/web').emit('agent:status', snapshotToDto(rt));
+      if (rt) io.of('/web').emit('agent:status', runtimeAgentStatusDto(rt));
     },
   });
   const stopDeviceScanner = startDeviceHeartbeatScanner({
@@ -652,6 +687,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     const canManageAgent = (agent: { ownerId?: string | null; deviceId?: string | null } | null | undefined, userId?: string | null) => {
       if (!userId || !agent) return false;
       if (isSystemAdmin(userId)) return true;
+      if (agent.ownerId) return agent.ownerId === userId;
       if (agent.deviceId) {
         const device = globalDb.devices.get(agent.deviceId);
         if (device?.userId === userId) return true;
@@ -793,7 +829,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           .filter((ga) => !(ga.source === 'scanned' && ga.category === 'executor-hosted'))
           .map((ga) => {
           const rt = registry.snapshot(ga.id);
-          return {
+          return enrichAgentOwnership({
             id: ga.id,
             name: ga.name,
             adapterKind: ga.adapterKind,
@@ -806,13 +842,12 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             networkId: ga.networkId,
             visibility: ga.visibility,
             ownerId: ga.ownerId,
-            ownerName: resolveOwnerName(ga.ownerId),
             description: ga.description,
             status: rt?.status ?? 'offline',
             publishedNetworkIds: rt?.publishedNetworkIds ?? globalDb.agentPublishes.listByAgent(ga.id).map((p) => p.networkId),
             lastSeenAt: rt?.lastHeartbeatAt ?? ga.lastSeenAt,
             lastError: rt?.lastError ?? ga.lastError ?? undefined,
-          };
+          });
         });
         const live = deviceRegistry.get(payload.deviceId);
         const dbDevice = globalDb.devices.get(payload.deviceId);
@@ -852,7 +887,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           } else if (agent.args) {
             try { parsedArgs = JSON.parse(agent.args); } catch { parsedArgs = [agent.args]; }
           }
-          return {
+          return enrichAgentOwnership({
             id: agent.id,
             name: agent.name,
             role: agent.role ?? '',
@@ -866,15 +901,13 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             networkId: agent.networkId,
             visibility: agent.visibility,
             ownerId: agent.ownerId,
-            ownerName: resolveOwnerName(agent.ownerId),
             description: agent.description,
-            deviceName: resolveDeviceName(agent.deviceId),
             status: resolved.status,
             lastSeenAt: resolved.lastSeenAt ?? rt?.lastHeartbeatAt ?? agent.lastSeenAt,
             lastError: resolved.lastError ?? rt?.lastError?.message ?? agent.lastError ?? undefined,
             publishedNetworkIds: rt?.publishedNetworkIds ?? globalDb.agentPublishes.listByAgent(agent.id).map((p) => p.networkId),
             connectCommand: renderConnectCommand({ adapterKind: agent.adapterKind as any }),
-          };
+          });
         });
         ack?.({ ok: true, agents });
       } catch (e: any) {
@@ -1624,7 +1657,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         if (changed) {
           const rt = registry.snapshot(payload.id);
           if (rt) {
-            io.of('/web').emit('agent:status', snapshotToDto(rt));
+            io.of('/web').emit('agent:status', runtimeAgentStatusDto(rt));
           } else {
             io.of('/web').emit('agent:status', {
               id: payload.id,
@@ -1681,7 +1714,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           cwd,
           description,
         });
-        if (rt) io.of('/web').emit('agent:status', snapshotToDto(rt));
+        if (rt) io.of('/web').emit('agent:status', runtimeAgentStatusDto(rt));
         ack?.({ ok: true, agent: globalDb.agents.getFull(payload.id) });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
@@ -1721,7 +1754,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const publishes = globalDb.agentPublishes.listByAgent(payload.agentId);
         registry.updatePublishedNetworks(payload.agentId, publishes.map((p: any) => p.networkId));
         const updated = registry.snapshot(payload.agentId);
-        if (updated) io.of('/web').emit('agent:status', snapshotToDto(updated));
+        if (updated) io.of('/web').emit('agent:status', runtimeAgentStatusDto(updated));
         ack?.({ ok: true });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
@@ -1747,7 +1780,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const publishes = globalDb.agentPublishes.listByAgent(payload.agentId);
         registry.updatePublishedNetworks(payload.agentId, publishes.map((p: any) => p.networkId));
         const updated = registry.snapshot(payload.agentId);
-        if (updated) io.of('/web').emit('agent:status', snapshotToDto(updated));
+        if (updated) io.of('/web').emit('agent:status', runtimeAgentStatusDto(updated));
         ack?.({ ok: true });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
@@ -2164,7 +2197,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           .map((agent) => {
             const liveAgent = registry.snapshot(agent.id);
             const resolved = agent.source === 'custom' ? resolveCustomAgentStatus(agent) : null;
-            const ownerName = resolveOwnerName(agent.ownerId) ?? usersById.get(device.userId) ?? '未知用户';
+            const ownerId = resolveAgentOwnerId(agent);
+            const ownerName = resolveOwnerName(ownerId) ?? usersById.get(device.userId) ?? '未知用户';
             return {
               id: agent.id,
               name: agent.name,
@@ -2182,7 +2216,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
               visibility: agent.visibility,
               networkId: agent.networkId,
               networkName: networksById.get(agent.networkId) ?? '未知团队',
-              ownerId: agent.ownerId,
+              ownerId,
               ownerName,
               userName: ownerName,
               deviceId: agent.deviceId ?? undefined,
@@ -2244,7 +2278,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           const live = registry.snapshot(agent.id);
           const resolved = agent.source === 'custom' ? resolveCustomAgentStatus(agent) : null;
           const device = agent.deviceId ? devicesById.get(agent.deviceId) : null;
-          const ownerName = resolveOwnerName(agent.ownerId) ?? device?.userName ?? '未知用户';
+          const ownerId = resolveAgentOwnerId(agent);
+          const ownerName = resolveOwnerName(ownerId) ?? device?.userName ?? '未知用户';
           return {
             id: agent.id,
             name: agent.name,
@@ -2262,7 +2297,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             visibility: agent.visibility,
             networkId: agent.networkId,
             networkName: networksById.get(agent.networkId) ?? '未知团队',
-            ownerId: agent.ownerId,
+            ownerId,
             ownerName,
             userName: ownerName,
             deviceId: agent.deviceId ?? undefined,
@@ -2279,9 +2314,11 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         if (seen.has(rt.id)) continue;
         const dto = snapshotToDto(rt);
         const device = dto.deviceId ? devicesById.get(dto.deviceId) : null;
-        const ownerName = resolveOwnerName(dto.ownerId) ?? device?.userName ?? '未知用户';
+        const ownerId = resolveAgentOwnerId(dto);
+        const ownerName = resolveOwnerName(ownerId) ?? device?.userName ?? '未知用户';
         agents.push({
           ...dto,
+          ownerId,
           ownerName,
           userName: ownerName,
           deviceName: device?.name ?? '未分配设备',

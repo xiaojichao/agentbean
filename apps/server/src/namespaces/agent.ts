@@ -188,18 +188,22 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
     for (const publish of deps.globalDb?.agentPublishes?.listByAgent(rt.id) ?? []) {
       publishedNetworkIds.add(publish.networkId);
     }
+    const deviceId = persisted?.deviceId ?? dto.deviceId;
+    const ownerId = persisted?.ownerId ?? dto.ownerId ?? (deviceId ? deps.globalDb?.devices?.get(deviceId)?.userId ?? null : null);
+    const ownerName = ownerId ? deps.globalDb?.users?.get(ownerId)?.username ?? null : null;
     return {
       ...dto,
       networkId: persisted?.networkId ?? dto.networkId,
       visibility: persisted?.visibility ?? dto.visibility,
       category: persisted?.category ?? dto.category,
       source: persisted?.source ?? dto.source,
-      ownerId: persisted?.ownerId ?? dto.ownerId,
+      ownerId,
+      ownerName,
       command: persisted?.command ?? dto.command,
       args: parseArgs(persisted?.args ?? dto.args),
       cwd: persisted?.cwd ?? dto.cwd,
       description: persisted?.description ?? dto.description,
-      deviceId: persisted?.deviceId ?? dto.deviceId,
+      deviceId,
       publishedNetworkIds: [...publishedNetworkIds],
     };
   };
@@ -313,6 +317,10 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       // Only AgentOS-hosted agents are device-level members. Custom Agents are
       // persisted configs and are dispatched through their selected runtime.
       const now = Date.now();
+      const parsed = parseToken(a.token!);
+      const tokenUserId = parsed?.userId ?? 'system';
+      const existingDevice = deps.globalDb?.devices?.get(a.deviceId);
+      const userId = existingDevice?.userId ?? tokenUserId;
       const deviceAgents = (a.agents ?? []).filter(isAgentOSHosted);
       for (const agentMeta of deviceAgents) {
         const publishes = deps.globalDb?.agentPublishes?.listByAgent(agentMeta.id) ?? [];
@@ -325,6 +333,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           category: (agentMeta.category as AgentCategory) ?? 'executor-hosted',
           networkId: a.networkId,
           visibility: agentMeta.visibility,
+          ownerId: agentMeta.ownerId ?? userId,
           deviceId: a.deviceId,
           publishedNetworkIds,
         });
@@ -335,7 +344,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           visibility: rt.visibility ?? 'public',
           category: rt.category ?? 'executor-hosted',
           firstSeenAt: rt.firstSeenAt, lastSeenAt: now, lastError: null,
-          ownerId: rt.ownerId ?? null,
+          ownerId: rt.ownerId ?? userId,
           command: rt.command ?? null,
           args: rt.args ? JSON.stringify(rt.args) : null,
           cwd: rt.cwd ?? null,
@@ -345,10 +354,6 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       }
 
       // Persist device to global DB
-      const parsed = parseToken(a.token!);
-      const tokenUserId = parsed?.userId ?? 'system';
-      const existingDevice = deps.globalDb?.devices?.get(a.deviceId);
-      const userId = existingDevice?.userId ?? tokenUserId;
       const sysHostname = a.systemInfo?.hostname ? String(a.systemInfo.hostname).replace(/\s+/g, '-') : undefined;
       deps.globalDb?.devices?.upsert({
         id: a.deviceId,
@@ -450,6 +455,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         const now = Date.now();
         const registered: any[] = [];
         const agentPayload = payload.agents.filter(isAgentOSHosted);
+        const ownerId = deps.globalDb?.devices?.get(a.deviceId)?.userId ?? parseToken(a.token!)?.userId ?? null;
         for (const ag of agentPayload) {
           const sanitizedName = normalizeAgentName(ag.name);
 
@@ -468,6 +474,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
               category: (ag.category as AgentCategory) ?? 'executor-hosted',
               source: (ag.source as any) ?? 'scanned',
               firstSeenAt: existingRt.firstSeenAt, lastSeenAt: now,
+              ownerId: ownerId ?? undefined,
               command: ag.command, args: ag.args ? JSON.stringify(ag.args) : undefined,
             });
             deps.db.agents.upsert({
@@ -478,7 +485,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
               category: (ag.category as AgentCategory) ?? 'executor-hosted',
               source: (ag.source as any) ?? 'scanned',
               firstSeenAt: existingRt.firstSeenAt, lastSeenAt: now,
-              lastError: null, ownerId: null,
+              lastError: null, ownerId,
               command: ag.command, args: ag.args ? JSON.stringify(ag.args) : null,
               cwd: null, description: null,
             });
@@ -514,6 +521,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             source: (ag.source as any) ?? 'scanned',
             firstSeenAt: existing ? (existing as any).firstSeenAt ?? now : now,
             lastSeenAt: now,
+            ownerId: ownerId ?? undefined,
             command: ag.command,
             args: ag.args ? JSON.stringify(ag.args) : undefined,
             description: null,
@@ -533,7 +541,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             firstSeenAt: existing ? (existing as any).firstSeenAt ?? now : now,
             lastSeenAt: now,
             lastError: null,
-            ownerId: null,
+            ownerId,
             command: ag.command,
             args: ag.args ? JSON.stringify(ag.args) : null,
             cwd: null,
@@ -550,6 +558,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             category: (ag.category as AgentCategory) ?? 'executor-hosted',
             networkId: a.networkId,
             deviceId: a.deviceId,
+            ownerId,
             publishedNetworkIds: publishes.map((p: { networkId: string }) => p.networkId),
           });
           deps.io.of('/web').emit('agent:status', runtimeStatusDto(rt));

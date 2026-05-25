@@ -157,6 +157,32 @@ describe('openDb', () => {
     }
   });
 
+  it('devices.transferOwner repairs an existing device owner', () => {
+    const globalPath = join(tmpdir(), `agentbean-global-transfer-${Date.now()}-${Math.random()}.db`);
+    const global = initGlobalDb(globalPath);
+    const now = Date.now();
+    try {
+      global.users.create({ id: 'old-owner', username: 'old-owner', createdAt: now });
+      global.users.create({ id: 'new-owner', username: 'new-owner', createdAt: now });
+      global.networks.create({ id: 'team-transfer', ownerId: 'new-owner', name: 'Team Transfer', path: 'team-transfer', visibility: 'public', createdAt: now });
+      global.devices.upsert({
+        id: 'transfer-device',
+        userId: 'old-owner',
+        networkId: 'team-transfer',
+        hostname: 'Transfer Device',
+        lastSeenAt: now,
+        systemInfo: null,
+      });
+
+      global.devices.transferOwner('transfer-device', 'new-owner');
+
+      expect(global.devices.get('transfer-device')).toMatchObject({ userId: 'new-owner' });
+    } finally {
+      global.close();
+      try { unlinkSync(globalPath); } catch {}
+    }
+  });
+
   it('messages.append + listByChannel orders by created_at', () => {
     const c = db.channels.create({ name: 'c', createdAt: 0 });
     db.messages.append({ id: 'm2', channelId: c.id, senderKind: 'human', senderId: null, body: 'two', createdAt: 200, metaJson: null });
