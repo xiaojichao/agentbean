@@ -8,7 +8,7 @@ import { pickAdapter } from './adapters/factory.js';
 import type { AgentConfigEntry, DeviceConfig } from './config.js';
 import { logger } from './log.js';
 import { scanRuntimes, scanAgentOSAgents, scanLocalAgents, getDeviceId } from './scanner.js';
-import { loadAuth, saveAuth } from './auth-store.js';
+import { loadAuth, saveAuth, type AuthData } from './auth-store.js';
 
 async function discoverAgents(deviceId?: string): Promise<AgentConfigEntry[]> {
   const [_runtimes, agentos, local] = await Promise.all([
@@ -154,6 +154,7 @@ Options:
 
   let serverUrl = values['server-url'] ?? process.env.AGENT_BEAN_SERVER_URL;
   let token = values['token'] ?? process.env.AGENT_BEAN_AGENT_TOKEN;
+  let savedAuth: AuthData | null = null;
   let networkId = values['network-id'] ?? 'default';
 
   if (values.invite) {
@@ -166,11 +167,10 @@ Options:
     token = auth.token;
     networkId = auth.networkId ?? networkId;
   } else if (!token) {
-    const saved = loadAuth();
-    if (saved) {
-      serverUrl = serverUrl ?? saved.serverUrl;
-      token = saved.token;
-      networkId = saved.networkId ?? networkId;
+    savedAuth = loadAuth();
+    if (savedAuth) {
+      serverUrl = serverUrl ?? savedAuth.serverUrl;
+      token = savedAuth.token;
     }
   }
 
@@ -179,6 +179,19 @@ Options:
     console.error('Usage: agentbean-daemon --server-url <url> --token <token>');
     process.exit(1);
   }
+
+  const tokenNetworkId = networkIdFromToken(token);
+  if (values['network-id'] && tokenNetworkId && values['network-id'] !== tokenNetworkId) {
+    console.error('Error: --network-id does not match the provided token.');
+    console.error('Use the team ID embedded in the token, or omit --network-id and let the daemon detect it.');
+    process.exit(1);
+  }
+  networkId = resolveCliNetworkId({
+    explicitNetworkId: values['network-id'],
+    token,
+    savedNetworkId: savedAuth?.networkId,
+    fallbackNetworkId: networkId,
+  });
 
   const deviceId = values['device-id'] ?? await getDeviceId();
 
@@ -207,6 +220,26 @@ function normalizeBaseUrl(serverUrl: string): string {
 function normalizeAgentUrl(serverUrl: string): string {
   const base = normalizeBaseUrl(serverUrl);
   return `${base}/agent`;
+}
+
+export function networkIdFromToken(token?: string | null): string | undefined {
+  const parts = String(token ?? '').split(':');
+  if (parts.length !== 3) return undefined;
+  const networkId = parts[1]?.trim();
+  return networkId || undefined;
+}
+
+export function resolveCliNetworkId(input: {
+  explicitNetworkId?: string;
+  token?: string;
+  savedNetworkId?: string;
+  fallbackNetworkId?: string;
+}): string {
+  return input.explicitNetworkId
+    ?? networkIdFromToken(input.token)
+    ?? input.savedNetworkId
+    ?? input.fallbackNetworkId
+    ?? 'default';
 }
 
 export const INVITE_CONNECTION_TIMEOUT_MS = 20_000;
