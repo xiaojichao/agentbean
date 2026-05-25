@@ -31,10 +31,18 @@ function deviceDisplayName(device: { id: string; hostname?: string | null; syste
   return (device.hostname ?? device.systemInfo?.hostname ?? '').trim() || device.id;
 }
 
+function deviceOwnerName(device: { userId?: string | null; ownerName?: string | null; userName?: string | null }): string {
+  return (device.ownerName ?? device.userName ?? device.userId ?? '').trim() || '未知用户';
+}
+
 function compareDevices(a: { id: string; hostname?: string | null; networkId?: string; systemInfo?: { hostname?: string } | null }, b: { id: string; hostname?: string | null; networkId?: string; systemInfo?: { hostname?: string } | null }): number {
   return deviceDisplayName(a).localeCompare(deviceDisplayName(b), 'zh-CN', { sensitivity: 'base', numeric: true }) ||
     (a.networkId ?? '').localeCompare(b.networkId ?? '', 'zh-CN', { sensitivity: 'base', numeric: true }) ||
     a.id.localeCompare(b.id);
+}
+
+function compareDeviceOwnerGroups(a: { ownerName: string }, b: { ownerName: string }): number {
+  return a.ownerName.localeCompare(b.ownerName, 'zh-CN', { sensitivity: 'base', numeric: true });
 }
 
 const DIRECTORY_PICKER_MIN_DAEMON_VERSION = '0.1.27';
@@ -183,6 +191,18 @@ export default function DevicesPage() {
   }, [conn, applyDevicesSnapshot, applyDeviceStatus]);
 
   const deviceList = useMemo(() => Object.values(devices).sort(compareDevices), [devices]);
+  const deviceGroups = useMemo(() => {
+    const groups = new Map<string, typeof deviceList>();
+    for (const device of deviceList) {
+      const ownerName = deviceOwnerName(device);
+      const list = groups.get(ownerName) ?? [];
+      list.push(device);
+      groups.set(ownerName, list);
+    }
+    return Array.from(groups.entries())
+      .map(([ownerName, list]) => ({ ownerName, devices: [...list].sort(compareDevices) }))
+      .sort(compareDeviceOwnerGroups);
+  }, [deviceList]);
 
   useEffect(() => {
     if (routeDeviceId) {
@@ -208,23 +228,31 @@ export default function DevicesPage() {
             </button>
           </div>
         <div className="flex-1 overflow-y-auto p-1.5">
-          {deviceList.map((device) => (
-            <button key={device.id} onClick={() => { setSelectedId(device.id); setEditName(false); setShowDeleteConfirm(false); router.push(`/${np}/devices/${device.id}`); }} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left ${selectedId === device.id ? 'bg-white shadow-sm ring-1 ring-neutral-200' : 'hover:bg-white/60'}`}>
-              <div className="relative shrink-0">
-                <Monitor size={16} className="text-neutral-500" />
-                <Circle size={6} className={`absolute -right-0.5 -top-0.5 fill-current ${STATUS_COLORS[device.status] ?? 'text-neutral-300'}`} />
+          {deviceGroups.map((group) => (
+            <div key={group.ownerName} className="mb-3 last:mb-0">
+              <div className="mb-1.5 flex items-center justify-between px-2 text-[11px] font-semibold text-neutral-400">
+                <span className="truncate">{group.ownerName}</span>
+                <span>{group.devices.length}</span>
               </div>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium leading-tight">{device.hostname ?? '未命名设备'}</div>
-                <div className="flex items-center gap-1 text-[11px] text-neutral-400">
-                  <span>daemon</span>
-                  <span className={device.status === 'online' ? 'text-neutral-600' : ''}>{formatDaemonVersion(device)}</span>
-                  {device.daemonUpdateAvailable && (
-                    <span className="rounded bg-amber-50 px-1 text-[10px] font-medium text-amber-700">可升级</span>
-                  )}
-                </div>
-              </div>
-            </button>
+              {group.devices.map((device) => (
+                <button key={device.id} onClick={() => { setSelectedId(device.id); setEditName(false); setShowDeleteConfirm(false); router.push(`/${np}/devices/${device.id}`); }} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left ${selectedId === device.id ? 'bg-white shadow-sm ring-1 ring-neutral-200' : 'hover:bg-white/60'}`}>
+                  <div className="relative shrink-0">
+                    <Monitor size={16} className="text-neutral-500" />
+                    <Circle size={6} className={`absolute -right-0.5 -top-0.5 fill-current ${STATUS_COLORS[device.status] ?? 'text-neutral-300'}`} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium leading-tight">{device.hostname ?? '未命名设备'}</div>
+                    <div className="flex items-center gap-1 text-[11px] text-neutral-400">
+                      <span>daemon</span>
+                      <span className={device.status === 'online' ? 'text-neutral-600' : ''}>{formatDaemonVersion(device)}</span>
+                      {device.daemonUpdateAvailable && (
+                        <span className="rounded bg-amber-50 px-1 text-[10px] font-medium text-amber-700">可升级</span>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
           ))}
           {deviceList.length === 0 && (
             <div className="px-3 py-8 text-center text-xs text-neutral-400">暂无设备</div>
