@@ -23,6 +23,7 @@ export default function NetworkLayout({ children }: { children: React.ReactNode 
     networkEvents().switch(resolved.id).then(() => {
       getWebSocket().emit('agents:subscribe', {});
       getWebSocket().emit('channels:subscribe', {});
+      getWebSocket().emit('devices:subscribe', {});
     });
   }, [resolved?.id, conn]);
 

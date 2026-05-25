@@ -53,7 +53,9 @@ export function Sidebar() {
         const subPath = segments.length > 2 ? segments.slice(2).join('/') : 'chat';
         router.push(`/${target.path}/${subPath}`);
       }
+      getWebSocket().emit('agents:subscribe', {});
       getWebSocket().emit('channels:subscribe', {});
+      getWebSocket().emit('devices:subscribe', {});
     }
   };
 
@@ -148,7 +150,9 @@ export function Sidebar() {
             const segments = pathname.split('/');
             const subPath = segments.length > 2 ? segments.slice(2).join('/') : 'chat';
             router.push(`/${networkPath}/${subPath}`);
+            getWebSocket().emit('agents:subscribe', {});
             getWebSocket().emit('channels:subscribe', {});
+            getWebSocket().emit('devices:subscribe', {});
           }}
         />
       )}
