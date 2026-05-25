@@ -259,6 +259,28 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
     const a = auth;
     logger.info({ deviceId: a.deviceId, sid: socket.id }, '/agent connected');
 
+    const emitCurrentDeviceStatus = () => {
+      const dev = deps.deviceRegistry.get(a.deviceId);
+      if (!dev) return;
+      const persisted = deps.globalDb?.devices?.get(a.deviceId);
+      const daemonVersionInfo = buildDaemonVersionInfo(a.systemInfo ?? null);
+      deps.io.of('/web').emit('device:status', {
+        id: dev.id,
+        userId: dev.userId,
+        networkId: dev.networkId,
+        agentIds: Array.from(dev.agents.keys()),
+        runtimes: dev.runtimes ?? persisted?.runtimes ?? [],
+        lastSeenAt: dev.lastSeenAt,
+        status: dev.status,
+        hostname: persisted?.hostname,
+        connectCommand: persisted?.connectCommand,
+        systemInfo: a.systemInfo ?? null,
+        daemonVersionInfo,
+        latestDaemonVersion: daemonVersionInfo.latest,
+        daemonUpdateAvailable: daemonVersionInfo.updateAvailable,
+      });
+    };
+
     socket.on('register', () => {
       // Only AgentOS-hosted agents are device-level members. Custom Agents are
       // persisted configs and are dispatched through their selected runtime.
@@ -338,6 +360,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         lastSeenAt: now,
         status: 'online',
       });
+      emitCurrentDeviceStatus();
     });
 
     socket.on('heartbeat', () => {
@@ -551,23 +574,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           dev.runtimes = normalizedRuntimes;
           dev.lastSeenAt = Date.now();
           dev.status = 'online';
-          const persisted = deps.globalDb?.devices?.get(a.deviceId);
-          const daemonVersionInfo = buildDaemonVersionInfo(a.systemInfo ?? null);
-          deps.io.of('/web').emit('device:status', {
-            id: dev.id,
-            userId: dev.userId,
-            networkId: dev.networkId,
-            agentIds: Array.from(dev.agents.keys()),
-            runtimes: dev.runtimes,
-            lastSeenAt: dev.lastSeenAt,
-            status: dev.status,
-            hostname: persisted?.hostname,
-            connectCommand: persisted?.connectCommand,
-            systemInfo: a.systemInfo ?? null,
-            daemonVersionInfo,
-            latestDaemonVersion: daemonVersionInfo.latest,
-            daemonUpdateAvailable: daemonVersionInfo.updateAvailable,
-          });
+          emitCurrentDeviceStatus();
         }
         ack?.({ ok: true });
       } catch (e: any) {

@@ -185,6 +185,164 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('lists all team devices instead of only devices owned by the current user', async () => {
+    app.globalDb.users.create({
+      id: 'team-device-owner',
+      username: 'team-device-owner',
+      passwordHash: null,
+      createdAt: Date.now(),
+    });
+    app.globalDb.networkMembers.add('default', 'team-device-owner', 'member');
+    app.globalDb.devices.upsert({
+      id: 'owned-by-team-member',
+      userId: 'team-device-owner',
+      networkId: 'default',
+      hostname: 'Member Laptop',
+      lastSeenAt: Date.now(),
+      systemInfo: null,
+    });
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    const snap = await new Promise<any[]>((resolve) => {
+      web.once('devices:snapshot', resolve);
+      web.emit('devices:subscribe', {});
+    });
+    const listed = await new Promise<any>((resolve) => {
+      web.emit('devices:list', {}, resolve);
+    });
+
+    expect(snap.find((device: any) => device.id === 'owned-by-team-member')).toMatchObject({
+      hostname: 'Member Laptop',
+      networkId: 'default',
+      userId: 'team-device-owner',
+    });
+    expect(listed.ok).toBe(true);
+    expect(listed.devices.find((device: any) => device.id === 'owned-by-team-member')).toMatchObject({
+      hostname: 'Member Laptop',
+      networkId: 'default',
+      userId: 'team-device-owner',
+    });
+    web.close();
+  });
+
+  it('pushes device status as soon as a daemon registers', async () => {
+    app.globalDb.users.create({
+      id: 'daemon-device-owner',
+      username: 'daemon-device-owner',
+      passwordHash: null,
+      createdAt: Date.now(),
+    });
+    app.globalDb.networkMembers.add('default', 'daemon-device-owner', 'member');
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    const gotStatus = new Promise<any>((resolve) => web.once('device:status', resolve));
+
+    const ag = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: generateToken('daemon-device-owner', 'default'),
+        deviceId: 'fresh-live-device',
+        networkId: 'default',
+        agents: [],
+        systemInfo: { hostname: 'Fresh Live Device', daemonVersion: '0.1.27' },
+      },
+      reconnection: false,
+      transports: ['websocket'],
+    });
+    await new Promise<void>((r) => ag.on('connect', () => r()));
+    ag.emit('register');
+
+    const status = await gotStatus;
+    expect(status).toMatchObject({
+      id: 'fresh-live-device',
+      userId: 'daemon-device-owner',
+      networkId: 'default',
+      hostname: 'Fresh-Live-Device',
+      status: 'online',
+    });
+
+    const snap = await new Promise<any[]>((resolve) => {
+      web.once('devices:snapshot', resolve);
+      web.emit('devices:subscribe', {});
+    });
+    expect(snap.find((device: any) => device.id === 'fresh-live-device')).toMatchObject({
+      userId: 'daemon-device-owner',
+      networkId: 'default',
+      status: 'online',
+    });
+    ag.close();
+    web.close();
+  });
+
+  it('binds newly created custom agents to the selected team device immediately', async () => {
+    app.globalDb.users.create({
+      id: 'remote-device-owner',
+      username: 'remote-owner',
+      passwordHash: null,
+      createdAt: Date.now(),
+    });
+    app.globalDb.networkMembers.add('default', 'remote-device-owner', 'member');
+    app.globalDb.devices.upsert({
+      id: 'remote-device-1',
+      userId: 'remote-device-owner',
+      networkId: 'default',
+      hostname: 'Remote Studio',
+      lastSeenAt: Date.now(),
+      systemInfo: { hostname: 'remote-studio.local' },
+    });
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const createRes = await new Promise<any>((resolve) => {
+      web.emit('agent:create', {
+        name: 'Device Bound Agent',
+        adapterKind: 'codex',
+        command: 'codex',
+        category: 'executor-hosted',
+        deviceId: 'remote-device-1',
+        cwd: '/Users/remote/project',
+      }, resolve);
+    });
+    expect(createRes.ok).toBe(true);
+    expect(createRes.agent).toMatchObject({
+      name: 'Device-Bound-Agent',
+      deviceId: 'remote-device-1',
+      source: 'custom',
+    });
+
+    const customList = await new Promise<any>((resolve) => {
+      web.emit('agent:custom:list', { deviceId: 'remote-device-1' }, resolve);
+    });
+    expect(customList.ok).toBe(true);
+    expect(customList.agents.find((agent: any) => agent.id === createRes.agent.id)).toMatchObject({
+      deviceId: 'remote-device-1',
+      deviceName: 'Remote Studio',
+    });
+
+    const snap = await new Promise<any[]>((resolve) => {
+      web.on('agents:snapshot', resolve);
+      web.emit('agents:subscribe', {});
+    });
+    expect(snap.find((agent: any) => agent.id === createRes.agent.id)).toMatchObject({
+      deviceId: 'remote-device-1',
+      deviceName: 'Remote Studio',
+    });
+    web.close();
+  });
+
   it('returns every team member for the default all channel', async () => {
     app.globalDb.users.create({
       id: 'u-all',

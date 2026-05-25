@@ -322,6 +322,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     };
   };
 
+  const devicesForNetwork = (networkId: string) =>
+    visibleDeviceRows(globalDb.devices.listByNetwork(networkId)).map(toDeviceDto);
+
   // Ensure system user exists for foreign key constraints
   try {
     globalDb.raw.prepare(`INSERT OR IGNORE INTO users (id, username, email, created_at, updated_at) VALUES (?, ?, null, ?, ?)`)
@@ -504,6 +507,13 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
   const socketNetworkMap = new Map<string, string>();
 
+  function emitDevicesSnapshotForNetwork(networkId: string): void {
+    for (const s of io.of('/web').sockets.values()) {
+      if ((socketNetworkMap.get(s.id) ?? defaultNetworkId) !== networkId) continue;
+      s.emit('devices:snapshot', devicesForNetwork(networkId));
+    }
+  }
+
   function emitChannelsSnapshotForNetwork(networkId: string): void {
     for (const s of io.of('/web').sockets.values()) {
       if ((socketNetworkMap.get(s.id) ?? defaultNetworkId) !== networkId) continue;
@@ -611,12 +621,16 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
     socket.on('devices:subscribe', () => {
       const nid = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
-      const userId = socket.data.userId as string | undefined;
-      // Load persisted devices from DB
-      const dbDevices = visibleDeviceRows(userId ? globalDb.devices.listByUser(userId) : globalDb.devices.listByNetwork(nid));
-      // Merge with live registry status
-      const devices = dbDevices.map(toDeviceDto);
-      socket.emit('devices:snapshot', devices);
+      socket.emit('devices:snapshot', devicesForNetwork(nid));
+    });
+
+    socket.on('devices:list', (_payload: {}, ack?: (r: any) => void) => {
+      try {
+        const nid = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        ack?.({ ok: true, devices: devicesForNetwork(nid) });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
     });
 
     socket.on('members:list', (_payload: {}, ack?: (r: any) => void) => {
@@ -718,6 +732,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             ownerId: agent.ownerId,
             ownerName: resolveOwnerName(agent.ownerId),
             description: agent.description,
+            deviceName: resolveDeviceName(agent.deviceId),
             status: resolved.status,
             lastSeenAt: resolved.lastSeenAt ?? rt?.lastHeartbeatAt ?? agent.lastSeenAt,
             lastError: resolved.lastError ?? rt?.lastError?.message ?? agent.lastError ?? undefined,
@@ -764,14 +779,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
     socket.on('device:delete', (payload: { id: string }, ack?: (r: any) => void) => {
       try {
+        const dbDevice = globalDb.devices.get(payload.id);
         globalDb.devices.delete(payload.id);
         ack?.({ ok: true });
-        // Refresh device list for this user
-        const nid = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
-        const userId = socket.data.userId as string | undefined;
-        const dbDevices = visibleDeviceRows(userId ? globalDb.devices.listByUser(userId) : globalDb.devices.listByNetwork(nid));
-        const devices = dbDevices.map(toDeviceDto);
-        socket.emit('devices:snapshot', devices);
+        emitDevicesSnapshotForNetwork(dbDevice?.networkId ?? socketNetworkMap.get(socket.id) ?? defaultNetworkId);
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }
@@ -780,14 +791,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     socket.on('device:rename', (payload: { id: string; hostname: string }, ack?: (r: any) => void) => {
       try {
         const hostname = payload.hostname.trim().replace(/\s+/g, '-');
+        const dbDevice = globalDb.devices.get(payload.id);
         globalDb.devices.rename(payload.id, hostname);
         ack?.({ ok: true });
-        // Refresh device list for all web clients
-        const nid = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
-        const userId = socket.data.userId as string | undefined;
-        const dbDevices = visibleDeviceRows(userId ? globalDb.devices.listByUser(userId) : globalDb.devices.listByNetwork(nid));
-        const devices = dbDevices.map(toDeviceDto);
-        io.of('/web').emit('devices:snapshot', devices);
+        emitDevicesSnapshotForNetwork(dbDevice?.networkId ?? socketNetworkMap.get(socket.id) ?? defaultNetworkId);
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }
@@ -1355,11 +1362,13 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const now = Date.now();
         const category = (payload.category as import('./db.js').AgentCategory) ?? 'executor-hosted';
         const requestedDevice = payload.deviceId ? globalDb.devices.get(payload.deviceId) as any : null;
-        const useRequestedDevice = Boolean(requestedDevice && (!userId || requestedDevice.userId === userId));
-        const deviceId = useRequestedDevice
-          ? payload.deviceId!
-          : `virtual-${userId ?? 'system'}`;
-        if (!useRequestedDevice) {
+        if (payload.deviceId && !requestedDevice) return ack?.({ ok: false, error: 'DEVICE_NOT_FOUND' });
+        if (requestedDevice && requestedDevice.networkId !== targetNetworkId) return ack?.({ ok: false, error: 'DEVICE_NOT_IN_TEAM' });
+        if (requestedDevice && userId && requestedDevice.userId !== userId && !globalDb.networkMembers.isMember(targetNetworkId, userId)) {
+          return ack?.({ ok: false, error: 'FORBIDDEN_DEVICE' });
+        }
+        const deviceId = requestedDevice ? payload.deviceId! : `virtual-${userId ?? 'system'}`;
+        if (!requestedDevice) {
           globalDb.devices?.upsert({
             id: deviceId,
             userId: userId ?? 'system',
@@ -1415,6 +1424,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           args: payload.args ?? null,
           cwd: payload.cwd ?? null,
           description: payload.description ?? null,
+          deviceId,
           publishedNetworkIds: [],
           source: 'custom',
         });
