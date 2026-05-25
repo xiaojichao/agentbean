@@ -379,6 +379,89 @@ describe('/web namespace', () => {
     owner.close();
   });
 
+  it('allows agent config changes only from the owning device user or an admin', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({
+      id: 'agent-config-device-owner',
+      username: 'agent-config-device-owner',
+      passwordHash: null,
+      createdAt: now,
+    });
+    app.globalDb.users.create({
+      id: 'agent-config-creator',
+      username: 'agent-config-creator',
+      passwordHash: null,
+      createdAt: now,
+    });
+    app.globalDb.networkMembers.add('default', 'agent-config-device-owner', 'member');
+    app.globalDb.networkMembers.add('default', 'agent-config-creator', 'member');
+    app.globalDb.devices.upsert({
+      id: 'agent-config-device',
+      userId: 'agent-config-device-owner',
+      networkId: 'default',
+      hostname: 'Config Device',
+      lastSeenAt: now,
+      systemInfo: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'agent-config-on-other-device',
+      name: 'Creator-Agent',
+      role: 'assistant',
+      adapterKind: 'codex',
+      deviceId: 'agent-config-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      ownerId: 'agent-config-creator',
+      command: 'codex',
+      cwd: '/Users/device/project',
+      description: 'Owned by creator, hosted on another device',
+    });
+
+    const creator = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('agent-config-creator', 'default') },
+    });
+    await new Promise<void>((r) => creator.on('connect', () => r()));
+    const denied = await new Promise<any>((resolve) => {
+      creator.emit('agent:config:update', {
+        id: 'agent-config-on-other-device',
+        name: 'Creator-Agent-Changed',
+        adapterKind: 'codex',
+        command: 'codex',
+        cwd: '/Users/device/project',
+        description: 'Attempted by creator',
+      }, resolve);
+    });
+    expect(denied).toEqual({ ok: false, error: 'FORBIDDEN' });
+    expect(app.globalDb.agents.getFull('agent-config-on-other-device')?.name).toBe('Creator-Agent');
+    creator.close();
+
+    const deviceOwner = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('agent-config-device-owner', 'default') },
+    });
+    await new Promise<void>((r) => deviceOwner.on('connect', () => r()));
+    const allowed = await new Promise<any>((resolve) => {
+      deviceOwner.emit('agent:config:update', {
+        id: 'agent-config-on-other-device',
+        name: 'Device-Agent',
+        adapterKind: 'codex',
+        command: 'codex',
+        cwd: '/Users/device/project',
+        description: 'Changed by device owner',
+      }, resolve);
+    });
+    expect(allowed.ok).toBe(true);
+    expect(app.globalDb.agents.getFull('agent-config-on-other-device')?.name).toBe('Device-Agent');
+    deviceOwner.close();
+  });
+
   it('pushes device status as soon as a daemon registers', async () => {
     app.globalDb.users.create({
       id: 'daemon-device-owner',

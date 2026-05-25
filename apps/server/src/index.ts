@@ -568,7 +568,6 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     const canManageAgent = (agent: { ownerId?: string | null; deviceId?: string | null } | null | undefined, userId?: string | null) => {
       if (!userId || !agent) return false;
       if (isSystemAdmin(userId)) return true;
-      if (agent.ownerId && agent.ownerId === userId) return true;
       if (agent.deviceId) {
         const device = globalDb.devices.get(agent.deviceId);
         if (device?.userId === userId) return true;
