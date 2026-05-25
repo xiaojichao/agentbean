@@ -322,8 +322,18 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     };
   };
 
-  const devicesForNetwork = (networkId: string) =>
-    visibleDeviceRows(globalDb.devices.listByNetwork(networkId)).map(toDeviceDto);
+  const devicesForNetwork = (networkId: string) => {
+    const rowsById = new Map<string, ReturnType<GlobalDb['devices']['listByUser']>[number]>();
+    for (const device of globalDb.devices.listByNetwork(networkId)) {
+      rowsById.set(device.id, device);
+    }
+    for (const agent of buildVisibleAgentDtos(networkId)) {
+      if (!agent.deviceId) continue;
+      const device = globalDb.devices.get(agent.deviceId);
+      if (device) rowsById.set(device.id, device);
+    }
+    return visibleDeviceRows([...rowsById.values()]).map(toDeviceDto);
+  };
 
   // Ensure system user exists for foreign key constraints
   try {
@@ -546,6 +556,23 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     logger.info({ sid: socket.id }, '/web client connected');
     socketNetworkMap.set(socket.id, socket.data.networkId ?? defaultNetworkId);
 
+    const isSystemAdmin = (userId?: string | null) =>
+      Boolean(userId && globalDb.users.get(userId)?.role === 'admin');
+
+    const canManageDevice = (device: { userId?: string | null } | null | undefined, userId?: string | null) =>
+      Boolean(userId && device && (device.userId === userId || isSystemAdmin(userId)));
+
+    const canManageAgent = (agent: { ownerId?: string | null; deviceId?: string | null } | null | undefined, userId?: string | null) => {
+      if (!userId || !agent) return false;
+      if (isSystemAdmin(userId)) return true;
+      if (agent.ownerId && agent.ownerId === userId) return true;
+      if (agent.deviceId) {
+        const device = globalDb.devices.get(agent.deviceId);
+        if (device?.userId === userId) return true;
+      }
+      return false;
+    };
+
     socket.on('disconnect', () => {
       socketNetworkMap.delete(socket.id);
       for (const [sessionId, sessionSocket] of inviteSessions.entries()) {
@@ -576,8 +603,12 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
     socket.on('device:scan', (payload: { deviceId: string }, ack?: (r: any) => void) => {
       try {
+        const userId = socket.data.userId as string | undefined;
+        if (!userId) return ack?.({ ok: false, error: 'NOT_AUTHENTICATED' });
         const device = deviceRegistry.get(payload.deviceId);
         if (!device || device.status === 'offline') return ack?.({ ok: false, error: 'DEVICE_OFFLINE' });
+        const persistedDevice = globalDb.devices.get(payload.deviceId);
+        if (!canManageDevice(persistedDevice, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
         const agentSocket = io.of('/agent').sockets.get(device.socket.id);
         if (!agentSocket) return ack?.({ ok: false, error: 'SOCKET_NOT_FOUND' });
         agentSocket.emit('agents:discover');
@@ -589,10 +620,14 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
     socket.on('device:select-directory', (payload: { deviceId: string }, ack?: (r: any) => void) => {
       try {
+        const userId = socket.data.userId as string | undefined;
+        if (!userId) return ack?.({ ok: false, error: 'NOT_AUTHENTICATED' });
         const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
         const device = deviceRegistry.get(payload.deviceId);
         if (!device || device.status === 'offline') return ack?.({ ok: false, error: 'DEVICE_OFFLINE' });
         if (device.networkId !== networkId) return ack?.({ ok: false, error: 'DEVICE_NOT_IN_TEAM' });
+        const persistedDevice = globalDb.devices.get(payload.deviceId);
+        if (!canManageDevice(persistedDevice, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
         if (!device.capabilities?.directoryPicker) return ack?.({ ok: false, error: 'DAEMON_UPGRADE_REQUIRED' });
         const agentSocket = io.of('/agent').sockets.get(device.socket.id);
         if (!agentSocket) return ack?.({ ok: false, error: 'SOCKET_NOT_FOUND' });
@@ -779,10 +814,14 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
     socket.on('device:delete', (payload: { id: string }, ack?: (r: any) => void) => {
       try {
+        const userId = socket.data.userId as string | undefined;
+        if (!userId) return ack?.({ ok: false, error: 'NOT_AUTHENTICATED' });
         const dbDevice = globalDb.devices.get(payload.id);
+        if (!dbDevice) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        if (!canManageDevice(dbDevice, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
         globalDb.devices.delete(payload.id);
         ack?.({ ok: true });
-        emitDevicesSnapshotForNetwork(dbDevice?.networkId ?? socketNetworkMap.get(socket.id) ?? defaultNetworkId);
+        emitDevicesSnapshotForNetwork(dbDevice.networkId);
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }
@@ -790,11 +829,15 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
     socket.on('device:rename', (payload: { id: string; hostname: string }, ack?: (r: any) => void) => {
       try {
+        const userId = socket.data.userId as string | undefined;
+        if (!userId) return ack?.({ ok: false, error: 'NOT_AUTHENTICATED' });
         const hostname = payload.hostname.trim().replace(/\s+/g, '-');
         const dbDevice = globalDb.devices.get(payload.id);
+        if (!dbDevice) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        if (!canManageDevice(dbDevice, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
         globalDb.devices.rename(payload.id, hostname);
         ack?.({ ok: true });
-        emitDevicesSnapshotForNetwork(dbDevice?.networkId ?? socketNetworkMap.get(socket.id) ?? defaultNetworkId);
+        emitDevicesSnapshotForNetwork(dbDevice.networkId);
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }
@@ -1364,7 +1407,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const requestedDevice = payload.deviceId ? globalDb.devices.get(payload.deviceId) as any : null;
         if (payload.deviceId && !requestedDevice) return ack?.({ ok: false, error: 'DEVICE_NOT_FOUND' });
         if (requestedDevice && requestedDevice.networkId !== targetNetworkId) return ack?.({ ok: false, error: 'DEVICE_NOT_IN_TEAM' });
-        if (requestedDevice && userId && requestedDevice.userId !== userId && !globalDb.networkMembers.isMember(targetNetworkId, userId)) {
+        if (requestedDevice && !canManageDevice(requestedDevice, userId)) {
           return ack?.({ ok: false, error: 'FORBIDDEN_DEVICE' });
         }
         const deviceId = requestedDevice ? payload.deviceId! : `virtual-${userId ?? 'system'}`;
@@ -1507,7 +1550,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const isCustom = existing.source === 'custom';
         const isAgentOS = existing.category === 'agentos-hosted';
         if (!isCustom && !isAgentOS) return ack?.({ ok: false, error: 'NOT_CONFIGURABLE_AGENT' });
-        if (existing.ownerId && existing.ownerId !== userId) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        if (!canManageAgent({ ownerId: existing.ownerId, deviceId: existing.deviceId }, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
         const name = payload.name.trim();
         if (!name) return ack?.({ ok: false, error: 'EMPTY_NAME' });
         if (/\s/.test(name)) return ack?.({ ok: false, error: 'NAME_HAS_SPACE' });
@@ -1548,7 +1591,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const persisted = rt ? null : globalDb.agents.getFull(payload.agentId);
         if (!rt && !persisted) return ack?.({ ok: false, error: 'NOT_FOUND' });
         const ownerId = rt?.ownerId ?? persisted?.ownerId;
-        if (ownerId && ownerId !== userId) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        const deviceId = rt?.deviceId ?? persisted?.deviceId;
+        if (!canManageAgent({ ownerId, deviceId }, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
         const category = rt?.category ?? persisted?.category;
         const source = rt?.source ?? persisted?.source;
         if (!isTeamAgent({ category, source })) {
@@ -1587,7 +1631,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const persisted = rt ? null : globalDb.agents.getFull(payload.agentId);
         if (!rt && !persisted) return ack?.({ ok: false, error: 'NOT_FOUND' });
         const ownerId = rt?.ownerId ?? persisted?.ownerId;
-        if (ownerId && ownerId !== userId) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        const deviceId = rt?.deviceId ?? persisted?.deviceId;
+        if (!canManageAgent({ ownerId, deviceId }, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
         const category = rt?.category ?? persisted?.category;
         const source = rt?.source ?? persisted?.source;
         if (!isTeamAgent({ category, source })) {

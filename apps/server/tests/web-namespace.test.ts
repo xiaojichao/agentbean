@@ -230,6 +230,149 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('allows only system admins or the owner to delete a device', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({
+      id: 'device-delete-owner',
+      username: 'device-delete-owner',
+      passwordHash: null,
+      createdAt: now,
+    });
+    app.globalDb.users.create({
+      id: 'device-delete-member',
+      username: 'device-delete-member',
+      passwordHash: null,
+      createdAt: now,
+    });
+    app.globalDb.networkMembers.add('default', 'device-delete-owner', 'member');
+    app.globalDb.networkMembers.add('default', 'device-delete-member', 'member');
+    app.globalDb.devices.upsert({
+      id: 'delete-owned-device',
+      userId: 'device-delete-owner',
+      networkId: 'default',
+      hostname: 'Owner Device',
+      lastSeenAt: now,
+      systemInfo: null,
+    });
+
+    const member = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('device-delete-member', 'default') },
+    });
+    await new Promise<void>((r) => member.on('connect', () => r()));
+    const denied = await new Promise<any>((resolve) => {
+      member.emit('device:delete', { id: 'delete-owned-device' }, resolve);
+    });
+    expect(denied).toEqual({ ok: false, error: 'FORBIDDEN' });
+    expect(app.globalDb.devices.get('delete-owned-device')).toMatchObject({ userId: 'device-delete-owner' });
+    member.close();
+
+    const owner = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('device-delete-owner', 'default') },
+    });
+    await new Promise<void>((r) => owner.on('connect', () => r()));
+    const ownerDeleted = await new Promise<any>((resolve) => {
+      owner.emit('device:delete', { id: 'delete-owned-device' }, resolve);
+    });
+    expect(ownerDeleted).toEqual({ ok: true });
+    expect(app.globalDb.devices.get('delete-owned-device')).toBeNull();
+    owner.close();
+
+    app.globalDb.devices.upsert({
+      id: 'delete-admin-device',
+      userId: 'device-delete-owner',
+      networkId: 'default',
+      hostname: 'Admin Managed Device',
+      lastSeenAt: now,
+      systemInfo: null,
+    });
+    const admin = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => admin.on('connect', () => r()));
+    const adminDeleted = await new Promise<any>((resolve) => {
+      admin.emit('device:delete', { id: 'delete-admin-device' }, resolve);
+    });
+    expect(adminDeleted).toEqual({ ok: true });
+    expect(app.globalDb.devices.get('delete-admin-device')).toBeNull();
+    admin.close();
+  });
+
+  it('prevents team members from removing agents that belong to another member device', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({
+      id: 'agent-device-owner',
+      username: 'agent-device-owner',
+      passwordHash: null,
+      createdAt: now,
+    });
+    app.globalDb.users.create({
+      id: 'agent-device-member',
+      username: 'agent-device-member',
+      passwordHash: null,
+      createdAt: now,
+    });
+    app.globalDb.networkMembers.add('default', 'agent-device-owner', 'member');
+    app.globalDb.networkMembers.add('default', 'agent-device-member', 'member');
+    app.globalDb.devices.upsert({
+      id: 'agent-owned-device',
+      userId: 'agent-device-owner',
+      networkId: 'default',
+      hostname: 'Agent Owner Device',
+      lastSeenAt: now,
+      systemInfo: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'agent-owned-by-device',
+      name: 'Owner Agent',
+      role: 'assistant',
+      adapterKind: 'hermes',
+      deviceId: 'agent-owned-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      ownerId: null,
+      command: 'hermes',
+      cwd: null,
+      description: null,
+    });
+    app.globalDb.agentPublishes.publish('agent-owned-by-device', 'default', 'agent-device-owner');
+
+    const member = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('agent-device-member', 'default') },
+    });
+    await new Promise<void>((r) => member.on('connect', () => r()));
+    const denied = await new Promise<any>((resolve) => {
+      member.emit('agent:unpublish', { agentId: 'agent-owned-by-device', networkId: 'default' }, resolve);
+    });
+    expect(denied).toEqual({ ok: false, error: 'FORBIDDEN' });
+    expect(app.globalDb.agentPublishes.isPublished('agent-owned-by-device', 'default')).toBe(true);
+    member.close();
+
+    const owner = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('agent-device-owner', 'default') },
+    });
+    await new Promise<void>((r) => owner.on('connect', () => r()));
+    const allowed = await new Promise<any>((resolve) => {
+      owner.emit('agent:unpublish', { agentId: 'agent-owned-by-device', networkId: 'default' }, resolve);
+    });
+    expect(allowed).toEqual({ ok: true });
+    expect(app.globalDb.agentPublishes.isPublished('agent-owned-by-device', 'default')).toBe(false);
+    owner.close();
+  });
+
   it('pushes device status as soon as a daemon registers', async () => {
     app.globalDb.users.create({
       id: 'daemon-device-owner',
@@ -515,6 +658,26 @@ describe('/web namespace', () => {
     expect(membersWhileBusy.agents.find((agent: any) => agent.id === 'scan-published-hermes-device-hermes-agent')).toMatchObject({
       name: 'Hermes-Agent',
       status: 'busy',
+    });
+
+    const listedDevices = await new Promise<any>((resolve) => {
+      web.emit('devices:list', {}, resolve);
+    });
+    expect(listedDevices.ok).toBe(true);
+    expect(listedDevices.devices.find((device: any) => device.id === 'published-hermes-device')).toMatchObject({
+      hostname: 'MyMBP',
+      networkId: 'default',
+      status: 'online',
+    });
+
+    const deviceSnapshot = await new Promise<any[]>((resolve) => {
+      web.once('devices:snapshot', resolve);
+      web.emit('devices:subscribe', {});
+    });
+    expect(deviceSnapshot.find((device: any) => device.id === 'published-hermes-device')).toMatchObject({
+      hostname: 'MyMBP',
+      networkId: 'default',
+      status: 'online',
     });
 
     ag.emit('reply', {

@@ -7,6 +7,7 @@ import { memberEvents, deviceEvents, agentEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { AgentDetail, AgentTopBar, HumanDetail, type AgentMemberTab, type HumanMember } from '@/components/member-detail';
 import type { AgentSnapshot } from '@/lib/schema';
+import { agentDeviceDisplayName } from '@/lib/agent-device';
 
 const TABS: { id: AgentMemberTab; label: string }[] = [
   { id: 'profile', label: '资料' },
@@ -98,9 +99,7 @@ export default function MembersPage() {
       const bDevice = (b.deviceName ?? (b.deviceId ? devices[b.deviceId]?.hostname : '') ?? '').toLowerCase();
       return aDevice.localeCompare(bDevice) || a.name.localeCompare(b.name);
     })) {
-      const label = agent.deviceName?.trim()
-        || (agent.deviceId ? devices[agent.deviceId]?.hostname : undefined)
-        || '未关联设备';
+      const label = agentDeviceDisplayName(agent, agent.deviceId ? devices[agent.deviceId] : undefined);
       const key = agent.deviceId ?? `unknown:${label}`;
       const group = groups.get(key) ?? { key, label, agents: [] };
       group.agents.push(agent);

@@ -29,6 +29,7 @@ import { agentEvents, dmEvents, fetchAgentWorkspace, memberEvents } from '@/lib/
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { formatRelative } from '@/lib/format-time';
 import type { AgentMetricsSummary, AgentSnapshot, AgentWorkspaceRun, DeviceInfo, UserInfo } from '@/lib/schema';
+import { agentDeviceDisplayName } from '@/lib/agent-device';
 import { AgentWorkspaceSection } from '@/components/agent-workspace-section';
 
 export interface HumanMember {
@@ -197,6 +198,7 @@ function AgentProfile({ agent, device, applyAgentStatus }: { agent: AgentSnapsho
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const isCustomAgent = agent.category === 'executor-hosted' || agent.source === 'custom';
+  const deviceName = agentDeviceDisplayName(agent, device);
 
   useEffect(() => {
     setName(agent.name);
@@ -277,7 +279,7 @@ function AgentProfile({ agent, device, applyAgentStatus }: { agent: AgentSnapsho
       <Section title="基本信息" icon={<Shield size={15} />} compactGrid>
         <InfoRow label="类型" value={CATEGORY_LABEL[agent.category ?? 'executor-hosted'] ?? '自定义 Agent'} />
         <InfoRow label="创建者" value={agent.ownerName ?? '未知'} />
-        <InfoRow label="设备" value={device?.hostname ?? '未关联设备'} />
+        <InfoRow label="设备" value={deviceName} />
         <InfoRow label="最近活跃" value={formatRelative(agent.lastSeenAt)} />
       </Section>
 
