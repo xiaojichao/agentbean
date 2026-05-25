@@ -98,13 +98,18 @@ describe('ClaudeCodeAdapter', () => {
 });
 
 describe('OpenClawAdapter', () => {
-  it('invokes openclaw agent --message <prompt>', async () => {
+  it('invokes openclaw agent --agent main --message <prompt>', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentbean-openclaw-test-'));
     const script = join(dir, 'fake-openclaw.cjs');
     writeFileSync(script, `
       const args = process.argv.slice(1);
       if (!args.includes('agent')) {
         process.stderr.write('missing agent command');
+        process.exit(1);
+      }
+      const agentIdx = args.indexOf('--agent');
+      if (agentIdx < 0 || args[agentIdx + 1] !== 'main') {
+        process.stderr.write('missing --agent main');
         process.exit(1);
       }
       const msgIdx = args.indexOf('--message');
@@ -142,6 +147,11 @@ describe('OpenClawAdapter', () => {
         process.stderr.write('missing agent command');
         process.exit(1);
       }
+      const agentIdx = args.indexOf('--agent');
+      if (agentIdx < 0 || args[agentIdx + 1] !== 'main') {
+        process.stderr.write('missing --agent main');
+        process.exit(1);
+      }
       const msgIdx = args.indexOf('--message');
       if (msgIdx >= 0 && args[msgIdx + 1]) {
         process.stdout.write(args[msgIdx + 1]);
@@ -161,7 +171,8 @@ describe('OpenClawAdapter', () => {
     writeFileSync(script, `
       const args = process.argv.slice(1);
       const msgIdx = args.indexOf('-m');
-      if (!args.includes('agent') || !args.includes('--local')) {
+      const agentIdx = args.indexOf('--agent');
+      if (!args.includes('agent') || !args.includes('--local') || agentIdx < 0 || args[agentIdx + 1] !== 'main') {
         process.stderr.write('missing configured args');
         process.exit(1);
       }
@@ -175,6 +186,29 @@ describe('OpenClawAdapter', () => {
     const adapter = new OpenClawAdapter({ command: process.execPath, args: [script, 'agent', '--local', '-m'] });
     const out = await adapter.ask({ prompt: 'hi-oc', history: [] }, new AbortController().signal);
     expect(out).toBe('hi-oc');
+  });
+
+  it('preserves explicitly configured openclaw target selector', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentbean-openclaw-test-'));
+    const script = join(dir, 'fake-openclaw.cjs');
+    writeFileSync(script, `
+      const args = process.argv.slice(1);
+      const agentValues = args.filter((arg, index) => args[index - 1] === '--agent');
+      if (agentValues.length !== 1 || agentValues[0] !== 'ops') {
+        process.stderr.write('wrong agent selector: ' + agentValues.join(','));
+        process.exit(1);
+      }
+      const msgIdx = args.indexOf('--message');
+      if (msgIdx >= 0 && args[msgIdx + 1]) {
+        process.stdout.write(args[msgIdx + 1]);
+      } else {
+        process.stderr.write('missing --message');
+        process.exit(1);
+      }
+    `);
+    const adapter = new OpenClawAdapter({ command: process.execPath, args: [script, 'agent', '--agent', 'ops'] });
+    const out = await adapter.ask({ prompt: 'hi-ops', history: [] }, new AbortController().signal);
+    expect(out).toBe('hi-ops');
   });
 });
 

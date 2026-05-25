@@ -128,6 +128,33 @@ function run(bin: string, args: string[]): Promise<string> {
   });
 }
 
+export function parseOpenClawAgentId(output: string): string | null {
+  if (!output.trim()) return null;
+  try {
+    const parsed = JSON.parse(output);
+    const list = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.agents)
+        ? parsed.agents
+        : Array.isArray(parsed?.items)
+          ? parsed.items
+          : [];
+    for (const item of list) {
+      const id = typeof item === 'string'
+        ? item
+        : typeof item?.id === 'string'
+          ? item.id
+          : typeof item?.agentId === 'string'
+            ? item.agentId
+            : null;
+      if (id?.trim()) return id.trim();
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 // --- Machine ID (stable per-device identifier) ---
 
 const MACHINE_ID_FILE = join(os.homedir(), ".agentbean", "device-id");
@@ -291,16 +318,17 @@ async function checkOpenClawGateway(): Promise<ScannedAgent | null> {
   const path = await which("openclaw");
   if (!path) return null;
 
-  const status = await run("openclaw", ["gateway", "status"]);
+  const status = await run(path, ["gateway", "status"]);
   const running = status.includes("running") || status.includes("✓");
 
   if (running) {
+    const agentId = parseOpenClawAgentId(await run(path, ["agents", "list", "--json"])) ?? "main";
     return {
       category: "agentos-hosted",
       name: "OpenClaw-Agent",
       adapterKind: "openclaw",
       command: path,
-      args: [],
+      args: ["agent", "--agent", agentId],
       source: "gateway",
     };
   }

@@ -19,16 +19,38 @@ function hasMessageFlag(args: string[]): boolean {
   return args.includes('--message') || args.includes('-m');
 }
 
+function hasTargetSelector(args: string[]): boolean {
+  return args.includes('--agent')
+    || args.includes('--session-id')
+    || args.includes('--session-key')
+    || args.includes('--to')
+    || args.includes('-t');
+}
+
+function ensureTargetSelector(args: string[]): string[] {
+  if (hasTargetSelector(args)) return args;
+  const messageIdx = args.findIndex((arg) => arg === '--message' || arg === '-m');
+  if (messageIdx >= 0) {
+    return [
+      ...args.slice(0, messageIdx),
+      '--agent',
+      'main',
+      ...args.slice(messageIdx),
+    ];
+  }
+  return [...args, '--agent', 'main'];
+}
+
 function buildArgs(baseArgs: string[], prompt: string): string[] {
-  // Current OpenClaw one-shot agent turns use: openclaw agent --message "<prompt>".
+  // Current OpenClaw one-shot agent turns require an explicit session selector.
   // Preserve explicit custom args when the message flag is already configured.
-  if (hasMessageFlag(baseArgs)) {
-    return [...baseArgs, prompt];
+  const agentArgs = baseArgs.includes('agent')
+    ? ensureTargetSelector(baseArgs)
+    : [...baseArgs, 'agent', '--agent', 'main'];
+  if (hasMessageFlag(agentArgs)) {
+    return [...agentArgs, prompt];
   }
-  if (baseArgs.includes('agent')) {
-    return [...baseArgs, '--message', prompt];
-  }
-  return [...baseArgs, 'agent', '--message', prompt];
+  return [...agentArgs, '--message', prompt];
 }
 
 function buildPrompt(input: AskInput, systemPrompt?: string): string {
