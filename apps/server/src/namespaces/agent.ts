@@ -33,6 +33,7 @@ export interface AgentNamespaceDeps {
       setConnectCommand(id: string, command: string): void;
       setRuntimes(id: string, runtimes: { name: string; adapterKind: string; command: string; installed: boolean }[]): void;
       touch(id: string, lastSeenAt: number): void;
+      transferOwner(id: string, userId: string): void;
     };
   };
   dispatchTimeoutMs?: number;
@@ -139,6 +140,12 @@ export interface AgentNamespaceHandle {
 
 function isAgentOSHosted(meta: { category?: string | null }): boolean {
   return meta.category === 'agentos-hosted';
+}
+
+function extractTokenFromConnectCommand(command?: string | null): string | null {
+  if (!command) return null;
+  const match = command.match(/(?:^|\s)--token(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s]+))/);
+  return match?.[1] ?? match?.[2] ?? match?.[3] ?? null;
 }
 
 function parseArgs(value: unknown): string[] | null {
@@ -320,7 +327,15 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       const parsed = parseToken(a.token!);
       const tokenUserId = parsed?.userId ?? 'system';
       const existingDevice = deps.globalDb?.devices?.get(a.deviceId);
-      const userId = existingDevice?.userId ?? tokenUserId;
+      const connectCommandToken = extractTokenFromConnectCommand(existingDevice?.connectCommand);
+      const connectCommandUserId = connectCommandToken ? parseToken(connectCommandToken)?.userId : null;
+      const userId = connectCommandUserId && deps.globalDb?.users?.get(connectCommandUserId)
+        ? connectCommandUserId
+        : existingDevice?.userId ?? tokenUserId;
+      if (existingDevice?.userId && existingDevice.userId !== userId) {
+        deps.globalDb?.devices?.transferOwner(a.deviceId, userId);
+        logger.info({ deviceId: a.deviceId, fromUserId: existingDevice.userId, toUserId: userId }, 'device owner repaired during daemon registration');
+      }
       const deviceAgents = (a.agents ?? []).filter(isAgentOSHosted);
       for (const agentMeta of deviceAgents) {
         const publishes = deps.globalDb?.agentPublishes?.listByAgent(agentMeta.id) ?? [];

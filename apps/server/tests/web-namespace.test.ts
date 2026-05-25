@@ -563,6 +563,44 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('repairs an existing device owner from the saved command when the daemon reconnects', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({ id: 'repair-test01', username: 'repair-test01', passwordHash: null, createdAt: now });
+    app.globalDb.users.create({ id: 'repair-demo1', username: 'repair-demo1', passwordHash: null, createdAt: now });
+    app.globalDb.networkMembers.add('default', 'repair-test01', 'member');
+    app.globalDb.networkMembers.add('default', 'repair-demo1', 'member');
+    app.globalDb.devices.upsert({
+      id: 'repair-mybmp-device',
+      userId: 'repair-demo1',
+      networkId: 'default',
+      hostname: 'MyMBP',
+      lastSeenAt: now,
+      systemInfo: { hostname: 'MyMBP' },
+    });
+    app.globalDb.devices.setConnectCommand(
+      'repair-mybmp-device',
+      'npx @agentbean/daemon@latest --server-url https://api.agentbean.dev --token repair-test01:default:original',
+    );
+
+    const ag = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: generateToken('repair-test01', 'default'),
+        deviceId: 'repair-mybmp-device',
+        networkId: 'default',
+        agents: [],
+        systemInfo: { hostname: 'MyMBP', daemonVersion: '0.1.31' },
+      },
+      reconnection: false,
+      transports: ['websocket'],
+    });
+    await new Promise<void>((r) => ag.on('connect', () => r()));
+    ag.emit('register');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(app.globalDb.devices.get('repair-mybmp-device')).toMatchObject({ userId: 'repair-test01' });
+    ag.close();
+  });
+
   it('binds newly created custom agents to the selected team device immediately', async () => {
     app.globalDb.users.create({
       id: 'remote-device-owner',
