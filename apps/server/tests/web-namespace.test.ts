@@ -486,6 +486,77 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('does not mark remote custom agents offline because their cwd is not on the server host', async () => {
+    const now = Date.now();
+    const owner = app.globalDb.users.listAll()[0]!;
+    app.globalDb.devices.upsert({
+      id: 'remote-custom-device',
+      userId: owner.id,
+      networkId: 'default',
+      hostname: 'MyMBP',
+      lastSeenAt: now,
+      systemInfo: { hostname: 'MyMBP' },
+    });
+    app.globalDb.agents.upsert({
+      id: 'remote-custom-agent',
+      name: 'test-Agent',
+      role: 'executor-agent',
+      adapterKind: 'codex',
+      deviceId: 'remote-custom-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      command: '/opt/homebrew/bin/codex',
+      args: JSON.stringify([]),
+      cwd: '/Users/shaw/drama',
+      ownerId: owner.id,
+      description: 'Remote custom agent',
+    });
+
+    const ag = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'remote-custom-device',
+        networkId: 'default',
+        capabilities: { customAgentDispatch: true },
+        agents: [],
+        systemInfo: { hostname: 'MyMBP' },
+      },
+      reconnection: false,
+      transports: ['websocket'],
+    });
+    await new Promise<void>((r) => ag.on('connect', () => r()));
+    ag.emit('register');
+    await new Promise<any>((resolve) => {
+      ag.emit('device:register-runtimes', {
+        runtimes: [{ name: 'Codex CLI', adapterKind: 'codex', command: '/opt/homebrew/bin/codex', installed: true }],
+      }, resolve);
+    });
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const members = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+    expect(members.ok).toBe(true);
+    expect(members.agents.find((agent: any) => agent.id === 'remote-custom-agent')).toMatchObject({
+      name: 'test-Agent',
+      deviceName: 'MyMBP',
+      status: 'online',
+    });
+
+    ag.close();
+    web.close();
+  });
+
   it('reports AgentOS agents as busy in member lists while dispatch is running', async () => {
     const web = ioClient(`${baseUrl}/web`, {
       reconnection: false,
@@ -622,7 +693,14 @@ describe('/web namespace', () => {
     });
     await new Promise<void>((r) => web.on('connect', () => r()));
     const statuses: any[] = [];
-    web.on('agent:status', (status: any) => statuses.push(status));
+    const busyStatusSeen = new Promise<any>((resolve) => {
+      web.on('agent:status', (status: any) => {
+        statuses.push(status);
+        if (status.id === 'scan-published-hermes-device-hermes-agent' && status.status === 'busy') {
+          resolve(status);
+        }
+      });
+    });
 
     const dmRes = await new Promise<any>((resolve) => {
       web.emit('dm:start', { agentId: 'scan-published-hermes-device-hermes-agent' }, resolve);
@@ -641,10 +719,7 @@ describe('/web namespace', () => {
     });
     expect(sendAck.ok).toBe(true);
 
-    const req = await dispatchSeen;
-    const busyStatus = statuses.find((status: any) =>
-      status.id === 'scan-published-hermes-device-hermes-agent' && status.status === 'busy'
-    );
+    const [req, busyStatus] = await Promise.all([dispatchSeen, busyStatusSeen]);
     expect(busyStatus).toMatchObject({
       networkId: 'default',
       status: 'busy',

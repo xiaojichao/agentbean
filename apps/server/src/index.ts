@@ -1,6 +1,6 @@
 import express from 'express';
 import http from 'node:http';
-import { existsSync, mkdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import multer from 'multer';
 import { Server as IOServer } from 'socket.io';
@@ -101,14 +101,8 @@ function isVirtualDeviceId(id?: string | null): boolean {
   return Boolean(id?.startsWith('virtual-'));
 }
 
-function projectDirectoryExists(cwd?: string | null): boolean {
-  if (!cwd?.trim()) return false;
-  const normalized = cwd.trim().replace(/^~(?=$|\/)/, process.env.HOME ?? '');
-  try {
-    return statSync(normalized).isDirectory();
-  } catch {
-    return false;
-  }
+function hasConfiguredProjectDirectory(cwd?: string | null): boolean {
+  return Boolean(cwd?.trim());
 }
 
 function resolveCorsOrigin(): string | false {
@@ -173,7 +167,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       };
     }
 
-    if (!projectDirectoryExists(agent.cwd)) {
+    if (!hasConfiguredProjectDirectory(agent.cwd)) {
       return { status: 'offline' as const, lastSeenAt: rt?.lastHeartbeatAt, lastError: undefined };
     }
 
