@@ -30,8 +30,8 @@ import {
 import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, memberEvents, taskEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, Artifact, ChannelSummary, ChatMessage } from '@/lib/schema';
+import { TASK_STATUS_BY_ID as STATUS_BY_ID, TASK_STATUS_COLUMNS as STATUS_COLUMNS, type TaskStatus } from '@/lib/task-status';
 
-type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
 type TaskViewMode = 'board' | 'list';
 
 interface Task {
@@ -61,15 +61,6 @@ interface FilterOption {
   muted?: boolean;
 }
 
-const STATUS_COLUMNS: { id: TaskStatus; label: string; menuLabel: string; empty: string; badge: string; dot: string; collapsedByDefault?: boolean }[] = [
-  { id: 'todo', label: '待办', menuLabel: '待办', empty: '暂无待办任务。', badge: 'border-orange-200 bg-orange-100 text-orange-700', dot: 'bg-orange-500' },
-  { id: 'in_progress', label: '进行中', menuLabel: '进行中', empty: '暂无进行中任务。', badge: 'border-cyan-200 bg-cyan-100 text-cyan-700', dot: 'bg-cyan-500' },
-  { id: 'in_review', label: '待审核', menuLabel: '待审核', empty: '暂无待审核任务。', badge: 'border-purple-200 bg-purple-100 text-purple-700', dot: 'bg-purple-500' },
-  { id: 'done', label: '已完成', menuLabel: '已完成', empty: '暂无已完成任务。', badge: 'border-emerald-200 bg-emerald-100 text-emerald-700', dot: 'bg-emerald-500', collapsedByDefault: true },
-  { id: 'closed', label: '已关闭', menuLabel: '已关闭', empty: '暂无已关闭任务。', badge: 'border-neutral-300 bg-neutral-100 text-neutral-600', dot: 'bg-neutral-500', collapsedByDefault: true },
-];
-
-const STATUS_BY_ID = Object.fromEntries(STATUS_COLUMNS.map((column) => [column.id, column])) as Record<TaskStatus, typeof STATUS_COLUMNS[number]>;
 const ME_FILTER = '__me__';
 const UNASSIGNED_FILTER = '__unassigned__';
 
