@@ -1,6 +1,7 @@
 import { spawn } from 'node-pty';
+import { accessSync, constants } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import type { CliAdapter, AskInput } from './adapter.js';
 
 export interface CodexAdapterOpts {
@@ -78,6 +79,30 @@ function buildRuntimeEnv(extra?: Record<string, string>): { [key: string]: strin
   return { ...(process.env as { [key: string]: string }), PATH: pathEntries, ...(extra ?? {}) };
 }
 
+function assertExecutable(command: string, env: { [key: string]: string }, label: string): void {
+  const trimmed = command.trim();
+  if (!trimmed) {
+    throw new Error(`${label} command is empty`);
+  }
+  if (trimmed.includes('/')) {
+    try {
+      accessSync(trimmed, constants.X_OK);
+      return;
+    } catch {
+      throw new Error(`${label} command is not executable: ${trimmed}`);
+    }
+  }
+
+  const pathEntries = (env.PATH ?? '').split(delimiter).filter(Boolean);
+  for (const dir of pathEntries) {
+    try {
+      accessSync(join(dir, trimmed), constants.X_OK);
+      return;
+    } catch {}
+  }
+  throw new Error(`${label} command was not found on PATH: ${trimmed}. PATH=${env.PATH ?? ''}`);
+}
+
 export class CodexAdapter implements CliAdapter {
   readonly kind = 'codex' as const;
   constructor(private readonly opts: CodexAdapterOpts) {}
@@ -93,13 +118,24 @@ export class CodexAdapter implements CliAdapter {
       const args = input.sandboxProfilePath
         ? ['-f', input.sandboxProfilePath, '--', baseCommand, ...baseArgs]
         : baseArgs;
+      const env = buildRuntimeEnv(input.env);
+
+      try {
+        assertExecutable(command, env, input.sandboxProfilePath ? 'Sandbox launcher' : 'Codex runtime');
+        if (input.sandboxProfilePath) {
+          assertExecutable(baseCommand, env, 'Codex runtime');
+        }
+      } catch (err) {
+        reject(err);
+        return;
+      }
 
       const pty = spawn(command, args, {
         name: 'xterm-color',
         cols: 80,
         rows: 30,
         cwd,
-        env: buildRuntimeEnv(input.env),
+        env,
       });
 
       const chunks: string[] = [];

@@ -24,6 +24,6 @@ describe('CodexAdapter against a node stub', () => {
     const adapter = new CodexAdapter({ command: '/path/does/not/exist/xyz' });
     await expect(
       adapter.ask({ prompt: 'p', history: [] }, new AbortController().signal),
-    ).rejects.toThrow();
+    ).rejects.toThrow('Codex runtime command is not executable: /path/does/not/exist/xyz');
   });
 });
