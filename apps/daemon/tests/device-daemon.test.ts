@@ -36,7 +36,10 @@ describe('device daemon socket options', () => {
   });
 
   it('uses native folder chooser commands for supported desktop platforms', () => {
-    expect(nativeDirectoryPickerCommands('darwin')[0]).toMatchObject({ command: 'osascript' });
+    const macPicker = nativeDirectoryPickerCommands('darwin')[0];
+    expect(macPicker).toMatchObject({ command: 'osascript' });
+    expect(macPicker.args).toContain('tell application "Finder" to activate');
+    expect(macPicker.args.join('\n')).toContain('default location (path to home folder)');
     expect(nativeDirectoryPickerCommands('win32')[0]).toMatchObject({ command: 'powershell.exe' });
     expect(nativeDirectoryPickerCommands('linux').map((cmd) => cmd.command)).toEqual(['zenity', 'kdialog']);
   });
