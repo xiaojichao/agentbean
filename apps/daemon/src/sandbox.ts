@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -13,7 +13,13 @@ export function getWorkspaceDir(agentId: string): string {
 }
 
 export function isSandboxAvailable(): boolean {
-  return process.platform === 'darwin';
+  if (process.platform !== 'darwin') return false;
+  try {
+    accessSync('/usr/bin/sandbox-exec', constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function generateSandboxProfile(agentId: string, runtimePath: string): string {

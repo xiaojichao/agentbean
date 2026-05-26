@@ -1,3 +1,6 @@
+import { spawn } from 'node-pty';
+import { accessSync, constants } from 'node:fs';
+import { homedir } from 'node:os';
 import { spawn as spawnChild } from 'node:child_process';
 import { spawn as spawnPty } from 'node-pty';
 import { accessSync, constants, existsSync, mkdtempSync, readFileSync } from 'node:fs';
@@ -219,6 +222,24 @@ export class CodexAdapter implements CliAdapter {
         ? ['-f', input.sandboxProfilePath, '--', baseCommand, ...baseArgs]
         : baseArgs;
       const env = buildRuntimeEnv(input.env);
+
+      try {
+        assertExecutable(command, env, input.sandboxProfilePath ? 'Sandbox launcher' : 'Codex runtime');
+        if (input.sandboxProfilePath) {
+          assertExecutable(baseCommand, env, 'Codex runtime');
+        }
+      } catch (err) {
+        reject(err);
+        return;
+      }
+
+      const pty = spawn(command, args, {
+        name: 'xterm-color',
+        cols: 80,
+        rows: 30,
+        cwd,
+        env,
+      });
 
       try {
         assertExecutable(command, env, input.sandboxProfilePath ? 'Sandbox launcher' : 'Codex runtime');
