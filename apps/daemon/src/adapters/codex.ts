@@ -1,8 +1,15 @@
-import { spawn } from 'node-pty';
+import { spawn as spawnChild } from 'node:child_process';
+import { spawn as spawnPty } from 'node-pty';
 import { accessSync, constants, existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import type { CliAdapter, AskInput } from './adapter.js';
+
+type RuntimeProcess = {
+  onData(cb: (data: string) => void): void;
+  onExit(cb: (event: { exitCode: number }) => void): void;
+  kill(signal?: string): void;
+};
 
 export interface CodexAdapterOpts {
   command: string;
@@ -143,6 +150,57 @@ function readOutputLastMessage(path?: string): string | null {
   return text || null;
 }
 
+function spawnRuntimeProcess(command: string, args: string[], opts: { cwd: string; env: { [key: string]: string } }): RuntimeProcess {
+  try {
+    const pty = spawnPty(command, args, {
+      name: 'xterm-color',
+      cols: 80,
+      rows: 30,
+      cwd: opts.cwd,
+      env: opts.env,
+    });
+    return {
+      onData: (cb) => pty.onData(cb),
+      onExit: (cb) => pty.onExit(({ exitCode }) => cb({ exitCode })),
+      kill: (signal) => pty.kill(signal),
+    };
+  } catch (err) {
+    const child = spawnChild(command, args, {
+      cwd: opts.cwd,
+      env: opts.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const dataHandlers: Array<(data: string) => void> = [];
+    const exitHandlers: Array<(event: { exitCode: number }) => void> = [];
+    let exited = false;
+
+    const emitExit = (exitCode: number) => {
+      if (exited) return;
+      exited = true;
+      for (const handler of exitHandlers) handler({ exitCode });
+    };
+
+    child.stdout?.on('data', (data) => {
+      for (const handler of dataHandlers) handler(String(data));
+    });
+    child.stderr?.on('data', (data) => {
+      for (const handler of dataHandlers) handler(String(data));
+    });
+    child.on('error', (childErr) => {
+      const message = childErr instanceof Error ? childErr.message : String(childErr);
+      for (const handler of dataHandlers) handler(message);
+      emitExit(1);
+    });
+    child.on('exit', (code) => emitExit(code ?? 1));
+
+    return {
+      onData: (cb) => { dataHandlers.push(cb); },
+      onExit: (cb) => { exitHandlers.push(cb); },
+      kill: (signal) => { child.kill(signal as NodeJS.Signals | undefined); },
+    };
+  }
+}
+
 export class CodexAdapter implements CliAdapter {
   readonly kind = 'codex' as const;
   constructor(private readonly opts: CodexAdapterOpts) {}
@@ -172,13 +230,7 @@ export class CodexAdapter implements CliAdapter {
         return;
       }
 
-      const pty = spawn(command, args, {
-        name: 'xterm-color',
-        cols: 80,
-        rows: 30,
-        cwd,
-        env,
-      });
+      const pty = spawnRuntimeProcess(command, args, { cwd, env });
 
       const chunks: string[] = [];
       let finished = false;
@@ -226,7 +278,7 @@ export class CodexAdapter implements CliAdapter {
   async health(): Promise<{ ok: boolean; detail?: string }> {
     return new Promise((resolve) => {
       try {
-        const pty = spawn('bash', ['-c', 'codex --version'], {
+        const pty = spawnPty('bash', ['-c', 'codex --version'], {
           name: 'xterm-color', cols: 80, rows: 30,
           cwd: this.opts.cwd ?? process.cwd(),
           env: buildRuntimeEnv(),
