@@ -44,6 +44,25 @@ describe('startup data repair', () => {
         cwd: null,
         description: null,
       });
+      global.agents.upsert({
+        id: 'agent-on-mybmp-with-demo-owner',
+        name: 'test-Agent',
+        role: null,
+        adapterKind: 'codex',
+        deviceId: 'my-mbp-device',
+        networkId: 'opensns',
+        visibility: 'public',
+        category: 'executor-hosted',
+        source: 'custom',
+        firstSeenAt: now,
+        lastSeenAt: now,
+        ownerId: 'demo1',
+        command: 'codex',
+        args: null,
+        cwd: '/Users/shaw/drama',
+        env: null,
+        description: null,
+      });
     } finally {
       global.close();
     }
@@ -52,6 +71,7 @@ describe('startup data repair', () => {
     try {
       expect(app.globalDb.devices.get('my-mbp-device')).toMatchObject({ userId: 'test01' });
       expect(app.globalDb.agents.getFull('agent-on-mybmp')).toMatchObject({ ownerId: 'test01' });
+      expect(app.globalDb.agents.getFull('agent-on-mybmp-with-demo-owner')).toMatchObject({ ownerId: 'test01' });
     } finally {
       await app.close();
       try { unlinkSync(globalPath); } catch {}

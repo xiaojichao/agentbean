@@ -141,6 +141,13 @@ export class AgentRegistry {
     return a;
   }
 
+  updateOwner(agentId: string, ownerId: string): AgentRuntime | null {
+    const a = this.byId.get(agentId);
+    if (!a) return null;
+    a.ownerId = ownerId;
+    return a;
+  }
+
   updatePublishedNetworks(agentId: string, networkIds: string[]): AgentRuntime | null {
     const a = this.byId.get(agentId);
     if (!a) return null;

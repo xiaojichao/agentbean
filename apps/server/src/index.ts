@@ -2319,10 +2319,21 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       }
 
       globalDb.devices.transferOwner(deviceId, userId);
+      const liveDevice = deviceRegistry.get(deviceId);
+      if (liveDevice) {
+        liveDevice.userId = userId;
+        for (const agent of liveDevice.agents.values()) {
+          agent.ownerId = userId;
+        }
+      }
       const updated = globalDb.devices.get(deviceId);
       if (!updated) return ack?.({ ok: false, error: 'DEVICE_NOT_FOUND' });
       const dto = toDeviceDto(updated, adminId);
       io.of('/web').emit('device:status', dto);
+      for (const agent of globalDb.agents.listByDevice(deviceId)) {
+        const rt = registry.updateOwner(agent.id, userId);
+        io.of('/web').emit('agent:status', rt ? runtimeAgentStatusDto(rt) : persistedAgentStatusDto(agent, 'offline', agent.lastSeenAt));
+      }
       emitDevicesSnapshotForNetwork(updated.networkId);
       ack?.({ ok: true, device: dto });
     });

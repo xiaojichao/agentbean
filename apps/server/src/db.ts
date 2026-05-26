@@ -676,6 +676,11 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   const deviceTouch = raw.prepare(`UPDATE devices SET last_seen_at = ? WHERE id = ?`);
   const deviceRename = raw.prepare(`UPDATE devices SET hostname = ? WHERE id = ?`);
   const deviceTransferOwner = raw.prepare(`UPDATE devices SET user_id = ? WHERE id = ?`);
+  const deviceTransferAgentOwners = raw.prepare(`UPDATE agents SET owner_id = ? WHERE device_id = ?`);
+  const transferDeviceOwner = raw.transaction((id: string, userId: string) => {
+    deviceTransferOwner.run(userId, id);
+    deviceTransferAgentOwners.run(userId, id);
+  });
 
   const globalAgentUpsert = raw.prepare(`
     INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, command, args, cwd, env, owner_id, description)
@@ -910,7 +915,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
       setRuntimes: (id, runtimes) => { deviceSetRuntimes.run(JSON.stringify(runtimes), Date.now(), id); },
       touch: (id, lastSeenAt) => { deviceTouch.run(lastSeenAt, id); },
       rename: (id, hostname) => { deviceRename.run(hostname, id); },
-      transferOwner: (id, userId) => { deviceTransferOwner.run(userId, id); },
+      transferOwner: (id, userId) => { transferDeviceOwner(id, userId); },
     },
   };
 }

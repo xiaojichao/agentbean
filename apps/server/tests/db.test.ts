@@ -173,10 +173,52 @@ describe('openDb', () => {
         lastSeenAt: now,
         systemInfo: null,
       });
+      global.agents.upsert({
+        id: 'agent-with-old-owner',
+        name: 'Old Owner Agent',
+        role: null,
+        adapterKind: 'codex',
+        deviceId: 'transfer-device',
+        networkId: 'team-transfer',
+        visibility: 'public',
+        category: 'executor-hosted',
+        source: 'custom',
+        firstSeenAt: now,
+        lastSeenAt: now,
+        lastError: null,
+        ownerId: 'old-owner',
+        command: 'codex',
+        args: null,
+        cwd: null,
+        env: null,
+        description: null,
+      });
+      global.agents.upsert({
+        id: 'agent-without-owner',
+        name: 'Missing Owner Agent',
+        role: null,
+        adapterKind: 'hermes',
+        deviceId: 'transfer-device',
+        networkId: 'team-transfer',
+        visibility: 'public',
+        category: 'agentos-hosted',
+        source: 'scanned',
+        firstSeenAt: now,
+        lastSeenAt: now,
+        lastError: null,
+        ownerId: null,
+        command: 'hermes',
+        args: null,
+        cwd: null,
+        env: null,
+        description: null,
+      });
 
       global.devices.transferOwner('transfer-device', 'new-owner');
 
       expect(global.devices.get('transfer-device')).toMatchObject({ userId: 'new-owner' });
+      expect(global.agents.getFull('agent-with-old-owner')).toMatchObject({ ownerId: 'new-owner' });
+      expect(global.agents.getFull('agent-without-owner')).toMatchObject({ ownerId: 'new-owner' });
     } finally {
       global.close();
       try { unlinkSync(globalPath); } catch {}

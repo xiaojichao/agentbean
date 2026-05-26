@@ -1495,6 +1495,26 @@ describe('/web namespace', () => {
       lastSeenAt: now,
       systemInfo: { hostname: 'shaw-mac.local' },
     });
+    app.globalDb.agents.upsert({
+      id: 'agent-transfer-admin',
+      name: 'test-Agent',
+      role: null,
+      adapterKind: 'codex',
+      deviceId: 'device-transfer-admin',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      lastError: null,
+      ownerId: 'old-device-owner',
+      command: 'codex',
+      args: null,
+      cwd: '/tmp/project',
+      env: null,
+      description: null,
+    });
 
     const member = ioClient(`${baseUrl}/web`, {
       reconnection: false,
@@ -1524,6 +1544,7 @@ describe('/web namespace', () => {
       userName: 'test01',
     });
     expect(app.globalDb.devices.get('device-transfer-admin')).toMatchObject({ userId: 'new-device-owner' });
+    expect(app.globalDb.agents.getFull('agent-transfer-admin')).toMatchObject({ ownerId: 'new-device-owner' });
 
     const devices = await new Promise<any>((resolve) => {
       admin.emit('admin:list-devices', {}, resolve);
@@ -1531,6 +1552,13 @@ describe('/web namespace', () => {
     expect(devices.devices.find((device: any) => device.id === 'device-transfer-admin')).toMatchObject({
       userId: 'new-device-owner',
       userName: 'test01',
+    });
+    const agents = await new Promise<any>((resolve) => {
+      admin.emit('admin:list-agents', {}, resolve);
+    });
+    expect(agents.agents.find((agent: any) => agent.id === 'agent-transfer-admin')).toMatchObject({
+      ownerId: 'new-device-owner',
+      ownerName: 'test01',
     });
     admin.close();
   });
