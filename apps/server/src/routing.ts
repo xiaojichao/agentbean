@@ -1,4 +1,4 @@
-export type RouteReason = 'MENTION' | 'FALLBACK' | 'UNKNOWN_MENTION' | 'NO_ONLINE';
+export type RouteReason = 'MENTION' | 'HUMAN_MENTION' | 'FALLBACK' | 'UNKNOWN_MENTION' | 'NO_ONLINE';
 
 export interface RouteAgent {
   id: string;
@@ -10,6 +10,7 @@ export interface RouteInput {
   body: string;
   members: RouteAgent[];
   candidates?: RouteAgent[];
+  humans?: { id: string; name: string }[];
 }
 
 export interface RouteResult {
@@ -26,6 +27,8 @@ export interface RouteResult {
  *    member/candidate; reason = 'MENTION'.
  *  - If "@<name>" is present but no online member/candidate matches, do not fall back to
  *    another Agent; reason = 'UNKNOWN_MENTION'.
+ *  - If "@<name>" matches a human member instead of an Agent, do not dispatch to an Agent
+ *    and do not report an Agent lookup error; reason = 'HUMAN_MENTION'.
  *  - If no mention is present, route to the first online member; reason = 'FALLBACK'.
  *  - If there are no online members at all, return empty targets; reason = 'NO_ONLINE'.
  */
@@ -41,6 +44,8 @@ export function routeHumanMessage(input: RouteInput): RouteResult {
     );
     const candidate = onlineCandidates.find((x) => x.name === name);
     if (candidate) return { targets: [candidate], reason: 'MENTION' };
+    const human = (input.humans ?? []).find((x) => x.name === name);
+    if (human) return { targets: [], reason: 'HUMAN_MENTION' };
     return { targets: [], reason: online.length === 0 ? 'NO_ONLINE' : 'UNKNOWN_MENTION' };
   }
   if (online.length === 0) {

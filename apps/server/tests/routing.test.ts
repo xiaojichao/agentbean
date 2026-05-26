@@ -54,4 +54,15 @@ describe('routeHumanMessage', () => {
     expect(result.targets).toEqual([]);
     expect(result.reason).toBe('UNKNOWN_MENTION');
   });
+
+  it('treats a mentioned human member as human chat without agent dispatch', () => {
+    const a = make('a', 'Codex');
+    const result = routeHumanMessage({
+      body: '@shaw_cd 你好',
+      members: [a],
+      humans: [{ id: 'u1', name: 'shaw_cd' }],
+    });
+    expect(result.targets).toEqual([]);
+    expect(result.reason).toBe('HUMAN_MENTION');
+  });
 });

@@ -1313,6 +1313,18 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         .filter((agent): agent is NonNullable<typeof agent> => Boolean(agent))
         .map((agent) => ({ id: agent.id, name: agent.name, status: agent.status }));
       const candidates = visibleAgents.map((agent) => ({ id: agent.id, name: agent.name, status: agent.status }));
+      const networkHumans = globalDb.networkMembers.listByNetwork(networkId);
+      const humanMemberIds = dmTargetId
+        ? new Set<string>()
+        : ch.visibility === 'private' && !isDefaultChannel
+          ? new Set(channels.userMembers(networkId, ch.id))
+          : null;
+      const humans = networkHumans
+        .filter((human) => {
+          if (!isDefaultChannel && channels.userHasLeft(networkId, ch.id, human.userId)) return false;
+          return !humanMemberIds || humanMemberIds.has(human.userId);
+        })
+        .map((human) => ({ id: human.userId, name: human.username }));
       const currentHistory = sp.messages.listByChannel(ch.id, 200);
       const threadAgent = parentMessageId && !explicitMention
         ? [...currentHistory].reverse()
@@ -1325,7 +1337,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
       const route = threadTarget && (threadTarget.status === 'online' || threadTarget.status === 'busy')
         ? { targets: [{ id: threadTarget.id, name: threadTarget.name, status: threadTarget.status }], reason: 'FALLBACK' as const }
-        : routeHumanMessage({ body, members, candidates });
+        : routeHumanMessage({ body, members, candidates, humans });
       const recipient = route.targets[0];
       const shouldCreateTask = Boolean(
         payload.asTask ||
@@ -1369,6 +1381,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           body: '当前没有在线 Agent 可响应,消息已保存。',
           createdAt: Date.now(), metaJson: JSON.stringify({ kind: 'no-online-agent' }),
         });
+        return;
+      }
+      if (route.reason === 'HUMAN_MENTION') {
         return;
       }
       if (route.reason === 'UNKNOWN_MENTION' || route.targets.length === 0) {
