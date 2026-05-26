@@ -18,6 +18,7 @@ export interface AgentConfig {
     cwd?: string;
     workspace?: string;
     systemPrompt?: string;
+    env?: Record<string, string>;
   };
   server: { url: string; token: string };
   heartbeatIntervalMs: number;
@@ -35,6 +36,7 @@ export interface AgentConfigEntry {
     cwd?: string;
     workspace?: string;
     systemPrompt?: string;
+    env?: Record<string, string>;
   };
   visibility: 'public' | 'private';
   sandboxed?: boolean;
@@ -67,6 +69,15 @@ function deepInterpolate(node: unknown): unknown {
     return out;
   }
   return node;
+}
+
+function parseEnvMap(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (key.trim()) out[key.trim()] = String(raw ?? '');
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 export function loadConfig(path: string): AgentConfig {
@@ -112,6 +123,7 @@ export function loadConfig(path: string): AgentConfig {
       cwd: typeof a.cwd === 'string' ? a.cwd : undefined,
       workspace: typeof a.workspace === 'string' ? a.workspace : undefined,
       systemPrompt: typeof a.systemPrompt === 'string' ? a.systemPrompt : undefined,
+      env: parseEnvMap(a.env),
     },
     server: { url: s.url, token: s.token },
     heartbeatIntervalMs: isValidHeartbeat(interp.heartbeatIntervalMs) ? interp.heartbeatIntervalMs : 10_000,
@@ -178,6 +190,7 @@ export function loadDeviceConfig(path: string): DeviceConfig {
         cwd: typeof ad.cwd === 'string' ? ad.cwd : undefined,
         workspace: typeof ad.workspace === 'string' ? ad.workspace : undefined,
         systemPrompt: typeof ad.systemPrompt === 'string' ? ad.systemPrompt : undefined,
+        env: parseEnvMap(ad.env),
       },
       visibility: a.visibility === 'public' ? 'public' : 'private',
       sandboxed: a.sandboxed === true,

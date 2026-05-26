@@ -46,6 +46,8 @@ function compareDeviceOwnerGroups(a: { ownerName: string }, b: { ownerName: stri
 }
 
 const DIRECTORY_PICKER_MIN_DAEMON_VERSION = '0.1.27';
+const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+type EnvRow = { key: string; value: string };
 
 function parseVersionParts(version?: string | null): number[] | null {
   const match = version?.match(/\d+(?:\.\d+)*/);
@@ -898,6 +900,35 @@ function buildRuntimeOptions(runtimes: any[]) {
   });
 }
 
+function EnvironmentVariableEditor({ rows, onChange }: { rows: EnvRow[]; onChange: (rows: EnvRow[]) => void }) {
+  const updateRow = (index: number, patch: Partial<EnvRow>) => {
+    onChange(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  };
+  const removeRow = (index: number) => {
+    onChange(rows.filter((_, i) => i !== index));
+  };
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-medium text-neutral-600">环境变量</label>
+      <p className="mb-2 text-[11px] text-neutral-400">创建后会注入到 Coding Agent 运行时环境。</p>
+      <div className="space-y-2">
+        {rows.map((row, index) => (
+          <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-2">
+            <input value={row.key} onChange={(e) => updateRow(index, { key: e.target.value })} className="min-w-0 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="KEY" />
+            <input value={row.value} onChange={(e) => updateRow(index, { value: e.target.value })} className="min-w-0 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="value" />
+            <button type="button" onClick={() => removeRow(index)} className="rounded-md border border-neutral-200 p-2 text-neutral-500 hover:bg-neutral-50" aria-label="删除环境变量">
+              <X size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+      <button type="button" onClick={() => onChange([...rows, { key: '', value: '' }])} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-neutral-600 hover:text-neutral-900">
+        <Plus size={12} /> 添加变量
+      </button>
+    </div>
+  );
+}
+
 function AgentConfigDialog({ agent, device, runtimes, canManage, onClose, onSaved }: { agent: any; device?: { systemInfo?: { daemonVersion?: string } | null; daemonVersionInfo?: { current: string | null } }; runtimes: any[]; canManage: boolean; onClose: () => void; onSaved: () => void }) {
   const isCustom = agent.source === 'custom';
   const isAgentOS = agent.category === 'agentos-hosted';
@@ -923,12 +954,12 @@ function AgentConfigDialog({ agent, device, runtimes, canManage, onClose, onSave
     const payload: { id: string; name: string; adapterKind?: string; command?: string; cwd?: string | null; description?: string | null } = {
       id: agent.id,
       name: trimmedName,
-      cwd: cwd.trim() || null,
       description: description.trim() || null,
     };
     if (isCustom) {
       payload.adapterKind = selectedRuntime.adapterKind;
       payload.command = selectedRuntime.command;
+      payload.cwd = cwd.trim() || null;
     }
     const res = await agentEvents().updateConfig(payload);
     setSaving(false);
@@ -970,16 +1001,25 @@ function AgentConfigDialog({ agent, device, runtimes, canManage, onClose, onSave
               )}
             </div>
           )}
-          <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">{isCustom ? '项目目录' : '目录'}</label>
-            <div className="flex gap-2">
-              <input value={cwd} onChange={(e) => setCwd(e.target.value)} disabled={!canEdit} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50" placeholder="/path/to/project（可选）" />
-              {canEdit && (
-                <DirectoryBrowseButton deviceId={agent.deviceId} daemonVersion={device?.systemInfo?.daemonVersion ?? device?.daemonVersionInfo?.current ?? null} onSelect={setCwd} onError={setError} />
-              )}
+          {isCustom ? (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-600">项目目录</label>
+              <div className="flex gap-2">
+                <input value={cwd} onChange={(e) => setCwd(e.target.value)} disabled={!canEdit} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50" placeholder="/path/to/project（可选）" />
+                {canEdit && (
+                  <DirectoryBrowseButton deviceId={agent.deviceId} daemonVersion={device?.systemInfo?.daemonVersion ?? device?.daemonVersionInfo?.current ?? null} onSelect={setCwd} onError={setError} />
+                )}
+              </div>
+              {canEdit && <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录，留空则使用默认路径</p>}
             </div>
-            {canEdit && <p className="mt-1 text-[11px] text-neutral-400">{isCustom ? 'Agent 启动时的工作目录，留空则使用默认路径' : 'AgentOS Agent 所在目录，留空则保持未配置状态'}</p>}
-          </div>
+          ) : (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-600">所在目录</label>
+              <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-1.5 font-mono text-sm text-neutral-700 break-all">
+                {cwd.trim() || '未配置'}
+              </div>
+            </div>
+          )}
         </div>
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         <div className="mt-6 flex justify-end gap-2">
@@ -1001,6 +1041,7 @@ function AddCustomAgentDialog({ deviceId, daemonVersion, runtimes, onClose, onCr
   const [runtimeIndex, setRuntimeIndex] = useState('0');
   const [cwd, setCwd] = useState('');
   const [description, setDescription] = useState('');
+  const [envRows, setEnvRows] = useState<EnvRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -1016,6 +1057,26 @@ function AddCustomAgentDialog({ deviceId, daemonVersion, runtimes, onClose, onCr
       setError('名称不能包含空格，请使用连字符（-）');
       return;
     }
+    if (!selectedRuntime?.adapterKind || !selectedRuntime?.command?.trim()) {
+      setError('Coding Agent 运行时为必填项');
+      return;
+    }
+    const trimmedCwd = cwd.trim();
+    if (!trimmedCwd) {
+      setError('项目目录为必填项');
+      return;
+    }
+    const env: Record<string, string> = {};
+    for (const row of envRows) {
+      const key = row.key.trim();
+      const value = row.value;
+      if (!key && !value.trim()) continue;
+      if (!key || !ENV_KEY_PATTERN.test(key)) {
+        setError('环境变量 Key 必须以字母或下划线开头，只能包含字母、数字和下划线');
+        return;
+      }
+      env[key] = value;
+    }
     setLoading(true);
     setError('');
     const payload = {
@@ -1024,7 +1085,8 @@ function AddCustomAgentDialog({ deviceId, daemonVersion, runtimes, onClose, onCr
       command: selectedRuntime.command,
       category: 'executor-hosted',
       deviceId,
-      cwd: cwd.trim() || undefined,
+      cwd: trimmedCwd,
+      env: Object.keys(env).length > 0 ? env : undefined,
       description: description.trim() || undefined,
     };
     const res = await agentEvents().create(payload);
@@ -1065,13 +1127,14 @@ function AddCustomAgentDialog({ deviceId, daemonVersion, runtimes, onClose, onCr
             )}
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">项目目录</label>
+            <label className="mb-1 block text-xs font-medium text-neutral-600">项目目录 <span className="text-red-500">*</span></label>
             <div className="flex gap-2">
-              <input value={cwd} onChange={(e) => setCwd(e.target.value)} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="/path/to/project（可选）" />
+              <input value={cwd} onChange={(e) => setCwd(e.target.value)} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="/path/to/project" />
               <DirectoryBrowseButton deviceId={deviceId} daemonVersion={daemonVersion} onSelect={setCwd} onError={setError} />
             </div>
-            <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录，留空则使用默认路径</p>
+            <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录</p>
           </div>
+          <EnvironmentVariableEditor rows={envRows} onChange={setEnvRows} />
         </div>
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         <div className="mt-6 flex justify-end gap-2">

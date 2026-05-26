@@ -151,7 +151,7 @@ export class AgentInstance {
         sandboxProfilePath: req.sandboxed && isSandboxAvailable()
           ? generateSandboxProfile(this.id, this.config.adapter.command)
           : undefined,
-        env: workspaceEnv(run),
+        env: { ...(this.config.adapter.env ?? {}), ...workspaceEnv(run) },
       }, ctl.signal);
       const processed = await postProcess(rawBody, projectWorkspace, this.adapter.kind, dispatchStart, {
         outputDirs: [run.outputDir, run.intermediateDir],

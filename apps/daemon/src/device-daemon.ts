@@ -25,6 +25,7 @@ type CustomDispatchAgent = {
   command: string;
   args?: string[] | null;
   cwd?: string | null;
+  env?: Record<string, string> | null;
   description?: string | null;
   category?: string | null;
 };
@@ -445,6 +446,7 @@ export function createDeviceDaemon(
               args: custom.args ?? [],
               cwd: custom.cwd ?? undefined,
               workspace: custom.cwd ?? undefined,
+              env: custom.env ?? undefined,
               systemPrompt: custom.description ?? undefined,
             },
             visibility: 'public',

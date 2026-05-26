@@ -2,16 +2,16 @@
 
 import { useEffect, useState, useRef, useCallback, type MouseEvent, type ReactNode, type RefObject } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2 } from 'lucide-react';
+import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye } from 'lucide-react';
 import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage } from '@/lib/schema';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
 import { messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
+import { TASK_STATUS_COLUMNS as TASK_COLUMNS, isTaskStatus, taskStatusDotClass, taskStatusText, type TaskStatus } from '@/lib/task-status';
 
 type ChatTab = 'chat' | 'tasks' | 'files';
-type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
 type TaskViewMode = 'board' | 'list';
 type SidebarSortMode = 'manual' | 'recent' | 'az';
 type ProfileTarget = { kind: 'human' | 'agent'; id: string };
@@ -53,14 +53,6 @@ interface HumanProfile {
   role?: string;
   email?: string | null;
 }
-
-const TASK_COLUMNS: { id: TaskStatus; label: string; empty: string; badge: string; collapsedByDefault?: boolean }[] = [
-  { id: 'todo', label: '待办', empty: '暂无待办任务。', badge: 'border-orange-200 bg-orange-100 text-orange-700' },
-  { id: 'in_progress', label: '进行中', empty: '暂无进行中任务。', badge: 'border-cyan-200 bg-cyan-100 text-cyan-700' },
-  { id: 'in_review', label: '待审核', empty: '暂无待审核任务。', badge: 'border-purple-200 bg-purple-100 text-purple-700' },
-  { id: 'done', label: '已完成', empty: '暂无已完成任务。', badge: 'border-emerald-200 bg-emerald-100 text-emerald-700', collapsedByDefault: true },
-  { id: 'closed', label: '已关闭', empty: '暂无已关闭任务。', badge: 'border-neutral-300 bg-neutral-100 text-neutral-600', collapsedByDefault: true },
-];
 
 export default function ChatPage() {
   const conn = useAgentBeanStore((s) => s.conn);
@@ -2335,7 +2327,6 @@ function ChatTaskBadge({
   const column = TASK_COLUMNS.find((item) => item.id === task?.status) ?? TASK_COLUMNS[0]!;
   const label = taskNumber ? `#${taskNumber}` : '#任务';
   const canChange = Boolean(task && onStatus);
-  const visual = taskBadgeVisual(task?.status ?? 'todo');
   return (
     <span className="relative inline-flex">
       <button
@@ -2343,10 +2334,10 @@ function ChatTaskBadge({
           event.stopPropagation();
           if (canChange) onOpen?.(!open);
         }}
-        className={`inline-flex h-5 items-center gap-1 rounded-full border px-2 text-[11px] font-semibold leading-none transition-colors ${visual.badge} ${canChange ? 'hover:brightness-105' : ''}`}
+        className={`inline-flex h-5 items-center gap-1 rounded-full border px-2 text-[11px] font-semibold leading-none transition-colors ${column.badge} ${canChange ? 'hover:brightness-105' : ''}`}
         title={canChange ? `${column.label} · 更改任务状态` : `${column.label} · 查看任务`}
       >
-        {visual.icon}
+        <span className={`h-2 w-2 rounded-full ${column.dot}`} />
         <span>{label}</span>
         <span>@{assigneeName}</span>
       </button>
@@ -2361,7 +2352,7 @@ function ChatTaskBadge({
               }}
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-neutral-700 hover:bg-neutral-50"
             >
-              <span className={`h-2 w-2 rounded-full ${taskStatusDotClass(status.id)}`} />
+              <span className={`h-2 w-2 rounded-full ${status.dot}`} />
               <span className="flex-1">{status.label}</span>
               {task?.status === status.id && <Check size={12} className="text-neutral-500" />}
             </button>
@@ -2370,52 +2361,6 @@ function ChatTaskBadge({
       )}
     </span>
   );
-}
-
-function taskBadgeVisual(status: TaskStatus): {
-  badge: string;
-  icon: ReactNode;
-  menuIconBg: string;
-  menuIcon: ReactNode;
-} {
-  if (status === 'done' || status === 'closed') {
-    return {
-      badge: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-      icon: <CheckCircle2 size={11} strokeWidth={2.5} />,
-      menuIconBg: 'bg-emerald-100 text-emerald-700',
-      menuIcon: <CheckCircle2 size={12} strokeWidth={2.5} />,
-    };
-  }
-  if (status === 'in_progress') {
-    return {
-      badge: 'border-cyan-200 bg-cyan-50 text-cyan-700',
-      icon: <SquareDot size={11} strokeWidth={2.5} />,
-      menuIconBg: 'bg-cyan-100 text-cyan-700',
-      menuIcon: <SquareDot size={12} strokeWidth={2.5} />,
-    };
-  }
-  return {
-    badge: 'border-purple-200 bg-purple-50 text-purple-700',
-    icon: <Eye size={11} strokeWidth={2.5} />,
-    menuIconBg: 'bg-purple-100 text-purple-700',
-    menuIcon: <Eye size={12} strokeWidth={2.5} />,
-  };
-}
-
-function taskStatusText(status: TaskStatus): string {
-  return TASK_COLUMNS.find((column) => column.id === status)?.label ?? status;
-}
-
-function isTaskStatus(value: unknown): value is TaskStatus {
-  return value === 'todo' || value === 'in_progress' || value === 'in_review' || value === 'done' || value === 'closed';
-}
-
-function taskStatusDotClass(status: TaskStatus): string {
-  if (status === 'done') return 'bg-emerald-500';
-  if (status === 'closed') return 'bg-neutral-400';
-  if (status === 'in_progress') return 'bg-cyan-500';
-  if (status === 'in_review') return 'bg-purple-500';
-  return 'bg-orange-400';
 }
 
 function MarkdownMessage({ body }: { body: string }) {
@@ -3064,14 +3009,6 @@ function statusDotClass(status?: AgentStatus): string {
   if (status === 'connecting') return 'bg-sky-500';
   if (status === 'error') return 'bg-red-500';
   return 'bg-neutral-300';
-}
-
-function taskStatusDot(status: TaskStatus): string {
-  if (status === 'todo') return 'bg-orange-500';
-  if (status === 'in_progress') return 'bg-cyan-500';
-  if (status === 'in_review') return 'bg-purple-500';
-  if (status === 'done') return 'bg-emerald-500';
-  return 'bg-neutral-400';
 }
 
 function uniqueMessages(messages: ChatMessage[]): ChatMessage[] {

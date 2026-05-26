@@ -155,7 +155,7 @@ describe('device:register-agents', () => {
       ag.emit('device:register-agents', {
         agents: [
           { name: 'Claude Code', category: 'executor-hosted', adapterKind: 'claude-code', command: '/usr/bin/claude', args: [], source: 'scanned' },
-          { name: 'Hermes Agent', category: 'agentos-hosted', adapterKind: 'hermes', command: '/usr/bin/hermes', args: ['gateway', 'run'], source: 'scanned' },
+          { name: 'Hermes Agent', category: 'agentos-hosted', adapterKind: 'hermes', command: '/usr/bin/hermes', args: ['gateway', 'run'], cwd: '/usr/bin', source: 'scanned' },
         ],
       }, resolve);
     });
@@ -168,6 +168,7 @@ describe('device:register-agents', () => {
     expect(dbAgents).toHaveLength(1);
     expect(dbAgents.map((a) => a.name).sort()).toEqual(['Hermes-Agent']);
     expect(dbAgents.every((a) => a.source === 'scanned')).toBe(true);
+    expect(dbAgents[0]!.cwd).toBe('/usr/bin');
 
     // Verify in AgentRegistry
     expect(app.registry!.all().some((a) => a.name === 'Claude-Code')).toBe(false);
@@ -332,6 +333,7 @@ describe('/agent dispatch round-trip', () => {
       command: '/opt/homebrew/bin/codex',
       args: JSON.stringify(['--foo']),
       cwd: '/Users/shaw/drama',
+      env: JSON.stringify({ FOO: 'bar' }),
       ownerId: 'default',
       description: 'Drama agent',
     });
@@ -354,10 +356,76 @@ describe('/agent dispatch round-trip', () => {
       adapterKind: 'codex',
       command: '/opt/homebrew/bin/codex',
       cwd: '/Users/shaw/drama',
+      env: { FOO: 'bar' },
     });
     expect(req.customAgent.args).toEqual(['--foo']);
 
     ag.close();
     await local.close();
   });
+
+  it('allows Claude Code custom agents without a saved command to dispatch through the device runtime', async () => {
+    const local = await buildApp({ dbPath: ':memory:', globalDbPath: ':memory:', agentToken: 'default:default:tok' });
+    await new Promise<void>((r) => local.http.listen(0, r));
+    const port = (local.http.address() as AddressInfo).port;
+    const lurl = `http://localhost:${port}/agent`;
+    const now = Date.now();
+
+    const ag = ioClient(lurl, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'd1',
+        networkId: 'default',
+        capabilities: { customAgentDispatch: true },
+        agents: [],
+      },
+      reconnection: false, transports: ['websocket'],
+    });
+    await new Promise<void>((r) => ag.on('connect', () => r()));
+    ag.emit('register');
+    await new Promise((r) => setTimeout(r, 50));
+
+    local.globalDb.agents.upsert({
+      id: 'custom-claude',
+      name: 'claude-agent',
+      role: 'executor-agent',
+      adapterKind: 'claude-code',
+      deviceId: 'd1',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      command: null,
+      args: JSON.stringify(['--bare']),
+      cwd: '/Users/shaw/AgentBean',
+      ownerId: 'default',
+      description: 'Claude Code custom agent',
+    });
+
+    const dispatchSeen = new Promise<any>((resolve) => {
+      ag.on('dispatch', (req: any) => {
+        resolve(req);
+        ag.emit('reply', { agentId: req.agentId, channelId: req.channelId, body: 'claude ok', requestId: req.requestId });
+      });
+    });
+
+    const requestId = newId();
+    const reply = await local.dispatch!({ agentId: 'custom-claude', channelId: 'c1', prompt: 'hi', requestId });
+
+    expect(reply).toEqual({ ok: true, body: 'claude ok' });
+    const req = await dispatchSeen;
+    expect(req.customAgent).toMatchObject({
+      id: 'custom-claude',
+      adapterKind: 'claude-code',
+      cwd: '/Users/shaw/AgentBean',
+    });
+    expect(req.customAgent.command).toBeNull();
+    expect(req.customAgent.args).toEqual(['--bare']);
+
+    ag.close();
+    await local.close();
+  });
+
 });

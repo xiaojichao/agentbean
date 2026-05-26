@@ -65,9 +65,10 @@ interface DispatchCustomAgent {
   name: string;
   role?: string | null;
   adapterKind: AdapterKind;
-  command: string;
+  command?: string | null;
   args?: string[] | null;
   cwd?: string | null;
+  env?: Record<string, string> | null;
   description?: string | null;
   category?: AgentCategory | string | null;
 }
@@ -94,6 +95,7 @@ export interface AgentSnapshotDto {
   command?: string | null;
   args?: string[] | null;
   cwd?: string | null;
+  env?: Record<string, string> | null;
   description?: string | null;
   deviceId?: string;
   deviceName?: string | null;
@@ -118,6 +120,7 @@ export function snapshotToDto(rt: AgentRuntime): AgentSnapshotDto {
     command: rt.command ?? null,
     args: rt.args ?? null,
     cwd: rt.cwd ?? null,
+    env: rt.env ?? null,
     description: rt.description ?? null,
     deviceId: rt.deviceId,
     publishedNetworkIds: rt.publishedNetworkIds,
@@ -160,6 +163,22 @@ function parseArgs(value: unknown): string[] | null {
   }
 }
 
+function customAgentRequiresSavedCommand(agent: DispatchCustomAgent): boolean {
+  return agent.adapterKind !== 'claude-code';
+}
+
+function parseEnv(value: unknown): Record<string, string> | null {
+  if (!value) return null;
+  if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, string>;
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function customAgentToDto(agent: any, status: AgentSnapshotDto['status'], lastError?: string): AgentSnapshotDto {
   return {
     id: agent.id,
@@ -177,6 +196,7 @@ function customAgentToDto(agent: any, status: AgentSnapshotDto['status'], lastEr
     command: agent.command ?? null,
     args: parseArgs(agent.args),
     cwd: agent.cwd ?? null,
+    env: parseEnv(agent.env),
     description: agent.description ?? null,
     deviceId: agent.deviceId,
     source: 'custom',
@@ -329,9 +349,10 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       const existingDevice = deps.globalDb?.devices?.get(a.deviceId);
       const connectCommandToken = extractTokenFromConnectCommand(existingDevice?.connectCommand);
       const connectCommandUserId = connectCommandToken ? parseToken(connectCommandToken)?.userId : null;
+      const tokenOwnerId = parsed?.userId && deps.globalDb?.users?.get(parsed.userId) ? parsed.userId : null;
       const userId = connectCommandUserId && deps.globalDb?.users?.get(connectCommandUserId)
         ? connectCommandUserId
-        : existingDevice?.userId ?? tokenUserId;
+        : tokenOwnerId ?? existingDevice?.userId ?? tokenUserId;
       if (existingDevice?.userId && existingDevice.userId !== userId) {
         deps.globalDb?.devices?.transferOwner(a.deviceId, userId);
         logger.info({ deviceId: a.deviceId, fromUserId: existingDevice.userId, toUserId: userId }, 'device owner repaired during daemon registration');
@@ -464,7 +485,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
 
     // Daemon registers scanned agents (runtimes, agentOS, standalone)
     socket.on('device:register-agents', (payload: {
-      agents: { name: string; category: string; adapterKind: string; command: string; args: string[]; source?: string }[]
+      agents: { name: string; category: string; adapterKind: string; command: string; args: string[]; cwd?: string | null; source?: string }[]
     }, ack?: (r: any) => void) => {
       try {
         const now = Date.now();
@@ -491,6 +512,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
               firstSeenAt: existingRt.firstSeenAt, lastSeenAt: now,
               ownerId: ownerId ?? undefined,
               command: ag.command, args: ag.args ? JSON.stringify(ag.args) : undefined,
+              cwd: ag.cwd ?? null,
             });
             deps.db.agents.upsert({
               id: existingRt.id, name: sanitizedName, role: null,
@@ -502,7 +524,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
               firstSeenAt: existingRt.firstSeenAt, lastSeenAt: now,
               lastError: null, ownerId,
               command: ag.command, args: ag.args ? JSON.stringify(ag.args) : null,
-              cwd: null, description: null,
+              cwd: ag.cwd ?? null, description: null,
             });
             registered.push({ id: existingRt.id, name: existingRt.name, category: existingRt.category, status: 'online' });
 
@@ -539,6 +561,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             ownerId: ownerId ?? undefined,
             command: ag.command,
             args: ag.args ? JSON.stringify(ag.args) : undefined,
+            cwd: ag.cwd ?? null,
             description: null,
           });
 
@@ -559,7 +582,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             ownerId,
             command: ag.command,
             args: ag.args ? JSON.stringify(ag.args) : null,
-            cwd: null,
+            cwd: ag.cwd ?? null,
             description: null,
           });
 
@@ -574,7 +597,11 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             networkId: a.networkId,
             deviceId: a.deviceId,
             ownerId,
+            command: ag.command,
+            args: ag.args ?? [],
+            cwd: ag.cwd ?? null,
             publishedNetworkIds: publishes.map((p: { networkId: string }) => p.networkId),
+            source: (ag.source as any) ?? 'scanned',
           });
           deps.io.of('/web').emit('agent:status', runtimeStatusDto(rt));
           registered.push({ id: agentId, name: sanitizedName, category: ag.category, status: 'online' });
@@ -667,6 +694,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         command: persisted.command,
         args: parseArgs(persisted.args),
         cwd: persisted.cwd,
+        env: parseEnv(persisted.env),
         description: persisted.description,
         category: persisted.category,
       };
@@ -677,7 +705,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       resolve({ ok: false, error: `${req.agentId} 不在线` });
       return;
     }
-    if (customAgent && !customAgent.command?.trim()) {
+    if (customAgent && customAgentRequiresSavedCommand(customAgent) && !customAgent.command?.trim()) {
       resolve({ ok: false, error: `${customAgent.name} 未配置运行时命令` });
       return;
     }

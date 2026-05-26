@@ -77,4 +77,22 @@ describe('device daemon socket options', () => {
 
     expect(resolved.command).toBe('codex');
   });
+
+  it('uses the detected Claude Code runtime when a custom agent has no saved command', () => {
+    const resolved = resolveCustomAgentRuntime({
+      id: 'custom-4',
+      name: 'claude-code-agent',
+      adapterKind: 'claude-code',
+      command: '',
+    }, [
+      {
+        name: 'Claude Code',
+        adapterKind: 'claude-code',
+        command: '/Users/shaw/.local/share/claude-latest/current/claude',
+        installed: true,
+      },
+    ]);
+
+    expect(resolved.command).toBe('/Users/shaw/.local/share/claude-latest/current/claude');
+  });
 });

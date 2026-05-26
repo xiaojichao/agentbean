@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS agents (
   owner_id      TEXT,
   command       TEXT,
   args          TEXT,
-  cwd           TEXT
+  cwd           TEXT,
+  env           TEXT
 );
 CREATE TABLE IF NOT EXISTS channels (
   id         TEXT PRIMARY KEY,
@@ -122,6 +123,7 @@ export interface AgentRow {
   command: string | null;
   args: string | null;
   cwd: string | null;
+  env?: string | null;
   description: string | null;
 }
 
@@ -236,6 +238,7 @@ function rowToAgent(r: any): AgentRow {
     command: r.command ?? null,
     args: r.args ?? null,
     cwd: r.cwd ?? null,
+    env: r.env ?? null,
     description: r.description ?? null,
   };
 }
@@ -316,6 +319,7 @@ CREATE TABLE IF NOT EXISTS agents (
   command TEXT,
   args TEXT,
   cwd TEXT,
+  env TEXT,
   owner_id TEXT,
   FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
   FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE
@@ -438,12 +442,12 @@ export interface GlobalDb {
     isPublished(agentId: string, networkId: string): boolean;
   };
   agents: {
-    upsert(row: { id: string; name: string; role?: string; adapterKind: string; deviceId: string; networkId: string; visibility?: string; category?: string; source?: string; firstSeenAt: number; lastSeenAt: number; lastError?: string | null; command?: string; args?: string; cwd?: string; ownerId?: string; description?: string | null }): void;
-    listAll(): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null }[];
-    listByDevice(deviceId: string): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null }[];
-    listCustomByOwner(ownerId: string): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null }[];
-    listVisibleInNetwork(networkId: string): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null }[];
-    getFull(id: string): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null } | null;
+    upsert(row: { id: string; name: string; role?: string; adapterKind: string; deviceId: string; networkId: string; visibility?: string; category?: string; source?: string; firstSeenAt: number; lastSeenAt: number; lastError?: string | null; command?: string; args?: string; cwd?: string; env?: string; ownerId?: string; description?: string | null }): void;
+    listAll(): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; env: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null }[];
+    listByDevice(deviceId: string): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; env: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null }[];
+    listCustomByOwner(ownerId: string): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; env: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null }[];
+    listVisibleInNetwork(networkId: string): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; env: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null }[];
+    getFull(id: string): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; env: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null } | null;
     updateConfig(id: string, input: { name: string; adapterKind?: string | null; command?: string | null; cwd?: string | null; description?: string | null; updatedAt: number }): void;
     get(id: string): { id: string } | null;
   };
@@ -643,6 +647,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   try { raw.exec(`ALTER TABLE agents ADD COLUMN command TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN args TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN cwd TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE agents ADD COLUMN env TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN owner_id TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN description TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE users ADD COLUMN current_network_id TEXT`); } catch {}
@@ -673,18 +678,26 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   const deviceTransferOwner = raw.prepare(`UPDATE devices SET user_id = ? WHERE id = ?`);
 
   const globalAgentUpsert = raw.prepare(`
-    INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, command, args, cwd, owner_id, description)
-    VALUES (@id, @name, @role, @adapterKind, @deviceId, @networkId, @visibility, @category, @source, @firstSeenAt, @lastSeenAt, @lastError, @command, @args, @cwd, @ownerId, @description)
+    INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, command, args, cwd, env, owner_id, description)
+    VALUES (@id, @name, @role, @adapterKind, @deviceId, @networkId, @visibility, @category, @source, @firstSeenAt, @lastSeenAt, @lastError, @command, @args, @cwd, @env, @ownerId, @description)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       adapter_kind = excluded.adapter_kind,
+      device_id = excluded.device_id,
+      network_id = excluded.network_id,
+      visibility = excluded.visibility,
+      category = excluded.category,
+      source = excluded.source,
       command = excluded.command,
       args = excluded.args,
+      cwd = excluded.cwd,
+      env = excluded.env,
+      owner_id = excluded.owner_id,
       last_seen_at = excluded.last_seen_at,
       description = excluded.description
   `);
   const globalAgentListByDevice = raw.prepare(`
-    SELECT id, name, role, adapter_kind AS adapterKind, category, source, command, args, cwd, device_id AS deviceId,
+    SELECT id, name, role, adapter_kind AS adapterKind, category, source, command, args, cwd, env, device_id AS deviceId,
            network_id AS networkId, visibility, owner_id AS ownerId, description,
            first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, last_error AS lastError
     FROM agents
@@ -692,14 +705,14 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
     ORDER BY first_seen_at
   `);
   const globalAgentListAll = raw.prepare(`
-    SELECT id, name, role, adapter_kind AS adapterKind, category, source, command, args, cwd, device_id AS deviceId,
+    SELECT id, name, role, adapter_kind AS adapterKind, category, source, command, args, cwd, env, device_id AS deviceId,
            network_id AS networkId, visibility, owner_id AS ownerId, description,
            first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, last_error AS lastError
     FROM agents
     ORDER BY first_seen_at DESC
   `);
   const globalAgentListCustomByOwner = raw.prepare(`
-    SELECT id, name, role, adapter_kind AS adapterKind, category, source, command, args, cwd, device_id AS deviceId,
+    SELECT id, name, role, adapter_kind AS adapterKind, category, source, command, args, cwd, env, device_id AS deviceId,
            network_id AS networkId, visibility, owner_id AS ownerId, description,
            first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, last_error AS lastError
     FROM agents
@@ -708,7 +721,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   `);
   const globalAgentListVisibleInNetwork = raw.prepare(`
     SELECT DISTINCT a.id, a.name, a.role, a.adapter_kind AS adapterKind, a.category, a.source,
-           a.command, a.args, a.cwd, a.device_id AS deviceId,
+           a.command, a.args, a.cwd, a.env, a.device_id AS deviceId,
            a.network_id AS networkId, a.visibility, a.owner_id AS ownerId, a.description,
            a.first_seen_at AS firstSeenAt, a.last_seen_at AS lastSeenAt, a.last_error AS lastError
     FROM agents a
@@ -718,7 +731,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
     ORDER BY a.first_seen_at DESC
   `);
   const globalAgentGetFull = raw.prepare(`
-    SELECT id, name, role, adapter_kind AS adapterKind, category, source, command, args, cwd, device_id AS deviceId,
+    SELECT id, name, role, adapter_kind AS adapterKind, category, source, command, args, cwd, env, device_id AS deviceId,
            network_id AS networkId, visibility, owner_id AS ownerId, description,
            first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, last_error AS lastError
     FROM agents WHERE id = ?
@@ -858,6 +871,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
           command: row.command ?? null,
           args: row.args ?? null,
           cwd: row.cwd ?? null,
+          env: row.env ?? null,
           ownerId: row.ownerId ?? null,
           description: row.description ?? null,
         });
@@ -918,6 +932,7 @@ export function openDb(path: string): Db {
   try { raw.exec(`ALTER TABLE agents ADD COLUMN command TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN args TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN cwd TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE agents ADD COLUMN env TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE agents ADD COLUMN description TEXT`); } catch {}
 
   // Channel visibility + user members migrations
@@ -927,8 +942,8 @@ export function openDb(path: string): Db {
   try { raw.exec(`ALTER TABLE channels ADD COLUMN archived_at INTEGER`); } catch {}
 
   const agentUpsert = raw.prepare(`
-    INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, owner_id, command, args, cwd)
-    VALUES (@id, @name, @role, @adapterKind, @deviceId, @networkId, @visibility, @category, @source, @firstSeenAt, @lastSeenAt, @lastError, @ownerId, @command, @args, @cwd)
+    INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, owner_id, command, args, cwd, env)
+    VALUES (@id, @name, @role, @adapterKind, @deviceId, @networkId, @visibility, @category, @source, @firstSeenAt, @lastSeenAt, @lastError, @ownerId, @command, @args, @cwd, @env)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       role = excluded.role,
@@ -943,11 +958,12 @@ export function openDb(path: string): Db {
       owner_id     = excluded.owner_id,
       command      = excluded.command,
       args         = excluded.args,
-      cwd          = excluded.cwd
+      cwd          = excluded.cwd,
+      env          = excluded.env
   `);
   const agentCreate = raw.prepare(`
-    INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, owner_id, command, args, cwd, description)
-    VALUES (@id, @name, @role, @adapterKind, @deviceId, @networkId, @visibility, @category, @source, @firstSeenAt, @lastSeenAt, @lastError, @ownerId, @command, @args, @cwd, @description)
+    INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, owner_id, command, args, cwd, env, description)
+    VALUES (@id, @name, @role, @adapterKind, @deviceId, @networkId, @visibility, @category, @source, @firstSeenAt, @lastSeenAt, @lastError, @ownerId, @command, @args, @cwd, @env, @description)
   `);
   const agentUpdateVisibility = raw.prepare(`
     UPDATE agents SET visibility = ? WHERE id = ?
@@ -1064,8 +1080,8 @@ export function openDb(path: string): Db {
     raw,
     close: () => raw.close(),
     agents: {
-      upsert: (row) => { agentUpsert.run({ ...row, source: row.source ?? 'self-register' }); },
-      create: (row) => { agentCreate.run({ ...row, source: row.source ?? 'self-register' }); },
+      upsert: (row) => { agentUpsert.run({ ...row, source: row.source ?? 'self-register', env: row.env ?? null }); },
+      create: (row) => { agentCreate.run({ ...row, source: row.source ?? 'self-register', env: row.env ?? null }); },
       updateVisibility: (id, visibility) => { agentUpdateVisibility.run(visibility, id); },
       updateNetworkId: (id, networkId) => { agentUpdateNetworkId.run(networkId, id); },
       getAll: () => agentGetAll.all().map(rowToAgent),

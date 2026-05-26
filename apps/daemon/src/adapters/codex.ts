@@ -1,8 +1,18 @@
 import { spawn } from 'node-pty';
 import { accessSync, constants } from 'node:fs';
 import { homedir } from 'node:os';
+import { spawn as spawnChild } from 'node:child_process';
+import { spawn as spawnPty } from 'node-pty';
+import { accessSync, constants, existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import type { CliAdapter, AskInput } from './adapter.js';
+
+type RuntimeProcess = {
+  onData(cb: (data: string) => void): void;
+  onExit(cb: (event: { exitCode: number }) => void): void;
+  kill(signal?: string): void;
+};
 
 export interface CodexAdapterOpts {
   command: string;
@@ -51,13 +61,47 @@ export function extractCodexReply(output: string, payload?: string): string {
   return clean.trim();
 }
 
-function normalizeExecArgs(args?: string[]): string[] {
+function hasFlag(args: string[], ...flags: string[]): boolean {
+  return args.some((arg) => flags.some((flag) => arg === flag || arg.startsWith(`${flag}=`)));
+}
+
+function flagValue(args: string[], ...flags: string[]): string | undefined {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    for (const flag of flags) {
+      if (arg === flag) return args[i + 1];
+      if (arg.startsWith(`${flag}=`)) return arg.slice(flag.length + 1);
+    }
+  }
+  return undefined;
+}
+
+function createOutputLastMessagePath(): string {
+  return join(mkdtempSync(join(tmpdir(), 'agentbean-codex-')), 'last-message.txt');
+}
+
+function normalizeExecArgs(args: string[] | undefined, outputLastMessagePath: string): { args: string[]; outputLastMessagePath?: string } {
   const baseArgs = args && args.length > 0 ? args : ['exec'];
   const subcommand = baseArgs[0];
-  if ((subcommand === 'exec' || subcommand === 'e') && !baseArgs.includes('--skip-git-repo-check')) {
-    return [subcommand, '--skip-git-repo-check', ...baseArgs.slice(1)];
+  if (subcommand === 'exec' || subcommand === 'e') {
+    const rest = baseArgs.slice(1);
+    const normalized = [subcommand];
+    if (!hasFlag(rest, '--skip-git-repo-check')) {
+      normalized.push('--skip-git-repo-check');
+    }
+    const configuredOutputPath = flagValue(rest, '--output-last-message', '-o');
+    if (!configuredOutputPath) {
+      normalized.push('--output-last-message', outputLastMessagePath);
+    }
+    if (!hasFlag(rest, '--json', '--experimental-json')) {
+      normalized.push('--json');
+    }
+    return {
+      args: [...normalized, ...rest],
+      outputLastMessagePath: configuredOutputPath ?? outputLastMessagePath,
+    };
   }
-  return baseArgs;
+  return { args: baseArgs };
 }
 
 function adapterTimeoutMs(): number {
@@ -103,6 +147,63 @@ function assertExecutable(command: string, env: { [key: string]: string }, label
   throw new Error(`${label} command was not found on PATH: ${trimmed}. PATH=${env.PATH ?? ''}`);
 }
 
+function readOutputLastMessage(path?: string): string | null {
+  if (!path || !existsSync(path)) return null;
+  const text = readFileSync(path, 'utf8').trim();
+  return text || null;
+}
+
+function spawnRuntimeProcess(command: string, args: string[], opts: { cwd: string; env: { [key: string]: string } }): RuntimeProcess {
+  try {
+    const pty = spawnPty(command, args, {
+      name: 'xterm-color',
+      cols: 80,
+      rows: 30,
+      cwd: opts.cwd,
+      env: opts.env,
+    });
+    return {
+      onData: (cb) => pty.onData(cb),
+      onExit: (cb) => pty.onExit(({ exitCode }) => cb({ exitCode })),
+      kill: (signal) => pty.kill(signal),
+    };
+  } catch (err) {
+    const child = spawnChild(command, args, {
+      cwd: opts.cwd,
+      env: opts.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const dataHandlers: Array<(data: string) => void> = [];
+    const exitHandlers: Array<(event: { exitCode: number }) => void> = [];
+    let exited = false;
+
+    const emitExit = (exitCode: number) => {
+      if (exited) return;
+      exited = true;
+      for (const handler of exitHandlers) handler({ exitCode });
+    };
+
+    child.stdout?.on('data', (data) => {
+      for (const handler of dataHandlers) handler(String(data));
+    });
+    child.stderr?.on('data', (data) => {
+      for (const handler of dataHandlers) handler(String(data));
+    });
+    child.on('error', (childErr) => {
+      const message = childErr instanceof Error ? childErr.message : String(childErr);
+      for (const handler of dataHandlers) handler(message);
+      emitExit(1);
+    });
+    child.on('exit', (code) => emitExit(code ?? 1));
+
+    return {
+      onData: (cb) => { dataHandlers.push(cb); },
+      onExit: (cb) => { exitHandlers.push(cb); },
+      kill: (signal) => { child.kill(signal as NodeJS.Signals | undefined); },
+    };
+  }
+}
+
 export class CodexAdapter implements CliAdapter {
   readonly kind = 'codex' as const;
   constructor(private readonly opts: CodexAdapterOpts) {}
@@ -112,7 +213,9 @@ export class CodexAdapter implements CliAdapter {
       const payload = renderPayload(input, this.opts.systemPrompt ?? input.systemPrompt);
       const cwd = input.workspace ?? this.opts.cwd ?? process.cwd();
       const baseCommand = this.opts.command || 'codex';
-      const configuredArgs = normalizeExecArgs(this.opts.args);
+      const defaultOutputLastMessagePath = createOutputLastMessagePath();
+      const normalizedExec = normalizeExecArgs(this.opts.args, defaultOutputLastMessagePath);
+      const configuredArgs = normalizedExec.args;
       const baseArgs = [...configuredArgs, payload];
       const command = input.sandboxProfilePath ? 'sandbox-exec' : baseCommand;
       const args = input.sandboxProfilePath
@@ -137,6 +240,18 @@ export class CodexAdapter implements CliAdapter {
         cwd,
         env,
       });
+
+      try {
+        assertExecutable(command, env, input.sandboxProfilePath ? 'Sandbox launcher' : 'Codex runtime');
+        if (input.sandboxProfilePath) {
+          assertExecutable(baseCommand, env, 'Codex runtime');
+        }
+      } catch (err) {
+        reject(err);
+        return;
+      }
+
+      const pty = spawnRuntimeProcess(command, args, { cwd, env });
 
       const chunks: string[] = [];
       let finished = false;
@@ -175,7 +290,7 @@ export class CodexAdapter implements CliAdapter {
           const detail = stripAnsi(raw).trim();
           return reject(new Error(detail ? `codex exit ${exitCode}: ${detail}` : `codex exit ${exitCode}`));
         }
-        const reply = extractCodexReply(raw, payload);
+        const reply = readOutputLastMessage(normalizedExec.outputLastMessagePath) ?? extractCodexReply(raw, payload);
         resolve(reply || '(Codex 已完成处理)');
       });
     });
@@ -184,7 +299,7 @@ export class CodexAdapter implements CliAdapter {
   async health(): Promise<{ ok: boolean; detail?: string }> {
     return new Promise((resolve) => {
       try {
-        const pty = spawn('bash', ['-c', 'codex --version'], {
+        const pty = spawnPty('bash', ['-c', 'codex --version'], {
           name: 'xterm-color', cols: 80, rows: 30,
           cwd: this.opts.cwd ?? process.cwd(),
           env: buildRuntimeEnv(),
