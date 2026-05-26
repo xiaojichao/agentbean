@@ -1,5 +1,6 @@
 import { spawn } from 'node-pty';
-import { homedir } from 'node:os';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CliAdapter, AskInput } from './adapter.js';
 
@@ -50,13 +51,47 @@ export function extractCodexReply(output: string, payload?: string): string {
   return clean.trim();
 }
 
-function normalizeExecArgs(args?: string[]): string[] {
+function hasFlag(args: string[], ...flags: string[]): boolean {
+  return args.some((arg) => flags.some((flag) => arg === flag || arg.startsWith(`${flag}=`)));
+}
+
+function flagValue(args: string[], ...flags: string[]): string | undefined {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    for (const flag of flags) {
+      if (arg === flag) return args[i + 1];
+      if (arg.startsWith(`${flag}=`)) return arg.slice(flag.length + 1);
+    }
+  }
+  return undefined;
+}
+
+function createOutputLastMessagePath(): string {
+  return join(mkdtempSync(join(tmpdir(), 'agentbean-codex-')), 'last-message.txt');
+}
+
+function normalizeExecArgs(args: string[] | undefined, outputLastMessagePath: string): { args: string[]; outputLastMessagePath?: string } {
   const baseArgs = args && args.length > 0 ? args : ['exec'];
   const subcommand = baseArgs[0];
-  if ((subcommand === 'exec' || subcommand === 'e') && !baseArgs.includes('--skip-git-repo-check')) {
-    return [subcommand, '--skip-git-repo-check', ...baseArgs.slice(1)];
+  if (subcommand === 'exec' || subcommand === 'e') {
+    const rest = baseArgs.slice(1);
+    const normalized = [subcommand];
+    if (!hasFlag(rest, '--skip-git-repo-check')) {
+      normalized.push('--skip-git-repo-check');
+    }
+    const configuredOutputPath = flagValue(rest, '--output-last-message', '-o');
+    if (!configuredOutputPath) {
+      normalized.push('--output-last-message', outputLastMessagePath);
+    }
+    if (!hasFlag(rest, '--json', '--experimental-json')) {
+      normalized.push('--json');
+    }
+    return {
+      args: [...normalized, ...rest],
+      outputLastMessagePath: configuredOutputPath ?? outputLastMessagePath,
+    };
   }
-  return baseArgs;
+  return { args: baseArgs };
 }
 
 function adapterTimeoutMs(): number {
@@ -78,6 +113,12 @@ function buildRuntimeEnv(extra?: Record<string, string>): { [key: string]: strin
   return { ...(process.env as { [key: string]: string }), PATH: pathEntries, ...(extra ?? {}) };
 }
 
+function readOutputLastMessage(path?: string): string | null {
+  if (!path || !existsSync(path)) return null;
+  const text = readFileSync(path, 'utf8').trim();
+  return text || null;
+}
+
 export class CodexAdapter implements CliAdapter {
   readonly kind = 'codex' as const;
   constructor(private readonly opts: CodexAdapterOpts) {}
@@ -87,7 +128,9 @@ export class CodexAdapter implements CliAdapter {
       const payload = renderPayload(input, this.opts.systemPrompt ?? input.systemPrompt);
       const cwd = input.workspace ?? this.opts.cwd ?? process.cwd();
       const baseCommand = this.opts.command || 'codex';
-      const configuredArgs = normalizeExecArgs(this.opts.args);
+      const defaultOutputLastMessagePath = createOutputLastMessagePath();
+      const normalizedExec = normalizeExecArgs(this.opts.args, defaultOutputLastMessagePath);
+      const configuredArgs = normalizedExec.args;
       const baseArgs = [...configuredArgs, payload];
       const command = input.sandboxProfilePath ? 'sandbox-exec' : baseCommand;
       const args = input.sandboxProfilePath
@@ -139,7 +182,7 @@ export class CodexAdapter implements CliAdapter {
           const detail = stripAnsi(raw).trim();
           return reject(new Error(detail ? `codex exit ${exitCode}: ${detail}` : `codex exit ${exitCode}`));
         }
-        const reply = extractCodexReply(raw, payload);
+        const reply = readOutputLastMessage(normalizedExec.outputLastMessagePath) ?? extractCodexReply(raw, payload);
         resolve(reply || '(Codex 已完成处理)');
       });
     });

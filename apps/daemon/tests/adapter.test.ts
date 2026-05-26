@@ -20,7 +20,7 @@ describe('CodexAdapter', () => {
     expect(out).toContain('OK:');
   });
 
-  it('uses codex exec when configured args are empty', async () => {
+  it('uses codex exec automation flags when configured args are empty', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentbean-codex-test-'));
     const script = join(dir, 'fake-codex.cjs');
     writeFileSync(script, `#!/usr/bin/env node
@@ -33,7 +33,16 @@ describe('CodexAdapter', () => {
         process.stdout.write('BAD:' + JSON.stringify(args));
         process.exit(3);
       }
-      process.stdout.write('OK:' + args[2]);
+      if (!args.includes('--json')) {
+        process.stdout.write('BAD:' + JSON.stringify(args));
+        process.exit(4);
+      }
+      const outIdx = args.indexOf('--output-last-message');
+      if (outIdx < 0 || !args[outIdx + 1]) {
+        process.stdout.write('BAD:' + JSON.stringify(args));
+        process.exit(5);
+      }
+      process.stdout.write('OK:' + args.at(-1));
     `);
     chmodSync(script, 0o755);
 
@@ -42,6 +51,23 @@ describe('CodexAdapter', () => {
     expect(out).toContain('OK:');
     expect(out).toContain('# user');
     expect(out).toContain('hi-codex');
+  });
+
+  it('prefers Codex output-last-message when available', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentbean-codex-test-'));
+    const script = join(dir, 'fake-codex.cjs');
+    writeFileSync(script, `#!/usr/bin/env node
+      const { writeFileSync } = require('node:fs');
+      const args = process.argv.slice(2);
+      const outIdx = args.indexOf('--output-last-message');
+      writeFileSync(args[outIdx + 1], 'final from file');
+      process.stdout.write('noisy json event');
+    `);
+    chmodSync(script, 0o755);
+
+    const adapter = new CodexAdapter({ command: script, args: [] });
+    const out = await adapter.ask({ prompt: 'hi-codex', history: [] }, new AbortController().signal);
+    expect(out).toBe('final from file');
   });
 
   it('adds the trusted-directory bypass to configured codex exec args', async () => {
@@ -55,7 +81,8 @@ describe('CodexAdapter', () => {
 
     const adapter = new CodexAdapter({ command: script, args: ['exec', '--json'] });
     const out = await adapter.ask({ prompt: 'hi-codex', history: [] }, new AbortController().signal);
-    expect(out).toContain('["exec","--skip-git-repo-check","--json"');
+    expect(out).toContain('["exec","--skip-git-repo-check","--output-last-message"');
+    expect(out).toContain('"--json"');
   });
 
   it('drops echoed prompt history from Codex terminal output', () => {
