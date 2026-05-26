@@ -12,6 +12,16 @@ let baseUrl: string;
 let storageBaseDir: string;
 let previousStorageBaseDir: string | undefined;
 
+async function waitFor(condition: () => boolean, timeoutMs = 1000): Promise<void> {
+  const startedAt = Date.now();
+  while (!condition()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error('condition not met before timeout');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 beforeEach(async () => {
   previousStorageBaseDir = process.env.STORAGE_BASE_DIR;
   storageBaseDir = mkdtempSync(join(tmpdir(), 'agentbean-web-namespace-'));
@@ -1832,7 +1842,7 @@ describe('message:send', () => {
       requestId: req.requestId,
     });
 
-    await new Promise((r) => setTimeout(r, 100));
+    await waitFor(() => statuses.some((s) => s.id === 'custom-legacy-drama' && s.status === 'online'));
     expect(statuses.some((s) => s.id === 'custom-legacy-drama' && s.status === 'online')).toBe(true);
 
     ag.close(); web.close();
