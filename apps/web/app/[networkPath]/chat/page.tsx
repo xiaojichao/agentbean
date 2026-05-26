@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback, type MouseEvent, type ReactNode, type RefObject } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye } from 'lucide-react';
+import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2 } from 'lucide-react';
 import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage } from '@/lib/schema';
@@ -2337,7 +2337,7 @@ function ChatTaskBadge({
         className={`inline-flex h-5 items-center gap-1 rounded-full border px-2 text-[11px] font-semibold leading-none transition-colors ${column.badge} ${canChange ? 'hover:brightness-105' : ''}`}
         title={canChange ? `${column.label} · 更改任务状态` : `${column.label} · 查看任务`}
       >
-        <span className={`h-2 w-2 rounded-full ${column.dot}`} />
+        {taskBadgeIcon(column.id)}
         <span>{label}</span>
         <span>@{assigneeName}</span>
       </button>
@@ -2361,6 +2361,16 @@ function ChatTaskBadge({
       )}
     </span>
   );
+}
+
+function taskBadgeIcon(status: TaskStatus): ReactNode {
+  if (status === 'done' || status === 'closed') {
+    return <CheckCircle2 size={11} strokeWidth={2.5} />;
+  }
+  if (status === 'in_progress') {
+    return <SquareDot size={11} strokeWidth={2.5} />;
+  }
+  return <Eye size={11} strokeWidth={2.5} />;
 }
 
 function MarkdownMessage({ body }: { body: string }) {

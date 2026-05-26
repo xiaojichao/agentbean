@@ -1601,6 +1601,37 @@ describe('message:send', () => {
     await local.close();
   });
 
+  it('saves @human channel messages without reporting a missing online agent', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({
+      id: 'human-chat-target',
+      username: 'human-target',
+      passwordHash: null,
+      createdAt: now,
+    });
+    app.globalDb.networkMembers.add('default', 'human-chat-target', 'member');
+
+    const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    const ch = app.channels.ensureDefault('default');
+
+    const messages: any[] = [];
+    web.emit('channel:join', { channelId: ch.id });
+    web.on('channel:message', (m: any) => messages.push(m));
+    await new Promise((r) => setTimeout(r, 50));
+
+    const ack = await new Promise<any>((resolve) => {
+      web.emit('message:send', { channelId: ch.id, body: '@human-target 你好', clientMsgId: 'human-mention-1' }, resolve);
+    });
+    expect(ack.ok).toBe(true);
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(messages.find((m) => m.senderKind === 'human' && m.body === '@human-target 你好')).toBeTruthy();
+    expect(messages.some((m) => m.senderKind === 'system' && String(m.body).includes('未找到被 @ 的在线 Agent'))).toBe(false);
+    expect(messages.some((m) => m.senderKind === 'system' && String(m.body).includes('当前没有在线 Agent'))).toBe(false);
+    web.close();
+  });
+
   it('routes DM messages directly to the custom agent target', async () => {
     const now = Date.now();
     const owner = app.globalDb.users.listAll()[0]!;
