@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Globe, Users, Monitor, Bot, Trash2, RefreshCw, X } from 'lucide-react';
+import { Globe, Users, Monitor, Bot, Trash2, RefreshCw, X, Save } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { getWebSocket } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
@@ -107,7 +107,11 @@ export default function AdminDashboardPage() {
       if (res?.ok) {
         if (t === 'networks') setNetworks(res.networks ?? []);
         if (t === 'users') setUsers(res.users ?? []);
-        if (t === 'devices') setDevices(res.devices ?? []);
+        if (t === 'devices') {
+          setDevices(res.devices ?? []);
+          const usersRes = await emitWithTimeout(socket, 'admin:list-users', {});
+          if (usersRes?.ok) setUsers(usersRes.users ?? []);
+        }
         if (t === 'agents') setAgents(res.agents ?? []);
       } else {
         setError(res?.error ?? '加载失败');
@@ -131,6 +135,16 @@ export default function AdminDashboardPage() {
     } else {
       setError(res?.error ?? '删除失败');
     }
+  };
+
+  const handleTransferDeviceOwner = async (deviceId: string, userId: string) => {
+    const socket = getWebSocket();
+    const res = await emitWithTimeout(socket, 'admin:transfer-device-owner', { deviceId, userId });
+    if (!res?.ok || !res.device) {
+      throw new Error(res?.error ?? '转移失败');
+    }
+    setDevices((current) => current.map((device) => (device.id === res.device.id ? res.device : device)));
+    setSelectedDevice((current) => (current?.id === res.device.id ? res.device : current));
   };
 
   if (!currentUser || currentUser.role !== 'admin') {
@@ -176,7 +190,7 @@ export default function AdminDashboardPage() {
       {!loading && tab === 'users' && <UsersTable users={users} onDelete={(id) => handleDelete('user', id)} />}
       {!loading && tab === 'devices' && <DevicesTable devices={devices} networks={networks} onSelect={setSelectedDevice} />}
       {!loading && tab === 'agents' && <AgentsTable agents={agents} networks={networks} onSelect={setSelectedAgent} onDelete={(id) => handleDelete('agent', id)} />}
-      {selectedDevice && <DeviceDetailDialog device={selectedDevice} onClose={() => setSelectedDevice(null)} />}
+      {selectedDevice && <DeviceDetailDialog device={selectedDevice} users={users} onTransferOwner={handleTransferDeviceOwner} onClose={() => setSelectedDevice(null)} />}
       {selectedAgent && <AgentDetailDialog agent={selectedAgent} onClose={() => setSelectedAgent(null)} />}
       </div>
     </div>
@@ -395,9 +409,44 @@ function AgentsTable({ agents, networks, onSelect, onDelete }: { agents: AdminAg
   );
 }
 
-function DeviceDetailDialog({ device, onClose }: { device: AdminDevice; onClose: () => void }) {
+function DeviceDetailDialog({
+  device,
+  users,
+  onTransferOwner,
+  onClose,
+}: {
+  device: AdminDevice;
+  users: AdminUser[];
+  onTransferOwner: (deviceId: string, userId: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [ownerId, setOwnerId] = useState(device.userId);
+  const [savingOwner, setSavingOwner] = useState(false);
+  const [ownerError, setOwnerError] = useState<string | null>(null);
   const runtimes = device.runtimes ?? [];
   const publicAgents = device.publicAgents ?? [];
+  const ownerOptions = users.length > 0
+    ? users
+    : [{ id: device.userId, username: device.userName ?? '未知用户', email: null, role: 'user', createdAt: 0 }];
+
+  useEffect(() => {
+    setOwnerId(device.userId);
+    setOwnerError(null);
+  }, [device.id, device.userId]);
+
+  const saveOwner = async () => {
+    if (!ownerId || ownerId === device.userId) return;
+    setSavingOwner(true);
+    setOwnerError(null);
+    try {
+      await onTransferOwner(device.id, ownerId);
+    } catch (err) {
+      setOwnerError(err instanceof Error ? err.message : '转移失败');
+    } finally {
+      setSavingOwner(false);
+    }
+  };
+
   return (
     <DialogShell title={device.name || device.hostname || '未命名设备'} icon={<Monitor size={17} className="text-neutral-600" />} onClose={onClose}>
       <div className="space-y-5">
@@ -419,6 +468,33 @@ function DeviceDetailDialog({ device, onClose }: { device: AdminDevice; onClose:
             <DetailItem label="Agent 数量" value={`${device.agentCount}`} />
             <DetailItem label="Daemon 版本" value={<DaemonVersionValue device={device} />} />
           </DetailGrid>
+          <div className="mt-3 rounded-md border border-neutral-200 bg-white px-3 py-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+              <label className="min-w-0 flex-1">
+                <span className="text-[11px] font-medium text-neutral-500">转移所有者</span>
+                <select
+                  value={ownerId}
+                  onChange={(event) => setOwnerId(event.target.value)}
+                  className="mt-1 h-9 w-full rounded-md border border-neutral-300 bg-white px-2 text-sm text-neutral-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                >
+                  {ownerOptions.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.username || user.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                onClick={saveOwner}
+                disabled={savingOwner || !ownerId || ownerId === device.userId}
+                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-neutral-300 px-3 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                <Save size={14} />
+                保存
+              </button>
+            </div>
+            {ownerError && <div className="mt-2 text-xs text-red-600">{ownerError}</div>}
+          </div>
         </section>
 
         <section>
