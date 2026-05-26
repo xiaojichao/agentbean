@@ -2342,7 +2342,7 @@ function ChatTaskBadge({
         <span>@{assigneeName}</span>
       </button>
       {open && canChange && (
-        <div className="absolute left-0 top-6 z-30 w-40 rounded-md border border-neutral-200 bg-white py-1 shadow-lg">
+        <div className="absolute left-0 top-6 z-30 w-32 rounded-md border border-neutral-200 bg-white py-1 shadow-lg">
           {TASK_COLUMNS.map((status) => (
             <button
               key={status.id}
@@ -2350,7 +2350,7 @@ function ChatTaskBadge({
                 event.stopPropagation();
                 onStatus?.(status.id);
               }}
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-neutral-700 hover:bg-neutral-50"
+              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-neutral-700 hover:bg-neutral-50"
             >
               <span className={`h-2 w-2 rounded-full ${status.dot}`} />
               <span className="flex-1">{status.label}</span>

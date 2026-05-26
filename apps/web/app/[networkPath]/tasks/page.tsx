@@ -814,9 +814,9 @@ function StatusButton({ task, open, compact, onOpen, onMove }: { task: Task; ope
         <ChevronDown size={12} />
       </button>
       {open && (
-        <div className="absolute left-0 top-8 z-30 w-40 rounded-md border border-neutral-200 bg-white py-1 shadow-lg">
+        <div className="absolute left-0 top-8 z-30 w-32 rounded-md border border-neutral-200 bg-white py-1 shadow-lg">
           {STATUS_COLUMNS.map((column) => (
-            <button key={column.id} onClick={() => onMove(column.id)} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-neutral-700 hover:bg-neutral-50">
+            <button key={column.id} onClick={() => onMove(column.id)} className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-neutral-700 hover:bg-neutral-50">
               <span className={`h-2 w-2 rounded-full ${column.dot}`} />
               <span className="flex-1">{column.menuLabel}</span>
               {task.status === column.id && <Check size={12} className="text-neutral-500" />}
