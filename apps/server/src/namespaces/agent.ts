@@ -65,9 +65,10 @@ interface DispatchCustomAgent {
   name: string;
   role?: string | null;
   adapterKind: AdapterKind;
-  command: string;
+  command?: string | null;
   args?: string[] | null;
   cwd?: string | null;
+  env?: Record<string, string> | null;
   description?: string | null;
   category?: AgentCategory | string | null;
 }
@@ -94,6 +95,7 @@ export interface AgentSnapshotDto {
   command?: string | null;
   args?: string[] | null;
   cwd?: string | null;
+  env?: Record<string, string> | null;
   description?: string | null;
   deviceId?: string;
   deviceName?: string | null;
@@ -118,6 +120,7 @@ export function snapshotToDto(rt: AgentRuntime): AgentSnapshotDto {
     command: rt.command ?? null,
     args: rt.args ?? null,
     cwd: rt.cwd ?? null,
+    env: rt.env ?? null,
     description: rt.description ?? null,
     deviceId: rt.deviceId,
     publishedNetworkIds: rt.publishedNetworkIds,
@@ -160,6 +163,22 @@ function parseArgs(value: unknown): string[] | null {
   }
 }
 
+function customAgentRequiresSavedCommand(agent: DispatchCustomAgent): boolean {
+  return agent.adapterKind !== 'claude-code';
+}
+
+function parseEnv(value: unknown): Record<string, string> | null {
+  if (!value) return null;
+  if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, string>;
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function customAgentToDto(agent: any, status: AgentSnapshotDto['status'], lastError?: string): AgentSnapshotDto {
   return {
     id: agent.id,
@@ -177,6 +196,7 @@ function customAgentToDto(agent: any, status: AgentSnapshotDto['status'], lastEr
     command: agent.command ?? null,
     args: parseArgs(agent.args),
     cwd: agent.cwd ?? null,
+    env: parseEnv(agent.env),
     description: agent.description ?? null,
     deviceId: agent.deviceId,
     source: 'custom',
@@ -667,6 +687,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         command: persisted.command,
         args: parseArgs(persisted.args),
         cwd: persisted.cwd,
+        env: parseEnv(persisted.env),
         description: persisted.description,
         category: persisted.category,
       };
@@ -677,7 +698,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       resolve({ ok: false, error: `${req.agentId} 不在线` });
       return;
     }
-    if (customAgent && !customAgent.command?.trim()) {
+    if (customAgent && customAgentRequiresSavedCommand(customAgent) && !customAgent.command?.trim()) {
       resolve({ ok: false, error: `${customAgent.name} 未配置运行时命令` });
       return;
     }

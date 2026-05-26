@@ -633,6 +633,7 @@ describe('/web namespace', () => {
         category: 'executor-hosted',
         deviceId: 'remote-device-1',
         cwd: '/Users/remote/project',
+        env: { OPENAI_BASE_URL: 'https://api.example.test' },
       }, resolve);
     });
     expect(createRes.ok).toBe(true);
@@ -640,7 +641,19 @@ describe('/web namespace', () => {
       name: 'Device-Bound-Agent',
       deviceId: 'remote-device-1',
       source: 'custom',
+      env: JSON.stringify({ OPENAI_BASE_URL: 'https://api.example.test' }),
     });
+
+    const missingCwdRes = await new Promise<any>((resolve) => {
+      web.emit('agent:create', {
+        name: 'Missing Cwd',
+        adapterKind: 'codex',
+        command: 'codex',
+        category: 'executor-hosted',
+        deviceId: 'remote-device-1',
+      }, resolve);
+    });
+    expect(missingCwdRes).toMatchObject({ ok: false, error: 'EMPTY_CWD' });
 
     const customList = await new Promise<any>((resolve) => {
       web.emit('agent:custom:list', { deviceId: 'remote-device-1' }, resolve);
