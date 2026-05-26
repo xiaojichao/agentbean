@@ -18,6 +18,12 @@ export const TASK_STATUS_COLUMNS: {
 
 export const TASK_STATUS_BY_ID = Object.fromEntries(TASK_STATUS_COLUMNS.map((column) => [column.id, column])) as Record<TaskStatus, typeof TASK_STATUS_COLUMNS[number]>;
 
+export const TASK_STATUS_MENU_PANEL_CLASS = 'z-50 rounded-md border border-neutral-200 bg-white py-1';
+export const TASK_STATUS_MENU_PANEL_STYLE = { width: 136, boxShadow: '0 4px 14px rgba(15, 23, 42, 0.14)' } as const;
+export const TASK_STATUS_MENU_ITEM_CLASS = 'flex h-6 w-full items-center gap-2 px-2.5 text-left text-xs leading-none text-neutral-700 hover:bg-neutral-50';
+export const TASK_STATUS_MENU_DOT_CLASS = 'h-2 w-2 shrink-0 rounded-full';
+export const TASK_STATUS_MENU_LABEL_CLASS = 'min-w-0 flex-1 truncate';
+
 export function isTaskStatus(value: unknown): value is TaskStatus {
   return value === 'todo' || value === 'in_progress' || value === 'in_review' || value === 'done' || value === 'closed';
 }

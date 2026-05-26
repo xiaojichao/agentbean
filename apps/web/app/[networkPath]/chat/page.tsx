@@ -9,7 +9,18 @@ import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage } from '@/lib/sc
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
 import { messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
-import { TASK_STATUS_COLUMNS as TASK_COLUMNS, isTaskStatus, taskStatusDotClass, taskStatusText, type TaskStatus } from '@/lib/task-status';
+import {
+  TASK_STATUS_COLUMNS as TASK_COLUMNS,
+  TASK_STATUS_MENU_DOT_CLASS,
+  TASK_STATUS_MENU_ITEM_CLASS,
+  TASK_STATUS_MENU_LABEL_CLASS,
+  TASK_STATUS_MENU_PANEL_CLASS,
+  TASK_STATUS_MENU_PANEL_STYLE,
+  isTaskStatus,
+  taskStatusDotClass,
+  taskStatusText,
+  type TaskStatus,
+} from '@/lib/task-status';
 
 type ChatTab = 'chat' | 'tasks' | 'files';
 type TaskViewMode = 'board' | 'list';
@@ -2342,7 +2353,7 @@ function ChatTaskBadge({
         <span>@{assigneeName}</span>
       </button>
       {open && canChange && (
-        <div className="absolute left-0 top-6 z-30 w-32 rounded-md border border-neutral-200 bg-white py-1 shadow-lg">
+        <div className={`absolute left-0 top-6 ${TASK_STATUS_MENU_PANEL_CLASS}`} style={TASK_STATUS_MENU_PANEL_STYLE}>
           {TASK_COLUMNS.map((status) => (
             <button
               key={status.id}
@@ -2350,10 +2361,10 @@ function ChatTaskBadge({
                 event.stopPropagation();
                 onStatus?.(status.id);
               }}
-              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-neutral-700 hover:bg-neutral-50"
+              className={TASK_STATUS_MENU_ITEM_CLASS}
             >
-              <span className={`h-2 w-2 rounded-full ${status.dot}`} />
-              <span className="flex-1">{status.label}</span>
+              <span className={`${TASK_STATUS_MENU_DOT_CLASS} ${status.dot}`} />
+              <span className={TASK_STATUS_MENU_LABEL_CLASS}>{status.menuLabel}</span>
               {task?.status === status.id && <Check size={12} className="text-neutral-500" />}
             </button>
           ))}

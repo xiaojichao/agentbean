@@ -30,7 +30,16 @@ import {
 import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, memberEvents, taskEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, Artifact, ChannelSummary, ChatMessage } from '@/lib/schema';
-import { TASK_STATUS_BY_ID as STATUS_BY_ID, TASK_STATUS_COLUMNS as STATUS_COLUMNS, type TaskStatus } from '@/lib/task-status';
+import {
+  TASK_STATUS_BY_ID as STATUS_BY_ID,
+  TASK_STATUS_COLUMNS as STATUS_COLUMNS,
+  TASK_STATUS_MENU_DOT_CLASS,
+  TASK_STATUS_MENU_ITEM_CLASS,
+  TASK_STATUS_MENU_LABEL_CLASS,
+  TASK_STATUS_MENU_PANEL_CLASS,
+  TASK_STATUS_MENU_PANEL_STYLE,
+  type TaskStatus,
+} from '@/lib/task-status';
 
 type TaskViewMode = 'board' | 'list';
 
@@ -814,11 +823,11 @@ function StatusButton({ task, open, compact, onOpen, onMove }: { task: Task; ope
         <ChevronDown size={12} />
       </button>
       {open && (
-        <div className="absolute left-0 top-8 z-30 w-32 rounded-md border border-neutral-200 bg-white py-1 shadow-lg">
+        <div className={`absolute left-0 top-8 ${TASK_STATUS_MENU_PANEL_CLASS}`} style={TASK_STATUS_MENU_PANEL_STYLE}>
           {STATUS_COLUMNS.map((column) => (
-            <button key={column.id} onClick={() => onMove(column.id)} className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-neutral-700 hover:bg-neutral-50">
-              <span className={`h-2 w-2 rounded-full ${column.dot}`} />
-              <span className="flex-1">{column.menuLabel}</span>
+            <button key={column.id} onClick={() => onMove(column.id)} className={TASK_STATUS_MENU_ITEM_CLASS}>
+              <span className={`${TASK_STATUS_MENU_DOT_CLASS} ${column.dot}`} />
+              <span className={TASK_STATUS_MENU_LABEL_CLASS}>{column.menuLabel}</span>
               {task.status === column.id && <Check size={12} className="text-neutral-500" />}
             </button>
           ))}
