@@ -77,7 +77,7 @@ function directoryPickerErrorMessage(error?: string): string {
   if (error === 'CANCELLED') return '';
   if (error === 'DEVICE_OFFLINE') return '目标设备不在线，无法在该设备上选择项目目录';
   if (error === 'DAEMON_UPGRADE_REQUIRED') return '该设备的 Daemon 版本过旧，请升级后再使用目录浏览';
-  if (error === 'DIRECTORY_PICKER_TIMEOUT') return '目录选择超时，请确认目标设备上已打开选择窗口';
+  if (error === 'DIRECTORY_PICKER_TIMEOUT') return '目录选择超时，请确认目标设备已登录桌面会话，并且 Daemon 是从该桌面用户会话启动的';
   if (error === 'DEVICE_NOT_IN_TEAM') return '该设备不属于当前团队';
   return error || '无法打开目录浏览窗口';
 }

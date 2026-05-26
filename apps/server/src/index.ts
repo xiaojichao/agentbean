@@ -785,7 +785,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           if (settled) return;
           settled = true;
           ack?.({ ok: false, error: 'DIRECTORY_PICKER_TIMEOUT' });
-        }, 130_000);
+        }, 30_000);
 
         agentSocket.emit('device:select-directory', {}, (res: any) => {
           if (settled) return;

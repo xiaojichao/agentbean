@@ -288,7 +288,7 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
       return emitWithTimeout(socket, 'device:scan', { deviceId });
     },
     selectDirectory(deviceId) {
-      return emitWithTimeout(socket, 'device:select-directory', { deviceId }, 140000);
+      return emitWithTimeout(socket, 'device:select-directory', { deviceId }, 35000);
     },
     delete(id) {
       return emitWithTimeout(socket, 'device:delete', { id });

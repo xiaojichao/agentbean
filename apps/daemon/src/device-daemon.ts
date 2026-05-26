@@ -104,7 +104,17 @@ type DirectoryPickerCommand = { command: string; args: string[] };
 
 export function nativeDirectoryPickerCommands(platform = process.platform): DirectoryPickerCommand[] {
   if (platform === 'darwin') {
-    return [{ command: 'osascript', args: ['-e', 'POSIX path of (choose folder with prompt "选择项目目录")'] }];
+    return [{
+      command: 'osascript',
+      args: [
+        '-e',
+        'tell application "Finder" to activate',
+        '-e',
+        'delay 0.2',
+        '-e',
+        'POSIX path of (choose folder with prompt "选择项目目录" default location (path to home folder))',
+      ],
+    }];
   }
   if (platform === 'win32') {
     return [{
