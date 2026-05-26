@@ -21,8 +21,7 @@ function buildPrompt(input: AskInput, systemPrompt?: string): string {
 }
 
 function normalizeClaudeArgs(args?: string[]): string[] {
-  const filtered = (args ?? []).filter((arg) => arg !== '--bare');
-  return ['-p', ...filtered];
+  return ['-p', ...(args ?? [])];
 }
 
 export class ClaudeCodeAdapter implements CliAdapter {

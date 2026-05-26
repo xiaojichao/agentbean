@@ -116,18 +116,18 @@ describe('CodexAdapter', () => {
 });
 
 describe('ClaudeCodeAdapter', () => {
-  it('does not pass the removed --bare option to Claude Code', async () => {
+  it('passes Claude Code bare mode through when configured', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'agentbean-claude-test-'));
     const script = join(dir, 'fake-claude.cjs');
     writeFileSync(script, `#!/usr/bin/env node
       const args = process.argv.slice(2);
-      if (args.includes('--bare')) {
-        process.stderr.write('unknown option --bare');
-        process.exit(1);
-      }
       if (args[0] !== '-p') {
         process.stderr.write('missing print mode');
         process.exit(2);
+      }
+      if (!args.includes('--bare')) {
+        process.stderr.write('missing bare mode');
+        process.exit(3);
       }
       process.stdout.write('OK:' + args.join(' '));
     `);
@@ -135,8 +135,7 @@ describe('ClaudeCodeAdapter', () => {
 
     const adapter = new ClaudeCodeAdapter({ command: script, args: ['--bare'] });
     const out = await adapter.ask({ prompt: 'hi', history: [] }, new AbortController().signal);
-    expect(out).toContain('OK:-p');
-    expect(out).not.toContain('--bare');
+    expect(out).toContain('OK:-p --bare');
   });
 
   it('rejects on bad command', async () => {
