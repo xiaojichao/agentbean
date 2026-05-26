@@ -2319,6 +2319,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       }
 
       globalDb.devices.transferOwner(deviceId, userId);
+      globalDb.devices.setConnectCommand(deviceId, renderConnectCommand({
+        adapterKind: 'codex',
+        token: generateToken(userId, device.networkId),
+      }));
       const liveDevice = deviceRegistry.get(deviceId);
       if (liveDevice) {
         liveDevice.userId = userId;

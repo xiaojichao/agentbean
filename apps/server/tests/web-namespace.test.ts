@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { buildApp, type AppHandle } from '../src/index.js';
-import { generateToken } from '../src/auth.js';
+import { generateToken, parseToken } from '../src/auth.js';
 import { io as ioClient } from 'socket.io-client';
 import { AddressInfo } from 'node:net';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -1495,6 +1495,10 @@ describe('/web namespace', () => {
       lastSeenAt: now,
       systemInfo: { hostname: 'shaw-mac.local' },
     });
+    app.globalDb.devices.setConnectCommand(
+      'device-transfer-admin',
+      'npx @agentbean/daemon@latest --server-url https://api.agentbean.dev --token old-device-owner:default:stale',
+    );
     app.globalDb.agents.upsert({
       id: 'agent-transfer-admin',
       name: 'test-Agent',
@@ -1545,6 +1549,8 @@ describe('/web namespace', () => {
     });
     expect(app.globalDb.devices.get('device-transfer-admin')).toMatchObject({ userId: 'new-device-owner' });
     expect(app.globalDb.agents.getFull('agent-transfer-admin')).toMatchObject({ ownerId: 'new-device-owner' });
+    const commandToken = app.globalDb.devices.get('device-transfer-admin')?.connectCommand?.match(/--token\s+(\S+)/)?.[1];
+    expect(parseToken(commandToken ?? '')?.userId).toBe('new-device-owner');
 
     const devices = await new Promise<any>((resolve) => {
       admin.emit('admin:list-devices', {}, resolve);
@@ -1561,6 +1567,24 @@ describe('/web namespace', () => {
       ownerName: 'test01',
     });
     admin.close();
+
+    const reconnect = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: generateToken('old-device-owner', 'default'),
+        deviceId: 'device-transfer-admin',
+        networkId: 'default',
+        agents: [],
+        systemInfo: { hostname: 'MyMBP', daemonVersion: '0.1.33' },
+      },
+      reconnection: false,
+      transports: ['websocket'],
+    });
+    await new Promise<void>((r) => reconnect.on('connect', () => r()));
+    reconnect.emit('register');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(app.globalDb.devices.get('device-transfer-admin')).toMatchObject({ userId: 'new-device-owner' });
+    expect(app.globalDb.agents.getFull('agent-transfer-admin')).toMatchObject({ ownerId: 'new-device-owner' });
+    reconnect.close();
   });
 });
 
