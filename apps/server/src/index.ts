@@ -2251,6 +2251,30 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       ack?.({ ok: true, devices });
     });
 
+    socket.on('admin:transfer-device-owner', (payload: { deviceId?: string; userId?: string }, ack?: (r: any) => void) => {
+      const adminId = requireAdmin(ack);
+      if (!adminId) return;
+      const deviceId = payload.deviceId?.trim();
+      const userId = payload.userId?.trim();
+      if (!deviceId || !userId) return ack?.({ ok: false, error: 'INVALID_PAYLOAD' });
+
+      const device = globalDb.devices.get(deviceId);
+      if (!device) return ack?.({ ok: false, error: 'DEVICE_NOT_FOUND' });
+      const targetUser = globalDb.users.get(userId);
+      if (!targetUser) return ack?.({ ok: false, error: 'USER_NOT_FOUND' });
+      if (!globalDb.networkMembers.isMember(device.networkId, userId)) {
+        return ack?.({ ok: false, error: 'USER_NOT_IN_NETWORK' });
+      }
+
+      globalDb.devices.transferOwner(deviceId, userId);
+      const updated = globalDb.devices.get(deviceId);
+      if (!updated) return ack?.({ ok: false, error: 'DEVICE_NOT_FOUND' });
+      const dto = toDeviceDto(updated, adminId);
+      io.of('/web').emit('device:status', dto);
+      emitDevicesSnapshotForNetwork(updated.networkId);
+      ack?.({ ok: true, device: dto });
+    });
+
     socket.on('admin:list-agents', (_p: {}, ack?: (r: any) => void) => {
       if (!requireAdmin(ack)) return;
       const usersById = new Map(globalDb.users.listAll().map((user) => [user.id, user.username]));

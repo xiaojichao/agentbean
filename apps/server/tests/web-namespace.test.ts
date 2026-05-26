@@ -1352,6 +1352,60 @@ describe('/web namespace', () => {
     });
     web.close();
   });
+
+  it('allows admins to transfer a device owner to another team member', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({ id: 'old-device-owner', username: 'old-owner', passwordHash: null, createdAt: now });
+    app.globalDb.users.create({ id: 'new-device-owner', username: 'test01', passwordHash: null, createdAt: now });
+    app.globalDb.networkMembers.add('default', 'old-device-owner', 'member');
+    app.globalDb.networkMembers.add('default', 'new-device-owner', 'member');
+    app.globalDb.devices.upsert({
+      id: 'device-transfer-admin',
+      userId: 'old-device-owner',
+      networkId: 'default',
+      hostname: 'MyMBP',
+      lastSeenAt: now,
+      systemInfo: { hostname: 'shaw-mac.local' },
+    });
+
+    const member = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('old-device-owner', 'default') },
+    });
+    await new Promise<void>((r) => member.on('connect', () => r()));
+    const forbidden = await new Promise<any>((resolve) => {
+      member.emit('admin:transfer-device-owner', { deviceId: 'device-transfer-admin', userId: 'new-device-owner' }, resolve);
+    });
+    expect(forbidden).toEqual({ ok: false, error: 'FORBIDDEN' });
+    member.close();
+
+    const admin = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => admin.on('connect', () => r()));
+    const transferred = await new Promise<any>((resolve) => {
+      admin.emit('admin:transfer-device-owner', { deviceId: 'device-transfer-admin', userId: 'new-device-owner' }, resolve);
+    });
+    expect(transferred.ok).toBe(true);
+    expect(transferred.device).toMatchObject({
+      id: 'device-transfer-admin',
+      userId: 'new-device-owner',
+      userName: 'test01',
+    });
+    expect(app.globalDb.devices.get('device-transfer-admin')).toMatchObject({ userId: 'new-device-owner' });
+
+    const devices = await new Promise<any>((resolve) => {
+      admin.emit('admin:list-devices', {}, resolve);
+    });
+    expect(devices.devices.find((device: any) => device.id === 'device-transfer-admin')).toMatchObject({
+      userId: 'new-device-owner',
+      userName: 'test01',
+    });
+    admin.close();
+  });
 });
 
 describe('message:send', () => {
