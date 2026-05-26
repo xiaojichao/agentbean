@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import tailwindConfig from '../tailwind.config.js';
 import {
   TASK_STATUS_BY_ID,
   TASK_STATUS_COLUMNS,
@@ -30,5 +31,9 @@ describe('task status styles', () => {
     expect(TASK_STATUS_MENU_ITEM_CLASS).toContain('h-6');
     expect(TASK_STATUS_MENU_DOT_CLASS).toContain('h-2');
     expect(TASK_STATUS_MENU_LABEL_CLASS).toContain('truncate');
+  });
+
+  it('includes shared lib styles in Tailwind scanning', () => {
+    expect(tailwindConfig.content).toContain('./lib/**/*.{ts,tsx}');
   });
 });
