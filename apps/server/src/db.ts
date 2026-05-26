@@ -683,9 +683,16 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       adapter_kind = excluded.adapter_kind,
+      device_id = excluded.device_id,
+      network_id = excluded.network_id,
+      visibility = excluded.visibility,
+      category = excluded.category,
+      source = excluded.source,
       command = excluded.command,
       args = excluded.args,
+      cwd = excluded.cwd,
       env = excluded.env,
+      owner_id = excluded.owner_id,
       last_seen_at = excluded.last_seen_at,
       description = excluded.description
   `);

@@ -155,7 +155,7 @@ describe('device:register-agents', () => {
       ag.emit('device:register-agents', {
         agents: [
           { name: 'Claude Code', category: 'executor-hosted', adapterKind: 'claude-code', command: '/usr/bin/claude', args: [], source: 'scanned' },
-          { name: 'Hermes Agent', category: 'agentos-hosted', adapterKind: 'hermes', command: '/usr/bin/hermes', args: ['gateway', 'run'], source: 'scanned' },
+          { name: 'Hermes Agent', category: 'agentos-hosted', adapterKind: 'hermes', command: '/usr/bin/hermes', args: ['gateway', 'run'], cwd: '/usr/bin', source: 'scanned' },
         ],
       }, resolve);
     });
@@ -168,6 +168,7 @@ describe('device:register-agents', () => {
     expect(dbAgents).toHaveLength(1);
     expect(dbAgents.map((a) => a.name).sort()).toEqual(['Hermes-Agent']);
     expect(dbAgents.every((a) => a.source === 'scanned')).toBe(true);
+    expect(dbAgents[0]!.cwd).toBe('/usr/bin');
 
     // Verify in AgentRegistry
     expect(app.registry!.all().some((a) => a.name === 'Claude-Code')).toBe(false);

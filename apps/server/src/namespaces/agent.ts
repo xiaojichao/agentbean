@@ -349,9 +349,10 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       const existingDevice = deps.globalDb?.devices?.get(a.deviceId);
       const connectCommandToken = extractTokenFromConnectCommand(existingDevice?.connectCommand);
       const connectCommandUserId = connectCommandToken ? parseToken(connectCommandToken)?.userId : null;
+      const tokenOwnerId = parsed?.userId && deps.globalDb?.users?.get(parsed.userId) ? parsed.userId : null;
       const userId = connectCommandUserId && deps.globalDb?.users?.get(connectCommandUserId)
         ? connectCommandUserId
-        : existingDevice?.userId ?? tokenUserId;
+        : tokenOwnerId ?? existingDevice?.userId ?? tokenUserId;
       if (existingDevice?.userId && existingDevice.userId !== userId) {
         deps.globalDb?.devices?.transferOwner(a.deviceId, userId);
         logger.info({ deviceId: a.deviceId, fromUserId: existingDevice.userId, toUserId: userId }, 'device owner repaired during daemon registration');
@@ -484,7 +485,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
 
     // Daemon registers scanned agents (runtimes, agentOS, standalone)
     socket.on('device:register-agents', (payload: {
-      agents: { name: string; category: string; adapterKind: string; command: string; args: string[]; source?: string }[]
+      agents: { name: string; category: string; adapterKind: string; command: string; args: string[]; cwd?: string | null; source?: string }[]
     }, ack?: (r: any) => void) => {
       try {
         const now = Date.now();
@@ -511,6 +512,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
               firstSeenAt: existingRt.firstSeenAt, lastSeenAt: now,
               ownerId: ownerId ?? undefined,
               command: ag.command, args: ag.args ? JSON.stringify(ag.args) : undefined,
+              cwd: ag.cwd ?? null,
             });
             deps.db.agents.upsert({
               id: existingRt.id, name: sanitizedName, role: null,
@@ -522,7 +524,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
               firstSeenAt: existingRt.firstSeenAt, lastSeenAt: now,
               lastError: null, ownerId,
               command: ag.command, args: ag.args ? JSON.stringify(ag.args) : null,
-              cwd: null, description: null,
+              cwd: ag.cwd ?? null, description: null,
             });
             registered.push({ id: existingRt.id, name: existingRt.name, category: existingRt.category, status: 'online' });
 
@@ -559,6 +561,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             ownerId: ownerId ?? undefined,
             command: ag.command,
             args: ag.args ? JSON.stringify(ag.args) : undefined,
+            cwd: ag.cwd ?? null,
             description: null,
           });
 
@@ -579,7 +582,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             ownerId,
             command: ag.command,
             args: ag.args ? JSON.stringify(ag.args) : null,
-            cwd: null,
+            cwd: ag.cwd ?? null,
             description: null,
           });
 
@@ -594,7 +597,11 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             networkId: a.networkId,
             deviceId: a.deviceId,
             ownerId,
+            command: ag.command,
+            args: ag.args ?? [],
+            cwd: ag.cwd ?? null,
             publishedNetworkIds: publishes.map((p: { networkId: string }) => p.networkId),
+            source: (ag.source as any) ?? 'scanned',
           });
           deps.io.of('/web').emit('agent:status', runtimeStatusDto(rt));
           registered.push({ id: agentId, name: sanitizedName, category: ag.category, status: 'online' });

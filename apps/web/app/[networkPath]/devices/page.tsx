@@ -954,12 +954,12 @@ function AgentConfigDialog({ agent, device, runtimes, canManage, onClose, onSave
     const payload: { id: string; name: string; adapterKind?: string; command?: string; cwd?: string | null; description?: string | null } = {
       id: agent.id,
       name: trimmedName,
-      cwd: cwd.trim() || null,
       description: description.trim() || null,
     };
     if (isCustom) {
       payload.adapterKind = selectedRuntime.adapterKind;
       payload.command = selectedRuntime.command;
+      payload.cwd = cwd.trim() || null;
     }
     const res = await agentEvents().updateConfig(payload);
     setSaving(false);
@@ -1001,16 +1001,25 @@ function AgentConfigDialog({ agent, device, runtimes, canManage, onClose, onSave
               )}
             </div>
           )}
-          <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">{isCustom ? '项目目录' : '目录'}</label>
-            <div className="flex gap-2">
-              <input value={cwd} onChange={(e) => setCwd(e.target.value)} disabled={!canEdit} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50" placeholder="/path/to/project（可选）" />
-              {canEdit && (
-                <DirectoryBrowseButton deviceId={agent.deviceId} daemonVersion={device?.systemInfo?.daemonVersion ?? device?.daemonVersionInfo?.current ?? null} onSelect={setCwd} onError={setError} />
-              )}
+          {isCustom ? (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-600">项目目录</label>
+              <div className="flex gap-2">
+                <input value={cwd} onChange={(e) => setCwd(e.target.value)} disabled={!canEdit} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50" placeholder="/path/to/project（可选）" />
+                {canEdit && (
+                  <DirectoryBrowseButton deviceId={agent.deviceId} daemonVersion={device?.systemInfo?.daemonVersion ?? device?.daemonVersionInfo?.current ?? null} onSelect={setCwd} onError={setError} />
+                )}
+              </div>
+              {canEdit && <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录，留空则使用默认路径</p>}
             </div>
-            {canEdit && <p className="mt-1 text-[11px] text-neutral-400">{isCustom ? 'Agent 启动时的工作目录，留空则使用默认路径' : 'AgentOS Agent 所在目录，留空则保持未配置状态'}</p>}
-          </div>
+          ) : (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-600">所在目录</label>
+              <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-1.5 font-mono text-sm text-neutral-700 break-all">
+                {cwd.trim() || '未配置'}
+              </div>
+            </div>
+          )}
         </div>
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         <div className="mt-6 flex justify-end gap-2">

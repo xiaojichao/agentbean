@@ -601,6 +601,111 @@ describe('/web namespace', () => {
     ag.close();
   });
 
+  it('repairs an existing device owner from the current daemon token when no saved command exists', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({ id: 'token-repair-test01', username: 'token-repair-test01', passwordHash: null, createdAt: now });
+    app.globalDb.users.create({ id: 'token-repair-demo1', username: 'token-repair-demo1', passwordHash: null, createdAt: now });
+    app.globalDb.networkMembers.add('default', 'token-repair-test01', 'member');
+    app.globalDb.networkMembers.add('default', 'token-repair-demo1', 'member');
+    app.globalDb.devices.upsert({
+      id: 'token-repair-device',
+      userId: 'token-repair-demo1',
+      networkId: 'default',
+      hostname: 'MyMBP',
+      lastSeenAt: now,
+      systemInfo: { hostname: 'MyMBP' },
+    });
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('token-repair-test01', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    const gotStatus = new Promise<any>((resolve) => web.once('device:status', resolve));
+
+    const ag = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: generateToken('token-repair-test01', 'default'),
+        deviceId: 'token-repair-device',
+        networkId: 'default',
+        agents: [],
+        systemInfo: { hostname: 'MyMBP', daemonVersion: '0.1.31' },
+      },
+      reconnection: false,
+      transports: ['websocket'],
+    });
+    await new Promise<void>((r) => ag.on('connect', () => r()));
+    ag.emit('register');
+
+    const status = await gotStatus;
+    expect(status).toMatchObject({
+      id: 'token-repair-device',
+      userId: 'token-repair-test01',
+      ownerName: 'token-repair-test01',
+    });
+    expect(app.globalDb.devices.get('token-repair-device')).toMatchObject({ userId: 'token-repair-test01' });
+    ag.close();
+    web.close();
+  });
+
+  it('lets the repaired device owner rename a scanned AgentOS agent while preserving its directory', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({ id: 'agentos-owner-test01', username: 'agentos-owner-test01', passwordHash: null, createdAt: now });
+    app.globalDb.users.create({ id: 'agentos-owner-demo1', username: 'agentos-owner-demo1', passwordHash: null, createdAt: now });
+    app.globalDb.networkMembers.add('default', 'agentos-owner-test01', 'member');
+    app.globalDb.networkMembers.add('default', 'agentos-owner-demo1', 'member');
+    app.globalDb.devices.upsert({
+      id: 'agentos-config-device',
+      userId: 'agentos-owner-test01',
+      networkId: 'default',
+      hostname: 'MyMBP',
+      lastSeenAt: now,
+      systemInfo: { hostname: 'MyMBP' },
+    });
+    app.globalDb.agents.upsert({
+      id: 'scan-agentos-config-device-hermes-agent',
+      name: 'Hermes-Agent',
+      role: 'gateway-agent',
+      adapterKind: 'hermes',
+      deviceId: 'agentos-config-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      ownerId: 'agentos-owner-demo1',
+      command: '/opt/homebrew/bin/hermes',
+      args: '[]',
+      cwd: '/opt/homebrew/bin',
+      description: 'before',
+    });
+
+    const owner = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('agentos-owner-test01', 'default') },
+    });
+    await new Promise<void>((r) => owner.on('connect', () => r()));
+    const allowed = await new Promise<any>((resolve) => {
+      owner.emit('agent:config:update', {
+        id: 'scan-agentos-config-device-hermes-agent',
+        name: 'Hermes-Renamed',
+        cwd: '/tmp/should-not-overwrite',
+        description: 'after',
+      }, resolve);
+    });
+
+    expect(allowed.ok).toBe(true);
+    expect(app.globalDb.agents.getFull('scan-agentos-config-device-hermes-agent')).toMatchObject({
+      name: 'Hermes-Renamed',
+      cwd: '/opt/homebrew/bin',
+      description: 'after',
+    });
+    owner.close();
+  });
+
   it('binds newly created custom agents to the selected team device immediately', async () => {
     app.globalDb.users.create({
       id: 'remote-device-owner',

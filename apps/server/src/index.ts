@@ -1722,7 +1722,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const isCustom = existing.source === 'custom';
         const isAgentOS = existing.category === 'agentos-hosted';
         if (!isCustom && !isAgentOS) return ack?.({ ok: false, error: 'NOT_CONFIGURABLE_AGENT' });
-        if (!canManageAgent({ ownerId: existing.ownerId, deviceId: existing.deviceId }, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        const canManageExistingAgent = isAgentOS && existing.deviceId
+          ? canManageDevice(globalDb.devices.get(existing.deviceId), userId)
+          : canManageAgent({ ownerId: existing.ownerId, deviceId: existing.deviceId }, userId);
+        if (!canManageExistingAgent) return ack?.({ ok: false, error: 'FORBIDDEN' });
         const name = payload.name.trim();
         if (!name) return ack?.({ ok: false, error: 'EMPTY_NAME' });
         if (/\s/.test(name)) return ack?.({ ok: false, error: 'NAME_HAS_SPACE' });
@@ -1730,7 +1733,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const command = isCustom ? payload.command?.trim() : undefined;
         if (isCustom && !adapterKind) return ack?.({ ok: false, error: 'EMPTY_RUNTIME' });
         if (isCustom && !command) return ack?.({ ok: false, error: 'EMPTY_COMMAND' });
-        const cwd = payload.cwd?.trim() || null;
+        const cwd = isAgentOS ? existing.cwd : payload.cwd?.trim() || null;
         const description = payload.description?.trim() || null;
         const updatedAt = Date.now();
         globalDb.agents.updateConfig(payload.id, {

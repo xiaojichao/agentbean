@@ -7,7 +7,7 @@ import {
   writeFileSync,
   mkdirSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import * as os from "node:os";
 import type { AgentCategory, AdapterKind } from "./config.js";
@@ -308,6 +308,7 @@ async function checkHermesGateway(): Promise<ScannedAgent | null> {
       adapterKind: "hermes",
       command: path,
       args: [],
+      cwd: dirname(path),
       source: "gateway",
     };
   }
@@ -329,6 +330,7 @@ async function checkOpenClawGateway(): Promise<ScannedAgent | null> {
       adapterKind: "openclaw",
       command: path,
       args: ["agent", "--agent", agentId ?? "main"],
+      cwd: dirname(path),
       source: "gateway",
     };
   }

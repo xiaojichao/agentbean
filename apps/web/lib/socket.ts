@@ -246,6 +246,8 @@ export interface DeviceAgent {
   source: string;
   command: string | null;
   args: string | null;
+  cwd: string | null;
+  description: string | null;
   deviceId: string;
   status: string;
   publishedNetworkIds: string[];
