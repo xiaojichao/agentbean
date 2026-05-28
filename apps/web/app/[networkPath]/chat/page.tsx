@@ -27,6 +27,18 @@ type TaskViewMode = 'board' | 'list';
 type SidebarSortMode = 'manual' | 'recent' | 'az';
 type ProfileTarget = { kind: 'human' | 'agent'; id: string };
 type ChatTaskMenuTarget = { surface: 'main' | 'thread'; messageId: string } | null;
+type ComposerAttachmentStatus = 'uploading' | 'ready' | 'failed';
+
+interface ComposerAttachment {
+  localId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  previewUrl?: string;
+  status: ComposerAttachmentStatus;
+  artifact?: Artifact;
+  error?: string;
+}
 
 interface TaskItem {
   id: string;
@@ -63,6 +75,38 @@ interface HumanProfile {
   username: string;
   role?: string;
   email?: string | null;
+}
+
+function createComposerAttachment(file: File): ComposerAttachment {
+  const isImage = file.type.startsWith('image/');
+  return {
+    localId: `upload-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    filename: file.name,
+    mimeType: file.type || 'application/octet-stream',
+    sizeBytes: file.size,
+    previewUrl: isImage && typeof URL !== 'undefined' ? URL.createObjectURL(file) : undefined,
+    status: 'uploading',
+  };
+}
+
+function revokeComposerPreview(attachment: ComposerAttachment) {
+  if (attachment.previewUrl?.startsWith('blob:') && typeof URL !== 'undefined') {
+    URL.revokeObjectURL(attachment.previewUrl);
+  }
+}
+
+function readyArtifacts(attachments: ComposerAttachment[]): Artifact[] {
+  return attachments
+    .filter((attachment) => attachment.status === 'ready' && attachment.artifact)
+    .map((attachment) => attachment.artifact!);
+}
+
+function hasUploadingAttachments(attachments: ComposerAttachment[]): boolean {
+  return attachments.some((attachment) => attachment.status === 'uploading');
+}
+
+function hasFailedAttachments(attachments: ComposerAttachment[]): boolean {
+  return attachments.some((attachment) => attachment.status === 'failed');
 }
 
 export default function ChatPage() {
@@ -117,8 +161,8 @@ export default function ChatPage() {
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionMembers, setMentionMembers] = useState<{ id: string; name: string; kind: 'human' | 'agent' }[]>([]);
   const [mentionIndex, setMentionIndex] = useState(0);
-  const [pendingAttachments, setPendingAttachments] = useState<Artifact[]>([]);
-  const [threadAttachments, setThreadAttachments] = useState<Artifact[]>([]);
+  const [pendingAttachments, setPendingAttachments] = useState<ComposerAttachment[]>([]);
+  const [threadAttachments, setThreadAttachments] = useState<ComposerAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
@@ -415,7 +459,10 @@ export default function ChatPage() {
   const closeThread = useCallback(() => {
     setThreadRootId(null);
     setThreadInput('');
-    setThreadAttachments([]);
+    setThreadAttachments((prev) => {
+      prev.forEach(revokeComposerPreview);
+      return [];
+    });
     setChatTaskMenuTarget(null);
     setThreadUrl(null);
   }, [setThreadUrl]);
@@ -553,43 +600,48 @@ export default function ChatPage() {
 
   const uploadFiles = async (files: FileList | File[], target: 'main' | 'thread') => {
     if (!activeChannel || !currentUser || files.length === 0) return;
+    const selected = Array.from(files).map((file) => ({ file, attachment: createComposerAttachment(file) }));
+    const setTargetAttachments = target === 'thread' ? setThreadAttachments : setPendingAttachments;
+    setTargetAttachments((prev) => [...prev, ...selected.map((entry) => entry.attachment)]);
     setUploading(true);
     try {
-      const uploaded: Artifact[] = [];
-      for (const file of Array.from(files)) {
+      for (const { file, attachment } of selected) {
         const form = new FormData();
         form.append('channelId', activeChannel);
         form.append('uploaderId', currentUser.id);
         form.append('file', file);
-        const res = await fetch(artifactUploadUrl(currentNetworkId), {
-          method: 'POST',
-          body: form,
-        });
-        if (!res.ok) throw new Error(await res.text());
-        uploaded.push(await res.json());
+        try {
+          const res = await fetch(artifactUploadUrl(currentNetworkId), {
+            method: 'POST',
+            body: form,
+          });
+          if (!res.ok) throw new Error(await res.text());
+          const artifact = await res.json() as Artifact;
+          setTargetAttachments((prev) => prev.map((item) => item.localId === attachment.localId
+            ? { ...item, status: 'ready', artifact, mimeType: artifact.mimeType || item.mimeType, sizeBytes: artifact.sizeBytes }
+            : item));
+        } catch (err) {
+          setTargetAttachments((prev) => prev.map((item) => item.localId === attachment.localId
+            ? { ...item, status: 'failed', error: err instanceof Error ? err.message : 'unknown' }
+            : item));
+        }
       }
-      if (target === 'thread') setThreadAttachments((prev) => [...prev, ...uploaded]);
-      else setPendingAttachments((prev) => [...prev, ...uploaded]);
-    } catch (err) {
-      appendMessage({
-        id: `local-upload-error-${Date.now()}`,
-        channelId: activeChannel,
-        senderKind: 'system',
-        senderId: null,
-        body: `附件上传失败：${err instanceof Error ? err.message : 'unknown'}`,
-        createdAt: Date.now(),
-        metaJson: JSON.stringify({ kind: 'upload-fail' }),
-      });
     } finally {
       setUploading(false);
     }
   };
 
   const sendMessage = () => {
-    if ((!input.trim() && pendingAttachments.length === 0) || !activeChannel) return;
+    const artifacts = readyArtifacts(pendingAttachments);
+    if (
+      (!input.trim() && artifacts.length === 0)
+      || !activeChannel
+      || hasUploadingAttachments(pendingAttachments)
+      || hasFailedAttachments(pendingAttachments)
+    ) return;
     const channelId = activeChannel;
     const body = input.trim();
-    const artifactIds = pendingAttachments.map((a) => a.id);
+    const artifactIds = artifacts.map((a) => a.id);
     const createTask = asTask;
     getWebSocket().emit('message:send', { channelId, body: body || '附件', asTask, artifactIds }, (res?: { ok?: boolean; error?: string }) => {
       if (res?.ok) {
@@ -607,15 +659,23 @@ export default function ChatPage() {
       });
     });
     setInput('');
+    pendingAttachments.forEach(revokeComposerPreview);
     setPendingAttachments([]);
     setAsTask(false);
   };
 
   const sendThreadMessage = () => {
-    if ((!threadInput.trim() && threadAttachments.length === 0) || !activeChannel || !threadRootId) return;
+    const artifacts = readyArtifacts(threadAttachments);
+    if (
+      (!threadInput.trim() && artifacts.length === 0)
+      || !activeChannel
+      || !threadRootId
+      || hasUploadingAttachments(threadAttachments)
+      || hasFailedAttachments(threadAttachments)
+    ) return;
     const channelId = activeChannel;
     const body = threadInput.trim() || '附件';
-    const artifactIds = threadAttachments.map((a) => a.id);
+    const artifactIds = artifacts.map((a) => a.id);
     getWebSocket().emit('message:send', { channelId, body, parentMessageId: threadRootId, artifactIds }, (res?: { ok?: boolean; error?: string }) => {
       if (res?.ok) return;
       appendMessage({
@@ -629,6 +689,7 @@ export default function ChatPage() {
       });
     });
     setThreadInput('');
+    threadAttachments.forEach(revokeComposerPreview);
     setThreadAttachments([]);
   };
 
@@ -648,7 +709,10 @@ export default function ChatPage() {
     setTab('chat');
     setThreadRootId(null);
     setThreadInput('');
-    setThreadAttachments([]);
+    setThreadAttachments((prev) => {
+      prev.forEach(revokeComposerPreview);
+      return [];
+    });
     setSelectedMessageId(targetMessageId);
     setChatTaskMenuTarget(null);
     const timer = window.setTimeout(() => {
@@ -713,7 +777,10 @@ export default function ChatPage() {
     setTab('chat');
     setThreadRootId(null);
     setThreadInput('');
-    setThreadAttachments([]);
+    setThreadAttachments((prev) => {
+      prev.forEach(revokeComposerPreview);
+      return [];
+    });
     setSelectedMessageId(messageId);
     setChatTaskMenuTarget(null);
     const params = new URLSearchParams(searchParams.toString());
@@ -997,7 +1064,11 @@ export default function ChatPage() {
                   {pendingAttachments.length > 0 && (
                     <AttachmentStrip
                       attachments={pendingAttachments}
-                      onRemove={(id) => setPendingAttachments((prev) => prev.filter((item) => item.id !== id))}
+                      onRemove={(id) => setPendingAttachments((prev) => {
+                        const removed = prev.find((item) => item.localId === id);
+                        if (removed) revokeComposerPreview(removed);
+                        return prev.filter((item) => item.localId !== id);
+                      })}
                     />
                   )}
                   <div className="flex items-center justify-between px-2 pb-2">
@@ -1008,7 +1079,7 @@ export default function ChatPage() {
                       <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传附件"><Paperclip size={16} /></button>
                       <label className="ml-1 flex cursor-pointer items-center gap-1 text-neutral-400 hover:text-neutral-600"><input type="checkbox" checked={asTask} onChange={(e) => setAsTask(e.target.checked)} className="rounded border-neutral-300" /><span className="text-xs">作为任务</span></label>
                     </div>
-                    <button onClick={sendMessage} disabled={uploading || (!input.trim() && pendingAttachments.length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40"><Send size={14} /></button>
+                    <button onClick={sendMessage} disabled={uploading || hasUploadingAttachments(pendingAttachments) || hasFailedAttachments(pendingAttachments) || (!input.trim() && readyArtifacts(pendingAttachments).length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40"><Send size={14} /></button>
                   </div>
                 </div>
               </div>
@@ -1101,7 +1172,11 @@ export default function ChatPage() {
           onInput={setThreadInput}
           onSend={sendThreadMessage}
           onUpload={(files) => uploadFiles(files, 'thread')}
-          onRemoveAttachment={(id) => setThreadAttachments((prev) => prev.filter((item) => item.id !== id))}
+          onRemoveAttachment={(id) => setThreadAttachments((prev) => {
+            const removed = prev.find((item) => item.localId === id);
+            if (removed) revokeComposerPreview(removed);
+            return prev.filter((item) => item.localId !== id);
+          })}
           onReply={handleThreadReply}
           onOpenProfile={openProfile}
           onToggleSave={toggleSave}
@@ -1848,7 +1923,7 @@ function ThreadPanel({
   humanProfiles: HumanProfile[];
   title: string;
   input: string;
-  attachments: Artifact[];
+  attachments: ComposerAttachment[];
   uploading: boolean;
   imageInputRef: RefObject<HTMLInputElement>;
   fileInputRef: RefObject<HTMLInputElement>;
@@ -1958,7 +2033,7 @@ function ThreadPanel({
                 <Paperclip size={16} />
               </button>
             </div>
-            <button onClick={onSend} disabled={uploading || (!input.trim() && attachments.length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40">
+            <button onClick={onSend} disabled={uploading || hasUploadingAttachments(attachments) || hasFailedAttachments(attachments) || (!input.trim() && readyArtifacts(attachments).length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40">
               <Send size={14} />
             </button>
           </div>
@@ -2144,32 +2219,44 @@ function SidebarSortButton({
   );
 }
 
-function AttachmentStrip({ attachments, onRemove }: { attachments: Artifact[]; onRemove: (id: string) => void }) {
+function AttachmentStrip({ attachments, onRemove }: { attachments: ComposerAttachment[]; onRemove: (id: string) => void }) {
   return (
     <div className="flex flex-wrap gap-2 border-t border-neutral-100 px-2 py-2">
-      {attachments.map((artifact) => {
-        const isImage = artifact.mimeType.startsWith('image/');
+      {attachments.map((attachment) => {
+        const artifact = attachment.artifact;
+        const isImage = attachment.mimeType.startsWith('image/');
+        const imageSrc = attachment.previewUrl ?? (artifact ? artifactUrl(artifact.previewUrl) : undefined);
+        const statusLabel = attachment.status === 'uploading'
+          ? '上传中'
+          : attachment.status === 'failed'
+            ? '上传失败'
+            : attachment.mimeType || '附件文件';
         return (
           <div
-            key={artifact.id}
+            key={attachment.localId}
             className={`group relative flex h-14 overflow-hidden rounded-sm border border-neutral-300 bg-white text-xs shadow-sm ${isImage ? 'w-14' : 'w-44 max-w-full items-center gap-2 px-2'}`}
-            title={artifact.filename}
+            title={attachment.error ?? attachment.filename}
           >
-            {isImage ? (
-              <img src={artifactUrl(artifact.previewUrl)} alt={artifact.filename} className="h-full w-full object-cover" />
+            {isImage && imageSrc ? (
+              <img src={imageSrc} alt={attachment.filename} className={`h-full w-full object-cover ${attachment.status === 'uploading' ? 'opacity-70' : ''}`} />
             ) : (
               <>
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm border border-neutral-200 bg-neutral-50 text-neutral-600">
                   <Paperclip size={15} />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="truncate font-medium text-neutral-800">{artifact.filename}</div>
-                  <div className="truncate text-[10px] text-neutral-400">{artifact.mimeType || '附件文件'}</div>
+                  <div className="truncate font-medium text-neutral-800">{attachment.filename}</div>
+                  <div className={`truncate text-[10px] ${attachment.status === 'failed' ? 'text-red-500' : 'text-neutral-400'}`}>{statusLabel}</div>
                 </div>
               </>
             )}
+            {isImage && attachment.status !== 'ready' && (
+              <div className={`absolute inset-x-0 bottom-0 px-1 py-0.5 text-center text-[10px] text-white ${attachment.status === 'failed' ? 'bg-red-500/85' : 'bg-neutral-900/70'}`}>
+                {statusLabel}
+              </div>
+            )}
             <button
-              onClick={() => onRemove(artifact.id)}
+              onClick={() => onRemove(attachment.localId)}
               className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-sm bg-white/90 text-neutral-500 opacity-0 shadow-sm hover:text-neutral-900 group-hover:opacity-100 focus:opacity-100"
               title="移除附件"
             >
