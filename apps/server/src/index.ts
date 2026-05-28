@@ -326,6 +326,11 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     userId?: string | null,
   ) => Boolean(userId && device && (device.userId === userId || globalDb.users.get(userId)?.role === 'admin'));
 
+  const isDeviceLocalToUser = (
+    device: { userId?: string | null } | null | undefined,
+    userId?: string | null,
+  ) => Boolean(userId && device?.userId === userId);
+
   const resolveDeviceName = (deviceId?: string | null) => {
     if (!deviceId) return null;
     const live = deviceRegistry.get(deviceId);
@@ -1665,7 +1670,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const requestedDevice = payload.deviceId ? globalDb.devices.get(payload.deviceId) as any : null;
         if (payload.deviceId && !requestedDevice) return ack?.({ ok: false, error: 'DEVICE_NOT_FOUND' });
         if (requestedDevice && requestedDevice.networkId !== targetNetworkId) return ack?.({ ok: false, error: 'DEVICE_NOT_IN_TEAM' });
-        if (requestedDevice && !canManageDevice(requestedDevice, userId)) {
+        if (requestedDevice && !isDeviceLocalToUser(requestedDevice, userId)) {
           return ack?.({ ok: false, error: 'FORBIDDEN_DEVICE' });
         }
         if (requestedDevice && !command) return ack?.({ ok: false, error: 'EMPTY_RUNTIME' });
@@ -1813,18 +1818,32 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const isCustom = existing.source === 'custom';
         const isAgentOS = existing.category === 'agentos-hosted';
         if (!isCustom && !isAgentOS) return ack?.({ ok: false, error: 'NOT_CONFIGURABLE_AGENT' });
+        const device = existing.deviceId ? globalDb.devices.get(existing.deviceId) : null;
+        const isLocalDeviceAgent = isDeviceLocalToUser(device, userId);
         const canManageExistingAgent = isAgentOS && existing.deviceId
           ? canManageDevice(globalDb.devices.get(existing.deviceId), userId)
           : canManageAgent({ ownerId: existing.ownerId, deviceId: existing.deviceId }, userId);
-        if (!canManageExistingAgent) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        const canEditMetadata = canManageExistingAgent || isLocalDeviceAgent;
+        if (!canEditMetadata) return ack?.({ ok: false, error: 'FORBIDDEN' });
         const name = payload.name.trim();
         if (!name) return ack?.({ ok: false, error: 'EMPTY_NAME' });
         if (/\s/.test(name)) return ack?.({ ok: false, error: 'NAME_HAS_SPACE' });
-        const adapterKind = isCustom ? payload.adapterKind?.trim() : undefined;
-        const command = isCustom ? payload.command?.trim() : undefined;
+        const includesRuntimeSettings =
+          payload.adapterKind !== undefined ||
+          payload.command !== undefined ||
+          payload.cwd !== undefined;
+        if (isCustom && includesRuntimeSettings && !isLocalDeviceAgent) {
+          return ack?.({ ok: false, error: 'FORBIDDEN_REMOTE_DEVICE_SETTINGS' });
+        }
+        const adapterKind = isCustom
+          ? (isLocalDeviceAgent ? payload.adapterKind?.trim() : existing.adapterKind)
+          : undefined;
+        const command = isCustom
+          ? (isLocalDeviceAgent ? payload.command?.trim() : existing.command ?? undefined)
+          : undefined;
         if (isCustom && !adapterKind) return ack?.({ ok: false, error: 'EMPTY_RUNTIME' });
         if (isCustom && !command) return ack?.({ ok: false, error: 'EMPTY_COMMAND' });
-        const cwd = isAgentOS ? existing.cwd : payload.cwd?.trim() || null;
+        const cwd = isAgentOS ? existing.cwd : (isLocalDeviceAgent ? payload.cwd?.trim() || null : existing.cwd);
         const description = payload.description?.trim() || null;
         const updatedAt = Date.now();
         globalDb.agents.updateConfig(payload.id, {

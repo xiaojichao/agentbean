@@ -322,6 +322,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const ownerName = device.ownerName ?? device.userName ?? '未知用户';
   const daemonVersion = daemonVersionDisplay(device);
   const canManageDevice = device.canManage ?? (currentUser?.role === 'admin' || Boolean(currentUser?.id && currentUser.id === device.userId));
+  const isLocalDevice = Boolean(currentUser?.id && currentUser.id === device.userId);
 
   const refreshDeviceAgents = () => {
     return deviceEvents().agentsList(device.id).then((res) => {
@@ -512,8 +513,8 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           icon={<Terminal size={14} className="text-violet-600" />}
           iconBg="bg-violet-50"
           agents={customAgents}
-          showAddButton={canManageDevice}
-          onAdd={canManageDevice ? () => setShowAddCustom(true) : undefined}
+          showAddButton={isLocalDevice}
+          onAdd={isLocalDevice ? () => setShowAddCustom(true) : undefined}
           onSelectNetwork={setSelectNetworkAgent}
           onSelectAgent={setConfigAgent}
           canManageAgents={canManageDevice}
@@ -556,7 +557,8 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           agent={configAgent}
           device={device}
           runtimes={runtimeList}
-          canManage={canManageDevice}
+          canEditMetadata={canManageDevice || isLocalDevice}
+          canEditDeviceSettings={isLocalDevice}
           onClose={() => setConfigAgent(null)}
           onSaved={() => {
             refreshDeviceAgents();
@@ -929,11 +931,12 @@ function EnvironmentVariableEditor({ rows, onChange }: { rows: EnvRow[]; onChang
   );
 }
 
-function AgentConfigDialog({ agent, device, runtimes, canManage, onClose, onSaved }: { agent: any; device?: { systemInfo?: { daemonVersion?: string } | null; daemonVersionInfo?: { current: string | null } }; runtimes: any[]; canManage: boolean; onClose: () => void; onSaved: () => void }) {
+function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDeviceSettings, onClose, onSaved }: { agent: any; device?: { systemInfo?: { daemonVersion?: string } | null; daemonVersionInfo?: { current: string | null } }; runtimes: any[]; canEditMetadata: boolean; canEditDeviceSettings: boolean; onClose: () => void; onSaved: () => void }) {
   const isCustom = agent.source === 'custom';
   const isAgentOS = agent.category === 'agentos-hosted';
   const editable = isCustom || isAgentOS;
-  const canEdit = editable && canManage;
+  const canEditMetadataFields = editable && canEditMetadata;
+  const canEditRuntimeFields = isCustom && editable && canEditDeviceSettings;
   const runtimeOptions = useMemo(() => buildRuntimeOptions(runtimes), [runtimes]);
   const initialRuntimeIndex = Math.max(0, runtimeOptions.findIndex((runtime) => runtime.adapterKind === agent.adapterKind && runtime.command === agent.command));
   const [name, setName] = useState<string>(agent.name ?? '');
@@ -945,7 +948,7 @@ function AgentConfigDialog({ agent, device, runtimes, canManage, onClose, onSave
   const selectedRuntime = runtimeOptions[Number(runtimeIndex)] ?? runtimeOptions[0] ?? RUNTIME_OPTIONS[0];
 
   const save = async () => {
-    if (!canEdit) return;
+    if (!canEditMetadataFields) return;
     const trimmedName = name.trim();
     if (!trimmedName) { setError('名称为必填项'); return; }
     if (/\s/.test(trimmedName)) { setError('名称不能包含空格，请使用连字符（-）'); return; }
@@ -957,9 +960,11 @@ function AgentConfigDialog({ agent, device, runtimes, canManage, onClose, onSave
       description: description.trim() || null,
     };
     if (isCustom) {
-      payload.adapterKind = selectedRuntime.adapterKind;
-      payload.command = selectedRuntime.command;
-      payload.cwd = cwd.trim() || null;
+      if (canEditRuntimeFields) {
+        payload.adapterKind = selectedRuntime.adapterKind;
+        payload.command = selectedRuntime.command;
+        payload.cwd = cwd.trim() || null;
+      }
     }
     const res = await agentEvents().updateConfig(payload);
     setSaving(false);
@@ -981,17 +986,17 @@ function AgentConfigDialog({ agent, device, runtimes, canManage, onClose, onSave
         <div className="mt-4 space-y-3">
           <div>
             <label className="mb-1 block text-xs font-medium text-neutral-600">名称</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} disabled={!canEdit} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50" />
-            {canEdit && <p className="mt-1 text-[11px] text-neutral-400">名称不能包含空格，可使用连字符（-）。</p>}
+            <input value={name} onChange={(e) => setName(e.target.value)} disabled={!canEditMetadataFields} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50" />
+            {canEditMetadataFields && <p className="mt-1 text-[11px] text-neutral-400">名称不能包含空格，可使用连字符（-）。</p>}
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-neutral-600">功能介绍</label>
-            <textarea value={description} onChange={(e) => setDescription(e.target.value)} disabled={!canEdit} rows={3} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 resize-none disabled:bg-neutral-50" placeholder="描述这个 Agent 的用途和能力" />
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} disabled={!canEditMetadataFields} rows={3} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 resize-none disabled:bg-neutral-50" placeholder="描述这个 Agent 的用途和能力" />
           </div>
           {isCustom && (
             <div>
               <label className="mb-1 block text-xs font-medium text-neutral-600">Code Agent 运行时</label>
-              <select value={runtimeIndex} onChange={(e) => setRuntimeIndex(e.target.value)} disabled={!canEdit} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50">
+              <select value={runtimeIndex} onChange={(e) => setRuntimeIndex(e.target.value)} disabled={!canEditRuntimeFields} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50">
                 {runtimeOptions.map((runtime, index) => (
                   <option key={`${runtime.adapterKind}-${runtime.command}-${index}`} value={String(index)}>{runtime.label}</option>
                 ))}
@@ -1005,12 +1010,12 @@ function AgentConfigDialog({ agent, device, runtimes, canManage, onClose, onSave
             <div>
               <label className="mb-1 block text-xs font-medium text-neutral-600">项目目录</label>
               <div className="flex gap-2">
-                <input value={cwd} onChange={(e) => setCwd(e.target.value)} disabled={!canEdit} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50" placeholder="/path/to/project（可选）" />
-                {canEdit && (
+                <input value={cwd} onChange={(e) => setCwd(e.target.value)} disabled={!canEditRuntimeFields} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50" placeholder="/path/to/project（可选）" />
+                {canEditRuntimeFields && (
                   <DirectoryBrowseButton deviceId={agent.deviceId} daemonVersion={device?.systemInfo?.daemonVersion ?? device?.daemonVersionInfo?.current ?? null} onSelect={setCwd} onError={setError} />
                 )}
               </div>
-              {canEdit && <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录，留空则使用默认路径</p>}
+              {canEditRuntimeFields && <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录，留空则使用默认路径</p>}
             </div>
           ) : (
             <div>
@@ -1024,7 +1029,7 @@ function AgentConfigDialog({ agent, device, runtimes, canManage, onClose, onSave
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         <div className="mt-6 flex justify-end gap-2">
           <button onClick={onClose} className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-50">关闭</button>
-          {canEdit && (
+          {canEditMetadataFields && (
             <button onClick={save} disabled={saving} className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white hover:bg-neutral-800 disabled:opacity-50">
               {saving ? '保存中...' : '保存'}
             </button>

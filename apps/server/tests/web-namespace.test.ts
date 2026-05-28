@@ -504,18 +504,35 @@ describe('/web namespace', () => {
       auth: { token: generateToken('agent-config-creator', 'default') },
     });
     await new Promise<void>((r) => creator.on('connect', () => r()));
-    const allowed = await new Promise<any>((resolve) => {
+    const metadataOnly = await new Promise<any>((resolve) => {
       creator.emit('agent:config:update', {
         id: 'agent-config-on-other-device',
         name: 'Creator-Agent-Changed',
-        adapterKind: 'codex',
-        command: 'codex',
-        cwd: '/Users/device/project',
         description: 'Changed by creator',
       }, resolve);
     });
-    expect(allowed.ok).toBe(true);
+    expect(metadataOnly.ok).toBe(true);
     expect(app.globalDb.agents.getFull('agent-config-on-other-device')?.name).toBe('Creator-Agent-Changed');
+    expect(app.globalDb.agents.getFull('agent-config-on-other-device')?.cwd).toBe('/Users/device/project');
+
+    const remoteRuntimeDenied = await new Promise<any>((resolve) => {
+      creator.emit('agent:config:update', {
+        id: 'agent-config-on-other-device',
+        name: 'Creator-Agent-Changed-Again',
+        adapterKind: 'claude-code',
+        command: 'claude',
+        cwd: '/Users/creator/project',
+        description: 'Changed by creator again',
+      }, resolve);
+    });
+    expect(remoteRuntimeDenied).toEqual({ ok: false, error: 'FORBIDDEN_REMOTE_DEVICE_SETTINGS' });
+    expect(app.globalDb.agents.getFull('agent-config-on-other-device')).toMatchObject({
+      name: 'Creator-Agent-Changed',
+      adapterKind: 'codex',
+      command: 'codex',
+      cwd: '/Users/device/project',
+      description: 'Changed by creator',
+    });
     creator.close();
 
     const deviceOwner = ioClient(`${baseUrl}/web`, {
@@ -524,18 +541,24 @@ describe('/web namespace', () => {
       auth: { token: generateToken('agent-config-device-owner', 'default') },
     });
     await new Promise<void>((r) => deviceOwner.on('connect', () => r()));
-    const denied = await new Promise<any>((resolve) => {
+    const localDeviceUpdate = await new Promise<any>((resolve) => {
       deviceOwner.emit('agent:config:update', {
         id: 'agent-config-on-other-device',
         name: 'Device-Agent',
-        adapterKind: 'codex',
-        command: 'codex',
-        cwd: '/Users/device/project',
+        adapterKind: 'claude-code',
+        command: 'claude',
+        cwd: '/Users/device/new-project',
         description: 'Changed by device owner',
       }, resolve);
     });
-    expect(denied).toEqual({ ok: false, error: 'FORBIDDEN' });
-    expect(app.globalDb.agents.getFull('agent-config-on-other-device')?.name).toBe('Creator-Agent-Changed');
+    expect(localDeviceUpdate.ok).toBe(true);
+    expect(app.globalDb.agents.getFull('agent-config-on-other-device')).toMatchObject({
+      name: 'Device-Agent',
+      adapterKind: 'claude-code',
+      command: 'claude',
+      cwd: '/Users/device/new-project',
+      description: 'Changed by device owner',
+    });
     deviceOwner.close();
   });
 
@@ -882,10 +905,29 @@ describe('/web namespace', () => {
       systemInfo: { hostname: 'remote-studio.local' },
     });
 
-    const web = ioClient(`${baseUrl}/web`, {
+    const adminWeb = ioClient(`${baseUrl}/web`, {
       reconnection: false,
       transports: ['websocket'],
       auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => adminWeb.on('connect', () => r()));
+    const remoteCreateRes = await new Promise<any>((resolve) => {
+      adminWeb.emit('agent:create', {
+        name: 'Admin Remote Agent',
+        adapterKind: 'codex',
+        command: 'codex',
+        category: 'executor-hosted',
+        deviceId: 'remote-device-1',
+        cwd: '/Users/remote/project',
+      }, resolve);
+    });
+    expect(remoteCreateRes).toMatchObject({ ok: false, error: 'FORBIDDEN_DEVICE' });
+    adminWeb.close();
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('remote-device-owner', 'default') },
     });
     await new Promise<void>((r) => web.on('connect', () => r()));
 
