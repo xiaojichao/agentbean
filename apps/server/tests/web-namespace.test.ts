@@ -145,6 +145,61 @@ describe('/web namespace', () => {
     ag.close(); web.close();
   });
 
+  it('brings a scanned AgentOS member back online when the daemon reconnects', async () => {
+    const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    const statuses: any[] = [];
+    web.on('agent:status', (status: any) => statuses.push(status));
+
+    const connectDaemon = async () => {
+      const ag = ioClient(`${baseUrl}/agent`, {
+        auth: {
+          token: 'default:default:tok',
+          deviceId: 'scan-reconnect-device',
+          networkId: 'default',
+          agents: [],
+        },
+        reconnection: false,
+        transports: ['websocket'],
+      });
+      await new Promise<void>((r) => ag.on('connect', () => r()));
+      ag.emit('register');
+      await new Promise<any>((resolve) => {
+        ag.emit('device:register-agents', {
+          agents: [{
+            name: 'Reconnect Agent',
+            category: 'agentos-hosted',
+            adapterKind: 'codex',
+            command: '/opt/homebrew/bin/codex',
+            args: [],
+            cwd: '/Users/shaw/reconnect-agent',
+            source: 'scanned',
+          }],
+        }, resolve);
+      });
+      return ag;
+    };
+
+    const first = await connectDaemon();
+    await waitFor(() => statuses.some((s) => s.id === 'scan-scan-reconnect-device-reconnect-agent' && s.status === 'online'));
+    first.close();
+    await waitFor(() => statuses.some((s) => s.id === 'scan-scan-reconnect-device-reconnect-agent' && s.status === 'offline'));
+
+    const second = await connectDaemon();
+    await waitFor(() => statuses.filter((s) => s.id === 'scan-scan-reconnect-device-reconnect-agent' && s.status === 'online').length >= 2);
+
+    const members = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+    expect(members.ok).toBe(true);
+    expect(members.agents.find((agent: any) => agent.id === 'scan-scan-reconnect-device-reconnect-agent')).toMatchObject({
+      status: 'online',
+    });
+
+    second.close();
+    web.close();
+  });
+
   it('includes device names in member agent rows so duplicate names can be distinguished', async () => {
     const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
     await new Promise<void>((r) => web.on('connect', () => r()));
@@ -1137,6 +1192,75 @@ describe('/web namespace', () => {
     expect(deviceAgents.ok).toBe(true);
     expect(deviceAgents.agents.find((agent: any) => agent.id === 'remote-custom-agent')).toMatchObject({
       name: 'test-Agent',
+      status: 'online',
+    });
+
+    ag.close();
+    web.close();
+  });
+
+  it('keeps custom agents online during daemon reconnect before runtimes are re-sent', async () => {
+    const now = Date.now();
+    const owner = app.globalDb.users.listAll()[0]!;
+    app.globalDb.devices.upsert({
+      id: 'custom-reconnect-device',
+      userId: owner.id,
+      networkId: 'default',
+      hostname: 'Custom Reconnect Device',
+      lastSeenAt: now,
+      systemInfo: { hostname: 'Custom Reconnect Device' },
+    });
+    app.globalDb.devices.setRuntimes('custom-reconnect-device', [
+      { name: 'Codex CLI', adapterKind: 'codex', command: '/opt/homebrew/bin/codex', installed: true },
+    ]);
+    app.globalDb.agents.upsert({
+      id: 'custom-reconnect-agent',
+      name: 'custom-reconnect',
+      role: 'executor-agent',
+      adapterKind: 'codex',
+      deviceId: 'custom-reconnect-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      command: '/opt/homebrew/bin/codex',
+      args: JSON.stringify([]),
+      cwd: '/Users/shaw/custom-reconnect',
+      ownerId: owner.id,
+      description: null,
+    });
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    const statusPromise = new Promise<any>((resolve) => {
+      web.on('agent:status', (status: any) => {
+        if (status.id === 'custom-reconnect-agent') resolve(status);
+      });
+    });
+
+    const ag = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'custom-reconnect-device',
+        networkId: 'default',
+        capabilities: { customAgentDispatch: true },
+        agents: [],
+        systemInfo: { hostname: 'Custom Reconnect Device' },
+      },
+      reconnection: false,
+      transports: ['websocket'],
+    });
+    await new Promise<void>((r) => ag.on('connect', () => r()));
+    ag.emit('register');
+
+    await expect(statusPromise).resolves.toMatchObject({
+      id: 'custom-reconnect-agent',
       status: 'online',
     });
 

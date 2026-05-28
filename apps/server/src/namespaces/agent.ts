@@ -533,18 +533,37 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
               command: ag.command, args: ag.args ? JSON.stringify(ag.args) : null,
               cwd: ag.cwd ?? null, description: null,
             });
-            registered.push({ id: existingRt.id, name: existingRt.name, category: existingRt.category, status: 'online' });
+            const publishes = deps.globalDb?.agentPublishes?.listByAgent(existingRt.id) ?? [];
+            const rt = deps.registry.register(socket.id, {
+              id: existingRt.id,
+              name: sanitizedName,
+              role: existingRt.role,
+              adapterKind: ag.adapterKind as AdapterKind,
+              category: (ag.category as AgentCategory) ?? existingRt.category ?? 'executor-hosted',
+              networkId: a.networkId,
+              visibility: existingRt.visibility,
+              ownerId: ownerId ?? existingRt.ownerId ?? null,
+              command: ag.command,
+              args: ag.args ?? [],
+              cwd: ag.cwd ?? null,
+              description: existingRt.description ?? null,
+              deviceId: a.deviceId,
+              publishedNetworkIds: publishes.map((p: { networkId: string }) => p.networkId),
+              source: (ag.source as any) ?? existingRt.source ?? 'scanned',
+            });
+            deps.io.of('/web').emit('agent:status', runtimeStatusDto(rt));
+            registered.push({ id: rt.id, name: rt.name, category: rt.category, status: 'online' });
 
             // Also ensure agent is in DeviceRegistry for heartbeats + dispatch
             const dev = deps.deviceRegistry.get(a.deviceId);
-            if (dev && !dev.agents.has(existingRt.id)) {
-              dev.agents.set(existingRt.id, {
-                id: existingRt.id,
-                name: existingRt.name,
-                role: existingRt.role,
-                adapterKind: existingRt.adapterKind,
-                category: existingRt.category,
-                visibility: existingRt.visibility,
+            if (dev) {
+              dev.agents.set(rt.id, {
+                id: rt.id,
+                name: rt.name,
+                role: rt.role,
+                adapterKind: rt.adapterKind,
+                category: rt.category,
+                visibility: rt.visibility,
               });
             }
             continue;
@@ -629,10 +648,11 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         }
 
         // Mark agents missing from this scan as offline
-        const scannedAgentIds = new Set(agentPayload.map((ag) => {
+        const scannedAgentIds = new Set(registered.map((ag) => ag.id));
+        for (const ag of agentPayload) {
           const name = normalizeAgentName(ag.name);
-          return `scan-${a.deviceId}-${name.toLowerCase().replace(/[^a-z0-9-]+/g, '-')}`;
-        }));
+          scannedAgentIds.add(`scan-${a.deviceId}-${name.toLowerCase().replace(/[^a-z0-9-]+/g, '-')}`);
+        }
         for (const rt of deps.registry.all()) {
           if (rt.deviceId === a.deviceId && rt.status !== 'offline' && (rt.source === 'scanned' || rt.id.startsWith(`scan-${a.deviceId}-`))) {
             if (!scannedAgentIds.has(rt.id)) {

@@ -241,6 +241,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     }
 
     const liveDevice = agent.deviceId ? deviceRegistry.get(agent.deviceId) : undefined;
+    const persistedDevice = agent.deviceId ? globalDb.devices.get(agent.deviceId) : null;
     const liveCandidates = liveDevice
       ? [liveDevice]
       : agent.deviceId?.startsWith('virtual-')
@@ -250,7 +251,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       ...liveCandidates.map((device) => ({
         lastSeenAt: device.lastSeenAt,
         status: device.status,
-        runtimes: device.runtimes ?? [],
+        runtimes: (device.runtimes?.length ? device.runtimes : persistedDevice?.runtimes) ?? [],
       })),
     ];
     for (const device of candidateDevices) {
