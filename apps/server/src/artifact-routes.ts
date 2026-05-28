@@ -1,6 +1,6 @@
 import type { Express, Request, Response, NextFunction } from 'express';
 import type multer from 'multer';
-import { mkdirSync, renameSync, existsSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { StorageManager } from './storage.js';
 import { newId } from './ids.js';
@@ -21,6 +21,22 @@ const MIME_MAP: Record<string, string> = {
 function guessMime(filename: string): string {
   const ext = filename.toLowerCase().replace(/^.*\./, '.');
   return MIME_MAP[ext] ?? 'application/octet-stream';
+}
+
+interface FileMoveOps {
+  renameSync(source: string, dest: string): void;
+  copyFileSync(source: string, dest: string): void;
+  unlinkSync(source: string): void;
+}
+
+export function moveUploadedFile(source: string, dest: string, ops: FileMoveOps = { renameSync, copyFileSync, unlinkSync }): void {
+  try {
+    ops.renameSync(source, dest);
+  } catch (err: any) {
+    if (err?.code !== 'EXDEV') throw err;
+    ops.copyFileSync(source, dest);
+    ops.unlinkSync(source);
+  }
 }
 
 export interface ArtifactRoutesDeps {
@@ -128,7 +144,7 @@ export function attachArtifactRoutes(deps: ArtifactRoutesDeps): void {
     const destPath = join(artifactDir, storagePath);
 
     try {
-      renameSync(file.path, destPath);
+      moveUploadedFile(file.path, destPath);
     } catch (err: any) {
       logger.error({ err: err.message }, 'artifact rename failed');
       return res.status(500).json({ error: 'storage error' });
