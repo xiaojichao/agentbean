@@ -686,7 +686,10 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
     INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, command, args, cwd, env, owner_id, description)
     VALUES (@id, @name, @role, @adapterKind, @deviceId, @networkId, @visibility, @category, @source, @firstSeenAt, @lastSeenAt, @lastError, @command, @args, @cwd, @env, @ownerId, @description)
     ON CONFLICT(id) DO UPDATE SET
-      name = excluded.name,
+      name = CASE
+        WHEN agents.source = 'custom' OR agents.category = 'agentos-hosted' THEN agents.name
+        ELSE excluded.name
+      END,
       adapter_kind = excluded.adapter_kind,
       device_id = excluded.device_id,
       network_id = excluded.network_id,
@@ -699,7 +702,10 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
       env = excluded.env,
       owner_id = excluded.owner_id,
       last_seen_at = excluded.last_seen_at,
-      description = excluded.description
+      description = CASE
+        WHEN agents.source = 'custom' OR agents.category = 'agentos-hosted' THEN agents.description
+        ELSE excluded.description
+      END
   `);
   const globalAgentListByDevice = raw.prepare(`
     SELECT id, name, role, adapter_kind AS adapterKind, category, source, command, args, cwd, env, device_id AS deviceId,

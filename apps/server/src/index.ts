@@ -1835,6 +1835,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           description,
           updatedAt,
         });
+        const persisted = globalDb.agents.getFull(payload.id);
         const rt = registry.updateConfig(payload.id, {
           name,
           adapterKind: adapterKind as import('./db.js').AdapterKind | undefined,
@@ -1842,8 +1843,18 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           cwd,
           description,
         });
-        if (rt) io.of('/web').emit('agent:status', runtimeAgentStatusDto(rt));
-        ack?.({ ok: true, agent: globalDb.agents.getFull(payload.id) });
+        if (rt) {
+          io.of('/web').emit('agent:status', runtimeAgentStatusDto(rt));
+        } else if (persisted) {
+          const resolved = resolveAgentStatus(persisted, persisted.lastSeenAt, persisted.lastError);
+          io.of('/web').emit('agent:status', persistedAgentStatusDto(
+            persisted,
+            resolved.status,
+            resolved.lastSeenAt ?? persisted.lastSeenAt,
+            resolved.lastError,
+          ));
+        }
+        ack?.({ ok: true, agent: persisted });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }

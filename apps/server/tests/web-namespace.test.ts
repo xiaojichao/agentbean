@@ -811,60 +811,57 @@ describe('/web namespace', () => {
     owner.close();
   });
 
-  it('preserves a renamed AgentOS agent across daemon reconnects', async () => {
-    const now = Date.now();
-    app.globalDb.users.create({ id: 'agentos-rename-owner', username: 'agentos-rename-owner', passwordHash: null, createdAt: now });
-    app.globalDb.networkMembers.add('default', 'agentos-rename-owner', 'member');
-
-    const firstDaemon = ioClient(`${baseUrl}/agent`, {
+  it('preserves a renamed scanned AgentOS agent across later scans', async () => {
+    const daemon = ioClient(`${baseUrl}/agent`, {
       auth: {
-        token: generateToken('agentos-rename-owner', 'default'),
+        token: 'default:default:tok',
         deviceId: 'agentos-rename-device',
         networkId: 'default',
-        agents: [{ id: 'agentos-rename-agent', name: 'Hermes-Original', role: 'r', adapterKind: 'hermes', category: 'agentos-hosted', visibility: 'public' }],
+        agents: [],
       },
       reconnection: false,
       transports: ['websocket'],
     });
-    await new Promise<void>((r) => firstDaemon.on('connect', () => r()));
-    firstDaemon.emit('register');
-    await waitFor(() => app.globalDb.agents.getFull('agentos-rename-agent')?.name === 'Hermes-Original');
+    await new Promise<void>((r) => daemon.on('connect', () => r()));
+    daemon.emit('register');
+    await new Promise<any>((resolve) => {
+      daemon.emit('device:register-agents', {
+        agents: [
+          { name: 'Hermes Original', category: 'agentos-hosted', adapterKind: 'hermes', command: '/usr/bin/hermes', args: ['gateway', 'run'], cwd: '/usr/bin', source: 'scanned' },
+        ],
+      }, resolve);
+    });
+    const agentId = 'scan-agentos-rename-device-hermes-original';
+    expect(app.globalDb.agents.getFull(agentId)?.name).toBe('Hermes-Original');
 
     const owner = ioClient(`${baseUrl}/web`, {
       reconnection: false,
       transports: ['websocket'],
-      auth: { token: generateToken('agentos-rename-owner', 'default') },
+      auth: { token: 'default:default:tok' },
     });
     await new Promise<void>((r) => owner.on('connect', () => r()));
     const renamed = await new Promise<any>((resolve) => {
       owner.emit('agent:config:update', {
-        id: 'agentos-rename-agent',
+        id: agentId,
         name: 'Hermes-Renamed',
         description: 'kept name',
       }, resolve);
     });
     expect(renamed.ok).toBe(true);
-    expect(app.globalDb.agents.getFull('agentos-rename-agent')?.name).toBe('Hermes-Renamed');
+    expect(app.globalDb.agents.getFull(agentId)?.name).toBe('Hermes-Renamed');
 
-    firstDaemon.close();
-    const reconnect = ioClient(`${baseUrl}/agent`, {
-      auth: {
-        token: generateToken('agentos-rename-owner', 'default'),
-        deviceId: 'agentos-rename-device',
-        networkId: 'default',
-        agents: [{ id: 'agentos-rename-agent', name: 'Hermes-Original', role: 'r', adapterKind: 'hermes', category: 'agentos-hosted', visibility: 'public' }],
-      },
-      reconnection: false,
-      transports: ['websocket'],
+    await new Promise<any>((resolve) => {
+      daemon.emit('device:register-agents', {
+        agents: [
+          { name: 'Hermes Original', category: 'agentos-hosted', adapterKind: 'hermes', command: '/usr/bin/hermes', args: ['gateway', 'run'], cwd: '/usr/bin', source: 'scanned' },
+        ],
+      }, resolve);
     });
-    await new Promise<void>((r) => reconnect.on('connect', () => r()));
-    reconnect.emit('register');
-    await new Promise((r) => setTimeout(r, 50));
 
-    expect(app.globalDb.agents.getFull('agentos-rename-agent')?.name).toBe('Hermes-Renamed');
-    expect(app.registry.snapshot('agentos-rename-agent')?.name).toBe('Hermes-Renamed');
+    expect(app.globalDb.agents.getFull(agentId)?.name).toBe('Hermes-Renamed');
+    expect(app.registry.snapshot(agentId)?.name).toBe('Hermes-Renamed');
 
-    reconnect.close();
+    daemon.close();
     owner.close();
   });
 

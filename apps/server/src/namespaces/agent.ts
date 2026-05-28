@@ -360,11 +360,13 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       }
       const deviceAgents = (a.agents ?? []).filter(isAgentOSHosted);
       for (const agentMeta of deviceAgents) {
+        const persistedAgent = deps.globalDb?.agents?.getFull(agentMeta.id);
+        const displayName = normalizeAgentName(persistedAgent?.name ?? agentMeta.name);
         const publishes = deps.globalDb?.agentPublishes?.listByAgent(agentMeta.id) ?? [];
         const publishedNetworkIds = publishes.map((p: { networkId: string }) => p.networkId);
         const rt = deps.registry.register(socket.id, {
           id: agentMeta.id,
-          name: normalizeAgentName(agentMeta.name),
+          name: displayName,
           role: agentMeta.role,
           adapterKind: agentMeta.adapterKind as AdapterKind,
           category: (agentMeta.category as AgentCategory) ?? 'executor-hosted',
@@ -424,7 +426,10 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         userId: userId ?? 'system',
         networkId: a.networkId,
         socket,
-        agents: new Map(deviceAgents.map((ag) => [ag.id, { ...ag, name: normalizeAgentName(ag.name) }])),
+        agents: new Map(deviceAgents.map((ag) => {
+          const persisted = deps.globalDb?.agents?.getFull(ag.id);
+          return [ag.id, { ...ag, name: normalizeAgentName(persisted?.name ?? ag.name) }];
+        })),
         capabilities: a.capabilities,
         protocolVersion: typeof a.protocolVersion === 'number' ? a.protocolVersion : undefined,
         daemonVersion: typeof a.daemonVersion === 'string' ? a.daemonVersion : typeof a.systemInfo?.daemonVersion === 'string' ? a.systemInfo.daemonVersion : null,
@@ -547,12 +552,13 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
 
           // Generate stable ID from deviceId + agent name for dedup
           const agentId = `scan-${a.deviceId}-${sanitizedName.toLowerCase().replace(/[^a-z0-9-]+/g, '-')}`;
-          const existing = deps.globalDb?.agents?.get(agentId);
+          const existing = deps.globalDb?.agents?.getFull(agentId);
+          const displayName = normalizeAgentName(existing?.name ?? sanitizedName);
 
           // Persist to global DB
           deps.globalDb?.agents?.upsert({
             id: agentId,
-            name: sanitizedName,
+            name: displayName,
             adapterKind: ag.adapterKind as AdapterKind,
             deviceId: a.deviceId,
             networkId: a.networkId,
@@ -570,7 +576,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           // Persist to per-network DB
           deps.db.agents.upsert({
             id: agentId,
-            name: sanitizedName,
+            name: displayName,
             role: null,
             adapterKind: ag.adapterKind as AdapterKind,
             deviceId: a.deviceId,
@@ -592,7 +598,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           const publishes = deps.globalDb?.agentPublishes?.listByAgent(agentId) ?? [];
           const rt = deps.registry.register(socket.id, {
             id: agentId,
-            name: sanitizedName,
+            name: displayName,
             role: '',
             adapterKind: ag.adapterKind as AdapterKind,
             category: (ag.category as AgentCategory) ?? 'executor-hosted',
@@ -606,14 +612,14 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             source: (ag.source as any) ?? 'scanned',
           });
           deps.io.of('/web').emit('agent:status', runtimeStatusDto(rt));
-          registered.push({ id: agentId, name: sanitizedName, category: ag.category, status: 'online' });
+          registered.push({ id: agentId, name: displayName, category: ag.category, status: 'online' });
 
           // Also add to DeviceRegistry so heartbeats + dispatch can find this agent
           const dev = deps.deviceRegistry.get(a.deviceId);
           if (dev) {
             dev.agents.set(agentId, {
               id: agentId,
-              name: sanitizedName,
+              name: displayName,
               role: '',
               adapterKind: ag.adapterKind as AdapterKind,
               category: (ag.category as AgentCategory) ?? 'executor-hosted',
@@ -623,10 +629,13 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         }
 
         // Mark agents missing from this scan as offline
-        const scannedNames = new Set(agentPayload.map((ag) => normalizeAgentName(ag.name).toLowerCase()));
+        const scannedAgentIds = new Set(agentPayload.map((ag) => {
+          const name = normalizeAgentName(ag.name);
+          return `scan-${a.deviceId}-${name.toLowerCase().replace(/[^a-z0-9-]+/g, '-')}`;
+        }));
         for (const rt of deps.registry.all()) {
           if (rt.deviceId === a.deviceId && rt.status !== 'offline' && (rt.source === 'scanned' || rt.id.startsWith(`scan-${a.deviceId}-`))) {
-            if (!scannedNames.has(rt.name.toLowerCase())) {
+            if (!scannedAgentIds.has(rt.id)) {
               const offRt = deps.registry.markOffline(rt.id, 'scan-missing');
               if (offRt) deps.io.of('/web').emit('agent:status', runtimeStatusDto(offRt));
               // Remove from DeviceRegistry agents map too
