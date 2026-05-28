@@ -138,11 +138,30 @@ function parseOriginList(value?: string): string[] {
     .filter(Boolean);
 }
 
+function withCanonicalHostVariants(origins: string[]): string[] {
+  const expanded = new Set(origins);
+  for (const origin of origins) {
+    try {
+      const url = new URL(origin);
+      if (url.hostname.startsWith('www.')) {
+        url.hostname = url.hostname.slice('www.'.length);
+        expanded.add(url.origin);
+      } else {
+        url.hostname = `www.${url.hostname}`;
+        expanded.add(url.origin);
+      }
+    } catch {
+      // Non-URL CORS values such as "*" are preserved as-is.
+    }
+  }
+  return [...expanded];
+}
+
 function resolveCorsOrigin(): CorsOrigin {
-  const configured = parseOriginList(process.env.CORS_ORIGIN);
+  const configured = withCanonicalHostVariants(parseOriginList(process.env.CORS_ORIGIN));
   if (configured.length > 0) return configured.length === 1 ? configured[0]! : configured;
 
-  const webOrigins = parseOriginList(process.env.WEB_URL);
+  const webOrigins = withCanonicalHostVariants(parseOriginList(process.env.WEB_URL));
   if (webOrigins.length > 0) return webOrigins.length === 1 ? webOrigins[0]! : webOrigins;
 
   return process.env.NODE_ENV === 'production' ? false : 'http://localhost:3100';

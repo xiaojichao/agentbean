@@ -50,6 +50,31 @@ describe('GET /healthz', () => {
     }
   });
 
+  it('allows the www host variant for browser REST uploads', async () => {
+    const previousCorsOrigin = process.env.CORS_ORIGIN;
+    const previousWebUrl = process.env.WEB_URL;
+    process.env.CORS_ORIGIN = 'https://agentbean.dev';
+    delete process.env.WEB_URL;
+
+    const corsApp = await buildApp({ dbPath: ':memory:', globalDbPath: ':memory:', agentToken: 'test:test:tok' });
+    try {
+      const res = await request(corsApp.http)
+        .options('/api/networks/default/artifacts/upload')
+        .set('Origin', 'https://www.agentbean.dev')
+        .set('Access-Control-Request-Method', 'POST');
+
+      expect(res.status).toBe(204);
+      expect(res.headers['access-control-allow-origin']).toBe('https://www.agentbean.dev');
+      expect(res.headers['access-control-allow-methods']).toContain('POST');
+    } finally {
+      await corsApp.close();
+      if (previousCorsOrigin === undefined) delete process.env.CORS_ORIGIN;
+      else process.env.CORS_ORIGIN = previousCorsOrigin;
+      if (previousWebUrl === undefined) delete process.env.WEB_URL;
+      else process.env.WEB_URL = previousWebUrl;
+    }
+  });
+
   it('exposes a Db handle', () => {
     expect(app.db).toBeTruthy();
     const tables = app.db.raw
