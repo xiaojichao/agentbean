@@ -248,6 +248,36 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     };
   };
 
+  const resolveAgentStatus = (agent: { id: string; source?: string | null; adapterKind?: string | null; command?: string | null; cwd?: string | null; deviceId?: string | null; networkId?: string | null }, fallbackLastSeenAt?: number | null, fallbackLastError?: string | null) => {
+    if (agent.source === 'custom') {
+      const resolved = resolveCustomAgentStatus(agent);
+      return {
+        status: resolved.status,
+        lastSeenAt: resolved.lastSeenAt ?? fallbackLastSeenAt,
+        lastError: resolved.lastError ?? fallbackLastError ?? undefined,
+      };
+    }
+    const rt = registry.snapshot(agent.id);
+    return {
+      status: rt?.status ?? 'offline',
+      lastSeenAt: rt?.lastHeartbeatAt ?? fallbackLastSeenAt,
+      lastError: rt?.lastError?.message ?? fallbackLastError ?? undefined,
+    };
+  };
+
+  const emitCustomAgentStatusesForDevice = (deviceId: string) => {
+    for (const agent of globalDb.agents.listByDevice(deviceId)) {
+      if (agent.source !== 'custom') continue;
+      const resolved = resolveCustomAgentStatus(agent);
+      io.of('/web').emit('agent:status', persistedAgentStatusDto(
+        agent,
+        resolved.status,
+        resolved.lastSeenAt ?? agent.lastSeenAt,
+        resolved.lastError,
+      ));
+    }
+  };
+
   const resolveOwnerName = (ownerId?: string | null) => {
     if (!ownerId) return null;
     return globalDb.users.get(ownerId)?.username ?? null;
@@ -585,6 +615,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     globalDb,
     metricsCollector,
     dispatchTimeoutMs: Number.isFinite(dispatchTimeoutMs) && dispatchTimeoutMs > 0 ? dispatchTimeoutMs : undefined,
+    onDeviceOnline: emitCustomAgentStatusesForDevice,
     onDeviceOffline: markDeviceAndAgentsOffline,
   });
 
@@ -880,27 +911,27 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const result = globalAgents
           .filter((ga) => !(ga.source === 'scanned' && ga.category === 'executor-hosted'))
           .map((ga) => {
-          const rt = registry.snapshot(ga.id);
-          return enrichAgentOwnership({
-            id: ga.id,
-            name: ga.name,
-            adapterKind: ga.adapterKind,
-            category: ga.category,
-            source: ga.source,
-            command: ga.command,
-            args: ga.args,
-            cwd: ga.cwd,
-            deviceId: ga.deviceId,
-            networkId: ga.networkId,
-            visibility: ga.visibility,
-            ownerId: ga.ownerId,
-            description: ga.description,
-            status: rt?.status ?? 'offline',
-            publishedNetworkIds: rt?.publishedNetworkIds ?? globalDb.agentPublishes.listByAgent(ga.id).map((p) => p.networkId),
-            lastSeenAt: rt?.lastHeartbeatAt ?? ga.lastSeenAt,
-            lastError: rt?.lastError ?? ga.lastError ?? undefined,
+            const resolved = resolveAgentStatus(ga, ga.lastSeenAt, ga.lastError);
+            return enrichAgentOwnership({
+              id: ga.id,
+              name: ga.name,
+              adapterKind: ga.adapterKind,
+              category: ga.category,
+              source: ga.source,
+              command: ga.command,
+              args: ga.args,
+              cwd: ga.cwd,
+              deviceId: ga.deviceId,
+              networkId: ga.networkId,
+              visibility: ga.visibility,
+              ownerId: ga.ownerId,
+              description: ga.description,
+              status: resolved.status,
+              publishedNetworkIds: registry.snapshot(ga.id)?.publishedNetworkIds ?? globalDb.agentPublishes.listByAgent(ga.id).map((p) => p.networkId),
+              lastSeenAt: resolved.lastSeenAt ?? ga.lastSeenAt,
+              lastError: resolved.lastError,
+            });
           });
-        });
         const live = deviceRegistry.get(payload.deviceId);
         const dbDevice = globalDb.devices.get(payload.deviceId);
         ack?.({ ok: true, agents: result, runtimes: live?.runtimes ?? dbDevice?.runtimes ?? [] });
@@ -2273,8 +2304,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const publicAgents = deviceAgents
           .filter((agent) => agent.visibility === 'public')
           .map((agent) => {
-            const liveAgent = registry.snapshot(agent.id);
-            const resolved = agent.source === 'custom' ? resolveCustomAgentStatus(agent) : null;
+            const resolved = resolveAgentStatus(agent, agent.lastSeenAt, agent.lastError);
             const ownerId = resolveAgentOwnerId(agent);
             const ownerName = resolveOwnerName(ownerId) ?? usersById.get(device.userId) ?? '未知用户';
             return {
@@ -2288,9 +2318,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
               args: parseArgs(agent.args),
               cwd: agent.cwd,
               description: agent.description,
-              status: liveAgent?.status ?? resolved?.status ?? 'offline',
-              lastSeenAt: liveAgent?.lastHeartbeatAt ?? resolved?.lastSeenAt ?? agent.lastSeenAt,
-              lastError: liveAgent?.lastError?.message ?? resolved?.lastError ?? agent.lastError ?? undefined,
+              status: resolved.status,
+              lastSeenAt: resolved.lastSeenAt ?? agent.lastSeenAt,
+              lastError: resolved.lastError,
               visibility: agent.visibility,
               networkId: agent.networkId,
               networkName: networksById.get(agent.networkId) ?? '未知团队',
@@ -2392,8 +2422,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       const agents: any[] = globalDb.agents.listAll()
         .filter(isTeamAgent)
         .map((agent) => {
-          const live = registry.snapshot(agent.id);
-          const resolved = agent.source === 'custom' ? resolveCustomAgentStatus(agent) : null;
+          const resolved = resolveAgentStatus(agent, agent.lastSeenAt, agent.lastError);
           const device = agent.deviceId ? devicesById.get(agent.deviceId) : null;
           const ownerId = resolveAgentOwnerId(agent);
           const ownerName = resolveOwnerName(ownerId) ?? device?.userName ?? '未知用户';
@@ -2408,9 +2437,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             args: parseArgs(agent.args),
             cwd: agent.cwd,
             description: agent.description,
-            status: live?.status ?? resolved?.status ?? 'offline',
-            lastSeenAt: live?.lastHeartbeatAt ?? resolved?.lastSeenAt ?? agent.lastSeenAt,
-            lastError: live?.lastError?.message ?? resolved?.lastError ?? agent.lastError ?? undefined,
+            status: resolved.status,
+            lastSeenAt: resolved.lastSeenAt ?? agent.lastSeenAt,
+            lastError: resolved.lastError,
             visibility: agent.visibility,
             networkId: agent.networkId,
             networkName: networksById.get(agent.networkId) ?? '未知团队',

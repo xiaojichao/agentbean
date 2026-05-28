@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback, type MouseEvent, type ReactNode, type RefObject } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2 } from 'lucide-react';
-import { artifactUploadUrl, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents } from '@/lib/socket';
+import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage } from '@/lib/schema';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
@@ -611,12 +611,7 @@ export default function ChatPage() {
         form.append('uploaderId', currentUser.id);
         form.append('file', file);
         try {
-          const res = await fetch(artifactUploadUrl(currentNetworkId), {
-            method: 'POST',
-            body: form,
-          });
-          if (!res.ok) throw new Error(await res.text());
-          const artifact = await res.json() as Artifact;
+          const artifact = await uploadArtifact(currentNetworkId, form);
           setTargetAttachments((prev) => prev.map((item) => item.localId === attachment.localId
             ? { ...item, status: 'ready', artifact, mimeType: artifact.mimeType || item.mimeType, sizeBytes: artifact.sizeBytes }
             : item));

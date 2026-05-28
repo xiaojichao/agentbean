@@ -237,6 +237,8 @@ export function createDeviceSocketOptions(input: {
         directoryPicker: true,
       },
     },
+    transports: ['websocket', 'polling'],
+    rememberUpgrade: true,
     reconnection: true,
     reconnectionDelay: 1_000,
     reconnectionDelayMax: 10_000,

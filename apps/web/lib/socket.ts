@@ -1,6 +1,6 @@
 'use client';
 import { io, type Socket } from 'socket.io-client';
-import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, NetworkSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun } from './schema.js';
+import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, NetworkSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, Artifact } from './schema.js';
 
 const configuredUrl = process.env.NEXT_PUBLIC_AGENT_BEAN_SERVER_URL ?? 'http://localhost:4000';
 const TOKEN_STORAGE_KEY = 'agentbean.token';
@@ -31,7 +31,42 @@ export function authedApiUrl(path: string): string {
 }
 
 export function artifactUploadUrl(networkId: string): string {
+  return authedApiUrl(`/api/networks/${encodeURIComponent(networkId)}/artifacts/upload`);
+}
+
+export function artifactUploadProxyUrl(networkId: string): string {
   return `/api/networks/${encodeURIComponent(networkId)}/artifacts/upload?token=${encodeURIComponent(getStoredAuthToken())}`;
+}
+
+export function artifactUploadFallbackUrls(networkId: string): string[] {
+  const urls = [artifactUploadUrl(networkId), artifactUploadProxyUrl(networkId)];
+  return [...new Set(urls)];
+}
+
+function cloneFormData(form: FormData): FormData {
+  const cloned = new FormData();
+  for (const [key, value] of form.entries()) {
+    cloned.append(key, value);
+  }
+  return cloned;
+}
+
+export async function uploadArtifact(networkId: string, form: FormData): Promise<Artifact> {
+  let lastError: Error | null = null;
+  for (const url of artifactUploadFallbackUrls(networkId)) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        body: cloneFormData(form),
+      });
+      if (res.ok) return await res.json() as Artifact;
+      const text = await res.text();
+      lastError = new Error(text || `${res.status} ${res.statusText}`);
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error('Failed to fetch');
+    }
+  }
+  throw lastError ?? new Error('Failed to upload artifact');
 }
 
 export async function fetchAgentWorkspace(networkId: string, agentId: string): Promise<{ ok: boolean; runs?: AgentWorkspaceRun[]; error?: string }> {

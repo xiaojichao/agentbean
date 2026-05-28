@@ -881,6 +881,20 @@ describe('/web namespace', () => {
       ownerId: owner.id,
       description: 'Remote custom agent',
     });
+    app.registry?.registerVirtual({
+      id: 'remote-custom-agent',
+      name: 'test-Agent',
+      role: 'executor-agent',
+      adapterKind: 'codex',
+      category: 'executor-hosted',
+      source: 'custom',
+      networkId: 'default',
+      deviceId: 'remote-custom-device',
+      command: '/opt/homebrew/bin/codex',
+      args: [],
+      cwd: '/Users/shaw/drama',
+      ownerId: owner.id,
+    });
 
     const ag = ioClient(`${baseUrl}/agent`, {
       auth: {
@@ -896,11 +910,6 @@ describe('/web namespace', () => {
     });
     await new Promise<void>((r) => ag.on('connect', () => r()));
     ag.emit('register');
-    await new Promise<any>((resolve) => {
-      ag.emit('device:register-runtimes', {
-        runtimes: [{ name: 'Codex CLI', adapterKind: 'codex', command: '/opt/homebrew/bin/codex', installed: true }],
-      }, resolve);
-    });
 
     const web = ioClient(`${baseUrl}/web`, {
       reconnection: false,
@@ -908,6 +917,20 @@ describe('/web namespace', () => {
       auth: { token: generateToken('admin', 'default') },
     });
     await new Promise<void>((r) => web.on('connect', () => r()));
+    const statusPromise = new Promise<any>((resolve) => {
+      web.on('agent:status', (status: any) => {
+        if (status.id === 'remote-custom-agent') resolve(status);
+      });
+    });
+    await new Promise<any>((resolve) => {
+      ag.emit('device:register-runtimes', {
+        runtimes: [{ name: 'Codex CLI', adapterKind: 'codex', command: '/opt/homebrew/bin/codex', installed: true }],
+      }, resolve);
+    });
+    await expect(statusPromise).resolves.toMatchObject({
+      id: 'remote-custom-agent',
+      status: 'online',
+    });
 
     const members = await new Promise<any>((resolve) => {
       web.emit('members:list', {}, resolve);
@@ -916,6 +939,15 @@ describe('/web namespace', () => {
     expect(members.agents.find((agent: any) => agent.id === 'remote-custom-agent')).toMatchObject({
       name: 'test-Agent',
       deviceName: 'MyMBP',
+      status: 'online',
+    });
+
+    const deviceAgents = await new Promise<any>((resolve) => {
+      web.emit('device:agents:list', { deviceId: 'remote-custom-device' }, resolve);
+    });
+    expect(deviceAgents.ok).toBe(true);
+    expect(deviceAgents.agents.find((agent: any) => agent.id === 'remote-custom-agent')).toMatchObject({
+      name: 'test-Agent',
       status: 'online',
     });
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createDeviceSocketOptions, nativeDirectoryPickerCommands, resolveCustomAgentRuntime } from '../src/device-daemon.js';
 
 describe('device daemon socket options', () => {
-  it('allows Socket.IO transport fallback for long-running device connections', () => {
+  it('prefers WebSocket while keeping Socket.IO polling fallback for long-running device connections', () => {
     const options = createDeviceSocketOptions({
       token: 'token',
       deviceId: 'device-1',
@@ -21,7 +21,8 @@ describe('device daemon socket options', () => {
       },
     });
 
-    expect(options).not.toHaveProperty('transports');
+    expect(options.transports).toEqual(['websocket', 'polling']);
+    expect(options.rememberUpgrade).toBe(true);
     expect(options.reconnection).toBe(true);
     expect(options.reconnectionDelay).toBe(1_000);
     expect(options.reconnectionDelayMax).toBe(10_000);

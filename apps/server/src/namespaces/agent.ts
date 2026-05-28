@@ -38,6 +38,7 @@ export interface AgentNamespaceDeps {
   };
   dispatchTimeoutMs?: number;
   metricsCollector?: AgentMetricsCollector;
+  onDeviceOnline?: (deviceId: string) => void;
   onDeviceOffline?: (deviceId: string, reason: string) => void;
 }
 
@@ -431,6 +432,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         status: 'online',
       });
       emitCurrentDeviceStatus();
+      deps.onDeviceOnline?.(a.deviceId);
     });
 
     socket.on('heartbeat', () => {
@@ -655,6 +657,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           dev.lastSeenAt = Date.now();
           dev.status = 'online';
           emitCurrentDeviceStatus();
+          deps.onDeviceOnline?.(a.deviceId);
         }
         ack?.({ ok: true });
       } catch (e: any) {
