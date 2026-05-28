@@ -326,10 +326,14 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     userId?: string | null,
   ) => Boolean(userId && device && (device.userId === userId || globalDb.users.get(userId)?.role === 'admin'));
 
-  const isDeviceLocalToUser = (
-    device: { userId?: string | null } | null | undefined,
-    userId?: string | null,
-  ) => Boolean(userId && device?.userId === userId);
+  const normalizeDeviceIdHint = (value: unknown): string | null =>
+    typeof value === 'string' && value.trim() ? value.trim() : null;
+
+  const socketCurrentDeviceId = (socket: import('socket.io').Socket): string | null =>
+    normalizeDeviceIdHint(socket.data.currentDeviceId);
+
+  const isDeviceLocalToSocket = (deviceId: string | null | undefined, socket: import('socket.io').Socket): boolean =>
+    Boolean(deviceId && socketCurrentDeviceId(socket) === deviceId);
 
   const resolveDeviceName = (deviceId?: string | null) => {
     if (!deviceId) return null;
@@ -407,7 +411,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
   const visibleDeviceRows = (rows: ReturnType<GlobalDb['devices']['listByUser']>) =>
     rows.filter((device) => !isVirtualDeviceId(device.id)).sort(compareDeviceRows);
 
-  const toDeviceDto = (dbd: ReturnType<GlobalDb['devices']['listByUser']>[number], viewerId?: string | null) => {
+  const toDeviceDto = (dbd: ReturnType<GlobalDb['devices']['listByUser']>[number], viewerId?: string | null, currentDeviceId?: string | null) => {
     const live = deviceRegistry.get(dbd.id);
     const systemInfo = dbd.systemInfo;
     const daemonVersionInfo = buildDaemonVersionInfo(systemInfo);
@@ -429,10 +433,11 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       latestDaemonVersion: daemonVersionInfo.latest,
       daemonUpdateAvailable: daemonVersionInfo.updateAvailable,
       canManage: canManageDeviceRow(dbd, viewerId),
+      isLocal: currentDeviceId ? currentDeviceId === dbd.id : undefined,
     };
   };
 
-  const devicesForNetwork = (networkId: string, viewerId?: string | null) => {
+  const devicesForNetwork = (networkId: string, viewerId?: string | null, currentDeviceId?: string | null) => {
     const rowsById = new Map<string, ReturnType<GlobalDb['devices']['listByUser']>[number]>();
     for (const device of globalDb.devices.listByNetwork(networkId)) {
       rowsById.set(device.id, device);
@@ -442,7 +447,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       const device = globalDb.devices.get(agent.deviceId);
       if (device) rowsById.set(device.id, device);
     }
-    return visibleDeviceRows([...rowsById.values()]).map((device) => toDeviceDto(device, viewerId));
+    return visibleDeviceRows([...rowsById.values()]).map((device) => toDeviceDto(device, viewerId, currentDeviceId));
   };
 
   const parsePersistedArgs = (args?: string[] | string | null) => {
@@ -742,7 +747,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
   function emitDevicesSnapshotForNetwork(networkId: string): void {
     for (const s of io.of('/web').sockets.values()) {
       if ((socketNetworkMap.get(s.id) ?? defaultNetworkId) !== networkId) continue;
-      s.emit('devices:snapshot', devicesForNetwork(networkId, s.data.userId as string | undefined));
+      s.emit('devices:snapshot', devicesForNetwork(networkId, s.data.userId as string | undefined, socketCurrentDeviceId(s)));
     }
   }
 
@@ -767,11 +772,12 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       socket.data.legacyAuth = true;
       return next();
     }
-    const parsed = verifyUserToken(clientToken, globalDb);
-    if (!parsed) return next(new Error('unauthorized'));
-    socket.data.userId = parsed.userId;
-    socket.data.networkId = parsed.networkId;
-    const user = globalDb.users.get(parsed.userId);
+      const parsed = verifyUserToken(clientToken, globalDb);
+      if (!parsed) return next(new Error('unauthorized'));
+      socket.data.userId = parsed.userId;
+      socket.data.networkId = parsed.networkId;
+      socket.data.currentDeviceId = normalizeDeviceIdHint(socket.handshake.auth.currentDeviceId);
+      const user = globalDb.users.get(parsed.userId);
     if (user) socket.data.role = user.role;
     next();
   }).on('connection', (socket) => {
@@ -885,13 +891,13 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
     socket.on('devices:subscribe', () => {
       const nid = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
-      socket.emit('devices:snapshot', devicesForNetwork(nid, socket.data.userId as string | undefined));
+      socket.emit('devices:snapshot', devicesForNetwork(nid, socket.data.userId as string | undefined, socketCurrentDeviceId(socket)));
     });
 
     socket.on('devices:list', (_payload: {}, ack?: (r: any) => void) => {
       try {
         const nid = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
-        ack?.({ ok: true, devices: devicesForNetwork(nid, socket.data.userId as string | undefined) });
+        ack?.({ ok: true, devices: devicesForNetwork(nid, socket.data.userId as string | undefined, socketCurrentDeviceId(socket)) });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }
@@ -1049,6 +1055,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             latestDaemonVersion: daemonVersionInfo.latest,
             daemonUpdateAvailable: daemonVersionInfo.updateAvailable,
             canManage: canManageDevice(dbDevice, socket.data.userId as string | undefined),
+            isLocal: isDeviceLocalToSocket(dbDevice.id, socket),
             agents,
           },
         });
@@ -1670,7 +1677,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const requestedDevice = payload.deviceId ? globalDb.devices.get(payload.deviceId) as any : null;
         if (payload.deviceId && !requestedDevice) return ack?.({ ok: false, error: 'DEVICE_NOT_FOUND' });
         if (requestedDevice && requestedDevice.networkId !== targetNetworkId) return ack?.({ ok: false, error: 'DEVICE_NOT_IN_TEAM' });
-        if (requestedDevice && !isDeviceLocalToUser(requestedDevice, userId)) {
+        if (requestedDevice && !isDeviceLocalToSocket(payload.deviceId, socket)) {
           return ack?.({ ok: false, error: 'FORBIDDEN_DEVICE' });
         }
         if (requestedDevice && !command) return ack?.({ ok: false, error: 'EMPTY_RUNTIME' });
@@ -1819,7 +1826,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const isAgentOS = existing.category === 'agentos-hosted';
         if (!isCustom && !isAgentOS) return ack?.({ ok: false, error: 'NOT_CONFIGURABLE_AGENT' });
         const device = existing.deviceId ? globalDb.devices.get(existing.deviceId) : null;
-        const isLocalDeviceAgent = isDeviceLocalToUser(device, userId);
+        const isLocalDeviceAgent = isDeviceLocalToSocket(existing.deviceId, socket);
         const canManageExistingAgent = isAgentOS && existing.deviceId
           ? canManageDevice(globalDb.devices.get(existing.deviceId), userId)
           : canManageAgent({ ownerId: existing.ownerId, deviceId: existing.deviceId }, userId);
@@ -1945,7 +1952,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       }
     });
 
-    socket.on('auth:invite:validate', (payload: { code: string }, ack?: (r: any) => void) => {
+    socket.on('auth:invite:validate', (payload: { code: string; deviceId?: string }, ack?: (r: any) => void) => {
       try {
         const invite = globalDb.invites.getByCode(payload.code);
         if (!invite) return ack?.({ ok: false, error: 'INVALID_CODE' });
@@ -1956,6 +1963,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         if (invite.purpose === 'device') {
           // Only store the first socket (the daemon's) — don't let browser validation overwrite it
           if (!inviteSessions.has(`device:${payload.code}`)) {
+            socket.data.pendingDeviceId = normalizeDeviceIdHint(payload.deviceId);
             inviteSessions.set(`device:${payload.code}`, socket);
           }
           ack?.({ ok: true, sessionId: null, registerUrl: `${webUrl}/device-login/${encodeURIComponent(payload.code)}` });
@@ -2133,10 +2141,11 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         socket.data.role = user.role;
         socketNetworkMap.set(socket.id, networkId);
         const devNetRow = globalDb.networks.get(networkId);
-        ack?.({ ok: true, token: userToken, networkId, networkPath: devNetRow?.path ?? 'default', userId: user.id, username: user.username, role: user.role });
+        const daemonSocket = inviteSessions.get(`device:${payload.inviteCode}`);
+        const deviceId = normalizeDeviceIdHint(daemonSocket?.data.pendingDeviceId);
+        ack?.({ ok: true, token: userToken, networkId, networkPath: devNetRow?.path ?? 'default', userId: user.id, username: user.username, role: user.role, deviceId });
 
         // Deliver token to the daemon socket waiting on this invite code
-        const daemonSocket = inviteSessions.get(`device:${payload.inviteCode}`);
         if (daemonSocket) {
           daemonSocket.emit('auth:token:deliver', { token: userToken, userId: user.id, networkId });
           inviteSessions.delete(`device:${payload.inviteCode}`);

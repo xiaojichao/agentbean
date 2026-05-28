@@ -298,7 +298,7 @@ function EmptyState() {
 }
 
 function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName, showDeleteConfirm, setShowDeleteConfirm, currentNetworkId }: {
-  device: { id: string; userId?: string | null; ownerName?: string | null; userName?: string | null; canManage?: boolean; hostname?: string; status: string; lastSeenAt: number; agentIds: string[]; runtimes?: any[]; connectCommand?: string | null; latestDaemonVersion?: string | null; daemonUpdateAvailable?: boolean; daemonVersionInfo?: { current: string | null; latest: string | null; updateAvailable: boolean; status: 'current' | 'update-available' | 'unknown' }; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string; daemonVersion?: string } | null };
+  device: { id: string; userId?: string | null; ownerName?: string | null; userName?: string | null; canManage?: boolean; isLocal?: boolean; hostname?: string; status: string; lastSeenAt: number; agentIds: string[]; runtimes?: any[]; connectCommand?: string | null; latestDaemonVersion?: string | null; daemonUpdateAvailable?: boolean; daemonVersionInfo?: { current: string | null; latest: string | null; updateAvailable: boolean; status: 'current' | 'update-available' | 'unknown' }; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string; daemonVersion?: string } | null };
   editName: boolean;
   setEditName: (v: boolean) => void;
   deviceName: string;
@@ -322,7 +322,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const ownerName = device.ownerName ?? device.userName ?? '未知用户';
   const daemonVersion = daemonVersionDisplay(device);
   const canManageDevice = device.canManage ?? (currentUser?.role === 'admin' || Boolean(currentUser?.id && currentUser.id === device.userId));
-  const isLocalDevice = Boolean(currentUser?.id && currentUser.id === device.userId);
+  const isLocalDevice = device.isLocal === true;
 
   const refreshDeviceAgents = () => {
     return deviceEvents().agentsList(device.id).then((res) => {

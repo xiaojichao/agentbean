@@ -4,6 +4,7 @@ import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, NetworkSummary, Agent
 
 const configuredUrl = process.env.NEXT_PUBLIC_AGENT_BEAN_SERVER_URL ?? 'http://localhost:4000';
 const TOKEN_STORAGE_KEY = 'agentbean.token';
+const DEVICE_ID_STORAGE_KEY = 'agentbean.deviceId';
 
 let webSocket: Socket | null = null;
 const webToken = process.env.NEXT_PUBLIC_AGENT_BEAN_WEB_TOKEN ?? process.env.NEXT_PUBLIC_AGENT_BEAN_AGENT_TOKEN ?? '';
@@ -15,6 +16,16 @@ function getStoredToken(): string {
 
 export function getStoredAuthToken(): string {
   return getStoredToken();
+}
+
+export function getStoredDeviceId(): string | null {
+  if (typeof window === 'undefined') return null;
+  return window.localStorage.getItem(DEVICE_ID_STORAGE_KEY);
+}
+
+export function setStoredDeviceId(deviceId: string): void {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(DEVICE_ID_STORAGE_KEY, deviceId);
 }
 
 function getServerUrl(): string {
@@ -82,7 +93,7 @@ export async function fetchAgentWorkspace(networkId: string, agentId: string): P
 export function getWebSocket(): Socket {
   if (webSocket) return webSocket;
   let retriedWithWebToken = false;
-  webSocket = io(`${getServerUrl()}/web`, { transports: ['websocket'], autoConnect: true, auth: { token: getStoredToken() } });
+  webSocket = io(`${getServerUrl()}/web`, { transports: ['websocket'], autoConnect: true, auth: { token: getStoredToken(), currentDeviceId: getStoredDeviceId() } });
   webSocket.on('connect_error', () => {
     if (typeof window === 'undefined' || retriedWithWebToken || !webToken) return;
     const storedToken = window.localStorage.getItem(TOKEN_STORAGE_KEY);
@@ -90,7 +101,7 @@ export function getWebSocket(): Socket {
     retriedWithWebToken = true;
     window.localStorage.removeItem(TOKEN_STORAGE_KEY);
     webSocket?.disconnect();
-    webSocket!.auth = { token: webToken };
+    webSocket!.auth = { token: webToken, currentDeviceId: getStoredDeviceId() };
     webSocket?.connect();
   });
   return webSocket;
@@ -226,7 +237,7 @@ export interface AuthEvents {
   login(payload: { username: string; password: string; joinCode?: string }): Promise<{ ok: boolean; token?: string; userId?: string; username?: string; email?: string | null; role?: 'admin' | 'user'; networkId?: string; networkPath?: string; error?: string }>;
   whoami(): Promise<{ ok: boolean; user?: UserInfo; error?: string }>;
   inviteCreate(payload?: { networkId?: string; purpose?: 'user' | 'device' }): Promise<{ ok: boolean; invite?: InviteInfo; error?: string }>;
-  deviceLogin(payload: { inviteCode: string; username: string; password: string }): Promise<{ ok: boolean; token?: string; networkId?: string; networkPath?: string; userId?: string; username?: string; role?: 'admin' | 'user'; error?: string }>;
+  deviceLogin(payload: { inviteCode: string; username: string; password: string }): Promise<{ ok: boolean; token?: string; networkId?: string; networkPath?: string; userId?: string; username?: string; role?: 'admin' | 'user'; deviceId?: string; error?: string }>;
   changePassword(payload: { currentPassword: string; newPassword: string }): Promise<{ ok: boolean; error?: string }>;
 }
 

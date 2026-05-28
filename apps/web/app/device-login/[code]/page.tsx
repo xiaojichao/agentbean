@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { createInviteSocket, authEvents, resetWebSocket } from '@/lib/socket';
+import { createInviteSocket, authEvents, resetWebSocket, setStoredDeviceId } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 
 export default function DeviceLoginPage() {
@@ -30,6 +30,7 @@ export default function DeviceLoginPage() {
         return;
       }
       localStorage.setItem('agentbean.token', res.token);
+      if (res.deviceId) setStoredDeviceId(res.deviceId);
       useAgentBeanStore.getState().setAuthToken(res.token);
       useAgentBeanStore.getState().setCurrentNetworkId(res.networkId ?? 'default');
       useAgentBeanStore.getState().setCurrentUser({

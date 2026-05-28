@@ -538,7 +538,7 @@ describe('/web namespace', () => {
     const deviceOwner = ioClient(`${baseUrl}/web`, {
       reconnection: false,
       transports: ['websocket'],
-      auth: { token: generateToken('agent-config-device-owner', 'default') },
+      auth: { token: generateToken('agent-config-device-owner', 'default'), currentDeviceId: 'agent-config-device' },
     });
     await new Promise<void>((r) => deviceOwner.on('connect', () => r()));
     const localDeviceUpdate = await new Promise<any>((resolve) => {
@@ -616,9 +616,6 @@ describe('/web namespace', () => {
       editor.emit('agent:config:update', {
         id: 'agent-config-broadcast-agent',
         name: 'Broadcast-Agent-Renamed',
-        adapterKind: 'codex',
-        command: 'codex',
-        cwd: '/Users/device/project',
         description: 'after',
       }, resolve);
     });
@@ -924,12 +921,36 @@ describe('/web namespace', () => {
     expect(remoteCreateRes).toMatchObject({ ok: false, error: 'FORBIDDEN_DEVICE' });
     adminWeb.close();
 
-    const web = ioClient(`${baseUrl}/web`, {
+    const ownerRemoteWeb = ioClient(`${baseUrl}/web`, {
       reconnection: false,
       transports: ['websocket'],
       auth: { token: generateToken('remote-device-owner', 'default') },
     });
+    await new Promise<void>((r) => ownerRemoteWeb.on('connect', () => r()));
+    const ownerRemoteCreateRes = await new Promise<any>((resolve) => {
+      ownerRemoteWeb.emit('agent:create', {
+        name: 'Owner Remote Agent',
+        adapterKind: 'codex',
+        command: 'codex',
+        category: 'executor-hosted',
+        deviceId: 'remote-device-1',
+        cwd: '/Users/remote/project',
+      }, resolve);
+    });
+    expect(ownerRemoteCreateRes).toMatchObject({ ok: false, error: 'FORBIDDEN_DEVICE' });
+    ownerRemoteWeb.close();
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('remote-device-owner', 'default'), currentDeviceId: 'remote-device-1' },
+    });
     await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const localDevices = await new Promise<any>((resolve) => {
+      web.emit('devices:list', {}, resolve);
+    });
+    expect(localDevices.devices.find((device: any) => device.id === 'remote-device-1')).toMatchObject({ isLocal: true });
 
     const createRes = await new Promise<any>((resolve) => {
       web.emit('agent:create', {

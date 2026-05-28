@@ -168,7 +168,8 @@ Options:
       console.error('Error: --server-url is required with --invite.');
       process.exit(1);
     }
-    const auth = await runInviteMode(serverUrl, values.invite);
+    const inviteDeviceId = values['device-id'] ?? await getDeviceId();
+    const auth = await runInviteMode(serverUrl, values.invite, inviteDeviceId);
     serverUrl = auth.serverUrl;
     token = auth.token;
     networkId = auth.networkId ?? networkId;
@@ -271,7 +272,7 @@ export function socketErrorMessage(err: any): string {
   return [...new Set(details)].join(': ') || 'unknown socket error';
 }
 
-async function runInviteMode(serverUrl: string, inviteCode: string) {
+async function runInviteMode(serverUrl: string, inviteCode: string, deviceId: string) {
   const { io } = await import('socket.io-client');
   const { execFile } = await import('node:child_process');
   const baseUrl = normalizeBaseUrl(serverUrl);
@@ -302,7 +303,7 @@ async function runInviteMode(serverUrl: string, inviteCode: string) {
       clearTimeout(connectTimer);
       logger.info('invite mode: connected, validating invite code');
       console.log('Connected. Validating invite code...');
-      socket.emit('auth:invite:validate', { code: inviteCode }, (res: any) => {
+      socket.emit('auth:invite:validate', { code: inviteCode, deviceId }, (res: any) => {
         if (!res?.ok) {
           fail(new Error(res?.error ?? 'invalid invite code'));
           return;

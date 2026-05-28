@@ -148,6 +148,7 @@ export interface DeviceInfo {
   status: AgentStatus;
   agentIds: string[];
   canManage?: boolean;
+  isLocal?: boolean;
   runtimes?: RuntimeInfo[];
   connectCommand?: string | null;
   latestDaemonVersion?: string | null;
