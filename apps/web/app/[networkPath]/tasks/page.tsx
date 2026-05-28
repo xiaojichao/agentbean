@@ -27,7 +27,7 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, memberEvents, taskEvents } from '@/lib/socket';
+import { artifactUploadUrl, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, memberEvents, taskEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, Artifact, ChannelSummary, ChatMessage } from '@/lib/schema';
 import {
@@ -376,9 +376,8 @@ export default function TasksPage() {
         form.append('channelId', selectedTask.channelId);
         form.append('uploaderId', currentUser.id);
         form.append('file', file);
-        const res = await fetch(`${getResolvedServerUrl()}/api/networks/${encodeURIComponent(currentNetworkId)}/artifacts/upload`, {
+        const res = await fetch(artifactUploadUrl(currentNetworkId), {
           method: 'POST',
-          headers: { Authorization: `Bearer ${getStoredAuthToken()}` },
           body: form,
         });
         if (!res.ok) throw new Error(await res.text());

@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback, type MouseEvent, type ReactNode, type RefObject } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2 } from 'lucide-react';
-import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents } from '@/lib/socket';
+import { artifactUploadUrl, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage } from '@/lib/schema';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
@@ -561,9 +561,8 @@ export default function ChatPage() {
         form.append('channelId', activeChannel);
         form.append('uploaderId', currentUser.id);
         form.append('file', file);
-        const res = await fetch(`${getResolvedServerUrl()}/api/networks/${encodeURIComponent(currentNetworkId)}/artifacts/upload`, {
+        const res = await fetch(artifactUploadUrl(currentNetworkId), {
           method: 'POST',
-          headers: { Authorization: `Bearer ${getStoredAuthToken()}` },
           body: form,
         });
         if (!res.ok) throw new Error(await res.text());
@@ -1005,8 +1004,8 @@ export default function ChatPage() {
                     <div className="flex items-center gap-1">
                       <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => { if (e.target.files) uploadFiles(e.target.files, 'main'); e.currentTarget.value = ''; }} />
                       <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => { if (e.target.files) uploadFiles(e.target.files, 'main'); e.currentTarget.value = ''; }} />
-                      <button onClick={() => imageInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-40" title="附件图片"><Image size={16} /></button>
-                      <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-40" title="附件文件"><Paperclip size={16} /></button>
+                      <button onClick={() => imageInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传图片"><Image size={16} /></button>
+                      <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传附件"><Paperclip size={16} /></button>
                       <label className="ml-1 flex cursor-pointer items-center gap-1 text-neutral-400 hover:text-neutral-600"><input type="checkbox" checked={asTask} onChange={(e) => setAsTask(e.target.checked)} className="rounded border-neutral-300" /><span className="text-xs">作为任务</span></label>
                     </div>
                     <button onClick={sendMessage} disabled={uploading || (!input.trim() && pendingAttachments.length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40"><Send size={14} /></button>
@@ -1952,10 +1951,10 @@ function ThreadPanel({
             <div className="flex items-center gap-1">
               <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => { if (e.target.files) onUpload(e.target.files); e.currentTarget.value = ''; }} />
               <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => { if (e.target.files) onUpload(e.target.files); e.currentTarget.value = ''; }} />
-              <button onClick={() => imageInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-40" title="附件图片">
+              <button onClick={() => imageInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传图片">
                 <Image size={16} />
               </button>
-              <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-40" title="附件文件">
+              <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传附件">
                 <Paperclip size={16} />
               </button>
             </div>
@@ -2147,16 +2146,38 @@ function SidebarSortButton({
 
 function AttachmentStrip({ attachments, onRemove }: { attachments: Artifact[]; onRemove: (id: string) => void }) {
   return (
-    <div className="flex flex-wrap gap-1.5 border-t border-neutral-100 px-2 py-2">
-      {attachments.map((artifact) => (
-        <div key={artifact.id} className="inline-flex max-w-56 items-center gap-1.5 rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1 text-xs text-neutral-600">
-          {artifact.mimeType.startsWith('image/') ? <Image size={12} /> : <Paperclip size={12} />}
-          <span className="truncate">{artifact.filename}</span>
-          <button onClick={() => onRemove(artifact.id)} className="text-neutral-400 hover:text-neutral-700" title="移除附件">
-            <X size={12} />
-          </button>
-        </div>
-      ))}
+    <div className="flex flex-wrap gap-2 border-t border-neutral-100 px-2 py-2">
+      {attachments.map((artifact) => {
+        const isImage = artifact.mimeType.startsWith('image/');
+        return (
+          <div
+            key={artifact.id}
+            className={`group relative flex h-14 overflow-hidden rounded-sm border border-neutral-300 bg-white text-xs shadow-sm ${isImage ? 'w-14' : 'w-44 max-w-full items-center gap-2 px-2'}`}
+            title={artifact.filename}
+          >
+            {isImage ? (
+              <img src={artifactUrl(artifact.previewUrl)} alt={artifact.filename} className="h-full w-full object-cover" />
+            ) : (
+              <>
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm border border-neutral-200 bg-neutral-50 text-neutral-600">
+                  <Paperclip size={15} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium text-neutral-800">{artifact.filename}</div>
+                  <div className="truncate text-[10px] text-neutral-400">{artifact.mimeType || '附件文件'}</div>
+                </div>
+              </>
+            )}
+            <button
+              onClick={() => onRemove(artifact.id)}
+              className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-sm bg-white/90 text-neutral-500 opacity-0 shadow-sm hover:text-neutral-900 group-hover:opacity-100 focus:opacity-100"
+              title="移除附件"
+            >
+              <X size={11} />
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }

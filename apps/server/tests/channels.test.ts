@@ -26,8 +26,11 @@ afterEach(() => {
 });
 
 describe('ChannelService', () => {
-  it('create requires at least one agentId', () => {
-    expect(() => svc.create('test-net', { name: '频道 1', agentIds: [] })).toThrow(/NO_AGENT/);
+  it('creates a channel without agent members', () => {
+    const ch = svc.create('test-net', { name: '频道 1', agentIds: [] });
+
+    expect(ch.name).toBe('频道 1');
+    expect(svc.memberIds('test-net', ch.id)).toEqual([]);
   });
 
   it('create persists channel and members', () => {
@@ -103,5 +106,19 @@ describe('ChannelService', () => {
     expect(restored.visibility).toBe('public');
     expect(svc.listForUser('test-net', 'u1').map((item) => item.id)).toContain(ch.id);
     expect(svc.userHasLeft('test-net', ch.id, 'u1')).toBe(false);
+  });
+
+  it('adds the creator as a private channel human member', () => {
+    const ch = svc.create('test-net', {
+      name: 'humans',
+      agentIds: [],
+      userIds: ['u2'],
+      visibility: 'private',
+      createdBy: 'u1',
+    });
+
+    expect(svc.memberIds('test-net', ch.id)).toEqual([]);
+    expect(svc.userMembers('test-net', ch.id).sort()).toEqual(['u1', 'u2']);
+    expect(svc.listForUser('test-net', 'u1').map((item) => item.id)).toContain(ch.id);
   });
 });

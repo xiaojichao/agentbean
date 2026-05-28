@@ -30,6 +30,10 @@ export function authedApiUrl(path: string): string {
   return `${getServerUrl()}${path}${sep}token=${encodeURIComponent(getStoredAuthToken())}`;
 }
 
+export function artifactUploadUrl(networkId: string): string {
+  return `/api/networks/${encodeURIComponent(networkId)}/artifacts/upload?token=${encodeURIComponent(getStoredAuthToken())}`;
+}
+
 export async function fetchAgentWorkspace(networkId: string, agentId: string): Promise<{ ok: boolean; runs?: AgentWorkspaceRun[]; error?: string }> {
   try {
     const res = await fetch(authedApiUrl(`/api/networks/${encodeURIComponent(networkId)}/agents/${encodeURIComponent(agentId)}/workspace`));

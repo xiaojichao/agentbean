@@ -35,7 +35,6 @@ export function NewChannelDialog({ onClose }: { onClose: () => void }) {
   };
 
   const submit = () => {
-    if (selectedAgents.size === 0) { setError('请选择至少 1 个 Agent'); return; }
     setPending(true);
     getWebSocket().emit('channel:create', {
       name: name.trim(),
@@ -92,7 +91,7 @@ export function NewChannelDialog({ onClose }: { onClose: () => void }) {
 
         {/* Agent selection */}
         <div>
-          <div className="text-xs font-medium text-neutral-500 mb-1.5">Agent 成员</div>
+          <div className="text-xs font-medium text-neutral-500 mb-1.5">Agent 成员（可选）</div>
           <div className="space-y-1 max-h-40 overflow-auto rounded-md border border-neutral-200 p-2">
             {agents.length === 0 ? (
               <div className="text-sm text-neutral-500 py-2 text-center">还没有 Agent</div>

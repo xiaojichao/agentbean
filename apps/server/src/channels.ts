@@ -17,18 +17,14 @@ export interface ChannelServiceDeps {
   getPersistedAgent?: (agentId: string) => PersistedAgentLookup | null;
 }
 
-export interface CreateChannelInput { name: string; agentIds: string[]; userIds?: string[]; visibility?: 'public' | 'private'; createdBy?: string; isDefault?: boolean; description?: string; }
+export interface CreateChannelInput { name: string; agentIds?: string[]; userIds?: string[]; visibility?: 'public' | 'private'; createdBy?: string; isDefault?: boolean; description?: string; }
 export interface DmChannel { id: string; name: string; dmTargetId: string; createdAt: number; }
 
 export class ChannelService {
   constructor(private readonly deps: ChannelServiceDeps) {}
 
   create(networkId: string, input: CreateChannelInput): ChannelRow {
-    const agentIds = [...new Set(input.agentIds)].filter(Boolean);
-    const userIds = [...new Set(input.userIds ?? [])].filter(Boolean);
-    if (agentIds.length === 0 && !input.isDefault) {
-      throw new Error('NO_AGENT');
-    }
+    const agentIds = [...new Set(input.agentIds ?? [])].filter(Boolean);
     const now = Date.now();
     const db = this.deps.storageManager.getSpace(networkId).db;
 
@@ -37,6 +33,10 @@ export class ChannelService {
     const id = newId();
     const visibility = input.visibility ?? 'public';
     const createdBy = input.createdBy ?? null;
+    const userIds = [...new Set([
+      ...(input.userIds ?? []),
+      ...(visibility === 'private' && createdBy ? [createdBy] : []),
+    ])].filter(Boolean);
     db.prepare('INSERT INTO channels (id, name, description, visibility, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)')
       .run(id, name, input.description?.trim() || null, visibility, createdBy, now);
 

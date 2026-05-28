@@ -54,6 +54,29 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('creates a human-only private channel', async () => {
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const res = await new Promise<any>((resolve) => {
+      web.emit('channel:create', { name: `humans-${Date.now()}`, visibility: 'private' }, resolve);
+    });
+
+    expect(res.ok).toBe(true);
+    const members = await new Promise<any>((resolve) => {
+      web.emit('channel:members', { channelId: res.channel.id }, resolve);
+    });
+    expect(members.ok).toBe(true);
+    expect(members.agents).toEqual([]);
+    expect(members.humans.map((human: any) => human.userId)).toEqual(['admin']);
+
+    web.close();
+  });
+
   it('fills missing agent creator names from the owning device user in member lists', async () => {
     const now = Date.now();
     app.globalDb.users.create({ id: 'creator-device-user', username: 'creator-device-user', passwordHash: null, createdAt: now });
@@ -1761,9 +1784,8 @@ describe('message:send', () => {
       sha256: 'fake-sha',
     }));
     form.append('file', new Blob(['fake image']), 'drama.png');
-    const uploadRes = await fetch(`${baseUrl}/api/networks/default/artifacts/upload`, {
+    const uploadRes = await fetch(`${baseUrl}/api/networks/default/artifacts/upload?token=${encodeURIComponent('default:default:user-token')}`, {
       method: 'POST',
-      headers: { Authorization: 'Bearer default:default:user-token' },
       body: form,
     });
     expect(uploadRes.status).toBe(201);

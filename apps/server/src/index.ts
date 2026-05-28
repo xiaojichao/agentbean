@@ -129,14 +129,40 @@ function hasConfiguredProjectDirectory(cwd?: string | null): boolean {
   return Boolean(cwd?.trim());
 }
 
-function resolveCorsOrigin(): string | false {
-  return process.env.CORS_ORIGIN ?? (process.env.NODE_ENV === 'production' ? false : 'http://localhost:3100');
+type CorsOrigin = string | string[] | false;
+
+function parseOriginList(value?: string): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
 }
 
-function attachRestCors(app: express.Express, origin: string | false): void {
+function resolveCorsOrigin(): CorsOrigin {
+  const configured = parseOriginList(process.env.CORS_ORIGIN);
+  if (configured.length > 0) return configured.length === 1 ? configured[0]! : configured;
+
+  const webOrigins = parseOriginList(process.env.WEB_URL);
+  if (webOrigins.length > 0) return webOrigins.length === 1 ? webOrigins[0]! : webOrigins;
+
+  return process.env.NODE_ENV === 'production' ? false : 'http://localhost:3100';
+}
+
+function resolveRequestCorsOrigin(origin: CorsOrigin, requestOrigin?: string): string | undefined {
+  if (!origin) return undefined;
+  if (origin === '*') return '*';
+  if (Array.isArray(origin)) {
+    if (origin.includes('*')) return '*';
+    return requestOrigin && origin.includes(requestOrigin) ? requestOrigin : undefined;
+  }
+  return origin;
+}
+
+function attachRestCors(app: express.Express, origin: CorsOrigin): void {
   app.use((req, res, next) => {
-    if (origin) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
+    const allowedOrigin = resolveRequestCorsOrigin(origin, req.headers.origin);
+    if (allowedOrigin) {
+      res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
       res.setHeader('Vary', 'Origin');
       res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -1223,13 +1249,13 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       socket.emit('channel:history', { channelId: payload.channelId, messages: messagesWithArtifacts });
     });
 
-    socket.on('channel:create', async (payload: { name?: string; agentIds: string[]; userIds?: string[]; visibility?: 'public' | 'private' }, ack?: (r: any) => void) => {
+    socket.on('channel:create', async (payload: { name?: string; agentIds?: string[]; userIds?: string[]; visibility?: 'public' | 'private' }, ack?: (r: any) => void) => {
       try {
         const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
         const userId = socket.data.userId as string | undefined;
         const ch = channels.create(networkId, {
           name: payload.name ?? '',
-          agentIds: payload.agentIds,
+          agentIds: payload.agentIds ?? [],
           userIds: payload.userIds,
           visibility: payload.visibility,
           createdBy: userId,

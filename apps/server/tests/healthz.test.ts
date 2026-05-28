@@ -25,6 +25,31 @@ describe('GET /healthz', () => {
     expect(res.headers['access-control-allow-methods']).toContain('GET');
   });
 
+  it('derives browser REST CORS from WEB_URL when CORS_ORIGIN is not set', async () => {
+    const previousCorsOrigin = process.env.CORS_ORIGIN;
+    const previousWebUrl = process.env.WEB_URL;
+    delete process.env.CORS_ORIGIN;
+    process.env.WEB_URL = 'https://agentbean.example.com';
+
+    const corsApp = await buildApp({ dbPath: ':memory:', globalDbPath: ':memory:', agentToken: 'test:test:tok' });
+    try {
+      const res = await request(corsApp.http)
+        .options('/api/networks/default/artifacts/upload')
+        .set('Origin', 'https://agentbean.example.com')
+        .set('Access-Control-Request-Method', 'POST');
+
+      expect(res.status).toBe(204);
+      expect(res.headers['access-control-allow-origin']).toBe('https://agentbean.example.com');
+      expect(res.headers['access-control-allow-methods']).toContain('POST');
+    } finally {
+      await corsApp.close();
+      if (previousCorsOrigin === undefined) delete process.env.CORS_ORIGIN;
+      else process.env.CORS_ORIGIN = previousCorsOrigin;
+      if (previousWebUrl === undefined) delete process.env.WEB_URL;
+      else process.env.WEB_URL = previousWebUrl;
+    }
+  });
+
   it('exposes a Db handle', () => {
     expect(app.db).toBeTruthy();
     const tables = app.db.raw
