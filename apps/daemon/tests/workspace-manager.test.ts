@@ -41,6 +41,28 @@ describe('workspace-manager', () => {
     expect(existsSync(join(run.outputDir, 'cover.png'))).toBe(true);
   });
 
+  it('archives duplicate generated files only once and keeps the friendlier filename', () => {
+    home = mkdtempSync(join(tmpdir(), 'agentbean-home-'));
+    process.env.AGENTBEAN_HOME = home;
+    const sourceDir = mkdtempSync(join(tmpdir(), 'agentbean-output-source-'));
+    const generatedName = join(sourceDir, 'ig_00f946ce43123745016a17f3f3b86c8198b25d84c5961ebf22.png');
+    const friendlyName = join(sourceDir, 'generative-ai-components.png');
+    writeFileSync(generatedName, 'same fake image');
+    writeFileSync(friendlyName, 'same fake image');
+
+    const run = beginAgentWorkspaceRun({
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      runId: 'run-1',
+      prompt: '生成封面图',
+      projectDir: sourceDir,
+    });
+    const archived = archiveOutputFiles(run, [generatedName, friendlyName]);
+
+    expect(archived).toHaveLength(1);
+    expect(archived[0]?.relativePath).toBe('runs/run-1/outputs/generative-ai-components.png');
+  });
+
   it('formats replies with archived workspace paths instead of original device paths', () => {
     home = mkdtempSync(join(tmpdir(), 'agentbean-home-'));
     process.env.AGENTBEAN_HOME = home;

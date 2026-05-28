@@ -149,7 +149,7 @@ export class AgentInstance {
         systemPrompt: this.config.adapter.systemPrompt,
         workspace: projectWorkspace,
         sandboxProfilePath: req.sandboxed && isSandboxAvailable()
-          ? generateSandboxProfile(this.id, this.config.adapter.command)
+          ? generateSandboxProfile(this.id, this.config.adapter.command, [run.runDir])
           : undefined,
         env: { ...(this.config.adapter.env ?? {}), ...workspaceEnv(run) },
       }, ctl.signal);

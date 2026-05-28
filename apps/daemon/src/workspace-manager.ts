@@ -62,6 +62,13 @@ function uniqueDestination(dir: string, filename: string): string {
   return candidate;
 }
 
+function fileNamePreference(path: string): number {
+  const name = basename(path).toLowerCase();
+  if (/^ig_[a-f0-9]{32,}\.(png|jpe?g|gif|webp)$/i.test(name)) return 0;
+  if (/^(image|output|generated)[._-]?\d*\.(png|jpe?g|gif|webp)$/i.test(name)) return 1;
+  return 2;
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -136,11 +143,13 @@ export function workspaceEnv(run: AgentWorkspaceRun): Record<string, string> {
 
 export function archiveOutputFiles(run: AgentWorkspaceRun, files: string[]): ArchivedWorkspaceFile[] {
   const archived: ArchivedWorkspaceFile[] = [];
-  const seen = new Set<string>();
+  const candidates = new Map<string, { abs: string; hash: string }>();
+  const hashOrder: string[] = [];
+  const seenPaths = new Set<string>();
   for (const file of files) {
     const abs = isAbsolute(file) ? file : resolve(file);
-    if (seen.has(abs)) continue;
-    seen.add(abs);
+    if (seenPaths.has(abs)) continue;
+    seenPaths.add(abs);
     let st;
     try {
       st = statSync(abs);
@@ -148,7 +157,20 @@ export function archiveOutputFiles(run: AgentWorkspaceRun, files: string[]): Arc
     } catch {
       continue;
     }
+    const hash = fileHash(abs);
+    const current = candidates.get(hash);
+    if (!current) {
+      candidates.set(hash, { abs, hash });
+      hashOrder.push(hash);
+    } else if (fileNamePreference(abs) > fileNamePreference(current.abs)) {
+      candidates.set(hash, { abs, hash });
+    }
+  }
 
+  for (const hash of hashOrder) {
+    const candidate = candidates.get(hash);
+    if (!candidate) continue;
+    const abs = candidate.abs;
     const alreadyInRun = relative(run.runDir, abs);
     const archivedPath = alreadyInRun && !alreadyInRun.startsWith('..') && !isAbsolute(alreadyInRun)
       ? abs
@@ -160,7 +182,7 @@ export function archiveOutputFiles(run: AgentWorkspaceRun, files: string[]): Arc
       archivedPath,
       relativePath: relative(run.agentDir, archivedPath),
       pathKind: 'output',
-      sha256: fileHash(archivedPath),
+      sha256: candidate.hash,
       sizeBytes,
     });
   }

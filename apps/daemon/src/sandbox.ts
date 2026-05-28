@@ -22,16 +22,21 @@ export function isSandboxAvailable(): boolean {
   }
 }
 
-export function generateSandboxProfile(agentId: string, runtimePath: string): string {
+export function generateSandboxProfile(agentId: string, runtimePath: string, writableDirs: string[] = []): string {
   const workspaceDir = getWorkspaceDir(agentId);
   const runtimeDir = runtimePath.includes('/') ? dirname(runtimePath) : '/usr/bin';
   const profilePath = `/tmp/agentbean-sandbox-${agentId}.sb`;
+  const extraWritableRules = writableDirs
+    .filter(Boolean)
+    .map((dir) => `(allow file-read* file-write*
+  (subpath "${escapeSchemeString(dir)}"))`)
+    .join('\n');
   const profile = `(version 1)
 (allow file-read* file-write*
   (subpath "${escapeSchemeString(workspaceDir)}"))
 (allow file-read* file-write*
   (subpath "/tmp"))
-(allow file-read*
+${extraWritableRules ? `${extraWritableRules}\n` : ''}(allow file-read*
   (subpath "${escapeSchemeString(runtimeDir)}"))
 (allow file-read*
   (subpath "/bin")
