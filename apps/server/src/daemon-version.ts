@@ -45,7 +45,7 @@ function readPackageVersion(path: string): string | null {
   }
 }
 
-export function getLatestDaemonVersion(): string | null {
+function getPackagedLatestDaemonVersion(): string | null {
   const fromEnv = cleanVersion(process.env.AGENT_BEAN_DAEMON_LATEST_VERSION);
   if (fromEnv) return fromEnv;
 
@@ -59,6 +59,95 @@ export function getLatestDaemonVersion(): string | null {
     if (version) return version;
   }
   return null;
+}
+
+let cachedNpmLatestVersion: string | null = null;
+let lastNpmLatestCheckedAt = 0;
+let pendingNpmLatestRefresh: Promise<string | null> | null = null;
+
+function npmRegistryUrl(): string {
+  return process.env.AGENT_BEAN_DAEMON_NPM_REGISTRY_URL ?? 'https://registry.npmjs.org/%40agentbean%2Fdaemon';
+}
+
+function npmRefreshIntervalMs(): number {
+  const raw = Number.parseInt(process.env.AGENT_BEAN_DAEMON_VERSION_REFRESH_MS ?? '', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 5 * 60_000;
+}
+
+function npmFetchTimeoutMs(): number {
+  const raw = Number.parseInt(process.env.AGENT_BEAN_DAEMON_VERSION_FETCH_TIMEOUT_MS ?? '', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 2_000;
+}
+
+async function fetchNpmLatestDaemonVersion(): Promise<string | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), npmFetchTimeoutMs());
+  try {
+    const res = await fetch(npmRegistryUrl(), {
+      signal: controller.signal,
+      headers: { accept: 'application/vnd.npm.install-v1+json, application/json' },
+    });
+    if (!res.ok) return null;
+    const json = await res.json() as { 'dist-tags'?: { latest?: unknown } };
+    return cleanVersion(json['dist-tags']?.latest);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export function getLatestDaemonVersion(): string | null {
+  return cachedNpmLatestVersion ?? getPackagedLatestDaemonVersion();
+}
+
+export function resetDaemonVersionCacheForTests(): void {
+  cachedNpmLatestVersion = null;
+  lastNpmLatestCheckedAt = 0;
+  pendingNpmLatestRefresh = null;
+}
+
+export async function refreshLatestDaemonVersionFromNpm(): Promise<string | null> {
+  if (process.env.NODE_ENV === 'test' && !process.env.AGENT_BEAN_DAEMON_NPM_REGISTRY_URL) {
+    return getLatestDaemonVersion();
+  }
+
+  const now = Date.now();
+  if (cachedNpmLatestVersion && now - lastNpmLatestCheckedAt < npmRefreshIntervalMs()) {
+    return cachedNpmLatestVersion;
+  }
+  if (pendingNpmLatestRefresh) return pendingNpmLatestRefresh;
+
+  pendingNpmLatestRefresh = fetchNpmLatestDaemonVersion()
+    .then((latest) => {
+      lastNpmLatestCheckedAt = Date.now();
+      if (latest) cachedNpmLatestVersion = latest;
+      return getLatestDaemonVersion();
+    })
+    .finally(() => {
+      pendingNpmLatestRefresh = null;
+    });
+  return pendingNpmLatestRefresh;
+}
+
+export function startDaemonVersionRefresh(onRefresh?: () => void): () => void {
+  if (process.env.NODE_ENV === 'test' && !process.env.AGENT_BEAN_DAEMON_NPM_REGISTRY_URL) {
+    return () => {};
+  }
+
+  let stopped = false;
+  const refresh = async () => {
+    const before = getLatestDaemonVersion();
+    await refreshLatestDaemonVersionFromNpm();
+    if (!stopped && before !== getLatestDaemonVersion()) onRefresh?.();
+  };
+  void refresh();
+  const timer = setInterval(() => { void refresh(); }, npmRefreshIntervalMs());
+  timer.unref?.();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
 }
 
 export function buildDaemonVersionInfo(systemInfo?: Record<string, unknown> | null): DaemonVersionInfo {

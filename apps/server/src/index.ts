@@ -21,7 +21,7 @@ import { newId } from './ids.js';
 import { generateToken, parseToken, verifyUserToken } from './auth.js';
 import { hashPassword, verifyPassword } from './password.js';
 import { generateInviteCode } from './invite.js';
-import { buildDaemonVersionInfo } from './daemon-version.js';
+import { buildDaemonVersionInfo, startDaemonVersionRefresh } from './daemon-version.js';
 
 export interface AppOptions { port?: number; dbPath?: string; globalDbPath?: string; agentToken?: string }
 export interface AppHandle {
@@ -414,7 +414,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
   const toDeviceDto = (dbd: ReturnType<GlobalDb['devices']['listByUser']>[number], viewerId?: string | null, currentDeviceId?: string | null) => {
     const live = deviceRegistry.get(dbd.id);
-    const systemInfo = dbd.systemInfo;
+    const systemInfo = live?.systemInfo ?? dbd.systemInfo;
     const daemonVersionInfo = buildDaemonVersionInfo(systemInfo);
     const ownerName = resolveOwnerName(dbd.userId) ?? '未知用户';
     return {
@@ -752,6 +752,11 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     }
   }
 
+  const stopDaemonVersionRefresh = startDaemonVersionRefresh(() => {
+    const networkIds = new Set(globalDb.networks.list().map((network) => network.id));
+    for (const networkId of networkIds) emitDevicesSnapshotForNetwork(networkId);
+  });
+
   function emitChannelsSnapshotForNetwork(networkId: string): void {
     for (const s of io.of('/web').sockets.values()) {
       if ((socketNetworkMap.get(s.id) ?? defaultNetworkId) !== networkId) continue;
@@ -1035,7 +1040,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         if (!dbDevice) return ack?.({ ok: false, error: 'NOT_FOUND' });
         const live = deviceRegistry.get(payload.id);
         const agents = live ? Array.from(live.agents.values()) : [];
-        const daemonVersionInfo = buildDaemonVersionInfo(dbDevice.systemInfo);
+        const daemonVersionInfo = buildDaemonVersionInfo(live?.systemInfo ?? dbDevice.systemInfo);
         const ownerName = resolveOwnerName(dbDevice.userId) ?? '未知用户';
         ack?.({
           ok: true,
@@ -1051,7 +1056,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             lastSeenAt: live ? live.lastSeenAt : dbDevice.lastSeenAt,
             status: live ? live.status : 'offline',
             connectCommand: dbDevice.connectCommand,
-            systemInfo: dbDevice.systemInfo,
+            systemInfo: live?.systemInfo ?? dbDevice.systemInfo,
             daemonVersionInfo,
             latestDaemonVersion: daemonVersionInfo.latest,
             daemonUpdateAvailable: daemonVersionInfo.updateAvailable,
@@ -2359,7 +2364,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       const devices = visibleDeviceRows(globalDb.devices.listAll()).map((device) => {
         const live = deviceRegistry.get(device.id);
         const deviceAgents = globalDb.agents.listByDevice(device.id).filter(isTeamAgent);
-        const daemonVersionInfo = buildDaemonVersionInfo(device.systemInfo);
+        const daemonVersionInfo = buildDaemonVersionInfo(live?.systemInfo ?? device.systemInfo);
         const publicAgents = deviceAgents
           .filter((agent) => agent.visibility === 'public')
           .map((agent) => {
@@ -2407,7 +2412,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           agentCount: live ? Math.max(live.agents.size, deviceAgents.length) : deviceAgents.length,
           lastSeenAt: live ? live.lastSeenAt : device.lastSeenAt,
           connectCommand: device.connectCommand,
-          systemInfo: device.systemInfo,
+          systemInfo: live?.systemInfo ?? device.systemInfo,
           daemonVersionInfo,
           latestDaemonVersion: daemonVersionInfo.latest,
           daemonUpdateAvailable: daemonVersionInfo.updateAvailable,
@@ -2550,6 +2555,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
   return {
     http: server, io, db, globalDb, registry, channels, dispatch,
     async close() {
+      stopDaemonVersionRefresh();
       stopScanner();
       stopDeviceScanner();
       await new Promise<void>((resolve) => io.close(() => resolve()));

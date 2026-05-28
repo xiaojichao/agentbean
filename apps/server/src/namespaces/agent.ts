@@ -433,6 +433,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         capabilities: a.capabilities,
         protocolVersion: typeof a.protocolVersion === 'number' ? a.protocolVersion : undefined,
         daemonVersion: typeof a.daemonVersion === 'string' ? a.daemonVersion : typeof a.systemInfo?.daemonVersion === 'string' ? a.systemInfo.daemonVersion : null,
+        systemInfo: a.systemInfo ?? null,
         lastSeenAt: now,
         status: 'online',
       });

@@ -1,11 +1,21 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { buildDaemonVersionInfo, compareVersions } from '../src/daemon-version.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  buildDaemonVersionInfo,
+  compareVersions,
+  refreshLatestDaemonVersionFromNpm,
+  resetDaemonVersionCacheForTests,
+} from '../src/daemon-version.js';
 
 const previousLatest = process.env.AGENT_BEAN_DAEMON_LATEST_VERSION;
+const previousRegistryUrl = process.env.AGENT_BEAN_DAEMON_NPM_REGISTRY_URL;
 
 afterEach(() => {
   if (previousLatest === undefined) delete process.env.AGENT_BEAN_DAEMON_LATEST_VERSION;
   else process.env.AGENT_BEAN_DAEMON_LATEST_VERSION = previousLatest;
+  if (previousRegistryUrl === undefined) delete process.env.AGENT_BEAN_DAEMON_NPM_REGISTRY_URL;
+  else process.env.AGENT_BEAN_DAEMON_NPM_REGISTRY_URL = previousRegistryUrl;
+  vi.restoreAllMocks();
+  resetDaemonVersionCacheForTests();
 });
 
 describe('daemon version compatibility metadata', () => {
@@ -32,6 +42,23 @@ describe('daemon version compatibility metadata', () => {
       latest: '0.1.19',
       updateAvailable: false,
       status: 'unknown',
+    });
+  });
+
+  it('refreshes the latest daemon version from npm metadata', async () => {
+    process.env.AGENT_BEAN_DAEMON_LATEST_VERSION = '0.1.19';
+    process.env.AGENT_BEAN_DAEMON_NPM_REGISTRY_URL = 'https://registry.example.test/@agentbean/daemon';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      'dist-tags': { latest: '0.1.34' },
+    }), { status: 200 })));
+
+    await refreshLatestDaemonVersionFromNpm();
+
+    expect(buildDaemonVersionInfo({ daemonVersion: '0.1.33' })).toEqual({
+      current: '0.1.33',
+      latest: '0.1.34',
+      updateAvailable: true,
+      status: 'update-available',
     });
   });
 });

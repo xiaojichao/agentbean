@@ -32,6 +32,7 @@ export interface DeviceRuntime {
   };
   protocolVersion?: number;
   daemonVersion?: string | null;
+  systemInfo?: Record<string, unknown> | null;
   lastSeenAt: number;
   status: AgentStatus;
 }
