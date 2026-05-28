@@ -367,4 +367,30 @@ Resume this session with:
 - architecture-diagram
 - baoyu-infographic`);
   });
+
+  it('drops echoed multiline Query history from unboxed Hermes output', () => {
+    const raw = `Query: shaw (user): @Hermes-Agent hello, 今天你在用什么模型？
+
+---
+
+Hermes-Agent (assistant): 我现在加载了以下 Skills：
+
+- architecture-diagram
+- baoyu-infographic
+
+---
+
+你在谁的设备上？
+Initializing agent...
+────────────────────────────────────────
+
+我运行在肖的 Mac mini 上。
+
+Resume this session with:
+  hermes --resume 20260520_223344
+
+Session:        20260520_223344`;
+
+    expect(extractHermesReply(raw)).toBe('我运行在肖的 Mac mini 上。');
+  });
 });

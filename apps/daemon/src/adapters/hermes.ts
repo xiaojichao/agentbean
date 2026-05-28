@@ -39,11 +39,21 @@ function buildPrompt(input: AskInput, systemPrompt?: string): string {
 const ANSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 const BOX_ONLY_RE = /^[\s─━═╭╮╰╯│┃┌┐└┘├┤┬┴┼]+$/;
 
+function stripEchoedQueryPreamble(lines: string[]): string[] {
+  const initIdx = lines.findIndex((line) => {
+    const trimmed = line.trim();
+    return trimmed === 'Initializing agent...' || trimmed === 'Initializing agent…';
+  });
+  if (initIdx < 0) return lines;
+  if (!lines.slice(0, initIdx).some((line) => line.trim().startsWith('Query:'))) return lines;
+  return lines.slice(initIdx + 1);
+}
+
 export function extractHermesReply(output: string): string {
-  const lines = output
+  const lines = stripEchoedQueryPreamble(output
     .replace(ANSI_RE, '')
     .replace(/\r\n?/g, '\n')
-    .split('\n');
+    .split('\n'));
 
   let boxStart = -1;
   for (let i = lines.length - 1; i >= 0; i -= 1) {
