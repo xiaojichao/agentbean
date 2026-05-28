@@ -539,6 +539,78 @@ describe('/web namespace', () => {
     deviceOwner.close();
   });
 
+  it('broadcasts persisted agent config name changes to other web clients', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({ id: 'agent-config-broadcast-owner', username: 'agent-config-broadcast-owner', passwordHash: null, createdAt: now });
+    app.globalDb.networkMembers.add('default', 'agent-config-broadcast-owner', 'member');
+    app.globalDb.devices.upsert({
+      id: 'agent-config-broadcast-device',
+      userId: 'agent-config-broadcast-owner',
+      networkId: 'default',
+      hostname: 'Broadcast Device',
+      lastSeenAt: now,
+      systemInfo: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'agent-config-broadcast-agent',
+      name: 'Broadcast-Agent',
+      role: 'assistant',
+      adapterKind: 'codex',
+      deviceId: 'agent-config-broadcast-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      ownerId: 'agent-config-broadcast-owner',
+      command: 'codex',
+      cwd: '/Users/device/project',
+      description: 'before',
+    });
+
+    const viewer = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('agent-config-broadcast-owner', 'default') },
+    });
+    const editor = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('agent-config-broadcast-owner', 'default') },
+    });
+    await Promise.all([
+      new Promise<void>((r) => viewer.on('connect', () => r())),
+      new Promise<void>((r) => editor.on('connect', () => r())),
+    ]);
+
+    const statusPromise = new Promise<any>((resolve) => {
+      viewer.on('agent:status', (status: any) => {
+        if (status.id === 'agent-config-broadcast-agent') resolve(status);
+      });
+    });
+    const updated = await new Promise<any>((resolve) => {
+      editor.emit('agent:config:update', {
+        id: 'agent-config-broadcast-agent',
+        name: 'Broadcast-Agent-Renamed',
+        adapterKind: 'codex',
+        command: 'codex',
+        cwd: '/Users/device/project',
+        description: 'after',
+      }, resolve);
+    });
+
+    expect(updated.ok).toBe(true);
+    await expect(statusPromise).resolves.toMatchObject({
+      id: 'agent-config-broadcast-agent',
+      name: 'Broadcast-Agent-Renamed',
+      description: 'after',
+    });
+
+    viewer.close();
+    editor.close();
+  });
+
   it('pushes device status as soon as a daemon registers', async () => {
     app.globalDb.users.create({
       id: 'daemon-device-owner',
@@ -736,6 +808,63 @@ describe('/web namespace', () => {
       cwd: '/opt/homebrew/bin',
       description: 'after',
     });
+    owner.close();
+  });
+
+  it('preserves a renamed AgentOS agent across daemon reconnects', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({ id: 'agentos-rename-owner', username: 'agentos-rename-owner', passwordHash: null, createdAt: now });
+    app.globalDb.networkMembers.add('default', 'agentos-rename-owner', 'member');
+
+    const firstDaemon = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: generateToken('agentos-rename-owner', 'default'),
+        deviceId: 'agentos-rename-device',
+        networkId: 'default',
+        agents: [{ id: 'agentos-rename-agent', name: 'Hermes-Original', role: 'r', adapterKind: 'hermes', category: 'agentos-hosted', visibility: 'public' }],
+      },
+      reconnection: false,
+      transports: ['websocket'],
+    });
+    await new Promise<void>((r) => firstDaemon.on('connect', () => r()));
+    firstDaemon.emit('register');
+    await waitFor(() => app.globalDb.agents.getFull('agentos-rename-agent')?.name === 'Hermes-Original');
+
+    const owner = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('agentos-rename-owner', 'default') },
+    });
+    await new Promise<void>((r) => owner.on('connect', () => r()));
+    const renamed = await new Promise<any>((resolve) => {
+      owner.emit('agent:config:update', {
+        id: 'agentos-rename-agent',
+        name: 'Hermes-Renamed',
+        description: 'kept name',
+      }, resolve);
+    });
+    expect(renamed.ok).toBe(true);
+    expect(app.globalDb.agents.getFull('agentos-rename-agent')?.name).toBe('Hermes-Renamed');
+
+    firstDaemon.close();
+    const reconnect = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: generateToken('agentos-rename-owner', 'default'),
+        deviceId: 'agentos-rename-device',
+        networkId: 'default',
+        agents: [{ id: 'agentos-rename-agent', name: 'Hermes-Original', role: 'r', adapterKind: 'hermes', category: 'agentos-hosted', visibility: 'public' }],
+      },
+      reconnection: false,
+      transports: ['websocket'],
+    });
+    await new Promise<void>((r) => reconnect.on('connect', () => r()));
+    reconnect.emit('register');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(app.globalDb.agents.getFull('agentos-rename-agent')?.name).toBe('Hermes-Renamed');
+    expect(app.registry.snapshot('agentos-rename-agent')?.name).toBe('Hermes-Renamed');
+
+    reconnect.close();
     owner.close();
   });
 
