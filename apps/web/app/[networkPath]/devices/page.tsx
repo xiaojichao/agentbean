@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, Check, FolderOpen } from 'lucide-react';
-import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl } from '@/lib/socket';
+import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, Check, FolderOpen, Paperclip, Image as ImageIcon } from 'lucide-react';
+import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl, fetchAgentWorkspace, authedApiUrl } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { daemonVersionDisplay } from '@/lib/daemon-version';
+import { formatRelative } from '@/lib/format-time';
+import type { AgentWorkspaceFile, AgentWorkspaceRun } from '@/lib/schema';
 
 const STATUS_COLORS: Record<string, string> = {
   online: 'text-emerald-500',
@@ -48,6 +50,7 @@ function compareDeviceOwnerGroups(a: { ownerName: string }, b: { ownerName: stri
 const DIRECTORY_PICKER_MIN_DAEMON_VERSION = '0.1.27';
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 type EnvRow = { key: string; value: string };
+type WorkspaceAgent = { id: string; name: string; adapterKind?: string; cwd?: string | null; runs: AgentWorkspaceRun[] };
 
 function parseVersionParts(version?: string | null): number[] | null {
   const match = version?.match(/\d+(?:\.\d+)*/);
@@ -317,11 +320,16 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const [showAddCustom, setShowAddCustom] = useState(false);
   const [selectNetworkAgent, setSelectNetworkAgent] = useState<any | null>(null);
   const [configAgent, setConfigAgent] = useState<any | null>(null);
+  const [workspaceAgents, setWorkspaceAgents] = useState<WorkspaceAgent[]>([]);
+  const [workspaceScanned, setWorkspaceScanned] = useState(false);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState('');
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const displayName = device.hostname ?? '未命名设备';
   const ownerName = device.ownerName ?? device.userName ?? '未知用户';
   const daemonVersion = daemonVersionDisplay(device);
   const canManageDevice = device.canManage ?? (currentUser?.role === 'admin' || Boolean(currentUser?.id && currentUser.id === device.userId));
+  const isOwnedByCurrentUser = Boolean(currentUser?.id && currentUser.id === device.userId);
   const isLocalDevice = device.isLocal === true;
 
   const refreshDeviceAgents = () => {
@@ -339,6 +347,9 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
 
   useEffect(() => {
     if (!device) return;
+    setWorkspaceAgents([]);
+    setWorkspaceScanned(false);
+    setWorkspaceError('');
     refreshDeviceAgents();
     refreshCustomAgents();
   }, [device?.id]);
@@ -353,6 +364,37 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
 
   const agentosAgents = deviceAgents.filter((a) => a.category === 'agentos-hosted');
   const runtimeList = deviceRuntimes;
+  const workspaceCandidates = useMemo(() => {
+    const byId = new Map<string, any>();
+    for (const agent of [...agentosAgents, ...customAgents]) {
+      if (agent?.id) byId.set(agent.id, agent);
+    }
+    return [...byId.values()];
+  }, [agentosAgents, customAgents]);
+
+  const scanWorkspaces = async () => {
+    if (!currentNetworkId) return;
+    setWorkspaceLoading(true);
+    setWorkspaceError('');
+    try {
+      const results = await Promise.all(workspaceCandidates.map(async (agent) => {
+        const res = await fetchAgentWorkspace(currentNetworkId, agent.id);
+        return {
+          id: agent.id,
+          name: agent.name,
+          adapterKind: agent.adapterKind,
+          cwd: agent.cwd ?? null,
+          runs: res.ok ? res.runs ?? [] : [],
+        };
+      }));
+      setWorkspaceAgents(results.filter((agent) => agent.runs.length > 0));
+      setWorkspaceScanned(true);
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : '扫描工作区失败');
+    } finally {
+      setWorkspaceLoading(false);
+    }
+  };
 
   const handleEditName = () => {
     setDeviceName(displayName);
@@ -438,14 +480,12 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
                   {device.systemInfo.cpuModel && <InfoCard label="CPU" value={device.systemInfo.cpuModel} />}
                   {device.systemInfo.cpuCores && <InfoCard label="CPU 核心" value={`${device.systemInfo.cpuCores} 核`} />}
                   {device.systemInfo.totalMemoryGB && <InfoCard label="总内存" value={`${device.systemInfo.totalMemoryGB} GB`} />}
-                  {device.systemInfo.freeMemoryGB && <InfoCard label="可用内存" value={`${device.systemInfo.freeMemoryGB} GB`} />}
                   {device.systemInfo.nodeVersion && <InfoCard label="Node.js" value={device.systemInfo.nodeVersion} />}
                   {(device.systemInfo.daemonVersion || daemonVersion.latestLabel) && (
                     <InfoCard
-                      label="Daemon"
-                      value={daemonVersion.currentLabel}
-                      hint={daemonVersion.updateAvailable && daemonVersion.latestLabel ? `可升级到 ${daemonVersion.latestLabel}` : undefined}
-                      tone={daemonVersion.updateAvailable ? 'warning' : undefined}
+                      label="Daemon 版本"
+                      value={daemonVersion.updateAvailable ? `${daemonVersion.currentLabel}（有更新版本）` : daemonVersion.currentLabel}
+                      tone={daemonVersion.updateAvailable ? 'danger' : undefined}
                     />
                   )}
                   {device.systemInfo.hostname && <InfoCard label="主机名" value={device.systemInfo.hostname} />}
@@ -457,7 +497,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
         </section>
 
         {/* CONNECTION */}
-        {canManageDevice && (
+        {isOwnedByCurrentUser && device.status === 'offline' && (
           <section className="rounded-lg border border-neutral-200 p-4">
             <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">连接命令</h3>
             {device.connectCommand ? (
@@ -519,6 +559,15 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           onSelectAgent={setConfigAgent}
           canManageAgents={canManageDevice}
         />
+        {isLocalDevice && (
+          <DeviceWorkspacesSection
+            agents={workspaceAgents}
+            scanned={workspaceScanned}
+            loading={workspaceLoading}
+            error={workspaceError}
+            onScan={scanWorkspaces}
+          />
+        )}
 
         {/* ACTIONS */}
         {canManageDevice && (
@@ -593,12 +642,25 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function InfoCard({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone?: 'warning' }) {
+function InfoCard({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone?: 'warning' | 'danger' }) {
+  const containerClass = tone === 'danger'
+    ? 'border-red-200 bg-red-50'
+    : tone === 'warning'
+      ? 'border-amber-200 bg-amber-50'
+      : 'border-neutral-100 bg-neutral-50';
+  const labelClass = tone === 'danger'
+    ? 'text-red-600'
+    : tone === 'warning'
+      ? 'text-amber-600'
+      : 'text-neutral-400';
+  const valueClass = tone === 'danger' ? 'text-red-700' : 'text-neutral-800';
+  const hintClass = tone === 'danger' ? 'text-red-700' : 'text-amber-700';
+
   return (
-    <div className={`rounded-md border px-3 py-2 ${tone === 'warning' ? 'border-amber-200 bg-amber-50' : 'border-neutral-100 bg-neutral-50'}`}>
-      <div className={`text-[10px] font-medium uppercase tracking-wider ${tone === 'warning' ? 'text-amber-600' : 'text-neutral-400'}`}>{label}</div>
-      <div className="mt-0.5 text-sm font-medium text-neutral-800 truncate">{value}</div>
-      {hint && <div className="mt-0.5 truncate text-[11px] font-medium text-amber-700">{hint}</div>}
+    <div className={`rounded-md border px-3 py-2 ${containerClass}`}>
+      <div className={`text-[10px] font-medium uppercase tracking-wider ${labelClass}`}>{label}</div>
+      <div className={`mt-0.5 truncate text-sm font-medium ${valueClass}`}>{value}</div>
+      {hint && <div className={`mt-0.5 truncate text-[11px] font-medium ${hintClass}`}>{hint}</div>}
     </div>
   );
 }
@@ -744,6 +806,112 @@ function RuntimeGroup({ runtimes, scanning, onScan }: {
         </div>
       )}
     </section>
+  );
+}
+
+function DeviceWorkspacesSection({ agents, scanned, loading, error, onScan }: {
+  agents: WorkspaceAgent[];
+  scanned: boolean;
+  loading: boolean;
+  error: string;
+  onScan: () => void;
+}) {
+  const totalRuns = agents.reduce((sum, agent) => sum + agent.runs.length, 0);
+  const totalFiles = agents.reduce((sum, agent) => sum + agent.runs.reduce((runSum, run) => runSum + run.files.length, 0), 0);
+
+  return (
+    <section className="rounded-lg border border-neutral-200 p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-neutral-500">
+            <FolderOpen size={14} /> Agent Workspaces
+          </h3>
+          {scanned && agents.length > 0 && (
+            <p className="text-[11px] text-neutral-400">{agents.length} 个 Agent，{totalRuns} 条同步记录，{totalFiles} 个文件</p>
+          )}
+        </div>
+        <button onClick={onScan} disabled={loading} className="flex items-center gap-1 rounded-md border border-neutral-300 px-2.5 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50">
+          <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> {scanned ? '重新扫描' : '扫描'}
+        </button>
+      </div>
+
+      {error && <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>}
+
+      {!scanned && !loading ? (
+        <div className="text-xs text-neutral-400">点击扫描查看此本机设备上的 Agent 工作区。</div>
+      ) : agents.length === 0 ? (
+        <div className="text-xs text-neutral-400">{loading ? '正在扫描 Agent 工作区...' : '未发现已同步的 Agent 工作区。'}</div>
+      ) : (
+        <div className="space-y-3">
+          {agents.map((agent) => (
+            <DeviceWorkspaceAgentCard key={agent.id} agent={agent} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DeviceWorkspaceAgentCard({ agent }: { agent: WorkspaceAgent }) {
+  const fileCount = agent.runs.reduce((sum, run) => sum + run.files.length, 0);
+  const latest = Math.max(...agent.runs.map((run) => run.updatedAt));
+  const workspacePath = agent.cwd ? `${agent.cwd}/.agentbean/${agent.name}` : `~/.agentbean/${agent.name}`;
+
+  return (
+    <div className="rounded-md border border-neutral-200 bg-neutral-50 p-3">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium text-neutral-800">{agent.name}</div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-neutral-400">
+            <span>{agent.adapterKind ?? 'Agent'}</span>
+            <span>{agent.runs.length} 条记录</span>
+            <span>{fileCount} 个文件</span>
+            <span>{formatRelative(latest)}</span>
+          </div>
+          <div className="mt-1 truncate font-mono text-[11px] text-neutral-400">{workspacePath}/</div>
+        </div>
+      </div>
+      <div className="space-y-3">
+        {agent.runs.slice(0, 4).map((run) => (
+          <div key={run.runId} className="border-t border-neutral-200 pt-3 first:border-t-0 first:pt-0">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="min-w-0 truncate text-xs font-medium text-neutral-600">同步记录</div>
+              <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[11px] text-neutral-500 ring-1 ring-neutral-200">
+                {run.files.length} 个文件
+              </span>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {run.files.slice(0, 6).map((file) => (
+                <DeviceWorkspaceFileLink key={file.id} file={file} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DeviceWorkspaceFileLink({ file }: { file: AgentWorkspaceFile }) {
+  const isImage = file.mimeType.startsWith('image/');
+  const sizeKb = Math.max(0.1, file.sizeBytes / 1024).toFixed(1);
+  return (
+    <a
+      href={authedApiUrl(file.downloadUrl)}
+      target="_blank"
+      rel="noreferrer"
+      title={file.relativePath}
+      className="group flex min-w-0 items-center gap-2 rounded-md border border-neutral-200 bg-white p-2 text-xs hover:border-neutral-300"
+    >
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded border border-neutral-200 bg-neutral-50">
+        {isImage ? <ImageIcon size={15} className="text-blue-500" /> : <Paperclip size={15} className="text-neutral-400" />}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-medium text-neutral-700 group-hover:text-neutral-950">{file.filename}</div>
+        <div className="mt-0.5 truncate text-[11px] text-neutral-400">{file.relativePath}</div>
+      </div>
+      <span className="shrink-0 text-[11px] text-neutral-400">{sizeKb} KB</span>
+    </a>
   );
 }
 
