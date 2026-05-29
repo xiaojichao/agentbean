@@ -1359,7 +1359,7 @@ describe('/web namespace', () => {
     web.close();
   });
 
-  it('deduplicates stale scanned AgentOS rows in device detail agent lists', async () => {
+  it('deduplicates scanned AgentOS rows by runtime location in device detail agent lists', async () => {
     const now = Date.now();
     app.globalDb.devices.upsert({
       id: 'duplicate-agentos-device',
@@ -1370,10 +1370,10 @@ describe('/web namespace', () => {
       systemInfo: { hostname: 'xiaodeMac-mini.local' },
     });
     app.globalDb.agents.upsert({
-      id: 'scan-duplicate-agentos-device-openclaw-agent-old',
-      name: 'OpenClaw-Agent-xiao-mini',
+      id: 'scan-duplicate-agentos-device-hermes-agent-old',
+      name: 'Hermes-Agent-mbp-xiao',
       role: 'gateway',
-      adapterKind: 'openclaw',
+      adapterKind: 'hermes',
       deviceId: 'duplicate-agentos-device',
       networkId: 'default',
       visibility: 'public',
@@ -1382,16 +1382,16 @@ describe('/web namespace', () => {
       firstSeenAt: now - 200,
       lastSeenAt: now - 200,
       ownerId: 'admin',
-      command: 'openclaw',
+      command: '/Users/shaw/.local/bin/hermes',
       args: JSON.stringify([]),
-      cwd: '/Users/shaw/old-openclaw',
+      cwd: '/Users/shaw/.local/bin',
       description: null,
     });
     app.globalDb.agents.upsert({
-      id: 'scan-duplicate-agentos-device-openclaw-agent-current',
-      name: 'OpenClaw-Agent-xiao-mini',
+      id: 'scan-duplicate-agentos-device-hermes-agent-current',
+      name: 'Hermes-Agent-xiao',
       role: 'gateway',
-      adapterKind: 'openclaw',
+      adapterKind: 'hermes',
       deviceId: 'duplicate-agentos-device',
       networkId: 'default',
       visibility: 'public',
@@ -1400,16 +1400,16 @@ describe('/web namespace', () => {
       firstSeenAt: now - 100,
       lastSeenAt: now,
       ownerId: 'admin',
-      command: 'openclaw',
+      command: '/Users/shaw/.local/bin/hermes',
       args: JSON.stringify([]),
-      cwd: '/Users/shaw/current-openclaw',
+      cwd: '/Users/shaw/.local/bin',
       description: null,
     });
     app.globalDb.agents.upsert({
-      id: 'custom-duplicate-agentos-device-openclaw-agent',
-      name: 'OpenClaw-Agent-xiao-mini',
+      id: 'custom-duplicate-agentos-device-hermes-agent',
+      name: 'Hermes-Agent-xiao',
       role: 'executor-agent',
-      adapterKind: 'openclaw',
+      adapterKind: 'hermes',
       deviceId: 'duplicate-agentos-device',
       networkId: 'default',
       visibility: 'public',
@@ -1418,9 +1418,9 @@ describe('/web namespace', () => {
       firstSeenAt: now,
       lastSeenAt: now,
       ownerId: 'admin',
-      command: 'openclaw',
+      command: '/Users/shaw/.local/bin/hermes',
       args: JSON.stringify([]),
-      cwd: '/Users/shaw/custom-openclaw',
+      cwd: '/Users/shaw/custom-hermes',
       description: null,
     });
 
@@ -1439,16 +1439,88 @@ describe('/web namespace', () => {
     const agentosRows = deviceAgents.agents.filter((agent: any) =>
       agent.category === 'agentos-hosted' &&
       agent.deviceId === 'duplicate-agentos-device' &&
-      agent.name === 'OpenClaw-Agent-xiao-mini'
+      agent.adapterKind === 'hermes'
     );
     expect(agentosRows).toHaveLength(1);
     expect(agentosRows[0]).toMatchObject({
-      id: 'scan-duplicate-agentos-device-openclaw-agent-current',
-      cwd: '/Users/shaw/current-openclaw',
+      id: 'scan-duplicate-agentos-device-hermes-agent-current',
+      cwd: '/Users/shaw/.local/bin',
     });
-    expect(deviceAgents.agents.find((agent: any) => agent.id === 'custom-duplicate-agentos-device-openclaw-agent')).toMatchObject({
+    expect(deviceAgents.agents.find((agent: any) => agent.id === 'custom-duplicate-agentos-device-hermes-agent')).toMatchObject({
       source: 'custom',
     });
+
+    web.close();
+  });
+
+  it('keeps scanned AgentOS rows with different runtime directories in device detail agent lists', async () => {
+    const now = Date.now();
+    app.globalDb.devices.upsert({
+      id: 'distinct-agentos-device',
+      userId: 'admin',
+      networkId: 'default',
+      hostname: 'AgentOS Device',
+      lastSeenAt: now,
+      systemInfo: { hostname: 'agentos-device.local' },
+    });
+    app.globalDb.agents.upsert({
+      id: 'scan-distinct-agentos-device-openclaw-agent-a',
+      name: 'OpenClaw-Agent',
+      role: 'gateway',
+      adapterKind: 'openclaw',
+      deviceId: 'distinct-agentos-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now - 100,
+      lastSeenAt: now - 100,
+      ownerId: 'admin',
+      command: '/opt/openclaw/bin/openclaw',
+      args: JSON.stringify([]),
+      cwd: '/opt/openclaw/bin',
+      description: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'scan-distinct-agentos-device-openclaw-agent-b',
+      name: 'OpenClaw-Agent',
+      role: 'gateway',
+      adapterKind: 'openclaw',
+      deviceId: 'distinct-agentos-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      ownerId: 'admin',
+      command: '/Users/shaw/.local/bin/openclaw',
+      args: JSON.stringify([]),
+      cwd: '/Users/shaw/.local/bin',
+      description: null,
+    });
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const deviceAgents = await new Promise<any>((resolve) => {
+      web.emit('device:agents:list', { deviceId: 'distinct-agentos-device' }, resolve);
+    });
+
+    expect(deviceAgents.ok).toBe(true);
+    const agentosRows = deviceAgents.agents.filter((agent: any) =>
+      agent.category === 'agentos-hosted' &&
+      agent.deviceId === 'distinct-agentos-device' &&
+      agent.adapterKind === 'openclaw'
+    );
+    expect(agentosRows.map((agent: any) => agent.cwd).sort()).toEqual([
+      '/Users/shaw/.local/bin',
+      '/opt/openclaw/bin',
+    ]);
 
     web.close();
   });

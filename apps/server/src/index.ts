@@ -125,25 +125,88 @@ function normalizeLogicalAgentName(name?: string | null): string {
   return (name ?? '').trim().toLowerCase().replace(/[_\s]+/g, '-');
 }
 
-function deviceAgentLogicalKey(agent: { name?: string | null; adapterKind?: string | null; deviceId?: string | null }, visibleNetworkId: string): string | null {
+function normalizeRuntimePath(value?: string | null): string {
+  return (value ?? '').trim().replace(/\\/g, '/').replace(/\/+$/g, '').toLowerCase();
+}
+
+function dirnameFromCommand(command?: string | null): string {
+  const normalized = normalizeRuntimePath(command);
+  const lastSlash = normalized.lastIndexOf('/');
+  return lastSlash > 0 ? normalized.slice(0, lastSlash) : '';
+}
+
+function normalizeAgentArgs(args?: string | string[] | null): string {
+  if (Array.isArray(args)) {
+    return args.map((arg) => String(arg).trim()).filter(Boolean).join('\u001f').toLowerCase();
+  }
+  const raw = (args ?? '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return normalizeAgentArgs(parsed.map((arg) => String(arg)));
+    }
+  } catch {
+    // Keep non-JSON persisted args comparable with live DTO args.
+  }
+  return raw.toLowerCase();
+}
+
+function runtimeLocationKey(agent: { cwd?: string | null; command?: string | null }): string {
+  return normalizeRuntimePath(agent.cwd) || dirnameFromCommand(agent.command);
+}
+
+function agentLogicalKey(
+  agent: {
+    name?: string | null;
+    adapterKind?: string | null;
+    deviceId?: string | null;
+    command?: string | null;
+    args?: string | string[] | null;
+    cwd?: string | null;
+    category?: string | null;
+  },
+  networkId: string,
+  options?: { preferRuntimeLocation?: boolean },
+): string | null {
   if (!agent.deviceId) return null;
-  const name = normalizeLogicalAgentName(agent.name);
   const adapterKind = normalizeKind(agent.adapterKind);
-  if (!name || !adapterKind) return null;
-  return [visibleNetworkId, agent.deviceId, name, adapterKind].join('\u0000');
+  if (!adapterKind) return null;
+  if (options?.preferRuntimeLocation || agent.category === 'agentos-hosted') {
+    const location = runtimeLocationKey(agent);
+    if (location) {
+      return [
+        networkId,
+        agent.deviceId,
+        adapterKind,
+        'runtime',
+        location,
+        normalizeAgentArgs(agent.args),
+      ].join('\u0000');
+    }
+  }
+  const name = normalizeLogicalAgentName(agent.name);
+  if (!name) return null;
+  return [networkId, agent.deviceId, adapterKind, 'name', name].join('\u0000');
+}
+
+function deviceAgentLogicalKey(
+  agent: {
+    name?: string | null;
+    adapterKind?: string | null;
+    deviceId?: string | null;
+    command?: string | null;
+    args?: string | string[] | null;
+    cwd?: string | null;
+    category?: string | null;
+  },
+  visibleNetworkId: string,
+): string | null {
+  return agentLogicalKey(agent, visibleNetworkId);
 }
 
 function visibleAgentLogicalKey(agent: AgentSnapshotDto): string | null {
-  if (!agent.deviceId) return null;
-  const name = normalizeLogicalAgentName(agent.name);
-  const adapterKind = normalizeKind(agent.adapterKind);
-  if (!name || !adapterKind) return null;
-  return [
-    agent.networkId ?? '',
-    agent.deviceId,
-    name,
-    adapterKind,
-  ].join('\u0000');
+  return agentLogicalKey(agent, agent.networkId ?? '', { preferRuntimeLocation: true });
 }
 
 function visibleAgentStatusRank(status?: string | null): number {
@@ -202,7 +265,7 @@ function dedupeVisibleAgentDtos(agents: AgentSnapshotDto[]): AgentSnapshotDto[] 
   return result;
 }
 
-function dedupeDeviceAgentRows<T extends { name?: string | null; adapterKind?: string | null; deviceId?: string | null; category?: string | null; source?: string | null; status?: string | null; networkId?: string | null; lastSeenAt?: number | null }>(agents: T[], visibleNetworkId: string): T[] {
+function dedupeDeviceAgentRows<T extends { name?: string | null; adapterKind?: string | null; deviceId?: string | null; category?: string | null; source?: string | null; status?: string | null; networkId?: string | null; lastSeenAt?: number | null; command?: string | null; args?: string | string[] | null; cwd?: string | null }>(agents: T[], visibleNetworkId: string): T[] {
   const result: T[] = [];
   const indexByLogicalKey = new Map<string, number>();
   for (const agent of agents) {
