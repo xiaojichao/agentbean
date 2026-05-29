@@ -108,10 +108,6 @@ export function nativeDirectoryPickerCommands(platform = process.platform): Dire
       command: 'osascript',
       args: [
         '-e',
-        'tell application "Finder" to activate',
-        '-e',
-        'delay 0.2',
-        '-e',
         'POSIX path of (choose folder with prompt "选择项目目录" default location (path to home folder))',
       ],
     }];
