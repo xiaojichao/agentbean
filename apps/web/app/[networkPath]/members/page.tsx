@@ -183,7 +183,7 @@ export default function MembersPage() {
       </div>
 
       {/* Right panel */}
-      <div className="flex flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col">
         {selectedAgent && <AgentTopBar agent={selectedAgent} />}
 
         {/* Tab bar */}
@@ -198,7 +198,7 @@ export default function MembersPage() {
         )}
 
         {/* Tab content */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="min-w-0 flex-1 overflow-y-auto p-6">
           {!selectedId && <EmptyState />}
           {selectedId && selectedAgent && <AgentDetail agent={selectedAgent} device={selectedDevice} tab={tab} />}
           {selectedId && tab === 'profile' && !selectedAgent && selectedId?.startsWith('user:') && selectedHuman && (
