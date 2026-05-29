@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import * as os from "node:os";
 import type { AgentCategory, AdapterKind } from "./config.js";
 import { logger } from "./log.js";
+import { agentbeanHome, localAgentsDir } from "./profile-paths.js";
 
 function readDaemonVersion(): string {
   try {
@@ -157,7 +158,7 @@ export function parseOpenClawAgentId(output: string): string | null {
 
 // --- Machine ID (stable per-device identifier) ---
 
-const MACHINE_ID_FILE = join(os.homedir(), ".agentbean", "device-id");
+const MACHINE_ID_FILE = () => join(agentbeanHome(), "device-id");
 
 function getFirstMacAddress(): string | null {
   const ifaces = os.networkInterfaces();
@@ -211,8 +212,9 @@ async function readPlatformMachineId(): Promise<string | null> {
  */
 export async function getDeviceId(): Promise<string> {
   // 1. Read cached ID
-  if (existsSync(MACHINE_ID_FILE)) {
-    const cached = readFileSync(MACHINE_ID_FILE, "utf-8").trim();
+  const machineIdFile = MACHINE_ID_FILE();
+  if (existsSync(machineIdFile)) {
+    const cached = readFileSync(machineIdFile, "utf-8").trim();
     if (cached) return cached;
   }
 
@@ -250,9 +252,9 @@ export async function getDeviceId(): Promise<string> {
 
   // 3. Cache to file
   try {
-    const dir = join(os.homedir(), ".agentbean");
+    const dir = agentbeanHome();
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(MACHINE_ID_FILE, deviceId);
+    writeFileSync(machineIdFile, deviceId);
   } catch {
     // non-fatal
   }
@@ -348,7 +350,7 @@ export async function scanAgentOSAgents(): Promise<ScannedAgent[]> {
 // --- Scan local agent definitions from filesystem ---
 
 export async function scanLocalAgents(
-  scanDir = join(os.homedir(), ".agentbean", "agents"),
+  scanDir = localAgentsDir(process.env.AGENTBEAN_PROFILE),
 ): Promise<ScannedAgent[]> {
   if (!existsSync(scanDir)) {
     return [];

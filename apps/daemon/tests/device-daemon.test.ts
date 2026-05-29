@@ -6,6 +6,8 @@ describe('device daemon socket options', () => {
     const options = createDeviceSocketOptions({
       token: 'token',
       deviceId: 'device-1',
+      machineId: 'machine-1',
+      profileId: 'team-1',
       networkId: 'team-1',
       agents: [],
       systemInfo: {
@@ -30,6 +32,8 @@ describe('device daemon socket options', () => {
     expect(options.auth).toMatchObject({
       token: 'token',
       deviceId: 'device-1',
+      machineId: 'machine-1',
+      profileId: 'team-1',
       networkId: 'team-1',
       daemonVersion: '0.0.0-test',
       capabilities: { customAgentDispatch: true, directoryPicker: true },

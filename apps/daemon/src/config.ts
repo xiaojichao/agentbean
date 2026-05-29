@@ -44,6 +44,8 @@ export interface AgentConfigEntry {
 
 export interface DeviceConfig {
   deviceId: string;
+  machineId?: string;
+  profileId?: string;
   networkId: string;
   server: { url: string; token: string };
   heartbeatIntervalMs: number;

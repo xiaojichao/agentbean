@@ -1,8 +1,7 @@
 import { io, type Socket } from 'socket.io-client';
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { basename, isAbsolute, join } from 'node:path';
-import { homedir } from 'node:os';
+import { basename, isAbsolute, dirname } from 'node:path';
 import { promisify } from 'node:util';
 import { logger } from './log.js';
 import type { DeviceConfig } from './config.js';
@@ -11,6 +10,7 @@ import { AgentInstance } from './agent-instance.js';
 import { pickAdapter } from './adapters/factory.js';
 import { scanRuntimes, scanAgentOSAgents, scanLocalAgents, collectSystemInfo, type SystemInfo } from './scanner.js';
 import { syncWorkspaceArtifacts } from './workspace-sync.js';
+import { scanCacheFile } from './profile-paths.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -158,9 +158,6 @@ export async function selectNativeDirectory(commands = nativeDirectoryPickerComm
   throw new Error(lastError ? `directory picker command not available: ${errorMessage(lastError)}` : 'directory picker command not available');
 }
 
-const CACHE_DIR = join(homedir(), '.agentbean');
-const CACHE_FILE = join(CACHE_DIR, 'scanned-agents.json');
-
 function isRuntimeEntry(entry: ScannedAgent): boolean {
   return entry.category === 'executor-hosted' &&
     ['codex', 'claude-code', 'kimi-cli', 'Kimi-cli'].includes(entry.adapterKind);
@@ -184,10 +181,11 @@ function splitLegacyCache(entries: ScannedAgent[]): ScanPayload {
   return { agents, runtimes };
 }
 
-function loadCache(): ScanPayload | null {
+function loadCache(profileId?: string): ScanPayload | null {
   try {
-    if (!existsSync(CACHE_FILE)) return null;
-    const parsed = JSON.parse(readFileSync(CACHE_FILE, 'utf-8')) as ScanPayload | ScannedAgent[];
+    const cacheFile = scanCacheFile(profileId);
+    if (!existsSync(cacheFile)) return null;
+    const parsed = JSON.parse(readFileSync(cacheFile, 'utf-8')) as ScanPayload | ScannedAgent[];
     if (Array.isArray(parsed)) return splitLegacyCache(parsed);
     return {
       agents: parsed.agents ?? [],
@@ -198,10 +196,12 @@ function loadCache(): ScanPayload | null {
   }
 }
 
-function saveCache(payload: ScanPayload): void {
+function saveCache(payload: ScanPayload, profileId?: string): void {
   try {
-    if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
-    writeFileSync(CACHE_FILE, JSON.stringify(payload, null, 2));
+    const cacheFile = scanCacheFile(profileId);
+    const cacheDir = dirname(cacheFile);
+    if (!existsSync(cacheDir)) mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(cacheFile, JSON.stringify(payload, null, 2));
   } catch (err: any) {
     logger.warn({ err: err?.message }, 'failed to save scan cache');
   }
@@ -215,6 +215,8 @@ export interface DeviceDaemonHandle {
 export function createDeviceSocketOptions(input: {
   token: string;
   deviceId: string;
+  machineId?: string;
+  profileId?: string;
   networkId: string;
   agents: Array<AgentInstance['publicMeta']>;
   systemInfo: SystemInfo;
@@ -223,6 +225,8 @@ export function createDeviceSocketOptions(input: {
     auth: {
       token: input.token,
       deviceId: input.deviceId,
+      machineId: input.machineId,
+      profileId: input.profileId,
       networkId: input.networkId,
       agents: input.agents,
       systemInfo: input.systemInfo,
@@ -332,13 +336,13 @@ export function createDeviceDaemon(
 
   async function scanAndRegister(sock: Socket, useCache: boolean) {
     if (useCache) {
-      const cached = loadCache();
+      const cached = loadCache(cfg.profileId);
       if (cached) {
         logger.info({ count: cached.agents.length + cached.runtimes.length }, 'using cached scan results');
         emitRegister(sock, cached);
         // Background refresh — only emit if results differ
         scanAll().then((fresh) => {
-          saveCache(fresh);
+          saveCache(fresh, cfg.profileId);
           const cachedKey = JSON.stringify([
             ...cached.agents.map((a) => a.command),
             ...cached.runtimes.map((rt) => rt.command),
@@ -360,7 +364,7 @@ export function createDeviceDaemon(
     // Full scan (no cache or cache miss)
     try {
       const scanned = await scanAll();
-      saveCache(scanned);
+      saveCache(scanned, cfg.profileId);
       emitRegister(sock, scanned);
     } catch (err: any) {
       logger.error({ err: err?.message }, 'scan failed');
@@ -373,6 +377,8 @@ export function createDeviceDaemon(
       socket = io(agentUrl, createDeviceSocketOptions({
         token: cfg.server.token,
         deviceId: cfg.deviceId,
+        machineId: cfg.machineId,
+        profileId: cfg.profileId,
         networkId: cfg.networkId,
         agents: publicAgents,
         systemInfo,

@@ -21,6 +21,8 @@ export interface RuntimeMeta {
 
 export interface DeviceRuntime {
   id: string;
+  machineId?: string | null;
+  profileId?: string | null;
   userId: string;
   networkId: string;
   socket: Socket;

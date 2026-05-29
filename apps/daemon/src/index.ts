@@ -8,18 +8,19 @@ import { pickAdapter } from './adapters/factory.js';
 import type { AgentConfigEntry, DeviceConfig } from './config.js';
 import { logger } from './log.js';
 import { scanRuntimes, scanAgentOSAgents, scanLocalAgents, getDeviceId } from './scanner.js';
-import { loadAuth, saveAuth, type AuthData } from './auth-store.js';
+import { listAuthProfiles, loadAuth, saveAuth, type AuthData } from './auth-store.js';
+import { deviceInstanceId, localAgentsDir, profileIdForNetwork } from './profile-paths.js';
 
 export function discoveredAgentId(name: string, deviceId?: string): string {
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   return deviceId ? `scan-${deviceId}-${slug}` : slug;
 }
 
-async function discoverAgents(deviceId?: string): Promise<AgentConfigEntry[]> {
+async function discoverAgents(deviceId?: string, profileId?: string): Promise<AgentConfigEntry[]> {
   const [_runtimes, agentos, local] = await Promise.all([
     scanRuntimes(),
     scanAgentOSAgents(),
-    scanLocalAgents(),
+    scanLocalAgents(profileId ? localAgentsDir(profileId) : undefined),
   ]);
 
   const seen = new Set<string>();
@@ -67,6 +68,34 @@ async function startDeviceDaemon(cfg: DeviceConfig) {
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
+}
+
+async function buildCliDeviceConfig(input: {
+  serverUrl: string;
+  token: string;
+  networkId: string;
+  machineId?: string;
+  explicitDeviceId?: string;
+  profileId?: string;
+}): Promise<DeviceConfig> {
+  const machineId = input.machineId ?? await getDeviceId();
+  const deviceId = input.explicitDeviceId ?? deviceInstanceId(machineId, input.networkId);
+  logger.info({ serverUrl: input.serverUrl, deviceId, machineId, networkId: input.networkId, profileId: input.profileId }, 'CLI mode: auto-discovering agents');
+  const agents = await discoverAgents(deviceId, input.profileId);
+
+  if (agents.length === 0) {
+    logger.warn('no agents discovered on this machine. Daemon will start with no agents.');
+  }
+
+  return {
+    deviceId,
+    machineId,
+    profileId: input.profileId,
+    networkId: input.networkId,
+    server: { url: input.serverUrl, token: input.token },
+    heartbeatIntervalMs: 10_000,
+    agents,
+  };
 }
 
 async function runDeviceMode(cfgPath: string) {
@@ -141,40 +170,65 @@ async function runCliMode() {
       'invite': { type: 'string' },
       'device-id': { type: 'string' },
       'network-id': { type: 'string' },
+      'profile': { type: 'string' },
+      'all-profiles': { type: 'boolean' },
       'help': { type: 'boolean' },
     },
     strict: true,
   });
 
   if (values.help) {
-    console.log(`Usage: agentbean-daemon --server-url <url> --token <token> [--device-id <id>] [--network-id <id>]
+    console.log(`Usage: agentbean-daemon --server-url <url> --token <token> [--device-id <id>] [--network-id <id>] [--profile <id>]
 
 Options:
   --server-url   AgentBean Server URL (required)
   --token        Authentication token (required)
   --device-id    Device ID (default: auto-detected from hardware)
   --network-id   Team ID (default: default)
+  --profile      Team profile for local auth/cache isolation
+  --all-profiles Start one connection for every saved team profile
 `);
     process.exit(0);
+  }
+
+  if (values['all-profiles']) {
+    const profiles = listAuthProfiles();
+    if (profiles.length === 0) {
+      console.error('Error: no saved AgentBean team profiles found.');
+      process.exit(1);
+    }
+    const machineId = values['device-id'] ?? await getDeviceId();
+    const configs = await Promise.all(profiles.map((profile) => buildCliDeviceConfig({
+      serverUrl: profile.serverUrl,
+      token: profile.token,
+      networkId: profile.networkId ?? networkIdFromToken(profile.token) ?? 'default',
+      machineId,
+      profileId: profile.profileId,
+    })));
+    await Promise.all(configs.map((cfg) => startDeviceDaemon(cfg)));
+    return;
   }
 
   let serverUrl = values['server-url'] ?? process.env.AGENT_BEAN_SERVER_URL;
   let token = values['token'] ?? process.env.AGENT_BEAN_AGENT_TOKEN;
   let savedAuth: AuthData | null = null;
   let networkId = values['network-id'] ?? 'default';
+  let profileId = values.profile ?? process.env.AGENTBEAN_PROFILE;
 
   if (values.invite) {
     if (!serverUrl) {
       console.error('Error: --server-url is required with --invite.');
       process.exit(1);
     }
-    const inviteDeviceId = values['device-id'] ?? await getDeviceId();
-    const auth = await runInviteMode(serverUrl, values.invite, inviteDeviceId);
+    const machineId = values['device-id'] ?? await getDeviceId();
+    const auth = await runInviteMode(serverUrl, values.invite, machineId);
     serverUrl = auth.serverUrl;
     token = auth.token;
     networkId = auth.networkId ?? networkId;
+    profileId = profileId ?? profileIdForNetwork(networkId);
+    saveAuth(auth, { profileId });
   } else if (!token) {
-    savedAuth = loadAuth();
+    savedAuth = loadAuth({ profileId });
     if (savedAuth) {
       serverUrl = serverUrl ?? savedAuth.serverUrl;
       token = savedAuth.token;
@@ -199,23 +253,17 @@ Options:
     savedNetworkId: savedAuth?.networkId,
     fallbackNetworkId: networkId,
   });
+  profileId = profileId ?? profileIdForNetwork(networkId);
 
-  const deviceId = values['device-id'] ?? await getDeviceId();
-
-  logger.info({ serverUrl, deviceId, networkId }, 'CLI mode: auto-discovering agents');
-  const agents = await discoverAgents(deviceId);
-
-  if (agents.length === 0) {
-    logger.warn('no agents discovered on this machine. Daemon will start with no agents.');
-  }
-
-  const cfg: DeviceConfig = {
-    deviceId,
+  const machineId = values['device-id'] ?? await getDeviceId();
+  const cfg = await buildCliDeviceConfig({
+    serverUrl,
+    token,
     networkId,
-    server: { url: serverUrl, token },
-    heartbeatIntervalMs: 10_000,
-    agents,
-  };
+    machineId,
+    explicitDeviceId: values['device-id'] ? values['device-id'] : undefined,
+    profileId,
+  });
 
   await startDeviceDaemon(cfg);
 }
@@ -330,7 +378,6 @@ async function runInviteMode(serverUrl: string, inviteCode: string, deviceId: st
         userId: payload.userId,
         networkId: payload.networkId,
       };
-      saveAuth(auth);
       logger.info({ networkId: auth.networkId }, 'invite mode: token received and saved');
       console.log('Registration complete! Starting daemon...');
       socket.disconnect();
@@ -342,7 +389,7 @@ async function runInviteMode(serverUrl: string, inviteCode: string, deviceId: st
 export async function main() {
   // Check for CLI flags first (npx mode)
   const hasCliFlags = process.argv.some(
-    (a) => a === '--server-url' || a === '--token' || a === '--invite' || a === '--help',
+    (a) => a === '--server-url' || a === '--token' || a === '--invite' || a === '--profile' || a === '--all-profiles' || a === '--help',
   );
 
   if (hasCliFlags) {
