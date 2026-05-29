@@ -2017,6 +2017,98 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('uses persisted runtime location to deduplicate live AgentOS members', async () => {
+    const now = Date.now();
+    app.globalDb.devices.upsert({
+      id: 'members-live-runtime-device',
+      userId: 'admin',
+      networkId: 'default',
+      hostname: '肖的Mac-mini',
+      lastSeenAt: now,
+      systemInfo: { hostname: 'xiaodeMac-mini.local' },
+    });
+    app.globalDb.agents.upsert({
+      id: 'scan-members-live-runtime-device-hermes-old',
+      name: 'Hermes-Agent-xiao-mini',
+      role: 'gateway',
+      adapterKind: 'hermes',
+      deviceId: 'members-live-runtime-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now - 100,
+      lastSeenAt: now - 100,
+      ownerId: 'admin',
+      command: '/Users/shaw/.local/bin/hermes',
+      args: JSON.stringify([]),
+      cwd: '/Users/shaw/.local/bin',
+      description: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'scan-members-live-runtime-device-hermes-current',
+      name: 'Hermes-Agent-xiao-mini-renamed',
+      role: 'gateway',
+      adapterKind: 'hermes',
+      deviceId: 'members-live-runtime-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      ownerId: 'admin',
+      command: '/Users/shaw/.local/bin/hermes',
+      args: JSON.stringify([]),
+      cwd: '/Users/shaw/.local/bin',
+      description: null,
+    });
+    app.registry.register('live-hermes-old', {
+      id: 'scan-members-live-runtime-device-hermes-old',
+      name: 'Hermes-Agent-xiao-mini',
+      role: 'gateway',
+      adapterKind: 'hermes',
+      category: 'agentos-hosted',
+      networkId: 'default',
+      deviceId: 'members-live-runtime-device',
+      source: 'scanned',
+    });
+    app.registry.register('live-hermes-current', {
+      id: 'scan-members-live-runtime-device-hermes-current',
+      name: 'Hermes-Agent-xiao-mini-renamed',
+      role: 'gateway',
+      adapterKind: 'hermes',
+      category: 'agentos-hosted',
+      networkId: 'default',
+      deviceId: 'members-live-runtime-device',
+      source: 'scanned',
+    });
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const members = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+
+    expect(members.ok).toBe(true);
+    const hermesRows = members.agents.filter((agent: any) =>
+      agent.category === 'agentos-hosted' &&
+      agent.deviceId === 'members-live-runtime-device' &&
+      agent.adapterKind === 'hermes'
+    );
+    expect(hermesRows).toHaveLength(1);
+    expect(hermesRows[0]).toMatchObject({
+      cwd: '/Users/shaw/.local/bin',
+    });
+
+    web.close();
+  });
+
   it('returns every team member for the default all channel', async () => {
     app.globalDb.users.create({
       id: 'u-all',

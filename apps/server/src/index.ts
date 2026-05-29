@@ -532,13 +532,36 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     return persisted?.hostname ?? systemName ?? live?.id ?? null;
   };
 
+  const parsePersistedArgs = (args?: string[] | string | null) => {
+    if (Array.isArray(args)) return args;
+    if (!args) return null;
+    try {
+      const parsed = JSON.parse(args);
+      return Array.isArray(parsed) ? parsed.map(String) : [args];
+    } catch {
+      return [args];
+    }
+  };
+
   const buildVisibleAgentDtos = (networkId: string) => {
     const registryAgents = registry.all().filter((a) =>
       isTeamAgent(a) &&
       effectivePublishedNetworkIds(a).includes(networkId)
     ).map((agent) => {
+      const persisted = globalDb.agents.getFull(agent.id);
       const dto = {
         ...snapshotToDto(agent),
+        category: agent.category ?? persisted?.category as AgentSnapshotDto['category'],
+        source: agent.source ?? persisted?.source as AgentSnapshotDto['source'],
+        command: agent.command ?? persisted?.command ?? null,
+        args: agent.args ?? parsePersistedArgs(persisted?.args),
+        cwd: agent.cwd ?? persisted?.cwd ?? null,
+        env: agent.env ?? parseEnvJson(persisted?.env),
+        deviceId: agent.deviceId ?? persisted?.deviceId ?? undefined,
+        networkId: agent.networkId ?? persisted?.networkId,
+        visibility: agent.visibility ?? persisted?.visibility as AgentSnapshotDto['visibility'],
+        ownerId: agent.ownerId ?? persisted?.ownerId ?? null,
+        description: agent.description ?? persisted?.description ?? null,
         publishedNetworkIds: effectivePublishedNetworkIds(agent),
         unpublishedNetworkIds: unpublishedNetworkIds(agent.id),
       };
@@ -556,10 +579,6 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       .filter(isTeamAgent)
       .filter((agent) => !seen.has(agent.id))
       .map((agent) => {
-        let parsedArgs: string[] | null = null;
-        if (agent.args) {
-          try { parsedArgs = JSON.parse(agent.args); } catch { parsedArgs = [agent.args]; }
-        }
         const resolved = resolveCustomAgentStatus(agent);
         return enrichAgentOwnership({
           id: agent.id,
@@ -569,7 +588,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           category: agent.category as AgentSnapshotDto['category'],
           source: agent.source as AgentSnapshotDto['source'],
           command: agent.command,
-          args: parsedArgs,
+          args: parsePersistedArgs(agent.args),
           cwd: agent.cwd,
           env: parseEnvJson(agent.env),
           deviceId: agent.deviceId ?? undefined,
@@ -642,17 +661,6 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       if (device) rowsById.set(device.id, device);
     }
     return visibleDeviceRows([...rowsById.values()]).map((device) => toDeviceDto(device, viewerId, currentDeviceId));
-  };
-
-  const parsePersistedArgs = (args?: string[] | string | null) => {
-    if (Array.isArray(args)) return args;
-    if (!args) return null;
-    try {
-      const parsed = JSON.parse(args);
-      return Array.isArray(parsed) ? parsed.map(String) : [args];
-    } catch {
-      return [args];
-    }
   };
 
   const persistedAgentStatusDto = (
