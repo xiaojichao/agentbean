@@ -329,10 +329,6 @@ CREATE TABLE IF NOT EXISTS agents (
 
 CREATE INDEX IF NOT EXISTS idx_agents_network ON agents(network_id, visibility);
 CREATE INDEX IF NOT EXISTS idx_devices_network ON devices(network_id);
-CREATE INDEX IF NOT EXISTS idx_devices_machine ON devices(machine_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_network_machine
-  ON devices(network_id, machine_id)
-  WHERE machine_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS invites (
   id TEXT PRIMARY KEY,
