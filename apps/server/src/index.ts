@@ -1148,10 +1148,23 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
         const userId = socket.data.userId as string | undefined;
         const requestedDevice = globalDb.devices.get(payload.deviceId);
-        if (!requestedDevice || requestedDevice.networkId !== networkId) return ack?.({ ok: false, error: 'DEVICE_NOT_IN_TEAM' });
-        if (!canViewDevice(requestedDevice, userId, networkId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
-        const globalAgents = globalDb.agents.listVisibleInNetwork(networkId)
-          .filter((agent) => agent.deviceId === payload.deviceId);
+        if (!requestedDevice) return ack?.({ ok: false, error: 'DEVICE_NOT_IN_TEAM' });
+        const visibleDeviceAgents = globalDb.agents.listVisibleInNetwork(networkId)
+          .filter((agent) => agent.deviceId === payload.deviceId && isTeamAgent(agent));
+        const deviceBelongsToNetwork = requestedDevice.networkId === networkId;
+        if (!deviceBelongsToNetwork && visibleDeviceAgents.length === 0) return ack?.({ ok: false, error: 'DEVICE_NOT_IN_TEAM' });
+        if (deviceBelongsToNetwork) {
+          if (!canViewDevice(requestedDevice, userId, networkId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        } else if (!userId || !globalDb.networkMembers.isMember(networkId, userId)) {
+          return ack?.({ ok: false, error: 'FORBIDDEN' });
+        }
+        const globalAgents = canManageDevice(requestedDevice, userId)
+          ? [
+              ...globalDb.agents.listByDevice(payload.deviceId)
+                .filter((agent) => isTeamAgent(agent) && agent.networkId === networkId),
+              ...visibleDeviceAgents,
+            ].filter((agent, index, agents) => agents.findIndex((candidate) => candidate.id === agent.id) === index)
+          : visibleDeviceAgents;
         // Merge with live AgentRegistry data
         const result = globalAgents
           .filter((ga) => !(ga.source === 'scanned' && ga.category === 'executor-hosted'))

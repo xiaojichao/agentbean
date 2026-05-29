@@ -2017,6 +2017,75 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('keeps unpublished device-owned AgentOS agents visible on the device detail for managers', async () => {
+    const now = Date.now();
+    const ownerId = 'admin';
+    const targetNetwork = app.globalDb.networks.create({
+      id: 'opensns-device-detail',
+      ownerId,
+      name: 'OpenSNS Device Detail',
+      path: 'opensns-device-detail',
+      visibility: 'private',
+      createdAt: now,
+    });
+    app.globalDb.networkMembers.add(targetNetwork.id, ownerId, 'owner');
+    app.globalDb.devices.upsert({
+      id: 'my-mbp-device-detail',
+      userId: ownerId,
+      networkId: targetNetwork.id,
+      hostname: 'MyMBP',
+      lastSeenAt: now,
+      systemInfo: { hostname: 'MyMBP.local' },
+    });
+    app.globalDb.agents.upsert({
+      id: 'scan-my-mbp-hermes-xiao',
+      name: 'Hermes-Agent-xiao',
+      role: 'gateway',
+      adapterKind: 'hermes',
+      deviceId: 'my-mbp-device-detail',
+      networkId: targetNetwork.id,
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      ownerId,
+      command: '/Users/shaw/.local/bin/hermes',
+      args: JSON.stringify([]),
+      cwd: '/Users/shaw/.local/bin',
+      description: null,
+    });
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken(ownerId, targetNetwork.id) },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const unpublish = await new Promise<any>((resolve) => {
+      web.emit('agent:unpublish', { agentId: 'scan-my-mbp-hermes-xiao', networkId: targetNetwork.id }, resolve);
+    });
+    expect(unpublish.ok).toBe(true);
+
+    const members = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+    expect(members.ok).toBe(true);
+    expect(members.agents.some((agent: any) => agent.id === 'scan-my-mbp-hermes-xiao')).toBe(false);
+
+    const listed = await new Promise<any>((resolve) => {
+      web.emit('device:agents:list', { deviceId: 'my-mbp-device-detail' }, resolve);
+    });
+    expect(listed.ok).toBe(true);
+    expect(listed.agents.find((agent: any) => agent.id === 'scan-my-mbp-hermes-xiao')).toMatchObject({
+      name: 'Hermes-Agent-xiao',
+      unpublishedNetworkIds: [targetNetwork.id],
+    });
+
+    web.close();
+  });
+
   it('returns every team member for the default all channel', async () => {
     app.globalDb.users.create({
       id: 'u-all',
