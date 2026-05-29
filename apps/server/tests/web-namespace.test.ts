@@ -121,6 +121,78 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('deduplicates scanned and custom agents that represent the same device member', async () => {
+    const now = Date.now();
+    app.globalDb.devices.upsert({
+      id: 'mac-mini-device',
+      userId: 'admin',
+      networkId: 'default',
+      hostname: '肖的Mac-mini',
+      lastSeenAt: now,
+      systemInfo: { hostname: 'Mac mini' },
+    });
+    app.globalDb.agents.upsert({
+      id: 'custom-openclaw-agent',
+      name: 'OpenClaw-Agent',
+      role: 'executor-agent',
+      adapterKind: 'openclaw',
+      deviceId: 'mac-mini-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: now - 100,
+      lastSeenAt: now,
+      ownerId: 'admin',
+      command: 'openclaw',
+      args: JSON.stringify([]),
+      cwd: '/Users/shaw/openclaw',
+      description: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'scan-mac-mini-device-openclaw-agent',
+      name: 'OpenClaw-Agent',
+      role: 'gateway',
+      adapterKind: 'openclaw',
+      deviceId: 'mac-mini-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      ownerId: 'admin',
+      command: 'openclaw',
+      args: JSON.stringify([]),
+      cwd: '/Users/shaw/openclaw',
+      description: null,
+    });
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const members = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+
+    expect(members.ok).toBe(true);
+    const openClawAgents = members.agents.filter((agent: any) =>
+      agent.deviceId === 'mac-mini-device' && agent.name === 'OpenClaw-Agent'
+    );
+    expect(openClawAgents).toHaveLength(1);
+    expect(openClawAgents[0]).toMatchObject({
+      id: 'custom-openclaw-agent',
+      source: 'custom',
+      deviceName: '肖的Mac-mini',
+    });
+
+    web.close();
+  });
+
   it('emits agent:status when a daemon registers', async () => {
     const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
     await new Promise<void>((r) => web.on('connect', () => r()));

@@ -9,7 +9,7 @@ import { openDb, initGlobalDb, type Db, type GlobalDb, type InviteRow } from './
 import { AgentRegistry, type AgentRuntime } from './registry.js';
 import { DeviceRegistry } from './device-registry.js';
 import { StorageManager } from './storage.js';
-import { attachAgentNamespace, snapshotToDto, type DispatchFn } from './namespaces/agent.js';
+import { attachAgentNamespace, snapshotToDto, type AgentSnapshotDto, type DispatchFn } from './namespaces/agent.js';
 import { AgentMetricsCollector } from './agent-metrics.js';
 import { renderConnectCommand } from './connect-command.js';
 import { startDeviceHeartbeatScanner, startHeartbeatScanner } from './heartbeat-scanner.js';
@@ -133,6 +133,19 @@ function deviceAgentLogicalKey(agent: { name?: string | null; adapterKind?: stri
   return [visibleNetworkId, agent.deviceId, name, adapterKind].join('\u0000');
 }
 
+function visibleAgentLogicalKey(agent: AgentSnapshotDto): string | null {
+  if (!agent.deviceId) return null;
+  const name = normalizeLogicalAgentName(agent.name);
+  const adapterKind = normalizeKind(agent.adapterKind);
+  if (!name || !adapterKind) return null;
+  return [
+    agent.networkId ?? '',
+    agent.deviceId,
+    name,
+    adapterKind,
+  ].join('\u0000');
+}
+
 function visibleAgentStatusRank(status?: string | null): number {
   if (status === 'busy') return 5;
   if (status === 'online') return 4;
@@ -148,6 +161,45 @@ function preferDeviceAgentRow<T extends { status?: string | null; source?: strin
   const currentOwnNetwork = current.networkId === visibleNetworkId;
   if (candidateOwnNetwork !== currentOwnNetwork) return candidateOwnNetwork ? candidate : current;
   return (candidate.lastSeenAt ?? 0) > (current.lastSeenAt ?? 0) ? candidate : current;
+}
+
+function visibleAgentSourceRank(source?: string | null): number {
+  if (source === 'custom') return 3;
+  if (source === 'self-register') return 2;
+  return 1;
+}
+
+function preferVisibleAgent(candidate: AgentSnapshotDto, current: AgentSnapshotDto): AgentSnapshotDto {
+  const statusDelta = visibleAgentStatusRank(candidate.status) - visibleAgentStatusRank(current.status);
+  if (statusDelta !== 0) return statusDelta > 0 ? candidate : current;
+  const sourceDelta = visibleAgentSourceRank(candidate.source) - visibleAgentSourceRank(current.source);
+  if (sourceDelta !== 0) return sourceDelta > 0 ? candidate : current;
+  return (candidate.lastSeenAt ?? 0) > (current.lastSeenAt ?? 0) ? candidate : current;
+}
+
+function dedupeVisibleAgentDtos(agents: AgentSnapshotDto[]): AgentSnapshotDto[] {
+  const result: AgentSnapshotDto[] = [];
+  const indexByLogicalKey = new Map<string, number>();
+  for (const agent of agents) {
+    const key = visibleAgentLogicalKey(agent);
+    if (!key) {
+      result.push(agent);
+      continue;
+    }
+    const existingIndex = indexByLogicalKey.get(key);
+    if (existingIndex === undefined) {
+      indexByLogicalKey.set(key, result.length);
+      result.push(agent);
+      continue;
+    }
+    const existing = result[existingIndex]!;
+    if (existing.source !== 'scanned' && agent.source !== 'scanned') {
+      result.push(agent);
+      continue;
+    }
+    result[existingIndex] = preferVisibleAgent(agent, existing);
+  }
+  return result;
 }
 
 function dedupeDeviceAgentRows<T extends { name?: string | null; adapterKind?: string | null; deviceId?: string | null; category?: string | null; source?: string | null; status?: string | null; networkId?: string | null; lastSeenAt?: number | null }>(agents: T[], visibleNetworkId: string): T[] {
@@ -450,16 +502,16 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           id: agent.id,
           name: agent.name,
           role: agent.role ?? '',
-          adapterKind: agent.adapterKind,
-          category: agent.category,
-          source: agent.source,
+          adapterKind: agent.adapterKind as AgentSnapshotDto['adapterKind'],
+          category: agent.category as AgentSnapshotDto['category'],
+          source: agent.source as AgentSnapshotDto['source'],
           command: agent.command,
           args: parsedArgs,
           cwd: agent.cwd,
           env: parseEnvJson(agent.env),
           deviceId: agent.deviceId ?? undefined,
           networkId: agent.networkId,
-          visibility: agent.visibility,
+          visibility: agent.visibility as AgentSnapshotDto['visibility'],
           ownerId: agent.ownerId,
           description: agent.description,
           status: resolved.status,
@@ -470,7 +522,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           connectCommand: renderConnectCommand({ adapterKind: agent.adapterKind as any }),
         });
       });
-    return [...registryAgents, ...persistedAgents];
+    return dedupeVisibleAgentDtos([...registryAgents, ...persistedAgents]);
   };
 
   function deviceDisplayName(device: ReturnType<GlobalDb['devices']['listByUser']>[number]): string {
