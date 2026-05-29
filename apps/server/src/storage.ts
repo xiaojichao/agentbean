@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import type { MessageRow, ArtifactRow, TaskRow, TaskStatus } from './db.js';
 import { newId } from './ids.js';
@@ -400,6 +400,16 @@ export class StorageManager {
     const space: StorageSpace = { networkId, db, dbPath, artifactDir, ...dao };
     this.spaces.set(networkId, space);
     return space;
+  }
+
+  deleteSpace(networkId: string): void {
+    const cached = this.spaces.get(networkId);
+    if (cached) {
+      try { cached.db.close(); } catch {}
+      this.spaces.delete(networkId);
+    }
+    const spaceDir = join(this.baseDir, networkId);
+    if (existsSync(spaceDir)) rmSync(spaceDir, { recursive: true, force: true });
   }
 
   closeAll(): void {

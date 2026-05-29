@@ -3,7 +3,7 @@ import { buildApp, type AppHandle } from '../src/index.js';
 import { generateToken, parseToken } from '../src/auth.js';
 import { io as ioClient } from 'socket.io-client';
 import { AddressInfo } from 'node:net';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1845,6 +1845,78 @@ describe('/web namespace', () => {
 
     daemon.close();
     web.close();
+  });
+
+  it('deletes a team and its team-scoped data from settings', async () => {
+    const owner = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => owner.on('connect', () => r()));
+    const created = await new Promise<any>((resolve) => {
+      owner.emit('network:create', { name: 'Delete Me', path: 'delete-me' }, resolve);
+    });
+    expect(created.ok).toBe(true);
+    const networkId = created.network.id;
+    const switched = await new Promise<any>((resolve) => {
+      owner.emit('network:switch', { networkId }, resolve);
+    });
+    expect(switched.ok).toBe(true);
+    app.globalDb.devices.upsert({
+      id: 'delete-team-device',
+      userId: 'admin',
+      networkId,
+      hostname: 'Delete Device',
+      lastSeenAt: Date.now(),
+      systemInfo: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'delete-team-agent',
+      name: 'Delete Agent',
+      role: 'assistant',
+      adapterKind: 'codex',
+      deviceId: 'delete-team-device',
+      networkId,
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: Date.now(),
+      lastSeenAt: Date.now(),
+      ownerId: 'admin',
+      command: 'codex',
+      cwd: '/tmp/delete-me',
+      description: null,
+    });
+    app.globalDb.agentPublishes.publish('delete-team-agent', networkId, 'admin');
+    app.globalDb.invites.create({
+      id: 'delete-team-invite',
+      code: 'delete-team-invite-code',
+      createdBy: 'admin',
+      networkId,
+      purpose: 'user',
+    });
+    expect(existsSync(join(storageBaseDir, networkId))).toBe(true);
+
+    const deleted = await new Promise<any>((resolve) => {
+      owner.emit('network:delete', { networkId }, resolve);
+    });
+    expect(deleted.ok).toBe(true);
+    expect(deleted.fallbackNetwork).toMatchObject({ id: 'default' });
+    expect(app.globalDb.networks.get(networkId)).toBeNull();
+    expect(app.globalDb.devices.get('delete-team-device')).toBeNull();
+    expect(app.globalDb.agents.getFull('delete-team-agent')).toBeNull();
+    expect(app.globalDb.agentPublishes.isPublished('delete-team-agent', networkId)).toBe(false);
+    expect(app.globalDb.invites.getByCode('delete-team-invite-code')).toBeNull();
+    expect(app.globalDb.users.get('admin')?.currentNetworkId).toBe('default');
+    expect(existsSync(join(storageBaseDir, networkId))).toBe(false);
+
+    const networks = await new Promise<any>((resolve) => {
+      owner.emit('network:list', {}, resolve);
+    });
+    expect(networks.ok).toBe(true);
+    expect(networks.networks.map((network: any) => network.id)).not.toContain(networkId);
+    owner.close();
   });
 
   it('registers a new user into the team from a join link and returns that team', async () => {

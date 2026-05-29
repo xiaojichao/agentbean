@@ -1317,6 +1317,78 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       }
     });
 
+    const fallbackNetworkForUser = (userId?: string, excludedNetworkId?: string) => {
+      const networks = getVisibleNetworks(userId).filter((network) => network.id !== excludedNetworkId);
+      return networks.find((network) => network.id === defaultNetworkId) ?? networks[0] ?? null;
+    };
+
+    const deleteNetwork = (networkId: string, actorId: string, allowAdminOverride = false) => {
+      if (networkId === defaultNetworkId) return { ok: false as const, error: 'CANNOT_DELETE_DEFAULT_NETWORK' };
+      const network = globalDb.networks.get(networkId);
+      if (!network) return { ok: false as const, error: 'NOT_FOUND' };
+      const actor = globalDb.users.get(actorId);
+      if (!actor) return { ok: false as const, error: 'NOT_AUTHENTICATED' };
+      const canDelete = network.ownerId === actorId || (allowAdminOverride && actor.role === 'admin');
+      if (!canDelete) return { ok: false as const, error: 'FORBIDDEN' };
+
+      const fallbackByUser = new Map<string, string | null>();
+      for (const member of globalDb.networkMembers.listByNetwork(networkId)) {
+        fallbackByUser.set(member.userId, fallbackNetworkForUser(member.userId, networkId)?.id ?? null);
+      }
+      if (!fallbackByUser.has(actorId)) {
+        fallbackByUser.set(actorId, fallbackNetworkForUser(actorId, networkId)?.id ?? null);
+      }
+
+      const deviceIds = globalDb.devices.listByNetwork(networkId).map((device) => device.id);
+      const agentIds = globalDb.agents.listAll().filter((agent) => agent.networkId === networkId).map((agent) => agent.id);
+      globalDb.raw.transaction(() => {
+        globalDb.raw.prepare('DELETE FROM invites WHERE network_id = ?').run(networkId);
+        globalDb.raw.prepare('UPDATE users SET current_network_id = NULL WHERE current_network_id = ?').run(networkId);
+        globalDb.raw.prepare('DELETE FROM networks WHERE id = ?').run(networkId);
+      })();
+      for (const [userId, fallbackNetworkId] of fallbackByUser.entries()) {
+        if (fallbackNetworkId) globalDb.users.setCurrentNetwork(userId, fallbackNetworkId);
+      }
+      storageManager.deleteSpace(networkId);
+
+      for (const deviceId of deviceIds) deviceRegistry.remove(deviceId);
+      for (const agentId of agentIds) registry.markOffline(agentId, 'network-deleted');
+
+      for (const s of io.of('/web').sockets.values()) {
+        const socketUserId = s.data.userId as string | undefined;
+        const visibleNetworks = getVisibleNetworks(socketUserId);
+        s.emit('networks:snapshot', visibleNetworks);
+        if ((socketNetworkMap.get(s.id) ?? defaultNetworkId) !== networkId) continue;
+        const fallback = socketUserId
+          ? visibleNetworks.find((candidate) => candidate.id === (globalDb.users.get(socketUserId)?.currentNetworkId ?? '')) ?? visibleNetworks[0] ?? null
+          : visibleNetworks.find((candidate) => candidate.id === defaultNetworkId) ?? visibleNetworks[0] ?? null;
+        if (fallback) {
+          socketNetworkMap.set(s.id, fallback.id);
+          s.emit('network:deleted', { networkId, fallbackNetwork: fallback });
+          s.emit('channels:snapshot', socketUserId ? channels.listForUser(fallback.id, socketUserId) : channels.list(fallback.id));
+          s.emit('devices:snapshot', devicesForNetwork(fallback.id, socketUserId, socketCurrentDeviceId(s)));
+          s.emit('agents:snapshot', buildVisibleAgentDtos(fallback.id));
+        } else {
+          socketNetworkMap.delete(s.id);
+          s.emit('network:deleted', { networkId, fallbackNetwork: null });
+        }
+      }
+
+      return { ok: true as const, fallbackNetwork: fallbackNetworkForUser(actorId) };
+    };
+
+    socket.on('network:delete', (payload: { networkId?: string }, ack?: (r: any) => void) => {
+      try {
+        const userId = socket.data.userId as string | undefined;
+        if (!userId) return ack?.({ ok: false, error: 'UNAUTHORIZED' });
+        const networkId = payload.networkId ?? socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const result = deleteNetwork(networkId, userId, true);
+        ack?.(result);
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
     socket.on('channels:subscribe', () => {
       const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
       const userId = socket.data.userId as string | undefined;
@@ -2374,10 +2446,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     });
 
     socket.on('admin:delete-network', (payload: { networkId: string }, ack?: (r: any) => void) => {
-      if (!requireAdmin(ack)) return;
-      if (payload.networkId === 'default') return ack?.({ ok: false, error: 'CANNOT_DELETE_DEFAULT_NETWORK' });
-      globalDb.raw.prepare('DELETE FROM networks WHERE id = ?').run(payload.networkId);
-      ack?.({ ok: true });
+      const adminId = requireAdmin(ack);
+      if (!adminId) return;
+      ack?.(deleteNetwork(payload.networkId, adminId, true));
     });
 
     socket.on('admin:list-devices', (_p: {}, ack?: (r: any) => void) => {

@@ -178,6 +178,7 @@ export interface NetworkEvents {
   create(payload: { name: string; path?: string; description?: string; visibility?: 'public' | 'private' }): Promise<{ ok: boolean; network?: NetworkSummary; error?: string }>;
   switch(networkId: string): Promise<{ ok: boolean; network?: NetworkSummary; error?: string }>;
   update(payload: { name?: string }): Promise<{ ok: boolean; network?: NetworkSummary; error?: string }>;
+  delete(networkId: string): Promise<{ ok: boolean; fallbackNetwork?: NetworkSummary | null; error?: string }>;
   onSnapshot(handler: (nets: NetworkSummary[]) => void): () => void;
   subscribe(): void;
 }
@@ -195,6 +196,9 @@ export function networkEvents(socket: Socket = getWebSocket()): NetworkEvents {
     },
     update(payload) {
       return emitWithTimeout(socket, 'network:update', payload);
+    },
+    delete(networkId) {
+      return emitWithTimeout(socket, 'network:delete', { networkId });
     },
     onSnapshot(handler) {
       socket.on('networks:snapshot', handler);
