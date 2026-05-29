@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import Database from 'better-sqlite3';
 import { initGlobalDb, openDb, type Db } from '../src/db.js';
 
 let dbPath: string;
@@ -151,6 +152,36 @@ describe('openDb', () => {
         networkId: 'team-2',
         lastSeenAt: now + 1,
       });
+    } finally {
+      global.close();
+      try { unlinkSync(globalPath); } catch {}
+    }
+  });
+
+  it('migrates a legacy devices table before creating machine-id indexes', () => {
+    const globalPath = join(tmpdir(), `agentbean-global-legacy-devices-${Date.now()}-${Math.random()}.db`);
+    const legacy = new Database(globalPath);
+    legacy.exec(`
+      CREATE TABLE devices (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        network_id TEXT NOT NULL,
+        hostname TEXT,
+        last_seen_at INTEGER NOT NULL,
+        connect_command TEXT,
+        system_info TEXT,
+        runtimes TEXT
+      );
+      CREATE INDEX idx_devices_network ON devices(network_id);
+    `);
+    legacy.close();
+
+    const global = initGlobalDb(globalPath);
+    try {
+      const columns = (global.raw.prepare(`PRAGMA table_info(devices)`).all() as any[]).map((row) => row.name);
+      const indexes = (global.raw.prepare(`PRAGMA index_list(devices)`).all() as any[]).map((row) => row.name);
+      expect(columns).toEqual(expect.arrayContaining(['machine_id', 'profile_id']));
+      expect(indexes).toEqual(expect.arrayContaining(['idx_devices_machine', 'idx_devices_network_machine']));
     } finally {
       global.close();
       try { unlinkSync(globalPath); } catch {}
