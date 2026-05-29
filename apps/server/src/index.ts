@@ -125,6 +125,14 @@ function normalizeLogicalAgentName(name?: string | null): string {
   return (name ?? '').trim().toLowerCase().replace(/[_\s]+/g, '-');
 }
 
+function deviceAgentLogicalKey(agent: { name?: string | null; adapterKind?: string | null; deviceId?: string | null }, visibleNetworkId: string): string | null {
+  if (!agent.deviceId) return null;
+  const name = normalizeLogicalAgentName(agent.name);
+  const adapterKind = normalizeKind(agent.adapterKind);
+  if (!name || !adapterKind) return null;
+  return [visibleNetworkId, agent.deviceId, name, adapterKind].join('\u0000');
+}
+
 function visibleAgentLogicalKey(agent: AgentSnapshotDto): string | null {
   if (!agent.deviceId) return null;
   const name = normalizeLogicalAgentName(agent.name);
@@ -144,6 +152,15 @@ function visibleAgentStatusRank(status?: string | null): number {
   if (status === 'connecting') return 3;
   if (status === 'error') return 2;
   return 1;
+}
+
+function preferDeviceAgentRow<T extends { status?: string | null; source?: string | null; networkId?: string | null; lastSeenAt?: number | null }>(candidate: T, current: T, visibleNetworkId: string): T {
+  const statusDelta = visibleAgentStatusRank(candidate.status) - visibleAgentStatusRank(current.status);
+  if (statusDelta !== 0) return statusDelta > 0 ? candidate : current;
+  const candidateOwnNetwork = candidate.networkId === visibleNetworkId;
+  const currentOwnNetwork = current.networkId === visibleNetworkId;
+  if (candidateOwnNetwork !== currentOwnNetwork) return candidateOwnNetwork ? candidate : current;
+  return (candidate.lastSeenAt ?? 0) > (current.lastSeenAt ?? 0) ? candidate : current;
 }
 
 function visibleAgentSourceRank(source?: string | null): number {
@@ -181,6 +198,30 @@ function dedupeVisibleAgentDtos(agents: AgentSnapshotDto[]): AgentSnapshotDto[] 
       continue;
     }
     result[existingIndex] = preferVisibleAgent(agent, existing);
+  }
+  return result;
+}
+
+function dedupeDeviceAgentRows<T extends { name?: string | null; adapterKind?: string | null; deviceId?: string | null; category?: string | null; source?: string | null; status?: string | null; networkId?: string | null; lastSeenAt?: number | null }>(agents: T[], visibleNetworkId: string): T[] {
+  const result: T[] = [];
+  const indexByLogicalKey = new Map<string, number>();
+  for (const agent of agents) {
+    if (agent.category !== 'agentos-hosted' || agent.source !== 'scanned') {
+      result.push(agent);
+      continue;
+    }
+    const key = deviceAgentLogicalKey(agent, visibleNetworkId);
+    if (!key) {
+      result.push(agent);
+      continue;
+    }
+    const existingIndex = indexByLogicalKey.get(key);
+    if (existingIndex === undefined) {
+      indexByLogicalKey.set(key, result.length);
+      result.push(agent);
+      continue;
+    }
+    result[existingIndex] = preferDeviceAgentRow(agent, result[existingIndex]!, visibleNetworkId);
   }
   return result;
 }
@@ -1066,7 +1107,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           });
         const live = deviceRegistry.get(payload.deviceId);
         const dbDevice = globalDb.devices.get(payload.deviceId);
-        ack?.({ ok: true, agents: result, runtimes: live?.runtimes ?? dbDevice?.runtimes ?? [] });
+        ack?.({ ok: true, agents: dedupeDeviceAgentRows(result, networkId), runtimes: live?.runtimes ?? dbDevice?.runtimes ?? [] });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }
