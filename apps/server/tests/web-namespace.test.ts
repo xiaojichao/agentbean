@@ -1933,6 +1933,90 @@ describe('/web namespace', () => {
     setupSocket.close();
   });
 
+  it('deduplicates published AgentOS rows by visible team runtime identity in member lists', async () => {
+    const now = Date.now();
+    const ownerId = 'admin';
+    const targetNetwork = app.globalDb.networks.create({
+      id: 'opensns-members-dedupe',
+      ownerId,
+      name: 'OpenSNS Members Dedupe',
+      path: 'opensns-members-dedupe',
+      visibility: 'private',
+      createdAt: now,
+    });
+    app.globalDb.networkMembers.add(targetNetwork.id, ownerId, 'owner');
+    app.globalDb.devices.upsert({
+      id: 'members-mybmp-runtime-device',
+      userId: ownerId,
+      networkId: 'default',
+      hostname: 'MyMBP',
+      lastSeenAt: now,
+      systemInfo: { hostname: 'shaw-mac.local' },
+    });
+    app.globalDb.agents.upsert({
+      id: 'scan-members-mybmp-runtime-device-hermes-mbp',
+      name: 'Hermes-Agent-mbp-xiao',
+      role: 'gateway',
+      adapterKind: 'hermes',
+      deviceId: 'members-mybmp-runtime-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now - 100,
+      lastSeenAt: now - 100,
+      ownerId,
+      command: '/Users/shaw/.local/bin/hermes',
+      args: JSON.stringify([]),
+      cwd: '/Users/shaw/.local/bin',
+      description: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'scan-members-mybmp-runtime-device-hermes-xiao',
+      name: 'Hermes-Agent-xiao',
+      role: 'gateway',
+      adapterKind: 'hermes',
+      deviceId: 'members-mybmp-runtime-device',
+      networkId: targetNetwork.id,
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      ownerId,
+      command: '/Users/shaw/.local/bin/hermes',
+      args: JSON.stringify([]),
+      cwd: '/Users/shaw/.local/bin',
+      description: null,
+    });
+    app.globalDb.agentPublishes.publish('scan-members-mybmp-runtime-device-hermes-mbp', targetNetwork.id, ownerId);
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken(ownerId, targetNetwork.id) },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const members = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+
+    expect(members.ok).toBe(true);
+    const hermesRows = members.agents.filter((agent: any) =>
+      agent.category === 'agentos-hosted' &&
+      agent.deviceId === 'members-mybmp-runtime-device' &&
+      agent.adapterKind === 'hermes'
+    );
+    expect(hermesRows).toHaveLength(1);
+    expect(hermesRows[0]).toMatchObject({
+      id: 'scan-members-mybmp-runtime-device-hermes-xiao',
+      cwd: '/Users/shaw/.local/bin',
+    });
+
+    web.close();
+  });
+
   it('returns every team member for the default all channel', async () => {
     app.globalDb.users.create({
       id: 'u-all',

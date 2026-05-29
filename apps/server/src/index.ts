@@ -205,8 +205,8 @@ function deviceAgentLogicalKey(
   return agentLogicalKey(agent, visibleNetworkId);
 }
 
-function visibleAgentLogicalKey(agent: AgentSnapshotDto): string | null {
-  return agentLogicalKey(agent, agent.networkId ?? '', { preferRuntimeLocation: true });
+function visibleAgentLogicalKey(agent: AgentSnapshotDto, visibleNetworkId: string): string | null {
+  return agentLogicalKey(agent, visibleNetworkId, { preferRuntimeLocation: true });
 }
 
 function visibleAgentStatusRank(status?: string | null): number {
@@ -240,11 +240,11 @@ function preferVisibleAgent(candidate: AgentSnapshotDto, current: AgentSnapshotD
   return (candidate.lastSeenAt ?? 0) > (current.lastSeenAt ?? 0) ? candidate : current;
 }
 
-function dedupeVisibleAgentDtos(agents: AgentSnapshotDto[]): AgentSnapshotDto[] {
+function dedupeVisibleAgentDtos(agents: AgentSnapshotDto[], visibleNetworkId: string): AgentSnapshotDto[] {
   const result: AgentSnapshotDto[] = [];
   const indexByLogicalKey = new Map<string, number>();
   for (const agent of agents) {
-    const key = visibleAgentLogicalKey(agent);
+    const key = visibleAgentLogicalKey(agent, visibleNetworkId);
     if (!key) {
       result.push(agent);
       continue;
@@ -585,7 +585,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           connectCommand: renderConnectCommand({ adapterKind: agent.adapterKind as any }),
         });
       });
-    return dedupeVisibleAgentDtos([...registryAgents, ...persistedAgents]);
+    return dedupeVisibleAgentDtos([...registryAgents, ...persistedAgents], networkId);
   };
 
   function deviceDisplayName(device: ReturnType<GlobalDb['devices']['listByUser']>[number]): string {
