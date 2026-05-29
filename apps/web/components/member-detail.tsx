@@ -651,7 +651,7 @@ function InlineEditor({ value, onChange, onCancel, onSave, saving }: { value: st
 function EditableLine({ value, onEdit }: { value: string; onEdit: () => void }) {
   return (
     <div className="flex items-start justify-between gap-3">
-      <div className="min-w-0 whitespace-pre-wrap text-sm text-neutral-800">{value}</div>
+      <div className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm text-neutral-800">{value}</div>
       <button onClick={onEdit} className="inline-flex shrink-0 items-center gap-1 rounded-md border border-neutral-200 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50">
         <Edit3 size={13} />
         编辑
@@ -661,7 +661,7 @@ function EditableLine({ value, onEdit }: { value: string; onEdit: () => void }) 
 }
 
 function ReadOnlyLine({ value }: { value: string }) {
-  return <div className="min-w-0 whitespace-pre-wrap text-sm text-neutral-800">{value}</div>;
+  return <div className="min-w-0 whitespace-pre-wrap break-words text-sm text-neutral-800">{value}</div>;
 }
 
 function ActionButton({ icon, label, disabled, danger }: { icon: React.ReactNode; label: string; disabled?: boolean; danger?: boolean }) {
