@@ -8,6 +8,7 @@ import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { daemonVersionDisplay } from '@/lib/daemon-version';
 import { formatRelative } from '@/lib/format-time';
 import type { AgentWorkspaceFile, AgentWorkspaceRun } from '@/lib/schema';
+import { updateAgentPublishState } from '@/lib/agent-publish-state';
 
 const STATUS_COLORS: Record<string, string> = {
   online: 'text-emerald-500',
@@ -345,6 +346,15 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
     });
   };
 
+  const updateSelectedAgentPublishState = (agentId: string, networkId: string, published: boolean) => {
+    setDeviceAgents((agents) => updateAgentPublishState(agents, agentId, networkId, published));
+    setCustomAgents((agents) => updateAgentPublishState(agents, agentId, networkId, published));
+    setSelectNetworkAgent((agent: any | null) => {
+      if (!agent || agent.id !== agentId) return agent;
+      return updateAgentPublishState([agent], agentId, networkId, published)[0] ?? agent;
+    });
+  };
+
   useEffect(() => {
     if (!device) return;
     setWorkspaceAgents([]);
@@ -599,6 +609,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
         <SelectNetworkDialog
           agent={selectNetworkAgent}
           onClose={() => setSelectNetworkAgent(null)}
+          onPublishedChange={updateSelectedAgentPublishState}
         />
       )}
       {configAgent && (
@@ -948,7 +959,7 @@ function AgentRow({ agent, icon, iconBg, onSelectNetwork, onSelectAgent, canMana
   );
 }
 
-function SelectNetworkDialog({ agent, onClose }: { agent: any; onClose: () => void }) {
+function SelectNetworkDialog({ agent, onClose, onPublishedChange }: { agent: any; onClose: () => void; onPublishedChange: (agentId: string, networkId: string, published: boolean) => void }) {
   const networks = useAgentBeanStore((s) => s.networks);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const [publishedIds, setPublishedIds] = useState<Set<string>>(new Set(agent.publishedNetworkIds ?? []));
@@ -966,11 +977,13 @@ function SelectNetworkDialog({ agent, onClose }: { agent: any; onClose: () => vo
       const res = await agentEvents().unpublish(agent.id, networkId);
       if (res.ok) {
         setPublishedIds((prev) => { const next = new Set(prev); next.delete(networkId); return next; });
+        onPublishedChange(agent.id, networkId, false);
       }
     } else {
       const res = await agentEvents().publish(agent.id, networkId);
       if (res.ok) {
         setPublishedIds((prev) => new Set(prev).add(networkId));
+        onPublishedChange(agent.id, networkId, true);
       }
     }
     setLoadingId(null);
