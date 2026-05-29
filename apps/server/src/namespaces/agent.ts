@@ -82,6 +82,16 @@ export interface DispatchResolution { ok: boolean; body?: string; error?: string
 export type DispatchFn = (req: DispatchRequest) => Promise<DispatchResolution>;
 export type StopAgentsFn = (agentIds: string[], reason?: string) => { stopped: number };
 
+function scanSlug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
+}
+
+function scannedAgentId(networkId: string, deviceId: string, name: string): string {
+  const nameSlug = scanSlug(name);
+  if (networkId === 'default') return `scan-${deviceId}-${nameSlug}`;
+  return `scan-${scanSlug(networkId)}-${deviceId}-${nameSlug}`;
+}
+
 export interface AgentSnapshotDto {
   id: string;
   name: string;
@@ -380,6 +390,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       const deviceAgents = (a.agents ?? []).filter(isAgentOSHosted);
       for (const agentMeta of deviceAgents) {
         const persistedAgent = deps.globalDb?.agents?.getFull(agentMeta.id);
+        if (persistedAgent && persistedAgent.networkId !== a.networkId) continue;
         const displayName = normalizeAgentName(persistedAgent?.name ?? agentMeta.name);
         const publishes = deps.globalDb?.agentPublishes?.listByAgent(agentMeta.id) ?? [];
         const publishedNetworkIds = effectivePublishedNetworkIds({
@@ -528,9 +539,9 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
 
           // Check if already registered via daemon's 'register' event
           const existingRt = deps.registry.findByDeviceAndName(a.deviceId, sanitizedName);
-          if (existingRt) {
+          if (existingRt?.networkId === a.networkId) {
             // Clean up old scan-prefix entry if it exists
-            const staleScanId = `scan-${a.deviceId}-${sanitizedName.toLowerCase().replace(/[^a-z0-9-]+/g, '-')}`;
+            const staleScanId = scannedAgentId(a.networkId, a.deviceId, sanitizedName);
             try { deps.db.raw.prepare('DELETE FROM agents WHERE id = ?').run(staleScanId); } catch {}
             try { deps.db.raw.prepare('DELETE FROM channel_members WHERE agent_id = ?').run(staleScanId); } catch {}
 
@@ -598,7 +609,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           }
 
           // Generate stable ID from deviceId + agent name for dedup
-          const agentId = `scan-${a.deviceId}-${sanitizedName.toLowerCase().replace(/[^a-z0-9-]+/g, '-')}`;
+          const agentId = scannedAgentId(a.networkId, a.deviceId, sanitizedName);
           const existing = deps.globalDb?.agents?.getFull(agentId);
           const displayName = normalizeAgentName(existing?.name ?? sanitizedName);
 
@@ -683,10 +694,10 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         const scannedAgentIds = new Set(registered.map((ag) => ag.id));
         for (const ag of agentPayload) {
           const name = normalizeAgentName(ag.name);
-          scannedAgentIds.add(`scan-${a.deviceId}-${name.toLowerCase().replace(/[^a-z0-9-]+/g, '-')}`);
+          scannedAgentIds.add(scannedAgentId(a.networkId, a.deviceId, name));
         }
         for (const rt of deps.registry.all()) {
-          if (rt.deviceId === a.deviceId && rt.status !== 'offline' && (rt.source === 'scanned' || rt.id.startsWith(`scan-${a.deviceId}-`))) {
+          if (rt.deviceId === a.deviceId && rt.networkId === a.networkId && rt.status !== 'offline' && (rt.source === 'scanned' || rt.id.startsWith(scannedAgentId(a.networkId, a.deviceId, '')))) {
             if (!scannedAgentIds.has(rt.id)) {
               const offRt = deps.registry.markOffline(rt.id, 'scan-missing');
               if (offRt) deps.io.of('/web').emit('agent:status', runtimeStatusDto(offRt));

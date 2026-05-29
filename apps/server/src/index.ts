@@ -967,8 +967,13 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
     socket.on('device:agents:list', (payload: { deviceId: string }, ack?: (r: any) => void) => {
       try {
-        // Get agents from global DB (persisted scanned agents)
-        const globalAgents = globalDb.agents.listByDevice(payload.deviceId);
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const userId = socket.data.userId as string | undefined;
+        const requestedDevice = globalDb.devices.get(payload.deviceId);
+        if (!requestedDevice || requestedDevice.networkId !== networkId) return ack?.({ ok: false, error: 'DEVICE_NOT_IN_TEAM' });
+        if (!canViewDevice(requestedDevice, userId, networkId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        const globalAgents = globalDb.agents.listVisibleInNetwork(networkId)
+          .filter((agent) => agent.deviceId === payload.deviceId);
         // Merge with live AgentRegistry data
         const result = globalAgents
           .filter((ga) => !(ga.source === 'scanned' && ga.category === 'executor-hosted'))
@@ -1017,7 +1022,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           ? new Set(globalDb.agents.listVisibleInNetwork(networkId).filter(isTeamAgent).map((agent) => agent.id))
           : null;
         const sourceAgents = payload.deviceId
-          ? globalDb.agents.listAll().filter((agent) =>
+          ? globalDb.agents.listVisibleInNetwork(networkId).filter((agent) =>
               agent.source === 'custom' &&
               agent.deviceId === payload.deviceId &&
               (!visibleAgentIds || visibleAgentIds.has(agent.id))

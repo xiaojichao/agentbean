@@ -1714,6 +1714,139 @@ describe('/web namespace', () => {
     adminSocket.close();
   });
 
+  it('keeps agents from an existing device isolated when the same device joins a new team', async () => {
+    const now = Date.now();
+    app.globalDb.devices.upsert({
+      id: 'my-mbp-isolated',
+      userId: 'admin',
+      networkId: 'default',
+      hostname: 'MyMBP',
+      lastSeenAt: now,
+      systemInfo: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'scan-my-mbp-isolated-hermes-agent',
+      name: 'Hermes-Agent',
+      role: 'gateway-agent',
+      adapterKind: 'hermes',
+      deviceId: 'my-mbp-isolated',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      ownerId: 'admin',
+      command: 'hermes',
+      cwd: '/Users/shaw/opensns-hermes',
+      description: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'custom-my-mbp-isolated-opensns',
+      name: 'OpenSNS-Custom',
+      role: 'executor-agent',
+      adapterKind: 'codex',
+      deviceId: 'my-mbp-isolated',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      ownerId: 'admin',
+      command: 'codex',
+      cwd: '/Users/shaw/opensns-custom',
+      description: null,
+    });
+    app.globalDb.agentPublishes.publish('scan-my-mbp-isolated-hermes-agent', 'default', 'admin');
+    app.globalDb.agentPublishes.publish('custom-my-mbp-isolated-opensns', 'default', 'admin');
+
+    const created = app.globalDb.networks.create({
+      id: 'agentbean-dev',
+      ownerId: 'admin',
+      name: 'AgentBean-Dev',
+      path: 'agentbean-dev',
+      visibility: 'private',
+      createdAt: now,
+    });
+    app.globalDb.networkMembers.add(created.id, 'admin', 'owner');
+
+    const daemon = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: generateToken('admin', created.id),
+        deviceId: 'my-mbp-isolated',
+        networkId: created.id,
+        agents: [],
+        systemInfo: { hostname: 'MyMBP' },
+      },
+      reconnection: false,
+      transports: ['websocket'],
+    });
+    await new Promise<void>((r) => daemon.on('connect', () => r()));
+    daemon.emit('register');
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', created.id) },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const devices = await new Promise<any>((resolve) => {
+      web.emit('devices:list', {}, resolve);
+    });
+    expect(devices.ok).toBe(true);
+    expect(devices.devices.find((device: any) => device.id === 'my-mbp-isolated')).toMatchObject({
+      networkId: created.id,
+      hostname: 'MyMBP',
+    });
+
+    const deviceAgents = await new Promise<any>((resolve) => {
+      web.emit('device:agents:list', { deviceId: 'my-mbp-isolated' }, resolve);
+    });
+    expect(deviceAgents.ok).toBe(true);
+    expect(deviceAgents.agents).toEqual([]);
+
+    const customAgents = await new Promise<any>((resolve) => {
+      web.emit('agent:custom:list', { deviceId: 'my-mbp-isolated' }, resolve);
+    });
+    expect(customAgents.ok).toBe(true);
+    expect(customAgents.agents).toEqual([]);
+
+    const members = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+    expect(members.ok).toBe(true);
+    expect(members.agents).toEqual([]);
+
+    const scanned = await new Promise<any>((resolve) => {
+      daemon.emit('device:register-agents', {
+        agents: [{
+          name: 'Hermes-Agent',
+          category: 'agentos-hosted',
+          adapterKind: 'hermes',
+          command: 'hermes',
+          args: [],
+          cwd: '/Users/shaw/agentbean-dev-hermes',
+          source: 'scanned',
+        }],
+      }, resolve);
+    });
+    expect(scanned.ok).toBe(true);
+    expect(scanned.agents.map((agent: any) => agent.id)).toEqual(['scan-agentbean-dev-my-mbp-isolated-hermes-agent']);
+    expect(app.globalDb.agents.getFull('scan-my-mbp-isolated-hermes-agent')).toMatchObject({
+      networkId: 'default',
+      cwd: '/Users/shaw/opensns-hermes',
+    });
+    expect(app.globalDb.agents.getFull('scan-agentbean-dev-my-mbp-isolated-hermes-agent')).toMatchObject({
+      networkId: created.id,
+      cwd: '/Users/shaw/agentbean-dev-hermes',
+    });
+
+    daemon.close();
+    web.close();
+  });
+
   it('registers a new user into the team from a join link and returns that team', async () => {
     const adminSocket = ioClient(`${baseUrl}/web`, {
       reconnection: false,
