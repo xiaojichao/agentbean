@@ -1287,6 +1287,175 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('deduplicates stale scanned AgentOS rows in device detail agent lists', async () => {
+    const now = Date.now();
+    app.globalDb.devices.upsert({
+      id: 'duplicate-agentos-device',
+      userId: 'admin',
+      networkId: 'default',
+      hostname: '肖的Mac-mini',
+      lastSeenAt: now,
+      systemInfo: { hostname: 'xiaodeMac-mini.local' },
+    });
+    app.globalDb.agents.upsert({
+      id: 'scan-duplicate-agentos-device-openclaw-agent-old',
+      name: 'OpenClaw-Agent-xiao-mini',
+      role: 'gateway',
+      adapterKind: 'openclaw',
+      deviceId: 'duplicate-agentos-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now - 200,
+      lastSeenAt: now - 200,
+      ownerId: 'admin',
+      command: 'openclaw',
+      args: JSON.stringify([]),
+      cwd: '/Users/shaw/old-openclaw',
+      description: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'scan-duplicate-agentos-device-openclaw-agent-current',
+      name: 'OpenClaw-Agent-xiao-mini',
+      role: 'gateway',
+      adapterKind: 'openclaw',
+      deviceId: 'duplicate-agentos-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now - 100,
+      lastSeenAt: now,
+      ownerId: 'admin',
+      command: 'openclaw',
+      args: JSON.stringify([]),
+      cwd: '/Users/shaw/current-openclaw',
+      description: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'custom-duplicate-agentos-device-openclaw-agent',
+      name: 'OpenClaw-Agent-xiao-mini',
+      role: 'executor-agent',
+      adapterKind: 'openclaw',
+      deviceId: 'duplicate-agentos-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      ownerId: 'admin',
+      command: 'openclaw',
+      args: JSON.stringify([]),
+      cwd: '/Users/shaw/custom-openclaw',
+      description: null,
+    });
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const deviceAgents = await new Promise<any>((resolve) => {
+      web.emit('device:agents:list', { deviceId: 'duplicate-agentos-device' }, resolve);
+    });
+
+    expect(deviceAgents.ok).toBe(true);
+    const agentosRows = deviceAgents.agents.filter((agent: any) =>
+      agent.category === 'agentos-hosted' &&
+      agent.deviceId === 'duplicate-agentos-device' &&
+      agent.name === 'OpenClaw-Agent-xiao-mini'
+    );
+    expect(agentosRows).toHaveLength(1);
+    expect(agentosRows[0]).toMatchObject({
+      id: 'scan-duplicate-agentos-device-openclaw-agent-current',
+      cwd: '/Users/shaw/current-openclaw',
+    });
+    expect(deviceAgents.agents.find((agent: any) => agent.id === 'custom-duplicate-agentos-device-openclaw-agent')).toMatchObject({
+      source: 'custom',
+    });
+
+    web.close();
+  });
+
+  it('removes global stale scan rows when a scanned AgentOS agent reconciles with a live runtime', async () => {
+    const now = Date.now();
+    app.globalDb.devices.upsert({
+      id: 'stale-scan-cleanup-device',
+      userId: 'admin',
+      networkId: 'default',
+      hostname: 'Cleanup Device',
+      lastSeenAt: now,
+      systemInfo: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'scan-stale-scan-cleanup-device-hermes-agent',
+      name: 'Hermes-Agent',
+      role: 'gateway',
+      adapterKind: 'hermes',
+      deviceId: 'stale-scan-cleanup-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now - 100,
+      lastSeenAt: now - 100,
+      ownerId: 'admin',
+      command: 'hermes',
+      args: JSON.stringify([]),
+      cwd: '/Users/shaw/stale-hermes',
+      description: null,
+    });
+    app.globalDb.agentPublishes.publish('scan-stale-scan-cleanup-device-hermes-agent', 'default', 'admin');
+
+    const daemon = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: generateToken('admin', 'default'),
+        deviceId: 'stale-scan-cleanup-device',
+        networkId: 'default',
+        agents: [{
+          id: 'live-hermes-agent',
+          name: 'Hermes-Agent',
+          role: 'gateway',
+          adapterKind: 'hermes',
+          category: 'agentos-hosted',
+          visibility: 'public',
+        }],
+      },
+      reconnection: false,
+      transports: ['websocket'],
+    });
+    await new Promise<void>((r) => daemon.on('connect', () => r()));
+    daemon.emit('register');
+
+    const scanned = await new Promise<any>((resolve) => {
+      daemon.emit('device:register-agents', {
+        agents: [{
+          name: 'Hermes-Agent',
+          category: 'agentos-hosted',
+          adapterKind: 'hermes',
+          command: 'hermes',
+          args: [],
+          cwd: '/Users/shaw/live-hermes',
+          source: 'scanned',
+        }],
+      }, resolve);
+    });
+
+    expect(scanned.ok).toBe(true);
+    expect(scanned.agents.map((agent: any) => agent.id)).toEqual(['live-hermes-agent']);
+    expect(app.globalDb.agents.getFull('scan-stale-scan-cleanup-device-hermes-agent')).toBeNull();
+    expect(app.globalDb.agentPublishes.isPublished('scan-stale-scan-cleanup-device-hermes-agent', 'default')).toBe(false);
+    expect(app.globalDb.agents.getFull('live-hermes-agent')).toMatchObject({
+      cwd: '/Users/shaw/live-hermes',
+    });
+
+    daemon.close();
+  });
+
   it('keeps custom agents online during daemon reconnect before runtimes are re-sent', async () => {
     const now = Date.now();
     const owner = app.globalDb.users.listAll()[0]!;

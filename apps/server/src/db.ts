@@ -461,6 +461,7 @@ export interface GlobalDb {
     getFull(id: string): { id: string; name: string; role: string | null; adapterKind: string; category: string; source: string; command: string | null; args: string | null; cwd: string | null; env: string | null; deviceId: string | null; networkId: string; visibility: string; ownerId: string | null; description: string | null; firstSeenAt: number; lastSeenAt: number; lastError: string | null } | null;
     updateConfig(id: string, input: { name: string; adapterKind?: string | null; command?: string | null; cwd?: string | null; description?: string | null; updatedAt: number }): void;
     get(id: string): { id: string } | null;
+    delete(id: string): void;
   };
   devices: {
     upsert(row: { id: string; userId: string; networkId: string; hostname?: string; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): void;
@@ -790,6 +791,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
     WHERE id = @id AND (source = 'custom' OR category = 'agentos-hosted')
   `);
   const globalAgentGet = raw.prepare(`SELECT id FROM agents WHERE id = ?`);
+  const globalAgentDelete = raw.prepare(`DELETE FROM agents WHERE id = ?`);
 
   return {
     raw,
@@ -930,6 +932,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
       getFull: (id) => (globalAgentGetFull.get(id) as any) ?? null,
       updateConfig: (id, input) => { globalAgentUpdateConfig.run({ id, ...input }); },
       get: (id) => (globalAgentGet.get(id) as any) ?? null,
+      delete: (id) => { globalAgentDelete.run(id); },
     },
     devices: {
       upsert: (row) => {

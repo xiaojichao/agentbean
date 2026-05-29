@@ -29,6 +29,7 @@ export interface AgentNamespaceDeps {
       get(id: string): any;
       getFull(id: string): any;
       listAll(): any[];
+      delete?(id: string): void;
     };
     devices?: {
       upsert(row: { id: string; userId: string; networkId: string; hostname?: string; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): void;
@@ -544,6 +545,9 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             const staleScanId = scannedAgentId(a.networkId, a.deviceId, sanitizedName);
             try { deps.db.raw.prepare('DELETE FROM agents WHERE id = ?').run(staleScanId); } catch {}
             try { deps.db.raw.prepare('DELETE FROM channel_members WHERE agent_id = ?').run(staleScanId); } catch {}
+            if (staleScanId !== existingRt.id) {
+              deps.globalDb?.agents?.delete?.(staleScanId);
+            }
 
             // Still update DB with latest scan info, but don't create a duplicate registry entry
             deps.globalDb?.agents?.upsert({
