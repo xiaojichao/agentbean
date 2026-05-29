@@ -32,8 +32,8 @@ export interface AgentNamespaceDeps {
       delete?(id: string): void;
     };
     devices?: {
-      upsert(row: { id: string; userId: string; networkId: string; hostname?: string; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): void;
-      get(id: string): { id: string; userId?: string | null; hostname?: string | null; connectCommand?: string | null; runtimes?: { name: string; adapterKind: string; command: string; installed: boolean }[] } | null;
+      upsert(row: { id: string; userId: string; networkId: string; machineId?: string | null; profileId?: string | null; hostname?: string; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): void;
+      get(id: string): { id: string; userId?: string | null; machineId?: string | null; profileId?: string | null; hostname?: string | null; connectCommand?: string | null; runtimes?: { name: string; adapterKind: string; command: string; installed: boolean }[] } | null;
       setConnectCommand(id: string, command: string): void;
       setRuntimes(id: string, runtimes: { name: string; adapterKind: string; command: string; installed: boolean }[]): void;
       touch(id: string, lastSeenAt: number): void;
@@ -336,6 +336,8 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
     const auth = socket.handshake.auth as {
       token: string;
       deviceId: string;
+      machineId?: string;
+      profileId?: string;
       networkId: string;
       agents: PublicAgentMeta[];
       systemInfo?: Record<string, unknown>;
@@ -358,6 +360,8 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         ownerName,
         userName: ownerName,
         networkId: dev.networkId,
+        machineId: dev.machineId ?? null,
+        profileId: dev.profileId ?? null,
         agentIds: Array.from(dev.agents.keys()),
         runtimes: dev.runtimes ?? persisted?.runtimes ?? [],
         lastSeenAt: dev.lastSeenAt,
@@ -433,6 +437,8 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         id: a.deviceId,
         userId,
         networkId: a.networkId,
+        machineId: typeof a.machineId === 'string' ? a.machineId : null,
+        profileId: typeof a.profileId === 'string' ? a.profileId : null,
         hostname: existingDevice?.hostname ?? sysHostname,
         lastSeenAt: now,
         systemInfo: a.systemInfo ?? null,
@@ -444,13 +450,13 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         let cmd: string;
         if (publicUrl) {
           // Production: always use npm package with public URL
-          cmd = `npx @agentbean/daemon@latest --server-url ${publicUrl} --token ${a.token}`;
+          cmd = `npx @agentbean/daemon@latest --server-url ${publicUrl} --token ${a.token}${a.profileId ? ` --profile ${a.profileId}` : ''}`;
         } else if (existsSync(localEntrypoint)) {
           // Local dev: use tsx with local source
-          cmd = `npx tsx ${localEntrypoint} --server-url http://localhost:4000 --token ${a.token}`;
+          cmd = `npx tsx ${localEntrypoint} --server-url http://localhost:4000 --token ${a.token}${a.profileId ? ` --profile ${a.profileId}` : ''}`;
         } else {
           // Fallback: npm package with localhost
-          cmd = `npx @agentbean/daemon@latest --server-url http://localhost:4000 --token ${a.token}`;
+          cmd = `npx @agentbean/daemon@latest --server-url http://localhost:4000 --token ${a.token}${a.profileId ? ` --profile ${a.profileId}` : ''}`;
         }
         deps.globalDb?.devices?.setConnectCommand(a.deviceId, cmd);
       }
@@ -458,6 +464,8 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       // Register device in DeviceRegistry
       deps.deviceRegistry.register({
         id: a.deviceId,
+        machineId: typeof a.machineId === 'string' ? a.machineId : null,
+        profileId: typeof a.profileId === 'string' ? a.profileId : null,
         userId: userId ?? 'system',
         networkId: a.networkId,
         socket,

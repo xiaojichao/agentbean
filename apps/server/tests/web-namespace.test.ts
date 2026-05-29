@@ -2203,6 +2203,27 @@ describe('/web namespace', () => {
     adminSocket.close();
   });
 
+  it('generates device invite commands with a team profile argument', async () => {
+    const adminSocket = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => adminSocket.on('connect', () => r()));
+    const created = await new Promise<any>((resolve) => {
+      adminSocket.emit('network:create', { name: 'AgentBean Dev', path: 'agentbean-dev' }, resolve);
+    });
+    expect(created.ok).toBe(true);
+
+    const invite = await new Promise<any>((resolve) => {
+      adminSocket.emit('invite:create', { networkId: created.network.id, purpose: 'device' }, resolve);
+    });
+    expect(invite.ok).toBe(true);
+    expect(invite.invite.command).toContain('--invite');
+    expect(invite.invite.command).toContain('--profile agentbean-dev');
+    adminSocket.close();
+  });
+
   it('keeps agents from an existing device isolated when the same device joins a new team', async () => {
     const now = Date.now();
     app.globalDb.devices.upsert({

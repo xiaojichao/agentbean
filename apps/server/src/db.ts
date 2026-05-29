@@ -294,6 +294,8 @@ CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   network_id TEXT NOT NULL,
+  machine_id TEXT,
+  profile_id TEXT,
   hostname TEXT,
   last_seen_at INTEGER NOT NULL,
   connect_command TEXT,
@@ -327,6 +329,10 @@ CREATE TABLE IF NOT EXISTS agents (
 
 CREATE INDEX IF NOT EXISTS idx_agents_network ON agents(network_id, visibility);
 CREATE INDEX IF NOT EXISTS idx_devices_network ON devices(network_id);
+CREATE INDEX IF NOT EXISTS idx_devices_machine ON devices(machine_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_network_machine
+  ON devices(network_id, machine_id)
+  WHERE machine_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS invites (
   id TEXT PRIMARY KEY,
@@ -377,6 +383,8 @@ export interface DeviceRow {
   id: string;
   userId: string;
   networkId: string;
+  machineId: string | null;
+  profileId: string | null;
   hostname: string | null;
   lastSeenAt: number;
   connectCommand: string | null;
@@ -464,7 +472,7 @@ export interface GlobalDb {
     delete(id: string): void;
   };
   devices: {
-    upsert(row: { id: string; userId: string; networkId: string; hostname?: string; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): void;
+    upsert(row: { id: string; userId: string; networkId: string; machineId?: string | null; profileId?: string | null; hostname?: string; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): void;
     get(id: string): DeviceRow | null;
     listAll(): DeviceRow[];
     listByNetwork(networkId: string): DeviceRow[];
@@ -525,6 +533,8 @@ function rowToDevice(r: any): DeviceRow {
     id: r.id,
     userId: r.user_id,
     networkId: r.network_id,
+    machineId: r.machine_id ?? null,
+    profileId: r.profile_id ?? null,
     hostname: r.hostname ?? null,
     lastSeenAt: r.last_seen_at,
     connectCommand: r.connect_command ?? null,
@@ -688,15 +698,21 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   try { raw.exec(`ALTER TABLE devices ADD COLUMN connect_command TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE devices ADD COLUMN system_info TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE devices ADD COLUMN runtimes TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE devices ADD COLUMN machine_id TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE devices ADD COLUMN profile_id TEXT`); } catch {}
+  try { raw.exec(`CREATE INDEX IF NOT EXISTS idx_devices_machine ON devices(machine_id)`); } catch {}
+  try { raw.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_network_machine ON devices(network_id, machine_id) WHERE machine_id IS NOT NULL`); } catch {}
 
   const userSetCurrentNetwork = raw.prepare(`UPDATE users SET current_network_id = ?, updated_at = ? WHERE id = ?`);
 
   const deviceUpsert = raw.prepare(`
-    INSERT INTO devices (id, user_id, network_id, hostname, last_seen_at, system_info)
-    VALUES (@id, @userId, @networkId, @hostname, @lastSeenAt, @systemInfo)
+    INSERT INTO devices (id, user_id, network_id, machine_id, profile_id, hostname, last_seen_at, system_info)
+    VALUES (@id, @userId, @networkId, @machineId, @profileId, @hostname, @lastSeenAt, @systemInfo)
     ON CONFLICT(id) DO UPDATE SET
       user_id = devices.user_id,
       network_id = excluded.network_id,
+      machine_id = COALESCE(excluded.machine_id, devices.machine_id),
+      profile_id = COALESCE(excluded.profile_id, devices.profile_id),
       hostname = excluded.hostname,
       last_seen_at = excluded.last_seen_at,
       system_info = COALESCE(excluded.system_info, system_info)
@@ -940,6 +956,8 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
           id: row.id,
           userId: row.userId,
           networkId: row.networkId,
+          machineId: row.machineId ?? null,
+          profileId: row.profileId ?? null,
           hostname: row.hostname ?? null,
           lastSeenAt: row.lastSeenAt,
           systemInfo: row.systemInfo ? JSON.stringify(row.systemInfo) : null,

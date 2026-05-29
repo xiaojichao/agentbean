@@ -35,20 +35,28 @@ export interface AppHandle {
   close: () => Promise<void>;
 }
 
-function buildInviteCommand(code: string, serverUrl: string): string {
+function profileIdForNetwork(networkId?: string | null): string {
+  const source = networkId?.trim() || 'default';
+  const slug = source.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug || 'default';
+}
+
+function buildInviteCommand(code: string, serverUrl: string, networkId?: string | null): string {
+  const profileArg = networkId ? ` --profile ${profileIdForNetwork(networkId)}` : '';
   const template = process.env.AGENT_BEAN_INVITE_COMMAND_TEMPLATE;
   if (template) {
     return template
       .replaceAll('{code}', code)
-      .replaceAll('{serverUrl}', serverUrl);
+      .replaceAll('{serverUrl}', serverUrl)
+      .replaceAll('{profile}', profileIdForNetwork(networkId));
   }
 
   const localAgentEntrypoint = resolve(process.cwd(), '../daemon/src/bin.ts');
   if (existsSync(localAgentEntrypoint)) {
-    return `npx --yes tsx ${localAgentEntrypoint} --invite ${code} --server-url ${serverUrl}`;
+    return `npx --yes tsx ${localAgentEntrypoint} --invite ${code} --server-url ${serverUrl}${profileArg}`;
   }
 
-  return `npx @agentbean/daemon@latest --invite ${code} --server-url ${serverUrl}`;
+  return `npx @agentbean/daemon@latest --invite ${code} --server-url ${serverUrl}${profileArg}`;
 }
 
 function normalizeEnv(input: unknown): Record<string, string> | null {
@@ -635,6 +643,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       ownerName,
       userName: ownerName,
       networkId: dbd.networkId,
+      machineId: dbd.machineId,
+      profileId: dbd.profileId,
       hostname: dbd.hostname,
       agentIds: live ? Array.from(live.agents.keys()) : [],
       runtimes: live?.runtimes ?? dbd.runtimes,
@@ -1259,6 +1269,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             ownerName,
             userName: ownerName,
             networkId: dbDevice.networkId,
+            machineId: live?.machineId ?? dbDevice.machineId,
+            profileId: live?.profileId ?? dbDevice.profileId,
             hostname: dbDevice.hostname,
             agentIds: live ? Array.from(live.agents.keys()) : [],
             runtimes: live?.runtimes ?? [],
@@ -2463,9 +2475,11 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const userId = socket.data.userId as string | undefined ?? (socket.data.legacyAuth ? 'system' : undefined);
         if (!userId) return ack?.({ ok: false, error: 'NOT_AUTHENTICATED' });
         const networkId = payload.networkId ?? socketNetworkMap.get(socket.id) ?? null;
+        let profileSource = networkId;
         if (networkId) {
           const network = globalDb.networks.get(networkId);
           if (!network) return ack?.({ ok: false, error: 'NETWORK_NOT_FOUND' });
+          profileSource = network.path ?? network.name ?? network.id;
           if (network.visibility !== 'public' && !globalDb.networkMembers.isMember(networkId, userId)) {
             return ack?.({ ok: false, error: 'FORBIDDEN' });
           }
@@ -2487,7 +2501,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           invite: {
             code,
             expiresAt: invite.expiresAt,
-            command: buildInviteCommand(code, serverUrl),
+            command: buildInviteCommand(code, serverUrl, profileSource),
             purpose,
           },
         });
