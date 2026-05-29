@@ -24,6 +24,7 @@ export interface AgentSnapshot {
   deviceId?: string;
   deviceName?: string | null;
   publishedNetworkIds?: string[];
+  unpublishedNetworkIds?: string[];
   source?: 'self-register' | 'scanned' | 'custom';
 }
 

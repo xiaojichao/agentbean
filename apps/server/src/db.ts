@@ -351,6 +351,15 @@ CREATE TABLE IF NOT EXISTS agent_network_publish (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_publish_network ON agent_network_publish(network_id);
 CREATE INDEX IF NOT EXISTS idx_agent_publish_agent ON agent_network_publish(agent_id);
+CREATE TABLE IF NOT EXISTS agent_network_unpublish (
+  agent_id       TEXT NOT NULL,
+  network_id     TEXT NOT NULL,
+  unpublished_at INTEGER NOT NULL,
+  PRIMARY KEY (agent_id, network_id),
+  FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+  FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_agent_unpublish_agent ON agent_network_unpublish(agent_id);
 `;
 
 export interface NetworkRow {
@@ -439,7 +448,9 @@ export interface GlobalDb {
     unpublish(agentId: string, networkId: string): void;
     listByAgent(agentId: string): { networkId: string; publishedBy: string; publishedAt: number }[];
     listByNetwork(networkId: string): { agentId: string; publishedBy: string; publishedAt: number }[];
+    listUnpublishedByAgent(agentId: string): { networkId: string; unpublishedAt: number }[];
     isPublished(agentId: string, networkId: string): boolean;
+    isUnpublished(agentId: string, networkId: string): boolean;
   };
   agents: {
     upsert(row: { id: string; name: string; role?: string; adapterKind: string; deviceId: string; networkId: string; visibility?: string; category?: string; source?: string; firstSeenAt: number; lastSeenAt: number; lastError?: string | null; command?: string; args?: string; cwd?: string; env?: string; ownerId?: string; description?: string | null }): void;
@@ -629,9 +640,20 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   const agentPublishDelete = raw.prepare(`
     DELETE FROM agent_network_publish WHERE agent_id = ? AND network_id = ?
   `);
+  const agentUnpublishInsert = raw.prepare(`
+    INSERT OR REPLACE INTO agent_network_unpublish (agent_id, network_id, unpublished_at)
+    VALUES (?, ?, ?)
+  `);
+  const agentUnpublishDelete = raw.prepare(`
+    DELETE FROM agent_network_unpublish WHERE agent_id = ? AND network_id = ?
+  `);
   const agentPublishByAgent = raw.prepare(`
     SELECT network_id AS networkId, published_by AS publishedBy, published_at AS publishedAt
     FROM agent_network_publish WHERE agent_id = ?
+  `);
+  const agentUnpublishByAgent = raw.prepare(`
+    SELECT network_id AS networkId, unpublished_at AS unpublishedAt
+    FROM agent_network_unpublish WHERE agent_id = ?
   `);
   const agentPublishByNetwork = raw.prepare(`
     SELECT agent_id AS agentId, published_by AS publishedBy, published_at AS publishedAt
@@ -640,6 +662,17 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
   const agentPublishGet = raw.prepare(`
     SELECT 1 FROM agent_network_publish WHERE agent_id = ? AND network_id = ?
   `);
+  const agentUnpublishGet = raw.prepare(`
+    SELECT 1 FROM agent_network_unpublish WHERE agent_id = ? AND network_id = ?
+  `);
+  const publishAgentToNetwork = raw.transaction((agentId: string, networkId: string, publishedBy: string) => {
+    agentUnpublishDelete.run(agentId, networkId);
+    agentPublishInsert.run(agentId, networkId, publishedBy, Date.now());
+  });
+  const unpublishAgentFromNetwork = raw.transaction((agentId: string, networkId: string) => {
+    agentPublishDelete.run(agentId, networkId);
+    agentUnpublishInsert.run(agentId, networkId, Date.now());
+  });
 
   // Migration: add columns to global agents table if missing
   try { raw.exec(`ALTER TABLE agents ADD COLUMN category TEXT NOT NULL DEFAULT 'executor-hosted'`); } catch {}
@@ -737,8 +770,9 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
            a.first_seen_at AS firstSeenAt, a.last_seen_at AS lastSeenAt, a.last_error AS lastError
     FROM agents a
     LEFT JOIN agent_network_publish p ON p.agent_id = a.id
+    LEFT JOIN agent_network_unpublish u ON u.agent_id = a.id AND u.network_id = ?
     WHERE (a.category = 'agentos-hosted' OR a.source = 'custom')
-      AND (a.network_id = ? OR p.network_id = ?)
+      AND (p.network_id = ? OR (a.network_id = ? AND u.agent_id IS NULL))
     ORDER BY a.first_seen_at DESC
   `);
   const globalAgentGetFull = raw.prepare(`
@@ -858,11 +892,13 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
       revoke: (code) => { inviteRevoke.run(Date.now(), code); },
     },
     agentPublishes: {
-      publish: (agentId, networkId, publishedBy) => { agentPublishInsert.run(agentId, networkId, publishedBy, Date.now()); },
-      unpublish: (agentId, networkId) => { agentPublishDelete.run(agentId, networkId); },
+      publish: (agentId, networkId, publishedBy) => { publishAgentToNetwork(agentId, networkId, publishedBy); },
+      unpublish: (agentId, networkId) => { unpublishAgentFromNetwork(agentId, networkId); },
       listByAgent: (agentId) => agentPublishByAgent.all(agentId) as { networkId: string; publishedBy: string; publishedAt: number }[],
       listByNetwork: (networkId) => agentPublishByNetwork.all(networkId) as { agentId: string; publishedBy: string; publishedAt: number }[],
+      listUnpublishedByAgent: (agentId) => agentUnpublishByAgent.all(agentId) as { networkId: string; unpublishedAt: number }[],
       isPublished: (agentId, networkId) => Boolean(agentPublishGet.get(agentId, networkId)),
+      isUnpublished: (agentId, networkId) => Boolean(agentUnpublishGet.get(agentId, networkId)),
     },
     agents: {
       upsert: (row) => {
@@ -890,7 +926,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
       listAll: () => globalAgentListAll.all() as any[],
       listByDevice: (deviceId) => globalAgentListByDevice.all(deviceId) as any[],
       listCustomByOwner: (ownerId) => globalAgentListCustomByOwner.all(ownerId) as any[],
-      listVisibleInNetwork: (networkId) => globalAgentListVisibleInNetwork.all(networkId, networkId) as any[],
+      listVisibleInNetwork: (networkId) => globalAgentListVisibleInNetwork.all(networkId, networkId, networkId) as any[],
       getFull: (id) => (globalAgentGetFull.get(id) as any) ?? null,
       updateConfig: (id, input) => { globalAgentUpdateConfig.run({ id, ...input }); },
       get: (id) => (globalAgentGet.get(id) as any) ?? null,

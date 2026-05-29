@@ -301,6 +301,7 @@ export interface DeviceAgent {
   deviceId: string;
   status: string;
   publishedNetworkIds: string[];
+  unpublishedNetworkIds?: string[];
 }
 
 export interface DeviceRuntime {

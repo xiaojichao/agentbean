@@ -319,8 +319,28 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     };
   };
 
+  const unpublishedNetworkIds = (agentId: string) =>
+    globalDb.agentPublishes.listUnpublishedByAgent(agentId).map((p) => p.networkId);
+
+  const effectivePublishedNetworkIds = (agent: { id: string; networkId?: string | null; publishedNetworkIds?: string[] }) => {
+    const unpublished = new Set(unpublishedNetworkIds(agent.id));
+    const published = new Set<string>();
+    if (agent.networkId && !unpublished.has(agent.networkId)) published.add(agent.networkId);
+    for (const publish of globalDb.agentPublishes.listByAgent(agent.id)) {
+      if (!unpublished.has(publish.networkId)) published.add(publish.networkId);
+    }
+    for (const networkId of agent.publishedNetworkIds ?? []) {
+      if (!unpublished.has(networkId)) published.add(networkId);
+    }
+    return [...published];
+  };
+
   const runtimeAgentStatusDto = (rt: AgentRuntime) =>
-    enrichAgentOwnership(snapshotToDto(rt));
+    enrichAgentOwnership({
+      ...snapshotToDto(rt),
+      publishedNetworkIds: effectivePublishedNetworkIds(rt),
+      unpublishedNetworkIds: unpublishedNetworkIds(rt.id),
+    });
 
   const canManageDeviceRow = (
     device: { userId?: string | null } | null | undefined,
@@ -347,9 +367,13 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
   const buildVisibleAgentDtos = (networkId: string) => {
     const registryAgents = registry.all().filter((a) =>
       isTeamAgent(a) &&
-      (a.networkId === networkId || a.publishedNetworkIds.includes(networkId))
+      effectivePublishedNetworkIds(a).includes(networkId)
     ).map((agent) => {
-      const dto = snapshotToDto(agent);
+      const dto = {
+        ...snapshotToDto(agent),
+        publishedNetworkIds: effectivePublishedNetworkIds(agent),
+        unpublishedNetworkIds: unpublishedNetworkIds(agent.id),
+      };
       if (agent.source !== 'custom') return enrichAgentOwnership(dto);
       const resolved = resolveCustomAgentStatus(agent);
       return enrichAgentOwnership({
@@ -388,7 +412,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           status: resolved.status,
           lastSeenAt: resolved.lastSeenAt ?? agent.lastSeenAt,
           lastError: resolved.lastError ?? agent.lastError ?? undefined,
-          publishedNetworkIds: globalDb.agentPublishes.listByAgent(agent.id).map((p) => p.networkId),
+          publishedNetworkIds: effectivePublishedNetworkIds(agent),
+          unpublishedNetworkIds: unpublishedNetworkIds(agent.id),
           connectCommand: renderConnectCommand({ adapterKind: agent.adapterKind as any }),
         });
       });
@@ -486,7 +511,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     status,
     lastSeenAt,
     lastError,
-    publishedNetworkIds: globalDb.agentPublishes.listByAgent(agent.id).map((p) => p.networkId),
+    publishedNetworkIds: effectivePublishedNetworkIds(agent),
+    unpublishedNetworkIds: unpublishedNetworkIds(agent.id),
     connectCommand: renderConnectCommand({ adapterKind: agent.adapterKind as any }),
   });
 
@@ -963,7 +989,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
               ownerId: ga.ownerId,
               description: ga.description,
               status: resolved.status,
-              publishedNetworkIds: registry.snapshot(ga.id)?.publishedNetworkIds ?? globalDb.agentPublishes.listByAgent(ga.id).map((p) => p.networkId),
+              publishedNetworkIds: effectivePublishedNetworkIds(registry.snapshot(ga.id) ?? ga),
+              unpublishedNetworkIds: unpublishedNetworkIds(ga.id),
               lastSeenAt: resolved.lastSeenAt ?? ga.lastSeenAt,
               lastError: resolved.lastError,
             });
@@ -1024,7 +1051,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             status: resolved.status,
             lastSeenAt: resolved.lastSeenAt ?? rt?.lastHeartbeatAt ?? agent.lastSeenAt,
             lastError: resolved.lastError ?? rt?.lastError?.message ?? agent.lastError ?? undefined,
-            publishedNetworkIds: rt?.publishedNetworkIds ?? globalDb.agentPublishes.listByAgent(agent.id).map((p) => p.networkId),
+            publishedNetworkIds: effectivePublishedNetworkIds(rt ?? agent),
+            unpublishedNetworkIds: unpublishedNetworkIds(agent.id),
             connectCommand: renderConnectCommand({ adapterKind: agent.adapterKind as any }),
           });
         });
@@ -1761,7 +1789,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             }
           }
           const publishes = globalDb.agentPublishes.listByAgent(id);
-          rt.publishedNetworkIds = publishes.map((p: any) => p.networkId);
+          rt.publishedNetworkIds = effectivePublishedNetworkIds({ ...rt, publishedNetworkIds: publishes.map((p: any) => p.networkId) });
         }
 
         ack?.({ ok: true, agent: row });
@@ -1922,8 +1950,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           return ack?.({ ok: false, error: 'NOT_NETWORK_MEMBER' });
         }
         globalDb.agentPublishes.publish(payload.agentId, payload.networkId, userId);
-        const publishes = globalDb.agentPublishes.listByAgent(payload.agentId);
-        registry.updatePublishedNetworks(payload.agentId, publishes.map((p: any) => p.networkId));
+        const current = registry.snapshot(payload.agentId) ?? persisted;
+        if (current) registry.updatePublishedNetworks(payload.agentId, effectivePublishedNetworkIds(current));
         const updated = registry.snapshot(payload.agentId);
         if (updated) io.of('/web').emit('agent:status', runtimeAgentStatusDto(updated));
         ack?.({ ok: true });
@@ -1948,8 +1976,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
           return ack?.({ ok: false, error: 'RUNTIME_NOT_AGENT' });
         }
         globalDb.agentPublishes.unpublish(payload.agentId, payload.networkId);
-        const publishes = globalDb.agentPublishes.listByAgent(payload.agentId);
-        registry.updatePublishedNetworks(payload.agentId, publishes.map((p: any) => p.networkId));
+        const current = registry.snapshot(payload.agentId) ?? persisted;
+        if (current) registry.updatePublishedNetworks(payload.agentId, effectivePublishedNetworkIds(current));
         const updated = registry.snapshot(payload.agentId);
         if (updated) io.of('/web').emit('agent:status', runtimeAgentStatusDto(updated));
         ack?.({ ok: true });
@@ -2395,7 +2423,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
               deviceName: device.hostname ?? (typeof device.systemInfo?.hostname === 'string' ? device.systemInfo.hostname : null) ?? '未命名设备',
               deviceUserId: device.userId,
               deviceUserName: usersById.get(device.userId) ?? '未知用户',
-              publishedNetworkIds: globalDb.agentPublishes.listByAgent(agent.id).map((p) => p.networkId),
+              publishedNetworkIds: effectivePublishedNetworkIds(agent),
+              unpublishedNetworkIds: unpublishedNetworkIds(agent.id),
               connectCommand: renderConnectCommand({ adapterKind: agent.adapterKind as any }),
             };
           });
@@ -2514,7 +2543,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
             deviceName: device?.name ?? '未分配设备',
             deviceUserId: device?.userId ?? null,
             deviceUserName: device?.userName ?? null,
-            publishedNetworkIds: globalDb.agentPublishes.listByAgent(agent.id).map((p) => p.networkId),
+            publishedNetworkIds: effectivePublishedNetworkIds(agent),
+            unpublishedNetworkIds: unpublishedNetworkIds(agent.id),
             connectCommand: renderConnectCommand({ adapterKind: agent.adapterKind as any }),
           };
         });

@@ -511,6 +511,94 @@ describe('/web namespace', () => {
     owner.close();
   });
 
+  it('removes an unpublished home-team agent from member and default channel lists', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({
+      id: 'unpublish-home-owner',
+      username: 'unpublish-home-owner',
+      passwordHash: null,
+      createdAt: now,
+    });
+    app.globalDb.networkMembers.add('default', 'unpublish-home-owner', 'member');
+    app.globalDb.devices.upsert({
+      id: 'unpublish-home-device',
+      userId: 'unpublish-home-owner',
+      networkId: 'default',
+      hostname: 'Owner Device',
+      lastSeenAt: now,
+      systemInfo: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'unpublish-home-agent',
+      name: 'Home Agent',
+      role: 'assistant',
+      adapterKind: 'hermes',
+      deviceId: 'unpublish-home-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      ownerId: null,
+      command: 'hermes',
+      cwd: null,
+      description: null,
+    });
+    app.globalDb.agentPublishes.publish('unpublish-home-agent', 'default', 'unpublish-home-owner');
+    app.registry.register('unpublish-home-socket', {
+      id: 'unpublish-home-agent',
+      name: 'Home Agent',
+      role: 'assistant',
+      adapterKind: 'hermes',
+      category: 'agentos-hosted',
+      networkId: 'default',
+      deviceId: 'unpublish-home-device',
+      source: 'scanned',
+      publishedNetworkIds: ['default'],
+    });
+    const all = app.channels.ensureDefault('default');
+
+    const owner = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('unpublish-home-owner', 'default') },
+    });
+    await new Promise<void>((r) => owner.on('connect', () => r()));
+
+    const before = await new Promise<any>((resolve) => {
+      owner.emit('members:list', {}, resolve);
+    });
+    expect(before.ok).toBe(true);
+    expect(before.agents.map((agent: any) => agent.id)).toContain('unpublish-home-agent');
+
+    const statusSeen = new Promise<any>((resolve) => {
+      owner.on('agent:status', (status: any) => {
+        if (status.id === 'unpublish-home-agent') resolve(status);
+      });
+    });
+    const unpublished = await new Promise<any>((resolve) => {
+      owner.emit('agent:unpublish', { agentId: 'unpublish-home-agent', networkId: 'default' }, resolve);
+    });
+    expect(unpublished).toEqual({ ok: true });
+    const status = await statusSeen;
+    expect(status.publishedNetworkIds).not.toContain('default');
+    expect(status.unpublishedNetworkIds).toContain('default');
+
+    const afterMembers = await new Promise<any>((resolve) => {
+      owner.emit('members:list', {}, resolve);
+    });
+    expect(afterMembers.ok).toBe(true);
+    expect(afterMembers.agents.map((agent: any) => agent.id)).not.toContain('unpublish-home-agent');
+
+    const afterAll = await new Promise<any>((resolve) => {
+      owner.emit('channel:members', { channelId: all.id }, resolve);
+    });
+    expect(afterAll.ok).toBe(true);
+    expect(afterAll.agents.map((agent: any) => agent.id)).not.toContain('unpublish-home-agent');
+    owner.close();
+  });
+
   it('allows agent config changes only from the agent owner or an admin', async () => {
     const now = Date.now();
     app.globalDb.users.create({

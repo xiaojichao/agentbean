@@ -20,7 +20,10 @@ export interface AgentNamespaceDeps {
     users: { get(id: string): { id: string; username?: string | null } | null };
     networkMembers: { isMember(networkId: string, userId: string): boolean };
     networks: { get(id: string): { id: string; visibility: 'public' | 'private' } | null };
-    agentPublishes: { listByAgent(agentId: string): { networkId: string }[] };
+    agentPublishes: {
+      listByAgent(agentId: string): { networkId: string }[];
+      listUnpublishedByAgent?(agentId: string): { networkId: string }[];
+    };
     agents?: {
       upsert(row: any): void;
       get(id: string): any;
@@ -101,6 +104,7 @@ export interface AgentSnapshotDto {
   deviceId?: string;
   deviceName?: string | null;
   publishedNetworkIds?: string[];
+  unpublishedNetworkIds?: string[];
   source?: 'self-register' | 'scanned' | 'custom';
 }
 
@@ -125,6 +129,7 @@ export function snapshotToDto(rt: AgentRuntime): AgentSnapshotDto {
     description: rt.description ?? null,
     deviceId: rt.deviceId,
     publishedNetworkIds: rt.publishedNetworkIds,
+    unpublishedNetworkIds: [],
     source: rt.source,
   };
 }
@@ -209,16 +214,29 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
   const pending = new Map<string, PendingDispatch>();
   const timeoutMs = deps.dispatchTimeoutMs ?? 960_000;
 
+  const unpublishedNetworkIds = (agentId: string) =>
+    deps.globalDb?.agentPublishes?.listUnpublishedByAgent?.(agentId).map((p) => p.networkId) ?? [];
+
+  const effectivePublishedNetworkIds = (agent: { id: string; networkId?: string | null; publishedNetworkIds?: string[] }) => {
+    const unpublished = new Set(unpublishedNetworkIds(agent.id));
+    const published = new Set<string>();
+    if (agent.networkId && !unpublished.has(agent.networkId)) published.add(agent.networkId);
+    for (const publish of deps.globalDb?.agentPublishes?.listByAgent(agent.id) ?? []) {
+      if (!unpublished.has(publish.networkId)) published.add(publish.networkId);
+    }
+    for (const networkId of agent.publishedNetworkIds ?? []) {
+      if (!unpublished.has(networkId)) published.add(networkId);
+    }
+    return [...published];
+  };
+
   const runtimeStatusDto = (rt: AgentRuntime): AgentSnapshotDto => {
     const dto = snapshotToDto(rt);
     const persisted = deps.globalDb?.agents?.getFull(rt.id);
-    const publishedNetworkIds = new Set<string>(dto.publishedNetworkIds ?? []);
-    for (const publish of deps.globalDb?.agentPublishes?.listByAgent(rt.id) ?? []) {
-      publishedNetworkIds.add(publish.networkId);
-    }
     const deviceId = persisted?.deviceId ?? dto.deviceId;
     const ownerId = persisted?.ownerId ?? dto.ownerId ?? (deviceId ? deps.globalDb?.devices?.get(deviceId)?.userId ?? null : null);
     const ownerName = ownerId ? deps.globalDb?.users?.get(ownerId)?.username ?? null : null;
+    const visibleNetworkIds = effectivePublishedNetworkIds({ ...rt, networkId: persisted?.networkId ?? dto.networkId });
     return {
       ...dto,
       networkId: persisted?.networkId ?? dto.networkId,
@@ -232,7 +250,8 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       cwd: persisted?.cwd ?? dto.cwd,
       description: persisted?.description ?? dto.description,
       deviceId,
-      publishedNetworkIds: [...publishedNetworkIds],
+      publishedNetworkIds: visibleNetworkIds,
+      unpublishedNetworkIds: unpublishedNetworkIds(rt.id),
     };
   };
 
@@ -254,7 +273,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         cwd: persisted.cwd ?? null,
         description: persisted.description ?? null,
         deviceId: persisted.deviceId,
-        publishedNetworkIds: deps.globalDb?.agentPublishes.listByAgent(agentId).map((p) => p.networkId) ?? [],
+        publishedNetworkIds: effectivePublishedNetworkIds(persisted),
         source: 'custom',
       });
     }
@@ -363,7 +382,11 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         const persistedAgent = deps.globalDb?.agents?.getFull(agentMeta.id);
         const displayName = normalizeAgentName(persistedAgent?.name ?? agentMeta.name);
         const publishes = deps.globalDb?.agentPublishes?.listByAgent(agentMeta.id) ?? [];
-        const publishedNetworkIds = publishes.map((p: { networkId: string }) => p.networkId);
+        const publishedNetworkIds = effectivePublishedNetworkIds({
+          id: agentMeta.id,
+          networkId: persistedAgent?.networkId ?? a.networkId,
+          publishedNetworkIds: publishes.map((p: { networkId: string }) => p.networkId),
+        });
         const rt = deps.registry.register(socket.id, {
           id: agentMeta.id,
           name: displayName,
@@ -549,7 +572,11 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
               cwd: ag.cwd ?? null,
               description: existingRt.description ?? null,
               deviceId: a.deviceId,
-              publishedNetworkIds: publishes.map((p: { networkId: string }) => p.networkId),
+              publishedNetworkIds: effectivePublishedNetworkIds({
+                id: existingRt.id,
+                networkId: a.networkId,
+                publishedNetworkIds: publishes.map((p: { networkId: string }) => p.networkId),
+              }),
               source: (ag.source as any) ?? existingRt.source ?? 'scanned',
             });
             deps.io.of('/web').emit('agent:status', runtimeStatusDto(rt));
@@ -628,7 +655,11 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             command: ag.command,
             args: ag.args ?? [],
             cwd: ag.cwd ?? null,
-            publishedNetworkIds: publishes.map((p: { networkId: string }) => p.networkId),
+            publishedNetworkIds: effectivePublishedNetworkIds({
+              id: agentId,
+              networkId: a.networkId,
+              publishedNetworkIds: publishes.map((p: { networkId: string }) => p.networkId),
+            }),
             source: (ag.source as any) ?? 'scanned',
           });
           deps.io.of('/web').emit('agent:status', runtimeStatusDto(rt));
