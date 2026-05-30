@@ -989,6 +989,68 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('merges a legacy machine-id device when a team-scoped daemon reconnects after upgrade', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({ id: 'legacy-owner', username: 'legacy-owner', passwordHash: null, createdAt: now });
+    app.globalDb.networkMembers.add('default', 'legacy-owner', 'member');
+    app.globalDb.devices.upsert({
+      id: 'legacy-machine-id',
+      userId: 'legacy-owner',
+      networkId: 'default',
+      hostname: 'MyMBP',
+      lastSeenAt: now - 1_000,
+      systemInfo: { hostname: 'MyMBP', daemonVersion: '0.1.34' },
+    });
+    app.globalDb.devices.setConnectCommand(
+      'legacy-machine-id',
+      'npx @agentbean/daemon@latest --server-url https://api.agentbean.dev --token legacy-owner:default:original',
+    );
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('legacy-owner', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    const gotStatus = new Promise<any>((resolve) => web.once('device:status', resolve));
+
+    const ag = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: generateToken('legacy-owner', 'default'),
+        deviceId: 'dev_team_scoped_legacy_machine',
+        machineId: 'legacy-machine-id',
+        profileId: 'default',
+        networkId: 'default',
+        agents: [],
+        systemInfo: { hostname: 'MyMBP', daemonVersion: '0.1.35' },
+      },
+      reconnection: false,
+      transports: ['websocket'],
+    });
+    await new Promise<void>((r) => ag.on('connect', () => r()));
+    ag.emit('register');
+
+    const status = await gotStatus;
+    expect(status).toMatchObject({
+      id: 'dev_team_scoped_legacy_machine',
+      machineId: 'legacy-machine-id',
+      profileId: 'default',
+      hostname: 'MyMBP',
+      userId: 'legacy-owner',
+      status: 'online',
+    });
+    expect(app.globalDb.devices.get('legacy-machine-id')).toBeNull();
+    expect(app.globalDb.devices.get('dev_team_scoped_legacy_machine')).toMatchObject({
+      id: 'dev_team_scoped_legacy_machine',
+      machineId: 'legacy-machine-id',
+      hostname: 'MyMBP',
+      userId: 'legacy-owner',
+    });
+    expect(app.globalDb.devices.listByNetwork('default').filter((device) => device.machineId === 'legacy-machine-id' || device.id === 'legacy-machine-id')).toHaveLength(1);
+    ag.close();
+    web.close();
+  });
+
   it('lets the repaired device owner rename a scanned AgentOS agent while preserving its directory', async () => {
     const now = Date.now();
     app.globalDb.users.create({ id: 'agentos-owner-test01', username: 'agentos-owner-test01', passwordHash: null, createdAt: now });

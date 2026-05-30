@@ -469,6 +469,7 @@ export interface GlobalDb {
   };
   devices: {
     upsert(row: { id: string; userId: string; networkId: string; machineId?: string | null; profileId?: string | null; hostname?: string; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): void;
+    mergeLegacyMachineDevice(input: { legacyDeviceId: string; targetDeviceId: string; userId: string; networkId: string; machineId?: string | null; profileId?: string | null; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): DeviceRow | null;
     get(id: string): DeviceRow | null;
     listAll(): DeviceRow[];
     listByNetwork(networkId: string): DeviceRow[];
@@ -727,6 +728,65 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
     deviceTransferOwner.run(userId, id);
     deviceTransferAgentOwners.run(userId, id);
   });
+  const deviceReassignAgents = raw.prepare(`UPDATE agents SET device_id = ? WHERE device_id = ?`);
+  const deviceMergeIntoTarget = raw.prepare(`
+    UPDATE devices
+    SET
+      user_id = @userId,
+      network_id = @networkId,
+      machine_id = COALESCE(@machineId, machine_id),
+      profile_id = COALESCE(@profileId, profile_id),
+      hostname = COALESCE((SELECT hostname FROM devices WHERE id = @legacyDeviceId), hostname),
+      last_seen_at = @lastSeenAt,
+      connect_command = COALESCE(connect_command, (SELECT connect_command FROM devices WHERE id = @legacyDeviceId)),
+      system_info = COALESCE(@systemInfo, system_info),
+      runtimes = COALESCE(runtimes, (SELECT runtimes FROM devices WHERE id = @legacyDeviceId))
+    WHERE id = @targetDeviceId
+  `);
+  const deviceCopyLegacyToTarget = raw.prepare(`
+    INSERT INTO devices (id, user_id, network_id, machine_id, profile_id, hostname, last_seen_at, connect_command, system_info, runtimes)
+    SELECT
+      @targetDeviceId,
+      @userId,
+      @networkId,
+      COALESCE(@machineId, machine_id),
+      COALESCE(@profileId, profile_id),
+      hostname,
+      @lastSeenAt,
+      connect_command,
+      COALESCE(@systemInfo, system_info),
+      runtimes
+    FROM devices
+    WHERE id = @legacyDeviceId
+  `);
+  const mergeLegacyMachineDevice = raw.transaction((input: { legacyDeviceId: string; targetDeviceId: string; userId: string; networkId: string; machineId?: string | null; profileId?: string | null; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }) => {
+    if (!input.legacyDeviceId || input.legacyDeviceId === input.targetDeviceId) return null;
+    const legacy = deviceGet.get(input.legacyDeviceId) as any;
+    if (!legacy || legacy.network_id !== input.networkId) return null;
+    const systemInfo = input.systemInfo ? JSON.stringify(input.systemInfo) : null;
+    const target = deviceGet.get(input.targetDeviceId) as any;
+    if (target) {
+      deviceReassignAgents.run(input.targetDeviceId, input.legacyDeviceId);
+      deviceMergeIntoTarget.run({
+        ...input,
+        machineId: input.machineId ?? null,
+        profileId: input.profileId ?? null,
+        systemInfo,
+      });
+      deviceDelete.run(input.legacyDeviceId);
+    } else {
+      deviceCopyLegacyToTarget.run({
+        ...input,
+        machineId: input.machineId ?? null,
+        profileId: input.profileId ?? null,
+        systemInfo,
+      });
+      deviceReassignAgents.run(input.targetDeviceId, input.legacyDeviceId);
+      deviceDelete.run(input.legacyDeviceId);
+    }
+    const row = deviceGet.get(input.targetDeviceId) as any;
+    return row ? rowToDevice(row) : null;
+  });
 
   const globalAgentUpsert = raw.prepare(`
     INSERT INTO agents (id, name, role, adapter_kind, device_id, network_id, visibility, category, source, first_seen_at, last_seen_at, last_error, command, args, cwd, env, owner_id, description)
@@ -959,6 +1019,7 @@ export function initGlobalDb(dbPath: string = './data/global.db'): GlobalDb {
           systemInfo: row.systemInfo ? JSON.stringify(row.systemInfo) : null,
         });
       },
+      mergeLegacyMachineDevice: (input) => mergeLegacyMachineDevice(input),
       get: (id) => {
         const r = deviceGet.get(id) as any;
         return r ? rowToDevice(r) : null;

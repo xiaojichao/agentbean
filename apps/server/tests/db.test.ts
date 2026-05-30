@@ -256,6 +256,69 @@ describe('openDb', () => {
     }
   });
 
+  it('merges a legacy machine-id device into a team-scoped device instance', () => {
+    const globalPath = join(tmpdir(), `agentbean-global-device-merge-${Date.now()}-${Math.random()}.db`);
+    const global = initGlobalDb(globalPath);
+    const now = Date.now();
+    try {
+      global.users.create({ id: 'merge-owner', username: 'merge-owner', createdAt: now });
+      global.networks.create({ id: 'merge-team', ownerId: 'merge-owner', name: 'Merge Team', path: 'merge-team', visibility: 'public', createdAt: now });
+      global.devices.upsert({
+        id: 'machine-legacy',
+        userId: 'merge-owner',
+        networkId: 'merge-team',
+        hostname: 'MyMBP',
+        lastSeenAt: now - 10,
+        systemInfo: { hostname: 'MyMBP', daemonVersion: '0.1.34' },
+      });
+      global.agents.upsert({
+        id: 'scan-machine-legacy-hermes-agent',
+        name: 'Hermes-Agent',
+        role: null,
+        adapterKind: 'hermes',
+        deviceId: 'machine-legacy',
+        networkId: 'merge-team',
+        visibility: 'public',
+        category: 'agentos-hosted',
+        source: 'scanned',
+        firstSeenAt: now - 10,
+        lastSeenAt: now - 10,
+        lastError: null,
+        ownerId: 'merge-owner',
+        command: 'hermes',
+        args: null,
+        cwd: null,
+        env: null,
+        description: null,
+      });
+
+      const merged = global.devices.mergeLegacyMachineDevice({
+        legacyDeviceId: 'machine-legacy',
+        targetDeviceId: 'dev_merged_team_machine',
+        userId: 'merge-owner',
+        networkId: 'merge-team',
+        machineId: 'machine-legacy',
+        profileId: 'merge-team',
+        lastSeenAt: now,
+        systemInfo: { hostname: 'MyMBP', daemonVersion: '0.1.35' },
+      });
+
+      expect(merged).toMatchObject({
+        id: 'dev_merged_team_machine',
+        machineId: 'machine-legacy',
+        profileId: 'merge-team',
+        hostname: 'MyMBP',
+      });
+      expect(global.devices.get('machine-legacy')).toBeNull();
+      expect(global.agents.getFull('scan-machine-legacy-hermes-agent')).toMatchObject({
+        deviceId: 'dev_merged_team_machine',
+      });
+    } finally {
+      global.close();
+      try { unlinkSync(globalPath); } catch {}
+    }
+  });
+
   it('messages.append + listByChannel orders by created_at', () => {
     const c = db.channels.create({ name: 'c', createdAt: 0 });
     db.messages.append({ id: 'm2', channelId: c.id, senderKind: 'human', senderId: null, body: 'two', createdAt: 200, metaJson: null });

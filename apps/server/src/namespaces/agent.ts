@@ -33,7 +33,8 @@ export interface AgentNamespaceDeps {
     };
     devices?: {
       upsert(row: { id: string; userId: string; networkId: string; machineId?: string | null; profileId?: string | null; hostname?: string; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): void;
-      get(id: string): { id: string; userId?: string | null; machineId?: string | null; profileId?: string | null; hostname?: string | null; connectCommand?: string | null; runtimes?: { name: string; adapterKind: string; command: string; installed: boolean }[] } | null;
+      mergeLegacyMachineDevice?(input: { legacyDeviceId: string; targetDeviceId: string; userId: string; networkId: string; machineId?: string | null; profileId?: string | null; lastSeenAt: number; systemInfo?: Record<string, unknown> | null }): { id: string; userId?: string | null; networkId?: string | null; machineId?: string | null; profileId?: string | null; hostname?: string | null; connectCommand?: string | null; runtimes?: { name: string; adapterKind: string; command: string; installed: boolean }[] } | null;
+      get(id: string): { id: string; userId?: string | null; networkId?: string | null; machineId?: string | null; profileId?: string | null; hostname?: string | null; connectCommand?: string | null; runtimes?: { name: string; adapterKind: string; command: string; installed: boolean }[] } | null;
       setConnectCommand(id: string, command: string): void;
       setRuntimes(id: string, runtimes: { name: string; adapterKind: string; command: string; installed: boolean }[]): void;
       touch(id: string, lastSeenAt: number): void;
@@ -382,15 +383,33 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       const parsed = parseToken(a.token!);
       const tokenUserId = parsed?.userId ?? 'system';
       const existingDevice = deps.globalDb?.devices?.get(a.deviceId);
-      const connectCommandToken = extractTokenFromConnectCommand(existingDevice?.connectCommand);
+      const machineId = typeof a.machineId === 'string' && a.machineId.trim() ? a.machineId.trim() : null;
+      const legacyMachineDevice = machineId && machineId !== a.deviceId
+        ? deps.globalDb?.devices?.get(machineId)
+        : null;
+      const connectCommandToken = extractTokenFromConnectCommand(existingDevice?.connectCommand ?? legacyMachineDevice?.connectCommand);
       const connectCommandUserId = connectCommandToken ? parseToken(connectCommandToken)?.userId : null;
       const tokenOwnerId = parsed?.userId && deps.globalDb?.users?.get(parsed.userId) ? parsed.userId : null;
       const userId = connectCommandUserId && deps.globalDb?.users?.get(connectCommandUserId)
         ? connectCommandUserId
-        : tokenOwnerId ?? existingDevice?.userId ?? tokenUserId;
-      if (existingDevice?.userId && existingDevice.userId !== userId) {
+        : tokenOwnerId ?? existingDevice?.userId ?? legacyMachineDevice?.userId ?? tokenUserId;
+      let persistedDevice = existingDevice ?? null;
+      if (legacyMachineDevice?.networkId === a.networkId && deps.globalDb?.devices?.mergeLegacyMachineDevice) {
+        persistedDevice = deps.globalDb.devices.mergeLegacyMachineDevice({
+          legacyDeviceId: legacyMachineDevice.id,
+          targetDeviceId: a.deviceId,
+          userId,
+          networkId: a.networkId,
+          machineId,
+          profileId: typeof a.profileId === 'string' ? a.profileId : null,
+          lastSeenAt: now,
+          systemInfo: a.systemInfo ?? null,
+        }) ?? persistedDevice;
+        logger.info({ legacyDeviceId: legacyMachineDevice.id, deviceId: a.deviceId, machineId }, 'legacy machine device merged during daemon registration');
+      }
+      if (persistedDevice?.userId && persistedDevice.userId !== userId) {
         deps.globalDb?.devices?.transferOwner(a.deviceId, userId);
-        logger.info({ deviceId: a.deviceId, fromUserId: existingDevice.userId, toUserId: userId }, 'device owner repaired during daemon registration');
+        logger.info({ deviceId: a.deviceId, fromUserId: persistedDevice.userId, toUserId: userId }, 'device owner repaired during daemon registration');
       }
       const deviceAgents = (a.agents ?? []).filter(isAgentOSHosted);
       for (const agentMeta of deviceAgents) {
@@ -437,14 +456,14 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         id: a.deviceId,
         userId,
         networkId: a.networkId,
-        machineId: typeof a.machineId === 'string' ? a.machineId : null,
+        machineId,
         profileId: typeof a.profileId === 'string' ? a.profileId : null,
-        hostname: existingDevice?.hostname ?? sysHostname,
+        hostname: persistedDevice?.hostname ?? sysHostname,
         lastSeenAt: now,
         systemInfo: a.systemInfo ?? null,
       });
       // Save connect command on first registration
-      if (!existingDevice?.connectCommand) {
+      if (!persistedDevice?.connectCommand) {
         const publicUrl = process.env.AGENT_BEAN_PUBLIC_SERVER_URL;
         const localEntrypoint = resolve(process.cwd(), '../daemon/src/bin.ts');
         let cmd: string;
