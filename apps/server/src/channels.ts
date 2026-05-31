@@ -166,6 +166,11 @@ export class ChannelService {
     }
     if (input.visibility !== undefined) {
       db.prepare('UPDATE channels SET visibility = ? WHERE id = ?').run(input.visibility, channelId);
+      if (input.visibility === 'private') {
+        const row = db.prepare('SELECT created_by AS createdBy FROM channels WHERE id = ?')
+          .get(channelId) as { createdBy: string | null } | undefined;
+        if (row?.createdBy) this.addUserMember(networkId, channelId, row.createdBy);
+      }
     }
   }
 
