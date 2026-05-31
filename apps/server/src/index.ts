@@ -164,6 +164,22 @@ function runtimeLocationKey(agent: { cwd?: string | null; command?: string | nul
   return normalizeRuntimePath(agent.cwd) || dirnameFromCommand(agent.command);
 }
 
+function agentNameLogicalKey(
+  agent: {
+    name?: string | null;
+    adapterKind?: string | null;
+    deviceId?: string | null;
+  },
+  networkId: string,
+): string | null {
+  if (!agent.deviceId) return null;
+  const adapterKind = normalizeKind(agent.adapterKind);
+  if (!adapterKind) return null;
+  const name = normalizeLogicalAgentName(agent.name);
+  if (!name) return null;
+  return [networkId, agent.deviceId, adapterKind, 'name', name].join('\u0000');
+}
+
 function agentLogicalKey(
   agent: {
     name?: string | null;
@@ -193,9 +209,7 @@ function agentLogicalKey(
       ].join('\u0000');
     }
   }
-  const name = normalizeLogicalAgentName(agent.name);
-  if (!name) return null;
-  return [networkId, agent.deviceId, adapterKind, 'name', name].join('\u0000');
+  return agentNameLogicalKey(agent, networkId);
 }
 
 function deviceAgentLogicalKey(
@@ -215,6 +229,17 @@ function deviceAgentLogicalKey(
 
 function visibleAgentLogicalKey(agent: AgentSnapshotDto, visibleNetworkId: string): string | null {
   return agentLogicalKey(agent, visibleNetworkId, { preferRuntimeLocation: true });
+}
+
+function visibleAgentLogicalKeys(agent: AgentSnapshotDto, visibleNetworkId: string): string[] {
+  const keys = new Set<string>();
+  const primaryKey = visibleAgentLogicalKey(agent, visibleNetworkId);
+  if (primaryKey) keys.add(primaryKey);
+  if (agent.category === 'agentos-hosted') {
+    const nameKey = agentNameLogicalKey(agent, visibleNetworkId);
+    if (nameKey) keys.add(nameKey);
+  }
+  return [...keys];
 }
 
 function visibleAgentStatusRank(status?: string | null): number {
@@ -252,14 +277,16 @@ function dedupeVisibleAgentDtos(agents: AgentSnapshotDto[], visibleNetworkId: st
   const result: AgentSnapshotDto[] = [];
   const indexByLogicalKey = new Map<string, number>();
   for (const agent of agents) {
-    const key = visibleAgentLogicalKey(agent, visibleNetworkId);
-    if (!key) {
+    const keys = visibleAgentLogicalKeys(agent, visibleNetworkId);
+    if (keys.length === 0) {
       result.push(agent);
       continue;
     }
-    const existingIndex = indexByLogicalKey.get(key);
+    const existingIndex = keys
+      .map((key) => indexByLogicalKey.get(key))
+      .find((index): index is number => index !== undefined);
     if (existingIndex === undefined) {
-      indexByLogicalKey.set(key, result.length);
+      for (const key of keys) indexByLogicalKey.set(key, result.length);
       result.push(agent);
       continue;
     }
@@ -273,6 +300,10 @@ function dedupeVisibleAgentDtos(agents: AgentSnapshotDto[], visibleNetworkId: st
       continue;
     }
     result[existingIndex] = preferVisibleAgent(agent, existing);
+    for (const key of visibleAgentLogicalKeys(result[existingIndex]!, visibleNetworkId)) {
+      indexByLogicalKey.set(key, existingIndex);
+    }
+    for (const key of keys) indexByLogicalKey.set(key, existingIndex);
   }
   return result;
 }
