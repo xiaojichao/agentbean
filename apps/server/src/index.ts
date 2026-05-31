@@ -180,6 +180,26 @@ function agentNameLogicalKey(
   return [networkId, agent.deviceId, adapterKind, 'name', name].join('\u0000');
 }
 
+function isAgentOsGatewayAdapter(adapterKind?: string | null): boolean {
+  const normalized = normalizeKind(adapterKind);
+  return normalized === 'hermes' || normalized === 'openclaw';
+}
+
+function agentGatewayLogicalKey(
+  agent: {
+    adapterKind?: string | null;
+    category?: string | null;
+    deviceId?: string | null;
+    source?: string | null;
+  },
+  networkId: string,
+): string | null {
+  if (!agent.deviceId || agent.category !== 'agentos-hosted' || agent.source === 'custom') return null;
+  const adapterKind = normalizeKind(agent.adapterKind);
+  if (!isAgentOsGatewayAdapter(adapterKind)) return null;
+  return [networkId, agent.deviceId, adapterKind, 'gateway'].join('\u0000');
+}
+
 function agentLogicalKey(
   agent: {
     name?: string | null;
@@ -233,6 +253,8 @@ function visibleAgentLogicalKey(agent: AgentSnapshotDto, visibleNetworkId: strin
 
 function visibleAgentLogicalKeys(agent: AgentSnapshotDto, visibleNetworkId: string): string[] {
   const keys = new Set<string>();
+  const gatewayKey = agentGatewayLogicalKey(agent, visibleNetworkId);
+  if (gatewayKey) keys.add(gatewayKey);
   const primaryKey = visibleAgentLogicalKey(agent, visibleNetworkId);
   if (primaryKey) keys.add(primaryKey);
   if (agent.category === 'agentos-hosted') {

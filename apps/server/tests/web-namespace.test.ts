@@ -358,6 +358,66 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('deduplicates renamed AgentOS gateway rows from the same device and adapter', async () => {
+    const now = Date.now();
+    app.globalDb.devices.upsert({
+      id: 'renamed-gateway-agentos-device',
+      userId: 'admin',
+      networkId: 'default',
+      hostname: 'MyMBP',
+      lastSeenAt: now,
+      systemInfo: { hostname: 'my-mbp.local' },
+    });
+    app.registry.register('renamed-gateway-old', {
+      id: 'renamed-hermes-old',
+      name: 'Hermes-Agent',
+      role: 'gateway-agent',
+      adapterKind: 'hermes',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      networkId: 'default',
+      deviceId: 'renamed-gateway-agentos-device',
+      visibility: 'public',
+    });
+    app.registry.register('renamed-gateway-current', {
+      id: 'renamed-hermes-current',
+      name: 'Hermes-Agent-xiao-mbp',
+      role: 'gateway-agent',
+      adapterKind: 'hermes',
+      category: 'agentos-hosted',
+      source: 'self-register',
+      networkId: 'default',
+      deviceId: 'renamed-gateway-agentos-device',
+      visibility: 'public',
+      command: '/Users/shaw/.local/bin/hermes',
+      cwd: '/Users/shaw/.local/bin',
+    });
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: 'default:default:tok' },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const members = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+
+    expect(members.ok).toBe(true);
+    const hermesRows = members.agents.filter((agent: any) =>
+      agent.deviceId === 'renamed-gateway-agentos-device' &&
+      agent.adapterKind === 'hermes'
+    );
+    expect(hermesRows).toHaveLength(1);
+    expect(hermesRows[0]).toMatchObject({
+      id: 'renamed-hermes-current',
+      name: 'Hermes-Agent-xiao-mbp',
+    });
+
+    web.close();
+  });
+
   it('emits agent:status when a daemon registers', async () => {
     const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
     await new Promise<void>((r) => web.on('connect', () => r()));
