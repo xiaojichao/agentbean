@@ -6,7 +6,7 @@ import multer from 'multer';
 import { Server as IOServer } from 'socket.io';
 import { logger } from './log.js';
 import { openDb, initGlobalDb, type Db, type GlobalDb, type InviteRow } from './db.js';
-import { AgentRegistry, type AgentRuntime } from './registry.js';
+import { AgentRegistry, normalizeAgentName, type AgentRuntime } from './registry.js';
 import { DeviceRegistry } from './device-registry.js';
 import { StorageManager } from './storage.js';
 import { attachAgentNamespace, snapshotToDto, type AgentSnapshotDto, type DispatchFn } from './namespaces/agent.js';
@@ -571,6 +571,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
   const runtimeAgentStatusDto = (rt: AgentRuntime) =>
     enrichAgentOwnership({
       ...snapshotToDto(rt),
+      name: normalizeAgentName(globalDb.agents.getFull(rt.id)?.name ?? rt.name),
       publishedNetworkIds: effectivePublishedNetworkIds(rt),
       unpublishedNetworkIds: unpublishedNetworkIds(rt.id),
     });
@@ -628,6 +629,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       const persisted = globalDb.agents.getFull(agent.id);
       const dto = {
         ...snapshotToDto(agent),
+        name: normalizeAgentName(persisted?.name ?? agent.name),
         category: agent.category ?? persisted?.category as AgentSnapshotDto['category'],
         source: agent.source ?? persisted?.source as AgentSnapshotDto['source'],
         command: agent.command ?? persisted?.command ?? null,

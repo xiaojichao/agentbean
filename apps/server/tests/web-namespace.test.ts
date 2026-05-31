@@ -418,6 +418,69 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('uses persisted display name for live AgentOS member rows after refresh', async () => {
+    const now = Date.now();
+    app.globalDb.devices.upsert({
+      id: 'members-refresh-display-device',
+      userId: 'admin',
+      networkId: 'default',
+      hostname: 'MyMBP',
+      lastSeenAt: now,
+      systemInfo: { hostname: 'my-mbp.local' },
+    });
+    app.globalDb.agents.upsert({
+      id: 'scan-members-refresh-display-device-hermes-agent',
+      name: 'Hermes-Agent-xiao-mbp',
+      role: 'gateway-agent',
+      adapterKind: 'hermes',
+      deviceId: 'members-refresh-display-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now - 100,
+      lastSeenAt: now,
+      ownerId: 'admin',
+      command: '/Users/shaw/.local/bin/hermes',
+      args: JSON.stringify([]),
+      cwd: '/Users/shaw/.local/bin',
+      description: null,
+    });
+    app.registry.register('members-refresh-display-live', {
+      id: 'scan-members-refresh-display-device-hermes-agent',
+      name: 'Hermes-Agent',
+      role: 'gateway-agent',
+      adapterKind: 'hermes',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      networkId: 'default',
+      deviceId: 'members-refresh-display-device',
+      visibility: 'public',
+      command: '/Users/shaw/.local/bin/hermes',
+      cwd: '/Users/shaw/.local/bin',
+    });
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: 'default:default:tok' },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const members = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+
+    expect(members.ok).toBe(true);
+    expect(members.agents.find((agent: any) => agent.id === 'scan-members-refresh-display-device-hermes-agent')).toMatchObject({
+      name: 'Hermes-Agent-xiao-mbp',
+      deviceName: 'MyMBP',
+      status: 'online',
+    });
+
+    web.close();
+  });
+
   it('emits agent:status when a daemon registers', async () => {
     const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
     await new Promise<void>((r) => web.on('connect', () => r()));

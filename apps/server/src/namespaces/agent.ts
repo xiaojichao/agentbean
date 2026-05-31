@@ -251,6 +251,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
     const visibleNetworkIds = effectivePublishedNetworkIds({ ...rt, networkId: persisted?.networkId ?? dto.networkId });
     return {
       ...dto,
+      name: normalizeAgentName(persisted?.name ?? rt.name),
       networkId: persisted?.networkId ?? dto.networkId,
       visibility: persisted?.visibility ?? dto.visibility,
       category: persisted?.category ?? dto.category,
@@ -568,6 +569,8 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
           // Check if already registered via daemon's 'register' event
           const existingRt = deps.registry.findByDeviceAndName(a.deviceId, sanitizedName);
           if (existingRt?.networkId === a.networkId) {
+            const persistedExisting = deps.globalDb?.agents?.getFull(existingRt.id);
+            const displayName = normalizeAgentName(persistedExisting?.name ?? existingRt.name ?? sanitizedName);
             // Clean up old scan-prefix entry if it exists
             const staleScanId = scannedAgentId(a.networkId, a.deviceId, sanitizedName);
             try { deps.db.raw.prepare('DELETE FROM agents WHERE id = ?').run(staleScanId); } catch {}
@@ -578,7 +581,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
 
             // Still update DB with latest scan info, but don't create a duplicate registry entry
             deps.globalDb?.agents?.upsert({
-              id: existingRt.id, name: sanitizedName, adapterKind: ag.adapterKind as AdapterKind,
+              id: existingRt.id, name: displayName, adapterKind: ag.adapterKind as AdapterKind,
               deviceId: a.deviceId, networkId: a.networkId,
               category: (ag.category as AgentCategory) ?? 'executor-hosted',
               source: (ag.source as any) ?? 'scanned',
@@ -588,7 +591,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
               cwd: ag.cwd ?? null,
             });
             deps.db.agents.upsert({
-              id: existingRt.id, name: sanitizedName, role: null,
+              id: existingRt.id, name: displayName, role: null,
               adapterKind: ag.adapterKind as AdapterKind,
               deviceId: a.deviceId, networkId: a.networkId,
               visibility: 'public' as const,
@@ -602,7 +605,7 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
             const publishes = deps.globalDb?.agentPublishes?.listByAgent(existingRt.id) ?? [];
             const rt = deps.registry.register(socket.id, {
               id: existingRt.id,
-              name: sanitizedName,
+              name: displayName,
               role: existingRt.role,
               adapterKind: ag.adapterKind as AdapterKind,
               category: (ag.category as AgentCategory) ?? existingRt.category ?? 'executor-hosted',
