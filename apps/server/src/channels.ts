@@ -125,6 +125,12 @@ export class ChannelService {
       .run(channelId, agentId, Date.now());
   }
 
+  removeAgentMember(networkId: string, channelId: string, agentId: string): void {
+    const db = this.deps.storageManager.getSpace(networkId).db;
+    db.prepare('DELETE FROM channel_members WHERE channel_id = ? AND agent_id = ?')
+      .run(channelId, agentId);
+  }
+
   addUserMember(networkId: string, channelId: string, userId: string): void {
     const db = this.deps.storageManager.getSpace(networkId).db;
     db.prepare('DELETE FROM channel_user_leaves WHERE channel_id = ? AND user_id = ?')
@@ -137,6 +143,17 @@ export class ChannelService {
     const db = this.deps.storageManager.getSpace(networkId).db;
     db.prepare('DELETE FROM channel_user_members WHERE channel_id = ? AND user_id = ?')
       .run(channelId, userId);
+  }
+
+  removeUserFromChannel(networkId: string, channelId: string, userId: string): void {
+    const db = this.deps.storageManager.getSpace(networkId).db;
+    const ch = this.get(networkId, channelId);
+    if (!ch || ch.name === 'all') throw new Error('CANNOT_REMOVE_FROM_DEFAULT_CHANNEL');
+    this.removeUserMember(networkId, channelId, userId);
+    if (ch.visibility !== 'private') {
+      db.prepare('INSERT OR REPLACE INTO channel_user_leaves (channel_id, user_id, left_at) VALUES (?, ?, ?)')
+        .run(channelId, userId, Date.now());
+    }
   }
 
   leaveUser(networkId: string, channelId: string, userId: string): void {

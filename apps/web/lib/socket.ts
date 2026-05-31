@@ -217,6 +217,7 @@ export interface ChannelEvents {
   members(channelId: string): Promise<{ ok: boolean; humans?: { userId: string; role: string; username: string }[]; agents?: import('./schema').AgentSnapshot[]; error?: string }>;
   addAgent(channelId: string, agentId: string): Promise<{ ok: boolean; error?: string }>;
   addMember(channelId: string, userId: string): Promise<{ ok: boolean; error?: string }>;
+  removeAgent(channelId: string, agentId: string): Promise<{ ok: boolean; error?: string }>;
   removeMember(channelId: string, userId: string): Promise<{ ok: boolean; error?: string }>;
   leave(channelId: string): Promise<{ ok: boolean; error?: string }>;
   archive(channelId: string): Promise<{ ok: boolean; error?: string }>;
@@ -231,6 +232,7 @@ export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
     members(channelId) { return emitWithTimeout(socket, 'channel:members', { channelId }); },
     addAgent(channelId, agentId) { return emitWithTimeout(socket, 'channel:add-agent', { channelId, agentId }); },
     addMember(channelId, userId) { return emitWithTimeout(socket, 'channel:add-member', { channelId, userId }); },
+    removeAgent(channelId, agentId) { return emitWithTimeout(socket, 'channel:remove-agent', { channelId, agentId }); },
     removeMember(channelId, userId) { return emitWithTimeout(socket, 'channel:remove-member', { channelId, userId }); },
     leave(channelId) { return emitWithTimeout(socket, 'channel:leave', { channelId }); },
     archive(channelId) { return emitWithTimeout(socket, 'channel:archive', { channelId }); },

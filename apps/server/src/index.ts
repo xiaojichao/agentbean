@@ -1990,7 +1990,21 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
         const ch = channels.get(networkId, payload.channelId);
         if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
-        channels.removeUserMember(networkId, payload.channelId, payload.userId);
+        channels.removeUserFromChannel(networkId, payload.channelId, payload.userId);
+        ack?.({ ok: true });
+        emitChannelsSnapshotForNetwork(networkId);
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
+    socket.on('channel:remove-agent', (payload: { channelId: string; agentId: string }, ack?: (r: any) => void) => {
+      try {
+        const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const ch = channels.get(networkId, payload.channelId);
+        if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        if (channels.isDefaultChannel(networkId, payload.channelId)) return ack?.({ ok: false, error: 'CANNOT_REMOVE_FROM_DEFAULT_CHANNEL' });
+        channels.removeAgentMember(networkId, payload.channelId, payload.agentId);
         ack?.({ ok: true });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
