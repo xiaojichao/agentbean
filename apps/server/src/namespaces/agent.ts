@@ -29,6 +29,7 @@ export interface AgentNamespaceDeps {
       get(id: string): any;
       getFull(id: string): any;
       listAll(): any[];
+      updateConfig?(id: string, input: { name: string; adapterKind?: string | null; command?: string | null; cwd?: string | null; description?: string | null; updatedAt: number }): void;
       delete?(id: string): void;
     };
     devices?: {
@@ -92,6 +93,20 @@ function scannedAgentId(networkId: string, deviceId: string, name: string): stri
   const nameSlug = scanSlug(name);
   if (networkId === 'default') return `scan-${deviceId}-${nameSlug}`;
   return `scan-${scanSlug(networkId)}-${deviceId}-${nameSlug}`;
+}
+
+function scanIdHasNameSlug(agentId: string, name: string): boolean {
+  return agentId.toLowerCase().endsWith(`-${scanSlug(normalizeAgentName(name))}`);
+}
+
+function resolveSelfRegisteredDisplayName(agentId: string, incomingName: string, persistedName?: string | null): string {
+  const incoming = normalizeAgentName(incomingName);
+  const persisted = persistedName ? normalizeAgentName(persistedName) : null;
+  if (!persisted || persisted === incoming) return persisted ?? incoming;
+
+  const persistedLooksScanDerived = scanIdHasNameSlug(agentId, persisted);
+  const incomingLooksScanDerived = scanIdHasNameSlug(agentId, incoming);
+  return persistedLooksScanDerived && !incomingLooksScanDerived ? incoming : persisted;
 }
 
 export interface AgentSnapshotDto {
@@ -413,10 +428,36 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         logger.info({ deviceId: a.deviceId, fromUserId: persistedDevice.userId, toUserId: userId }, 'device owner repaired during daemon registration');
       }
       const deviceAgents = (a.agents ?? []).filter(isAgentOSHosted);
+      const selfRegisteredAgentsToPersist: any[] = [];
       for (const agentMeta of deviceAgents) {
         const persistedAgent = deps.globalDb?.agents?.getFull(agentMeta.id);
         if (persistedAgent && persistedAgent.networkId !== a.networkId) continue;
-        const displayName = normalizeAgentName(persistedAgent?.name ?? agentMeta.name);
+        const displayName = resolveSelfRegisteredDisplayName(agentMeta.id, agentMeta.name, persistedAgent?.name);
+        if (persistedAgent && displayName !== normalizeAgentName(persistedAgent.name)) {
+          deps.globalDb?.agents?.updateConfig?.(agentMeta.id, {
+            name: displayName,
+            adapterKind: null,
+            command: null,
+            cwd: persistedAgent.cwd ?? null,
+            description: persistedAgent.description ?? null,
+            updatedAt: now,
+          });
+        } else if (!persistedAgent && agentMeta.id.startsWith('scan-') && !scanIdHasNameSlug(agentMeta.id, displayName)) {
+          selfRegisteredAgentsToPersist.push({
+            id: agentMeta.id,
+            name: displayName,
+            role: agentMeta.role,
+            adapterKind: agentMeta.adapterKind as AdapterKind,
+            deviceId: a.deviceId,
+            networkId: a.networkId,
+            visibility: agentMeta.visibility ?? 'public',
+            category: (agentMeta.category as AgentCategory) ?? 'executor-hosted',
+            source: 'self-register',
+            firstSeenAt: now,
+            lastSeenAt: now,
+            ownerId: agentMeta.ownerId ?? userId,
+          });
+        }
         const publishes = deps.globalDb?.agentPublishes?.listByAgent(agentMeta.id) ?? [];
         const publishedNetworkIds = effectivePublishedNetworkIds({
           id: agentMeta.id,
@@ -463,6 +504,9 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
         lastSeenAt: now,
         systemInfo: a.systemInfo ?? null,
       });
+      for (const row of selfRegisteredAgentsToPersist) {
+        deps.globalDb?.agents?.upsert(row);
+      }
       // Save connect command on first registration
       if (!persistedDevice?.connectCommand) {
         const publicUrl = process.env.AGENT_BEAN_PUBLIC_SERVER_URL;
