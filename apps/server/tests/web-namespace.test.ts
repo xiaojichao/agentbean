@@ -2815,6 +2815,111 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('removes selected humans and agents from channel members', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({
+      id: 'remove-channel-human',
+      username: 'remove-channel-human',
+      passwordHash: null,
+      createdAt: now,
+    });
+    app.globalDb.networkMembers.add('default', 'remove-channel-human', 'member');
+    app.registry.register('remove-channel-agent-session', {
+      id: 'remove-channel-agent',
+      name: 'Remove Channel Agent',
+      role: 'r',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      networkId: 'default',
+    });
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const created = await new Promise<any>((resolve) => {
+      web.emit('channel:create', {
+        name: `remove-members-${now}`,
+        visibility: 'private',
+        userIds: ['remove-channel-human'],
+        agentIds: ['remove-channel-agent'],
+      }, resolve);
+    });
+    expect(created.ok).toBe(true);
+
+    const before = await new Promise<any>((resolve) => {
+      web.emit('channel:members', { channelId: created.channel.id }, resolve);
+    });
+    expect(before.humans.map((human: any) => human.userId)).toContain('remove-channel-human');
+    expect(before.agents.map((agent: any) => agent.id)).toContain('remove-channel-agent');
+
+    const removeHuman = await new Promise<any>((resolve) => {
+      web.emit('channel:remove-member', { channelId: created.channel.id, userId: 'remove-channel-human' }, resolve);
+    });
+    const removeAgent = await new Promise<any>((resolve) => {
+      web.emit('channel:remove-agent', { channelId: created.channel.id, agentId: 'remove-channel-agent' }, resolve);
+    });
+    expect(removeHuman.ok).toBe(true);
+    expect(removeAgent.ok).toBe(true);
+
+    const after = await new Promise<any>((resolve) => {
+      web.emit('channel:members', { channelId: created.channel.id }, resolve);
+    });
+    expect(after.humans.map((human: any) => human.userId)).not.toContain('remove-channel-human');
+    expect(after.agents.map((agent: any) => agent.id)).not.toContain('remove-channel-agent');
+    web.close();
+  });
+
+  it('removes humans from public channel visibility', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({
+      id: 'remove-public-human',
+      username: 'remove-public-human',
+      passwordHash: null,
+      createdAt: now,
+    });
+    app.globalDb.networkMembers.add('default', 'remove-public-human', 'member');
+
+    const adminSocket = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    await new Promise<void>((r) => adminSocket.on('connect', () => r()));
+
+    const created = await new Promise<any>((resolve) => {
+      adminSocket.emit('channel:create', { name: `public-remove-${now}`, visibility: 'public' }, resolve);
+    });
+    expect(created.ok).toBe(true);
+
+    const remove = await new Promise<any>((resolve) => {
+      adminSocket.emit('channel:remove-member', { channelId: created.channel.id, userId: 'remove-public-human' }, resolve);
+    });
+    expect(remove.ok).toBe(true);
+
+    const members = await new Promise<any>((resolve) => {
+      adminSocket.emit('channel:members', { channelId: created.channel.id }, resolve);
+    });
+    expect(members.humans.map((human: any) => human.userId)).not.toContain('remove-public-human');
+
+    const memberSocket = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('remove-public-human', 'default') },
+    });
+    await new Promise<void>((r) => memberSocket.on('connect', () => r()));
+    const visibleChannels = await new Promise<any[]>((resolve) => {
+      memberSocket.emit('channels:subscribe', {});
+      memberSocket.on('channels:snapshot', resolve);
+    });
+    expect(visibleChannels.map((channel) => channel.id)).not.toContain(created.channel.id);
+    adminSocket.close();
+    memberSocket.close();
+  });
+
   it('keeps existing default all members after a new user registers', async () => {
     const registerSocket = ioClient(`${baseUrl}/web`, {
       reconnection: false,

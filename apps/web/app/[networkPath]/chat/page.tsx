@@ -436,6 +436,15 @@ export default function ChatPage() {
     return res;
   };
 
+  const handleRemoveChannelMember = async (member: ChannelMemberEntry) => {
+    if (!activeChannel) return { ok: false, error: 'NO_CHANNEL' };
+    const res = member.kind === 'agent'
+      ? await channelEvents().removeAgent(activeChannel, member.id)
+      : await channelEvents().removeMember(activeChannel, member.id);
+    if (res.ok) await loadChannelMembers(activeChannel);
+    return res;
+  };
+
   const setThreadUrl = useCallback((messageId: string | null) => {
     const params = new URLSearchParams(searchParams.toString());
     if (messageId && activeChannel) {
@@ -1221,6 +1230,8 @@ export default function ChatPage() {
           members={channelMembers}
           candidates={mentionMembers.map((member) => ({ id: member.id, name: member.name, kind: member.kind }))}
           onAddMember={handleAddChannelMember}
+          onRemoveMember={handleRemoveChannelMember}
+          canRemoveMembers={!isDefaultPublicChannel}
           onClose={() => setShowMembers(false)}
         />
       )}
@@ -1378,18 +1389,23 @@ function ChannelMembersDialog({
   members,
   candidates,
   onAddMember,
+  onRemoveMember,
+  canRemoveMembers,
   onClose,
 }: {
   channelName: string;
   members: ChannelMemberEntry[];
   candidates: ChannelMemberEntry[];
   onAddMember: (member: ChannelMemberEntry) => Promise<{ ok: boolean; error?: string }>;
+  onRemoveMember: (member: ChannelMemberEntry) => Promise<{ ok: boolean; error?: string }>;
+  canRemoveMembers: boolean;
   onClose: () => void;
 }) {
   const agentMembers = members.filter((member) => member.kind === 'agent');
   const humanMembers = members.filter((member) => member.kind === 'human');
   const [showAdd, setShowAdd] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [removingKey, setRemovingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const memberKeys = new Set(members.map((member) => `${member.kind}:${member.id}`));
   const addable = candidates.filter((candidate) => !memberKeys.has(`${candidate.kind}:${candidate.id}`));
@@ -1404,6 +1420,14 @@ function ChannelMembersDialog({
     }
     setShowAdd(false);
   };
+  const remove = async (member: ChannelMemberEntry) => {
+    const key = `${member.kind}:${member.id}`;
+    setRemovingKey(key);
+    setError(null);
+    const res = await onRemoveMember(member);
+    setRemovingKey(null);
+    if (!res.ok) setError(res.error ?? '移除失败');
+  };
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35">
       <div className="w-[380px] rounded-lg border border-neutral-200 bg-white p-5 shadow-xl">
@@ -1412,8 +1436,8 @@ function ChannelMembersDialog({
           <button onClick={onClose} className="text-neutral-400 hover:text-neutral-600"><X size={16} /></button>
         </div>
         <div className="rounded-lg border border-neutral-200 p-3">
-          <MemberGroup title="智能体" members={agentMembers} />
-          <MemberGroup title="人类" members={humanMembers} />
+          <MemberGroup title="智能体" members={agentMembers} onRemove={canRemoveMembers ? remove : undefined} removingKey={removingKey} />
+          <MemberGroup title="人类" members={humanMembers} onRemove={canRemoveMembers ? remove : undefined} removingKey={removingKey} />
           {members.length === 0 && <div className="py-6 text-center text-sm text-neutral-400">#{channelName} 暂无成员</div>}
         </div>
         {error && <div className="mt-3 rounded-md bg-rose-50 px-3 py-2 text-xs text-rose-600">{error}</div>}
@@ -1438,7 +1462,17 @@ function ChannelMembersDialog({
   );
 }
 
-function MemberGroup({ title, members }: { title: string; members: ChannelMemberEntry[] }) {
+function MemberGroup({
+  title,
+  members,
+  onRemove,
+  removingKey,
+}: {
+  title: string;
+  members: ChannelMemberEntry[];
+  onRemove?: (member: ChannelMemberEntry) => void;
+  removingKey?: string | null;
+}) {
   if (members.length === 0) return null;
   return (
     <div className="mb-3 last:mb-0">
@@ -1458,6 +1492,18 @@ function MemberGroup({ title, members }: { title: string; members: ChannelMember
                 </div>
               )}
             </div>
+            {onRemove && (
+              <button
+                type="button"
+                onClick={() => onRemove(member)}
+                disabled={removingKey === `${member.kind}:${member.id}`}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-neutral-300 hover:bg-red-50 hover:text-red-500 disabled:opacity-40"
+                title={`移除 ${member.name}`}
+                aria-label={`移除 ${member.name}`}
+              >
+                <X size={12} />
+              </button>
+            )}
           </div>
         ))}
       </div>
