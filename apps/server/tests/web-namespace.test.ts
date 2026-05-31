@@ -1320,6 +1320,62 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('creates device-bound custom agents after switching away from the token network', async () => {
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default'), currentDeviceId: 'switched-machine-1' },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const netRes = await new Promise<any>((resolve) => {
+      web.emit('network:create', { name: 'OpenSNS Create Team', path: 'opensns-create-team', visibility: 'private' }, resolve);
+    });
+    expect(netRes.ok).toBe(true);
+    const targetNetworkId = netRes.network.id;
+    app.globalDb.devices.upsert({
+      id: 'switched-team-device-1',
+      userId: 'admin',
+      networkId: targetNetworkId,
+      machineId: 'switched-machine-1',
+      profileId: 'opensns-create-team',
+      hostname: 'Switched Team Device',
+      lastSeenAt: Date.now(),
+      systemInfo: { hostname: 'switched-team.local' },
+    });
+
+    const switchRes = await new Promise<any>((resolve) => {
+      web.emit('network:switch', { networkId: targetNetworkId }, resolve);
+    });
+    expect(switchRes.ok).toBe(true);
+
+    const localDevices = await new Promise<any>((resolve) => {
+      web.emit('devices:list', {}, resolve);
+    });
+    expect(localDevices.devices.find((device: any) => device.id === 'switched-team-device-1')).toMatchObject({ isLocal: true });
+
+    const createRes = await new Promise<any>((resolve) => {
+      web.emit('agent:create', {
+        name: 'Switched Team Agent',
+        adapterKind: 'codex',
+        command: 'codex',
+        category: 'executor-hosted',
+        deviceId: 'switched-team-device-1',
+        cwd: '/Users/admin/opensns',
+      }, resolve);
+    });
+
+    expect(createRes.ok).toBe(true);
+    expect(createRes.agent).toMatchObject({
+      name: 'Switched-Team-Agent',
+      deviceId: 'switched-team-device-1',
+      networkId: targetNetworkId,
+      source: 'custom',
+    });
+
+    web.close();
+  });
+
   it('does not mark remote custom agents offline because their cwd is not on the server host', async () => {
     const now = Date.now();
     const owner = app.globalDb.users.listAll()[0]!;
