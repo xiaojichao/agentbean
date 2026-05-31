@@ -529,8 +529,20 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
   const socketCurrentDeviceId = (socket: import('socket.io').Socket): string | null =>
     normalizeDeviceIdHint(socket.data.currentDeviceId);
 
+  const isDeviceLocalToHint = (
+    device: { id?: string | null; machineId?: string | null } | null | undefined,
+    currentDeviceId?: string | null,
+  ): boolean => {
+    if (!device?.id || !currentDeviceId) return false;
+    if (device.id === currentDeviceId) return true;
+    return Boolean(device.machineId && device.machineId === currentDeviceId);
+  };
+
+  const resolveDeviceLocalCandidate = (deviceId: string | null | undefined) =>
+    deviceId ? globalDb.devices.get(deviceId) : null;
+
   const isDeviceLocalToSocket = (deviceId: string | null | undefined, socket: import('socket.io').Socket): boolean =>
-    Boolean(deviceId && socketCurrentDeviceId(socket) === deviceId);
+    isDeviceLocalToHint(resolveDeviceLocalCandidate(deviceId), socketCurrentDeviceId(socket));
 
   const resolveDeviceName = (deviceId?: string | null) => {
     if (!deviceId) return null;
@@ -656,7 +668,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       latestDaemonVersion: daemonVersionInfo.latest,
       daemonUpdateAvailable: daemonVersionInfo.updateAvailable,
       canManage: canManageDeviceRow(dbd, viewerId),
-      isLocal: currentDeviceId ? currentDeviceId === dbd.id : undefined,
+      isLocal: isDeviceLocalToHint(dbd, currentDeviceId),
     };
   };
 

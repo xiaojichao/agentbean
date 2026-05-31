@@ -1174,6 +1174,8 @@ describe('/web namespace', () => {
       id: 'remote-device-1',
       userId: 'remote-device-owner',
       networkId: 'default',
+      machineId: 'remote-machine-1',
+      profileId: 'default',
       hostname: 'Remote Studio',
       lastSeenAt: Date.now(),
       systemInfo: { hostname: 'remote-studio.local' },
@@ -1220,7 +1222,7 @@ describe('/web namespace', () => {
     const web = ioClient(`${baseUrl}/web`, {
       reconnection: false,
       transports: ['websocket'],
-      auth: { token: generateToken('remote-device-owner', 'default'), currentDeviceId: 'remote-device-1' },
+      auth: { token: generateToken('remote-device-owner', 'default'), currentDeviceId: 'remote-machine-1' },
     });
     await new Promise<void>((r) => web.on('connect', () => r()));
 
