@@ -121,4 +121,19 @@ describe('ChannelService', () => {
     expect(svc.userMembers('test-net', ch.id).sort()).toEqual(['u1', 'u2']);
     expect(svc.listForUser('test-net', 'u1').map((item) => item.id)).toContain(ch.id);
   });
+
+  it('keeps the creator in the channel list when a public channel becomes private', () => {
+    const ch = svc.create('test-net', {
+      name: 'project',
+      agentIds: [],
+      visibility: 'public',
+      createdBy: 'u1',
+    });
+
+    svc.update('test-net', ch.id, { visibility: 'private' });
+
+    expect(svc.userMembers('test-net', ch.id)).toEqual(['u1']);
+    expect(svc.listForUser('test-net', 'u1').map((item) => item.id)).toContain(ch.id);
+    expect(svc.listForUser('test-net', 'u2').map((item) => item.id)).not.toContain(ch.id);
+  });
 });
