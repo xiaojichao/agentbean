@@ -43,8 +43,29 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect app changes
+        id: changes
+        working-directory: .
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "should_validate=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          changed_files="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
+          if echo "$changed_files" | grep -qE "^${{ matrix.app_dir }}/"; then
+            echo "should_validate=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No changes under ${{ matrix.app_dir }}; skipping validation for this app."
+            echo "should_validate=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Node.js
+        if: steps.changes.outputs.should_validate == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: 22
@@ -52,17 +73,21 @@ jobs:
           cache-dependency-path: ${{ matrix.lockfile }}
 
       - name: Ensure localhost resolves
+        if: steps.changes.outputs.should_validate == 'true'
         run: |
           grep -qE '(^|[[:space:]])localhost([[:space:]]|$)' /etc/hosts || \
             echo '127.0.0.1 localhost' | sudo tee -a /etc/hosts
 
       - name: Install dependencies
+        if: steps.changes.outputs.should_validate == 'true'
         run: npm ci
 
       - name: Run tests
+        if: steps.changes.outputs.should_validate == 'true'
         run: npm test
 
       - name: Build
+        if: steps.changes.outputs.should_validate == 'true'
         run: npm run build
 
   deploy:
