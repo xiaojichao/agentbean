@@ -83,8 +83,44 @@ function agentSourceRank(source?: string | null): number {
   return 1;
 }
 
+function agentIdHasNameSlug(agentId: string, name?: string | null): boolean {
+  const normalized = normalizeLogicalAgentName(name);
+  return Boolean(normalized && agentId.toLowerCase().endsWith(`-${normalized}`));
+}
+
+function isGenericGatewayName(agent: AgentSnapshot): boolean {
+  const kind = normalizeKind(agent.adapterKind);
+  const name = normalizeLogicalAgentName(agent.name);
+  return (kind === 'hermes' && name === 'hermes-agent') ||
+    (kind === 'openclaw' && name === 'openclaw-agent');
+}
+
+function agentDisplayRank(agent: AgentSnapshot): number {
+  if (agent.source === 'custom') return 4;
+  if (agent.source === 'self-register') return 3;
+  if (agent.category === 'agentos-hosted' && agent.name && !isGenericGatewayName(agent)) return 2;
+  if (agent.category === 'agentos-hosted' && agent.name && !agentGatewayLogicalKey(agent, agent.networkId ?? '') && !agentIdHasNameSlug(agent.id, agent.name)) return 2;
+  return 1;
+}
+
+function mergeAgentSnapshot(display: AgentSnapshot, status: AgentSnapshot): AgentSnapshot {
+  const lastSeenAt = Math.max(display.lastSeenAt ?? 0, status.lastSeenAt ?? 0);
+  return {
+    ...display,
+    status: status.status,
+    lastSeenAt: lastSeenAt || (display.lastSeenAt ?? status.lastSeenAt),
+    lastError: status.lastError,
+  };
+}
+
 function preferAgentSnapshot(candidate: AgentSnapshot, current: AgentSnapshot): AgentSnapshot {
+  const displayDelta = agentDisplayRank(candidate) - agentDisplayRank(current);
   const statusDelta = agentStatusRank(candidate.status) - agentStatusRank(current.status);
+  if (displayDelta !== 0) {
+    const display = displayDelta > 0 ? candidate : current;
+    const status = statusDelta > 0 ? candidate : current;
+    return mergeAgentSnapshot(display, status);
+  }
   if (statusDelta !== 0) return statusDelta > 0 ? candidate : current;
   const sourceDelta = agentSourceRank(candidate.source) - agentSourceRank(current.source);
   if (sourceDelta !== 0) return sourceDelta > 0 ? candidate : current;
