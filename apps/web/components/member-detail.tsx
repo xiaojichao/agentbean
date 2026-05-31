@@ -15,11 +15,7 @@ import {
   FolderOpen,
   Inbox,
   MessageSquare,
-  Play,
-  RefreshCw,
-  RotateCcw,
   Shield,
-  Trash2,
   User,
   Users,
   X,
@@ -109,9 +105,15 @@ function statusDotClass(status?: string): string {
   return 'text-neutral-300';
 }
 
-export function AgentTopBar({ agent }: { agent: AgentSnapshot }) {
+export function AgentTopBar({ agent, device }: { agent: AgentSnapshot; device?: DeviceInfo }) {
   const np = useCurrentNetworkPath();
+  const currentUser = useAgentBeanStore((s) => s.currentUser);
   const [dmLoading, setDmLoading] = useState(false);
+  const canManageOnDevice = Boolean(agent.deviceId && currentUser?.id && (
+    currentUser.role === 'admin' ||
+    agent.ownerId === currentUser.id ||
+    device?.userId === currentUser.id
+  ));
 
   const startDm = async () => {
     setDmLoading(true);
@@ -139,12 +141,12 @@ export function AgentTopBar({ agent }: { agent: AgentSnapshot }) {
           <MessageSquare size={14} />
           私聊
         </button>
-        <button disabled title="由设备 Daemon 自动管理" className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-400">
-          <Play size={14} />
-        </button>
-        <button disabled title="由设备 Daemon 自动管理" className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-400">
-          <RotateCcw size={14} />
-        </button>
+        {canManageOnDevice && (
+          <Link href={`/${np}/devices/${agent.deviceId}`} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-3 text-xs font-medium text-neutral-800 hover:bg-neutral-50">
+            <Cpu size={14} />
+            在设备中管理
+          </Link>
+        )}
       </div>
     </div>
   );
@@ -192,6 +194,7 @@ export function AgentDetail({ agent, device, tab }: { agent: AgentSnapshot; devi
 }
 
 function AgentProfile({ agent, device, applyAgentStatus }: { agent: AgentSnapshot; device?: DeviceInfo; applyAgentStatus: (snap: AgentSnapshot) => void }) {
+  const np = useCurrentNetworkPath();
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const [editing, setEditing] = useState<'name' | 'description' | null>(null);
   const [name, setName] = useState(agent.name);
@@ -200,7 +203,11 @@ function AgentProfile({ agent, device, applyAgentStatus }: { agent: AgentSnapsho
   const [saveError, setSaveError] = useState<string | null>(null);
   const isCustomAgent = agent.category === 'executor-hosted' || agent.source === 'custom';
   const deviceName = agentDeviceDisplayName(agent, device);
-  const canEditProfile = Boolean(currentUser?.id && (agent.ownerId === currentUser.id || (!agent.ownerId && device?.userId === currentUser.id)));
+  const canEditProfile = Boolean(currentUser?.id && (
+    currentUser.role === 'admin' ||
+    agent.ownerId === currentUser.id ||
+    (!agent.ownerId && device?.userId === currentUser.id)
+  ));
 
   useEffect(() => {
     setName(agent.name);
@@ -310,13 +317,16 @@ function AgentProfile({ agent, device, applyAgentStatus }: { agent: AgentSnapsho
       </Section>
 
       <Section title="操作" icon={<Zap size={15} />}>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-          <ActionButton icon={<Play size={14} />} label="启动 Agent" disabled />
-          <ActionButton icon={<RefreshCw size={14} />} label="重启 / 重置" disabled />
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {canEditProfile && agent.deviceId && (
+            <Link href={`/${np}/devices/${agent.deviceId}`} className="inline-flex items-center justify-center gap-2 rounded-md border border-neutral-200 px-3 py-2 text-xs font-medium text-neutral-700 hover:bg-neutral-50">
+              <Cpu size={14} />
+              在设备中管理
+            </Link>
+          )}
           <CopyDiagnosticButton agent={agent} device={device} />
-          <ActionButton icon={<Trash2 size={14} />} label="删除 Agent" danger disabled />
         </div>
-        <div className="mt-2 text-xs text-neutral-400">启动、重启和删除动作当前由设备 Daemon 与配置页管理。</div>
+        <div className="mt-2 text-xs text-neutral-400">运行时、团队发布和删除在设备页管理。</div>
       </Section>
     </div>
   );
@@ -662,15 +672,6 @@ function EditableLine({ value, onEdit }: { value: string; onEdit: () => void }) 
 
 function ReadOnlyLine({ value }: { value: string }) {
   return <div className="min-w-0 whitespace-pre-wrap break-words text-sm text-neutral-800">{value}</div>;
-}
-
-function ActionButton({ icon, label, disabled, danger }: { icon: React.ReactNode; label: string; disabled?: boolean; danger?: boolean }) {
-  return (
-    <button disabled={disabled} className={`inline-flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 ${danger ? 'border-rose-200 text-rose-600' : 'border-neutral-200 text-neutral-700 hover:bg-neutral-50'}`}>
-      {icon}
-      {label}
-    </button>
-  );
 }
 
 function CopyDiagnosticButton({ agent, device }: { agent: AgentSnapshot; device?: DeviceInfo }) {
