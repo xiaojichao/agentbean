@@ -1770,7 +1770,6 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         .map((id) => agentById.get(id))
         .filter((agent): agent is NonNullable<typeof agent> => Boolean(agent))
         .map((agent) => ({ id: agent.id, name: agent.name, status: agent.status }));
-      const candidates = visibleAgents.map((agent) => ({ id: agent.id, name: agent.name, status: agent.status }));
       const networkHumans = globalDb.networkMembers.listByNetwork(networkId);
       const humanMemberIds = dmTargetId
         ? new Set<string>()
@@ -1795,7 +1794,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
 
       const route = threadTarget && (threadTarget.status === 'online' || threadTarget.status === 'busy')
         ? { targets: [{ id: threadTarget.id, name: threadTarget.name, status: threadTarget.status }], reason: 'FALLBACK' as const }
-        : routeHumanMessage({ body, members, candidates, humans });
+        : routeHumanMessage({ body, members, humans });
       const recipient = route.targets[0];
       const shouldCreateTask = Boolean(
         payload.asTask ||

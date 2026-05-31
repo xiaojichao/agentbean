@@ -3676,6 +3676,54 @@ describe('message:send', () => {
     custom.close(); agentos.close(); web.close();
   });
 
+  it('does not dispatch @mentions to agents outside the channel members', async () => {
+    const agentos = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'd-outside-mention',
+        networkId: 'default',
+        agents: [{ id: 'outside-hermes', name: 'Hermes-Agent', role: 'r', adapterKind: 'hermes', category: 'agentos-hosted', visibility: 'public' }],
+      },
+      reconnection: false, transports: ['websocket'],
+    });
+    await new Promise<void>((r) => agentos.on('connect', () => r()));
+    agentos.emit('register');
+    const dispatches: any[] = [];
+    agentos.on('dispatch', (req: any) => {
+      dispatches.push(req);
+      agentos.emit('reply', { agentId: req.agentId, channelId: req.channelId, body: 'should not route', requestId: req.requestId });
+    });
+
+    const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+    const ch = await new Promise<any>((resolve) => {
+      web.emit('channel:create', { name: `outside-mention-${Date.now()}`, agentIds: [] }, resolve);
+    });
+    expect(ch.ok).toBe(true);
+
+    const members = await new Promise<any>((resolve) => {
+      web.emit('channel:members', { channelId: ch.channel.id }, resolve);
+    });
+    expect(members.ok).toBe(true);
+    expect(members.agents.map((agent: any) => agent.id)).not.toContain('outside-hermes');
+
+    const messages: any[] = [];
+    web.emit('channel:join', { channelId: ch.channel.id });
+    web.on('channel:message', (m: any) => messages.push(m));
+    await new Promise((r) => setTimeout(r, 50));
+
+    const ack = await new Promise<any>((resolve) => {
+      web.emit('message:send', { channelId: ch.channel.id, body: '@Hermes-Agent hello', clientMsgId: 'outside-mention-1' }, resolve);
+    });
+    expect(ack.ok).toBe(true);
+    await new Promise((r) => setTimeout(r, 150));
+
+    expect(dispatches).toHaveLength(0);
+    expect(messages.some((m) => m.senderKind === 'agent' && m.senderId === 'outside-hermes')).toBe(false);
+
+    agentos.close(); web.close();
+  });
+
   it('does not duplicate the current thread message in dispatch history', async () => {
     const agentos = ioClient(`${baseUrl}/agent`, {
       auth: {
