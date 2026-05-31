@@ -193,6 +193,62 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('deduplicates duplicate live AgentOS member rows from the same device', async () => {
+    const now = Date.now();
+    app.globalDb.devices.upsert({
+      id: 'live-duplicate-agentos-device',
+      userId: 'admin',
+      networkId: 'default',
+      hostname: '肖的Mac-mini',
+      lastSeenAt: now,
+      systemInfo: { hostname: 'xiao-mini.local' },
+    });
+    app.registry.register('live-duplicate-a', {
+      id: 'live-hermes-agent-a',
+      name: 'Hermes-Agent-xiao-mini',
+      role: 'gateway',
+      adapterKind: 'hermes',
+      category: 'agentos-hosted',
+      source: 'self-register',
+      networkId: 'default',
+      deviceId: 'live-duplicate-agentos-device',
+      visibility: 'public',
+    });
+    app.registry.register('live-duplicate-b', {
+      id: 'live-hermes-agent-b',
+      name: 'Hermes-Agent-xiao-mini',
+      role: 'gateway',
+      adapterKind: 'hermes',
+      category: 'agentos-hosted',
+      source: 'self-register',
+      networkId: 'default',
+      deviceId: 'live-duplicate-agentos-device',
+      visibility: 'public',
+    });
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: 'default:default:tok' },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const members = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+
+    expect(members.ok).toBe(true);
+    const hermesRows = members.agents.filter((agent: any) =>
+      agent.category === 'agentos-hosted' &&
+      agent.deviceId === 'live-duplicate-agentos-device' &&
+      agent.adapterKind === 'hermes' &&
+      agent.name === 'Hermes-Agent-xiao-mini'
+    );
+    expect(hermesRows).toHaveLength(1);
+
+    web.close();
+  });
+
   it('emits agent:status when a daemon registers', async () => {
     const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
     await new Promise<void>((r) => web.on('connect', () => r()));

@@ -264,7 +264,11 @@ function dedupeVisibleAgentDtos(agents: AgentSnapshotDto[], visibleNetworkId: st
       continue;
     }
     const existing = result[existingIndex]!;
-    if (existing.source !== 'scanned' && agent.source !== 'scanned') {
+    const shouldDedupe =
+      existing.source === 'scanned' ||
+      agent.source === 'scanned' ||
+      (existing.category === 'agentos-hosted' && agent.category === 'agentos-hosted');
+    if (!shouldDedupe) {
       result.push(agent);
       continue;
     }
