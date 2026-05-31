@@ -481,6 +481,74 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('keeps renamed AgentOS member display name when a generic live scan row is online', async () => {
+    const now = Date.now();
+    app.globalDb.devices.upsert({
+      id: 'members-renamed-display-device',
+      userId: 'admin',
+      networkId: 'default',
+      hostname: 'MyMBP',
+      lastSeenAt: now,
+      systemInfo: { hostname: 'my-mbp.local' },
+    });
+    app.globalDb.agents.upsert({
+      id: 'scan-members-renamed-display-device-hermes-agent-xiao-mbp',
+      name: 'Hermes-Agent-xiao-mbp',
+      role: 'gateway-agent',
+      adapterKind: 'hermes',
+      deviceId: 'members-renamed-display-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now - 100,
+      lastSeenAt: now - 100,
+      ownerId: 'admin',
+      command: '/Users/shaw/.local/bin/hermes',
+      args: JSON.stringify([]),
+      cwd: '/Users/shaw/.local/bin',
+      description: null,
+    });
+    app.registry.register('members-renamed-display-live', {
+      id: 'scan-members-renamed-display-device-hermes-agent',
+      name: 'Hermes-Agent',
+      role: 'gateway-agent',
+      adapterKind: 'hermes',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      networkId: 'default',
+      deviceId: 'members-renamed-display-device',
+      visibility: 'public',
+      command: '/Users/shaw/.local/bin/hermes',
+      cwd: '/Users/shaw/.local/bin',
+    });
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: 'default:default:tok' },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const members = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+
+    expect(members.ok).toBe(true);
+    const hermesRows = members.agents.filter((agent: any) =>
+      agent.deviceId === 'members-renamed-display-device' &&
+      agent.adapterKind === 'hermes'
+    );
+    expect(hermesRows).toHaveLength(1);
+    expect(hermesRows[0]).toMatchObject({
+      id: 'scan-members-renamed-display-device-hermes-agent-xiao-mbp',
+      name: 'Hermes-Agent-xiao-mbp',
+      status: 'online',
+    });
+
+    web.close();
+  });
+
   it('adopts daemon self-registered AgentOS display name over stale scanned DB name', async () => {
     const now = Date.now();
     app.globalDb.devices.upsert({

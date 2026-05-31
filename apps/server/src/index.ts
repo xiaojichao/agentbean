@@ -287,8 +287,44 @@ function visibleAgentSourceRank(source?: string | null): number {
   return 1;
 }
 
+function agentIdHasNameSlug(agentId: string, name?: string | null): boolean {
+  const normalized = normalizeLogicalAgentName(name);
+  return Boolean(normalized && agentId.toLowerCase().endsWith(`-${normalized}`));
+}
+
+function isGenericGatewayName(agent: AgentSnapshotDto): boolean {
+  const kind = normalizeKind(agent.adapterKind);
+  const name = normalizeLogicalAgentName(agent.name);
+  return (kind === 'hermes' && name === 'hermes-agent') ||
+    (kind === 'openclaw' && name === 'openclaw-agent');
+}
+
+function visibleAgentDisplayRank(agent: AgentSnapshotDto): number {
+  if (agent.source === 'custom') return 4;
+  if (agent.source === 'self-register') return 3;
+  if (agent.category === 'agentos-hosted' && agent.name && !isGenericGatewayName(agent)) return 2;
+  if (agent.category === 'agentos-hosted' && agent.name && !agentGatewayLogicalKey(agent, agent.networkId ?? '') && !agentIdHasNameSlug(agent.id, agent.name)) return 2;
+  return 1;
+}
+
+function mergeVisibleAgent(display: AgentSnapshotDto, status: AgentSnapshotDto): AgentSnapshotDto {
+  const lastSeenAt = Math.max(display.lastSeenAt ?? 0, status.lastSeenAt ?? 0);
+  return {
+    ...display,
+    status: status.status,
+    lastSeenAt: lastSeenAt || (display.lastSeenAt ?? status.lastSeenAt),
+    lastError: status.lastError,
+  };
+}
+
 function preferVisibleAgent(candidate: AgentSnapshotDto, current: AgentSnapshotDto): AgentSnapshotDto {
+  const displayDelta = visibleAgentDisplayRank(candidate) - visibleAgentDisplayRank(current);
   const statusDelta = visibleAgentStatusRank(candidate.status) - visibleAgentStatusRank(current.status);
+  if (displayDelta !== 0) {
+    const display = displayDelta > 0 ? candidate : current;
+    const status = statusDelta > 0 ? candidate : current;
+    return mergeVisibleAgent(display, status);
+  }
   if (statusDelta !== 0) return statusDelta > 0 ? candidate : current;
   const sourceDelta = visibleAgentSourceRank(candidate.source) - visibleAgentSourceRank(current.source);
   if (sourceDelta !== 0) return sourceDelta > 0 ? candidate : current;

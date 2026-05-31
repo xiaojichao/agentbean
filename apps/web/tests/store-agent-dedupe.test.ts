@@ -58,6 +58,39 @@ describe('agent store dedupe', () => {
     });
   });
 
+  it('merges online status into the renamed AgentOS gateway row', () => {
+    useAgentBeanStore.getState().applyAgentsSnapshot([
+      agent({
+        id: 'hermes-renamed',
+        name: 'Hermes-Agent-xiao-mbp',
+        source: 'scanned',
+        status: 'offline',
+        lastSeenAt: 20,
+        command: '/Users/shaw/.local/bin/hermes',
+        cwd: '/Users/shaw/.local/bin',
+      }),
+    ]);
+
+    useAgentBeanStore.getState().applyAgentStatus(agent({
+      id: 'hermes-generic',
+      name: 'Hermes-Agent',
+      source: 'scanned',
+      status: 'online',
+      lastSeenAt: 30,
+      command: '/Users/shaw/.local/bin/hermes',
+      cwd: '/Users/shaw/.local/bin',
+    }));
+
+    const hermesRows = Object.values(useAgentBeanStore.getState().agents)
+      .filter((item) => item.deviceId === 'device-1' && item.adapterKind === 'hermes');
+    expect(hermesRows).toHaveLength(1);
+    expect(hermesRows[0]).toMatchObject({
+      id: 'hermes-renamed',
+      name: 'Hermes-Agent-xiao-mbp',
+      status: 'online',
+    });
+  });
+
   it('still applies status changes for the same agent id', () => {
     useAgentBeanStore.getState().applyAgentsSnapshot([
       agent({
