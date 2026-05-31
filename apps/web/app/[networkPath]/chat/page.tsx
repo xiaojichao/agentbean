@@ -354,9 +354,7 @@ export default function ChatPage() {
         ...(currentUser ? [{ id: currentUser.id, name: `${currentUser.username}（你）`, kind: 'human' as const }] : []),
         ...Object.values(agents).map((agent) => ({ id: agent.id, name: agent.name, kind: 'agent' as const })),
       ];
-  const visibleMentionMembers = isDm
-    ? mentionMembers
-    : (channelMembers.length > 0 ? channelMembers.map((member) => ({ id: member.id, name: member.name.replace(/（你）$/, ''), kind: member.kind })) : mentionMembers);
+  const visibleMentionMembers = channelMembers.map((member) => ({ id: member.id, name: member.name.replace(/（你）$/, ''), kind: member.kind }));
   const channelMemberCount = isDm ? 2 : channelMembers.length;
   const orderedChannels = sortChannels(channels, channelSort, messagesByChannel);
   const orderedDms = sortDms(dms, dmSort, messagesByChannel, agents);
