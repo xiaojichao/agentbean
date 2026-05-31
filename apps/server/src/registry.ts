@@ -167,6 +167,10 @@ export class AgentRegistry {
     return a;
   }
 
+  remove(agentId: string): boolean {
+    return this.byId.delete(agentId);
+  }
+
   snapshot(agentId: string): AgentRuntime | null {
     return this.byId.get(agentId) ?? null;
   }

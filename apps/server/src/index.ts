@@ -1035,6 +1035,32 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     }
   }
 
+  function emitAgentsSnapshotForNetwork(networkId: string): void {
+    for (const s of io.of('/web').sockets.values()) {
+      if ((socketNetworkMap.get(s.id) ?? defaultNetworkId) !== networkId) continue;
+      s.emit('agents:snapshot', buildVisibleAgentDtos(networkId));
+    }
+  }
+
+  function emitAgentsSnapshotForAllNetworks(): void {
+    for (const network of globalDb.networks.list()) emitAgentsSnapshotForNetwork(network.id);
+  }
+
+  function deletePersistedAgent(agentId: string): void {
+    registry.remove(agentId);
+    for (const device of deviceRegistry.all()) {
+      device.agents.delete(agentId);
+    }
+    for (const network of globalDb.networks.list()) {
+      storageManager.getSpace(network.id).db.prepare('DELETE FROM channel_members WHERE agent_id = ?').run(agentId);
+    }
+    db.raw.prepare('DELETE FROM channel_members WHERE agent_id = ?').run(agentId);
+    globalDb.raw.prepare('DELETE FROM agent_network_publish WHERE agent_id = ?').run(agentId);
+    globalDb.raw.prepare('DELETE FROM agent_network_unpublish WHERE agent_id = ?').run(agentId);
+    globalDb.agents.delete(agentId);
+    db.raw.prepare('DELETE FROM agents WHERE id = ?').run(agentId);
+  }
+
   const stopDaemonVersionRefresh = startDaemonVersionRefresh(() => {
     const networkIds = new Set(globalDb.networks.list().map((network) => network.id));
     for (const networkId of networkIds) emitDevicesSnapshotForNetwork(networkId);
@@ -2256,6 +2282,33 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       }
     });
 
+    socket.on('agent:delete', (payload: { agentId: string }, ack?: (r: any) => void) => {
+      try {
+        const userId = socket.data.userId as string | undefined;
+        if (!userId) return ack?.({ ok: false, error: 'UNAUTHORIZED' });
+        const agentId = payload.agentId?.trim();
+        if (!agentId) return ack?.({ ok: false, error: 'INVALID_PAYLOAD' });
+        const existing = globalDb.agents.getFull(agentId);
+        if (!existing) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        if (existing.source !== 'custom' || existing.category !== 'executor-hosted') {
+          return ack?.({ ok: false, error: 'NOT_DELETABLE_AGENT' });
+        }
+        if (!canManageAgent({ ownerId: existing.ownerId, deviceId: existing.deviceId }, userId)) {
+          return ack?.({ ok: false, error: 'FORBIDDEN' });
+        }
+
+        deletePersistedAgent(agentId);
+        emitAgentsSnapshotForAllNetworks();
+        if (existing.deviceId) {
+          const device = globalDb.devices.get(existing.deviceId);
+          if (device) emitDevicesSnapshotForNetwork(device.networkId);
+        }
+        ack?.({ ok: true });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e.message ?? 'unknown' });
+      }
+    });
+
     socket.on('agent:publish', (payload: { agentId: string; networkId: string }, ack?: (r: any) => void) => {
       try {
         const userId = socket.data.userId as string | undefined;
@@ -2290,6 +2343,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         if (current) registry.updatePublishedNetworks(payload.agentId, effectivePublishedNetworkIds(current));
         const updated = registry.snapshot(payload.agentId);
         if (updated) io.of('/web').emit('agent:status', runtimeAgentStatusDto(updated));
+        emitAgentsSnapshotForAllNetworks();
         ack?.({ ok: true });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
@@ -2316,6 +2370,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         if (current) registry.updatePublishedNetworks(payload.agentId, effectivePublishedNetworkIds(current));
         const updated = registry.snapshot(payload.agentId);
         if (updated) io.of('/web').emit('agent:status', runtimeAgentStatusDto(updated));
+        emitAgentsSnapshotForAllNetworks();
         ack?.({ ok: true });
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });

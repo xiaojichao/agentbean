@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, Check, FolderOpen, Paperclip, Image as ImageIcon } from 'lucide-react';
+import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, Check, FolderOpen, Paperclip, Image as ImageIcon, Trash2 } from 'lucide-react';
 import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl, fetchAgentWorkspace, authedApiUrl } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { daemonVersionDisplay } from '@/lib/daemon-version';
@@ -321,11 +321,15 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const [showAddCustom, setShowAddCustom] = useState(false);
   const [selectNetworkAgent, setSelectNetworkAgent] = useState<any | null>(null);
   const [configAgent, setConfigAgent] = useState<any | null>(null);
+  const [deleteAgent, setDeleteAgent] = useState<any | null>(null);
+  const [deleteAgentSaving, setDeleteAgentSaving] = useState(false);
+  const [deleteAgentError, setDeleteAgentError] = useState('');
   const [workspaceAgents, setWorkspaceAgents] = useState<WorkspaceAgent[]>([]);
   const [workspaceScanned, setWorkspaceScanned] = useState(false);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [workspaceError, setWorkspaceError] = useState('');
   const currentUser = useAgentBeanStore((s) => s.currentUser);
+  const applyAgentStatus = useAgentBeanStore((s) => s.applyAgentStatus);
   const displayName = device.hostname ?? '未命名设备';
   const ownerName = device.ownerName ?? device.userName ?? '未知用户';
   const daemonVersion = daemonVersionDisplay(device);
@@ -351,8 +355,29 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
     setCustomAgents((agents) => updateAgentPublishState(agents, agentId, networkId, published));
     setSelectNetworkAgent((agent: any | null) => {
       if (!agent || agent.id !== agentId) return agent;
-      return updateAgentPublishState([agent], agentId, networkId, published)[0] ?? agent;
+      const updated = updateAgentPublishState([agent], agentId, networkId, published)[0] ?? agent;
+      applyAgentStatus(updated);
+      return updated;
     });
+  };
+
+  const confirmDeleteAgent = async () => {
+    if (!deleteAgent) return;
+    setDeleteAgentSaving(true);
+    setDeleteAgentError('');
+    const res = await agentEvents().delete(deleteAgent.id);
+    setDeleteAgentSaving(false);
+    if (!res.ok) {
+      setDeleteAgentError(res.error ?? '删除失败');
+      return;
+    }
+    setDeviceAgents((agents) => agents.filter((agent) => agent.id !== deleteAgent.id));
+    setCustomAgents((agents) => agents.filter((agent) => agent.id !== deleteAgent.id));
+    if (selectNetworkAgent?.id === deleteAgent.id) setSelectNetworkAgent(null);
+    if (configAgent?.id === deleteAgent.id) setConfigAgent(null);
+    setDeleteAgent(null);
+    refreshDeviceAgents();
+    refreshCustomAgents();
   };
 
   useEffect(() => {
@@ -567,6 +592,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           onAdd={isLocalDevice ? () => setShowAddCustom(true) : undefined}
           onSelectNetwork={setSelectNetworkAgent}
           onSelectAgent={setConfigAgent}
+          onDeleteAgent={setDeleteAgent}
           canManageAgents={canManageDevice}
         />
         {isLocalDevice && (
@@ -624,6 +650,19 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
             refreshDeviceAgents();
             refreshCustomAgents();
           }}
+        />
+      )}
+      {deleteAgent && (
+        <DeleteCustomAgentDialog
+          agent={deleteAgent}
+          saving={deleteAgentSaving}
+          error={deleteAgentError}
+          onCancel={() => {
+            if (deleteAgentSaving) return;
+            setDeleteAgent(null);
+            setDeleteAgentError('');
+          }}
+          onConfirm={confirmDeleteAgent}
         />
       )}
       {showAddCustom && (
@@ -734,7 +773,7 @@ function AddDeviceDialog({ onClose, currentNetworkId }: { onClose: () => void; c
   );
 }
 
-function AgentGroup({ title, subtitle, icon, iconBg, agents, scanning, onScan, showAddButton, onAdd, onSelectNetwork, onSelectAgent, canManageAgents = false }: {
+function AgentGroup({ title, subtitle, icon, iconBg, agents, scanning, onScan, showAddButton, onAdd, onSelectNetwork, onSelectAgent, onDeleteAgent, canManageAgents = false }: {
   title: string;
   subtitle: string;
   icon: React.ReactNode;
@@ -746,6 +785,7 @@ function AgentGroup({ title, subtitle, icon, iconBg, agents, scanning, onScan, s
   onAdd?: () => void;
   onSelectNetwork: (agent: any) => void;
   onSelectAgent: (agent: any) => void;
+  onDeleteAgent?: (agent: any) => void;
   canManageAgents?: boolean;
 }) {
   return (
@@ -773,7 +813,7 @@ function AgentGroup({ title, subtitle, icon, iconBg, agents, scanning, onScan, s
       ) : (
         <div className="space-y-1.5">
           {agents.map((agent) => (
-            <AgentRow key={agent.id} agent={agent} icon={icon} iconBg={iconBg} onSelectNetwork={onSelectNetwork} onSelectAgent={onSelectAgent} canManage={canManageAgents} />
+            <AgentRow key={agent.id} agent={agent} icon={icon} iconBg={iconBg} onSelectNetwork={onSelectNetwork} onSelectAgent={onSelectAgent} onDeleteAgent={onDeleteAgent} canManage={canManageAgents} />
           ))}
         </div>
       )}
@@ -927,12 +967,13 @@ function DeviceWorkspaceFileLink({ file }: { file: AgentWorkspaceFile }) {
   );
 }
 
-function AgentRow({ agent, icon, iconBg, onSelectNetwork, onSelectAgent, canManage }: {
+function AgentRow({ agent, icon, iconBg, onSelectNetwork, onSelectAgent, onDeleteAgent, canManage }: {
   agent: any;
   icon: React.ReactNode;
   iconBg: string;
   onSelectNetwork: (agent: any) => void;
   onSelectAgent: (agent: any) => void;
+  onDeleteAgent?: (agent: any) => void;
   canManage: boolean;
 }) {
   const publishedCount = agent.publishedNetworkIds?.length ?? 0;
@@ -954,6 +995,16 @@ function AgentRow({ agent, icon, iconBg, onSelectNetwork, onSelectAgent, canMana
       {canManage && (
         <button onClick={(e) => { e.stopPropagation(); onSelectNetwork(agent); }} className="shrink-0 rounded-md border border-neutral-300 px-2 py-1 text-[11px] hover:bg-neutral-50">
           选择团队
+        </button>
+      )}
+      {canManage && onDeleteAgent && agent.source === 'custom' && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onDeleteAgent(agent); }}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-rose-200 text-rose-600 hover:bg-rose-50"
+          title="删除 Agent"
+          aria-label={`删除 ${agent.name}`}
+        >
+          <Trash2 size={13} />
         </button>
       )}
     </div>
@@ -1026,6 +1077,39 @@ function SelectNetworkDialog({ agent, onClose, onPublishedChange }: { agent: any
         </div>
         <div className="mt-6 flex justify-end">
           <button onClick={onClose} className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white hover:bg-neutral-800">完成</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeleteCustomAgentDialog({ agent, saving, error, onCancel, onConfirm }: {
+  agent: any;
+  saving: boolean;
+  error: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onCancel}>
+      <div className="mx-4 w-full max-w-md rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-rose-50 text-rose-600">
+            <Trash2 size={18} />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold text-neutral-950">删除 {agent.name}</h2>
+            <p className="mt-2 text-sm leading-6 text-neutral-600">
+              这会删除自定义 Agent 配置，并从已发布团队和频道成员中移除；不会删除设备本身。
+            </p>
+          </div>
+        </div>
+        {error && <div className="mt-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{error}</div>}
+        <div className="mt-6 flex justify-end gap-2">
+          <button onClick={onCancel} disabled={saving} className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-50 disabled:opacity-50">取消</button>
+          <button onClick={onConfirm} disabled={saving} className="rounded-md bg-rose-600 px-4 py-2 text-sm text-white hover:bg-rose-700 disabled:opacity-50">
+            {saving ? '删除中...' : '确认删除'}
+          </button>
         </div>
       </div>
     </div>

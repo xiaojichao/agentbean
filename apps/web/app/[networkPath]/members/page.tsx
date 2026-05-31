@@ -184,7 +184,7 @@ export default function MembersPage() {
 
       {/* Right panel */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {selectedAgent && <AgentTopBar agent={selectedAgent} />}
+        {selectedAgent && <AgentTopBar agent={selectedAgent} device={selectedDevice} />}
 
         {/* Tab bar */}
         {selectedAgent && (

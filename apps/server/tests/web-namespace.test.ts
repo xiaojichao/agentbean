@@ -959,6 +959,135 @@ describe('/web namespace', () => {
     owner.close();
   });
 
+  it('deletes only manageable custom agents and clears publish plus channel membership state', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({ id: 'delete-custom-owner', username: 'delete-custom-owner', passwordHash: null, createdAt: now });
+    app.globalDb.users.create({ id: 'delete-custom-outsider', username: 'delete-custom-outsider', passwordHash: null, createdAt: now });
+    app.globalDb.networkMembers.add('default', 'delete-custom-owner', 'member');
+    app.globalDb.networkMembers.add('default', 'delete-custom-outsider', 'member');
+    app.globalDb.devices.upsert({
+      id: 'delete-custom-device',
+      userId: 'delete-custom-owner',
+      networkId: 'default',
+      hostname: 'Delete Custom Device',
+      lastSeenAt: now,
+      systemInfo: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'delete-custom-agent',
+      name: 'Delete-Custom-Agent',
+      role: 'assistant',
+      adapterKind: 'codex',
+      deviceId: 'delete-custom-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'executor-hosted',
+      source: 'custom',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      ownerId: 'delete-custom-owner',
+      command: 'codex',
+      cwd: '/tmp/delete-custom',
+      description: null,
+    });
+    app.globalDb.agentPublishes.publish('delete-custom-agent', 'default', 'delete-custom-owner');
+    app.registry.registerVirtual({
+      id: 'delete-custom-agent',
+      name: 'Delete-Custom-Agent',
+      role: 'assistant',
+      adapterKind: 'codex',
+      category: 'executor-hosted',
+      networkId: 'default',
+      deviceId: 'delete-custom-device',
+      ownerId: 'delete-custom-owner',
+      source: 'custom',
+      publishedNetworkIds: ['default'],
+    });
+    const channel = app.channels.create('default', {
+      name: 'delete-custom-channel',
+      agentIds: ['delete-custom-agent'],
+      createdBy: 'delete-custom-owner',
+    });
+
+    const outsider = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('delete-custom-outsider', 'default') },
+    });
+    await new Promise<void>((r) => outsider.on('connect', () => r()));
+    const denied = await new Promise<any>((resolve) => {
+      outsider.emit('agent:delete', { agentId: 'delete-custom-agent' }, resolve);
+    });
+    expect(denied).toEqual({ ok: false, error: 'FORBIDDEN' });
+    outsider.close();
+
+    const owner = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('delete-custom-owner', 'default') },
+    });
+    await new Promise<void>((r) => owner.on('connect', () => r()));
+    const deleted = await new Promise<any>((resolve) => {
+      owner.emit('agent:delete', { agentId: 'delete-custom-agent' }, resolve);
+    });
+    expect(deleted).toEqual({ ok: true });
+    expect(app.globalDb.agents.getFull('delete-custom-agent')).toBeNull();
+    expect(app.globalDb.agentPublishes.isPublished('delete-custom-agent', 'default')).toBe(false);
+    expect(app.channels.memberIds('default', channel.id)).not.toContain('delete-custom-agent');
+    expect(app.registry.snapshot('delete-custom-agent')).toBeNull();
+
+    const members = await new Promise<any>((resolve) => {
+      owner.emit('members:list', {}, resolve);
+    });
+    expect(members.ok).toBe(true);
+    expect(members.agents.map((agent: any) => agent.id)).not.toContain('delete-custom-agent');
+    owner.close();
+  });
+
+  it('rejects delete for scanned or AgentOS-hosted agents', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({ id: 'delete-non-custom-owner', username: 'delete-non-custom-owner', passwordHash: null, createdAt: now });
+    app.globalDb.networkMembers.add('default', 'delete-non-custom-owner', 'member');
+    app.globalDb.devices.upsert({
+      id: 'delete-non-custom-device',
+      userId: 'delete-non-custom-owner',
+      networkId: 'default',
+      hostname: 'Delete Non Custom Device',
+      lastSeenAt: now,
+      systemInfo: null,
+    });
+    app.globalDb.agents.upsert({
+      id: 'delete-agentos-agent',
+      name: 'Delete-AgentOS-Agent',
+      role: 'assistant',
+      adapterKind: 'hermes',
+      deviceId: 'delete-non-custom-device',
+      networkId: 'default',
+      visibility: 'public',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      firstSeenAt: now,
+      lastSeenAt: now,
+      ownerId: null,
+      command: 'hermes',
+      cwd: null,
+      description: null,
+    });
+
+    const owner = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('delete-non-custom-owner', 'default') },
+    });
+    await new Promise<void>((r) => owner.on('connect', () => r()));
+    const res = await new Promise<any>((resolve) => {
+      owner.emit('agent:delete', { agentId: 'delete-agentos-agent' }, resolve);
+    });
+    expect(res).toEqual({ ok: false, error: 'NOT_DELETABLE_AGENT' });
+    expect(app.globalDb.agents.getFull('delete-agentos-agent')).not.toBeNull();
+    owner.close();
+  });
+
   it('allows agent config changes only from the agent owner or an admin', async () => {
     const now = Date.now();
     app.globalDb.users.create({
