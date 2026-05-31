@@ -43,6 +43,57 @@ afterEach(async () => {
 });
 
 describe('/web namespace', () => {
+  it('allows artifact uploads to a switched team when the user token belongs to another team', async () => {
+    const now = Date.now();
+    const targetNetwork = app.globalDb.networks.create({
+      id: 'opensns-upload-target',
+      ownerId: 'admin',
+      name: 'OpenSNS Upload Target',
+      path: 'opensns-upload-target',
+      visibility: 'private',
+      createdAt: now,
+    });
+    app.globalDb.networkMembers.add(targetNetwork.id, 'admin', 'owner');
+
+    const form = new FormData();
+    form.append('channelId', 'channel-1');
+    form.append('uploaderId', 'admin');
+    form.append('file', new Blob(['hello']), 'hello.md');
+
+    const res = await fetch(`${baseUrl}/api/networks/${targetNetwork.id}/artifacts/upload?token=${encodeURIComponent(generateToken('admin', 'default'))}`, {
+      method: 'POST',
+      body: form,
+    });
+
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects artifact uploads to a private team when the token user is not a member', async () => {
+    const now = Date.now();
+    const targetNetwork = app.globalDb.networks.create({
+      id: 'private-upload-target',
+      ownerId: 'admin',
+      name: 'Private Upload Target',
+      path: 'private-upload-target',
+      visibility: 'private',
+      createdAt: now,
+    });
+    app.globalDb.users.create({ id: 'upload-outsider', username: 'upload-outsider', passwordHash: null, createdAt: now });
+    app.globalDb.networkMembers.add('default', 'upload-outsider', 'member');
+
+    const form = new FormData();
+    form.append('channelId', 'channel-1');
+    form.append('uploaderId', 'upload-outsider');
+    form.append('file', new Blob(['hello']), 'hello.md');
+
+    const res = await fetch(`${baseUrl}/api/networks/${targetNetwork.id}/artifacts/upload?token=${encodeURIComponent(generateToken('upload-outsider', 'default'))}`, {
+      method: 'POST',
+      body: form,
+    });
+
+    expect(res.status).toBe(401);
+  });
+
   it('emits empty snapshot when no agents are registered', async () => {
     const web = ioClient(`${baseUrl}/web`, { reconnection: false, transports: ['websocket'], auth: { token: 'default:default:tok' } });
     await new Promise<void>((r) => web.on('connect', () => r()));

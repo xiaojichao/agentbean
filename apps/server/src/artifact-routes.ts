@@ -114,7 +114,7 @@ export function attachArtifactRoutes(deps: ArtifactRoutesDeps): void {
     if (provided === token) return next();
     if (provided && globalDb) {
       const parsed = verifyUserToken(provided, globalDb);
-      if (parsed?.networkId === networkId) {
+      if (parsed) {
         const network = globalDb.networks.get(networkId);
         if (network?.visibility === 'public' || globalDb.networkMembers.isMember(networkId, parsed.userId)) {
           return next();
