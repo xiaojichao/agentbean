@@ -629,6 +629,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
       {showAddCustom && (
         <AddCustomAgentDialog
           deviceId={device.id}
+          networkId={currentNetworkId}
           daemonVersion={device.systemInfo?.daemonVersion ?? device.daemonVersionInfo?.current ?? null}
           runtimes={runtimeList}
           onClose={() => setShowAddCustom(false)}
@@ -1221,7 +1222,7 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
   );
 }
 
-function AddCustomAgentDialog({ deviceId, daemonVersion, runtimes, onClose, onCreated }: { deviceId: string; daemonVersion?: string | null; runtimes: any[]; onClose: () => void; onCreated: () => void }) {
+function AddCustomAgentDialog({ deviceId, networkId, daemonVersion, runtimes, onClose, onCreated }: { deviceId: string; networkId?: string | null; daemonVersion?: string | null; runtimes: any[]; onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState('');
   const runtimeOptions = useMemo(() => buildRuntimeOptions(runtimes), [runtimes]);
   const [runtimeIndex, setRuntimeIndex] = useState('0');
@@ -1271,6 +1272,7 @@ function AddCustomAgentDialog({ deviceId, daemonVersion, runtimes, onClose, onCr
       command: selectedRuntime.command,
       category: 'executor-hosted',
       deviceId,
+      networkId: networkId ?? undefined,
       cwd: trimmedCwd,
       env: Object.keys(env).length > 0 ? env : undefined,
       description: description.trim() || undefined,

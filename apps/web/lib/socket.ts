@@ -124,7 +124,7 @@ export interface AgentEvents {
   metrics(): Promise<{ ok: boolean; summaries?: AgentMetricsSummary[]; error?: string }>;
   publish(agentId: string, networkId: string): Promise<{ ok: boolean; error?: string }>;
   unpublish(agentId: string, networkId: string): Promise<{ ok: boolean; error?: string }>;
-  create(payload: { name: string; adapterKind: string; command: string; args?: string[]; category?: string; cwd?: string; env?: Record<string, string>; description?: string; deviceId?: string }): Promise<{ ok: boolean; agent?: any; error?: string }>;
+  create(payload: { name: string; adapterKind: string; command: string; args?: string[]; category?: string; cwd?: string; env?: Record<string, string>; description?: string; deviceId?: string; networkId?: string }): Promise<{ ok: boolean; agent?: any; error?: string }>;
   updateConfig(payload: { id: string; name: string; adapterKind?: string; command?: string; cwd?: string | null; description?: string | null }): Promise<{ ok: boolean; agent?: any; error?: string }>;
   listCustom(payload?: { deviceId?: string }): Promise<{ ok: boolean; agents?: AgentSnapshot[]; error?: string }>;
   subscribe(): void;

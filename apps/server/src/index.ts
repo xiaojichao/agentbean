@@ -1976,7 +1976,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const command = payload.command?.trim() ?? '';
         const cwd = payload.cwd?.trim() ?? '';
         const env = normalizeEnv(payload.env);
-        const targetNetworkId = payload.networkId ?? socket.data.networkId ?? socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const targetNetworkId = payload.networkId ?? socketNetworkMap.get(socket.id) ?? socket.data.networkId ?? defaultNetworkId;
         const userId = socket.data.userId as string | undefined;
         const network = globalDb.networks.get(targetNetworkId);
         if (userId && network?.visibility !== 'public' && !globalDb.networkMembers.isMember(targetNetworkId, userId)) {
