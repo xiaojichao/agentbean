@@ -3687,7 +3687,9 @@ describe('message:send', () => {
     expect(taskUpdates.some((task) => task.id === humanMeta.taskId && task.status === 'closed')).toBe(true);
     const reply = messages.find((m) => m.senderKind === 'agent' && m.senderId === 'custom-drama' && m.body === 'custom dm ok');
     expect(reply).toBeTruthy();
-    expect(JSON.parse(reply.metaJson).inReplyTo).toBe(human!.id);
+    const replyMeta = JSON.parse(reply.metaJson);
+    expect(replyMeta.inReplyTo).toBe(human!.id);
+    expect(replyMeta.senderName).toBe('drama');
     expect(reply.artifacts?.[0]).toMatchObject({
       id: uploadedArtifactId,
       filename: 'drama.png',

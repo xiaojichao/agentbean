@@ -17,6 +17,7 @@ export interface CurrentDisplayUser {
 export interface SpeakerMessage {
   senderKind: string;
   senderId?: string | null;
+  metaJson?: string | null;
 }
 
 export interface SpeakerSources {
@@ -49,12 +50,54 @@ export function humanDisplayName(senderId: string | null | undefined, sources: S
   return fallback;
 }
 
+function cleanAgentName(name: string | null | undefined): string {
+  return (name ?? '').trim();
+}
+
+function agentNameFromMeta(metaJson: string | null | undefined): string {
+  if (!metaJson) return '';
+  try {
+    const meta = JSON.parse(metaJson) as { senderName?: unknown; agentName?: unknown };
+    const senderName = typeof meta.senderName === 'string' ? meta.senderName : '';
+    const agentName = typeof meta.agentName === 'string' ? meta.agentName : '';
+    return cleanAgentName(senderName || agentName);
+  } catch {
+    return '';
+  }
+}
+
+export function agentDisplayName(
+  senderId: string | null | undefined,
+  agents: Record<string, DisplayAgent>,
+  sources: SpeakerSources = {},
+  metaJson?: string | null,
+  fallback = 'Agent',
+): string {
+  if (!senderId) return fallback;
+
+  const agentName = cleanAgentName(agents[senderId]?.name);
+  if (agentName) return agentName;
+
+  const channelMember = sources.channelMembers?.find((member) => member.id === senderId && member.kind === 'agent');
+  const channelName = cleanAgentName(channelMember?.name ?? channelMember?.username);
+  if (channelName) return channelName;
+
+  const mentionMember = sources.mentionMembers?.find((member) => member.id === senderId && member.kind === 'agent');
+  const mentionName = cleanAgentName(mentionMember?.name ?? mentionMember?.username);
+  if (mentionName) return mentionName;
+
+  const metaName = agentNameFromMeta(metaJson);
+  if (metaName) return metaName;
+
+  return fallback;
+}
+
 export function messageSpeakerName(
   msg: SpeakerMessage,
   agents: Record<string, DisplayAgent>,
   sources: SpeakerSources = {},
 ): string {
   if (msg.senderKind === 'human') return humanDisplayName(msg.senderId, sources);
-  if (msg.senderKind === 'agent') return msg.senderId ? (agents[msg.senderId]?.name ?? 'Agent') : 'Agent';
+  if (msg.senderKind === 'agent') return agentDisplayName(msg.senderId, agents, sources, msg.metaJson);
   return '系统';
 }

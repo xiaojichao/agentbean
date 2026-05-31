@@ -1932,7 +1932,11 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         persist({
           id: newId(), channelId: ch.id, senderKind: 'agent', senderId: dispatchRecipient.id,
           body: reply.body.trim(), createdAt: Date.now(),
-          metaJson: JSON.stringify({ inReplyTo: parentMessageId ?? humanMsg.id, requestId: reqId }),
+          metaJson: JSON.stringify({
+            inReplyTo: parentMessageId ?? humanMsg.id,
+            requestId: reqId,
+            senderName: dispatchRecipient.name,
+          }),
           artifactIds: artifactIds?.length ? artifactIds : undefined,
         });
         if (taskId) publishTaskStatusChange(sp, taskId, 'done');
