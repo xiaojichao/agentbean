@@ -2351,7 +2351,8 @@ function ChatBubble({
   showReplyAction?: boolean;
   showReplyCount?: boolean;
 }) {
-  const agent = useAgentBeanStore((s) => msg.senderId ? s.agents[msg.senderId] : undefined);
+  const agents = useAgentBeanStore((s) => s.agents);
+  const agent = msg.senderId ? agents[msg.senderId] : undefined;
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const meta = parseMeta(msg);
 
@@ -2374,9 +2375,7 @@ function ChatBubble({
   }
 
   const isHuman = msg.senderKind === 'human';
-  const speaker = isHuman
-    ? messageSpeakerName(msg, {}, { currentUser, humanProfiles, channelMembers })
-    : (agent?.name ?? 'Agent');
+  const speaker = messageSpeakerName(msg, agents, { currentUser, humanProfiles, channelMembers });
   const time = formatTime(msg.createdAt);
   const isOwner = isHuman && currentUser?.id === msg.senderId;
   const taskId = typeof meta.taskId === 'string' ? meta.taskId : null;
