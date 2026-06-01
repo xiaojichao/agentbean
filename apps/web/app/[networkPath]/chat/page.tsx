@@ -26,6 +26,7 @@ type ChatTab = 'chat' | 'tasks' | 'files';
 type TaskViewMode = 'board' | 'list';
 type SidebarSortMode = 'manual' | 'recent' | 'az';
 type ProfileTarget = { kind: 'human' | 'agent'; id: string };
+type MentionProfileMember = { id: string; name: string; kind: ProfileTarget['kind'] };
 type ChatTaskMenuTarget = { surface: 'main' | 'thread'; messageId: string } | null;
 type ComposerAttachmentStatus = 'uploading' | 'ready' | 'failed';
 
@@ -1039,6 +1040,7 @@ export default function ChatPage() {
                         reacted={reactionIds.has(msg.id)}
                         humanProfiles={humanProfiles}
                         channelMembers={channelMembers}
+                        mentionMembers={mentionMembers}
                         onReply={() => handleReply(msg)}
                         onOpenThread={() => openThread(msg.id)}
                         onOpenProfile={openProfile}
@@ -1183,6 +1185,7 @@ export default function ChatPage() {
           taskNumbers={taskNumbers}
           activeDmAgent={activeDmAgent}
           channelMembers={channelMembers}
+          mentionMembers={mentionMembers}
           chatTaskMenuTarget={chatTaskMenuTarget}
           onInput={setThreadInput}
           onSend={sendThreadMessage}
@@ -1987,6 +1990,7 @@ function ThreadPanel({
   taskNumbers,
   activeDmAgent,
   channelMembers,
+  mentionMembers,
   chatTaskMenuTarget,
   onInput,
   onSend,
@@ -2017,6 +2021,7 @@ function ThreadPanel({
   taskNumbers: Map<string, number>;
   activeDmAgent?: AgentSnapshot;
   channelMembers: ChannelMemberEntry[];
+  mentionMembers: MentionProfileMember[];
   chatTaskMenuTarget: ChatTaskMenuTarget;
   onInput: (value: string) => void;
   onSend: () => void;
@@ -2052,6 +2057,7 @@ function ThreadPanel({
         reacted={reactionIds.has(msg.id)}
         humanProfiles={humanProfiles}
         channelMembers={channelMembers}
+        mentionMembers={mentionMembers}
         onReply={() => onReply(msg)}
         onOpenThread={() => {}}
         onOpenProfile={onOpenProfile}
@@ -2364,6 +2370,7 @@ function ChatBubble({
   reacted,
   humanProfiles = [],
   channelMembers = [],
+  mentionMembers = [],
   onReply,
   onOpenThread,
   onOpenProfile,
@@ -2385,6 +2392,7 @@ function ChatBubble({
   reacted: boolean;
   humanProfiles?: HumanProfile[];
   channelMembers?: ChannelMemberEntry[];
+  mentionMembers?: MentionProfileMember[];
   onReply: () => void;
   onOpenThread: () => void;
   onOpenProfile: (target: ProfileTarget) => void;
@@ -2425,6 +2433,7 @@ function ChatBubble({
   const isOwner = isHuman && currentUser?.id === msg.senderId;
   const taskId = typeof meta.taskId === 'string' ? meta.taskId : null;
   const canOpenProfile = Boolean(msg.senderId && (msg.senderKind === 'human' || msg.senderKind === 'agent'));
+  const messageMentionMembers = mergeMentionProfileMembers(channelMembers, mentionMembers);
   const profileTarget = msg.senderKind === 'agent'
     ? { kind: 'agent' as const, id: msg.senderId ?? '' }
     : { kind: 'human' as const, id: msg.senderId ?? '' };
@@ -2466,7 +2475,7 @@ function ChatBubble({
           {!isHuman && agent?.role && <span className="text-xs text-neutral-400">{agent.role}</span>}
           <span className="text-[10px] text-neutral-400">{time}</span>
         </div>
-        <MarkdownMessage body={displayMessageBody(msg)} />
+        <MarkdownMessage body={displayMessageBody(msg)} mentionMembers={messageMentionMembers} onOpenMention={onOpenProfile} />
         {msg.artifacts && msg.artifacts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">
             {msg.artifacts.map((artifact) => (
@@ -2575,15 +2584,29 @@ function taskBadgeIcon(status: TaskStatus): ReactNode {
   return <Eye size={11} strokeWidth={2.5} />;
 }
 
-function MarkdownMessage({ body }: { body: string }) {
+function MarkdownMessage({
+  body,
+  mentionMembers = [],
+  onOpenMention,
+}: {
+  body: string;
+  mentionMembers?: MentionProfileMember[];
+  onOpenMention?: (target: ProfileTarget) => void;
+}) {
+  const markdownOptions = { mentionMembers, onOpenMention };
   return (
     <div className="mt-1 space-y-2 break-words text-sm leading-relaxed text-neutral-700">
-      {renderMarkdownBlocks(body)}
+      {renderMarkdownBlocks(body, markdownOptions)}
     </div>
   );
 }
 
-function renderMarkdownBlocks(body: string): ReactNode[] {
+interface MarkdownRenderOptions {
+  mentionMembers?: MentionProfileMember[];
+  onOpenMention?: (target: ProfileTarget) => void;
+}
+
+function renderMarkdownBlocks(body: string, options: MarkdownRenderOptions = {}): ReactNode[] {
   const lines = body.replace(/\r\n/g, '\n').split('\n');
   const nodes: ReactNode[] = [];
   let i = 0;
@@ -2619,7 +2642,7 @@ function renderMarkdownBlocks(body: string): ReactNode[] {
     if (heading) {
       const level = heading[1]!.length;
       const className = headingClassName(level);
-      nodes.push(<div key={`heading-${nodes.length}`} className={className}>{renderInlineMarkdown(heading[2]!)}</div>);
+      nodes.push(<div key={`heading-${nodes.length}`} className={className}>{renderInlineMarkdown(heading[2]!, options)}</div>);
       i += 1;
       continue;
     }
@@ -2639,7 +2662,7 @@ function renderMarkdownBlocks(body: string): ReactNode[] {
       nodes.push(
         <blockquote key={`quote-${nodes.length}`} className="border-l-2 border-neutral-300 pl-3 text-neutral-600">
           {quoteLines.map((quote, idx) => (
-            <p key={idx}>{renderInlineMarkdown(quote)}</p>
+            <p key={idx}>{renderInlineMarkdown(quote, options)}</p>
           ))}
         </blockquote>,
       );
@@ -2654,7 +2677,7 @@ function renderMarkdownBlocks(body: string): ReactNode[] {
       }
       nodes.push(
         <ul key={`ul-${nodes.length}`} className="list-disc space-y-1 pl-5">
-          {items.map((item, idx) => <li key={idx}>{renderInlineMarkdown(item)}</li>)}
+          {items.map((item, idx) => <li key={idx}>{renderInlineMarkdown(item, options)}</li>)}
         </ul>,
       );
       continue;
@@ -2668,7 +2691,7 @@ function renderMarkdownBlocks(body: string): ReactNode[] {
       }
       nodes.push(
         <ol key={`ol-${nodes.length}`} className="list-decimal space-y-1 pl-5">
-          {items.map((item, idx) => <li key={idx}>{renderInlineMarkdown(item)}</li>)}
+          {items.map((item, idx) => <li key={idx}>{renderInlineMarkdown(item, options)}</li>)}
         </ol>,
       );
       continue;
@@ -2680,7 +2703,7 @@ function renderMarkdownBlocks(body: string): ReactNode[] {
         tableLines.push(lines[i] ?? '');
         i += 1;
       }
-      nodes.push(renderMarkdownTable(tableLines, `table-${nodes.length}`));
+      nodes.push(renderMarkdownTable(tableLines, `table-${nodes.length}`, options));
       continue;
     }
 
@@ -2699,7 +2722,7 @@ function renderMarkdownBlocks(body: string): ReactNode[] {
       paragraph.push((lines[i] ?? '').trim());
       i += 1;
     }
-    nodes.push(<p key={`p-${nodes.length}`}>{renderParagraphLines(paragraph)}</p>);
+    nodes.push(<p key={`p-${nodes.length}`}>{renderParagraphLines(paragraph, options)}</p>);
   }
 
   return nodes.length > 0 ? nodes : [<p key="empty" />];
@@ -2727,7 +2750,7 @@ function parseMarkdownTableRow(line: string): string[] {
   return trimmed.split('|').map((cell) => cell.trim());
 }
 
-function renderMarkdownTable(lines: string[], key: string): ReactNode {
+function renderMarkdownTable(lines: string[], key: string, options: MarkdownRenderOptions = {}): ReactNode {
   const header = parseMarkdownTableRow(lines[0] ?? '');
   const rows = lines.slice(2).map(parseMarkdownTableRow);
   return (
@@ -2737,7 +2760,7 @@ function renderMarkdownTable(lines: string[], key: string): ReactNode {
           <tr>
             {header.map((cell, index) => (
               <th key={index} className="border-b border-neutral-200 px-2 py-1.5 font-semibold">
-                {renderInlineMarkdown(cell)}
+                {renderInlineMarkdown(cell, options)}
               </th>
             ))}
           </tr>
@@ -2747,7 +2770,7 @@ function renderMarkdownTable(lines: string[], key: string): ReactNode {
             <tr key={rowIndex} className="border-t border-neutral-100 align-top">
               {header.map((_, cellIndex) => (
                 <td key={cellIndex} className="px-2 py-1.5 text-neutral-700">
-                  {renderInlineMarkdown(row[cellIndex] ?? '')}
+                  {renderInlineMarkdown(row[cellIndex] ?? '', options)}
                 </td>
               ))}
             </tr>
@@ -2758,17 +2781,17 @@ function renderMarkdownTable(lines: string[], key: string): ReactNode {
   );
 }
 
-function renderParagraphLines(lines: string[]): ReactNode[] {
+function renderParagraphLines(lines: string[], options: MarkdownRenderOptions = {}): ReactNode[] {
   return lines.flatMap((line, index) => {
-    const inline = renderInlineMarkdown(line);
+    const inline = renderInlineMarkdown(line, options);
     return index < lines.length - 1
       ? [...inline, <br key={`br-${index}`} />]
       : inline;
   });
 }
 
-function renderInlineMarkdown(text: string): ReactNode[] {
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+]\([^)]+\)|https?:\/\/[^\s)]+|@[\w-]+)/g;
+function renderInlineMarkdown(text: string, options: MarkdownRenderOptions = {}): ReactNode[] {
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\)|https?:\/\/[^\s)]+|@[\p{L}\p{N}_-]+)/gu;
   const nodes: ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -2786,13 +2809,13 @@ function renderInlineMarkdown(text: string): ReactNode[] {
         </code>,
       );
     } else if (token.startsWith('**') && token.endsWith('**')) {
-      nodes.push(<strong key={`strong-${match.index}`} className="font-semibold text-neutral-950">{renderInlineMarkdown(token.slice(2, -2))}</strong>);
+      nodes.push(<strong key={`strong-${match.index}`} className="font-semibold text-neutral-950">{renderInlineMarkdown(token.slice(2, -2), options)}</strong>);
     } else if (token.startsWith('[')) {
       const link = token.match(/^\[([^\]]+)]\(([^)]+)\)$/);
       const href = link ? safeMarkdownHref(link[2]!) : null;
       nodes.push(href ? (
         <a key={`link-${match.index}`} href={href} target="_blank" rel="noreferrer" className="font-medium text-blue-600 underline-offset-2 hover:underline">
-          {renderInlineMarkdown(link![1]!)}
+          {renderInlineMarkdown(link![1]!, options)}
         </a>
       ) : token);
     } else if (token.startsWith('http://') || token.startsWith('https://')) {
@@ -2802,7 +2825,23 @@ function renderInlineMarkdown(text: string): ReactNode[] {
         </a>,
       );
     } else {
-      nodes.push(<span key={`mention-${match.index}`} className="cursor-pointer font-medium text-blue-600 hover:underline">{token}</span>);
+      const target = resolveMentionTarget(token.slice(1), options.mentionMembers ?? []);
+      nodes.push(target && options.onOpenMention ? (
+        <button
+          key={`mention-${match.index}`}
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            options.onOpenMention?.(target);
+          }}
+          className="font-medium text-blue-600 underline-offset-2 hover:underline"
+          title={`查看 ${token} 资料`}
+        >
+          {token}
+        </button>
+      ) : (
+        <span key={`mention-${match.index}`} className="font-medium text-blue-600">{token}</span>
+      ));
     }
 
     lastIndex = match.index + token.length;
@@ -2813,6 +2852,32 @@ function renderInlineMarkdown(text: string): ReactNode[] {
   }
 
   return nodes;
+}
+
+function mergeMentionProfileMembers(
+  channelMembers: ChannelMemberEntry[] = [],
+  mentionMembers: MentionProfileMember[] = [],
+): MentionProfileMember[] {
+  const merged = new Map<string, MentionProfileMember>();
+  for (const member of [...channelMembers, ...mentionMembers]) {
+    merged.set(`${member.kind}:${member.id}`, {
+      id: member.id,
+      name: member.name.replace(/（你）$/, ''),
+      kind: member.kind,
+    });
+  }
+  return [...merged.values()];
+}
+
+function normalizeMentionName(name: string): string {
+  return name.replace(/^@/, '').replace(/（你）$/, '').trim().toLowerCase();
+}
+
+function resolveMentionTarget(name: string, members: MentionProfileMember[]): ProfileTarget | null {
+  const normalized = normalizeMentionName(name);
+  if (!normalized) return null;
+  const member = members.find((item) => normalizeMentionName(item.name) === normalized);
+  return member ? { kind: member.kind, id: member.id } : null;
 }
 
 function safeMarkdownHref(href: string): string | null {
