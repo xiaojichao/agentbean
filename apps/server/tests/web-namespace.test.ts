@@ -2942,6 +2942,91 @@ describe('/web namespace', () => {
     web.close();
   });
 
+  it('restricts channel member management to the channel creator, team owner, and admins', async () => {
+    const now = Date.now();
+    const networkId = 'channel-permission-team';
+    app.globalDb.users.create({ id: 'channel-team-owner', username: 'channel-team-owner', passwordHash: null, createdAt: now });
+    app.globalDb.users.create({ id: 'channel-creator', username: 'channel-creator', passwordHash: null, createdAt: now });
+    app.globalDb.users.create({ id: 'channel-regular', username: 'channel-regular', passwordHash: null, createdAt: now });
+    app.globalDb.users.create({ id: 'channel-target', username: 'channel-target', passwordHash: null, createdAt: now });
+    app.globalDb.networks.create({
+      id: networkId,
+      ownerId: 'channel-team-owner',
+      name: 'Channel Permission Team',
+      path: networkId,
+      visibility: 'private',
+      createdAt: now,
+    });
+    for (const userId of ['channel-team-owner', 'channel-creator', 'channel-regular', 'channel-target']) {
+      app.globalDb.networkMembers.add(networkId, userId, userId === 'channel-team-owner' ? 'owner' : 'member');
+    }
+    app.registry.register('channel-target-agent-session', {
+      id: 'channel-target-agent',
+      name: 'Channel Target Agent',
+      role: 'r',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      networkId,
+    });
+
+    const connect = async (userId: string) => {
+      const socket = ioClient(`${baseUrl}/web`, {
+        reconnection: false,
+        transports: ['websocket'],
+        auth: { token: generateToken(userId, networkId) },
+      });
+      await new Promise<void>((r) => socket.on('connect', () => r()));
+      return socket;
+    };
+    const emit = (socket: ReturnType<typeof ioClient>, event: string, payload: any) =>
+      new Promise<any>((resolve) => socket.emit(event, payload, resolve));
+
+    const creatorSocket = await connect('channel-creator');
+    const regularSocket = await connect('channel-regular');
+    const ownerSocket = await connect('channel-team-owner');
+    const adminSocket = await connect('admin');
+
+    const created = await emit(creatorSocket, 'channel:create', {
+      name: `member-permission-${now}`,
+      visibility: 'private',
+      userIds: ['channel-regular'],
+    });
+    expect(created.ok).toBe(true);
+
+    await expect(emit(regularSocket, 'channel:add-member', { channelId: created.channel.id, userId: 'channel-target' }))
+      .resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    await expect(emit(regularSocket, 'channel:add-agent', { channelId: created.channel.id, agentId: 'channel-target-agent' }))
+      .resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    await expect(emit(creatorSocket, 'channel:add-member', { channelId: created.channel.id, userId: 'channel-target' }))
+      .resolves.toMatchObject({ ok: true });
+    await expect(emit(creatorSocket, 'channel:add-agent', { channelId: created.channel.id, agentId: 'channel-target-agent' }))
+      .resolves.toMatchObject({ ok: true });
+
+    await expect(emit(regularSocket, 'channel:remove-member', { channelId: created.channel.id, userId: 'channel-target' }))
+      .resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    await expect(emit(regularSocket, 'channel:remove-agent', { channelId: created.channel.id, agentId: 'channel-target-agent' }))
+      .resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    let members = await emit(creatorSocket, 'channel:members', { channelId: created.channel.id });
+    expect(members.humans.map((human: any) => human.userId)).toContain('channel-target');
+    expect(members.agents.map((agent: any) => agent.id)).toContain('channel-target-agent');
+
+    await expect(emit(ownerSocket, 'channel:remove-member', { channelId: created.channel.id, userId: 'channel-target' }))
+      .resolves.toMatchObject({ ok: true });
+    await expect(emit(adminSocket, 'channel:remove-agent', { channelId: created.channel.id, agentId: 'channel-target-agent' }))
+      .resolves.toMatchObject({ ok: true });
+
+    members = await emit(creatorSocket, 'channel:members', { channelId: created.channel.id });
+    expect(members.humans.map((human: any) => human.userId)).not.toContain('channel-target');
+    expect(members.agents.map((agent: any) => agent.id)).not.toContain('channel-target-agent');
+
+    creatorSocket.close();
+    regularSocket.close();
+    ownerSocket.close();
+    adminSocket.close();
+  });
+
   it('removes humans from public channel visibility', async () => {
     const now = Date.now();
     app.globalDb.users.create({
