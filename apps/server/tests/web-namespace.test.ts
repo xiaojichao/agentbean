@@ -2942,7 +2942,7 @@ describe('/web namespace', () => {
     web.close();
   });
 
-  it('restricts channel member management to the channel creator, team owner, and admins', async () => {
+  it('restricts channel member management to the channel creator only', async () => {
     const now = Date.now();
     const networkId = 'channel-permission-team';
     app.globalDb.users.create({ id: 'channel-team-owner', username: 'channel-team-owner', passwordHash: null, createdAt: now });
@@ -3007,14 +3007,18 @@ describe('/web namespace', () => {
       .resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
     await expect(emit(regularSocket, 'channel:remove-agent', { channelId: created.channel.id, agentId: 'channel-target-agent' }))
       .resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    await expect(emit(ownerSocket, 'channel:remove-member', { channelId: created.channel.id, userId: 'channel-target' }))
+      .resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    await expect(emit(adminSocket, 'channel:remove-agent', { channelId: created.channel.id, agentId: 'channel-target-agent' }))
+      .resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
 
     let members = await emit(creatorSocket, 'channel:members', { channelId: created.channel.id });
     expect(members.humans.map((human: any) => human.userId)).toContain('channel-target');
     expect(members.agents.map((agent: any) => agent.id)).toContain('channel-target-agent');
 
-    await expect(emit(ownerSocket, 'channel:remove-member', { channelId: created.channel.id, userId: 'channel-target' }))
+    await expect(emit(creatorSocket, 'channel:remove-member', { channelId: created.channel.id, userId: 'channel-target' }))
       .resolves.toMatchObject({ ok: true });
-    await expect(emit(adminSocket, 'channel:remove-agent', { channelId: created.channel.id, agentId: 'channel-target-agent' }))
+    await expect(emit(creatorSocket, 'channel:remove-agent', { channelId: created.channel.id, agentId: 'channel-target-agent' }))
       .resolves.toMatchObject({ ok: true });
 
     members = await emit(creatorSocket, 'channel:members', { channelId: created.channel.id });
