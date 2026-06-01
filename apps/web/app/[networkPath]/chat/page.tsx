@@ -1231,6 +1231,7 @@ export default function ChatPage() {
           candidates={mentionMembers.map((member) => ({ id: member.id, name: member.name, kind: member.kind }))}
           onAddMember={handleAddChannelMember}
           onRemoveMember={handleRemoveChannelMember}
+          canAddMembers={!isDefaultPublicChannel}
           canRemoveMembers={!isDefaultPublicChannel}
           onClose={() => setShowMembers(false)}
         />
@@ -1390,6 +1391,7 @@ function ChannelMembersDialog({
   candidates,
   onAddMember,
   onRemoveMember,
+  canAddMembers,
   canRemoveMembers,
   onClose,
 }: {
@@ -1398,6 +1400,7 @@ function ChannelMembersDialog({
   candidates: ChannelMemberEntry[];
   onAddMember: (member: ChannelMemberEntry) => Promise<{ ok: boolean; error?: string }>;
   onRemoveMember: (member: ChannelMemberEntry) => Promise<{ ok: boolean; error?: string }>;
+  canAddMembers: boolean;
   canRemoveMembers: boolean;
   onClose: () => void;
 }) {
@@ -1435,13 +1438,13 @@ function ChannelMembersDialog({
           <h3 className="text-sm font-semibold">成员（{members.length}）</h3>
           <button onClick={onClose} className="text-neutral-400 hover:text-neutral-600"><X size={16} /></button>
         </div>
-        <div className="rounded-lg border border-neutral-200 p-3">
+        <div className="max-h-[260px] overflow-y-auto rounded-lg border border-neutral-200 p-3 pr-2">
           <MemberGroup title="智能体" members={agentMembers} onRemove={canRemoveMembers ? remove : undefined} removingKey={removingKey} />
           <MemberGroup title="人类" members={humanMembers} onRemove={canRemoveMembers ? remove : undefined} removingKey={removingKey} />
           {members.length === 0 && <div className="py-6 text-center text-sm text-neutral-400">#{channelName} 暂无成员</div>}
         </div>
         {error && <div className="mt-3 rounded-md bg-rose-50 px-3 py-2 text-xs text-rose-600">{error}</div>}
-        {showAdd && (
+        {canAddMembers && showAdd && (
           <div className="mt-3 max-h-44 overflow-y-auto rounded-lg border border-neutral-200 p-2">
             {addable.length === 0 ? (
               <div className="py-4 text-center text-xs text-neutral-400">没有可添加的成员</div>
@@ -1454,9 +1457,11 @@ function ChannelMembersDialog({
             ))}
           </div>
         )}
-        <button onClick={() => setShowAdd((v) => !v)} disabled={adding} className="mt-3 flex w-full items-center justify-center gap-2 rounded-md bg-pink-500 px-3 py-2 text-sm font-medium text-white hover:bg-pink-600 disabled:opacity-50">
-          <Plus size={14} /> 添加成员
-        </button>
+        {canAddMembers && (
+          <button onClick={() => setShowAdd((v) => !v)} disabled={adding} className="mt-3 flex w-full items-center justify-center gap-2 rounded-md bg-pink-500 px-3 py-2 text-sm font-medium text-white hover:bg-pink-600 disabled:opacity-50">
+            <Plus size={14} /> 添加成员
+          </button>
+        )}
       </div>
     </div>
   );
