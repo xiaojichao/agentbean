@@ -26,6 +26,7 @@ import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { formatRelative } from '@/lib/format-time';
 import type { AgentMetricsSummary, AgentSnapshot, AgentWorkspaceRun, DeviceInfo, UserInfo } from '@/lib/schema';
 import { agentDeviceDisplayName } from '@/lib/agent-device';
+import { ownedAgentsForMember } from '@/lib/agent-list';
 import { AgentWorkspaceSection } from '@/components/agent-workspace-section';
 
 export interface HumanMember {
@@ -513,7 +514,7 @@ function AgentActivity({ agent, device, metrics, runs }: { agent: AgentSnapshot;
 export function HumanDetail({ human, currentUser, onUpdated }: { human: HumanMember; currentUser?: UserInfo | null; onUpdated?: (human: HumanMember) => void }) {
   const np = useCurrentNetworkPath();
   const agents = useAgentBeanStore((s) => s.agents);
-  const ownedAgents = Object.values(agents).filter((a) => a.ownerId === human.userId);
+  const ownedAgents = ownedAgentsForMember(agents, human.userId);
   const isSelf = currentUser?.id === human.userId;
   const canEdit = isSelf || currentUser?.role === 'admin';
   const [editingDescription, setEditingDescription] = useState(false);
