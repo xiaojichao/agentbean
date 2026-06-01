@@ -7,6 +7,7 @@ import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket,
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage } from '@/lib/schema';
 import { ownedAgentsForMember } from '@/lib/agent-list';
+import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
 import { messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
@@ -159,6 +160,7 @@ export default function ChatPage() {
   const [loadedSavedKey, setLoadedSavedKey] = useState<string | null>(null);
   const [reactionIds, setReactionIds] = useState<Set<string>>(new Set());
   const [loadedReactionsKey, setLoadedReactionsKey] = useState<string | null>(null);
+  const [profileAgentCache, setProfileAgentCache] = useState<Record<string, AgentSnapshot>>({});
   const [showMention, setShowMention] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionMembers, setMentionMembers] = useState<{ id: string; name: string; kind: 'human' | 'agent' }[]>([]);
@@ -201,6 +203,10 @@ export default function ChatPage() {
       setTab(chatTabParam);
     }
   }, [chatTabParam]);
+
+  useEffect(() => {
+    setProfileAgentCache({});
+  }, [currentNetworkId]);
 
   // Subscribe to channels + DMs
   useEffect(() => {
@@ -375,8 +381,24 @@ export default function ChatPage() {
   const profileHuman = profileTarget?.kind === 'human'
     ? resolveHumanProfile(profileTarget.id, humanProfiles, currentUser, channelMembers, mentionMembers)
     : null;
-  const profileAgent = profileTarget?.kind === 'agent' ? agents[profileTarget.id] : null;
+  const profileAgent = profileTarget?.kind === 'agent'
+    ? resolveAgentProfileSnapshot(profileTarget.id, { agents, channelMembers, mentionMembers, dms, cache: profileAgentCache })
+    : null;
+  const profileAgentTitle = profileTarget?.kind === 'agent'
+    ? resolveAgentProfileTitle(profileTarget.id, profileAgent, { channelMembers, mentionMembers, dms })
+    : null;
   const taskNumbers = buildTaskNumberMap(tasks);
+
+  useEffect(() => {
+    if (profileTarget?.kind !== 'agent' || !profileAgent) return;
+    const keys = agentProfileCacheKeys(profileTarget.id, profileAgent);
+    setProfileAgentCache((prev) => {
+      if (keys.every((key) => prev[key] === profileAgent)) return prev;
+      const next = { ...prev };
+      for (const key of keys) next[key] = profileAgent;
+      return next;
+    });
+  }, [profileTarget?.kind, profileTarget?.id, profileAgent]);
 
   const switchTab = (nextTab: ChatTab) => {
     setTab(nextTab);
@@ -1161,6 +1183,7 @@ export default function ChatPage() {
           target={profileTarget}
           human={profileHuman}
           agent={profileAgent}
+          agentTitle={profileAgentTitle}
           currentUserId={currentUser?.id}
           agents={agents}
           onClose={closeProfile}
@@ -2138,6 +2161,7 @@ function ProfilePanel({
   target,
   human,
   agent,
+  agentTitle,
   currentUserId,
   agents,
   onClose,
@@ -2146,13 +2170,14 @@ function ProfilePanel({
   target: ProfileTarget;
   human: HumanProfile | null;
   agent: AgentSnapshot | null | undefined;
+  agentTitle?: string | null;
   currentUserId?: string;
   agents: Record<string, AgentSnapshot>;
   onClose: () => void;
   onOpenAgent: (agentId: string) => void;
 }) {
   const title = target.kind === 'agent'
-    ? (agent?.name ?? 'Agent')
+    ? (agent?.name ?? agentTitle ?? 'Agent')
     : (human?.username ?? '成员');
   const createdAgents = target.kind === 'human'
     ? ownedAgentsForMember(agents, target.id)
