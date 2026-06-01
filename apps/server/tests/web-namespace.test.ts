@@ -3078,6 +3078,96 @@ describe('/web namespace', () => {
     memberSocket.close();
   });
 
+  it('only lets channel creators update, archive, or delete non-default channels and only allows #all description updates', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({
+      id: 'channel-editor-outsider',
+      username: 'channel-editor-outsider',
+      passwordHash: null,
+      createdAt: now,
+    });
+    app.globalDb.networkMembers.add('default', 'channel-editor-outsider', 'member');
+
+    const creatorSocket = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('admin', 'default') },
+    });
+    const outsiderSocket = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('channel-editor-outsider', 'default') },
+    });
+    await new Promise<void>((r) => creatorSocket.on('connect', () => r()));
+    await new Promise<void>((r) => outsiderSocket.on('connect', () => r()));
+    const emit = (socket: ReturnType<typeof ioClient>, event: string, payload: any) =>
+      new Promise<any>((resolve) => socket.emit(event, payload, resolve));
+
+    const created = await emit(creatorSocket, 'channel:create', {
+      name: `creator-controls-${now}`,
+      visibility: 'public',
+      userIds: ['channel-editor-outsider'],
+    });
+    expect(created.ok).toBe(true);
+
+    await expect(emit(outsiderSocket, 'channel:update', {
+      channelId: created.channel.id,
+      name: 'outsider-rename',
+      description: 'outsider edit',
+      visibility: 'private',
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    await expect(emit(outsiderSocket, 'channel:archive', { channelId: created.channel.id }))
+      .resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    await expect(emit(outsiderSocket, 'channel:delete', { channelId: created.channel.id }))
+      .resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    let channel = app.channels.get('default', created.channel.id);
+    expect(channel).toMatchObject({
+      name: created.channel.name,
+      description: null,
+      visibility: 'public',
+      archivedAt: null,
+    });
+
+    await expect(emit(creatorSocket, 'channel:update', {
+      channelId: created.channel.id,
+      name: 'creator-renamed',
+      description: 'creator edit',
+      visibility: 'private',
+    })).resolves.toMatchObject({ ok: true });
+    channel = app.channels.get('default', created.channel.id);
+    expect(channel).toMatchObject({
+      name: 'creator-renamed',
+      description: 'creator edit',
+      visibility: 'private',
+    });
+
+    const all = app.channels.ensureDefault('default');
+    await expect(emit(creatorSocket, 'channel:update', {
+      channelId: all.id,
+      name: 'renamed-all',
+      description: '团队默认频道',
+    })).resolves.toMatchObject({ ok: false, error: 'CANNOT_RENAME_DEFAULT_CHANNEL' });
+    await expect(emit(creatorSocket, 'channel:update', {
+      channelId: all.id,
+      description: '团队默认频道',
+    })).resolves.toMatchObject({ ok: true });
+    await expect(emit(creatorSocket, 'channel:update', {
+      channelId: all.id,
+      visibility: 'private',
+    })).resolves.toMatchObject({ ok: false, error: 'CANNOT_CHANGE_DEFAULT_CHANNEL_VISIBILITY' });
+    await expect(emit(creatorSocket, 'channel:archive', { channelId: all.id }))
+      .resolves.toMatchObject({ ok: false, error: 'CANNOT_ARCHIVE_DEFAULT_CHANNEL' });
+    await expect(emit(creatorSocket, 'channel:delete', { channelId: all.id }))
+      .resolves.toMatchObject({ ok: false, error: 'CANNOT_DELETE_DEFAULT_CHANNEL' });
+
+    const allAfter = app.channels.get('default', all.id);
+    expect(allAfter).toMatchObject({ name: 'all', description: '团队默认频道', visibility: 'public', archivedAt: null });
+
+    creatorSocket.close();
+    outsiderSocket.close();
+  });
+
   it('keeps existing default all members after a new user registers', async () => {
     const registerSocket = ioClient(`${baseUrl}/web`, {
       reconnection: false,

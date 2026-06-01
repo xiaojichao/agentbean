@@ -68,10 +68,10 @@ export class ChannelService {
       LEFT JOIN channel_user_leaves cul ON c.id = cul.channel_id AND cul.user_id = ?
       WHERE c.archived_at IS NULL
         AND (c.name = 'all' OR cul.user_id IS NULL)
-        AND (c.visibility = 'public' OR c.name = 'all' OR cum.user_id IS NOT NULL)
+        AND (c.visibility = 'public' OR c.name = 'all' OR c.created_by = ? OR cum.user_id IS NOT NULL)
         AND (c.is_dm IS NULL OR c.is_dm = 0)
       ORDER BY c.created_at
-    `).all(userId, userId) as ChannelRow[];
+    `).all(userId, userId, userId) as ChannelRow[];
   }
 
   get(networkId: string, id: string): ChannelRow | null {
@@ -172,6 +172,16 @@ export class ChannelService {
 
   update(networkId: string, channelId: string, input: { name?: string; description?: string | null; visibility?: 'public' | 'private' }): void {
     const db = this.deps.storageManager.getSpace(networkId).db;
+    const current = this.get(networkId, channelId);
+    if (!current) throw new Error('NOT_FOUND');
+    if (current.name === 'all') {
+      if (input.name !== undefined) throw new Error('CANNOT_RENAME_DEFAULT_CHANNEL');
+      if (input.visibility !== undefined) throw new Error('CANNOT_CHANGE_DEFAULT_CHANNEL_VISIBILITY');
+      if (input.description !== undefined) {
+        db.prepare('UPDATE channels SET description = ? WHERE id = ?').run(input.description?.trim() || null, channelId);
+      }
+      return;
+    }
     if (input.name !== undefined) {
       const name = this.normalizeChannelName(input.name);
       if (!name) throw new Error('EMPTY_NAME');
@@ -192,8 +202,10 @@ export class ChannelService {
   }
 
   archive(networkId: string, channelId: string): void {
+    const ch = this.get(networkId, channelId);
+    if (!ch || ch.name === 'all') throw new Error('CANNOT_ARCHIVE_DEFAULT_CHANNEL');
     const db = this.deps.storageManager.getSpace(networkId).db;
-    db.prepare('UPDATE channels SET archived_at = ? WHERE id = ? AND name != ?').run(Date.now(), channelId, 'all');
+    db.prepare('UPDATE channels SET archived_at = ? WHERE id = ?').run(Date.now(), channelId);
   }
 
   delete(networkId: string, channelId: string): void {
