@@ -1243,6 +1243,10 @@ export default function ChatPage() {
           candidates={mentionMembers.map((member) => ({ id: member.id, name: member.name, kind: member.kind }))}
           onAddMember={handleAddChannelMember}
           onRemoveMember={handleRemoveChannelMember}
+          onOpenMember={(member) => {
+            setShowMembers(false);
+            openProfile({ kind: member.kind, id: member.id });
+          }}
           canAddMembers={canManageActiveChannelMembers}
           canRemoveMembers={canManageActiveChannelMembers}
           onClose={() => setShowMembers(false)}
@@ -1403,6 +1407,7 @@ function ChannelMembersDialog({
   candidates,
   onAddMember,
   onRemoveMember,
+  onOpenMember,
   canAddMembers,
   canRemoveMembers,
   onClose,
@@ -1412,6 +1417,7 @@ function ChannelMembersDialog({
   candidates: ChannelMemberEntry[];
   onAddMember: (member: ChannelMemberEntry) => Promise<{ ok: boolean; error?: string }>;
   onRemoveMember: (member: ChannelMemberEntry) => Promise<{ ok: boolean; error?: string }>;
+  onOpenMember: (member: ChannelMemberEntry) => void;
   canAddMembers: boolean;
   canRemoveMembers: boolean;
   onClose: () => void;
@@ -1451,8 +1457,8 @@ function ChannelMembersDialog({
           <button onClick={onClose} className="text-neutral-400 hover:text-neutral-600"><X size={16} /></button>
         </div>
         <div className="max-h-[260px] overflow-y-auto rounded-lg border border-neutral-200 p-3 pr-2">
-          <MemberGroup title="智能体" members={agentMembers} onRemove={canRemoveMembers ? remove : undefined} removingKey={removingKey} />
-          <MemberGroup title="人类" members={humanMembers} onRemove={canRemoveMembers ? remove : undefined} removingKey={removingKey} />
+          <MemberGroup title="智能体" members={agentMembers} onOpen={onOpenMember} onRemove={canRemoveMembers ? remove : undefined} removingKey={removingKey} />
+          <MemberGroup title="人类" members={humanMembers} onOpen={onOpenMember} onRemove={canRemoveMembers ? remove : undefined} removingKey={removingKey} />
           {members.length === 0 && <div className="py-6 text-center text-sm text-neutral-400">#{channelName} 暂无成员</div>}
         </div>
         {error && <div className="mt-3 rounded-md bg-rose-50 px-3 py-2 text-xs text-rose-600">{error}</div>}
@@ -1482,11 +1488,13 @@ function ChannelMembersDialog({
 function MemberGroup({
   title,
   members,
+  onOpen,
   onRemove,
   removingKey,
 }: {
   title: string;
   members: ChannelMemberEntry[];
+  onOpen: (member: ChannelMemberEntry) => void;
   onRemove?: (member: ChannelMemberEntry) => void;
   removingKey?: string | null;
 }) {
@@ -1497,22 +1505,32 @@ function MemberGroup({
       <div className="space-y-2">
         {members.map((member) => (
           <div key={`${member.kind}:${member.id}`} className="flex items-center gap-2">
-            <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[11px] font-semibold ${member.kind === 'agent' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'}`}>
-              {member.kind === 'agent' ? 'A' : '人'}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium text-neutral-800">{member.name}</div>
-              {member.kind === 'agent' && (
-                <div className="flex items-center gap-1 text-[11px] text-neutral-400">
-                  <span className={`h-1.5 w-1.5 rounded-full ${statusDotClass(member.status)}`} />
-                  <span>{statusLabel(member.status)}</span>
-                </div>
-              )}
-            </div>
+            <button
+              type="button"
+              onClick={() => onOpen(member)}
+              className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-neutral-50 focus:outline-none focus:ring-2 focus:ring-neutral-900"
+              title={`查看 ${member.name} 资料`}
+            >
+              <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[11px] font-semibold ${member.kind === 'agent' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                {member.kind === 'agent' ? 'A' : '人'}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium text-neutral-800">{member.name}</div>
+                {member.kind === 'agent' && (
+                  <div className="flex items-center gap-1 text-[11px] text-neutral-400">
+                    <span className={`h-1.5 w-1.5 rounded-full ${statusDotClass(member.status)}`} />
+                    <span>{statusLabel(member.status)}</span>
+                  </div>
+                )}
+              </div>
+            </button>
             {onRemove && (
               <button
                 type="button"
-                onClick={() => onRemove(member)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRemove(member);
+                }}
                 disabled={removingKey === `${member.kind}:${member.id}`}
                 className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-neutral-300 hover:bg-red-50 hover:text-red-500 disabled:opacity-40"
                 title={`移除 ${member.name}`}
