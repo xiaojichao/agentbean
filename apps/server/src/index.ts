@@ -22,6 +22,7 @@ import { generateToken, parseToken, verifyUserToken } from './auth.js';
 import { hashPassword, verifyPassword } from './password.js';
 import { generateInviteCode } from './invite.js';
 import { buildDaemonVersionInfo, startDaemonVersionRefresh } from './daemon-version.js';
+import { enrichAgentSenderName } from './message-meta.js';
 
 export interface AppOptions { port?: number; dbPath?: string; globalDbPath?: string; agentToken?: string }
 export interface AppHandle {
@@ -1752,14 +1753,19 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
       socket.join(`channel:${payload.channelId}`);
       const sp = storageManager.getSpace(networkId);
       const history = sp.messages.listByChannel(payload.channelId, 200);
+      const visibleAgentNames = new Map(buildVisibleAgentDtos(networkId).map((agent) => [agent.id, agent.name]));
       const messagesWithArtifacts = history.map(m => {
+        const senderName = m.senderId
+          ? visibleAgentNames.get(m.senderId) ?? globalDb.agents.getFull(m.senderId)?.name
+          : null;
+        const message = enrichAgentSenderName(m, senderName);
         const artifacts = sp.artifacts.listByMessage(m.id).map(a => ({
           id: a.id, filename: a.filename, mimeType: a.mimeType,
           sizeBytes: a.sizeBytes, createdAt: a.createdAt,
           downloadUrl: `/api/networks/${networkId}/artifacts/${a.id}/download`,
           previewUrl: `/api/networks/${networkId}/artifacts/${a.id}/preview`,
         }));
-        return { ...m, artifacts: artifacts.length > 0 ? artifacts : undefined };
+        return { ...message, artifacts: artifacts.length > 0 ? artifacts : undefined };
       });
       socket.emit('channel:history', { channelId: payload.channelId, messages: messagesWithArtifacts });
     });

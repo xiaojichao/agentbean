@@ -1,6 +1,7 @@
 import type { ChatMessage, Artifact } from '@/lib/schema';
 import { useAgentBeanStore } from '@/lib/store';
 import { getResolvedServerUrl, getStoredAuthToken } from '@/lib/socket';
+import { messageSpeakerName } from '@/lib/display-names';
 
 const KIND_LABEL: Record<ChatMessage['senderKind'], string> = {
   human: '你',
@@ -40,8 +41,9 @@ function ArtifactPreview({ artifact }: { artifact: Artifact }) {
 
 export function ChannelMessage({ msg }: { msg: ChatMessage }) {
   const agent = useAgentBeanStore((s) => msg.senderId ? s.agents[msg.senderId] : undefined);
+  const agents = msg.senderId && agent ? { [msg.senderId]: agent } : {};
   const speaker = msg.senderKind === 'agent'
-    ? (agent?.name ?? 'Agent')
+    ? messageSpeakerName(msg, agents)
     : KIND_LABEL[msg.senderKind];
   const time = new Date(msg.createdAt).toLocaleTimeString('zh-CN');
 
