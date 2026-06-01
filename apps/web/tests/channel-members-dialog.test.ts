@@ -4,8 +4,12 @@ import { describe, expect, it } from 'vitest';
 const chatPage = readFileSync(new URL('../app/[networkPath]/chat/page.tsx', import.meta.url), 'utf8');
 
 describe('channel members dialog', () => {
-  it('hides add-member controls for the default public channel', () => {
-    expect(chatPage).toContain('canAddMembers={!isDefaultPublicChannel}');
+  it('hides add-member controls unless the viewer can manage channel members', () => {
+    expect(chatPage).toContain('const canManageActiveChannelMembers = Boolean(');
+    expect(chatPage).toContain("currentUser.role === 'admin'");
+    expect(chatPage).toContain('activeChannelObj.createdBy === currentUser.id');
+    expect(chatPage).toContain('currentNetwork?.ownerId === currentUser.id');
+    expect(chatPage).toContain('canAddMembers={canManageActiveChannelMembers}');
     expect(chatPage).toContain('canAddMembers && showAdd');
     expect(chatPage).toContain('canAddMembers && (');
   });
