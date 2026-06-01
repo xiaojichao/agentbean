@@ -37,6 +37,29 @@ describe('agent profile resolution', () => {
     })).toBe('OpenClaw-Agent-xiao-mini');
   });
 
+  it('resolves a stale gateway profile id after member hints disappear', () => {
+    const current = agent({
+      id: 'scan-network-3c00f768-8423-2933-879c-2a7000f9031b-openclaw-agent-xiao-mini',
+      deviceId: '3c00f768-8423-2933-879c-2a7000f9031b',
+    });
+    const resolved = resolveAgentProfileSnapshot('scan-network-3c00f768-8423-2933-879c-2a7000f9031b-openclaw-agent', {
+      agents: { [current.id]: current },
+      channelMembers: [],
+      mentionMembers: [],
+      dms: [],
+    });
+
+    expect(resolved).toBe(current);
+  });
+
+  it('derives a gateway title from a stale profile id when no snapshot is available yet', () => {
+    expect(resolveAgentProfileTitle('scan-network-3c00f768-8423-2933-879c-2a7000f9031b-hermes-agent', null, {
+      channelMembers: [],
+      mentionMembers: [],
+      dms: [],
+    })).toBe('Hermes-Agent');
+  });
+
   it('caches both the stale URL id and the canonical snapshot id', () => {
     expect(agentProfileCacheKeys('agent-stale', agent({ id: 'agent-current' }))).toEqual([
       'agent-stale',
