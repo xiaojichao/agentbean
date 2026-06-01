@@ -6,6 +6,7 @@ import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareD
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage } from '@/lib/schema';
+import { ownedAgentsForMember } from '@/lib/agent-list';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
 import { messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
@@ -2154,7 +2155,7 @@ function ProfilePanel({
     ? (agent?.name ?? 'Agent')
     : (human?.username ?? '成员');
   const createdAgents = target.kind === 'human'
-    ? Object.values(agents).filter((item) => item.ownerId === target.id)
+    ? ownedAgentsForMember(agents, target.id)
     : [];
 
   return (
