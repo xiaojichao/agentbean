@@ -26,6 +26,7 @@ describe('runIntros', () => {
     expect(dispatched[0].prompt).toContain('频道 1');
     expect(messages).toHaveLength(2);
     expect(messages[0]).toMatchObject({ channelId: 'c1', senderKind: 'agent', body: expect.stringContaining('intro') });
+    expect(JSON.parse(messages[0].metaJson)).toMatchObject({ senderName: 'A1' });
   });
 
   it('emits a system failure message when dispatch returns ok=false', async () => {

@@ -60,7 +60,7 @@ export async function runIntros(input: RunIntrosInput): Promise<void> {
         senderId: m.id,
         body: result.body,
         createdAt: Date.now(),
-        metaJson: JSON.stringify({ kind: 'intro' }),
+        metaJson: JSON.stringify({ kind: 'intro', senderName: m.name }),
       });
     } else {
       input.onMessage({
