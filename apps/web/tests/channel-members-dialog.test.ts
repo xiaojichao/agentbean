@@ -6,9 +6,9 @@ const chatPage = readFileSync(new URL('../app/[networkPath]/chat/page.tsx', impo
 describe('channel members dialog', () => {
   it('hides add-member controls unless the viewer can manage channel members', () => {
     expect(chatPage).toContain('const canManageActiveChannelMembers = Boolean(');
-    expect(chatPage).toContain("currentUser.role === 'admin'");
     expect(chatPage).toContain('activeChannelObj.createdBy === currentUser.id');
-    expect(chatPage).toContain('currentNetwork?.ownerId === currentUser.id');
+    expect(chatPage).not.toContain("currentUser.role === 'admin'");
+    expect(chatPage).not.toContain('currentNetwork?.ownerId === currentUser.id');
     expect(chatPage).toContain('canAddMembers={canManageActiveChannelMembers}');
     expect(chatPage).toContain('canAddMembers && showAdd');
     expect(chatPage).toContain('canAddMembers && (');

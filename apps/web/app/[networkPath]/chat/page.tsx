@@ -113,7 +113,6 @@ export default function ChatPage() {
   const conn = useAgentBeanStore((s) => s.conn);
   const channels = useAgentBeanStore((s) => s.channels);
   const agents = useAgentBeanStore((s) => s.agents);
-  const networks = useAgentBeanStore((s) => s.networks);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
   const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
@@ -346,16 +345,11 @@ export default function ChatPage() {
   const activeDm = dms.find((d) => d.id === activeChannel);
   const isDm = !!activeDm;
   const isDefaultPublicChannel = !isDm && activeChannelObj?.name === 'all';
-  const currentNetwork = networks.find((network) => network.id === currentNetworkId);
   const canManageActiveChannelMembers = Boolean(
     activeChannelObj &&
     currentUser &&
     !isDefaultPublicChannel &&
-    (
-      currentUser.role === 'admin' ||
-      activeChannelObj.createdBy === currentUser.id ||
-      currentNetwork?.ownerId === currentUser.id
-    ),
+    activeChannelObj.createdBy === currentUser.id,
   );
   const activeDmAgent = activeDm ? agents[activeDm.dmTargetId] : undefined;
   const activeDmName = activeDmAgent?.name ?? activeDm?.name ?? '';
