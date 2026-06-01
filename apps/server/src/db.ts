@@ -1109,7 +1109,7 @@ export function openDb(path: string): Db {
     SELECT c.id, c.name, c.description, c.visibility, c.created_by AS createdBy, c.created_at AS createdAt, c.archived_at AS archivedAt
     FROM channels c
     LEFT JOIN channel_user_members cum ON c.id = cum.channel_id AND cum.user_id = ?
-    WHERE c.archived_at IS NULL AND (c.visibility = 'public' OR cum.user_id IS NOT NULL)
+    WHERE c.archived_at IS NULL AND (c.visibility = 'public' OR c.created_by = ? OR cum.user_id IS NOT NULL)
     ORDER BY c.created_at
   `);
 
@@ -1223,7 +1223,7 @@ export function openDb(path: string): Db {
         return { id: cid, name, description, visibility, createdBy, createdAt, archivedAt: null };
       },
       list: () => channelList.all() as ChannelRow[],
-      listForUser: (userId) => channelListForUser.all(userId) as ChannelRow[],
+      listForUser: (userId) => channelListForUser.all(userId, userId) as ChannelRow[],
       get: (id) => (channelGet.get(id) as ChannelRow | undefined) ?? null,
     },
     channelMembers: {

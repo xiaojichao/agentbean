@@ -345,6 +345,11 @@ export default function ChatPage() {
   const activeDm = dms.find((d) => d.id === activeChannel);
   const isDm = !!activeDm;
   const isDefaultPublicChannel = !isDm && activeChannelObj?.name === 'all';
+  const canManageActiveChannel = Boolean(
+    activeChannelObj &&
+    currentUser &&
+    (isDefaultPublicChannel || activeChannelObj.createdBy === currentUser.id),
+  );
   const canManageActiveChannelMembers = Boolean(
     activeChannelObj &&
     currentUser &&
@@ -974,9 +979,11 @@ export default function ChatPage() {
               <button onClick={() => { setChannelActionError(null); setShowStopAgents(true); }} className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="停止所有 Agent">
                 <SquareDot size={14} />
               </button>
-              <button onClick={() => setShowEditChannel(true)} className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="编辑频道">
-                <Pencil size={14} />
-              </button>
+              {canManageActiveChannel && (
+                <button onClick={() => setShowEditChannel(true)} className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="编辑频道">
+                  <Pencil size={14} />
+                </button>
+              )}
               {!isDefaultPublicChannel && (
                 <button onClick={() => { setChannelActionError(null); setShowLeaveChannel(true); }} className="flex h-7 items-center gap-1 rounded-md px-2 text-xs text-neutral-500 hover:bg-neutral-100" title="离开频道">
                   <ExternalLink size={13} />
@@ -1204,6 +1211,7 @@ export default function ChatPage() {
           onSaved={() => setShowEditChannel(false)}
           onArchive={handleArchiveChannel}
           onDelete={handleDeleteChannel}
+          isDefaultChannel={isDefaultPublicChannel}
         />
       )}
       {showStopAgents && activeChannelObj && (
@@ -1256,12 +1264,14 @@ function ChannelEditDialog({
   onSaved,
   onArchive,
   onDelete,
+  isDefaultChannel,
 }: {
   channel: { id: string; name: string; description?: string | null; visibility?: string };
   onClose: () => void;
   onSaved: () => void;
   onArchive: (channelId: string) => Promise<{ ok: boolean; error?: string }>;
   onDelete: (channelId: string) => Promise<{ ok: boolean; error?: string }>;
+  isDefaultChannel: boolean;
 }) {
   const [name, setName] = useState(channel.name);
   const [description, setDescription] = useState(channel.description ?? '');
@@ -1271,14 +1281,14 @@ function ChannelEditDialog({
   const [error, setError] = useState<string | null>(null);
 
   const handleSave = async () => {
-    if (!name.trim()) return;
+    if (!isDefaultChannel && !name.trim()) return;
     setSaving(true);
     setError(null);
     const res = await channelEvents().update({
       channelId: channel.id,
-      name: name.trim(),
+      name: isDefaultChannel ? undefined : name.trim(),
       description: description.trim() || null,
-      visibility,
+      visibility: isDefaultChannel ? undefined : visibility,
     });
     setSaving(false);
     if (!res.ok) {
@@ -1309,32 +1319,38 @@ function ChannelEditDialog({
           <button onClick={onClose} className="text-neutral-400 hover:text-neutral-600"><X size={16} /></button>
         </div>
         <div className="space-y-4">
-          <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-500">名称 *</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} autoFocus className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400" />
-          </div>
+          {!isDefaultChannel && (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">名称 *</label>
+              <input value={name} onChange={(e) => setName(e.target.value)} autoFocus className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400" />
+            </div>
+          )}
           <div>
             <label className="mb-1 block text-xs font-medium text-neutral-500">描述（可选）</label>
-            <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} placeholder="这个频道用于什么？" className="w-full resize-none rounded-md border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400" />
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} placeholder="这个频道用于什么？" autoFocus={isDefaultChannel} className="w-full resize-none rounded-md border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400" />
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => setVisibility('public')} className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs ${visibility === 'public' ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-neutral-200 text-neutral-500 hover:bg-neutral-50'}`}>
-              <Hash size={12} /> 公开
-            </button>
-            <button onClick={() => setVisibility('private')} className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs ${visibility === 'private' ? 'border-purple-300 bg-purple-50 text-purple-700' : 'border-neutral-200 text-neutral-500 hover:bg-neutral-50'}`}>
-              <Lock size={12} /> 私有
-            </button>
-          </div>
+          {!isDefaultChannel && (
+            <div className="flex items-center gap-2">
+              <button onClick={() => setVisibility('public')} className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs ${visibility === 'public' ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-neutral-200 text-neutral-500 hover:bg-neutral-50'}`}>
+                <Hash size={12} /> 公开
+              </button>
+              <button onClick={() => setVisibility('private')} className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs ${visibility === 'private' ? 'border-purple-300 bg-purple-50 text-purple-700' : 'border-neutral-200 text-neutral-500 hover:bg-neutral-50'}`}>
+                <Lock size={12} /> 私有
+              </button>
+            </div>
+          )}
         </div>
         {error && <div className="mt-3 rounded-md bg-rose-50 px-3 py-2 text-xs text-rose-600">{error}</div>}
         <div className="mt-5 flex items-center justify-between border-t border-neutral-100 pt-4">
-          <div className="flex gap-2">
-            <button onClick={() => setConfirmAction('archive')} className="rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50">归档频道</button>
-            <button onClick={() => setConfirmAction('delete')} className="rounded-md border border-rose-200 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50">删除频道</button>
-          </div>
+          {!isDefaultChannel && (
+            <div className="flex gap-2">
+              <button onClick={() => setConfirmAction('archive')} className="rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50">归档频道</button>
+              <button onClick={() => setConfirmAction('delete')} className="rounded-md border border-rose-200 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50">删除频道</button>
+            </div>
+          )}
           <div className="flex gap-2">
           <button onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-neutral-600 hover:bg-neutral-100">取消</button>
-          <button onClick={handleSave} disabled={saving || !name.trim()} className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-50">
+          <button onClick={handleSave} disabled={saving || (!isDefaultChannel && !name.trim())} className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-50">
             {saving ? '保存中...' : '保存'}
           </button>
           </div>

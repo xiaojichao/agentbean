@@ -25,4 +25,14 @@ describe('channel members dialog', () => {
     expect(chatPage).toContain('<MemberGroup title="智能体" members={agentMembers} onOpen={onOpenMember}');
     expect(chatPage).toContain('onClick={() => onOpen(member)}');
   });
+
+  it('hides channel edit controls unless the viewer is the creator and simplifies #all editing', () => {
+    expect(chatPage).toContain('const canManageActiveChannel = Boolean(');
+    expect(chatPage).toContain('activeChannelObj.createdBy === currentUser.id');
+    expect(chatPage).toContain('canManageActiveChannel && (');
+    expect(chatPage).toContain('isDefaultChannel={isDefaultPublicChannel}');
+    expect(chatPage).toContain('!isDefaultChannel && (');
+    expect(chatPage).toContain("name: isDefaultChannel ? undefined : name.trim()");
+    expect(chatPage).toContain('visibility: isDefaultChannel ? undefined : visibility');
+  });
 });

@@ -1990,7 +1990,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const userId = socket.data.userId as string | undefined;
         const ch = channels.get(networkId, payload.channelId);
         if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
-        if (!canManageChannelMembers(ch, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        if (!channels.isDefaultChannel(networkId, payload.channelId) && !canManageChannelMembers(ch, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
         channels.addUserMember(networkId, payload.channelId, payload.userId);
         ack?.({ ok: true });
       } catch (e: any) {
@@ -2004,7 +2004,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const userId = socket.data.userId as string | undefined;
         const ch = channels.get(networkId, payload.channelId);
         if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
-        if (!canManageChannelMembers(ch, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        if (!channels.isDefaultChannel(networkId, payload.channelId) && !canManageChannelMembers(ch, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
         const agent = buildVisibleAgentDtos(networkId).find((item) => item.id === payload.agentId);
         if (!agent) return ack?.({ ok: false, error: 'AGENT_NOT_FOUND' });
         channels.addAgentMember(networkId, payload.channelId, payload.agentId);
@@ -2070,8 +2070,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     socket.on('channel:update', (payload: { channelId: string; name?: string; description?: string | null; visibility?: 'public' | 'private' }, ack?: (r: any) => void) => {
       try {
         const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const userId = socket.data.userId as string | undefined;
         const ch = channels.get(networkId, payload.channelId);
         if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        if (!channels.isDefaultChannel(networkId, payload.channelId) && !canManageChannelMembers(ch, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
         channels.update(networkId, payload.channelId, { name: payload.name, description: payload.description, visibility: payload.visibility });
         ack?.({ ok: true });
         emitChannelsSnapshotForNetwork(networkId);
@@ -2098,8 +2100,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     socket.on('channel:archive', (payload: { channelId: string }, ack?: (r: any) => void) => {
       try {
         const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const userId = socket.data.userId as string | undefined;
         const ch = channels.get(networkId, payload.channelId);
         if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        if (!channels.isDefaultChannel(networkId, payload.channelId) && !canManageChannelMembers(ch, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
         channels.archive(networkId, payload.channelId);
         ack?.({ ok: true });
         emitChannelsSnapshotForNetwork(networkId);
@@ -2111,8 +2115,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     socket.on('channel:delete', (payload: { channelId: string }, ack?: (r: any) => void) => {
       try {
         const networkId = socketNetworkMap.get(socket.id) ?? defaultNetworkId;
+        const userId = socket.data.userId as string | undefined;
         const ch = channels.get(networkId, payload.channelId);
         if (!ch) return ack?.({ ok: false, error: 'NOT_FOUND' });
+        if (!channels.isDefaultChannel(networkId, payload.channelId) && !canManageChannelMembers(ch, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
         channels.delete(networkId, payload.channelId);
         ack?.({ ok: true });
         emitChannelsSnapshotForNetwork(networkId);
