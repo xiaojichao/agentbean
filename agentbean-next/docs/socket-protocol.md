@@ -314,9 +314,10 @@ Ack<{ agent: AgentDto }>
 
 ```ts
 {
+  userId: string;
   teamId: string;
   name: string;
-  description?: string;
+  title?: string;
   visibility: "public" | "private";
   humanMemberIds?: string[];
   agentMemberIds?: string[];
@@ -328,6 +329,34 @@ Ack：
 ```ts
 Ack<{ channel: ChannelDto }>
 ```
+
+#### `channel:update`
+
+客户端：
+
+```ts
+{
+  userId: string;
+  teamId: string;
+  channelId: string;
+  name?: string;
+  title?: string;
+  visibility?: "public" | "private";
+  humanMemberIds?: string[];
+  agentMemberIds?: string[];
+}
+```
+
+Ack：
+
+```ts
+Ack<{ channel: ChannelDto }>
+```
+
+规则：
+
+- 非默认频道只允许 creator 更新 settings。
+- 默认 `all` 频道只允许 creator 更新 `title`。
 
 #### `channels:subscribe`
 
@@ -385,7 +414,6 @@ Ack<{ message: MessageDto; dispatches: DispatchDto[] }>
 
 延后的 channel、DM 与 message commands：
 
-- `channel:update`：保留给 channel settings。
 - `channel:add-member`：保留给 private channel management。
 - `channel:remove-member`：保留给 private channel management。
 - `channel:add-agent`：保留给 channel-agent membership。

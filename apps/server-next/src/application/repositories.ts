@@ -61,6 +61,10 @@ export interface ChannelRepository {
   create(input: ChannelRecord): Promise<ChannelRecord>;
   getById(channelId: ID): Promise<ChannelRecord | null>;
   listForUser(teamId: ID, userId: ID): Promise<ChannelRecord[]>;
+  update(input: {
+    channelId: ID;
+    changes: Partial<Pick<ChannelRecord, 'name' | 'title' | 'visibility' | 'humanMemberIds' | 'agentMemberIds' | 'updatedAt'>>;
+  }): Promise<ChannelRecord | null>;
 }
 
 export interface DeviceRepository {

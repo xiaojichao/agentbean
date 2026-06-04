@@ -52,6 +52,9 @@ Phase 1 完成标准：
 | P2-08 | Missing scanned agent 变为 offline，且不删除 membership/history。 | UseCase | Missing scan behavior。 | `acceptance-tests.md`, `agent-identity-rules.md` |
 | P2-09 | `listVisibleAgents` 返回 primary-team 与 published agents，且没有 clones。 | UseCase | Visibility projection。 | `agent-identity-rules.md`, `feature-disposition.md` |
 | P2-10 | Public channel list 对 team member 可见。 | UseCase | Channel visibility。 | `acceptance-tests.md` |
+| P2-10a | Private channel 创建时 creator 自动可见，非 member 不可见。 | UseCase | Channel creator visibility。 | `current-behavior.md`, `feature-disposition.md` |
+| P2-10b | 非默认频道 settings 只允许 creator 更新。 | UseCase | Channel creator controls。 | `current-behavior.md`, `feature-disposition.md` |
+| P2-10c | 默认 `all` 频道只允许 creator 更新 `title`。 | UseCase | Default channel boundary。 | `current-behavior.md`, `feature-disposition.md` |
 | P2-11 | `sendMessage` 持久化 server-derived human sender，并忽略 client sender input。 | UseCase | Sender identity。 | `acceptance-tests.md`, `contracts-dto.md` |
 | P2-12 | 带 online agent 的 `sendMessage` 创建 dispatch record。 | UseCase | Dispatch first-class persistence。 | `first-slice-schema-repositories.md`, `contracts-dto.md` |
 | P2-13 | 无 online agent 的 `sendMessage` 持久化 message，并返回 no-online dispatch result。 | UseCase | Non-fatal no-dispatch path。 | `acceptance-tests.md` |

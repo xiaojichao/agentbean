@@ -90,6 +90,15 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           return channel.visibility === 'public' || channel.humanMemberIds.includes(userId);
         });
       },
+      async update(input) {
+        const channel = channels.get(input.channelId);
+        if (!channel) {
+          return null;
+        }
+        const updated = { ...channel, ...input.changes };
+        channels.set(input.channelId, updated);
+        return updated;
+      },
     },
     devices: {
       async upsertHello(input) {

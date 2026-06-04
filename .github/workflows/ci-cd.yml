@@ -57,7 +57,13 @@ jobs:
 
           git fetch origin "${{ github.base_ref }}" --depth=1
           changed_files="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
-          if echo "$changed_files" | grep -qE "^${{ matrix.app_dir }}/"; then
+          if [ "${{ matrix.app_dir }}" = "apps/web" ]; then
+            app_changed_files="$(printf '%s\n' "$changed_files" | grep -E '^apps/web/' | grep -Ev '^apps/web/vercel\.json$' || true)"
+          else
+            app_changed_files="$(printf '%s\n' "$changed_files" | grep -E "^${{ matrix.app_dir }}/" || true)"
+          fi
+
+          if [ -n "$app_changed_files" ]; then
             echo "should_validate=true" >> "$GITHUB_OUTPUT"
           else
             echo "No changes under ${{ matrix.app_dir }}; skipping validation for this app."

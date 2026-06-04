@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ChannelDto, type DeviceDto, type DispatchDto, type MessageDto, type RuntimeDto, type TeamDto, type UserDto } from '../../../../packages/contracts/src/index';
-import { normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index';
+import { canApplyChannelUpdate, channelHumanMembersForCreate, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index';
 import type { ServerNextRepositories } from './repositories';
 
 export interface ServerNextClock {
@@ -20,6 +20,8 @@ export interface ServerNextUseCases {
   registerDiscoveredAgents(input: RegisterDiscoveredAgentsInput): Promise<Ack<RegisterDiscoveredAgentsResult>>;
   listVisibleAgents(input: { teamId: string }): Promise<Ack<{ agents: AgentDto[] }>>;
   listChannels(input: { teamId: string; userId: string }): Promise<Ack<{ channels: ChannelDto[] }>>;
+  createChannel(input: CreateChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
+  updateChannel(input: UpdateChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
   registerAgent(input: AgentDto): Promise<Ack<{ agent: AgentDto }>>;
   sendMessage(input: SendMessageInput): Promise<Ack<SendMessageResult>>;
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
@@ -110,6 +112,27 @@ export interface SendMessageResult {
 export interface ListChannelMessagesInput {
   channelId: string;
   limit: number;
+}
+
+export interface CreateChannelInput {
+  userId: string;
+  teamId: string;
+  name: string;
+  title?: string;
+  visibility: ChannelDto['visibility'];
+  humanMemberIds?: string[];
+  agentMemberIds?: string[];
+}
+
+export interface UpdateChannelInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
+  name?: string;
+  title?: string;
+  visibility?: ChannelDto['visibility'];
+  humanMemberIds?: string[];
+  agentMemberIds?: string[];
 }
 
 export interface ReceiveDispatchResultInput {
@@ -361,6 +384,86 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeSuccess({ channels: await repositories.channels.listForUser(listInput.teamId, listInput.userId) });
     },
 
+    async createChannel(channelInput) {
+      if (!(await repositories.teams.isMember(channelInput.teamId, channelInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      if (!(await allHumanMembersBelongToTeam(repositories, channelInput.teamId, channelInput.humanMemberIds ?? []))) {
+        return makeFailure('FORBIDDEN', 'Channel human member is not in team');
+      }
+
+      const now = clock.now();
+      const channel = await repositories.channels.create({
+        id: ids.nextId(),
+        teamId: channelInput.teamId,
+        kind: 'channel',
+        name: slugify(channelInput.name),
+        title: channelInput.title,
+        visibility: channelInput.visibility,
+        createdBy: channelInput.userId,
+        createdAt: now,
+        humanMemberIds: channelHumanMembersForCreate({
+          visibility: channelInput.visibility,
+          createdBy: channelInput.userId,
+          humanMemberIds: channelInput.humanMemberIds,
+        }),
+        agentMemberIds: uniqueIds(channelInput.agentMemberIds ?? []),
+      });
+
+      return makeSuccess({ channel });
+    },
+
+    async updateChannel(channelInput) {
+      if (!(await repositories.teams.isMember(channelInput.teamId, channelInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const channel = await repositories.channels.getById(channelInput.channelId);
+      if (!channel || channel.teamId !== channelInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Channel not found');
+      }
+      const updateIntent = {
+        ...(channelInput.name !== undefined ? { name: channelInput.name } : {}),
+        ...(channelInput.title !== undefined ? { title: channelInput.title } : {}),
+        ...(channelInput.visibility !== undefined ? { visibility: channelInput.visibility } : {}),
+        ...(channelInput.humanMemberIds !== undefined ? { humanMemberIds: channelInput.humanMemberIds } : {}),
+        ...(channelInput.agentMemberIds !== undefined ? { agentMemberIds: channelInput.agentMemberIds } : {}),
+      };
+      if (!canApplyChannelUpdate(channel, channelInput.userId, updateIntent)) {
+        return makeFailure('FORBIDDEN', 'User cannot manage channel');
+      }
+      if (
+        channelInput.humanMemberIds &&
+        !(await allHumanMembersBelongToTeam(repositories, channelInput.teamId, channelInput.humanMemberIds))
+      ) {
+        return makeFailure('FORBIDDEN', 'Channel human member is not in team');
+      }
+
+      const visibility = channelInput.visibility ?? channel.visibility;
+      const humanMemberIds = channelInput.humanMemberIds
+        ? channelHumanMembersForCreate({
+            visibility,
+            createdBy: channel.createdBy ?? channelInput.userId,
+            humanMemberIds: channelInput.humanMemberIds,
+          })
+        : undefined;
+      const updated = await repositories.channels.update({
+        channelId: channel.id,
+        changes: {
+          ...(channelInput.name ? { name: slugify(channelInput.name) } : {}),
+          ...(channelInput.title !== undefined ? { title: channelInput.title } : {}),
+          ...(channelInput.visibility ? { visibility: channelInput.visibility } : {}),
+          ...(humanMemberIds ? { humanMemberIds } : {}),
+          ...(channelInput.agentMemberIds ? { agentMemberIds: uniqueIds(channelInput.agentMemberIds) } : {}),
+          updatedAt: clock.now(),
+        },
+      });
+      if (!updated) {
+        return makeFailure('NOT_FOUND', 'Channel not found');
+      }
+
+      return makeSuccess({ channel: updated });
+    },
+
     async registerAgent(agentInput) {
       const agent = await repositories.agents.upsert(agentInput);
       return makeSuccess({ agent });
@@ -590,6 +693,23 @@ function slugify(value: string): string {
 
 function hashPassword(password: string): string {
   return createHash('sha256').update(password).digest('hex');
+}
+
+async function allHumanMembersBelongToTeam(
+  repositories: ServerNextRepositories,
+  teamId: string,
+  userIds: string[],
+): Promise<boolean> {
+  for (const userId of uniqueIds(userIds)) {
+    if (!(await repositories.teams.isMember(teamId, userId))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function uniqueIds(ids: string[]): string[] {
+  return Array.from(new Set(ids.filter(Boolean)));
 }
 
 function agentIdentityKey(input: {

@@ -14,3 +14,24 @@ export interface ChannelDto {
   createdAt: UnixMs;
   updatedAt?: UnixMs;
 }
+
+export interface CreateChannelCommandDto {
+  userId: ID;
+  teamId: ID;
+  name: string;
+  title?: string;
+  visibility: ChannelVisibility;
+  humanMemberIds?: ID[];
+  agentMemberIds?: ID[];
+}
+
+export interface UpdateChannelCommandDto {
+  userId: ID;
+  teamId: ID;
+  channelId: ID;
+  name?: string;
+  title?: string;
+  visibility?: ChannelVisibility;
+  humanMemberIds?: ID[];
+  agentMemberIds?: ID[];
+}

@@ -2,23 +2,20 @@
 
 This repository keeps Vercel Preview Deployments for web changes, but skips the Vercel build for changes that do not affect `apps/web`.
 
-## Required Vercel Setting
+## Repository Configuration
 
-Only a Vercel team member can apply this setting.
+The repository includes `vercel.json` with:
 
-@xiaojichao please configure the `web` project in Vercel:
+```json
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "ignoreCommand": "bash scripts/vercel-ignore-build.sh"
+}
+```
 
-1. Open Vercel Dashboard.
-2. Select the `web` project.
-3. Go to `Settings` -> `Git`.
-4. Enable `Automatically expose System Environment Variables` if it is not already enabled.
-5. Set `Ignored Build Step` to:
+This overrides the Vercel project's ignored build step for deployments from this repository.
 
-   ```bash
-   bash scripts/vercel-ignore-build.sh
-   ```
-
-6. Save the project settings.
+The `apps/web` project root also includes `apps/web/vercel.json` with an equivalent command that points back to the root script. This covers Vercel monorepo projects whose configured root directory is `apps/web`.
 
 ## Behavior
 
@@ -30,7 +27,6 @@ Vercel uses inverted exit codes for the ignored build step:
 The script continues Vercel builds for:
 
 - The `main` branch.
-- Changes under `apps/web/`.
-- Changes to `vercel.json`, if that file is added later.
+- Changes under `apps/web/`, except `apps/web/vercel.json` configuration-only updates.
 
-The script skips Vercel builds for docs-only, daemon-only, server-only, and GitHub Actions-only changes.
+The script skips Vercel builds for docs-only, daemon-only, server-only, AgentBean Next rewrite, Vercel configuration-only, and GitHub Actions-only changes.

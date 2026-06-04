@@ -146,7 +146,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             channel.teamId,
             channel.kind,
             channel.name,
-            null,
+            channel.title ?? null,
             channel.visibility,
             channel.createdBy ?? null,
             channel.createdAt,
@@ -193,6 +193,46 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             }
             return channel;
         });
+      },
+      async update(input) {
+        const existing = mapChannel(teamDb, teamDb.prepare('SELECT * FROM channels WHERE id = ?').get(input.channelId));
+        if (!existing) {
+          return null;
+        }
+        const updated: ChannelRecord = {
+          ...existing,
+          ...input.changes,
+        };
+        teamDb
+          .prepare(
+            `UPDATE channels
+             SET name = ?, description = ?, visibility = ?
+             WHERE id = ?`,
+          )
+          .run(updated.name, updated.title ?? null, updated.visibility, updated.id);
+        if (input.changes.humanMemberIds) {
+          teamDb.prepare('DELETE FROM channel_human_members WHERE channel_id = ?').run(updated.id);
+          for (const userId of updated.humanMemberIds) {
+            teamDb
+              .prepare(
+                `INSERT INTO channel_human_members (channel_id, user_id, role, joined_at)
+                 VALUES (?, ?, ?, ?)`,
+              )
+              .run(updated.id, userId, 'member', updated.updatedAt ?? updated.createdAt);
+          }
+        }
+        if (input.changes.agentMemberIds) {
+          teamDb.prepare('DELETE FROM channel_agent_members WHERE channel_id = ?').run(updated.id);
+          for (const agentId of updated.agentMemberIds) {
+            teamDb
+              .prepare(
+                `INSERT INTO channel_agent_members (channel_id, agent_id, joined_at)
+                 VALUES (?, ?, ?)`,
+              )
+              .run(updated.id, agentId, updated.updatedAt ?? updated.createdAt);
+          }
+        }
+        return mapChannel(teamDb, teamDb.prepare('SELECT * FROM channels WHERE id = ?').get(updated.id));
       },
     },
     devices: {
@@ -580,6 +620,7 @@ function mapChannel(db: SqliteDatabase, row: unknown): ChannelRecord | null {
     teamId: sqliteText(row, 'team_id'),
     kind: sqliteText(row, 'kind') as ChannelRecord['kind'],
     name: sqliteText(row, 'name'),
+    title: sqliteNullableText(row, 'description'),
     visibility: sqliteText(row, 'visibility') as ChannelRecord['visibility'],
     createdBy: sqliteNullableText(row, 'created_by'),
     createdAt: sqliteNumber(row, 'created_at'),

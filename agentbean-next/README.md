@@ -26,6 +26,7 @@
 - `docs/socket-protocol.md` 定义重写版初始 `/web` 与 `/agent` 协议表面。
 - `docs/implementation-runbook.md` 给出第一切片的逐步开发检查清单。
 - `docs/first-slice-status.md` 记录第一切片当前实现、验证证据与剩余边界。
+- `docs/second-slice-status.md` 记录第二切片 channel controls 的实现、验证证据与剩余边界。
 - `docs/first-slice-schema-repositories.md` 定义第一切片的新 SQLite schema 与 repository 接口。
 - `docs/migration-plan.md` 给出分阶段实现计划。
 - `docs/verification-matrix.md` 将必需测试映射到阶段和来源文档。
@@ -52,13 +53,13 @@
 
 ## 当前实现状态
 
-第一切片已经具备可运行的最小协议链路：
+第一切片已经具备可运行的最小协议链路，第二切片已经补上 channel controls 的最小行为：
 
 - `packages/contracts`：共享 DTO、`Ack<T>`、error codes 与 socket event constants。
-- `packages/domain`：message routing、agent identity、status merge 与 channel visibility 纯函数。
-- `apps/server-next`：SQLite schema/repositories、use cases、Socket.IO namespace adapters 与 E2E smoke。
+- `packages/domain`：message routing、agent identity、status merge、channel visibility 与 creator controls 纯函数。
+- `apps/server-next`：SQLite schema/repositories、use cases、Socket.IO namespace adapters、channel create/update controls 与 E2E smoke。
 - `apps/daemon-next`：daemon protocol client 与 stub executor。
-- `apps/web-next`：web socket client 与最小 session/state 边界。
+- `apps/web-next`：web socket client、channel create/update commands 与最小 session/state 边界。
 
 当前本地验证命令：
 
