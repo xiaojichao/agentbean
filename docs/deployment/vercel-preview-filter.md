@@ -26,6 +26,5 @@ The script continues Vercel builds for:
 
 - The `main` branch.
 - Changes under `apps/web/`.
-- Changes to `vercel.json`, if that file is added later.
 
-The script skips Vercel builds for docs-only, daemon-only, server-only, and GitHub Actions-only changes.
+The script skips Vercel builds for docs-only, daemon-only, server-only, AgentBean Next rewrite, Vercel configuration-only, and GitHub Actions-only changes.
