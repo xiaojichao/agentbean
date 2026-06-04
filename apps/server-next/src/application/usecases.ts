@@ -22,6 +22,11 @@ export interface ServerNextUseCases {
   listChannels(input: { teamId: string; userId: string }): Promise<Ack<{ channels: ChannelDto[] }>>;
   createChannel(input: CreateChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
   updateChannel(input: UpdateChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
+  addChannelHumanMember(input: ChannelHumanMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
+  removeChannelHumanMember(input: ChannelHumanMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
+  addChannelAgentMember(input: ChannelAgentMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
+  removeChannelAgentMember(input: ChannelAgentMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
+  listChannelMembers(input: ListChannelMembersInput): Promise<Ack<{ humanMemberIds: string[]; agentMemberIds: string[] }>>;
   registerAgent(input: AgentDto): Promise<Ack<{ agent: AgentDto }>>;
   sendMessage(input: SendMessageInput): Promise<Ack<SendMessageResult>>;
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
@@ -133,6 +138,26 @@ export interface UpdateChannelInput {
   visibility?: ChannelDto['visibility'];
   humanMemberIds?: string[];
   agentMemberIds?: string[];
+}
+
+export interface ChannelHumanMemberInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
+  memberUserId: string;
+}
+
+export interface ChannelAgentMemberInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
+  agentId: string;
+}
+
+export interface ListChannelMembersInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
 }
 
 export interface ReceiveDispatchResultInput {
@@ -464,6 +489,109 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeSuccess({ channel: updated });
     },
 
+    async addChannelHumanMember(memberInput) {
+      const channel = await channelForCreatorManagement(repositories, memberInput);
+      if (!channel.ok) {
+        return channel;
+      }
+      if (!(await repositories.teams.isMember(memberInput.teamId, memberInput.memberUserId))) {
+        return makeFailure('FORBIDDEN', 'Channel human member is not in team');
+      }
+
+      const updated = await repositories.channels.update({
+        channelId: channel.channel.id,
+        changes: {
+          humanMemberIds: uniqueIds([...channel.channel.humanMemberIds, memberInput.memberUserId]),
+          updatedAt: clock.now(),
+        },
+      });
+      if (!updated) {
+        return makeFailure('NOT_FOUND', 'Channel not found');
+      }
+      return makeSuccess({ channel: updated });
+    },
+
+    async removeChannelHumanMember(memberInput) {
+      const channel = await channelForCreatorManagement(repositories, memberInput);
+      if (!channel.ok) {
+        return channel;
+      }
+      const nextHumanMemberIds = channel.channel.humanMemberIds.filter((memberId) => memberId !== memberInput.memberUserId);
+      const updated = await repositories.channels.update({
+        channelId: channel.channel.id,
+        changes: {
+          humanMemberIds: channelHumanMembersForCreate({
+            visibility: channel.channel.visibility,
+            createdBy: channel.channel.createdBy ?? memberInput.userId,
+            humanMemberIds: nextHumanMemberIds,
+          }),
+          updatedAt: clock.now(),
+        },
+      });
+      if (!updated) {
+        return makeFailure('NOT_FOUND', 'Channel not found');
+      }
+      return makeSuccess({ channel: updated });
+    },
+
+    async addChannelAgentMember(memberInput) {
+      const channel = await channelForCreatorManagement(repositories, memberInput);
+      if (!channel.ok) {
+        return channel;
+      }
+      const agent = await repositories.agents.getById(memberInput.agentId);
+      if (!agent || !agent.visibleTeamIds.includes(memberInput.teamId)) {
+        return makeFailure('FORBIDDEN', 'Channel agent member is not visible in team');
+      }
+
+      const updated = await repositories.channels.update({
+        channelId: channel.channel.id,
+        changes: {
+          agentMemberIds: uniqueIds([...channel.channel.agentMemberIds, memberInput.agentId]),
+          updatedAt: clock.now(),
+        },
+      });
+      if (!updated) {
+        return makeFailure('NOT_FOUND', 'Channel not found');
+      }
+      return makeSuccess({ channel: updated });
+    },
+
+    async removeChannelAgentMember(memberInput) {
+      const channel = await channelForCreatorManagement(repositories, memberInput);
+      if (!channel.ok) {
+        return channel;
+      }
+      const updated = await repositories.channels.update({
+        channelId: channel.channel.id,
+        changes: {
+          agentMemberIds: channel.channel.agentMemberIds.filter((agentId) => agentId !== memberInput.agentId),
+          updatedAt: clock.now(),
+        },
+      });
+      if (!updated) {
+        return makeFailure('NOT_FOUND', 'Channel not found');
+      }
+      return makeSuccess({ channel: updated });
+    },
+
+    async listChannelMembers(memberInput) {
+      if (!(await repositories.teams.isMember(memberInput.teamId, memberInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const channel = await repositories.channels.getById(memberInput.channelId);
+      if (!channel || channel.teamId !== memberInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Channel not found');
+      }
+      if (channel.visibility === 'private' && !channel.humanMemberIds.includes(memberInput.userId)) {
+        return makeFailure('FORBIDDEN', 'User cannot view channel');
+      }
+      return makeSuccess({
+        humanMemberIds: channel.humanMemberIds,
+        agentMemberIds: channel.agentMemberIds,
+      });
+    },
+
     async registerAgent(agentInput) {
       const agent = await repositories.agents.upsert(agentInput);
       return makeSuccess({ agent });
@@ -706,6 +834,23 @@ async function allHumanMembersBelongToTeam(
     }
   }
   return true;
+}
+
+async function channelForCreatorManagement(
+  repositories: ServerNextRepositories,
+  input: { userId: string; teamId: string; channelId: string },
+): Promise<Ack<{ channel: ChannelDto & { humanMemberIds: string[]; agentMemberIds: string[] } }>> {
+  if (!(await repositories.teams.isMember(input.teamId, input.userId))) {
+    return makeFailure('FORBIDDEN', 'User is not a team member');
+  }
+  const channel = await repositories.channels.getById(input.channelId);
+  if (!channel || channel.teamId !== input.teamId) {
+    return makeFailure('NOT_FOUND', 'Channel not found');
+  }
+  if (!canApplyChannelUpdate(channel, input.userId, { humanMemberIds: channel.humanMemberIds })) {
+    return makeFailure('FORBIDDEN', 'User cannot manage channel');
+  }
+  return makeSuccess({ channel });
 }
 
 function uniqueIds(ids: string[]): string[] {

@@ -1,5 +1,11 @@
 import { WEB_EVENTS } from '../../../packages/contracts/src/index';
-import type { CreateChannelCommandDto, UpdateChannelCommandDto } from '../../../packages/contracts/src/index';
+import type {
+  ChannelAgentMemberCommandDto,
+  ChannelHumanMemberCommandDto,
+  CreateChannelCommandDto,
+  ListChannelMembersCommandDto,
+  UpdateChannelCommandDto,
+} from '../../../packages/contracts/src/index';
 
 export interface WebSocketTransport {
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
@@ -34,6 +40,11 @@ export interface WebSocketClient {
   listTeams(input: ListTeamsInput): Promise<unknown>;
   createChannel(input: CreateChannelCommandDto): Promise<unknown>;
   updateChannel(input: UpdateChannelCommandDto): Promise<unknown>;
+  addChannelHumanMember(input: ChannelHumanMemberCommandDto): Promise<unknown>;
+  removeChannelHumanMember(input: ChannelHumanMemberCommandDto): Promise<unknown>;
+  addChannelAgentMember(input: ChannelAgentMemberCommandDto): Promise<unknown>;
+  removeChannelAgentMember(input: ChannelAgentMemberCommandDto): Promise<unknown>;
+  listChannelMembers(input: ListChannelMembersCommandDto): Promise<unknown>;
   sendMessage(input: SendMessageInput): Promise<unknown>;
 }
 
@@ -64,6 +75,21 @@ export function createWebSocketClient(transport: WebSocketTransport): WebSocketC
     },
     updateChannel(input) {
       return transport.emitWithAck(WEB_EVENTS.channel.update, input);
+    },
+    addChannelHumanMember(input) {
+      return transport.emitWithAck(WEB_EVENTS.channel.addMember, input);
+    },
+    removeChannelHumanMember(input) {
+      return transport.emitWithAck(WEB_EVENTS.channel.removeMember, input);
+    },
+    addChannelAgentMember(input) {
+      return transport.emitWithAck(WEB_EVENTS.channel.addAgent, input);
+    },
+    removeChannelAgentMember(input) {
+      return transport.emitWithAck(WEB_EVENTS.channel.removeAgent, input);
+    },
+    listChannelMembers(input) {
+      return transport.emitWithAck(WEB_EVENTS.channel.members, input);
     },
     sendMessage(input) {
       return transport.emitWithAck(WEB_EVENTS.message.send, input);

@@ -390,6 +390,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             .get(identityKey),
         );
       },
+      async getById(agentId) {
+        return mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(agentId));
+      },
       async linkIdentity(input) {
         globalDb
           .prepare(

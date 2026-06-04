@@ -69,9 +69,9 @@
 | Channel list/snapshot | First Slice | 保留。 |
 | Channel create | Second Slice | 支持 public/private channel；private channel 自动包含 creator。 |
 | Channel join/history | First Slice | 保留，history 优先通过 ack result 返回。 |
-| `channel:add-member` / `channel:remove-member` | Keep | 保留给 private channel management。 |
-| `channel:add-agent` / `channel:remove-agent` | Keep | 保留给 channel-agent membership。 |
-| `channel:members` | Keep | 保留。 |
+| `channel:add-member` / `channel:remove-member` | Third Slice | Creator-only；真实更新 private channel 可见性。 |
+| `channel:add-agent` / `channel:remove-agent` | Third Slice | Creator-only；agent 必须对 team 可见。 |
+| `channel:members` | Third Slice | 当前返回 human/agent member id 列表；详情 DTO 延后。 |
 | Channel update/rename/visibility | Second Slice | 非默认频道 creator-only；默认 `all` 只允许 creator 更新 `title`。 |
 | Channel leave | Defer | 仅当 left/hidden channel UX 仍保留时实现。 |
 | Channel archive | Reevaluate | 延后或删除；需要产品决策。 |

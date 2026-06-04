@@ -74,6 +74,21 @@ describe('server-next SQLite repositories', () => {
         status: 'online',
         lastSeenAt: 500,
       });
+      await repositories.users.create({
+        id: 'user-2',
+        username: 'teammate',
+        role: 'user',
+        passwordHash: 'unused',
+        createdAt: 500,
+        updatedAt: 500,
+      });
+      await repositories.teams.addMember({
+        teamId: 'team-1',
+        userId: 'user-2',
+        username: 'teammate',
+        role: 'member',
+        joinedAt: 500,
+      });
 
       await expect(app.loginUser({ username: 'shaw', password: 'secret' })).resolves.toMatchObject({
         ok: true,
@@ -131,6 +146,57 @@ describe('server-next SQLite repositories', () => {
       });
       expect(teamDb.prepare('SELECT user_id AS userId FROM channel_human_members WHERE channel_id = ?').get('channel-ops')).toEqual({
         userId: 'user-1',
+      });
+      await expect(
+        app.addChannelHumanMember({
+          userId: 'user-1',
+          teamId: 'team-1',
+          channelId: 'channel-ops',
+          memberUserId: 'user-2',
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        channel: { humanMemberIds: ['user-1', 'user-2'] },
+      });
+      await expect(
+        app.addChannelAgentMember({
+          userId: 'user-1',
+          teamId: 'team-1',
+          channelId: 'channel-ops',
+          agentId: 'agent-1',
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        channel: { agentMemberIds: ['agent-1'] },
+      });
+      await expect(
+        app.listChannelMembers({
+          userId: 'user-2',
+          teamId: 'team-1',
+          channelId: 'channel-ops',
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        humanMemberIds: ['user-1', 'user-2'],
+        agentMemberIds: ['agent-1'],
+      });
+      await app.removeChannelHumanMember({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-ops',
+        memberUserId: 'user-2',
+      });
+      await app.removeChannelAgentMember({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-ops',
+        agentId: 'agent-1',
+      });
+      expect(teamDb.prepare('SELECT COUNT(*) AS count FROM channel_human_members WHERE channel_id = ? AND user_id = ?').get('channel-ops', 'user-2')).toEqual({
+        count: 0,
+      });
+      expect(teamDb.prepare('SELECT COUNT(*) AS count FROM channel_agent_members WHERE channel_id = ? AND agent_id = ?').get('channel-ops', 'agent-1')).toEqual({
+        count: 0,
       });
       expect(teamDb.prepare('SELECT sender_kind AS senderKind, sender_id AS senderId FROM messages WHERE id = ?').get('message-1')).toEqual({
         senderKind: 'human',
