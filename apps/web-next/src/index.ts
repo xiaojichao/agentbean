@@ -1,14 +1,19 @@
 import { WEB_EVENTS } from '../../../packages/contracts/src/index';
 import type {
+  AgentDto,
   ChannelAgentMemberCommandDto,
+  ChannelDto,
   ChannelHumanMemberCommandDto,
   CreateChannelCommandDto,
+  DispatchDto,
   ListChannelMembersCommandDto,
+  MessageDto,
   UpdateChannelCommandDto,
 } from '../../../packages/contracts/src/index';
 
 export interface WebSocketTransport {
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
+  on(event: string, handler: (payload: unknown) => void): void;
 }
 
 export interface RegisterInput {
@@ -34,10 +39,19 @@ export interface SendMessageInput {
   clientMessageId?: string;
 }
 
+export interface SubscribeInput {
+  userId: string;
+  teamId: string;
+}
+
 export interface WebSocketClient {
   register(input: RegisterInput): Promise<unknown>;
   login(input: LoginInput): Promise<unknown>;
   listTeams(input: ListTeamsInput): Promise<unknown>;
+  subscribeAgents(input: SubscribeInput, onSnapshot: (agents: AgentDto[]) => void): Promise<unknown>;
+  subscribeChannels(input: SubscribeInput, onSnapshot: (channels: ChannelDto[]) => void): Promise<unknown>;
+  onChannelMessage(handler: (message: MessageDto) => void): void;
+  onDispatchStatus(handler: (dispatch: DispatchDto) => void): void;
   createChannel(input: CreateChannelCommandDto): Promise<unknown>;
   updateChannel(input: UpdateChannelCommandDto): Promise<unknown>;
   addChannelHumanMember(input: ChannelHumanMemberCommandDto): Promise<unknown>;
@@ -69,6 +83,28 @@ export function createWebSocketClient(transport: WebSocketTransport): WebSocketC
     },
     listTeams(input) {
       return transport.emitWithAck(WEB_EVENTS.team.list, input);
+    },
+    subscribeAgents(input, onSnapshot) {
+      transport.on(WEB_EVENTS.agent.snapshot, (payload) => {
+        onSnapshot(payload as AgentDto[]);
+      });
+      return transport.emitWithAck(WEB_EVENTS.agent.subscribe, input);
+    },
+    subscribeChannels(input, onSnapshot) {
+      transport.on(WEB_EVENTS.channel.snapshot, (payload) => {
+        onSnapshot(payload as ChannelDto[]);
+      });
+      return transport.emitWithAck(WEB_EVENTS.channel.subscribe, input);
+    },
+    onChannelMessage(handler) {
+      transport.on(WEB_EVENTS.channel.message, (payload) => {
+        handler(payload as MessageDto);
+      });
+    },
+    onDispatchStatus(handler) {
+      transport.on(WEB_EVENTS.message.dispatchStatus, (payload) => {
+        handler(payload as DispatchDto);
+      });
     },
     createChannel(input) {
       return transport.emitWithAck(WEB_EVENTS.channel.create, input);
@@ -122,4 +158,13 @@ export function applyChannelSnapshot<T>(_current: T[], snapshot: T[]): T[] {
 
 export function appendConversationMessage<T>(current: T[], message: T): T[] {
   return [...current, message];
+}
+
+export function applyDispatchStatus<T extends { id: string }>(current: T[], dispatch: T): T[] {
+  const index = current.findIndex((candidate) => candidate.id === dispatch.id);
+  if (index < 0) {
+    return [...current, dispatch];
+  }
+
+  return current.map((candidate, candidateIndex) => (candidateIndex === index ? dispatch : candidate));
 }
