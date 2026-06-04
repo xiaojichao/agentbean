@@ -119,6 +119,131 @@ describe('server-next second-slice channel controls', () => {
       },
     });
   });
+
+  test('lets a channel creator add and remove human members with real visibility changes', async () => {
+    const { app, repositories } = createApp(['user-1', 'team-1', 'channel-all', 'channel-ops']);
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await repositories.teams.addMember({
+      teamId: 'team-1',
+      userId: 'user-2',
+      username: 'teammate',
+      role: 'member',
+      joinedAt: 100,
+    });
+    await app.createChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      name: 'ops',
+      visibility: 'private',
+    });
+
+    await expect(
+      app.addChannelHumanMember({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-ops',
+        memberUserId: 'user-2',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      channel: { id: 'channel-ops', humanMemberIds: ['user-1', 'user-2'] },
+    });
+    await expect(app.listChannels({ teamId: 'team-1', userId: 'user-2' })).resolves.toMatchObject({
+      ok: true,
+      channels: [{ id: 'channel-all' }, { id: 'channel-ops' }],
+    });
+
+    await expect(
+      app.removeChannelHumanMember({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-ops',
+        memberUserId: 'user-2',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      channel: { id: 'channel-ops', humanMemberIds: ['user-1'] },
+    });
+    await expect(app.listChannels({ teamId: 'team-1', userId: 'user-2' })).resolves.toMatchObject({
+      ok: true,
+      channels: [{ id: 'channel-all' }],
+    });
+  });
+
+  test('lets a channel creator manage agent members and list channel membership', async () => {
+    const { app, repositories } = createApp(['user-1', 'team-1', 'channel-all', 'channel-ops']);
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await repositories.teams.addMember({
+      teamId: 'team-1',
+      userId: 'user-2',
+      username: 'teammate',
+      role: 'member',
+      joinedAt: 100,
+    });
+    await repositories.agents.upsert({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'executor-hosted',
+      source: 'scanned',
+      status: 'online',
+      lastSeenAt: 100,
+    });
+    await app.createChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      name: 'ops',
+      visibility: 'private',
+    });
+
+    await expect(
+      app.addChannelAgentMember({
+        userId: 'user-2',
+        teamId: 'team-1',
+        channelId: 'channel-ops',
+        agentId: 'agent-1',
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+    await expect(
+      app.addChannelAgentMember({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-ops',
+        agentId: 'agent-1',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      channel: { id: 'channel-ops', agentMemberIds: ['agent-1'] },
+    });
+    await expect(
+      app.listChannelMembers({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-ops',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      humanMemberIds: ['user-1'],
+      agentMemberIds: ['agent-1'],
+    });
+
+    await expect(
+      app.removeChannelAgentMember({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-ops',
+        agentId: 'agent-1',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      channel: { id: 'channel-ops', agentMemberIds: [] },
+    });
+  });
 });
 
 function createApp(ids: string[]) {

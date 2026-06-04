@@ -35,3 +35,23 @@ export interface UpdateChannelCommandDto {
   humanMemberIds?: ID[];
   agentMemberIds?: ID[];
 }
+
+export interface ChannelHumanMemberCommandDto {
+  userId: ID;
+  teamId: ID;
+  channelId: ID;
+  memberUserId: ID;
+}
+
+export interface ChannelAgentMemberCommandDto {
+  userId: ID;
+  teamId: ID;
+  channelId: ID;
+  agentId: ID;
+}
+
+export interface ListChannelMembersCommandDto {
+  userId: ID;
+  teamId: ID;
+  channelId: ID;
+}

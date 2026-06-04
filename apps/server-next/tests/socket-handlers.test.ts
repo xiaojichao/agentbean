@@ -16,6 +16,11 @@ describe('server-next socket handlers', () => {
       listTeams: vi.fn(async (payload) => makeSuccess({ payload })),
       createChannel: vi.fn(async (payload) => makeSuccess({ payload })),
       updateChannel: vi.fn(async (payload) => makeSuccess({ payload })),
+      addChannelHumanMember: vi.fn(async (payload) => makeSuccess({ payload })),
+      removeChannelHumanMember: vi.fn(async (payload) => makeSuccess({ payload })),
+      addChannelAgentMember: vi.fn(async (payload) => makeSuccess({ payload })),
+      removeChannelAgentMember: vi.fn(async (payload) => makeSuccess({ payload })),
+      listChannelMembers: vi.fn(async (payload) => makeSuccess({ payload })),
       sendMessage: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
 
@@ -27,6 +32,11 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.team.list,
       WEB_EVENTS.channel.create,
       WEB_EVENTS.channel.update,
+      WEB_EVENTS.channel.addMember,
+      WEB_EVENTS.channel.removeMember,
+      WEB_EVENTS.channel.addAgent,
+      WEB_EVENTS.channel.removeAgent,
+      WEB_EVENTS.channel.members,
       WEB_EVENTS.message.send,
     ]);
     expect(socket.eventNames()).not.toContain('network:list');
@@ -53,6 +63,35 @@ describe('server-next socket handlers', () => {
       channelId: 'channel-2',
       title: 'Team-wide updates',
     });
+    await socket.trigger(WEB_EVENTS.channel.addMember, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
+      memberUserId: 'user-2',
+    });
+    await socket.trigger(WEB_EVENTS.channel.removeMember, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
+      memberUserId: 'user-2',
+    });
+    await socket.trigger(WEB_EVENTS.channel.addAgent, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
+      agentId: 'agent-1',
+    });
+    await socket.trigger(WEB_EVENTS.channel.removeAgent, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
+      agentId: 'agent-1',
+    });
+    await socket.trigger(WEB_EVENTS.channel.members, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
+    });
 
     expect(app.registerUser).toHaveBeenCalledWith({ username: 'shaw' });
     expect(app.sendMessage).toHaveBeenCalledWith({
@@ -72,6 +111,35 @@ describe('server-next socket handlers', () => {
       teamId: 'team-1',
       channelId: 'channel-2',
       title: 'Team-wide updates',
+    });
+    expect(app.addChannelHumanMember).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
+      memberUserId: 'user-2',
+    });
+    expect(app.removeChannelHumanMember).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
+      memberUserId: 'user-2',
+    });
+    expect(app.addChannelAgentMember).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
+      agentId: 'agent-1',
+    });
+    expect(app.removeChannelAgentMember).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
+      agentId: 'agent-1',
+    });
+    expect(app.listChannelMembers).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
     });
   });
 

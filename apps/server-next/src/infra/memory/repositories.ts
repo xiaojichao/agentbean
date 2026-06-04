@@ -141,6 +141,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const agentId = identityLinks.get(identityKey);
         return agentId ? agents.get(agentId) ?? null : null;
       },
+      async getById(agentId) {
+        return agents.get(agentId) ?? null;
+      },
       async linkIdentity(input) {
         identityLinks.set(input.identityKey, input.agentId);
       },

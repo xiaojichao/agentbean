@@ -358,6 +358,100 @@ Ack<{ channel: ChannelDto }>
 - 非默认频道只允许 creator 更新 settings。
 - 默认 `all` 频道只允许 creator 更新 `title`。
 
+#### `channel:add-member`
+
+客户端：
+
+```ts
+{
+  userId: string;
+  teamId: string;
+  channelId: string;
+  memberUserId: string;
+}
+```
+
+Ack：
+
+```ts
+Ack<{ channel: ChannelDto }>
+```
+
+#### `channel:remove-member`
+
+客户端：
+
+```ts
+{
+  userId: string;
+  teamId: string;
+  channelId: string;
+  memberUserId: string;
+}
+```
+
+Ack：
+
+```ts
+Ack<{ channel: ChannelDto }>
+```
+
+#### `channel:add-agent`
+
+客户端：
+
+```ts
+{
+  userId: string;
+  teamId: string;
+  channelId: string;
+  agentId: string;
+}
+```
+
+Ack：
+
+```ts
+Ack<{ channel: ChannelDto }>
+```
+
+#### `channel:remove-agent`
+
+客户端：
+
+```ts
+{
+  userId: string;
+  teamId: string;
+  channelId: string;
+  agentId: string;
+}
+```
+
+Ack：
+
+```ts
+Ack<{ channel: ChannelDto }>
+```
+
+#### `channel:members`
+
+客户端：
+
+```ts
+{
+  userId: string;
+  teamId: string;
+  channelId: string;
+}
+```
+
+Ack：
+
+```ts
+Ack<{ humanMemberIds: string[]; agentMemberIds: string[] }>
+```
+
 #### `channels:subscribe`
 
 客户端：
@@ -414,11 +508,6 @@ Ack<{ message: MessageDto; dispatches: DispatchDto[] }>
 
 延后的 channel、DM 与 message commands：
 
-- `channel:add-member`：保留给 private channel management。
-- `channel:remove-member`：保留给 private channel management。
-- `channel:add-agent`：保留给 channel-agent membership。
-- `channel:remove-agent`：保留给 channel-agent membership。
-- `channel:members`：保留给 channel detail views。
 - `channel:leave`：仅当 hidden/left channel UX 保留时保留。
 - `channel:archive`：延后；需要产品决策。
 - `channel:delete`：延后；需要产品决策。

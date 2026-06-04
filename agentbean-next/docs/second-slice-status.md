@@ -39,8 +39,8 @@ npm run build:packages
 
 这些不属于第二切片：
 
-- `channel:add-member`、`channel:remove-member`、`channel:add-agent`、`channel:remove-agent` 的独立成员管理命令。
-- `channel:members` detail view。
+- 成员弹窗 UI shell 与组件渲染。
+- 返回 human/agent member 详情 DTO；第三切片当前只返回 id 列表。
 - Channel archive/delete/leave。
 - DM thread 创建与 agent DM。
 - 浏览器 UI shell 与组件渲染。

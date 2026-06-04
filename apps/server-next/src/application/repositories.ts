@@ -81,6 +81,7 @@ export interface RuntimeRepository {
 export interface AgentRepository {
   upsert(input: AgentRecord): Promise<AgentRecord>;
   getByIdentityKey(identityKey: string): Promise<AgentRecord | null>;
+  getById(agentId: ID): Promise<AgentRecord | null>;
   linkIdentity(input: { identityKey: string; agentId: ID; kind: string; timestamp: UnixMs }): Promise<void>;
   markMissingScannedOffline(input: { teamId: ID; deviceId: ID; seenIdentityKeys: string[]; timestamp: UnixMs }): Promise<ID[]>;
   updateStatus(input: { agentId: ID; status: AgentRecord['status']; lastSeenAt: UnixMs; lastError?: string }): Promise<void>;

@@ -8,10 +8,13 @@ import {
   makeSuccess,
   type Ack,
   type AgentDto,
+  type ChannelAgentMemberCommandDto,
   type ChannelDto,
+  type ChannelHumanMemberCommandDto,
   type CreateChannelCommandDto,
   type DeviceDto,
   type DispatchDto,
+  type ListChannelMembersCommandDto,
   type MessageDto,
   type TeamDto,
   type UpdateChannelCommandDto,
@@ -111,6 +114,23 @@ describe('first-slice contract result shape', () => {
       channelId: channel.id,
       title: 'Team-wide updates',
     };
+    const humanMemberCommand: ChannelHumanMemberCommandDto = {
+      userId: user.id,
+      teamId: team.id,
+      channelId: channel.id,
+      memberUserId: 'user-2',
+    };
+    const agentMemberCommand: ChannelAgentMemberCommandDto = {
+      userId: user.id,
+      teamId: team.id,
+      channelId: channel.id,
+      agentId: agent.id,
+    };
+    const listMembersCommand: ListChannelMembersCommandDto = {
+      userId: user.id,
+      teamId: team.id,
+      channelId: channel.id,
+    };
 
     expect(ack.ok).toBe(true);
     expect(team.id).toBe(device.teamId);
@@ -118,6 +138,9 @@ describe('first-slice contract result shape', () => {
     expect(message.meta?.routeReason).toBe('MENTION');
     expect(createChannel.visibility).toBe('private');
     expect(updateChannel.title).toBe('Team-wide updates');
+    expect(humanMemberCommand.memberUserId).toBe('user-2');
+    expect(agentMemberCommand.agentId).toBe('agent-1');
+    expect(listMembersCommand.channelId).toBe('channel-1');
   });
 
   test('exposes first-slice socket event constants without old network naming', () => {
