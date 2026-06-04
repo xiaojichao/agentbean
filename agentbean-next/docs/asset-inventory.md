@@ -15,11 +15,11 @@
 最重要、必须保留的产品不变量：
 
 - AgentBean 是一个 local-first 的团队协作平台，服务于人类、本地 agent、远端设备 agent，以及由 AgentOS 托管的 agent。
-- 一个团队或 network 拥有 channels、DMs、threads、tasks、files、members、devices 和 agent visibility。
+- 一个团队或 team 拥有 channels、DMs、threads、tasks、files、members、devices 和 agent visibility。
 - 系统包含三个进程：Web、Server 和 Daemon。
 - Web 通过 Socket.IO 与 artifact HTTP routes 和 Server 通信。
 - Daemon 通过 Socket.IO 与 Server 通信，并执行本地工具或桥接到 AgentOS gateways。
-- 第一版重写仍可接受 SQLite：一个全局数据库，加上 team/network 作用域的存储。
+- 第一版重写仍可接受 SQLite：一个全局数据库，加上 team 作用域的存储。
 
 ## 作为行为资产保留
 
@@ -32,7 +32,7 @@
 - `apps/server/src/channels.ts`
   - 频道成员关系与私有频道行为，可复用为 domain/use-case 需求。
 - `apps/server/src/artifact-routes.ts`、`apps/server/src/storage.ts`
-  - 应保留 artifact 与 per-network storage 行为，但 repository 边界需要更干净。
+  - 应保留 artifact 与 per-team storage 行为，但 repository 边界需要更干净。
 - `apps/server/src/registry.ts`、`apps/server/src/heartbeat-scanner.ts`
   - Runtime 状态、heartbeat、reconnect 与 offline 行为很有价值，但应从 transport code 中拆开。
 - `apps/daemon/src/scanner.ts`
@@ -41,7 +41,7 @@
   - Adapter 行为应迁移到稳定的 execution interface 后面。
 - `apps/daemon/src/device-daemon.ts`
   - Device lifecycle、scan cache、periodic rescan 与 dispatch 行为很重要，但该文件应被拆解。
-- `apps/web/app/[networkPath]/*`
+- `apps/web/app/[teamPath]/*`
   - Information architecture 与功能覆盖面有参考价值。
 - `apps/web/tests/*`、`apps/server/tests/*`、`apps/daemon/tests/*`
   - 现有测试并不完整，但可以作为很好的回归测试种子。
@@ -51,7 +51,7 @@
 这些文件是有用参考，但不应复制为目标形态：
 
 - `apps/server/src/index.ts`
-  - 职责过多：app boot、auth、Socket.IO handlers、network management、devices、tasks、messages、artifacts 和 dispatch。
+  - 职责过多：app boot、auth、Socket.IO handlers、team management、devices、tasks、messages、artifacts 和 dispatch。
 - `apps/server/src/db.ts`
   - Schema、migration、row mapping、repository behavior 和 types 耦合过紧。
 - `apps/server/src/namespaces/agent.ts`
@@ -60,9 +60,9 @@
   - 作为单个 client module 过宽，应改成按 feature 分区的 protocol clients。
 - `apps/web/lib/store.ts`
   - 包含偏 domain 的 agent dedupe 与 selection logic，并且重复了 server/daemon 规则。
-- `apps/web/app/[networkPath]/tasks/page.tsx`
+- `apps/web/app/[teamPath]/tasks/page.tsx`
   - Page、local UI state、socket calls、filters、thread UI、upload behavior 与 rendering 混在一起。
-- `apps/web/app/[networkPath]/chat/page.tsx`
+- `apps/web/app/[teamPath]/chat/page.tsx`
   - 同样的问题：feature behavior 与 presentation 应在迁移前拆开。
 
 ## 需要显式保留的风险
@@ -70,7 +70,7 @@
 重写版应把这些视为显式需求，而不是偶然实现细节：
 
 - Agent identity 并不简单。Scanned agents、self-registered agents、custom agents、device IDs、runtime paths 与 AgentOS gateway agents 必须稳定去重。
-- Network membership 与 agent publishing 是两个不同概念。
+- Team membership 与 agent publishing 是两个不同概念。
 - DM 与 private channel visibility 必须在 server-side 强制执行，不能只在 UI 中隐藏。
 - Dispatch history 不得重复当前用户 prompt。
 - Daemon reconnect 与 periodic scan behavior 是正确性的一部分，不只是可观测性。

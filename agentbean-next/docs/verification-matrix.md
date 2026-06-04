@@ -17,7 +17,7 @@
 | ID | 必需测试 | 层级 | 验证内容 | 来源文档 |
 |---|---|---|---|---|
 | P1-01 | `Ack<T>` success/failure shapes 可编译，并拒绝 invalid error codes。 | Domain | Shared result contract。 | `contracts-dto.md`, `socket-protocol.md` |
-| P1-02 | `UserDto`, `NetworkDto`, `DeviceDto`, `AgentDto`, `ChannelDto`, `MessageDto`, `DispatchDto` type fixtures 可编译。 | Domain | First-slice DTO contract。 | `contracts-dto.md` |
+| P1-02 | `UserDto`, `TeamDto`, `DeviceDto`, `AgentDto`, `ChannelDto`, `MessageDto`, `DispatchDto` type fixtures 可编译。 | Domain | First-slice DTO contract。 | `contracts-dto.md` |
 | P1-03 | Mention 路由到匹配的 online agent。 | Domain | Direct mention routing。 | `acceptance-tests.md`, `current-behavior.md` |
 | P1-04 | Unknown mention 不会 fallback。 | Domain | 避免意外 dispatch。 | `acceptance-tests.md`, `current-behavior.md` |
 | P1-05 | Human mention 不会 dispatch 给 agent。 | Domain | Human mention behavior。 | `acceptance-tests.md`, `current-behavior.md` |
@@ -25,12 +25,12 @@
 | P1-07 | No online agent 产生 non-fatal route result。 | Domain | Message send 可在无 dispatch 时持久化。 | `acceptance-tests.md`, `current-behavior.md` |
 | P1-08 | Agent identity 会规范化 adapter aliases。 | Domain | Adapter canonicalization。 | `agent-identity-rules.md` |
 | P1-09 | Linux path comparison 保留大小写；Windows comparison 大小写不敏感；unknown 默认大小写敏感。 | Domain | Path identity safety。 | `agent-identity-rules.md` |
-| P1-10 | 同 network/device/name 下 self-register 胜过 scan-prefix duplicate。 | Domain | Canonical ID merge。 | `agent-identity-rules.md` |
+| P1-10 | 同 team/device/name 下 self-register 胜过 scan-prefix duplicate。 | Domain | Canonical ID merge。 | `agent-identity-rules.md` |
 | P1-11 | Custom agent 不与 scanned runtime 合并。 | Domain | Custom config identity。 | `agent-identity-rules.md` |
 | P1-12 | Concrete AgentOS hosted agent 在 display 上胜过 generic gateway。 | Domain | Display precedence。 | `agent-identity-rules.md` |
 | P1-13 | Same-adapter gateway instances 不合并，除非 `gatewayInstanceKey` 匹配。 | Domain | Gateway instance identity。 | `agent-identity-rules.md` |
 | P1-14 | 较新的 status event 胜过较旧的 `busy`；status rank 只打破 same-batch conflict。 | Domain | Status merge ordering。 | `agent-identity-rules.md` |
-| P1-15 | Published agent 在 visible networks 中保持同一 identity。 | Domain | Publication projection，无 clone。 | `agent-identity-rules.md`, `feature-disposition.md` |
+| P1-15 | Published agent 在 visible teams 中保持同一 identity。 | Domain | Publication projection，无 clone。 | `agent-identity-rules.md`, `feature-disposition.md` |
 | P1-16 | Private channel visibility 允许 members 并拒绝 non-members。 | Domain | Server-side visibility rule。 | `acceptance-tests.md`, `target-architecture.md` |
 
 Phase 1 完成标准：
@@ -43,22 +43,22 @@ Phase 1 完成标准：
 | ID | 必需测试 | 层级 | 验证内容 | 来源文档 |
 |---|---|---|---|---|
 | P2-01 | Global migrations 创建 first-slice tables 与 indexes。 | Repository | Fresh schema exists。 | `first-slice-schema-repositories.md` |
-| P2-02 | Network migrations 创建 channel/message/dispatch tables 与 indexes。 | Repository | Network schema exists。 | `first-slice-schema-repositories.md` |
-| P2-03 | Register user 创建 private network、owner membership、default `all` channel 与 current network。 | UseCase | Registration transaction。 | `acceptance-tests.md`, `first-slice-schema-repositories.md` |
-| P2-04 | Login 在 membership 有效时恢复 saved current network。 | UseCase | Current network behavior。 | `acceptance-tests.md` |
+| P2-02 | Team migrations 创建 channel/message/dispatch tables 与 indexes。 | Repository | Team schema exists。 | `first-slice-schema-repositories.md` |
+| P2-03 | Register user 创建 private team、owner membership、default `all` channel 与 current team。 | UseCase | Registration transaction。 | `acceptance-tests.md`, `first-slice-schema-repositories.md` |
+| P2-04 | Login 在 membership 有效时恢复 saved current team。 | UseCase | Current team behavior。 | `acceptance-tests.md` |
 | P2-05 | Device hello upsert device，并调和 `machineId + profileId`。 | UseCase | Agent dedupe 前的 device identity。 | `agent-identity-rules.md`, `first-slice-schema-repositories.md` |
 | P2-06 | Runtime report 替换 device 的 runtimes，并保留 normalized path keys。 | Repository/UseCase | Runtime capability model。 | `contracts-dto.md`, `agent-identity-rules.md` |
 | P2-07 | Agent register batch 使用 identity links 创建/链接 canonical agents。 | UseCase | Agent dedupe persisted。 | `agent-identity-rules.md`, `first-slice-schema-repositories.md` |
 | P2-08 | Missing scanned agent 变为 offline，且不删除 membership/history。 | UseCase | Missing scan behavior。 | `acceptance-tests.md`, `agent-identity-rules.md` |
-| P2-09 | `listVisibleAgents` 返回 primary-network 与 published agents，且没有 clones。 | UseCase | Visibility projection。 | `agent-identity-rules.md`, `feature-disposition.md` |
-| P2-10 | Public channel list 对 network member 可见。 | UseCase | Channel visibility。 | `acceptance-tests.md` |
+| P2-09 | `listVisibleAgents` 返回 primary-team 与 published agents，且没有 clones。 | UseCase | Visibility projection。 | `agent-identity-rules.md`, `feature-disposition.md` |
+| P2-10 | Public channel list 对 team member 可见。 | UseCase | Channel visibility。 | `acceptance-tests.md` |
 | P2-11 | `sendMessage` 持久化 server-derived human sender，并忽略 client sender input。 | UseCase | Sender identity。 | `acceptance-tests.md`, `contracts-dto.md` |
 | P2-12 | 带 online agent 的 `sendMessage` 创建 dispatch record。 | UseCase | Dispatch first-class persistence。 | `first-slice-schema-repositories.md`, `contracts-dto.md` |
 | P2-13 | 无 online agent 的 `sendMessage` 持久化 message，并返回 no-online dispatch result。 | UseCase | Non-fatal no-dispatch path。 | `acceptance-tests.md` |
 | P2-14 | Dispatch timeout 将 dispatch 标记为 `timed_out`，并带有 `DISPATCH_TIMEOUT`。 | UseCase | Stable timeout error。 | `acceptance-tests.md`, `contracts-dto.md` |
 | P2-15 | Dispatch result 将 dispatch 标记为 succeeded，并追加 agent message。 | UseCase | Reply persistence。 | `acceptance-tests.md` |
 | P2-16 | Dispatch error 将 dispatch 标记为 failed，并更新 agent last error。 | UseCase | Error propagation。 | `acceptance-tests.md` |
-| P2-17 | `/web` login/network/channel/message socket flow 只使用 documented first-slice events。 | Socket | Transport adapter thinness。 | `socket-protocol.md`, `contracts-dto.md` |
+| P2-17 | `/web` login/team/channel/message socket flow 只使用 documented first-slice events。 | Socket | Transport adapter thinness。 | `socket-protocol.md`, `contracts-dto.md` |
 | P2-18 | `/agent` device hello/runtime/agent batch/dispatch result flow 使用 documented DTOs。 | Socket | Agent namespace contract。 | `socket-protocol.md`, `contracts-dto.md` |
 
 Phase 2 完成标准：
@@ -90,9 +90,9 @@ Phase 3 完成标准：
 | ID | 必需测试 | 层级 | 验证内容 | 来源文档 |
 |---|---|---|---|---|
 | P4-01 | Web API client 使用 first-slice event names 与 `Ack<T>` handling。 | Web | Client contract。 | `socket-protocol.md`, `contracts-dto.md` |
-| P4-02 | Session store 只持久化 token 与 current network。 | Web | Web state ownership。 | `target-architecture.md` |
+| P4-02 | Session store 只持久化 token 与 current team。 | Web | Web state ownership。 | `target-architecture.md` |
 | P4-03 | Login/register screen 处理 success 与 failure ack shapes。 | Web | Auth contract。 | `contracts-dto.md` |
-| P4-04 | Network shell 从 `NetworkDto` 渲染 current network。 | Web | Network projection。 | `contracts-dto.md` |
+| P4-04 | Team shell 从 `TeamDto` 渲染 current team。 | Web | Team projection。 | `contracts-dto.md` |
 | P4-05 | Device/agent status UI 渲染 server snapshots，不做 local dedupe。 | Web | Server-owned identity。 | `agent-identity-rules.md`, `target-architecture.md` |
 | P4-06 | Channel list 渲染 `ChannelDto` 与 selected channel history。 | Web | Channel/message DTOs。 | `contracts-dto.md` |
 | P4-07 | Message composer 只发送 body/clientMessageId；sender identity 不由 client 提供。 | Web | Sender trust boundary。 | `contracts-dto.md`, `acceptance-tests.md` |

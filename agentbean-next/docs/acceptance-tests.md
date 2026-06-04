@@ -2,29 +2,29 @@
 
 这些测试定义半重建后必须保留下来的行为。它们以产品级场景编写，而不是当前实现测试。
 
-## Auth 与 Network
+## Auth 与 Team
 
-### 注册会创建 Private Network
+### 注册会创建 Private Team
 
 前提：新用户使用 username 和 password 注册，
 当：注册成功，
 结果：用户收到 session token，
-并且创建一个 private network，
-且该 network 成为用户的 current network。
+并且创建一个 private team，
+且该 team 成为用户的 current team。
 
-### 登录会恢复 Current Network
+### 登录会恢复 Current Team
 
-前提：用户属于多个 networks，
-并且用户之前切换到了其中一个 network，
+前提：用户属于多个 teams，
+并且用户之前切换到了其中一个 team，
 当：用户再次登录，
-结果：如果用户仍是该 network 的 member，server 返回已保存的 current network。
+结果：如果用户仍是该 team 的 member，server 返回已保存的 current team。
 
-### Invite Join 会添加 Network Membership
+### Invite Join 会添加 Team Membership
 
-前提：某 network 的 invite code，
+前提：某 team 的 invite code，
 当：新用户通过该 invite 注册，
-结果：用户被加入受邀 network，
-并且登录后可以列出该 network。
+结果：用户被加入受邀 team，
+并且登录后可以列出该 team。
 
 ## Device 与 Daemon
 
@@ -73,10 +73,10 @@
 
 ## Channels 与 Messages
 
-### Public Channel 对 Network Members 可见
+### Public Channel 对 Team Members 可见
 
-前提：某 network 中存在 public channel，
-当：任意 network member 列出 channels，
+前提：某 team 中存在 public channel，
+当：任意 team member 列出 channels，
 结果：该 channel 可见。
 
 ### Private Channel 只对 Members 可见
@@ -165,10 +165,10 @@
 当：token 缺失或无效，
 结果：server 拒绝 upload。
 
-### Artifact Metadata 带有 Network Scope
+### Artifact Metadata 带有 Team Scope
 
 前提：为 channel message 上传了一个 file，
-当：另一个 network 尝试 fetch 它，
+当：另一个 team 尝试 fetch 它，
 结果：access 被拒绝。
 
 ### Workspace Run 可回链到 Agent
@@ -179,11 +179,11 @@
 
 ## Tasks
 
-### Task Create 会持久化 Network Scope
+### Task Create 会持久化 Team Scope
 
-前提：用户在某 network 中创建 task，
+前提：用户在某 team 中创建 task，
 当：列出 tasks，
-结果：它只出现在该 network 中。
+结果：它只出现在该 team 中。
 
 ### Task 可以关联 Channel
 
@@ -202,7 +202,7 @@
 ### 第一条端到端切片
 
 前提：server-next、daemon-next 与 web-next 正在运行，
-当：用户登录、选择 network、连接 daemon、打开 channel 并发送 message，
+当：用户登录、选择 team、连接 daemon、打开 channel 并发送 message，
 结果：用户能看到：
 
 - 已连接 device
@@ -213,7 +213,7 @@
 ### Reconnect 保持 UI 一致
 
 前提：web client 失去并恢复 socket connection，
-当：它重新订阅 current network，
+当：它重新订阅 current team，
 结果：agents、devices、channels、DMs、tasks 与 messages 都从 server snapshots 重新加载。
 
 ## 来自当前测试的回归种子

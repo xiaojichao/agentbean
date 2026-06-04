@@ -14,24 +14,24 @@
 
 | 当前表面 | 状态 | 目标方向 |
 |---|---|---|
-| 注册用户并创建 private network | First Slice | `auth:register` use case 与类型化 contract。 |
-| 登录并恢复 current network | First Slice | `auth:login` use case。 |
+| 注册用户并创建 private team | First Slice | `auth:register` use case 与类型化 contract。 |
+| 登录并恢复 current team | First Slice | `auth:login` use case。 |
 | `auth:whoami` | First Slice | 保留。 |
 | `auth:change-password` | Defer | 保留在 account settings 中。第一切片不需要。 |
 | User invite 注册 | Keep | 保留为 user invite flow。 |
 | Device invite login/token delivery | Keep | 保留为 device onboarding flow，在第一条 daemon 切片之后实现。 |
 
-## Networks 与 Members
+## Teams 与 Members
 
 | 当前表面 | 状态 | 目标方向 |
 |---|---|---|
-| Network list/create/switch | First Slice | 保留。 |
-| Network rename/update | Defer | 保留给 settings。 |
-| Network delete | Defer | 如果产品 UX 需要，仅保留 owner delete。 |
-| Admin network delete | Drop | 明确指定前不提供 admin surface。 |
-| Network members list | Keep | 保留。 |
+| Team list/create/switch | First Slice | 保留。 |
+| Team rename/update | Defer | 保留给 settings。 |
+| Team delete | Defer | 如果产品 UX 需要，仅保留 owner delete。 |
+| Admin team delete | Drop | 明确指定前不提供 admin surface。 |
+| Team members list | Keep | 保留。 |
 | Human profile/description update | Defer | 保留为 member/profile settings。 |
-| Public network auto-join | Reevaluate | 实现前先澄清产品规则。 |
+| Public team auto-join | Reevaluate | 实现前先澄清产品规则。 |
 
 ## Devices
 
@@ -140,8 +140,8 @@
 |---|---|---|
 | `admin:list-users` | Drop | 不属于第一版产品。 |
 | `admin:delete-user` | Drop | 只有在有明确 admin spec 与 audit model 后才重新引入。 |
-| `admin:list-networks` | Drop | 不属于第一版产品。 |
-| `admin:delete-network` | Drop | Owner network delete 可单独保留。 |
+| `admin:list-teams` | Drop | 不属于第一版产品。 |
+| `admin:delete-team` | Drop | Owner team delete 可单独保留。 |
 | `admin:list-devices` | Drop | 不属于第一版产品。 |
 | `admin:transfer-device-owner` | Drop | 除非 admin spec 要求 transfer，否则使用 re-invite/reconnect。 |
 | `admin:list-agents` | Drop | 不属于第一版产品。 |
@@ -152,7 +152,7 @@
 在构建其余内容前，只需要这些行为：
 
 1. Register/login。
-2. Current network selection。
+2. Current team selection。
 3. Device hello。
 4. Runtime 与 agent report。
 5. Agent/device snapshots。

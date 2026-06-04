@@ -9,7 +9,7 @@
 当前实现有两个活跃 storage scopes：
 
 - 来自 `apps/server/src/db.ts` 的 Global DB
-- 来自 `apps/server/src/storage.ts` 的 Per-network DB
+- 来自 `apps/server/src/storage.ts` 的 Per-team DB
 
 `apps/server/src/db.ts` 中还有一个较旧的 `SCHEMA` block，看起来像包含 agents、channels、messages、artifacts 与 tasks 的单数据库。除非当前 code paths 需要它，否则把它视为 legacy implementation history。
 
@@ -20,7 +20,7 @@
 目的：
 
 - Human account identity 与 login。
-- Current network preference。
+- Current team preference。
 - Admin/member role metadata。
 
 当前字段包括：
@@ -31,21 +31,21 @@
 - `description`
 - `password_hash`
 - `role`
-- `current_network_id`
+- `current_team_id`
 - `created_at`
 - `updated_at`
 
 重写说明：
 
 - 保留 user/account concept。
-- 保留 password hash 与 current network behavior。
+- 保留 password hash 与 current team behavior。
 - 没有产品决策前，不保留当前 token payload 或精确 role model。
 
-### `networks`
+### `teams`
 
 目的：
 
-- Channels、devices、agents、tasks 与 artifacts 的 team/network container。
+- Channels、devices、agents、tasks 与 artifacts 的 team container。
 
 当前字段包括：
 
@@ -60,19 +60,19 @@
 
 重写说明：
 
-- 保留 network/team 作为 core aggregate。
-- 决定产品语言使用 `team`、`network`，还是两者都用。当前 docs 两者都在使用。
-- 如果 Web routing 仍使用 `[networkPath]`，保留 URL/path slug behavior。
+- 保留 team 作为 core aggregate。
+- 决定产品语言使用 `team`、`team`，还是两者都用。当前 docs 两者都在使用。
+- 如果 Web routing 仍使用 `[teamPath]`，保留 URL/path slug behavior。
 
-### `network_members`
+### `team_members`
 
 目的：
 
-- 用户在 networks 中的 membership。
+- 用户在 teams 中的 membership。
 
 当前字段包括：
 
-- `network_id`
+- `team_id`
 - `user_id`
 - `role`
 - `joined_at`
@@ -92,7 +92,7 @@
 
 - `id`
 - `user_id`
-- `network_id`
+- `team_id`
 - `machine_id`
 - `profile_id`
 - `hostname`
@@ -103,7 +103,7 @@
 
 重写说明：
 
-- 保留 device identity、owner、network、machine/profile identity 与 runtime reporting。
+- 保留 device identity、owner、team、machine/profile identity 与 runtime reporting。
 - 只有 query needs 证明有必要时，才考虑把 runtimes 规范化成独立表。第一版重写中，只要 contract 类型化，JSON 可以接受。
 - `connect_command` 可以改为派生，而不是存储。
 
@@ -120,7 +120,7 @@
 - `role`
 - `adapter_kind`
 - `device_id`
-- `network_id`
+- `team_id`
 - `visibility`
 - `category`
 - `source`
@@ -137,21 +137,21 @@
 重写说明：
 
 - 保留 persisted agent identity 与 configuration。
-- 尽可能用显式 network publishing 与 channel membership semantics 替换宽泛的 `visibility`。
+- 尽可能用显式 team publishing 与 channel membership semantics 替换宽泛的 `visibility`。
 - 保留 `category` 与 `source`，但实现前先敲定词汇。
 - 将 `command`、`args`、`cwd` 与 `env` 视为 custom-agent runtime config。
 - 如果引入更干净的 identity rules，不保留 old agent IDs。
 
-### `agent_network_publish`
+### `agent_team_publish`
 
 目的：
 
-- 将 agents many-to-many publish 到额外 networks。
+- 将 agents many-to-many publish 到额外 teams。
 
 当前字段包括：
 
 - `agent_id`
-- `network_id`
+- `team_id`
 - `published_by`
 - `published_at`
 
@@ -160,7 +160,7 @@
 - 保留产品行为。
 - 建模为 `AgentPublication` 或等价概念。
 
-### `agent_network_unpublish`
+### `agent_team_unpublish`
 
 目的：
 
@@ -169,7 +169,7 @@
 当前字段包括：
 
 - `agent_id`
-- `network_id`
+- `team_id`
 - `unpublished_at`
 
 重写说明：
@@ -188,7 +188,7 @@
 - `id`
 - `code`
 - `created_by`
-- `network_id`
+- `team_id`
 - `purpose`
 - `used_at`
 - `expires_at`
@@ -216,9 +216,9 @@
 - 决定 join links 是否只是 user invites，还是独立 aggregate。
 - Metrics persistence 延后到 metrics feature slice。
 
-## Per-Network DB
+## Per-Team DB
 
-每个 network 都有一块由 `StorageManager` 管理的 SQLite 空间。
+每个 team 都有一块由 `StorageManager` 管理的 SQLite 空间。
 
 ### `channels`
 
@@ -337,14 +337,14 @@
 重写说明：
 
 - 保留。
-- 如果 access control 与 workspace views 需要，添加显式 network、channel、agent、workspace run linkage。
+- 如果 access control 与 workspace views 需要，添加显式 team、channel、agent、workspace run linkage。
 - 不要只依赖 filesystem path 做 authorization decisions。
 
 ### `tasks`
 
 目的：
 
-- Network/channel task board items。
+- Team/channel task board items。
 
 当前字段包括：
 
@@ -389,8 +389,8 @@
 推荐的 first-slice tables：
 
 - `users`
-- `networks`
-- `network_members`
+- `teams`
+- `team_members`
 - `devices`
 - `device_runtimes` 或 device runtime JSON
 - `agents`

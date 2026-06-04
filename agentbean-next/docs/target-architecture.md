@@ -40,7 +40,7 @@ Pure types 与 rules。不包含 Socket.IO、Express、SQLite、file system 或 
 建议模块：
 
 - `auth`
-- `network`
+- `team`
 - `member`
 - `agent`
 - `device`
@@ -54,7 +54,7 @@ Pure types 与 rules。不包含 Socket.IO、Express、SQLite、file system 或 
 Domain rules 示例：
 
 - 用户能看到哪些 channels。
-- Agent 是否在某 network 中可见。
+- Agent 是否在某 team 中可见。
 - 如何在 custom、self-register、scanned、runtime 与 AgentOS gateway reports 之间解析 agent identity 与 dedupe。见 `docs/agent-identity-rules.md`。
 - Message 如何 route 到 agents。
 - Daemon 是否允许 register device 或 agent。
@@ -68,8 +68,8 @@ Use cases。每个 use case 协调 repositories、domain rules 与 outbound port
 
 - `registerUser`
 - `loginUser`
-- `createNetwork`
-- `switchNetwork`
+- `createTeam`
+- `switchTeam`
 - `createInvite`
 - `completeDeviceInvite`
 - `registerDevice`
@@ -132,7 +132,7 @@ Web 是交互层，不应成为业务事实来源。
 建议 feature modules：
 
 - `features/auth`
-- `features/networks`
+- `features/teams`
 - `features/chat`
 - `features/agents`
 - `features/devices`
@@ -153,13 +153,13 @@ Web 是交互层，不应成为业务事实来源。
 - `lib/api/web-events`
 - `lib/api/artifact-api`
 - `lib/session/auth-token`
-- `lib/session/network-selection`
+- `lib/session/team-selection`
 
 Zustand store 应缩小为：
 
 - Connection state。
 - Current session。
-- Current network。
+- Current team。
 - Server snapshots。
 - Short-lived UI cache。
 
@@ -214,7 +214,7 @@ Daemon protocol code 不应知道 UI concepts。Execution code 不应知道 Sock
 packages/contracts/
   src/
     auth.ts
-    network.ts
+    team.ts
     agent.ts
     device.ts
     channel.ts
@@ -232,15 +232,15 @@ packages/contracts/
 
 - Global DB：
   - users
-  - networks
-  - network members
+  - teams
+  - team members
   - devices
   - agents
   - agent publishes
   - invites
   - join links
   - metrics
-- Network DB：
+- Team DB：
   - channels
   - channel members
   - channel agent members
@@ -259,5 +259,5 @@ packages/contracts/
 - Domain rules 可在无 sockets 或 databases 的情况下测试。
 - Repositories 隐藏 storage details。
 - Web 接收 snapshots 与 command results；不推断 server-side truth。
-- Daemon 报告 capabilities 与 execution results；不决定 network visibility。
+- Daemon 报告 capabilities 与 execution results；不决定 team visibility。
 - 每个迁移切片都先有 regression tests，再删除旧行为。

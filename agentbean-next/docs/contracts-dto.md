@@ -5,7 +5,7 @@
 范围：
 
 - User login/register。
-- Current network selection。
+- Current team selection。
 - Daemon device registration。
 - Runtime 与 agent discovery。
 - Agent/device snapshots。
@@ -89,13 +89,13 @@ export interface HumanMemberDto {
 
 说明：
 
-- `HumanMemberDto` 是 network membership projection，不是完整 account record。
-- `role` 的作用域是 network/team membership。
+- `HumanMemberDto` 是 team membership projection，不是完整 account record。
+- `role` 的作用域是 team membership。
 
-## NetworkDto
+## TeamDto
 
 ```ts
-export interface NetworkDto {
+export interface TeamDto {
   id: ID;
   name: string;
   path: string;
@@ -110,7 +110,7 @@ export interface NetworkDto {
 说明：
 
 - `path` 是稳定的 UI route segment。
-- 即使产品语言后续改为 `TeamDto`，第一切片也可以使用 `NetworkDto`。
+- `TeamDto` 是第一切片的团队投影，也是统一后的产品术语。
 
 ## DeviceDto
 
@@ -119,7 +119,7 @@ export type DeviceStatus = "connecting" | "online" | "offline" | "error";
 
 export interface DeviceDto {
   id: ID;
-  networkId: ID;
+  teamId: ID;
   ownerId: ID;
   machineId?: string | null;
   profileId?: string | null;
@@ -196,8 +196,8 @@ export type AgentStatus = "connecting" | "online" | "busy" | "offline" | "error"
 
 export interface AgentDto {
   id: ID;
-  primaryNetworkId: ID;
-  visibleNetworkIds: ID[];
+  primaryTeamId: ID;
+  visibleTeamIds: ID[];
   name: string;
   role?: string | null;
   description?: string | null;
@@ -218,7 +218,7 @@ export interface AgentDto {
 
 说明：
 
-- `visibleNetworkIds` 是 publication/visibility rules 的 projection result。Clients 不得自行计算。
+- `visibleTeamIds` 是 publication/visibility rules 的 projection result。Clients 不得自行计算。
 - `envKeys` 可以展示已配置哪些变量，而不会暴露 secret values。
 
 ## DiscoveredAgentDto
@@ -226,7 +226,7 @@ export interface AgentDto {
 ```ts
 export interface DiscoveredAgentDto {
   deviceId: ID;
-  networkId: ID;
+  teamId: ID;
   name: string;
   adapterKind: AdapterKind;
   category: AgentCategory;
@@ -254,7 +254,7 @@ export type ChannelVisibility = "public" | "private";
 
 export interface ChannelDto {
   id: ID;
-  networkId: ID;
+  teamId: ID;
   kind: ChannelKind;
   name: string;
   description?: string | null;
@@ -280,7 +280,7 @@ export type SenderKind = "human" | "agent" | "system";
 
 export interface MessageDto {
   id: ID;
-  networkId: ID;
+  teamId: ID;
   channelId: ID;
   threadId?: ID | null;
   senderKind: SenderKind;
@@ -321,7 +321,7 @@ export type DispatchStatus =
 
 export interface DispatchDto {
   id: ID;
-  networkId: ID;
+  teamId: ID;
   channelId: ID;
   messageId: ID;
   agentId: ID;
@@ -348,7 +348,7 @@ export interface DispatchDto {
 export interface DispatchRequestDto {
   dispatchId: ID;
   requestId: string;
-  networkId: ID;
+  teamId: ID;
   channelId: ID;
   messageId: ID;
   agentId: ID;
@@ -398,8 +398,8 @@ export interface DispatchCustomAgentDto {
 
 ```ts
 // /web
-type AuthLoginAck = Ack<{ token: string; user: UserDto; currentNetwork: NetworkDto }>;
-type NetworkListAck = Ack<{ networks: NetworkDto[]; currentNetworkId: ID | null }>;
+type AuthLoginAck = Ack<{ token: string; user: UserDto; currentTeam: TeamDto }>;
+type TeamListAck = Ack<{ teams: TeamDto[]; currentTeamId: ID | null }>;
 type DeviceListAck = Ack<{ devices: DeviceDto[] }>;
 type AgentSubscribeAck = Ack<{ agents: AgentDto[] }>;
 type ChannelJoinAck = Ack<{ channel: ChannelDto; messages: MessageDto[] }>;
@@ -416,7 +416,7 @@ type DispatchErrorAck = Ack;
 
 ## Phase 1 DTO 决策
 
-- 第一切片保留 `NetworkDto`。产品文案后续可以说 "team"，但 contracts 不应在第一切片实现前重命名。
+- 第一切片统一使用 `TeamDto`，不再引入旧团队 DTO 别名。
 - 第一切片保留宽松且可选的 `DeviceSystemInfoDto`。只有在 daemon platform reporting 稳定后再收紧。
 - 第一切片 public DTO 不包含 `AgentDto.displayRank`。Display precedence 留在 server-side，并通过 ordered/projection results 验证，而不是暴露成 client contract field。
 - 在第一切片 `ChannelDto` 上保留可选的 `humanMemberIds` 与 `agentMemberIds` snapshot fields。后续 `channel:members` command 可以提供更丰富的 member details。

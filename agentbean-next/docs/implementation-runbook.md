@@ -20,7 +20,7 @@ packages/
     src/
       common.ts
       auth.ts
-      network.ts
+      team.ts
       device.ts
       agent.ts
       channel.ts
@@ -99,7 +99,7 @@ apps/
 - App bootstrap。
 - SQLite migration runner。
 - Global DB connection。
-- Network DB/storage manager。
+- Team DB/storage manager。
 - Repository interfaces 与 SQLite implementations。
 - Use-case layer。
 - 薄 Socket.IO `/web` 与 `/agent` adapters。
@@ -108,8 +108,8 @@ apps/
 
 - `registerUser`
 - `loginUser`
-- `listNetworks`
-- `switchNetwork`
+- `listTeams`
+- `switchTeam`
 - `deviceHello`
 - `reportDeviceRuntimes`
 - `registerDiscoveredAgents`
@@ -180,7 +180,7 @@ apps/
 - Session token storage。
 - Socket/API client。
 - Login/register screen。
-- Network shell。
+- Team shell。
 - Device/agent status strip 或 panel。
 - Channel list。
 - Conversation view。
@@ -196,7 +196,7 @@ apps/
 完成标准：
 
 - 用户可以 log in/register。
-- 用户可以看到 current network。
+- 用户可以看到 current team。
 - 用户可以看到 connected daemon 与 discovered agent。
 - 用户可以 create/join channel。
 - 用户可以发送 message 并看到 agent reply。
@@ -211,7 +211,7 @@ apps/
 必需场景：
 
 1. Register user。
-2. Get current network。
+2. Get current team。
 3. Daemon hello。
 4. Runtime report。
 5. Agent register batch。
@@ -235,7 +235,7 @@ apps/
 - 确认所有 Phase 1-4 verification matrix tests 通过。
 - 确认没有引入 old compatibility adapters。
 - 确认 web 没有实现 agent dedupe 或 permission decisions。
-- 确认 daemon 没有决定 network visibility。
+- 确认 daemon 没有决定 team visibility。
 
 ## 暂不实现
 

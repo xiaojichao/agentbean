@@ -17,19 +17,15 @@
 
 ## 产品词汇缺口
 
-### Team vs Network
+### Team 术语已确认
 
-当前文档和代码同时使用 `team` 与 `network`。
+AgentBean 统一使用 `team` 作为产品与 domain model 术语。
 
-需要决策：
+已确认：
 
-- 为 UI 和 domain model 选择一个主要产品术语。
-- 如果两者都保留，精确定义它们之间的关系。
-
-推荐方向：
-
-- 在 product/UI language 中使用 `team`。
-- 仅在仍需要描述 infrastructure 或 isolation 时使用 `network`。
+- UI、domain、contract、schema 与 protocol 都应使用 `team`。
+- 不再保留第二套团队容器概念或同义术语。
+- 旧实现中残留的旧命名只可在盘点历史时作为 identifier 出现；目标实现不应继续采用。
 
 ### Agent Types
 
@@ -74,7 +70,7 @@ Tasks 可以拥有 `assignee_id`，但目标类型还没有完全指定。
 
 ### Snapshot 语义
 
-当前系统会为 agents、devices、networks、channels 与 DMs 发送 snapshots，但没有说明一致性保证。
+当前系统会为 agents、devices、teams、channels 与 DMs 发送 snapshots，但没有说明一致性保证。
 
 需要决策：
 
@@ -130,11 +126,11 @@ Thread behavior 已存在，但 data model 应显式化。
 
 ### Artifact Access Control
 
-当前 artifact metadata 需要更清晰的 network/channel/message/workspace linkage。
+当前 artifact metadata 需要更清晰的 team/channel/message/workspace linkage。
 
 需要：
 
-- Network-scoped artifact authorization。
+- Team-scoped artifact authorization。
 - Message 与 workspace bindings。
 
 ### Search Projection

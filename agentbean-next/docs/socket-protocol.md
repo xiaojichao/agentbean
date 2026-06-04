@@ -55,7 +55,7 @@ Auth modes：
 Ack：
 
 ```ts
-Ack<{ token: string; user: UserDto; currentNetwork: NetworkDto }>
+Ack<{ token: string; user: UserDto; currentTeam: TeamDto }>
 ```
 
 #### `auth:register`
@@ -69,7 +69,7 @@ Ack<{ token: string; user: UserDto; currentNetwork: NetworkDto }>
 Ack：
 
 ```ts
-Ack<{ token: string; user: UserDto; currentNetwork: NetworkDto }>
+Ack<{ token: string; user: UserDto; currentTeam: TeamDto }>
 ```
 
 #### `auth:whoami`
@@ -83,7 +83,7 @@ Ack<{ token: string; user: UserDto; currentNetwork: NetworkDto }>
 Ack：
 
 ```ts
-Ack<{ user: UserDto; currentNetwork: NetworkDto | null }>
+Ack<{ user: UserDto; currentTeam: TeamDto | null }>
 ```
 
 #### 延后的 Auth Commands
@@ -98,17 +98,17 @@ Ack<{ user: UserDto; currentNetwork: NetworkDto | null }>
 - `device-invite:create`：显式替换 `purpose: "device"` 的 `invite:create`。
 - `device-invite:complete`：显式替换 browser `auth:device-login` token delivery。
 
-### Networks
+### Teams
 
-#### `network:list`
+#### `team:list`
 
 Ack：
 
 ```ts
-Ack<{ networks: NetworkDto[]; currentNetworkId: string | null }>
+Ack<{ teams: TeamDto[]; currentTeamId: string | null }>
 ```
 
-#### `network:create`
+#### `team:create`
 
 客户端：
 
@@ -119,31 +119,31 @@ Ack<{ networks: NetworkDto[]; currentNetworkId: string | null }>
 Ack：
 
 ```ts
-Ack<{ network: NetworkDto }>
+Ack<{ team: TeamDto }>
 ```
 
-#### `network:switch`
+#### `team:switch`
 
 客户端：
 
 ```ts
-{ networkId: string }
+{ teamId: string }
 ```
 
 Ack：
 
 ```ts
-Ack<{ network: NetworkDto }>
+Ack<{ team: TeamDto }>
 ```
 
 服务器事件：
 
-- `networks:snapshot`：`NetworkDto[]`
+- `teams:snapshot`：`TeamDto[]`
 
-延后的 network commands：
+延后的 team commands：
 
-- `network:update`：保留给 settings。
-- `network:delete`：如果 product UX 需要 owner delete，则保留。
+- `team:update`：保留给 settings。
+- `team:delete`：如果 product UX 需要 owner delete，则保留。
 
 ### Members
 
@@ -152,7 +152,7 @@ Ack<{ network: NetworkDto }>
 客户端：
 
 ```ts
-{ networkId: string }
+{ teamId: string }
 ```
 
 Ack：
@@ -172,7 +172,7 @@ Ack<{ humans: HumanMemberDto[]; agents: AgentDto[] }>
 客户端：
 
 ```ts
-{ networkId: string }
+{ teamId: string }
 ```
 
 Ack：
@@ -228,7 +228,7 @@ Ack
 客户端：
 
 ```ts
-{ networkId: string }
+{ teamId: string }
 ```
 
 Ack：
@@ -243,7 +243,7 @@ Ack<{ agents: AgentDto[] }>
 
 ```ts
 {
-  networkId: string;
+  teamId: string;
   name: string;
   description?: string;
   adapterKind: AdapterKind;
@@ -266,7 +266,7 @@ Ack<{ agent: AgentDto }>
 客户端：
 
 ```ts
-{ agentId: string; networkId: string }
+{ agentId: string; teamId: string }
 ```
 
 Ack：
@@ -280,7 +280,7 @@ Ack<{ agent: AgentDto }>
 客户端：
 
 ```ts
-{ agentId: string; networkId: string }
+{ agentId: string; teamId: string }
 ```
 
 Ack：
@@ -314,7 +314,7 @@ Ack<{ agent: AgentDto }>
 
 ```ts
 {
-  networkId: string;
+  teamId: string;
   name: string;
   description?: string;
   visibility: "public" | "private";
@@ -334,7 +334,7 @@ Ack<{ channel: ChannelDto }>
 客户端：
 
 ```ts
-{ networkId: string }
+{ teamId: string }
 ```
 
 Ack：
@@ -408,7 +408,7 @@ Task commands 仅保留产品方向。不要在第一切片实现这些 commands
 客户端：
 
 ```ts
-{ networkId: string; channelId?: string }
+{ teamId: string; channelId?: string }
 ```
 
 Ack：
@@ -423,7 +423,7 @@ Ack<{ tasks: TaskDto[] }>
 
 ```ts
 {
-  networkId: string;
+  teamId: string;
   title: string;
   description?: string;
   channelId?: string;
@@ -479,8 +479,8 @@ Ack<{ task: TaskDto }>
 
 - `admin:list-users`
 - `admin:delete-user`
-- `admin:list-networks`
-- `admin:delete-network`
+- `admin:list-teams`
+- `admin:delete-team`
 - `admin:list-devices`
 - `admin:transfer-device-owner`
 - `admin:list-agents`
@@ -506,7 +506,7 @@ Daemon：
 ```ts
 {
   deviceId: string;
-  networkId: string;
+  teamId: string;
   machineId?: string;
   profileId?: string;
   hostname?: string;
@@ -528,7 +528,7 @@ Ack<{ device: DeviceDto; scanIntervalMs: number }>
 Daemon：
 
 ```ts
-{ deviceId: string; networkId: string; runtimes: RuntimeDto[] }
+{ deviceId: string; teamId: string; runtimes: RuntimeDto[] }
 ```
 
 Ack：
@@ -544,7 +544,7 @@ Daemon：
 ```ts
 {
   deviceId: string;
-  networkId: string;
+  teamId: string;
   agents: DiscoveredAgentDto[];
 }
 ```
@@ -625,7 +625,7 @@ DTOs 不应直接暴露 database rows。
 这些 DTOs 定义在 `docs/contracts-dto.md` 中，是第一切片必需项：
 
 - `UserDto`
-- `NetworkDto`
+- `TeamDto`
 - `HumanMemberDto`
 - `AgentDto`
 - `RuntimeDto`

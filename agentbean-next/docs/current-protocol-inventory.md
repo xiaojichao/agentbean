@@ -12,40 +12,40 @@ Browser clients 连接到 `/web`。当前实现允许 anonymous sockets 用于 a
 
 | 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `auth:register` | Web -> Server | 注册用户、创建 private network，并可选消费 invite。 | 保留行为，重新设计 payload/result。 |
-| `auth:login` | Web -> Server | 登录并返回 token/current network。提供 join code 时也会消费。 | 保留行为；在更干净时把 login 与 join consumption 拆开。 |
+| `auth:register` | Web -> Server | 注册用户、创建 private team，并可选消费 invite。 | 保留行为，重新设计 payload/result。 |
+| `auth:login` | Web -> Server | 登录并返回 token/current team。提供 join code 时也会消费。 | 保留行为；在更干净时把 login 与 join consumption 拆开。 |
 | `auth:whoami` | Web -> Server | 返回当前用户。 | 保留。 |
 | `auth:change-password` | Web -> Server | 校验当前密码后修改密码。 | 保留，但延后到 account settings slice。 |
 | `auth:invite:validate` | Web/Daemon -> Server | 校验 device 或 user invite；对 device invite 还会记录等待中的 daemon socket。 | 拆分为显式 user-invite 与 device-invite flows。 |
 | `auth:device-login` | Web -> Server | 面向等待中 device invite 的 browser login；向 daemon 交付 token。 | 保留行为，重设计为 device invite completion use case。 |
-| `auth:join:validate` | Web -> Server | 校验 user join link，并返回目标 network display info。 | 保留行为，重命名到 join/invite domain 下。 |
+| `auth:join:validate` | Web -> Server | 校验 user join link，并返回目标 team display info。 | 保留行为，重命名到 join/invite domain 下。 |
 | `auth:token:deliver` | Server -> Waiting socket | 向 daemon 或 invite session 交付 token。 | 保留行为，但让 delivery target 显式化。 |
 
-### Networks
+### Teams
 
 | 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `network:list` | Web -> Server | 列出当前用户可见的 networks。 | 保留。 |
-| `network:create` | Web -> Server | 创建 network 与 default channel。 | 保留。 |
-| `network:switch` | Web -> Server | 设置 socket current network，并持久化 user current network。 | 保留。 |
-| `network:update` | Web -> Server | 重命名 current network。 | 保留，延后到 settings slice。 |
-| `network:delete` | Web -> Server | 删除 network，并广播 fallback network state。 | 保留行为，延后到 settings/admin slice。 |
-| `networks:snapshot` | Server -> Web | 广播可见 network list。 | 保留为 snapshot，payload 应类型化。 |
-| `network:deleted` | Server -> Web | 当 current network 被删除时通知 sockets。 | 如果 delete 仍在范围内则保留行为。 |
+| `team:list` | Web -> Server | 列出当前用户可见的 teams。 | 保留。 |
+| `team:create` | Web -> Server | 创建 team 与 default channel。 | 保留。 |
+| `team:switch` | Web -> Server | 设置 socket current team，并持久化 user current team。 | 保留。 |
+| `team:update` | Web -> Server | 重命名 current team。 | 保留，延后到 settings slice。 |
+| `team:delete` | Web -> Server | 删除 team，并广播 fallback team state。 | 保留行为，延后到 settings/admin slice。 |
+| `teams:snapshot` | Server -> Web | 广播可见 team list。 | 保留为 snapshot，payload 应类型化。 |
+| `team:deleted` | Server -> Web | 当 current team 被删除时通知 sockets。 | 如果 delete 仍在范围内则保留行为。 |
 
 ### Members
 
 | 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `members:list` | Web -> Server | 列出某 network 的 human members 与 visible agents。 | 保留。 |
+| `members:list` | Web -> Server | 列出某 team 的 human members 与 visible agents。 | 保留。 |
 | `member:update-human` | Web -> Server | 更新 human description。 | 保留，延后到 profile/member settings slice。 |
 
 ### Devices
 
 | 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `devices:subscribe` | Web -> Server | 订阅 current network 的 device snapshot。 | 保留为 `device:list` 加 `devices:snapshot`。 |
-| `devices:list` | Web -> Server | 列出 current network 的 devices。 | 保留；如有需要可规范为单数 command 命名。 |
+| `devices:subscribe` | Web -> Server | 订阅 current team 的 device snapshot。 | 保留为 `device:list` 加 `devices:snapshot`。 |
+| `devices:list` | Web -> Server | 列出 current team 的 devices。 | 保留；如有需要可规范为单数 command 命名。 |
 | `device:get` | Web -> Server | 获取 device detail。 | 保留。 |
 | `device:agents:list` | Web -> Server | 列出某个 device 的 agents 与 runtimes。 | 保留行为，可能拆入 `device:get` detail DTO。 |
 | `device:scan` | Web -> Server -> Daemon | 请求 online daemon 重新扫描。 | 保留。 |
@@ -59,19 +59,19 @@ Browser clients 连接到 `/web`。当前实现允许 anonymous sockets 用于 a
 
 | 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `agents:subscribe` | Web -> Server | 发送 current network 的 visible agent snapshot。 | 保留。 |
+| `agents:subscribe` | Web -> Server | 发送 current team 的 visible agent snapshot。 | 保留。 |
 | `agents:discover` | Web -> Server -> Daemon | 向 daemons 广播 rescan request。 | 保留行为，targeted scans 可能通过 `device:scan` 路由。 |
 | `agents:snapshot` | Server -> Web | Visible agent snapshot。 | 保留。 |
 | `agents:discovered` | Server -> Web | 转发 daemon discovery payload。 | 保留为 typed discovery event。 |
 | `agent:status` | Server -> Web | 广播 agent online/busy/error/offline state。 | 保留。 |
 | `agent:metrics` | Web -> Server | 返回 metrics summaries。 | 保留，延后到 metrics slice。 |
 | `agent:create` | Web -> Server | 创建 custom 或 hosted agent config。 | 保留，但重设计 command/config DTO。 |
-| `agent:update` | Web -> Server | 更新 agent 的 visibility/network fields。 | 替换为显式 `agent:publish`、`agent:unpublish` 与 config update。不要保留宽泛 update。 |
+| `agent:update` | Web -> Server | 更新 agent 的 visibility/team fields。 | 替换为显式 `agent:publish`、`agent:unpublish` 与 config update。不要保留宽泛 update。 |
 | `agent:config:update` | Web -> Server | 更新 custom agent name/runtime config。 | 保留为 `agent:update-config` 或等价命令。 |
 | `agent:custom:list` | Web -> Server | 列出 custom agents，可选按 device 过滤。 | 合并到 `agents:subscribe`、`device:get` 或 filtered `agent:list`。 |
 | `agent:delete` | Web -> Server | 在允许时删除 custom 或 AgentOS agent。 | 保留行为，延后到 agent management slice。 |
-| `agent:publish` | Web -> Server | Publish agent 到 network。 | 保留。 |
-| `agent:unpublish` | Web -> Server | 从 network unpublish agent。 | 保留。 |
+| `agent:publish` | Web -> Server | Publish agent 到 team。 | 保留。 |
+| `agent:unpublish` | Web -> Server | 从 team unpublish agent。 | 保留。 |
 
 ### Channels、DMs、Messages
 
@@ -97,13 +97,13 @@ Browser clients 连接到 `/web`。当前实现允许 anonymous sockets 用于 a
 | `dm:list` | Web -> Server | 列出 DMs。 | 保留。 |
 | `dms:snapshot` | Server -> Web | DM list snapshot。 | 保留。 |
 | `message:send` | Web -> Server | 持久化 human message，route 并 dispatch 给 agents。 | 保留为第一切片行为。 |
-| `message:search` | Web -> Server | 在 current network 中搜索 messages。 | 保留，延后到 search slice。 |
+| `message:search` | Web -> Server | 在 current team 中搜索 messages。 | 保留，延后到 search slice。 |
 
 ### Tasks
 
 | 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `task:create` | Web -> Server | 创建 network/channel task。 | 保留；除非需要，否则延后到第一条 chat/dispatch slice 之后。 |
+| `task:create` | Web -> Server | 创建 team/channel task。 | 保留；除非需要，否则延后到第一条 chat/dispatch slice 之后。 |
 | `task:list` | Web -> Server | 列出 tasks，可选按 channel 过滤。 | 保留。 |
 | `task:update` | Web -> Server | 更新 fields/status/assignment/sort。 | 保留。 |
 | `task:delete` | Web -> Server | 删除 task。 | 保留。 |
@@ -115,7 +115,7 @@ Browser clients 连接到 `/web`。当前实现允许 anonymous sockets 用于 a
 | 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
 | `invite:create` | Web -> Server | 创建 user/device invite。 | 保留行为，拆成显式 user invite 与 device invite commands。 |
-| `join:create` | Web -> Server | 为 current network 创建 user join link。 | 保留，重命名到 invite/join domain 下。 |
+| `join:create` | Web -> Server | 为 current team 创建 user join link。 | 保留，重命名到 invite/join domain 下。 |
 | `join:list` | Web -> Server | 列出 active join links。 | 保留，延后。 |
 | `join:revoke` | Web -> Server | 撤销 join link。 | 保留，延后。 |
 
@@ -125,8 +125,8 @@ Browser clients 连接到 `/web`。当前实现允许 anonymous sockets 用于 a
 |---|---|---|---|
 | `admin:list-users` | Web -> Server | Admin user inventory。 | 从第一版产品中删除。只有在明确 admin requirements 后才重新引入。 |
 | `admin:delete-user` | Web -> Server | 删除 user。 | 删除/延后。 |
-| `admin:list-networks` | Web -> Server | Admin network inventory。 | 删除/延后。 |
-| `admin:delete-network` | Web -> Server | 以 admin 身份删除 network。 | 删除/延后；正常 owner delete 可保留。 |
+| `admin:list-teams` | Web -> Server | Admin team inventory。 | 删除/延后。 |
+| `admin:delete-team` | Web -> Server | 以 admin 身份删除 team。 | 删除/延后；正常 owner delete 可保留。 |
 | `admin:list-devices` | Web -> Server | Admin device inventory。 | 删除/延后。 |
 | `admin:transfer-device-owner` | Web -> Server | 转移 device ownership。 | 删除/延后；更可能通过 device re-invite 支持。 |
 | `admin:list-agents` | Web -> Server | Admin agent inventory。 | 删除/延后。 |
@@ -162,8 +162,8 @@ Daemon clients 连接到 `/agent`。
 | Route | 当前目的 | 重写处置 |
 |---|---|---|
 | `GET /healthz` | Health check。 | 保留。 |
-| `/api/networks/:networkId/artifacts/*` 下的 artifact upload/download routes | 上传、预览与下载 artifacts。 | 保留行为；定义 auth、network scoping 与 metadata contract。 |
-| `apps/web/app/api/networks/[networkId]/artifacts/upload/route.ts` 中的 Web proxy artifact upload route | Frontend fallback/proxy upload。 | 重新评估。除非 deployment 需要 proxy，否则优先使用 direct typed server route。 |
+| `/api/teams/:teamId/artifacts/*` 下的 artifact upload/download routes | 上传、预览与下载 artifacts。 | 保留行为；定义 auth、team scoping 与 metadata contract。 |
+| `apps/web/app/api/teams/[teamId]/artifacts/upload/route.ts` 中的 Web proxy artifact upload route | Frontend fallback/proxy upload。 | 重新评估。除非 deployment 需要 proxy，否则优先使用 direct typed server route。 |
 
 ## 当前协议问题
 

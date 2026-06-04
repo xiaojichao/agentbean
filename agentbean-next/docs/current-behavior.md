@@ -4,13 +4,13 @@
 
 ## 产品模型
 
-AgentBean 是一个 local-first 协作产品，人类和 agent 在同一个 team 或 network 中工作。
+AgentBean 是一个 local-first 协作产品，人类和 agent 在同一个 team 中工作。
 
 核心对象：
 
 - User
-- Network 或 team
-- Network membership
+- Team
+- Team membership
 - Device
 - Agent
 - Runtime
@@ -41,12 +41,12 @@ AgentBean 由三个协作进程组成：
 ## 身份与成员关系
 
 - 用户使用 username 和 password 注册。
-- 注册会创建或加入一个 network。
-- 登录返回 user token 和 current network。
-- 一个用户可以属于多个 networks。
-- Server 会持久化用户的 current network。
+- 注册会创建或加入一个 team。
+- 登录返回 user token 和 current team。
+- 一个用户可以属于多个 teams。
+- Server 会持久化用户的 current team。
 - Private channels 只对选中的 members 可见。
-- Public channels 对 network 中所有 members 可见。
+- Public channels 对 team 中所有 members 可见。
 
 ## Agent 模型
 
@@ -63,8 +63,8 @@ Agent sources：
 
 重要行为：
 
-- Agents 属于一个 primary network。
-- Agents 可以 publish 到额外 networks。
+- Agents 属于一个 primary team。
+- Agents 可以 publish 到额外 teams。
 - Agent online status 取决于 daemon/device state 与 heartbeat。
 - Custom agent online status 取决于 device online state、runtime availability 和 project directory availability。
 - Agent identity 必须对 scan registrations、self-registrations 与 custom-agent representations 做一致去重。
@@ -108,7 +108,7 @@ Device invite 行为：
 Server dispatch 职责：
 
 - 决定 target agent。
-- 构造 prompt、history、attachments、network/team context。
+- 构造 prompt、history、attachments 与 team context。
 - 把 request 发送给正确的已连接 daemon 或 AgentOS socket。
 - 跟踪 timeout。
 - 持久化 reply 或 error。
@@ -126,7 +126,7 @@ Daemon dispatch 职责：
 ## Artifact 行为
 
 - Artifacts 上传到 server storage。
-- Artifact metadata 与 network/channel/message context 一起持久化。
+- Artifact metadata 与 team/channel/message context 一起持久化。
 - Agent replies 可以包含生成的 artifacts。
 - Web 可以预览 images 并下载 files。
 - Agent workspace views 应展示 runs 生成的 files。
@@ -137,7 +137,7 @@ Daemon dispatch 职责：
 
 - UI 已有 task board/list 体验。
 - 当前分支中 Server 已有 task persistence 与 socket APIs。
-- Tasks 属于 network，并可关联 channels/messages。
+- Tasks 属于 team，并可关联 channels/messages。
 
 必需行为：
 
@@ -170,7 +170,7 @@ Daemon dispatch 职责：
 第一条重写切片应证明：
 
 1. 用户可以登录或注册。
-2. 用户拥有 current network。
+2. 用户拥有 current team。
 3. Daemon 可以连接并上报 device。
 4. Daemon 可以上报一个 runtime 和一个 agent。
 5. Web 可以看到该 device 和 agent。

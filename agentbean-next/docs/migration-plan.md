@@ -38,7 +38,7 @@
 
 - `packages/contracts` 或等价 shared contract module。
 - 来自 `docs/contracts-dto.md` 的 first-slice DTOs。
-- User、network、agent、device、channel、message、task、artifact 与 dispatch 的 domain types。
+- User、team、agent、device、channel、message、task、artifact 与 dispatch 的 domain types。
 - Domain services：
   - message routing
   - channel visibility
@@ -62,17 +62,17 @@
 
 ## Phase 2：Server Core Slice
 
-目标：构建最小 server，使其能 authenticate、管理 network、注册 daemon、创建 channel、持久化 messages，并 dispatch 到 agent。
+目标：构建最小 server，使其能 authenticate、管理 team、注册 daemon、创建 channel、持久化 messages，并 dispatch 到 agent。
 
 构建：
 
 - App bootstrap。
 - SQLite migration runner。
-- 来自 `docs/first-slice-schema-repositories.md` 的 global 与 network-scoped repositories。
+- 来自 `docs/first-slice-schema-repositories.md` 的 global 与 team-scoped repositories。
 - Use cases：
   - `registerUser`
   - `loginUser`
-  - `listNetworks`
+  - `listTeams`
   - `registerDevice`
   - `registerDiscoveredAgents`
   - `createChannel`
@@ -134,7 +134,7 @@
 
 - Session management。
 - Login/register pages。
-- Network shell。
+- Team shell。
 - Channel list。
 - Conversation view。
 - Agent/device status summary。
@@ -150,7 +150,7 @@
 完成定义：
 
 - 用户可以 log in。
-- 用户可以看到 current network。
+- 用户可以看到 current team。
 - 用户可以看到 connected daemon/agent status。
 - 用户可以 create 或 join channel。
 - 用户可以发送 message 并看到 agent reply。
@@ -229,8 +229,8 @@
 1. 创建 `packages/contracts`。
 2. 将 message routing 移入 pure domain module。
 3. 将 agent identity 与 dedupe rules 定义为 pure functions。
-4. 为 users、networks、devices、agents、channels 与 messages 添加 temp-SQLite repository interfaces。
-5. 实现 `/web` login 与 network list。
+4. 为 users、teams、devices、agents、channels 与 messages 添加 temp-SQLite repository interfaces。
+5. 实现 `/web` login 与 team list。
 6. 实现 `/agent` device hello 与 agent register batch。
 7. 实现 message send 与 stub dispatch。
 8. 添加第一条 workflow 的 tiny web shell。

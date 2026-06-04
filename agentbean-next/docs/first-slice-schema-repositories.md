@@ -8,14 +8,14 @@
 
 使用两个 database scopes：
 
-- Global DB：accounts、networks、memberships、devices、runtimes、agents、publications。
-- Network DB：channels、channel memberships、messages、dispatches。
+- Global DB：accounts、teams、memberships、devices、runtimes、agents、publications。
+- Team DB：channels、channel memberships、messages、dispatches。
 
 建议文件：
 
 ```text
 apps/server-next/src/infra/sqlite/migrations/global/0001_first_slice.sql
-apps/server-next/src/infra/sqlite/migrations/network/0001_first_slice.sql
+apps/server-next/src/infra/sqlite/migrations/team/0001_first_slice.sql
 ```
 
 ## 全局 Schema
@@ -28,12 +28,12 @@ CREATE TABLE users (
   display_name       TEXT,
   password_hash      TEXT NOT NULL,
   role               TEXT NOT NULL DEFAULT 'user',
-  current_network_id TEXT,
+  current_team_id TEXT,
   created_at         INTEGER NOT NULL,
   updated_at         INTEGER NOT NULL
 );
 
-CREATE TABLE networks (
+CREATE TABLE teams (
   id          TEXT PRIMARY KEY,
   owner_id    TEXT NOT NULL,
   name        TEXT NOT NULL,
@@ -44,19 +44,19 @@ CREATE TABLE networks (
   FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
-CREATE TABLE network_members (
-  network_id TEXT NOT NULL,
+CREATE TABLE team_members (
+  team_id TEXT NOT NULL,
   user_id    TEXT NOT NULL,
   role       TEXT NOT NULL DEFAULT 'member',
   joined_at  INTEGER NOT NULL,
-  PRIMARY KEY (network_id, user_id),
-  FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE,
+  PRIMARY KEY (team_id, user_id),
+  FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE TABLE devices (
   id             TEXT PRIMARY KEY,
-  network_id     TEXT NOT NULL,
+  team_id     TEXT NOT NULL,
   owner_id       TEXT NOT NULL,
   machine_id     TEXT,
   profile_id     TEXT,
@@ -67,14 +67,14 @@ CREATE TABLE devices (
   last_seen_at   INTEGER NOT NULL,
   created_at     INTEGER NOT NULL,
   updated_at     INTEGER NOT NULL,
-  FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE,
+  FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
   FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE TABLE device_runtimes (
   id                     TEXT PRIMARY KEY,
   device_id              TEXT NOT NULL,
-  network_id             TEXT NOT NULL,
+  team_id             TEXT NOT NULL,
   adapter_kind           TEXT NOT NULL,
   name                   TEXT NOT NULL,
   installed              INTEGER NOT NULL DEFAULT 0,
@@ -85,12 +85,12 @@ CREATE TABLE device_runtimes (
   version                TEXT,
   last_seen_at           INTEGER NOT NULL,
   FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
-  FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE
+  FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
 );
 
 CREATE TABLE agents (
   id                 TEXT PRIMARY KEY,
-  primary_network_id TEXT NOT NULL,
+  primary_team_id TEXT NOT NULL,
   name               TEXT NOT NULL,
   normalized_name    TEXT NOT NULL,
   role               TEXT,
@@ -109,7 +109,7 @@ CREATE TABLE agents (
   last_error         TEXT,
   created_at         INTEGER NOT NULL,
   updated_at         INTEGER NOT NULL,
-  FOREIGN KEY (primary_network_id) REFERENCES networks(id) ON DELETE CASCADE,
+  FOREIGN KEY (primary_team_id) REFERENCES teams(id) ON DELETE CASCADE,
   FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE SET NULL,
   FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE SET NULL
 );
@@ -125,12 +125,12 @@ CREATE TABLE agent_identity_links (
 
 CREATE TABLE agent_publications (
   agent_id     TEXT NOT NULL,
-  network_id   TEXT NOT NULL,
+  team_id   TEXT NOT NULL,
   published_by TEXT NOT NULL,
   published_at INTEGER NOT NULL,
-  PRIMARY KEY (agent_id, network_id),
+  PRIMARY KEY (agent_id, team_id),
   FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
-  FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE,
+  FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
   FOREIGN KEY (published_by) REFERENCES users(id) ON DELETE CASCADE
 );
 ```
@@ -138,26 +138,26 @@ CREATE TABLE agent_publications (
 ### 全局索引
 
 ```sql
-CREATE INDEX idx_users_current_network ON users(current_network_id);
-CREATE INDEX idx_network_members_user ON network_members(user_id);
-CREATE INDEX idx_devices_network ON devices(network_id);
+CREATE INDEX idx_users_current_team ON users(current_team_id);
+CREATE INDEX idx_team_members_user ON team_members(user_id);
+CREATE INDEX idx_devices_team ON devices(team_id);
 CREATE INDEX idx_devices_machine_profile ON devices(machine_id, profile_id);
 CREATE INDEX idx_device_runtimes_device ON device_runtimes(device_id);
-CREATE INDEX idx_device_runtimes_identity ON device_runtimes(network_id, device_id, adapter_kind, normalized_command_key, normalized_cwd_key);
-CREATE INDEX idx_agents_primary_network ON agents(primary_network_id);
+CREATE INDEX idx_device_runtimes_identity ON device_runtimes(team_id, device_id, adapter_kind, normalized_command_key, normalized_cwd_key);
+CREATE INDEX idx_agents_primary_team ON agents(primary_team_id);
 CREATE INDEX idx_agents_device ON agents(device_id);
-CREATE INDEX idx_agents_identity_lookup ON agents(primary_network_id, device_id, adapter_kind, normalized_name);
-CREATE INDEX idx_agent_publications_network ON agent_publications(network_id);
+CREATE INDEX idx_agents_identity_lookup ON agents(primary_team_id, device_id, adapter_kind, normalized_name);
+CREATE INDEX idx_agent_publications_team ON agent_publications(team_id);
 ```
 
-## Network Schema
+## Team Schema
 
-每个 network DB 都只服务于一个 network。关键 rows 仍存储 `network_id`，因为 DTOs 与 tests 不应依赖隐式 file location。
+每个 team DB 都只服务于一个 team。关键 rows 仍存储 `team_id`，因为 DTOs 与 tests 不应依赖隐式 file location。
 
 ```sql
 CREATE TABLE channels (
   id          TEXT PRIMARY KEY,
-  network_id  TEXT NOT NULL,
+  team_id  TEXT NOT NULL,
   kind        TEXT NOT NULL DEFAULT 'channel',
   name        TEXT NOT NULL,
   description TEXT,
@@ -185,7 +185,7 @@ CREATE TABLE channel_agent_members (
 
 CREATE TABLE messages (
   id                TEXT PRIMARY KEY,
-  network_id        TEXT NOT NULL,
+  team_id        TEXT NOT NULL,
   channel_id        TEXT NOT NULL,
   thread_id         TEXT,
   sender_kind       TEXT NOT NULL,
@@ -199,7 +199,7 @@ CREATE TABLE messages (
 
 CREATE TABLE dispatches (
   id            TEXT PRIMARY KEY,
-  network_id    TEXT NOT NULL,
+  team_id    TEXT NOT NULL,
   channel_id    TEXT NOT NULL,
   message_id    TEXT NOT NULL,
   agent_id      TEXT NOT NULL,
@@ -217,11 +217,11 @@ CREATE TABLE dispatches (
 );
 ```
 
-### Network 索引
+### Team 索引
 
 ```sql
-CREATE INDEX idx_channels_network_created ON channels(network_id, created_at);
-CREATE INDEX idx_channels_network_kind ON channels(network_id, kind);
+CREATE INDEX idx_channels_team_created ON channels(team_id, created_at);
+CREATE INDEX idx_channels_team_kind ON channels(team_id, kind);
 CREATE INDEX idx_channel_human_members_user ON channel_human_members(user_id);
 CREATE INDEX idx_channel_agent_members_agent ON channel_agent_members(agent_id);
 CREATE INDEX idx_messages_channel_created ON messages(channel_id, created_at);
@@ -241,17 +241,17 @@ export interface UserRepository {
   create(input: CreateUserInput): Promise<UserRecord>;
   getById(id: ID): Promise<UserRecord | null>;
   getByUsername(username: string): Promise<UserRecord | null>;
-  setCurrentNetwork(userId: ID, networkId: ID): Promise<void>;
+  setCurrentTeam(userId: ID, teamId: ID): Promise<void>;
 }
 
-export interface NetworkRepository {
-  create(input: CreateNetworkInput): Promise<NetworkRecord>;
-  getById(id: ID): Promise<NetworkRecord | null>;
-  getByPath(path: string): Promise<NetworkRecord | null>;
-  listForUser(userId: ID): Promise<NetworkRecord[]>;
-  addMember(input: AddNetworkMemberInput): Promise<void>;
-  isMember(networkId: ID, userId: ID): Promise<boolean>;
-  listMembers(networkId: ID): Promise<HumanMemberRecord[]>;
+export interface TeamRepository {
+  create(input: CreateTeamInput): Promise<TeamRecord>;
+  getById(id: ID): Promise<TeamRecord | null>;
+  getByPath(path: string): Promise<TeamRecord | null>;
+  listForUser(userId: ID): Promise<TeamRecord[]>;
+  addMember(input: AddTeamMemberInput): Promise<void>;
+  isMember(teamId: ID, userId: ID): Promise<boolean>;
+  listMembers(teamId: ID): Promise<HumanMemberRecord[]>;
 }
 
 export interface DeviceRepository {
@@ -259,7 +259,7 @@ export interface DeviceRepository {
   getById(id: ID): Promise<DeviceRecord | null>;
   findByMachineProfile(machineId: string, profileId: string): Promise<DeviceRecord | null>;
   setStatus(input: SetDeviceStatusInput): Promise<void>;
-  listByNetwork(networkId: ID): Promise<DeviceRecord[]>;
+  listByTeam(teamId: ID): Promise<DeviceRecord[]>;
 }
 
 export interface RuntimeRepository {
@@ -274,14 +274,14 @@ export interface AgentRepository {
   createCustom(input: CreateCustomAgentInput): Promise<AgentRecord>;
   updateStatus(input: UpdateAgentStatusInput): Promise<void>;
   linkIdentity(input: LinkAgentIdentityInput): Promise<void>;
-  listVisibleInNetwork(networkId: ID): Promise<AgentRecord[]>;
+  listVisibleInTeam(teamId: ID): Promise<AgentRecord[]>;
   listByDevice(deviceId: ID): Promise<AgentRecord[]>;
 }
 
 export interface ChannelRepository {
   create(input: CreateChannelInput): Promise<ChannelRecord>;
   getById(channelId: ID): Promise<ChannelRecord | null>;
-  listForUser(networkId: ID, userId: ID): Promise<ChannelRecord[]>;
+  listForUser(teamId: ID, userId: ID): Promise<ChannelRecord[]>;
   addHumanMember(input: AddChannelHumanMemberInput): Promise<void>;
   addAgentMember(input: AddChannelAgentMemberInput): Promise<void>;
   listAgentMembers(channelId: ID): Promise<ID[]>;
@@ -310,7 +310,7 @@ export interface DispatchRepository {
 
 这些操作使用显式 unit-of-work helpers：
 
-- Register user：create user、create private network、add owner membership、set current network、create default channel。
+- Register user：create user、create private team、add owner membership、set current team、create default channel。
 - Device report：upsert device、replace runtimes、upsert/link agents、mark missing scanned agents offline。
 - Send message：append human message、create dispatch records、publish message event。
 - Receive dispatch result：update dispatch、append agent message、update agent status、publish message/status events。
@@ -320,10 +320,10 @@ export interface DispatchRepository {
 
 用户注册时：
 
-- 创建 private network。
+- 创建 private team。
 - 创建 owner membership。
 - 创建名为 `all` 的 default public channel。
-- 将 current network 设为 private network。
+- 将 current team 设为 private team。
 
 Default channel 决策：
 
@@ -350,4 +350,4 @@ Default channel 决策：
 - Agent identity links 可以表示 `docs/agent-identity-rules.md` 中的每一种 key。
 - Dispatch lifecycle 被持久化，而不只存储在内存中。
 - Message sender identity 由 server 推导。
-- Network-scoped reads 可以被授权，而不依赖 client-provided network state。
+- Team-scoped reads 可以被授权，而不依赖 client-provided team state。
