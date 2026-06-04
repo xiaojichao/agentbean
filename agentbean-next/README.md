@@ -25,6 +25,7 @@
 - `docs/target-architecture.md` 描述目标模块边界。
 - `docs/socket-protocol.md` 定义重写版初始 `/web` 与 `/agent` 协议表面。
 - `docs/implementation-runbook.md` 给出第一切片的逐步开发检查清单。
+- `docs/first-slice-status.md` 记录第一切片当前实现、验证证据与剩余边界。
 - `docs/first-slice-schema-repositories.md` 定义第一切片的新 SQLite schema 与 repository 接口。
 - `docs/migration-plan.md` 给出分阶段实现计划。
 - `docs/verification-matrix.md` 将必需测试映射到阶段和来源文档。
@@ -32,8 +33,8 @@
 
 ## 非目标
 
-- 这个目录目前还不包含可运行的应用代码。
-- 它还不会替代当前的 `apps/web`、`apps/server` 或 `apps/daemon`。
+- 第一切片代码已放在仓库根目录的 `packages/contracts`、`packages/domain`、`apps/server-next`、`apps/daemon-next` 与 `apps/web-next`。
+- 第一切片仍不会替代当前生产中的 `apps/web`、`apps/server` 或 `apps/daemon`。
 - 不应因为当前文件形状已经存在，就原样带入重写版。现有代码是参考来源，不是目标架构。
 
 ## 第一实现切片
@@ -41,10 +42,29 @@
 第一个可运行切片应包含：
 
 1. 用户登录或注册。
-2. 网络选择与 snapshot。
+2. Team 选择与 snapshot。
 3. Daemon 注册。
 4. Runtime 扫描 snapshot。
 5. 频道创建与消息发送。
 6. Agent dispatch 与回复持久化。
 
 只有在这个切片稳定之后，才迁移其余功能。
+
+## 当前实现状态
+
+第一切片已经具备可运行的最小协议链路：
+
+- `packages/contracts`：共享 DTO、`Ack<T>`、error codes 与 socket event constants。
+- `packages/domain`：message routing、agent identity、status merge 与 channel visibility 纯函数。
+- `apps/server-next`：SQLite schema/repositories、use cases、Socket.IO namespace adapters 与 E2E smoke。
+- `apps/daemon-next`：daemon protocol client 与 stub executor。
+- `apps/web-next`：web socket client 与最小 session/state 边界。
+
+当前本地验证命令：
+
+```bash
+npm run test:phase1
+npm run build:packages
+```
+
+本机如果尚未安装根 workspace 依赖，可临时使用已安装的 `apps/server/node_modules` 运行同等测试；SQLite native module 当前与 Node 22 ABI 匹配。
