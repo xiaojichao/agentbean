@@ -1,24 +1,24 @@
-# First-Slice Schema And Repositories
+# 第一切片 Schema 与 Repositories
 
-This document defines the fresh SQLite schema and repository interfaces for the first AgentBean Next slice.
+本文档定义 AgentBean Next 第一切片的新 SQLite schema 与 repository interfaces。
 
-It is not a migration of the old schema. Old SQLite files do not need compatibility.
+它不是旧 schema 的 migration。旧 SQLite files 不需要 compatibility。
 
-## Storage Scope
+## 存储范围
 
-Use two database scopes:
+使用两个 database scopes：
 
-- Global DB: accounts, networks, memberships, devices, runtimes, agents, publications.
-- Network DB: channels, channel memberships, messages, dispatches.
+- Global DB：accounts、networks、memberships、devices、runtimes、agents、publications。
+- Network DB：channels、channel memberships、messages、dispatches。
 
-Suggested files:
+建议文件：
 
 ```text
 apps/server-next/src/infra/sqlite/migrations/global/0001_first_slice.sql
 apps/server-next/src/infra/sqlite/migrations/network/0001_first_slice.sql
 ```
 
-## Global Schema
+## 全局 Schema
 
 ```sql
 CREATE TABLE users (
@@ -135,7 +135,7 @@ CREATE TABLE agent_publications (
 );
 ```
 
-### Global Indexes
+### 全局索引
 
 ```sql
 CREATE INDEX idx_users_current_network ON users(current_network_id);
@@ -152,7 +152,7 @@ CREATE INDEX idx_agent_publications_network ON agent_publications(network_id);
 
 ## Network Schema
 
-Each network DB is scoped to a single network. `network_id` is still stored on key rows because DTOs and tests should not rely on implicit file location.
+每个 network DB 都只服务于一个 network。关键 rows 仍存储 `network_id`，因为 DTOs 与 tests 不应依赖隐式 file location。
 
 ```sql
 CREATE TABLE channels (
@@ -217,7 +217,7 @@ CREATE TABLE dispatches (
 );
 ```
 
-### Network Indexes
+### Network 索引
 
 ```sql
 CREATE INDEX idx_channels_network_created ON channels(network_id, created_at);
@@ -232,9 +232,9 @@ CREATE INDEX idx_dispatches_agent_status ON dispatches(agent_id, status);
 CREATE INDEX idx_dispatches_request_id ON dispatches(request_id);
 ```
 
-## Repository Interfaces
+## Repository 接口
 
-These interfaces are use-case oriented. They do not expose raw rows as the public application boundary.
+这些 interfaces 面向 use case。它们不会把 raw rows 暴露为 public application boundary。
 
 ```ts
 export interface UserRepository {
@@ -306,34 +306,34 @@ export interface DispatchRepository {
 }
 ```
 
-## Transaction Boundaries
+## 事务边界
 
-Use explicit unit-of-work helpers for these operations:
+这些操作使用显式 unit-of-work helpers：
 
-- Register user: create user, create private network, add owner membership, set current network, create default channel.
-- Device report: upsert device, replace runtimes, upsert/link agents, mark missing scanned agents offline.
-- Send message: append human message, create dispatch records, publish message event.
-- Receive dispatch result: update dispatch, append agent message, update agent status, publish message/status events.
-- Receive dispatch error/timeout: update dispatch and agent status.
+- Register user：create user、create private network、add owner membership、set current network、create default channel。
+- Device report：upsert device、replace runtimes、upsert/link agents、mark missing scanned agents offline。
+- Send message：append human message、create dispatch records、publish message event。
+- Receive dispatch result：update dispatch、append agent message、update agent status、publish message/status events。
+- Receive dispatch error/timeout：update dispatch 与 agent status。
 
-## First-Slice Seed Data
+## 第一切片种子数据
 
-On user registration:
+用户注册时：
 
-- Create a private network.
-- Create owner membership.
-- Create a default public channel named `all`.
-- Set current network to the private network.
+- 创建 private network。
+- 创建 owner membership。
+- 创建名为 `all` 的 default public channel。
+- 将 current network 设为 private network。
 
-Default channel decision:
+Default channel 决策：
 
-- Current behavior uses `all` as the default channel name.
-- The first slice keeps `all` to avoid an unnecessary behavior change.
-- If product UX later prefers `general`, handle that as an explicit rename decision in a later slice.
+- 当前行为使用 `all` 作为 default channel name。
+- 第一切片保留 `all`，避免不必要的行为变更。
+- 如果后续产品 UX 偏好 `general`，在后续切片中作为显式 rename decision 处理。
 
-## Explicitly Deferred Tables
+## 显式延后的 Tables
 
-Do not add these until their feature slice begins:
+在对应 feature slice 开始前，不要添加这些 tables：
 
 - `invites`
 - `tasks`
@@ -344,10 +344,10 @@ Do not add these until their feature slice begins:
 - `agent_metrics`
 - `audit_events`
 
-## Schema Verification Checklist
+## Schema 验证清单
 
-- All first-slice DTOs can be built without reading old tables.
-- Agent identity links can represent every key from `docs/agent-identity-rules.md`.
-- Dispatch lifecycle is persisted, not only stored in memory.
-- Message sender identity is server-derived.
-- Network-scoped reads can be authorized without relying on client-provided network state.
+- 所有 first-slice DTOs 都可以在不读取 old tables 的情况下构建。
+- Agent identity links 可以表示 `docs/agent-identity-rules.md` 中的每一种 key。
+- Dispatch lifecycle 被持久化，而不只存储在内存中。
+- Message sender identity 由 server 推导。
+- Network-scoped reads 可以被授权，而不依赖 client-provided network state。

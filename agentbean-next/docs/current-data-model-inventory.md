@@ -1,29 +1,29 @@
-# Current Data Model Inventory
+# 当前数据模型盘点
 
-This document inventories the current persistence model. It is a Phase 0 input for the rewrite, not a schema compatibility requirement.
+本文档盘点当前 persistence model。它是重写的 Phase 0 输入，不是 schema compatibility requirement。
 
-The old SQLite files do not need to be migrated because the product has not shipped. Use this inventory to preserve domain concepts, not table shapes.
+旧 SQLite files 不需要迁移，因为产品尚未发布。使用这份盘点来保留 domain concepts，而不是 table shapes。
 
-## Storage Scopes
+## 存储范围s
 
-The current implementation has two active storage scopes:
+当前实现有两个活跃 storage scopes：
 
-- Global DB from `apps/server/src/db.ts`
-- Per-network DB from `apps/server/src/storage.ts`
+- 来自 `apps/server/src/db.ts` 的 Global DB
+- 来自 `apps/server/src/storage.ts` 的 Per-network DB
 
-There is also an older `SCHEMA` block in `apps/server/src/db.ts` that resembles a single database containing agents, channels, messages, artifacts, and tasks. Treat it as legacy implementation history unless current code paths require it.
+`apps/server/src/db.ts` 中还有一个较旧的 `SCHEMA` block，看起来像包含 agents、channels、messages、artifacts 与 tasks 的单数据库。除非当前 code paths 需要它，否则把它视为 legacy implementation history。
 
-## Global DB
+## 全局 DB
 
 ### `users`
 
-Purpose:
+目的：
 
-- Human account identity and login.
-- Current network preference.
-- Admin/member role metadata.
+- Human account identity 与 login。
+- Current network preference。
+- Admin/member role metadata。
 
-Current fields include:
+当前字段包括：
 
 - `id`
 - `username`
@@ -35,19 +35,19 @@ Current fields include:
 - `created_at`
 - `updated_at`
 
-Rewrite notes:
+重写说明：
 
-- Keep the user/account concept.
-- Keep password hash and current network behavior.
-- Do not preserve current token payload or exact role model without a product decision.
+- 保留 user/account concept。
+- 保留 password hash 与 current network behavior。
+- 没有产品决策前，不保留当前 token payload 或精确 role model。
 
 ### `networks`
 
-Purpose:
+目的：
 
-- Team/network container for channels, devices, agents, tasks, and artifacts.
+- Channels、devices、agents、tasks 与 artifacts 的 team/network container。
 
-Current fields include:
+当前字段包括：
 
 - `id`
 - `owner_id`
@@ -58,37 +58,37 @@ Current fields include:
 - `type`
 - `created_at`
 
-Rewrite notes:
+重写说明：
 
-- Keep network/team as a core aggregate.
-- Decide whether the product language is `team`, `network`, or both. Current docs use both.
-- Keep URL/path slug behavior if the Web routing still uses `[networkPath]`.
+- 保留 network/team 作为 core aggregate。
+- 决定产品语言使用 `team`、`network`，还是两者都用。当前 docs 两者都在使用。
+- 如果 Web routing 仍使用 `[networkPath]`，保留 URL/path slug behavior。
 
 ### `network_members`
 
-Purpose:
+目的：
 
-- User membership in networks.
+- 用户在 networks 中的 membership。
 
-Current fields include:
+当前字段包括：
 
 - `network_id`
 - `user_id`
 - `role`
 - `joined_at`
 
-Rewrite notes:
+重写说明：
 
-- Keep.
-- Define roles explicitly rather than relying on loose strings.
+- 保留。
+- 显式定义 roles，而不是依赖 loose strings。
 
 ### `devices`
 
-Purpose:
+目的：
 
-- Registered daemon/device identity and last known metadata.
+- 已注册 daemon/device identity 与 last known metadata。
 
-Current fields include:
+当前字段包括：
 
 - `id`
 - `user_id`
@@ -101,19 +101,19 @@ Current fields include:
 - `system_info`
 - `runtimes`
 
-Rewrite notes:
+重写说明：
 
-- Keep device identity, owner, network, machine/profile identity, and runtime reporting.
-- Consider normalizing runtimes into a separate table only if query needs justify it. JSON is acceptable for first rewrite if contract is typed.
-- `connect_command` may be derived instead of stored.
+- 保留 device identity、owner、network、machine/profile identity 与 runtime reporting。
+- 只有 query needs 证明有必要时，才考虑把 runtimes 规范化成独立表。第一版重写中，只要 contract 类型化，JSON 可以接受。
+- `connect_command` 可以改为派生，而不是存储。
 
 ### `agents`
 
-Purpose:
+目的：
 
-- Persisted agent identity/configuration independent of live socket state.
+- 独立于 live socket state 的 persisted agent identity/configuration。
 
-Current fields include:
+当前字段包括：
 
 - `id`
 - `name`
@@ -134,56 +134,56 @@ Current fields include:
 - `owner_id`
 - `description`
 
-Rewrite notes:
+重写说明：
 
-- Keep persisted agent identity and configuration.
-- Replace broad `visibility` with explicit network publishing and channel membership semantics where possible.
-- Keep `category` and `source`, but finalize vocabulary before implementation.
-- Treat `command`, `args`, `cwd`, and `env` as custom-agent runtime config.
-- Do not preserve old agent IDs if cleaner identity rules are introduced.
+- 保留 persisted agent identity 与 configuration。
+- 尽可能用显式 network publishing 与 channel membership semantics 替换宽泛的 `visibility`。
+- 保留 `category` 与 `source`，但实现前先敲定词汇。
+- 将 `command`、`args`、`cwd` 与 `env` 视为 custom-agent runtime config。
+- 如果引入更干净的 identity rules，不保留 old agent IDs。
 
 ### `agent_network_publish`
 
-Purpose:
+目的：
 
-- Many-to-many publishing of agents into additional networks.
+- 将 agents many-to-many publish 到额外 networks。
 
-Current fields include:
+当前字段包括：
 
 - `agent_id`
 - `network_id`
 - `published_by`
 - `published_at`
 
-Rewrite notes:
+重写说明：
 
-- Keep product behavior.
-- Model as `AgentPublication` or equivalent.
+- 保留产品行为。
+- 建模为 `AgentPublication` 或等价概念。
 
 ### `agent_network_unpublish`
 
-Purpose:
+目的：
 
-- Tracks explicit unpublishing/hidden state for agents.
+- 跟踪 agents 的显式 unpublishing/hidden state。
 
-Current fields include:
+当前字段包括：
 
 - `agent_id`
 - `network_id`
 - `unpublished_at`
 
-Rewrite notes:
+重写说明：
 
-- Reevaluate. This may be a workaround for scan/publish ambiguity.
-- Keep only if there is a clear product rule requiring remembered suppressions.
+- 重新评估。这可能是 scan/publish ambiguity 的 workaround。
+- 只有存在需要 remembered suppressions 的清晰产品规则时才保留。
 
 ### `invites`
 
-Purpose:
+目的：
 
-- User join links and device invites.
+- User join links 与 device invites。
 
-Current fields include:
+当前字段包括：
 
 - `id`
 - `code`
@@ -196,37 +196,37 @@ Current fields include:
 - `uses_count`
 - `created_at`
 
-Rewrite notes:
+重写说明：
 
-- Keep invite concept.
-- Split user invite and device invite behavior in application services, even if one table backs both.
-- Define max-use behavior and used/revoked state explicitly.
+- 保留 invite concept。
+- 即使一张表支撑二者，也要在 application services 中拆分 user invite 与 device invite behavior。
+- 显式定义 max-use behavior 与 used/revoked state。
 
-### Mentioned But Not Fully Separate
+### 提到但未完全分离的概念
 
-Current docs mention these concepts:
+当前 docs 提到这些概念：
 
 - `join_links`
 - `agent_metrics`
 
-Current implementation appears to store join links through `invites`. Metrics are handled through `agent-metrics.ts` and may be in-memory or partially persisted depending on code path.
+当前实现看起来通过 `invites` 存储 join links。Metrics 由 `agent-metrics.ts` 处理，取决于 code path，可能是 in-memory 或 partially persisted。
 
-Rewrite notes:
+重写说明：
 
-- Decide whether join links are just user invites or a separate aggregate.
-- Defer metrics persistence until the metrics feature slice.
+- 决定 join links 是否只是 user invites，还是独立 aggregate。
+- Metrics persistence 延后到 metrics feature slice。
 
 ## Per-Network DB
 
-Each network has its own SQLite space managed by `StorageManager`.
+每个 network 都有一块由 `StorageManager` 管理的 SQLite 空间。
 
 ### `channels`
 
-Purpose:
+目的：
 
-- Public/private channels and DM channels.
+- Public/private channels 与 DM channels。
 
-Current fields include:
+当前字段包括：
 
 - `id`
 - `name`
@@ -238,69 +238,69 @@ Current fields include:
 - `is_dm`
 - `dm_target_id`
 
-Rewrite notes:
+重写说明：
 
-- Keep channels.
-- Consider modeling DMs either as a specialized channel type or a separate `dm_threads` concept. Current `is_dm` is serviceable but implicit.
-- Keep archive only if product needs it.
+- 保留 channels。
+- 考虑将 DMs 建模为 specialized channel type，或独立的 `dm_threads` concept。当前 `is_dm` 可用但隐式。
+- 只有产品需要时才保留 archive。
 
 ### `channel_members`
 
-Purpose:
+目的：
 
-- Agent members in channels.
+- Channels 中的 agent members。
 
-Current fields include:
+当前字段包括：
 
 - `channel_id`
 - `agent_id`
 - `joined_at`
 
-Rewrite notes:
+重写说明：
 
-- Keep.
-- Rename to `channel_agent_members` in the rewrite to avoid ambiguity.
+- 保留。
+- 重写时重命名为 `channel_agent_members`，避免歧义。
 
 ### `channel_user_members`
 
-Purpose:
+目的：
 
-- Human members in private channels and explicit channel membership.
+- Private channels 与显式 channel membership 中的 human members。
 
-Current fields include:
+当前字段包括：
 
 - `channel_id`
 - `user_id`
 - `joined_at`
 
-Rewrite notes:
+重写说明：
 
-- Keep.
-- Enforce channel visibility server-side in all reads and joins.
+- 保留。
+- 在所有 reads 与 joins 中强制执行 server-side channel visibility。
 
 ### `channel_user_leaves`
 
-Purpose:
+目的：
 
-- Tracks user leave state for channels.
+- 跟踪用户对 channels 的 leave state。
 
-Current fields include:
+当前字段包括：
 
 - `channel_id`
 - `user_id`
 - `left_at`
 
-Rewrite notes:
+重写说明：
 
-- Reevaluate. Keep only if leave/hide channel is in target UX.
+- 重新评估。只有 target UX 保留 leave/hide channel 时才保留。
 
 ### `messages`
 
-Purpose:
+目的：
 
-- Channel/DM/thread message persistence.
+- Channel/DM/thread message persistence。
 
-Current fields include:
+当前字段包括：
 
 - `id`
 - `channel_id`
@@ -310,19 +310,19 @@ Current fields include:
 - `created_at`
 - `meta_json`
 
-Rewrite notes:
+重写说明：
 
-- Keep messages.
-- Replace unstructured `meta_json` with typed metadata where possible: thread, attachments, task link, display sender name, route/dispatch metadata.
-- Add indexes based on search and history requirements.
+- 保留 messages。
+- 尽可能用 typed metadata 替换 unstructured `meta_json`：thread、attachments、task link、display sender name、route/dispatch metadata。
+- 根据 search 与 history requirements 添加 indexes。
 
 ### `artifacts`
 
-Purpose:
+目的：
 
-- Metadata for uploaded/generated files.
+- Uploaded/generated files 的 metadata。
 
-Current fields include:
+当前字段包括：
 
 - `id`
 - `message_id`
@@ -334,19 +334,19 @@ Current fields include:
 - `created_at`
 - `meta_json`
 
-Rewrite notes:
+重写说明：
 
-- Keep.
-- Add explicit network, channel, agent, workspace run linkage if needed by access control and workspace views.
-- Avoid relying only on filesystem path for authorization decisions.
+- 保留。
+- 如果 access control 与 workspace views 需要，添加显式 network、channel、agent、workspace run linkage。
+- 不要只依赖 filesystem path 做 authorization decisions。
 
 ### `tasks`
 
-Purpose:
+目的：
 
-- Network/channel task board items.
+- Network/channel task board items。
 
-Current fields include:
+当前字段包括：
 
 - `id`
 - `title`
@@ -360,39 +360,39 @@ Current fields include:
 - `created_at`
 - `updated_at`
 
-Rewrite notes:
+重写说明：
 
-- Keep.
-- Decide whether assignees can be humans, agents, or both.
-- Consider typed task status and a separate task-event log only if history/audit is needed.
+- 保留。
+- 决定 assignees 可以是 humans、agents，还是两者都可以。
+- 只有 history/audit 需要时，才考虑 typed task status 与独立 task-event log。
 
-## Missing Or Under-Specified Models
+## 缺失或定义不足的模型
 
-These concepts exist in product behavior but are not cleanly modeled yet:
+这些概念存在于产品行为中，但尚未被干净建模：
 
-- Dispatch requests and dispatch results.
-- Workspace runs.
-- Artifact-to-run linkage.
-- Message thread root/reply relationship.
-- DM participant model beyond `dm_target_id`.
-- Agent runtime availability history.
-- Device ownership transfer.
-- Admin audit trail.
-- Search index or searchable projection.
-- Notification/reminder preferences.
-- Saved/bookmarked messages and reactions.
+- Dispatch requests 与 dispatch results。
+- Workspace runs。
+- Artifact-to-run linkage。
+- Message thread root/reply relationship。
+- `dm_target_id` 之外的 DM participant model。
+- Agent runtime availability history。
+- Device ownership transfer。
+- Admin audit trail。
+- Search index 或 searchable projection。
+- Notification/reminder preferences。
+- Saved/bookmarked messages 与 reactions。
 
-## Rewrite Data Model Direction
+## 重写数据模型方向
 
-Use fresh schemas and explicit migrations.
+使用 fresh schemas 与显式 migrations。
 
-Recommended first-slice tables:
+推荐的 first-slice tables：
 
 - `users`
 - `networks`
 - `network_members`
 - `devices`
-- `device_runtimes` or device runtime JSON
+- `device_runtimes` 或 device runtime JSON
 - `agents`
 - `agent_publications`
 - `channels`
@@ -402,23 +402,23 @@ Recommended first-slice tables:
 - `dispatches`
 - `artifacts`
 
-Add later:
+后续添加：
 
 - `invites`
 - `tasks`
 - `workspace_runs`
-- `message_threads` if not represented by `messages.thread_id`
+- `message_threads`，如果没有用 `messages.thread_id` 表示
 - `saved_messages`
 - `message_reactions`
 - `agent_metrics`
 - `audit_events`
 
-## Current Data Model Problems
+## 当前数据模型问题
 
-- Schema creation and migration are embedded in large TypeScript files.
-- Some data is duplicated between global agent rows, runtime registry state, and web store projections.
-- Some important concepts are hidden in JSON fields.
-- DM and channel share a table without a strong typed abstraction.
-- Dispatch lifecycle is not a first-class persisted model.
-- Workspace runs and generated artifacts need clearer linkage.
-- Existing schemas should not constrain the rewrite because there is no shipped data compatibility requirement.
+- Schema creation 与 migration 嵌入在大型 TypeScript 文件中。
+- 一些数据重复存在于 global agent rows、runtime registry state 与 web store projections 中。
+- 一些重要概念隐藏在 JSON fields 中。
+- DM 与 channel 共用一张表，但缺少强 typed abstraction。
+- Dispatch lifecycle 不是一等 persisted model。
+- Workspace runs 与 generated artifacts 需要更清晰 linkage。
+- 由于没有 shipped data compatibility requirement，现有 schemas 不应约束重写。

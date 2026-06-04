@@ -1,164 +1,164 @@
-# Feature Disposition Matrix
+# 功能处置矩阵
 
-This matrix maps the current feature surface to the rewrite plan.
+本矩阵将当前功能表面映射到重写计划。
 
-Status values:
+状态值：
 
-- `First Slice`: required for the first end-to-end rewrite slice.
-- `Keep`: product behavior should remain, but not necessarily in the first slice.
-- `Defer`: useful behavior, implement after core flows are stable.
-- `Merge/Rename`: keep behavior but replace current event/API shape.
-- `Drop`: do not carry into the rewrite unless a new product requirement asks for it.
+- `First Slice`：第一条端到端重写切片必需。
+- `Keep`：产品行为应保留，但不一定进入第一切片。
+- `Defer`：有用行为，核心流程稳定后再实现。
+- `Merge/Rename`：保留行为，但替换当前 event/API 形状。
+- `Drop`：除非出现新的产品需求，否则不带入重写版。
 
-## Auth And Accounts
+## Auth 与 Accounts
 
-| Current Surface | Status | Target Direction |
+| 当前表面 | 状态 | 目标方向 |
 |---|---|---|
-| Register user and create private network | First Slice | `auth:register` use case and typed contract. |
-| Login and restore current network | First Slice | `auth:login` use case. |
-| `auth:whoami` | First Slice | Keep. |
-| `auth:change-password` | Defer | Keep under account settings. Not needed for first slice. |
-| User invite registration | Keep | Keep as user invite flow. |
-| Device invite login/token delivery | Keep | Keep as device onboarding flow after first daemon slice. |
+| 注册用户并创建 private network | First Slice | `auth:register` use case 与类型化 contract。 |
+| 登录并恢复 current network | First Slice | `auth:login` use case。 |
+| `auth:whoami` | First Slice | 保留。 |
+| `auth:change-password` | Defer | 保留在 account settings 中。第一切片不需要。 |
+| User invite 注册 | Keep | 保留为 user invite flow。 |
+| Device invite login/token delivery | Keep | 保留为 device onboarding flow，在第一条 daemon 切片之后实现。 |
 
-## Networks And Members
+## Networks 与 Members
 
-| Current Surface | Status | Target Direction |
+| 当前表面 | 状态 | 目标方向 |
 |---|---|---|
-| Network list/create/switch | First Slice | Keep. |
-| Network rename/update | Defer | Keep for settings. |
-| Network delete | Defer | Keep owner delete only if product UX needs it. |
-| Admin network delete | Drop | No admin surface until explicitly specified. |
-| Network members list | Keep | Keep. |
-| Human profile/description update | Defer | Keep as member/profile settings. |
-| Public network auto-join | Reevaluate | Clarify product rule before implementation. |
+| Network list/create/switch | First Slice | 保留。 |
+| Network rename/update | Defer | 保留给 settings。 |
+| Network delete | Defer | 如果产品 UX 需要，仅保留 owner delete。 |
+| Admin network delete | Drop | 明确指定前不提供 admin surface。 |
+| Network members list | Keep | 保留。 |
+| Human profile/description update | Defer | 保留为 member/profile settings。 |
+| Public network auto-join | Reevaluate | 实现前先澄清产品规则。 |
 
 ## Devices
 
-| Current Surface | Status | Target Direction |
+| 当前表面 | 状态 | 目标方向 |
 |---|---|---|
-| Daemon/device registration | First Slice | Replace with `device:hello`. |
-| Device runtime report | First Slice | Replace with `device:runtimes`. |
-| Device list/status snapshots | First Slice | Keep typed snapshots. |
-| Device detail | Keep | Keep. |
-| Device scan request | Keep | Keep as `device:scan-requested`. |
-| Native directory picker | Defer | Keep for custom agent creation. |
-| Device rename | Defer | Keep. |
-| Device delete | Defer | Keep if device management UX requires it. |
-| Device ownership transfer | Drop | Replace with re-invite/reconnect unless a clear admin need appears. |
+| Daemon/device registration | First Slice | 替换为 `device:hello`。 |
+| Device runtime report | First Slice | 替换为 `device:runtimes`。 |
+| Device list/status snapshots | First Slice | 保留类型化 snapshots。 |
+| Device detail | Keep | 保留。 |
+| Device scan request | Keep | 保留为 `device:scan-requested`。 |
+| Native directory picker | Defer | 保留给 custom agent creation。 |
+| Device rename | Defer | 保留。 |
+| Device delete | Defer | 如果 device management UX 需要则保留。 |
+| Device ownership transfer | Drop | 除非出现清晰的 admin 需求，否则用 re-invite/reconnect 替代。 |
 
 ## Agents
 
-| Current Surface | Status | Target Direction |
+| 当前表面 | 状态 | 目标方向 |
 |---|---|---|
-| Agent visible snapshot/status | First Slice | Keep. |
-| Agent discovery from daemon | First Slice | Replace old discovery payloads with typed runtime/agent reports. |
-| `agent:create` custom agent | Keep | Keep, after device/runtime slice. |
-| `agent:update` broad update | Merge/Rename | Remove. Split into publish/unpublish and config update. |
-| `agent:config:update` | Keep | Keep as explicit custom agent config update. |
-| `agent:delete` | Defer | Keep for custom agents; define permissions and delete semantics first. |
-| `agent:custom:list` | Merge/Rename | Merge into filtered agent list or device detail. |
-| `agent:publish` / `agent:unpublish` | Keep | Keep. |
-| Agent metrics | Defer | Keep after core collaboration flow. |
-| Legacy `standalone-cli` | Drop | Do not preserve. |
+| Agent visible snapshot/status | First Slice | 保留。 |
+| Daemon 上报的 agent discovery | First Slice | 用类型化 runtime/agent reports 替换旧 discovery payloads。 |
+| `agent:create` custom agent | Keep | 保留，在 device/runtime 切片之后实现。 |
+| `agent:update` broad update | Merge/Rename | 删除。拆分为 publish/unpublish 与 config update。 |
+| `agent:config:update` | Keep | 保留为显式 custom agent config update。 |
+| `agent:delete` | Defer | 保留给 custom agents；先定义权限和删除语义。 |
+| `agent:custom:list` | Merge/Rename | 合并进 filtered agent list 或 device detail。 |
+| `agent:publish` / `agent:unpublish` | Keep | 保留。 |
+| Agent metrics | Defer | 核心协作流程之后保留。 |
+| Legacy `standalone-cli` | Drop | 不保留。 |
 
-## Channels And Membership
+## Channels 与 Membership
 
-| Current Surface | Status | Target Direction |
+| 当前表面 | 状态 | 目标方向 |
 |---|---|---|
-| Channel list/snapshot | First Slice | Keep. |
-| Channel create | First Slice | Keep minimal public channel creation first; private membership can follow. |
-| Channel join/history | First Slice | Keep, prefer ack result for history. |
-| `channel:add-member` / `channel:remove-member` | Keep | Keep for private channel management. |
-| `channel:add-agent` / `channel:remove-agent` | Keep | Keep for channel-agent membership. |
-| `channel:members` | Keep | Keep. |
-| Channel update/rename/visibility | Defer | Keep for channel settings. |
-| Channel leave | Defer | Keep only if left/hidden channel UX remains. |
-| Channel archive | Reevaluate | Defer or drop; needs product decision. |
-| Channel delete | Reevaluate | Defer; decide hard-delete vs archive. |
-| Stop agents in channel | Keep | Keep as dispatch cancellation, not channel-specific transport logic. |
+| Channel list/snapshot | First Slice | 保留。 |
+| Channel create | First Slice | 先保留最小 public channel creation；private membership 可后续实现。 |
+| Channel join/history | First Slice | 保留，history 优先通过 ack result 返回。 |
+| `channel:add-member` / `channel:remove-member` | Keep | 保留给 private channel management。 |
+| `channel:add-agent` / `channel:remove-agent` | Keep | 保留给 channel-agent membership。 |
+| `channel:members` | Keep | 保留。 |
+| Channel update/rename/visibility | Defer | 保留给 channel settings。 |
+| Channel leave | Defer | 仅当 left/hidden channel UX 仍保留时实现。 |
+| Channel archive | Reevaluate | 延后或删除；需要产品决策。 |
+| Channel delete | Reevaluate | 延后；决定 hard-delete 还是 archive。 |
+| 停止 channel 中的 agents | Keep | 保留为 dispatch cancellation，而不是 channel-specific transport logic。 |
 
-## DMs And Threads
+## DMs 与 Threads
 
-| Current Surface | Status | Target Direction |
+| 当前表面 | 状态 | 目标方向 |
 |---|---|---|
-| `dm:start` | Keep | Keep as start/get DM with agent. |
-| `dm:list` / `dms:snapshot` | Keep | Keep. |
-| DM mention filtering | Keep | Preserve behavior in UI and server routing. |
-| Thread message context | Keep | Preserve. Dispatch history must not duplicate current prompt. |
-| Formal thread data model | Missing | Add explicit thread fields or model in rewrite. |
+| `dm:start` | Keep | 保留为 start/get DM with agent。 |
+| `dm:list` / `dms:snapshot` | Keep | 保留。 |
+| DM mention filtering | Keep | 在 UI 与 server routing 中保留该行为。 |
+| Thread message context | Keep | 保留。Dispatch history 不得重复当前 prompt。 |
+| Formal thread data model | Missing | 在重写版中加入显式 thread fields 或 model。 |
 
-## Messages, Search, Dispatch
+## Messages、Search、Dispatch
 
-| Current Surface | Status | Target Direction |
+| 当前表面 | 状态 | 目标方向 |
 |---|---|---|
-| `message:send` | First Slice | Keep core behavior: persist human message, route, dispatch, persist reply. |
-| `channel:message` broadcast | First Slice | Keep. |
-| `message:search` | Defer | Keep after message persistence is stable. |
-| Agent dispatch `dispatch` | First Slice | Rename to `dispatch:request`. |
-| Agent reply `reply` | First Slice | Rename to `dispatch:result`. |
-| Agent error `error_event` | First Slice | Rename to `dispatch:error`. |
-| `dispatch:cancel` | Keep | Keep. |
-| Dispatch persistence | Missing | Add first-class dispatch table/model. |
+| `message:send` | First Slice | 保留核心行为：持久化 human message、route、dispatch、持久化 reply。 |
+| `channel:message` broadcast | First Slice | 保留。 |
+| `message:search` | Defer | Message persistence 稳定后保留。 |
+| Agent dispatch `dispatch` | First Slice | 重命名为 `dispatch:request`。 |
+| Agent reply `reply` | First Slice | 重命名为 `dispatch:result`。 |
+| Agent error `error_event` | First Slice | 重命名为 `dispatch:error`。 |
+| `dispatch:cancel` | Keep | 保留。 |
+| Dispatch persistence | Missing | 加入一等 dispatch table/model。 |
 
-## Artifacts And Workspace
+## Artifacts 与 Workspace
 
-| Current Surface | Status | Target Direction |
+| 当前表面 | 状态 | 目标方向 |
 |---|---|---|
-| Artifact upload/download | Keep | Keep after text dispatch slice, before rich agent workspace. |
-| Artifact preview | Defer | Keep. |
-| Artifact-message binding | Keep | Keep. |
-| Workspace runs | Keep | Add explicit model; current behavior is under-modeled. |
-| Web upload proxy route | Reevaluate | Keep only if deployment constraints require it. |
+| Artifact upload/download | Keep | 在 text dispatch slice 之后、rich agent workspace 之前保留。 |
+| Artifact preview | Defer | 保留。 |
+| Artifact-message binding | Keep | 保留。 |
+| Workspace runs | Keep | 加入显式 model；当前行为建模不足。 |
+| Web upload proxy route | Reevaluate | 仅当 deployment constraints 需要时保留。 |
 
 ## Tasks
 
-| Current Surface | Status | Target Direction |
+| 当前表面 | 状态 | 目标方向 |
 |---|---|---|
-| `task:create` | Defer | Keep after core chat/dispatch. |
-| `task:list` | Defer | Keep. |
-| `task:update` | Defer | Keep. |
-| `task:delete` | Defer | Keep. |
-| `task:reorder` | Merge/Rename | Merge into `task:update` unless UI benefits from explicit command. |
-| `task:updated` | Defer | Keep. |
-| Task-channel/message link | Keep | Preserve as product behavior. |
+| `task:create` | Defer | 核心 chat/dispatch 之后保留。 |
+| `task:list` | Defer | 保留。 |
+| `task:update` | Defer | 保留。 |
+| `task:delete` | Defer | 保留。 |
+| `task:reorder` | Merge/Rename | 除非 UI 明显受益于显式 command，否则合并进 `task:update`。 |
+| `task:updated` | Defer | 保留。 |
+| Task-channel/message link | Keep | 作为产品行为保留。 |
 
-## Invites And Join Links
+## Invites 与 Join Links
 
-| Current Surface | Status | Target Direction |
+| 当前表面 | 状态 | 目标方向 |
 |---|---|---|
-| `invite:create` with `purpose: device` | Keep | Replace with explicit `device-invite:create`. |
-| `invite:create` with `purpose: user` | Merge/Rename | Prefer user join link commands. |
-| `join:create` | Keep | Keep as user invite creation. |
-| `join:list` | Defer | Keep. |
-| `join:revoke` | Defer | Keep. |
-| `auth:join:validate` | Keep | Rename to `join:validate` or `invite:validate-user`. |
+| `invite:create` with `purpose: device` | Keep | 替换为显式 `device-invite:create`。 |
+| `invite:create` with `purpose: user` | Merge/Rename | 优先使用 user join link commands。 |
+| `join:create` | Keep | 保留为 user invite creation。 |
+| `join:list` | Defer | 保留。 |
+| `join:revoke` | Defer | 保留。 |
+| `auth:join:validate` | Keep | 重命名为 `join:validate` 或 `invite:validate-user`。 |
 
-## Admin Surface
+## Admin 表面
 
-| Current Surface | Status | Target Direction |
+| 当前表面 | 状态 | 目标方向 |
 |---|---|---|
-| `admin:list-users` | Drop | Not part of first product. |
-| `admin:delete-user` | Drop | Reintroduce only with explicit admin spec and audit model. |
-| `admin:list-networks` | Drop | Not part of first product. |
-| `admin:delete-network` | Drop | Owner network delete may remain separately. |
-| `admin:list-devices` | Drop | Not part of first product. |
-| `admin:transfer-device-owner` | Drop | Use re-invite/reconnect unless admin spec requires transfer. |
-| `admin:list-agents` | Drop | Not part of first product. |
-| `admin:delete-agent` | Drop | Not part of first product. |
+| `admin:list-users` | Drop | 不属于第一版产品。 |
+| `admin:delete-user` | Drop | 只有在有明确 admin spec 与 audit model 后才重新引入。 |
+| `admin:list-networks` | Drop | 不属于第一版产品。 |
+| `admin:delete-network` | Drop | Owner network delete 可单独保留。 |
+| `admin:list-devices` | Drop | 不属于第一版产品。 |
+| `admin:transfer-device-owner` | Drop | 除非 admin spec 要求 transfer，否则使用 re-invite/reconnect。 |
+| `admin:list-agents` | Drop | 不属于第一版产品。 |
+| `admin:delete-agent` | Drop | 不属于第一版产品。 |
 
-## Minimum First Slice
+## 最小第一切片
 
-Only these behaviors are required before building the rest:
+在构建其余内容前，只需要这些行为：
 
-1. Register/login.
-2. Current network selection.
-3. Device hello.
-4. Runtime and agent report.
-5. Agent/device snapshots.
-6. Channel list/create/join.
-7. Message send.
-8. Dispatch request/result/error.
-9. Persisted human and agent messages.
+1. Register/login。
+2. Current network selection。
+3. Device hello。
+4. Runtime 与 agent report。
+5. Agent/device snapshots。
+6. Channel list/create/join。
+7. Message send。
+8. Dispatch request/result/error。
+9. 持久化 human 与 agent messages。
 
-Everything else should be implemented after the first slice is stable.
+其余功能都应在第一切片稳定后实现。

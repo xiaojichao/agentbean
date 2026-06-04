@@ -1,10 +1,10 @@
-# Asset Inventory
+# 资产盘点
 
-This document separates reusable project assets from implementation shapes that should be replaced.
+本文档区分可复用的项目资产，以及应被替换的实现形态。
 
-## Preserve As Product Sources
+## 作为产品来源保留
 
-These files capture product intent and should become the source material for the rewrite specs:
+这些文件捕获了产品意图，应成为重写规格的来源材料：
 
 - `README.md`
 - `docs/superpowers/specs/2026-05-09-agentbean-prd.md`
@@ -12,75 +12,75 @@ These files capture product intent and should become the source material for the
 - `docs/superpowers/specs/2026-06-01-agentbean-current-behavior-baseline-spec.md`
 - `docs/superpowers/plans/2026-05-09-agentbean-implementation-roadmap.md`
 
-The most important product invariants to preserve:
+最重要、必须保留的产品不变量：
 
-- AgentBean is a local-first team collaboration platform for humans, local agents, remote-device agents, and AgentOS-hosted agents.
-- A team or network owns channels, DMs, threads, tasks, files, members, devices, and agent visibility.
-- The system has three processes: Web, Server, and Daemon.
-- Web talks to Server over Socket.IO and artifact HTTP routes.
-- Daemon talks to Server over Socket.IO and executes local tools or bridges to AgentOS gateways.
-- SQLite remains acceptable for the first rewrite version: global database plus team/network-scoped storage.
+- AgentBean 是一个 local-first 的团队协作平台，服务于人类、本地 agent、远端设备 agent，以及由 AgentOS 托管的 agent。
+- 一个团队或 network 拥有 channels、DMs、threads、tasks、files、members、devices 和 agent visibility。
+- 系统包含三个进程：Web、Server 和 Daemon。
+- Web 通过 Socket.IO 与 artifact HTTP routes 和 Server 通信。
+- Daemon 通过 Socket.IO 与 Server 通信，并执行本地工具或桥接到 AgentOS gateways。
+- 第一版重写仍可接受 SQLite：一个全局数据库，加上 team/network 作用域的存储。
 
-## Preserve As Behavior Assets
+## 作为行为资产保留
 
-These areas contain useful behavior and edge-case knowledge:
+这些区域包含有用的行为与边界情况知识：
 
 - `apps/server/src/routing.ts`
-  - Small, isolated message routing rule for mention, human mention, fallback, and no-online states.
-- `apps/server/src/auth.ts`, `apps/server/src/password.ts`, `apps/server/src/invite.ts`
-  - Useful authentication and invite mechanics, though they should move behind application services.
+  - 小而隔离的消息路由规则，覆盖 mention、human mention、fallback 和 no-online 状态。
+- `apps/server/src/auth.ts`、`apps/server/src/password.ts`、`apps/server/src/invite.ts`
+  - 有用的认证与邀请机制，但应移到 application services 后面。
 - `apps/server/src/channels.ts`
-  - Channel membership and private-channel behavior are reusable as domain/use-case requirements.
-- `apps/server/src/artifact-routes.ts`, `apps/server/src/storage.ts`
-  - Artifact and per-network storage behavior should be preserved, but the repository boundary should be cleaner.
-- `apps/server/src/registry.ts`, `apps/server/src/heartbeat-scanner.ts`
-  - Runtime state, heartbeat, reconnect, and offline behavior are valuable, but should be split from transport code.
+  - 频道成员关系与私有频道行为，可复用为 domain/use-case 需求。
+- `apps/server/src/artifact-routes.ts`、`apps/server/src/storage.ts`
+  - 应保留 artifact 与 per-network storage 行为，但 repository 边界需要更干净。
+- `apps/server/src/registry.ts`、`apps/server/src/heartbeat-scanner.ts`
+  - Runtime 状态、heartbeat、reconnect 与 offline 行为很有价值，但应从 transport code 中拆开。
 - `apps/daemon/src/scanner.ts`
-  - Runtime detection and AgentOS/local-agent scanning have high migration value.
+  - Runtime detection 与 AgentOS/local-agent scanning 具有很高的迁移价值。
 - `apps/daemon/src/adapters/*`
-  - Adapter behavior should be migrated behind a stable execution interface.
+  - Adapter 行为应迁移到稳定的 execution interface 后面。
 - `apps/daemon/src/device-daemon.ts`
-  - Device lifecycle, scan cache, periodic rescan, and dispatch behavior are important, but the file should be decomposed.
+  - Device lifecycle、scan cache、periodic rescan 与 dispatch 行为很重要，但该文件应被拆解。
 - `apps/web/app/[networkPath]/*`
-  - Information architecture and feature coverage are useful.
-- `apps/web/tests/*`, `apps/server/tests/*`, `apps/daemon/tests/*`
-  - Existing tests are not complete, but they are good regression seeds.
+  - Information architecture 与功能覆盖面有参考价值。
+- `apps/web/tests/*`、`apps/server/tests/*`、`apps/daemon/tests/*`
+  - 现有测试并不完整，但可以作为很好的回归测试种子。
 
-## Rewrite Instead Of Porting
+## 重写而不是移植
 
-These files are useful references but should not be copied as the target shape:
+这些文件是有用参考，但不应复制为目标形态：
 
 - `apps/server/src/index.ts`
-  - Too many responsibilities: app boot, auth, Socket.IO handlers, network management, devices, tasks, messages, artifacts, and dispatch.
+  - 职责过多：app boot、auth、Socket.IO handlers、network management、devices、tasks、messages、artifacts 和 dispatch。
 - `apps/server/src/db.ts`
-  - Schema, migration, row mapping, repository behavior, and types are too tightly combined.
+  - Schema、migration、row mapping、repository behavior 和 types 耦合过紧。
 - `apps/server/src/namespaces/agent.ts`
-  - Valuable behavior, but transport handling, persistence, registry updates, device state, and dispatch coordination are interleaved.
+  - 行为有价值，但 transport handling、persistence、registry updates、device state 与 dispatch coordination 交织在一起。
 - `apps/web/lib/socket.ts`
-  - Too broad as a single client module. It should become feature-scoped protocol clients.
+  - 作为单个 client module 过宽，应改成按 feature 分区的 protocol clients。
 - `apps/web/lib/store.ts`
-  - Contains domain-ish agent dedupe and selection logic that duplicates server/daemon rules.
+  - 包含偏 domain 的 agent dedupe 与 selection logic，并且重复了 server/daemon 规则。
 - `apps/web/app/[networkPath]/tasks/page.tsx`
-  - Page, local UI state, socket calls, filters, thread UI, upload behavior, and rendering are combined.
+  - Page、local UI state、socket calls、filters、thread UI、upload behavior 与 rendering 混在一起。
 - `apps/web/app/[networkPath]/chat/page.tsx`
-  - Same concern: feature behavior and presentation should be split before migration.
+  - 同样的问题：feature behavior 与 presentation 应在迁移前拆开。
 
-## Risks To Preserve Explicitly
+## 需要显式保留的风险
 
-The rewrite should treat these as explicit requirements rather than accidental implementation details:
+重写版应把这些视为显式需求，而不是偶然实现细节：
 
-- Agent identity is not trivial. Scanned agents, self-registered agents, custom agents, device IDs, runtime paths, and AgentOS gateway agents must dedupe consistently.
-- Network membership and agent publishing are distinct concepts.
-- DM and private channel visibility must be enforced server-side, not only hidden in the UI.
-- Dispatch history must not duplicate the current user prompt.
-- Daemon reconnect and periodic scan behavior are part of correctness, not just observability.
-- Artifact upload must connect generated files to messages, channels, agents, and workspace runs.
-- Device invite flow must preserve the distinction between browser-authenticated users and daemon sockets waiting for token delivery.
+- Agent identity 并不简单。Scanned agents、self-registered agents、custom agents、device IDs、runtime paths 与 AgentOS gateway agents 必须稳定去重。
+- Network membership 与 agent publishing 是两个不同概念。
+- DM 与 private channel visibility 必须在 server-side 强制执行，不能只在 UI 中隐藏。
+- Dispatch history 不得重复当前用户 prompt。
+- Daemon reconnect 与 periodic scan behavior 是正确性的一部分，不只是可观测性。
+- Artifact upload 必须把生成文件连接到 messages、channels、agents 与 workspace runs。
+- Device invite flow 必须保留 browser-authenticated users 与等待 token delivery 的 daemon sockets 之间的区别。
 
-## Suggested Extraction Rules
+## 建议的抽取规则
 
-- Extract behavior first, not files.
-- Each migrated behavior needs an acceptance test before old code is replaced.
-- Shared normalization rules should live in one shared domain module or be generated from a single protocol schema.
-- Socket event payloads should be typed at the boundary and converted into domain commands.
-- Repositories should expose use-case-oriented methods, not raw table-shaped APIs.
+- 先抽取行为，而不是文件。
+- 每个迁移行为都需要在旧代码被替换前拥有一个 acceptance test。
+- 共享 normalization rules 应放在一个共享 domain module 中，或从单一 protocol schema 生成。
+- Socket event payloads 应在边界处类型化，再转换成 domain commands。
+- Repositories 应暴露面向 use case 的方法，而不是 raw table-shaped APIs。

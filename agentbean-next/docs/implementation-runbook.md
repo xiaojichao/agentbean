@@ -1,18 +1,18 @@
-# Implementation Runbook
+# 实现 Runbook
 
-This is the execution checklist for building the first AgentBean Next slice. It is more concrete than `migration-plan.md` and should be followed in order.
+这是构建 AgentBean Next 第一切片的执行检查清单。它比 `migration-plan.md` 更具体，应按顺序执行。
 
-## Ground Rules
+## 基本规则
 
-- Build new code separately from current `apps/web`, `apps/server`, and `apps/daemon`.
-- Do not preserve old Socket.IO event names, old SQLite schemas, or old module shapes.
-- Do not implement later-slice features while building the first slice.
-- Every step must produce code plus tests or a typed contract.
-- If a step needs a product decision, update docs before coding around it.
+- 新代码与当前 `apps/web`、`apps/server`、`apps/daemon` 分开构建。
+- 不保留旧 Socket.IO event names、旧 SQLite schemas 或旧 module shapes。
+- 构建第一切片时，不实现后续切片功能。
+- 每一步都必须产出代码，并配套 tests 或 typed contract。
+- 如果某一步需要产品决策，先更新 docs，再围绕它写代码。
 
-## Target Workspace
+## 目标工作区
 
-Recommended first implementation layout:
+推荐的第一版实现布局：
 
 ```text
 packages/
@@ -33,78 +33,78 @@ apps/
   web-next/
 ```
 
-If the repository does not yet have a root package/workspace, create one before adding these projects.
+如果仓库还没有 root package/workspace，应先创建，再添加这些 projects。
 
-## Step 1: Create `packages/contracts`
+## Step 1：创建 `packages/contracts`
 
-Inputs:
+输入：
 
 - `docs/contracts-dto.md`
 - `docs/socket-protocol.md`
 - `docs/agent-identity-rules.md`
 
-Build:
+构建：
 
-- Shared DTO types.
-- `Ack<T>` and `ErrorCode`.
-- Adapter kind, agent category, agent status, dispatch status.
-- Socket event names as constants or typed maps.
+- Shared DTO types。
+- `Ack<T>` 与 `ErrorCode`。
+- Adapter kind、agent category、agent status、dispatch status。
+- 作为 constants 或 typed maps 的 socket event names。
 
-Tests:
+测试：
 
-- Type-only or runtime schema tests if a validator is introduced.
-- No imports from server, web, or daemon apps.
+- 如果引入 validator，添加 type-only 或 runtime schema tests。
+- 不从 server、web 或 daemon apps 导入。
 
-Done when:
+完成标准：
 
-- Contracts build independently.
-- Server, web, and daemon can import contracts without circular dependencies.
-- No database row types exist in contracts.
+- Contracts 可独立 build。
+- Server、web 与 daemon 可以导入 contracts 且没有 circular dependencies。
+- Contracts 中不存在 database row types。
 
-## Step 2: Build Domain Pure Functions
+## Step 2：构建 Domain Pure Functions
 
-Inputs:
+输入：
 
 - `docs/agent-identity-rules.md`
 - `docs/current-behavior.md`
 - `docs/acceptance-tests.md`
 
-Build:
+构建：
 
-- Message routing: mention, human mention, unknown mention, fallback, no-online.
-- Agent identity normalization and key generation.
-- Agent merge/display/status resolution.
-- Channel visibility rules.
-- Agent visibility/publication rules.
+- Message routing：mention、human mention、unknown mention、fallback、no-online。
+- Agent identity normalization 与 key generation。
+- Agent merge/display/status resolution。
+- Channel visibility rules。
+- Agent visibility/publication rules。
 
-Tests:
+测试：
 
-- All Phase 1 tests in `docs/verification-matrix.md`.
+- `docs/verification-matrix.md` 中所有 Phase 1 tests。
 
-Done when:
+完成标准：
 
-- Domain tests run without Socket.IO, Express, Next.js, daemon code, or SQLite.
-- Web does not need its own agent dedupe algorithm.
+- Domain tests 不依赖 Socket.IO、Express、Next.js、daemon code 或 SQLite 即可运行。
+- Web 不需要自己的 agent dedupe algorithm。
 
-## Step 3: Create `apps/server-next`
+## Step 3：创建 `apps/server-next`
 
-Inputs:
+输入：
 
 - `docs/first-slice-schema-repositories.md`
 - `docs/contracts-dto.md`
 - `docs/socket-protocol.md`
 
-Build:
+构建：
 
-- App bootstrap.
-- SQLite migration runner.
-- Global DB connection.
-- Network DB/storage manager.
-- Repository interfaces and SQLite implementations.
-- Use-case layer.
-- Thin Socket.IO `/web` and `/agent` adapters.
+- App bootstrap。
+- SQLite migration runner。
+- Global DB connection。
+- Network DB/storage manager。
+- Repository interfaces 与 SQLite implementations。
+- Use-case layer。
+- 薄 Socket.IO `/web` 与 `/agent` adapters。
 
-First use cases:
+第一批 use cases：
 
 - `registerUser`
 - `loginUser`
@@ -121,133 +121,133 @@ First use cases:
 - `receiveDispatchResult`
 - `receiveDispatchError`
 
-Tests:
+测试：
 
-- Repository tests with temp SQLite.
-- Use-case tests.
-- Socket integration tests using test clients.
+- 使用 temp SQLite 的 repository tests。
+- Use-case tests。
+- 使用 test clients 的 socket integration tests。
 
-Done when:
+完成标准：
 
-- A test web client can register/login and create/join a channel.
-- A test daemon client can register a device, runtimes, and one agent.
-- Sending a message creates a persisted dispatch.
-- Receiving a daemon result persists an agent message.
+- Test web client 可以 register/login 并 create/join channel。
+- Test daemon client 可以注册 device、runtimes 与一个 agent。
+- 发送 message 会创建 persisted dispatch。
+- 接收 daemon result 会持久化 agent message。
 
-## Step 4: Create `apps/daemon-next`
+## Step 4：创建 `apps/daemon-next`
 
-Inputs:
-
-- `docs/contracts-dto.md`
-- `docs/socket-protocol.md`
-- Existing daemon scanner/adapter behavior as reference.
-
-Build:
-
-- CLI bootstrap.
-- Agent protocol client.
-- Device hello.
-- Runtime report.
-- Agent register batch.
-- Dispatch request listener.
-- Stub executor first.
-- Optional one real local adapter after stub path passes.
-
-Tests:
-
-- Protocol client tests.
-- Stub dispatch result/error tests.
-- Reconnect test.
-- Runtime normalization tests.
-
-Done when:
-
-- Daemon-next can connect to server-next.
-- Daemon-next reports one runtime and one discovered agent.
-- Daemon-next accepts dispatch and returns text.
-- Server-next updates dispatch and agent status from daemon activity.
-
-## Step 5: Create `apps/web-next`
-
-Inputs:
+输入：
 
 - `docs/contracts-dto.md`
 - `docs/socket-protocol.md`
-- Existing UI information architecture as reference, not as code shape.
+- 现有 daemon scanner/adapter behavior 作为参考。
 
-Build:
+构建：
 
-- Session token storage.
-- Socket/API client.
-- Login/register screen.
-- Network shell.
-- Device/agent status strip or panel.
-- Channel list.
-- Conversation view.
-- Message composer.
+- CLI bootstrap。
+- Agent protocol client。
+- Device hello。
+- Runtime report。
+- Agent register batch。
+- Dispatch request listener。
+- 先做 stub executor。
+- Stub path 通过后，可选迁移一个真实 local adapter。
 
-Tests:
+测试：
 
-- API client tests with fake socket.
-- Session store tests.
-- Component tests for login, channel list, conversation, and status.
-- Optional browser smoke test if tooling is available.
+- Protocol client tests。
+- Stub dispatch result/error tests。
+- Reconnect test。
+- Runtime normalization tests。
 
-Done when:
+完成标准：
 
-- User can log in/register.
-- User can see current network.
-- User can see connected daemon and discovered agent.
-- User can create/join a channel.
-- User can send a message and see an agent reply.
+- Daemon-next 可以连接 server-next。
+- Daemon-next 上报一个 runtime 与一个 discovered agent。
+- Daemon-next 接收 dispatch 并返回 text。
+- Server-next 会根据 daemon activity 更新 dispatch 与 agent status。
 
-## Step 6: Wire End-To-End Smoke
+## Step 5：创建 `apps/web-next`
 
-Build:
+输入：
 
-- One script or test harness that starts server-next and uses test web/daemon clients.
-- If full browser testing is available, add a minimal Web smoke after protocol smoke.
+- `docs/contracts-dto.md`
+- `docs/socket-protocol.md`
+- 现有 UI information architecture 作为参考，而不是代码形状。
 
-Required scenario:
+构建：
 
-1. Register user.
-2. Get current network.
-3. Daemon hello.
-4. Runtime report.
-5. Agent register batch.
-6. Create channel.
-7. Join channel.
-8. Send message.
-9. Server creates dispatch.
-10. Daemon returns result.
-11. Server persists and broadcasts agent reply.
+- Session token storage。
+- Socket/API client。
+- Login/register screen。
+- Network shell。
+- Device/agent status strip 或 panel。
+- Channel list。
+- Conversation view。
+- Message composer。
 
-Done when:
+测试：
 
-- The scenario passes locally.
-- It runs in CI or has a documented command ready for CI.
+- 使用 fake socket 的 API client tests。
+- Session store tests。
+- Login、channel list、conversation 与 status 的 component tests。
+- 如果 tooling 可用，添加可选 browser smoke test。
 
-## Step 7: Freeze First Slice
+完成标准：
 
-Before implementing deferred features:
+- 用户可以 log in/register。
+- 用户可以看到 current network。
+- 用户可以看到 connected daemon 与 discovered agent。
+- 用户可以 create/join channel。
+- 用户可以发送 message 并看到 agent reply。
 
-- Update docs if code made any contract or schema decision more precise.
-- Confirm all Phase 1-4 verification matrix tests pass.
-- Confirm no old compatibility adapters were introduced.
-- Confirm web does not implement agent dedupe or permission decisions.
-- Confirm daemon does not decide network visibility.
+## Step 6：串起端到端 Smoke
 
-## Do Not Implement Yet
+构建：
 
-Until the first slice is green:
+- 一个 script 或 test harness，启动 server-next，并使用 test web/daemon clients。
+- 如果 full browser testing 可用，在 protocol smoke 之后添加 minimal Web smoke。
 
-- Tasks.
-- Artifacts.
-- Workspace runs.
-- Device invite flow.
-- User join links.
-- Admin.
-- Search.
-- Channel archive/delete.
-- Saved messages/reactions.
-- Metrics UI.
+必需场景：
+
+1. Register user。
+2. Get current network。
+3. Daemon hello。
+4. Runtime report。
+5. Agent register batch。
+6. Create channel。
+7. Join channel。
+8. Send message。
+9. Server creates dispatch。
+10. Daemon returns result。
+11. Server persists and broadcasts agent reply。
+
+完成标准：
+
+- 该场景本地通过。
+- 它能在 CI 中运行，或已有可接入 CI 的 documented command。
+
+## Step 7：冻结第一切片
+
+在实现 deferred features 前：
+
+- 如果代码让某个 contract 或 schema decision 更精确，更新 docs。
+- 确认所有 Phase 1-4 verification matrix tests 通过。
+- 确认没有引入 old compatibility adapters。
+- 确认 web 没有实现 agent dedupe 或 permission decisions。
+- 确认 daemon 没有决定 network visibility。
+
+## 暂不实现
+
+第一切片变绿前，不实现：
+
+- Tasks。
+- Artifacts。
+- Workspace runs。
+- Device invite flow。
+- User join links。
+- Admin。
+- Search。
+- Channel archive/delete。
+- Saved messages/reactions。
+- Metrics UI。

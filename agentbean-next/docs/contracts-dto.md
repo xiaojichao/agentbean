@@ -1,37 +1,37 @@
-# First-Slice Contracts And DTOs
+# 第一切片 Contracts 与 DTOs
 
-This document defines the minimum shared DTO surface for the first AgentBean Next implementation slice.
+本文档定义 AgentBean Next 第一实现切片所需的最小共享 DTO 表面。
 
-Scope:
+范围：
 
-- User login/register.
-- Current network selection.
-- Daemon device registration.
-- Runtime and agent discovery.
-- Agent/device snapshots.
-- Channel list/create/join.
-- Message send.
-- Agent dispatch request/result/error.
+- User login/register。
+- Current network selection。
+- Daemon device registration。
+- Runtime 与 agent discovery。
+- Agent/device snapshots。
+- Channel list/create/join。
+- Message send。
+- Agent dispatch request/result/error。
 
-Out of scope for this first DTO pass:
+第一轮 DTO 不包含：
 
-- Tasks.
-- Artifacts.
-- Workspace runs.
-- Invites/join links.
-- Admin.
-- Search.
-- Channel settings beyond first-slice creation/join.
+- Tasks。
+- Artifacts。
+- Workspace runs。
+- Invites/join links。
+- Admin。
+- Search。
+- 第一切片 create/join 之外的 channel settings。
 
-## Contract Rules
+## Contract 规则
 
-- DTOs are transport contracts, not database rows.
-- IDs are opaque strings.
-- Timestamps are Unix epoch milliseconds.
-- Optional fields should be omitted when unknown unless `null` carries explicit meaning.
-- Server owns all permission, visibility, identity, and dedupe decisions.
-- Web and daemon may cache DTOs but must not infer domain truth from missing fields.
-- All command acknowledgements use `Ack<T>`.
+- DTOs 是 transport contracts，不是 database rows。
+- IDs 是 opaque strings。
+- Timestamps 使用 Unix epoch milliseconds。
+- Optional fields 在 unknown 时应省略，除非 `null` 携带显式含义。
+- Server 拥有所有 permission、visibility、identity 与 dedupe decisions。
+- Web 与 daemon 可以缓存 DTOs，但不得从 missing fields 推断 domain truth。
+- 所有 command acknowledgements 使用 `Ack<T>`。
 
 ## Common Types
 
@@ -69,10 +69,10 @@ export interface UserDto {
 }
 ```
 
-Notes:
+说明：
 
-- `role` is included because current behavior already has admin/user roles, but admin protocol is out of first-slice scope.
-- `displayName` is separate from `username` so UI naming can evolve without changing login identity.
+- 包含 `role` 是因为当前行为已经有 admin/user roles，但 admin protocol 不属于第一切片范围。
+- `displayName` 与 `username` 分开，使 UI 命名可以演进而不改变 login identity。
 
 ## HumanMemberDto
 
@@ -87,10 +87,10 @@ export interface HumanMemberDto {
 }
 ```
 
-Notes:
+说明：
 
-- `HumanMemberDto` is a network membership projection, not the full account record.
-- `role` is scoped to the network/team membership.
+- `HumanMemberDto` 是 network membership projection，不是完整 account record。
+- `role` 的作用域是 network/team membership。
 
 ## NetworkDto
 
@@ -107,10 +107,10 @@ export interface NetworkDto {
 }
 ```
 
-Notes:
+说明：
 
-- `path` is the stable UI route segment.
-- The first slice can use `NetworkDto` even if product language later changes to `TeamDto`.
+- `path` 是稳定的 UI route segment。
+- 即使产品语言后续改为 `TeamDto`，第一切片也可以使用 `NetworkDto`。
 
 ## DeviceDto
 
@@ -150,11 +150,11 @@ export interface DeviceCapabilitiesDto {
 }
 ```
 
-Notes:
+说明：
 
-- `DeviceDto` is snapshot-friendly.
-- `DeviceDetailDto` is the first-slice detail shell used by `device:get`; later slices may add workspace, logs, invite, and diagnostics fields.
-- Runtime and agent lists may also arrive through snapshot events.
+- `DeviceDto` 适合 snapshot。
+- `DeviceDetailDto` 是 `device:get` 在第一切片中的 detail shell；后续切片可添加 workspace、logs、invite 与 diagnostics fields。
+- Runtime 与 agent lists 也可能通过 snapshot events 到达。
 
 ## RuntimeDto
 
@@ -181,11 +181,11 @@ export interface RuntimeDto {
 }
 ```
 
-Notes:
+说明：
 
-- `command` and `cwd` preserve display values.
-- `normalizedCommandKey` and `normalizedCwdKey` are comparison keys generated using platform/filesystem rules from `agent-identity-rules.md`.
-- Runtimes are capabilities. They are not visible product agents unless bound through an agent identity/config.
+- `command` 与 `cwd` 保留 display values。
+- `normalizedCommandKey` 与 `normalizedCwdKey` 是按照 `agent-identity-rules.md` 中平台/文件系统规则生成的 comparison keys。
+- Runtimes 是 capabilities。除非通过 agent identity/config 绑定，否则不是 visible product agents。
 
 ## AgentDto
 
@@ -216,10 +216,10 @@ export interface AgentDto {
 }
 ```
 
-Notes:
+说明：
 
-- `visibleNetworkIds` is a projection result from publication/visibility rules. Clients must not compute it.
-- `envKeys` can show which variables are configured without exposing secret values.
+- `visibleNetworkIds` 是 publication/visibility rules 的 projection result。Clients 不得自行计算。
+- `envKeys` 可以展示已配置哪些变量，而不会暴露 secret values。
 
 ## DiscoveredAgentDto
 
@@ -241,10 +241,10 @@ export interface DiscoveredAgentDto {
 }
 ```
 
-Notes:
+说明：
 
-- This is daemon/gateway report data, not necessarily a persisted visible `AgentDto`.
-- Server identity rules decide whether this creates, updates, aliases, or only refreshes availability for a logical agent.
+- 这是 daemon/gateway report data，不一定是已持久化的 visible `AgentDto`。
+- Server identity rules 决定它会为某个 logical agent 创建、更新、alias，还是仅刷新 availability。
 
 ## ChannelDto
 
@@ -268,10 +268,10 @@ export interface ChannelDto {
 }
 ```
 
-Notes:
+说明：
 
-- First slice may only create public channels.
-- Private channel and DM fields are included because first-slice snapshots should not need a breaking DTO change later.
+- 第一切片可能只创建 public channels。
+- Private channel 与 DM fields 已包含进来，是为了让第一切片 snapshots 后续不需要破坏性 DTO 变更。
 
 ## MessageDto
 
@@ -301,10 +301,10 @@ export interface MessageMetaDto {
 }
 ```
 
-Notes:
+说明：
 
-- Server sets `senderKind` and `senderId`; clients must not be trusted for sender identity.
-- `threadId` should not cause the current prompt to appear twice in dispatch history.
+- Server 设置 `senderKind` 与 `senderId`；sender identity 不可信任 clients。
+- `threadId` 不应导致当前 prompt 在 dispatch history 中出现两次。
 
 ## DispatchDto
 
@@ -337,10 +337,10 @@ export interface DispatchDto {
 }
 ```
 
-Notes:
+说明：
 
-- `DispatchDto` is first-class in the rewrite, unlike the current mostly in-memory lifecycle.
-- `requestId` is the daemon protocol correlation ID and may differ from persisted `id`.
+- 不同于当前基本在内存中协调的 lifecycle，`DispatchDto` 在重写版中是一等模型。
+- `requestId` 是 daemon protocol correlation ID，可能不同于 persisted `id`。
 
 ## DispatchRequestDto
 
@@ -386,15 +386,15 @@ export interface DispatchCustomAgentDto {
 }
 ```
 
-Notes:
+说明：
 
-- `prompt` is the current user input.
-- `history` must not include the current user input again.
-- First slice may send raw `customAgent.env` values, but only to the single daemon selected to execute that custom agent and only inside the dispatch request.
-- Server must not broadcast raw env values to web clients, snapshots, logs, or unrelated daemons.
-- Later slices should replace raw env transport with a server-issued secret reference or daemon-local secret storage.
+- `prompt` 是当前 user input。
+- `history` 不得再次包含当前 user input。
+- 第一切片可以发送 raw `customAgent.env` values，但只能发给被选中执行该 custom agent 的单个 daemon，且只能放在 dispatch request 内。
+- Server 不得把 raw env values 广播到 web clients、snapshots、logs 或无关 daemons。
+- 后续切片应将 raw env transport 替换为 server-issued secret reference 或 daemon-local secret storage。
 
-## First-Slice Event DTO Usage
+## 第一切片 Event DTO 用法
 
 ```ts
 // /web
@@ -414,10 +414,10 @@ type DispatchResultAck = Ack;
 type DispatchErrorAck = Ack;
 ```
 
-## Phase 1 DTO Decisions
+## Phase 1 DTO 决策
 
-- Keep `NetworkDto` for the first slice. Product copy may say "team" later, but contracts should not rename it before the first slice is implemented.
-- Keep `DeviceSystemInfoDto` loose and optional for the first slice. Tighten it only after daemon platform reporting stabilizes.
-- Do not include `AgentDto.displayRank` in the first-slice public DTO. Display precedence stays server-side and is verified through ordered/projection results, not exposed as a client contract field.
-- Keep `humanMemberIds` and `agentMemberIds` on first-slice `ChannelDto` as optional snapshot fields. A later `channel:members` command may provide richer member details.
-- First slice may send raw `DispatchCustomAgentDto.env` only to the selected daemon inside `DispatchRequestDto`. Replace with secret references or daemon-local secret storage in a later security hardening slice.
+- 第一切片保留 `NetworkDto`。产品文案后续可以说 "team"，但 contracts 不应在第一切片实现前重命名。
+- 第一切片保留宽松且可选的 `DeviceSystemInfoDto`。只有在 daemon platform reporting 稳定后再收紧。
+- 第一切片 public DTO 不包含 `AgentDto.displayRank`。Display precedence 留在 server-side，并通过 ordered/projection results 验证，而不是暴露成 client contract field。
+- 在第一切片 `ChannelDto` 上保留可选的 `humanMemberIds` 与 `agentMemberIds` snapshot fields。后续 `channel:members` command 可以提供更丰富的 member details。
+- 第一切片只允许在 `DispatchRequestDto` 内，把 raw `DispatchCustomAgentDto.env` 发给被选中的 daemon。后续 security hardening slice 应替换为 secret references 或 daemon-local secret storage。

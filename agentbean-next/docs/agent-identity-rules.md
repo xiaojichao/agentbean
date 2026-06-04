@@ -1,96 +1,96 @@
-# Agent Identity And Dedupe Rules
+# Agent 身份与去重规则
 
-Agent identity is a high-risk part of the rewrite. The target implementation must define identity once in the domain/contracts layer and reuse it from server, web, and daemon-facing code.
+Agent identity 是重写中的高风险部分。目标实现必须在 domain/contracts 层只定义一次身份规则，并在 server、web 与 daemon-facing code 中复用。
 
-The current implementation has useful lessons, but the rewrite should not preserve duplicated client/server dedupe logic. Server domain code should decide identity and visibility. Web should render server snapshots.
+当前实现提供了有用经验，但重写版不应保留重复的 client/server dedupe logic。Server domain code 应决定 identity 与 visibility。Web 只渲染 server snapshots。
 
-## Terms
+## 术语
 
-- **Device**: a registered daemon endpoint. A device may have `deviceId`, `machineId`, and `profileId`.
-- **Runtime**: an executable capability on a device, such as Codex, Claude Code, or Kimi CLI.
-- **Discovered agent**: an agent-like entry reported by scanner or AgentOS gateway.
-- **Custom agent**: user-created agent config bound to a device, runtime, command, cwd, args, and env.
-- **AgentOS gateway**: a connector such as Hermes or OpenClaw that may expose one or more hosted agents.
-- **Logical agent**: the canonical domain identity used for persistence, channel membership, dispatch, publication, and UI display.
-- **Visible agent**: a projection of a logical agent into a network where it is visible.
+- **Device**：已注册的 daemon endpoint。一个 device 可能有 `deviceId`、`machineId` 和 `profileId`。
+- **Runtime**：device 上的一种可执行能力，例如 Codex、Claude Code 或 Kimi CLI。
+- **Discovered agent**：由 scanner 或 AgentOS gateway 上报的类 agent 条目。
+- **Custom agent**：用户创建的 agent config，绑定到 device、runtime、command、cwd、args 与 env。
+- **AgentOS gateway**：Hermes 或 OpenClaw 这类 connector，可能暴露一个或多个 hosted agents。
+- **Logical agent**：用于 persistence、channel membership、dispatch、publication 与 UI display 的规范 domain identity。
+- **Visible agent**：logical agent 在某个可见 network 中的 projection。
 
-## Normalization
+## 规范化
 
-All identity comparisons must normalize inputs before key generation.
+所有身份比较都必须在 key generation 前规范化输入。
 
-| Field | Normalization |
+| 字段 | 规范化 |
 |---|---|
-| `networkId` | Exact canonical ID after network lookup. Do not compare by network name/path. |
-| `deviceId` | Canonical registered device ID. If `machineId + profileId` maps to an existing device, reconcile device identity before agent dedupe. |
-| `adapterKind` | Lowercase, replace `_` and spaces with `-`; aliases: `claude` -> `claude-code`, `codex-cli` -> `codex`, `kimi` -> `kimi-cli`. |
-| `name` | Trim, lowercase, collapse spaces/underscores to `-`, strip duplicate separators for identity. Preserve display casing separately if needed. |
-| `command` | Trim and normalize slashes for comparison. Apply platform/filesystem case rules when known; do not blindly lowercase on case-sensitive filesystems. Preserve display value separately and store a normalized comparison key. |
-| `cwd` | Trim, normalize slashes, remove trailing slash, and apply platform/filesystem case rules when known. Preserve display value separately and store a normalized comparison key. |
-| `args` | Convert to string array, trim empty args, join with an unambiguous separator for comparison. |
-| `gatewayId` / `gatewayName` | Prefer stable gateway instance ID from the gateway. Fallback to normalized gateway name, then normalized endpoint/command if no explicit ID exists. |
-| `source` | One of `custom`, `self-register`, `scanned`. |
-| `category` | One of `executor-hosted`, `agentos-hosted`. |
+| `networkId` | Network lookup 后的精确 canonical ID。不要用 network name/path 比较。 |
+| `deviceId` | Canonical registered device ID。如果 `machineId + profileId` 映射到已有 device，应先调和 device identity，再做 agent dedupe。 |
+| `adapterKind` | 转小写，把 `_` 和空格替换为 `-`；aliases：`claude` -> `claude-code`，`codex-cli` -> `codex`，`kimi` -> `kimi-cli`。 |
+| `name` | Trim、转小写、把 spaces/underscores 折叠为 `-`，去掉重复 separators 作为 identity。必要时单独保留 display casing。 |
+| `command` | Trim 并规范化 slashes 用于比较。已知平台/文件系统大小写规则时应用规则；不要在 case-sensitive filesystems 上盲目转小写。单独保留 display value，并存储 normalized comparison key。 |
+| `cwd` | Trim、规范化 slashes、移除 trailing slash，并在已知时应用平台/文件系统大小写规则。单独保留 display value，并存储 normalized comparison key。 |
+| `args` | 转换为 string array，移除空 args，使用无歧义 separator join 后比较。 |
+| `gatewayId` / `gatewayName` | 优先使用 gateway 提供的 stable gateway instance ID。没有显式 ID 时 fallback 到 normalized gateway name，再 fallback 到 normalized endpoint/command。 |
+| `source` | `custom`、`self-register`、`scanned` 之一。 |
+| `category` | `executor-hosted`、`agentos-hosted` 之一。 |
 
-Path comparison rules:
+Path comparison rules：
 
-- Linux and other known case-sensitive filesystems should preserve case in comparison keys.
-- Windows should compare paths case-insensitively.
-- macOS should use detected filesystem behavior when possible; default to case-insensitive only for local paths known to live on the default case-insensitive volume.
-- If platform/filesystem behavior is unknown, prefer case-sensitive comparison to avoid accidental merges.
-- Store both original display paths and normalized comparison keys.
+- Linux 与其他已知 case-sensitive filesystems 在 comparison keys 中应保留大小写。
+- Windows 应以 case-insensitive 方式比较 paths。
+- macOS 应尽可能使用检测到的 filesystem behavior；只有已知位于默认 case-insensitive volume 的 local paths 才默认 case-insensitive。
+- 如果 platform/filesystem behavior 未知，优先使用 case-sensitive comparison，避免意外合并。
+- 同时存储 original display paths 与 normalized comparison keys。
 
-## Identity Key Rules
+## Identity Key 规则
 
-Use the first applicable row. `primaryNetworkId` means the network where the agent is owned. Published networks are visibility projections, not new identities.
+使用第一条适用规则。`primaryNetworkId` 表示 agent 所属 network。Published networks 是 visibility projections，不是新 identities。
 
-| Agent Input | Same Logical Agent If | Do Not Merge If | Canonical ID Strategy |
+| Agent 输入 | 何时是同一个 Logical Agent | 不要合并的情况 | Canonical ID 策略 |
 |---|---|---|---|
-| Existing persisted custom agent | Same persisted `agentId`. | Different `agentId`, even if name/runtime matches. Custom agents are user-created configs. | Server-issued `agentId`. |
-| New custom agent create request | Never auto-merge by name alone. Optionally reject duplicate name per device/network as validation, but do not silently merge. | Existing custom agent with different ID. | New server-issued `agentId`. |
-| Custom agent runtime availability | Match runtime by compatible adapter/command on same `deviceId`; this links availability, not identity. | Runtime belongs to different device or incompatible adapter. | Keep custom `agentId`; store runtime match separately. |
-| Self-registered agent with stable server-known ID | Same `agentId`. | Same name but different device/network and no reconciled device identity. | Reuse `agentId`. |
-| Self-registered agent without trusted ID | Same `primaryNetworkId + deviceId + adapterKind + normalizedName`. | Different device, different primary network, different adapter kind. | Server may assign canonical ID and remember source linkage. |
-| Scanned AgentOS hosted concrete agent | Same `primaryNetworkId + deviceId + adapterKind + normalizedName`, when name is not a generic gateway name. | Different device, network, adapter, or concrete name. | Stable derived ID or existing canonical ID. |
-| Scanned AgentOS generic gateway entry | Same `primaryNetworkId + deviceId + adapterKind + gatewayInstanceKey`. | Concrete hosted agent with distinct non-generic name should not be collapsed into generic display identity. Different gateway instances on the same device must not merge. | Stable gateway ID; may be hidden behind concrete agents in UI. |
-| Scanned executor runtime | Same `primaryNetworkId + deviceId + adapterKind + runtimeLocation + args`. | Treating it as a product agent. It is a capability unless user creates/binds a custom agent. | Runtime ID or runtime record, not agent ID. |
-| Published agent visible in another network | Same source `agentId`; visible through publication into `visibleNetworkId`. | Creating a second agent row for the target network. | Keep original `agentId`, add publication record. |
-| Same name on different devices | Not the same logical agent. | Device reconciliation proves both device IDs are the same physical/profile identity. | Separate IDs unless device reconciliation merges first. |
-| Same device/name across different primary networks | Not the same logical agent. | It is the same original agent published into another network. | Separate IDs by primary network; publication preserves original ID. |
+| Existing persisted custom agent | 相同 persisted `agentId`。 | 不同 `agentId`，即使 name/runtime 匹配。Custom agents 是用户创建的 configs。 | Server-issued `agentId`。 |
+| New custom agent create request | 绝不只按 name 自动合并。可选择按 device/network 拒绝重复 name 作为 validation，但不要静默合并。 | Existing custom agent with different ID。 | 新 server-issued `agentId`。 |
+| Custom agent runtime availability | 在同一 `deviceId` 上按 compatible adapter/command 匹配 runtime；这是链接 availability，不是 identity。 | Runtime 属于不同 device 或 incompatible adapter。 | 保持 custom `agentId`；单独存储 runtime match。 |
+| Self-registered agent with stable server-known ID | 相同 `agentId`。 | Same name 但 different device/network，且没有 reconciled device identity。 | 复用 `agentId`。 |
+| Self-registered agent without trusted ID | 相同 `primaryNetworkId + deviceId + adapterKind + normalizedName`。 | Different device、different primary network、different adapter kind。 | Server 可分配 canonical ID 并记住 source linkage。 |
+| Scanned AgentOS hosted concrete agent | 相同 `primaryNetworkId + deviceId + adapterKind + normalizedName`，且 name 不是 generic gateway name。 | Different device、network、adapter 或 concrete name。 | Stable derived ID 或 existing canonical ID。 |
+| Scanned AgentOS generic gateway entry | 相同 `primaryNetworkId + deviceId + adapterKind + gatewayInstanceKey`。 | 不应把 distinct non-generic name 的 concrete hosted agent 折叠进 generic display identity。同一 device 上不同 gateway instances 不能合并。 | Stable gateway ID；UI 中可隐藏在 concrete agents 后面。 |
+| Scanned executor runtime | 相同 `primaryNetworkId + deviceId + adapterKind + runtimeLocation + args`。 | 不要把它当作 product agent。它只是 capability，除非用户创建/绑定 custom agent。 | Runtime ID 或 runtime record，而不是 agent ID。 |
+| Published agent visible in another network | 相同 source `agentId`；通过 publication 进入 `visibleNetworkId` 可见。 | 为 target network 创建第二条 agent row。 | 保持原始 `agentId`，添加 publication record。 |
+| Same name on different devices | 不是同一个 logical agent。 | Device reconciliation 证明两个 device IDs 是同一 physical/profile identity。 | 除非先合并 device reconciliation，否则使用独立 IDs。 |
+| Same device/name across different primary networks | 不是同一个 logical agent。 | 这是同一个 original agent publish 到另一个 network。 | 按 primary network 使用独立 IDs；publication 保留 original ID。 |
 
-## Source Precedence
+## Source 优先级
 
-When multiple records resolve to the same logical agent, keep one canonical identity and merge fields using this precedence.
+当多条 records 解析到同一个 logical agent 时，保留一个 canonical identity，并按以下优先级合并 fields。
 
-### Display And Configuration Precedence
+### Display 与 Configuration 优先级
 
-Higher rows win for display/config fields unless a field is empty.
+除非字段为空，否则更高行拥有 display/config fields。
 
-| Rank | Source | Fields It May Own |
+| Rank | Source | 可拥有的字段 |
 |---|---|---|
-| 1 | User-edited custom agent config | `name`, `description`, `command`, `args`, `cwd`, `env`, `ownerId`, publication intent. |
-| 2 | Self-registered agent | `name`, `role`, `adapterKind`, `category`, live socket identity, richer non-scan display info. |
-| 3 | Concrete AgentOS hosted scan | `name`, `adapterKind`, `category`, gateway-backed execution metadata. |
-| 4 | Generic AgentOS gateway scan | Connector availability and gateway status. Should not replace concrete hosted agent display. |
-| 5 | Runtime scan | Runtime availability only. Should not create or overwrite product agent display. |
+| 1 | User-edited custom agent config | `name`、`description`、`command`、`args`、`cwd`、`env`、`ownerId`、publication intent。 |
+| 2 | Self-registered agent | `name`、`role`、`adapterKind`、`category`、live socket identity、更丰富的 non-scan display info。 |
+| 3 | Concrete AgentOS hosted scan | `name`、`adapterKind`、`category`、gateway-backed execution metadata。 |
+| 4 | Generic AgentOS gateway scan | Connector availability 与 gateway status。不应替换 concrete hosted agent display。 |
+| 5 | Runtime scan | 仅 runtime availability。不应创建或覆盖 product agent display。 |
 
-Rules:
+规则：
 
-- A scan must not overwrite a user-edited custom agent name, description, env, cwd, command, or args.
-- A generic gateway entry such as `hermes-agent` or `openclaw-agent` must not overwrite a concrete hosted agent name.
-- A self-register event may update live status and socket binding for an existing scanned AgentOS identity if it has the same logical key.
-- A scan may refresh `lastSeenAt`, runtime command availability, and category/source evidence.
-- A missing scan marks scanned/gateway availability offline; it must not delete custom agent config or publication records.
+- Scan 不得覆盖 user-edited custom agent 的 name、description、env、cwd、command 或 args。
+- `hermes-agent` 或 `openclaw-agent` 这类 generic gateway entry 不得覆盖 concrete hosted agent name。
+- 如果 self-register event 与现有 scanned AgentOS identity 拥有相同 logical key，它可以更新 live status 与 socket binding。
+- Scan 可以刷新 `lastSeenAt`、runtime command availability 以及 category/source evidence。
+- Missing scan 会把 scanned/gateway availability 标为 offline；不得删除 custom agent config 或 publication records。
 
-### Status Precedence
+### Status 优先级
 
-Status is merged independently from display/config. A lower display-rank record can still provide the freshest status.
+Status 独立于 display/config 合并。较低 display-rank 的 record 仍可提供最新 status。
 
-Status merge order:
+Status merge order：
 
-1. Partition status events by status source, such as daemon connection, gateway scan, dispatch lifecycle, heartbeat timeout, or manual/config event.
-2. For each source, keep only the latest event by monotonic sequence if available, otherwise by `lastSeenAt`/event timestamp.
-3. Merge the latest per-source events by timestamp. Newer events win over older events, even if the older event has a higher status rank.
-4. Use status priority only to break same-timestamp or same-batch conflicts.
+1. 按 status source 分组 status events，例如 daemon connection、gateway scan、dispatch lifecycle、heartbeat timeout 或 manual/config event。
+2. 每个 source 内，如果有 monotonic sequence，只保留最新 event；否则按 `lastSeenAt`/event timestamp 保留最新。
+3. 按 timestamp 合并每个 source 的最新 events。较新的 events 胜过较旧 events，即使旧 event 的 status rank 更高。
+4. Status priority 只用于打破 same-timestamp 或 same-batch conflicts。
 
 | Rank | Status |
 |---|---|
@@ -100,52 +100,52 @@ Status merge order:
 | 4 | `error` |
 | 5 | `offline` |
 
-Tie breakers:
+Tie breakers：
 
-1. Prefer the event with the highest status rank only when events are from the same timestamp/batch after per-source compaction.
-2. Preserve `lastError` only from the status source that produced `error`, or from the most recent failed dispatch.
-3. Do not let any older event override a newer event. For example, an old `busy` must not override a newer `offline`, `online`, or `error`.
-4. A heartbeat timeout may produce `offline`, but it must carry a timestamp/sequence newer than the last successful heartbeat to take effect.
+1. 只有在 per-source compaction 后 events 来自同一 timestamp/batch 时，才优先选择 status rank 最高的 event。
+2. 只保留产生 `error` 的 status source 的 `lastError`，或保留最近一次 failed dispatch 的 `lastError`。
+3. 不允许任何较旧 event 覆盖较新 event。例如旧 `busy` 不得覆盖较新的 `offline`、`online` 或 `error`。
+4. Heartbeat timeout 可以产生 `offline`，但必须携带比 last successful heartbeat 更新的 timestamp/sequence 才能生效。
 
-## Conflict Resolution Table
+## 冲突解决表
 
-| Conflict | Resolution |
+| 冲突 | 解决方案 |
 |---|---|
-| Scan reports `scan-{device}-{name}` but self-register already exists for same device/name/network. | Keep self-register canonical ID; delete or alias stale scan ID; update scan metadata onto canonical record only where allowed. |
-| AgentOS gateway reports generic `hermes-agent`, then concrete `Reviewer`. | Keep both identities internally if needed, but visible list should prefer concrete hosted agent. Generic gateway can be connector/device capability. |
-| Same device and adapter report two gateway instances. | Do not merge unless `gatewayInstanceKey` matches. Use gateway ID first, then gateway name, then endpoint/command-derived key. |
-| Custom agent has same name as scanned AgentOS agent on same device. | Do not auto-merge. Custom agent is a user config. Validation may ask user to rename if confusing. |
-| Custom agent command points to a scanned runtime. | Link custom agent to runtime availability; do not merge identities. |
-| Same agent name appears on two devices. | Separate logical agents. |
-| Same device appears with new `deviceId` but same `machineId + profileId`. | Reconcile device first; then dedupe agents under canonical device ID. |
-| Same agent is published to another network. | Same `agentId`; add visible projection/publication. Do not clone. |
-| Scan omits a previously scanned agent. | Mark scanned/gateway identity offline. Do not remove channel membership, history, or publications until explicit cleanup. |
-| User edits custom agent config while daemon scan is stale. | User edit wins for config; runtime availability updates when daemon reconnects/scans. |
-| Adapter aliases differ (`codex-cli` vs `codex`). | Normalize and compare canonical adapter kind. |
-| Adapter kinds are genuinely different but names match. | Do not merge unless a specific adapter bridge rule exists and is tested. |
+| Scan reports `scan-{device}-{name}`，但同 device/name/network 已存在 self-register。 | 保留 self-register canonical ID；删除或 alias stale scan ID；只在允许字段上把 scan metadata 更新到 canonical record。 |
+| AgentOS gateway 先报告 generic `hermes-agent`，随后报告 concrete `Reviewer`。 | 如有需要内部保留两个 identities，但 visible list 应优先 concrete hosted agent。Generic gateway 可作为 connector/device capability。 |
+| 同一 device 与 adapter 上报两个 gateway instances。 | 除非 `gatewayInstanceKey` 匹配，否则不要合并。先用 gateway ID，再用 gateway name，再用 endpoint/command-derived key。 |
+| Custom agent 与同 device 上 scanned AgentOS agent 同名。 | 不自动合并。Custom agent 是 user config。如有混淆，validation 可要求用户重命名。 |
+| Custom agent command 指向 scanned runtime。 | 把 custom agent 关联到 runtime availability；不要合并 identities。 |
+| 同一 agent name 出现在两个 devices 上。 | 分成两个 logical agents。 |
+| 同一 device 以新 `deviceId` 出现，但 `machineId + profileId` 相同。 | 先调和 device；再在 canonical device ID 下做 agent dedupe。 |
+| 同一 agent publish 到另一个 network。 | 相同 `agentId`；添加 visible projection/publication。不要 clone。 |
+| Scan 漏掉先前 scanned agent。 | 将 scanned/gateway identity 标为 offline。显式 cleanup 之前，不移除 channel membership、history 或 publications。 |
+| 用户在 daemon scan stale 时编辑 custom agent config。 | 用户编辑赢得 config；runtime availability 在 daemon reconnect/scan 后更新。 |
+| Adapter aliases 不同（`codex-cli` vs `codex`）。 | 规范化并比较 canonical adapter kind。 |
+| Adapter kinds 确实不同但 names 匹配。 | 除非存在经过测试的特定 adapter bridge rule，否则不要合并。 |
 
-## Field Ownership
+## 字段归属
 
-| Field | Owner |
+| 字段 | Owner |
 |---|---|
-| `id` | Server identity service. |
-| `primaryNetworkId` | Creation/persistence use case. |
-| `publishedNetworkIds` | Agent publication use cases. |
-| `ownerId` | Creation/ownership use cases. |
-| `name` | User config or highest display precedence source. |
-| `description` | User config. |
-| `adapterKind` | User config for custom; daemon/gateway report for discovered hosted agents. |
-| `category` | Domain classification from source report, normalized by server. |
-| `source` | Server-derived from creation/report path. |
-| `deviceId` | Device registration and agent report. |
-| `command`, `args`, `cwd`, `env` | User config for custom; scan report for discovered/gateway metadata. |
-| `status`, `lastSeenAt`, `lastError` | Live registry/dispatch/heartbeat events. |
-| `channelMembership` | Channel use cases. |
-| `runtimeAvailability` | Daemon runtime reports. |
+| `id` | Server identity service。 |
+| `primaryNetworkId` | Creation/persistence use case。 |
+| `publishedNetworkIds` | Agent publication use cases。 |
+| `ownerId` | Creation/ownership use cases。 |
+| `name` | User config 或最高 display precedence source。 |
+| `description` | User config。 |
+| `adapterKind` | Custom agent 来自 user config；discovered hosted agents 来自 daemon/gateway report。 |
+| `category` | 从 source report 得出的 domain classification，由 server 规范化。 |
+| `source` | Server 根据 creation/report path 推导。 |
+| `deviceId` | Device registration 与 agent report。 |
+| `command`、`args`、`cwd`、`env` | Custom agent 来自 user config；discovered/gateway metadata 来自 scan report。 |
+| `status`、`lastSeenAt`、`lastError` | Live registry/dispatch/heartbeat events。 |
+| `channelMembership` | Channel use cases。 |
+| `runtimeAvailability` | Daemon runtime reports。 |
 
-## Target Domain API
+## 目标 Domain API
 
-The rewrite should implement identity as pure functions plus a small service:
+重写版应把 identity 实现为 pure functions 加一个小 service：
 
 ```ts
 type AgentIdentityKey =
@@ -161,31 +161,31 @@ function resolveAgentMerge(existing: AgentRecord[], incoming: AgentReport): Agen
 function mergeAgentRecords(display: AgentRecord, status: AgentRecord): AgentProjection;
 ```
 
-`runtime` keys should be used for runtime availability and custom-agent binding, not for creating visible product agents.
+`runtime` keys 应用于 runtime availability 与 custom-agent binding，不应用来创建 visible product agents。
 
-## Required Tests
+## 必需测试
 
-The first contracts/domain package should include tests for:
+第一版 contracts/domain package 应包含这些测试：
 
-- Self-register beats scan-prefix duplicate for same `networkId + deviceId + name`.
-- Concrete AgentOS hosted agent beats generic gateway display.
-- Multiple same-adapter AgentOS gateway instances on one device do not merge unless `gatewayInstanceKey` matches.
-- Generic gateway status can still show connector availability without replacing concrete agent display.
-- Custom agent does not merge with scanned runtime.
-- Linux path comparison preserves case; Windows path comparison is case-insensitive; unknown filesystem behavior defaults to case-sensitive.
-- Custom agent config is not overwritten by daemon scan.
-- Newer `offline` or `online` status beats older `busy`; status rank only breaks same-batch conflicts.
-- Runtime availability links to custom agent on same device and compatible adapter.
-- Same name on two devices creates two logical agents.
-- Same device reconnected under same `machineId + profileId` reconciles before dedupe.
-- Published agent keeps same ID across visible networks.
-- Missing scan marks scanned agent offline without deleting memberships/history.
-- Adapter aliases normalize.
-- Different adapter kinds with same name do not merge.
+- 同一 `networkId + deviceId + name` 下，self-register 胜过 scan-prefix duplicate。
+- Concrete AgentOS hosted agent 在 display 上胜过 generic gateway。
+- 同一 device 上多个 same-adapter AgentOS gateway instances 不合并，除非 `gatewayInstanceKey` 匹配。
+- Generic gateway status 可以展示 connector availability，但不替换 concrete agent display。
+- Custom agent 不与 scanned runtime 合并。
+- Linux path comparison 保留大小写；Windows path comparison 大小写不敏感；unknown filesystem behavior 默认大小写敏感。
+- Custom agent config 不会被 daemon scan 覆盖。
+- 较新的 `offline` 或 `online` status 胜过较旧的 `busy`；status rank 只打破 same-batch conflicts。
+- Runtime availability 关联到同一 device 且 compatible adapter 的 custom agent。
+- 两个 devices 上同名 agent 产生两个 logical agents。
+- 同一 device 用相同 `machineId + profileId` 重新连接时，先 reconcile 再 dedupe。
+- Published agent 在 visible networks 中保持相同 ID。
+- Missing scan 把 scanned agent 标为 offline，但不删除 memberships/history。
+- Adapter aliases 会被规范化。
+- 不同 adapter kinds 的同名 agent 不合并。
 
-## Implementation Placement
+## 实现位置
 
-- Put these rules in server/domain or shared contracts/domain.
-- Web must not implement its own agent dedupe beyond stable list rendering.
-- Daemon may normalize adapter/runtime reports, but server remains the authority for identity.
-- Persist canonical identity decisions so reconnects do not depend on in-memory ordering.
+- 将这些规则放在 server/domain 或 shared contracts/domain 中。
+- 除稳定 list rendering 外，Web 不得实现自己的 agent dedupe。
+- Daemon 可以规范化 adapter/runtime reports，但 server 仍是 identity 的权威。
+- 持久化 canonical identity decisions，确保 reconnects 不依赖 in-memory ordering。

@@ -1,8 +1,8 @@
-# Target Architecture
+# 目标架构
 
-AgentBean Next keeps the three-process architecture, but replaces the current large-file coordination style with explicit boundaries.
+AgentBean Next 保留三进程架构，但用显式边界替换当前的大文件协调风格。
 
-## System Shape
+## 系统形态
 
 ```text
 apps/
@@ -27,17 +27,17 @@ apps/
       bootstrap/
 ```
 
-This structure can live either as new apps or as a gradual replacement inside the current apps. The important decision is the boundary, not the exact folder names.
+该结构既可以作为新 apps 存在，也可以在当前 apps 内渐进替换。重要的是边界，而不是精确的文件夹名称。
 
-## Server Boundary
+## Server 边界
 
-Server is the collaboration authority. It owns authentication, membership, persistence, routing decisions, device state, agent visibility, task state, and artifact metadata.
+Server 是协作权威。它拥有 authentication、membership、persistence、routing decisions、device state、agent visibility、task state 与 artifact metadata。
 
 ### `domain/`
 
-Pure types and rules. No Socket.IO, Express, SQLite, file system, or environment variables.
+Pure types 与 rules。不包含 Socket.IO、Express、SQLite、file system 或 environment variables。
 
-Suggested modules:
+建议模块：
 
 - `auth`
 - `network`
@@ -51,20 +51,20 @@ Suggested modules:
 - `artifact`
 - `dispatch`
 
-Examples of domain rules:
+Domain rules 示例：
 
-- Which channels a user can see.
-- Whether an agent is visible in a network.
-- How agent identity and dedupe are resolved across custom, self-register, scanned, runtime, and AgentOS gateway reports. See `docs/agent-identity-rules.md`.
-- How a message routes to agents.
-- Whether a daemon is allowed to register a device or agent.
-- How agent status is derived from heartbeat and device state.
+- 用户能看到哪些 channels。
+- Agent 是否在某 network 中可见。
+- 如何在 custom、self-register、scanned、runtime 与 AgentOS gateway reports 之间解析 agent identity 与 dedupe。见 `docs/agent-identity-rules.md`。
+- Message 如何 route 到 agents。
+- Daemon 是否允许 register device 或 agent。
+- 如何从 heartbeat 与 device state 推导 agent status。
 
 ### `application/`
 
-Use cases. Each use case coordinates repositories, domain rules, and outbound ports.
+Use cases。每个 use case 协调 repositories、domain rules 与 outbound ports。
 
-Suggested use cases:
+建议 use cases：
 
 - `registerUser`
 - `loginUser`
@@ -84,52 +84,52 @@ Suggested use cases:
 - `updateTaskStatus`
 - `uploadArtifact`
 
-Use cases should return typed results and domain errors. Transport handlers should translate those into Socket.IO ack payloads or HTTP responses.
+Use cases 应返回 typed results 与 domain errors。Transport handlers 再把它们转换为 Socket.IO ack payloads 或 HTTP responses。
 
 ### `infra/`
 
-Implement technical details behind interfaces:
+在 interfaces 后面实现技术细节：
 
-- SQLite repositories.
-- Schema migrations.
-- Artifact file storage.
-- Password hashing.
-- Token signing and verification.
-- Clock and ID generation.
-- Daemon gateway for dispatching to connected sockets.
-- Event publisher for web snapshots.
+- SQLite repositories。
+- Schema migrations。
+- Artifact file storage。
+- Password hashing。
+- Token signing and verification。
+- Clock 与 ID generation。
+- 面向 connected sockets dispatch 的 daemon gateway。
+- 面向 web snapshots 的 event publisher。
 
-SQLite can stay. The main change is to stop exposing raw database shape to transport code.
+SQLite 可以保留。主要变化是停止把 raw database shape 暴露给 transport code。
 
 ### `transport/`
 
-Adapters only:
+只做 adapters：
 
 - `transport/socket/web`
 - `transport/socket/agent`
 - `transport/http/artifacts`
 - `transport/http/health`
 
-Transport may:
+Transport 可以：
 
-- Validate payload shape.
-- Read auth context.
-- Call one use case.
-- Map result to ack or event.
+- Validate payload shape。
+- 读取 auth context。
+- 调用一个 use case。
+- 将 result 映射为 ack 或 event。
 
-Transport must not:
+Transport 不得：
 
-- Build SQL.
-- Mutate registries directly.
-- Decide cross-domain behavior.
-- Know how artifacts are stored.
-- Reimplement agent visibility or dedupe rules.
+- 构造 SQL。
+- 直接 mutate registries。
+- 决定 cross-domain behavior。
+- 知道 artifacts 如何存储。
+- 重新实现 agent visibility 或 dedupe rules。
 
-## Web Boundary
+## Web 边界
 
-Web is the interaction layer. It should not be the source of business truth.
+Web 是交互层，不应成为业务事实来源。
 
-Suggested feature modules:
+建议 feature modules：
 
 - `features/auth`
 - `features/networks`
@@ -140,14 +140,14 @@ Suggested feature modules:
 - `features/artifacts`
 - `features/members`
 
-Each feature should own:
+每个 feature 应拥有：
 
-- UI components.
-- Feature hooks.
-- Presentation-only state.
-- Calls into typed API clients.
+- UI components。
+- Feature hooks。
+- Presentation-only state。
+- 调用 typed API clients。
 
-Shared client modules:
+共享 client modules：
 
 - `lib/api/socket-client`
 - `lib/api/web-events`
@@ -155,60 +155,60 @@ Shared client modules:
 - `lib/session/auth-token`
 - `lib/session/network-selection`
 
-The Zustand store should shrink to:
+Zustand store 应缩小为：
 
-- Connection state.
-- Current session.
-- Current network.
-- Server snapshots.
-- Short-lived UI cache.
+- Connection state。
+- Current session。
+- Current network。
+- Server snapshots。
+- Short-lived UI cache。
 
-It should not contain:
+它不应包含：
 
-- Agent dedupe algorithms.
-- Permission rules.
-- Channel visibility rules.
-- Protocol-specific fallback behavior.
+- Agent dedupe algorithms。
+- Permission rules。
+- Channel visibility rules。
+- Protocol-specific fallback behavior。
 
-## Daemon Boundary
+## Daemon 边界
 
-Daemon is a device bridge. It should be reliable even when server and web evolve.
+Daemon 是 device bridge。即使 server 与 web 演进，它也应保持可靠。
 
-Suggested modules:
+建议模块：
 
 - `protocol/agent-client`
-  - Socket connection, auth, reconnect, event subscription, ack handling.
+  - Socket connection、auth、reconnect、event subscription、ack handling。
 - `scanner/runtime-scanner`
-  - PATH and known runtime discovery.
+  - PATH 与已知 runtime discovery。
 - `scanner/agentos-scanner`
-  - Hermes/OpenClaw gateway discovery.
+  - Hermes/OpenClaw gateway discovery。
 - `scanner/local-agent-scanner`
-  - Local config discovery.
+  - Local config discovery。
 - `execution/executor`
-  - Dispatch abstraction used by all adapters.
+  - 所有 adapters 共用的 dispatch abstraction。
 - `execution/adapters`
-  - Codex, Claude Code, Kimi, Hermes, OpenClaw.
+  - Codex、Claude Code、Kimi、Hermes、OpenClaw。
 - `workspace/workspace-manager`
-  - Run directories, artifact detection, metadata.
+  - Run directories、artifact detection、metadata。
 - `workspace/artifact-uploader`
-  - Upload generated files to server.
+  - 将 generated files 上传到 server。
 - `bootstrap/cli`
-  - CLI parsing and startup.
+  - CLI parsing 与 startup。
 
-Daemon protocol code should not know UI concepts. Execution code should not know Socket.IO.
+Daemon protocol code 不应知道 UI concepts。Execution code 不应知道 Socket.IO。
 
-## Shared Contracts
+## 共享 Contracts
 
-The rewrite needs a single contract source for:
+重写版需要一个单一 contract source，覆盖：
 
-- Socket event names.
-- Ack result shapes.
-- DTOs.
-- Domain error codes.
-- Agent categories and adapter kinds.
-- Task statuses.
+- Socket event names。
+- Ack result shapes。
+- DTOs。
+- Domain error codes。
+- Agent categories 与 adapter kinds。
+- Task statuses。
 
-This can start as a shared TypeScript package:
+它可以从一个共享 TypeScript package 开始：
 
 ```text
 packages/contracts/
@@ -224,13 +224,13 @@ packages/contracts/
     socket.ts
 ```
 
-Avoid importing server domain modules directly into web or daemon. Contracts are boundary DTOs, not the entire domain model.
+避免把 server domain modules 直接导入 web 或 daemon。Contracts 是边界 DTOs，不是完整 domain model。
 
-## Persistence Model
+## 持久化模型
 
-Keep two storage scopes:
+保留两个 storage scopes：
 
-- Global DB:
+- Global DB：
   - users
   - networks
   - network members
@@ -240,7 +240,7 @@ Keep two storage scopes:
   - invites
   - join links
   - metrics
-- Network DB:
+- Network DB：
   - channels
   - channel members
   - channel agent members
@@ -250,14 +250,14 @@ Keep two storage scopes:
   - artifacts
   - workspace runs
 
-The first rewrite can use SQLite, but migrations must be explicit files rather than ad hoc `ALTER TABLE` logic embedded in a large DB module.
+第一版重写可以使用 SQLite，但 migrations 必须是显式文件，而不是嵌入在大型 DB module 中的 ad hoc `ALTER TABLE` logic。
 
-## Implementation Principles
+## 实现原则
 
-- One use case per user-visible behavior.
-- Transport handlers are thin.
-- Domain rules are testable without sockets or databases.
-- Repositories hide storage details.
-- Web receives snapshots and command results; it does not infer server-side truth.
-- Daemon reports capabilities and execution results; it does not decide network visibility.
-- Every migrated slice gets regression tests before old behavior is deleted.
+- 每个 user-visible behavior 对应一个 use case。
+- Transport handlers 保持薄。
+- Domain rules 可在无 sockets 或 databases 的情况下测试。
+- Repositories 隐藏 storage details。
+- Web 接收 snapshots 与 command results；不推断 server-side truth。
+- Daemon 报告 capabilities 与 execution results；不决定 network visibility。
+- 每个迁移切片都先有 regression tests，再删除旧行为。

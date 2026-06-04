@@ -1,240 +1,240 @@
-# Known Gaps
+# 已知缺口
 
-This document records gaps that must be resolved before or during the rewrite. It distinguishes product gaps from implementation gaps so the new system does not accidentally copy old ambiguity.
+本文档记录重写前或重写期间必须解决的缺口。它区分产品缺口与实现缺口，避免新系统意外复制旧的不明确性。
 
-## Phase 0 Gaps Now Closed By Inventory Docs
+## 已由盘点文档关闭的 Phase 0 缺口
 
-The following Phase 0 artifacts now exist:
+以下 Phase 0 artifacts 现在已经存在：
 
-- Current behavior baseline: `docs/current-behavior.md`
-- Current Socket/HTTP protocol inventory: `docs/current-protocol-inventory.md`
-- Current data model inventory: `docs/current-data-model-inventory.md`
-- Feature disposition matrix: `docs/feature-disposition.md`
-- Agent identity and dedupe rule table: `docs/agent-identity-rules.md`
-- Acceptance test list: `docs/acceptance-tests.md`
+- 当前行为基线：`docs/current-behavior.md`
+- 当前 Socket/HTTP 协议盘点：`docs/current-protocol-inventory.md`
+- 当前数据模型盘点：`docs/current-data-model-inventory.md`
+- 功能处置矩阵：`docs/feature-disposition.md`
+- Agent identity 与 dedupe rule table：`docs/agent-identity-rules.md`
+- Acceptance test list：`docs/acceptance-tests.md`
 
-These are still living documents. They should be refined as implementation starts.
+这些仍是活文档。实现开始后应继续细化。
 
-## Product Vocabulary Gaps
+## 产品词汇缺口
 
 ### Team vs Network
 
-Current docs and code use both `team` and `network`.
+当前文档和代码同时使用 `team` 与 `network`。
 
-Decision needed:
+需要决策：
 
-- Pick one primary product term for the UI and domain model.
-- If both remain, define their relationship exactly.
+- 为 UI 和 domain model 选择一个主要产品术语。
+- 如果两者都保留，精确定义它们之间的关系。
 
-Recommended direction:
+推荐方向：
 
-- Use `team` in product/UI language.
-- Use `network` only when referring to infrastructure or isolation if still needed.
+- 在 product/UI language 中使用 `team`。
+- 仅在仍需要描述 infrastructure 或 isolation 时使用 `network`。
 
 ### Agent Types
 
-Current categories:
+当前 categories：
 
 - `executor-hosted`
 - `agentos-hosted`
 
-Current sources:
+当前 sources：
 
 - `self-register`
 - `scanned`
 - `custom`
 
-Decision needed:
+需要决策：
 
-- Confirm whether source and category are both needed.
-- Define whether custom agents are always `executor-hosted`.
-- Define whether AgentOS gateway agents are devices, agents, runtimes, or connectors.
+- 确认 source 与 category 是否都需要。
+- 定义 custom agents 是否总是 `executor-hosted`。
+- 定义 AgentOS gateway agents 是 devices、agents、runtimes 还是 connectors。
 
-Initial identity and precedence rules are defined in `docs/agent-identity-rules.md`; the remaining gap is product vocabulary and final category naming, not the merge algorithm itself.
+初始 identity 与 precedence rules 已在 `docs/agent-identity-rules.md` 中定义；剩余缺口是产品词汇与最终 category naming，而不是 merge algorithm 本身。
 
 ### Assignee Model
 
-Tasks can have an `assignee_id`, but the target type is not fully specified.
+Tasks 可以拥有 `assignee_id`，但目标类型还没有完全指定。
 
-Decision needed:
+需要决策：
 
-- Can tasks be assigned to humans, agents, or both?
-- Should assignees be typed as `{ kind, id }`?
+- Tasks 能否分配给 humans、agents，或两者都可以？
+- Assignees 是否应类型化为 `{ kind, id }`？
 
-## Protocol Gaps
+## 协议缺口
 
-### Uniform Error Codes
+### 统一 Error Codes
 
-Current errors use mixed strings such as `NOT_AUTHENTICATED`, `UNAUTHORIZED`, `FORBIDDEN`, `DEVICE_NOT_IN_TEAM`, and raw exception messages.
+当前 errors 混用 `NOT_AUTHENTICATED`、`UNAUTHORIZED`、`FORBIDDEN`、`DEVICE_NOT_IN_TEAM` 与 raw exception messages 等字符串。
 
-Decision needed:
+需要决策：
 
-- Define canonical error codes.
-- Map transport errors to domain errors.
+- 定义 canonical error codes。
+- 将 transport errors 映射到 domain errors。
 
-### Snapshot Semantics
+### Snapshot 语义
 
-Current snapshots are sent for agents, devices, networks, channels, and DMs, but consistency guarantees are not specified.
+当前系统会为 agents、devices、networks、channels 与 DMs 发送 snapshots，但没有说明一致性保证。
 
-Decision needed:
+需要决策：
 
-- Are snapshots full replacements or patches?
-- When should clients resubscribe?
-- What is the recovery flow after reconnect?
+- Snapshots 是 full replacements 还是 patches？
+- Clients 应在什么时候 resubscribe？
+- Reconnect 后的 recovery flow 是什么？
 
 ### Acknowledgement Shape
 
-Current ack payloads differ by event.
+当前 ack payloads 因 event 而异。
 
-Decision needed:
+需要决策：
 
-- Use one `Ack<T>` result shape across all commands.
-- Avoid separate response events where acks are sufficient.
+- 所有 commands 使用统一的 `Ack<T>` result shape。
+- 当 acks 足够时，避免使用单独 response events。
 
 ### Admin Protocol
 
-Current implementation has admin events, but no complete admin product spec.
+当前实现有 admin events，但没有完整 admin product spec。
 
-Decision:
+决策：
 
-- Drop admin protocol from the initial rewrite.
-- Reintroduce only with role, permission, and audit requirements.
+- 从初始重写中删除 admin protocol。
+- 只有具备 role、permission 与 audit requirements 后才重新引入。
 
-## Data Model Gaps
+## 数据模型缺口
 
-### Dispatch Is Not First-Class Enough
+### Dispatch 不够一等
 
-Current dispatch lifecycle is mostly coordinated in memory and message metadata.
+当前 dispatch lifecycle 主要通过内存与 message metadata 协调。
 
-Needed:
+需要：
 
-- `dispatches` model with request ID, agent ID, channel ID, message ID, status, error, timestamps, timeout, and artifact links.
+- `dispatches` model，包含 request ID、agent ID、channel ID、message ID、status、error、timestamps、timeout 与 artifact links。
 
-### Workspace Runs Are Under-Modeled
+### Workspace Runs 建模不足
 
-Current product expects agent workspace views, but persistence is not cleanly defined.
+当前产品期待 agent workspace views，但 persistence 没有清晰定义。
 
-Needed:
+需要：
 
-- `workspace_runs` model.
-- Links between run, agent, device, dispatch, artifacts, and generated files.
+- `workspace_runs` model。
+- run、agent、device、dispatch、artifacts 与 generated files 之间的链接。
 
-### Threads Are Under-Specified
+### Threads 定义不足
 
-Thread behavior exists, but the data model should be explicit.
+Thread behavior 已存在，但 data model 应显式化。
 
-Needed:
+需要：
 
-- Either `messages.thread_id` and root-message convention, or a separate `threads` table.
-- Dispatch history rules for threads.
+- 要么使用 `messages.thread_id` 与 root-message convention，要么使用独立 `threads` table。
+- Threads 的 dispatch history rules。
 
 ### Artifact Access Control
 
-Current artifact metadata needs clearer network/channel/message/workspace linkage.
+当前 artifact metadata 需要更清晰的 network/channel/message/workspace linkage。
 
-Needed:
+需要：
 
-- Network-scoped artifact authorization.
-- Message and workspace bindings.
+- Network-scoped artifact authorization。
+- Message 与 workspace bindings。
 
 ### Search Projection
 
-Current message search is direct DB search.
+当前 message search 是直接 DB search。
 
-Needed:
+需要：
 
-- Decide whether simple SQL search is enough for first release.
-- Defer full-text indexing unless needed.
+- 决定第一版是否 simple SQL search 就足够。
+- 除非确实需要，否则延后 full-text indexing。
 
-## Web Gaps
+## Web 缺口
 
 ### State Ownership
 
-Current Zustand store includes domain logic such as agent dedupe.
+当前 Zustand store 包含 agent dedupe 等 domain logic。
 
-Needed:
+需要：
 
-- Move dedupe and permission decisions to server/domain.
-- Keep web store focused on session, connection, snapshots, and UI state.
+- 将 dedupe 与 permission decisions 移到 server/domain。
+- Web store 聚焦 session、connection、snapshots 与 UI state。
 
-### Large Page Decomposition
+### 大页面拆分
 
-Current chat and task pages mix data loading, socket calls, feature state, and rendering.
+当前 chat 与 task pages 混合 data loading、socket calls、feature state 与 rendering。
 
-Needed:
+需要：
 
-- Split into feature modules and hooks during migration.
+- 迁移期间拆分为 feature modules 与 hooks。
 
-### Saved Messages And Reactions
+### Saved Messages 与 Reactions
 
-Current UI has saved/reaction local state.
+当前 UI 有 saved/reaction local state。
 
-Decision needed:
+需要决策：
 
-- Keep as local-only UX, persist server-side, or drop for first release.
+- 作为 local-only UX 保留、server-side 持久化，或从 first release 删除。
 
-## Daemon Gaps
+## Daemon 缺口
 
 ### Runtime Resolution
 
-Current daemon has useful runtime matching rules, but source of truth is spread across daemon, server, and web.
+当前 daemon 有有用的 runtime matching rules，但 source of truth 分散在 daemon、server 与 web 中。
 
-Needed:
+需要：
 
-- One shared contract for adapter kinds.
-- Server-side persisted config.
-- Daemon-side execution resolution with typed error reporting.
+- 一个共享 contract 定义 adapter kinds。
+- Server-side persisted config。
+- Daemon-side execution resolution 与 typed error reporting。
 
 ### Directory Picker
 
-Native directory selection is useful but not core to first slice.
+Native directory selection 有用，但不是第一切片核心。
 
-Decision:
+决策：
 
-- Defer until custom agent setup.
+- 延后到 custom agent setup。
 
 ### Reconnect Guarantees
 
-Current reconnect and periodic scan behavior exist, but exact guarantees are not formalized.
+当前 reconnect 与 periodic scan behavior 存在，但精确保证尚未形式化。
 
-Needed:
+需要：
 
-- Define heartbeat interval.
-- Define offline timeout.
-- Define scan interval.
-- Define server behavior when daemon reconnects with same device ID.
+- 定义 heartbeat interval。
+- 定义 offline timeout。
+- 定义 scan interval。
+- 定义 daemon 以相同 device ID reconnect 时的 server behavior。
 
-## Testing Gaps
+## 测试缺口
 
-### No True End-To-End Test Yet
+### 尚无真正端到端测试
 
-Current tests are useful but mostly app-local.
+当前测试有用，但大多局限于单 app。
 
-Needed:
+需要：
 
-- One test or smoke script covering Web-like client, Server, and Daemon-like client together.
+- 一个覆盖 Web-like client、Server 与 Daemon-like client 的组合测试或 smoke script。
 
-### Acceptance Tests Need Prioritization
+### Acceptance Tests 需要优先级
 
-`docs/acceptance-tests.md` is broad.
+`docs/acceptance-tests.md` 范围很广。
 
-Needed:
+需要：
 
-- Mark first-slice tests versus later-feature tests.
+- 标出 first-slice tests 与 later-feature tests。
 
 ### Contract Tests
 
-Needed:
+需要：
 
-- Validate protocol DTOs at both web and daemon boundaries.
+- 在 web 与 daemon 两侧边界验证 protocol DTOs。
 
-## Explicit Non-Gaps
+## 显式非缺口
 
-These are not gaps because old compatibility is intentionally dropped:
+这些不是缺口，因为旧兼容性被有意放弃：
 
-- Old Socket.IO event names.
-- Old SQLite schemas.
-- Old daemon client compatibility.
-- Existing local `.agentbean` data shape.
-- Legacy `standalone-cli`.
-- Admin events without product spec.
+- 旧 Socket.IO event names。
+- 旧 SQLite schemas。
+- 旧 daemon client compatibility。
+- 现有本地 `.agentbean` data shape。
+- Legacy `standalone-cli`。
+- 没有 product spec 的 admin events。

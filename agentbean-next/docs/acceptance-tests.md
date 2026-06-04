@@ -1,224 +1,224 @@
-# Acceptance Tests
+# 验收测试
 
-These tests define the behavior that must survive the semi-rebuild. They are written as product-level scenarios, not as current implementation tests.
+这些测试定义半重建后必须保留下来的行为。它们以产品级场景编写，而不是当前实现测试。
 
-## Auth And Network
+## Auth 与 Network
 
-### Register Creates A Private Network
+### 注册会创建 Private Network
 
-Given a new user registers with username and password,
-when registration succeeds,
-then the user receives a session token,
-and a private network is created,
-and that network becomes the user's current network.
+前提：新用户使用 username 和 password 注册，
+当：注册成功，
+结果：用户收到 session token，
+并且创建一个 private network，
+且该 network 成为用户的 current network。
 
-### Login Restores Current Network
+### 登录会恢复 Current Network
 
-Given a user belongs to multiple networks,
-and the user previously switched to one network,
-when the user logs in again,
-then the server returns the saved current network if the user is still a member.
+前提：用户属于多个 networks，
+并且用户之前切换到了其中一个 network，
+当：用户再次登录，
+结果：如果用户仍是该 network 的 member，server 返回已保存的 current network。
 
-### Invite Join Adds Network Membership
+### Invite Join 会添加 Network Membership
 
-Given an invite code for a network,
-when a new user registers through that invite,
-then the user is added to the invited network,
-and can list that network after login.
+前提：某 network 的 invite code，
+当：新用户通过该 invite 注册，
+结果：用户被加入受邀 network，
+并且登录后可以列出该 network。
 
-## Device And Daemon
+## Device 与 Daemon
 
-### Device Invite Delivers Token To Daemon
+### Device Invite 会把 Token 交付给 Daemon
 
-Given a daemon is waiting with a device invite code,
-when a logged-in user completes device login in the browser,
-then the server delivers a device token to the waiting daemon session,
-and the daemon reconnects to `/agent` with that token.
+前提：daemon 正携带 device invite code 等待，
+当：已登录用户在 browser 中完成 device login，
+结果：server 将 device token 交付给等待中的 daemon session，
+并且 daemon 携带该 token 重新连接 `/agent`。
 
-### Daemon Registers Runtimes And Agents
+### Daemon 会注册 Runtimes 与 Agents
 
-Given a daemon connects with a valid device token,
-when it sends device hello, runtimes, and discovered agents,
-then the server persists the device,
-stores runtime metadata,
-dedupes agents,
-and broadcasts updated device and agent snapshots to web clients.
+前提：daemon 使用有效 device token 连接，
+当：它发送 device hello、runtimes 与 discovered agents，
+结果：server 持久化 device，
+存储 runtime metadata，
+对 agents 去重，
+并向 web clients 广播更新后的 device 与 agent snapshots。
 
-### Missing Agent Becomes Offline
+### Missing Agent 会变成 Offline
 
-Given a daemon previously reported an agent,
-when a later scan omits that agent,
-then the server marks the agent offline instead of deleting its historical identity.
+前提：daemon 之前上报过某 agent，
+当：后续扫描漏掉该 agent，
+结果：server 将该 agent 标记为 offline，而不是删除它的历史 identity。
 
 ## Agent Identity
 
-### Scanned And Self-Registered Agent Dedupe
+### Scanned 与 Self-Registered Agent 会去重
 
-Given a daemon reports the same agent through a scan path and a self-register path,
-when both reports share device and logical name or runtime identity,
-then the UI sees one logical agent, not duplicates.
+前提：daemon 通过 scan path 与 self-register path 上报同一个 agent，
+当：两份报告共享 device 与 logical name 或 runtime identity，
+结果：UI 看到一个 logical agent，而不是重复项。
 
-### AgentOS Gateway Dedupe
+### AgentOS Gateway 会去重
 
-Given a Hermes or OpenClaw gateway agent is discovered,
-when the gateway also exposes concrete hosted agents,
-then generic gateway entries do not override better display entries for the same logical hosted agent.
+前提：发现了 Hermes 或 OpenClaw gateway agent，
+当：gateway 也暴露 concrete hosted agents，
+结果：generic gateway entries 不会覆盖同一 logical hosted agent 上更好的 display entries。
 
-### Custom Agent Uses Device Runtime
+### Custom Agent 使用 Device Runtime
 
-Given a user creates a custom agent on a device,
-when the device reports compatible runtimes,
-then dispatch uses the best available runtime command,
-and reports a clear error if the runtime or working directory is unavailable.
+前提：用户在某 device 上创建 custom agent，
+当：device 上报 compatible runtimes，
+结果：dispatch 使用最佳可用 runtime command，
+并在 runtime 或 working directory 不可用时报告清晰 error。
 
-## Channels And Messages
+## Channels 与 Messages
 
-### Public Channel Is Visible To Network Members
+### Public Channel 对 Network Members 可见
 
-Given a public channel exists in a network,
-when any network member lists channels,
-then the channel is visible.
+前提：某 network 中存在 public channel，
+当：任意 network member 列出 channels，
+结果：该 channel 可见。
 
-### Private Channel Is Visible Only To Members
+### Private Channel 只对 Members 可见
 
-Given a private channel exists with selected human members,
-when a non-member lists channels or attempts to join,
-then the server denies access.
+前提：存在只选择了部分 human members 的 private channel，
+当：非 member 列出 channels 或尝试 join，
+结果：server 拒绝访问。
 
-### Message Send Persists Human Sender
+### Message Send 会持久化 Human Sender
 
-Given a logged-in user sends a channel message,
-when the message is persisted,
-then `senderKind` is `human`,
-and `senderId` is the authenticated user ID,
-not a client-provided value.
+前提：已登录用户发送 channel message，
+当：message 被持久化，
+结果：`senderKind` 是 `human`，
+并且 `senderId` 是已认证 user ID，
+而不是 client 提供的值。
 
-### Mention Routes To Target Agent
+### Mention 会路由到 Target Agent
 
-Given a channel has online agents,
-when a user sends a message starting with `@AgentName`,
-then the server dispatches only to the matching online agent.
+前提：channel 中有 online agents，
+当：用户发送以 `@AgentName` 开头的 message，
+结果：server 只 dispatch 给匹配的 online agent。
 
-### Unknown Mention Does Not Fallback
+### Unknown Mention 不会 Fallback
 
-Given a channel has online agents,
-when a user sends a message starting with an unknown `@Name`,
-then the server does not dispatch to a fallback agent.
+前提：channel 中有 online agents，
+当：用户发送以未知 `@Name` 开头的 message，
+结果：server 不会 dispatch 给 fallback agent。
 
-### Human Mention Does Not Dispatch To Agent
+### Human Mention 不会 Dispatch 给 Agent
 
-Given a channel has human members and agents,
-when a user mentions a human member by name,
-then the server persists the message,
-and does not dispatch to an agent.
+前提：channel 中有人类 members 和 agents，
+当：用户按姓名 mention human member，
+结果：server 持久化该 message，
+并且不会 dispatch 给 agent。
 
-### Fallback Dispatch Uses First Online Agent
+### Fallback Dispatch 使用第一个 Online Agent
 
-Given a channel has online agents,
-when a message has no mention,
-then the server dispatches to the first eligible online agent.
+前提：channel 中有 online agents，
+当：message 没有 mention，
+结果：server dispatch 给第一个符合条件的 online agent。
 
-### No Online Agent Is A Non-Fatal State
+### No Online Agent 是非致命状态
 
-Given a channel has no online agents,
-when a user sends a message,
-then the human message is still persisted,
-and the server returns a no-online dispatch result rather than failing the send.
+前提：channel 中没有 online agents，
+当：用户发送 message，
+结果：human message 仍会持久化，
+并且 server 返回 no-online dispatch result，而不是让 send 失败。
 
-### Thread Dispatch Does Not Duplicate Current Prompt
+### Thread Dispatch 不会重复 Current Prompt
 
-Given a user replies inside a thread,
-when the server builds dispatch history,
-then previous messages are included as history,
-and the current user input appears only as the dispatch prompt.
+前提：用户在 thread 内回复，
+当：server 构造 dispatch history，
+结果：previous messages 会作为 history 包含，
+并且当前 user input 只作为 dispatch prompt 出现一次。
 
-## Dispatch And Replies
+## Dispatch 与 Replies
 
-### Dispatch Timeout Is Visible
+### Dispatch Timeout 对用户可见
 
-Given the server dispatches to an agent,
-when the daemon does not return before timeout,
-then the dispatch is marked failed with `DISPATCH_TIMEOUT`,
-and the original human message remains persisted.
+前提：server dispatch 到 agent，
+当：daemon 在 timeout 前没有返回，
+结果：dispatch 被标记为 failed，并带有 `DISPATCH_TIMEOUT`，
+且原始 human message 保持持久化。
 
-### Agent Reply Persists With Artifacts
+### Agent Reply 会携带 Artifacts 持久化
 
-Given an agent returns text and artifact IDs,
-when the server receives the dispatch result,
-then it persists an agent message,
-binds artifacts to that message,
-and broadcasts the message to web clients.
+前提：agent 返回 text 与 artifact IDs，
+当：server 收到 dispatch result，
+结果：它持久化一条 agent message，
+把 artifacts 绑定到该 message，
+并向 web clients 广播该 message。
 
-### Agent Error Updates Status
+### Agent Error 会更新 Status
 
-Given a daemon reports execution failure,
-when the server receives the error,
-then it records the dispatch failure,
-updates agent last error,
-and notifies web clients.
+前提：daemon 上报 execution failure，
+当：server 收到 error，
+结果：它记录 dispatch failure，
+更新 agent last error，
+并通知 web clients。
 
-## Artifacts And Workspace
+## Artifacts 与 Workspace
 
-### Artifact Upload Is Authenticated
+### Artifact Upload 必须认证
 
-Given an artifact upload request,
-when the token is missing or invalid,
-then the server rejects the upload.
+前提：artifact upload request，
+当：token 缺失或无效，
+结果：server 拒绝 upload。
 
-### Artifact Metadata Is Network Scoped
+### Artifact Metadata 带有 Network Scope
 
-Given a file is uploaded for a channel message,
-when another network tries to fetch it,
-then access is denied.
+前提：为 channel message 上传了一个 file，
+当：另一个 network 尝试 fetch 它，
+结果：access 被拒绝。
 
-### Workspace Run Links Back To Agent
+### Workspace Run 可回链到 Agent
 
-Given a daemon creates files during an agent run,
-when it uploads artifacts,
-then the server can list those artifacts from the agent workspace view.
+前提：daemon 在 agent run 期间创建 files，
+当：它上传 artifacts，
+结果：server 可以从 agent workspace view 列出这些 artifacts。
 
 ## Tasks
 
-### Task Create Persists Network Scope
+### Task Create 会持久化 Network Scope
 
-Given a user creates a task in a network,
-when the task is listed,
-then it appears only for that network.
+前提：用户在某 network 中创建 task，
+当：列出 tasks，
+结果：它只出现在该 network 中。
 
-### Task Can Link To Channel
+### Task 可以关联 Channel
 
-Given a task is created from a channel context,
-when the channel task list is loaded,
-then the task appears in that channel.
+前提：从 channel context 创建 task，
+当：加载 channel task list，
+结果：该 task 出现在该 channel 中。
 
-### Task Status Update Broadcasts
+### Task Status Update 会广播
 
-Given a task exists,
-when a user moves it to another status,
-then the server persists the new status and broadcasts `task:updated`.
+前提：task 已存在，
+当：用户把它移动到另一个 status，
+结果：server 持久化 new status，并广播 `task:updated`。
 
-## Web Smoke Tests
+## Web 冒烟测试
 
-### First End-To-End Slice
+### 第一条端到端切片
 
-Given server-next, daemon-next, and web-next are running,
-when a user logs in, selects a network, connects a daemon, opens a channel, and sends a message,
-then the user sees:
+前提：server-next、daemon-next 与 web-next 正在运行，
+当：用户登录、选择 network、连接 daemon、打开 channel 并发送 message，
+结果：用户能看到：
 
-- the connected device
-- the discovered agent
-- the sent human message
-- the persisted agent reply
+- 已连接 device
+- 已发现 agent
+- 已发送 human message
+- 已持久化 agent reply
 
-### Reconnect Keeps UI Consistent
+### Reconnect 保持 UI 一致
 
-Given a web client loses and restores the socket connection,
-when it resubscribes to the current network,
-then agents, devices, channels, DMs, tasks, and messages are reloaded from server snapshots.
+前提：web client 失去并恢复 socket connection，
+当：它重新订阅 current network，
+结果：agents、devices、channels、DMs、tasks 与 messages 都从 server snapshots 重新加载。
 
-## Regression Seeds From Current Tests
+## 来自当前测试的回归种子
 
-Existing tests should be reviewed and migrated where they describe product behavior:
+现有测试应被审查并迁移，其中描述产品行为的测试尤其重要：
 
 - `apps/server/tests/routing.test.ts`
 - `apps/server/tests/channels.test.ts`

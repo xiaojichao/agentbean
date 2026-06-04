@@ -1,176 +1,176 @@
-# Current Protocol Inventory
+# 当前协议盘点
 
-This document inventories the current Socket.IO and HTTP protocol surface. It is a Phase 0 input for the rewrite, not a compatibility promise.
+本文档盘点当前 Socket.IO 与 HTTP 协议表面。它是重写的 Phase 0 输入，不是兼容性承诺。
 
-The current protocol is useful as a behavior map, but the rewrite does not need to preserve event names, payload shapes, ack shapes, or legacy aliases.
+当前协议可作为行为地图使用，但重写版不需要保留 event names、payload shapes、ack shapes 或 legacy aliases。
 
 ## `/web` Namespace
 
-Browser clients connect to `/web`. The current implementation allows anonymous sockets for auth and invite flows, and authenticated sockets for app operations.
+Browser clients 连接到 `/web`。当前实现允许 anonymous sockets 用于 auth 与 invite flows，也允许 authenticated sockets 用于 app operations。
 
-### Auth And Session
+### Auth 与 Session
 
-| Event | Direction | Current Purpose | Rewrite Disposition |
+| 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `auth:register` | Web -> Server | Register a user, create private network, optionally consume invite. | Keep behavior, redesign payload/result. |
-| `auth:login` | Web -> Server | Login and return token/current network. Also consumes join code when supplied. | Keep behavior, separate login from join consumption where cleaner. |
-| `auth:whoami` | Web -> Server | Return current user. | Keep. |
-| `auth:change-password` | Web -> Server | Change password after verifying current password. | Keep, but defer until account settings slice. |
-| `auth:invite:validate` | Web/Daemon -> Server | Validate device or user invite; for device invite also records waiting daemon socket. | Split into explicit user-invite and device-invite flows. |
-| `auth:device-login` | Web -> Server | Browser login for a waiting device invite; delivers token to daemon. | Keep behavior, redesign as device invite completion use case. |
-| `auth:join:validate` | Web -> Server | Validate user join link and return target network display info. | Keep behavior, rename under join/invite domain. |
-| `auth:token:deliver` | Server -> Waiting socket | Deliver token to daemon or invite session. | Keep behavior, but make delivery target explicit. |
+| `auth:register` | Web -> Server | 注册用户、创建 private network，并可选消费 invite。 | 保留行为，重新设计 payload/result。 |
+| `auth:login` | Web -> Server | 登录并返回 token/current network。提供 join code 时也会消费。 | 保留行为；在更干净时把 login 与 join consumption 拆开。 |
+| `auth:whoami` | Web -> Server | 返回当前用户。 | 保留。 |
+| `auth:change-password` | Web -> Server | 校验当前密码后修改密码。 | 保留，但延后到 account settings slice。 |
+| `auth:invite:validate` | Web/Daemon -> Server | 校验 device 或 user invite；对 device invite 还会记录等待中的 daemon socket。 | 拆分为显式 user-invite 与 device-invite flows。 |
+| `auth:device-login` | Web -> Server | 面向等待中 device invite 的 browser login；向 daemon 交付 token。 | 保留行为，重设计为 device invite completion use case。 |
+| `auth:join:validate` | Web -> Server | 校验 user join link，并返回目标 network display info。 | 保留行为，重命名到 join/invite domain 下。 |
+| `auth:token:deliver` | Server -> Waiting socket | 向 daemon 或 invite session 交付 token。 | 保留行为，但让 delivery target 显式化。 |
 
 ### Networks
 
-| Event | Direction | Current Purpose | Rewrite Disposition |
+| 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `network:list` | Web -> Server | List networks visible to the current user. | Keep. |
-| `network:create` | Web -> Server | Create network and default channel. | Keep. |
-| `network:switch` | Web -> Server | Set socket current network and persist user current network. | Keep. |
-| `network:update` | Web -> Server | Rename current network. | Keep, defer until settings slice. |
-| `network:delete` | Web -> Server | Delete a network and broadcast fallback network state. | Keep behavior, defer until settings/admin slice. |
-| `networks:snapshot` | Server -> Web | Broadcast visible network list. | Keep as snapshot, payload should be typed. |
-| `network:deleted` | Server -> Web | Notify sockets when current network was deleted. | Keep behavior if delete remains in scope. |
+| `network:list` | Web -> Server | 列出当前用户可见的 networks。 | 保留。 |
+| `network:create` | Web -> Server | 创建 network 与 default channel。 | 保留。 |
+| `network:switch` | Web -> Server | 设置 socket current network，并持久化 user current network。 | 保留。 |
+| `network:update` | Web -> Server | 重命名 current network。 | 保留，延后到 settings slice。 |
+| `network:delete` | Web -> Server | 删除 network，并广播 fallback network state。 | 保留行为，延后到 settings/admin slice。 |
+| `networks:snapshot` | Server -> Web | 广播可见 network list。 | 保留为 snapshot，payload 应类型化。 |
+| `network:deleted` | Server -> Web | 当 current network 被删除时通知 sockets。 | 如果 delete 仍在范围内则保留行为。 |
 
 ### Members
 
-| Event | Direction | Current Purpose | Rewrite Disposition |
+| 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `members:list` | Web -> Server | List human members and visible agents for a network. | Keep. |
-| `member:update-human` | Web -> Server | Update human description. | Keep, defer until profile/member settings slice. |
+| `members:list` | Web -> Server | 列出某 network 的 human members 与 visible agents。 | 保留。 |
+| `member:update-human` | Web -> Server | 更新 human description。 | 保留，延后到 profile/member settings slice。 |
 
 ### Devices
 
-| Event | Direction | Current Purpose | Rewrite Disposition |
+| 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `devices:subscribe` | Web -> Server | Subscribe to device snapshot for current network. | Keep as `device:list` plus `devices:snapshot`. |
-| `devices:list` | Web -> Server | List devices for current network. | Keep, normalize to singular command naming if desired. |
-| `device:get` | Web -> Server | Get device detail. | Keep. |
-| `device:agents:list` | Web -> Server | List agents and runtimes for one device. | Keep behavior, likely split into `device:get` detail DTO. |
-| `device:scan` | Web -> Server -> Daemon | Ask online daemon to rescan. | Keep. |
-| `device:select-directory` | Web -> Server -> Daemon | Ask daemon to open native directory picker. | Keep behavior, defer until custom agent setup slice. |
-| `device:delete` | Web -> Server | Delete a device. | Keep, defer. |
-| `device:rename` | Web -> Server | Rename device/hostname. | Keep, defer. |
-| `devices:snapshot` | Server -> Web | Broadcast/list devices. | Keep. |
-| `device:status` | Server -> Web | Broadcast device status or metadata changes. | Keep. |
+| `devices:subscribe` | Web -> Server | 订阅 current network 的 device snapshot。 | 保留为 `device:list` 加 `devices:snapshot`。 |
+| `devices:list` | Web -> Server | 列出 current network 的 devices。 | 保留；如有需要可规范为单数 command 命名。 |
+| `device:get` | Web -> Server | 获取 device detail。 | 保留。 |
+| `device:agents:list` | Web -> Server | 列出某个 device 的 agents 与 runtimes。 | 保留行为，可能拆入 `device:get` detail DTO。 |
+| `device:scan` | Web -> Server -> Daemon | 请求 online daemon 重新扫描。 | 保留。 |
+| `device:select-directory` | Web -> Server -> Daemon | 请求 daemon 打开 native directory picker。 | 保留行为，延后到 custom agent setup slice。 |
+| `device:delete` | Web -> Server | 删除 device。 | 保留，延后。 |
+| `device:rename` | Web -> Server | 重命名 device/hostname。 | 保留，延后。 |
+| `devices:snapshot` | Server -> Web | 广播/列出 devices。 | 保留。 |
+| `device:status` | Server -> Web | 广播 device status 或 metadata changes。 | 保留。 |
 
 ### Agents
 
-| Event | Direction | Current Purpose | Rewrite Disposition |
+| 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `agents:subscribe` | Web -> Server | Send visible agent snapshot for current network. | Keep. |
-| `agents:discover` | Web -> Server -> Daemon | Broadcast rescan request to daemons. | Keep behavior, probably route through `device:scan` for targeted scans. |
-| `agents:snapshot` | Server -> Web | Visible agent snapshot. | Keep. |
-| `agents:discovered` | Server -> Web | Relay daemon discovery payload. | Keep as typed discovery event. |
-| `agent:status` | Server -> Web | Broadcast agent online/busy/error/offline state. | Keep. |
-| `agent:metrics` | Web -> Server | Return metrics summaries. | Keep, defer until metrics slice. |
-| `agent:create` | Web -> Server | Create custom or hosted agent config. | Keep, but redesign command/config DTO. |
-| `agent:update` | Web -> Server | Update visibility/network fields for an agent. | Replace with explicit `agent:publish`, `agent:unpublish`, and config update. Do not keep as broad update. |
-| `agent:config:update` | Web -> Server | Update custom agent name/runtime config. | Keep as `agent:update-config` or equivalent. |
-| `agent:custom:list` | Web -> Server | List custom agents, optionally by device. | Merge into `agents:subscribe`, `device:get`, or a filtered `agent:list`. |
-| `agent:delete` | Web -> Server | Delete custom or AgentOS agent where allowed. | Keep behavior, defer until agent management slice. |
-| `agent:publish` | Web -> Server | Publish agent to network. | Keep. |
-| `agent:unpublish` | Web -> Server | Unpublish agent from network. | Keep. |
+| `agents:subscribe` | Web -> Server | 发送 current network 的 visible agent snapshot。 | 保留。 |
+| `agents:discover` | Web -> Server -> Daemon | 向 daemons 广播 rescan request。 | 保留行为，targeted scans 可能通过 `device:scan` 路由。 |
+| `agents:snapshot` | Server -> Web | Visible agent snapshot。 | 保留。 |
+| `agents:discovered` | Server -> Web | 转发 daemon discovery payload。 | 保留为 typed discovery event。 |
+| `agent:status` | Server -> Web | 广播 agent online/busy/error/offline state。 | 保留。 |
+| `agent:metrics` | Web -> Server | 返回 metrics summaries。 | 保留，延后到 metrics slice。 |
+| `agent:create` | Web -> Server | 创建 custom 或 hosted agent config。 | 保留，但重设计 command/config DTO。 |
+| `agent:update` | Web -> Server | 更新 agent 的 visibility/network fields。 | 替换为显式 `agent:publish`、`agent:unpublish` 与 config update。不要保留宽泛 update。 |
+| `agent:config:update` | Web -> Server | 更新 custom agent name/runtime config。 | 保留为 `agent:update-config` 或等价命令。 |
+| `agent:custom:list` | Web -> Server | 列出 custom agents，可选按 device 过滤。 | 合并到 `agents:subscribe`、`device:get` 或 filtered `agent:list`。 |
+| `agent:delete` | Web -> Server | 在允许时删除 custom 或 AgentOS agent。 | 保留行为，延后到 agent management slice。 |
+| `agent:publish` | Web -> Server | Publish agent 到 network。 | 保留。 |
+| `agent:unpublish` | Web -> Server | 从 network unpublish agent。 | 保留。 |
 
-### Channels, DMs, Messages
+### Channels、DMs、Messages
 
-| Event | Direction | Current Purpose | Rewrite Disposition |
+| 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `channels:subscribe` | Web -> Server | Send channel and DM snapshots. | Keep, but split channel and DM snapshots if cleaner. |
-| `channels:snapshot` | Server -> Web | Channel list snapshot. | Keep. |
-| `channel:create` | Web -> Server | Create public/private channel with agents and users. | Keep. |
-| `channel:join` | Web -> Server | Join room and return message history. | Keep. |
-| `channel:history` | Server -> Web | Channel history result. | Prefer ack result from `channel:join`; event optional. |
-| `channel:message` | Server -> Web | Broadcast persisted message. | Keep. |
-| `channel:members` | Web -> Server | Get human and agent members for channel. | Keep. |
-| `channel:add-member` | Web -> Server | Add human member. | Keep. |
-| `channel:remove-member` | Web -> Server | Remove human member. | Keep. |
-| `channel:add-agent` | Web -> Server | Add agent member. | Keep. |
-| `channel:remove-agent` | Web -> Server | Remove agent member. | Keep. |
-| `channel:update` | Web -> Server | Rename/update description/visibility. | Keep, defer until channel settings slice. |
-| `channel:leave` | Web -> Server | Mark user leave for channel. | Keep behavior if leave UX remains. |
-| `channel:archive` | Web -> Server | Archive channel. | Defer; keep only if product needs archive. |
-| `channel:delete` | Web -> Server | Delete channel. | Defer; keep only if product needs hard delete. |
-| `channel:stop-agents` | Web -> Server | Cancel running agents associated with channel. | Keep behavior, redesign around dispatch cancellation. |
-| `dm:start` | Web -> Server | Create/get DM channel with agent. | Keep. |
-| `dm:list` | Web -> Server | List DMs. | Keep. |
-| `dms:snapshot` | Server -> Web | DM list snapshot. | Keep. |
-| `message:send` | Web -> Server | Persist human message, route and dispatch to agents. | Keep as first-slice behavior. |
-| `message:search` | Web -> Server | Search messages in current network. | Keep, defer until search slice. |
+| `channels:subscribe` | Web -> Server | 发送 channel 与 DM snapshots。 | 保留；若更干净可拆分 channel 与 DM snapshots。 |
+| `channels:snapshot` | Server -> Web | Channel list snapshot。 | 保留。 |
+| `channel:create` | Web -> Server | 创建包含 agents 与 users 的 public/private channel。 | 保留。 |
+| `channel:join` | Web -> Server | 加入 room 并返回 message history。 | 保留。 |
+| `channel:history` | Server -> Web | Channel history result。 | 优先使用 `channel:join` 的 ack result；event 可选。 |
+| `channel:message` | Server -> Web | 广播已持久化 message。 | 保留。 |
+| `channel:members` | Web -> Server | 获取 channel 的 human 与 agent members。 | 保留。 |
+| `channel:add-member` | Web -> Server | 添加 human member。 | 保留。 |
+| `channel:remove-member` | Web -> Server | 移除 human member。 | 保留。 |
+| `channel:add-agent` | Web -> Server | 添加 agent member。 | 保留。 |
+| `channel:remove-agent` | Web -> Server | 移除 agent member。 | 保留。 |
+| `channel:update` | Web -> Server | 重命名/更新 description/visibility。 | 保留，延后到 channel settings slice。 |
+| `channel:leave` | Web -> Server | 标记用户离开 channel。 | 如果 leave UX 保留，则保留行为。 |
+| `channel:archive` | Web -> Server | Archive channel。 | 延后；仅当产品需要 archive 时保留。 |
+| `channel:delete` | Web -> Server | Delete channel。 | 延后；仅当产品需要 hard delete 时保留。 |
+| `channel:stop-agents` | Web -> Server | 取消与 channel 关联的 running agents。 | 保留行为，围绕 dispatch cancellation 重设计。 |
+| `dm:start` | Web -> Server | 创建/获取与 agent 的 DM channel。 | 保留。 |
+| `dm:list` | Web -> Server | 列出 DMs。 | 保留。 |
+| `dms:snapshot` | Server -> Web | DM list snapshot。 | 保留。 |
+| `message:send` | Web -> Server | 持久化 human message，route 并 dispatch 给 agents。 | 保留为第一切片行为。 |
+| `message:search` | Web -> Server | 在 current network 中搜索 messages。 | 保留，延后到 search slice。 |
 
 ### Tasks
 
-| Event | Direction | Current Purpose | Rewrite Disposition |
+| 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `task:create` | Web -> Server | Create network/channel task. | Keep, defer after first chat/dispatch slice unless needed. |
-| `task:list` | Web -> Server | List tasks, optionally by channel. | Keep. |
-| `task:update` | Web -> Server | Update fields/status/assignment/sort. | Keep. |
-| `task:delete` | Web -> Server | Delete task. | Keep. |
-| `task:reorder` | Web -> Server | Update task sort order. | Merge into `task:update` unless a dedicated command is clearer. |
-| `task:updated` | Server -> Web | Broadcast task update. | Keep. |
+| `task:create` | Web -> Server | 创建 network/channel task。 | 保留；除非需要，否则延后到第一条 chat/dispatch slice 之后。 |
+| `task:list` | Web -> Server | 列出 tasks，可选按 channel 过滤。 | 保留。 |
+| `task:update` | Web -> Server | 更新 fields/status/assignment/sort。 | 保留。 |
+| `task:delete` | Web -> Server | 删除 task。 | 保留。 |
+| `task:reorder` | Web -> Server | 更新 task sort order。 | 除非专用 command 更清晰，否则合并进 `task:update`。 |
+| `task:updated` | Server -> Web | 广播 task update。 | 保留。 |
 
-### Invites And Join Links
+### Invites 与 Join Links
 
-| Event | Direction | Current Purpose | Rewrite Disposition |
+| 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `invite:create` | Web -> Server | Create user/device invite. | Keep behavior, split explicit user invite and device invite commands. |
-| `join:create` | Web -> Server | Create user join link for current network. | Keep, rename under invite/join domain. |
-| `join:list` | Web -> Server | List active join links. | Keep, defer. |
-| `join:revoke` | Web -> Server | Revoke join link. | Keep, defer. |
+| `invite:create` | Web -> Server | 创建 user/device invite。 | 保留行为，拆成显式 user invite 与 device invite commands。 |
+| `join:create` | Web -> Server | 为 current network 创建 user join link。 | 保留，重命名到 invite/join domain 下。 |
+| `join:list` | Web -> Server | 列出 active join links。 | 保留，延后。 |
+| `join:revoke` | Web -> Server | 撤销 join link。 | 保留，延后。 |
 
 ### Admin
 
-| Event | Direction | Current Purpose | Rewrite Disposition |
+| 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `admin:list-users` | Web -> Server | Admin user inventory. | Drop from first product. Reintroduce only with explicit admin requirements. |
-| `admin:delete-user` | Web -> Server | Delete user. | Drop/defer. |
-| `admin:list-networks` | Web -> Server | Admin network inventory. | Drop/defer. |
-| `admin:delete-network` | Web -> Server | Delete network as admin. | Drop/defer; normal owner delete can remain. |
-| `admin:list-devices` | Web -> Server | Admin device inventory. | Drop/defer. |
-| `admin:transfer-device-owner` | Web -> Server | Transfer device ownership. | Drop/defer; likely support through device re-invite instead. |
-| `admin:list-agents` | Web -> Server | Admin agent inventory. | Drop/defer. |
-| `admin:delete-agent` | Web -> Server | Delete arbitrary agent as admin. | Drop/defer. |
+| `admin:list-users` | Web -> Server | Admin user inventory。 | 从第一版产品中删除。只有在明确 admin requirements 后才重新引入。 |
+| `admin:delete-user` | Web -> Server | 删除 user。 | 删除/延后。 |
+| `admin:list-networks` | Web -> Server | Admin network inventory。 | 删除/延后。 |
+| `admin:delete-network` | Web -> Server | 以 admin 身份删除 network。 | 删除/延后；正常 owner delete 可保留。 |
+| `admin:list-devices` | Web -> Server | Admin device inventory。 | 删除/延后。 |
+| `admin:transfer-device-owner` | Web -> Server | 转移 device ownership。 | 删除/延后；更可能通过 device re-invite 支持。 |
+| `admin:list-agents` | Web -> Server | Admin agent inventory。 | 删除/延后。 |
+| `admin:delete-agent` | Web -> Server | 以 admin 身份删除任意 agent。 | 删除/延后。 |
 
 ## `/agent` Namespace
 
-Daemon clients connect to `/agent`.
+Daemon clients 连接到 `/agent`。
 
 ### Daemon -> Server
 
-| Event | Direction | Current Purpose | Rewrite Disposition |
+| 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `register` | Daemon -> Server | Register one agent. | Replace with device hello plus typed batch registration unless single-agent registration is still needed. |
-| `heartbeat` | Daemon -> Server | Refresh agent/device heartbeat and status. | Keep behavior, define explicit heartbeat DTO. |
-| `reply` | Daemon -> Server | Return agent text/artifact result for request. | Replace with `dispatch:result`. |
-| `error_event` | Daemon -> Server | Report agent execution or request error. | Replace with `dispatch:error` and device/agent error events. |
-| `agents:discovered` | Daemon -> Server | Send discovered agents, relayed to web. | Replace with typed discovery/report events. |
-| `device:register-agents` | Daemon -> Server | Batch register scanned agents and mark missing agents offline. | Keep behavior as `agent:register-batch`. |
-| `device:register-runtimes` | Daemon -> Server | Report installed runtimes. | Keep as `device:runtimes`. |
+| `register` | Daemon -> Server | 注册一个 agent。 | 替换为 device hello 加 typed batch registration，除非仍需要 single-agent registration。 |
+| `heartbeat` | Daemon -> Server | 刷新 agent/device heartbeat 与 status。 | 保留行为，定义显式 heartbeat DTO。 |
+| `reply` | Daemon -> Server | 返回某 request 的 agent text/artifact result。 | 替换为 `dispatch:result`。 |
+| `error_event` | Daemon -> Server | 报告 agent execution 或 request error。 | 替换为 `dispatch:error` 与 device/agent error events。 |
+| `agents:discovered` | Daemon -> Server | 发送 discovered agents，并转发给 web。 | 替换为 typed discovery/report events。 |
+| `device:register-agents` | Daemon -> Server | 批量注册 scanned agents，并把 missing agents 标为 offline。 | 保留行为为 `agent:register-batch`。 |
+| `device:register-runtimes` | Daemon -> Server | 上报 installed runtimes。 | 保留为 `device:runtimes`。 |
 
 ### Server -> Daemon
 
-| Event | Direction | Current Purpose | Rewrite Disposition |
+| 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `agents:discover` | Server -> Daemon | Request rescan. | Keep as `device:scan-requested`. |
-| `device:select-directory` | Server -> Daemon | Request native directory picker. | Keep, defer until custom agent setup. |
-| `dispatch` | Server -> Daemon | Execute an agent request. | Keep behavior as `dispatch:request`. |
-| `dispatch:cancel` | Server -> Daemon | Cancel pending/running request. | Keep. |
+| `agents:discover` | Server -> Daemon | 请求 rescan。 | 保留为 `device:scan-requested`。 |
+| `device:select-directory` | Server -> Daemon | 请求 native directory picker。 | 保留，延后到 custom agent setup。 |
+| `dispatch` | Server -> Daemon | 执行 agent request。 | 保留行为为 `dispatch:request`。 |
+| `dispatch:cancel` | Server -> Daemon | 取消 pending/running request。 | 保留。 |
 
 ## HTTP Routes
 
-| Route | Current Purpose | Rewrite Disposition |
+| Route | 当前目的 | 重写处置 |
 |---|---|---|
-| `GET /healthz` | Health check. | Keep. |
-| Artifact upload/download routes under `/api/networks/:networkId/artifacts/*` | Upload, preview, and download artifacts. | Keep behavior; define auth, network scoping, and metadata contract. |
-| Web proxy artifact upload route in `apps/web/app/api/networks/[networkId]/artifacts/upload/route.ts` | Frontend fallback/proxy upload. | Reevaluate. Prefer direct typed server route unless deployment requires proxy. |
+| `GET /healthz` | Health check。 | 保留。 |
+| `/api/networks/:networkId/artifacts/*` 下的 artifact upload/download routes | 上传、预览与下载 artifacts。 | 保留行为；定义 auth、network scoping 与 metadata contract。 |
+| `apps/web/app/api/networks/[networkId]/artifacts/upload/route.ts` 中的 Web proxy artifact upload route | Frontend fallback/proxy upload。 | 重新评估。除非 deployment 需要 proxy，否则优先使用 direct typed server route。 |
 
-## Current Protocol Problems
+## 当前协议问题
 
-- Event naming is inconsistent: singular and plural forms both exist (`device:*` and `devices:*`).
-- Some events do too much, especially `message:send`, `agent:create`, and invite/auth flows.
-- Current ack shapes are not uniform.
-- Some server-to-client responses use events where request acks would be clearer, such as `channel:history`.
-- Admin events exist without a fully specified product surface.
-- Current web client centralizes nearly all protocol calls in `apps/web/lib/socket.ts`.
-- Daemon protocol mixes agent registration, device registration, runtime report, dispatch, and discovery concerns.
+- Event naming 不一致：单数和复数形式都存在（`device:*` 与 `devices:*`）。
+- 一些 events 做得太多，尤其是 `message:send`、`agent:create` 与 invite/auth flows。
+- 当前 ack shapes 不统一。
+- 一些 server-to-client responses 使用 events，而 request acks 会更清晰，例如 `channel:history`。
+- Admin events 存在，但没有完整的产品表面规格。
+- 当前 web client 几乎把所有 protocol calls 都集中在 `apps/web/lib/socket.ts`。
+- Daemon protocol 混合了 agent registration、device registration、runtime report、dispatch 与 discovery concerns。
