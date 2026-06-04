@@ -14,6 +14,8 @@ describe('server-next socket handlers', () => {
       registerUser: vi.fn(async (payload) => makeSuccess({ payload })),
       loginUser: vi.fn(async (payload) => makeSuccess({ payload })),
       listTeams: vi.fn(async (payload) => makeSuccess({ payload })),
+      createChannel: vi.fn(async (payload) => makeSuccess({ payload })),
+      updateChannel: vi.fn(async (payload) => makeSuccess({ payload })),
       sendMessage: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
 
@@ -23,6 +25,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.auth.register,
       WEB_EVENTS.auth.login,
       WEB_EVENTS.team.list,
+      WEB_EVENTS.channel.create,
+      WEB_EVENTS.channel.update,
       WEB_EVENTS.message.send,
     ]);
     expect(socket.eventNames()).not.toContain('network:list');
@@ -37,6 +41,18 @@ describe('server-next socket handlers', () => {
       channelId: 'channel-1',
       body: 'hello',
     });
+    await socket.trigger(WEB_EVENTS.channel.create, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      name: 'ops',
+      visibility: 'private',
+    });
+    await socket.trigger(WEB_EVENTS.channel.update, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
+      title: 'Team-wide updates',
+    });
 
     expect(app.registerUser).toHaveBeenCalledWith({ username: 'shaw' });
     expect(app.sendMessage).toHaveBeenCalledWith({
@@ -44,6 +60,18 @@ describe('server-next socket handlers', () => {
       teamId: 'team-1',
       channelId: 'channel-1',
       body: 'hello',
+    });
+    expect(app.createChannel).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      name: 'ops',
+      visibility: 'private',
+    });
+    expect(app.updateChannel).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
+      title: 'Team-wide updates',
     });
   });
 

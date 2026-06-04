@@ -1,4 +1,5 @@
 import { WEB_EVENTS } from '../../../packages/contracts/src/index';
+import type { CreateChannelCommandDto, UpdateChannelCommandDto } from '../../../packages/contracts/src/index';
 
 export interface WebSocketTransport {
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
@@ -31,6 +32,8 @@ export interface WebSocketClient {
   register(input: RegisterInput): Promise<unknown>;
   login(input: LoginInput): Promise<unknown>;
   listTeams(input: ListTeamsInput): Promise<unknown>;
+  createChannel(input: CreateChannelCommandDto): Promise<unknown>;
+  updateChannel(input: UpdateChannelCommandDto): Promise<unknown>;
   sendMessage(input: SendMessageInput): Promise<unknown>;
 }
 
@@ -55,6 +58,12 @@ export function createWebSocketClient(transport: WebSocketTransport): WebSocketC
     },
     listTeams(input) {
       return transport.emitWithAck(WEB_EVENTS.team.list, input);
+    },
+    createChannel(input) {
+      return transport.emitWithAck(WEB_EVENTS.channel.create, input);
+    },
+    updateChannel(input) {
+      return transport.emitWithAck(WEB_EVENTS.channel.update, input);
     },
     sendMessage(input) {
       return transport.emitWithAck(WEB_EVENTS.message.send, input);

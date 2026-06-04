@@ -22,6 +22,8 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.auth.register, app, 'registerUser');
   bind(socket, WEB_EVENTS.auth.login, app, 'loginUser');
   bind(socket, WEB_EVENTS.team.list, app, 'listTeams');
+  bind(socket, WEB_EVENTS.channel.create, app, 'createChannel');
+  bind(socket, WEB_EVENTS.channel.update, app, 'updateChannel');
   bind(socket, WEB_EVENTS.message.send, app, 'sendMessage', (result) => {
     if (!options.dispatch || !isSendMessageAck(result)) {
       return;

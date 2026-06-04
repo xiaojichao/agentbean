@@ -67,12 +67,12 @@
 | 当前表面 | 状态 | 目标方向 |
 |---|---|---|
 | Channel list/snapshot | First Slice | 保留。 |
-| Channel create | First Slice | 先保留最小 public channel creation；private membership 可后续实现。 |
+| Channel create | Second Slice | 支持 public/private channel；private channel 自动包含 creator。 |
 | Channel join/history | First Slice | 保留，history 优先通过 ack result 返回。 |
 | `channel:add-member` / `channel:remove-member` | Keep | 保留给 private channel management。 |
 | `channel:add-agent` / `channel:remove-agent` | Keep | 保留给 channel-agent membership。 |
 | `channel:members` | Keep | 保留。 |
-| Channel update/rename/visibility | Defer | 保留给 channel settings。 |
+| Channel update/rename/visibility | Second Slice | 非默认频道 creator-only；默认 `all` 只允许 creator 更新 `title`。 |
 | Channel leave | Defer | 仅当 left/hidden channel UX 仍保留时实现。 |
 | Channel archive | Reevaluate | 延后或删除；需要产品决策。 |
 | Channel delete | Reevaluate | 延后；决定 hard-delete 还是 archive。 |

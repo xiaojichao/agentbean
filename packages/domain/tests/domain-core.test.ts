@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import {
   applyMissingScan,
+  canApplyChannelUpdate,
   canViewChannel,
+  channelHumanMembersForCreate,
   identityKeyFor,
   mergeAgentProjection,
   normalizeAdapterKind,
@@ -272,5 +274,38 @@ describe('Phase 1 agent identity and visibility rules', () => {
     expect(canViewChannel(privateChannel, { memberId: 'user-1', kind: 'human' })).toBe(true);
     expect(canViewChannel(privateChannel, { memberId: 'user-2', kind: 'human' })).toBe(false);
     expect(canViewChannel({ ...privateChannel, visibility: 'public' }, { memberId: 'user-2', kind: 'human' })).toBe(true);
+  });
+
+  test('keeps a private channel visible to its creator even when no members are supplied', () => {
+    expect(
+      channelHumanMembersForCreate({
+        visibility: 'private',
+        createdBy: 'user-1',
+        humanMemberIds: [],
+      }),
+    ).toEqual(['user-1']);
+  });
+
+  test('allows only the channel creator to manage ordinary channel settings', () => {
+    const channel = {
+      name: 'ops',
+      visibility: 'private' as const,
+      createdBy: 'user-1',
+    };
+
+    expect(canApplyChannelUpdate(channel, 'user-1', { name: 'war-room' })).toBe(true);
+    expect(canApplyChannelUpdate(channel, 'user-2', { name: 'war-room' })).toBe(false);
+  });
+
+  test('limits the default all channel to creator description updates', () => {
+    const allChannel = {
+      name: 'all',
+      visibility: 'public' as const,
+      createdBy: 'user-1',
+    };
+
+    expect(canApplyChannelUpdate(allChannel, 'user-1', { title: 'Team-wide updates' })).toBe(true);
+    expect(canApplyChannelUpdate(allChannel, 'user-1', { name: 'announcements' })).toBe(false);
+    expect(canApplyChannelUpdate(allChannel, 'user-2', { title: 'Team-wide updates' })).toBe(false);
   });
 });

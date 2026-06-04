@@ -9,10 +9,12 @@ import {
   type Ack,
   type AgentDto,
   type ChannelDto,
+  type CreateChannelCommandDto,
   type DeviceDto,
   type DispatchDto,
   type MessageDto,
   type TeamDto,
+  type UpdateChannelCommandDto,
   type UserDto,
 } from '../src/index';
 
@@ -97,11 +99,25 @@ describe('first-slice contract result shape', () => {
     };
     const ack: Ack<{ message: MessageDto; dispatches: DispatchDto[] }> =
       makeSuccess({ message, dispatches: [dispatch] });
+    const createChannel: CreateChannelCommandDto = {
+      userId: user.id,
+      teamId: team.id,
+      name: 'ops',
+      visibility: 'private',
+    };
+    const updateChannel: UpdateChannelCommandDto = {
+      userId: user.id,
+      teamId: team.id,
+      channelId: channel.id,
+      title: 'Team-wide updates',
+    };
 
     expect(ack.ok).toBe(true);
     expect(team.id).toBe(device.teamId);
     expect(agent.visibleTeamIds).toEqual(['team-1']);
     expect(message.meta?.routeReason).toBe('MENTION');
+    expect(createChannel.visibility).toBe('private');
+    expect(updateChannel.title).toBe('Team-wide updates');
   });
 
   test('exposes first-slice socket event constants without old network naming', () => {

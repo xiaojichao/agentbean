@@ -51,7 +51,7 @@ describe('server-next SQLite repositories', () => {
         repositories,
         clock: { now: () => 500 },
         ids: {
-          nextId: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1']),
+          nextId: createIds(['user-1', 'team-1', 'channel-1', 'channel-ops', 'message-1', 'dispatch-1', 'request-1']),
         },
       });
 
@@ -84,6 +84,28 @@ describe('server-next SQLite repositories', () => {
         channels: [{ id: 'channel-1', visibility: 'public' }],
       });
       await expect(
+        app.createChannel({
+          userId: 'user-1',
+          teamId: 'team-1',
+          name: 'ops',
+          visibility: 'private',
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        channel: { id: 'channel-ops', visibility: 'private', createdBy: 'user-1' },
+      });
+      await expect(
+        app.updateChannel({
+          userId: 'user-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          title: 'Team-wide updates',
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        channel: { id: 'channel-1', name: 'all', title: 'Team-wide updates' },
+      });
+      await expect(
         app.sendMessage({
           userId: 'user-1',
           teamId: 'team-1',
@@ -102,6 +124,12 @@ describe('server-next SQLite repositories', () => {
         currentTeamId: 'team-1',
       });
       expect(teamDb.prepare('SELECT user_id AS userId FROM channel_human_members WHERE channel_id = ?').get('channel-1')).toEqual({
+        userId: 'user-1',
+      });
+      expect(teamDb.prepare('SELECT description AS title FROM channels WHERE id = ?').get('channel-1')).toEqual({
+        title: 'Team-wide updates',
+      });
+      expect(teamDb.prepare('SELECT user_id AS userId FROM channel_human_members WHERE channel_id = ?').get('channel-ops')).toEqual({
         userId: 'user-1',
       });
       expect(teamDb.prepare('SELECT sender_kind AS senderKind, sender_id AS senderId FROM messages WHERE id = ?').get('message-1')).toEqual({
