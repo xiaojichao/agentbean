@@ -2,23 +2,18 @@
 
 This repository keeps Vercel Preview Deployments for web changes, but skips the Vercel build for changes that do not affect `apps/web`.
 
-## Required Vercel Setting
+## Repository Configuration
 
-Only a Vercel team member can apply this setting.
+The repository includes `vercel.json` with:
 
-@xiaojichao please configure the `web` project in Vercel:
+```json
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "ignoreCommand": "bash scripts/vercel-ignore-build.sh"
+}
+```
 
-1. Open Vercel Dashboard.
-2. Select the `web` project.
-3. Go to `Settings` -> `Git`.
-4. Enable `Automatically expose System Environment Variables` if it is not already enabled.
-5. Set `Ignored Build Step` to:
-
-   ```bash
-   bash scripts/vercel-ignore-build.sh
-   ```
-
-6. Save the project settings.
+This overrides the Vercel project's ignored build step for deployments from this repository.
 
 ## Behavior
 
