@@ -3,6 +3,7 @@ import {
   applyAgentSnapshot,
   applyChannelSnapshot,
   appendConversationMessage,
+  applyDispatchStatus,
   createSessionStore,
   createWebSocketClient,
   type WebSocketTransport,
@@ -68,6 +69,26 @@ describe('web-next first-slice state boundaries', () => {
     });
     expect(JSON.stringify(transport.emitted[0]?.[1])).not.toContain('sender');
   });
+
+  test('dispatch status updates replace matching dispatch without reordering unrelated statuses', () => {
+    expect(
+      applyDispatchStatus(
+        [
+          { id: 'dispatch-1', status: 'queued' },
+          { id: 'dispatch-2', status: 'running' },
+        ],
+        { id: 'dispatch-1', status: 'completed' },
+      ),
+    ).toEqual([
+      { id: 'dispatch-1', status: 'completed' },
+      { id: 'dispatch-2', status: 'running' },
+    ]);
+
+    expect(applyDispatchStatus([{ id: 'dispatch-1', status: 'queued' }], { id: 'dispatch-2', status: 'running' })).toEqual([
+      { id: 'dispatch-1', status: 'queued' },
+      { id: 'dispatch-2', status: 'running' },
+    ]);
+  });
 });
 
 class RecordingTransport implements WebSocketTransport {
@@ -76,5 +97,9 @@ class RecordingTransport implements WebSocketTransport {
   async emitWithAck(event: string, payload: unknown): Promise<unknown> {
     this.emitted.push([event, payload]);
     return { ok: true };
+  }
+
+  on(): void {
+    // State tests only exercise command emission.
   }
 }
