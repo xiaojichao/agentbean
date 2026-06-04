@@ -3833,15 +3833,20 @@ describe('message:send', () => {
     });
     expect(ch.ok).toBe(true);
 
+    const messages: any[] = [];
+    web.on('channel:message', (m: any) => messages.push(m));
+
     const history = await new Promise<any>((resolve) => {
       web.once('channel:history', resolve);
       web.emit('channel:join', { channelId: ch.channel.id });
     });
-    const intro = history.messages.find((m: any) => m.senderKind === 'agent' && m.body === 'hi I am A1');
-    expect(JSON.parse(intro.metaJson)).toMatchObject({ senderName: 'A1' });
+    const findIntro = () => [
+      ...history.messages,
+      ...messages,
+    ].find((m: any) => m.senderKind === 'agent' && m.body === 'hi I am A1');
+    await waitFor(() => Boolean(findIntro()));
+    expect(JSON.parse(findIntro().metaJson)).toMatchObject({ senderName: 'A1' });
 
-    const messages: any[] = [];
-    web.on('channel:message', (m: any) => messages.push(m));
     await new Promise((r) => setTimeout(r, 200));
 
     const ack = await new Promise<any>((resolve) => {

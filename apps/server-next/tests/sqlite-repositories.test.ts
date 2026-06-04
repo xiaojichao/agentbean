@@ -1,0 +1,451 @@
+import { createRequire } from 'node:module';
+import { describe, expect, test } from 'vitest';
+import { createServerNextUseCases } from '../src/application/usecases';
+import {
+  applyGlobalMigrations,
+  applyTeamMigrations,
+  createSqliteRepositories,
+  type SqliteDatabase,
+} from '../src/infra/sqlite/repositories';
+
+type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { close(): void };
+
+const requireFromWorkspace = createRequire(import.meta.url);
+const Database = loadBetterSqlite3();
+
+describe('server-next SQLite repositories', () => {
+  test('applies executable first-slice migrations to global and team databases', () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      expect(tableNames(globalDb)).toEqual(
+        expect.arrayContaining([
+          'users',
+          'teams',
+          'team_members',
+          'devices',
+          'device_runtimes',
+          'agents',
+          'agent_identity_links',
+          'agent_publications',
+        ]),
+      );
+      expect(tableNames(teamDb)).toEqual(
+        expect.arrayContaining([
+          'channels',
+          'channel_human_members',
+          'channel_agent_members',
+          'messages',
+          'dispatches',
+        ]),
+      );
+    } finally {
+      close();
+    }
+  });
+
+  test('persists register, login, message, and dispatch use cases with SQLite', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 500 },
+        ids: {
+          nextId: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1']),
+        },
+      });
+
+      await expect(
+        app.registerUser({ username: 'Shaw', password: 'secret', teamName: 'AgentBean' }),
+      ).resolves.toMatchObject({
+        ok: true,
+        user: { id: 'user-1', username: 'shaw', primaryTeamId: 'team-1' },
+        currentTeam: { id: 'team-1', path: 'agentbean', currentUserRole: 'owner' },
+        defaultChannel: { id: 'channel-1', name: 'all' },
+      });
+      await repositories.agents.upsert({
+        id: 'agent-1',
+        primaryTeamId: 'team-1',
+        visibleTeamIds: ['team-1'],
+        name: 'Codex',
+        adapterKind: 'codex',
+        category: 'executor-hosted',
+        source: 'scanned',
+        status: 'online',
+        lastSeenAt: 500,
+      });
+
+      await expect(app.loginUser({ username: 'shaw', password: 'secret' })).resolves.toMatchObject({
+        ok: true,
+        currentTeam: { id: 'team-1', currentUserRole: 'owner' },
+      });
+      await expect(app.listChannels({ teamId: 'team-1', userId: 'user-1' })).resolves.toMatchObject({
+        ok: true,
+        channels: [{ id: 'channel-1', visibility: 'public' }],
+      });
+      await expect(
+        app.sendMessage({
+          userId: 'user-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          body: '@Codex hello',
+          senderId: 'client-spoof',
+          senderKind: 'agent',
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        message: { id: 'message-1', senderKind: 'human', senderId: 'user-1' },
+        dispatches: [{ id: 'dispatch-1', requestId: 'request-1', agentId: 'agent-1' }],
+      });
+
+      expect(globalDb.prepare('SELECT current_team_id AS currentTeamId FROM users WHERE id = ?').get('user-1')).toEqual({
+        currentTeamId: 'team-1',
+      });
+      expect(teamDb.prepare('SELECT user_id AS userId FROM channel_human_members WHERE channel_id = ?').get('channel-1')).toEqual({
+        userId: 'user-1',
+      });
+      expect(teamDb.prepare('SELECT sender_kind AS senderKind, sender_id AS senderId FROM messages WHERE id = ?').get('message-1')).toEqual({
+        senderKind: 'human',
+        senderId: 'user-1',
+      });
+    } finally {
+      close();
+    }
+  });
+
+  test('marks stale queued dispatches as timed out without deleting the original message', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 1000 },
+        ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1']) },
+      });
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+      await repositories.agents.upsert({
+        id: 'agent-1',
+        primaryTeamId: 'team-1',
+        visibleTeamIds: ['team-1'],
+        name: 'Codex',
+        adapterKind: 'codex',
+        category: 'executor-hosted',
+        source: 'scanned',
+        status: 'online',
+        lastSeenAt: 1000,
+      });
+      await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex hello' });
+
+      await expect(app.failTimedOutDispatches({ olderThan: 1001 })).resolves.toMatchObject({
+        ok: true,
+        dispatches: [{ id: 'dispatch-1', status: 'failed', error: 'DISPATCH_TIMEOUT' }],
+      });
+      expect(teamDb.prepare('SELECT body FROM messages WHERE id = ?').get('message-1')).toEqual({ body: '@Codex hello' });
+    } finally {
+      close();
+    }
+  });
+
+  test('reconciles device hello, replaces runtimes, and dedupes discovered agents', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 700 },
+        ids: {
+          nextId: createIds([
+            'user-1',
+            'team-1',
+            'channel-1',
+            'device-1',
+            'runtime-1',
+            'runtime-2',
+            'runtime-3',
+            'agent-1',
+          ]),
+        },
+      });
+
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+
+      await expect(
+        app.deviceHello({
+          teamId: 'team-1',
+          ownerId: 'user-1',
+          machineId: 'machine-1',
+          profileId: 'default',
+          hostname: 'First Host',
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        device: { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'online' },
+      });
+      await expect(
+        app.deviceHello({
+          teamId: 'team-1',
+          ownerId: 'user-1',
+          machineId: 'machine-1',
+          profileId: 'default',
+          hostname: 'Renamed Host',
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        device: { id: 'device-1', name: 'Renamed Host' },
+      });
+      expect(globalDb.prepare('SELECT COUNT(*) AS count FROM devices').get()).toEqual({ count: 1 });
+
+      await expect(
+        app.reportDeviceRuntimes({
+          teamId: 'team-1',
+          deviceId: 'device-1',
+          runtimes: [
+            {
+              adapterKind: 'codex-cli',
+              name: 'Codex CLI',
+              command: '/Applications/Codex',
+              cwd: '/Work/AgentBean/',
+              version: '1.0.0',
+            },
+            {
+              adapterKind: 'claude',
+              name: 'Claude Code',
+              command: '/Applications/Claude',
+            },
+          ],
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        runtimes: [
+          { id: 'runtime-1', adapterKind: 'codex', name: 'Codex CLI' },
+          { id: 'runtime-2', adapterKind: 'claude-code', name: 'Claude Code' },
+        ],
+      });
+      await app.reportDeviceRuntimes({
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI', command: '/Applications/Codex' }],
+      });
+      expect(globalDb.prepare('SELECT COUNT(*) AS count FROM device_runtimes WHERE device_id = ?').get('device-1')).toEqual({
+        count: 1,
+      });
+
+      await expect(
+        app.registerDiscoveredAgents({
+          teamId: 'team-1',
+          deviceId: 'device-1',
+          agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        agents: [{ id: 'agent-1', adapterKind: 'codex', name: 'Codex', status: 'online' }],
+        missingOfflineIds: [],
+      });
+      await expect(
+        app.registerDiscoveredAgents({
+          teamId: 'team-1',
+          deviceId: 'device-1',
+          agents: [{ name: 'codex', adapterKind: 'codex', category: 'executor-hosted' }],
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        agents: [{ id: 'agent-1', name: 'codex' }],
+      });
+      expect(globalDb.prepare('SELECT COUNT(*) AS count FROM agents').get()).toEqual({ count: 1 });
+      expect(globalDb.prepare('SELECT agent_id AS agentId FROM agent_identity_links').get()).toEqual({
+        agentId: 'agent-1',
+      });
+
+      await expect(
+        app.registerDiscoveredAgents({ teamId: 'team-1', deviceId: 'device-1', agents: [] }),
+      ).resolves.toMatchObject({
+        ok: true,
+        agents: [],
+        missingOfflineIds: ['agent-1'],
+      });
+      await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+        ok: true,
+        agents: [{ id: 'agent-1', status: 'offline' }],
+      });
+    } finally {
+      close();
+    }
+  });
+
+  test('persists dispatch result as an agent message and completed dispatch', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 900 },
+        ids: {
+          nextId: createIds([
+            'user-1',
+            'team-1',
+            'channel-1',
+            'device-1',
+            'agent-1',
+            'message-1',
+            'dispatch-1',
+            'request-1',
+            'reply-1',
+          ]),
+        },
+      });
+
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+      await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' });
+      await app.registerDiscoveredAgents({
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        agents: [{ name: 'Codex', adapterKind: 'codex', category: 'executor-hosted' }],
+      });
+      await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex hello' });
+
+      await expect(
+        app.receiveDispatchResult({
+          dispatchId: 'dispatch-1',
+          agentId: 'agent-1',
+          body: 'done',
+          artifactIds: ['artifact-1'],
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        dispatch: { id: 'dispatch-1', status: 'completed', completedAt: 900 },
+        message: { id: 'reply-1', senderKind: 'agent', senderId: 'agent-1', body: 'done' },
+      });
+
+      expect(teamDb.prepare('SELECT status, completed_at AS completedAt FROM dispatches WHERE id = ?').get('dispatch-1')).toEqual({
+        status: 'completed',
+        completedAt: 900,
+      });
+      expect(
+        teamDb
+          .prepare('SELECT sender_kind AS senderKind, sender_id AS senderId, body, meta_json AS metaJson FROM messages WHERE id = ?')
+          .get('reply-1'),
+      ).toEqual({
+        senderKind: 'agent',
+        senderId: 'agent-1',
+        body: 'done',
+        metaJson: JSON.stringify({ dispatchId: 'dispatch-1', artifactIds: ['artifact-1'] }),
+      });
+    } finally {
+      close();
+    }
+  });
+
+  test('records dispatch error without appending an agent reply', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 950 },
+        ids: {
+          nextId: createIds([
+            'user-1',
+            'team-1',
+            'channel-1',
+            'device-1',
+            'agent-1',
+            'message-1',
+            'dispatch-1',
+            'request-1',
+          ]),
+        },
+      });
+
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+      await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' });
+      await app.registerDiscoveredAgents({
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        agents: [{ name: 'Codex', adapterKind: 'codex', category: 'executor-hosted' }],
+      });
+      await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex hello' });
+
+      await expect(
+        app.receiveDispatchError({
+          dispatchId: 'dispatch-1',
+          agentId: 'agent-1',
+          error: 'executor failed',
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        dispatch: { id: 'dispatch-1', status: 'failed', error: 'executor failed' },
+      });
+
+      expect(
+        teamDb.prepare('SELECT status, error_message AS errorMessage, completed_at AS completedAt FROM dispatches WHERE id = ?').get('dispatch-1'),
+      ).toEqual({
+        status: 'failed',
+        errorMessage: 'executor failed',
+        completedAt: 950,
+      });
+      expect(teamDb.prepare("SELECT COUNT(*) AS count FROM messages WHERE sender_kind = 'agent'").get()).toEqual({ count: 0 });
+      expect(globalDb.prepare('SELECT status, last_error AS lastError FROM agents WHERE id = ?').get('agent-1')).toEqual({
+        status: 'offline',
+        lastError: 'executor failed',
+      });
+    } finally {
+      close();
+    }
+  });
+});
+
+function openMigratedDatabases() {
+  const globalDb = new Database(':memory:');
+  const teamDb = new Database(':memory:');
+  applyGlobalMigrations(globalDb);
+  applyTeamMigrations(teamDb);
+  return {
+    globalDb,
+    teamDb,
+    close() {
+      globalDb.close();
+      teamDb.close();
+    },
+  };
+}
+
+function tableNames(db: SqliteDatabase): string[] {
+  return db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+    .all()
+    .map((row) => (row as { name: string }).name);
+}
+
+function createIds(ids: string[]) {
+  let index = 0;
+  return () => {
+    const id = ids[index];
+    index += 1;
+    if (!id) {
+      throw new Error('Test id sequence exhausted');
+    }
+    return id;
+  };
+}
+
+function loadBetterSqlite3(): BetterSqlite3Constructor {
+  const candidates = [
+    () => requireFromWorkspace('better-sqlite3') as BetterSqlite3Constructor,
+    () => {
+      const requireFromServer = createRequire(new URL('../../server/package.json', import.meta.url));
+      return requireFromServer('better-sqlite3') as BetterSqlite3Constructor;
+    },
+  ];
+
+  for (const loadCandidate of candidates) {
+    try {
+      const Candidate = loadCandidate();
+      const db = new Candidate(':memory:');
+      db.close();
+      return Candidate;
+    } catch {
+      // Try the next installed copy; native modules are ABI-specific.
+    }
+  }
+  throw new Error('No compatible better-sqlite3 installation found for this Node.js runtime');
+}

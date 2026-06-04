@@ -1,0 +1,26 @@
+{
+  "name": "@agentbean/server-next",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@agentbean/contracts": "workspace:*",
+    "@agentbean/domain": "workspace:*",
+    "better-sqlite3": "^12.10.0",
+    "socket.io": "^4.7.5",
+    "socket.io-client": "^4.8.3",
+    "ulid": "^2.3.0"
+  }
+}
