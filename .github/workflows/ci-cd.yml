@@ -36,10 +36,6 @@ jobs:
             app_dir: apps/daemon
             lockfile: apps/daemon/package-lock.json
 
-    defaults:
-      run:
-        working-directory: ${{ matrix.app_dir }}
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -86,15 +82,18 @@ jobs:
 
       - name: Install dependencies
         if: steps.changes.outputs.should_validate == 'true'
-        run: npm ci
+        working-directory: ${{ matrix.app_dir }}
+        run: npm --workspaces=false ci
 
       - name: Run tests
         if: steps.changes.outputs.should_validate == 'true'
-        run: npm test
+        working-directory: ${{ matrix.app_dir }}
+        run: npm --workspaces=false test -- --api.host 127.0.0.1
 
       - name: Build
         if: steps.changes.outputs.should_validate == 'true'
-        run: npm run build
+        working-directory: ${{ matrix.app_dir }}
+        run: npm --workspaces=false run build
 
   deploy:
     name: Deploy production
@@ -176,8 +175,8 @@ jobs:
         if: env.NPM_TOKEN != ''
         working-directory: apps/daemon
         run: |
-          npm ci
-          npm run build
+          npm --workspaces=false ci
+          npm --workspaces=false run build
           PKG_VERSION="$(node -p "require('./package.json').version")"
           if npm view "@agentbean/daemon@$PKG_VERSION" version >/dev/null 2>&1; then
             echo "::notice::@agentbean/daemon@$PKG_VERSION is already published; skipping npm publish."
