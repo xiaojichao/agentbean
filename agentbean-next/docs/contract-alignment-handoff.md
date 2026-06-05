@@ -76,7 +76,7 @@
 
 ### 现象
 
-`packages/contracts/src/dispatch.ts` 当前状态是 `queued`、`accepted`、`running`、`completed`、`failed`、`cancelled`、`timeout`。但 `agentbean-next/docs/contracts-dto.md` 与 `agentbean-next/docs/verification-matrix.md` 使用的是 `succeeded` 与 `timed_out`。
+`packages/contracts/src/dispatch.ts` 当前状态是 `queued`、`accepted`、`running`、`completed`、`failed`、`cancelled`、`timeout`。但 `agentbean-next/docs/contracts-dto.md` 还包含 `sent`、`succeeded` 与 `timed_out`，`agentbean-next/docs/verification-matrix.md` 也使用的是 `succeeded` 与 `timed_out`。
 
 ### 影响
 
@@ -85,7 +85,7 @@ UI 状态判断、dispatch timeout 测试命名、server repository 状态值和
 ### 推荐修改
 
 - 先由负责人确认 canonical 状态命名。
-- 建议优先保留文档中的 `succeeded` 与 `timed_out` 作为目标契约，因为它们比 `completed` 与 `timeout` 更明确地区分成功完成和超时失败。
+- 建议优先保留文档中的 `succeeded` 与 `timed_out` 作为目标契约，因为它们比 `completed` 与 `timeout` 更明确地区分成功完成和超时失败；同时确认 `sent` 是否属于目标状态机。
 - 无论最终选择哪套，都必须一次性对齐 `packages/contracts`、server repository/use case、daemon result handling、web state helper、测试 fixture 与所有 docs。
 
 ### 验收标准
