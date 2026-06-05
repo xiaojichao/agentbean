@@ -40,17 +40,16 @@ export type ID = string;
 export type UnixMs = number;
 
 export type ErrorCode =
+  | "BAD_REQUEST"
   | "UNAUTHENTICATED"
   | "FORBIDDEN"
   | "NOT_FOUND"
-  | "VALIDATION_FAILED"
+  | "VALIDATION_ERROR"
   | "CONFLICT"
   | "DEVICE_OFFLINE"
   | "AGENT_OFFLINE"
   | "DISPATCH_TIMEOUT"
-  | "EXECUTION_FAILED"
-  | "UPLOAD_FAILED"
-  | "INTERNAL";
+  | "INTERNAL_ERROR";
 
 export type Ack<T extends object = {}> =
   | ({ ok: true } & T)

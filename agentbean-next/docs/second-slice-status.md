@@ -39,7 +39,6 @@ npm run build:packages
 
 这些不属于第二切片：
 
-- 成员弹窗 UI shell 与组件渲染。
 - 成员弹窗 UI shell 与组件渲染；第七切片已补齐 human/agent member 详情 DTO。
 - Channel archive/delete/leave。
 - DM thread 创建与 agent DM。
