@@ -270,6 +270,72 @@ describe('server-next Socket.IO namespaces', () => {
       expect(agentSnapshots.at(-1)).toEqual([{ id: 'agent-1', status: 'offline' }]);
     });
   });
+
+  test('refreshes device snapshots and runtimes after daemon device reports', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-all', 'device-1', 'runtime-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const web = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      web.disconnect();
+      agent.disconnect();
+    });
+
+    await web.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+
+    const deviceSnapshots: Array<Array<{ id: string; status: string }>> = [];
+    const runtimeEvents: Array<{ deviceId: string; runtimes: Array<{ id: string; name: string }> }> = [];
+    web.on(WEB_EVENTS.device.snapshot, (devices) => {
+      deviceSnapshots.push(deviceSummaries(devices));
+    });
+    web.on(WEB_EVENTS.device.runtimes, (payload) => {
+      runtimeEvents.push(runtimeSummary(payload));
+    });
+
+    await expect(
+      web.emitWithAck(WEB_EVENTS.device.list, { userId: 'user-1', teamId: 'team-1' }),
+    ).resolves.toMatchObject({ ok: true, devices: [] });
+    await eventually(async () => {
+      expect(deviceSnapshots.at(-1)).toEqual([]);
+    });
+
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'device-1', status: 'online' } });
+    await eventually(async () => {
+      expect(deviceSnapshots.at(-1)).toEqual([{ id: 'device-1', status: 'online' }]);
+    });
+
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.device.runtimes, {
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }],
+      }),
+    ).resolves.toMatchObject({ ok: true, runtimes: [{ id: 'runtime-1', name: 'Codex CLI' }] });
+    await eventually(async () => {
+      expect(runtimeEvents.at(-1)).toEqual({
+        deviceId: 'device-1',
+        runtimes: [{ id: 'runtime-1', name: 'Codex CLI' }],
+      });
+    });
+  });
 });
 
 async function startSocketServer(app: ReturnType<typeof createInMemoryServerNext>) {
@@ -347,4 +413,35 @@ function agentSummaries(payload: unknown): Array<{ id: string; status: string }>
     }
     return { id: String(agent.id), status: String(agent.status) };
   });
+}
+
+function deviceSummaries(payload: unknown): Array<{ id: string; status: string }> {
+  if (!Array.isArray(payload)) {
+    throw new Error('Expected device snapshot payload to be an array');
+  }
+  return payload.map((device) => {
+    if (!device || typeof device !== 'object' || !('id' in device) || !('status' in device)) {
+      throw new Error('Expected device snapshot item to include id and status');
+    }
+    return { id: String(device.id), status: String(device.status) };
+  });
+}
+
+function runtimeSummary(payload: unknown): { deviceId: string; runtimes: Array<{ id: string; name: string }> } {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('Expected device runtimes payload to be an object');
+  }
+  const candidate = payload as { deviceId?: unknown; runtimes?: unknown };
+  if (typeof candidate.deviceId !== 'string' || !Array.isArray(candidate.runtimes)) {
+    throw new Error('Expected device runtimes payload to include deviceId and runtimes');
+  }
+  return {
+    deviceId: candidate.deviceId,
+    runtimes: candidate.runtimes.map((runtime) => {
+      if (!runtime || typeof runtime !== 'object' || !('id' in runtime) || !('name' in runtime)) {
+        throw new Error('Expected runtime item to include id and name');
+      }
+      return { id: String(runtime.id), name: String(runtime.name) };
+    }),
+  };
 }

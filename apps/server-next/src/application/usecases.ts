@@ -15,6 +15,7 @@ export interface ServerNextUseCases {
   registerUser(input: RegisterUserInput): Promise<Ack<RegisterUserResult>>;
   loginUser(input: LoginUserInput): Promise<Ack<LoginUserResult>>;
   listTeams(input: { userId: string }): Promise<Ack<{ teams: TeamDto[] }>>;
+  listDevices(input: { teamId: string; userId: string }): Promise<Ack<{ devices: DeviceDto[] }>>;
   deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto }>>;
   reportDeviceRuntimes(input: ReportDeviceRuntimesInput): Promise<Ack<{ runtimes: RuntimeDto[] }>>;
   registerDiscoveredAgents(input: RegisterDiscoveredAgentsInput): Promise<Ack<RegisterDiscoveredAgentsResult>>;
@@ -308,6 +309,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
 
       return makeSuccess({ device: toDeviceDto(device) });
+    },
+
+    async listDevices(deviceListInput) {
+      if (!(await repositories.teams.isMember(deviceListInput.teamId, deviceListInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      return makeSuccess({
+        devices: (await repositories.devices.listByTeam(deviceListInput.teamId)).map(toDeviceDto),
+      });
     },
 
     async reportDeviceRuntimes(runtimeInput) {

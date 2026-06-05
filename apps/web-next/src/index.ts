@@ -5,9 +5,11 @@ import type {
   ChannelDto,
   ChannelHumanMemberCommandDto,
   CreateChannelCommandDto,
+  DeviceDto,
   DispatchDto,
   ListChannelMembersCommandDto,
   MessageDto,
+  RuntimeDto,
   UpdateChannelCommandDto,
 } from '../../../packages/contracts/src/index';
 
@@ -48,8 +50,10 @@ export interface WebSocketClient {
   register(input: RegisterInput): Promise<unknown>;
   login(input: LoginInput): Promise<unknown>;
   listTeams(input: ListTeamsInput): Promise<unknown>;
+  listDevices(input: SubscribeInput, onSnapshot?: (devices: DeviceDto[]) => void): Promise<unknown>;
   subscribeAgents(input: SubscribeInput, onSnapshot: (agents: AgentDto[]) => void): Promise<unknown>;
   subscribeChannels(input: SubscribeInput, onSnapshot: (channels: ChannelDto[]) => void): Promise<unknown>;
+  onDeviceRuntimes(handler: (payload: { deviceId: string; runtimes: RuntimeDto[] }) => void): void;
   onChannelMessage(handler: (message: MessageDto) => void): void;
   onDispatchStatus(handler: (dispatch: DispatchDto) => void): void;
   createChannel(input: CreateChannelCommandDto): Promise<unknown>;
@@ -76,8 +80,10 @@ export interface SessionStore {
 export function createWebSocketClient(transport: WebSocketTransport): WebSocketClient {
   let agentSubscription: SubscribeInput | undefined;
   let channelSubscription: SubscribeInput | undefined;
+  let deviceSubscription: SubscribeInput | undefined;
   let onAgentSnapshot: ((agents: AgentDto[]) => void) | undefined;
   let onChannelSnapshot: ((channels: ChannelDto[]) => void) | undefined;
+  let onDeviceSnapshot: ((devices: DeviceDto[]) => void) | undefined;
 
   transport.on('connect', () => {
     if (agentSubscription) {
@@ -86,12 +92,18 @@ export function createWebSocketClient(transport: WebSocketTransport): WebSocketC
     if (channelSubscription) {
       void transport.emitWithAck(WEB_EVENTS.channel.subscribe, channelSubscription);
     }
+    if (deviceSubscription) {
+      void transport.emitWithAck(WEB_EVENTS.device.list, deviceSubscription);
+    }
   });
   transport.on(WEB_EVENTS.agent.snapshot, (payload) => {
     onAgentSnapshot?.(payload as AgentDto[]);
   });
   transport.on(WEB_EVENTS.channel.snapshot, (payload) => {
     onChannelSnapshot?.(payload as ChannelDto[]);
+  });
+  transport.on(WEB_EVENTS.device.snapshot, (payload) => {
+    onDeviceSnapshot?.(payload as DeviceDto[]);
   });
 
   return {
@@ -103,6 +115,11 @@ export function createWebSocketClient(transport: WebSocketTransport): WebSocketC
     },
     listTeams(input) {
       return transport.emitWithAck(WEB_EVENTS.team.list, input);
+    },
+    listDevices(input, onSnapshot) {
+      deviceSubscription = input;
+      onDeviceSnapshot = onSnapshot;
+      return transport.emitWithAck(WEB_EVENTS.device.list, input);
     },
     subscribeAgents(input, onSnapshot) {
       agentSubscription = input;
@@ -122,6 +139,11 @@ export function createWebSocketClient(transport: WebSocketTransport): WebSocketC
     onDispatchStatus(handler) {
       transport.on(WEB_EVENTS.message.dispatchStatus, (payload) => {
         handler(payload as DispatchDto);
+      });
+    },
+    onDeviceRuntimes(handler) {
+      transport.on(WEB_EVENTS.device.runtimes, (payload) => {
+        handler(payload as { deviceId: string; runtimes: RuntimeDto[] });
       });
     },
     createChannel(input) {

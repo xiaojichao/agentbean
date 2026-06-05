@@ -22,6 +22,7 @@ interface WebSocketSubscription {
   socket: SocketLike;
   channels?: ChannelSubscription;
   agents?: AgentSubscription;
+  devices?: ChannelSubscription;
 }
 
 export function attachServerNextNamespaces(server: SocketServerLike, app: ServerNextUseCases): void {
@@ -65,6 +66,19 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         socket.emit?.(WEB_EVENTS.agent.snapshot, result.agents);
       }
     });
+    socket.on(WEB_EVENTS.device.list, async (payload, ack) => {
+      const input = asDeviceSubscription(payload);
+      if (!input) {
+        ack?.({ ok: false, error: 'VALIDATION_ERROR', message: 'Invalid device list payload' });
+        return;
+      }
+      const result = await app.listDevices(input);
+      ack?.(result);
+      if (result.ok) {
+        subscriber.devices = input;
+        socket.emit?.(WEB_EVENTS.device.snapshot, result.devices);
+      }
+    });
     registerWebSocketHandlers(socket, app, {
       dispatch(request) {
         agentNamespace.emit?.(AGENT_EVENTS.dispatch.request, request);
@@ -83,6 +97,17 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
   });
   agentNamespace.on('connection', (socket) => {
     registerAgentSocketHandlers(socket, app, {
+      async afterDeviceMutation(payload, result) {
+        if (!isSuccessAck(result)) {
+          return;
+        }
+        const teamId = payloadTeamId(payload) ?? resultDeviceTeamId(result);
+        if (!teamId) {
+          return;
+        }
+        await refreshDeviceSubscribers(webSubscribers, app, teamId);
+        emitDeviceRuntimes(webSubscribers, teamId, result);
+      },
       async afterAgentMutation(payload, result) {
         if (!isSuccessAck(result)) {
           return;
@@ -141,6 +166,35 @@ function asChannelSubscription(payload: unknown): ChannelSubscription | null {
 }
 
 const asAgentSubscription = asChannelSubscription;
+const asDeviceSubscription = asChannelSubscription;
+
+async function refreshDeviceSubscribers(
+  subscribers: Set<WebSocketSubscription>,
+  app: ServerNextUseCases,
+  teamId: string,
+): Promise<void> {
+  for (const subscriber of subscribers) {
+    if (subscriber.devices?.teamId !== teamId) {
+      continue;
+    }
+    const result = await app.listDevices(subscriber.devices);
+    if (result.ok) {
+      subscriber.socket.emit?.(WEB_EVENTS.device.snapshot, result.devices);
+    }
+  }
+}
+
+function emitDeviceRuntimes(subscribers: Set<WebSocketSubscription>, teamId: string, result: unknown): void {
+  const runtimesPayload = resultRuntimesPayload(result);
+  if (!runtimesPayload) {
+    return;
+  }
+  for (const subscriber of subscribers) {
+    if (subscriber.devices?.teamId === teamId) {
+      subscriber.socket.emit?.(WEB_EVENTS.device.runtimes, runtimesPayload);
+    }
+  }
+}
 
 function isSuccessAck(result: unknown): result is { ok: true } {
   return Boolean(result && typeof result === 'object' && (result as { ok?: unknown }).ok === true);
@@ -160,4 +214,30 @@ function resultDispatchTeamId(result: unknown): string | null {
   }
   const dispatch = (result as { dispatch?: { teamId?: unknown } }).dispatch;
   return typeof dispatch?.teamId === 'string' ? dispatch.teamId : null;
+}
+
+function resultDeviceTeamId(result: unknown): string | null {
+  if (!result || typeof result !== 'object') {
+    return null;
+  }
+  const device = (result as { device?: { teamId?: unknown } }).device;
+  return typeof device?.teamId === 'string' ? device.teamId : null;
+}
+
+function resultRuntimesPayload(result: unknown): { deviceId: string; runtimes: unknown[] } | null {
+  if (!result || typeof result !== 'object') {
+    return null;
+  }
+  const candidate = result as { runtimes?: unknown };
+  if (!Array.isArray(candidate.runtimes) || candidate.runtimes.length === 0) {
+    return null;
+  }
+  const firstRuntime = candidate.runtimes[0] as { deviceId?: unknown };
+  if (typeof firstRuntime.deviceId !== 'string') {
+    return null;
+  }
+  return {
+    deviceId: firstRuntime.deviceId,
+    runtimes: candidate.runtimes,
+  };
 }

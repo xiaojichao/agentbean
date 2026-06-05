@@ -17,6 +17,7 @@ export interface WebSocketHandlerOptions {
 }
 
 export interface AgentSocketHandlerOptions {
+  afterDeviceMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
 
@@ -60,8 +61,10 @@ export function registerAgentSocketHandlers(
   app: ServerNextUseCases,
   options: AgentSocketHandlerOptions = {},
 ): void {
-  bind(socket, AGENT_EVENTS.device.hello, app, 'deviceHello');
-  bind(socket, AGENT_EVENTS.device.runtimes, app, 'reportDeviceRuntimes');
+  const afterDeviceMutation = (payload: unknown, result: unknown) =>
+    options.afterDeviceMutation?.(payload, result);
+  bind(socket, AGENT_EVENTS.device.hello, app, 'deviceHello', afterDeviceMutation);
+  bind(socket, AGENT_EVENTS.device.runtimes, app, 'reportDeviceRuntimes', afterDeviceMutation);
   const afterAgentMutation = (payload: unknown, result: unknown) =>
     options.afterAgentMutation?.(payload, result);
   bind(socket, AGENT_EVENTS.agent.registerBatch, app, 'registerDiscoveredAgents', afterAgentMutation);

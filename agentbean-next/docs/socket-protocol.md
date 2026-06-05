@@ -171,7 +171,7 @@ Ack<{ humans: HumanMemberDto[]; agents: AgentDto[] }>
 客户端：
 
 ```ts
-{ teamId: string }
+{ userId: string; teamId: string }
 ```
 
 Ack：
@@ -179,6 +179,14 @@ Ack：
 ```ts
 Ack<{ devices: DeviceDto[] }>
 ```
+
+服务器行为：
+
+- `device:list` 同时作为 web client 的 device snapshot subscription 入口。
+- Subscribe 成功前，server 会确认 `userId` 是该 team 的 member。
+- Subscribe 成功后立即向该 socket 发送 `devices:snapshot`。
+- Daemon `device:hello` 改变 device projection 后，server 会刷新同 team active subscribers 的 `devices:snapshot`。
+- Daemon `device:runtimes` 成功后，server 会向同 team active subscribers 发送 `device:runtimes`。
 
 #### `device:get`
 
