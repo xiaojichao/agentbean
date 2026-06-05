@@ -34,7 +34,7 @@ else
   echo "(none)"
 fi
 
-if echo "$changed_files" | grep -E '^apps/web/' | grep -Ev '^apps/web/vercel\.json$' >/dev/null; then
+if echo "$changed_files" | grep -E '^apps/web/' | grep -Ev '^apps/web/(vercel\.json|\.nvmrc)$' >/dev/null; then
   echo "Web-related changes detected. Continue Vercel build."
   exit 1
 fi

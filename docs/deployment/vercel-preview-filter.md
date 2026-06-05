@@ -27,6 +27,6 @@ Vercel uses inverted exit codes for the ignored build step:
 The script continues Vercel builds for:
 
 - The `main` branch.
-- Changes under `apps/web/`, except `apps/web/vercel.json` configuration-only updates.
+- Changes under `apps/web/`, except configuration-only updates to `apps/web/vercel.json` and `apps/web/.nvmrc`.
 
 The script skips Vercel builds for docs-only, daemon-only, server-only, AgentBean Next rewrite, Vercel configuration-only, and GitHub Actions-only changes.
