@@ -47,7 +47,7 @@ npm run build:packages
 
 - 当前本机根目录未必已经安装 workspace dependencies。
 - 如果直接运行根脚本前尚未安装依赖，可先安装 workspace dependencies；临时验证时可使用 `apps/server/node_modules` 中已安装的 Vitest/TypeScript/Socket.IO。
-- SQLite 测试依赖 `better-sqlite3` native module；当前已验证可用的本机 Node 是 `/Users/shaw/.nvm/versions/node/v22.22.0/bin/node`。
+- SQLite 测试依赖 `better-sqlite3` native module；当前已验证可用的本机 Node 是 `/Users/shaw/.nvm/versions/node/v24.15.0/bin/node`。
 
 ## 暂未实现
 

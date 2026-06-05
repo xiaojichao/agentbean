@@ -71,4 +71,4 @@ npm run test:phase1
 npm run build:packages
 ```
 
-本机如果尚未安装根 workspace 依赖，可临时使用已安装的 `apps/server/node_modules` 运行同等测试；SQLite native module 当前与 Node 22 ABI 匹配。
+本机如果尚未安装根 workspace 依赖，可临时使用已安装的 `apps/server/node_modules` 运行同等测试；SQLite native module 当前与 Node v24.15.0 ABI 匹配。

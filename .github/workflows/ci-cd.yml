@@ -70,7 +70,7 @@ jobs:
         if: steps.changes.outputs.should_validate == 'true'
         uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24.15.0
           cache: npm
           cache-dependency-path: ${{ matrix.lockfile }}
 
@@ -116,7 +116,7 @@ jobs:
         if: env.RAILWAY_TOKEN != ''
         uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24.15.0
 
       - name: Install Railway CLI
         if: env.RAILWAY_TOKEN != ''
@@ -165,7 +165,7 @@ jobs:
         if: env.NPM_TOKEN != ''
         uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24.15.0
           registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: apps/daemon/package-lock.json
