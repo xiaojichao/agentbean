@@ -16,9 +16,12 @@ interface ChannelSubscription {
   teamId: string;
 }
 
+type AgentSubscription = ChannelSubscription;
+
 interface WebSocketSubscription {
   socket: SocketLike;
   channels?: ChannelSubscription;
+  agents?: AgentSubscription;
 }
 
 export function attachServerNextNamespaces(server: SocketServerLike, app: ServerNextUseCases): void {
@@ -44,6 +47,24 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         socket.emit?.(WEB_EVENTS.channel.snapshot, result.channels);
       }
     });
+    socket.on(WEB_EVENTS.agent.subscribe, async (payload, ack) => {
+      const input = asAgentSubscription(payload);
+      if (!input) {
+        ack?.({ ok: false, error: 'VALIDATION_ERROR', message: 'Invalid agent subscription payload' });
+        return;
+      }
+      const teamAccess = await app.listChannels(input);
+      if (!teamAccess.ok) {
+        ack?.(teamAccess);
+        return;
+      }
+      const result = await app.listVisibleAgents({ teamId: input.teamId });
+      ack?.(result);
+      if (result.ok) {
+        subscriber.agents = input;
+        socket.emit?.(WEB_EVENTS.agent.snapshot, result.agents);
+      }
+    });
     registerWebSocketHandlers(socket, app, {
       dispatch(request) {
         agentNamespace.emit?.(AGENT_EVENTS.dispatch.request, request);
@@ -61,7 +82,18 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
     });
   });
   agentNamespace.on('connection', (socket) => {
-    registerAgentSocketHandlers(socket, app);
+    registerAgentSocketHandlers(socket, app, {
+      async afterAgentMutation(payload, result) {
+        if (!isSuccessAck(result)) {
+          return;
+        }
+        const teamId = payloadTeamId(payload) ?? resultDispatchTeamId(result);
+        if (!teamId) {
+          return;
+        }
+        await refreshAgentSubscribers(webSubscribers, app, teamId);
+      },
+    });
   });
 }
 
@@ -81,6 +113,22 @@ async function refreshChannelSubscribers(
   }
 }
 
+async function refreshAgentSubscribers(
+  subscribers: Set<WebSocketSubscription>,
+  app: ServerNextUseCases,
+  teamId: string,
+): Promise<void> {
+  for (const subscriber of subscribers) {
+    if (subscriber.agents?.teamId !== teamId) {
+      continue;
+    }
+    const result = await app.listVisibleAgents({ teamId: subscriber.agents.teamId });
+    if (result.ok) {
+      subscriber.socket.emit?.(WEB_EVENTS.agent.snapshot, result.agents);
+    }
+  }
+}
+
 function asChannelSubscription(payload: unknown): ChannelSubscription | null {
   if (!payload || typeof payload !== 'object') {
     return null;
@@ -92,6 +140,8 @@ function asChannelSubscription(payload: unknown): ChannelSubscription | null {
   return { userId: candidate.userId, teamId: candidate.teamId };
 }
 
+const asAgentSubscription = asChannelSubscription;
+
 function isSuccessAck(result: unknown): result is { ok: true } {
   return Boolean(result && typeof result === 'object' && (result as { ok?: unknown }).ok === true);
 }
@@ -102,4 +152,12 @@ function payloadTeamId(payload: unknown): string | null {
   }
   const teamId = (payload as { teamId?: unknown }).teamId;
   return typeof teamId === 'string' ? teamId : null;
+}
+
+function resultDispatchTeamId(result: unknown): string | null {
+  if (!result || typeof result !== 'object') {
+    return null;
+  }
+  const dispatch = (result as { dispatch?: { teamId?: unknown } }).dispatch;
+  return typeof dispatch?.teamId === 'string' ? dispatch.teamId : null;
 }

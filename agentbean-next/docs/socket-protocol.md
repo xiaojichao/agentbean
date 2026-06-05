@@ -227,7 +227,7 @@ Ack
 客户端：
 
 ```ts
-{ teamId: string }
+{ userId: string; teamId: string }
 ```
 
 Ack：
@@ -235,6 +235,12 @@ Ack：
 ```ts
 Ack<{ agents: AgentDto[] }>
 ```
+
+服务器行为：
+
+- Subscribe 成功前，server 会确认 `userId` 是该 team 的 member。
+- Subscribe 成功后立即向该 socket 发送 `agents:snapshot`。
+- Daemon agent batch 或 dispatch result/error 改变 agent projection 后，server 会刷新同 team active subscribers 的 `agents:snapshot`。
 
 #### `agent:create`
 

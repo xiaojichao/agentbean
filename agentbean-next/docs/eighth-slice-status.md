@@ -31,6 +31,6 @@ npm run build:packages
 
 这些不属于第八切片：
 
-- `agents:subscribe` 的 server-side initial snapshot 与 agent status broadcast。
+- `agents:subscribe` 的 server-side initial snapshot 与 agent status broadcast；第九切片已补齐。
 - 成员弹窗 UI shell 与组件渲染。
 - Channel leave/archive/delete。
