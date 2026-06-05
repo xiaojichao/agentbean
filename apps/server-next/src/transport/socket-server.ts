@@ -1,5 +1,5 @@
 import type { ServerNextUseCases } from '../application/usecases';
-import { AGENT_EVENTS } from '../../../../packages/contracts/src/index';
+import { AGENT_EVENTS, WEB_EVENTS } from '../../../../packages/contracts/src/index';
 import { registerAgentSocketHandlers, registerWebSocketHandlers, type SocketLike } from './socket-handlers';
 
 export interface NamespaceLike {
@@ -11,16 +11,95 @@ export interface SocketServerLike {
   of(namespace: '/web' | '/agent'): NamespaceLike;
 }
 
+interface ChannelSubscription {
+  userId: string;
+  teamId: string;
+}
+
+interface WebSocketSubscription {
+  socket: SocketLike;
+  channels?: ChannelSubscription;
+}
+
 export function attachServerNextNamespaces(server: SocketServerLike, app: ServerNextUseCases): void {
   const agentNamespace = server.of('/agent');
+  const webSubscribers = new Set<WebSocketSubscription>();
+
   server.of('/web').on('connection', (socket) => {
+    const subscriber: WebSocketSubscription = { socket };
+    webSubscribers.add(subscriber);
+    socket.on('disconnect', async () => {
+      webSubscribers.delete(subscriber);
+    });
+    socket.on(WEB_EVENTS.channel.subscribe, async (payload, ack) => {
+      const input = asChannelSubscription(payload);
+      if (!input) {
+        ack?.({ ok: false, error: 'VALIDATION_ERROR', message: 'Invalid channel subscription payload' });
+        return;
+      }
+      const result = await app.listChannels(input);
+      ack?.(result);
+      if (result.ok) {
+        subscriber.channels = input;
+        socket.emit?.(WEB_EVENTS.channel.snapshot, result.channels);
+      }
+    });
     registerWebSocketHandlers(socket, app, {
       dispatch(request) {
         agentNamespace.emit?.(AGENT_EVENTS.dispatch.request, request);
+      },
+      async afterChannelMutation(payload, result) {
+        if (!isSuccessAck(result)) {
+          return;
+        }
+        const teamId = payloadTeamId(payload);
+        if (!teamId) {
+          return;
+        }
+        await refreshChannelSubscribers(webSubscribers, app, teamId);
       },
     });
   });
   agentNamespace.on('connection', (socket) => {
     registerAgentSocketHandlers(socket, app);
   });
+}
+
+async function refreshChannelSubscribers(
+  subscribers: Set<WebSocketSubscription>,
+  app: ServerNextUseCases,
+  teamId: string,
+): Promise<void> {
+  for (const subscriber of subscribers) {
+    if (subscriber.channels?.teamId !== teamId) {
+      continue;
+    }
+    const result = await app.listChannels(subscriber.channels);
+    if (result.ok) {
+      subscriber.socket.emit?.(WEB_EVENTS.channel.snapshot, result.channels);
+    }
+  }
+}
+
+function asChannelSubscription(payload: unknown): ChannelSubscription | null {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const candidate = payload as { userId?: unknown; teamId?: unknown };
+  if (typeof candidate.userId !== 'string' || typeof candidate.teamId !== 'string') {
+    return null;
+  }
+  return { userId: candidate.userId, teamId: candidate.teamId };
+}
+
+function isSuccessAck(result: unknown): result is { ok: true } {
+  return Boolean(result && typeof result === 'object' && (result as { ok?: unknown }).ok === true);
+}
+
+function payloadTeamId(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const teamId = (payload as { teamId?: unknown }).teamId;
+  return typeof teamId === 'string' ? teamId : null;
 }

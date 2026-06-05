@@ -3,6 +3,7 @@ import type { ServerNextUseCases } from '../application/usecases';
 
 export interface SocketLike {
   on(event: string, handler: SocketHandler): void;
+  emit?(event: string, payload: unknown): void;
 }
 
 export type SocketAck = (result: unknown) => void;
@@ -12,6 +13,7 @@ type UseCaseName = keyof ServerNextUseCases;
 
 export interface WebSocketHandlerOptions {
   dispatch?(request: DispatchRequestDto & { id: string }): void;
+  afterChannelMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
 
 export function registerWebSocketHandlers(
@@ -24,12 +26,14 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.team.list, app, 'listTeams');
   bind(socket, WEB_EVENTS.channel.create, app, 'createChannel');
   bind(socket, WEB_EVENTS.channel.update, app, 'updateChannel');
-  bind(socket, WEB_EVENTS.channel.addMember, app, 'addChannelHumanMember');
-  bind(socket, WEB_EVENTS.channel.removeMember, app, 'removeChannelHumanMember');
-  bind(socket, WEB_EVENTS.channel.addAgent, app, 'addChannelAgentMember');
-  bind(socket, WEB_EVENTS.channel.removeAgent, app, 'removeChannelAgentMember');
+  const afterChannelMutation = (payload: unknown, result: unknown) =>
+    options.afterChannelMutation?.(payload, result);
+  bind(socket, WEB_EVENTS.channel.addMember, app, 'addChannelHumanMember', afterChannelMutation);
+  bind(socket, WEB_EVENTS.channel.removeMember, app, 'removeChannelHumanMember', afterChannelMutation);
+  bind(socket, WEB_EVENTS.channel.addAgent, app, 'addChannelAgentMember', afterChannelMutation);
+  bind(socket, WEB_EVENTS.channel.removeAgent, app, 'removeChannelAgentMember', afterChannelMutation);
   bind(socket, WEB_EVENTS.channel.members, app, 'listChannelMembers');
-  bind(socket, WEB_EVENTS.message.send, app, 'sendMessage', (result) => {
+  bind(socket, WEB_EVENTS.message.send, app, 'sendMessage', (_payload, result) => {
     if (!options.dispatch || !isSendMessageAck(result)) {
       return;
     }
@@ -60,14 +64,14 @@ function bind(
   event: string,
   app: ServerNextUseCases,
   methodName: UseCaseName,
-  afterResult?: (result: unknown) => void,
+  afterResult?: (payload: unknown, result: unknown) => Promise<void> | void,
 ): void {
   socket.on(event, async (payload, ack) => {
     try {
       const method = app[methodName] as (input: unknown) => Promise<unknown>;
       const result = await method(payload);
       ack?.(result);
-      afterResult?.(result);
+      await afterResult?.(payload, result);
     } catch (error) {
       ack?.(makeFailure('INTERNAL_ERROR', error instanceof Error ? error.message : 'Unhandled socket handler error'));
     }

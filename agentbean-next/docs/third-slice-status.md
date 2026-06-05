@@ -43,4 +43,4 @@ npm run build:packages
 - 成员弹窗 UI shell 与组件渲染。
 - Channel leave/archive/delete。
 - DM thread 创建与 agent DM。
-- 成员变更后的实时 snapshot broadcast。
+- 成员变更后的实时 snapshot broadcast；第八切片已补齐 per-user `channels:snapshot` refresh。

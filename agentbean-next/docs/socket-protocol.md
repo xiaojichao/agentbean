@@ -22,16 +22,15 @@ type Ack<T = {}> = Ok<T> | Fail;
 Error codes 应是稳定字符串：
 
 - `UNAUTHENTICATED`
+- `BAD_REQUEST`
 - `FORBIDDEN`
 - `NOT_FOUND`
-- `VALIDATION_FAILED`
+- `VALIDATION_ERROR`
 - `CONFLICT`
 - `DEVICE_OFFLINE`
 - `AGENT_OFFLINE`
 - `DISPATCH_TIMEOUT`
-- `EXECUTION_FAILED`
-- `UPLOAD_FAILED`
-- `INTERNAL`
+- `INTERNAL_ERROR`
 
 ## `/web` Namespace
 
@@ -462,7 +461,7 @@ Ack<{
 客户端：
 
 ```ts
-{ teamId: string }
+{ userId: string; teamId: string }
 ```
 
 Ack：
@@ -470,6 +469,11 @@ Ack：
 ```ts
 Ack<{ channels: ChannelDto[] }>
 ```
+
+服务器行为：
+
+- Subscribe 成功后立即向该 socket 发送 `channels:snapshot`。
+- Channel membership 变更后，server 会按每个 active subscription 的 `{ userId, teamId }` 重新计算可见 channel list，并分别发送 `channels:snapshot`。不得向整个 team 广播同一份 private-channel snapshot。
 
 #### `channel:join`
 

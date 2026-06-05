@@ -32,5 +32,5 @@ npm run build:packages
 这些不属于第七切片：
 
 - 成员弹窗 UI shell 与组件渲染。
-- 成员变更后的实时 snapshot broadcast。
+- 成员变更后的实时 snapshot broadcast；第八切片已补齐 per-user `channels:snapshot` refresh。
 - Channel leave/archive/delete。

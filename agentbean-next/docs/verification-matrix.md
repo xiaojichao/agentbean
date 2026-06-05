@@ -59,6 +59,7 @@ Phase 1 完成标准：
 | P2-10e | Creator 移除 human member 后真实回收 private channel 可见性。 | UseCase | Channel human membership removal。 | `current-behavior.md`, `feature-disposition.md` |
 | P2-10f | Creator 添加/移除 agent member，且 agent 必须对 team 可见。 | UseCase | Channel agent membership。 | `agent-identity-rules.md`, `feature-disposition.md` |
 | P2-10g | `channel:members` 返回 human/agent member ids 与详情 DTO，并对 private channel 执行可见性检查。 | UseCase | Channel member listing。 | `socket-protocol.md`, `feature-disposition.md` |
+| P2-10h | `channels:subscribe` 成功后发送 per-user snapshot，membership 变更后按订阅者重新计算并刷新 snapshot。 | Socket | Channel subscription broadcast。 | `socket-protocol.md`, `known-gaps.md` |
 | P2-11 | `sendMessage` 持久化 server-derived human sender，并忽略 client sender input。 | UseCase | Sender identity。 | `acceptance-tests.md`, `contracts-dto.md` |
 | P2-12 | 带 online agent 的 `sendMessage` 创建 dispatch record。 | UseCase | Dispatch first-class persistence。 | `first-slice-schema-repositories.md`, `contracts-dto.md` |
 | P2-13 | 无 online agent 的 `sendMessage` 持久化 message，并返回 no-online dispatch result。 | UseCase | Non-fatal no-dispatch path。 | `acceptance-tests.md` |
