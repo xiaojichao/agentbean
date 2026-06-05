@@ -212,14 +212,20 @@ Ack<{ device: DeviceDetailDto }>
 客户端：
 
 ```ts
-{ deviceId: string }
+{ userId: string; deviceId: string }
 ```
 
 Ack：
 
 ```ts
-Ack
+Ack<{ request: { requestId: string; deviceId: string } }>
 ```
+
+服务器行为：
+
+- `device:scan` 成功前，server 会根据 device 所属 team 确认 `userId` 是 team member。
+- 目标 device 必须处于 `online` 状态，否则返回 `DEVICE_OFFLINE`。
+- 成功后，server 只向该 device 当前绑定的 daemon socket 发送 `device:scan-requested`。
 
 服务器事件：
 
@@ -702,7 +708,7 @@ Ack<{ agents: AgentDto[] }>
 
 服务器事件：
 
-- `device:scan-requested`：`{ requestId: string }`
+- `device:scan-requested`：`{ requestId: string; deviceId: string }`
 - `dispatch:request`：`DispatchRequestDto`
 - `dispatch:cancel`：`{ dispatchId: string; reason?: string }`
 

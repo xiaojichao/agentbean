@@ -15,6 +15,9 @@ describe('server-next socket handlers', () => {
       loginUser: vi.fn(async (payload) => makeSuccess({ payload })),
       listTeams: vi.fn(async (payload) => makeSuccess({ payload })),
       getDevice: vi.fn(async (payload) => makeSuccess({ payload })),
+      requestDeviceScan: vi.fn(async (payload) =>
+        makeSuccess({ request: { requestId: 'scan-1', deviceId: (payload as { deviceId: string }).deviceId } }),
+      ),
       createChannel: vi.fn(async (payload) => makeSuccess({ payload })),
       updateChannel: vi.fn(async (payload) => makeSuccess({ payload })),
       addChannelHumanMember: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -32,6 +35,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.auth.login,
       WEB_EVENTS.team.list,
       WEB_EVENTS.device.get,
+      WEB_EVENTS.device.scan,
       WEB_EVENTS.channel.create,
       WEB_EVENTS.channel.update,
       WEB_EVENTS.channel.addMember,
@@ -54,6 +58,10 @@ describe('server-next socket handlers', () => {
       body: 'hello',
     });
     await socket.trigger(WEB_EVENTS.device.get, {
+      userId: 'user-1',
+      deviceId: 'device-1',
+    });
+    await socket.trigger(WEB_EVENTS.device.scan, {
       userId: 'user-1',
       deviceId: 'device-1',
     });
@@ -107,6 +115,10 @@ describe('server-next socket handlers', () => {
       body: 'hello',
     });
     expect(app.getDevice).toHaveBeenCalledWith({
+      userId: 'user-1',
+      deviceId: 'device-1',
+    });
+    expect(app.requestDeviceScan).toHaveBeenCalledWith({
       userId: 'user-1',
       deviceId: 'device-1',
     });

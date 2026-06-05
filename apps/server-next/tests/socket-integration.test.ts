@@ -336,6 +336,72 @@ describe('server-next Socket.IO namespaces', () => {
       });
     });
   });
+
+  test('routes device scan requests only to the matching daemon socket', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-all', 'device-1', 'device-2', 'scan-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const web = await connectClient(`${baseUrl}/web`);
+    const agentOne = await connectClient(`${baseUrl}/agent`);
+    const agentTwo = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      web.disconnect();
+      agentOne.disconnect();
+      agentTwo.disconnect();
+    });
+
+    await web.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    const agentOneScanRequests: unknown[] = [];
+    const agentTwoScanRequests: unknown[] = [];
+    agentOne.on(AGENT_EVENTS.device.scanRequested, (payload) => {
+      agentOneScanRequests.push(payload);
+    });
+    agentTwo.on(AGENT_EVENTS.device.scanRequested, (payload) => {
+      agentTwoScanRequests.push(payload);
+    });
+
+    await expect(
+      agentOne.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'device-1', status: 'online' } });
+    await expect(
+      agentTwo.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-2',
+        profileId: 'default',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'device-2', status: 'online' } });
+
+    await expect(
+      web.emitWithAck(WEB_EVENTS.device.scan, { userId: 'user-1', deviceId: 'device-1' }),
+    ).resolves.toEqual({
+      ok: true,
+      request: {
+        requestId: 'scan-1',
+        deviceId: 'device-1',
+      },
+    });
+    await eventually(async () => {
+      expect(agentOneScanRequests).toEqual([{ requestId: 'scan-1', deviceId: 'device-1' }]);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(agentTwoScanRequests).toEqual([]);
+  });
 });
 
 async function startSocketServer(app: ReturnType<typeof createInMemoryServerNext>) {

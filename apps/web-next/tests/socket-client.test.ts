@@ -15,6 +15,7 @@ describe('web-next socket client', () => {
     await client.listTeams({ userId: 'user-1' });
     await client.listDevices({ userId: 'user-1', teamId: 'team-1' });
     await client.getDevice({ userId: 'user-1', deviceId: 'device-1' });
+    await client.scanDevice({ userId: 'user-1', deviceId: 'device-1' });
     await client.createChannel({
       userId: 'user-1',
       teamId: 'team-1',
@@ -69,6 +70,7 @@ describe('web-next socket client', () => {
       [WEB_EVENTS.team.list, { userId: 'user-1' }],
       [WEB_EVENTS.device.list, { userId: 'user-1', teamId: 'team-1' }],
       [WEB_EVENTS.device.get, { userId: 'user-1', deviceId: 'device-1' }],
+      [WEB_EVENTS.device.scan, { userId: 'user-1', deviceId: 'device-1' }],
       [WEB_EVENTS.channel.create, { userId: 'user-1', teamId: 'team-1', name: 'ops', visibility: 'private' }],
       [WEB_EVENTS.channel.update, { userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', title: 'Team-wide updates' }],
       [WEB_EVENTS.channel.addMember, { userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', memberUserId: 'user-2' }],

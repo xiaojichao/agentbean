@@ -212,6 +212,36 @@ describe('server-next first-slice use cases', () => {
       error: 'FORBIDDEN',
     });
   });
+
+  test('creates device scan requests for online devices visible to team members', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 500,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-1', 'scan-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+    });
+
+    await expect(app.requestDeviceScan({ userId: 'user-1', deviceId: 'device-1' })).resolves.toEqual({
+      ok: true,
+      request: {
+        requestId: 'scan-1',
+        deviceId: 'device-1',
+      },
+    });
+    await expect(app.requestDeviceScan({ userId: 'user-2', deviceId: 'device-1' })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+    await expect(app.requestDeviceScan({ userId: 'user-1', deviceId: 'missing-device' })).resolves.toMatchObject({
+      ok: false,
+      error: 'NOT_FOUND',
+    });
+  });
 });
 
 function createIds(ids: string[]) {

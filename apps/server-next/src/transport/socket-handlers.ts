@@ -13,6 +13,7 @@ type UseCaseName = keyof ServerNextUseCases;
 
 export interface WebSocketHandlerOptions {
   dispatch?(request: DispatchRequestDto & { id: string }): void;
+  deviceScan?(request: { requestId: string; deviceId: string }): void;
   afterChannelMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
 
@@ -30,6 +31,12 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.auth.login, app, 'loginUser');
   bind(socket, WEB_EVENTS.team.list, app, 'listTeams');
   bind(socket, WEB_EVENTS.device.get, app, 'getDevice');
+  bind(socket, WEB_EVENTS.device.scan, app, 'requestDeviceScan', (_payload, result) => {
+    if (!options.deviceScan || !isDeviceScanAck(result)) {
+      return;
+    }
+    options.deviceScan(result.request);
+  });
   bind(socket, WEB_EVENTS.channel.create, app, 'createChannel');
   bind(socket, WEB_EVENTS.channel.update, app, 'updateChannel');
   const afterChannelMutation = (payload: unknown, result: unknown) =>
@@ -90,6 +97,24 @@ function bind(
       ack?.(makeFailure('INTERNAL_ERROR', error instanceof Error ? error.message : 'Unhandled socket handler error'));
     }
   });
+}
+
+function isDeviceScanAck(result: unknown): result is {
+  ok: true;
+  request: {
+    requestId: string;
+    deviceId: string;
+  };
+} {
+  if (!result || typeof result !== 'object') {
+    return false;
+  }
+  const request = (result as { ok?: unknown; request?: { requestId?: unknown; deviceId?: unknown } }).request;
+  return (
+    (result as { ok?: unknown }).ok === true &&
+    typeof request?.requestId === 'string' &&
+    typeof request?.deviceId === 'string'
+  );
 }
 
 function isSendMessageAck(result: unknown): result is {
