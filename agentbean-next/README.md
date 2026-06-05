@@ -20,6 +20,7 @@
 - `docs/feature-disposition.md` 将现有功能/事件表面映射到保留、延后、合并或删除决策。
 - `docs/agent-identity-rules.md` 定义 Agent 身份、去重、冲突与优先级的规范规则。
 - `docs/contracts-dto.md` 定义第一切片的共享 DTO、`Ack` 和 `ErrorCode`。
+- `docs/contract-alignment-handoff.md` 记录 PR #72 后发现的契约偏差、已确认产品决策与后续接手建议。
 - `docs/known-gaps.md` 记录产品、协议、数据模型、web、daemon 与测试中的待解决缺口。
 - `docs/asset-inventory.md` 列出应保留什么、重写什么，以及原因。
 - `docs/target-architecture.md` 描述目标模块边界。

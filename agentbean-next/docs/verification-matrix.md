@@ -109,7 +109,7 @@ Phase 3 完成标准：
 | P4-04 | Team shell 从 `TeamDto` 渲染 current team。 | Web | Team projection。 | `contracts-dto.md` |
 | P4-05 | Device/agent status UI 渲染 server snapshots，不做 local dedupe。 | Web | Server-owned identity。 | `agent-identity-rules.md`, `target-architecture.md` |
 | P4-06 | Channel list 渲染 `ChannelDto` 与 selected channel history。 | Web | Channel/message DTOs。 | `contracts-dto.md` |
-| P4-07 | Message composer 只发送 body/clientMessageId；sender identity 不由 client 提供。 | Web | Sender trust boundary。 | `contracts-dto.md`, `acceptance-tests.md` |
+| P4-07 | Message composer 按当前协议发送 `userId`、`teamId`、`channelId`、`body` 与 `clientMessageId`；不发送 `senderKind`/`senderId`。 | Web | Sender trust boundary。 | `contracts-dto.md`, `acceptance-tests.md` |
 | P4-08 | Conversation 追加 `channel:message` 与 dispatch status updates。 | Web | Realtime projection。 | `socket-protocol.md` |
 | P4-09 | Reconnect 会 resubscribe 并替换 snapshots，而不是 patch stale state。 | Web | Snapshot recovery。 | `known-gaps.md`, `acceptance-tests.md` |
 

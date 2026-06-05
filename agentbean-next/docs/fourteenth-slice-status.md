@@ -2,6 +2,10 @@
 
 本文记录 AgentBean Next 第十四切片当前已经落地的 daemon builtin scanner 边界。
 
+## 契约对齐提醒
+
+本文的已实现列表记录当前代码状态。其中“installed runtime 会生成 `executor-hosted` agent report”已被标记为契约偏差：已确认目标是 builtin scanner 只产出 runtime capability，不自动生成 visible product agent。后续接手建议见 `docs/contract-alignment-handoff.md`。
+
 ## 已实现
 
 - `apps/daemon-next`
