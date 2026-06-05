@@ -160,11 +160,105 @@ describe('web-next socket client', () => {
       dispatches: [dispatch],
     });
   });
+
+  test('resubscribes active snapshot streams after reconnect without duplicating handlers', async () => {
+    const transport = new FakeWebTransport();
+    const snapshots: { agents: AgentDto[][]; channels: ChannelDto[][] } = {
+      agents: [],
+      channels: [],
+    };
+    const client = createWebSocketClient(transport);
+    const agent = {
+      id: 'agent-1',
+      teamId: 'team-1',
+      name: 'Codex',
+      adapterKind: 'codex-cli',
+      category: 'executor-hosted',
+      status: 'online',
+      source: 'self-register',
+      lastSeenAt: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    } satisfies AgentDto;
+    const channel = {
+      id: 'channel-1',
+      teamId: 'team-1',
+      name: 'all',
+      visibility: 'public',
+      humanMemberIds: ['user-1'],
+      agentMemberIds: [],
+      createdBy: 'user-1',
+      createdAt: 1,
+      updatedAt: 1,
+    } satisfies ChannelDto;
+
+    await client.subscribeAgents({ userId: 'user-1', teamId: 'team-1' }, (agents) => {
+      snapshots.agents.push(agents);
+    });
+    await client.subscribeChannels({ userId: 'user-1', teamId: 'team-1' }, (channels) => {
+      snapshots.channels.push(channels);
+    });
+
+    expect(transport.handlerCount(WEB_EVENTS.agent.snapshot)).toBe(1);
+    expect(transport.handlerCount(WEB_EVENTS.channel.snapshot)).toBe(1);
+
+    await transport.trigger('connect', undefined);
+    await transport.trigger(WEB_EVENTS.agent.snapshot, [agent]);
+    await transport.trigger(WEB_EVENTS.channel.snapshot, [channel]);
+
+    expect(transport.emitted).toEqual([
+      [WEB_EVENTS.agent.subscribe, { userId: 'user-1', teamId: 'team-1' }],
+      [WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-1' }],
+      [WEB_EVENTS.agent.subscribe, { userId: 'user-1', teamId: 'team-1' }],
+      [WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-1' }],
+    ]);
+    expect(snapshots).toEqual({
+      agents: [[agent]],
+      channels: [[channel]],
+    });
+  });
+
+  test('replaces active snapshot subscriptions without adding duplicate snapshot handlers', async () => {
+    const transport = new FakeWebTransport();
+    const snapshots: AgentDto[][] = [];
+    const client = createWebSocketClient(transport);
+    const agent = {
+      id: 'agent-2',
+      teamId: 'team-2',
+      name: 'Claude',
+      adapterKind: 'claude-code',
+      category: 'executor-hosted',
+      status: 'online',
+      source: 'self-register',
+      lastSeenAt: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    } satisfies AgentDto;
+
+    await client.subscribeAgents({ userId: 'user-1', teamId: 'team-1' }, (agents) => {
+      snapshots.push(agents);
+    });
+    await client.subscribeAgents({ userId: 'user-1', teamId: 'team-2' }, (agents) => {
+      snapshots.push(agents);
+    });
+
+    expect(transport.handlerCount(WEB_EVENTS.agent.snapshot)).toBe(1);
+
+    await transport.trigger('connect', undefined);
+    await transport.trigger(WEB_EVENTS.agent.snapshot, [agent]);
+
+    expect(transport.emitted).toEqual([
+      [WEB_EVENTS.agent.subscribe, { userId: 'user-1', teamId: 'team-1' }],
+      [WEB_EVENTS.agent.subscribe, { userId: 'user-1', teamId: 'team-2' }],
+      [WEB_EVENTS.agent.subscribe, { userId: 'user-1', teamId: 'team-2' }],
+    ]);
+    expect(snapshots).toEqual([[agent]]);
+  });
 });
 
 class FakeWebTransport implements WebSocketTransport {
   readonly emitted: Array<[string, unknown]> = [];
-  private readonly handlers = new Map<string, (payload: unknown) => void>();
+  private readonly handlers = new Map<string, Array<(payload: unknown) => void>>();
 
   async emitWithAck(event: string, payload: unknown): Promise<unknown> {
     this.emitted.push([event, payload]);
@@ -172,14 +266,22 @@ class FakeWebTransport implements WebSocketTransport {
   }
 
   on(event: string, handler: (payload: unknown) => void): void {
-    this.handlers.set(event, handler);
+    const handlers = this.handlers.get(event) ?? [];
+    handlers.push(handler);
+    this.handlers.set(event, handlers);
   }
 
   async trigger(event: string, payload: unknown): Promise<void> {
-    const handler = this.handlers.get(event);
-    if (!handler) {
+    const handlers = this.handlers.get(event);
+    if (!handlers) {
       throw new Error(`No handler for ${event}`);
     }
-    handler(payload);
+    for (const handler of handlers) {
+      await handler(payload);
+    }
+  }
+
+  handlerCount(event: string): number {
+    return this.handlers.get(event)?.length ?? 0;
   }
 }
