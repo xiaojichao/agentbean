@@ -37,7 +37,7 @@ npm run build:packages
 
 这些不属于第十切片：
 
-- `device:get` detail shell。
+- `device:get` detail shell；第十一切片已补齐。
 - `device:scan` 请求路由到 daemon。
 - 成员弹窗 UI shell 与组件渲染。
 - Channel leave/archive/delete。

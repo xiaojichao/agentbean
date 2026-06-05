@@ -165,6 +165,53 @@ describe('server-next first-slice use cases', () => {
       ],
     });
   });
+
+  test('returns device detail with runtimes and visible agents for team members only', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 500,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-1', 'runtime-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+      hostname: 'shaw-mbp',
+    });
+    await app.reportDeviceRuntimes({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }],
+    });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'executor-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 500,
+    });
+
+    await expect(app.getDevice({ userId: 'user-1', deviceId: 'device-1' })).resolves.toMatchObject({
+      ok: true,
+      device: {
+        id: 'device-1',
+        teamId: 'team-1',
+        name: 'shaw-mbp',
+        runtimes: [{ id: 'runtime-1', name: 'Codex CLI' }],
+        agents: [{ id: 'agent-1', name: 'Codex' }],
+      },
+    });
+    await expect(app.getDevice({ userId: 'user-2', deviceId: 'device-1' })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+  });
 });
 
 function createIds(ids: string[]) {
