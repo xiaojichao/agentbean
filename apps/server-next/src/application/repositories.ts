@@ -72,6 +72,7 @@ export interface DeviceRepository {
   upsertHello(input: DeviceRecord): Promise<DeviceRecord>;
   getById(id: ID): Promise<DeviceRecord | null>;
   findByMachineProfile(machineId: string, profileId: string): Promise<DeviceRecord | null>;
+  listByTeam(teamId: ID): Promise<DeviceRecord[]>;
 }
 
 export interface RuntimeRepository {

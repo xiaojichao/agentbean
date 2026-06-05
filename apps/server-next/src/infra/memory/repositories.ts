@@ -135,6 +135,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           ) ?? null
         );
       },
+      async listByTeam(teamId) {
+        return Array.from(devices.values()).filter((device) => device.teamId === teamId);
+      },
     },
     runtimes: {
       async replaceForDevice(input) {

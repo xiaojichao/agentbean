@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { WEB_EVENTS, type AgentDto, type ChannelDto, type DispatchDto, type MessageDto } from '../../../packages/contracts/src/index';
+import { WEB_EVENTS, type AgentDto, type ChannelDto, type DeviceDto, type DispatchDto, type MessageDto, type RuntimeDto } from '../../../packages/contracts/src/index';
 import { createWebSocketClient, type WebSocketTransport } from '../src/index';
 
 describe('web-next socket client', () => {
@@ -13,6 +13,7 @@ describe('web-next socket client', () => {
     });
     await client.login({ username: 'shaw', password: 'secret' });
     await client.listTeams({ userId: 'user-1' });
+    await client.listDevices({ userId: 'user-1', teamId: 'team-1' });
     await client.createChannel({
       userId: 'user-1',
       teamId: 'team-1',
@@ -65,6 +66,7 @@ describe('web-next socket client', () => {
       [WEB_EVENTS.auth.register, { username: 'shaw', password: 'secret', teamName: 'AgentBean' }],
       [WEB_EVENTS.auth.login, { username: 'shaw', password: 'secret' }],
       [WEB_EVENTS.team.list, { userId: 'user-1' }],
+      [WEB_EVENTS.device.list, { userId: 'user-1', teamId: 'team-1' }],
       [WEB_EVENTS.channel.create, { userId: 'user-1', teamId: 'team-1', name: 'ops', visibility: 'private' }],
       [WEB_EVENTS.channel.update, { userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', title: 'Team-wide updates' }],
       [WEB_EVENTS.channel.addMember, { userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', memberUserId: 'user-2' }],
@@ -82,6 +84,8 @@ describe('web-next socket client', () => {
     const snapshots: {
       agents?: AgentDto[];
       channels?: ChannelDto[];
+      devices?: DeviceDto[];
+      runtimes?: Array<{ deviceId: string; runtimes: RuntimeDto[] }>;
       messages?: MessageDto[];
       dispatches?: DispatchDto[];
     } = {};
@@ -92,6 +96,12 @@ describe('web-next socket client', () => {
     });
     await client.subscribeChannels({ userId: 'user-1', teamId: 'team-1' }, (channels) => {
       snapshots.channels = channels;
+    });
+    await client.listDevices({ userId: 'user-1', teamId: 'team-1' }, (devices) => {
+      snapshots.devices = devices;
+    });
+    client.onDeviceRuntimes((payload) => {
+      snapshots.runtimes = [...(snapshots.runtimes ?? []), payload];
     });
     client.onChannelMessage((message) => {
       snapshots.messages = [...(snapshots.messages ?? []), message];
@@ -123,6 +133,19 @@ describe('web-next socket client', () => {
       createdAt: 1,
       updatedAt: 1,
     } satisfies ChannelDto;
+    const device = {
+      id: 'device-1',
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      status: 'online',
+    } satisfies DeviceDto;
+    const runtime = {
+      id: 'runtime-1',
+      deviceId: 'device-1',
+      adapterKind: 'codex',
+      name: 'Codex CLI',
+      status: 'online',
+    } satisfies RuntimeDto;
     const message = {
       id: 'message-1',
       teamId: 'team-1',
@@ -146,16 +169,21 @@ describe('web-next socket client', () => {
 
     await transport.trigger(WEB_EVENTS.agent.snapshot, [agent]);
     await transport.trigger(WEB_EVENTS.channel.snapshot, [channel]);
+    await transport.trigger(WEB_EVENTS.device.snapshot, [device]);
+    await transport.trigger(WEB_EVENTS.device.runtimes, { deviceId: 'device-1', runtimes: [runtime] });
     await transport.trigger(WEB_EVENTS.channel.message, message);
     await transport.trigger(WEB_EVENTS.message.dispatchStatus, dispatch);
 
-    expect(transport.emitted.slice(-2)).toEqual([
+    expect(transport.emitted.slice(-3)).toEqual([
       [WEB_EVENTS.agent.subscribe, { userId: 'user-1', teamId: 'team-1' }],
       [WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-1' }],
+      [WEB_EVENTS.device.list, { userId: 'user-1', teamId: 'team-1' }],
     ]);
     expect(snapshots).toEqual({
       agents: [agent],
       channels: [channel],
+      devices: [device],
+      runtimes: [{ deviceId: 'device-1', runtimes: [runtime] }],
       messages: [message],
       dispatches: [dispatch],
     });
@@ -163,9 +191,10 @@ describe('web-next socket client', () => {
 
   test('resubscribes active snapshot streams after reconnect without duplicating handlers', async () => {
     const transport = new FakeWebTransport();
-    const snapshots: { agents: AgentDto[][]; channels: ChannelDto[][] } = {
+    const snapshots: { agents: AgentDto[][]; channels: ChannelDto[][]; devices: DeviceDto[][] } = {
       agents: [],
       channels: [],
+      devices: [],
     };
     const client = createWebSocketClient(transport);
     const agent = {
@@ -198,9 +227,13 @@ describe('web-next socket client', () => {
     await client.subscribeChannels({ userId: 'user-1', teamId: 'team-1' }, (channels) => {
       snapshots.channels.push(channels);
     });
+    await client.listDevices({ userId: 'user-1', teamId: 'team-1' }, (devices) => {
+      snapshots.devices.push(devices);
+    });
 
     expect(transport.handlerCount(WEB_EVENTS.agent.snapshot)).toBe(1);
     expect(transport.handlerCount(WEB_EVENTS.channel.snapshot)).toBe(1);
+    expect(transport.handlerCount(WEB_EVENTS.device.snapshot)).toBe(1);
 
     await transport.trigger('connect', undefined);
     await transport.trigger(WEB_EVENTS.agent.snapshot, [agent]);
@@ -209,12 +242,15 @@ describe('web-next socket client', () => {
     expect(transport.emitted).toEqual([
       [WEB_EVENTS.agent.subscribe, { userId: 'user-1', teamId: 'team-1' }],
       [WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-1' }],
+      [WEB_EVENTS.device.list, { userId: 'user-1', teamId: 'team-1' }],
       [WEB_EVENTS.agent.subscribe, { userId: 'user-1', teamId: 'team-1' }],
       [WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-1' }],
+      [WEB_EVENTS.device.list, { userId: 'user-1', teamId: 'team-1' }],
     ]);
     expect(snapshots).toEqual({
       agents: [[agent]],
       channels: [[channel]],
+      devices: [],
     });
   });
 

@@ -324,6 +324,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             .get(machineId, profileId),
         );
       },
+      async listByTeam(teamId) {
+        return globalDb
+          .prepare('SELECT * FROM devices WHERE team_id = ? ORDER BY updated_at, id')
+          .all(teamId)
+          .map((row) => {
+            const device = mapDevice(row);
+            if (!device) {
+              throw new Error('SQLite device row could not be mapped');
+            }
+            return device;
+          });
+      },
     },
     runtimes: {
       async replaceForDevice(input) {

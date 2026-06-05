@@ -32,5 +32,5 @@ npm run build:packages
 这些不属于第九切片：
 
 - 成员弹窗 UI shell 与组件渲染。
-- Device status/runtimes 的 server-side web subscription broadcast。
+- Device status/runtimes 的 server-side web subscription broadcast；第十切片已补齐。
 - Channel leave/archive/delete。
