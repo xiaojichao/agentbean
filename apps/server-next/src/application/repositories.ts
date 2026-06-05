@@ -1,4 +1,4 @@
-import type { AgentDto, ChannelDto, DeviceDto, DispatchDto, ID, MessageDto, RuntimeDto, TeamDto, UnixMs, UserDto } from '../../../../packages/contracts/src/index';
+import type { AgentDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, RuntimeDto, TeamDto, UnixMs, UserDto } from '../../../../packages/contracts/src/index';
 
 export interface UserRecord extends UserDto {
   passwordHash: string;
@@ -55,6 +55,7 @@ export interface TeamRepository {
   addMember(input: TeamMemberRecord): Promise<void>;
   isMember(teamId: ID, userId: ID): Promise<boolean>;
   getMemberRole(teamId: ID, userId: ID): Promise<'owner' | 'admin' | 'member' | null>;
+  listMembersByIds(teamId: ID, userIds: ID[]): Promise<HumanMemberDto[]>;
 }
 
 export interface ChannelRepository {

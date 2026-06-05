@@ -25,7 +25,7 @@
 - Creator 可以移除 human member，并真实回收 private channel 可见性。
 - 非 creator 不能添加 agent member。
 - Creator 可以添加/移除 agent member。
-- `channel:members` 返回 channel 的 human/agent member id 列表。
+- `channel:members` 返回 channel 的 human/agent member id 列表；第七切片已在此基础上补充详情 DTO。
 - SQLite membership 表会持久化 add/remove 后的真实状态。
 - Web socket client 与 server socket handlers 的 channel membership 协议路径。
 
@@ -41,7 +41,6 @@ npm run build:packages
 这些不属于第三切片：
 
 - 成员弹窗 UI shell 与组件渲染。
-- 返回 human/agent member 详情 DTO；当前只返回 id 列表。
 - Channel leave/archive/delete。
 - DM thread 创建与 agent DM。
 - 成员变更后的实时 snapshot broadcast。

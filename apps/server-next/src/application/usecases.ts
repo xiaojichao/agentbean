@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ChannelDto, type DeviceDto, type DispatchDto, type MessageDto, type RuntimeDto, type TeamDto, type UserDto } from '../../../../packages/contracts/src/index';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ChannelDto, type ChannelMembersDto, type DeviceDto, type DispatchDto, type MessageDto, type RuntimeDto, type TeamDto, type UserDto } from '../../../../packages/contracts/src/index';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index';
 import type { ServerNextRepositories } from './repositories';
 
@@ -26,7 +26,7 @@ export interface ServerNextUseCases {
   removeChannelHumanMember(input: ChannelHumanMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
   addChannelAgentMember(input: ChannelAgentMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
   removeChannelAgentMember(input: ChannelAgentMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
-  listChannelMembers(input: ListChannelMembersInput): Promise<Ack<{ humanMemberIds: string[]; agentMemberIds: string[] }>>;
+  listChannelMembers(input: ListChannelMembersInput): Promise<Ack<ChannelMembersDto>>;
   registerAgent(input: AgentDto): Promise<Ack<{ agent: AgentDto }>>;
   sendMessage(input: SendMessageInput): Promise<Ack<SendMessageResult>>;
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
@@ -586,9 +586,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (channel.visibility === 'private' && !channel.humanMemberIds.includes(memberInput.userId)) {
         return makeFailure('FORBIDDEN', 'User cannot view channel');
       }
+      const agents: AgentDto[] = [];
+      for (const agentId of channel.agentMemberIds) {
+        const agent = await repositories.agents.getById(agentId);
+        if (agent && agent.visibleTeamIds.includes(memberInput.teamId)) {
+          agents.push(agent);
+        }
+      }
       return makeSuccess({
         humanMemberIds: channel.humanMemberIds,
         agentMemberIds: channel.agentMemberIds,
+        humans: await repositories.teams.listMembersByIds(memberInput.teamId, channel.humanMemberIds),
+        agents,
       });
     },
 

@@ -449,7 +449,12 @@ Ack<{ channel: ChannelDto }>
 Ack：
 
 ```ts
-Ack<{ humanMemberIds: string[]; agentMemberIds: string[] }>
+Ack<{
+  humanMemberIds: string[];
+  agentMemberIds: string[];
+  humans: HumanMemberDto[];
+  agents: AgentDto[];
+}>
 ```
 
 #### `channels:subscribe`

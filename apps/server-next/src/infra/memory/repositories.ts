@@ -73,6 +73,26 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       async getMemberRole(teamId, userId) {
         return members.get(`${teamId}:${userId}`)?.role ?? null;
       },
+      async listMembersByIds(teamId, userIds) {
+        return userIds.flatMap((userId) => {
+          const member = members.get(`${teamId}:${userId}`);
+          if (!member) {
+            return [];
+          }
+          const user = users.get(userId);
+          return [
+            {
+              id: `${teamId}:${userId}`,
+              teamId,
+              userId,
+              username: user?.username ?? member.username,
+              role: member.role,
+              displayName: user?.displayName,
+              avatarUrl: user?.avatarUrl,
+            },
+          ];
+        });
+      },
     },
     channels: {
       async create(input) {

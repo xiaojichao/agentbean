@@ -10,6 +10,7 @@ import {
   type AgentDto,
   type ChannelAgentMemberCommandDto,
   type ChannelDto,
+  type ChannelMembersDto,
   type ChannelHumanMemberCommandDto,
   type CreateChannelCommandDto,
   type DeviceDto,
@@ -131,6 +132,20 @@ describe('first-slice contract result shape', () => {
       teamId: team.id,
       channelId: channel.id,
     };
+    const channelMembers: ChannelMembersDto = {
+      humanMemberIds: [user.id],
+      agentMemberIds: [agent.id],
+      humans: [
+        {
+          id: `${team.id}:${user.id}`,
+          teamId: team.id,
+          userId: user.id,
+          username: user.username,
+          role: 'owner',
+        },
+      ],
+      agents: [agent],
+    };
 
     expect(ack.ok).toBe(true);
     expect(team.id).toBe(device.teamId);
@@ -141,6 +156,8 @@ describe('first-slice contract result shape', () => {
     expect(humanMemberCommand.memberUserId).toBe('user-2');
     expect(agentMemberCommand.agentId).toBe('agent-1');
     expect(listMembersCommand.channelId).toBe('channel-1');
+    expect(channelMembers.humans[0]?.username).toBe('shaw');
+    expect(channelMembers.agents[0]?.name).toBe('Codex');
   });
 
   test('exposes first-slice socket event constants without old network naming', () => {

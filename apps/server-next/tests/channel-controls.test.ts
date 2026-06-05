@@ -230,6 +230,20 @@ describe('server-next second-slice channel controls', () => {
       ok: true,
       humanMemberIds: ['user-1'],
       agentMemberIds: ['agent-1'],
+      humans: [
+        {
+          userId: 'user-1',
+          username: 'shaw',
+          role: 'owner',
+        },
+      ],
+      agents: [
+        {
+          id: 'agent-1',
+          name: 'Codex',
+          status: 'online',
+        },
+      ],
     });
 
     await expect(

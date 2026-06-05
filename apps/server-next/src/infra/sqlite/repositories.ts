@@ -132,6 +132,49 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .get(teamId, userId);
         return row ? (sqliteText(row, 'role') as TeamMemberRecord['role']) : null;
       },
+      async listMembersByIds(teamId, userIds) {
+        const members: Array<{
+          teamId: string;
+          userId: string;
+          username: string;
+          role: TeamMemberRecord['role'];
+          displayName?: string;
+        }> = [];
+        for (const userId of userIds) {
+          const row = globalDb
+            .prepare(
+              `SELECT
+                team_members.team_id,
+                team_members.user_id,
+                users.username,
+                users.display_name,
+                team_members.role,
+                team_members.joined_at
+              FROM team_members
+              JOIN users ON users.id = team_members.user_id
+              WHERE team_members.team_id = ?
+              AND team_members.user_id = ?`,
+            )
+            .get(teamId, userId);
+          if (row) {
+            members.push({
+              teamId: sqliteText(row, 'team_id'),
+              userId: sqliteText(row, 'user_id'),
+              username: sqliteText(row, 'username'),
+              role: sqliteText(row, 'role') as TeamMemberRecord['role'],
+              ...(sqliteNullableText(row, 'display_name') ? { displayName: sqliteNullableText(row, 'display_name') } : {}),
+            });
+          }
+        }
+        return members.map((member) => ({
+          id: `${member.teamId}:${member.userId}`,
+          teamId: member.teamId,
+          userId: member.userId,
+          username: member.username,
+          role: member.role,
+          displayName: member.displayName,
+        }));
+      },
     },
     channels: {
       async create(channel) {

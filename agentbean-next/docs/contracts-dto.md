@@ -78,12 +78,13 @@ export interface UserDto {
 
 ```ts
 export interface HumanMemberDto {
+  id: ID;
+  teamId: ID;
   userId: ID;
   username: string;
   displayName?: string | null;
+  avatarUrl?: string | null;
   role: "owner" | "member" | "admin";
-  description?: string | null;
-  joinedAt: UnixMs;
 }
 ```
 
@@ -91,6 +92,7 @@ export interface HumanMemberDto {
 
 - `HumanMemberDto` 是 team membership projection，不是完整 account record。
 - `role` 的作用域是 team membership。
+- `id` 是 membership projection id，当前实现使用 `${teamId}:${userId}`。
 
 ## TeamDto
 
@@ -273,6 +275,23 @@ export interface ChannelDto {
 - 第一切片可能只创建 public channels。
 - Private channel 与 DM fields 已包含进来，是为了让第一切片 snapshots 后续不需要破坏性 DTO 变更。
 
+## ChannelMembersDto
+
+```ts
+export interface ChannelMembersDto {
+  humanMemberIds: ID[];
+  agentMemberIds: ID[];
+  humans: HumanMemberDto[];
+  agents: AgentDto[];
+}
+```
+
+说明：
+
+- `channel:members` 返回 id 列表与详情 projection，方便 UI 保持兼容同时直接渲染成员弹窗。
+- `humanMemberIds` / `agentMemberIds` 是 channel membership 的原始 id 顺序。
+- `humans` / `agents` 是 server 已做 team visibility 与 repository projection 后的详情列表。旧数据中缺失或不可见的 agent 可以保留在 id 列表中，但不会出现在 `agents` 详情里。
+
 ## MessageDto
 
 ```ts
@@ -419,5 +438,5 @@ type DispatchErrorAck = Ack;
 - 第一切片统一使用 `TeamDto`，不再引入旧团队 DTO 别名。
 - 第一切片保留宽松且可选的 `DeviceSystemInfoDto`。只有在 daemon platform reporting 稳定后再收紧。
 - 第一切片 public DTO 不包含 `AgentDto.displayRank`。Display precedence 留在 server-side，并通过 ordered/projection results 验证，而不是暴露成 client contract field。
-- 在第一切片 `ChannelDto` 上保留可选的 `humanMemberIds` 与 `agentMemberIds` snapshot fields。后续 `channel:members` command 可以提供更丰富的 member details。
+- 在第一切片 `ChannelDto` 上保留可选的 `humanMemberIds` 与 `agentMemberIds` snapshot fields。第七切片的 `channel:members` command 已提供 `ChannelMembersDto`，同时返回 ids 与 human/agent detail projections。
 - 第一切片只允许在 `DispatchRequestDto` 内，把 raw `DispatchCustomAgentDto.env` 发给被选中的 daemon。后续 security hardening slice 应替换为 secret references 或 daemon-local secret storage。

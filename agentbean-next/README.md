@@ -31,6 +31,7 @@
 - `docs/fourth-slice-status.md` 记录第四切片 daemon protocol hardening 的实现、验证证据与剩余边界。
 - `docs/fifth-slice-status.md` 记录第五切片 web realtime boundary 的实现、验证证据与剩余边界。
 - `docs/sixth-slice-status.md` 记录第六切片 web reconnect resubscription 的实现、验证证据与剩余边界。
+- `docs/seventh-slice-status.md` 记录第七切片 channel member details DTO 的实现、验证证据与剩余边界。
 - `docs/first-slice-schema-repositories.md` 定义第一切片的新 SQLite schema 与 repository 接口。
 - `docs/migration-plan.md` 给出分阶段实现计划。
 - `docs/verification-matrix.md` 将必需测试映射到阶段和来源文档。
@@ -57,11 +58,11 @@
 
 ## 当前实现状态
 
-第一切片已经具备可运行的最小协议链路，第二切片已经补上 channel controls 的最小行为，第三切片已经补上 channel membership 的最小命令面，第四切片已经补上 daemon protocol hardening 的最小边界，第五切片已经补上 web realtime boundary 的最小客户端边界，第六切片已经补上 web reconnect resubscription 的最小恢复边界：
+第一切片已经具备可运行的最小协议链路，第二切片已经补上 channel controls 的最小行为，第三切片已经补上 channel membership 的最小命令面，第四切片已经补上 daemon protocol hardening 的最小边界，第五切片已经补上 web realtime boundary 的最小客户端边界，第六切片已经补上 web reconnect resubscription 的最小恢复边界，第七切片已经补上 channel member details DTO 的最小数据边界：
 
 - `packages/contracts`：共享 DTO、`Ack<T>`、error codes 与 socket event constants。
 - `packages/domain`：message routing、agent identity、status merge、channel visibility 与 creator controls 纯函数。
-- `apps/server-next`：SQLite schema/repositories、use cases、Socket.IO namespace adapters、channel controls、channel membership 与 E2E smoke。
+- `apps/server-next`：SQLite schema/repositories、use cases、Socket.IO namespace adapters、channel controls、channel membership、member detail projections 与 E2E smoke。
 - `apps/daemon-next`：daemon protocol client、stub executor、reconnect re-announcement 与 dispatch error/env 边界。
 - `apps/web-next`：web socket client、channel create/update/member commands、agent/channel subscriptions、message/dispatch realtime events、reconnect resubscription 与最小 session/state 边界。
 
