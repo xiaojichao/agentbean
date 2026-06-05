@@ -74,6 +74,26 @@ export interface SessionStore {
 }
 
 export function createWebSocketClient(transport: WebSocketTransport): WebSocketClient {
+  let agentSubscription: SubscribeInput | undefined;
+  let channelSubscription: SubscribeInput | undefined;
+  let onAgentSnapshot: ((agents: AgentDto[]) => void) | undefined;
+  let onChannelSnapshot: ((channels: ChannelDto[]) => void) | undefined;
+
+  transport.on('connect', () => {
+    if (agentSubscription) {
+      void transport.emitWithAck(WEB_EVENTS.agent.subscribe, agentSubscription);
+    }
+    if (channelSubscription) {
+      void transport.emitWithAck(WEB_EVENTS.channel.subscribe, channelSubscription);
+    }
+  });
+  transport.on(WEB_EVENTS.agent.snapshot, (payload) => {
+    onAgentSnapshot?.(payload as AgentDto[]);
+  });
+  transport.on(WEB_EVENTS.channel.snapshot, (payload) => {
+    onChannelSnapshot?.(payload as ChannelDto[]);
+  });
+
   return {
     register(input) {
       return transport.emitWithAck(WEB_EVENTS.auth.register, input);
@@ -85,15 +105,13 @@ export function createWebSocketClient(transport: WebSocketTransport): WebSocketC
       return transport.emitWithAck(WEB_EVENTS.team.list, input);
     },
     subscribeAgents(input, onSnapshot) {
-      transport.on(WEB_EVENTS.agent.snapshot, (payload) => {
-        onSnapshot(payload as AgentDto[]);
-      });
+      agentSubscription = input;
+      onAgentSnapshot = onSnapshot;
       return transport.emitWithAck(WEB_EVENTS.agent.subscribe, input);
     },
     subscribeChannels(input, onSnapshot) {
-      transport.on(WEB_EVENTS.channel.snapshot, (payload) => {
-        onSnapshot(payload as ChannelDto[]);
-      });
+      channelSubscription = input;
+      onChannelSnapshot = onSnapshot;
       return transport.emitWithAck(WEB_EVENTS.channel.subscribe, input);
     },
     onChannelMessage(handler) {

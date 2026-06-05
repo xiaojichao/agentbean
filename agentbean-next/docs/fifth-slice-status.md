@@ -35,6 +35,5 @@ npm run build:packages
 这些不属于第五切片：
 
 - 浏览器 UI shell 与组件渲染。
-- Reconnect 后自动重新调用所有 subscriptions 的连接管理器；当前只冻结 client API 与 snapshot replacement reducer。
 - Human/agent member 详情 DTO 与成员弹窗 UI。
 - Permission、channel visibility 或 agent dedupe 的 web-side fallback；这些仍由 server/domain 拥有。
