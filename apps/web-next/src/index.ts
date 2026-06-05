@@ -52,6 +52,7 @@ export interface WebSocketClient {
   listTeams(input: ListTeamsInput): Promise<unknown>;
   listDevices(input: SubscribeInput, onSnapshot?: (devices: DeviceDto[]) => void): Promise<unknown>;
   getDevice(input: { userId: string; deviceId: string }): Promise<unknown>;
+  scanDevice(input: { userId: string; deviceId: string }): Promise<unknown>;
   subscribeAgents(input: SubscribeInput, onSnapshot: (agents: AgentDto[]) => void): Promise<unknown>;
   subscribeChannels(input: SubscribeInput, onSnapshot: (channels: ChannelDto[]) => void): Promise<unknown>;
   onDeviceRuntimes(handler: (payload: { deviceId: string; runtimes: RuntimeDto[] }) => void): void;
@@ -124,6 +125,9 @@ export function createWebSocketClient(transport: WebSocketTransport): WebSocketC
     },
     getDevice(input) {
       return transport.emitWithAck(WEB_EVENTS.device.get, input);
+    },
+    scanDevice(input) {
+      return transport.emitWithAck(WEB_EVENTS.device.scan, input);
     },
     subscribeAgents(input, onSnapshot) {
       agentSubscription = input;

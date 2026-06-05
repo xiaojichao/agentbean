@@ -28,6 +28,7 @@ interface WebSocketSubscription {
 export function attachServerNextNamespaces(server: SocketServerLike, app: ServerNextUseCases): void {
   const agentNamespace = server.of('/agent');
   const webSubscribers = new Set<WebSocketSubscription>();
+  const agentSocketsByDeviceId = new Map<string, SocketLike>();
 
   server.of('/web').on('connection', (socket) => {
     const subscriber: WebSocketSubscription = { socket };
@@ -83,6 +84,9 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
       dispatch(request) {
         agentNamespace.emit?.(AGENT_EVENTS.dispatch.request, request);
       },
+      deviceScan(request) {
+        agentSocketsByDeviceId.get(request.deviceId)?.emit?.(AGENT_EVENTS.device.scanRequested, request);
+      },
       async afterChannelMutation(payload, result) {
         if (!isSuccessAck(result)) {
           return;
@@ -96,10 +100,28 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
     });
   });
   agentNamespace.on('connection', (socket) => {
+    let connectedDeviceId: string | undefined;
+    socket.on('disconnect', async () => {
+      if (connectedDeviceId && agentSocketsByDeviceId.get(connectedDeviceId) === socket) {
+        agentSocketsByDeviceId.delete(connectedDeviceId);
+      }
+    });
     registerAgentSocketHandlers(socket, app, {
       async afterDeviceMutation(payload, result) {
         if (!isSuccessAck(result)) {
           return;
+        }
+        const deviceId = resultDeviceId(result);
+        if (deviceId) {
+          if (
+            connectedDeviceId &&
+            connectedDeviceId !== deviceId &&
+            agentSocketsByDeviceId.get(connectedDeviceId) === socket
+          ) {
+            agentSocketsByDeviceId.delete(connectedDeviceId);
+          }
+          connectedDeviceId = deviceId;
+          agentSocketsByDeviceId.set(deviceId, socket);
         }
         const teamId = payloadTeamId(payload) ?? resultDeviceTeamId(result);
         if (!teamId) {
@@ -222,6 +244,14 @@ function resultDeviceTeamId(result: unknown): string | null {
   }
   const device = (result as { device?: { teamId?: unknown } }).device;
   return typeof device?.teamId === 'string' ? device.teamId : null;
+}
+
+function resultDeviceId(result: unknown): string | null {
+  if (!result || typeof result !== 'object') {
+    return null;
+  }
+  const device = (result as { device?: { id?: unknown } }).device;
+  return typeof device?.id === 'string' ? device.id : null;
 }
 
 function resultRuntimesPayload(result: unknown): { deviceId: string; runtimes: unknown[] } | null {

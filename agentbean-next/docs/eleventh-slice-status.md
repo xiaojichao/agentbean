@@ -32,6 +32,7 @@ npm run build:packages
 
 这些不属于第十一切片：
 
-- `device:scan` 请求路由到 daemon。
 - 成员弹窗 UI shell 与组件渲染。
 - Channel leave/archive/delete。
+
+后续第十二切片已补上 `device:scan` 请求路由到 daemon 的最小命令边界。

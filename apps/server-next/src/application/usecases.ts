@@ -17,6 +17,7 @@ export interface ServerNextUseCases {
   listTeams(input: { userId: string }): Promise<Ack<{ teams: TeamDto[] }>>;
   listDevices(input: { teamId: string; userId: string }): Promise<Ack<{ devices: DeviceDto[] }>>;
   getDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDetailDto }>>;
+  requestDeviceScan(input: RequestDeviceScanInput): Promise<Ack<RequestDeviceScanResult>>;
   deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto }>>;
   reportDeviceRuntimes(input: ReportDeviceRuntimesInput): Promise<Ack<{ runtimes: RuntimeDto[] }>>;
   registerDiscoveredAgents(input: RegisterDiscoveredAgentsInput): Promise<Ack<RegisterDiscoveredAgentsResult>>;
@@ -67,6 +68,18 @@ export interface DeviceHelloInput {
   hostname?: string;
   daemonVersion?: string;
   systemInfo?: DeviceDto['systemInfo'];
+}
+
+export interface RequestDeviceScanInput {
+  userId: string;
+  deviceId: string;
+}
+
+export interface RequestDeviceScanResult {
+  request: {
+    requestId: string;
+    deviceId: string;
+  };
 }
 
 export interface ReportDeviceRuntimesInput {
@@ -335,6 +348,26 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ...toDeviceDto(device),
           runtimes: (await repositories.runtimes.listByDevice(device.id)).map(toRuntimeDto),
           agents: visibleAgents.filter((agent) => agent.deviceId === device.id),
+        },
+      });
+    },
+
+    async requestDeviceScan(scanInput) {
+      const device = await repositories.devices.getById(scanInput.deviceId);
+      if (!device) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      if (!(await repositories.teams.isMember(device.teamId, scanInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      if (device.status !== 'online') {
+        return makeFailure('DEVICE_OFFLINE', 'Device is not online');
+      }
+
+      return makeSuccess({
+        request: {
+          requestId: ids.nextId(),
+          deviceId: device.id,
         },
       });
     },
