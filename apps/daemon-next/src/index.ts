@@ -31,6 +31,13 @@ export interface DaemonAgentReport {
   gatewayInstanceKey?: string;
 }
 
+export interface DaemonScanSnapshot {
+  runtimes: DaemonRuntimeReport[];
+  agents: DaemonAgentReport[];
+}
+
+export type DaemonScanProvider = () => Promise<DaemonScanSnapshot>;
+
 export interface DispatchRequestPayload {
   id: string;
   teamId: string;
@@ -48,6 +55,7 @@ export interface CreateDaemonProtocolClientInput {
   device: DaemonDeviceConfig;
   runtimes: DaemonRuntimeReport[];
   agents: DaemonAgentReport[];
+  scan?: DaemonScanProvider;
 }
 
 export interface DaemonProtocolClient {
@@ -55,12 +63,23 @@ export interface DaemonProtocolClient {
 }
 
 export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInput): DaemonProtocolClient {
-  const { socket, executor, device, runtimes, agents } = input;
+  const { socket, executor, device, runtimes, agents, scan } = input;
 
   return {
     async start() {
-      await announceDeviceSnapshot(socket, device, runtimes, agents);
-      socket.onReconnect?.(() => announceDeviceSnapshot(socket, device, runtimes, agents));
+      let currentDeviceId = await announceDeviceSnapshot(socket, device, runtimes, agents);
+      socket.onReconnect?.(async () => {
+        currentDeviceId = await announceDeviceSnapshot(socket, device, runtimes, agents);
+      });
+
+      socket.on(AGENT_EVENTS.device.scanRequested, async (payload) => {
+        const request = readScanRequest(payload);
+        if (request.deviceId !== currentDeviceId) {
+          return;
+        }
+        const snapshot = scan ? await scan() : { runtimes, agents };
+        await reportDeviceSnapshot(socket, device.teamId, currentDeviceId, snapshot.runtimes, snapshot.agents);
+      });
 
       socket.on(AGENT_EVENTS.dispatch.request, async (payload) => {
         const request = payload as DispatchRequestPayload;
@@ -88,20 +107,42 @@ async function announceDeviceSnapshot(
   device: DaemonDeviceConfig,
   runtimes: DaemonRuntimeReport[],
   agents: DaemonAgentReport[],
-): Promise<void> {
+): Promise<string> {
   const helloAck = await socket.emitWithAck(AGENT_EVENTS.device.hello, device);
   const deviceId = readAckDeviceId(helloAck);
 
+  await reportDeviceSnapshot(socket, device.teamId, deviceId, runtimes, agents);
+  return deviceId;
+}
+
+async function reportDeviceSnapshot(
+  socket: DaemonProtocolSocket,
+  teamId: string,
+  deviceId: string,
+  runtimes: DaemonRuntimeReport[],
+  agents: DaemonAgentReport[],
+): Promise<void> {
   await socket.emitWithAck(AGENT_EVENTS.device.runtimes, {
-    teamId: device.teamId,
+    teamId,
     deviceId,
     runtimes,
   });
   await socket.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
-    teamId: device.teamId,
+    teamId,
     deviceId,
     agents,
   });
+}
+
+function readScanRequest(payload: unknown): { requestId: string; deviceId: string } {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('device:scan-requested payload missing request');
+  }
+  const request = payload as { requestId?: unknown; deviceId?: unknown };
+  if (typeof request.requestId !== 'string' || typeof request.deviceId !== 'string') {
+    throw new Error('device:scan-requested payload missing request id or device id');
+  }
+  return { requestId: request.requestId, deviceId: request.deviceId };
 }
 
 function readAckDeviceId(ack: unknown): string {
