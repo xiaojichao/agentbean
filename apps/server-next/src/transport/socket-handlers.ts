@@ -16,6 +16,10 @@ export interface WebSocketHandlerOptions {
   afterChannelMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
 
+export interface AgentSocketHandlerOptions {
+  afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
+}
+
 export function registerWebSocketHandlers(
   socket: SocketLike,
   app: ServerNextUseCases,
@@ -51,12 +55,18 @@ export function registerWebSocketHandlers(
   });
 }
 
-export function registerAgentSocketHandlers(socket: SocketLike, app: ServerNextUseCases): void {
+export function registerAgentSocketHandlers(
+  socket: SocketLike,
+  app: ServerNextUseCases,
+  options: AgentSocketHandlerOptions = {},
+): void {
   bind(socket, AGENT_EVENTS.device.hello, app, 'deviceHello');
   bind(socket, AGENT_EVENTS.device.runtimes, app, 'reportDeviceRuntimes');
-  bind(socket, AGENT_EVENTS.agent.registerBatch, app, 'registerDiscoveredAgents');
-  bind(socket, AGENT_EVENTS.dispatch.result, app, 'receiveDispatchResult');
-  bind(socket, AGENT_EVENTS.dispatch.error, app, 'receiveDispatchError');
+  const afterAgentMutation = (payload: unknown, result: unknown) =>
+    options.afterAgentMutation?.(payload, result);
+  bind(socket, AGENT_EVENTS.agent.registerBatch, app, 'registerDiscoveredAgents', afterAgentMutation);
+  bind(socket, AGENT_EVENTS.dispatch.result, app, 'receiveDispatchResult', afterAgentMutation);
+  bind(socket, AGENT_EVENTS.dispatch.error, app, 'receiveDispatchError', afterAgentMutation);
 }
 
 function bind(

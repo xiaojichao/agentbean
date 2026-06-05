@@ -205,6 +205,71 @@ describe('server-next Socket.IO namespaces', () => {
       expect(teammateSnapshots.at(-1)).toEqual(['channel-all']);
     });
   });
+
+  test('refreshes agent snapshots after daemon agent reports change status', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-all', 'device-1', 'agent-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const web = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      web.disconnect();
+      agent.disconnect();
+    });
+
+    await web.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+
+    const agentSnapshots: Array<Array<{ id: string; status: string }>> = [];
+    web.on(WEB_EVENTS.agent.snapshot, (agents) => {
+      agentSnapshots.push(agentSummaries(agents));
+    });
+    await expect(
+      web.emitWithAck(WEB_EVENTS.agent.subscribe, { userId: 'user-1', teamId: 'team-1' }),
+    ).resolves.toMatchObject({ ok: true, agents: [] });
+    await eventually(async () => {
+      expect(agentSnapshots.at(-1)).toEqual([]);
+    });
+
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'device-1' } });
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      }),
+    ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-1', status: 'online' }] });
+    await eventually(async () => {
+      expect(agentSnapshots.at(-1)).toEqual([{ id: 'agent-1', status: 'online' }]);
+    });
+
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        agents: [],
+      }),
+    ).resolves.toMatchObject({ ok: true, missingOfflineIds: ['agent-1'] });
+    await eventually(async () => {
+      expect(agentSnapshots.at(-1)).toEqual([{ id: 'agent-1', status: 'offline' }]);
+    });
+  });
 });
 
 async function startSocketServer(app: ReturnType<typeof createInMemoryServerNext>) {
@@ -269,5 +334,17 @@ function channelIds(payload: unknown): string[] {
       throw new Error('Expected channel snapshot item to include id');
     }
     return String(channel.id);
+  });
+}
+
+function agentSummaries(payload: unknown): Array<{ id: string; status: string }> {
+  if (!Array.isArray(payload)) {
+    throw new Error('Expected agent snapshot payload to be an array');
+  }
+  return payload.map((agent) => {
+    if (!agent || typeof agent !== 'object' || !('id' in agent) || !('status' in agent)) {
+      throw new Error('Expected agent snapshot item to include id and status');
+    }
+    return { id: String(agent.id), status: String(agent.status) };
   });
 }

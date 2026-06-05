@@ -51,6 +51,7 @@ Phase 1 完成标准：
 | P2-07 | Agent register batch 使用 identity links 创建/链接 canonical agents。 | UseCase | Agent dedupe persisted。 | `agent-identity-rules.md`, `first-slice-schema-repositories.md` |
 | P2-08 | Missing scanned agent 变为 offline，且不删除 membership/history。 | UseCase | Missing scan behavior。 | `acceptance-tests.md`, `agent-identity-rules.md` |
 | P2-09 | `listVisibleAgents` 返回 primary-team 与 published agents，且没有 clones。 | UseCase | Visibility projection。 | `agent-identity-rules.md`, `feature-disposition.md` |
+| P2-09a | `agents:subscribe` 成功后发送 initial snapshot，daemon agent batch/status 变化后刷新 subscribed sockets。 | Socket | Agent subscription broadcast。 | `socket-protocol.md`, `known-gaps.md` |
 | P2-10 | Public channel list 对 team member 可见。 | UseCase | Channel visibility。 | `acceptance-tests.md` |
 | P2-10a | Private channel 创建时 creator 自动可见，非 member 不可见。 | UseCase | Channel creator visibility。 | `current-behavior.md`, `feature-disposition.md` |
 | P2-10b | 非默认频道 settings 只允许 creator 更新。 | UseCase | Channel creator controls。 | `current-behavior.md`, `feature-disposition.md` |
