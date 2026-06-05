@@ -1,4 +1,6 @@
 import type { ID, UnixMs } from './common';
+import type { AgentDto } from './agent';
+import type { HumanMemberDto } from './auth';
 
 export type ChannelKind = 'channel' | 'direct';
 export type ChannelVisibility = 'public' | 'private';
@@ -54,4 +56,11 @@ export interface ListChannelMembersCommandDto {
   userId: ID;
   teamId: ID;
   channelId: ID;
+}
+
+export interface ChannelMembersDto {
+  humanMemberIds: ID[];
+  agentMemberIds: ID[];
+  humans: HumanMemberDto[];
+  agents: AgentDto[];
 }

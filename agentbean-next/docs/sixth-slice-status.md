@@ -35,4 +35,4 @@ npm run build:packages
 - 浏览器 UI shell 与组件渲染。
 - Socket.IO 真实 browser runtime 的 backoff、disconnect reason 与 auth refresh 策略。
 - 多 team 同时订阅；当前 web-next client 只维护当前 active team 的 agent/channel subscriptions。
-- Human/agent member 详情 DTO 与成员弹窗 UI。
+- 成员弹窗 UI。

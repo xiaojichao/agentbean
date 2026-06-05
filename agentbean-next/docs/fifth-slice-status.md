@@ -35,5 +35,5 @@ npm run build:packages
 这些不属于第五切片：
 
 - 浏览器 UI shell 与组件渲染。
-- Human/agent member 详情 DTO 与成员弹窗 UI。
+- 成员弹窗 UI。
 - Permission、channel visibility 或 agent dedupe 的 web-side fallback；这些仍由 server/domain 拥有。

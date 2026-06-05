@@ -179,6 +179,11 @@ describe('server-next SQLite repositories', () => {
         ok: true,
         humanMemberIds: ['user-1', 'user-2'],
         agentMemberIds: ['agent-1'],
+        humans: [
+          { userId: 'user-1', username: 'shaw', role: 'owner' },
+          { userId: 'user-2', username: 'teammate', role: 'member' },
+        ],
+        agents: [{ id: 'agent-1', name: 'Codex', status: 'online' }],
       });
       await app.removeChannelHumanMember({
         userId: 'user-1',
