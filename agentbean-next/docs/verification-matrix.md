@@ -48,6 +48,7 @@ Phase 1 完成标准：
 | P2-04 | Login 在 membership 有效时恢复 saved current team。 | UseCase | Current team behavior。 | `acceptance-tests.md` |
 | P2-05 | Device hello upsert device，并调和 `machineId + profileId`。 | UseCase | Agent dedupe 前的 device identity。 | `agent-identity-rules.md`, `first-slice-schema-repositories.md` |
 | P2-05a | `device:list` 成功后发送 initial snapshot，daemon hello/runtimes 后刷新 subscribed sockets。 | Socket | Device subscription broadcast。 | `socket-protocol.md`, `known-gaps.md` |
+| P2-05b | `device:get` 返回 device detail、runtimes 与该 device 的 visible agents，并拒绝非 team member。 | UseCase/Socket | Device detail shell。 | `socket-protocol.md`, `contracts-dto.md` |
 | P2-06 | Runtime report 替换 device 的 runtimes，并保留 normalized path keys。 | Repository/UseCase | Runtime capability model。 | `contracts-dto.md`, `agent-identity-rules.md` |
 | P2-07 | Agent register batch 使用 identity links 创建/链接 canonical agents。 | UseCase | Agent dedupe persisted。 | `agent-identity-rules.md`, `first-slice-schema-repositories.md` |
 | P2-08 | Missing scanned agent 变为 offline，且不删除 membership/history。 | UseCase | Missing scan behavior。 | `acceptance-tests.md`, `agent-identity-rules.md` |

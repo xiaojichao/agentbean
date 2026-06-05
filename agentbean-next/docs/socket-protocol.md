@@ -193,7 +193,7 @@ Ack<{ devices: DeviceDto[] }>
 客户端：
 
 ```ts
-{ deviceId: string }
+{ userId: string; deviceId: string }
 ```
 
 Ack：
@@ -201,6 +201,11 @@ Ack：
 ```ts
 Ack<{ device: DeviceDetailDto }>
 ```
+
+服务器行为：
+
+- `device:get` 成功前，server 会根据 device 所属 team 确认 `userId` 是 team member。
+- `DeviceDetailDto` 包含 device projection、该 device 的 runtimes，以及对该 team 可见且绑定到该 device 的 agents。
 
 #### `device:scan`
 

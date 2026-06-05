@@ -29,6 +29,7 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.auth.register, app, 'registerUser');
   bind(socket, WEB_EVENTS.auth.login, app, 'loginUser');
   bind(socket, WEB_EVENTS.team.list, app, 'listTeams');
+  bind(socket, WEB_EVENTS.device.get, app, 'getDevice');
   bind(socket, WEB_EVENTS.channel.create, app, 'createChannel');
   bind(socket, WEB_EVENTS.channel.update, app, 'updateChannel');
   const afterChannelMutation = (payload: unknown, result: unknown) =>

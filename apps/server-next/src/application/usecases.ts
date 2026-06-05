@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ChannelDto, type ChannelMembersDto, type DeviceDto, type DispatchDto, type MessageDto, type RuntimeDto, type TeamDto, type UserDto } from '../../../../packages/contracts/src/index';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DispatchDto, type MessageDto, type RuntimeDto, type TeamDto, type UserDto } from '../../../../packages/contracts/src/index';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index';
 import type { ServerNextRepositories } from './repositories';
 
@@ -16,6 +16,7 @@ export interface ServerNextUseCases {
   loginUser(input: LoginUserInput): Promise<Ack<LoginUserResult>>;
   listTeams(input: { userId: string }): Promise<Ack<{ teams: TeamDto[] }>>;
   listDevices(input: { teamId: string; userId: string }): Promise<Ack<{ devices: DeviceDto[] }>>;
+  getDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDetailDto }>>;
   deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto }>>;
   reportDeviceRuntimes(input: ReportDeviceRuntimesInput): Promise<Ack<{ runtimes: RuntimeDto[] }>>;
   registerDiscoveredAgents(input: RegisterDiscoveredAgentsInput): Promise<Ack<RegisterDiscoveredAgentsResult>>;
@@ -317,6 +318,24 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       return makeSuccess({
         devices: (await repositories.devices.listByTeam(deviceListInput.teamId)).map(toDeviceDto),
+      });
+    },
+
+    async getDevice(deviceDetailInput) {
+      const device = await repositories.devices.getById(deviceDetailInput.deviceId);
+      if (!device) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      if (!(await repositories.teams.isMember(device.teamId, deviceDetailInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const visibleAgents = await repositories.agents.listVisibleInTeam(device.teamId);
+      return makeSuccess({
+        device: {
+          ...toDeviceDto(device),
+          runtimes: (await repositories.runtimes.listByDevice(device.id)).map(toRuntimeDto),
+          agents: visibleAgents.filter((agent) => agent.deviceId === device.id),
+        },
       });
     },
 
