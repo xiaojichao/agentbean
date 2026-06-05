@@ -91,6 +91,7 @@ Phase 2 完成标准：
 | P3-06 | Stub executor 返回 dispatch error。 | Daemon | Execution failure path。 | `socket-protocol.md`, `contracts-dto.md` |
 | P3-07 | Raw `customAgent.env` 只在被选中 daemon dispatch 时消费，且不记录到日志。 | Daemon | First-slice env safety。 | `contracts-dto.md` |
 | P3-08 | Reconnect 会重新发送 device hello、runtimes 与 agent batch。 | Daemon | Reconnect consistency。 | `known-gaps.md`, `acceptance-tests.md` |
+| P3-09 | Daemon 收到匹配当前 device 的 `device:scan-requested` 后重新扫描并上报 runtimes 与 agents；不匹配 deviceId 不触发扫描。 | Daemon | Targeted rescan command。 | `socket-protocol.md`, `current-protocol-inventory.md` |
 
 Phase 3 完成标准：
 

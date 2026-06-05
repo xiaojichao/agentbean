@@ -35,6 +35,7 @@ npm run build:packages
 
 这些不属于第十二切片：
 
-- Daemon-next 收到 `device:scan-requested` 后触发真实 runtime/agent rescan。
 - 成员弹窗 UI shell 与组件渲染。
 - Channel leave/archive/delete。
+
+后续第十三切片已补上 Daemon-next 收到 `device:scan-requested` 后重新上报 runtime/agent snapshot 的最小协议边界。

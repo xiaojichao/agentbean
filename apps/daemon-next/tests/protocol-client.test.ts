@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { AGENT_EVENTS, type DispatchRequestDto } from '../../../packages/contracts/src/index';
+import { AGENT_EVENTS } from '../../../packages/contracts/src/index';
 import {
   createDaemonProtocolClient,
   type DispatchRequestPayload,
@@ -73,6 +73,74 @@ describe('daemon-next protocol client', () => {
       [AGENT_EVENTS.device.hello, { teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' }],
       [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-2', runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }] }],
       [AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-2', agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }] }],
+    ]);
+  });
+
+  test('handles targeted scan requests by reporting fresh runtimes and agents', async () => {
+    const socket = new FakeAgentSocket();
+    let scanCount = 0;
+    const client = createDaemonProtocolClient({
+      socket,
+      executor: async (request) => `stub:${request.prompt}`,
+      device: {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+      },
+      runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }],
+      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      scan: async () => {
+        scanCount += 1;
+        return {
+          runtimes: [{ adapterKind: 'claude-code', name: 'Claude Code' }],
+          agents: [{ name: 'Claude', adapterKind: 'claude-code', category: 'executor-hosted' }],
+        };
+      },
+    });
+
+    await client.start();
+    await socket.trigger(AGENT_EVENTS.device.scanRequested, {
+      requestId: 'scan-1',
+      deviceId: 'device-1',
+    });
+
+    expect(scanCount).toBe(1);
+    expect(socket.emitted.slice(-2)).toEqual([
+      [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-1', runtimes: [{ adapterKind: 'claude-code', name: 'Claude Code' }] }],
+      [AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-1', agents: [{ name: 'Claude', adapterKind: 'claude-code', category: 'executor-hosted' }] }],
+    ]);
+  });
+
+  test('ignores scan requests for a different device id', async () => {
+    const socket = new FakeAgentSocket();
+    let scanCount = 0;
+    const client = createDaemonProtocolClient({
+      socket,
+      executor: async (request) => `stub:${request.prompt}`,
+      device: { teamId: 'team-1', ownerId: 'user-1' },
+      runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }],
+      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      scan: async () => {
+        scanCount += 1;
+        return {
+          runtimes: [],
+          agents: [],
+        };
+      },
+    });
+
+    await client.start();
+    await socket.trigger(AGENT_EVENTS.device.scanRequested, {
+      requestId: 'scan-1',
+      deviceId: 'other-device',
+    });
+
+    expect(scanCount).toBe(0);
+    expect(socket.emitted).toEqual([
+      [AGENT_EVENTS.device.hello, { teamId: 'team-1', ownerId: 'user-1' }],
+      [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-1', runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }] }],
+      [AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-1', agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }] }],
     ]);
   });
 
@@ -171,7 +239,7 @@ class FakeAgentSocket implements DaemonProtocolSocket {
     this.reconnectHandler = handler;
   }
 
-  async trigger(event: string, payload: DispatchRequestDto & { id: string }): Promise<void> {
+  async trigger(event: string, payload: unknown): Promise<void> {
     const handler = this.handlers.get(event);
     if (!handler) {
       throw new Error(`No handler for ${event}`);
