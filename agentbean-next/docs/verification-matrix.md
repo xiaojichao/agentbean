@@ -92,6 +92,7 @@ Phase 2 完成标准：
 | P3-07 | Raw `customAgent.env` 只在被选中 daemon dispatch 时消费，且不记录到日志。 | Daemon | First-slice env safety。 | `contracts-dto.md` |
 | P3-08 | Reconnect 会重新发送 device hello、runtimes 与 agent batch。 | Daemon | Reconnect consistency。 | `known-gaps.md`, `acceptance-tests.md` |
 | P3-09 | Daemon 收到匹配当前 device 的 `device:scan-requested` 后重新扫描并上报 runtimes 与 agents；不匹配 deviceId 不触发扫描。 | Daemon | Targeted rescan command。 | `socket-protocol.md`, `current-protocol-inventory.md` |
+| P3-10 | Builtin scanner 发现 known CLI runtimes，并只为 installed runtimes 生成 executor-hosted agent reports。 | Daemon | Runtime/agent scan provider。 | `current-behavior.md`, `feature-disposition.md` |
 
 Phase 3 完成标准：
 

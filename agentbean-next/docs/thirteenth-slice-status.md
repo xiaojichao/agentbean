@@ -32,6 +32,7 @@ npm run build:packages
 
 这些不属于第十三切片：
 
-- 把真实 runtime scanner / agent discovery scanner 接入 daemon-next CLI。
 - 成员弹窗 UI shell 与组件渲染。
 - Channel leave/archive/delete。
+
+后续第十四切片已补上 daemon-next builtin scanner provider；CLI runtime 接线仍需要后续入口切片。

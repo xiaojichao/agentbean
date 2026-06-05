@@ -1,5 +1,8 @@
 import { AGENT_EVENTS, type AgentCategory, type DispatchCustomAgentDto } from '../../../packages/contracts/src/index';
 
+export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner';
+export type { BuiltinScannerOptions } from './scanner';
+
 export interface DaemonProtocolSocket {
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
   on(event: string, handler: (payload: unknown) => Promise<void>): void;
@@ -22,6 +25,7 @@ export interface DaemonRuntimeReport {
   command?: string;
   cwd?: string;
   version?: string;
+  installed?: boolean;
 }
 
 export interface DaemonAgentReport {
