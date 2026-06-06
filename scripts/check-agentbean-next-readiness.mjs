@@ -127,6 +127,16 @@ export function collectAgentBeanNextReadinessChecks({
       'CI must block manual AgentBean Next production deploys that do not also request production smoke',
     ),
     check(
+      'ci-requires-repository-target-for-manual-next-deploy',
+      workflow.includes('Require repository deploy target for manual AgentBean Next deploy') &&
+        workflow.includes('repository variable AGENTBEAN_DEPLOY_TARGET=next') &&
+        workflow.includes('The workflow input alone is not the final production flip') &&
+        workflow.includes("inputs.run_production_deploy && env.AGENTBEAN_DEPLOY_TARGET == 'next' && vars.AGENTBEAN_DEPLOY_TARGET != 'next'") &&
+        cutoverRunbook.includes('workflow input alone') &&
+        cutoverRunbook.includes('repository variable，不是 workflow dispatch input'),
+      'CI must block manual AgentBean Next deploys when only the workflow input is next but the repository variable is still old',
+    ),
+    check(
       'ci-requires-old-smoke-for-manual-rollback-deploy',
       workflow.includes('Require old production smoke for manual AgentBean rollback deploy') &&
         workflow.includes('Manual old AgentBean production deploy requires run_agentbean_old_production_smoke=true') &&

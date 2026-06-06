@@ -273,6 +273,12 @@ jobs:
           AGENTBEAN_NEXT_DATA_DIR: ${{ vars.AGENTBEAN_NEXT_DATA_DIR }}
         run: npm run check:agentbean-next-readiness -- --production
 
+      - name: Require repository deploy target for manual AgentBean Next deploy
+        if: github.event_name == 'workflow_dispatch' && inputs.run_production_deploy && env.AGENTBEAN_DEPLOY_TARGET == 'next' && vars.AGENTBEAN_DEPLOY_TARGET != 'next'
+        run: |
+          echo "::error::Manual AgentBean Next production deploy requires repository variable AGENTBEAN_DEPLOY_TARGET=next. The workflow input alone is not the final production flip."
+          exit 1
+
       - name: Require production smoke for manual AgentBean Next deploy
         if: github.event_name == 'workflow_dispatch' && inputs.run_production_deploy && env.AGENTBEAN_DEPLOY_TARGET == 'next' && !inputs.run_agentbean_next_production_smoke
         run: |
