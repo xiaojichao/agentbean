@@ -99,6 +99,18 @@ describe('server-next Socket.IO namespaces', () => {
         agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
       }),
     ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-1', status: 'online' }] });
+
+    const channelMessages: unknown[] = [];
+    web.on(WEB_EVENTS.channel.message, (message) => {
+      channelMessages.push(message);
+    });
+    await expect(
+      web.emitWithAck(WEB_EVENTS.channel.subscribe, {
+        userId: 'user-1',
+        teamId: 'team-1',
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
     await expect(
       web.emitWithAck(WEB_EVENTS.message.send, {
         userId: 'user-1',
@@ -121,6 +133,11 @@ describe('server-next Socket.IO namespaces', () => {
       ok: true,
       dispatch: { id: 'dispatch-1', status: 'succeeded' },
       message: { id: 'reply-1', senderKind: 'agent', body: 'done' },
+    });
+    await eventually(async () => {
+      expect(channelMessages).toEqual([
+        expect.objectContaining({ id: 'reply-1', senderKind: 'agent', body: 'done' }),
+      ]);
     });
   });
 

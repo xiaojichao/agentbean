@@ -231,11 +231,17 @@
       el("auth-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         const data = Object.fromEntries(new FormData(event.currentTarget));
-        const ack = await emit("auth:register", data);
+        let ack = await emit("auth:register", data);
+        if (!ack.ok && ack.error === "CONFLICT") {
+          ack = await emit("auth:login", {
+            username: data.username,
+            password: data.password,
+          });
+        }
         if (!ack.ok) return;
         state.user = ack.user;
         state.team = ack.currentTeam;
-        state.channel = ack.defaultChannel;
+        state.channel = ack.defaultChannel || state.channel;
         await subscribe();
         render();
       });
