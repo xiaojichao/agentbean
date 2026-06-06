@@ -35,6 +35,11 @@ on:
         required: true
         default: false
         type: boolean
+      sync_railway_next_runtime_env:
+        description: Sync AgentBean Next runtime variables into Railway without deploying.
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -324,13 +329,61 @@ jobs:
       - name: Run Railway AgentBean Next preflight
         run: npm run check:agentbean-next-railway-preflight
 
+  railway-next-env-sync:
+    name: Railway Next env sync
+    runs-on: ubuntu-latest
+    needs:
+      - validate-agentbean-next
+    if: github.event_name == 'workflow_dispatch' && inputs.sync_railway_next_runtime_env
+    timeout-minutes: 10
+
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_PROJECT_ID: c6b70675-f7d5-47a1-a8e7-05b37d13e476
+      RAILWAY_SERVICE_ID: 7b1dce9b-b7e7-4cfb-bb3f-ef86d10e8647
+      RAILWAY_ENVIRONMENT: e9c1a221-28b1-49c0-b279-be249a428737
+      AGENTBEAN_DEPLOY_TARGET: next
+      AGENTBEAN_NEXT_SESSION_SECRET: ${{ secrets.AGENTBEAN_NEXT_SESSION_SECRET }}
+      AGENTBEAN_NEXT_DATA_DIR: ${{ vars.AGENTBEAN_NEXT_DATA_DIR }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js for Railway CLI
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.15.0
+
+      - name: Run AgentBean Next production readiness checks
+        run: npm run check:agentbean-next-readiness -- --production
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Sync Railway AgentBean Next runtime env
+        run: |
+          railway variable set "AGENTBEAN_NEXT_DATA_DIR=${AGENTBEAN_NEXT_DATA_DIR}" \
+            --service "$RAILWAY_SERVICE_ID" \
+            --environment "$RAILWAY_ENVIRONMENT" \
+            --skip-deploys
+
+          printf '%s' "$AGENTBEAN_NEXT_SESSION_SECRET" | railway variable set AGENTBEAN_NEXT_SESSION_SECRET \
+            --service "$RAILWAY_SERVICE_ID" \
+            --environment "$RAILWAY_ENVIRONMENT" \
+            --stdin \
+            --skip-deploys
+
+      - name: Verify Railway AgentBean Next preflight
+        run: npm run check:agentbean-next-railway-preflight
+
   publish:
     name: Publish agent to npm
     runs-on: ubuntu-latest
     needs:
       - validate
       - validate-agentbean-next
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && !inputs.run_railway_preflight)
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env)
     timeout-minutes: 15
 
     env:

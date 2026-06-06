@@ -20,6 +20,7 @@
 - `workflow_dispatch` 可以把 `agentbean_npm_publish_target=next` 与 `agentbean_deploy_target=old` 组合使用，先发布 next npm packages 而不替换 Railway production deploy。
 - `workflow_dispatch` 只有 `run_production_deploy=true` 时才会运行 Railway production deploy。
 - `workflow_dispatch` 可以设置 `run_railway_preflight=true` 单独运行 `Railway Next preflight`，只读验证 Railway production runtime env 与 volume，不执行 `railway up`。
+- `workflow_dispatch` 可以设置 `sync_railway_next_runtime_env=true` 单独运行 `Railway Next env sync`，把 GitHub Actions 中的 Next runtime env 写入 Railway variables，并使用 `--skip-deploys` 避免触发部署。
 - production readiness 会检查：
   - `AGENTBEAN_DEPLOY_TARGET=next`
   - `RAILWAY_TOKEN`
@@ -116,7 +117,8 @@ gh workflow run "CI/CD" \
   -f agentbean_deploy_target=old \
   -f agentbean_npm_publish_target=old \
   -f run_production_deploy=false \
-  -f run_railway_preflight=true
+  -f run_railway_preflight=true \
+  -f sync_railway_next_runtime_env=false
 ```
 
 预期：
@@ -127,6 +129,27 @@ gh workflow run "CI/CD" \
 - `Run AgentBean Next production readiness checks` 通过。
 - `Run Railway AgentBean Next preflight` 通过。
 - preflight 日志只输出检查项通过/失败，不输出 `AGENTBEAN_NEXT_SESSION_SECRET` 明文。
+
+如果 preflight 仅缺少 Railway variables，先运行显式 env sync：
+
+```bash
+gh workflow run "CI/CD" \
+  --repo xiaojichao/agentbean \
+  --ref main \
+  -f agentbean_deploy_target=old \
+  -f agentbean_npm_publish_target=old \
+  -f run_production_deploy=false \
+  -f run_railway_preflight=false \
+  -f sync_railway_next_runtime_env=true
+```
+
+预期：
+
+- `Deploy production` 不运行。
+- `Publish agent to npm` 不运行。
+- `Railway Next env sync` 运行。
+- `Sync Railway AgentBean Next runtime env` 使用 `--skip-deploys`，不会触发 Railway deploy。
+- `Verify Railway AgentBean Next preflight` 通过。
 
 ## 切换前本地验证
 

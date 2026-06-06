@@ -145,6 +145,19 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes('run: npm run check:agentbean-next-readiness -- --production'),
       'CI must allow read-only Railway Next preflight without running production deploy',
     ),
+    check(
+      'ci-syncs-railway-next-env-without-deploy',
+      workflow.includes('sync_railway_next_runtime_env') &&
+        workflow.includes('Railway Next env sync') &&
+        workflow.includes("if: github.event_name == 'workflow_dispatch' && inputs.sync_railway_next_runtime_env") &&
+        workflow.includes('railway variable set "AGENTBEAN_NEXT_DATA_DIR=${AGENTBEAN_NEXT_DATA_DIR}"') &&
+        workflow.includes('railway variable set AGENTBEAN_NEXT_SESSION_SECRET') &&
+        workflow.includes('--stdin') &&
+        workflow.includes('--skip-deploys') &&
+        workflow.includes('Verify Railway AgentBean Next preflight') &&
+        workflow.includes("!inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env"),
+      'CI must allow explicitly syncing Railway Next runtime env without deploy or npm publish',
+    ),
   ];
 
   if (production) {
