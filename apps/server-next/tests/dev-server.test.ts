@@ -56,19 +56,50 @@ describe('server-next dev server entry', () => {
   test('uses platform PORT for production-style startup defaults', () => {
     expect(
       parseServerNextDevConfig({
-        env: { PORT: '4108', AGENTBEAN_NEXT_SESSION_SECRET: 'prod-secret' },
+        env: {
+          PORT: '4108',
+          AGENTBEAN_NEXT_DATA_DIR: '/tmp/prod-agentbean-next',
+          AGENTBEAN_NEXT_SESSION_SECRET: 'prod-secret',
+        },
         argv: [],
       }),
     ).toEqual({
       host: '0.0.0.0',
       port: 4108,
       storage: 'sqlite',
+      dataDir: '/tmp/prod-agentbean-next',
+      sessionSecret: 'prod-secret',
+    });
+    expect(() =>
+      parseServerNextDevConfig({
+        env: { PORT: '4108', AGENTBEAN_NEXT_DATA_DIR: '/tmp/prod-agentbean-next' },
+        argv: [],
+      }),
+    ).toThrow(
+      'AGENTBEAN_NEXT_SESSION_SECRET',
+    );
+    expect(() =>
+      parseServerNextDevConfig({
+        env: { PORT: '4108', AGENTBEAN_NEXT_SESSION_SECRET: 'prod-secret' },
+        argv: [],
+      }),
+    ).toThrow('AGENTBEAN_NEXT_DATA_DIR');
+    expect(
+      parseServerNextDevConfig({
+        env: {
+          PORT: '4108',
+          AGENTBEAN_NEXT_STORAGE: 'memory',
+          AGENTBEAN_NEXT_SESSION_SECRET: 'prod-secret',
+        },
+        argv: [],
+      }),
+    ).toEqual({
+      host: '0.0.0.0',
+      port: 4108,
+      storage: 'memory',
       dataDir: join(process.cwd(), '.agentbean-next'),
       sessionSecret: 'prod-secret',
     });
-    expect(() => parseServerNextDevConfig({ env: { PORT: '4108' }, argv: [] })).toThrow(
-      'AGENTBEAN_NEXT_SESSION_SECRET',
-    );
   });
 
   test('starts a long-running Socket.IO server with healthz and web namespace', async () => {
