@@ -39,5 +39,5 @@ http://127.0.0.1:4100/
 
 - 页面还没有自动启动 daemon-next；需要另起 daemon-next 进程连接同一个 server。
 - 页面没有持久化会话，也没有完整错误态、loading 态或复杂导航。
-- SQLite 文件路径模式仍未实现。
+- 后续第二十切片已补上 server-next SQLite 文件模式；页面自己的会话持久化仍未实现。
 - 真实 Codex/Claude/Gemini 交互式 adapter 仍在后续切片。

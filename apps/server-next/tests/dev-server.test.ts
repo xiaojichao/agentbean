@@ -1,4 +1,7 @@
 import { createRequire } from 'node:module';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import { WEB_EVENTS } from '../../../packages/contracts/src/index';
 import { createInMemoryServerNext } from '../src/index';
@@ -7,6 +10,7 @@ import { parseServerNextDevConfig, startServerNextDevServer } from '../src/dev-s
 type SocketIoServerConstructor = ConstructorParameters<typeof startServerNextDevServer>[0] extends { Server?: infer T }
   ? NonNullable<T>
   : never;
+type BetterSqlite3Constructor = NonNullable<NonNullable<Parameters<typeof startServerNextDevServer>[0]>['Database']>;
 type ClientSocket = {
   connect(): void;
   disconnect(): void;
@@ -19,6 +23,7 @@ const { Server } = requireFromServer('socket.io') as { Server: SocketIoServerCon
 const { io: createClient } = requireFromServer('socket.io-client') as {
   io(url: string, options?: Record<string, unknown>): ClientSocket;
 };
+const Database = requireFromServer('better-sqlite3') as BetterSqlite3Constructor;
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -32,10 +37,13 @@ describe('server-next dev server entry', () => {
   test('parses host and port from args or env', () => {
     expect(
       parseServerNextDevConfig({
-        env: { AGENTBEAN_NEXT_HOST: '0.0.0.0' },
-        argv: ['--port', '0'],
+        env: {
+          AGENTBEAN_NEXT_HOST: '0.0.0.0',
+          AGENTBEAN_NEXT_DATA_DIR: '/tmp/env-data',
+        },
+        argv: ['--port', '0', '--storage', 'sqlite', '--data-dir', '/tmp/arg-data'],
       }),
-    ).toEqual({ host: '0.0.0.0', port: 0 });
+    ).toEqual({ host: '0.0.0.0', port: 0, storage: 'sqlite', dataDir: '/tmp/arg-data' });
   });
 
   test('starts a long-running Socket.IO server with healthz and web namespace', async () => {
@@ -46,7 +54,7 @@ describe('server-next dev server entry', () => {
     const server = await startServerNextDevServer({
       app,
       Server,
-      config: { host: '127.0.0.1', port: 0 },
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir: '.agentbean-next-test' },
     });
     cleanups.push(() => server.close());
 
@@ -72,6 +80,52 @@ describe('server-next dev server entry', () => {
       user: { id: 'user-1' },
       currentTeam: { id: 'team-1' },
       defaultChannel: { id: 'channel-1' },
+    });
+  });
+
+  test('starts with SQLite file storage and preserves registered users across restarts', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-sqlite-'));
+    const first = await startServerNextDevServer({
+      Server,
+      Database,
+      config: { host: '127.0.0.1', port: 0, storage: 'sqlite', dataDir },
+    });
+    cleanups.push(() => first.close());
+
+    const firstWeb = await connectClient(`${first.baseUrl}/web`);
+    cleanups.push(async () => {
+      firstWeb.disconnect();
+    });
+    await firstWeb.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    firstWeb.disconnect();
+    await first.close();
+    cleanups.pop();
+    cleanups.pop();
+
+    const second = await startServerNextDevServer({
+      Server,
+      Database,
+      config: { host: '127.0.0.1', port: 0, storage: 'sqlite', dataDir },
+    });
+    cleanups.push(() => second.close());
+    const secondWeb = await connectClient(`${second.baseUrl}/web`);
+    cleanups.push(async () => {
+      secondWeb.disconnect();
+    });
+
+    await expect(
+      secondWeb.emitWithAck(WEB_EVENTS.auth.login, {
+        username: 'shaw',
+        password: 'secret',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      user: { username: 'shaw' },
+      currentTeam: { name: 'AgentBean' },
     });
   });
 });

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { createServer, type Server as HttpServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
@@ -6,6 +6,12 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createServerNextUseCases } from './application/usecases.js';
 import { createInMemoryRepositories } from './infra/memory/repositories.js';
+import {
+  applyGlobalMigrations,
+  applyTeamMigrations,
+  createSqliteRepositories,
+  type SqliteDatabase,
+} from './infra/sqlite/repositories.js';
 import { attachServerNextNamespaces, type SocketServerLike } from './transport/socket-server.js';
 import type { ServerNextUseCases } from './application/usecases.js';
 
@@ -16,6 +22,8 @@ type SocketIoServerConstructor = new (server: HttpServer, options?: Record<strin
 export interface ServerNextDevConfig {
   host: string;
   port: number;
+  storage: 'memory' | 'sqlite';
+  dataDir: string;
 }
 
 export interface ParseServerNextDevConfigInput {
@@ -27,6 +35,7 @@ export interface StartServerNextDevServerInput {
   app?: ServerNextUseCases;
   config?: ServerNextDevConfig;
   Server?: SocketIoServerConstructor;
+  Database?: BetterSqlite3Constructor;
 }
 
 export interface ServerNextDevServerHandle {
@@ -38,23 +47,33 @@ export interface ServerNextDevServerHandle {
   close(): Promise<void>;
 }
 
+type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { close(): void };
+
 export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = {}): ServerNextDevConfig {
   const argv = input.argv ?? process.argv.slice(2);
   const env = input.env ?? process.env;
   const args = parseArgs(argv);
   const host = args.host ?? env.AGENTBEAN_NEXT_HOST ?? '127.0.0.1';
   const port = Number(args.port ?? env.AGENTBEAN_NEXT_PORT ?? 4100);
+  const storage = args.storage ?? env.AGENTBEAN_NEXT_STORAGE ?? 'memory';
+  const dataDir = args['data-dir'] ?? env.AGENTBEAN_NEXT_DATA_DIR ?? join(process.cwd(), '.agentbean-next');
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error('AGENTBEAN_NEXT_PORT or --port must be an integer between 0 and 65535');
   }
-  return { host, port };
+  if (storage !== 'memory' && storage !== 'sqlite') {
+    throw new Error('AGENTBEAN_NEXT_STORAGE or --storage must be memory or sqlite');
+  }
+  return { host, port, storage, dataDir };
 }
 
 export async function startServerNextDevServer(
   input: StartServerNextDevServerInput = {},
 ): Promise<ServerNextDevServerHandle> {
   const config = input.config ?? parseServerNextDevConfig();
-  const app = input.app ?? createDefaultInMemoryApp();
+  const appWithCleanup = input.app
+    ? { app: input.app, close: async () => undefined }
+    : createDefaultApp(config, input.Database);
+  const app = appWithCleanup.app;
   const Server = input.Server ?? loadSocketIoServer();
   const httpServer = createServer((request, response) => {
     if (request.url === '/' || request.url === '/preview') {
@@ -87,6 +106,7 @@ export async function startServerNextDevServer(
     async close() {
       await new Promise<void>((resolve) => ioServer.close(() => resolve()));
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      await appWithCleanup.close();
     },
   };
 }
@@ -110,14 +130,42 @@ function readPreviewHtml(): string {
   throw new Error('web-next preview page not found');
 }
 
-function createDefaultInMemoryApp(): ServerNextUseCases {
-  return createServerNextUseCases({
-    repositories: createInMemoryRepositories(),
-    clock: { now: () => Date.now() },
-    ids: {
-      nextId: () => randomUUID(),
+function createDefaultApp(
+  config: ServerNextDevConfig,
+  Database: BetterSqlite3Constructor | undefined,
+): { app: ServerNextUseCases; close(): Promise<void> } {
+  if (config.storage === 'memory') {
+    return {
+      app: createServerNextUseCases({
+        repositories: createInMemoryRepositories(),
+        clock: { now: () => Date.now() },
+        ids: {
+          nextId: () => randomUUID(),
+        },
+      }),
+      close: async () => undefined,
+    };
+  }
+
+  mkdirSync(config.dataDir, { recursive: true });
+  const Sqlite = Database ?? loadBetterSqlite3();
+  const globalDb = new Sqlite(join(config.dataDir, 'global.sqlite'));
+  const teamDb = new Sqlite(join(config.dataDir, 'team.sqlite'));
+  applyGlobalMigrations(globalDb);
+  applyTeamMigrations(teamDb);
+  return {
+    app: createServerNextUseCases({
+      repositories: createSqliteRepositories({ globalDb, teamDb }),
+      clock: { now: () => Date.now() },
+      ids: {
+        nextId: () => randomUUID(),
+      },
+    }),
+    async close() {
+      globalDb.close();
+      teamDb.close();
     },
-  });
+  };
 }
 
 export async function runServerNextDevServer(config = parseServerNextDevConfig()): Promise<ServerNextDevServerHandle> {
@@ -141,6 +189,25 @@ function loadSocketIoServer(): SocketIoServerConstructor {
     }
   }
   throw new Error('socket.io is not installed; run npm ci in apps/server or provide a workspace install');
+}
+
+function loadBetterSqlite3(): BetterSqlite3Constructor {
+  const requireUrls = [
+    new URL('../../../../../server/package.json', import.meta.url),
+    new URL('../../server/package.json', import.meta.url),
+    pathToFileURL(join(process.cwd(), 'apps/server/package.json')),
+  ];
+  for (const requireUrl of requireUrls) {
+    try {
+      const Candidate = createRequire(requireUrl)('better-sqlite3') as BetterSqlite3Constructor;
+      const db = new Candidate(':memory:');
+      db.close();
+      return Candidate;
+    } catch {
+      // Try the next installed copy; native modules are ABI-specific.
+    }
+  }
+  throw new Error('better-sqlite3 is not installed for this Node.js runtime; run npm ci in apps/server');
 }
 
 function parseArgs(argv: string[]): Record<string, string> {

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import type {
@@ -653,8 +653,31 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
 }
 
 function applyMigration(db: SqliteDatabase, relativePath: string): void {
-  const baseDir = fileURLToPath(new URL('migrations', import.meta.url));
-  db.exec(readFileSync(join(baseDir, relativePath), 'utf8'));
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS schema_migrations (
+      id TEXT PRIMARY KEY,
+      applied_at INTEGER NOT NULL
+    );`,
+  );
+  const existing = db.prepare('SELECT id FROM schema_migrations WHERE id = ?').get(relativePath);
+  if (existing) {
+    return;
+  }
+  db.exec(readFileSync(resolveMigrationPath(relativePath), 'utf8'));
+  db.prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)').run(relativePath, Date.now());
+}
+
+function resolveMigrationPath(relativePath: string): string {
+  const candidates = [
+    join(fileURLToPath(new URL('migrations', import.meta.url)), relativePath),
+    join(process.cwd(), 'apps/server-next/src/infra/sqlite/migrations', relativePath),
+    join(process.cwd(), 'src/infra/sqlite/migrations', relativePath),
+  ];
+  const candidate = candidates.find((path) => existsSync(path));
+  if (!candidate) {
+    throw new Error(`SQLite migration not found: ${relativePath}`);
+  }
+  return candidate;
 }
 
 function mapUser(row: unknown): UserRecord | null {

@@ -15,6 +15,7 @@
     "test:phase1": "vitest run packages/contracts/tests packages/domain/tests apps/server-next/tests apps/daemon-next/tests apps/web-next/tests --environment node --api.host 127.0.0.1",
     "preview:agentbean-next": "cd apps/server-next && ../../node_modules/.bin/vitest run tests/e2e-first-slice.test.ts --config vitest.config.ts --api.host 127.0.0.1 -t \"runtime capability -> custom agent -> message -> daemon reply\"",
     "dev:server-next": "npm run build:server-next && node apps/server-next/dist/apps/server-next/src/bin.js",
+    "dev:server-next:sqlite": "npm run build:server-next && AGENTBEAN_NEXT_STORAGE=sqlite node apps/server-next/dist/apps/server-next/src/bin.js",
     "build:contracts": "tsc -p packages/contracts/tsconfig.json",
     "build:domain": "tsc -p packages/domain/tsconfig.json",
     "build:server-next": "tsc -p apps/server-next/tsconfig.json",
