@@ -28,6 +28,7 @@
   - `AGENTBEAN_NEXT_SESSION_SECRET`
   - `AGENTBEAN_NEXT_DATA_DIR`
   - `AGENTBEAN_NEXT_DATA_DIR` 不使用本地 `.agentbean-next` fallback
+  - `AGENTBEAN_NEXT_ENTRY_URL` 指向非本机 HTTP(S) production smoke URL
   - `@agentbean/contracts` 与 `@agentbean/daemon-next` package manifests 可发布。
   - `@agentbean/daemon-next` 依赖 registry 版 `@agentbean/contracts` 与 `socket.io-client`。
   - canonical `@agentbean/daemon` next release 版本高于当前旧 daemon `0.1.35`。
@@ -40,6 +41,7 @@
 当前真实外部配置状态：
 
 - GitHub repository variables 当前已有 `AGENTBEAN_NEXT_DATA_DIR=/data/agentbean-next`。
+- GitHub repository variable `AGENTBEAN_NEXT_ENTRY_URL` 需要在 final smoke 前指向实际 production URL，或在 workflow dispatch 时通过 `agentbean_next_entry_url` 输入覆盖。
 - GitHub repository secrets 当前已有 `RAILWAY_TOKEN`、`NPM_TOKEN` 与 `AGENTBEAN_NEXT_SESSION_SECRET`。
 - npm registry 当前已发布：
   - `@agentbean/contracts@0.2.0`
@@ -234,10 +236,11 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run audit:agentbean-n
 
 - GitHub variable `AGENTBEAN_DEPLOY_TARGET` 已设置为 `next`。
 - GitHub variable `AGENTBEAN_NEXT_DATA_DIR` 指向 production Railway volume path。
+- GitHub variable `AGENTBEAN_NEXT_ENTRY_URL` 指向可访问的 production URL，或 workflow dispatch 显式提供 `agentbean_next_entry_url`。
 - GitHub secrets 已包含 `RAILWAY_TOKEN`、`NPM_TOKEN` 与 `AGENTBEAN_NEXT_SESSION_SECRET`。
 - npm registry 已包含 `@agentbean/contracts`、`@agentbean/daemon-next` 与 canonical `@agentbean/daemon` 的 next version。
 
-当前外部状态下，此 audit 预期只剩 `AGENTBEAN_DEPLOY_TARGET=next` 一项失败；失败本身就是 final flip 尚未获得明确批准且尚未打开的证据。
+当前外部状态下，此 audit 预期至少会因为 `AGENTBEAN_DEPLOY_TARGET=next` 尚未打开而失败；如果尚未配置 `AGENTBEAN_NEXT_ENTRY_URL`，也会同时提示 production smoke URL 缺口。
 
 ## Production Flip
 

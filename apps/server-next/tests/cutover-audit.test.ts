@@ -11,6 +11,7 @@ describe('AgentBean Next cutover audit', () => {
         variables: [
           { name: 'AGENTBEAN_DEPLOY_TARGET', value: 'next' },
           { name: 'AGENTBEAN_NEXT_DATA_DIR', value: '/data/agentbean-next' },
+          { name: 'AGENTBEAN_NEXT_ENTRY_URL', value: 'https://agentbean.example.com' },
         ],
         secrets: [
           { name: 'RAILWAY_TOKEN' },
@@ -28,7 +29,7 @@ describe('AgentBean Next cutover audit', () => {
     expect(summarizeCutoverAudit(checks)).toMatchObject({
       ok: true,
       failed: 0,
-      total: 10,
+      total: 11,
     });
   });
 
@@ -48,6 +49,7 @@ describe('AgentBean Next cutover audit', () => {
     expect(checks.filter((check) => !check.ok).map((check) => check.id)).toEqual([
       'github-variable-deploy-target-next',
       'github-variable-next-data-dir',
+      'github-variable-next-entry-url',
       'github-secret-next-session-secret',
       'npm-contracts-next-version',
       'npm-canonical-daemon-next-version',
