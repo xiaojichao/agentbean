@@ -46,6 +46,28 @@
   - 已确认 volume mount path 覆盖 `/data/agentbean-next`。
   - 仅剩 Railway variables 缺少 `AGENTBEAN_NEXT_DATA_DIR` 与 `AGENTBEAN_NEXT_SESSION_SECRET`。
 - 本切片随后新增显式 Railway env sync job，用于补齐上述两个 variables，但仍不 deploy。
+- GitHub Actions run `27067398886` 真实执行 `Railway Next env sync`。
+  - `Validate AgentBean Next` 通过。
+  - `Run AgentBean Next production readiness checks` 通过 `23/23`。
+  - `Sync Railway AgentBean Next runtime env` 成功。
+  - `Verify Railway AgentBean Next preflight` 通过 `11/11`。
+  - `Deploy production` 与 `Publish agent to npm` 均按预期 skipped。
+- 本机随后运行 external cutover audit：
+  - GitHub variables/secrets 可读。
+  - `AGENTBEAN_NEXT_DATA_DIR=/data/agentbean-next` 已设置。
+  - `RAILWAY_TOKEN`、`NPM_TOKEN`、`AGENTBEAN_NEXT_SESSION_SECRET` 已存在。
+  - npm registry 已包含 `@agentbean/contracts@0.2.0`、`@agentbean/daemon-next@0.2.0`、canonical `@agentbean/daemon@0.2.0`。
+  - 当前唯一失败项是 `AGENTBEAN_DEPLOY_TARGET=next` 尚未打开。
+
+## 当前真实状态
+
+截至本切片，AgentBean Next 的本地、npm、GitHub Actions、Railway variables 与 Railway volume gate 已全部满足。真正 production flip 前只剩一个外部生产开关：
+
+```bash
+gh variable set AGENTBEAN_DEPLOY_TARGET --repo xiaojichao/agentbean --body next
+```
+
+该命令会把后续 production deploy 目标切到 AgentBean Next。由于它会实际替换生产后端，必须由用户明确批准后才能执行。
 
 ## 本地验证
 
@@ -69,7 +91,7 @@ gh workflow run "CI/CD" \
   -f sync_railway_next_runtime_env=false
 ```
 
-如果 `Railway Next preflight` 通过，说明 production service 的 Next runtime env 与 volume 已经具备切换前条件。届时仍不要自动 flip；下一步才是把 `AGENTBEAN_DEPLOY_TARGET` 设为 `next`，再触发 production deploy 与 smoke。
+如果 `Railway Next preflight` 通过，说明 production service 的 Next runtime env 与 volume 已经具备切换前条件。当前该条件已经由 run `27067398886` 证明通过。下一步是用户明确批准后，把 `AGENTBEAN_DEPLOY_TARGET` 设为 `next`，再触发 production deploy 与 smoke。
 
 如果 preflight 仅因为 Railway variables 缺失而失败，先运行：
 
@@ -88,7 +110,7 @@ gh workflow run "CI/CD" \
 
 ## 仍未完成
 
-- 尚未在 GitHub Actions 中真实运行 `Railway Next env sync`。
+- 尚未获得用户对 final production flip 的明确批准。
 - 尚未把 GitHub variable `AGENTBEAN_DEPLOY_TARGET` 设置为 `next`。
 - 尚未执行 production deploy flip。
 - 尚未完成 production browser smoke 与 SQLite volume 持久化复核。
