@@ -133,6 +133,18 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes("env.AGENTBEAN_DEPLOY_TARGET == 'next'"),
       'CI must allow publishing AgentBean Next npm packages without flipping the Railway production deploy target',
     ),
+    check(
+      'ci-runs-railway-next-preflight-without-deploy',
+      packageJson.scripts?.['check:agentbean-next-railway-preflight'] ===
+        'node scripts/check-agentbean-next-railway-preflight.mjs' &&
+        workflow.includes('run_railway_preflight') &&
+        workflow.includes('Railway Next preflight') &&
+        workflow.includes('npm run check:agentbean-next-railway-preflight') &&
+        workflow.includes("if: github.event_name == 'workflow_dispatch' && inputs.run_railway_preflight") &&
+        workflow.includes("github.event_name == 'workflow_dispatch' && !inputs.run_railway_preflight") &&
+        workflow.includes('run: npm run check:agentbean-next-readiness -- --production'),
+      'CI must allow read-only Railway Next preflight without running production deploy',
+    ),
   ];
 
   if (production) {
