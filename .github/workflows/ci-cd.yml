@@ -50,6 +50,16 @@ on:
         required: false
         default: ''
         type: string
+      run_agentbean_old_production_smoke:
+        description: Run old AgentBean entry smoke after rollback or old-target deploy.
+        required: true
+        default: false
+        type: boolean
+      agentbean_old_entry_url:
+        description: Old AgentBean deployed URL for rollback smoke. Falls back to agentbean_next_entry_url or repository variable AGENTBEAN_NEXT_ENTRY_URL.
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -440,6 +450,37 @@ jobs:
 
       - name: Run AgentBean Next business smoke
         run: npm run smoke:agentbean-next-business
+
+  agentbean-old-production-smoke:
+    name: Old AgentBean production smoke
+    runs-on: ubuntu-latest
+    needs:
+      - validate-agentbean-next
+      - deploy
+    if: always() && needs.validate-agentbean-next.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') && github.event_name == 'workflow_dispatch' && inputs.run_agentbean_old_production_smoke
+    timeout-minutes: 10
+
+    env:
+      AGENTBEAN_OLD_ENTRY_URL: ${{ inputs.agentbean_old_entry_url || inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.15.0
+
+      - name: Verify old production smoke target URL
+        run: |
+          if [ -z "$AGENTBEAN_OLD_ENTRY_URL" ]; then
+            echo "::error::AGENTBEAN_OLD_ENTRY_URL is required. Set workflow input agentbean_old_entry_url, agentbean_next_entry_url, or repository variable AGENTBEAN_NEXT_ENTRY_URL."
+            exit 1
+          fi
+
+      - name: Run old AgentBean public entry smoke
+        run: npm run smoke:agentbean-old-entry
 
   publish:
     name: Publish agent to npm

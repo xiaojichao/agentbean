@@ -21,6 +21,7 @@ describe('AgentBean Next readiness checker', () => {
       'entry-smoke-script',
       'business-smoke-script',
       'persistence-smoke-script',
+      'old-entry-smoke-script',
       'ci-runs-production-smoke-on-demand',
       'ci-requires-production-smoke-for-next-deploy',
       'ci-runs-ready-to-flip-before-production-smoke',

@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-截至第四十九切片，仓库内替换前 gate 已具备：
+截至第五十五切片，仓库内替换前 gate 已具备：
 
 - 根目录 `railway.json` 明确声明 AgentBean Next 的 build、start 与 `/healthz`。
 - `AGENTBEAN_DEPLOY_TARGET` 支持 `old|next`，默认仍为 `old`。
@@ -22,6 +22,7 @@
 - `workflow_dispatch` 可以设置 `run_railway_preflight=true` 单独运行 `Railway Next preflight`，只读验证 Railway production runtime env 与 volume，不执行 `railway up`。
 - `workflow_dispatch` 可以设置 `sync_railway_next_runtime_env=true` 单独运行 `Railway Next env sync`，把 GitHub Actions 中的 Next runtime env 写入 Railway variables，并使用 `--skip-deploys` 避免触发部署。
 - `workflow_dispatch` 可以设置 `run_agentbean_next_production_smoke=true`，对输入 `agentbean_next_entry_url` 或 repository variable `AGENTBEAN_NEXT_ENTRY_URL` 指向的 URL 运行 public entry smoke 与 business smoke。
+- `workflow_dispatch` 可以设置 `run_agentbean_old_production_smoke=true`，对输入 `agentbean_old_entry_url`、`agentbean_next_entry_url` 或 repository variable `AGENTBEAN_NEXT_ENTRY_URL` 指向的 URL 运行 old entry smoke，用于 rollback 后证明公开入口已经回到旧 AgentBean。
 - production readiness 会检查：
   - `AGENTBEAN_DEPLOY_TARGET=next`
   - `RAILWAY_TOKEN`
@@ -36,6 +37,7 @@
 - public entry smoke 会检查公开入口的 `/healthz`、根页面 HTML 与 Socket.IO client route，防止最终访问入口仍落在旧 Vercel 或临时 harness 页面。
 - business smoke 会通过 Socket.IO 注册临时用户/team、连接 daemon、创建 custom agent、发送消息并等待 agent reply，防止只验证入口而没有验证真实业务链路。
 - persistence smoke 会在同一个 SQLite data dir 下启动 server-next 两次，验证 token session、current team、channel/message history 能在重启后恢复。
+- old entry smoke 会检查公开入口的旧生产 `/healthz` 返回 `{ "status": "ok" }`，并拒绝 AgentBean Next 的 `{ "ok": true, "service": "agentbean-next-server" }` 健康载荷，防止 rollback 后实际仍停在 Next server。
 
 当前真实外部配置状态：
 
@@ -71,6 +73,24 @@ gh workflow run "CI/CD" \
 ```
 
 该 job 只运行 `smoke:agentbean-next-entry` 与 `smoke:agentbean-next-business`，不会执行 Railway deploy，也不会发布 npm。
+
+如果需要在回滚或 old-target deploy 后单独验证旧生产入口，可以运行：
+
+```bash
+gh workflow run "CI/CD" \
+  --repo xiaojichao/agentbean \
+  --ref main \
+  -f agentbean_deploy_target=old \
+  -f agentbean_npm_publish_target=old \
+  -f run_production_deploy=false \
+  -f run_railway_preflight=false \
+  -f sync_railway_next_runtime_env=false \
+  -f run_agentbean_next_production_smoke=false \
+  -f run_agentbean_old_production_smoke=true \
+  -f agentbean_old_entry_url=https://api.agentbean.dev
+```
+
+该 job 只运行 `smoke:agentbean-old-entry`，不会执行 Railway deploy，也不会发布 npm。
 
 ## 切换前必备配置
 
@@ -210,6 +230,7 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run build:packages
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run preview:agentbean-next
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_NEXT_ENTRY_URL=http://127.0.0.1:4110 npm run smoke:agentbean-next-entry
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_NEXT_ENTRY_URL=http://127.0.0.1:4110 npm run smoke:agentbean-next-business
+PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_OLD_ENTRY_URL=https://api.agentbean.dev npm run smoke:agentbean-old-entry
 ```
 
 预期：
@@ -220,6 +241,7 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_NEXT_ENTRY_URL=
 - daemon install smoke 通过：本地 pack contracts 与 canonical daemon tarball，临时安装后验证三个 bin。
 - entry smoke 通过：`/healthz` 返回 `agentbean-next-server`，根页面返回 `AgentBean` 产品 preview shell，`/socket.io/socket.io.js` 可访问。
 - business smoke 通过：临时用户/team、daemon socket、custom agent、message dispatch 与 agent reply 均可用。
+- old entry smoke 在 production 仍指向旧 AgentBean 时通过：旧生产 `/healthz` 返回 `{ "status": "ok" }`，且不是 AgentBean Next server health payload。
 - next 目标发布时，npm job 会跳过已存在版本，并只发布缺失版本。
 - canonical `@agentbean/daemon` next release package 保留旧 `daemon` 与 `agentbean-daemon` bin。
 
@@ -318,6 +340,29 @@ gh variable set AGENTBEAN_DEPLOY_TARGET --repo xiaojichao/agentbean --body old
 - `Deploy production` 使用旧 `apps/server` deploy path。
 - `Run AgentBean Next production readiness checks` skipped。
 - 旧生产 `/healthz` 恢复。
+- `Old AgentBean production smoke` 通过。
+
+推荐使用 workflow dispatch 同时部署 old target 并运行 old entry smoke：
+
+```bash
+gh workflow run "CI/CD" \
+  --repo xiaojichao/agentbean \
+  --ref main \
+  -f agentbean_deploy_target=old \
+  -f agentbean_npm_publish_target=old \
+  -f run_production_deploy=true \
+  -f run_railway_preflight=false \
+  -f sync_railway_next_runtime_env=false \
+  -f run_agentbean_next_production_smoke=false \
+  -f run_agentbean_old_production_smoke=true \
+  -f agentbean_old_entry_url=https://api.agentbean.dev
+```
+
+本机也可以直接复核：
+
+```bash
+PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_OLD_ENTRY_URL=https://api.agentbean.dev npm run smoke:agentbean-old-entry
+```
 
 Rollback 后保留 AgentBean Next 的 Railway volume，不要删除。先保存失败日志和 smoke 记录，再决定是否清理数据。
 

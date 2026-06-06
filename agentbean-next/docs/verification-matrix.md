@@ -117,6 +117,7 @@ Phase 2 完成标准：
 | P3-21 | 本地 ready-to-flip audit 可以在唯一缺口是 `AGENTBEAN_DEPLOY_TARGET=next` 时返回成功，同时严格 cutover audit 继续保持红灯。 | Release/CI | 替换旧 AgentBean 前，需要把“已经准备好等待授权”和“已经完成 final flip”分成两个不同证据。 | `production-cutover-runbook.md`, `fifty-second-slice-status.md` |
 | P3-22 | CI 的 `AgentBean Next production smoke` job 必须先运行 ready-to-flip audit，再运行 public entry smoke 与 business smoke。 | Release/CI | 防止 final smoke 在 GitHub variables/secrets、production URL 或 npm registry 状态漂移时才暴露问题。 | `production-cutover-runbook.md`, `fifty-third-slice-status.md` |
 | P3-23 | CI 必须阻止手动 `agentbean_deploy_target=next` 且 `run_production_deploy=true` 但未请求 `run_agentbean_next_production_smoke=true` 的 workflow dispatch；push 上 `AGENTBEAN_DEPLOY_TARGET=next` 时必须自动运行 production smoke。 | Release/CI | 真正替换旧 AgentBean 时不能只切不验。 | `production-cutover-runbook.md`, `fifty-fourth-slice-status.md` |
+| P3-24 | CI 可以手动运行 `Old AgentBean production smoke`，验证 rollback 或 old-target deploy 后公开入口 `/healthz` 已恢复旧 AgentBean payload，并拒绝 AgentBean Next health payload。 | Release/CI | 真正替换旧 AgentBean 前，rollback 不能只靠手工观察，必须有可执行 smoke 证明旧系统可恢复。 | `production-cutover-runbook.md`, `fifty-fifth-slice-status.md` |
 
 Phase 3 完成标准：
 
