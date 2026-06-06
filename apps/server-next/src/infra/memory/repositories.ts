@@ -19,6 +19,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const devices = new Map<string, DeviceRecord>();
   const runtimes = new Map<string, RuntimeRecord>();
   const agents = new Map<string, AgentRecord>();
+  const agentEnv = new Map<string, Record<string, string>>();
   const identityLinks = new Map<string, string>();
   const messages = new Map<string, MessageRecord>();
   const dispatches = new Map<string, DispatchRecord>();
@@ -160,8 +161,12 @@ export function createInMemoryRepositories(): ServerNextRepositories {
     },
     agents: {
       async upsert(input) {
-        agents.set(input.id, input);
-        return input;
+        const { env, ...agent } = input;
+        agents.set(input.id, agent);
+        if (env) {
+          agentEnv.set(input.id, env);
+        }
+        return agent;
       },
       async getByIdentityKey(identityKey) {
         const agentId = identityLinks.get(identityKey);
@@ -169,6 +174,19 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async getById(agentId) {
         return agents.get(agentId) ?? null;
+      },
+      async getExecutionConfig(agentId) {
+        const agent = agents.get(agentId);
+        if (!agent) {
+          return null;
+        }
+        return {
+          adapterKind: agent.adapterKind,
+          command: agent.command,
+          args: agent.args,
+          cwd: agent.cwd,
+          env: agentEnv.get(agentId),
+        };
       },
       async linkIdentity(input) {
         identityLinks.set(input.identityKey, input.agentId);

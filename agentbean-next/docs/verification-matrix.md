@@ -72,6 +72,7 @@ Phase 1 完成标准：
 | P2-16 | Dispatch error 将 dispatch 标记为 failed，并更新 agent last error。 | UseCase | Error propagation。 | `acceptance-tests.md` |
 | P2-17 | `/web` login/team/channel/message socket flow 只使用 documented first-slice events。 | Socket | Transport adapter thinness。 | `socket-protocol.md`, `contracts-dto.md` |
 | P2-18 | `/agent` device hello/runtime/agent batch/dispatch result flow 使用 documented DTOs。 | Socket | Agent namespace contract。 | `socket-protocol.md`, `contracts-dto.md` |
+| P2-19 | custom agent dispatch request 会带上 private execution config，并只投递给绑定 device 的 daemon socket。 | UseCase/Socket | Dispatch-only secret transport，不向 web snapshot 或其他 daemon 泄露 raw env。 | `contracts-dto.md`, `socket-protocol.md` |
 
 Phase 2 完成标准：
 
@@ -93,6 +94,7 @@ Phase 2 完成标准：
 | P3-08 | Reconnect 会重新发送 device hello、runtimes 与 agent batch。 | Daemon | Reconnect consistency。 | `known-gaps.md`, `acceptance-tests.md` |
 | P3-09 | Daemon 收到匹配当前 device 的 `device:scan-requested` 后重新扫描并上报 runtimes 与 agents；不匹配 deviceId 不触发扫描。 | Daemon | Targeted rescan command。 | `socket-protocol.md`, `current-protocol-inventory.md` |
 | P3-10 | Builtin scanner 发现 known CLI runtimes，并只为 installed runtimes 生成 executor-hosted agent reports。 | Daemon | Runtime/agent scan provider。 | `current-behavior.md`, `feature-disposition.md` |
+| P3-11 | Daemon-next CLI 可以解析本地 device config、桥接 Socket.IO reconnect，并在 custom dispatch 中执行 server 发送的 command/args/cwd/env。 | Daemon | 真实 daemon-next 运行入口与 custom command executor。 | `implementation-runbook.md`, `contracts-dto.md` |
 
 Phase 3 完成标准：
 

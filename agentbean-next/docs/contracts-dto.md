@@ -395,6 +395,7 @@ export interface DispatchRequestDto {
   channelId: ID;
   messageId: ID;
   agentId: ID;
+  deviceId?: ID | null;
   teamName?: string | null;
   prompt: string;
   history: DispatchHistoryItemDto[];
@@ -433,6 +434,7 @@ export interface DispatchCustomAgentDto {
 
 - `prompt` 是当前 user input。
 - `history` 不得再次包含当前 user input。
+- `deviceId` 是 server-side dispatch target hint；custom agent dispatch 必须用它定向到拥有该 device 的 daemon socket。
 - 第一切片可以发送 raw `customAgent.env` values，但只能发给被选中执行该 custom agent 的单个 daemon，且只能放在 dispatch request 内。
 - Server 不得把 raw env values 广播到 web clients、snapshots、logs 或无关 daemons。
 - 后续切片应将 raw env transport 替换为 server-issued secret reference 或 daemon-local secret storage。

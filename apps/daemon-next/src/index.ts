@@ -2,6 +2,8 @@ import { AGENT_EVENTS, type AgentCategory, type DispatchCustomAgentDto } from '.
 
 export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner';
 export type { BuiltinScannerOptions } from './scanner';
+export { createCommandExecutor } from './executor';
+export type { CommandExecutorOptions } from './executor';
 
 export interface DaemonProtocolSocket {
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
@@ -48,6 +50,7 @@ export interface DispatchRequestPayload {
   channelId: string;
   messageId: string;
   agentId: string;
+  deviceId?: string;
   requestId: string;
   prompt: string;
   customAgent?: DispatchCustomAgentDto | null;

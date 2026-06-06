@@ -50,20 +50,15 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.agent.create, app, 'createCustomAgent', (payload, result) =>
     options.afterAgentMutation?.(payload, result),
   );
-  bind(socket, WEB_EVENTS.message.send, app, 'sendMessage', (_payload, result) => {
+  bind(socket, WEB_EVENTS.message.send, app, 'sendMessage', async (_payload, result) => {
     if (!options.dispatch || !isSendMessageAck(result)) {
       return;
     }
     for (const dispatch of result.dispatches) {
-      options.dispatch({
-        id: dispatch.id,
-        teamId: dispatch.teamId,
-        channelId: dispatch.channelId,
-        messageId: dispatch.messageId,
-        agentId: dispatch.agentId,
-        requestId: dispatch.requestId,
-        prompt: result.message.body,
-      });
+      const request = await app.getDispatchRequest({ dispatchId: dispatch.id });
+      if (request.ok) {
+        options.dispatch(request.request);
+      }
     }
   });
 }

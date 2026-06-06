@@ -733,6 +733,7 @@ Daemon 行为：
 
 - 收到匹配当前 device 的 `device:scan-requested` 后，daemon 会重新扫描并发送 `device:runtimes` 与 `agent:register-batch`。
 - 收到不匹配当前 device 的 `device:scan-requested` 时，daemon 不应触发扫描或上报。
+- custom agent 的 `dispatch:request` 必须由 server 定向发送给 `DispatchRequestDto.deviceId` 对应的 daemon socket；不得向整个 `/agent` namespace 广播 raw `customAgent.env`。
 
 ### Dispatch 结果
 

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DispatchDto, type MessageDto, type RuntimeDto, type TeamDto, type UserDto } from '../../../../packages/contracts/src/index';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DispatchDto, type DispatchRequestDto, type MessageDto, type RuntimeDto, type TeamDto, type UserDto } from '../../../../packages/contracts/src/index';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index';
 import type { ServerNextRepositories } from './repositories';
 
@@ -33,6 +33,7 @@ export interface ServerNextUseCases {
   listChannelMembers(input: ListChannelMembersInput): Promise<Ack<ChannelMembersDto>>;
   registerAgent(input: AgentDto): Promise<Ack<{ agent: AgentDto }>>;
   sendMessage(input: SendMessageInput): Promise<Ack<SendMessageResult>>;
+  getDispatchRequest(input: { dispatchId: string }): Promise<Ack<{ request: DispatchRequestDto & { id: string } }>>;
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   failTimedOutDispatches(input: { olderThan: number }): Promise<Ack<{ dispatches: DispatchDto[] }>>;
   receiveDispatchResult(input: ReceiveDispatchResultInput): Promise<Ack<ReceiveDispatchResultResult>>;
@@ -522,6 +523,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         args: agentInput.args,
         cwd: runtime?.cwd ?? agentInput.cwd,
         envKeys: Object.keys(agentInput.env ?? {}).sort(),
+        env: agentInput.env,
         lastSeenAt: now,
       });
 
@@ -785,6 +787,46 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         message,
         dispatches,
         route,
+      });
+    },
+
+    async getDispatchRequest(requestInput) {
+      const dispatch = await repositories.dispatches.getById(requestInput.dispatchId);
+      if (!dispatch) {
+        return makeFailure('NOT_FOUND', 'Dispatch not found');
+      }
+      const agent = await repositories.agents.getById(dispatch.agentId);
+      if (!agent) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
+      const executionConfig = agent.source === 'custom'
+        ? await repositories.agents.getExecutionConfig(agent.id)
+        : null;
+
+      return makeSuccess({
+        request: {
+          id: dispatch.id,
+          teamId: dispatch.teamId,
+          channelId: dispatch.channelId,
+          messageId: dispatch.messageId,
+          agentId: dispatch.agentId,
+          deviceId: agent.deviceId,
+          requestId: dispatch.requestId,
+          prompt: dispatch.prompt,
+          ...(executionConfig
+            ? {
+                customAgent: {
+                  id: agent.id,
+                  name: agent.name,
+                  adapterKind: executionConfig.adapterKind,
+                  command: executionConfig.command,
+                  args: executionConfig.args,
+                  cwd: executionConfig.cwd,
+                  env: executionConfig.env,
+                },
+              }
+            : {}),
+        },
       });
     },
 

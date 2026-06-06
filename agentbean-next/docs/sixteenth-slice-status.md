@@ -50,8 +50,8 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run build:packages
 
 这些不属于第十六切片：
 
-- 持久化 raw custom agent env 并在 dispatch-only path 注入 daemon。
-- 真实 daemon-next CLI 入口。
 - Browser UI form：device runtime picker、agent name/env editor、create button。
 - 长驻 server-next dev server 与 web-next 可视化页面。
 - Agent update/delete/publish/unpublish 的完整管理流。
+
+后续第十七切片已补上 raw custom agent env 的 dispatch-only transport、按 device 定向投递，以及真实 daemon-next CLI 入口。

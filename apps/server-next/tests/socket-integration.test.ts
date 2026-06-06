@@ -499,6 +499,124 @@ describe('server-next Socket.IO namespaces', () => {
     expect(JSON.stringify(agentSnapshots)).not.toContain('secret-value');
   });
 
+  test('sends custom agent dispatch secrets only to the daemon that owns the target device', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-all',
+        'device-1',
+        'runtime-1',
+        'device-2',
+        'runtime-2',
+        'agent-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const web = await connectClient(`${baseUrl}/web`);
+    const targetDaemon = await connectClient(`${baseUrl}/agent`);
+    const otherDaemon = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      web.disconnect();
+      targetDaemon.disconnect();
+      otherDaemon.disconnect();
+    });
+
+    const targetDispatches: unknown[] = [];
+    const otherDispatches: unknown[] = [];
+    targetDaemon.on(AGENT_EVENTS.dispatch.request, (payload) => {
+      targetDispatches.push(payload);
+    });
+    otherDaemon.on(AGENT_EVENTS.dispatch.request, (payload) => {
+      otherDispatches.push(payload);
+    });
+
+    await web.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    await targetDaemon.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+    });
+    await targetDaemon.emitWithAck(AGENT_EVENTS.device.runtimes, {
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimes: [
+        {
+          adapterKind: 'codex',
+          name: 'Codex CLI',
+          command: '/opt/homebrew/bin/codex',
+          cwd: '/Users/shaw/AgentBean',
+          installed: true,
+        },
+      ],
+    });
+    await otherDaemon.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-2',
+      profileId: 'default',
+    });
+    await otherDaemon.emitWithAck(AGENT_EVENTS.device.runtimes, {
+      teamId: 'team-1',
+      deviceId: 'device-2',
+      runtimes: [
+        {
+          adapterKind: 'codex',
+          name: 'Codex CLI',
+          command: '/opt/homebrew/bin/codex',
+          cwd: '/Users/shaw/AgentBean',
+          installed: true,
+        },
+      ],
+    });
+
+    await web.emitWithAck(WEB_EVENTS.agent.create, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimeId: 'runtime-1',
+      name: 'Codex',
+      args: ['--model', 'gpt-5.4'],
+      env: { OPENAI_API_KEY: 'secret-value' },
+    });
+
+    await web.emitWithAck(WEB_EVENTS.message.send, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-all',
+      body: '@Codex hello',
+    });
+
+    await eventually(async () => {
+      expect(targetDispatches).toHaveLength(1);
+    });
+    expect(targetDispatches[0]).toMatchObject({
+      id: 'dispatch-1',
+      deviceId: 'device-1',
+      customAgent: {
+        adapterKind: 'codex',
+        command: '/opt/homebrew/bin/codex',
+        args: ['--model', 'gpt-5.4'],
+        cwd: '/Users/shaw/AgentBean',
+        env: { OPENAI_API_KEY: 'secret-value' },
+      },
+    });
+    expect(otherDispatches).toEqual([]);
+  });
+
   test('routes device scan requests only to the matching daemon socket', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,
