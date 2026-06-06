@@ -117,6 +117,13 @@ export function collectAgentBeanNextReadinessChecks({
       'CI deploy job must keep old|next deployment target gate',
     ),
     check(
+      'ci-bounds-railway-deploy-command',
+      workflow.includes('timeout 8m railway up') &&
+        workflow.includes('Railway deploy attempt ${attempt}/3') &&
+        workflow.includes('timeout-minutes: 30'),
+      'CI deploy job must bound each Railway CLI deploy attempt so production deploy cannot hang indefinitely',
+    ),
+    check(
       'contracts-package-publishable',
       contractsPackageJson.private === false &&
         contractsPackageJson.version !== '0.0.0' &&

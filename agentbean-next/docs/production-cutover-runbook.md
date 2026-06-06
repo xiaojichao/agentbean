@@ -258,7 +258,7 @@ gh variable set AGENTBEAN_DEPLOY_TARGET --repo xiaojichao/agentbean --body next
 - `Railway Next preflight` 已在同一批生产配置上通过。
 - `Deploy production` 中的 `Run AgentBean Next production readiness checks` 被执行，不是 skipped。
 - `Run AgentBean Next production readiness checks` 通过。
-- Railway deploy 成功。
+- Railway deploy 成功；如果 Railway CLI 卡住，`timeout 8m railway up` 会让单次尝试有界失败，整个 deploy job 不应无限等待。
 - `AgentBean Next production smoke` 成功，至少覆盖 public entry smoke 与 business smoke。
 
 ## 生产 Smoke

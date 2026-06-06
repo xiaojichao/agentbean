@@ -24,6 +24,7 @@ describe('AgentBean Next readiness checker', () => {
       'ci-runs-production-smoke-on-demand',
       'ci-runs-daemon-install-smoke',
       'deploy-target-gate',
+      'ci-bounds-railway-deploy-command',
       'contracts-package-publishable',
       'daemon-next-package-publishable',
       'daemon-next-runtime-dependencies',
