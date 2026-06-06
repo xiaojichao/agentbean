@@ -210,6 +210,13 @@ jobs:
         with:
           node-version: 24.15.0
 
+      - name: Run AgentBean Next production readiness checks
+        if: env.RAILWAY_TOKEN != '' && env.AGENTBEAN_DEPLOY_TARGET == 'next'
+        env:
+          AGENTBEAN_NEXT_SESSION_SECRET: ${{ secrets.AGENTBEAN_NEXT_SESSION_SECRET }}
+          AGENTBEAN_NEXT_DATA_DIR: ${{ vars.AGENTBEAN_NEXT_DATA_DIR }}
+        run: npm run check:agentbean-next-readiness -- --production
+
       - name: Install Railway CLI
         if: env.RAILWAY_TOKEN != ''
         run: npm install -g @railway/cli

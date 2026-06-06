@@ -82,6 +82,7 @@ Phase 1 完成标准：
 | P2-26 | 根目录 Railway deploy config 必须显式声明 `npm run build`、`npm start` 与 `/healthz`。 | Config/CI | `AGENTBEAN_DEPLOY_TARGET=next` 时 root deploy 不依赖平台隐式推断。 | `target-architecture.md`, `implementation-runbook.md` |
 | P2-27 | production readiness checker 必须能区分静态部署契约已就绪与 production flip env 未就绪。 | Config/CI | 真正替换旧 AgentBean 前，用一个可运行 preflight 明确列出缺少的生产配置。 | `target-architecture.md`, `implementation-runbook.md` |
 | P2-28 | AgentBean Next CI 必须显式运行 `check:agentbean-next-readiness`，且 readiness checker 自身检查该 gate 存在。 | Config/CI | 防止部署契约检查只存在于本地命令或单测中，替换旧系统前必须进入主线 gate。 | `target-architecture.md`, `implementation-runbook.md` |
+| P2-29 | production deploy job 在 `AGENTBEAN_DEPLOY_TARGET=next` 时必须先运行 `check:agentbean-next-readiness -- --production`。 | Config/CI | 防止缺少 session secret、data dir 或 deploy target 时直接执行 next production deploy。 | `target-architecture.md`, `implementation-runbook.md` |
 
 Phase 2 完成标准：
 
