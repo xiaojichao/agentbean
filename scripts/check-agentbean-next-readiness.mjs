@@ -57,6 +57,18 @@ export function collectAgentBeanNextReadinessChecks({
       'CI deploy job must run production readiness checks before AGENTBEAN_DEPLOY_TARGET=next deploys',
     ),
     check(
+      'daemon-install-smoke-script',
+      packageJson.scripts?.['smoke:agentbean-next-daemon-install'] ===
+        'node scripts/smoke-agentbean-next-daemon-install.mjs',
+      'root package.json must expose the AgentBean Next daemon install smoke',
+    ),
+    check(
+      'ci-runs-daemon-install-smoke',
+      workflow.includes('Run AgentBean Next daemon install smoke') &&
+        workflow.includes('npm run smoke:agentbean-next-daemon-install -- --skip-build'),
+      'AgentBean Next CI must verify the canonical daemon package can be installed through the old npm entry',
+    ),
+    check(
       'deploy-target-gate',
       workflow.includes('AGENTBEAN_DEPLOY_TARGET') &&
         workflow.includes('deploy_path="apps/server"') &&

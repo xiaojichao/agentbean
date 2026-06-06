@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-截至第三十七切片，仓库内替换前 gate 已具备：
+截至第三十八切片，仓库内替换前 gate 已具备：
 
 - 根目录 `railway.json` 明确声明 AgentBean Next 的 build、start 与 `/healthz`。
 - `AGENTBEAN_DEPLOY_TARGET` 支持 `old|next`，默认仍为 `old`。
@@ -13,6 +13,7 @@
   - readiness checks
   - phase tests
   - packages build
+  - daemon install smoke
   - preview smoke
 - `Deploy production` job 在 `AGENTBEAN_DEPLOY_TARGET=next` 时，会先运行 `npm run check:agentbean-next-readiness -- --production`。
 - `Publish agent to npm` job 在 `AGENTBEAN_DEPLOY_TARGET=next` 时，会先发布 `@agentbean/contracts`，再发布 `@agentbean/daemon-next`，最后发布由 daemon-next 生成的 canonical `@agentbean/daemon`。
@@ -25,6 +26,7 @@
   - `@agentbean/contracts` 与 `@agentbean/daemon-next` package manifests 可发布。
   - `@agentbean/daemon-next` 依赖 registry 版 `@agentbean/contracts` 与 `socket.io-client`。
   - canonical `@agentbean/daemon` next release 版本高于当前旧 daemon `0.1.35`。
+  - CI 在 build 后执行 daemon install smoke，验证 canonical `@agentbean/daemon` tarball 能在临时空项目安装，并且旧 `daemon` / `agentbean-daemon` bin 能进入 daemon-next CLI。
 
 当前真实外部配置状态：
 
@@ -83,6 +85,7 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run preview:agentbean
 - 默认 readiness 通过。
 - 显式注入 production env 后，production readiness 通过。
 - phase tests、packages build 与 preview smoke 通过。
+- daemon install smoke 通过：本地 pack contracts 与 canonical daemon tarball，临时安装后验证三个 bin。
 - next 目标发布时，npm job 会跳过已存在版本，并只发布缺失版本。
 - canonical `@agentbean/daemon` next release package 保留旧 `daemon` 与 `agentbean-daemon` bin。
 

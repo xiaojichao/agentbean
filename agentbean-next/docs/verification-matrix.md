@@ -107,6 +107,7 @@ Phase 2 完成标准：
 | P3-11 | Daemon-next CLI 可以解析本地 device config、桥接 Socket.IO reconnect，并在 custom dispatch 中执行 server 发送的 command/args/cwd/env。 | Daemon | 真实 daemon-next 运行入口与 custom command executor。 | `implementation-runbook.md`, `contracts-dto.md` |
 | P3-12 | `@agentbean/contracts` 与 `@agentbean/daemon-next` 具备 public npm package manifest，daemon-next 依赖 registry contracts 与 `socket.io-client`，CI 在 `next` 目标下先发布 contracts 再发布 daemon-next。 | Daemon/CI | 替换旧 daemon 前，用户必须能从 npm 安装 daemon-next。 | `production-cutover-runbook.md`, `target-architecture.md` |
 | P3-13 | CI 在 `next` 目标下基于 daemon-next 生成 canonical `@agentbean/daemon` release package，保留旧 `daemon` / `agentbean-daemon` bin，并使用高于 `0.1.35` 的版本发布。 | Daemon/CI | 替换旧 daemon npm 用户入口，而不要求用户改装另一个包名。 | `production-cutover-runbook.md`, `target-architecture.md` |
+| P3-14 | CI 在 build 后执行 daemon install smoke：pack `@agentbean/contracts` 与 canonical `@agentbean/daemon`，在临时空项目安装 tarball，并确认 `daemon` / `agentbean-daemon` / `agentbean-next-daemon` 三个 bin 能进入 daemon-next CLI。 | Daemon/CI | 替换旧 daemon 前，必须验证旧 npm 用户入口不是只在 manifest 上存在，而是在真实安装路径中可执行。 | `production-cutover-runbook.md`, `target-architecture.md` |
 
 Phase 3 完成标准：
 
