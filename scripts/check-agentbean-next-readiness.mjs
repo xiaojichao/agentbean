@@ -124,6 +124,15 @@ export function collectAgentBeanNextReadinessChecks({
       'CI deploy job must bound each Railway CLI deploy attempt so production deploy cannot hang indefinitely',
     ),
     check(
+      'ready-to-flip-audit-script',
+      packageJson.scripts?.['audit:agentbean-next-ready-to-flip'] ===
+        'node scripts/audit-agentbean-next-cutover.mjs --allow-pending-final-flip' &&
+        cutoverRunbook.includes('npm run audit:agentbean-next-ready-to-flip') &&
+        cutoverRunbook.includes('AGENTBEAN_DEPLOY_TARGET=next') &&
+        cutoverRunbook.includes('最终开关'),
+      'root package.json and production runbook must expose a pre-final-flip audit that allows only the final deploy target to remain pending',
+    ),
+    check(
       'contracts-package-publishable',
       contractsPackageJson.private === false &&
         contractsPackageJson.version !== '0.0.0' &&

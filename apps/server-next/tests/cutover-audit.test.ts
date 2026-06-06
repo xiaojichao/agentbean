@@ -56,6 +56,39 @@ describe('AgentBean Next cutover audit', () => {
     ]);
   });
 
+  test('can pass ready-to-flip mode when only final deploy target is pending', () => {
+    const checks = collectAgentBeanNextCutoverAudit({
+      runCommand: createFakeRunCommand({
+        variables: [
+          { name: 'AGENTBEAN_NEXT_DATA_DIR', value: '/data/agentbean-next' },
+          { name: 'AGENTBEAN_NEXT_ENTRY_URL', value: 'https://agentbean.example.com' },
+        ],
+        secrets: [
+          { name: 'RAILWAY_TOKEN' },
+          { name: 'NPM_TOKEN' },
+          { name: 'AGENTBEAN_NEXT_SESSION_SECRET' },
+        ],
+        npmVersions: {
+          '@agentbean/contracts@0.2.0': '0.2.0',
+          '@agentbean/daemon-next@0.2.0': '0.2.0',
+          '@agentbean/daemon@0.2.0': '0.2.0',
+        },
+      }),
+    });
+
+    expect(summarizeCutoverAudit(checks)).toMatchObject({
+      ok: false,
+      failed: 1,
+      pendingFinalFlip: false,
+    });
+    expect(summarizeCutoverAudit(checks, { allowPendingFinalFlip: true })).toMatchObject({
+      ok: true,
+      failed: 0,
+      pendingFinalFlip: true,
+      total: 11,
+    });
+  });
+
   test('reports GitHub command failures instead of crashing', () => {
     const checks = collectAgentBeanNextCutoverAudit({
       runCommand: (_command, args) => {

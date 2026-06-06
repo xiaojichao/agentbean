@@ -28,12 +28,11 @@
   - `AGENTBEAN_NEXT_SESSION_SECRET`
   - `AGENTBEAN_NEXT_DATA_DIR`
   - `AGENTBEAN_NEXT_DATA_DIR` 不使用本地 `.agentbean-next` fallback
-  - `AGENTBEAN_NEXT_ENTRY_URL` 指向非本机 HTTP(S) production smoke URL
   - `@agentbean/contracts` 与 `@agentbean/daemon-next` package manifests 可发布。
   - `@agentbean/daemon-next` 依赖 registry 版 `@agentbean/contracts` 与 `socket.io-client`。
   - canonical `@agentbean/daemon` next release 版本高于当前旧 daemon `0.1.35`。
   - CI 在 build 后执行 daemon install smoke，验证 canonical `@agentbean/daemon` tarball 能在临时空项目安装，并且旧 `daemon` / `agentbean-daemon` bin 能进入 daemon-next CLI。
-- external cutover audit 会只读检查 GitHub variables、GitHub secrets 与 npm registry next package versions。
+- external cutover audit 会只读检查 GitHub variables、GitHub secrets、`AGENTBEAN_NEXT_ENTRY_URL` production smoke URL 与 npm registry next package versions。
 - public entry smoke 会检查公开入口的 `/healthz`、根页面 HTML 与 Socket.IO client route，防止最终访问入口仍落在旧 Vercel 或临时 harness 页面。
 - business smoke 会通过 Socket.IO 注册临时用户/team、连接 daemon、创建 custom agent、发送消息并等待 agent reply，防止只验证入口而没有验证真实业务链路。
 - persistence smoke 会在同一个 SQLite data dir 下启动 server-next 两次，验证 token session、current team、channel/message history 能在重启后恢复。
@@ -41,7 +40,7 @@
 当前真实外部配置状态：
 
 - GitHub repository variables 当前已有 `AGENTBEAN_NEXT_DATA_DIR=/data/agentbean-next`。
-- GitHub repository variable `AGENTBEAN_NEXT_ENTRY_URL` 需要在 final smoke 前指向实际 production URL，或在 workflow dispatch 时通过 `agentbean_next_entry_url` 输入覆盖。
+- GitHub repository variable `AGENTBEAN_NEXT_ENTRY_URL=https://api.agentbean.dev` 已指向当前 production Railway backend 入口；final flip 后同一入口应返回 AgentBean Next 的 `/healthz` 与业务 smoke。
 - GitHub repository secrets 当前已有 `RAILWAY_TOKEN`、`NPM_TOKEN` 与 `AGENTBEAN_NEXT_SESSION_SECRET`。
 - npm registry 当前已发布：
   - `@agentbean/contracts@0.2.0`
@@ -226,6 +225,17 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_NEXT_ENTRY_URL=
 
 ## 外部 Cutover Audit
 
+在等待用户批准最终开关时，先运行 ready-to-flip audit：
+
+```bash
+PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run audit:agentbean-next-ready-to-flip
+```
+
+预期：
+
+- 除 `AGENTBEAN_DEPLOY_TARGET=next` 之外，GitHub variables、GitHub secrets、production smoke URL 与 npm registry next package versions 全部通过。
+- 命令返回成功，表示当前状态已经准备好等待最终开关；它不等同于已经替换旧 AgentBean。
+
 在真正 flip 前运行：
 
 ```bash
@@ -240,7 +250,7 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run audit:agentbean-n
 - GitHub secrets 已包含 `RAILWAY_TOKEN`、`NPM_TOKEN` 与 `AGENTBEAN_NEXT_SESSION_SECRET`。
 - npm registry 已包含 `@agentbean/contracts`、`@agentbean/daemon-next` 与 canonical `@agentbean/daemon` 的 next version。
 
-当前外部状态下，此 audit 预期至少会因为 `AGENTBEAN_DEPLOY_TARGET=next` 尚未打开而失败；如果尚未配置 `AGENTBEAN_NEXT_ENTRY_URL`，也会同时提示 production smoke URL 缺口。
+当前外部状态下，严格 cutover audit 预期只会因为 `AGENTBEAN_DEPLOY_TARGET=next` 尚未打开而失败。这个失败项是最终开关，不应在没有用户明确批准时提前设置。
 
 ## Production Flip
 

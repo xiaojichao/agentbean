@@ -90,12 +90,18 @@ export function collectAgentBeanNextCutoverAudit({
   ];
 }
 
-export function summarizeCutoverAudit(checks) {
+const finalFlipPendingCheckIds = new Set(['github-variable-deploy-target-next']);
+
+export function summarizeCutoverAudit(checks, { allowPendingFinalFlip = false } = {}) {
   const failed = checks.filter((candidate) => !candidate.ok);
+  const effectiveFailed = allowPendingFinalFlip
+    ? failed.filter((candidate) => !finalFlipPendingCheckIds.has(candidate.id))
+    : failed;
   return {
-    ok: failed.length === 0,
+    ok: effectiveFailed.length === 0,
     total: checks.length,
-    failed: failed.length,
+    failed: effectiveFailed.length,
+    pendingFinalFlip: allowPendingFinalFlip && effectiveFailed.length === 0 && failed.length > 0,
     checks,
   };
 }
@@ -191,13 +197,16 @@ function check(id, ok, message) {
 function parseArgs(argv) {
   return {
     json: argv.includes('--json'),
+    allowPendingFinalFlip: argv.includes('--allow-pending-final-flip'),
   };
 }
 
 function formatText(summary) {
   const lines = [
     summary.ok
-      ? `AgentBean Next cutover audit passed (${summary.total}/${summary.total}).`
+      ? summary.pendingFinalFlip
+        ? `AgentBean Next is ready for final flip; AGENTBEAN_DEPLOY_TARGET=next is still pending (${summary.total - 1}/${summary.total} strict checks passed).`
+        : `AgentBean Next cutover audit passed (${summary.total}/${summary.total}).`
       : `AgentBean Next cutover audit failed (${summary.failed}/${summary.total}).`,
   ];
   for (const checkResult of summary.checks) {
@@ -208,7 +217,9 @@ function formatText(summary) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
-  const summary = summarizeCutoverAudit(collectAgentBeanNextCutoverAudit());
+  const summary = summarizeCutoverAudit(collectAgentBeanNextCutoverAudit(), {
+    allowPendingFinalFlip: args.allowPendingFinalFlip,
+  });
   console.log(args.json ? JSON.stringify(summary, null, 2) : formatText(summary));
   process.exitCode = summary.ok ? 0 : 1;
 }
