@@ -17,6 +17,7 @@ import {
   type DispatchDto,
   type ListChannelMembersCommandDto,
   type MessageDto,
+  type RuntimeDto,
   type TeamDto,
   type UpdateChannelCommandDto,
   type UserDto,
@@ -70,6 +71,20 @@ describe('first-slice contract result shape', () => {
       source: 'scanned',
       status: 'online',
       deviceId: device.id,
+      lastSeenAt: 3,
+    };
+    const runtime: RuntimeDto = {
+      id: 'runtime-1',
+      deviceId: device.id,
+      adapterKind: 'codex',
+      name: 'Codex CLI',
+      installed: true,
+      command: '/opt/homebrew/bin/codex',
+      cwd: '/opt/homebrew/bin',
+      normalizedCommandKey: '/opt/homebrew/bin/codex',
+      normalizedCwdKey: '/opt/homebrew/bin',
+      version: '1.0.0',
+      status: 'online',
       lastSeenAt: 3,
     };
     const channel: ChannelDto = {
@@ -149,6 +164,8 @@ describe('first-slice contract result shape', () => {
 
     expect(ack.ok).toBe(true);
     expect(team.id).toBe(device.teamId);
+    expect(runtime.installed).toBe(true);
+    expect(runtime.normalizedCommandKey).toBe('/opt/homebrew/bin/codex');
     expect(agent.visibleTeamIds).toEqual(['team-1']);
     expect(message.meta?.routeReason).toBe('MENTION');
     expect(createChannel.visibility).toBe('private');

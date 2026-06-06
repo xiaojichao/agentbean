@@ -148,6 +148,7 @@ describe('web-next socket client', () => {
       deviceId: 'device-1',
       adapterKind: 'codex',
       name: 'Codex CLI',
+      installed: true,
       status: 'online',
     } satisfies RuntimeDto;
     const message = {
@@ -164,7 +165,7 @@ describe('web-next socket client', () => {
       channelId: 'channel-1',
       messageId: 'message-1',
       agentId: 'agent-1',
-      status: 'completed',
+      status: 'succeeded',
       requestId: 'request-1',
       createdAt: 1,
       updatedAt: 2,

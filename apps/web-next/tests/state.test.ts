@@ -77,10 +77,10 @@ describe('web-next first-slice state boundaries', () => {
           { id: 'dispatch-1', status: 'queued' },
           { id: 'dispatch-2', status: 'running' },
         ],
-        { id: 'dispatch-1', status: 'completed' },
+        { id: 'dispatch-1', status: 'succeeded' },
       ),
     ).toEqual([
-      { id: 'dispatch-1', status: 'completed' },
+      { id: 'dispatch-1', status: 'succeeded' },
       { id: 'dispatch-2', status: 'running' },
     ]);
 

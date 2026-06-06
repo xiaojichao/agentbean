@@ -100,6 +100,7 @@ export interface DispatchRepository {
   create(input: DispatchRecord): Promise<DispatchRecord>;
   getById(id: ID): Promise<DispatchRecord | null>;
   markSucceeded(input: { dispatchId: ID; completedAt: UnixMs }): Promise<DispatchRecord | null>;
+  markTimedOut(input: { dispatchId: ID; error: string; completedAt: UnixMs }): Promise<DispatchRecord | null>;
   markFailed(input: { dispatchId: ID; error: string; completedAt: UnixMs }): Promise<DispatchRecord | null>;
   listPendingOlderThan(timestamp: UnixMs): Promise<DispatchRecord[]>;
   listByMessage(messageId: ID): Promise<DispatchRecord[]>;

@@ -1,12 +1,15 @@
 # 契约对齐与文档回补交接
 
-本文记录 PR #72 之后继续按文档推进开发时发现的契约偏差。它是交接清单，不是实现 PR：本轮只暴露问题、回补明确的文档漏项，并给出推荐修法与验收标准，具体代码修改应由后续开发 PR 拆分完成。
+本文记录 PR #72 之后继续按文档推进开发时发现的契约偏差。PR #88 原先是交接清单；本轮已把其中可直接收口的契约偏差补成实现，并保留剩余产品工作边界。
 
 ## 范围与结论
 
-- `message:send` 的协议文档漏写当前实现实际要求的 `userId` 与 `teamId`；这是明确文档漏项，本轮已在协议文档与验证矩阵中回补。
-- Daemon builtin scanner 的产品决策已确认：扫描到的 CLI runtime 只代表 runtime capability，不应自动生成 visible product agent。只有用户创建或绑定 custom agent 后，才应进入 visible agent list。
-- 其余项目是代码契约与文档契约错位，本文给出接手建议，不在本轮直接修改实现代码。
+- `message:send` 的协议文档漏写当前实现实际要求的 `userId` 与 `teamId`；这是明确文档漏项，已在协议文档与验证矩阵中回补。
+- Daemon builtin scanner 的产品决策已确认并已落地：扫描到的 CLI runtime 只代表 runtime capability，不再自动生成 visible product agent。只有用户创建或绑定 custom agent 后，才应进入 visible agent list。
+- `RuntimeDto` public contract、server mapper、server/web tests 已对齐 runtime capability fields。
+- `DispatchStatus` 已统一到 `queued`、`sent`、`accepted`、`running`、`succeeded`、`failed`、`cancelled`、`timed_out`；server result 与 timeout 状态也已同步。
+- `agents:subscribe` refresh 已补二次 team membership gate；失权订阅不再收到后续 `agents:snapshot`。
+- server-next/daemon-next 已显式声明 Node types，并在 workspace devDependencies 中补充 `@types/node`。
 
 ## 1. Agent snapshot refresh 缺少二次 membership gate
 
@@ -20,11 +23,10 @@
 
 文档一直强调 server 拥有权限与可见性边界。这里会让 agent snapshot broadcast 在成员关系变化后依赖旧订阅状态，和 channel/device refresh 的 per-user gate 方向不一致。
 
-### 推荐修改
+### 本 PR 处理
 
-- 在 `refreshAgentSubscribers` 中保留订阅时的 `{ userId, teamId }`，每次刷新前重新执行 team membership gate。
-- 或者新增/改造 use case，例如 `listVisibleAgents({ userId, teamId })`，让 agent 可见性查询本身带 user/team gate。
-- 如果刷新时发现用户已无权访问 team，应停止向该 socket 推送，并清理当前 agent subscription。
+- `refreshAgentSubscribers` 复用订阅时保存的 `{ userId, teamId }` 重新调用 `listChannels` 作为 team gate。
+- 如果刷新时发现用户已无权访问 team，会停止向该 socket 推送，并清理当前 agent subscription。
 
 ### 验收标准
 
@@ -36,17 +38,17 @@
 
 ### 现象
 
-`agentbean-next/docs/contracts-dto.md` 中的 `RuntimeDto` 包含 `installed`、`command`、`cwd`、`normalizedCommandKey`、`normalizedCwdKey`。但 `packages/contracts/src/agent.ts` 的 public `RuntimeDto` 仍只包含 `id`、`deviceId`、`adapterKind`、`name`、`version`、`status`、`lastSeenAt`，`apps/server-next/src/application/usecases.ts` 的 `toRuntimeDto` 也会丢掉 runtime capability 字段。
+`agentbean-next/docs/contracts-dto.md` 中的 `RuntimeDto` 包含 `installed`、`command`、`cwd`、`normalizedCommandKey`、`normalizedCwdKey`。实现前，`packages/contracts/src/agent.ts` 的 public `RuntimeDto` 仍只包含 `id`、`deviceId`、`adapterKind`、`name`、`version`、`status`、`lastSeenAt`，`apps/server-next/src/application/usecases.ts` 的 `toRuntimeDto` 也会丢掉 runtime capability 字段。
 
 ### 影响
 
 设备详情、`device:runtimes`、web-next 类型层拿不到文档承诺的 runtime capability 信息。第十四切片 scanner 已经上报 `command`、`cwd` 与 `installed`，但这些字段在 server/public DTO 边界被截断。
 
-### 推荐修改
+### 本 PR 处理
 
-- 将 public `RuntimeDto` 与 `contracts-dto.md` 对齐，补齐 `installed`、`command`、`cwd`、`normalizedCommandKey`、`normalizedCwdKey`。
-- 确认 `toRuntimeDto` 不再截断这些字段。
-- 确认 device detail、`device:runtimes` socket event、web-next `onDeviceRuntimes` 类型都能读取这些字段。
+- public `RuntimeDto` 已补齐 `installed`、`command`、`cwd`、`normalizedCommandKey`、`normalizedCwdKey`。
+- `toRuntimeDto` 已保留 runtime capability fields。
+- contracts、server socket/runtime ack、web-next runtime fixture 都已覆盖这些字段。
 
 ### 验收标准
 
@@ -76,17 +78,17 @@
 
 ### 现象
 
-`packages/contracts/src/dispatch.ts` 当前状态是 `queued`、`accepted`、`running`、`completed`、`failed`、`cancelled`、`timeout`。但 `agentbean-next/docs/contracts-dto.md` 还包含 `sent`、`succeeded` 与 `timed_out`，`agentbean-next/docs/verification-matrix.md` 也使用的是 `succeeded` 与 `timed_out`。
+实现前，`packages/contracts/src/dispatch.ts` 的状态是 `queued`、`accepted`、`running`、`completed`、`failed`、`cancelled`、`timeout`。但 `agentbean-next/docs/contracts-dto.md` 还包含 `sent`、`succeeded` 与 `timed_out`，`agentbean-next/docs/verification-matrix.md` 也使用的是 `succeeded` 与 `timed_out`。
 
 ### 影响
 
 UI 状态判断、dispatch timeout 测试命名、server repository 状态值和文档验收口径会分裂。后续开发如果按文档写测试，会和 public contract 类型不匹配；如果按代码写 UI，则会偏离文档状态矩阵。
 
-### 推荐修改
+### 本 PR 处理
 
-- 先由负责人确认 canonical 状态命名。
-- 建议优先保留文档中的 `succeeded` 与 `timed_out` 作为目标契约，因为它们比 `completed` 与 `timeout` 更明确地区分成功完成和超时失败；同时确认 `sent` 是否属于目标状态机。
-- 无论最终选择哪套，都必须一次性对齐 `packages/contracts`、server repository/use case、daemon result handling、web state helper、测试 fixture 与所有 docs。
+- 保留文档中的 `succeeded` 与 `timed_out` 作为目标契约。
+- public `DispatchStatus` 已加入 `sent`，并将 `completed`/`timeout` 替换为 `succeeded`/`timed_out`。
+- server memory/SQLite repository、use case、server/web tests 已同步状态值；普通 dispatch error 仍保持 `failed`。
 
 ### 验收标准
 
@@ -102,17 +104,17 @@ Daemon builtin scanner 扫描到 Claude Code、Codex CLI、Gemini CLI 等 CLI ru
 
 Visible product agent 应来自用户创建、导入或显式绑定的 agent 配置；runtime capability 可以作为创建/绑定 custom agent 的候选能力。
 
-### 当前偏差
+### 实现前偏差
 
-`apps/daemon-next/src/scanner.ts` 当前在 runtime installed 时会同时 push runtime report 与 `executor-hosted` agent report。`apps/server-next/src/application/usecases.ts` 的 `registerDiscoveredAgents` 会把这些 discovered agents upsert 为 `source: "scanned"` 且对 team 可见的 agents。
+`apps/daemon-next/src/scanner.ts` 在 runtime installed 时曾同时 push runtime report 与 `executor-hosted` agent report。`apps/server-next/src/application/usecases.ts` 的 `registerDiscoveredAgents` 会把这些 discovered agents upsert 为 `source: "scanned"` 且对 team 可见的 agents。
 
 因此，只要本机安装了 Codex CLI，就可能自动出现一个可见的 `Codex` product agent。这和已确认的 runtime capability 决策不一致。
 
-### 推荐修改
+### 本 PR 处理
 
-- daemon builtin scanner 只上报 `runtimes`，不为 installed runtime 自动上报 `agents`。
-- server 不应把 runtime report 转换成 visible agent。
-- custom agent 创建/绑定流程应引用 runtime capability，例如 adapter kind、command、cwd、normalized keys，但只有用户动作完成后才进入 visible agent list。
+- daemon builtin scanner 只上报 `runtimes`，不再为 installed runtime 自动上报 `agents`。
+- server 不会把 runtime report 转换成 visible agent。
+- custom agent 创建/绑定流程仍是后续产品工作；它应引用 runtime capability，例如 adapter kind、command、cwd、normalized keys，但只有用户动作完成后才进入 visible agent list。
 - 如果后续仍需要展示“可创建的 runtime 候选”，应放在 device/runtime UI 或 agent creation UI 中，而不是混入 `agents:snapshot`。
 
 ### 验收标准
@@ -126,17 +128,17 @@ Visible product agent 应来自用户创建、导入或显式绑定的 agent 配
 
 ### 现象
 
-`apps/server-next` 使用 `node:crypto`、`node:fs`、`node:url`、`node:path` 等 Node builtins，但 `apps/server-next/tsconfig.json` 没有 Node types 配置，根 `package.json` 的 devDependencies 也没有 `@types/node`。当前测试可以通过，但干净执行 `npm run build:packages` 时，server-next type build 无法稳定复现通过。
+实现前，`apps/server-next` 使用 `node:crypto`、`node:fs`、`node:url`、`node:path` 等 Node builtins，但 `apps/server-next/tsconfig.json` 没有 Node types 配置，根 `package.json` 的 devDependencies 也没有 `@types/node`。当前测试可以通过，但干净执行 `npm run build:packages` 时，server-next type build 无法稳定复现通过。
 
 ### 影响
 
 状态文档记录的 build 验证会和新 checkout 的实际结果不一致。后续开发者按文档验证时，会在 server-next build 阶段遇到 Node builtin type declaration 缺失。
 
-### 推荐修改
+### 本 PR 处理
 
-- 在 workspace devDependencies 中补充与当前 Node/TypeScript 兼容的 `@types/node`。
-- 在 server-next/daemon-next 相关 tsconfig 中明确 Node types 策略，避免 browser/web 包继承不必要的 Node globals。
-- 重新确认 `npm run build:packages` 在干净依赖安装后可通过。
+- workspace devDependencies 已补充 `@types/node`。
+- server-next/daemon-next tsconfig 已明确 `types: ["node"]`。
+- `npm run build:packages` 已重新验证通过。
 
 ### 验收标准
 
@@ -144,15 +146,13 @@ Visible product agent 应来自用户创建、导入或显式绑定的 agent 配
 - `apps/server-next` 不再报告 `node:*` module type declarations missing。
 - 文档中的验证记录和实际 build 命令一致。
 
-## 建议接手顺序
+## 后续接手边界
 
-1. 先修 Node types/build 复现问题，保证后续所有 PR 的基础验证可信。
-2. 对齐 `RuntimeDto` 与 `message:send` 这类 DTO/protocol 契约，避免继续扩散到 web-next。
-3. 按已确认产品决策修正 scanner runtime capability 与 visible agent 边界。
-4. 修正 `agents:subscribe` refresh 的权限二次校验。
-5. 最后统一 `DispatchStatus` 命名，并同步迁移测试和 UI 状态判断。
+1. authenticated socket session 如果要从 server 派生 `userId`/current team，需要同步 web client、server use case、协议文档与测试。
+2. custom agent 创建/绑定流程应引用 runtime capability，但不要让 scanner 自动创建 visible product agent。
+3. 如果 dispatch 状态机要继续引入 `sent` 的实际流转，需要同步 daemon dispatch lifecycle 与 UI 状态 helper。
 
-## 建议新增或更新的验证
+## 已新增或更新的验证
 
 - `apps/server-next/tests`：agent subscription 在成员关系变化后不再推送 snapshot。
 - `packages/contracts/tests`：`RuntimeDto` fixture 包含完整 capability fields。
