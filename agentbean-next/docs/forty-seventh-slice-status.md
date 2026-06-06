@@ -42,5 +42,4 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run test:phase1
 
 - 尚未获得用户对 final production flip 的明确批准。
 - 尚未在 production host 上运行 `smoke:agentbean-next-entry` 与 `smoke:agentbean-next-business`。
-- 尚未完成真实浏览器 smoke 与 SQLite volume 重启持久化复核。
-
+- 尚未完成真实浏览器 smoke 与 Railway production volume 重启持久化复核；本地 SQLite restart 路径已由第四十八切片脚本化。

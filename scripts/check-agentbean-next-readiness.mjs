@@ -81,6 +81,15 @@ export function collectAgentBeanNextReadinessChecks({
       'root package.json and production runbook must expose the AgentBean Next business smoke',
     ),
     check(
+      'persistence-smoke-script',
+      packageJson.scripts?.['smoke:agentbean-next-persistence'] ===
+        'npm run build:server-next && node scripts/smoke-agentbean-next-persistence.mjs' &&
+        cutoverRunbook.includes('npm run smoke:agentbean-next-persistence') &&
+        cutoverRunbook.includes('SQLite volume') &&
+        cutoverRunbook.includes('channel/message'),
+      'root package.json and production runbook must expose the AgentBean Next SQLite restart persistence smoke',
+    ),
+    check(
       'ci-runs-daemon-install-smoke',
       workflow.includes('Run AgentBean Next daemon install smoke') &&
         workflow.includes('npm run smoke:agentbean-next-daemon-install -- --skip-build'),
