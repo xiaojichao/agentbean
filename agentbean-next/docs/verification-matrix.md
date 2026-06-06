@@ -73,6 +73,7 @@ Phase 1 完成标准：
 | P2-17 | `/web` login/team/channel/message socket flow 只使用 documented first-slice events。 | Socket | Transport adapter thinness。 | `socket-protocol.md`, `contracts-dto.md` |
 | P2-18 | `/agent` device hello/runtime/agent batch/dispatch result flow 使用 documented DTOs。 | Socket | Agent namespace contract。 | `socket-protocol.md`, `contracts-dto.md` |
 | P2-19 | custom agent dispatch request 会带上 private execution config，并只投递给绑定 device 的 daemon socket。 | UseCase/Socket | Dispatch-only secret transport，不向 web snapshot 或其他 daemon 泄露 raw env。 | `contracts-dto.md`, `socket-protocol.md` |
+| P2-20 | server-next 长驻 dev server 暴露 `/healthz`，并挂载真实 `/web` 与 `/agent` Socket.IO namespaces。 | Socket | 本地替换旧 server 的运行入口。 | `implementation-runbook.md`, `target-architecture.md` |
 
 Phase 2 完成标准：
 
