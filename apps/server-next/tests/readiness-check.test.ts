@@ -18,6 +18,7 @@ describe('AgentBean Next readiness checker', () => {
       'ci-runs-readiness-checker',
       'ci-runs-production-readiness-before-next-deploy',
       'daemon-install-smoke-script',
+      'entry-smoke-script',
       'ci-runs-daemon-install-smoke',
       'deploy-target-gate',
       'contracts-package-publishable',
