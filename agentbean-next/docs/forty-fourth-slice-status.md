@@ -21,6 +21,17 @@
   - 覆盖 runtime variables 与 volume 都正确时通过。
   - 覆盖 data dir 不一致、缺少 session secret、volume 不覆盖 data dir 时失败。
   - 覆盖 Railway JSON output 形状兼容与 redacted secret 处理。
+  - 覆盖当前 Railway CLI 的 `volume list --service --environment --json` 参数形状。
+
+## 真实运行记录
+
+- GitHub Actions run `27066832805` 首次真实执行了 `Railway Next preflight`。
+- `Run AgentBean Next production readiness checks` 通过 `22/22`。
+- `Deploy production` 与 `Publish agent to npm` 均按预期 skipped。
+- `Run Railway AgentBean Next preflight` 失败，暴露两个问题：
+  - 当前 npm 安装的 Railway CLI 不接受 `railway volume list --project`。
+  - Railway production service 尚未暴露 `AGENTBEAN_NEXT_DATA_DIR` 与 `AGENTBEAN_NEXT_SESSION_SECRET` runtime variables。
+- 本切片随后修正脚本，改用当前 CLI 接受的 `railway volume list --service --environment --json`。
 
 ## 本地验证
 

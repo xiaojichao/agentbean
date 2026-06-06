@@ -172,8 +172,6 @@ function readRailwayVolumes({ env, runCommand }) {
     const output = runCommand('railway', [
       'volume',
       'list',
-      '--project',
-      env.RAILWAY_PROJECT_ID,
       '--service',
       env.RAILWAY_SERVICE_ID,
       '--environment',
