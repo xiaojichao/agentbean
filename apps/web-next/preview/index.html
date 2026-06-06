@@ -201,11 +201,19 @@
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
+      const SESSION_KEY = "agentbean-next-preview-session";
       const socket = io("/web", { transports: ["websocket", "polling"] });
       const state = { user: null, team: null, channel: null, devices: [], runtimes: [], agents: [], messages: [] };
       const el = (id) => document.getElementById(id);
 
-      socket.on("connect", () => setStatus("已连接"));
+      socket.on("connect", async () => {
+        setStatus("已连接");
+        if (state.user && state.team) {
+          await subscribe();
+          return;
+        }
+        await restoreSession();
+      });
       socket.on("disconnect", () => setStatus("已断开"));
       socket.on("devices:snapshot", (devices) => {
         state.devices = devices;
@@ -221,6 +229,7 @@
       });
       socket.on("channels:snapshot", (channels) => {
         state.channel = channels[0] || state.channel;
+        saveSession();
         render();
       });
       socket.on("channel:message", (message) => {
@@ -242,6 +251,7 @@
         state.user = ack.user;
         state.team = ack.currentTeam;
         state.channel = ack.defaultChannel || state.channel;
+        saveSession();
         await subscribe();
         render();
       });
@@ -278,9 +288,13 @@
       });
 
       async function subscribe() {
-        await emit("device:list", { userId: state.user.id, teamId: state.team.id });
-        await emit("agents:subscribe", { userId: state.user.id, teamId: state.team.id });
-        await emit("channels:subscribe", { userId: state.user.id, teamId: state.team.id });
+        const payload = { userId: state.user.id, teamId: state.team.id };
+        const devices = await emit("device:list", payload);
+        const agents = await emit("agents:subscribe", payload);
+        const channels = await emit("channels:subscribe", payload);
+        if (!devices.ok || !agents.ok || !channels.ok) {
+          clearSession();
+        }
       }
 
       async function emit(event, payload) {
@@ -320,6 +334,49 @@
 
       function setStatus(text) {
         el("connection-status").textContent = text;
+      }
+
+      async function restoreSession() {
+        const session = readSession();
+        if (!session) return;
+        state.user = session.user;
+        state.team = session.team;
+        state.channel = session.channel || null;
+        render();
+        await subscribe();
+      }
+
+      function saveSession() {
+        if (!state.user || !state.team) return;
+        localStorage.setItem(SESSION_KEY, JSON.stringify({
+          user: state.user,
+          team: state.team,
+          channel: state.channel,
+        }));
+      }
+
+      function readSession() {
+        try {
+          const raw = localStorage.getItem(SESSION_KEY);
+          if (!raw) return null;
+          const session = JSON.parse(raw);
+          if (!session.user?.id || !session.team?.id) return null;
+          return session;
+        } catch {
+          return null;
+        }
+      }
+
+      function clearSession() {
+        localStorage.removeItem(SESSION_KEY);
+        state.user = null;
+        state.team = null;
+        state.channel = null;
+        state.devices = [];
+        state.runtimes = [];
+        state.agents = [];
+        state.messages = [];
+        render();
       }
 
       function escapeHtml(value) {
