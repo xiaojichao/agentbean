@@ -99,9 +99,19 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes('AGENTBEAN_NEXT_ENTRY_URL: ${{ inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}') &&
         workflow.includes('npm run smoke:agentbean-next-entry') &&
         workflow.includes('npm run smoke:agentbean-next-business') &&
+        workflow.includes("github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AGENTBEAN_DEPLOY_TARGET == 'next'") &&
         cutoverRunbook.includes('run_agentbean_next_production_smoke') &&
         cutoverRunbook.includes('agentbean_next_entry_url'),
       'CI must expose an explicit workflow_dispatch AgentBean Next production smoke gate',
+    ),
+    check(
+      'ci-requires-production-smoke-for-next-deploy',
+      workflow.includes('Require production smoke for manual AgentBean Next deploy') &&
+        workflow.includes('Manual AgentBean Next production deploy requires run_agentbean_next_production_smoke=true') &&
+        workflow.includes("inputs.run_production_deploy && env.AGENTBEAN_DEPLOY_TARGET == 'next' && !inputs.run_agentbean_next_production_smoke") &&
+        cutoverRunbook.includes('run_agentbean_next_production_smoke=true') &&
+        cutoverRunbook.includes('只切不验'),
+      'CI must block manual AgentBean Next production deploys that do not also request production smoke',
     ),
     check(
       'ci-runs-ready-to-flip-before-production-smoke',
