@@ -138,7 +138,7 @@ Phase 3 完成标准：
 | P4-12 | preview 页面刷新或 Socket.IO reconnect 后恢复 session 并重新订阅 devices、agents 与 channels。 | Web | 本地 preview 会话恢复。 | `target-architecture.md`, `known-gaps.md` |
 | P4-13 | web-next preview 可以通过 `channel:create` 创建 channel，刷新 channel snapshot，并在新 channel 中继续发送消息。 | Web/Socket | 本地 preview 不只依赖默认 `all` channel，开始覆盖真实产品 channel 工作流。 | `socket-protocol.md`, `target-architecture.md` |
 | P4-14 | preview 内联脚本在 DOM harness 中覆盖 `auth:whoami` session restore、snapshot resubscribe、`channel:create` submit 与新 channel message selection。 | Web | 防止静态 preview 的关键交互在无浏览器测试时回退。 | `socket-protocol.md`, `known-gaps.md` |
-| P4-15 | 本地 preview 第一屏必须自动进入默认 team，并呈现旧 AgentBean 风格的左侧频道、中间聊天、右侧成员/设备/runtime/custom agent 工作台。 | Web/UX | 防止把临时协议验证器误当成可替换旧 AgentBean 的产品 UI。 | `target-architecture.md`, `known-gaps.md` |
+| P4-15 | 本地 preview 第一屏必须自动进入默认 team，并呈现旧 AgentBean 风格的左侧频道、中间聊天、右侧成员/设备/runtime/custom agent 工作台。 | Web/UX | 防止把临时协议验证器误当成可替换旧 AgentBean 的产品 UI。 | `target-architecture.md`, `known-gaps.md`, `forty-fifth-slice-status.md` |
 
 Phase 4 完成标准：
 

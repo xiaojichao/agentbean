@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AgentBean Next Preview</title>
+    <title>AgentBean</title>
     <style>
       :root {
         color-scheme: light;
@@ -16,6 +16,17 @@
       }
       body {
         margin: 0;
+      }
+      .sr-only {
+        border: 0;
+        clip: rect(0, 0, 0, 0);
+        height: 1px;
+        margin: -1px;
+        overflow: hidden;
+        padding: 0;
+        position: absolute;
+        white-space: nowrap;
+        width: 1px;
       }
       button,
       input,
@@ -144,7 +155,7 @@
         gap: 8px;
       }
       .team-row {
-        align-items: end;
+        align-items: center;
         display: flex;
         gap: 8px;
       }
@@ -156,6 +167,26 @@
         margin: 0;
         min-width: 0;
         flex: 1;
+      }
+      .team-switcher {
+        align-items: center;
+        background: #ffffff;
+        border: 1px solid #d7d7d3;
+        color: #171717;
+        display: flex;
+        gap: 8px;
+        justify-content: space-between;
+        min-height: 32px;
+        width: 100%;
+      }
+      .team-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .team-caret {
+        color: #737373;
+        flex: 0 0 auto;
       }
       .team-advanced {
         display: grid;
@@ -190,7 +221,7 @@
       .sidebar-scroll {
         display: grid;
         align-content: start;
-        gap: 12px;
+        gap: 14px;
         overflow: auto;
         padding: 12px 8px 16px;
       }
@@ -388,6 +419,30 @@
         max-width: 240px;
         width: 40%;
       }
+      .sidebar-action,
+      .workbench-card {
+        border: 1px solid #e5e5e5;
+        border-radius: 8px;
+        background: #ffffff;
+        padding: 10px;
+      }
+      .sidebar-action {
+        display: grid;
+        gap: 8px;
+      }
+      .action-heading {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .action-heading h2 {
+        font-size: 13px;
+      }
+      .form-grid {
+        display: grid;
+        gap: 8px;
+      }
       .right-rail {
         background: #fafafa;
         border-left: 1px solid #e5e5e5;
@@ -423,7 +478,6 @@
         color: #171717;
         box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);
       }
-      form,
       .panel {
         border: 1px solid #e5e5e5;
         border-radius: 8px;
@@ -445,6 +499,17 @@
         display: grid;
         gap: 8px;
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      }
+      .advanced-fields {
+        border-top: 1px solid #eeeeec;
+        padding-top: 8px;
+      }
+      .advanced-fields summary {
+        color: #666b70;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+        margin-bottom: 8px;
       }
       .rail-muted {
         color: #737373;
@@ -484,7 +549,7 @@
           <div class="brand-mark">Ab</div>
           <div class="brand-copy">
             <h1>AgentBean</h1>
-            <p class="brand-subtitle">Next local</p>
+            <p class="brand-subtitle">私有 Agent 团队</p>
           </div>
           <p class="connection-pill" id="connection-status">连接中</p>
         </div>
@@ -492,8 +557,11 @@
         <div class="team-strip">
           <form class="team-form" id="auth-form">
             <div class="team-row">
-              <label>当前团队 <input name="teamName" value="AgentBean" /></label>
-              <button id="team-submit" type="submit" title="进入 AgentBean">进入</button>
+              <label class="sr-only">当前团队 <input name="teamName" value="AgentBean" /></label>
+              <button class="team-switcher" id="team-submit" type="submit" title="进入 AgentBean">
+                <span class="team-name" id="team-display-name">AgentBean</span>
+                <span class="team-caret">⌄</span>
+              </button>
             </div>
             <p class="session-summary" id="session-summary"></p>
             <div class="team-advanced">
@@ -514,16 +582,21 @@
             <div class="section-title">频道</div>
             <ul class="list" id="channels"></ul>
           </section>
-          <form class="compact-form" id="channel-create-form">
-            <h2>新建频道</h2>
-            <label>名称 <input name="name" value="ops" /></label>
-            <label>标题 <input name="title" value="Ops" /></label>
-            <label>可见性
-              <select name="visibility">
-                <option value="public">公开</option>
-                <option value="private">私有</option>
-              </select>
-            </label>
+          <form class="sidebar-action" id="channel-create-form">
+            <div class="action-heading">
+              <h2>新建频道</h2>
+              <span class="meta">Team</span>
+            </div>
+            <div class="form-grid">
+              <label>名称 <input name="name" value="ops" /></label>
+              <label>标题 <input name="title" value="Ops" /></label>
+              <label>可见性
+                <select name="visibility">
+                  <option value="public">公开</option>
+                  <option value="private">私有</option>
+                </select>
+              </label>
+            </div>
             <button type="submit">创建频道</button>
           </form>
         </div>
@@ -575,17 +648,23 @@
           <div class="rail-heading"><h2>运行时</h2><span class="meta">Codex / Claude / Gemini</span></div>
           <ul class="list" id="runtimes"></ul>
         </div>
-        <form class="compact-form" id="agent-create-form">
-          <h2>添加 Custom Agent</h2>
+        <form class="workbench-card compact-form" id="agent-create-form">
+          <div class="action-heading">
+            <h2>添加自定义 Agent</h2>
+            <span class="meta">本机运行时</span>
+          </div>
           <div class="inline-form-row">
             <label>设备 <select name="deviceId"></select></label>
             <label>运行时 <select name="runtimeId"></select></label>
           </div>
           <label>名称 <input name="name" value="Codex" /></label>
-          <div class="inline-form-row">
-            <label>Env Key <input name="envKey" value="OPENAI_API_KEY" /></label>
-            <label>Env Value <input name="envValue" type="password" /></label>
-          </div>
+          <details class="advanced-fields">
+            <summary>环境变量</summary>
+            <div class="inline-form-row">
+              <label>Key <input name="envKey" value="OPENAI_API_KEY" /></label>
+              <label>Value <input name="envValue" type="password" /></label>
+            </div>
+          </details>
           <button type="submit">创建 Agent</button>
         </form>
         <div class="panel events">
@@ -860,7 +939,7 @@
       function renderAuthState() {
         const authenticated = Boolean(state.user && state.team);
         document.body.dataset.auth = authenticated ? "true" : "false";
-        el("team-submit").textContent = authenticated ? "切换" : "进入";
+        el("team-display-name").textContent = state.team?.name || "AgentBean";
         el("session-summary").textContent = authenticated
           ? `${state.user.username || state.user.name || state.user.id} · ${state.team.name || state.team.id}`
           : "";
