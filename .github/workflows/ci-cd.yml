@@ -426,6 +426,9 @@ jobs:
             exit 1
           fi
 
+      - name: Run AgentBean Next ready-to-flip audit
+        run: npm run audit:agentbean-next-ready-to-flip
+
       - name: Run AgentBean Next public entry smoke
         run: npm run smoke:agentbean-next-entry
 

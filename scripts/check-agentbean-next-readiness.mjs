@@ -104,6 +104,16 @@ export function collectAgentBeanNextReadinessChecks({
       'CI must expose an explicit workflow_dispatch AgentBean Next production smoke gate',
     ),
     check(
+      'ci-runs-ready-to-flip-before-production-smoke',
+      workflow.includes('Run AgentBean Next ready-to-flip audit') &&
+        workflow.includes('npm run audit:agentbean-next-ready-to-flip') &&
+        workflow.indexOf('Run AgentBean Next ready-to-flip audit') <
+          workflow.indexOf('Run AgentBean Next public entry smoke') &&
+        cutoverRunbook.includes('ready-to-flip audit') &&
+        cutoverRunbook.includes('production smoke'),
+      'CI production smoke must first prove external state is ready except for the final deploy target',
+    ),
+    check(
       'ci-runs-daemon-install-smoke',
       workflow.includes('Run AgentBean Next daemon install smoke') &&
         workflow.includes('npm run smoke:agentbean-next-daemon-install -- --skip-build'),
