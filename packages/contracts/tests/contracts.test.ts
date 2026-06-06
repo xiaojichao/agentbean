@@ -3,6 +3,10 @@ import {
   ERROR_CODES,
   WEB_EVENTS,
   AGENT_EVENTS,
+  ADAPTER_KINDS,
+  AGENT_CATEGORIES,
+  AGENT_SOURCES,
+  AGENT_STATUSES,
   isErrorCode,
   makeFailure,
   makeSuccess,
@@ -12,8 +16,10 @@ import {
   type ChannelDto,
   type ChannelMembersDto,
   type ChannelHumanMemberCommandDto,
+  type CreateAgentCommandDto,
   type CreateChannelCommandDto,
   type DeviceDto,
+  type DiscoveredAgentDto,
   type DispatchDto,
   type ListChannelMembersCommandDto,
   type MessageDto,
@@ -185,5 +191,69 @@ describe('first-slice contract result shape', () => {
     expect(AGENT_EVENTS.device.hello).toBe('device:hello');
     expect(AGENT_EVENTS.dispatch.request).toBe('dispatch:request');
     expect(Object.values(WEB_EVENTS.team)).not.toContain('network:list');
+  });
+
+  test('keeps agent contracts aligned with runtime capability and custom agent docs', () => {
+    const customAgent: AgentDto = {
+      id: 'agent-custom-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Custom Codex',
+      description: 'Runs Codex from the selected runtime',
+      adapterKind: 'codex',
+      category: 'executor-hosted',
+      source: 'custom',
+      status: 'error',
+      ownerId: 'user-1',
+      deviceId: 'device-1',
+      command: '/opt/homebrew/bin/codex',
+      args: ['--model', 'gpt-5.4'],
+      cwd: '/Users/shaw/AgentBean',
+      envKeys: ['OPENAI_API_KEY'],
+      lastSeenAt: 10,
+      lastError: 'Missing OPENAI_API_KEY',
+    };
+    const selfRegisteredAgent: AgentDto = {
+      id: 'agent-self-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Gateway Agent',
+      adapterKind: 'claude-code',
+      category: 'agentos-hosted',
+      source: 'self-register',
+      status: 'connecting',
+      lastSeenAt: 11,
+    };
+    const discovered: DiscoveredAgentDto = {
+      deviceId: 'device-1',
+      teamId: 'team-1',
+      name: 'Gateway Agent',
+      adapterKind: 'claude-code',
+      category: 'agentos-hosted',
+      source: 'self-register',
+      command: '/opt/homebrew/bin/claude',
+      cwd: '/Users/shaw/AgentBean',
+      gatewayInstanceKey: 'gateway-1',
+      metadata: { provider: 'agentos' },
+    };
+    const createAgent: CreateAgentCommandDto = {
+      userId: 'user-1',
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimeId: 'runtime-1',
+      name: 'Custom Codex',
+      env: { OPENAI_API_KEY: 'secret-value' },
+    };
+
+    expect(customAgent.source).toBe('custom');
+    expect(ADAPTER_KINDS).toEqual(['codex', 'claude-code', 'gemini', 'kimi-cli', 'hermes', 'openclaw']);
+    expect(AGENT_CATEGORIES).toEqual(['executor-hosted', 'agentos-hosted']);
+    expect(AGENT_SOURCES).toEqual(['custom', 'self-register', 'scanned']);
+    expect(AGENT_STATUSES).toEqual(['connecting', 'online', 'busy', 'offline', 'error']);
+    expect(customAgent.envKeys).toEqual(['OPENAI_API_KEY']);
+    expect(selfRegisteredAgent.category).toBe('agentos-hosted');
+    expect(discovered.source).toBe('self-register');
+    expect(discovered.gatewayInstanceKey).toBe('gateway-1');
+    expect(createAgent.runtimeId).toBe('runtime-1');
   });
 });

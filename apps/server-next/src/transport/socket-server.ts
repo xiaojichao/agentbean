@@ -97,6 +97,16 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         }
         await refreshChannelSubscribers(webSubscribers, app, teamId);
       },
+      async afterAgentMutation(payload, result) {
+        if (!isSuccessAck(result)) {
+          return;
+        }
+        const teamId = payloadTeamId(payload);
+        if (!teamId) {
+          return;
+        }
+        await refreshAgentSubscribers(webSubscribers, app, teamId);
+      },
     });
   });
   agentNamespace.on('connection', (socket) => {

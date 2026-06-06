@@ -15,6 +15,7 @@ export interface WebSocketHandlerOptions {
   dispatch?(request: DispatchRequestDto & { id: string }): void;
   deviceScan?(request: { requestId: string; deviceId: string }): void;
   afterChannelMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
 
 export interface AgentSocketHandlerOptions {
@@ -46,6 +47,9 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.channel.addAgent, app, 'addChannelAgentMember', afterChannelMutation);
   bind(socket, WEB_EVENTS.channel.removeAgent, app, 'removeChannelAgentMember', afterChannelMutation);
   bind(socket, WEB_EVENTS.channel.members, app, 'listChannelMembers');
+  bind(socket, WEB_EVENTS.agent.create, app, 'createCustomAgent', (payload, result) =>
+    options.afterAgentMutation?.(payload, result),
+  );
   bind(socket, WEB_EVENTS.message.send, app, 'sendMessage', (_payload, result) => {
     if (!options.dispatch || !isSendMessageAck(result)) {
       return;

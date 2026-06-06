@@ -151,6 +151,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         }
         return input.runtimes;
       },
+      async getById(runtimeId) {
+        return runtimes.get(runtimeId) ?? null;
+      },
       async listByDevice(deviceId) {
         return Array.from(runtimes.values()).filter((runtime) => runtime.deviceId === deviceId);
       },

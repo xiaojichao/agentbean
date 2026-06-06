@@ -414,6 +414,91 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('creates custom agents from runtime capability and refreshes agent snapshots', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-all', 'device-1', 'runtime-1', 'agent-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const web = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      web.disconnect();
+      agent.disconnect();
+    });
+
+    await web.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    await agent.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+    });
+    await agent.emitWithAck(AGENT_EVENTS.device.runtimes, {
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimes: [
+        {
+          adapterKind: 'codex',
+          name: 'Codex CLI',
+          command: '/opt/homebrew/bin/codex',
+          cwd: '/Users/shaw/AgentBean',
+          installed: true,
+        },
+      ],
+    });
+
+    const agentSnapshots: unknown[][] = [];
+    web.on(WEB_EVENTS.agent.snapshot, (agents) => {
+      if (!Array.isArray(agents)) {
+        throw new Error('Expected agent snapshot payload to be an array');
+      }
+      agentSnapshots.push(agents);
+    });
+    await web.emitWithAck(WEB_EVENTS.agent.subscribe, { userId: 'user-1', teamId: 'team-1' });
+    await eventually(async () => {
+      expect(agentSnapshots.at(-1)).toEqual([]);
+    });
+
+    await expect(
+      web.emitWithAck(WEB_EVENTS.agent.create, {
+        userId: 'user-1',
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        runtimeId: 'runtime-1',
+        name: 'Custom Codex',
+        env: { OPENAI_API_KEY: 'secret-value' },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      agent: {
+        id: 'agent-1',
+        source: 'custom',
+        command: '/opt/homebrew/bin/codex',
+        envKeys: ['OPENAI_API_KEY'],
+      },
+    });
+    await eventually(async () => {
+      expect(agentSnapshots.at(-1)).toMatchObject([
+        {
+          id: 'agent-1',
+          name: 'Custom Codex',
+          source: 'custom',
+          envKeys: ['OPENAI_API_KEY'],
+        },
+      ]);
+    });
+    expect(JSON.stringify(agentSnapshots)).not.toContain('secret-value');
+  });
+
   test('routes device scan requests only to the matching daemon socket', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,

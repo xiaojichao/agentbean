@@ -1,4 +1,4 @@
-export type RouteAgentStatus = 'online' | 'offline' | 'busy' | 'unknown';
+export type RouteAgentStatus = 'connecting' | 'online' | 'busy' | 'offline' | 'error' | 'unknown';
 
 export interface RouteAgent {
   id: string;

@@ -77,6 +77,7 @@ export interface DeviceRepository {
 
 export interface RuntimeRepository {
   replaceForDevice(input: { teamId: ID; deviceId: ID; runtimes: RuntimeRecord[] }): Promise<RuntimeRecord[]>;
+  getById(runtimeId: ID): Promise<RuntimeRecord | null>;
   listByDevice(deviceId: ID): Promise<RuntimeRecord[]>;
 }
 

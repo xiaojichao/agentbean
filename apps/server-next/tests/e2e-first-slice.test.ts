@@ -35,6 +35,114 @@ afterEach(async () => {
 });
 
 describe('AgentBean Next first-slice smoke', () => {
+  test('runs preview flow with runtime capability -> custom agent -> message -> daemon reply', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1100,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'device-1',
+        'runtime-1',
+        'agent-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+        'reply-1',
+      ]),
+    });
+    const { baseUrl, httpServer, ioServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const webSocket = await connectClient(`${baseUrl}/web`);
+    const agentSocket = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      webSocket.disconnect();
+      agentSocket.disconnect();
+    });
+
+    const web = createWebSocketClient(webSocket);
+    await expect(
+      web.register({
+        username: 'shaw',
+        password: 'secret',
+        teamName: 'AgentBean',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      user: { id: 'user-1' },
+      currentTeam: { id: 'team-1' },
+      defaultChannel: { id: 'channel-1' },
+    });
+
+    const daemon = createDaemonProtocolClient({
+      socket: agentSocket,
+      executor: async (request) => `preview:${request.prompt}`,
+      device: {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+      },
+      runtimes: [
+        {
+          adapterKind: 'codex',
+          name: 'Codex CLI',
+          command: '/opt/homebrew/bin/codex',
+          cwd: '/Users/shaw/AgentBean',
+          installed: true,
+        },
+      ],
+      agents: [],
+    });
+    await daemon.start();
+
+    await expect(
+      web.createAgent({
+        userId: 'user-1',
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        runtimeId: 'runtime-1',
+        name: 'Codex',
+        env: { OPENAI_API_KEY: 'secret-value' },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      agent: {
+        id: 'agent-1',
+        source: 'custom',
+        command: '/opt/homebrew/bin/codex',
+        envKeys: ['OPENAI_API_KEY'],
+      },
+    });
+
+    await expect(
+      web.sendMessage({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        body: '@Codex hello',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      message: { id: 'message-1', senderKind: 'human' },
+      dispatches: [{ id: 'dispatch-1', agentId: 'agent-1' }],
+    });
+
+    await eventually(async () => {
+      await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
+        ok: true,
+        messages: [
+          { id: 'message-1', senderKind: 'human', body: '@Codex hello' },
+          { id: 'reply-1', senderKind: 'agent', body: 'preview:@Codex hello' },
+        ],
+      });
+    });
+  });
+
   test('runs register -> daemon hello -> agent batch -> message send -> dispatch result', async () => {
     const app = createInMemoryServerNext({
       now: () => 1200,

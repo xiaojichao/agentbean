@@ -13,6 +13,7 @@
     "test:daemon-next": "vitest run apps/daemon-next/tests --config apps/daemon-next/vitest.config.ts",
     "test:web-next": "vitest run apps/web-next/tests --config apps/web-next/vitest.config.ts",
     "test:phase1": "vitest run packages/contracts/tests packages/domain/tests apps/server-next/tests apps/daemon-next/tests apps/web-next/tests --environment node --api.host 127.0.0.1",
+    "preview:agentbean-next": "cd apps/server-next && ../../node_modules/.bin/vitest run tests/e2e-first-slice.test.ts --config vitest.config.ts --api.host 127.0.0.1 -t \"runtime capability -> custom agent -> message -> daemon reply\"",
     "build:contracts": "tsc -p packages/contracts/tsconfig.json",
     "build:domain": "tsc -p packages/domain/tsconfig.json",
     "build:server-next": "tsc -p apps/server-next/tsconfig.json",

@@ -4,6 +4,7 @@ import type {
   ChannelAgentMemberCommandDto,
   ChannelDto,
   ChannelHumanMemberCommandDto,
+  CreateAgentCommandDto,
   CreateChannelCommandDto,
   DeviceDto,
   DispatchDto,
@@ -65,6 +66,7 @@ export interface WebSocketClient {
   addChannelAgentMember(input: ChannelAgentMemberCommandDto): Promise<unknown>;
   removeChannelAgentMember(input: ChannelAgentMemberCommandDto): Promise<unknown>;
   listChannelMembers(input: ListChannelMembersCommandDto): Promise<unknown>;
+  createAgent(input: CreateAgentCommandDto): Promise<unknown>;
   sendMessage(input: SendMessageInput): Promise<unknown>;
 }
 
@@ -174,6 +176,9 @@ export function createWebSocketClient(transport: WebSocketTransport): WebSocketC
     },
     listChannelMembers(input) {
       return transport.emitWithAck(WEB_EVENTS.channel.members, input);
+    },
+    createAgent(input) {
+      return transport.emitWithAck(WEB_EVENTS.agent.create, input);
     },
     sendMessage(input) {
       return transport.emitWithAck(WEB_EVENTS.message.send, input);

@@ -365,6 +365,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         }
         return input.runtimes;
       },
+      async getById(runtimeId) {
+        return mapRuntime(globalDb.prepare('SELECT * FROM device_runtimes WHERE id = ?').get(runtimeId));
+      },
       async listByDevice(deviceId) {
         return globalDb
           .prepare('SELECT * FROM device_runtimes WHERE device_id = ? ORDER BY last_seen_at, id')
@@ -409,14 +412,14 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             agent.category,
             agent.source,
             agent.status,
-            null,
+            agent.ownerId ?? null,
             agent.deviceId ?? null,
-            null,
-            null,
-            null,
-            null,
+            agent.command ?? null,
+            agent.args ? JSON.stringify(agent.args) : null,
+            agent.cwd ?? null,
+            agent.envKeys ? JSON.stringify(agent.envKeys) : null,
             agent.lastSeenAt ?? 0,
-            null,
+            agent.lastError ?? null,
             agent.lastSeenAt ?? 0,
             agent.lastSeenAt ?? 0,
           );
@@ -741,7 +744,6 @@ function mapRuntime(row: unknown): RuntimeRecord | null {
     cwd: sqliteNullableText(row, 'cwd'),
     normalizedCwdKey: sqliteNullableText(row, 'normalized_cwd_key'),
     version: sqliteNullableText(row, 'version'),
-    status: installed ? 'online' : 'offline',
     lastSeenAt: sqliteNumber(row, 'last_seen_at'),
   };
 }
@@ -765,8 +767,14 @@ function mapAgent(db: SqliteDatabase, row: unknown): AgentRecord | null {
     category: sqliteText(row, 'category') as AgentRecord['category'],
     source: sqliteText(row, 'source') as AgentRecord['source'],
     status: sqliteText(row, 'status') as AgentRecord['status'],
+    ownerId: sqliteNullableText(row, 'owner_id'),
     deviceId: sqliteNullableText(row, 'device_id'),
+    command: sqliteNullableText(row, 'command'),
+    args: parseJsonArray(sqliteNullableText(row, 'args_json')),
+    cwd: sqliteNullableText(row, 'cwd'),
+    envKeys: parseJsonArray(sqliteNullableText(row, 'env_json')),
     lastSeenAt: sqliteNumber(row, 'last_seen_at'),
+    lastError: sqliteNullableText(row, 'last_error'),
   };
 }
 
@@ -844,6 +852,17 @@ function sqliteNullableNumber(row: unknown, key: string): number | undefined {
     throw new Error(`Expected SQLite column ${key} to be nullable number`);
   }
   return value;
+}
+
+function parseJsonArray(value: string | undefined): string[] | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed)) {
+    return undefined;
+  }
+  return parsed.filter((item): item is string => typeof item === 'string');
 }
 
 function sqliteValue(row: unknown, key: string): unknown {

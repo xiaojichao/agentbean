@@ -213,6 +213,86 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('creates a visible custom agent from an installed device runtime without exposing raw env', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 550,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-1', 'runtime-1', 'agent-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+      hostname: 'shaw-mbp',
+    });
+    await app.reportDeviceRuntimes({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimes: [
+        {
+          adapterKind: 'codex',
+          name: 'Codex CLI',
+          command: '/opt/homebrew/bin/codex',
+          cwd: '/Users/shaw/AgentBean',
+          installed: true,
+        },
+      ],
+    });
+
+    const ack = await app.createCustomAgent({
+      userId: 'user-1',
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimeId: 'runtime-1',
+      name: 'Custom Codex',
+      description: 'Local Codex preview agent',
+      args: ['--model', 'gpt-5.4'],
+      env: {
+        OPENAI_API_KEY: 'secret-value',
+      },
+    });
+
+    expect(ack).toMatchObject({
+      ok: true,
+      agent: {
+        id: 'agent-1',
+        primaryTeamId: 'team-1',
+        visibleTeamIds: ['team-1'],
+        name: 'Custom Codex',
+        description: 'Local Codex preview agent',
+        adapterKind: 'codex',
+        category: 'executor-hosted',
+        source: 'custom',
+        status: 'online',
+        ownerId: 'user-1',
+        deviceId: 'device-1',
+        command: '/opt/homebrew/bin/codex',
+        args: ['--model', 'gpt-5.4'],
+        cwd: '/Users/shaw/AgentBean',
+        envKeys: ['OPENAI_API_KEY'],
+        lastSeenAt: 550,
+      },
+    });
+    expect(JSON.stringify(ack)).not.toContain('secret-value');
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', source: 'custom', envKeys: ['OPENAI_API_KEY'] }],
+    });
+    await expect(
+      app.createCustomAgent({
+        userId: 'user-2',
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        runtimeId: 'runtime-1',
+        name: 'Forbidden Codex',
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+  });
+
   test('creates device scan requests for online devices visible to team members', async () => {
     const app = createInMemoryServerNext({
       now: () => 500,
