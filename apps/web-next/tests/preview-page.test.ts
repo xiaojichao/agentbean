@@ -32,6 +32,16 @@ interface PreviewHarness {
 }
 
 describe('web-next preview page interactions', () => {
+  test('renders an AgentBean-style preview workspace shell', () => {
+    const html = readFileSync(new URL('../preview/index.html', import.meta.url), 'utf8');
+
+    expect(html).toContain('class="brand"');
+    expect(html).toContain('class="workspace"');
+    expect(html).toContain('class="right-rail"');
+    expect(html).toContain('进入 AgentBean Next');
+    expect(html).toContain('发送消息');
+  });
+
   test('restores saved session through auth:whoami and resubscribes snapshots on connect', async () => {
     const harness = createPreviewHarness({
       'auth:whoami': () => ({
@@ -125,9 +135,22 @@ function createPreviewHarness(acks: Record<string, AckFactory>): PreviewHarness 
       elements.set(`${id}:${fieldName}`, createElement(`${id}:${fieldName}`));
     }
   }
-  for (const id of ['connection-status', 'channels', 'devices', 'runtimes', 'agents', 'messages', 'events']) {
+  for (const id of [
+    'active-channel-meta',
+    'active-channel-title',
+    'connection-status',
+    'channels',
+    'devices',
+    'runtimes',
+    'agents',
+    'messages',
+    'events',
+    'session-summary',
+    'team-submit',
+  ]) {
     elements.set(id, createElement(id));
   }
+  const body = { dataset: {} as Record<string, string> };
 
   const socket = {
     on(event: string, handler: (payload: unknown) => unknown): void {
@@ -150,6 +173,7 @@ function createPreviewHarness(acks: Record<string, AckFactory>): PreviewHarness 
   const context = vm.createContext({
     FormData: FakeFormData,
     document: {
+      body,
       createElement: (tagName: string) => createElement(tagName),
       getElementById: (id: string) => requiredElement(elements, id),
       querySelector: (selector: string) => {
