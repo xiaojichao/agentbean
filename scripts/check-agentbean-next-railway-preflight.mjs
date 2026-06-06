@@ -169,15 +169,7 @@ function readRailwayVolumes({ env, runCommand }) {
     return { ok: false, items: [], error: 'missing Railway token, project id, service id, or environment id' };
   }
   try {
-    const output = runCommand('railway', [
-      'volume',
-      'list',
-      '--service',
-      env.RAILWAY_SERVICE_ID,
-      '--environment',
-      env.RAILWAY_ENVIRONMENT,
-      '--json',
-    ]);
+    const output = runCommand('railway', ['volume', 'list', '--json']);
     return { ok: true, items: parseJson(output), error: undefined };
   } catch (error) {
     return { ok: false, items: [], error: formatCommandError(error) };
