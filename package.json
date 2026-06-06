@@ -14,6 +14,7 @@
     "test:web-next": "vitest run apps/web-next/tests --config apps/web-next/vitest.config.ts",
     "test:phase1": "vitest run packages/contracts/tests packages/domain/tests apps/server-next/tests apps/daemon-next/tests apps/web-next/tests --environment node --api.host 127.0.0.1",
     "check:agentbean-next-readiness": "node scripts/check-agentbean-next-readiness.mjs",
+    "smoke:agentbean-next-daemon-install": "node scripts/smoke-agentbean-next-daemon-install.mjs",
     "preview:agentbean-next": "cd apps/server-next && ../../node_modules/.bin/vitest run tests/e2e-first-slice.test.ts --config vitest.config.ts --api.host 127.0.0.1 -t \"runtime capability -> custom agent -> message -> daemon reply\"",
     "build": "npm run build:packages",
     "dev:server-next": "npm run build:server-next && node apps/server-next/dist/apps/server-next/src/bin.js",

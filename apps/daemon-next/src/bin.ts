@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import { runDaemonNextCli } from './cli.js';
 
 runDaemonNextCli().catch((error) => {
