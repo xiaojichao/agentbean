@@ -30,6 +30,7 @@ coverage/
 .playwright-mcp/
 
 # Runtime data
+.agentbean-next/
 data/
 docs/demo001/data/
 *.db

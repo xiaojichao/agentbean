@@ -117,6 +117,7 @@ Phase 3 完成标准：
 | P4-08 | Conversation 追加 `channel:message` 与 dispatch status updates。 | Web | Realtime projection。 | `socket-protocol.md` |
 | P4-09 | Reconnect 会 resubscribe 并替换 snapshots，而不是 patch stale state。 | Web | Snapshot recovery。 | `known-gaps.md`, `acceptance-tests.md` |
 | P4-10 | server-next dev server 托管 web-next preview 页面，页面包含 register、custom agent create、message send 三个主要操作面。 | Web/Socket | 本地可视化 preview 入口。 | `implementation-runbook.md`, `target-architecture.md` |
+| P4-11 | full local preview launcher 启动 SQLite server，bootstrap/login preview 用户，并把 daemon-next 连接到同一个 team。 | Web/Socket/Daemon | 一条命令启动本地替换 preview。 | `implementation-runbook.md`, `target-architecture.md` |
 
 Phase 4 完成标准：
 

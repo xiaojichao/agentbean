@@ -41,5 +41,5 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run dev:server-next:s
 
 - 每个 team 独立 SQLite 文件或多 team storage manager；当前 preview 使用一个 `team.sqlite`。
 - production deploy 切换到 server-next。
-- web-next 页面还没有自动启动或引导 daemon-next。
+- 后续第二十一切片已补上一条命令启动 server-next 与 daemon-next 的 full local preview launcher。
 - 真实 Codex/Claude/Gemini 交互式 adapter 仍在后续切片。

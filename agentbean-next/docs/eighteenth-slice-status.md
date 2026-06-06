@@ -36,4 +36,4 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run test:server-next 
 
 - server-next dev server 默认仍使用 in-memory repositories；后续第二十切片已补上可选 SQLite 文件模式。
 - web-next 仍缺可视化页面与 browser form。
-- daemon-next 与 server-next 的组合启动脚本尚未合并为一条 full preview command。
+- 后续第二十一切片已补上 daemon-next 与 server-next 的 full local preview launcher。

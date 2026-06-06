@@ -152,6 +152,7 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         if (!teamId) {
           return;
         }
+        await emitChannelMessageSubscribers(webSubscribers, app, teamId, result);
         await refreshAgentSubscribers(webSubscribers, app, teamId);
       },
     });
@@ -191,6 +192,27 @@ async function refreshAgentSubscribers(
     const result = await app.listVisibleAgents({ teamId: subscriber.agents.teamId });
     if (result.ok) {
       subscriber.socket.emit?.(WEB_EVENTS.agent.snapshot, result.agents);
+    }
+  }
+}
+
+async function emitChannelMessageSubscribers(
+  subscribers: Set<WebSocketSubscription>,
+  app: ServerNextUseCases,
+  teamId: string,
+  result: unknown,
+): Promise<void> {
+  const message = resultMessage(result);
+  if (!message) {
+    return;
+  }
+  for (const subscriber of subscribers) {
+    if (subscriber.channels?.teamId !== teamId) {
+      continue;
+    }
+    const channels = await app.listChannels(subscriber.channels);
+    if (channels.ok && channels.channels.some((channel) => channel.id === message.channelId)) {
+      subscriber.socket.emit?.(WEB_EVENTS.channel.message, message);
     }
   }
 }
@@ -255,6 +277,14 @@ function resultDispatchTeamId(result: unknown): string | null {
   }
   const dispatch = (result as { dispatch?: { teamId?: unknown } }).dispatch;
   return typeof dispatch?.teamId === 'string' ? dispatch.teamId : null;
+}
+
+function resultMessage(result: unknown): { channelId: string } | null {
+  if (!result || typeof result !== 'object') {
+    return null;
+  }
+  const message = (result as { message?: { channelId?: unknown } }).message;
+  return typeof message?.channelId === 'string' ? message as { channelId: string } : null;
 }
 
 function resultDeviceTeamId(result: unknown): string | null {
