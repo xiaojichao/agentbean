@@ -24,6 +24,7 @@ export interface ServerNextDevConfig {
   port: number;
   storage: 'memory' | 'sqlite';
   dataDir: string;
+  sessionSecret: string;
 }
 
 export interface ParseServerNextDevConfigInput {
@@ -57,13 +58,17 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
   const port = Number(args.port ?? env.AGENTBEAN_NEXT_PORT ?? env.PORT ?? 4100);
   const storage = args.storage ?? env.AGENTBEAN_NEXT_STORAGE ?? (env.PORT ? 'sqlite' : 'memory');
   const dataDir = args['data-dir'] ?? env.AGENTBEAN_NEXT_DATA_DIR ?? join(process.cwd(), '.agentbean-next');
+  const sessionSecret = args['session-secret'] ?? env.AGENTBEAN_NEXT_SESSION_SECRET ?? '';
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error('AGENTBEAN_NEXT_PORT or --port must be an integer between 0 and 65535');
   }
   if (storage !== 'memory' && storage !== 'sqlite') {
     throw new Error('AGENTBEAN_NEXT_STORAGE or --storage must be memory or sqlite');
   }
-  return { host, port, storage, dataDir };
+  if (env.PORT && !sessionSecret) {
+    throw new Error('AGENTBEAN_NEXT_SESSION_SECRET or --session-secret is required when PORT is set');
+  }
+  return { host, port, storage, dataDir, sessionSecret: sessionSecret || 'agentbean-next-dev-session-secret' };
 }
 
 export async function startServerNextDevServer(
@@ -142,6 +147,7 @@ function createDefaultApp(
         ids: {
           nextId: () => randomUUID(),
         },
+        sessionSecret: config.sessionSecret,
       }),
       close: async () => undefined,
     };
@@ -160,6 +166,7 @@ function createDefaultApp(
       ids: {
         nextId: () => randomUUID(),
       },
+      sessionSecret: config.sessionSecret,
     }),
     async close() {
       globalDb.close();

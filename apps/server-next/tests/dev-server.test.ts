@@ -40,16 +40,23 @@ describe('server-next dev server entry', () => {
         env: {
           AGENTBEAN_NEXT_HOST: '0.0.0.0',
           AGENTBEAN_NEXT_DATA_DIR: '/tmp/env-data',
+          AGENTBEAN_NEXT_SESSION_SECRET: 'secret-from-env',
         },
         argv: ['--port', '0', '--storage', 'sqlite', '--data-dir', '/tmp/arg-data'],
       }),
-    ).toEqual({ host: '0.0.0.0', port: 0, storage: 'sqlite', dataDir: '/tmp/arg-data' });
+    ).toEqual({
+      host: '0.0.0.0',
+      port: 0,
+      storage: 'sqlite',
+      dataDir: '/tmp/arg-data',
+      sessionSecret: 'secret-from-env',
+    });
   });
 
   test('uses platform PORT for production-style startup defaults', () => {
     expect(
       parseServerNextDevConfig({
-        env: { PORT: '4108' },
+        env: { PORT: '4108', AGENTBEAN_NEXT_SESSION_SECRET: 'prod-secret' },
         argv: [],
       }),
     ).toEqual({
@@ -57,7 +64,11 @@ describe('server-next dev server entry', () => {
       port: 4108,
       storage: 'sqlite',
       dataDir: join(process.cwd(), '.agentbean-next'),
+      sessionSecret: 'prod-secret',
     });
+    expect(() => parseServerNextDevConfig({ env: { PORT: '4108' }, argv: [] })).toThrow(
+      'AGENTBEAN_NEXT_SESSION_SECRET',
+    );
   });
 
   test('starts a long-running Socket.IO server with healthz and web namespace', async () => {
@@ -68,7 +79,13 @@ describe('server-next dev server entry', () => {
     const server = await startServerNextDevServer({
       app,
       Server,
-      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir: '.agentbean-next-test' },
+      config: {
+        host: '127.0.0.1',
+        port: 0,
+        storage: 'memory',
+        dataDir: '.agentbean-next-test',
+        sessionSecret: 'test-secret',
+      },
     });
     cleanups.push(() => server.close());
 
@@ -104,7 +121,7 @@ describe('server-next dev server entry', () => {
     const first = await startServerNextDevServer({
       Server,
       Database,
-      config: { host: '127.0.0.1', port: 0, storage: 'sqlite', dataDir },
+      config: { host: '127.0.0.1', port: 0, storage: 'sqlite', dataDir, sessionSecret: 'test-secret' },
     });
     cleanups.push(() => first.close());
 
@@ -125,7 +142,7 @@ describe('server-next dev server entry', () => {
     const second = await startServerNextDevServer({
       Server,
       Database,
-      config: { host: '127.0.0.1', port: 0, storage: 'sqlite', dataDir },
+      config: { host: '127.0.0.1', port: 0, storage: 'sqlite', dataDir, sessionSecret: 'test-secret' },
     });
     cleanups.push(() => second.close());
     const secondWeb = await connectClient(`${second.baseUrl}/web`);
