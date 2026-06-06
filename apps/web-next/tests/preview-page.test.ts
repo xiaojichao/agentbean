@@ -36,9 +36,12 @@ describe('web-next preview page interactions', () => {
     const html = readFileSync(new URL('../preview/index.html', import.meta.url), 'utf8');
 
     expect(html).toContain('class="brand"');
+    expect(html).toContain('当前团队');
+    expect(html).toContain('class="nav-item active"># 聊天');
     expect(html).toContain('class="workspace"');
     expect(html).toContain('class="right-rail"');
-    expect(html).toContain('进入 AgentBean Next');
+    expect(html).toContain('aria-label="右侧工作区"');
+    expect(html).toContain('添加 Custom Agent');
     expect(html).toContain('发送消息');
   });
 
@@ -75,6 +78,37 @@ describe('web-next preview page interactions', () => {
       token: 'token-1',
       user: { id: 'user-1' },
       team: { id: 'team-1' },
+    });
+  });
+
+  test('auto-enters the default preview team when no saved session exists', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+    });
+
+    await harness.socket.trigger('connect');
+
+    expect(harness.emitted).toEqual([
+      ['auth:register', { username: 'shaw', password: 'secret', teamName: 'AgentBean' }],
+      ['device:list', { userId: 'user-1', teamId: 'team-1' }],
+      ['agents:subscribe', { userId: 'user-1', teamId: 'team-1' }],
+      ['channels:subscribe', { userId: 'user-1', teamId: 'team-1' }],
+    ]);
+    expect(JSON.parse(harness.localStorage.getItem('agentbean-next-preview-session') ?? '{}')).toMatchObject({
+      token: 'token-1',
+      user: { id: 'user-1' },
+      team: { id: 'team-1' },
+      channel: { id: 'channel-1' },
     });
   });
 
@@ -157,6 +191,25 @@ describe('web-next preview page interactions', () => {
     expect(runtimeOptions).toContain('runtime-2');
     expect(runtimeOptions).toContain('Codex CLI');
     expect(runtimeOptions.indexOf('runtime-2')).toBeLessThan(runtimeOptions.indexOf('runtime-gemini'));
+  });
+
+  test('folds duplicate preview device rows and keeps the runtime-bearing row', async () => {
+    const harness = createPreviewHarness({});
+
+    await harness.socket.trigger('devices:snapshot', [
+      { id: 'stale-device', name: 'shaw-mac.local', status: 'online' },
+      { id: 'current-device', name: 'shaw-mac.local', status: 'online' },
+    ]);
+    await harness.socket.trigger('device:runtimes', {
+      deviceId: 'current-device',
+      runtimes: [{ id: 'runtime-codex', name: 'Codex CLI', adapterKind: 'codex' }],
+    });
+
+    const devicesHtml = harness.element('devices').innerHTML;
+    expect(devicesHtml).not.toContain('stale-device');
+    expect(devicesHtml).toContain('current-device');
+    expect(harness.element('agent-create-form:deviceId').innerHTML).toContain('current-device');
+    expect(harness.element('agent-create-form:deviceId').innerHTML).not.toContain('stale-device');
   });
 });
 
