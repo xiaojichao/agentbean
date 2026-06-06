@@ -133,6 +133,7 @@ Phase 4 完成标准：
 | E2E-02 | 同一流程在无 online agent 时持久化 human message，并返回 no-online dispatch result。 | E2E | Non-fatal no-agent behavior。 | `acceptance-tests.md` |
 | E2E-03 | Daemon disconnect/reconnect 会刷新 device 与 agent snapshots。 | E2E | Reconnect behavior。 | `acceptance-tests.md`, `known-gaps.md` |
 | E2E-04 | Register -> daemon hello -> runtime report -> `agent:create` custom agent -> message send -> dispatch result -> agent reply visible。 | E2E | 本地 AgentBean Next preview flow。 | `socket-protocol.md`, `contract-alignment-handoff.md` |
+| E2E-05 | CI 在 AgentBean Next 相关路径变更时运行 phase tests、packages build 与 preview smoke，并阻止 deploy/publish 继续。 | CI | 替换旧系统前的持续验证 gate。 | `implementation-runbook.md`, `migration-plan.md` |
 
 只有全部 E2E gates 通过后，第一切片才可冻结。
 
