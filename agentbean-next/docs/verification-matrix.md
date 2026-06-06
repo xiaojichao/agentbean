@@ -80,6 +80,7 @@ Phase 1 完成标准：
 | P2-24 | 平台式启动存在 `PORT` 时，server-next 必须显式配置 `AGENTBEAN_NEXT_SESSION_SECRET` 或 `--session-secret`。 | Config | 避免 production 使用 dev fallback session secret。 | `target-architecture.md`, `socket-protocol.md` |
 | P2-25 | 平台式启动存在 `PORT` 且使用 SQLite storage 时，server-next 必须显式配置 `AGENTBEAN_NEXT_DATA_DIR` 或 `--data-dir`。 | Config | 避免 production 写入默认仓库目录或临时目录，导致部署重启后数据丢失。 | `target-architecture.md`, `implementation-runbook.md` |
 | P2-26 | 根目录 Railway deploy config 必须显式声明 `npm run build`、`npm start` 与 `/healthz`。 | Config/CI | `AGENTBEAN_DEPLOY_TARGET=next` 时 root deploy 不依赖平台隐式推断。 | `target-architecture.md`, `implementation-runbook.md` |
+| P2-27 | production readiness checker 必须能区分静态部署契约已就绪与 production flip env 未就绪。 | Config/CI | 真正替换旧 AgentBean 前，用一个可运行 preflight 明确列出缺少的生产配置。 | `target-architecture.md`, `implementation-runbook.md` |
 
 Phase 2 完成标准：
 
