@@ -25,6 +25,7 @@ export interface AgentBeanNextPreviewConfig {
   host: string;
   port: number;
   dataDir: string;
+  sessionSecret: string;
   username: string;
   password: string;
   teamName: string;
@@ -85,6 +86,7 @@ export function parseAgentBeanNextPreviewConfig(
     host: serverConfig.host,
     port: serverConfig.port,
     dataDir: serverConfig.dataDir,
+    sessionSecret: serverConfig.sessionSecret,
     username: env.AGENTBEAN_NEXT_PREVIEW_USERNAME ?? 'shaw',
     password: env.AGENTBEAN_NEXT_PREVIEW_PASSWORD ?? 'secret',
     teamName: env.AGENTBEAN_NEXT_PREVIEW_TEAM ?? 'AgentBean',
@@ -106,6 +108,7 @@ export async function startAgentBeanNextPreview(
       port: config.port,
       storage: 'sqlite',
       dataDir: config.dataDir,
+      sessionSecret: config.sessionSecret,
     },
   });
   const sockets: PreviewSocketLike[] = [];

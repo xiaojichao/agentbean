@@ -28,7 +28,7 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm install --package-loc
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm ci --ignore-scripts --fetch-timeout=15000 --fetch-retries=1 --loglevel=notice
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run test:phase1
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run build:packages
-PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_NEXT_HOST=127.0.0.1 PORT=0 AGENTBEAN_NEXT_DATA_DIR=/private/tmp/agentbean-next-production-smoke npm run start:server-next
+PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_NEXT_HOST=127.0.0.1 PORT=0 AGENTBEAN_NEXT_SESSION_SECRET=production-smoke-secret AGENTBEAN_NEXT_DATA_DIR=/private/tmp/agentbean-next-production-smoke npm run start:server-next
 ```
 
 上述命令在不含任何 `node_modules` 的临时干净副本中通过，并用该副本生成的 `package-lock.json` 替换仓库根 lockfile。本机根 `node_modules` 中的 `.bun` symlink 会触发 npm Arborist 的 `Cannot read properties of null (reading 'matches')`，因此验证时需要使用干净安装树；CI clean checkout 不包含该本机状态。
