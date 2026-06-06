@@ -1,7 +1,7 @@
 {
   "name": "@agentbean/daemon-next",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "private": false,
   "type": "module",
   "main": "./dist/apps/daemon-next/src/index.js",
   "types": "./dist/apps/daemon-next/src/index.d.ts",
@@ -14,12 +14,17 @@
       "import": "./dist/apps/daemon-next/src/index.js"
     }
   },
+  "files": [
+    "dist/**/*"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/apps/daemon-next/src/bin.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@agentbean/contracts": "file:../../packages/contracts"
+    "@agentbean/contracts": "0.1.0",
+    "socket.io-client": "^4.8.3"
   }
 }

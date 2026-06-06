@@ -114,9 +114,12 @@ async function connectSocketIoClient(serverUrl: string): Promise<SocketIoClientL
 
 function loadSocketIoClient(): { io(url: string, options?: Record<string, unknown>): SocketIoClientLike } {
   const requireUrls = [
+    new URL('../../../../package.json', import.meta.url),
     new URL('../../../../../server/package.json', import.meta.url),
     new URL('../../server/package.json', import.meta.url),
+    new URL('../package.json', import.meta.url),
     pathToFileURL(join(process.cwd(), 'apps/server/package.json')),
+    pathToFileURL(join(process.cwd(), 'apps/daemon-next/package.json')),
   ];
   for (const requireUrl of requireUrls) {
     try {

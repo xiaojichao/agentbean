@@ -269,6 +269,7 @@ jobs:
 
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      AGENTBEAN_DEPLOY_TARGET: ${{ vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
 
     steps:
       - name: Check out repository
@@ -282,7 +283,9 @@ jobs:
           node-version: 24.15.0
           registry-url: https://registry.npmjs.org
           cache: npm
-          cache-dependency-path: apps/daemon/package-lock.json
+          cache-dependency-path: |
+            apps/daemon/package-lock.json
+            package-lock.json
 
       - name: Install, build, and publish
         id: agent-package
@@ -304,6 +307,47 @@ jobs:
       - name: Publish npm package
         if: env.NPM_TOKEN != '' && steps.agent-package.outputs.should_publish == 'true'
         working-directory: apps/daemon
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Install and build AgentBean Next npm packages
+        id: agentbean-next-packages
+        if: env.NPM_TOKEN != '' && env.AGENTBEAN_DEPLOY_TARGET == 'next'
+        run: |
+          npm ci --ignore-scripts
+          npm run build:contracts
+          npm run build:daemon-next
+
+          CONTRACTS_VERSION="$(node -p "require('./packages/contracts/package.json').version")"
+          DAEMON_NEXT_VERSION="$(node -p "require('./apps/daemon-next/package.json').version")"
+
+          if npm view "@agentbean/contracts@$CONTRACTS_VERSION" version >/dev/null 2>&1; then
+            echo "::notice::@agentbean/contracts@$CONTRACTS_VERSION is already published; skipping npm publish."
+            echo "should_publish_contracts=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish_contracts=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          if npm view "@agentbean/daemon-next@$DAEMON_NEXT_VERSION" version >/dev/null 2>&1; then
+            echo "::notice::@agentbean/daemon-next@$DAEMON_NEXT_VERSION is already published; skipping npm publish."
+            echo "should_publish_daemon_next=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish_daemon_next=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish AgentBean Next contracts package
+        if: env.NPM_TOKEN != '' && env.AGENTBEAN_DEPLOY_TARGET == 'next' && steps.agentbean-next-packages.outputs.should_publish_contracts == 'true'
+        working-directory: packages/contracts
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish AgentBean Next daemon package
+        if: env.NPM_TOKEN != '' && env.AGENTBEAN_DEPLOY_TARGET == 'next' && steps.agentbean-next-packages.outputs.should_publish_daemon_next == 'true'
+        working-directory: apps/daemon-next
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -18,6 +18,10 @@ describe('AgentBean Next readiness checker', () => {
       'ci-runs-readiness-checker',
       'ci-runs-production-readiness-before-next-deploy',
       'deploy-target-gate',
+      'contracts-package-publishable',
+      'daemon-next-package-publishable',
+      'daemon-next-runtime-dependencies',
+      'ci-publishes-next-packages',
     ]);
   });
 
