@@ -27,6 +27,7 @@ describe('AgentBean Next readiness checker', () => {
       'ci-publishes-next-packages',
       'ci-decouples-next-npm-publish-from-production-deploy',
       'ci-runs-railway-next-preflight-without-deploy',
+      'ci-syncs-railway-next-env-without-deploy',
     ]);
   });
 
