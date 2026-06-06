@@ -30,6 +30,7 @@ export function registerWebSocketHandlers(
 ): void {
   bind(socket, WEB_EVENTS.auth.register, app, 'registerUser');
   bind(socket, WEB_EVENTS.auth.login, app, 'loginUser');
+  bind(socket, WEB_EVENTS.auth.whoami, app, 'whoami');
   bind(socket, WEB_EVENTS.team.list, app, 'listTeams');
   bind(socket, WEB_EVENTS.device.get, app, 'getDevice');
   bind(socket, WEB_EVENTS.device.scan, app, 'requestDeviceScan', (_payload, result) => {

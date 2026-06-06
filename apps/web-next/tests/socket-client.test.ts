@@ -12,6 +12,7 @@ describe('web-next socket client', () => {
       event: WEB_EVENTS.auth.register,
     });
     await client.login({ username: 'shaw', password: 'secret' });
+    await client.whoami({ token: 'token-1' });
     await client.listTeams({ userId: 'user-1' });
     await client.listDevices({ userId: 'user-1', teamId: 'team-1' });
     await client.getDevice({ userId: 'user-1', deviceId: 'device-1' });
@@ -74,6 +75,7 @@ describe('web-next socket client', () => {
     expect(transport.emitted).toEqual([
       [WEB_EVENTS.auth.register, { username: 'shaw', password: 'secret', teamName: 'AgentBean' }],
       [WEB_EVENTS.auth.login, { username: 'shaw', password: 'secret' }],
+      [WEB_EVENTS.auth.whoami, { token: 'token-1' }],
       [WEB_EVENTS.team.list, { userId: 'user-1' }],
       [WEB_EVENTS.device.list, { userId: 'user-1', teamId: 'team-1' }],
       [WEB_EVENTS.device.get, { userId: 'user-1', deviceId: 'device-1' }],
