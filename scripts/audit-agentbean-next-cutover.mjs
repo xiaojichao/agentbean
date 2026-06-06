@@ -53,6 +53,11 @@ export function collectAgentBeanNextCutoverAudit({
       'GitHub variable AGENTBEAN_NEXT_DATA_DIR must point at the production Railway volume path',
     ),
     check(
+      'github-variable-next-entry-url',
+      isProductionHttpUrl(variableMap.get('AGENTBEAN_NEXT_ENTRY_URL')),
+      'GitHub variable AGENTBEAN_NEXT_ENTRY_URL must point at the deployed AgentBean Next production URL',
+    ),
+    check(
       'github-secret-railway-token',
       secretNames.has('RAILWAY_TOKEN'),
       'GitHub secret RAILWAY_TOKEN must exist for production deploy',
@@ -162,6 +167,21 @@ function isRetryableCommandError(error) {
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function isProductionHttpUrl(value) {
+  if (!value) {
+    return false;
+  }
+  try {
+    const url = new URL(String(value));
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+      return false;
+    }
+    return !['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(url.hostname);
+  } catch {
+    return false;
+  }
 }
 
 function check(id, ok, message) {

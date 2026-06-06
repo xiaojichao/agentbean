@@ -10,6 +10,7 @@
   - 只读读取 npm registry 中 next package versions。
   - 检查 `AGENTBEAN_DEPLOY_TARGET=next`。
   - 检查 `AGENTBEAN_NEXT_DATA_DIR` 存在且不是本地 `.agentbean-next` fallback。
+  - 检查 `AGENTBEAN_NEXT_ENTRY_URL` 指向可用于 production smoke 的非本机 HTTP(S) URL。
   - 检查 `RAILWAY_TOKEN`、`NPM_TOKEN` 与 `AGENTBEAN_NEXT_SESSION_SECRET` secrets 存在。
   - 检查 npm registry 已存在 `@agentbean/contracts@0.2.0`。
   - 检查 npm registry 已存在 `@agentbean/daemon-next@0.2.0`。
