@@ -20,6 +20,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@agentbean/contracts": "workspace:*"
+    "@agentbean/contracts": "file:../../packages/contracts"
   }
 }

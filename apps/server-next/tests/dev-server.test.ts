@@ -46,6 +46,20 @@ describe('server-next dev server entry', () => {
     ).toEqual({ host: '0.0.0.0', port: 0, storage: 'sqlite', dataDir: '/tmp/arg-data' });
   });
 
+  test('uses platform PORT for production-style startup defaults', () => {
+    expect(
+      parseServerNextDevConfig({
+        env: { PORT: '4108' },
+        argv: [],
+      }),
+    ).toEqual({
+      host: '0.0.0.0',
+      port: 4108,
+      storage: 'sqlite',
+      dataDir: join(process.cwd(), '.agentbean-next'),
+    });
+  });
+
   test('starts a long-running Socket.IO server with healthz and web namespace', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,
