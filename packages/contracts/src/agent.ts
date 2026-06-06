@@ -10,6 +10,11 @@ export interface RuntimeDto {
   deviceId: ID;
   adapterKind: AdapterKind;
   name: string;
+  installed: boolean;
+  command?: string;
+  cwd?: string;
+  normalizedCommandKey?: string;
+  normalizedCwdKey?: string;
   version?: string;
   status: AgentStatus;
   lastSeenAt?: UnixMs;

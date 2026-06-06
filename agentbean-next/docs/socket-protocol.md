@@ -520,6 +520,8 @@ Ack<{ channel: ChannelDto; messages: MessageDto[] }>
 
 ```ts
 {
+  userId: string;
+  teamId: string;
   channelId: string;
   body: string;
   clientMessageId?: string;
@@ -533,6 +535,12 @@ Ack：
 ```ts
 Ack<{ message: MessageDto; dispatches: DispatchDto[] }>
 ```
+
+说明：
+
+- 当前 first-slice payload 显式携带 `userId` 与 `teamId`，用于 team/channel gate 与路由。
+- `senderKind` 与 `senderId` 仍由 server 派生，client 不应发送 sender identity。
+- 如果后续改为从 authenticated socket session 派生 user/team，必须同步更新 web client、server use case、本文档与验证矩阵。
 
 服务器事件：
 

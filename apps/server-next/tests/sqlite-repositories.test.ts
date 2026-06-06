@@ -237,7 +237,7 @@ describe('server-next SQLite repositories', () => {
 
       await expect(app.failTimedOutDispatches({ olderThan: 1001 })).resolves.toMatchObject({
         ok: true,
-        dispatches: [{ id: 'dispatch-1', status: 'failed', error: 'DISPATCH_TIMEOUT' }],
+        dispatches: [{ id: 'dispatch-1', status: 'timed_out', error: 'DISPATCH_TIMEOUT' }],
       });
       expect(teamDb.prepare('SELECT body FROM messages WHERE id = ?').get('message-1')).toEqual({ body: '@Codex hello' });
     } finally {
@@ -316,8 +316,17 @@ describe('server-next SQLite repositories', () => {
       ).resolves.toMatchObject({
         ok: true,
         runtimes: [
-          { id: 'runtime-1', adapterKind: 'codex', name: 'Codex CLI' },
-          { id: 'runtime-2', adapterKind: 'claude-code', name: 'Claude Code' },
+          {
+            id: 'runtime-1',
+            adapterKind: 'codex',
+            name: 'Codex CLI',
+            installed: true,
+            command: '/Applications/Codex',
+            cwd: '/Work/AgentBean/',
+            normalizedCommandKey: '/Applications/Codex',
+            normalizedCwdKey: '/Work/AgentBean',
+          },
+          { id: 'runtime-2', adapterKind: 'claude-code', name: 'Claude Code', installed: true },
         ],
       });
       await app.reportDeviceRuntimes({
@@ -371,7 +380,7 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
-  test('persists dispatch result as an agent message and completed dispatch', async () => {
+  test('persists dispatch result as an agent message and succeeded dispatch', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
       const repositories = createSqliteRepositories({ globalDb, teamDb });
@@ -411,12 +420,12 @@ describe('server-next SQLite repositories', () => {
         }),
       ).resolves.toMatchObject({
         ok: true,
-        dispatch: { id: 'dispatch-1', status: 'completed', completedAt: 900 },
+        dispatch: { id: 'dispatch-1', status: 'succeeded', completedAt: 900 },
         message: { id: 'reply-1', senderKind: 'agent', senderId: 'agent-1', body: 'done' },
       });
 
       expect(teamDb.prepare('SELECT status, completed_at AS completedAt FROM dispatches WHERE id = ?').get('dispatch-1')).toEqual({
-        status: 'completed',
+        status: 'succeeded',
         completedAt: 900,
       });
       expect(

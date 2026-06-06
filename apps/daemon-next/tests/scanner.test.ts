@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from '../src/index';
 
 describe('daemon-next builtin scanner', () => {
-  test('reports known runtimes and creates agents only for installed CLIs', async () => {
+  test('reports known runtimes without creating visible product agents', async () => {
     const snapshot = await scanBuiltinRuntimeAgents({
       findExecutable: async (bin) => {
         if (bin === 'codex') {
@@ -38,10 +38,7 @@ describe('daemon-next builtin scanner', () => {
         installed: false,
       },
     ]);
-    expect(snapshot.agents).toEqual([
-      { name: 'Claude', adapterKind: 'claude-code', category: 'executor-hosted' },
-      { name: 'Codex', adapterKind: 'codex', category: 'executor-hosted' },
-    ]);
+    expect(snapshot.agents).toEqual([]);
   });
 
   test('creates a scan provider wrapper for protocol rescan injection', async () => {
@@ -55,7 +52,7 @@ describe('daemon-next builtin scanner', () => {
         { adapterKind: 'codex', installed: false },
         { adapterKind: 'gemini', command: '/usr/local/bin/gemini', installed: true },
       ],
-      agents: [{ name: 'Gemini', adapterKind: 'gemini', category: 'executor-hosted' }],
+      agents: [],
     });
   });
 });

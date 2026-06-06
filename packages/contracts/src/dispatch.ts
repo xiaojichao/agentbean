@@ -3,12 +3,13 @@ import type { AdapterKind } from './agent';
 
 export type DispatchStatus =
   | 'queued'
+  | 'sent'
   | 'accepted'
   | 'running'
-  | 'completed'
+  | 'succeeded'
   | 'failed'
   | 'cancelled'
-  | 'timeout';
+  | 'timed_out';
 
 export interface DispatchAttachmentDto {
   id: ID;

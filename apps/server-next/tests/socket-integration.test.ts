@@ -2,8 +2,8 @@ import { createServer, type Server as HttpServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, test } from 'vitest';
-import { AGENT_EVENTS, WEB_EVENTS } from '../../../packages/contracts/src/index';
-import { createServerNextUseCases } from '../src/application/usecases';
+import { AGENT_EVENTS, WEB_EVENTS, makeFailure, makeSuccess } from '../../../packages/contracts/src/index';
+import { createServerNextUseCases, type ServerNextUseCases } from '../src/application/usecases';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories';
 import { createInMemoryServerNext } from '../src/index';
 import { attachServerNextNamespaces } from '../src/transport/socket-server';
@@ -119,7 +119,7 @@ describe('server-next Socket.IO namespaces', () => {
       }),
     ).resolves.toMatchObject({
       ok: true,
-      dispatch: { id: 'dispatch-1', status: 'completed' },
+      dispatch: { id: 'dispatch-1', status: 'succeeded' },
       message: { id: 'reply-1', senderKind: 'agent', body: 'done' },
     });
   });
@@ -271,6 +271,61 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('stops refreshing agent snapshots when a subscribed user loses team access', async () => {
+    let channelGateCalls = 0;
+    let visibleAgentCalls = 0;
+    const app = {
+      listChannels: async () => {
+        channelGateCalls += 1;
+        return channelGateCalls === 1
+          ? makeSuccess({ channels: [] })
+          : makeFailure('FORBIDDEN', 'User is not a team member');
+      },
+      listVisibleAgents: async () => {
+        visibleAgentCalls += 1;
+        return makeSuccess({ agents: [{ id: 'agent-1', status: 'online' }] });
+      },
+      registerDiscoveredAgents: async () => makeSuccess({ agents: [], missingOfflineIds: [] }),
+    } as unknown as ServerNextUseCases;
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const web = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      web.disconnect();
+      agent.disconnect();
+    });
+
+    const agentSnapshots: unknown[] = [];
+    web.on(WEB_EVENTS.agent.snapshot, (agents) => {
+      agentSnapshots.push(agents);
+    });
+
+    await expect(
+      web.emitWithAck(WEB_EVENTS.agent.subscribe, { userId: 'user-1', teamId: 'team-1' }),
+    ).resolves.toMatchObject({ ok: true });
+    await eventually(async () => {
+      expect(agentSnapshots).toHaveLength(1);
+      expect(visibleAgentCalls).toBe(1);
+    });
+
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(channelGateCalls).toBe(2);
+    expect(visibleAgentCalls).toBe(1);
+    expect(agentSnapshots).toHaveLength(1);
+  });
+
   test('refreshes device snapshots and runtimes after daemon device reports', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,
@@ -295,7 +350,10 @@ describe('server-next Socket.IO namespaces', () => {
     });
 
     const deviceSnapshots: Array<Array<{ id: string; status: string }>> = [];
-    const runtimeEvents: Array<{ deviceId: string; runtimes: Array<{ id: string; name: string }> }> = [];
+    const runtimeEvents: Array<{
+      deviceId: string;
+      runtimes: Array<{ id: string; name: string; installed: boolean; command?: string; normalizedCommandKey?: string }>;
+    }> = [];
     web.on(WEB_EVENTS.device.snapshot, (devices) => {
       deviceSnapshots.push(deviceSummaries(devices));
     });
@@ -326,13 +384,32 @@ describe('server-next Socket.IO namespaces', () => {
       agent.emitWithAck(AGENT_EVENTS.device.runtimes, {
         teamId: 'team-1',
         deviceId: 'device-1',
-        runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }],
+        runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI', command: '/opt/homebrew/bin/codex' }],
       }),
-    ).resolves.toMatchObject({ ok: true, runtimes: [{ id: 'runtime-1', name: 'Codex CLI' }] });
+    ).resolves.toMatchObject({
+      ok: true,
+      runtimes: [
+        {
+          id: 'runtime-1',
+          name: 'Codex CLI',
+          installed: true,
+          command: '/opt/homebrew/bin/codex',
+          normalizedCommandKey: '/opt/homebrew/bin/codex',
+        },
+      ],
+    });
     await eventually(async () => {
       expect(runtimeEvents.at(-1)).toEqual({
         deviceId: 'device-1',
-        runtimes: [{ id: 'runtime-1', name: 'Codex CLI' }],
+        runtimes: [
+          {
+            id: 'runtime-1',
+            name: 'Codex CLI',
+            installed: true,
+            command: '/opt/homebrew/bin/codex',
+            normalizedCommandKey: '/opt/homebrew/bin/codex',
+          },
+        ],
       });
     });
   });
@@ -493,7 +570,10 @@ function deviceSummaries(payload: unknown): Array<{ id: string; status: string }
   });
 }
 
-function runtimeSummary(payload: unknown): { deviceId: string; runtimes: Array<{ id: string; name: string }> } {
+function runtimeSummary(payload: unknown): {
+  deviceId: string;
+  runtimes: Array<{ id: string; name: string; installed: boolean; command?: string; normalizedCommandKey?: string }>;
+} {
   if (!payload || typeof payload !== 'object') {
     throw new Error('Expected device runtimes payload to be an object');
   }
@@ -504,10 +584,27 @@ function runtimeSummary(payload: unknown): { deviceId: string; runtimes: Array<{
   return {
     deviceId: candidate.deviceId,
     runtimes: candidate.runtimes.map((runtime) => {
-      if (!runtime || typeof runtime !== 'object' || !('id' in runtime) || !('name' in runtime)) {
+      if (!runtime || typeof runtime !== 'object' || !('id' in runtime) || !('name' in runtime) || !('installed' in runtime)) {
         throw new Error('Expected runtime item to include id and name');
       }
-      return { id: String(runtime.id), name: String(runtime.name) };
+      const candidateRuntime = runtime as {
+        id: unknown;
+        name: unknown;
+        installed: unknown;
+        command?: unknown;
+        normalizedCommandKey?: unknown;
+      };
+      if (typeof candidateRuntime.installed !== 'boolean') {
+        throw new Error('Expected runtime item installed to be boolean');
+      }
+      return {
+        id: String(candidateRuntime.id),
+        name: String(candidateRuntime.name),
+        installed: candidateRuntime.installed,
+        command: typeof candidateRuntime.command === 'string' ? candidateRuntime.command : undefined,
+        normalizedCommandKey:
+          typeof candidateRuntime.normalizedCommandKey === 'string' ? candidateRuntime.normalizedCommandKey : undefined,
+      };
     }),
   };
 }

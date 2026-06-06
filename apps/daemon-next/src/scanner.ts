@@ -1,12 +1,11 @@
 import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import type { DaemonAgentReport, DaemonScanProvider, DaemonScanSnapshot } from './index';
+import type { DaemonScanProvider, DaemonScanSnapshot } from './index';
 
 interface RuntimeSpec {
   bin: string;
   name: string;
-  agentName: string;
   adapterKind: string;
   candidates?: string[];
 }
@@ -27,7 +26,6 @@ export async function scanBuiltinRuntimeAgents(
 ): Promise<DaemonScanSnapshot> {
   const findExecutable = options.findExecutable ?? ((bin, candidates) => findExecutableOnPath(bin, candidates, options));
   const runtimes: DaemonScanSnapshot['runtimes'] = [];
-  const agents: DaemonAgentReport[] = [];
 
   for (const spec of specs) {
     const command = await findExecutable(spec.bin, spec.candidates ?? []);
@@ -39,16 +37,9 @@ export async function scanBuiltinRuntimeAgents(
       cwd: command ? dirname(command) : undefined,
       installed,
     });
-    if (installed) {
-      agents.push({
-        name: spec.agentName,
-        adapterKind: spec.adapterKind,
-        category: 'executor-hosted',
-      });
-    }
   }
 
-  return { runtimes, agents };
+  return { runtimes, agents: [] };
 }
 
 function defaultRuntimeSpecs(home: string): RuntimeSpec[] {
@@ -56,20 +47,17 @@ function defaultRuntimeSpecs(home: string): RuntimeSpec[] {
     {
       bin: 'claude',
       name: 'Claude Code',
-      agentName: 'Claude',
       adapterKind: 'claude-code',
       candidates: claudeCandidates(home),
     },
     {
       bin: 'codex',
       name: 'Codex CLI',
-      agentName: 'Codex',
       adapterKind: 'codex',
     },
     {
       bin: 'gemini',
       name: 'Gemini CLI',
-      agentName: 'Gemini',
       adapterKind: 'gemini',
     },
   ];

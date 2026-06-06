@@ -169,6 +169,11 @@ async function refreshAgentSubscribers(
     if (subscriber.agents?.teamId !== teamId) {
       continue;
     }
+    const teamAccess = await app.listChannels(subscriber.agents);
+    if (!teamAccess.ok) {
+      subscriber.agents = undefined;
+      continue;
+    }
     const result = await app.listVisibleAgents({ teamId: subscriber.agents.teamId });
     if (result.ok) {
       subscriber.socket.emit?.(WEB_EVENTS.agent.snapshot, result.agents);

@@ -735,13 +735,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const pending = await repositories.dispatches.listPendingOlderThan(timeoutInput.olderThan);
       const dispatches: DispatchDto[] = [];
       for (const dispatch of pending) {
-        const failed = await repositories.dispatches.markFailed({
+        const timedOut = await repositories.dispatches.markTimedOut({
           dispatchId: dispatch.id,
           error: 'DISPATCH_TIMEOUT',
           completedAt: now,
         });
-        if (failed) {
-          dispatches.push(toDispatchDto(failed));
+        if (timedOut) {
+          dispatches.push(toDispatchDto(timedOut));
         }
       }
       return makeSuccess({ dispatches });
@@ -859,6 +859,11 @@ function toRuntimeDto(runtime: RuntimeDto): RuntimeDto {
     deviceId: runtime.deviceId,
     adapterKind: runtime.adapterKind,
     name: runtime.name,
+    installed: runtime.installed,
+    command: runtime.command,
+    cwd: runtime.cwd,
+    normalizedCommandKey: runtime.normalizedCommandKey,
+    normalizedCwdKey: runtime.normalizedCwdKey,
     version: runtime.version,
     status: runtime.status,
     lastSeenAt: runtime.lastSeenAt,

@@ -232,9 +232,24 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         }
         const updated = {
           ...dispatch,
-          status: 'completed' as const,
+          status: 'succeeded' as const,
           updatedAt: input.completedAt,
           completedAt: input.completedAt,
+        };
+        dispatches.set(input.dispatchId, updated);
+        return updated;
+      },
+      async markTimedOut(input) {
+        const dispatch = dispatches.get(input.dispatchId);
+        if (!dispatch) {
+          return null;
+        }
+        const updated = {
+          ...dispatch,
+          status: 'timed_out' as const,
+          updatedAt: input.completedAt,
+          completedAt: input.completedAt,
+          error: input.error,
         };
         dispatches.set(input.dispatchId, updated);
         return updated;

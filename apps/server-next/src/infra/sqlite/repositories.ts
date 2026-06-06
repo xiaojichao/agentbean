@@ -586,7 +586,17 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
              SET status = ?, updated_at = ?, completed_at = ?, error_code = NULL, error_message = NULL
              WHERE id = ?`,
           )
-          .run('completed', input.completedAt, input.completedAt, input.dispatchId);
+          .run('succeeded', input.completedAt, input.completedAt, input.dispatchId);
+        return mapDispatch(teamDb.prepare('SELECT * FROM dispatches WHERE id = ?').get(input.dispatchId));
+      },
+      async markTimedOut(input) {
+        teamDb
+          .prepare(
+            `UPDATE dispatches
+             SET status = ?, updated_at = ?, completed_at = ?, error_message = ?
+             WHERE id = ?`,
+          )
+          .run('timed_out', input.completedAt, input.completedAt, input.error, input.dispatchId);
         return mapDispatch(teamDb.prepare('SELECT * FROM dispatches WHERE id = ?').get(input.dispatchId));
       },
       async markFailed(input) {
