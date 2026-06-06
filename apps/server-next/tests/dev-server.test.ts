@@ -125,6 +125,8 @@ describe('server-next dev server entry', () => {
       service: 'agentbean-next-server',
     });
     await expect(fetch(server.baseUrl).then((response) => response.text())).resolves.toContain('id="agent-create-form"');
+    await expect(fetch(server.baseUrl).then((response) => response.text())).resolves.toContain('id="channel-create-form"');
+    await expect(fetch(server.baseUrl).then((response) => response.text())).resolves.toContain('channel:create');
     await expect(fetch(server.baseUrl).then((response) => response.text())).resolves.toContain('auth:whoami');
     await expect(fetch(server.baseUrl).then((response) => response.text())).resolves.toContain('token: state.token');
 

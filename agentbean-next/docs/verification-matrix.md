@@ -124,6 +124,7 @@ Phase 3 完成标准：
 | P4-11 | web-next preview 保存 token，并在 reconnect/refresh 时通过 `auth:whoami` 恢复 user 与 current team；token 无效时清除本地 session。 | Web/Socket | 可视化 preview 使用服务端登录态恢复。 | `socket-protocol.md`, `target-architecture.md` |
 | P4-11 | full local preview launcher 启动 SQLite server，bootstrap/login preview 用户，并把 daemon-next 连接到同一个 team。 | Web/Socket/Daemon | 一条命令启动本地替换 preview。 | `implementation-runbook.md`, `target-architecture.md` |
 | P4-12 | preview 页面刷新或 Socket.IO reconnect 后恢复 session 并重新订阅 devices、agents 与 channels。 | Web | 本地 preview 会话恢复。 | `target-architecture.md`, `known-gaps.md` |
+| P4-13 | web-next preview 可以通过 `channel:create` 创建 channel，刷新 channel snapshot，并在新 channel 中继续发送消息。 | Web/Socket | 本地 preview 不只依赖默认 `all` channel，开始覆盖真实产品 channel 工作流。 | `socket-protocol.md`, `target-architecture.md` |
 
 Phase 4 完成标准：
 
