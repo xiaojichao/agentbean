@@ -42,6 +42,11 @@ export function collectAgentBeanNextReadinessChecks({
       'AgentBean Next CI change detection must include root railway.json',
     ),
     check(
+      'ci-runs-readiness-checker',
+      workflow.includes('npm run check:agentbean-next-readiness'),
+      'AgentBean Next CI must run the readiness checker before deploy/publish can continue',
+    ),
+    check(
       'deploy-target-gate',
       workflow.includes('AGENTBEAN_DEPLOY_TARGET') &&
         workflow.includes('deploy_path="apps/server"') &&
