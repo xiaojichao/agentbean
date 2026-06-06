@@ -127,6 +127,15 @@ export function collectAgentBeanNextReadinessChecks({
       'CI must block manual AgentBean Next production deploys that do not also request production smoke',
     ),
     check(
+      'ci-requires-old-smoke-for-manual-rollback-deploy',
+      workflow.includes('Require old production smoke for manual AgentBean rollback deploy') &&
+        workflow.includes('Manual old AgentBean production deploy requires run_agentbean_old_production_smoke=true') &&
+        workflow.includes("inputs.run_production_deploy && env.AGENTBEAN_DEPLOY_TARGET == 'old' && !inputs.run_agentbean_old_production_smoke") &&
+        cutoverRunbook.includes('run_agentbean_old_production_smoke=true') &&
+        cutoverRunbook.includes('反向只切不验'),
+      'CI must block manual old AgentBean rollback deploys that do not also request old entry smoke',
+    ),
+    check(
       'ci-runs-ready-to-flip-before-production-smoke',
       workflow.includes('Run AgentBean Next ready-to-flip audit') &&
         workflow.includes('npm run audit:agentbean-next-ready-to-flip') &&

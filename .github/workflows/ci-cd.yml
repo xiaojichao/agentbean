@@ -279,6 +279,12 @@ jobs:
           echo "::error::Manual AgentBean Next production deploy requires run_agentbean_next_production_smoke=true."
           exit 1
 
+      - name: Require old production smoke for manual AgentBean rollback deploy
+        if: github.event_name == 'workflow_dispatch' && inputs.run_production_deploy && env.AGENTBEAN_DEPLOY_TARGET == 'old' && !inputs.run_agentbean_old_production_smoke
+        run: |
+          echo "::error::Manual old AgentBean production deploy requires run_agentbean_old_production_smoke=true."
+          exit 1
+
       - name: Install Railway CLI
         if: env.RAILWAY_TOKEN != ''
         run: npm install -g @railway/cli
