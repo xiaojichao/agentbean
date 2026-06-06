@@ -119,6 +119,7 @@ Phase 2 完成标准：
 | P3-23 | CI 必须阻止手动 `agentbean_deploy_target=next` 且 `run_production_deploy=true` 但未请求 `run_agentbean_next_production_smoke=true` 的 workflow dispatch；push 上 `AGENTBEAN_DEPLOY_TARGET=next` 时必须自动运行 production smoke。 | Release/CI | 真正替换旧 AgentBean 时不能只切不验。 | `production-cutover-runbook.md`, `fifty-fourth-slice-status.md` |
 | P3-24 | CI 可以手动运行 `Old AgentBean production smoke`，验证 rollback 或 old-target deploy 后公开入口 `/healthz` 已恢复旧 AgentBean payload，并拒绝 AgentBean Next health payload。 | Release/CI | 真正替换旧 AgentBean 前，rollback 不能只靠手工观察，必须有可执行 smoke 证明旧系统可恢复。 | `production-cutover-runbook.md`, `fifty-fifth-slice-status.md` |
 | P3-25 | CI 必须阻止手动 `agentbean_deploy_target=old` 且 `run_production_deploy=true` 但未请求 `run_agentbean_old_production_smoke=true` 的 workflow dispatch。 | Release/CI | rollback/old deploy 也不能反向只切不验。 | `production-cutover-runbook.md`, `fifty-sixth-slice-status.md` |
+| P3-26 | CI 必须阻止手动 `agentbean_deploy_target=next` 且 `run_production_deploy=true`，但 repository variable `AGENTBEAN_DEPLOY_TARGET` 仍不是 `next` 的 workflow dispatch。 | Release/CI | workflow input 不能临时绕过最终生产开关；final flip 必须落在 repository variable 上，后续 push 才会保持 Next deploy 与 production smoke。 | `production-cutover-runbook.md`, `fifty-seventh-slice-status.md` |
 
 Phase 3 完成标准：
 
