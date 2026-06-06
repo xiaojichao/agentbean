@@ -263,6 +263,12 @@ jobs:
           AGENTBEAN_NEXT_DATA_DIR: ${{ vars.AGENTBEAN_NEXT_DATA_DIR }}
         run: npm run check:agentbean-next-readiness -- --production
 
+      - name: Require production smoke for manual AgentBean Next deploy
+        if: github.event_name == 'workflow_dispatch' && inputs.run_production_deploy && env.AGENTBEAN_DEPLOY_TARGET == 'next' && !inputs.run_agentbean_next_production_smoke
+        run: |
+          echo "::error::Manual AgentBean Next production deploy requires run_agentbean_next_production_smoke=true."
+          exit 1
+
       - name: Install Railway CLI
         if: env.RAILWAY_TOKEN != ''
         run: npm install -g @railway/cli
@@ -393,7 +399,7 @@ jobs:
     needs:
       - validate-agentbean-next
       - deploy
-    if: always() && github.event_name == 'workflow_dispatch' && inputs.run_agentbean_next_production_smoke && needs.validate-agentbean-next.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped')
+    if: always() && needs.validate-agentbean-next.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') && ((github.event_name == 'workflow_dispatch' && inputs.run_agentbean_next_production_smoke) || (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AGENTBEAN_DEPLOY_TARGET == 'next'))
     timeout-minutes: 15
 
     env:

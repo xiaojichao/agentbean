@@ -262,6 +262,10 @@ gh variable set AGENTBEAN_DEPLOY_TARGET --repo xiaojichao/agentbean --body next
 
 随后推送一个 no-op 或运行 workflow dispatch 触发 production deploy。
 
+如果使用 workflow dispatch 触发 `agentbean_deploy_target=next` 与 `run_production_deploy=true`，必须同时设置 `run_agentbean_next_production_smoke=true`。CI 会阻止只切不验的手动 Next production deploy。
+
+如果通过 repository variable `AGENTBEAN_DEPLOY_TARGET=next` 后推送 `main` 触发生产部署，CI 会在 push run 的 deploy 成功后自动运行 `AgentBean Next production smoke`。
+
 部署时必须确认：
 
 - `Validate AgentBean Next` 通过。
