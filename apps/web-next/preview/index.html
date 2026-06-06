@@ -203,7 +203,7 @@
     <script>
       const SESSION_KEY = "agentbean-next-preview-session";
       const socket = io("/web", { transports: ["websocket", "polling"] });
-      const state = { user: null, team: null, channel: null, devices: [], runtimes: [], agents: [], messages: [] };
+      const state = { token: null, user: null, team: null, channel: null, devices: [], runtimes: [], agents: [], messages: [] };
       const el = (id) => document.getElementById(id);
 
       socket.on("connect", async () => {
@@ -248,6 +248,7 @@
           });
         }
         if (!ack.ok) return;
+        state.token = ack.token || null;
         state.user = ack.user;
         state.team = ack.currentTeam;
         state.channel = ack.defaultChannel || state.channel;
@@ -339,16 +340,24 @@
       async function restoreSession() {
         const session = readSession();
         if (!session) return;
-        state.user = session.user;
-        state.team = session.team;
+        const ack = await emit("auth:whoami", { token: session.token });
+        if (!ack.ok) {
+          clearSession();
+          return;
+        }
+        state.token = session.token;
+        state.user = ack.user;
+        state.team = ack.currentTeam;
         state.channel = session.channel || null;
+        saveSession();
         render();
         await subscribe();
       }
 
       function saveSession() {
-        if (!state.user || !state.team) return;
+        if (!state.token || !state.user || !state.team) return;
         localStorage.setItem(SESSION_KEY, JSON.stringify({
+          token: state.token,
           user: state.user,
           team: state.team,
           channel: state.channel,
@@ -360,7 +369,7 @@
           const raw = localStorage.getItem(SESSION_KEY);
           if (!raw) return null;
           const session = JSON.parse(raw);
-          if (!session.user?.id || !session.team?.id) return null;
+          if (!session.token || !session.user?.id || !session.team?.id) return null;
           return session;
         } catch {
           return null;
@@ -369,6 +378,7 @@
 
       function clearSession() {
         localStorage.removeItem(SESSION_KEY);
+        state.token = null;
         state.user = null;
         state.team = null;
         state.channel = null;
