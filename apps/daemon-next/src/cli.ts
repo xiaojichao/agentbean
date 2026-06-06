@@ -2,9 +2,9 @@ import { hostname as readHostname } from 'node:os';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createBuiltinScanProvider } from './scanner';
-import { createCommandExecutor } from './executor';
-import { createDaemonProtocolClient, type DaemonDeviceConfig, type DaemonProtocolSocket } from './index';
+import { createBuiltinScanProvider } from './scanner.js';
+import { createCommandExecutor } from './executor.js';
+import { createDaemonProtocolClient, type DaemonDeviceConfig, type DaemonProtocolSocket } from './index.js';
 
 interface SocketIoClientLike {
   connected: boolean;

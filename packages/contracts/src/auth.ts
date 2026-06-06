@@ -1,4 +1,4 @@
-import type { ID } from './common';
+import type { ID } from './common.js';
 
 export type UserRole = 'user' | 'admin';
 export type TeamMemberRole = 'owner' | 'admin' | 'member';

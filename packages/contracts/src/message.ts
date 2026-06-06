@@ -1,4 +1,4 @@
-import type { ID, UnixMs } from './common';
+import type { ID, UnixMs } from './common.js';
 
 export type SenderKind = 'human' | 'agent' | 'system';
 export type RouteReason = 'MENTION' | 'DIRECT' | 'CHANNEL_DEFAULT' | 'MANUAL';

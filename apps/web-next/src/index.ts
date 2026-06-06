@@ -1,4 +1,4 @@
-import { WEB_EVENTS } from '../../../packages/contracts/src/index';
+import { WEB_EVENTS } from '../../../packages/contracts/src/index.js';
 import type {
   AgentDto,
   ChannelAgentMemberCommandDto,
@@ -12,7 +12,7 @@ import type {
   MessageDto,
   RuntimeDto,
   UpdateChannelCommandDto,
-} from '../../../packages/contracts/src/index';
+} from '../../../packages/contracts/src/index.js';
 
 export interface WebSocketTransport {
   emitWithAck(event: string, payload: unknown): Promise<unknown>;

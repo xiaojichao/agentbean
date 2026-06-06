@@ -1,4 +1,4 @@
-import type { AgentDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, RuntimeDto, TeamDto, UnixMs, UserDto } from '../../../../packages/contracts/src/index';
+import type { AgentDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, RuntimeDto, TeamDto, UnixMs, UserDto } from '../../../../packages/contracts/src/index.js';
 
 export interface UserRecord extends UserDto {
   passwordHash: string;

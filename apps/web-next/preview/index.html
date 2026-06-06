@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AgentBean Next Preview</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f7f7f4;
+        color: #1e2428;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      main {
+        display: grid;
+        grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+        min-height: 100vh;
+      }
+      aside {
+        border-right: 1px solid #d7dad4;
+        background: #ffffff;
+        padding: 20px;
+      }
+      section {
+        padding: 20px;
+      }
+      h1,
+      h2 {
+        margin: 0 0 14px;
+        letter-spacing: 0;
+      }
+      h1 {
+        font-size: 22px;
+      }
+      h2 {
+        font-size: 15px;
+      }
+      form,
+      .panel {
+        border: 1px solid #d7dad4;
+        border-radius: 8px;
+        background: #ffffff;
+        padding: 14px;
+        margin-bottom: 14px;
+      }
+      label {
+        display: grid;
+        gap: 5px;
+        margin-bottom: 10px;
+        font-size: 12px;
+        color: #526067;
+      }
+      input,
+      textarea,
+      select {
+        width: 100%;
+        border: 1px solid #c7ccc4;
+        border-radius: 6px;
+        padding: 9px 10px;
+        font: inherit;
+        color: #1e2428;
+        background: #fbfbf9;
+      }
+      textarea {
+        min-height: 84px;
+        resize: vertical;
+      }
+      button {
+        border: 0;
+        border-radius: 6px;
+        background: #0f766e;
+        color: #ffffff;
+        padding: 9px 12px;
+        font: inherit;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: #34404a;
+      }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+      .list {
+        display: grid;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .item {
+        border: 1px solid #d7dad4;
+        border-radius: 8px;
+        padding: 10px;
+        background: #ffffff;
+      }
+      .meta {
+        color: #68747b;
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+      .status {
+        display: inline-flex;
+        align-items: center;
+        min-height: 26px;
+        border-radius: 999px;
+        padding: 4px 10px;
+        background: #e8f3f1;
+        color: #0f766e;
+        font-size: 12px;
+      }
+      .messages {
+        min-height: 260px;
+        max-height: 52vh;
+        overflow: auto;
+      }
+      @media (max-width: 860px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+        aside {
+          border-right: 0;
+          border-bottom: 1px solid #d7dad4;
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <aside>
+        <h1>AgentBean Next</h1>
+        <p class="status" id="connection-status">连接中</p>
+
+        <form id="auth-form">
+          <h2>注册</h2>
+          <label>用户名 <input name="username" value="shaw" autocomplete="username" /></label>
+          <label>密码 <input name="password" value="secret" type="password" autocomplete="new-password" /></label>
+          <label>Team <input name="teamName" value="AgentBean" /></label>
+          <button type="submit">创建会话</button>
+        </form>
+
+        <form id="agent-create-form">
+          <h2>Custom Agent</h2>
+          <label>Device <select name="deviceId"></select></label>
+          <label>Runtime <select name="runtimeId"></select></label>
+          <label>名称 <input name="name" value="Codex" /></label>
+          <label>Env Key <input name="envKey" value="OPENAI_API_KEY" /></label>
+          <label>Env Value <input name="envValue" type="password" /></label>
+          <button type="submit">创建 Agent</button>
+        </form>
+
+        <form id="message-form">
+          <h2>消息</h2>
+          <label>Channel <select name="channelId"></select></label>
+          <label>内容 <textarea name="body">@Codex hello</textarea></label>
+          <button type="submit">发送</button>
+        </form>
+      </aside>
+
+      <section>
+        <div class="grid">
+          <div class="panel">
+            <h2>Devices</h2>
+            <ul class="list" id="devices"></ul>
+          </div>
+          <div class="panel">
+            <h2>Runtimes</h2>
+            <ul class="list" id="runtimes"></ul>
+          </div>
+          <div class="panel">
+            <h2>Agents</h2>
+            <ul class="list" id="agents"></ul>
+          </div>
+        </div>
+
+        <div class="panel messages">
+          <h2>Conversation</h2>
+          <ul class="list" id="messages"></ul>
+        </div>
+
+        <div class="panel">
+          <h2>Events</h2>
+          <ul class="list" id="events"></ul>
+        </div>
+      </section>
+    </main>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      const socket = io("/web", { transports: ["websocket", "polling"] });
+      const state = { user: null, team: null, channel: null, devices: [], runtimes: [], agents: [], messages: [] };
+      const el = (id) => document.getElementById(id);
+
+      socket.on("connect", () => setStatus("已连接"));
+      socket.on("disconnect", () => setStatus("已断开"));
+      socket.on("devices:snapshot", (devices) => {
+        state.devices = devices;
+        render();
+      });
+      socket.on("device:runtimes", (payload) => {
+        state.runtimes = payload.runtimes || [];
+        render();
+      });
+      socket.on("agents:snapshot", (agents) => {
+        state.agents = agents;
+        render();
+      });
+      socket.on("channels:snapshot", (channels) => {
+        state.channel = channels[0] || state.channel;
+        render();
+      });
+      socket.on("channel:message", (message) => {
+        state.messages.push(message);
+        render();
+      });
+
+      el("auth-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const data = Object.fromEntries(new FormData(event.currentTarget));
+        const ack = await emit("auth:register", data);
+        if (!ack.ok) return;
+        state.user = ack.user;
+        state.team = ack.currentTeam;
+        state.channel = ack.defaultChannel;
+        await subscribe();
+        render();
+      });
+
+      el("agent-create-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!state.user || !state.team) return;
+        const data = Object.fromEntries(new FormData(event.currentTarget));
+        const env = data.envKey && data.envValue ? { [data.envKey]: data.envValue } : undefined;
+        await emit("agent:create", {
+          userId: state.user.id,
+          teamId: state.team.id,
+          deviceId: data.deviceId,
+          runtimeId: data.runtimeId || undefined,
+          name: data.name,
+          env,
+        });
+      });
+
+      el("message-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!state.user || !state.team || !state.channel) return;
+        const data = Object.fromEntries(new FormData(event.currentTarget));
+        const ack = await emit("message:send", {
+          userId: state.user.id,
+          teamId: state.team.id,
+          channelId: data.channelId || state.channel.id,
+          body: data.body,
+        });
+        if (ack.ok && ack.message) {
+          state.messages.push(ack.message);
+          render();
+        }
+      });
+
+      async function subscribe() {
+        await emit("device:list", { userId: state.user.id, teamId: state.team.id });
+        await emit("agents:subscribe", { userId: state.user.id, teamId: state.team.id });
+        await emit("channels:subscribe", { userId: state.user.id, teamId: state.team.id });
+      }
+
+      async function emit(event, payload) {
+        const ack = await socket.emitWithAck(event, payload);
+        addEvent(event, ack);
+        return ack;
+      }
+
+      function render() {
+        renderList("devices", state.devices, (device) => `${device.name || device.id}<span class="meta">${device.status}</span>`);
+        renderList("runtimes", state.runtimes, (runtime) => `${runtime.name}<span class="meta">${runtime.command || "not installed"}</span>`);
+        renderList("agents", state.agents, (agent) => `${agent.name}<span class="meta">${agent.status} · ${agent.source}</span>`);
+        renderList("messages", state.messages, (message) => `${message.body}<span class="meta">${message.senderKind}</span>`);
+        fillSelect("agent-create-form", "deviceId", state.devices, (device) => [device.id, device.name || device.id]);
+        fillSelect("agent-create-form", "runtimeId", state.runtimes, (runtime) => [runtime.id, runtime.name]);
+        fillSelect("message-form", "channelId", state.channel ? [state.channel] : [], (channel) => [channel.id, channel.title || channel.name]);
+      }
+
+      function renderList(id, items, format) {
+        el(id).innerHTML = items.map((item) => `<li class="item">${format(item)}</li>`).join("");
+      }
+
+      function fillSelect(formId, name, items, mapItem) {
+        const select = document.querySelector(`#${formId} [name="${name}"]`);
+        select.innerHTML = items.map((item) => {
+          const [value, label] = mapItem(item);
+          return `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`;
+        }).join("");
+      }
+
+      function addEvent(event, ack) {
+        const item = document.createElement("li");
+        item.className = "item";
+        item.textContent = `${event}: ${ack.ok ? "ok" : ack.error || "error"}`;
+        el("events").prepend(item);
+      }
+
+      function setStatus(text) {
+        el("connection-status").textContent = text;
+      }
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[char]));
+      }
+    </script>
+  </body>
+</html>

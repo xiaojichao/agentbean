@@ -1,7 +1,7 @@
 import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import type { DaemonScanProvider, DaemonScanSnapshot } from './index';
+import type { DaemonScanProvider, DaemonScanSnapshot } from './index.js';
 
 interface RuntimeSpec {
   bin: string;

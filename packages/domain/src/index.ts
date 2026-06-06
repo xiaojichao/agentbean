@@ -1,3 +1,3 @@
-export * from './routing';
-export * from './identity';
-export * from './channel';
+export * from './routing.js';
+export * from './identity.js';
+export * from './channel.js';
