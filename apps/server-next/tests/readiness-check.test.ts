@@ -21,6 +21,7 @@ describe('AgentBean Next readiness checker', () => {
       'contracts-package-publishable',
       'daemon-next-package-publishable',
       'daemon-next-runtime-dependencies',
+      'daemon-next-version-replaces-old-daemon',
       'ci-publishes-next-packages',
     ]);
   });

@@ -89,13 +89,22 @@ export function collectAgentBeanNextReadinessChecks({
       '@agentbean/daemon-next must depend on published contracts and socket.io-client',
     ),
     check(
+      'daemon-next-version-replaces-old-daemon',
+      compareSemver(daemonNextPackageJson.version, '0.1.35') > 0,
+      '@agentbean/daemon-next version must be higher than the current @agentbean/daemon release before replacement',
+    ),
+    check(
       'ci-publishes-next-packages',
       workflow.includes("env.AGENTBEAN_DEPLOY_TARGET == 'next'") &&
         workflow.includes('@agentbean/contracts@$CONTRACTS_VERSION') &&
         workflow.includes('@agentbean/daemon-next@$DAEMON_NEXT_VERSION') &&
         workflow.indexOf('Publish AgentBean Next contracts package') <
-          workflow.indexOf('Publish AgentBean Next daemon package'),
-      'CI publish job must publish AgentBean Next contracts before daemon-next when target is next',
+          workflow.indexOf('Publish AgentBean Next daemon package') &&
+        workflow.includes('prepare-agentbean-next-daemon-release.mjs') &&
+        workflow.includes('@agentbean/daemon@$CANONICAL_DAEMON_VERSION') &&
+        workflow.indexOf('Publish AgentBean Next daemon package') <
+          workflow.indexOf('Publish AgentBean Next canonical daemon package'),
+      'CI publish job must publish contracts, daemon-next, then canonical @agentbean/daemon when target is next',
     ),
   ];
 
@@ -144,6 +153,26 @@ function readJson(path) {
 
 function check(id, ok, message) {
   return { id, ok, message };
+}
+
+function compareSemver(left, right) {
+  const leftParts = parseSemver(left);
+  const rightParts = parseSemver(right);
+  for (let index = 0; index < 3; index += 1) {
+    const delta = leftParts[index] - rightParts[index];
+    if (delta !== 0) {
+      return delta;
+    }
+  }
+  return 0;
+}
+
+function parseSemver(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(String(version));
+  if (!match) {
+    return [0, 0, 0];
+  }
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
 }
 
 function parseArgs(argv) {
