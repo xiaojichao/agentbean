@@ -47,6 +47,14 @@ export function collectAgentBeanNextReadinessChecks({
       'AgentBean Next CI must run the readiness checker before deploy/publish can continue',
     ),
     check(
+      'ci-runs-production-readiness-before-next-deploy',
+      workflow.includes("env.AGENTBEAN_DEPLOY_TARGET == 'next'") &&
+        workflow.includes('npm run check:agentbean-next-readiness -- --production') &&
+        workflow.includes('AGENTBEAN_NEXT_SESSION_SECRET') &&
+        workflow.includes('AGENTBEAN_NEXT_DATA_DIR'),
+      'CI deploy job must run production readiness checks before AGENTBEAN_DEPLOY_TARGET=next deploys',
+    ),
+    check(
       'deploy-target-gate',
       workflow.includes('AGENTBEAN_DEPLOY_TARGET') &&
         workflow.includes('deploy_path="apps/server"') &&
