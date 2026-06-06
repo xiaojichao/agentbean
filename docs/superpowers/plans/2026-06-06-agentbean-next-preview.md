@@ -1,74 +1,74 @@
-# AgentBean Next Preview Implementation Plan
+# AgentBean Next Preview 实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **给 agentic workers 的说明：** 必须使用子技能 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 按任务逐项执行本计划。步骤使用 checkbox（`- [ ]`）语法追踪进度。
 
-**Goal:** Build a local AgentBean Next preview that can run locally, create a custom agent from a device runtime capability, send a message, and receive an agent reply.
+**目标：** 做出一个本地可运行的 AgentBean Next preview：能从 device runtime capability 创建 custom agent，发送消息，并收到 agent 回复。
 
-**Architecture:** Keep the existing slice rhythm. First align public agent contracts with the Chinese docs, then add a server/web custom-agent creation command that binds to runtime capability without letting scanner auto-create visible agents, then add minimal local preview wiring for daemon/server/web.
+**架构：** 沿用现有切片节奏。先把 public agent contracts 与中文文档对齐，再增加 server/web 的 custom agent 创建命令，并绑定到 runtime capability，同时保持 scanner 不自动创建 visible agent。最后补上最小本地 preview wiring，覆盖 daemon/server/web 的消息闭环。
 
-**Tech Stack:** TypeScript, Vitest, Socket.IO test clients, temp SQLite repositories, existing `packages/contracts`, `packages/domain`, `apps/server-next`, `apps/daemon-next`, and `apps/web-next`.
+**技术栈：** TypeScript、Vitest、Socket.IO test clients、临时 SQLite repositories，以及现有 `packages/contracts`、`packages/domain`、`apps/server-next`、`apps/daemon-next`、`apps/web-next`。
 
 ---
 
-### Task 1: Align Agent Public Contracts
+### 任务 1：对齐 Agent Public Contracts
 
-**Files:**
-- Modify: `packages/contracts/src/agent.ts`
-- Modify: `packages/contracts/tests/contracts.test.ts`
-- Verify: `agentbean-next/docs/contracts-dto.md`
+**文件：**
+- 修改：`packages/contracts/src/agent.ts`
+- 修改：`packages/contracts/tests/contracts.test.ts`
+- 验证：`agentbean-next/docs/contracts-dto.md`
 
-- [ ] **Step 1: Write the failing contract test**
+- [ ] **步骤 1：编写失败的 contract test**
 
-Add assertions that prove the public `AgentDto` accepts `source: "custom"`, `source: "self-register"`, `category: "agentos-hosted"`, status `error`, command/args/cwd/envKeys, and that `DiscoveredAgentDto` does not require persisted IDs.
+增加断言，证明 public `AgentDto` 支持 `source: "custom"`、`source: "self-register"`、`category: "agentos-hosted"`、`status: "error"`、`command`、`args`、`cwd`、`envKeys`，并证明 `DiscoveredAgentDto` 不要求 persisted IDs。
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **步骤 2：运行测试并确认失败**
 
-Run:
-
-```bash
-PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run test:contracts
-```
-
-Expected: TypeScript/Vitest fails because current contract still uses `created/imported`, lacks several documented fields, and requires discovered-agent persisted fields.
-
-- [ ] **Step 3: Implement minimal contract alignment**
-
-Change `packages/contracts/src/agent.ts` to match `agentbean-next/docs/contracts-dto.md` for `AdapterKind`, `AgentCategory`, `AgentSource`, `AgentStatus`, `AgentDto`, `RuntimeDto`, and `DiscoveredAgentDto`.
-
-- [ ] **Step 4: Run contract test to verify green**
-
-Run:
+运行：
 
 ```bash
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run test:contracts
 ```
 
-Expected: contract tests pass.
+预期：TypeScript/Vitest 失败，因为当前 contract 仍使用 `created/imported`，缺少若干文档字段，并且 discovered-agent 仍要求 persisted fields。
 
-### Task 2: Keep Server/Web/Daemon Green Under Aligned Contracts
+- [ ] **步骤 3：实现最小 contract alignment**
 
-**Files:**
-- Modify: `apps/server-next/src/application/usecases.ts`
-- Modify: `apps/server-next/src/application/repositories.ts`
-- Modify: `apps/server-next/src/infra/memory/repositories.ts`
-- Modify: `apps/server-next/src/infra/sqlite/repositories.ts`
-- Modify: `apps/server-next/tests/*`
-- Modify: `apps/daemon-next/tests/*`
-- Modify: `apps/web-next/tests/*`
+修改 `packages/contracts/src/agent.ts`，让 `AdapterKind`、`AgentCategory`、`AgentSource`、`AgentStatus`、`AgentDto`、`RuntimeDto`、`DiscoveredAgentDto` 与 `agentbean-next/docs/contracts-dto.md` 保持一致。
 
-- [ ] **Step 1: Run phase tests to expose contract fallout**
+- [ ] **步骤 4：运行 contract test 并确认变绿**
 
-Run:
+运行：
+
+```bash
+PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run test:contracts
+```
+
+预期：contract tests 通过。
+
+### 任务 2：在对齐后的 contracts 下保持 Server/Web/Daemon 全绿
+
+**文件：**
+- 修改：`apps/server-next/src/application/usecases.ts`
+- 修改：`apps/server-next/src/application/repositories.ts`
+- 修改：`apps/server-next/src/infra/memory/repositories.ts`
+- 修改：`apps/server-next/src/infra/sqlite/repositories.ts`
+- 修改：`apps/server-next/tests/*`
+- 修改：`apps/daemon-next/tests/*`
+- 修改：`apps/web-next/tests/*`
+
+- [ ] **步骤 1：运行 phase tests，暴露 contract fallout**
+
+运行：
 
 ```bash
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run test:phase1
 ```
 
-Expected: failures only where old contract names or required fields remain.
+预期：只在旧 contract 命名或旧 required fields 仍被引用的位置失败。
 
-- [ ] **Step 2: Update implementation and fixtures**
+- [ ] **步骤 2：更新实现和测试 fixtures**
 
-Use canonical values:
+统一使用 canonical values：
 
 ```ts
 source: "self-register" | "scanned" | "custom"
@@ -76,30 +76,30 @@ category: "executor-hosted" | "agentos-hosted"
 status: "connecting" | "online" | "busy" | "offline" | "error"
 ```
 
-- [ ] **Step 3: Run full phase tests**
+- [ ] **步骤 3：运行完整 phase tests**
 
-Run:
+运行：
 
 ```bash
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run test:phase1
 ```
 
-Expected: all phase tests pass.
+预期：所有 phase tests 通过。
 
-### Task 3: Add Custom Agent Create Contract and Use Case
+### 任务 3：增加 Custom Agent Create Contract 和 Use Case
 
-**Files:**
-- Modify: `packages/contracts/src/agent.ts`
-- Modify: `packages/contracts/src/socket.ts`
-- Modify: `apps/server-next/src/application/usecases.ts`
-- Modify: `apps/server-next/src/transport/socket-handlers.ts`
-- Modify: `apps/server-next/src/transport/socket-server.ts`
-- Modify: `apps/server-next/tests/first-slice.test.ts`
-- Modify: `apps/server-next/tests/socket-integration.test.ts`
+**文件：**
+- 修改：`packages/contracts/src/agent.ts`
+- 修改：`packages/contracts/src/socket.ts`
+- 修改：`apps/server-next/src/application/usecases.ts`
+- 修改：`apps/server-next/src/transport/socket-handlers.ts`
+- 修改：`apps/server-next/src/transport/socket-server.ts`
+- 修改：`apps/server-next/tests/first-slice.test.ts`
+- 修改：`apps/server-next/tests/socket-integration.test.ts`
 
-- [ ] **Step 1: Write failing server use-case test**
+- [ ] **步骤 1：编写失败的 server use-case test**
 
-Test that a team member can create a custom agent bound to an installed runtime on an online device. Expected agent fields:
+测试 team member 可以在 online device 上，基于 installed runtime 创建 custom agent。预期 agent fields：
 
 ```ts
 {
@@ -114,75 +114,76 @@ Test that a team member can create a custom agent bound to an installed runtime 
 }
 ```
 
-- [ ] **Step 2: Verify the test fails**
+- [ ] **步骤 2：确认测试失败**
 
-Run targeted server-next tests with Node v24.15.0.
+使用 Node v24.15.0 运行 targeted server-next tests。
 
-- [ ] **Step 3: Implement minimal `createCustomAgent` use case**
+- [ ] **步骤 3：实现最小 `createCustomAgent` use case**
 
-Rules:
-- Validate user is a member of the device team.
-- Validate target device belongs to the same team.
-- If `runtimeId` is supplied, validate runtime belongs to the device and is installed.
-- Persist a visible custom `AgentDto`.
-- Store only env keys in public DTO; never expose raw env values in snapshots.
+规则：
 
-- [ ] **Step 4: Add socket handler for `agent:create`**
+- 校验 user 是 device 所属 team 的 member。
+- 校验目标 device 属于同一个 team。
+- 如果传入 `runtimeId`，校验该 runtime 属于该 device，并且已安装。
+- 持久化一个 visible custom `AgentDto`。
+- Public DTO 只保存 env keys；不要在 snapshots 中暴露 raw env values。
 
-Bind `WEB_EVENTS.agent.create` to `createCustomAgent` and refresh `agents:snapshot` subscribers after success.
+- [ ] **步骤 4：为 `agent:create` 增加 socket handler**
 
-- [ ] **Step 5: Verify use-case and socket tests pass**
+将 `WEB_EVENTS.agent.create` 绑定到 `createCustomAgent`，并在成功后刷新 `agents:snapshot` subscribers。
 
-Run:
+- [ ] **步骤 5：验证 use-case 和 socket tests 通过**
+
+运行：
 
 ```bash
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run test:server-next
 ```
 
-### Task 4: Add Web Client Custom Agent Command
+### 任务 4：增加 Web Client Custom Agent Command
 
-**Files:**
-- Modify: `apps/web-next/src/index.ts`
-- Modify: `apps/web-next/tests/socket-client.test.ts`
+**文件：**
+- 修改：`apps/web-next/src/index.ts`
+- 修改：`apps/web-next/tests/socket-client.test.ts`
 
-- [ ] **Step 1: Write failing web client test**
+- [ ] **步骤 1：编写失败的 web client test**
 
-Test that web-next emits `agent:create`, receives `Ack<{ agent }>` and refreshes agent snapshots.
+测试 web-next 会发出 `agent:create`，收到 `Ack<{ agent }>`，并能刷新 agent snapshots。
 
-- [ ] **Step 2: Implement minimal client method**
+- [ ] **步骤 2：实现最小 client method**
 
-Add `createAgent(input)` to the web socket client using existing ack handling.
+在 web socket client 中增加 `createAgent(input)`，复用现有 ack handling。
 
-- [ ] **Step 3: Verify web-next tests pass**
+- [ ] **步骤 3：验证 web-next tests 通过**
 
-Run:
+运行：
 
 ```bash
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run test:web-next
 ```
 
-### Task 5: Add Preview Smoke
+### 任务 5：增加 Preview Smoke
 
-**Files:**
-- Create or modify: `apps/server-next/tests/preview-smoke.test.ts`
-- Modify docs: `agentbean-next/README.md`
-- Create docs: `agentbean-next/docs/fifteenth-slice-status.md`
+**文件：**
+- 创建或修改：`apps/server-next/tests/preview-smoke.test.ts`
+- 修改文档：`agentbean-next/README.md`
+- 创建文档：`agentbean-next/docs/fifteenth-slice-status.md`
 
-- [ ] **Step 1: Write failing smoke test**
+- [ ] **步骤 1：编写失败的 smoke test**
 
-Smoke flow:
+Smoke flow：
 
 ```text
 register -> daemon hello -> runtime report -> device:get -> agent:create -> agents:subscribe -> channel:create -> message:send -> dispatch:result -> agent reply visible
 ```
 
-- [ ] **Step 2: Implement only missing preview pieces**
+- [ ] **步骤 2：只实现缺失的 preview pieces**
 
-Avoid broad UI work. The preview can be socket/client based as long as it proves local runnability and real message flow.
+避免做大范围 UI 工作。只要能证明本地可运行和真实消息流，preview 可以先基于 socket/client。
 
-- [ ] **Step 3: Verify full phase and build**
+- [ ] **步骤 3：验证完整 phase 和 build**
 
-Run:
+运行：
 
 ```bash
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run test:phase1
@@ -190,5 +191,4 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run build:packages
 git diff --check
 ```
 
-Expected: all pass.
-
+预期：全部通过。
