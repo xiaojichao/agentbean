@@ -24,6 +24,7 @@ describe('AgentBean Next readiness checker', () => {
       'old-entry-smoke-script',
       'ci-runs-production-smoke-on-demand',
       'ci-requires-production-smoke-for-next-deploy',
+      'ci-requires-old-smoke-for-manual-rollback-deploy',
       'ci-runs-ready-to-flip-before-production-smoke',
       'ci-runs-daemon-install-smoke',
       'deploy-target-gate',

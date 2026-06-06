@@ -23,6 +23,7 @@
 - `workflow_dispatch` 可以设置 `sync_railway_next_runtime_env=true` 单独运行 `Railway Next env sync`，把 GitHub Actions 中的 Next runtime env 写入 Railway variables，并使用 `--skip-deploys` 避免触发部署。
 - `workflow_dispatch` 可以设置 `run_agentbean_next_production_smoke=true`，对输入 `agentbean_next_entry_url` 或 repository variable `AGENTBEAN_NEXT_ENTRY_URL` 指向的 URL 运行 public entry smoke 与 business smoke。
 - `workflow_dispatch` 可以设置 `run_agentbean_old_production_smoke=true`，对输入 `agentbean_old_entry_url`、`agentbean_next_entry_url` 或 repository variable `AGENTBEAN_NEXT_ENTRY_URL` 指向的 URL 运行 old entry smoke，用于 rollback 后证明公开入口已经回到旧 AgentBean。
+- `workflow_dispatch` 手动执行 `agentbean_deploy_target=old` 且 `run_production_deploy=true` 时，必须同时设置 `run_agentbean_old_production_smoke=true`。CI 会阻止 rollback/old deploy 的反向只切不验。
 - production readiness 会检查：
   - `AGENTBEAN_DEPLOY_TARGET=next`
   - `RAILWAY_TOKEN`
@@ -285,6 +286,8 @@ gh variable set AGENTBEAN_DEPLOY_TARGET --repo xiaojichao/agentbean --body next
 随后推送一个 no-op 或运行 workflow dispatch 触发 production deploy。
 
 如果使用 workflow dispatch 触发 `agentbean_deploy_target=next` 与 `run_production_deploy=true`，必须同时设置 `run_agentbean_next_production_smoke=true`。CI 会阻止只切不验的手动 Next production deploy。
+
+如果使用 workflow dispatch 触发 `agentbean_deploy_target=old` 与 `run_production_deploy=true`，必须同时设置 `run_agentbean_old_production_smoke=true`。CI 会阻止反向只切不验的手动 rollback/old production deploy。
 
 如果通过 repository variable `AGENTBEAN_DEPLOY_TARGET=next` 后推送 `main` 触发生产部署，CI 会在 push run 的 deploy 成功后自动运行 `AgentBean Next production smoke`。
 
