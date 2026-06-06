@@ -116,7 +116,7 @@ jobs:
 
           git fetch origin "${{ github.base_ref }}" --depth=1
           changed_files="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
-          next_changed_files="$(printf '%s\n' "$changed_files" | grep -E '^agentbean-next/|^packages/|^apps/(server-next|daemon-next|web-next)/|^package\.json$|^\.github/workflows/ci-cd\.yml$' || true)"
+          next_changed_files="$(printf '%s\n' "$changed_files" | grep -E '^agentbean-next/|^packages/|^apps/(server-next|daemon-next|web-next)/|^package\.json$|^railway\.json$|^\.github/workflows/ci-cd\.yml$' || true)"
 
           if [ -n "$next_changed_files" ]; then
             echo "should_validate=true" >> "$GITHUB_OUTPUT"
