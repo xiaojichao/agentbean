@@ -33,18 +33,21 @@
 
 当前真实外部配置状态：
 
-- GitHub repository variables 当前为空。
-- GitHub repository secrets 当前已有 `RAILWAY_TOKEN` 与 `NPM_TOKEN`，但尚未看到 `AGENTBEAN_NEXT_SESSION_SECRET`。
-- npm registry 当前尚未发布 `@agentbean/contracts@0.2.0`；因此 next packages 首次真实发布仍未发生。
+- GitHub repository variables 当前已有 `AGENTBEAN_NEXT_DATA_DIR=/data/agentbean-next`。
+- GitHub repository secrets 当前已有 `RAILWAY_TOKEN`、`NPM_TOKEN` 与 `AGENTBEAN_NEXT_SESSION_SECRET`。
+- npm registry 当前已发布：
+  - `@agentbean/contracts@0.2.0`
+  - `@agentbean/daemon-next@0.2.0`
+  - canonical `@agentbean/daemon@0.2.0`
 - 本机当前没有安装 `railway` CLI。
 
-因此，现在还不能直接 flip 到 `next`。否则 production preflight 会按预期失败。
+因此，现在还不能直接 flip 到 `next`。剩余关键门槛是确认 Railway production volume 与 runtime env，然后再打开 `AGENTBEAN_DEPLOY_TARGET=next`。
 
 ## 切换前必备配置
 
 ### GitHub Actions
 
-需要设置：
+已设置：
 
 ```bash
 gh secret set AGENTBEAN_NEXT_SESSION_SECRET --repo xiaojichao/agentbean
@@ -61,7 +64,7 @@ gh variable set AGENTBEAN_DEPLOY_TARGET --repo xiaojichao/agentbean --body next
 
 ## 先发布 Next npm Packages
 
-在 production deploy 仍保持旧 AgentBean 时，可以先发布 next npm packages：
+在 production deploy 仍保持旧 AgentBean 时，已经通过以下命令发布 next npm packages：
 
 ```bash
 gh workflow run "CI/CD" \
@@ -72,15 +75,15 @@ gh workflow run "CI/CD" \
   -f run_production_deploy=false
 ```
 
-预期：
+已确认：
 
 - `Publish agent to npm` 会执行。
 - `Install and build AgentBean Next npm packages` 会执行。
-- 缺失的 next packages 会按顺序发布：
+- 缺失的 next packages 已按顺序发布：
   - `@agentbean/contracts@0.2.0`
   - `@agentbean/daemon-next@0.2.0`
   - canonical `@agentbean/daemon@0.2.0`
-- `Deploy production` 不会运行，因为 `run_production_deploy=false`。
+- `Deploy production` 未运行，因为 `run_production_deploy=false`。
 
 发布完成后再次运行：
 
@@ -88,7 +91,7 @@ gh workflow run "CI/CD" \
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run audit:agentbean-next-cutover
 ```
 
-此时 npm registry 相关检查应通过；真正 production flip 仍会因为 `AGENTBEAN_DEPLOY_TARGET`、`AGENTBEAN_NEXT_DATA_DIR` 或 `AGENTBEAN_NEXT_SESSION_SECRET` 未完成而保持红灯。
+此时 npm registry、data dir 与 session secret 相关检查已经通过；真正 production flip 仍会因为 `AGENTBEAN_DEPLOY_TARGET=next` 尚未打开而保持红灯。
 
 ### Railway
 
@@ -139,7 +142,7 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run audit:agentbean-n
 - GitHub secrets 已包含 `RAILWAY_TOKEN`、`NPM_TOKEN` 与 `AGENTBEAN_NEXT_SESSION_SECRET`。
 - npm registry 已包含 `@agentbean/contracts`、`@agentbean/daemon-next` 与 canonical `@agentbean/daemon` 的 next version。
 
-当前外部状态下，此 audit 预期失败；失败本身就是禁止 production flip 的证据。
+当前外部状态下，此 audit 预期只剩 `AGENTBEAN_DEPLOY_TARGET=next` 一项失败；失败本身就是禁止 production flip 的证据。
 
 ## Production Flip
 
