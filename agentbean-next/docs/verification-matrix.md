@@ -111,6 +111,7 @@ Phase 2 完成标准：
 | P3-15 | 本地 external cutover audit 可以只读检查 GitHub variables、GitHub secrets 与 npm registry 版本，明确 production flip 前还缺哪些外部条件。 | Release/CI | 真正替换旧 AgentBean 前，必须把代码就绪与外部配置/发布状态分开验收。 | `production-cutover-runbook.md`, `target-architecture.md` |
 | P3-16 | 本地 full preview 对晚订阅的 web session replay 已持久化 device runtimes，并让 Custom Agent 表单按当前 device 过滤 runtime。 | Preview/Web/Server | 替换旧 AgentBean 前，本地 UI 必须能稳定看到 runtime、创建 custom agent，而不是只在协议测试里成立。 | `production-cutover-runbook.md`, `target-architecture.md` |
 | P3-17 | CI 可以手动发布 AgentBean Next npm packages，而不触发 Railway production deploy；production deploy 需要单独显式打开。 | Release/CI | 替换旧 AgentBean 前，应先发布 next daemon npm 用户入口，但不能因此提前替换生产后端。 | `production-cutover-runbook.md`, `target-architecture.md` |
+| P3-18 | CI 可以手动运行 Railway Next 只读 preflight，验证 production runtime env 与 volume 覆盖 `AGENTBEAN_NEXT_DATA_DIR`，且不触发 deploy。 | Release/CI | 替换旧 AgentBean 前，必须用生产侧证据确认 Next SQLite 数据目录落在持久化 volume 上。 | `production-cutover-runbook.md`, `target-architecture.md` |
 
 Phase 3 完成标准：
 
