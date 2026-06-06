@@ -283,9 +283,9 @@ jobs:
               ;;
           esac
 
-          for attempt in 1 2 3 4 5; do
-            echo "Railway deploy attempt ${attempt}/5"
-            if railway up "$deploy_path" \
+          for attempt in 1 2 3; do
+            echo "Railway deploy attempt ${attempt}/3"
+            if timeout 8m railway up "$deploy_path" \
               --ci \
               --path-as-root \
               --project "$RAILWAY_PROJECT_ID" \
@@ -294,7 +294,7 @@ jobs:
               --verbose; then
               exit 0
             fi
-            if [ "$attempt" -eq 5 ]; then
+            if [ "$attempt" -eq 3 ]; then
               exit 1
             fi
             sleep $((attempt * 15))

@@ -113,6 +113,7 @@ Phase 2 完成标准：
 | P3-17 | CI 可以手动发布 AgentBean Next npm packages，而不触发 Railway production deploy；production deploy 需要单独显式打开。 | Release/CI | 替换旧 AgentBean 前，应先发布 next daemon npm 用户入口，但不能因此提前替换生产后端。 | `production-cutover-runbook.md`, `target-architecture.md` |
 | P3-18 | CI 可以手动运行 Railway Next 只读 preflight，验证 production runtime env 与 volume 覆盖 `AGENTBEAN_NEXT_DATA_DIR`，且不触发 deploy。 | Release/CI | 替换旧 AgentBean 前，必须用生产侧证据确认 Next SQLite 数据目录落在持久化 volume 上。 | `production-cutover-runbook.md`, `target-architecture.md` |
 | P3-19 | CI 可以手动把 GitHub Actions 中的 Next runtime env 同步到 Railway variables，并使用 `--skip-deploys` 避免触发 deploy 或 npm publish。 | Release/CI | 替换旧 AgentBean 前，必须能补齐 Railway service variables，同时保持 final flip 仍由单独步骤控制。 | `production-cutover-runbook.md`, `target-architecture.md` |
+| P3-20 | CI 的 Railway deploy step 必须给每次 `railway up` 设置命令级 timeout，避免 production deploy 因 CLI 卡住而无限等待。 | Release/CI | 替换旧 AgentBean 前，deploy、production smoke 与 rollback 都必须有可控失败边界。 | `production-cutover-runbook.md`, `fifty-first-slice-status.md` |
 
 Phase 3 完成标准：
 
