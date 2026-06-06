@@ -89,7 +89,7 @@
       }
       .grid {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
         gap: 14px;
       }
       .list {
@@ -153,6 +153,19 @@
           <button type="submit">创建会话</button>
         </form>
 
+        <form id="channel-create-form">
+          <h2>Channel</h2>
+          <label>名称 <input name="name" value="ops" /></label>
+          <label>标题 <input name="title" value="Ops" /></label>
+          <label>可见性
+            <select name="visibility">
+              <option value="public">public</option>
+              <option value="private">private</option>
+            </select>
+          </label>
+          <button type="submit">创建 Channel</button>
+        </form>
+
         <form id="agent-create-form">
           <h2>Custom Agent</h2>
           <label>Device <select name="deviceId"></select></label>
@@ -173,6 +186,10 @@
 
       <section>
         <div class="grid">
+          <div class="panel">
+            <h2>Channels</h2>
+            <ul class="list" id="channels"></ul>
+          </div>
           <div class="panel">
             <h2>Devices</h2>
             <ul class="list" id="devices"></ul>
@@ -203,7 +220,7 @@
     <script>
       const SESSION_KEY = "agentbean-next-preview-session";
       const socket = io("/web", { transports: ["websocket", "polling"] });
-      const state = { token: null, user: null, team: null, channel: null, devices: [], runtimes: [], agents: [], messages: [] };
+      const state = { token: null, user: null, team: null, channel: null, channels: [], devices: [], runtimes: [], agents: [], messages: [] };
       const el = (id) => document.getElementById(id);
 
       socket.on("connect", async () => {
@@ -228,7 +245,8 @@
         render();
       });
       socket.on("channels:snapshot", (channels) => {
-        state.channel = channels[0] || state.channel;
+        state.channels = channels || [];
+        state.channel = state.channels.find((channel) => channel.id === state.channel?.id) || state.channels[0] || state.channel;
         saveSession();
         render();
       });
@@ -255,6 +273,25 @@
         saveSession();
         await subscribe();
         render();
+      });
+
+      el("channel-create-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!state.user || !state.team) return;
+        const data = Object.fromEntries(new FormData(event.currentTarget));
+        const ack = await emit("channel:create", {
+          userId: state.user.id,
+          teamId: state.team.id,
+          name: data.name,
+          title: data.title || undefined,
+          visibility: data.visibility,
+        });
+        if (ack.ok && ack.channel) {
+          state.channel = ack.channel;
+          state.channels = [...state.channels.filter((channel) => channel.id !== ack.channel.id), ack.channel];
+          saveSession();
+          render();
+        }
       });
 
       el("agent-create-form").addEventListener("submit", async (event) => {
@@ -305,17 +342,22 @@
       }
 
       function render() {
-        renderList("devices", state.devices, (device) => `${device.name || device.id}<span class="meta">${device.status}</span>`);
-        renderList("runtimes", state.runtimes, (runtime) => `${runtime.name}<span class="meta">${runtime.command || "not installed"}</span>`);
-        renderList("agents", state.agents, (agent) => `${agent.name}<span class="meta">${agent.status} · ${agent.source}</span>`);
-        renderList("messages", state.messages, (message) => `${message.body}<span class="meta">${message.senderKind}</span>`);
+        renderList("channels", state.channels, (channel) => renderItem(channel.title || channel.name, channel.visibility));
+        renderList("devices", state.devices, (device) => renderItem(device.name || device.id, device.status));
+        renderList("runtimes", state.runtimes, (runtime) => renderItem(runtime.name, runtime.command || "not installed"));
+        renderList("agents", state.agents, (agent) => renderItem(agent.name, `${agent.status} · ${agent.source}`));
+        renderList("messages", state.messages, (message) => renderItem(message.body, message.senderKind));
         fillSelect("agent-create-form", "deviceId", state.devices, (device) => [device.id, device.name || device.id]);
         fillSelect("agent-create-form", "runtimeId", state.runtimes, (runtime) => [runtime.id, runtime.name]);
-        fillSelect("message-form", "channelId", state.channel ? [state.channel] : [], (channel) => [channel.id, channel.title || channel.name]);
+        fillSelect("message-form", "channelId", state.channels, (channel) => [channel.id, channel.title || channel.name]);
       }
 
       function renderList(id, items, format) {
         el(id).innerHTML = items.map((item) => `<li class="item">${format(item)}</li>`).join("");
+      }
+
+      function renderItem(primary, meta) {
+        return `${escapeHtml(primary)}<span class="meta">${escapeHtml(meta)}</span>`;
       }
 
       function fillSelect(formId, name, items, mapItem) {
@@ -382,6 +424,7 @@
         state.user = null;
         state.team = null;
         state.channel = null;
+        state.channels = [];
         state.devices = [];
         state.runtimes = [];
         state.agents = [];

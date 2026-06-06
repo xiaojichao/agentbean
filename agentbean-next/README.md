@@ -54,6 +54,7 @@
 - `docs/twenty-sixth-slice-status.md` 记录第二十六切片 preview whoami session restore 的实现、验证证据与剩余边界。
 - `docs/twenty-seventh-slice-status.md` 记录第二十七切片 production session secret guard 的实现、验证证据与剩余边界。
 - `docs/twenty-eighth-slice-status.md` 记录第二十八切片 production SQLite data dir guard 的实现、验证证据与剩余边界。
+- `docs/twenty-ninth-slice-status.md` 记录第二十九切片 preview channel create flow 的实现、验证证据与剩余边界。
 - `docs/first-slice-schema-repositories.md` 定义第一切片的新 SQLite schema 与 repository 接口。
 - `docs/migration-plan.md` 给出分阶段实现计划。
 - `docs/verification-matrix.md` 将必需测试映射到阶段和来源文档。
@@ -80,13 +81,13 @@
 
 ## 当前实现状态
 
-第一切片已经具备可运行的最小协议链路，第二切片已经补上 channel controls 的最小行为，第三切片已经补上 channel membership 的最小命令面，第四切片已经补上 daemon protocol hardening 的最小边界，第五切片已经补上 web realtime boundary 的最小客户端边界，第六切片已经补上 web reconnect resubscription 的最小恢复边界，第七切片已经补上 channel member details DTO 的最小数据边界，第八切片已经补上 channel snapshot subscription broadcast 的最小实时边界，第九切片已经补上 agent snapshot subscription broadcast 的最小实时边界，第十切片已经补上 device snapshot 与 runtimes broadcast 的最小实时边界，第十一切片已经补上 device detail shell 的最小数据边界，第十二切片已经补上 device scan routing 的最小命令边界，第十三切片已经补上 daemon rescan command 的最小协议边界，第十四切片已经补上 daemon builtin scanner 的最小扫描边界，第十五切片已经补上 Agent public contract alignment 的最小契约边界，第十六切片已经补上 custom agent preview flow 的最小可运行边界，第十七切片已经补上 daemon-next CLI 与 dispatch-only secret transport 的最小替换底座，第十八切片已经补上 server-next 长驻 dev server 的最小运行入口，第十九切片已经补上 web-next 静态 preview 页面的最小可视化入口，第二十切片已经补上 server-next SQLite dev storage 的最小持久化入口，第二十一切片已经补上 full local preview launcher，第二十二切片已经补上 preview session persistence，第二十三切片已经补上 AgentBean Next CI validation gate，第二十四切片已经补上 production deploy target gate，第二十五切片已经补上 auth session token 与 whoami，第二十六切片已经补上 preview whoami session restore，第二十七切片已经补上 production session secret guard，第二十八切片已经补上 production SQLite data dir guard：
+第一切片已经具备可运行的最小协议链路，第二切片已经补上 channel controls 的最小行为，第三切片已经补上 channel membership 的最小命令面，第四切片已经补上 daemon protocol hardening 的最小边界，第五切片已经补上 web realtime boundary 的最小客户端边界，第六切片已经补上 web reconnect resubscription 的最小恢复边界，第七切片已经补上 channel member details DTO 的最小数据边界，第八切片已经补上 channel snapshot subscription broadcast 的最小实时边界，第九切片已经补上 agent snapshot subscription broadcast 的最小实时边界，第十切片已经补上 device snapshot 与 runtimes broadcast 的最小实时边界，第十一切片已经补上 device detail shell 的最小数据边界，第十二切片已经补上 device scan routing 的最小命令边界，第十三切片已经补上 daemon rescan command 的最小协议边界，第十四切片已经补上 daemon builtin scanner 的最小扫描边界，第十五切片已经补上 Agent public contract alignment 的最小契约边界，第十六切片已经补上 custom agent preview flow 的最小可运行边界，第十七切片已经补上 daemon-next CLI 与 dispatch-only secret transport 的最小替换底座，第十八切片已经补上 server-next 长驻 dev server 的最小运行入口，第十九切片已经补上 web-next 静态 preview 页面的最小可视化入口，第二十切片已经补上 server-next SQLite dev storage 的最小持久化入口，第二十一切片已经补上 full local preview launcher，第二十二切片已经补上 preview session persistence，第二十三切片已经补上 AgentBean Next CI validation gate，第二十四切片已经补上 production deploy target gate，第二十五切片已经补上 auth session token 与 whoami，第二十六切片已经补上 preview whoami session restore，第二十七切片已经补上 production session secret guard，第二十八切片已经补上 production SQLite data dir guard，第二十九切片已经补上 preview channel create flow：
 
 - `packages/contracts`：共享 DTO、`Ack<T>`、error codes 与 socket event constants。
 - `packages/domain`：message routing、agent identity、status merge、channel visibility 与 creator controls 纯函数。
 - `apps/server-next`：SQLite schema/repositories、SQLite dev storage、use cases、Socket.IO namespace adapters、长驻 dev server、channel controls、channel membership、member detail projections、device detail、device scan routing、channel/agent/device snapshot subscriptions、custom agent 私有执行配置、按 device 定向 dispatch 与 E2E smoke。
 - `apps/daemon-next`：daemon protocol client、Socket.IO bridge、CLI config、custom command executor、builtin scanner、reconnect re-announcement、device/runtimes reports、targeted rescan command 与 dispatch error/env 边界。
-- `apps/web-next`：web socket client、静态 preview 页面、register/login fallback、preview session persistence、channel create/update/member commands、device scan command、agent/channel/device subscriptions、message/dispatch/device realtime events、reconnect resubscription 与最小 session/state 边界。
+- `apps/web-next`：web socket client、静态 preview 页面、register/login fallback、preview session persistence、channel create/update/member commands、preview channel create flow、device scan command、agent/channel/device subscriptions、message/dispatch/device realtime events、reconnect resubscription 与最小 session/state 边界。
 
 当前本地验证命令：
 
