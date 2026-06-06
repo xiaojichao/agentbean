@@ -44,6 +44,6 @@ production-style smoke 启动后，`/healthz` 返回：
 这些不属于第二十四切片：
 
 - 真正把 GitHub 仓库变量 `AGENTBEAN_DEPLOY_TARGET` 切到 `next`。
-- Railway production data volume 与 `AGENTBEAN_NEXT_DATA_DIR` 的最终路径确认。
+- Railway production data volume 创建、绑定，以及真实 `AGENTBEAN_NEXT_DATA_DIR` 路径配置。
 - `apps/web` / Vercel 正式切换到 web-next 产品界面。
 - 真实 Codex/Claude/Gemini 交互式 adapter。

@@ -57,7 +57,9 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
   const host = args.host ?? env.AGENTBEAN_NEXT_HOST ?? (env.PORT ? '0.0.0.0' : '127.0.0.1');
   const port = Number(args.port ?? env.AGENTBEAN_NEXT_PORT ?? env.PORT ?? 4100);
   const storage = args.storage ?? env.AGENTBEAN_NEXT_STORAGE ?? (env.PORT ? 'sqlite' : 'memory');
-  const dataDir = args['data-dir'] ?? env.AGENTBEAN_NEXT_DATA_DIR ?? join(process.cwd(), '.agentbean-next');
+  const configuredDataDir = args['data-dir'] ?? env.AGENTBEAN_NEXT_DATA_DIR;
+  const hasExplicitDataDir = configuredDataDir !== undefined && configuredDataDir.length > 0;
+  const dataDir = hasExplicitDataDir ? configuredDataDir : join(process.cwd(), '.agentbean-next');
   const sessionSecret = args['session-secret'] ?? env.AGENTBEAN_NEXT_SESSION_SECRET ?? '';
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error('AGENTBEAN_NEXT_PORT or --port must be an integer between 0 and 65535');
@@ -67,6 +69,9 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
   }
   if (env.PORT && !sessionSecret) {
     throw new Error('AGENTBEAN_NEXT_SESSION_SECRET or --session-secret is required when PORT is set');
+  }
+  if (env.PORT && storage === 'sqlite' && !hasExplicitDataDir) {
+    throw new Error('AGENTBEAN_NEXT_DATA_DIR or --data-dir is required when PORT uses sqlite storage');
   }
   return { host, port, storage, dataDir, sessionSecret: sessionSecret || 'agentbean-next-dev-session-secret' };
 }
