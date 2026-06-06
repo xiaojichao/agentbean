@@ -12,6 +12,8 @@ export function collectAgentBeanNextReadinessChecks({
   production = false,
 } = {}) {
   const packageJson = readJson(join(root, 'package.json'));
+  const contractsPackageJson = readJson(join(root, 'packages/contracts/package.json'));
+  const daemonNextPackageJson = readJson(join(root, 'apps/daemon-next/package.json'));
   const railwayJson = readJson(join(root, 'railway.json'));
   const workflow = readFileSync(join(root, '.github/workflows/ci-cd.yml'), 'utf8');
   const checks = [
@@ -60,6 +62,40 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes('deploy_path="apps/server"') &&
         workflow.includes('deploy_path="."'),
       'CI deploy job must keep old|next deployment target gate',
+    ),
+    check(
+      'contracts-package-publishable',
+      contractsPackageJson.private === false &&
+        contractsPackageJson.version !== '0.0.0' &&
+        Array.isArray(contractsPackageJson.files) &&
+        contractsPackageJson.files.includes('dist/**/*') &&
+        contractsPackageJson.scripts?.prepublishOnly === 'npm run build',
+      '@agentbean/contracts must be publishable before daemon-next can be installed from npm',
+    ),
+    check(
+      'daemon-next-package-publishable',
+      daemonNextPackageJson.private === false &&
+        daemonNextPackageJson.version !== '0.0.0' &&
+        Array.isArray(daemonNextPackageJson.files) &&
+        daemonNextPackageJson.files.includes('dist/**/*') &&
+        daemonNextPackageJson.bin?.['agentbean-next-daemon'] === './dist/apps/daemon-next/src/bin.js' &&
+        daemonNextPackageJson.scripts?.prepublishOnly === 'npm run build',
+      '@agentbean/daemon-next must expose a public npm package with a CLI bin',
+    ),
+    check(
+      'daemon-next-runtime-dependencies',
+      daemonNextPackageJson.dependencies?.['@agentbean/contracts'] === contractsPackageJson.version &&
+        Boolean(daemonNextPackageJson.dependencies?.['socket.io-client']),
+      '@agentbean/daemon-next must depend on published contracts and socket.io-client',
+    ),
+    check(
+      'ci-publishes-next-packages',
+      workflow.includes("env.AGENTBEAN_DEPLOY_TARGET == 'next'") &&
+        workflow.includes('@agentbean/contracts@$CONTRACTS_VERSION') &&
+        workflow.includes('@agentbean/daemon-next@$DAEMON_NEXT_VERSION') &&
+        workflow.indexOf('Publish AgentBean Next contracts package') <
+          workflow.indexOf('Publish AgentBean Next daemon package'),
+      'CI publish job must publish AgentBean Next contracts before daemon-next when target is next',
     ),
   ];
 
