@@ -131,13 +131,19 @@ jobs:
         with:
           node-version: 24.15.0
           cache: npm
-          cache-dependency-path: apps/server/package-lock.json
+          cache-dependency-path: |
+            apps/server/package-lock.json
+            package-lock.json
 
       - name: Ensure localhost resolves
         if: steps.changes.outputs.should_validate == 'true'
         run: |
           grep -qE '(^|[[:space:]])localhost([[:space:]]|$)' /etc/hosts || \
             echo '127.0.0.1 localhost' | sudo tee -a /etc/hosts
+
+      - name: Verify AgentBean Next root install plan
+        if: steps.changes.outputs.should_validate == 'true'
+        run: npm ci --ignore-scripts
 
       - name: Install shared validation dependencies
         if: steps.changes.outputs.should_validate == 'true'
@@ -184,6 +190,7 @@ jobs:
     timeout-minutes: 30
 
     env:
+      AGENTBEAN_DEPLOY_TARGET: ${{ vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_PROJECT_ID: c6b70675-f7d5-47a1-a8e7-05b37d13e476
       RAILWAY_SERVICE_ID: 7b1dce9b-b7e7-4cfb-bb3f-ef86d10e8647
@@ -206,9 +213,22 @@ jobs:
       - name: Deploy Railway backend
         if: env.RAILWAY_TOKEN != ''
         run: |
+          case "${AGENTBEAN_DEPLOY_TARGET}" in
+            old)
+              deploy_path="apps/server"
+              ;;
+            next)
+              deploy_path="."
+              ;;
+            *)
+              echo "::error::AGENTBEAN_DEPLOY_TARGET must be old or next, got '${AGENTBEAN_DEPLOY_TARGET}'"
+              exit 1
+              ;;
+          esac
+
           for attempt in 1 2 3 4 5; do
             echo "Railway deploy attempt ${attempt}/5"
-            if railway up apps/server \
+            if railway up "$deploy_path" \
               --ci \
               --path-as-root \
               --project "$RAILWAY_PROJECT_ID" \

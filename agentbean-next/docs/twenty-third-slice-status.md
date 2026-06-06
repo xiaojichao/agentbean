@@ -44,4 +44,4 @@ node apps/server/node_modules/vitest/vitest.mjs run \
 
 - production deploy 切换到 server-next。
 - 真实浏览器点击自动化。
-- 根 workspace `package-lock.json`；当前 CI 继续复用 `apps/server/package-lock.json` 提供 Next validation 所需工具链。
+- 后续第二十四切片已补上根 workspace `package-lock.json`、Next deploy target gate 与 root install plan validation。

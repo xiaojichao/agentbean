@@ -53,9 +53,9 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
   const argv = input.argv ?? process.argv.slice(2);
   const env = input.env ?? process.env;
   const args = parseArgs(argv);
-  const host = args.host ?? env.AGENTBEAN_NEXT_HOST ?? '127.0.0.1';
-  const port = Number(args.port ?? env.AGENTBEAN_NEXT_PORT ?? 4100);
-  const storage = args.storage ?? env.AGENTBEAN_NEXT_STORAGE ?? 'memory';
+  const host = args.host ?? env.AGENTBEAN_NEXT_HOST ?? (env.PORT ? '0.0.0.0' : '127.0.0.1');
+  const port = Number(args.port ?? env.AGENTBEAN_NEXT_PORT ?? env.PORT ?? 4100);
+  const storage = args.storage ?? env.AGENTBEAN_NEXT_STORAGE ?? (env.PORT ? 'sqlite' : 'memory');
   const dataDir = args['data-dir'] ?? env.AGENTBEAN_NEXT_DATA_DIR ?? join(process.cwd(), '.agentbean-next');
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error('AGENTBEAN_NEXT_PORT or --port must be an integer between 0 and 65535');
