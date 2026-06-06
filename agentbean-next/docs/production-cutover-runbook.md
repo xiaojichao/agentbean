@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-截至第三十八切片，仓库内替换前 gate 已具备：
+截至第三十九切片，仓库内替换前 gate 已具备：
 
 - 根目录 `railway.json` 明确声明 AgentBean Next 的 build、start 与 `/healthz`。
 - `AGENTBEAN_DEPLOY_TARGET` 支持 `old|next`，默认仍为 `old`。
@@ -27,11 +27,13 @@
   - `@agentbean/daemon-next` 依赖 registry 版 `@agentbean/contracts` 与 `socket.io-client`。
   - canonical `@agentbean/daemon` next release 版本高于当前旧 daemon `0.1.35`。
   - CI 在 build 后执行 daemon install smoke，验证 canonical `@agentbean/daemon` tarball 能在临时空项目安装，并且旧 `daemon` / `agentbean-daemon` bin 能进入 daemon-next CLI。
+- external cutover audit 会只读检查 GitHub variables、GitHub secrets 与 npm registry next package versions。
 
 当前真实外部配置状态：
 
 - GitHub repository variables 当前为空。
-- GitHub repository secrets 当前已有 `RAILWAY_TOKEN`，但尚未看到 `AGENTBEAN_NEXT_SESSION_SECRET`。
+- GitHub repository secrets 当前已有 `RAILWAY_TOKEN` 与 `NPM_TOKEN`，但尚未看到 `AGENTBEAN_NEXT_SESSION_SECRET`。
+- npm registry 当前尚未发布 `@agentbean/contracts@0.2.0`；因此 next packages 首次真实发布仍未发生。
 - 本机当前没有安装 `railway` CLI。
 
 因此，现在还不能直接 flip 到 `next`。否则 production preflight 会按预期失败。
@@ -88,6 +90,23 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run preview:agentbean
 - daemon install smoke 通过：本地 pack contracts 与 canonical daemon tarball，临时安装后验证三个 bin。
 - next 目标发布时，npm job 会跳过已存在版本，并只发布缺失版本。
 - canonical `@agentbean/daemon` next release package 保留旧 `daemon` 与 `agentbean-daemon` bin。
+
+## 外部 Cutover Audit
+
+在真正 flip 前运行：
+
+```bash
+PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run audit:agentbean-next-cutover
+```
+
+预期：
+
+- GitHub variable `AGENTBEAN_DEPLOY_TARGET` 已设置为 `next`。
+- GitHub variable `AGENTBEAN_NEXT_DATA_DIR` 指向 production Railway volume path。
+- GitHub secrets 已包含 `RAILWAY_TOKEN`、`NPM_TOKEN` 与 `AGENTBEAN_NEXT_SESSION_SECRET`。
+- npm registry 已包含 `@agentbean/contracts`、`@agentbean/daemon-next` 与 canonical `@agentbean/daemon` 的 next version。
+
+当前外部状态下，此 audit 预期失败；失败本身就是禁止 production flip 的证据。
 
 ## Production Flip
 

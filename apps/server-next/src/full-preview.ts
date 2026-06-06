@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { spawn } from 'node:child_process';
 import { hostname as readHostname } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -165,6 +166,9 @@ export async function runAgentBeanNextPreview(
   console.log(`Preview user: ${handle.user.username}`);
   console.log(`Preview team: ${handle.currentTeam.name}`);
   console.log(`SQLite data dir: ${config.dataDir}`);
+  if (process.env.AGENTBEAN_NEXT_OPEN_BROWSER === '1') {
+    openPreviewUrl(handle.baseUrl);
+  }
   return handle;
 }
 
@@ -255,4 +259,14 @@ function loadSocketIoClient(): SocketIoClientFactory {
     }
   }
   throw new Error('socket.io-client is not installed; run npm ci in apps/server or provide a workspace install');
+}
+
+function openPreviewUrl(url: string): void {
+  const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
+  const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
+  const child = spawn(opener, args, {
+    detached: true,
+    stdio: 'ignore',
+  });
+  child.unref();
 }
