@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-截至第四十八切片，仓库内替换前 gate 已具备：
+截至第四十九切片，仓库内替换前 gate 已具备：
 
 - 根目录 `railway.json` 明确声明 AgentBean Next 的 build、start 与 `/healthz`。
 - `AGENTBEAN_DEPLOY_TARGET` 支持 `old|next`，默认仍为 `old`。
@@ -21,6 +21,7 @@
 - `workflow_dispatch` 只有 `run_production_deploy=true` 时才会运行 Railway production deploy。
 - `workflow_dispatch` 可以设置 `run_railway_preflight=true` 单独运行 `Railway Next preflight`，只读验证 Railway production runtime env 与 volume，不执行 `railway up`。
 - `workflow_dispatch` 可以设置 `sync_railway_next_runtime_env=true` 单独运行 `Railway Next env sync`，把 GitHub Actions 中的 Next runtime env 写入 Railway variables，并使用 `--skip-deploys` 避免触发部署。
+- `workflow_dispatch` 可以设置 `run_agentbean_next_production_smoke=true`，对输入 `agentbean_next_entry_url` 或 repository variable `AGENTBEAN_NEXT_ENTRY_URL` 指向的 URL 运行 public entry smoke 与 business smoke。
 - production readiness 会检查：
   - `AGENTBEAN_DEPLOY_TARGET=next`
   - `RAILWAY_TOKEN`
@@ -52,6 +53,23 @@
 - 本机当前没有安装 `railway` CLI。
 
 因此，现在已经具备 final flip 前的生产配置证据。剩余关键门槛是获得用户对实际生产切换的明确批准，然后打开 `AGENTBEAN_DEPLOY_TARGET=next`。
+
+如果已经有可访问的 AgentBean Next 部署 URL，可以先不部署、只运行生产 smoke：
+
+```bash
+gh workflow run "CI/CD" \
+  --repo xiaojichao/agentbean \
+  --ref main \
+  -f agentbean_deploy_target=old \
+  -f agentbean_npm_publish_target=old \
+  -f run_production_deploy=false \
+  -f run_railway_preflight=false \
+  -f sync_railway_next_runtime_env=false \
+  -f run_agentbean_next_production_smoke=true \
+  -f agentbean_next_entry_url=https://<production-host>
+```
+
+该 job 只运行 `smoke:agentbean-next-entry` 与 `smoke:agentbean-next-business`，不会执行 Railway deploy，也不会发布 npm。
 
 ## 切换前必备配置
 
@@ -238,6 +256,7 @@ gh variable set AGENTBEAN_DEPLOY_TARGET --repo xiaojichao/agentbean --body next
 - `Deploy production` 中的 `Run AgentBean Next production readiness checks` 被执行，不是 skipped。
 - `Run AgentBean Next production readiness checks` 通过。
 - Railway deploy 成功。
+- `AgentBean Next production smoke` 成功，至少覆盖 public entry smoke 与 business smoke。
 
 ## 生产 Smoke
 

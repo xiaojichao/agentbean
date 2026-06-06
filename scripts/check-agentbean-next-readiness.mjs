@@ -90,6 +90,20 @@ export function collectAgentBeanNextReadinessChecks({
       'root package.json and production runbook must expose the AgentBean Next SQLite restart persistence smoke',
     ),
     check(
+      'ci-runs-production-smoke-on-demand',
+      workflow.includes('run_agentbean_next_production_smoke') &&
+        workflow.includes('agentbean_next_entry_url') &&
+        workflow.includes('AgentBean Next production smoke') &&
+        workflow.includes("needs.validate-agentbean-next.result == 'success'") &&
+        workflow.includes("needs.deploy.result == 'success' || needs.deploy.result == 'skipped'") &&
+        workflow.includes('AGENTBEAN_NEXT_ENTRY_URL: ${{ inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}') &&
+        workflow.includes('npm run smoke:agentbean-next-entry') &&
+        workflow.includes('npm run smoke:agentbean-next-business') &&
+        cutoverRunbook.includes('run_agentbean_next_production_smoke') &&
+        cutoverRunbook.includes('agentbean_next_entry_url'),
+      'CI must expose an explicit workflow_dispatch AgentBean Next production smoke gate',
+    ),
+    check(
       'ci-runs-daemon-install-smoke',
       workflow.includes('Run AgentBean Next daemon install smoke') &&
         workflow.includes('npm run smoke:agentbean-next-daemon-install -- --skip-build'),

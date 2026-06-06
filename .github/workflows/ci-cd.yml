@@ -40,6 +40,16 @@ on:
         required: true
         default: false
         type: boolean
+      run_agentbean_next_production_smoke:
+        description: Run AgentBean Next entry and business smoke against a deployed URL.
+        required: true
+        default: false
+        type: boolean
+      agentbean_next_entry_url:
+        description: AgentBean Next deployed URL for production smoke. Falls back to repository variable AGENTBEAN_NEXT_ENTRY_URL.
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -376,6 +386,51 @@ jobs:
 
       - name: Verify Railway AgentBean Next preflight
         run: npm run check:agentbean-next-railway-preflight
+
+  agentbean-next-production-smoke:
+    name: AgentBean Next production smoke
+    runs-on: ubuntu-latest
+    needs:
+      - validate-agentbean-next
+      - deploy
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.run_agentbean_next_production_smoke && needs.validate-agentbean-next.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped')
+    timeout-minutes: 15
+
+    env:
+      AGENTBEAN_NEXT_ENTRY_URL: ${{ inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.15.0
+          cache: npm
+          cache-dependency-path: |
+            apps/server/package-lock.json
+            package-lock.json
+
+      - name: Install root smoke dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install Socket.IO smoke client dependency
+        working-directory: apps/server
+        run: npm --workspaces=false ci
+
+      - name: Verify production smoke target URL
+        run: |
+          if [ -z "$AGENTBEAN_NEXT_ENTRY_URL" ]; then
+            echo "::error::AGENTBEAN_NEXT_ENTRY_URL is required. Set workflow input agentbean_next_entry_url or repository variable AGENTBEAN_NEXT_ENTRY_URL."
+            exit 1
+          fi
+
+      - name: Run AgentBean Next public entry smoke
+        run: npm run smoke:agentbean-next-entry
+
+      - name: Run AgentBean Next business smoke
+        run: npm run smoke:agentbean-next-business
 
   publish:
     name: Publish agent to npm
