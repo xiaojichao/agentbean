@@ -72,6 +72,15 @@ export function collectAgentBeanNextReadinessChecks({
       'root package.json and production runbook must expose the AgentBean Next public entry smoke',
     ),
     check(
+      'business-smoke-script',
+      packageJson.scripts?.['smoke:agentbean-next-business'] ===
+        'node scripts/smoke-agentbean-next-business.mjs' &&
+        cutoverRunbook.includes('npm run smoke:agentbean-next-business') &&
+        cutoverRunbook.includes('custom agent') &&
+        cutoverRunbook.includes('agent reply'),
+      'root package.json and production runbook must expose the AgentBean Next business smoke',
+    ),
+    check(
       'ci-runs-daemon-install-smoke',
       workflow.includes('Run AgentBean Next daemon install smoke') &&
         workflow.includes('npm run smoke:agentbean-next-daemon-install -- --skip-build'),

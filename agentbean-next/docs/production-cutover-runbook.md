@@ -33,6 +33,7 @@
   - CI 在 build 后执行 daemon install smoke，验证 canonical `@agentbean/daemon` tarball 能在临时空项目安装，并且旧 `daemon` / `agentbean-daemon` bin 能进入 daemon-next CLI。
 - external cutover audit 会只读检查 GitHub variables、GitHub secrets 与 npm registry next package versions。
 - public entry smoke 会检查公开入口的 `/healthz`、根页面 HTML 与 Socket.IO client route，防止最终访问入口仍落在旧 Vercel 或临时 harness 页面。
+- business smoke 会通过 Socket.IO 注册临时用户/team、连接 daemon、创建 custom agent、发送消息并等待 agent reply，防止只验证入口而没有验证真实业务链路。
 
 当前真实外部配置状态：
 
@@ -170,6 +171,7 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run test:phase1
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run build:packages
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run preview:agentbean-next
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_NEXT_ENTRY_URL=http://127.0.0.1:4110 npm run smoke:agentbean-next-entry
+PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_NEXT_ENTRY_URL=http://127.0.0.1:4110 npm run smoke:agentbean-next-business
 ```
 
 预期：
@@ -179,6 +181,7 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_NEXT_ENTRY_URL=
 - phase tests、packages build 与 preview smoke 通过。
 - daemon install smoke 通过：本地 pack contracts 与 canonical daemon tarball，临时安装后验证三个 bin。
 - entry smoke 通过：`/healthz` 返回 `agentbean-next-server`，根页面返回 `AgentBean` 产品 preview shell，`/socket.io/socket.io.js` 可访问。
+- business smoke 通过：临时用户/team、daemon socket、custom agent、message dispatch 与 agent reply 均可用。
 - next 目标发布时，npm job 会跳过已存在版本，并只发布缺失版本。
 - canonical `@agentbean/daemon` next release package 保留旧 `daemon` 与 `agentbean-daemon` bin。
 
@@ -224,6 +227,7 @@ gh variable set AGENTBEAN_DEPLOY_TARGET --repo xiaojichao/agentbean --body next
 ```bash
 curl -fsS https://<production-host>/healthz
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_NEXT_ENTRY_URL=https://<production-host> npm run smoke:agentbean-next-entry
+PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_NEXT_ENTRY_URL=https://<production-host> npm run smoke:agentbean-next-business
 ```
 
 预期：
@@ -231,6 +235,7 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_NEXT_ENTRY_URL=
 - `/healthz` 返回健康状态。
 - 根页面是 AgentBean Next 的 `AgentBean` 产品 preview shell，不是旧 Vercel web 或 `AgentBean Next Preview` harness。
 - Socket.IO client route 可访问。
+- 临时用户注册、current team、daemon 连接、custom agent 创建、消息 dispatch 与 agent reply 全部成功。
 
 随后用真实浏览器或等价客户端验证：
 
