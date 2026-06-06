@@ -125,6 +125,7 @@ Phase 3 完成标准：
 | P4-11 | full local preview launcher 启动 SQLite server，bootstrap/login preview 用户，并把 daemon-next 连接到同一个 team。 | Web/Socket/Daemon | 一条命令启动本地替换 preview。 | `implementation-runbook.md`, `target-architecture.md` |
 | P4-12 | preview 页面刷新或 Socket.IO reconnect 后恢复 session 并重新订阅 devices、agents 与 channels。 | Web | 本地 preview 会话恢复。 | `target-architecture.md`, `known-gaps.md` |
 | P4-13 | web-next preview 可以通过 `channel:create` 创建 channel，刷新 channel snapshot，并在新 channel 中继续发送消息。 | Web/Socket | 本地 preview 不只依赖默认 `all` channel，开始覆盖真实产品 channel 工作流。 | `socket-protocol.md`, `target-architecture.md` |
+| P4-14 | preview 内联脚本在 DOM harness 中覆盖 `auth:whoami` session restore、snapshot resubscribe、`channel:create` submit 与新 channel message selection。 | Web | 防止静态 preview 的关键交互在无浏览器测试时回退。 | `socket-protocol.md`, `known-gaps.md` |
 
 Phase 4 完成标准：
 
