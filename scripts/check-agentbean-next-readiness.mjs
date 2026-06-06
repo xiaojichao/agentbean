@@ -90,6 +90,19 @@ export function collectAgentBeanNextReadinessChecks({
       'root package.json and production runbook must expose the AgentBean Next SQLite restart persistence smoke',
     ),
     check(
+      'old-entry-smoke-script',
+      packageJson.scripts?.['smoke:agentbean-old-entry'] ===
+        'node scripts/smoke-agentbean-old-entry.mjs' &&
+        workflow.includes('run_agentbean_old_production_smoke') &&
+        workflow.includes('agentbean_old_entry_url') &&
+        workflow.includes('Old AgentBean production smoke') &&
+        workflow.includes('npm run smoke:agentbean-old-entry') &&
+        cutoverRunbook.includes('npm run smoke:agentbean-old-entry') &&
+        cutoverRunbook.includes('run_agentbean_old_production_smoke') &&
+        cutoverRunbook.includes('旧生产 `/healthz`'),
+      'root package.json, CI, and production runbook must expose an old AgentBean rollback entry smoke',
+    ),
+    check(
       'ci-runs-production-smoke-on-demand',
       workflow.includes('run_agentbean_next_production_smoke') &&
         workflow.includes('agentbean_next_entry_url') &&
