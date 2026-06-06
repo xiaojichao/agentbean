@@ -16,6 +16,7 @@ export function collectAgentBeanNextReadinessChecks({
   const daemonNextPackageJson = readJson(join(root, 'apps/daemon-next/package.json'));
   const railwayJson = readJson(join(root, 'railway.json'));
   const workflow = readFileSync(join(root, '.github/workflows/ci-cd.yml'), 'utf8');
+  const cutoverRunbook = readFileSync(join(root, 'agentbean-next/docs/production-cutover-runbook.md'), 'utf8');
   const checks = [
     check(
       'root-build-script',
@@ -61,6 +62,14 @@ export function collectAgentBeanNextReadinessChecks({
       packageJson.scripts?.['smoke:agentbean-next-daemon-install'] ===
         'node scripts/smoke-agentbean-next-daemon-install.mjs',
       'root package.json must expose the AgentBean Next daemon install smoke',
+    ),
+    check(
+      'entry-smoke-script',
+      packageJson.scripts?.['smoke:agentbean-next-entry'] ===
+        'node scripts/smoke-agentbean-next-entry.mjs' &&
+        cutoverRunbook.includes('npm run smoke:agentbean-next-entry') &&
+        cutoverRunbook.includes('AGENTBEAN_NEXT_ENTRY_URL'),
+      'root package.json and production runbook must expose the AgentBean Next public entry smoke',
     ),
     check(
       'ci-runs-daemon-install-smoke',
