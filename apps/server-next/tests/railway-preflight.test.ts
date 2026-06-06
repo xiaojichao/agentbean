@@ -35,15 +35,7 @@ describe('AgentBean Next Railway preflight', () => {
     );
 
     expect(summary.ok).toBe(true);
-    expect(calls[1]).toEqual([
-      'volume',
-      'list',
-      '--service',
-      'service-id',
-      '--environment',
-      'environment-id',
-      '--json',
-    ]);
+    expect(calls[1]).toEqual(['volume', 'list', '--json']);
   });
 
   test('fails without Railway runtime variables or a data-dir-covering volume', () => {
