@@ -15,6 +15,7 @@ describe('AgentBean Next readiness checker', () => {
       'railway-build-command',
       'railway-start-healthcheck',
       'ci-validates-root-railway-config',
+      'ci-runs-readiness-checker',
       'deploy-target-gate',
     ]);
   });

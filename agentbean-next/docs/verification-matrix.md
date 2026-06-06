@@ -81,6 +81,7 @@ Phase 1 完成标准：
 | P2-25 | 平台式启动存在 `PORT` 且使用 SQLite storage 时，server-next 必须显式配置 `AGENTBEAN_NEXT_DATA_DIR` 或 `--data-dir`。 | Config | 避免 production 写入默认仓库目录或临时目录，导致部署重启后数据丢失。 | `target-architecture.md`, `implementation-runbook.md` |
 | P2-26 | 根目录 Railway deploy config 必须显式声明 `npm run build`、`npm start` 与 `/healthz`。 | Config/CI | `AGENTBEAN_DEPLOY_TARGET=next` 时 root deploy 不依赖平台隐式推断。 | `target-architecture.md`, `implementation-runbook.md` |
 | P2-27 | production readiness checker 必须能区分静态部署契约已就绪与 production flip env 未就绪。 | Config/CI | 真正替换旧 AgentBean 前，用一个可运行 preflight 明确列出缺少的生产配置。 | `target-architecture.md`, `implementation-runbook.md` |
+| P2-28 | AgentBean Next CI 必须显式运行 `check:agentbean-next-readiness`，且 readiness checker 自身检查该 gate 存在。 | Config/CI | 防止部署契约检查只存在于本地命令或单测中，替换旧系统前必须进入主线 gate。 | `target-architecture.md`, `implementation-runbook.md` |
 
 Phase 2 完成标准：
 
@@ -142,7 +143,7 @@ Phase 4 完成标准：
 | E2E-02 | 同一流程在无 online agent 时持久化 human message，并返回 no-online dispatch result。 | E2E | Non-fatal no-agent behavior。 | `acceptance-tests.md` |
 | E2E-03 | Daemon disconnect/reconnect 会刷新 device 与 agent snapshots。 | E2E | Reconnect behavior。 | `acceptance-tests.md`, `known-gaps.md` |
 | E2E-04 | Register -> daemon hello -> runtime report -> `agent:create` custom agent -> message send -> dispatch result -> agent reply visible。 | E2E | 本地 AgentBean Next preview flow。 | `socket-protocol.md`, `contract-alignment-handoff.md` |
-| E2E-05 | CI 在 AgentBean Next 相关路径变更时运行 phase tests、packages build 与 preview smoke，并阻止 deploy/publish 继续。 | CI | 替换旧系统前的持续验证 gate。 | `implementation-runbook.md`, `migration-plan.md` |
+| E2E-05 | CI 在 AgentBean Next 相关路径变更时运行 readiness checks、phase tests、packages build 与 preview smoke，并阻止 deploy/publish 继续。 | CI | 替换旧系统前的持续验证 gate。 | `implementation-runbook.md`, `migration-plan.md` |
 
 只有全部 E2E gates 通过后，第一切片才可冻结。
 
