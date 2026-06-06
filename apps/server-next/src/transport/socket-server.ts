@@ -1,6 +1,6 @@
-import type { ServerNextUseCases } from '../application/usecases';
-import { AGENT_EVENTS, WEB_EVENTS } from '../../../../packages/contracts/src/index';
-import { registerAgentSocketHandlers, registerWebSocketHandlers, type SocketLike } from './socket-handlers';
+import type { ServerNextUseCases } from '../application/usecases.js';
+import { AGENT_EVENTS, WEB_EVENTS } from '../../../../packages/contracts/src/index.js';
+import { registerAgentSocketHandlers, registerWebSocketHandlers, type SocketLike } from './socket-handlers.js';
 
 export interface NamespaceLike {
   on(event: 'connection', handler: (socket: SocketLike) => void): void;

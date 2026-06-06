@@ -1,10 +1,10 @@
-import { createServerNextUseCases, type ServerNextUseCases } from './application/usecases';
-import { createInMemoryRepositories } from './infra/memory/repositories';
+import { createServerNextUseCases, type ServerNextUseCases } from './application/usecases.js';
+import { createInMemoryRepositories } from './infra/memory/repositories.js';
 
-export * from './application/repositories';
-export * from './application/usecases';
-export * from './infra/memory/repositories';
-export * from './dev-server';
+export * from './application/repositories.js';
+export * from './application/usecases.js';
+export * from './infra/memory/repositories.js';
+export * from './dev-server.js';
 
 export interface CreateInMemoryServerNextInput {
   now?: () => number;

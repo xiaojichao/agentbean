@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DispatchDto, type DispatchRequestDto, type MessageDto, type RuntimeDto, type TeamDto, type UserDto } from '../../../../packages/contracts/src/index';
-import { canApplyChannelUpdate, channelHumanMembersForCreate, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index';
-import type { ServerNextRepositories } from './repositories';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DispatchDto, type DispatchRequestDto, type MessageDto, type RuntimeDto, type TeamDto, type UserDto } from '../../../../packages/contracts/src/index.js';
+import { canApplyChannelUpdate, channelHumanMembersForCreate, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
+import type { ServerNextRepositories } from './repositories.js';
 
 export interface ServerNextClock {
   now(): number;

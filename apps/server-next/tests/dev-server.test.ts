@@ -54,6 +54,7 @@ describe('server-next dev server entry', () => {
       ok: true,
       service: 'agentbean-next-server',
     });
+    await expect(fetch(server.baseUrl).then((response) => response.text())).resolves.toContain('id="agent-create-form"');
 
     const web = await connectClient(`${server.baseUrl}/web`);
     cleanups.push(async () => {

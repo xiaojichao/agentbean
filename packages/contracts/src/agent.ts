@@ -1,4 +1,4 @@
-import type { ID, UnixMs } from './common';
+import type { ID, UnixMs } from './common.js';
 
 export const ADAPTER_KINDS = ['codex', 'claude-code', 'gemini', 'kimi-cli', 'hermes', 'openclaw'] as const;
 export type AdapterKind = (typeof ADAPTER_KINDS)[number];

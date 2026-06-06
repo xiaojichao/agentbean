@@ -1,4 +1,4 @@
-import { runServerNextDevServer } from './dev-server';
+import { runServerNextDevServer } from './dev-server.js';
 
 runServerNextDevServer().catch((error) => {
   console.error(error instanceof Error ? error.message : error);

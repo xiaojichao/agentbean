@@ -1,12 +1,13 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { createServer, type Server as HttpServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createServerNextUseCases } from './application/usecases';
-import { createInMemoryRepositories } from './infra/memory/repositories';
-import { attachServerNextNamespaces, type SocketServerLike } from './transport/socket-server';
-import type { ServerNextUseCases } from './application/usecases';
+import { createServerNextUseCases } from './application/usecases.js';
+import { createInMemoryRepositories } from './infra/memory/repositories.js';
+import { attachServerNextNamespaces, type SocketServerLike } from './transport/socket-server.js';
+import type { ServerNextUseCases } from './application/usecases.js';
 
 type SocketIoServerConstructor = new (server: HttpServer, options?: Record<string, unknown>) => SocketServerLike & {
   close(callback?: () => void): void;
@@ -56,6 +57,11 @@ export async function startServerNextDevServer(
   const app = input.app ?? createDefaultInMemoryApp();
   const Server = input.Server ?? loadSocketIoServer();
   const httpServer = createServer((request, response) => {
+    if (request.url === '/' || request.url === '/preview') {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      response.end(readPreviewHtml());
+      return;
+    }
     if (request.url === '/healthz') {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ ok: true, service: 'agentbean-next-server' }));
@@ -83,6 +89,25 @@ export async function startServerNextDevServer(
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     },
   };
+}
+
+function readPreviewHtml(): string {
+  const candidates = [
+    new URL('../../../../../web-next/preview/index.html', import.meta.url),
+    new URL('../../web-next/preview/index.html', import.meta.url),
+    pathToFileURL(join(process.cwd(), 'apps/web-next/preview/index.html')),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const path = candidate.pathname;
+      if (existsSync(path)) {
+        return readFileSync(path, 'utf8');
+      }
+    } catch {
+      // Try the next known repository layout.
+    }
+  }
+  throw new Error('web-next preview page not found');
 }
 
 function createDefaultInMemoryApp(): ServerNextUseCases {

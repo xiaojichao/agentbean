@@ -1,5 +1,5 @@
-import type { ID, UnixMs } from './common';
-import type { TeamMemberRole } from './auth';
+import type { ID, UnixMs } from './common.js';
+import type { TeamMemberRole } from './auth.js';
 
 export type TeamVisibility = 'private' | 'public';
 

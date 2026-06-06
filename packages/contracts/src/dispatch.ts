@@ -1,5 +1,5 @@
-import type { ID, UnixMs } from './common';
-import type { AdapterKind } from './agent';
+import type { ID, UnixMs } from './common.js';
+import type { AdapterKind } from './agent.js';
 
 export type DispatchStatus =
   | 'queued'

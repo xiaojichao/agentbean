@@ -1,4 +1,4 @@
-import { runDaemonNextCli } from './cli';
+import { runDaemonNextCli } from './cli.js';
 
 runDaemonNextCli().catch((error) => {
   console.error(error instanceof Error ? error.message : error);

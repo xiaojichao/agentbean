@@ -13,7 +13,7 @@ import type {
   TeamMemberRecord,
   TeamRecord,
   UserRecord,
-} from '../../application/repositories';
+} from '../../application/repositories.js';
 
 export interface SqliteStatement {
   run(...params: unknown[]): unknown;

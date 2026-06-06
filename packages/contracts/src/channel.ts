@@ -1,6 +1,6 @@
-import type { ID, UnixMs } from './common';
-import type { AgentDto } from './agent';
-import type { HumanMemberDto } from './auth';
+import type { ID, UnixMs } from './common.js';
+import type { AgentDto } from './agent.js';
+import type { HumanMemberDto } from './auth.js';
 
 export type ChannelKind = 'channel' | 'direct';
 export type ChannelVisibility = 'public' | 'private';

@@ -1,5 +1,5 @@
-import { AGENT_EVENTS, WEB_EVENTS, makeFailure, type DispatchRequestDto } from '../../../../packages/contracts/src/index';
-import type { ServerNextUseCases } from '../application/usecases';
+import { AGENT_EVENTS, WEB_EVENTS, makeFailure, type DispatchRequestDto } from '../../../../packages/contracts/src/index.js';
+import type { ServerNextUseCases } from '../application/usecases.js';
 
 export interface SocketLike {
   on(event: string, handler: SocketHandler): void;

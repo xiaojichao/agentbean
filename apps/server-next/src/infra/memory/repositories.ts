@@ -9,7 +9,7 @@ import type {
   TeamMemberRecord,
   TeamRecord,
   UserRecord,
-} from '../../application/repositories';
+} from '../../application/repositories.js';
 
 export function createInMemoryRepositories(): ServerNextRepositories {
   const users = new Map<string, UserRecord>();

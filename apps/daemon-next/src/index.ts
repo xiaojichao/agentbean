@@ -1,9 +1,9 @@
-import { AGENT_EVENTS, type AgentCategory, type DispatchCustomAgentDto } from '../../../packages/contracts/src/index';
+import { AGENT_EVENTS, type AgentCategory, type DispatchCustomAgentDto } from '../../../packages/contracts/src/index.js';
 
-export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner';
-export type { BuiltinScannerOptions } from './scanner';
-export { createCommandExecutor } from './executor';
-export type { CommandExecutorOptions } from './executor';
+export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner.js';
+export type { BuiltinScannerOptions } from './scanner.js';
+export { createCommandExecutor } from './executor.js';
+export type { CommandExecutorOptions } from './executor.js';
 
 export interface DaemonProtocolSocket {
   emitWithAck(event: string, payload: unknown): Promise<unknown>;

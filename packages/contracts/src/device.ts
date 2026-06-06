@@ -1,5 +1,5 @@
-import type { ID, UnixMs } from './common';
-import type { AgentDto, RuntimeDto } from './agent';
+import type { ID, UnixMs } from './common.js';
+import type { AgentDto, RuntimeDto } from './agent.js';
 
 export type DeviceStatus = 'online' | 'offline' | 'unknown';
 
