@@ -17,10 +17,12 @@ const completeEnv = {
 
 describe('AgentBean Next Railway preflight', () => {
   test('passes when Railway runtime variables and a covering volume are present', () => {
+    const calls: string[][] = [];
     const summary = summarizeRailwayPreflight(
       collectAgentBeanNextRailwayPreflightChecks({
         env: completeEnv,
         runCommand: (_command, args) => {
+          calls.push(args);
           if (args[0] === 'variable') {
             return JSON.stringify([
               { name: 'AGENTBEAN_NEXT_DATA_DIR', value: '/data/agentbean-next' },
@@ -33,6 +35,15 @@ describe('AgentBean Next Railway preflight', () => {
     );
 
     expect(summary.ok).toBe(true);
+    expect(calls[1]).toEqual([
+      'volume',
+      'list',
+      '--service',
+      'service-id',
+      '--environment',
+      'environment-id',
+      '--json',
+    ]);
   });
 
   test('fails without Railway runtime variables or a data-dir-covering volume', () => {
