@@ -267,11 +267,13 @@ Ack<{ agents: AgentDto[] }>
 
 ```ts
 {
+  userId: string;
   teamId: string;
+  deviceId: string;
+  runtimeId?: string;
   name: string;
   description?: string;
-  adapterKind: AdapterKind;
-  deviceId: string;
+  adapterKind?: AdapterKind;
   command?: string;
   args?: string[];
   cwd?: string;
@@ -284,6 +286,13 @@ Ack：
 ```ts
 Ack<{ agent: AgentDto }>
 ```
+
+服务器行为：
+
+- `agent:create` 成功前，server 会根据 `teamId` 与 `deviceId` 确认 `userId` 是 team member。
+- 如果提供 `runtimeId`，该 runtime 必须属于同一 device/team 且 `installed: true`。
+- 创建出的 visible product agent 必须是 `source: "custom"`，scanner 不得自动创建 visible agent。
+- Ack 与后续 `agents:snapshot` 只暴露 `envKeys`，不得返回 raw `env` values。
 
 #### `agent:publish`
 

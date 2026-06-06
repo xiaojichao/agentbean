@@ -22,6 +22,7 @@ export interface ServerNextUseCases {
   reportDeviceRuntimes(input: ReportDeviceRuntimesInput): Promise<Ack<{ runtimes: RuntimeDto[] }>>;
   registerDiscoveredAgents(input: RegisterDiscoveredAgentsInput): Promise<Ack<RegisterDiscoveredAgentsResult>>;
   listVisibleAgents(input: { teamId: string }): Promise<Ack<{ agents: AgentDto[] }>>;
+  createCustomAgent(input: CreateCustomAgentInput): Promise<Ack<{ agent: AgentDto }>>;
   listChannels(input: { teamId: string; userId: string }): Promise<Ack<{ channels: ChannelDto[] }>>;
   createChannel(input: CreateChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
   updateChannel(input: UpdateChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
@@ -111,6 +112,20 @@ export interface RegisterDiscoveredAgentsInput {
 export interface RegisterDiscoveredAgentsResult {
   agents: AgentDto[];
   missingOfflineIds: string[];
+}
+
+export interface CreateCustomAgentInput {
+  userId: string;
+  teamId: string;
+  deviceId: string;
+  runtimeId?: string;
+  name: string;
+  description?: string;
+  adapterKind?: string;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
 }
 
 export interface SendMessageInput {
@@ -398,7 +413,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             ? normalizePathForComparison(runtime.cwd, { platform: 'unknown' })
             : undefined,
           version: runtime.version,
-          status: runtime.installed === false ? 'offline' : 'online',
           lastSeenAt: now,
         })),
       });
@@ -462,6 +476,56 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     async listVisibleAgents(listInput) {
       return makeSuccess({ agents: await repositories.agents.listVisibleInTeam(listInput.teamId) });
+    },
+
+    async createCustomAgent(agentInput) {
+      const device = await repositories.devices.getById(agentInput.deviceId);
+      if (!device || device.teamId !== agentInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      if (!(await repositories.teams.isMember(agentInput.teamId, agentInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      if (device.status !== 'online') {
+        return makeFailure('DEVICE_OFFLINE', 'Device is not online');
+      }
+
+      const runtime = agentInput.runtimeId
+        ? await repositories.runtimes.getById(agentInput.runtimeId)
+        : null;
+      if (agentInput.runtimeId && (!runtime || runtime.deviceId !== device.id || runtime.teamId !== device.teamId)) {
+        return makeFailure('NOT_FOUND', 'Runtime not found');
+      }
+      if (runtime && !runtime.installed) {
+        return makeFailure('VALIDATION_ERROR', 'Runtime is not installed');
+      }
+
+      const adapterKind = normalizeAdapterKind(runtime?.adapterKind ?? agentInput.adapterKind ?? '');
+      if (!adapterKind) {
+        return makeFailure('VALIDATION_ERROR', 'adapterKind is required');
+      }
+
+      const now = clock.now();
+      const agent = await repositories.agents.upsert({
+        id: ids.nextId(),
+        primaryTeamId: agentInput.teamId,
+        visibleTeamIds: [agentInput.teamId],
+        name: agentInput.name.trim(),
+        description: agentInput.description?.trim(),
+        adapterKind: adapterKind as AdapterKind,
+        category: 'executor-hosted',
+        source: 'custom',
+        status: 'online',
+        ownerId: agentInput.userId,
+        deviceId: device.id,
+        command: runtime?.command ?? agentInput.command,
+        args: agentInput.args,
+        cwd: runtime?.cwd ?? agentInput.cwd,
+        envKeys: Object.keys(agentInput.env ?? {}).sort(),
+        lastSeenAt: now,
+      });
+
+      return makeSuccess({ agent });
     },
 
     async listChannels(listInput) {
@@ -865,7 +929,6 @@ function toRuntimeDto(runtime: RuntimeDto): RuntimeDto {
     normalizedCommandKey: runtime.normalizedCommandKey,
     normalizedCwdKey: runtime.normalizedCwdKey,
     version: runtime.version,
-    status: runtime.status,
     lastSeenAt: runtime.lastSeenAt,
   };
 }

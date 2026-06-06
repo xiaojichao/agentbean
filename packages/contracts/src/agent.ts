@@ -1,9 +1,16 @@
 import type { ID, UnixMs } from './common';
 
-export type AdapterKind = 'codex' | 'claude-code' | 'gemini' | 'cursor' | 'custom';
-export type AgentCategory = 'executor-hosted' | 'cloud' | 'external';
-export type AgentSource = 'scanned' | 'created' | 'imported';
-export type AgentStatus = 'online' | 'offline' | 'busy' | 'unknown';
+export const ADAPTER_KINDS = ['codex', 'claude-code', 'gemini', 'kimi-cli', 'hermes', 'openclaw'] as const;
+export type AdapterKind = (typeof ADAPTER_KINDS)[number];
+
+export const AGENT_CATEGORIES = ['executor-hosted', 'agentos-hosted'] as const;
+export type AgentCategory = (typeof AGENT_CATEGORIES)[number];
+
+export const AGENT_SOURCES = ['custom', 'self-register', 'scanned'] as const;
+export type AgentSource = (typeof AGENT_SOURCES)[number];
+
+export const AGENT_STATUSES = ['connecting', 'online', 'busy', 'offline', 'error'] as const;
+export type AgentStatus = (typeof AGENT_STATUSES)[number];
 
 export interface RuntimeDto {
   id: ID;
@@ -16,7 +23,6 @@ export interface RuntimeDto {
   normalizedCommandKey?: string;
   normalizedCwdKey?: string;
   version?: string;
-  status: AgentStatus;
   lastSeenAt?: UnixMs;
 }
 
@@ -29,18 +35,43 @@ export interface AgentDto {
   category: AgentCategory;
   source: AgentSource;
   status: AgentStatus;
+  ownerId?: ID;
   deviceId?: ID;
-  runtimeId?: ID;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  envKeys?: string[];
   description?: string;
   lastSeenAt?: UnixMs;
+  lastError?: string;
 }
 
 export interface DiscoveredAgentDto {
-  id: ID;
   deviceId: ID;
-  runtimeId?: ID;
+  teamId: ID;
   adapterKind: AdapterKind;
   name: string;
-  status: AgentStatus;
-  discoveredAt: UnixMs;
+  category: AgentCategory;
+  source: 'scanned' | 'self-register';
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  gatewayId?: string;
+  gatewayName?: string;
+  gatewayInstanceKey?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CreateAgentCommandDto {
+  userId: ID;
+  teamId: ID;
+  deviceId: ID;
+  runtimeId?: ID;
+  name: string;
+  description?: string;
+  adapterKind?: AdapterKind;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
 }

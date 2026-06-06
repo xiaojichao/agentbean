@@ -125,6 +125,7 @@ Phase 4 完成标准：
 | E2E-01 | Register -> daemon hello -> runtime report -> agent batch -> channel create/join -> message send -> dispatch result -> agent reply visible。 | E2E | 完整第一切片。 | `implementation-runbook.md`, `acceptance-tests.md` |
 | E2E-02 | 同一流程在无 online agent 时持久化 human message，并返回 no-online dispatch result。 | E2E | Non-fatal no-agent behavior。 | `acceptance-tests.md` |
 | E2E-03 | Daemon disconnect/reconnect 会刷新 device 与 agent snapshots。 | E2E | Reconnect behavior。 | `acceptance-tests.md`, `known-gaps.md` |
+| E2E-04 | Register -> daemon hello -> runtime report -> `agent:create` custom agent -> message send -> dispatch result -> agent reply visible。 | E2E | 本地 AgentBean Next preview flow。 | `socket-protocol.md`, `contract-alignment-handoff.md` |
 
 只有全部 E2E gates 通过后，第一切片才可冻结。
 

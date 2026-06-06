@@ -40,6 +40,8 @@
 - `docs/twelfth-slice-status.md` 记录第十二切片 device scan routing 的实现、验证证据与剩余边界。
 - `docs/thirteenth-slice-status.md` 记录第十三切片 daemon rescan command 的实现、验证证据与剩余边界。
 - `docs/fourteenth-slice-status.md` 记录第十四切片 daemon builtin scanner 的实现、验证证据与剩余边界。
+- `docs/fifteenth-slice-status.md` 记录第十五切片 Agent public contract alignment 的实现、验证证据与剩余边界。
+- `docs/sixteenth-slice-status.md` 记录第十六切片 custom agent preview flow 的实现、验证证据与剩余边界。
 - `docs/first-slice-schema-repositories.md` 定义第一切片的新 SQLite schema 与 repository 接口。
 - `docs/migration-plan.md` 给出分阶段实现计划。
 - `docs/verification-matrix.md` 将必需测试映射到阶段和来源文档。
@@ -66,7 +68,7 @@
 
 ## 当前实现状态
 
-第一切片已经具备可运行的最小协议链路，第二切片已经补上 channel controls 的最小行为，第三切片已经补上 channel membership 的最小命令面，第四切片已经补上 daemon protocol hardening 的最小边界，第五切片已经补上 web realtime boundary 的最小客户端边界，第六切片已经补上 web reconnect resubscription 的最小恢复边界，第七切片已经补上 channel member details DTO 的最小数据边界，第八切片已经补上 channel snapshot subscription broadcast 的最小实时边界，第九切片已经补上 agent snapshot subscription broadcast 的最小实时边界，第十切片已经补上 device snapshot 与 runtimes broadcast 的最小实时边界，第十一切片已经补上 device detail shell 的最小数据边界，第十二切片已经补上 device scan routing 的最小命令边界，第十三切片已经补上 daemon rescan command 的最小协议边界，第十四切片已经补上 daemon builtin scanner 的最小扫描边界：
+第一切片已经具备可运行的最小协议链路，第二切片已经补上 channel controls 的最小行为，第三切片已经补上 channel membership 的最小命令面，第四切片已经补上 daemon protocol hardening 的最小边界，第五切片已经补上 web realtime boundary 的最小客户端边界，第六切片已经补上 web reconnect resubscription 的最小恢复边界，第七切片已经补上 channel member details DTO 的最小数据边界，第八切片已经补上 channel snapshot subscription broadcast 的最小实时边界，第九切片已经补上 agent snapshot subscription broadcast 的最小实时边界，第十切片已经补上 device snapshot 与 runtimes broadcast 的最小实时边界，第十一切片已经补上 device detail shell 的最小数据边界，第十二切片已经补上 device scan routing 的最小命令边界，第十三切片已经补上 daemon rescan command 的最小协议边界，第十四切片已经补上 daemon builtin scanner 的最小扫描边界，第十五切片已经补上 Agent public contract alignment 的最小契约边界，第十六切片已经补上 custom agent preview flow 的最小可运行边界：
 
 - `packages/contracts`：共享 DTO、`Ack<T>`、error codes 与 socket event constants。
 - `packages/domain`：message routing、agent identity、status merge、channel visibility 与 creator controls 纯函数。
@@ -79,6 +81,7 @@
 ```bash
 npm run test:phase1
 npm run build:packages
+npm run preview:agentbean-next
 ```
 
 本机如果尚未安装根 workspace 依赖，可临时使用已安装的 `apps/server/node_modules` 运行同等测试；SQLite native module 当前与 Node v24.15.0 ABI 匹配。

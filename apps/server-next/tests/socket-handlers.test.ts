@@ -25,6 +25,7 @@ describe('server-next socket handlers', () => {
       addChannelAgentMember: vi.fn(async (payload) => makeSuccess({ payload })),
       removeChannelAgentMember: vi.fn(async (payload) => makeSuccess({ payload })),
       listChannelMembers: vi.fn(async (payload) => makeSuccess({ payload })),
+      createCustomAgent: vi.fn(async (payload) => makeSuccess({ payload })),
       sendMessage: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
 
@@ -43,6 +44,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.channel.addAgent,
       WEB_EVENTS.channel.removeAgent,
       WEB_EVENTS.channel.members,
+      WEB_EVENTS.agent.create,
       WEB_EVENTS.message.send,
     ]);
     expect(socket.eventNames()).not.toContain('network:list');
@@ -106,6 +108,13 @@ describe('server-next socket handlers', () => {
       teamId: 'team-1',
       channelId: 'channel-2',
     });
+    await socket.trigger(WEB_EVENTS.agent.create, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimeId: 'runtime-1',
+      name: 'Custom Codex',
+    });
 
     expect(app.registerUser).toHaveBeenCalledWith({ username: 'shaw' });
     expect(app.sendMessage).toHaveBeenCalledWith({
@@ -162,6 +171,13 @@ describe('server-next socket handlers', () => {
       userId: 'user-1',
       teamId: 'team-1',
       channelId: 'channel-2',
+    });
+    expect(app.createCustomAgent).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimeId: 'runtime-1',
+      name: 'Custom Codex',
     });
   });
 

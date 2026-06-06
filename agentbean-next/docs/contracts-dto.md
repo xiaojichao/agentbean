@@ -163,6 +163,7 @@ export interface DeviceCapabilitiesDto {
 export type AdapterKind =
   | "codex"
   | "claude-code"
+  | "gemini"
   | "kimi-cli"
   | "hermes"
   | "openclaw";
@@ -246,6 +247,30 @@ export interface DiscoveredAgentDto {
 
 - 这是 daemon/gateway report data，不一定是已持久化的 visible `AgentDto`。
 - Server identity rules 决定它会为某个 logical agent 创建、更新、alias，还是仅刷新 availability。
+
+## CreateAgentCommandDto
+
+```ts
+export interface CreateAgentCommandDto {
+  userId: ID;
+  teamId: ID;
+  deviceId: ID;
+  runtimeId?: ID;
+  name: string;
+  description?: string;
+  adapterKind?: AdapterKind;
+  command?: string | null;
+  args?: string[] | null;
+  cwd?: string | null;
+  env?: Record<string, string>;
+}
+```
+
+说明：
+
+- `runtimeId` 指向 `device:get` 或 `device:runtimes` 中看到的 runtime capability。
+- 如果使用 `runtimeId`，server 会从 runtime capability 派生 `adapterKind`、`command` 与 `cwd`。
+- Public `AgentDto` 只返回 `envKeys`，不得把 raw `env` values 放入 ack、snapshot 或 logs。
 
 ## ChannelDto
 
