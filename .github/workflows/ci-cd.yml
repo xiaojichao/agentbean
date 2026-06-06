@@ -318,9 +318,11 @@ jobs:
           npm ci --ignore-scripts
           npm run build:contracts
           npm run build:daemon-next
+          node scripts/prepare-agentbean-next-daemon-release.mjs --out .agentbean-next-release/daemon
 
           CONTRACTS_VERSION="$(node -p "require('./packages/contracts/package.json').version")"
           DAEMON_NEXT_VERSION="$(node -p "require('./apps/daemon-next/package.json').version")"
+          CANONICAL_DAEMON_VERSION="$(node -p "require('./.agentbean-next-release/daemon/package.json').version")"
 
           if npm view "@agentbean/contracts@$CONTRACTS_VERSION" version >/dev/null 2>&1; then
             echo "::notice::@agentbean/contracts@$CONTRACTS_VERSION is already published; skipping npm publish."
@@ -335,6 +337,13 @@ jobs:
           else
             echo "should_publish_daemon_next=true" >> "$GITHUB_OUTPUT"
           fi
+
+          if npm view "@agentbean/daemon@$CANONICAL_DAEMON_VERSION" version >/dev/null 2>&1; then
+            echo "::notice::@agentbean/daemon@$CANONICAL_DAEMON_VERSION is already published; skipping npm publish."
+            echo "should_publish_canonical_daemon=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish_canonical_daemon=true" >> "$GITHUB_OUTPUT"
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -348,6 +357,13 @@ jobs:
       - name: Publish AgentBean Next daemon package
         if: env.NPM_TOKEN != '' && env.AGENTBEAN_DEPLOY_TARGET == 'next' && steps.agentbean-next-packages.outputs.should_publish_daemon_next == 'true'
         working-directory: apps/daemon-next
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish AgentBean Next canonical daemon package
+        if: env.NPM_TOKEN != '' && env.AGENTBEAN_DEPLOY_TARGET == 'next' && steps.agentbean-next-packages.outputs.should_publish_canonical_daemon == 'true'
+        working-directory: .agentbean-next-release/daemon
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

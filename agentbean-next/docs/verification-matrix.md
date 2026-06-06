@@ -106,6 +106,7 @@ Phase 2 完成标准：
 | P3-10 | Builtin scanner 发现 known CLI runtimes，并只为 installed runtimes 生成 executor-hosted agent reports。 | Daemon | Runtime/agent scan provider。 | `current-behavior.md`, `feature-disposition.md` |
 | P3-11 | Daemon-next CLI 可以解析本地 device config、桥接 Socket.IO reconnect，并在 custom dispatch 中执行 server 发送的 command/args/cwd/env。 | Daemon | 真实 daemon-next 运行入口与 custom command executor。 | `implementation-runbook.md`, `contracts-dto.md` |
 | P3-12 | `@agentbean/contracts` 与 `@agentbean/daemon-next` 具备 public npm package manifest，daemon-next 依赖 registry contracts 与 `socket.io-client`，CI 在 `next` 目标下先发布 contracts 再发布 daemon-next。 | Daemon/CI | 替换旧 daemon 前，用户必须能从 npm 安装 daemon-next。 | `production-cutover-runbook.md`, `target-architecture.md` |
+| P3-13 | CI 在 `next` 目标下基于 daemon-next 生成 canonical `@agentbean/daemon` release package，保留旧 `daemon` / `agentbean-daemon` bin，并使用高于 `0.1.35` 的版本发布。 | Daemon/CI | 替换旧 daemon npm 用户入口，而不要求用户改装另一个包名。 | `production-cutover-runbook.md`, `target-architecture.md` |
 
 Phase 3 完成标准：
 
