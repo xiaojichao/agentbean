@@ -4,6 +4,7 @@ import { createInMemoryRepositories } from './infra/memory/repositories';
 export * from './application/repositories';
 export * from './application/usecases';
 export * from './infra/memory/repositories';
+export * from './dev-server';
 
 export interface CreateInMemoryServerNextInput {
   now?: () => number;
