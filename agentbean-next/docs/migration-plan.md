@@ -188,6 +188,7 @@
 - 新实现的 fresh data/bootstrap plan。
 - 面向未来生产使用的 backup/restore procedure。
 - Web、Server 与 Daemon 的 deployment updates。
+- `docs/production-cutover-runbook.md` 中的 preflight、flip、smoke 与 rollback 步骤完成。
 - 如果届时已有外部用户，提供 release notes。
 
 完成定义：
