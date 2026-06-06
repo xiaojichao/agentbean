@@ -48,6 +48,33 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.channel.addAgent, app, 'addChannelAgentMember', afterChannelMutation);
   bind(socket, WEB_EVENTS.channel.removeAgent, app, 'removeChannelAgentMember', afterChannelMutation);
   bind(socket, WEB_EVENTS.channel.members, app, 'listChannelMembers');
+  socket.on(WEB_EVENTS.channel.join, async (payload, ack) => {
+    try {
+      const input = asChannelJoinInput(payload);
+      if (!input) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'Invalid channel join payload'));
+        return;
+      }
+      const channels = await app.listChannels({ userId: input.userId, teamId: input.teamId });
+      if (!channels.ok) {
+        ack?.(channels);
+        return;
+      }
+      const channel = channels.channels.find((candidate) => candidate.id === input.channelId);
+      if (!channel) {
+        ack?.(makeFailure('NOT_FOUND', 'Channel not found'));
+        return;
+      }
+      const messages = await app.listChannelMessages({ channelId: input.channelId, limit: input.limit });
+      if (!messages.ok) {
+        ack?.(messages);
+        return;
+      }
+      ack?.({ ok: true, channel, messages: messages.messages });
+    } catch (error) {
+      ack?.(makeFailure('INTERNAL_ERROR', error instanceof Error ? error.message : 'Unhandled socket handler error'));
+    }
+  });
   bind(socket, WEB_EVENTS.agent.create, app, 'createCustomAgent', (payload, result) =>
     options.afterAgentMutation?.(payload, result),
   );
@@ -97,6 +124,29 @@ function bind(
       ack?.(makeFailure('INTERNAL_ERROR', error instanceof Error ? error.message : 'Unhandled socket handler error'));
     }
   });
+}
+
+function asChannelJoinInput(payload: unknown): { userId: string; teamId: string; channelId: string; limit: number } | null {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const candidate = payload as { userId?: unknown; teamId?: unknown; channelId?: unknown; limit?: unknown };
+  if (
+    typeof candidate.userId !== 'string' ||
+    typeof candidate.teamId !== 'string' ||
+    typeof candidate.channelId !== 'string'
+  ) {
+    return null;
+  }
+  const limit = typeof candidate.limit === 'number' && Number.isInteger(candidate.limit)
+    ? candidate.limit
+    : 50;
+  return {
+    userId: candidate.userId,
+    teamId: candidate.teamId,
+    channelId: candidate.channelId,
+    limit: Math.min(Math.max(limit, 1), 200),
+  };
 }
 
 function isDeviceScanAck(result: unknown): result is {

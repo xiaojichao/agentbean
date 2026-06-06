@@ -26,6 +26,12 @@ describe('server-next socket handlers', () => {
       addChannelAgentMember: vi.fn(async (payload) => makeSuccess({ payload })),
       removeChannelAgentMember: vi.fn(async (payload) => makeSuccess({ payload })),
       listChannelMembers: vi.fn(async (payload) => makeSuccess({ payload })),
+      listChannels: vi.fn(async () => makeSuccess({
+        channels: [{ id: 'channel-2', teamId: 'team-1', visibility: 'public' }],
+      })),
+      listChannelMessages: vi.fn(async () => makeSuccess({
+        messages: [{ id: 'message-1', channelId: 'channel-2', body: 'hello' }],
+      })),
       createCustomAgent: vi.fn(async (payload) => makeSuccess({ payload })),
       sendMessage: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
@@ -46,6 +52,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.channel.addAgent,
       WEB_EVENTS.channel.removeAgent,
       WEB_EVENTS.channel.members,
+      WEB_EVENTS.channel.join,
       WEB_EVENTS.agent.create,
       WEB_EVENTS.message.send,
     ]);
@@ -110,6 +117,16 @@ describe('server-next socket handlers', () => {
       userId: 'user-1',
       teamId: 'team-1',
       channelId: 'channel-2',
+    });
+    await expect(socket.trigger(WEB_EVENTS.channel.join, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
+      limit: 25,
+    })).resolves.toEqual({
+      ok: true,
+      channel: { id: 'channel-2', teamId: 'team-1', visibility: 'public' },
+      messages: [{ id: 'message-1', channelId: 'channel-2', body: 'hello' }],
     });
     await socket.trigger(WEB_EVENTS.agent.create, {
       userId: 'user-1',
@@ -176,6 +193,8 @@ describe('server-next socket handlers', () => {
       teamId: 'team-1',
       channelId: 'channel-2',
     });
+    expect(app.listChannels).toHaveBeenCalledWith({ userId: 'user-1', teamId: 'team-1' });
+    expect(app.listChannelMessages).toHaveBeenCalledWith({ channelId: 'channel-2', limit: 25 });
     expect(app.createCustomAgent).toHaveBeenCalledWith({
       userId: 'user-1',
       teamId: 'team-1',

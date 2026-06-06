@@ -20,6 +20,7 @@ describe('AgentBean Next readiness checker', () => {
       'daemon-install-smoke-script',
       'entry-smoke-script',
       'business-smoke-script',
+      'persistence-smoke-script',
       'ci-runs-daemon-install-smoke',
       'deploy-target-gate',
       'contracts-package-publishable',

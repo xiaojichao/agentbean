@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-截至第四十一切片，仓库内替换前 gate 已具备：
+截至第四十八切片，仓库内替换前 gate 已具备：
 
 - 根目录 `railway.json` 明确声明 AgentBean Next 的 build、start 与 `/healthz`。
 - `AGENTBEAN_DEPLOY_TARGET` 支持 `old|next`，默认仍为 `old`。
@@ -34,6 +34,7 @@
 - external cutover audit 会只读检查 GitHub variables、GitHub secrets 与 npm registry next package versions。
 - public entry smoke 会检查公开入口的 `/healthz`、根页面 HTML 与 Socket.IO client route，防止最终访问入口仍落在旧 Vercel 或临时 harness 页面。
 - business smoke 会通过 Socket.IO 注册临时用户/team、连接 daemon、创建 custom agent、发送消息并等待 agent reply，防止只验证入口而没有验证真实业务链路。
+- persistence smoke 会在同一个 SQLite data dir 下启动 server-next 两次，验证 token session、current team、channel/message history 能在重启后恢复。
 
 当前真实外部配置状态：
 
@@ -101,6 +102,24 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run audit:agentbean-n
 ```
 
 此时 npm registry、data dir 与 session secret 相关检查已经通过；真正 production flip 仍会因为 `AGENTBEAN_DEPLOY_TARGET=next` 尚未打开而保持红灯。
+
+## 本地重启持久化 Smoke
+
+final flip 前先在本机运行 SQLite 重启持久化 smoke：
+
+```bash
+PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run smoke:agentbean-next-persistence
+```
+
+预期：
+
+- 脚本创建临时 SQLite data dir。
+- 第一次 server-next 启动后写入 session/team/channel/message。
+- server-next 关闭并使用同一个 data dir 第二次启动。
+- `auth:whoami` 能恢复 token session 与 current team。
+- `channel:join` 能恢复 channel/message history。
+
+这个 smoke 证明 server-next 的 SQLite restart 路径可用；它不等同于 Railway production volume 已验证。Railway volume 仍必须在 final flip 后用 production smoke 或等价 one-off 环境复核。
 
 ### Railway
 
@@ -228,6 +247,7 @@ gh variable set AGENTBEAN_DEPLOY_TARGET --repo xiaojichao/agentbean --body next
 curl -fsS https://<production-host>/healthz
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_NEXT_ENTRY_URL=https://<production-host> npm run smoke:agentbean-next-entry
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_NEXT_ENTRY_URL=https://<production-host> npm run smoke:agentbean-next-business
+PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run smoke:agentbean-next-persistence
 ```
 
 预期：
@@ -236,6 +256,7 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_NEXT_ENTRY_URL=
 - 根页面是 AgentBean Next 的 `AgentBean` 产品 preview shell，不是旧 Vercel web 或 `AgentBean Next Preview` harness。
 - Socket.IO client route 可访问。
 - 临时用户注册、current team、daemon 连接、custom agent 创建、消息 dispatch 与 agent reply 全部成功。
+- 本地 SQLite 重启 smoke 可以恢复 session/team/channel/message。
 
 随后用真实浏览器或等价客户端验证：
 
@@ -245,7 +266,7 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_NEXT_ENTRY_URL=
 - daemon-next 连接到同一 team。
 - 发送 human message。
 - agent reply 可见。
-- 重启 server 后，SQLite volume 中的 session/team/channel/message 仍保留。
+- 重启 server 后，SQLite volume 中的 session/team/channel/message 仍保留；如果可以在 Railway one-off 环境访问同一个 volume，则用 `npm run smoke:agentbean-next-persistence -- --data-dir "$AGENTBEAN_NEXT_DATA_DIR" --keep-data` 做等价复核。
 
 ## Rollback
 
