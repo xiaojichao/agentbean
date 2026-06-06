@@ -54,5 +54,5 @@ team: AgentBean
 
 - production deploy 切换到 server-next。
 - web-next 还没有真实浏览器自动化验收脚本。
-- 页面还没有持久化登录态；刷新后需要重新提交默认表单，但会自动登录已有用户。
+- 后续第二十二切片已补上 preview session persistence；正式 auth token 设计仍未实现。
 - 真实 Codex/Claude/Gemini 交互式 adapter 仍在后续切片。
