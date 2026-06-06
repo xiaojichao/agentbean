@@ -76,6 +76,7 @@ Phase 1 完成标准：
 | P2-20 | server-next 长驻 dev server 暴露 `/healthz`，并挂载真实 `/web` 与 `/agent` Socket.IO namespaces。 | Socket | 本地替换旧 server 的运行入口。 | `implementation-runbook.md`, `target-architecture.md` |
 | P2-21 | server-next dev server 在 SQLite 文件模式下重启后保留注册用户与 current team。 | Repository/Socket | 本地替换旧 server 的持久化入口。 | `first-slice-schema-repositories.md`, `target-architecture.md` |
 | P2-22 | server-next 在平台提供 `PORT` 时默认监听 `0.0.0.0:$PORT`，并默认使用 SQLite storage。 | Config/Socket | 生产平台替换旧 server 的启动入口。 | `target-architecture.md`, `implementation-runbook.md` |
+| P2-23 | register/login 返回 signed session token，`auth:whoami` 能用 token 恢复 user 与 current team，篡改 token 返回 `UNAUTHENTICATED`。 | UseCase/Socket | 正式 web 登录态恢复入口。 | `socket-protocol.md`, `target-architecture.md` |
 
 Phase 2 完成标准：
 

@@ -13,6 +13,7 @@ describe('server-next socket handlers', () => {
     const app = {
       registerUser: vi.fn(async (payload) => makeSuccess({ payload })),
       loginUser: vi.fn(async (payload) => makeSuccess({ payload })),
+      whoami: vi.fn(async (payload) => makeSuccess({ payload })),
       listTeams: vi.fn(async (payload) => makeSuccess({ payload })),
       getDevice: vi.fn(async (payload) => makeSuccess({ payload })),
       requestDeviceScan: vi.fn(async (payload) =>
@@ -34,6 +35,7 @@ describe('server-next socket handlers', () => {
     expect(socket.eventNames()).toEqual([
       WEB_EVENTS.auth.register,
       WEB_EVENTS.auth.login,
+      WEB_EVENTS.auth.whoami,
       WEB_EVENTS.team.list,
       WEB_EVENTS.device.get,
       WEB_EVENTS.device.scan,
@@ -53,6 +55,7 @@ describe('server-next socket handlers', () => {
       ok: true,
       payload: { username: 'shaw' },
     });
+    await socket.trigger(WEB_EVENTS.auth.whoami, { token: 'token-1' });
     await socket.trigger(WEB_EVENTS.message.send, {
       userId: 'user-1',
       teamId: 'team-1',
@@ -117,6 +120,7 @@ describe('server-next socket handlers', () => {
     });
 
     expect(app.registerUser).toHaveBeenCalledWith({ username: 'shaw' });
+    expect(app.whoami).toHaveBeenCalledWith({ token: 'token-1' });
     expect(app.sendMessage).toHaveBeenCalledWith({
       userId: 'user-1',
       teamId: 'team-1',

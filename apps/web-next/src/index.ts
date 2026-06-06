@@ -50,6 +50,7 @@ export interface SubscribeInput {
 export interface WebSocketClient {
   register(input: RegisterInput): Promise<unknown>;
   login(input: LoginInput): Promise<unknown>;
+  whoami(input: { token: string }): Promise<unknown>;
   listTeams(input: ListTeamsInput): Promise<unknown>;
   listDevices(input: SubscribeInput, onSnapshot?: (devices: DeviceDto[]) => void): Promise<unknown>;
   getDevice(input: { userId: string; deviceId: string }): Promise<unknown>;
@@ -116,6 +117,9 @@ export function createWebSocketClient(transport: WebSocketTransport): WebSocketC
     },
     login(input) {
       return transport.emitWithAck(WEB_EVENTS.auth.login, input);
+    },
+    whoami(input) {
+      return transport.emitWithAck(WEB_EVENTS.auth.whoami, input);
     },
     listTeams(input) {
       return transport.emitWithAck(WEB_EVENTS.team.list, input);

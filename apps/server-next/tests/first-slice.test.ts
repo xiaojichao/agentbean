@@ -55,6 +55,7 @@ describe('server-next first-slice use cases', () => {
 
     expect(ack).toMatchObject({
       ok: true,
+      token: expect.stringMatching(/^abn\./),
       user: { id: 'user-1', username: 'shaw', role: 'user', primaryTeamId: 'team-1' },
       currentTeam: {
         id: 'team-1',
@@ -88,8 +89,31 @@ describe('server-next first-slice use cases', () => {
 
     expect(ack).toMatchObject({
       ok: true,
+      token: expect.stringMatching(/^abn\./),
       user: { id: 'user-1', username: 'shaw', primaryTeamId: 'team-1' },
       currentTeam: { id: 'team-1', currentUserRole: 'owner' },
+    });
+  });
+
+  test('whoami restores user and current team from a signed session token', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 220,
+      ids: createIds(['user-1', 'team-1', 'channel-1']),
+    });
+
+    const loginAck = await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    if (!loginAck.ok) {
+      throw new Error('registration failed');
+    }
+
+    await expect(app.whoami({ token: loginAck.token })).resolves.toMatchObject({
+      ok: true,
+      user: { id: 'user-1', username: 'shaw', primaryTeamId: 'team-1' },
+      currentTeam: { id: 'team-1', currentUserRole: 'owner' },
+    });
+    await expect(app.whoami({ token: `${loginAck.token}x` })).resolves.toMatchObject({
+      ok: false,
+      error: 'UNAUTHENTICATED',
     });
   });
 

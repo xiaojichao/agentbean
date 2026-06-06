@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DispatchDto, type DispatchRequestDto, type MessageDto, type RuntimeDto, type TeamDto, type UserDto } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { ServerNextRepositories } from './repositories.js';
@@ -14,6 +14,7 @@ export interface ServerNextIds {
 export interface ServerNextUseCases {
   registerUser(input: RegisterUserInput): Promise<Ack<RegisterUserResult>>;
   loginUser(input: LoginUserInput): Promise<Ack<LoginUserResult>>;
+  whoami(input: WhoamiInput): Promise<Ack<WhoamiResult>>;
   listTeams(input: { userId: string }): Promise<Ack<{ teams: TeamDto[] }>>;
   listDevices(input: { teamId: string; userId: string }): Promise<Ack<{ devices: DeviceDto[] }>>;
   getDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDetailDto }>>;
@@ -47,6 +48,7 @@ export interface RegisterUserInput {
 }
 
 export interface RegisterUserResult {
+  token: string;
   user: UserDto;
   currentTeam: TeamDto;
   defaultChannel: ChannelDto;
@@ -58,6 +60,16 @@ export interface LoginUserInput {
 }
 
 export interface LoginUserResult {
+  token: string;
+  user: UserDto;
+  currentTeam: TeamDto;
+}
+
+export interface WhoamiInput {
+  token: string;
+}
+
+export interface WhoamiResult {
   user: UserDto;
   currentTeam: TeamDto;
 }
@@ -218,10 +230,12 @@ export interface CreateServerNextUseCasesInput {
   repositories: ServerNextRepositories;
   clock: ServerNextClock;
   ids: ServerNextIds;
+  sessionSecret?: string;
 }
 
 export function createServerNextUseCases(input: CreateServerNextUseCasesInput): ServerNextUseCases {
   const { repositories, clock, ids } = input;
+  const sessionSecret = input.sessionSecret ?? 'agentbean-next-dev-session-secret';
 
   return {
     async registerUser(registerInput) {
@@ -276,6 +290,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
 
       return makeSuccess({
+        token: issueSessionToken(user.id, sessionSecret),
         user: toUserDto(user),
         currentTeam: toTeamDto(team, 'owner'),
         defaultChannel,
@@ -288,18 +303,33 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('UNAUTHENTICATED', 'Invalid username or password');
       }
 
-      const teams = await repositories.teams.listForUser(user.id);
-      const currentTeam =
-        teams.find((team) => team.id === user.currentTeamId) ??
-        teams.find((team) => team.id === user.primaryTeamId) ??
-        teams[0];
-
+      const currentTeam = await resolveCurrentTeam(repositories, user);
       if (!currentTeam) {
         return makeFailure('FORBIDDEN', 'User has no team membership');
       }
 
       await repositories.users.setCurrentTeam(user.id, currentTeam.id);
 
+      return makeSuccess({
+        token: issueSessionToken(user.id, sessionSecret),
+        user: { ...toUserDto(user), primaryTeamId: currentTeam.id },
+        currentTeam: toTeamDto(currentTeam, currentTeam.currentUserRole),
+      });
+    },
+
+    async whoami(whoamiInput) {
+      const userId = verifySessionToken(whoamiInput.token, sessionSecret);
+      if (!userId) {
+        return makeFailure('UNAUTHENTICATED', 'Invalid session token');
+      }
+      const user = await repositories.users.getById(userId);
+      if (!user) {
+        return makeFailure('UNAUTHENTICATED', 'Session user no longer exists');
+      }
+      const currentTeam = await resolveCurrentTeam(repositories, user);
+      if (!currentTeam) {
+        return makeFailure('FORBIDDEN', 'User has no team membership');
+      }
       return makeSuccess({
         user: { ...toUserDto(user), primaryTeamId: currentTeam.id },
         currentTeam: toTeamDto(currentTeam, currentTeam.currentUserRole),
@@ -1002,6 +1032,55 @@ function slugify(value: string): string {
 
 function hashPassword(password: string): string {
   return createHash('sha256').update(password).digest('hex');
+}
+
+async function resolveCurrentTeam(
+  repositories: ServerNextRepositories,
+  user: { id: string; currentTeamId?: string; primaryTeamId?: string },
+): Promise<(TeamDto & { currentUserRole: 'owner' | 'admin' | 'member' }) | undefined> {
+  const teams = await repositories.teams.listForUser(user.id);
+  return (
+    teams.find((team) => team.id === user.currentTeamId) ??
+    teams.find((team) => team.id === user.primaryTeamId) ??
+    teams[0]
+  );
+}
+
+function issueSessionToken(userId: string, secret: string): string {
+  const payload = Buffer.from(JSON.stringify({ userId }), 'utf8').toString('base64url');
+  return `abn.${payload}.${signSessionPayload(payload, secret)}`;
+}
+
+function verifySessionToken(token: string, secret: string): string | null {
+  const parts = token.split('.');
+  if (parts.length !== 3 || parts[0] !== 'abn') {
+    return null;
+  }
+  const payload = parts[1];
+  const signature = parts[2];
+  if (!payload || !signature) {
+    return null;
+  }
+  const expected = signSessionPayload(payload, secret);
+  if (!safeEqual(signature, expected)) {
+    return null;
+  }
+  try {
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { userId?: unknown };
+    return typeof decoded.userId === 'string' && decoded.userId ? decoded.userId : null;
+  } catch {
+    return null;
+  }
+}
+
+function signSessionPayload(payload: string, secret: string): string {
+  return createHmac('sha256', secret).update(payload).digest('base64url');
+}
+
+function safeEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 async function allHumanMembersBelongToTeam(
