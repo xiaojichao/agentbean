@@ -78,6 +78,7 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
       if (result.ok) {
         subscriber.devices = input;
         socket.emit?.(WEB_EVENTS.device.snapshot, result.devices);
+        await emitStoredDeviceRuntimes(socket, app, input, result.devices);
       }
     });
     registerWebSocketHandlers(socket, app, {
@@ -255,6 +256,23 @@ function emitDeviceRuntimes(subscribers: Set<WebSocketSubscription>, teamId: str
   for (const subscriber of subscribers) {
     if (subscriber.devices?.teamId === teamId) {
       subscriber.socket.emit?.(WEB_EVENTS.device.runtimes, runtimesPayload);
+    }
+  }
+}
+
+async function emitStoredDeviceRuntimes(
+  socket: SocketLike,
+  app: ServerNextUseCases,
+  subscription: ChannelSubscription,
+  devices: Array<{ id: string }>,
+): Promise<void> {
+  for (const device of devices) {
+    const result = await app.getDevice({ userId: subscription.userId, deviceId: device.id });
+    if (result.ok && result.device.runtimes.length > 0) {
+      socket.emit?.(WEB_EVENTS.device.runtimes, {
+        deviceId: device.id,
+        runtimes: result.device.runtimes,
+      });
     }
   }
 }

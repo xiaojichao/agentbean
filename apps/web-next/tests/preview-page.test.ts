@@ -115,6 +115,49 @@ describe('web-next preview page interactions', () => {
       channel: { id: 'channel-2' },
     });
   });
+
+  test('keeps runtime options scoped to the selected preview device', async () => {
+    const harness = createPreviewHarness({});
+
+    await harness.socket.trigger('devices:snapshot', [
+      { id: 'device-1', name: 'MacBook' },
+      { id: 'device-2', name: 'Mac mini' },
+    ]);
+    await harness.socket.trigger('device:runtimes', {
+      deviceId: 'device-1',
+      runtimes: [{ id: 'runtime-1', name: 'Codex CLI' }],
+    });
+    expect(harness.element('agent-create-form:runtimeId').innerHTML).toContain('runtime-1');
+    expect(harness.element('agent-create-form:runtimeId').innerHTML).toContain('Codex CLI');
+
+    await harness.socket.trigger('device:runtimes', {
+      deviceId: 'device-2',
+      runtimes: [{ id: 'runtime-2', name: 'Claude Code' }],
+    });
+    expect(harness.element('agent-create-form:runtimeId').innerHTML).toContain('runtime-1');
+    expect(harness.element('agent-create-form:runtimeId').innerHTML).not.toContain('runtime-2');
+  });
+
+  test('selects a runtime-bearing preview device when the current device has no runtimes', async () => {
+    const harness = createPreviewHarness({});
+
+    await harness.socket.trigger('devices:snapshot', [
+      { id: 'stale-device', name: 'Old Mac' },
+      { id: 'device-2', name: 'Current Mac' },
+    ]);
+    await harness.socket.trigger('device:runtimes', {
+      deviceId: 'device-2',
+      runtimes: [
+        { id: 'runtime-gemini', name: 'Gemini CLI', adapterKind: 'gemini' },
+        { id: 'runtime-2', name: 'Codex CLI', adapterKind: 'codex' },
+      ],
+    });
+
+    const runtimeOptions = harness.element('agent-create-form:runtimeId').innerHTML;
+    expect(runtimeOptions).toContain('runtime-2');
+    expect(runtimeOptions).toContain('Codex CLI');
+    expect(runtimeOptions.indexOf('runtime-2')).toBeLessThan(runtimeOptions.indexOf('runtime-gemini'));
+  });
 });
 
 function createPreviewHarness(acks: Record<string, AckFactory>): PreviewHarness {

@@ -482,7 +482,18 @@
     <script>
       const SESSION_KEY = "agentbean-next-preview-session";
       const socket = io("/web", { transports: ["websocket", "polling"] });
-      const state = { token: null, user: null, team: null, channel: null, channels: [], devices: [], runtimes: [], agents: [], messages: [] };
+      const state = {
+        token: null,
+        user: null,
+        team: null,
+        channel: null,
+        channels: [],
+        devices: [],
+        runtimesByDevice: {},
+        selectedDeviceId: null,
+        agents: [],
+        messages: [],
+      };
       const el = (id) => document.getElementById(id);
 
       socket.on("connect", async () => {
@@ -495,11 +506,19 @@
       });
       socket.on("disconnect", () => setStatus("已断开"));
       socket.on("devices:snapshot", (devices) => {
-        state.devices = devices;
+        state.devices = devices || [];
+        if (!state.selectedDeviceId || !state.devices.some((device) => device.id === state.selectedDeviceId)) {
+          state.selectedDeviceId = state.devices[0]?.id || null;
+        }
         render();
       });
       socket.on("device:runtimes", (payload) => {
-        state.runtimes = payload.runtimes || [];
+        if (payload?.deviceId) {
+          state.runtimesByDevice[payload.deviceId] = payload.runtimes || [];
+          if (!state.selectedDeviceId || getSelectedDeviceRuntimes().length === 0) {
+            state.selectedDeviceId = payload.deviceId;
+          }
+        }
         render();
       });
       socket.on("agents:snapshot", (agents) => {
@@ -570,6 +589,10 @@
           env,
         });
       });
+      document.querySelector('#agent-create-form [name="deviceId"]').addEventListener("change", (event) => {
+        state.selectedDeviceId = event.currentTarget.value || null;
+        render();
+      });
 
       el("message-form").addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -604,15 +627,16 @@
       }
 
       function render() {
+        const selectedRuntimes = getSelectedDeviceRuntimes();
         renderList("channels", state.channels, (channel) => renderItem(channel.title || channel.name, channel.visibility));
         renderList("devices", state.devices, (device) => renderItem(device.name || device.id, device.status));
-        renderList("runtimes", state.runtimes, (runtime) => renderItem(runtime.name, runtime.command || "not installed"));
+        renderList("runtimes", selectedRuntimes, (runtime) => renderItem(runtime.name, runtime.command || "not installed"));
         renderList("agents", state.agents, (agent) => renderItem(agent.name, `${agent.status} · ${agent.source}`));
         renderMessages();
         renderActiveChannel();
         renderAuthState();
         fillSelect("agent-create-form", "deviceId", state.devices, (device) => [device.id, device.name || device.id]);
-        fillSelect("agent-create-form", "runtimeId", state.runtimes, (runtime) => [runtime.id, runtime.name]);
+        fillSelect("agent-create-form", "runtimeId", selectedRuntimes, (runtime) => [runtime.id, runtime.name]);
         fillSelect("message-form", "channelId", state.channels, (channel) => [channel.id, channel.title || channel.name]);
       }
 
@@ -656,6 +680,34 @@
           : "";
       }
 
+      function getSelectedDeviceRuntimes() {
+        const selectedId = getSelectedDeviceId();
+        return sortRuntimesForPreview(selectedId ? state.runtimesByDevice[selectedId] || [] : []);
+      }
+
+      function getSelectedDeviceId() {
+        if (state.selectedDeviceId && state.devices.some((device) => device.id === state.selectedDeviceId)) {
+          return state.selectedDeviceId;
+        }
+        return state.devices[0]?.id || null;
+      }
+
+      function sortRuntimesForPreview(runtimes) {
+        const order = new Map([
+          ["codex", 0],
+          ["codex-cli", 0],
+          ["claude-code", 1],
+          ["claude", 1],
+          ["gemini", 2],
+          ["gemini-cli", 2],
+        ]);
+        return [...runtimes].sort((left, right) => {
+          const leftRank = order.get(left.adapterKind) ?? 99;
+          const rightRank = order.get(right.adapterKind) ?? 99;
+          return leftRank - rightRank || String(left.name).localeCompare(String(right.name));
+        });
+      }
+
       function fillSelect(formId, name, items, mapItem) {
         const select = document.querySelector(`#${formId} [name="${name}"]`);
         const previous = select.value;
@@ -664,9 +716,12 @@
           return `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`;
         }).join("");
         if (items.length === 0) return;
-        const target = name === "channelId" ? state.channel?.id : previous;
+        const target = name === "channelId" ? state.channel?.id : name === "deviceId" ? getSelectedDeviceId() : previous;
         if (target && Array.from(select.options || []).some((option) => option.value === target)) {
           select.value = target;
+          if (name === "deviceId") {
+            state.selectedDeviceId = target;
+          }
         }
       }
 
@@ -728,7 +783,8 @@
         state.channel = null;
         state.channels = [];
         state.devices = [];
-        state.runtimes = [];
+        state.runtimesByDevice = {};
+        state.selectedDeviceId = null;
         state.agents = [];
         state.messages = [];
         render();

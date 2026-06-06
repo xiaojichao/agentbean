@@ -429,6 +429,39 @@ describe('server-next Socket.IO namespaces', () => {
         ],
       });
     });
+
+    const lateWeb = await connectClient(`${baseUrl}/web`);
+    cleanups.push(async () => {
+      lateWeb.disconnect();
+    });
+    const lateRuntimeEvents: Array<{
+      deviceId: string;
+      runtimes: Array<{ id: string; name: string; installed: boolean; command?: string; normalizedCommandKey?: string }>;
+    }> = [];
+    lateWeb.on(WEB_EVENTS.device.runtimes, (payload) => {
+      lateRuntimeEvents.push(runtimeSummary(payload));
+    });
+
+    await expect(
+      lateWeb.emitWithAck(WEB_EVENTS.device.list, { userId: 'user-1', teamId: 'team-1' }),
+    ).resolves.toMatchObject({
+      ok: true,
+      devices: [{ id: 'device-1', status: 'online' }],
+    });
+    await eventually(async () => {
+      expect(lateRuntimeEvents.at(-1)).toEqual({
+        deviceId: 'device-1',
+        runtimes: [
+          {
+            id: 'runtime-1',
+            name: 'Codex CLI',
+            installed: true,
+            command: '/opt/homebrew/bin/codex',
+            normalizedCommandKey: '/opt/homebrew/bin/codex',
+          },
+        ],
+      });
+    });
   });
 
   test('creates custom agents from runtime capability and refreshes agent snapshots', async () => {

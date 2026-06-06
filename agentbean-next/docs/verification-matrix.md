@@ -109,6 +109,7 @@ Phase 2 完成标准：
 | P3-13 | CI 在 `next` 目标下基于 daemon-next 生成 canonical `@agentbean/daemon` release package，保留旧 `daemon` / `agentbean-daemon` bin，并使用高于 `0.1.35` 的版本发布。 | Daemon/CI | 替换旧 daemon npm 用户入口，而不要求用户改装另一个包名。 | `production-cutover-runbook.md`, `target-architecture.md` |
 | P3-14 | CI 在 build 后执行 daemon install smoke：pack `@agentbean/contracts` 与 canonical `@agentbean/daemon`，在临时空项目安装 tarball，并确认 `daemon` / `agentbean-daemon` / `agentbean-next-daemon` 三个 bin 能进入 daemon-next CLI。 | Daemon/CI | 替换旧 daemon 前，必须验证旧 npm 用户入口不是只在 manifest 上存在，而是在真实安装路径中可执行。 | `production-cutover-runbook.md`, `target-architecture.md` |
 | P3-15 | 本地 external cutover audit 可以只读检查 GitHub variables、GitHub secrets 与 npm registry 版本，明确 production flip 前还缺哪些外部条件。 | Release/CI | 真正替换旧 AgentBean 前，必须把代码就绪与外部配置/发布状态分开验收。 | `production-cutover-runbook.md`, `target-architecture.md` |
+| P3-16 | 本地 full preview 对晚订阅的 web session replay 已持久化 device runtimes，并让 Custom Agent 表单按当前 device 过滤 runtime。 | Preview/Web/Server | 替换旧 AgentBean 前，本地 UI 必须能稳定看到 runtime、创建 custom agent，而不是只在协议测试里成立。 | `production-cutover-runbook.md`, `target-architecture.md` |
 
 Phase 3 完成标准：
 
