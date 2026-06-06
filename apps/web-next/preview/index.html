@@ -7,8 +7,8 @@
     <style>
       :root {
         color-scheme: light;
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: #f5f5f4;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+        background: #f7f7f6;
         color: #171717;
       }
       * {
@@ -17,73 +17,88 @@
       body {
         margin: 0;
       }
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+      }
+      button {
+        cursor: pointer;
+      }
       main {
         display: grid;
-        grid-template-columns: 208px minmax(0, 1fr) 320px;
-        min-height: 100vh;
+        grid-template-columns: 208px minmax(0, 1fr) 348px;
         height: 100vh;
+        min-height: 100vh;
+        overflow: hidden;
       }
-      aside {
-        background: #fafafa;
-        border-right: 1px solid #e5e5e5;
-        display: flex;
-        flex-direction: column;
-        min-height: 0;
-      }
+      aside,
       section {
         min-width: 0;
       }
       h1,
-      h2 {
+      h2,
+      h3,
+      p {
         margin: 0;
         letter-spacing: 0;
       }
       h1 {
-        font-size: 15px;
+        font-size: 14px;
+        font-weight: 650;
       }
       h2 {
-        font-size: 13px;
+        font-size: 14px;
+        font-weight: 650;
       }
-      form,
-      .panel {
-        border: 1px solid #e5e5e5;
-        border-radius: 8px;
-        background: #ffffff;
-        padding: 10px;
-      }
-      label {
-        display: grid;
-        gap: 5px;
-        margin-bottom: 10px;
+      h3 {
         font-size: 12px;
-        color: #526067;
+        font-weight: 650;
       }
       input,
       textarea,
       select {
         width: 100%;
-        border: 1px solid #d4d4d4;
+        border: 1px solid #d7d7d3;
         border-radius: 6px;
         padding: 8px 10px;
-        font: inherit;
         color: #171717;
-        background: #fafafa;
+        background: #ffffff;
+        outline: none;
+      }
+      input:focus,
+      textarea:focus,
+      select:focus {
+        border-color: #171717;
       }
       textarea {
+        line-height: 1.5;
         min-height: 76px;
         resize: vertical;
       }
+      label {
+        display: grid;
+        gap: 5px;
+        font-size: 12px;
+        color: #666b70;
+      }
       button {
+        align-items: center;
         border: 0;
         border-radius: 6px;
         background: #171717;
         color: #ffffff;
-        padding: 8px 11px;
-        font: inherit;
-        cursor: pointer;
+        display: inline-flex;
+        font-weight: 600;
+        justify-content: center;
+        min-height: 34px;
+        padding: 8px 12px;
       }
       button.secondary {
-        background: #525252;
+        background: #ffffff;
+        border: 1px solid #d7d7d3;
+        color: #2f3437;
       }
       button:disabled {
         cursor: not-allowed;
@@ -93,9 +108,10 @@
         align-items: center;
         border-bottom: 1px solid #e5e5e5;
         display: flex;
-        gap: 10px;
+        gap: 9px;
         min-height: 56px;
-        padding: 0 14px;
+        padding: 0 14px 0 16px;
+        position: relative;
       }
       .brand-mark {
         align-items: center;
@@ -103,38 +119,47 @@
         border-radius: 6px;
         color: #ffffff;
         display: inline-flex;
+        font-size: 13px;
         font-weight: 700;
-        height: 30px;
+        height: 28px;
         justify-content: center;
-        width: 30px;
+        width: 28px;
+      }
+      .brand-copy {
+        min-width: 0;
+      }
+      .brand-subtitle {
+        color: #737373;
+        font-size: 11px;
+        margin-top: 1px;
       }
       .team-strip {
         border-bottom: 1px solid #e5e5e5;
         display: grid;
         gap: 8px;
-        padding: 8px 12px 10px;
+        padding: 10px 12px;
       }
       .team-form {
         display: grid;
         gap: 8px;
       }
       .team-row {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 46px;
-        gap: 6px;
+        align-items: end;
+        display: flex;
+        gap: 8px;
       }
       .team-row button {
-        align-items: center;
-        display: inline-flex;
-        justify-content: center;
-        padding: 0;
+        flex: 0 0 auto;
+        min-width: 44px;
       }
       .team-form label {
         margin: 0;
+        min-width: 0;
+        flex: 1;
       }
       .team-advanced {
         display: grid;
-        gap: 6px;
+        gap: 8px;
       }
       body[data-auth="true"] .team-advanced {
         display: none;
@@ -143,51 +168,93 @@
         color: #737373;
         display: none;
         font-size: 12px;
-        margin: 0;
         overflow-wrap: anywhere;
       }
       body[data-auth="true"] .session-summary {
         display: block;
       }
+      .connection-pill {
+        align-items: center;
+        border: 1px solid #bbf7d0;
+        background: #f0fdf4;
+        border-radius: 999px;
+        color: #047857;
+        display: inline-flex;
+        font-size: 11px;
+        font-weight: 650;
+        margin-left: auto;
+        min-height: 24px;
+        padding: 2px 8px;
+        white-space: nowrap;
+      }
       .sidebar-scroll {
         display: grid;
         align-content: start;
-        gap: 10px;
+        gap: 12px;
         overflow: auto;
-        padding: 12px 8px;
+        padding: 12px 8px 16px;
       }
-      .nav-item {
+      .nav-group {
+        display: grid;
+        gap: 3px;
+      }
+      .nav-item,
+      .nav-row {
         align-items: center;
-        background: #e5e5e5b3;
         border-radius: 6px;
         display: flex;
         font-size: 14px;
-        font-weight: 600;
+        font-weight: 550;
         gap: 8px;
-        padding: 7px 8px;
+        min-height: 32px;
+        padding: 6px 8px;
+      }
+      .nav-item.active,
+      .nav-row.active {
+        background: #e8e8e6;
+        color: #111827;
+        font-weight: 650;
+      }
+      .nav-item.muted {
+        color: #70757a;
+      }
+      .nav-row {
+        background: transparent;
+        border: 0;
+        color: #3f4549;
+        width: 100%;
+      }
+      .nav-row:hover {
+        background: #f0f0ee;
       }
       .section-title {
         color: #737373;
         font-size: 11px;
         font-weight: 700;
         letter-spacing: 0.04em;
-        margin: 8px 2px 6px;
+        margin: 0 6px 5px;
         text-transform: uppercase;
       }
       .list {
         display: grid;
-        gap: 8px;
+        gap: 6px;
         margin: 0;
         padding: 0;
         list-style: none;
       }
       .item {
         border: 1px solid #e5e5e5;
-        border-radius: 7px;
-        padding: 10px;
+        border-radius: 8px;
+        padding: 9px 10px;
         background: #ffffff;
         display: grid;
         gap: 4px;
+      }
+      .item.compact {
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        padding: 4px 6px;
       }
       .meta {
         color: #68747b;
@@ -196,16 +263,6 @@
       }
       .primary {
         overflow-wrap: anywhere;
-      }
-      .status {
-        display: inline-flex;
-        align-items: center;
-        min-height: 24px;
-        border-radius: 999px;
-        padding: 3px 9px;
-        background: #ecfdf5;
-        color: #047857;
-        font-size: 12px;
       }
       .workspace {
         background: #fafafa;
@@ -224,9 +281,10 @@
       }
       .channel-badge {
         align-items: center;
-        background: #fff7ed;
+        background: #f5f5f4;
+        border: 1px solid #e7e5e4;
         border-radius: 6px;
-        color: #d97706;
+        color: #525252;
         display: inline-flex;
         font-weight: 700;
         height: 32px;
@@ -239,15 +297,20 @@
         gap: 10px;
         min-width: 0;
       }
+      .header-actions {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+      }
       .conversation {
         flex: 1;
         overflow: auto;
-        padding: 16px;
+        padding: 18px 16px;
       }
       .conversation-inner {
         display: grid;
         align-content: start;
-        gap: 12px;
+        gap: 10px;
         min-height: 100%;
         margin: 0 auto;
         max-width: 768px;
@@ -262,15 +325,15 @@
       }
       .message {
         border: 1px solid #e5e5e5;
-        border-radius: 7px;
+        border-radius: 8px;
         display: grid;
         gap: 6px;
-        padding: 10px 12px;
+        padding: 11px 12px;
       }
       .message.human {
-        background: #f0f9ff;
-        border-color: #e0f2fe;
-        color: #0c4a6e;
+        background: #eff6ff;
+        border-color: #dbeafe;
+        color: #1e3a8a;
       }
       .message.agent {
         background: #ffffff;
@@ -302,7 +365,7 @@
       .composer {
         background: #ffffff;
         border-top: 1px solid #e5e5e5;
-        padding: 12px 16px;
+        padding: 12px 16px 14px;
       }
       .composer form {
         border: 0;
@@ -332,13 +395,40 @@
         gap: 12px;
         align-content: start;
         overflow: auto;
-        padding: 14px;
+        padding: 14px 14px 18px;
       }
       .rail-heading {
         align-items: center;
         display: flex;
         justify-content: space-between;
         margin-bottom: 8px;
+      }
+      .rail-tabs {
+        background: #efefed;
+        border-radius: 8px;
+        display: grid;
+        gap: 2px;
+        grid-template-columns: repeat(3, 1fr);
+        padding: 2px;
+      }
+      .rail-tab {
+        background: transparent;
+        color: #525252;
+        font-size: 12px;
+        min-height: 28px;
+        padding: 4px 6px;
+      }
+      .rail-tab.active {
+        background: #ffffff;
+        color: #171717;
+        box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);
+      }
+      form,
+      .panel {
+        border: 1px solid #e5e5e5;
+        border-radius: 8px;
+        background: #ffffff;
+        padding: 10px;
       }
       .events {
         max-height: 168px;
@@ -351,9 +441,19 @@
       .compact-form label {
         margin: 0;
       }
+      .inline-form-row {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      }
+      .rail-muted {
+        color: #737373;
+        font-size: 12px;
+      }
       @media (max-width: 860px) {
         main {
           height: auto;
+          overflow: visible;
           grid-template-columns: 1fr;
         }
         aside {
@@ -381,16 +481,19 @@
     <main>
       <aside>
         <div class="brand">
-          <div class="brand-mark">A</div>
-          <h1>AgentBean</h1>
-          <p class="status" id="connection-status">连接中</p>
+          <div class="brand-mark">Ab</div>
+          <div class="brand-copy">
+            <h1>AgentBean</h1>
+            <p class="brand-subtitle">Next local</p>
+          </div>
+          <p class="connection-pill" id="connection-status">连接中</p>
         </div>
 
         <div class="team-strip">
           <form class="team-form" id="auth-form">
             <div class="team-row">
-              <label>当前 Team <input name="teamName" value="AgentBean" /></label>
-              <button id="team-submit" type="submit" title="进入 AgentBean Next">进入</button>
+              <label>当前团队 <input name="teamName" value="AgentBean" /></label>
+              <button id="team-submit" type="submit" title="进入 AgentBean">进入</button>
             </div>
             <p class="session-summary" id="session-summary"></p>
             <div class="team-advanced">
@@ -401,25 +504,27 @@
         </div>
 
         <div class="sidebar-scroll">
-          <div class="nav-item"># 聊天</div>
-          <div class="nav-item">▣ 任务</div>
-          <div class="nav-item">◎ 成员</div>
-          <div class="nav-item">▱ 设备</div>
-          <section>
-            <div class="section-title">Channels</div>
+          <div class="nav-group" aria-label="主导航">
+            <div class="nav-item active"># 聊天</div>
+            <div class="nav-item muted">▣ 任务</div>
+            <div class="nav-item muted">◎ 成员</div>
+            <div class="nav-item muted">▱ 设备</div>
+          </div>
+          <section aria-label="频道">
+            <div class="section-title">频道</div>
             <ul class="list" id="channels"></ul>
           </section>
           <form class="compact-form" id="channel-create-form">
-            <h2>新建 Channel</h2>
+            <h2>新建频道</h2>
             <label>名称 <input name="name" value="ops" /></label>
             <label>标题 <input name="title" value="Ops" /></label>
             <label>可见性
               <select name="visibility">
-                <option value="public">public</option>
-                <option value="private">private</option>
+                <option value="public">公开</option>
+                <option value="private">私有</option>
               </select>
             </label>
-            <button type="submit">创建 Channel</button>
+            <button type="submit">创建频道</button>
           </form>
         </div>
       </aside>
@@ -433,7 +538,10 @@
               <div class="meta" id="active-channel-meta">公开频道</div>
             </div>
           </div>
-          <span class="status">Next Preview</span>
+          <div class="header-actions">
+            <button class="secondary" type="button" disabled>成员</button>
+            <button class="secondary" type="button" disabled>设置</button>
+          </div>
         </div>
         <div class="conversation">
           <div class="conversation-inner" id="messages"></div>
@@ -442,7 +550,7 @@
           <form id="message-form">
             <label>内容 <textarea name="body">@Codex hello</textarea></label>
             <div class="composer-actions">
-              <label>Channel <select name="channelId"></select></label>
+              <label>频道 <select name="channelId"></select></label>
               <button type="submit">发送消息</button>
             </div>
           </form>
@@ -450,29 +558,38 @@
       </section>
 
       <section class="right-rail">
+        <div class="rail-tabs" aria-label="右侧工作区">
+          <button class="rail-tab active" type="button">成员</button>
+          <button class="rail-tab" type="button">设备</button>
+          <button class="rail-tab" type="button">Agent</button>
+        </div>
         <div class="panel">
-          <div class="rail-heading"><h2>Devices</h2><span class="meta">daemon-next</span></div>
+          <div class="rail-heading"><h2>成员</h2><span class="meta">human / agent</span></div>
+          <ul class="list" id="agents"></ul>
+        </div>
+        <div class="panel">
+          <div class="rail-heading"><h2>设备</h2><span class="meta">daemon</span></div>
           <ul class="list" id="devices"></ul>
         </div>
         <div class="panel">
-          <div class="rail-heading"><h2>Runtimes</h2><span class="meta">可运行环境</span></div>
+          <div class="rail-heading"><h2>运行时</h2><span class="meta">Codex / Claude / Gemini</span></div>
           <ul class="list" id="runtimes"></ul>
         </div>
-        <div class="panel">
-          <div class="rail-heading"><h2>Agents</h2><span class="meta">custom</span></div>
-          <ul class="list" id="agents"></ul>
-        </div>
         <form class="compact-form" id="agent-create-form">
-          <h2>Custom Agent</h2>
-          <label>Device <select name="deviceId"></select></label>
-          <label>Runtime <select name="runtimeId"></select></label>
+          <h2>添加 Custom Agent</h2>
+          <div class="inline-form-row">
+            <label>设备 <select name="deviceId"></select></label>
+            <label>运行时 <select name="runtimeId"></select></label>
+          </div>
           <label>名称 <input name="name" value="Codex" /></label>
-          <label>Env Key <input name="envKey" value="OPENAI_API_KEY" /></label>
-          <label>Env Value <input name="envValue" type="password" /></label>
+          <div class="inline-form-row">
+            <label>Env Key <input name="envKey" value="OPENAI_API_KEY" /></label>
+            <label>Env Value <input name="envValue" type="password" /></label>
+          </div>
           <button type="submit">创建 Agent</button>
         </form>
         <div class="panel events">
-          <div class="rail-heading"><h2>Events</h2><span class="meta">socket</span></div>
+          <div class="rail-heading"><h2>活动</h2><span class="meta">socket</span></div>
           <ul class="list" id="events"></ul>
         </div>
       </section>
@@ -502,13 +619,17 @@
           await subscribe();
           return;
         }
-        await restoreSession();
+        const restored = await restoreSession();
+        if (!restored) {
+          await authenticateFromForm();
+        }
       });
       socket.on("disconnect", () => setStatus("已断开"));
       socket.on("devices:snapshot", (devices) => {
         state.devices = devices || [];
-        if (!state.selectedDeviceId || !state.devices.some((device) => device.id === state.selectedDeviceId)) {
-          state.selectedDeviceId = state.devices[0]?.id || null;
+        const visibleDevices = getVisibleDevices();
+        if (!state.selectedDeviceId || !visibleDevices.some((device) => device.id === state.selectedDeviceId)) {
+          state.selectedDeviceId = visibleDevices[0]?.id || null;
         }
         render();
       });
@@ -538,7 +659,11 @@
 
       el("auth-form").addEventListener("submit", async (event) => {
         event.preventDefault();
-        const data = Object.fromEntries(new FormData(event.currentTarget));
+        await authenticateFromForm();
+      });
+
+      async function authenticateFromForm() {
+        const data = Object.fromEntries(new FormData(el("auth-form")));
         let ack = await emit("auth:register", data);
         if (!ack.ok && ack.error === "CONFLICT") {
           ack = await emit("auth:login", {
@@ -554,7 +679,7 @@
         saveSession();
         await subscribe();
         render();
-      });
+      }
 
       el("channel-create-form").addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -593,6 +718,21 @@
         state.selectedDeviceId = event.currentTarget.value || null;
         render();
       });
+      el("channels").addEventListener("click", (event) => {
+        const row = event.target.closest("[data-channel-id]");
+        if (!row) return;
+        const channel = state.channels.find((item) => item.id === row.dataset.channelId);
+        if (!channel) return;
+        state.channel = channel;
+        saveSession();
+        render();
+      });
+      el("devices").addEventListener("click", (event) => {
+        const row = event.target.closest("[data-device-id]");
+        if (!row) return;
+        state.selectedDeviceId = row.dataset.deviceId || null;
+        render();
+      });
 
       el("message-form").addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -627,17 +767,63 @@
       }
 
       function render() {
+        const visibleDevices = getVisibleDevices();
         const selectedRuntimes = getSelectedDeviceRuntimes();
-        renderList("channels", state.channels, (channel) => renderItem(channel.title || channel.name, channel.visibility));
-        renderList("devices", state.devices, (device) => renderItem(device.name || device.id, device.status));
-        renderList("runtimes", selectedRuntimes, (runtime) => renderItem(runtime.name, runtime.command || "not installed"));
-        renderList("agents", state.agents, (agent) => renderItem(agent.name, `${agent.status} · ${agent.source}`));
+        renderChannels();
+        renderDevices(visibleDevices);
+        renderRuntimes(selectedRuntimes);
+        renderAgents();
         renderMessages();
         renderActiveChannel();
         renderAuthState();
-        fillSelect("agent-create-form", "deviceId", state.devices, (device) => [device.id, device.name || device.id]);
+        fillSelect("agent-create-form", "deviceId", visibleDevices, (device) => [device.id, device.name || device.id]);
         fillSelect("agent-create-form", "runtimeId", selectedRuntimes, (runtime) => [runtime.id, runtime.name]);
         fillSelect("message-form", "channelId", state.channels, (channel) => [channel.id, channel.title || channel.name]);
+      }
+
+      function renderChannels() {
+        if (state.channels.length === 0) {
+          el("channels").innerHTML = `<li class="item compact"><span class="meta">登录后显示频道</span></li>`;
+          return;
+        }
+        const activeId = state.channel?.id || state.channels[0]?.id;
+        el("channels").innerHTML = state.channels.map((channel) => {
+          const active = channel.id === activeId ? " active" : "";
+          const icon = channel.visibility === "private" ? "▣" : "#";
+          return `<li><button class="nav-row${active}" type="button" data-channel-id="${escapeHtml(channel.id)}">
+            <span>${icon}</span><span class="primary">${escapeHtml(channel.title || channel.name)}</span>
+          </button></li>`;
+        }).join("");
+      }
+
+      function renderDevices(devices) {
+        if (devices.length === 0) {
+          el("devices").innerHTML = `<li class="item"><span class="primary">暂无设备</span><span class="meta">daemon 连接后会显示在这里</span></li>`;
+          return;
+        }
+        const selectedId = getSelectedDeviceId();
+        el("devices").innerHTML = devices.map((device) => {
+          const active = device.id === selectedId ? " active" : "";
+          const status = device.status === "online" ? "在线" : device.status || "未知";
+          return `<li><button class="nav-row${active}" type="button" data-device-id="${escapeHtml(device.id)}">
+            <span>▱</span><span class="primary">${escapeHtml(device.name || device.id)}</span><span class="meta">${escapeHtml(status)}</span>
+          </button></li>`;
+        }).join("");
+      }
+
+      function renderRuntimes(runtimes) {
+        renderList("runtimes", runtimes, (runtime) => renderItem(runtime.name, runtime.command || "未安装"));
+      }
+
+      function renderAgents() {
+        if (state.agents.length === 0) {
+          el("agents").innerHTML = `<li class="item"><span class="primary">暂无 Agent</span><span class="meta">创建后会加入当前团队</span></li>`;
+          return;
+        }
+        renderList("agents", state.agents, (agent) => {
+          const status = agent.status === "online" ? "在线" : agent.status === "busy" ? "忙碌" : "离线";
+          return renderItem(agent.name, `${status} · ${agent.source || "custom"}`);
+        });
       }
 
       function renderList(id, items, format) {
@@ -686,10 +872,28 @@
       }
 
       function getSelectedDeviceId() {
-        if (state.selectedDeviceId && state.devices.some((device) => device.id === state.selectedDeviceId)) {
+        const visibleDevices = getVisibleDevices();
+        if (state.selectedDeviceId && visibleDevices.some((device) => device.id === state.selectedDeviceId)) {
           return state.selectedDeviceId;
         }
-        return state.devices[0]?.id || null;
+        return visibleDevices[0]?.id || null;
+      }
+
+      function getVisibleDevices() {
+        const byStableKey = new Map();
+        for (const device of state.devices) {
+          const key = device.machineId || (device.profileId && device.name ? `${device.profileId}:${device.name}` : device.name || device.id);
+          const previous = byStableKey.get(key);
+          if (!previous || devicePreviewScore(device) > devicePreviewScore(previous)) {
+            byStableKey.set(key, device);
+          }
+        }
+        return Array.from(byStableKey.values());
+      }
+
+      function devicePreviewScore(device) {
+        const runtimes = state.runtimesByDevice[device.id] || [];
+        return (device.status === "online" ? 1000 : 0) + runtimes.length * 10 + Number(device.lastSeenAt || 0) / 10000000000000;
       }
 
       function sortRuntimesForPreview(runtimes) {
@@ -738,11 +942,11 @@
 
       async function restoreSession() {
         const session = readSession();
-        if (!session) return;
+        if (!session) return false;
         const ack = await emit("auth:whoami", { token: session.token });
         if (!ack.ok) {
           clearSession();
-          return;
+          return false;
         }
         state.token = session.token;
         state.user = ack.user;
@@ -751,6 +955,7 @@
         saveSession();
         render();
         await subscribe();
+        return true;
       }
 
       function saveSession() {

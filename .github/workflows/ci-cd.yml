@@ -8,6 +8,28 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      agentbean_deploy_target:
+        description: Deploy target for Railway production deploy.
+        required: true
+        default: old
+        type: choice
+        options:
+          - old
+          - next
+      agentbean_npm_publish_target:
+        description: npm publish target for AgentBean packages.
+        required: true
+        default: old
+        type: choice
+        options:
+          - old
+          - next
+      run_production_deploy:
+        description: Run Railway production deploy during this manual dispatch.
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -194,11 +216,11 @@ jobs:
     needs:
       - validate
       - validate-agentbean-next
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.run_production_deploy)
     timeout-minutes: 30
 
     env:
-      AGENTBEAN_DEPLOY_TARGET: ${{ vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
+      AGENTBEAN_DEPLOY_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.agentbean_deploy_target || vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_PROJECT_ID: c6b70675-f7d5-47a1-a8e7-05b37d13e476
       RAILWAY_SERVICE_ID: 7b1dce9b-b7e7-4cfb-bb3f-ef86d10e8647
@@ -268,12 +290,13 @@ jobs:
     needs:
       - validate
       - validate-agentbean-next
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     timeout-minutes: 15
 
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       AGENTBEAN_DEPLOY_TARGET: ${{ vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
+      AGENTBEAN_NPM_PUBLISH_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.agentbean_npm_publish_target || vars.AGENTBEAN_NPM_PUBLISH_TARGET || vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
 
     steps:
       - name: Check out repository
@@ -317,7 +340,7 @@ jobs:
 
       - name: Install and build AgentBean Next npm packages
         id: agentbean-next-packages
-        if: env.NPM_TOKEN != '' && env.AGENTBEAN_DEPLOY_TARGET == 'next'
+        if: env.NPM_TOKEN != '' && env.AGENTBEAN_NPM_PUBLISH_TARGET == 'next'
         run: |
           npm ci --ignore-scripts
           npm run build:contracts
@@ -352,21 +375,21 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish AgentBean Next contracts package
-        if: env.NPM_TOKEN != '' && env.AGENTBEAN_DEPLOY_TARGET == 'next' && steps.agentbean-next-packages.outputs.should_publish_contracts == 'true'
+        if: env.NPM_TOKEN != '' && env.AGENTBEAN_NPM_PUBLISH_TARGET == 'next' && steps.agentbean-next-packages.outputs.should_publish_contracts == 'true'
         working-directory: packages/contracts
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish AgentBean Next daemon package
-        if: env.NPM_TOKEN != '' && env.AGENTBEAN_DEPLOY_TARGET == 'next' && steps.agentbean-next-packages.outputs.should_publish_daemon_next == 'true'
+        if: env.NPM_TOKEN != '' && env.AGENTBEAN_NPM_PUBLISH_TARGET == 'next' && steps.agentbean-next-packages.outputs.should_publish_daemon_next == 'true'
         working-directory: apps/daemon-next
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish AgentBean Next canonical daemon package
-        if: env.NPM_TOKEN != '' && env.AGENTBEAN_DEPLOY_TARGET == 'next' && steps.agentbean-next-packages.outputs.should_publish_canonical_daemon == 'true'
+        if: env.NPM_TOKEN != '' && env.AGENTBEAN_NPM_PUBLISH_TARGET == 'next' && steps.agentbean-next-packages.outputs.should_publish_canonical_daemon == 'true'
         working-directory: .agentbean-next-release/daemon
         run: npm publish --access public
         env:

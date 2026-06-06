@@ -110,6 +110,7 @@ Phase 2 完成标准：
 | P3-14 | CI 在 build 后执行 daemon install smoke：pack `@agentbean/contracts` 与 canonical `@agentbean/daemon`，在临时空项目安装 tarball，并确认 `daemon` / `agentbean-daemon` / `agentbean-next-daemon` 三个 bin 能进入 daemon-next CLI。 | Daemon/CI | 替换旧 daemon 前，必须验证旧 npm 用户入口不是只在 manifest 上存在，而是在真实安装路径中可执行。 | `production-cutover-runbook.md`, `target-architecture.md` |
 | P3-15 | 本地 external cutover audit 可以只读检查 GitHub variables、GitHub secrets 与 npm registry 版本，明确 production flip 前还缺哪些外部条件。 | Release/CI | 真正替换旧 AgentBean 前，必须把代码就绪与外部配置/发布状态分开验收。 | `production-cutover-runbook.md`, `target-architecture.md` |
 | P3-16 | 本地 full preview 对晚订阅的 web session replay 已持久化 device runtimes，并让 Custom Agent 表单按当前 device 过滤 runtime。 | Preview/Web/Server | 替换旧 AgentBean 前，本地 UI 必须能稳定看到 runtime、创建 custom agent，而不是只在协议测试里成立。 | `production-cutover-runbook.md`, `target-architecture.md` |
+| P3-17 | CI 可以手动发布 AgentBean Next npm packages，而不触发 Railway production deploy；production deploy 需要单独显式打开。 | Release/CI | 替换旧 AgentBean 前，应先发布 next daemon npm 用户入口，但不能因此提前替换生产后端。 | `production-cutover-runbook.md`, `target-architecture.md` |
 
 Phase 3 完成标准：
 
@@ -135,6 +136,7 @@ Phase 3 完成标准：
 | P4-12 | preview 页面刷新或 Socket.IO reconnect 后恢复 session 并重新订阅 devices、agents 与 channels。 | Web | 本地 preview 会话恢复。 | `target-architecture.md`, `known-gaps.md` |
 | P4-13 | web-next preview 可以通过 `channel:create` 创建 channel，刷新 channel snapshot，并在新 channel 中继续发送消息。 | Web/Socket | 本地 preview 不只依赖默认 `all` channel，开始覆盖真实产品 channel 工作流。 | `socket-protocol.md`, `target-architecture.md` |
 | P4-14 | preview 内联脚本在 DOM harness 中覆盖 `auth:whoami` session restore、snapshot resubscribe、`channel:create` submit 与新 channel message selection。 | Web | 防止静态 preview 的关键交互在无浏览器测试时回退。 | `socket-protocol.md`, `known-gaps.md` |
+| P4-15 | 本地 preview 第一屏必须自动进入默认 team，并呈现旧 AgentBean 风格的左侧频道、中间聊天、右侧成员/设备/runtime/custom agent 工作台。 | Web/UX | 防止把临时协议验证器误当成可替换旧 AgentBean 的产品 UI。 | `target-architecture.md`, `known-gaps.md` |
 
 Phase 4 完成标准：
 

@@ -107,7 +107,8 @@ export function collectAgentBeanNextReadinessChecks({
     ),
     check(
       'ci-publishes-next-packages',
-      workflow.includes("env.AGENTBEAN_DEPLOY_TARGET == 'next'") &&
+      workflow.includes('AGENTBEAN_NPM_PUBLISH_TARGET') &&
+        workflow.includes("env.AGENTBEAN_NPM_PUBLISH_TARGET == 'next'") &&
         workflow.includes('@agentbean/contracts@$CONTRACTS_VERSION') &&
         workflow.includes('@agentbean/daemon-next@$DAEMON_NEXT_VERSION') &&
         workflow.indexOf('Publish AgentBean Next contracts package') <
@@ -116,7 +117,21 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes('@agentbean/daemon@$CANONICAL_DAEMON_VERSION') &&
         workflow.indexOf('Publish AgentBean Next daemon package') <
           workflow.indexOf('Publish AgentBean Next canonical daemon package'),
-      'CI publish job must publish contracts, daemon-next, then canonical @agentbean/daemon when target is next',
+      'CI publish job must publish contracts, daemon-next, then canonical @agentbean/daemon when npm publish target is next',
+    ),
+    check(
+      'ci-decouples-next-npm-publish-from-production-deploy',
+        workflow.includes('agentbean_npm_publish_target') &&
+        workflow.includes('agentbean_deploy_target') &&
+        workflow.includes('run_production_deploy') &&
+        workflow.includes('inputs.agentbean_npm_publish_target') &&
+        workflow.includes('inputs.agentbean_deploy_target') &&
+        workflow.includes('inputs.run_production_deploy') &&
+        workflow.includes('AGENTBEAN_NPM_PUBLISH_TARGET') &&
+        workflow.includes('AGENTBEAN_DEPLOY_TARGET') &&
+        workflow.includes("env.AGENTBEAN_NPM_PUBLISH_TARGET == 'next'") &&
+        workflow.includes("env.AGENTBEAN_DEPLOY_TARGET == 'next'"),
+      'CI must allow publishing AgentBean Next npm packages without flipping the Railway production deploy target',
     ),
   ];
 

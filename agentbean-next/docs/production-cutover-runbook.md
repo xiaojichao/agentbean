@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-截至第三十九切片，仓库内替换前 gate 已具备：
+截至第四十一切片，仓库内替换前 gate 已具备：
 
 - 根目录 `railway.json` 明确声明 AgentBean Next 的 build、start 与 `/healthz`。
 - `AGENTBEAN_DEPLOY_TARGET` 支持 `old|next`，默认仍为 `old`。
@@ -16,7 +16,9 @@
   - daemon install smoke
   - preview smoke
 - `Deploy production` job 在 `AGENTBEAN_DEPLOY_TARGET=next` 时，会先运行 `npm run check:agentbean-next-readiness -- --production`。
-- `Publish agent to npm` job 在 `AGENTBEAN_DEPLOY_TARGET=next` 时，会先发布 `@agentbean/contracts`，再发布 `@agentbean/daemon-next`，最后发布由 daemon-next 生成的 canonical `@agentbean/daemon`。
+- `Publish agent to npm` job 在 `AGENTBEAN_NPM_PUBLISH_TARGET=next` 时，会先发布 `@agentbean/contracts`，再发布 `@agentbean/daemon-next`，最后发布由 daemon-next 生成的 canonical `@agentbean/daemon`。
+- `workflow_dispatch` 可以把 `agentbean_npm_publish_target=next` 与 `agentbean_deploy_target=old` 组合使用，先发布 next npm packages 而不替换 Railway production deploy。
+- `workflow_dispatch` 只有 `run_production_deploy=true` 时才会运行 Railway production deploy。
 - production readiness 会检查：
   - `AGENTBEAN_DEPLOY_TARGET=next`
   - `RAILWAY_TOKEN`
@@ -56,6 +58,37 @@ gh variable set AGENTBEAN_DEPLOY_TARGET --repo xiaojichao/agentbean --body next
 ```
 
 这一步是最后的 flip。
+
+## 先发布 Next npm Packages
+
+在 production deploy 仍保持旧 AgentBean 时，可以先发布 next npm packages：
+
+```bash
+gh workflow run "CI/CD" \
+  --repo xiaojichao/agentbean \
+  --ref main \
+  -f agentbean_deploy_target=old \
+  -f agentbean_npm_publish_target=next \
+  -f run_production_deploy=false
+```
+
+预期：
+
+- `Publish agent to npm` 会执行。
+- `Install and build AgentBean Next npm packages` 会执行。
+- 缺失的 next packages 会按顺序发布：
+  - `@agentbean/contracts@0.2.0`
+  - `@agentbean/daemon-next@0.2.0`
+  - canonical `@agentbean/daemon@0.2.0`
+- `Deploy production` 不会运行，因为 `run_production_deploy=false`。
+
+发布完成后再次运行：
+
+```bash
+PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run audit:agentbean-next-cutover
+```
+
+此时 npm registry 相关检查应通过；真正 production flip 仍会因为 `AGENTBEAN_DEPLOY_TARGET`、`AGENTBEAN_NEXT_DATA_DIR` 或 `AGENTBEAN_NEXT_SESSION_SECRET` 未完成而保持红灯。
 
 ### Railway
 
