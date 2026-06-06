@@ -36,12 +36,15 @@ describe('web-next preview page interactions', () => {
     const html = readFileSync(new URL('../preview/index.html', import.meta.url), 'utf8');
 
     expect(html).toContain('class="brand"');
+    expect(html).toContain('私有 Agent 团队');
+    expect(html).toContain('class="team-switcher"');
     expect(html).toContain('当前团队');
     expect(html).toContain('class="nav-item active"># 聊天');
     expect(html).toContain('class="workspace"');
     expect(html).toContain('class="right-rail"');
     expect(html).toContain('aria-label="右侧工作区"');
-    expect(html).toContain('添加 Custom Agent');
+    expect(html).toContain('添加自定义 Agent');
+    expect(html).toContain('环境变量');
     expect(html).toContain('发送消息');
   });
 
@@ -110,6 +113,7 @@ describe('web-next preview page interactions', () => {
       team: { id: 'team-1' },
       channel: { id: 'channel-1' },
     });
+    expect(harness.element('team-display-name').textContent).toBe('AgentBean');
   });
 
   test('creates a channel through the preview form and selects it for messages', async () => {
@@ -242,6 +246,7 @@ function createPreviewHarness(acks: Record<string, AckFactory>): PreviewHarness 
     'messages',
     'events',
     'session-summary',
+    'team-display-name',
     'team-submit',
   ]) {
     elements.set(id, createElement(id));
