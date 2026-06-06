@@ -55,11 +55,24 @@ describe('AgentBean Next full preview launcher', () => {
       username: 'preview',
       password: 'secret',
       teamName: 'Preview Team',
-      machineId: undefined,
+      machineId: 'agentbean-next-preview:host.local',
       profileId: 'preview-profile',
       hostname: 'host.local',
       fallbackPrefix: 'preview:',
     });
+  });
+
+  test('uses a stable preview machine id by default', () => {
+    expect(
+      parseAgentBeanNextPreviewConfig({
+        hostname: 'shaw-mac.local',
+        env: {
+          AGENTBEAN_NEXT_DATA_DIR: '/tmp/agentbean-next',
+          AGENTBEAN_NEXT_SESSION_SECRET: 'preview-secret',
+        },
+        argv: ['--port', '0'],
+      }).machineId,
+    ).toBe('agentbean-next-preview:shaw-mac.local');
   });
 
   test('logs in when the bootstrapped preview user already exists', async () => {

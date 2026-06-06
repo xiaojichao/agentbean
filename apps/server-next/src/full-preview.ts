@@ -83,6 +83,7 @@ export function parseAgentBeanNextPreviewConfig(
       AGENTBEAN_NEXT_STORAGE: 'sqlite',
     },
   });
+  const hostname = env.AGENTBEAN_NEXT_HOSTNAME ?? input.hostname ?? readHostname();
   return {
     host: serverConfig.host,
     port: serverConfig.port,
@@ -91,9 +92,9 @@ export function parseAgentBeanNextPreviewConfig(
     username: env.AGENTBEAN_NEXT_PREVIEW_USERNAME ?? 'shaw',
     password: env.AGENTBEAN_NEXT_PREVIEW_PASSWORD ?? 'secret',
     teamName: env.AGENTBEAN_NEXT_PREVIEW_TEAM ?? 'AgentBean',
-    machineId: env.AGENTBEAN_NEXT_MACHINE_ID,
+    machineId: env.AGENTBEAN_NEXT_MACHINE_ID ?? `agentbean-next-preview:${hostname}`,
     profileId: env.AGENTBEAN_NEXT_PROFILE_ID ?? 'agentbean-next-preview',
-    hostname: env.AGENTBEAN_NEXT_HOSTNAME ?? input.hostname ?? readHostname(),
+    hostname,
     fallbackPrefix: env.AGENTBEAN_NEXT_FALLBACK_PREFIX ?? 'daemon-next:',
   };
 }
