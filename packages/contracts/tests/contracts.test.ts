@@ -20,6 +20,7 @@ import {
   type CreateChannelCommandDto,
   type DeviceDto,
   type DiscoveredAgentDto,
+  type DispatchRequestDto,
   type DispatchDto,
   type ListChannelMembersCommandDto,
   type MessageDto,
@@ -122,6 +123,22 @@ describe('first-slice contract result shape', () => {
       createdAt: 6,
       updatedAt: 6,
     };
+    const dispatchRequest: DispatchRequestDto = {
+      teamId: team.id,
+      channelId: channel.id,
+      messageId: message.id,
+      agentId: agent.id,
+      requestId: 'request-1',
+      prompt: '@Codex hello',
+      deviceId: device.id,
+      customAgent: {
+        adapterKind: 'codex',
+        command: '/opt/homebrew/bin/codex',
+        args: ['--model', 'gpt-5.4'],
+        cwd: '/Users/shaw/AgentBean',
+        env: { OPENAI_API_KEY: 'secret-value' },
+      },
+    };
     const ack: Ack<{ message: MessageDto; dispatches: DispatchDto[] }> =
       makeSuccess({ message, dispatches: [dispatch] });
     const createChannel: CreateChannelCommandDto = {
@@ -174,6 +191,7 @@ describe('first-slice contract result shape', () => {
     expect(runtime.normalizedCommandKey).toBe('/opt/homebrew/bin/codex');
     expect(agent.visibleTeamIds).toEqual(['team-1']);
     expect(message.meta?.routeReason).toBe('MENTION');
+    expect(dispatchRequest.customAgent?.env?.OPENAI_API_KEY).toBe('secret-value');
     expect(createChannel.visibility).toBe('private');
     expect(updateChannel.title).toBe('Team-wide updates');
     expect(humanMemberCommand.memberUserId).toBe('user-2');

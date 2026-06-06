@@ -82,6 +82,10 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
     });
     registerWebSocketHandlers(socket, app, {
       dispatch(request) {
+        if (request.deviceId) {
+          agentSocketsByDeviceId.get(request.deviceId)?.emit?.(AGENT_EVENTS.dispatch.request, request);
+          return;
+        }
         agentNamespace.emit?.(AGENT_EVENTS.dispatch.request, request);
       },
       deviceScan(request) {

@@ -24,7 +24,15 @@ export interface ChannelRecord extends ChannelDto {
 
 export type MessageRecord = MessageDto;
 export type DispatchRecord = DispatchDto & { prompt: string };
+export interface AgentExecutionConfig {
+  adapterKind: AgentDto['adapterKind'];
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+}
 export type AgentRecord = AgentDto;
+export type AgentUpsertRecord = AgentRecord & { env?: Record<string, string> };
 export interface DeviceRecord extends DeviceDto {
   machineId?: string;
   profileId?: string;
@@ -82,9 +90,10 @@ export interface RuntimeRepository {
 }
 
 export interface AgentRepository {
-  upsert(input: AgentRecord): Promise<AgentRecord>;
+  upsert(input: AgentUpsertRecord): Promise<AgentRecord>;
   getByIdentityKey(identityKey: string): Promise<AgentRecord | null>;
   getById(agentId: ID): Promise<AgentRecord | null>;
+  getExecutionConfig(agentId: ID): Promise<AgentExecutionConfig | null>;
   linkIdentity(input: { identityKey: string; agentId: ID; kind: string; timestamp: UnixMs }): Promise<void>;
   markMissingScannedOffline(input: { teamId: ID; deviceId: ID; seenIdentityKeys: string[]; timestamp: UnixMs }): Promise<ID[]>;
   updateStatus(input: { agentId: ID; status: AgentRecord['status']; lastSeenAt: UnixMs; lastError?: string }): Promise<void>;

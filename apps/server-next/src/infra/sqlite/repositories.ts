@@ -6,6 +6,7 @@ import type {
   ChannelRecord,
   DeviceRecord,
   DispatchRecord,
+  AgentExecutionConfig,
   MessageRecord,
   RuntimeRecord,
   ServerNextRepositories,
@@ -417,7 +418,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             agent.command ?? null,
             agent.args ? JSON.stringify(agent.args) : null,
             agent.cwd ?? null,
-            agent.envKeys ? JSON.stringify(agent.envKeys) : null,
+            agent.env ? JSON.stringify(agent.env) : null,
             agent.lastSeenAt ?? 0,
             agent.lastError ?? null,
             agent.lastSeenAt ?? 0,
@@ -450,6 +451,12 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       },
       async getById(agentId) {
         return mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(agentId));
+      },
+      async getExecutionConfig(agentId) {
+        const row = globalDb
+          .prepare('SELECT adapter_kind, command, args_json, cwd, env_json FROM agents WHERE id = ?')
+          .get(agentId);
+        return mapAgentExecutionConfig(row);
       },
       async linkIdentity(input) {
         globalDb
@@ -758,6 +765,7 @@ function mapAgent(db: SqliteDatabase, row: unknown): AgentRecord | null {
     .prepare('SELECT team_id FROM agent_publications WHERE agent_id = ? ORDER BY published_at')
     .all(id)
     .map((publication) => sqliteText(publication, 'team_id'));
+  const rawEnv = parseJsonObject(sqliteNullableText(row, 'env_json'));
   return {
     id,
     primaryTeamId,
@@ -772,9 +780,22 @@ function mapAgent(db: SqliteDatabase, row: unknown): AgentRecord | null {
     command: sqliteNullableText(row, 'command'),
     args: parseJsonArray(sqliteNullableText(row, 'args_json')),
     cwd: sqliteNullableText(row, 'cwd'),
-    envKeys: parseJsonArray(sqliteNullableText(row, 'env_json')),
+    envKeys: rawEnv ? Object.keys(rawEnv).sort() : undefined,
     lastSeenAt: sqliteNumber(row, 'last_seen_at'),
     lastError: sqliteNullableText(row, 'last_error'),
+  };
+}
+
+function mapAgentExecutionConfig(row: unknown): AgentExecutionConfig | null {
+  if (!row) {
+    return null;
+  }
+  return {
+    adapterKind: sqliteText(row, 'adapter_kind') as AgentExecutionConfig['adapterKind'],
+    command: sqliteNullableText(row, 'command'),
+    args: parseJsonArray(sqliteNullableText(row, 'args_json')),
+    cwd: sqliteNullableText(row, 'cwd'),
+    env: parseJsonObject(sqliteNullableText(row, 'env_json')),
   };
 }
 
@@ -863,6 +884,20 @@ function parseJsonArray(value: string | undefined): string[] | undefined {
     return undefined;
   }
   return parsed.filter((item): item is string => typeof item === 'string');
+}
+
+function parseJsonObject(value: string | undefined): Record<string, string> | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const entries = Object.entries(parsed).filter(
+    (entry): entry is [string, string] => typeof entry[1] === 'string',
+  );
+  return Object.fromEntries(entries);
 }
 
 function sqliteValue(row: unknown, key: string): unknown {

@@ -19,9 +19,13 @@ export interface DispatchAttachmentDto {
 }
 
 export interface DispatchCustomAgentDto {
+  id?: ID;
+  name?: string;
   adapterKind: AdapterKind;
+  args?: string[];
   command?: string;
   cwd?: string;
+  env?: Record<string, string>;
 }
 
 export interface DispatchRequestDto {
@@ -29,6 +33,7 @@ export interface DispatchRequestDto {
   channelId: ID;
   messageId: ID;
   agentId: ID;
+  deviceId?: ID;
   requestId: string;
   prompt: string;
   attachments?: DispatchAttachmentDto[];
