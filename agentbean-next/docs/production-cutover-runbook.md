@@ -21,7 +21,7 @@
 - `workflow_dispatch` 只有 `run_production_deploy=true` 时才会运行 Railway production deploy。
 - `workflow_dispatch` 可以设置 `run_railway_preflight=true` 单独运行 `Railway Next preflight`，只读验证 Railway production runtime env 与 volume，不执行 `railway up`。
 - `workflow_dispatch` 可以设置 `sync_railway_next_runtime_env=true` 单独运行 `Railway Next env sync`，把 GitHub Actions 中的 Next runtime env 写入 Railway variables，并使用 `--skip-deploys` 避免触发部署。
-- `workflow_dispatch` 可以设置 `run_agentbean_next_production_smoke=true`，对输入 `agentbean_next_entry_url` 或 repository variable `AGENTBEAN_NEXT_ENTRY_URL` 指向的 URL 运行 public entry smoke 与 business smoke。
+- `workflow_dispatch` 可以设置 `run_agentbean_next_production_smoke=true`，对输入 `agentbean_next_entry_url` 或 repository variable `AGENTBEAN_NEXT_ENTRY_URL` 指向的 URL 运行 production smoke。final flip 前，该 job 会先运行 ready-to-flip audit；final flip 后，该 job 会先运行 strict cutover audit，再运行 public entry smoke 与 business smoke。Actions 中的 audit 会使用 job 注入的 production variables/secrets；其中 smoke 目标 URL 可由 workflow input 覆盖，但 strict audit 的 entry URL 来自 repository variable `AGENTBEAN_NEXT_ENTRY_URL` 的专用注入值。本地 audit 缺少 env 时会回退到 GitHub CLI 只读查询。
 - `workflow_dispatch` 可以设置 `run_agentbean_old_production_smoke=true`，对输入 `agentbean_old_entry_url`、`agentbean_next_entry_url` 或 repository variable `AGENTBEAN_NEXT_ENTRY_URL` 指向的 URL 运行 old entry smoke，用于 rollback 后证明公开入口已经回到旧 AgentBean。
 - `workflow_dispatch` 手动执行 `agentbean_deploy_target=next` 且 `run_production_deploy=true` 时，仓库变量 `AGENTBEAN_DEPLOY_TARGET` 也必须已经是 `next`。workflow input alone 不是最终生产开关，不能绕过 repository variable 的 final flip。
 - `workflow_dispatch` 手动执行 `agentbean_deploy_target=old` 且 `run_production_deploy=true` 时，必须同时设置 `run_agentbean_old_production_smoke=true`。CI 会阻止 rollback/old deploy 的反向只切不验。
@@ -299,7 +299,8 @@ gh variable set AGENTBEAN_DEPLOY_TARGET --repo xiaojichao/agentbean --body next
 - `Deploy production` 中的 `Run AgentBean Next production readiness checks` 被执行，不是 skipped。
 - `Run AgentBean Next production readiness checks` 通过。
 - Railway deploy 成功；如果 Railway CLI 卡住，`timeout 8m railway up` 会让单次尝试有界失败，整个 deploy job 不应无限等待。
-- `AgentBean Next production smoke` 先运行 ready-to-flip audit，确认除最终开关外的外部状态没有漂移。
+- `AgentBean Next production smoke` 在 final flip 前先运行 ready-to-flip audit，确认除最终开关外的外部状态没有漂移。
+- `AgentBean Next production smoke` 在 final flip 后先运行 strict cutover audit，确认 repository variable `AGENTBEAN_DEPLOY_TARGET=next` 也已经生效。
 - `AgentBean Next production smoke` 成功，至少覆盖 public entry smoke 与 business smoke。
 
 ## 生产 Smoke

@@ -425,7 +425,14 @@ jobs:
     timeout-minutes: 15
 
     env:
+      AGENTBEAN_DEPLOY_TARGET: ${{ vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
+      AGENTBEAN_NEXT_DATA_DIR: ${{ vars.AGENTBEAN_NEXT_DATA_DIR }}
+      AGENTBEAN_NEXT_AUDIT_ENTRY_URL: ${{ vars.AGENTBEAN_NEXT_ENTRY_URL }}
       AGENTBEAN_NEXT_ENTRY_URL: ${{ inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}
+      AGENTBEAN_NEXT_SESSION_SECRET: ${{ secrets.AGENTBEAN_NEXT_SESSION_SECRET }}
+      GH_TOKEN: ${{ github.token }}
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
 
     steps:
       - name: Check out repository
@@ -455,7 +462,12 @@ jobs:
           fi
 
       - name: Run AgentBean Next ready-to-flip audit
+        if: vars.AGENTBEAN_DEPLOY_TARGET != 'next'
         run: npm run audit:agentbean-next-ready-to-flip
+
+      - name: Run AgentBean Next strict cutover audit
+        if: vars.AGENTBEAN_DEPLOY_TARGET == 'next'
+        run: npm run audit:agentbean-next-cutover
 
       - name: Run AgentBean Next public entry smoke
         run: npm run smoke:agentbean-next-entry
