@@ -148,12 +148,40 @@ export function collectAgentBeanNextReadinessChecks({
     check(
       'ci-runs-ready-to-flip-before-production-smoke',
       workflow.includes('Run AgentBean Next ready-to-flip audit') &&
+        workflow.includes("if: vars.AGENTBEAN_DEPLOY_TARGET != 'next'") &&
         workflow.includes('npm run audit:agentbean-next-ready-to-flip') &&
         workflow.indexOf('Run AgentBean Next ready-to-flip audit') <
           workflow.indexOf('Run AgentBean Next public entry smoke') &&
         cutoverRunbook.includes('ready-to-flip audit') &&
         cutoverRunbook.includes('production smoke'),
       'CI production smoke must first prove external state is ready except for the final deploy target',
+    ),
+    check(
+      'ci-runs-strict-cutover-after-final-flip-before-production-smoke',
+      workflow.includes('Run AgentBean Next strict cutover audit') &&
+        workflow.includes("if: vars.AGENTBEAN_DEPLOY_TARGET == 'next'") &&
+        workflow.includes('npm run audit:agentbean-next-cutover') &&
+        workflow.indexOf('Run AgentBean Next strict cutover audit') <
+          workflow.indexOf('Run AgentBean Next public entry smoke') &&
+        cutoverRunbook.includes('strict cutover audit') &&
+        cutoverRunbook.includes('final flip 后'),
+      'CI production smoke must run strict cutover audit after the final deploy target is next',
+    ),
+    check(
+      'ci-provides-production-env-for-production-smoke-audits',
+      workflow.includes('GH_TOKEN: ${{ github.token }}') &&
+        workflow.includes("AGENTBEAN_DEPLOY_TARGET: ${{ vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}") &&
+        workflow.includes('AGENTBEAN_NEXT_DATA_DIR: ${{ vars.AGENTBEAN_NEXT_DATA_DIR }}') &&
+        workflow.includes('AGENTBEAN_NEXT_AUDIT_ENTRY_URL: ${{ vars.AGENTBEAN_NEXT_ENTRY_URL }}') &&
+        workflow.includes('AGENTBEAN_NEXT_ENTRY_URL: ${{ inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}') &&
+        workflow.includes('AGENTBEAN_NEXT_SESSION_SECRET: ${{ secrets.AGENTBEAN_NEXT_SESSION_SECRET }}') &&
+        workflow.includes('NPM_TOKEN: ${{ secrets.NPM_TOKEN }}') &&
+        workflow.includes('RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}') &&
+        workflow.indexOf('GH_TOKEN: ${{ github.token }}') <
+          workflow.indexOf('Run AgentBean Next ready-to-flip audit') &&
+        workflow.indexOf('GH_TOKEN: ${{ github.token }}') <
+          workflow.indexOf('Run AgentBean Next strict cutover audit'),
+      'CI production smoke audits must receive production variables and secrets before running cutover audits',
     ),
     check(
       'ci-runs-daemon-install-smoke',

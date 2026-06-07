@@ -112,6 +112,82 @@ describe('AgentBean Next cutover audit', () => {
       message: 'GitHub repository variables could not be read: failed to get variables: TLS handshake timeout',
     });
   });
+
+  test('can audit CI-provided production environment without GitHub CLI variable or secret listing', () => {
+    const checks = collectAgentBeanNextCutoverAudit({
+      env: {
+        AGENTBEAN_DEPLOY_TARGET: 'next',
+        AGENTBEAN_NEXT_DATA_DIR: '/data/agentbean-next',
+        AGENTBEAN_NEXT_AUDIT_ENTRY_URL: 'https://agentbean.example.com',
+        AGENTBEAN_NEXT_ENTRY_URL: 'https://agentbean.example.com',
+        RAILWAY_TOKEN: 'railway-token',
+        NPM_TOKEN: 'npm-token',
+        AGENTBEAN_NEXT_SESSION_SECRET: 'session-secret',
+      },
+      runCommand: (_command, args) => {
+        if (args[0] === 'variable' || args[0] === 'secret') {
+          throw new Error('GitHub CLI listing is not available in this CI job');
+        }
+        if (args[0] === 'view') {
+          const versions: Record<string, string> = {
+            '@agentbean/contracts@0.2.0': '0.2.0',
+            '@agentbean/daemon-next@0.2.0': '0.2.0',
+            '@agentbean/daemon@0.2.0': '0.2.0',
+          };
+          const version = versions[args[1]];
+          if (!version) {
+            throw new Error(`missing npm version for ${args[1]}`);
+          }
+          return `${version}\n`;
+        }
+        throw new Error(`unexpected command args: ${args.join(' ')}`);
+      },
+    });
+
+    expect(summarizeCutoverAudit(checks)).toMatchObject({
+      ok: true,
+      failed: 0,
+      total: 11,
+    });
+  });
+
+  test('does not treat workflow smoke URL override as repository entry URL evidence', () => {
+    const checks = collectAgentBeanNextCutoverAudit({
+      env: {
+        AGENTBEAN_DEPLOY_TARGET: 'next',
+        AGENTBEAN_NEXT_DATA_DIR: '/data/agentbean-next',
+        AGENTBEAN_NEXT_ENTRY_URL: 'https://override.example.com',
+        RAILWAY_TOKEN: 'railway-token',
+        NPM_TOKEN: 'npm-token',
+        AGENTBEAN_NEXT_SESSION_SECRET: 'session-secret',
+      },
+      runCommand: (_command, args) => {
+        if (args[0] === 'variable' || args[0] === 'secret') {
+          throw new Error('GitHub CLI listing is not available in this CI job');
+        }
+        if (args[0] === 'view') {
+          const versions: Record<string, string> = {
+            '@agentbean/contracts@0.2.0': '0.2.0',
+            '@agentbean/daemon-next@0.2.0': '0.2.0',
+            '@agentbean/daemon@0.2.0': '0.2.0',
+          };
+          const version = versions[args[1]];
+          if (!version) {
+            throw new Error(`missing npm version for ${args[1]}`);
+          }
+          return `${version}\n`;
+        }
+        throw new Error(`unexpected command args: ${args.join(' ')}`);
+      },
+    });
+
+    expect(checks.find((check) => check.id === 'github-variable-next-entry-url')).toMatchObject({
+      ok: false,
+    });
+    expect(summarizeCutoverAudit(checks)).toMatchObject({
+      ok: false,
+    });
+  });
 });
 
 function createFakeRunCommand({

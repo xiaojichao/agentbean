@@ -27,6 +27,8 @@ describe('AgentBean Next readiness checker', () => {
       'ci-requires-repository-target-for-manual-next-deploy',
       'ci-requires-old-smoke-for-manual-rollback-deploy',
       'ci-runs-ready-to-flip-before-production-smoke',
+      'ci-runs-strict-cutover-after-final-flip-before-production-smoke',
+      'ci-provides-production-env-for-production-smoke-audits',
       'ci-runs-daemon-install-smoke',
       'deploy-target-gate',
       'ci-bounds-railway-deploy-command',
@@ -40,6 +42,14 @@ describe('AgentBean Next readiness checker', () => {
       'ci-runs-railway-next-preflight-without-deploy',
       'ci-syncs-railway-next-env-without-deploy',
     ]);
+  });
+
+  test('requires production environment for production smoke audits', () => {
+    const summary = summarizeReadiness(collectAgentBeanNextReadinessChecks());
+
+    expect(summary.checks.find((check) => check.id === 'ci-provides-production-env-for-production-smoke-audits')).toMatchObject({
+      ok: true,
+    });
   });
 
   test('fails production readiness when required flip configuration is absent', () => {

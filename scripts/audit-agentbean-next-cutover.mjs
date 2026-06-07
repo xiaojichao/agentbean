@@ -10,13 +10,14 @@ const repo = 'xiaojichao/agentbean';
 
 export function collectAgentBeanNextCutoverAudit({
   root = rootDir,
+  env = process.env,
   runCommand = runCommandSync,
 } = {}) {
   const contractsPackage = readJson(join(root, 'packages/contracts/package.json'));
   const daemonNextPackage = readJson(join(root, 'apps/daemon-next/package.json'));
   const canonicalDaemonVersion = daemonNextPackage.version;
-  const variablesResult = readGitHubVariables(runCommand);
-  const secretsResult = readGitHubSecrets(runCommand);
+  const variablesResult = readGitHubVariables(runCommand, env);
+  const secretsResult = readGitHubSecrets(runCommand, env);
   const registry = {
     contracts: npmVersionExists(runCommand, '@agentbean/contracts', contractsPackage.version),
     daemonNext: npmVersionExists(runCommand, '@agentbean/daemon-next', daemonNextPackage.version),
@@ -106,7 +107,15 @@ export function summarizeCutoverAudit(checks, { allowPendingFinalFlip = false } 
   };
 }
 
-function readGitHubVariables(runCommand) {
+function readGitHubVariables(runCommand, env) {
+  const envItems = [
+    envVariable(env, 'AGENTBEAN_DEPLOY_TARGET'),
+    envVariable(env, 'AGENTBEAN_NEXT_DATA_DIR'),
+    envVariable(env, 'AGENTBEAN_NEXT_AUDIT_ENTRY_URL', 'AGENTBEAN_NEXT_ENTRY_URL'),
+  ].filter(Boolean);
+  if (envItems.length === 3) {
+    return { ok: true, items: envItems, error: undefined };
+  }
   try {
     const output = runCommand('gh', [
       'variable',
@@ -122,13 +131,30 @@ function readGitHubVariables(runCommand) {
   }
 }
 
-function readGitHubSecrets(runCommand) {
+function readGitHubSecrets(runCommand, env) {
+  const envItems = [
+    envSecret(env, 'RAILWAY_TOKEN'),
+    envSecret(env, 'NPM_TOKEN'),
+    envSecret(env, 'AGENTBEAN_NEXT_SESSION_SECRET'),
+  ].filter(Boolean);
+  if (envItems.length === 3) {
+    return { ok: true, items: envItems, error: undefined };
+  }
   try {
     const output = runCommand('gh', ['secret', 'list', '--repo', repo, '--json', 'name,updatedAt']);
     return { ok: true, items: JSON.parse(output), error: undefined };
   } catch (error) {
     return { ok: false, items: [], error: formatCommandError(error) };
   }
+}
+
+function envVariable(env, name, variableName = name) {
+  const value = env[name];
+  return value ? { name: variableName, value } : null;
+}
+
+function envSecret(env, name) {
+  return env[name] ? { name } : null;
 }
 
 function npmVersionExists(runCommand, packageName, version) {
