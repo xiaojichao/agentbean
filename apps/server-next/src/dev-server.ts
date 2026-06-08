@@ -12,7 +12,7 @@ import {
   createSqliteRepositories,
   type SqliteDatabase,
 } from './infra/sqlite/repositories.js';
-import { attachServerNextNamespaces, type SocketServerLike } from './transport/socket-server.js';
+import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
 import type { ServerNextUseCases } from './application/usecases.js';
 
 type SocketIoServerConstructor = new (server: HttpServer, options?: Record<string, unknown>) => SocketServerLike & {
@@ -37,6 +37,7 @@ export interface StartServerNextDevServerInput {
   config?: ServerNextDevConfig;
   Server?: SocketIoServerConstructor;
   Database?: BetterSqlite3Constructor;
+  dispatchTimeout?: DispatchTimeoutSchedulerConfig;
 }
 
 export interface ServerNextDevServerHandle {
@@ -49,6 +50,11 @@ export interface ServerNextDevServerHandle {
 }
 
 type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { close(): void };
+
+export interface DispatchTimeoutSchedulerConfig {
+  timeoutMs: number;
+  intervalMs: number;
+}
 
 export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = {}): ServerNextDevConfig {
   const argv = input.argv ?? process.argv.slice(2);
@@ -100,7 +106,12 @@ export async function startServerNextDevServer(
     response.end(JSON.stringify({ ok: false, error: 'NOT_FOUND' }));
   });
   const ioServer = new Server(httpServer, { cors: { origin: '*' } });
-  attachServerNextNamespaces(ioServer, app);
+  const realtime = attachServerNextNamespaces(ioServer, app);
+  const dispatchTimeoutInterval = startDispatchTimeoutScheduler(
+    app,
+    realtime,
+    input.dispatchTimeout ?? { timeoutMs: 5 * 60 * 1000, intervalMs: 5000 },
+  );
 
   await new Promise<void>((resolve) => {
     httpServer.listen(config.port, config.host, () => resolve());
@@ -114,11 +125,33 @@ export async function startServerNextDevServer(
     httpServer,
     ioServer,
     async close() {
+      if (dispatchTimeoutInterval) {
+        clearInterval(dispatchTimeoutInterval);
+      }
       await new Promise<void>((resolve) => ioServer.close(() => resolve()));
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
       await appWithCleanup.close();
     },
   };
+}
+
+function startDispatchTimeoutScheduler(
+  app: ServerNextUseCases,
+  realtime: ServerNextRealtime,
+  config: DispatchTimeoutSchedulerConfig,
+): ReturnType<typeof setInterval> | null {
+  if (config.intervalMs <= 0 || config.timeoutMs <= 0) {
+    return null;
+  }
+  return setInterval(async () => {
+    const result = await app.failTimedOutDispatches({ olderThan: Date.now() - config.timeoutMs });
+    if (!result.ok) {
+      return;
+    }
+    for (const dispatch of result.dispatches) {
+      realtime.emitDispatchStatus(dispatch);
+    }
+  }, config.intervalMs);
 }
 
 function readPreviewHtml(): string {

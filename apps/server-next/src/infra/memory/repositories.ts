@@ -251,6 +251,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         if (!dispatch) {
           return null;
         }
+        if (!isPendingDispatchStatus(dispatch.status)) {
+          return { dispatch, changed: false };
+        }
         const updated = {
           ...dispatch,
           status: 'succeeded' as const,
@@ -258,12 +261,15 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           completedAt: input.completedAt,
         };
         dispatches.set(input.dispatchId, updated);
-        return updated;
+        return { dispatch: updated, changed: true };
       },
       async markTimedOut(input) {
         const dispatch = dispatches.get(input.dispatchId);
         if (!dispatch) {
           return null;
+        }
+        if (!isPendingDispatchStatus(dispatch.status)) {
+          return { dispatch, changed: false };
         }
         const updated = {
           ...dispatch,
@@ -273,12 +279,15 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           error: input.error,
         };
         dispatches.set(input.dispatchId, updated);
-        return updated;
+        return { dispatch: updated, changed: true };
       },
       async markFailed(input) {
         const dispatch = dispatches.get(input.dispatchId);
         if (!dispatch) {
           return null;
+        }
+        if (!isPendingDispatchStatus(dispatch.status)) {
+          return { dispatch, changed: false };
         }
         const updated = {
           ...dispatch,
@@ -288,12 +297,32 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           error: input.error,
         };
         dispatches.set(input.dispatchId, updated);
-        return updated;
+        return { dispatch: updated, changed: true };
+      },
+      async markCancelled(input) {
+        const dispatch = dispatches.get(input.dispatchId);
+        if (!dispatch) {
+          return null;
+        }
+        if (!isPendingDispatchStatus(dispatch.status)) {
+          return { dispatch, changed: false };
+        }
+        const updated = {
+          ...dispatch,
+          status: 'cancelled' as const,
+          updatedAt: input.completedAt,
+          completedAt: input.completedAt,
+        };
+        dispatches.set(input.dispatchId, updated);
+        return { dispatch: updated, changed: true };
       },
       async listPendingOlderThan(timestamp) {
         return Array.from(dispatches.values()).filter(
           (dispatch) =>
-            (dispatch.status === 'queued' || dispatch.status === 'accepted' || dispatch.status === 'running') &&
+            (dispatch.status === 'queued' ||
+              dispatch.status === 'sent' ||
+              dispatch.status === 'accepted' ||
+              dispatch.status === 'running') &&
             dispatch.updatedAt < timestamp,
         );
       },
@@ -302,4 +331,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
     },
   };
+}
+
+function isPendingDispatchStatus(status: DispatchRecord['status']): boolean {
+  return status === 'queued' || status === 'sent' || status === 'accepted' || status === 'running';
 }

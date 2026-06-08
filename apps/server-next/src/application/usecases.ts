@@ -35,6 +35,7 @@ export interface ServerNextUseCases {
   registerAgent(input: AgentDto): Promise<Ack<{ agent: AgentDto }>>;
   sendMessage(input: SendMessageInput): Promise<Ack<SendMessageResult>>;
   getDispatchRequest(input: { dispatchId: string }): Promise<Ack<{ request: DispatchRequestDto & { id: string } }>>;
+  cancelDispatch(input: CancelDispatchInput): Promise<Ack<{ dispatch: DispatchDto }>>;
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   failTimedOutDispatches(input: { olderThan: number }): Promise<Ack<{ dispatches: DispatchDto[] }>>;
   receiveDispatchResult(input: ReceiveDispatchResultInput): Promise<Ack<ReceiveDispatchResultResult>>;
@@ -160,6 +161,11 @@ export interface SendMessageResult {
 export interface ListChannelMessagesInput {
   channelId: string;
   limit: number;
+}
+
+export interface CancelDispatchInput {
+  userId: string;
+  dispatchId: string;
 }
 
 export interface CreateChannelInput {
@@ -866,18 +872,40 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
     },
 
+    async cancelDispatch(cancelInput) {
+      const dispatch = await repositories.dispatches.getById(cancelInput.dispatchId);
+      if (!dispatch) {
+        return makeFailure('NOT_FOUND', 'Dispatch not found');
+      }
+      if (!(await repositories.teams.isMember(dispatch.teamId, cancelInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+
+      const cancelled = await repositories.dispatches.markCancelled({
+        dispatchId: cancelInput.dispatchId,
+        completedAt: clock.now(),
+      });
+      if (!cancelled) {
+        return makeFailure('NOT_FOUND', 'Dispatch not found');
+      }
+      return makeSuccess({ dispatch: toDispatchDto(cancelled.dispatch) });
+    },
+
     async failTimedOutDispatches(timeoutInput) {
       const now = clock.now();
       const pending = await repositories.dispatches.listPendingOlderThan(timeoutInput.olderThan);
       const dispatches: DispatchDto[] = [];
       for (const dispatch of pending) {
+        if (!isPendingDispatchStatus(dispatch.status)) {
+          continue;
+        }
         const timedOut = await repositories.dispatches.markTimedOut({
           dispatchId: dispatch.id,
           error: 'DISPATCH_TIMEOUT',
           completedAt: now,
         });
-        if (timedOut) {
-          dispatches.push(toDispatchDto(timedOut));
+        if (timedOut?.changed) {
+          dispatches.push(toDispatchDto(timedOut.dispatch));
         }
       }
       return makeSuccess({ dispatches });
@@ -891,6 +919,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (dispatch.agentId !== resultInput.agentId) {
         return makeFailure('FORBIDDEN', 'Dispatch does not belong to agent');
       }
+      if (!isPendingDispatchStatus(dispatch.status)) {
+        return makeFailure('CONFLICT', 'Dispatch is already completed');
+      }
 
       const now = clock.now();
       const completed = await repositories.dispatches.markSucceeded({
@@ -900,16 +931,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!completed) {
         return makeFailure('NOT_FOUND', 'Dispatch not found');
       }
+      if (!completed.changed) {
+        return makeFailure('CONFLICT', 'Dispatch is already completed');
+      }
       const message = await repositories.messages.append({
         id: ids.nextId(),
-        teamId: dispatch.teamId,
-        channelId: dispatch.channelId,
+        teamId: completed.dispatch.teamId,
+        channelId: completed.dispatch.channelId,
         senderKind: 'agent',
         senderId: resultInput.agentId,
         body: resultInput.body,
         createdAt: now,
         meta: {
-          dispatchId: resultInput.dispatchId,
+          dispatchId: completed.dispatch.id,
           ...(resultInput.artifactIds ? { artifactIds: resultInput.artifactIds } : {}),
         },
       });
@@ -919,7 +953,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         lastSeenAt: now,
       });
 
-      return makeSuccess({ dispatch: toDispatchDto(completed), message });
+      return makeSuccess({ dispatch: toDispatchDto(completed.dispatch), message });
     },
 
     async receiveDispatchError(errorInput) {
@@ -929,6 +963,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       if (dispatch.agentId !== errorInput.agentId) {
         return makeFailure('FORBIDDEN', 'Dispatch does not belong to agent');
+      }
+      if (!isPendingDispatchStatus(dispatch.status)) {
+        return makeFailure('CONFLICT', 'Dispatch is already completed');
       }
 
       const now = clock.now();
@@ -940,6 +977,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!failed) {
         return makeFailure('NOT_FOUND', 'Dispatch not found');
       }
+      if (!failed.changed) {
+        return makeFailure('CONFLICT', 'Dispatch is already completed');
+      }
       await repositories.agents.updateStatus({
         agentId: errorInput.agentId,
         status: 'offline',
@@ -947,7 +987,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         lastError: errorInput.error,
       });
 
-      return makeSuccess({ dispatch: toDispatchDto(failed) });
+      return makeSuccess({ dispatch: toDispatchDto(failed.dispatch) });
     },
   };
 }
@@ -1081,6 +1121,10 @@ function safeEqual(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
   return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function isPendingDispatchStatus(status: DispatchDto['status']): boolean {
+  return status === 'queued' || status === 'sent' || status === 'accepted' || status === 'running';
 }
 
 async function allHumanMembersBelongToTeam(

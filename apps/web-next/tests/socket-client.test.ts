@@ -71,6 +71,10 @@ describe('web-next socket client', () => {
       channelId: 'channel-1',
       body: 'hello',
     });
+    await client.cancelDispatch({
+      userId: 'user-1',
+      dispatchId: 'dispatch-1',
+    });
 
     expect(transport.emitted).toEqual([
       [WEB_EVENTS.auth.register, { username: 'shaw', password: 'secret', teamName: 'AgentBean' }],
@@ -89,6 +93,7 @@ describe('web-next socket client', () => {
       [WEB_EVENTS.channel.members, { userId: 'user-1', teamId: 'team-1', channelId: 'channel-2' }],
       [WEB_EVENTS.agent.create, { userId: 'user-1', teamId: 'team-1', deviceId: 'device-1', runtimeId: 'runtime-1', name: 'Custom Codex' }],
       [WEB_EVENTS.message.send, { userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'hello' }],
+      [WEB_EVENTS.dispatch.cancel, { userId: 'user-1', dispatchId: 'dispatch-1' }],
     ]);
     expect(transport.emitted.map(([event]) => event)).not.toContain('network:list');
   });

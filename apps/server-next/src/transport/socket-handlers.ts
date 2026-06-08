@@ -13,6 +13,8 @@ type UseCaseName = keyof ServerNextUseCases;
 
 export interface WebSocketHandlerOptions {
   dispatch?(request: DispatchRequestDto & { id: string }): void;
+  dispatchCancel?(request: DispatchRequestDto & { id: string }): void;
+  dispatchStatus?(dispatch: unknown): void;
   deviceScan?(request: { requestId: string; deviceId: string }): void;
   afterChannelMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
@@ -87,6 +89,19 @@ export function registerWebSocketHandlers(
       if (request.ok) {
         options.dispatch(request.request);
       }
+    }
+  });
+  bind(socket, WEB_EVENTS.dispatch.cancel, app, 'cancelDispatch', async (_payload, result) => {
+    if (!isDispatchAck(result)) {
+      return;
+    }
+    options.dispatchStatus?.(result.dispatch);
+    if (!options.dispatchCancel) {
+      return;
+    }
+    const request = await app.getDispatchRequest({ dispatchId: result.dispatch.id });
+    if (request.ok) {
+      options.dispatchCancel(request.request);
     }
   });
 }
@@ -188,4 +203,12 @@ function isSendMessageAck(result: unknown): result is {
     typeof candidate.message?.body === 'string' &&
     Array.isArray(candidate.dispatches)
   );
+}
+
+function isDispatchAck(result: unknown): result is { ok: true; dispatch: { id: string } } {
+  if (!result || typeof result !== 'object') {
+    return false;
+  }
+  const candidate = result as { ok?: unknown; dispatch?: { id?: unknown } };
+  return candidate.ok === true && typeof candidate.dispatch?.id === 'string';
 }

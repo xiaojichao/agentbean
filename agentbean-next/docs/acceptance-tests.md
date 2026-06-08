@@ -138,7 +138,7 @@
 
 前提：server dispatch 到 agent，
 当：daemon 在 timeout 前没有返回，
-结果：dispatch 被标记为 failed，并带有 `DISPATCH_TIMEOUT`，
+结果：dispatch 被标记为 `timed_out`，并带有 `DISPATCH_TIMEOUT`，
 且原始 human message 保持持久化。
 
 ### Agent Reply 会携带 Artifacts 持久化

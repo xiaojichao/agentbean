@@ -34,6 +34,7 @@ describe('server-next socket handlers', () => {
       })),
       createCustomAgent: vi.fn(async (payload) => makeSuccess({ payload })),
       sendMessage: vi.fn(async (payload) => makeSuccess({ payload })),
+      cancelDispatch: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
 
     registerWebSocketHandlers(socket, app);
@@ -55,6 +56,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.channel.join,
       WEB_EVENTS.agent.create,
       WEB_EVENTS.message.send,
+      WEB_EVENTS.dispatch.cancel,
     ]);
     expect(socket.eventNames()).not.toContain('network:list');
 
@@ -135,6 +137,10 @@ describe('server-next socket handlers', () => {
       runtimeId: 'runtime-1',
       name: 'Custom Codex',
     });
+    await socket.trigger(WEB_EVENTS.dispatch.cancel, {
+      userId: 'user-1',
+      dispatchId: 'dispatch-1',
+    });
 
     expect(app.registerUser).toHaveBeenCalledWith({ username: 'shaw' });
     expect(app.whoami).toHaveBeenCalledWith({ token: 'token-1' });
@@ -201,6 +207,10 @@ describe('server-next socket handlers', () => {
       deviceId: 'device-1',
       runtimeId: 'runtime-1',
       name: 'Custom Codex',
+    });
+    expect(app.cancelDispatch).toHaveBeenCalledWith({
+      userId: 'user-1',
+      dispatchId: 'dispatch-1',
     });
   });
 

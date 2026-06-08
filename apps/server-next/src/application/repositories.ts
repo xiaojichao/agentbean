@@ -24,6 +24,10 @@ export interface ChannelRecord extends ChannelDto {
 
 export type MessageRecord = MessageDto;
 export type DispatchRecord = DispatchDto & { prompt: string };
+export interface DispatchMutationResult {
+  dispatch: DispatchRecord;
+  changed: boolean;
+}
 export interface AgentExecutionConfig {
   adapterKind: AgentDto['adapterKind'];
   command?: string;
@@ -109,9 +113,10 @@ export interface MessageRepository {
 export interface DispatchRepository {
   create(input: DispatchRecord): Promise<DispatchRecord>;
   getById(id: ID): Promise<DispatchRecord | null>;
-  markSucceeded(input: { dispatchId: ID; completedAt: UnixMs }): Promise<DispatchRecord | null>;
-  markTimedOut(input: { dispatchId: ID; error: string; completedAt: UnixMs }): Promise<DispatchRecord | null>;
-  markFailed(input: { dispatchId: ID; error: string; completedAt: UnixMs }): Promise<DispatchRecord | null>;
+  markSucceeded(input: { dispatchId: ID; completedAt: UnixMs }): Promise<DispatchMutationResult | null>;
+  markTimedOut(input: { dispatchId: ID; error: string; completedAt: UnixMs }): Promise<DispatchMutationResult | null>;
+  markFailed(input: { dispatchId: ID; error: string; completedAt: UnixMs }): Promise<DispatchMutationResult | null>;
+  markCancelled(input: { dispatchId: ID; completedAt: UnixMs }): Promise<DispatchMutationResult | null>;
   listPendingOlderThan(timestamp: UnixMs): Promise<DispatchRecord[]>;
   listByMessage(messageId: ID): Promise<DispatchRecord[]>;
 }
