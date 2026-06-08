@@ -190,6 +190,118 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('cancelDispatch marks a pending dispatch as cancelled for team members', async () => {
+    let now = 430;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'executor-hosted',
+      source: 'scanned',
+      status: 'online',
+      lastSeenAt: now,
+    });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex hello',
+    });
+
+    now = 450;
+    await expect(app.cancelDispatch({ userId: 'user-1', dispatchId: 'dispatch-1' })).resolves.toMatchObject({
+      ok: true,
+      dispatch: {
+        id: 'dispatch-1',
+        status: 'cancelled',
+        completedAt: 450,
+      },
+    });
+    await expect(app.cancelDispatch({ userId: 'user-2', dispatchId: 'dispatch-1' })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+    await expect(app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: 'late reply',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+    });
+    await expect(app.failTimedOutDispatches({ olderThan: 999 })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [],
+    });
+    await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
+      ok: true,
+      messages: [
+        {
+          id: 'message-1',
+          senderKind: 'human',
+          body: '@Codex hello',
+        },
+      ],
+    });
+  });
+
+  test('receiveDispatchResult is idempotent against same-millisecond duplicate results', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 470,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1', 'message-2']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'executor-hosted',
+      source: 'scanned',
+      status: 'online',
+      lastSeenAt: 470,
+    });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex hello',
+    });
+
+    await expect(app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: 'first reply',
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatch: { status: 'succeeded' },
+      message: { id: 'message-2', body: 'first reply' },
+    });
+    await expect(app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: 'duplicate reply',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+    });
+    await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
+      ok: true,
+      messages: [
+        { id: 'message-1', body: '@Codex hello' },
+        { id: 'message-2', body: 'first reply' },
+      ],
+    });
+  });
+
   test('returns device detail with runtimes and visible agents for team members only', async () => {
     const app = createInMemoryServerNext({
       now: () => 500,

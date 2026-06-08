@@ -173,6 +173,47 @@ describe('daemon-next protocol client', () => {
     ]);
   });
 
+  test('ignores dispatch results after a cancel request', async () => {
+    const socket = new FakeAgentSocket();
+    let resolveExecutor: ((body: string) => void) | undefined;
+    let executorStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      executorStarted = resolve;
+    });
+    const client = createDaemonProtocolClient({
+      socket,
+      executor: async () => {
+        executorStarted?.();
+        return new Promise<string>((resolve) => {
+          resolveExecutor = resolve;
+        });
+      },
+      device: { teamId: 'team-1', ownerId: 'user-1' },
+      runtimes: [],
+      agents: [],
+    });
+
+    await client.start();
+    const running = socket.trigger(AGENT_EVENTS.dispatch.request, {
+      id: 'dispatch-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'hello',
+    });
+    await started;
+    await socket.trigger(AGENT_EVENTS.dispatch.cancel, {
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+    });
+    resolveExecutor?.('late result');
+    await running;
+
+    expect(socket.emitted.some(([event]) => event === AGENT_EVENTS.dispatch.result)).toBe(false);
+  });
+
   test('passes raw custom agent env only inside selected dispatch request', async () => {
     const socket = new FakeAgentSocket();
     const received: DispatchRequestPayload[] = [];

@@ -98,8 +98,8 @@
 | Agent dispatch `dispatch` | First Slice | 重命名为 `dispatch:request`。 |
 | Agent reply `reply` | First Slice | 重命名为 `dispatch:result`。 |
 | Agent error `error_event` | First Slice | 重命名为 `dispatch:error`。 |
-| `dispatch:cancel` | Keep | 保留。 |
-| Dispatch persistence | Missing | 加入一等 dispatch table/model。 |
+| `dispatch:cancel` | First Slice | 已实现 web command、server 状态更新、daemon cancel signal 与 dispatch status 广播。 |
+| Dispatch persistence | First Slice | 已加入一等 dispatch table/model，并接入 result/error/cancel/timeout 状态。 |
 
 ## Artifacts 与 Workspace
 

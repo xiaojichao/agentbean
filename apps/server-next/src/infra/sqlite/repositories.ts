@@ -590,40 +590,58 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return mapDispatch(teamDb.prepare('SELECT * FROM dispatches WHERE id = ?').get(id));
       },
       async markSucceeded(input) {
-        teamDb
+        const result = teamDb
           .prepare(
             `UPDATE dispatches
              SET status = ?, updated_at = ?, completed_at = ?, error_code = NULL, error_message = NULL
-             WHERE id = ?`,
+             WHERE id = ?
+             AND status IN ('queued', 'sent', 'accepted', 'running')`,
           )
           .run('succeeded', input.completedAt, input.completedAt, input.dispatchId);
-        return mapDispatch(teamDb.prepare('SELECT * FROM dispatches WHERE id = ?').get(input.dispatchId));
+        const dispatch = mapDispatch(teamDb.prepare('SELECT * FROM dispatches WHERE id = ?').get(input.dispatchId));
+        return dispatch ? { dispatch, changed: sqliteChanges(result) > 0 } : null;
       },
       async markTimedOut(input) {
-        teamDb
+        const result = teamDb
           .prepare(
             `UPDATE dispatches
              SET status = ?, updated_at = ?, completed_at = ?, error_message = ?
-             WHERE id = ?`,
+             WHERE id = ?
+             AND status IN ('queued', 'sent', 'accepted', 'running')`,
           )
           .run('timed_out', input.completedAt, input.completedAt, input.error, input.dispatchId);
-        return mapDispatch(teamDb.prepare('SELECT * FROM dispatches WHERE id = ?').get(input.dispatchId));
+        const dispatch = mapDispatch(teamDb.prepare('SELECT * FROM dispatches WHERE id = ?').get(input.dispatchId));
+        return dispatch ? { dispatch, changed: sqliteChanges(result) > 0 } : null;
       },
       async markFailed(input) {
-        teamDb
+        const result = teamDb
           .prepare(
             `UPDATE dispatches
              SET status = ?, updated_at = ?, completed_at = ?, error_message = ?
-             WHERE id = ?`,
+             WHERE id = ?
+             AND status IN ('queued', 'sent', 'accepted', 'running')`,
           )
           .run('failed', input.completedAt, input.completedAt, input.error, input.dispatchId);
-        return mapDispatch(teamDb.prepare('SELECT * FROM dispatches WHERE id = ?').get(input.dispatchId));
+        const dispatch = mapDispatch(teamDb.prepare('SELECT * FROM dispatches WHERE id = ?').get(input.dispatchId));
+        return dispatch ? { dispatch, changed: sqliteChanges(result) > 0 } : null;
+      },
+      async markCancelled(input) {
+        const result = teamDb
+          .prepare(
+            `UPDATE dispatches
+             SET status = ?, updated_at = ?, completed_at = ?, error_code = NULL, error_message = NULL
+             WHERE id = ?
+             AND status IN ('queued', 'sent', 'accepted', 'running')`,
+          )
+          .run('cancelled', input.completedAt, input.completedAt, input.dispatchId);
+        const dispatch = mapDispatch(teamDb.prepare('SELECT * FROM dispatches WHERE id = ?').get(input.dispatchId));
+        return dispatch ? { dispatch, changed: sqliteChanges(result) > 0 } : null;
       },
       async listPendingOlderThan(timestamp) {
         return teamDb
           .prepare(
             `SELECT * FROM dispatches
-             WHERE status IN ('queued', 'accepted', 'running')
+             WHERE status IN ('queued', 'sent', 'accepted', 'running')
              AND updated_at < ?
              ORDER BY updated_at`,
           )
@@ -885,6 +903,14 @@ function sqliteNumber(row: unknown, key: string): number {
     throw new Error(`Expected SQLite column ${key} to be number`);
   }
   return value;
+}
+
+function sqliteChanges(result: unknown): number {
+  if (!result || typeof result !== 'object') {
+    return 0;
+  }
+  const changes = (result as { changes?: unknown }).changes;
+  return typeof changes === 'number' ? changes : 0;
 }
 
 function sqliteNullableNumber(row: unknown, key: string): number | undefined {

@@ -75,6 +75,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   return {
     async start() {
       let currentDeviceId = await announceDeviceSnapshot(socket, device, runtimes, agents);
+      const cancelledDispatchIds = new Set<string>();
       socket.onReconnect?.(async () => {
         currentDeviceId = await announceDeviceSnapshot(socket, device, runtimes, agents);
       });
@@ -88,16 +89,29 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         await reportDeviceSnapshot(socket, device.teamId, currentDeviceId, snapshot.runtimes, snapshot.agents);
       });
 
+      socket.on(AGENT_EVENTS.dispatch.cancel, async (payload) => {
+        cancelledDispatchIds.add(readDispatchCancel(payload).dispatchId);
+      });
+
       socket.on(AGENT_EVENTS.dispatch.request, async (payload) => {
         const request = payload as DispatchRequestPayload;
+        if (cancelledDispatchIds.has(request.id)) {
+          return;
+        }
         try {
           const body = await executor(request);
+          if (cancelledDispatchIds.delete(request.id)) {
+            return;
+          }
           await socket.emitWithAck(AGENT_EVENTS.dispatch.result, {
             dispatchId: request.id,
             agentId: request.agentId,
             body,
           });
         } catch (error) {
+          if (cancelledDispatchIds.delete(request.id)) {
+            return;
+          }
           await socket.emitWithAck(AGENT_EVENTS.dispatch.error, {
             dispatchId: request.id,
             agentId: request.agentId,
@@ -171,4 +185,15 @@ function readErrorMessage(error: unknown): string {
     return error;
   }
   return 'Dispatch executor failed';
+}
+
+function readDispatchCancel(payload: unknown): { dispatchId: string } {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('dispatch:cancel payload missing dispatch id');
+  }
+  const dispatchId = (payload as { dispatchId?: unknown }).dispatchId;
+  if (typeof dispatchId !== 'string') {
+    throw new Error('dispatch:cancel payload missing dispatch id');
+  }
+  return { dispatchId };
 }

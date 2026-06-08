@@ -54,6 +54,9 @@ export const WEB_EVENTS = {
     dispatchStatus: 'message:dispatch-status',
     search: 'message:search',
   },
+  dispatch: {
+    cancel: 'dispatch:cancel',
+  },
 } as const;
 
 export const AGENT_EVENTS = {

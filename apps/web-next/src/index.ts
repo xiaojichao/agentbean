@@ -47,6 +47,11 @@ export interface SubscribeInput {
   teamId: string;
 }
 
+export interface CancelDispatchInput {
+  userId?: string;
+  dispatchId: string;
+}
+
 type SessionDeviceCommandInput = { userId?: string; deviceId: string };
 type SessionCreateChannelInput = Omit<CreateChannelCommandDto, 'userId'> & { userId?: string };
 type SessionUpdateChannelInput = Omit<UpdateChannelCommandDto, 'userId'> & { userId?: string };
@@ -77,6 +82,7 @@ export interface WebSocketClient {
   listChannelMembers(input: SessionListChannelMembersInput): Promise<unknown>;
   createAgent(input: SessionCreateAgentInput): Promise<unknown>;
   sendMessage(input: SendMessageInput): Promise<unknown>;
+  cancelDispatch(input: CancelDispatchInput): Promise<unknown>;
 }
 
 export interface SessionSnapshot {
@@ -194,6 +200,9 @@ export function createWebSocketClient(transport: WebSocketTransport): WebSocketC
     },
     sendMessage(input) {
       return transport.emitWithAck(WEB_EVENTS.message.send, input);
+    },
+    cancelDispatch(input) {
+      return transport.emitWithAck(WEB_EVENTS.dispatch.cancel, input);
     },
   };
 }

@@ -2,9 +2,10 @@ import { createRequire } from 'node:module';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, test } from 'vitest';
-import { WEB_EVENTS } from '../../../packages/contracts/src/index';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import { WEB_EVENTS, makeSuccess, type DispatchDto } from '../../../packages/contracts/src/index';
 import { createInMemoryServerNext } from '../src/index';
+import type { ServerNextUseCases } from '../src/application/usecases';
 import { parseServerNextDevConfig, startServerNextDevServer } from '../src/dev-server';
 
 type SocketIoServerConstructor = ConstructorParameters<typeof startServerNextDevServer>[0] extends { Server?: infer T }
@@ -194,6 +195,76 @@ describe('server-next dev server entry', () => {
       currentTeam: { name: 'AgentBean' },
     });
   });
+
+  test('periodically marks timed out dispatches and broadcasts dispatch status', async () => {
+    const timedOutDispatch = {
+      id: 'dispatch-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      status: 'timed_out',
+      error: 'DISPATCH_TIMEOUT',
+      createdAt: 1000,
+      updatedAt: 2000,
+      completedAt: 2000,
+    } satisfies DispatchDto;
+    let returnedDispatch = false;
+    let subscriptionsReady = false;
+    const app = {
+      listChannels: vi.fn(async (input: { teamId: string }) => makeSuccess({
+        channels: [{ id: `${input.teamId}-channel`, teamId: input.teamId, visibility: 'public' }],
+      })),
+      failTimedOutDispatches: vi.fn(async () => {
+        if (!subscriptionsReady || returnedDispatch) {
+          return makeSuccess({ dispatches: [] });
+        }
+        returnedDispatch = true;
+        return makeSuccess({ dispatches: [timedOutDispatch] });
+      }),
+    } as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: {
+        host: '127.0.0.1',
+        port: 0,
+        storage: 'memory',
+        dataDir: '.agentbean-next-test',
+        sessionSecret: 'test-secret',
+      },
+      dispatchTimeout: {
+        timeoutMs: 25,
+        intervalMs: 5,
+      },
+    });
+    cleanups.push(() => server.close());
+    const web = await connectClient(`${server.baseUrl}/web`);
+    const otherTeamWeb = await connectClient(`${server.baseUrl}/web`);
+    cleanups.push(async () => {
+      web.disconnect();
+      otherTeamWeb.disconnect();
+    });
+
+    const statuses: unknown[] = [];
+    const otherTeamStatuses: unknown[] = [];
+    web.on(WEB_EVENTS.message.dispatchStatus, (dispatch) => {
+      statuses.push(dispatch);
+    });
+    otherTeamWeb.on(WEB_EVENTS.message.dispatchStatus, (dispatch) => {
+      otherTeamStatuses.push(dispatch);
+    });
+    await web.emitWithAck(WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-1' });
+    await otherTeamWeb.emitWithAck(WEB_EVENTS.channel.subscribe, { userId: 'user-2', teamId: 'team-2' });
+    subscriptionsReady = true;
+
+    await eventually(() => {
+      expect(app.failTimedOutDispatches).toHaveBeenCalled();
+      expect(statuses).toEqual([timedOutDispatch]);
+      expect(otherTeamStatuses).toEqual([]);
+    });
+  });
 });
 
 async function connectClient(url: string): Promise<ClientSocket> {
@@ -220,4 +291,18 @@ function createIds(ids: string[]) {
     }
     return id;
   };
+}
+
+async function eventually(assertion: () => Promise<void> | void, attempts = 20): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+  throw lastError;
 }

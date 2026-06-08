@@ -551,6 +551,28 @@ Ack<{ message: MessageDto; dispatches: DispatchDto[] }>
 - `teamId` 仍由 payload 提供，用于 team/channel gate 与路由；后续 team switch 完成后可再评估是否从 current team 派生。
 - `senderKind` 与 `senderId` 仍由 server 派生，client 不应发送 sender identity。
 
+#### `dispatch:cancel`
+
+客户端：
+
+```ts
+{ userId: string; dispatchId: string }
+```
+
+Ack：
+
+```ts
+Ack<{ dispatch: DispatchDto }>
+```
+
+服务器行为：
+
+- `dispatch:cancel` 成功前，server 会确认 `userId` 是该 dispatch 所属 team 的 member。
+- 只有 `queued`、`sent`、`accepted`、`running` 状态会被转为 `cancelled`；已经 terminal 的 dispatch 不会被回退。
+- 成功后 server 会向 web clients 广播 `message:dispatch-status`。
+- 如果 dispatch 对应的 agent 绑定了当前连接的 device socket，server 会向该 daemon 发送 `dispatch:cancel`；否则向 `/agent` namespace 广播。
+- `server-next` runtime 会定期调用 dispatch timeout 调度，把超时 pending dispatch 标记为 `timed_out` 并广播 `message:dispatch-status`。
+
 服务器事件：
 
 - `channels:snapshot`：`ChannelDto[]`
@@ -734,6 +756,7 @@ Daemon 行为：
 - 收到匹配当前 device 的 `device:scan-requested` 后，daemon 会重新扫描并发送 `device:runtimes` 与 `agent:register-batch`。
 - 收到不匹配当前 device 的 `device:scan-requested` 时，daemon 不应触发扫描或上报。
 - custom agent 的 `dispatch:request` 必须由 server 定向发送给 `DispatchRequestDto.deviceId` 对应的 daemon socket；不得向整个 `/agent` namespace 广播 raw `customAgent.env`。
+- 收到 `dispatch:cancel` 后，daemon 会记录取消请求；如果对应 dispatch 正在执行，后续 late result/error 不再回传。
 
 ### Dispatch 结果
 
