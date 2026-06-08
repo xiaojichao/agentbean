@@ -141,6 +141,90 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('derives web command user identity from authenticated socket session', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+    });
+    const registerAck = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    expect(registerAck).toMatchObject({
+      ok: true,
+      token: expect.any(String),
+      currentTeam: { id: 'team-1' },
+      defaultChannel: { id: 'channel-1' },
+    });
+
+    const web = await connectClient(`${baseUrl}/web`, { auth: { token: (registerAck as { token: string }).token } });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+
+    await expect(
+      web.emitWithAck(WEB_EVENTS.channel.subscribe, {
+        teamId: 'team-1',
+      }),
+    ).resolves.toMatchObject({ ok: true, channels: [{ id: 'channel-1' }] });
+    await expect(
+      web.emitWithAck(WEB_EVENTS.message.send, {
+        userId: 'attacker-user',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        body: 'hello from session',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      message: { id: 'message-1', senderKind: 'human', senderId: 'user-1' },
+    });
+  });
+
+  test.each(['not-a-valid-token', ''])(
+    'rejects invalid authenticated socket token %j instead of falling back to payload userId',
+    async (token) => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const web = await connectClient(`${baseUrl}/web`, { auth: { token } });
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      web.disconnect();
+    });
+    await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+
+    await expect(
+      web.emitWithAck(WEB_EVENTS.channel.subscribe, {
+        userId: 'user-1',
+        teamId: 'team-1',
+      }),
+    ).resolves.toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
+    },
+  );
+
   test('refreshes per-user channel snapshots after membership changes', async () => {
     const repositories = createInMemoryRepositories();
     const app = createServerNextUseCases({
@@ -747,11 +831,12 @@ async function startSocketServer(app: ReturnType<typeof createInMemoryServerNext
   };
 }
 
-async function connectClient(url: string): Promise<ClientSocket> {
+async function connectClient(url: string, options: Record<string, unknown> = {}): Promise<ClientSocket> {
   const socket = createClient(url, {
     transports: ['websocket'],
     forceNew: true,
     reconnection: false,
+    ...options,
   });
   await new Promise<void>((resolve, reject) => {
     socket.on('connect', () => resolve());

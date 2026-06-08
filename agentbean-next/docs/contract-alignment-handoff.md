@@ -72,7 +72,7 @@
 
 ### 后续注意
 
-如果后续引入 authenticated socket session，并决定由 server 从 session 派生 `userId` 或 current team，则必须同时修改 web client、server use case、协议文档与测试，避免重新出现文档/代码分叉。
+后续已引入 authenticated socket session 的第一步：带 `auth.token` 的 `/web` socket 会由 server 派生 `userId`，payload 中显式 `userId` 仅作为兼容路径保留。`teamId` 当前仍由 payload 提供；如果后续 team switch 完成并决定从 current team 派生 `teamId`，必须同步修改 web client、server use case、协议文档与测试，避免重新出现文档/代码分叉。
 
 ## 4. DispatchStatus 命名不一致
 
@@ -148,7 +148,7 @@ Visible product agent 应来自用户创建、导入或显式绑定的 agent 配
 
 ## 后续接手边界
 
-1. authenticated socket session 如果要从 server 派生 `userId`/current team，需要同步 web client、server use case、协议文档与测试。
+1. authenticated socket session 已支持从 server 派生 `userId`；current team 派生仍需等待 team switch/onboarding 设计收口。
 2. custom agent 创建/绑定流程应引用 runtime capability，但不要让 scanner 自动创建 visible product agent。
 3. 如果 dispatch 状态机要继续引入 `sent` 的实际流转，需要同步 daemon dispatch lifecycle 与 UI 状态 helper。
 
