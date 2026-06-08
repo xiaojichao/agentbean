@@ -27,6 +27,7 @@
 - `docs/socket-protocol.md` 定义重写版初始 `/web` 与 `/agent` 协议表面。
 - `docs/implementation-runbook.md` 给出第一切片的逐步开发检查清单。
 - `docs/production-cutover-runbook.md` 给出真正替换旧 AgentBean 前的生产切换清单。
+- `docs/post-flip-gap-audit.md` 记录 production final flip 后的生产观察证据与替代旧服务缺口分级。
 - `docs/first-slice-status.md` 记录第一切片当前实现、验证证据与剩余边界。
 - `docs/second-slice-status.md` 记录第二切片 channel controls 的实现、验证证据与剩余边界。
 - `docs/third-slice-status.md` 记录第三切片 channel membership 的实现、验证证据与剩余边界。
