@@ -35,6 +35,7 @@ export async function runAgentBeanNextBusinessSmoke({
 
   const checks = [check('business-url-present', true, 'AgentBean Next business smoke target URL is configured')];
   const sockets = [];
+  const pendingAgentResultsByDispatchId = new Map();
 
   try {
     const webSocket = await connectSocket(ioFactory, new URL('/web', normalizedBaseUrl).toString(), timeoutMs);
@@ -65,11 +66,12 @@ export async function runAgentBeanNextBusinessSmoke({
     await emitAck(webSocket, WEB_EVENTS.device.list, { userId, teamId }, timeoutMs);
 
     agentSocket.on(AGENT_EVENTS.dispatch.request, (request) => {
-      void emitAck(agentSocket, AGENT_EVENTS.dispatch.result, {
+      const resultAck = emitAck(agentSocket, AGENT_EVENTS.dispatch.result, {
         dispatchId: request.id,
         agentId: request.agentId,
         body: `business-smoke:${request.prompt}`,
       }, timeoutMs);
+      pendingAgentResultsByDispatchId.set(request.id, resultAck);
     });
 
     const deviceAck = await emitAck(agentSocket, AGENT_EVENTS.device.hello, {
@@ -166,6 +168,7 @@ export async function runAgentBeanNextBusinessSmoke({
       return summarizeBusinessSmoke(checks);
     }
 
+    await waitForDispatchResultAck(pendingAgentResultsByDispatchId, dispatchId, timeoutMs);
     const reply = await replyPromise;
     checks.push(
       check(
@@ -317,6 +320,17 @@ async function waitForChannelMessage(socket, { channelId, body, timeoutMs }) {
   });
 }
 
+async function waitForDispatchResultAck(pendingAgentResultsByDispatchId, dispatchId, timeoutMs) {
+  const startedAt = Date.now();
+  while (!pendingAgentResultsByDispatchId.has(dispatchId)) {
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error(`Timed out waiting for dispatch result ack ${dispatchId}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  await pendingAgentResultsByDispatchId.get(dispatchId);
+}
+
 function readNestedString(value, path) {
   let current = value;
   for (const key of path) {
@@ -369,4 +383,3 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log(args.json ? JSON.stringify(summary, null, 2) : formatText(summary));
   process.exitCode = summary.ok ? 0 : 1;
 }
-
