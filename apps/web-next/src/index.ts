@@ -34,6 +34,16 @@ export interface ListTeamsInput {
   userId?: string;
 }
 
+export interface CreateTeamInput {
+  userId?: string;
+  name: string;
+}
+
+export interface SwitchTeamInput {
+  userId?: string;
+  teamId: string;
+}
+
 export interface SendMessageInput {
   userId?: string;
   teamId: string;
@@ -65,6 +75,8 @@ export interface WebSocketClient {
   login(input: LoginInput): Promise<unknown>;
   whoami(input: { token: string }): Promise<unknown>;
   listTeams(input: ListTeamsInput): Promise<unknown>;
+  createTeam(input: CreateTeamInput): Promise<unknown>;
+  switchTeam(input: SwitchTeamInput): Promise<unknown>;
   listDevices(input: SubscribeInput, onSnapshot?: (devices: DeviceDto[]) => void): Promise<unknown>;
   getDevice(input: SessionDeviceCommandInput): Promise<unknown>;
   scanDevice(input: SessionDeviceCommandInput): Promise<unknown>;
@@ -137,6 +149,12 @@ export function createWebSocketClient(transport: WebSocketTransport): WebSocketC
     },
     listTeams(input) {
       return transport.emitWithAck(WEB_EVENTS.team.list, input);
+    },
+    createTeam(input) {
+      return transport.emitWithAck(WEB_EVENTS.team.create, input);
+    },
+    switchTeam(input) {
+      return transport.emitWithAck(WEB_EVENTS.team.switch, input);
     },
     listDevices(input, onSnapshot) {
       deviceSubscription = input;

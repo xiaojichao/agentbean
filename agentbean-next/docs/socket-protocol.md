@@ -104,7 +104,7 @@ Ack<{ user: UserDto; currentTeam: TeamDto | null }>
 Ack：
 
 ```ts
-Ack<{ teams: TeamDto[]; currentTeamId: string | null }>
+Ack<{ teams: TeamDto[]; currentTeamId?: string }>
 ```
 
 #### `team:create`
@@ -112,28 +112,41 @@ Ack<{ teams: TeamDto[]; currentTeamId: string | null }>
 客户端：
 
 ```ts
-{ name: string; path?: string; description?: string; visibility?: "public" | "private" }
+{ userId?: string; name: string }
 ```
 
 Ack：
 
 ```ts
-Ack<{ team: TeamDto }>
+Ack<{ team: TeamDto; defaultChannel: ChannelDto }>
 ```
+
+行为：
+
+- 只创建 `private` team。
+- 创建者自动成为 `owner`。
+- 同时创建默认 public `all` channel。
+- 创建成功后持久化切换 `users.current_team_id` 到新 team。
 
 #### `team:switch`
 
 客户端：
 
 ```ts
-{ teamId: string }
+{ userId?: string; teamId: string }
 ```
 
 Ack：
 
 ```ts
-Ack<{ team: TeamDto }>
+Ack<{ currentTeam: TeamDto }>
 ```
+
+行为：
+
+- 只允许切换到当前用户已经加入的 team。
+- 非成员切换返回 `FORBIDDEN`。
+- 成功后更新 `users.current_team_id`。
 
 服务器事件：
 

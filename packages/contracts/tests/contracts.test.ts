@@ -25,6 +25,11 @@ import {
   type ListChannelMembersCommandDto,
   type MessageDto,
   type RuntimeDto,
+  type CreateTeamAckDto,
+  type CreateTeamCommandDto,
+  type ListTeamsAckDto,
+  type SwitchTeamAckDto,
+  type SwitchTeamCommandDto,
   type TeamDto,
   type UpdateChannelCommandDto,
   type UserDto,
@@ -60,6 +65,38 @@ describe('first-slice contract result shape', () => {
       ownerId: user.id,
       currentUserRole: 'owner',
       createdAt: 1,
+    };
+    const teamList: ListTeamsAckDto = {
+      currentTeamId: team.id,
+      teams: [team],
+    };
+    const createTeamCommand: CreateTeamCommandDto = {
+      userId: user.id,
+      name: 'Ops Team',
+    };
+    const createTeamAck: CreateTeamAckDto = {
+      team: {
+        ...team,
+        id: 'team-2',
+        name: createTeamCommand.name,
+        path: 'ops-team',
+      },
+      defaultChannel: {
+        id: 'channel-2',
+        teamId: 'team-2',
+        kind: 'channel',
+        name: 'all',
+        visibility: 'public',
+        createdBy: user.id,
+        createdAt: 2,
+      },
+    };
+    const switchTeamCommand: SwitchTeamCommandDto = {
+      userId: user.id,
+      teamId: team.id,
+    };
+    const switchTeamAck: SwitchTeamAckDto = {
+      currentTeam: team,
     };
     const device: DeviceDto = {
       id: 'device-1',
@@ -187,6 +224,10 @@ describe('first-slice contract result shape', () => {
 
     expect(ack.ok).toBe(true);
     expect(team.id).toBe(device.teamId);
+    expect(teamList.currentTeamId).toBe(team.id);
+    expect(createTeamAck.defaultChannel.name).toBe('all');
+    expect(createTeamAck.team.name).toBe(createTeamCommand.name);
+    expect(switchTeamAck.currentTeam.id).toBe(switchTeamCommand.teamId);
     expect(runtime.installed).toBe(true);
     expect(runtime.normalizedCommandKey).toBe('/opt/homebrew/bin/codex');
     expect(agent.visibleTeamIds).toEqual(['team-1']);
@@ -204,6 +245,8 @@ describe('first-slice contract result shape', () => {
   test('exposes first-slice socket event constants without old network naming', () => {
     expect(WEB_EVENTS.auth.login).toBe('auth:login');
     expect(WEB_EVENTS.team.list).toBe('team:list');
+    expect(WEB_EVENTS.team.create).toBe('team:create');
+    expect(WEB_EVENTS.team.switch).toBe('team:switch');
     expect(WEB_EVENTS.team.snapshot).toBe('teams:snapshot');
     expect(WEB_EVENTS.message.send).toBe('message:send');
     expect(AGENT_EVENTS.device.hello).toBe('device:hello');

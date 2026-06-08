@@ -15,7 +15,9 @@ export interface ServerNextUseCases {
   registerUser(input: RegisterUserInput): Promise<Ack<RegisterUserResult>>;
   loginUser(input: LoginUserInput): Promise<Ack<LoginUserResult>>;
   whoami(input: WhoamiInput): Promise<Ack<WhoamiResult>>;
-  listTeams(input: { userId: string }): Promise<Ack<{ teams: TeamDto[] }>>;
+  listTeams(input: { userId: string }): Promise<Ack<ListTeamsResult>>;
+  createTeam(input: CreateTeamInput): Promise<Ack<CreateTeamResult>>;
+  switchTeam(input: SwitchTeamInput): Promise<Ack<SwitchTeamResult>>;
   listDevices(input: { teamId: string; userId: string }): Promise<Ack<{ devices: DeviceDto[] }>>;
   getDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDetailDto }>>;
   requestDeviceScan(input: RequestDeviceScanInput): Promise<Ack<RequestDeviceScanResult>>;
@@ -72,6 +74,30 @@ export interface WhoamiInput {
 
 export interface WhoamiResult {
   user: UserDto;
+  currentTeam: TeamDto;
+}
+
+export interface ListTeamsResult {
+  currentTeamId?: string;
+  teams: TeamDto[];
+}
+
+export interface CreateTeamInput {
+  userId: string;
+  name: string;
+}
+
+export interface CreateTeamResult {
+  team: TeamDto;
+  defaultChannel: ChannelDto;
+}
+
+export interface SwitchTeamInput {
+  userId: string;
+  teamId: string;
+}
+
+export interface SwitchTeamResult {
   currentTeam: TeamDto;
 }
 
@@ -343,9 +369,74 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async listTeams(listInput) {
+      const user = await repositories.users.getById(listInput.userId);
+      if (!user) {
+        return makeFailure('UNAUTHENTICATED', 'User not found');
+      }
       const teams = await repositories.teams.listForUser(listInput.userId);
+      const currentTeam = resolveCurrentTeamFromList(teams, user);
       return makeSuccess({
+        currentTeamId: currentTeam?.id,
         teams: teams.map((team) => toTeamDto(team, team.currentUserRole)),
+      });
+    },
+
+    async createTeam(teamInput) {
+      const user = await repositories.users.getById(teamInput.userId);
+      if (!user) {
+        return makeFailure('UNAUTHENTICATED', 'User not found');
+      }
+
+      const now = clock.now();
+      const teamId = ids.nextId();
+      const channelId = ids.nextId();
+      const team = await repositories.teams.create({
+        id: teamId,
+        name: teamInput.name.trim(),
+        path: slugify(teamInput.name),
+        visibility: 'private',
+        ownerId: user.id,
+        createdAt: now,
+      });
+      await repositories.teams.addMember({
+        teamId,
+        userId: user.id,
+        username: user.username,
+        role: 'owner',
+        joinedAt: now,
+      });
+      const defaultChannel = await repositories.channels.create({
+        id: channelId,
+        teamId,
+        kind: 'channel',
+        name: 'all',
+        visibility: 'public',
+        createdBy: user.id,
+        createdAt: now,
+        humanMemberIds: [user.id],
+        agentMemberIds: [],
+      });
+      await repositories.users.setCurrentTeam(user.id, teamId);
+
+      return makeSuccess({
+        team: toTeamDto(team, 'owner'),
+        defaultChannel,
+      });
+    },
+
+    async switchTeam(teamInput) {
+      const team = await repositories.teams.getById(teamInput.teamId);
+      if (!team) {
+        return makeFailure('NOT_FOUND', 'Team not found');
+      }
+      const role = await repositories.teams.getMemberRole(teamInput.teamId, teamInput.userId);
+      if (!role) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      await repositories.users.setCurrentTeam(teamInput.userId, teamInput.teamId);
+
+      return makeSuccess({
+        currentTeam: toTeamDto(team, role),
       });
     },
 
@@ -1079,6 +1170,13 @@ async function resolveCurrentTeam(
   user: { id: string; currentTeamId?: string; primaryTeamId?: string },
 ): Promise<(TeamDto & { currentUserRole: 'owner' | 'admin' | 'member' }) | undefined> {
   const teams = await repositories.teams.listForUser(user.id);
+  return resolveCurrentTeamFromList(teams, user);
+}
+
+function resolveCurrentTeamFromList(
+  teams: Array<TeamDto & { currentUserRole: 'owner' | 'admin' | 'member' }>,
+  user: { currentTeamId?: string; primaryTeamId?: string },
+): (TeamDto & { currentUserRole: 'owner' | 'admin' | 'member' }) | undefined {
   return (
     teams.find((team) => team.id === user.currentTeamId) ??
     teams.find((team) => team.id === user.primaryTeamId) ??

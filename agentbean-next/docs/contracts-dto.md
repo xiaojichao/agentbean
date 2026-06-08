@@ -444,7 +444,9 @@ export interface DispatchCustomAgentDto {
 ```ts
 // /web
 type AuthLoginAck = Ack<{ token: string; user: UserDto; currentTeam: TeamDto }>;
-type TeamListAck = Ack<{ teams: TeamDto[]; currentTeamId: ID | null }>;
+type TeamListAck = Ack<{ teams: TeamDto[]; currentTeamId?: ID }>;
+type TeamCreateAck = Ack<{ team: TeamDto; defaultChannel: ChannelDto }>;
+type TeamSwitchAck = Ack<{ currentTeam: TeamDto }>;
 type DeviceListAck = Ack<{ devices: DeviceDto[] }>;
 type AgentSubscribeAck = Ack<{ agents: AgentDto[] }>;
 type ChannelJoinAck = Ack<{ channel: ChannelDto; messages: MessageDto[] }>;
