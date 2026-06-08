@@ -204,6 +204,39 @@ describe('web-next socket client', () => {
     });
   });
 
+  test('allows session-authenticated commands to omit userId', async () => {
+    const transport = new FakeWebTransport();
+    const client = createWebSocketClient(transport);
+
+    await client.listTeams({});
+    await client.subscribeChannels({ teamId: 'team-1' }, () => undefined);
+    await client.listDevices({ teamId: 'team-1' });
+    await client.createAgent({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimeId: 'runtime-1',
+      name: 'Custom Codex',
+    });
+    await client.sendMessage({
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: 'hello',
+    });
+
+    expect(transport.emitted).toEqual([
+      [WEB_EVENTS.team.list, {}],
+      [WEB_EVENTS.channel.subscribe, { teamId: 'team-1' }],
+      [WEB_EVENTS.device.list, { teamId: 'team-1' }],
+      [WEB_EVENTS.agent.create, {
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        runtimeId: 'runtime-1',
+        name: 'Custom Codex',
+      }],
+      [WEB_EVENTS.message.send, { teamId: 'team-1', channelId: 'channel-1', body: 'hello' }],
+    ]);
+  });
+
   test('resubscribes active snapshot streams after reconnect without duplicating handlers', async () => {
     const transport = new FakeWebTransport();
     const snapshots: { agents: AgentDto[][]; channels: ChannelDto[][]; devices: DeviceDto[][] } = {

@@ -31,11 +31,11 @@ export interface LoginInput {
 }
 
 export interface ListTeamsInput {
-  userId: string;
+  userId?: string;
 }
 
 export interface SendMessageInput {
-  userId: string;
+  userId?: string;
   teamId: string;
   channelId: string;
   body: string;
@@ -43,9 +43,17 @@ export interface SendMessageInput {
 }
 
 export interface SubscribeInput {
-  userId: string;
+  userId?: string;
   teamId: string;
 }
+
+type SessionDeviceCommandInput = { userId?: string; deviceId: string };
+type SessionCreateChannelInput = Omit<CreateChannelCommandDto, 'userId'> & { userId?: string };
+type SessionUpdateChannelInput = Omit<UpdateChannelCommandDto, 'userId'> & { userId?: string };
+type SessionChannelHumanMemberInput = Omit<ChannelHumanMemberCommandDto, 'userId'> & { userId?: string };
+type SessionChannelAgentMemberInput = Omit<ChannelAgentMemberCommandDto, 'userId'> & { userId?: string };
+type SessionListChannelMembersInput = Omit<ListChannelMembersCommandDto, 'userId'> & { userId?: string };
+type SessionCreateAgentInput = Omit<CreateAgentCommandDto, 'userId'> & { userId?: string };
 
 export interface WebSocketClient {
   register(input: RegisterInput): Promise<unknown>;
@@ -53,21 +61,21 @@ export interface WebSocketClient {
   whoami(input: { token: string }): Promise<unknown>;
   listTeams(input: ListTeamsInput): Promise<unknown>;
   listDevices(input: SubscribeInput, onSnapshot?: (devices: DeviceDto[]) => void): Promise<unknown>;
-  getDevice(input: { userId: string; deviceId: string }): Promise<unknown>;
-  scanDevice(input: { userId: string; deviceId: string }): Promise<unknown>;
+  getDevice(input: SessionDeviceCommandInput): Promise<unknown>;
+  scanDevice(input: SessionDeviceCommandInput): Promise<unknown>;
   subscribeAgents(input: SubscribeInput, onSnapshot: (agents: AgentDto[]) => void): Promise<unknown>;
   subscribeChannels(input: SubscribeInput, onSnapshot: (channels: ChannelDto[]) => void): Promise<unknown>;
   onDeviceRuntimes(handler: (payload: { deviceId: string; runtimes: RuntimeDto[] }) => void): void;
   onChannelMessage(handler: (message: MessageDto) => void): void;
   onDispatchStatus(handler: (dispatch: DispatchDto) => void): void;
-  createChannel(input: CreateChannelCommandDto): Promise<unknown>;
-  updateChannel(input: UpdateChannelCommandDto): Promise<unknown>;
-  addChannelHumanMember(input: ChannelHumanMemberCommandDto): Promise<unknown>;
-  removeChannelHumanMember(input: ChannelHumanMemberCommandDto): Promise<unknown>;
-  addChannelAgentMember(input: ChannelAgentMemberCommandDto): Promise<unknown>;
-  removeChannelAgentMember(input: ChannelAgentMemberCommandDto): Promise<unknown>;
-  listChannelMembers(input: ListChannelMembersCommandDto): Promise<unknown>;
-  createAgent(input: CreateAgentCommandDto): Promise<unknown>;
+  createChannel(input: SessionCreateChannelInput): Promise<unknown>;
+  updateChannel(input: SessionUpdateChannelInput): Promise<unknown>;
+  addChannelHumanMember(input: SessionChannelHumanMemberInput): Promise<unknown>;
+  removeChannelHumanMember(input: SessionChannelHumanMemberInput): Promise<unknown>;
+  addChannelAgentMember(input: SessionChannelAgentMemberInput): Promise<unknown>;
+  removeChannelAgentMember(input: SessionChannelAgentMemberInput): Promise<unknown>;
+  listChannelMembers(input: SessionListChannelMembersInput): Promise<unknown>;
+  createAgent(input: SessionCreateAgentInput): Promise<unknown>;
   sendMessage(input: SendMessageInput): Promise<unknown>;
 }
 

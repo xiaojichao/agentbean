@@ -1,6 +1,12 @@
 import type { ServerNextUseCases } from '../application/usecases.js';
 import { AGENT_EVENTS, WEB_EVENTS } from '../../../../packages/contracts/src/index.js';
-import { registerAgentSocketHandlers, registerWebSocketHandlers, type SocketLike } from './socket-handlers.js';
+import {
+  registerAgentSocketHandlers,
+  registerWebSocketHandlers,
+  UnauthenticatedSocketError,
+  type AuthenticatedUserIdentity,
+  type SocketLike,
+} from './socket-handlers.js';
 
 export interface NamespaceLike {
   on(event: 'connection', handler: (socket: SocketLike) => void): void;
@@ -31,57 +37,71 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
   const agentSocketsByDeviceId = new Map<string, SocketLike>();
 
   server.of('/web').on('connection', (socket) => {
+    const authenticatedUser = createAuthenticatedUserResolver(socket, app);
     const subscriber: WebSocketSubscription = { socket };
     webSubscribers.add(subscriber);
     socket.on('disconnect', async () => {
       webSubscribers.delete(subscriber);
     });
     socket.on(WEB_EVENTS.channel.subscribe, async (payload, ack) => {
-      const input = asChannelSubscription(payload);
-      if (!input) {
-        ack?.({ ok: false, error: 'VALIDATION_ERROR', message: 'Invalid channel subscription payload' });
-        return;
-      }
-      const result = await app.listChannels(input);
-      ack?.(result);
-      if (result.ok) {
-        subscriber.channels = input;
-        socket.emit?.(WEB_EVENTS.channel.snapshot, result.channels);
+      try {
+        const input = await readSubscriptionInput(payload, authenticatedUser);
+        if (!input) {
+          ack?.({ ok: false, error: 'VALIDATION_ERROR', message: 'Invalid channel subscription payload' });
+          return;
+        }
+        const result = await app.listChannels(input);
+        ack?.(result);
+        if (result.ok) {
+          subscriber.channels = input;
+          socket.emit?.(WEB_EVENTS.channel.snapshot, result.channels);
+        }
+      } catch (error) {
+        ack?.(subscriptionErrorAck(error));
       }
     });
     socket.on(WEB_EVENTS.agent.subscribe, async (payload, ack) => {
-      const input = asAgentSubscription(payload);
-      if (!input) {
-        ack?.({ ok: false, error: 'VALIDATION_ERROR', message: 'Invalid agent subscription payload' });
-        return;
-      }
-      const teamAccess = await app.listChannels(input);
-      if (!teamAccess.ok) {
-        ack?.(teamAccess);
-        return;
-      }
-      const result = await app.listVisibleAgents({ teamId: input.teamId });
-      ack?.(result);
-      if (result.ok) {
-        subscriber.agents = input;
-        socket.emit?.(WEB_EVENTS.agent.snapshot, result.agents);
+      try {
+        const input = await readSubscriptionInput(payload, authenticatedUser);
+        if (!input) {
+          ack?.({ ok: false, error: 'VALIDATION_ERROR', message: 'Invalid agent subscription payload' });
+          return;
+        }
+        const teamAccess = await app.listChannels(input);
+        if (!teamAccess.ok) {
+          ack?.(teamAccess);
+          return;
+        }
+        const result = await app.listVisibleAgents({ teamId: input.teamId });
+        ack?.(result);
+        if (result.ok) {
+          subscriber.agents = input;
+          socket.emit?.(WEB_EVENTS.agent.snapshot, result.agents);
+        }
+      } catch (error) {
+        ack?.(subscriptionErrorAck(error));
       }
     });
     socket.on(WEB_EVENTS.device.list, async (payload, ack) => {
-      const input = asDeviceSubscription(payload);
-      if (!input) {
-        ack?.({ ok: false, error: 'VALIDATION_ERROR', message: 'Invalid device list payload' });
-        return;
-      }
-      const result = await app.listDevices(input);
-      ack?.(result);
-      if (result.ok) {
-        subscriber.devices = input;
-        socket.emit?.(WEB_EVENTS.device.snapshot, result.devices);
-        await emitStoredDeviceRuntimes(socket, app, input, result.devices);
+      try {
+        const input = await readSubscriptionInput(payload, authenticatedUser);
+        if (!input) {
+          ack?.({ ok: false, error: 'VALIDATION_ERROR', message: 'Invalid device list payload' });
+          return;
+        }
+        const result = await app.listDevices(input);
+        ack?.(result);
+        if (result.ok) {
+          subscriber.devices = input;
+          socket.emit?.(WEB_EVENTS.device.snapshot, result.devices);
+          await emitStoredDeviceRuntimes(socket, app, input, result.devices);
+        }
+      } catch (error) {
+        ack?.(subscriptionErrorAck(error));
       }
     });
     registerWebSocketHandlers(socket, app, {
+      authenticatedUser,
       dispatch(request) {
         if (request.deviceId) {
           agentSocketsByDeviceId.get(request.deviceId)?.emit?.(AGENT_EVENTS.dispatch.request, request);
@@ -218,19 +238,80 @@ async function emitChannelMessageSubscribers(
   }
 }
 
-function asChannelSubscription(payload: unknown): ChannelSubscription | null {
+async function asChannelSubscription(
+  payload: unknown,
+  authenticatedUser?: () => Promise<AuthenticatedUserIdentity>,
+): Promise<ChannelSubscription | null> {
   if (!payload || typeof payload !== 'object') {
     return null;
   }
   const candidate = payload as { userId?: unknown; teamId?: unknown };
-  if (typeof candidate.userId !== 'string' || typeof candidate.teamId !== 'string') {
+  if (typeof candidate.teamId !== 'string') {
     return null;
   }
-  return { userId: candidate.userId, teamId: candidate.teamId };
+  const auth = await authenticatedUser?.();
+  if (auth?.hasToken && !auth.userId) {
+    throw new UnauthenticatedSocketError();
+  }
+  const userId = auth?.userId ?? (typeof candidate.userId === 'string' ? candidate.userId : null);
+  if (!userId) {
+    return null;
+  }
+  return { userId, teamId: candidate.teamId };
 }
 
-const asAgentSubscription = asChannelSubscription;
-const asDeviceSubscription = asChannelSubscription;
+async function readSubscriptionInput(
+  payload: unknown,
+  authenticatedUser: () => Promise<AuthenticatedUserIdentity>,
+): Promise<ChannelSubscription | null> {
+  return asChannelSubscription(payload, authenticatedUser);
+}
+
+function subscriptionErrorAck(error: unknown): { ok: false; error: string; message: string } {
+  if (error instanceof UnauthenticatedSocketError) {
+    return { ok: false, error: 'UNAUTHENTICATED', message: 'Invalid session token' };
+  }
+  return {
+    ok: false,
+    error: 'INTERNAL_ERROR',
+    message: error instanceof Error ? error.message : 'Unhandled socket handler error',
+  };
+}
+
+function createAuthenticatedUserResolver(
+  socket: SocketLike,
+  app: ServerNextUseCases,
+): () => Promise<AuthenticatedUserIdentity> {
+  let cached: AuthenticatedUserIdentity | undefined;
+  return async () => {
+    if (cached) {
+      return cached;
+    }
+    const authToken = socketAuthToken(socket);
+    if (!authToken.hasToken) {
+      cached = { hasToken: false, userId: null };
+      return cached;
+    }
+    if (!authToken.token) {
+      cached = { hasToken: true, userId: null };
+      return cached;
+    }
+    const result = await app.whoami({ token: authToken.token });
+    cached = { hasToken: true, userId: result.ok ? result.user.id : null };
+    return cached;
+  };
+}
+
+function socketAuthToken(socket: SocketLike): { hasToken: boolean; token: string | null } {
+  const auth = (socket as { handshake?: { auth?: Record<string, unknown> } }).handshake?.auth;
+  if (!auth || !Object.prototype.hasOwnProperty.call(auth, 'token')) {
+    return { hasToken: false, token: null };
+  }
+  return {
+    hasToken: true,
+    token: typeof auth.token === 'string' && auth.token.length > 0 ? auth.token : null,
+  };
+}
 
 async function refreshDeviceSubscribers(
   subscribers: Set<WebSocketSubscription>,

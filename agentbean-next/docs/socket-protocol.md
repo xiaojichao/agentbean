@@ -39,7 +39,7 @@ Browser clients 连接到 `/web`。
 Auth modes：
 
 - Anonymous：用于 login、signup、invite validation 与 device login screens。
-- User session token：用于 normal app operations。
+- User session token：用于 normal app operations。Socket.IO client 可以通过 `auth.token` 传入 session token；server 会用 `auth:whoami` 同一套 token 校验逻辑派生 `userId`。当前实现仍临时接受 payload 中显式 `userId` 作为兼容路径，但带 token 的 socket 会以 session user 覆盖 payload user。
 
 ### Auth
 
@@ -171,7 +171,7 @@ Ack<{ humans: HumanMemberDto[]; agents: AgentDto[] }>
 客户端：
 
 ```ts
-{ userId: string; teamId: string }
+{ userId?: string; teamId: string }
 ```
 
 Ack：
@@ -183,7 +183,7 @@ Ack<{ devices: DeviceDto[] }>
 服务器行为：
 
 - `device:list` 同时作为 web client 的 device snapshot subscription 入口。
-- Subscribe 成功前，server 会确认 `userId` 是该 team 的 member。
+- Subscribe 成功前，server 会确认 session 派生或 payload 兼容字段中的 `userId` 是该 team 的 member。
 - Subscribe 成功后立即向该 socket 发送 `devices:snapshot`。
 - Daemon `device:hello` 改变 device projection 后，server 会刷新同 team active subscribers 的 `devices:snapshot`。
 - Daemon `device:runtimes` 成功后，server 会向同 team active subscribers 发送 `device:runtimes`。
@@ -193,7 +193,7 @@ Ack<{ devices: DeviceDto[] }>
 客户端：
 
 ```ts
-{ userId: string; deviceId: string }
+{ userId?: string; deviceId: string }
 ```
 
 Ack：
@@ -204,7 +204,7 @@ Ack<{ device: DeviceDetailDto }>
 
 服务器行为：
 
-- `device:get` 成功前，server 会根据 device 所属 team 确认 `userId` 是 team member。
+- `device:get` 成功前，server 会根据 device 所属 team 确认 session 派生或 payload 兼容字段中的 `userId` 是 team member。
 - `DeviceDetailDto` 包含 device projection、该 device 的 runtimes，以及对该 team 可见且绑定到该 device 的 agents。
 
 #### `device:scan`
@@ -212,7 +212,7 @@ Ack<{ device: DeviceDetailDto }>
 客户端：
 
 ```ts
-{ userId: string; deviceId: string }
+{ userId?: string; deviceId: string }
 ```
 
 Ack：
@@ -223,7 +223,7 @@ Ack<{ request: { requestId: string; deviceId: string } }>
 
 服务器行为：
 
-- `device:scan` 成功前，server 会根据 device 所属 team 确认 `userId` 是 team member。
+- `device:scan` 成功前，server 会根据 device 所属 team 确认 session 派生或 payload 兼容字段中的 `userId` 是 team member。
 - 目标 device 必须处于 `online` 状态，否则返回 `DEVICE_OFFLINE`。
 - 成功后，server 只向该 device 当前绑定的 daemon socket 发送 `device:scan-requested`。
 
@@ -246,7 +246,7 @@ Ack<{ request: { requestId: string; deviceId: string } }>
 客户端：
 
 ```ts
-{ userId: string; teamId: string }
+{ userId?: string; teamId: string }
 ```
 
 Ack：
@@ -257,7 +257,7 @@ Ack<{ agents: AgentDto[] }>
 
 服务器行为：
 
-- Subscribe 成功前，server 会确认 `userId` 是该 team 的 member。
+- Subscribe 成功前，server 会确认 session 派生或 payload 兼容字段中的 `userId` 是该 team 的 member。
 - Subscribe 成功后立即向该 socket 发送 `agents:snapshot`。
 - Daemon agent batch 或 dispatch result/error 改变 agent projection 后，server 会刷新同 team active subscribers 的 `agents:snapshot`。
 
@@ -267,7 +267,7 @@ Ack<{ agents: AgentDto[] }>
 
 ```ts
 {
-  userId: string;
+  userId?: string;
   teamId: string;
   deviceId: string;
   runtimeId?: string;
@@ -289,7 +289,7 @@ Ack<{ agent: AgentDto }>
 
 服务器行为：
 
-- `agent:create` 成功前，server 会根据 `teamId` 与 `deviceId` 确认 `userId` 是 team member。
+- `agent:create` 成功前，server 会根据 `teamId` 与 `deviceId` 确认 session 派生或 payload 兼容字段中的 `userId` 是 team member。
 - 如果提供 `runtimeId`，该 runtime 必须属于同一 device/team 且 `installed: true`。
 - 创建出的 visible product agent 必须是 `source: "custom"`，scanner 不得自动创建 visible agent。
 - Ack 与后续 `agents:snapshot` 只暴露 `envKeys`，不得返回 raw `env` values。
@@ -347,7 +347,7 @@ Ack<{ agent: AgentDto }>
 
 ```ts
 {
-  userId: string;
+  userId?: string;
   teamId: string;
   name: string;
   title?: string;
@@ -369,7 +369,7 @@ Ack<{ channel: ChannelDto }>
 
 ```ts
 {
-  userId: string;
+  userId?: string;
   teamId: string;
   channelId: string;
   name?: string;
@@ -397,7 +397,7 @@ Ack<{ channel: ChannelDto }>
 
 ```ts
 {
-  userId: string;
+  userId?: string;
   teamId: string;
   channelId: string;
   memberUserId: string;
@@ -416,7 +416,7 @@ Ack<{ channel: ChannelDto }>
 
 ```ts
 {
-  userId: string;
+  userId?: string;
   teamId: string;
   channelId: string;
   memberUserId: string;
@@ -435,7 +435,7 @@ Ack<{ channel: ChannelDto }>
 
 ```ts
 {
-  userId: string;
+  userId?: string;
   teamId: string;
   channelId: string;
   agentId: string;
@@ -454,7 +454,7 @@ Ack<{ channel: ChannelDto }>
 
 ```ts
 {
-  userId: string;
+  userId?: string;
   teamId: string;
   channelId: string;
   agentId: string;
@@ -473,7 +473,7 @@ Ack<{ channel: ChannelDto }>
 
 ```ts
 {
-  userId: string;
+  userId?: string;
   teamId: string;
   channelId: string;
 }
@@ -495,7 +495,7 @@ Ack<{
 客户端：
 
 ```ts
-{ userId: string; teamId: string }
+{ userId?: string; teamId: string }
 ```
 
 Ack：
@@ -529,7 +529,7 @@ Ack<{ channel: ChannelDto; messages: MessageDto[] }>
 
 ```ts
 {
-  userId: string;
+  userId?: string;
   teamId: string;
   channelId: string;
   body: string;
@@ -547,9 +547,9 @@ Ack<{ message: MessageDto; dispatches: DispatchDto[] }>
 
 说明：
 
-- 当前 first-slice payload 显式携带 `userId` 与 `teamId`，用于 team/channel gate 与路由。
+- 带 `auth.token` 的 web socket 会从 authenticated socket session 派生 `userId`；payload 中的 `userId` 只作为临时兼容路径保留。
+- `teamId` 仍由 payload 提供，用于 team/channel gate 与路由；后续 team switch 完成后可再评估是否从 current team 派生。
 - `senderKind` 与 `senderId` 仍由 server 派生，client 不应发送 sender identity。
-- 如果后续改为从 authenticated socket session 派生 user/team，必须同步更新 web client、server use case、本文档与验证矩阵。
 
 服务器事件：
 
