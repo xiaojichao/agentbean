@@ -101,8 +101,8 @@ Ack<{ user: UserDto; currentTeam: TeamDto | null }>
 这些是目标行为，但不是第一切片要求：
 
 - `auth:change-password`：保留给 account settings。
-- `join:list`：保留给 invite management。
-- `join:revoke`：保留给 invite management。
+- `join:list`：保留给 invite management；当前不在 Next shared event constants 中暴露。
+- `join:revoke`：保留给 invite management；当前不在 Next shared event constants 中暴露。
 - `device-invite:create`：显式替换 `purpose: "device"` 的 `invite:create`。
 - `device-invite:complete`：显式替换 browser `auth:device-login` token delivery。
 

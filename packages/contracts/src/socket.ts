@@ -15,8 +15,6 @@ export const WEB_EVENTS = {
   join: {
     create: 'join:create',
     validate: 'join:validate',
-    list: 'join:list',
-    revoke: 'join:revoke',
   },
   member: {
     list: 'members:list',

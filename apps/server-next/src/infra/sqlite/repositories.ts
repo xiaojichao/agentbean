@@ -203,7 +203,17 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return mapJoinLink(globalDb.prepare('SELECT * FROM join_links WHERE code = ?').get(code));
       },
       async incrementUses(code) {
-        globalDb.prepare('UPDATE join_links SET uses_count = uses_count + 1 WHERE code = ?').run(code);
+        const result = globalDb
+          .prepare(
+            `UPDATE join_links
+             SET uses_count = uses_count + 1
+             WHERE code = ?
+             AND (max_uses IS NULL OR uses_count < max_uses)`,
+          )
+          .run(code);
+        if (sqliteChanges(result) === 0) {
+          return null;
+        }
         return mapJoinLink(globalDb.prepare('SELECT * FROM join_links WHERE code = ?').get(code));
       },
     },

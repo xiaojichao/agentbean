@@ -54,15 +54,18 @@ describe('server-next SQLite repositories', () => {
         ids: {
           nextId: createIds(['user-1', 'team-1', 'channel-1', 'join-1', 'user-2', 'team-2', 'channel-2']),
         },
+        joinCodes: {
+          nextCode: createIds(['code-1']),
+        },
       });
       await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
 
       await expect(app.createJoinLink({ userId: 'user-1', teamId: 'team-1' })).resolves.toMatchObject({
         ok: true,
-        link: { id: 'join-1', code: 'join-1', teamId: 'team-1', usesCount: 0, maxUses: 1 },
+        link: { id: 'join-1', code: 'code-1', teamId: 'team-1', usesCount: 0, maxUses: 1 },
       });
-      expect(globalDb.prepare('SELECT code, team_id AS teamId, uses_count AS usesCount FROM join_links WHERE code = ?').get('join-1')).toEqual({
-        code: 'join-1',
+      expect(globalDb.prepare('SELECT code, team_id AS teamId, uses_count AS usesCount FROM join_links WHERE code = ?').get('code-1')).toEqual({
+        code: 'code-1',
         teamId: 'team-1',
         usesCount: 0,
       });
@@ -72,7 +75,7 @@ describe('server-next SQLite repositories', () => {
           username: 'lin',
           password: 'secret',
           teamName: 'Lin Private',
-          joinCode: 'join-1',
+          joinCode: 'code-1',
         }),
       ).resolves.toMatchObject({
         ok: true,
@@ -82,11 +85,15 @@ describe('server-next SQLite repositories', () => {
       expect(globalDb.prepare('SELECT role FROM team_members WHERE team_id = ? AND user_id = ?').get('team-1', 'user-2')).toEqual({
         role: 'member',
       });
-      expect(globalDb.prepare('SELECT uses_count AS usesCount FROM join_links WHERE code = ?').get('join-1')).toEqual({
+      expect(globalDb.prepare('SELECT uses_count AS usesCount FROM join_links WHERE code = ?').get('code-1')).toEqual({
         usesCount: 1,
       });
       expect(globalDb.prepare('SELECT current_team_id AS currentTeamId FROM users WHERE id = ?').get('user-2')).toEqual({
         currentTeamId: 'team-1',
+      });
+      await expect(repositories.joinLinks.incrementUses('code-1')).resolves.toBeNull();
+      expect(globalDb.prepare('SELECT uses_count AS usesCount FROM join_links WHERE code = ?').get('code-1')).toEqual({
+        usesCount: 1,
       });
     } finally {
       close();

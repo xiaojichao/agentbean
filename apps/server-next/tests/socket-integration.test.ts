@@ -195,6 +195,7 @@ describe('server-next Socket.IO namespaces', () => {
     const app = createInMemoryServerNext({
       now: () => 1100,
       ids: createIds(['user-1', 'team-1', 'channel-1', 'join-1', 'user-2', 'team-2', 'channel-2']),
+      joinCodes: createIds(['code-1']),
     });
     const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
     cleanups.push(async () => {
@@ -226,12 +227,12 @@ describe('server-next Socket.IO namespaces', () => {
 
     await expect(owner.emitWithAck(WEB_EVENTS.join.create, { teamId: 'team-1' })).resolves.toMatchObject({
       ok: true,
-      link: { code: 'join-1', teamId: 'team-1', usesCount: 0 },
+      link: { code: 'code-1', teamId: 'team-1', usesCount: 0 },
       team: { id: 'team-1' },
     });
-    await expect(guest.emitWithAck(WEB_EVENTS.join.validate, { code: 'join-1' })).resolves.toMatchObject({
+    await expect(guest.emitWithAck(WEB_EVENTS.join.validate, { code: 'code-1' })).resolves.toMatchObject({
       ok: true,
-      link: { code: 'join-1', teamId: 'team-1' },
+      link: { code: 'code-1', teamId: 'team-1' },
       team: { id: 'team-1', name: 'AgentBean' },
     });
     await expect(
@@ -239,7 +240,7 @@ describe('server-next Socket.IO namespaces', () => {
         username: 'lin',
         password: 'secret',
         teamName: 'Lin Private',
-        joinCode: 'join-1',
+        joinCode: 'code-1',
       }),
     ).resolves.toMatchObject({
       ok: true,
@@ -247,7 +248,7 @@ describe('server-next Socket.IO namespaces', () => {
       currentTeam: { id: 'team-1', currentUserRole: 'member' },
       joinedTeam: { id: 'team-1', currentUserRole: 'member' },
     });
-    await expect(guest.emitWithAck(WEB_EVENTS.join.validate, { code: 'join-1' })).resolves.toMatchObject({
+    await expect(guest.emitWithAck(WEB_EVENTS.join.validate, { code: 'code-1' })).resolves.toMatchObject({
       ok: false,
       error: 'INVITE_ALREADY_USED',
     });

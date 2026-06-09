@@ -1,4 +1,4 @@
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DispatchDto, type DispatchRequestDto, type JoinLinkDto, type MessageDto, type RuntimeDto, type TeamDto, type UserDto } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { JoinLinkRecord, ServerNextRepositories, UserRecord } from './repositories.js';
@@ -9,6 +9,10 @@ export interface ServerNextClock {
 
 export interface ServerNextIds {
   nextId(): string;
+}
+
+export interface ServerNextJoinCodes {
+  nextCode(): string;
 }
 
 export interface ServerNextUseCases {
@@ -284,11 +288,13 @@ export interface CreateServerNextUseCasesInput {
   repositories: ServerNextRepositories;
   clock: ServerNextClock;
   ids: ServerNextIds;
+  joinCodes?: ServerNextJoinCodes;
   sessionSecret?: string;
 }
 
 export function createServerNextUseCases(input: CreateServerNextUseCasesInput): ServerNextUseCases {
   const { repositories, clock, ids } = input;
+  const joinCodes = input.joinCodes ?? { nextCode: generateJoinCode };
   const sessionSecret = input.sessionSecret ?? 'agentbean-next-dev-session-secret';
 
   return {
@@ -499,7 +505,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const linkId = ids.nextId();
       const link = await repositories.joinLinks.create({
         id: linkId,
-        code: linkId,
+        code: joinCodes.nextCode(),
         teamId: team.id,
         createdBy: joinInput.userId,
         createdAt: clock.now(),
@@ -1266,6 +1272,10 @@ function slugify(value: string): string {
 
 function hashPassword(password: string): string {
   return createHash('sha256').update(password).digest('hex');
+}
+
+function generateJoinCode(): string {
+  return randomBytes(16).toString('base64url');
 }
 
 async function resolveCurrentTeam(

@@ -183,6 +183,7 @@ describe('server-next first-slice use cases', () => {
     const app = createInMemoryServerNext({
       now: () => 250,
       ids: createIds(['user-1', 'team-1', 'channel-1', 'join-1']),
+      joinCodes: createIds(['code-1']),
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
 
@@ -190,7 +191,7 @@ describe('server-next first-slice use cases', () => {
       ok: true,
       link: {
         id: 'join-1',
-        code: 'join-1',
+        code: 'code-1',
         teamId: 'team-1',
         createdBy: 'user-1',
         usesCount: 0,
@@ -198,9 +199,9 @@ describe('server-next first-slice use cases', () => {
       },
       team: { id: 'team-1', name: 'AgentBean' },
     });
-    await expect(app.validateJoinLink({ code: 'join-1' })).resolves.toMatchObject({
+    await expect(app.validateJoinLink({ code: 'code-1' })).resolves.toMatchObject({
       ok: true,
-      link: { code: 'join-1', teamId: 'team-1', usesCount: 0, maxUses: 1 },
+      link: { code: 'code-1', teamId: 'team-1', usesCount: 0, maxUses: 1 },
       team: { id: 'team-1', name: 'AgentBean' },
     });
   });
@@ -209,6 +210,7 @@ describe('server-next first-slice use cases', () => {
     const app = createInMemoryServerNext({
       now: () => 260,
       ids: createIds(['user-1', 'team-1', 'channel-1', 'join-1', 'user-2', 'team-2', 'channel-2']),
+      joinCodes: createIds(['code-1']),
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
     await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
@@ -218,7 +220,7 @@ describe('server-next first-slice use cases', () => {
         username: 'lin',
         password: 'secret',
         teamName: 'Lin Private',
-        joinCode: 'join-1',
+        joinCode: 'code-1',
       }),
     ).resolves.toMatchObject({
       ok: true,
@@ -235,7 +237,7 @@ describe('server-next first-slice use cases', () => {
         expect.objectContaining({ id: 'team-2', currentUserRole: 'owner' }),
       ]),
     });
-    await expect(app.validateJoinLink({ code: 'join-1' })).resolves.toMatchObject({
+    await expect(app.validateJoinLink({ code: 'code-1' })).resolves.toMatchObject({
       ok: false,
       error: 'INVITE_ALREADY_USED',
     });
@@ -253,12 +255,13 @@ describe('server-next first-slice use cases', () => {
         'team-2',
         'channel-2',
       ]),
+      joinCodes: createIds(['code-1']),
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
     await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
     await app.registerUser({ username: 'lin', password: 'secret', teamName: 'Lin Private' });
 
-    await expect(app.loginUser({ username: 'lin', password: 'secret', joinCode: 'join-1' })).resolves.toMatchObject({
+    await expect(app.loginUser({ username: 'lin', password: 'secret', joinCode: 'code-1' })).resolves.toMatchObject({
       ok: true,
       user: { id: 'user-2', primaryTeamId: 'team-1' },
       currentTeam: { id: 'team-1', currentUserRole: 'member' },
@@ -274,22 +277,23 @@ describe('server-next first-slice use cases', () => {
     const app = createInMemoryServerNext({
       now: () => 275,
       ids: createIds(['user-1', 'team-1', 'channel-1', 'join-1', 'team-2', 'channel-2', 'user-2', 'team-3', 'channel-3']),
+      joinCodes: createIds(['code-1']),
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
     await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
     await app.createTeam({ userId: 'user-1', name: 'Ops Team' });
 
-    await expect(app.loginUser({ username: 'shaw', password: 'secret', joinCode: 'join-1' })).resolves.toMatchObject({
+    await expect(app.loginUser({ username: 'shaw', password: 'secret', joinCode: 'code-1' })).resolves.toMatchObject({
       ok: true,
       currentTeam: { id: 'team-1', currentUserRole: 'owner' },
       joinedTeam: { id: 'team-1', currentUserRole: 'owner' },
     });
-    await expect(app.validateJoinLink({ code: 'join-1' })).resolves.toMatchObject({
+    await expect(app.validateJoinLink({ code: 'code-1' })).resolves.toMatchObject({
       ok: true,
-      link: { code: 'join-1', usesCount: 0, maxUses: 1 },
+      link: { code: 'code-1', usesCount: 0, maxUses: 1 },
     });
     await expect(
-      app.registerUser({ username: 'lin', password: 'secret', teamName: 'Lin Private', joinCode: 'join-1' }),
+      app.registerUser({ username: 'lin', password: 'secret', teamName: 'Lin Private', joinCode: 'code-1' }),
     ).resolves.toMatchObject({
       ok: true,
       currentTeam: { id: 'team-1', currentUserRole: 'member' },
@@ -300,6 +304,7 @@ describe('server-next first-slice use cases', () => {
     const app = createInMemoryServerNext({
       now: () => 280,
       ids: createIds(['user-1', 'team-1', 'channel-1', 'join-1', 'join-2', 'user-2', 'team-2', 'channel-2', 'user-3', 'team-3', 'channel-3']),
+      joinCodes: createIds(['code-1', 'code-2']),
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
     await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
@@ -314,16 +319,16 @@ describe('server-next first-slice use cases', () => {
       ok: false,
       error: 'INVITE_INVALID',
     });
-    await expect(app.validateJoinLink({ code: 'join-2' })).resolves.toMatchObject({
+    await expect(app.validateJoinLink({ code: 'code-2' })).resolves.toMatchObject({
       ok: false,
       error: 'INVITE_EXPIRED',
     });
-    await expect(app.loginUser({ username: 'lin', password: 'secret', joinCode: 'join-1' })).resolves.toMatchObject({
+    await expect(app.loginUser({ username: 'lin', password: 'secret', joinCode: 'code-1' })).resolves.toMatchObject({
       ok: true,
       currentTeam: { id: 'team-1' },
     });
     await expect(
-      app.registerUser({ username: 'mei', password: 'secret', teamName: 'Mei Private', joinCode: 'join-1' }),
+      app.registerUser({ username: 'mei', password: 'secret', teamName: 'Mei Private', joinCode: 'code-1' }),
     ).resolves.toMatchObject({
       ok: false,
       error: 'INVITE_ALREADY_USED',

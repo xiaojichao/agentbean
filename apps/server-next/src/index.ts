@@ -9,6 +9,7 @@ export * from './dev-server.js';
 export interface CreateInMemoryServerNextInput {
   now?: () => number;
   ids?: () => string;
+  joinCodes?: () => string;
 }
 
 export function createInMemoryServerNext(input: CreateInMemoryServerNextInput = {}): ServerNextUseCases {
@@ -25,5 +26,6 @@ export function createInMemoryServerNext(input: CreateInMemoryServerNextInput = 
           return `id-${fallbackId}`;
         }),
     },
+    ...(input.joinCodes ? { joinCodes: { nextCode: input.joinCodes } } : {}),
   });
 }

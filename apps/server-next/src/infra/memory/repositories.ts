@@ -110,6 +110,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         if (!link) {
           return null;
         }
+        if (link.maxUses !== undefined && link.usesCount >= link.maxUses) {
+          return null;
+        }
         const updated = { ...link, usesCount: link.usesCount + 1 };
         joinLinks.set(code, updated);
         return updated;
