@@ -14,6 +14,8 @@ describe('web-next socket client', () => {
     await client.login({ username: 'shaw', password: 'secret' });
     await client.whoami({ token: 'token-1' });
     await client.listTeams({ userId: 'user-1' });
+    await client.createTeam({ userId: 'user-1', name: 'Ops Team' });
+    await client.switchTeam({ userId: 'user-1', teamId: 'team-2' });
     await client.listDevices({ userId: 'user-1', teamId: 'team-1' });
     await client.getDevice({ userId: 'user-1', deviceId: 'device-1' });
     await client.scanDevice({ userId: 'user-1', deviceId: 'device-1' });
@@ -81,6 +83,8 @@ describe('web-next socket client', () => {
       [WEB_EVENTS.auth.login, { username: 'shaw', password: 'secret' }],
       [WEB_EVENTS.auth.whoami, { token: 'token-1' }],
       [WEB_EVENTS.team.list, { userId: 'user-1' }],
+      [WEB_EVENTS.team.create, { userId: 'user-1', name: 'Ops Team' }],
+      [WEB_EVENTS.team.switch, { userId: 'user-1', teamId: 'team-2' }],
       [WEB_EVENTS.device.list, { userId: 'user-1', teamId: 'team-1' }],
       [WEB_EVENTS.device.get, { userId: 'user-1', deviceId: 'device-1' }],
       [WEB_EVENTS.device.scan, { userId: 'user-1', deviceId: 'device-1' }],
@@ -214,6 +218,8 @@ describe('web-next socket client', () => {
     const client = createWebSocketClient(transport);
 
     await client.listTeams({});
+    await client.createTeam({ name: 'Ops Team' });
+    await client.switchTeam({ teamId: 'team-2' });
     await client.subscribeChannels({ teamId: 'team-1' }, () => undefined);
     await client.listDevices({ teamId: 'team-1' });
     await client.createAgent({
@@ -230,6 +236,8 @@ describe('web-next socket client', () => {
 
     expect(transport.emitted).toEqual([
       [WEB_EVENTS.team.list, {}],
+      [WEB_EVENTS.team.create, { name: 'Ops Team' }],
+      [WEB_EVENTS.team.switch, { teamId: 'team-2' }],
       [WEB_EVENTS.channel.subscribe, { teamId: 'team-1' }],
       [WEB_EVENTS.device.list, { teamId: 'team-1' }],
       [WEB_EVENTS.agent.create, {

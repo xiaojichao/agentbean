@@ -25,9 +25,9 @@ Browser clients 连接到 `/web`。当前实现允许 anonymous sockets 用于 a
 
 | 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `team:list` | Web -> Server | 列出当前用户可见的 teams。 | 保留。 |
-| `team:create` | Web -> Server | 创建 team 与 default channel。 | 保留。 |
-| `team:switch` | Web -> Server | 设置 socket current team，并持久化 user current team。 | 保留。 |
+| `team:list` | Web -> Server | 列出当前用户可见的 teams，并返回当前 `currentTeamId`。 | 保留。 |
+| `team:create` | Web -> Server | 创建 private team、默认 `all` channel，创建者成为 owner，并自动切换 current team。 | 保留。 |
+| `team:switch` | Web -> Server | 只允许切换到用户已加入的 team，并持久化 user current team；非成员返回 `FORBIDDEN`。 | 保留。 |
 | `team:update` | Web -> Server | 重命名 current team。 | 保留，延后到 settings slice。 |
 | `team:delete` | Web -> Server | 删除 team，并广播 fallback team state。 | 保留行为，延后到 settings/admin slice。 |
 | `teams:snapshot` | Server -> Web | 广播可见 team list。 | 保留为 snapshot，payload 应类型化。 |

@@ -95,6 +95,90 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('listTeams returns the current team id', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 210,
+      ids: createIds(['user-1', 'team-1', 'channel-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+
+    await expect(app.listTeams({ userId: 'user-1' })).resolves.toMatchObject({
+      ok: true,
+      currentTeamId: 'team-1',
+      teams: [{ id: 'team-1', currentUserRole: 'owner' }],
+    });
+  });
+
+  test('createTeam creates an owned private team, default all channel, and switches current team', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 230,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'team-2', 'channel-2']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+
+    await expect(app.createTeam({ userId: 'user-1', name: 'Ops Team' })).resolves.toMatchObject({
+      ok: true,
+      team: {
+        id: 'team-2',
+        name: 'Ops Team',
+        path: 'ops-team',
+        visibility: 'private',
+        ownerId: 'user-1',
+        currentUserRole: 'owner',
+      },
+      defaultChannel: {
+        id: 'channel-2',
+        teamId: 'team-2',
+        name: 'all',
+        visibility: 'public',
+      },
+    });
+    await expect(app.listTeams({ userId: 'user-1' })).resolves.toMatchObject({
+      ok: true,
+      currentTeamId: 'team-2',
+      teams: [
+        { id: 'team-1', currentUserRole: 'owner' },
+        { id: 'team-2', currentUserRole: 'owner' },
+      ],
+    });
+    await expect(app.loginUser({ username: 'shaw', password: 'secret' })).resolves.toMatchObject({
+      ok: true,
+      currentTeam: { id: 'team-2' },
+    });
+  });
+
+  test('switchTeam updates current team only for existing team members', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 240,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'team-2',
+        'channel-2',
+        'user-2',
+        'team-3',
+        'channel-3',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.createTeam({ userId: 'user-1', name: 'Ops Team' });
+    await app.registerUser({ username: 'lin', password: 'secret', teamName: 'Lin Team' });
+
+    await expect(app.switchTeam({ userId: 'user-1', teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      currentTeam: { id: 'team-1', currentUserRole: 'owner' },
+    });
+    await expect(app.listTeams({ userId: 'user-1' })).resolves.toMatchObject({
+      ok: true,
+      currentTeamId: 'team-1',
+    });
+    await expect(app.switchTeam({ userId: 'user-2', teamId: 'team-2' })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+  });
+
   test('whoami restores user and current team from a signed session token', async () => {
     const app = createInMemoryServerNext({
       now: () => 220,

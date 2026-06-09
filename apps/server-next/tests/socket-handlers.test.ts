@@ -15,6 +15,8 @@ describe('server-next socket handlers', () => {
       loginUser: vi.fn(async (payload) => makeSuccess({ payload })),
       whoami: vi.fn(async (payload) => makeSuccess({ payload })),
       listTeams: vi.fn(async (payload) => makeSuccess({ payload })),
+      createTeam: vi.fn(async (payload) => makeSuccess({ payload })),
+      switchTeam: vi.fn(async (payload) => makeSuccess({ payload })),
       getDevice: vi.fn(async (payload) => makeSuccess({ payload })),
       requestDeviceScan: vi.fn(async (payload) =>
         makeSuccess({ request: { requestId: 'scan-1', deviceId: (payload as { deviceId: string }).deviceId } }),
@@ -44,6 +46,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.auth.login,
       WEB_EVENTS.auth.whoami,
       WEB_EVENTS.team.list,
+      WEB_EVENTS.team.create,
+      WEB_EVENTS.team.switch,
       WEB_EVENTS.device.get,
       WEB_EVENTS.device.scan,
       WEB_EVENTS.channel.create,
@@ -65,6 +69,14 @@ describe('server-next socket handlers', () => {
       payload: { username: 'shaw' },
     });
     await socket.trigger(WEB_EVENTS.auth.whoami, { token: 'token-1' });
+    await socket.trigger(WEB_EVENTS.team.create, {
+      userId: 'user-1',
+      name: 'Ops Team',
+    });
+    await socket.trigger(WEB_EVENTS.team.switch, {
+      userId: 'user-1',
+      teamId: 'team-2',
+    });
     await socket.trigger(WEB_EVENTS.message.send, {
       userId: 'user-1',
       teamId: 'team-1',
@@ -144,6 +156,14 @@ describe('server-next socket handlers', () => {
 
     expect(app.registerUser).toHaveBeenCalledWith({ username: 'shaw' });
     expect(app.whoami).toHaveBeenCalledWith({ token: 'token-1' });
+    expect(app.createTeam).toHaveBeenCalledWith({
+      userId: 'user-1',
+      name: 'Ops Team',
+    });
+    expect(app.switchTeam).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-2',
+    });
     expect(app.sendMessage).toHaveBeenCalledWith({
       userId: 'user-1',
       teamId: 'team-1',
