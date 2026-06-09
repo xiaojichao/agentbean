@@ -3,6 +3,7 @@ import type {
   ChannelRecord,
   DeviceRecord,
   DispatchRecord,
+  JoinLinkRecord,
   MessageRecord,
   RuntimeRecord,
   ServerNextRepositories,
@@ -15,6 +16,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const users = new Map<string, UserRecord>();
   const teams = new Map<string, TeamRecord>();
   const members = new Map<string, TeamMemberRecord>();
+  const joinLinks = new Map<string, JoinLinkRecord>();
   const channels = new Map<string, ChannelRecord>();
   const devices = new Map<string, DeviceRecord>();
   const runtimes = new Map<string, RuntimeRecord>();
@@ -93,6 +95,27 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             },
           ];
         });
+      },
+    },
+    joinLinks: {
+      async create(input) {
+        joinLinks.set(input.code, input);
+        return input;
+      },
+      async getByCode(code) {
+        return joinLinks.get(code) ?? null;
+      },
+      async incrementUses(code) {
+        const link = joinLinks.get(code);
+        if (!link) {
+          return null;
+        }
+        if (link.maxUses !== undefined && link.usesCount >= link.maxUses) {
+          return null;
+        }
+        const updated = { ...link, usesCount: link.usesCount + 1 };
+        joinLinks.set(code, updated);
+        return updated;
       },
     },
     channels: {

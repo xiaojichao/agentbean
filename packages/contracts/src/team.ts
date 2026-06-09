@@ -46,3 +46,31 @@ export interface SwitchTeamCommandDto {
 export interface SwitchTeamAckDto {
   currentTeam: TeamDto;
 }
+
+export interface JoinLinkDto {
+  id: ID;
+  code: string;
+  teamId: ID;
+  createdBy: ID;
+  createdAt: UnixMs;
+  expiresAt?: UnixMs;
+  maxUses?: number;
+  usesCount: number;
+  revokedAt?: UnixMs;
+}
+
+export interface CreateJoinLinkCommandDto {
+  userId: ID;
+  teamId: ID;
+  expiresAt?: UnixMs;
+  maxUses?: number;
+}
+
+export interface ValidateJoinLinkCommandDto {
+  code: string;
+}
+
+export interface JoinLinkAckDto {
+  link: JoinLinkDto;
+  team: TeamDto;
+}

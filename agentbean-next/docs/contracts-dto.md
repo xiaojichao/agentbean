@@ -10,6 +10,7 @@
 - Runtime 与 agent discovery。
 - Agent/device snapshots。
 - Channel list/create/join。
+- User join links。
 - Message send。
 - Agent dispatch request/result/error。
 
@@ -18,7 +19,7 @@
 - Tasks。
 - Artifacts。
 - Workspace runs。
-- Invites/join links。
+- Device invites。
 - Admin。
 - Search。
 - 第一切片 create/join 之外的 channel settings。
@@ -49,6 +50,9 @@ export type ErrorCode =
   | "DEVICE_OFFLINE"
   | "AGENT_OFFLINE"
   | "DISPATCH_TIMEOUT"
+  | "INVITE_INVALID"
+  | "INVITE_EXPIRED"
+  | "INVITE_ALREADY_USED"
   | "INTERNAL_ERROR";
 
 export type Ack<T extends object = {}> =
@@ -112,6 +116,28 @@ export interface TeamDto {
 
 - `path` 是稳定的 UI route segment。
 - `TeamDto` 是第一切片的团队投影，也是统一后的产品术语。
+
+## JoinLinkDto
+
+```ts
+export interface JoinLinkDto {
+  id: ID;
+  code: string;
+  teamId: ID;
+  createdBy: ID;
+  createdAt: UnixMs;
+  expiresAt?: UnixMs;
+  maxUses?: number;
+  usesCount: number;
+  revokedAt?: UnixMs;
+}
+```
+
+说明：
+
+- `JoinLinkDto` 只覆盖 user join link，不覆盖 device invite。
+- 第一版 `join:create` 默认 `maxUses` 为 1。
+- `join:validate` 和带 `joinCode` 的 auth flows 会复用 `INVITE_INVALID`、`INVITE_EXPIRED`、`INVITE_ALREADY_USED`。
 
 ## DeviceDto
 
@@ -447,6 +473,8 @@ type AuthLoginAck = Ack<{ token: string; user: UserDto; currentTeam: TeamDto }>;
 type TeamListAck = Ack<{ teams: TeamDto[]; currentTeamId?: ID }>;
 type TeamCreateAck = Ack<{ team: TeamDto; defaultChannel: ChannelDto }>;
 type TeamSwitchAck = Ack<{ currentTeam: TeamDto }>;
+type JoinCreateAck = Ack<{ link: JoinLinkDto; team: TeamDto }>;
+type JoinValidateAck = Ack<{ link: JoinLinkDto; team: TeamDto }>;
 type DeviceListAck = Ack<{ devices: DeviceDto[] }>;
 type AgentSubscribeAck = Ack<{ agents: AgentDto[] }>;
 type ChannelJoinAck = Ack<{ channel: ChannelDto; messages: MessageDto[] }>;

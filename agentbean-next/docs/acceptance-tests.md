@@ -24,7 +24,24 @@
 前提：某 team 的 invite code，
 当：新用户通过该 invite 注册，
 结果：用户被加入受邀 team，
-并且登录后可以列出该 team。
+该受邀 team 成为用户的 current team，
+并且登录或 `whoami` 后可以恢复该 current team。
+
+### 已有用户可通过 Join Link 加入 Team
+
+前提：某已登录用户不属于目标 team，
+并且目标 team member 创建了 user join link，
+当：该用户登录时提供 join code，
+结果：server 将该用户加入目标 team，
+并把 current team 切换到受邀 team。
+
+### Join Link Validate 可在注册前预览 Team
+
+前提：某 team 存在可用 user join link，
+当：anonymous browser session 校验该 code，
+结果：server 返回目标 team 的展示信息；
+当：code 无效、过期或已耗尽，
+结果：server 返回稳定 invite error code。
 
 ## Device 与 Daemon
 

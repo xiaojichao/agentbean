@@ -129,10 +129,11 @@
 |---|---|---|
 | `invite:create` with `purpose: device` | Keep | 替换为显式 `device-invite:create`。 |
 | `invite:create` with `purpose: user` | Merge/Rename | 优先使用 user join link commands。 |
-| `join:create` | Keep | 保留为 user invite creation。 |
+| `join:create` | First Slice | Next 已实现为 user join link creation，不覆盖 device invite。 |
+| `join:validate` | First Slice | Next 已实现为 user join link validation，替换旧 `auth:join:validate`。 |
 | `join:list` | Defer | 保留。 |
 | `join:revoke` | Defer | 保留。 |
-| `auth:join:validate` | Keep | 重命名为 `join:validate` 或 `invite:validate-user`。 |
+| `auth:join:validate` | Merge/Rename | 由 `join:validate` 承接。 |
 
 ## Admin 表面
 

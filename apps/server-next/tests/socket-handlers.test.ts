@@ -17,6 +17,8 @@ describe('server-next socket handlers', () => {
       listTeams: vi.fn(async (payload) => makeSuccess({ payload })),
       createTeam: vi.fn(async (payload) => makeSuccess({ payload })),
       switchTeam: vi.fn(async (payload) => makeSuccess({ payload })),
+      createJoinLink: vi.fn(async (payload) => makeSuccess({ payload })),
+      validateJoinLink: vi.fn(async (payload) => makeSuccess({ payload })),
       getDevice: vi.fn(async (payload) => makeSuccess({ payload })),
       requestDeviceScan: vi.fn(async (payload) =>
         makeSuccess({ request: { requestId: 'scan-1', deviceId: (payload as { deviceId: string }).deviceId } }),
@@ -48,6 +50,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.team.list,
       WEB_EVENTS.team.create,
       WEB_EVENTS.team.switch,
+      WEB_EVENTS.join.create,
+      WEB_EVENTS.join.validate,
       WEB_EVENTS.device.get,
       WEB_EVENTS.device.scan,
       WEB_EVENTS.channel.create,
@@ -76,6 +80,13 @@ describe('server-next socket handlers', () => {
     await socket.trigger(WEB_EVENTS.team.switch, {
       userId: 'user-1',
       teamId: 'team-2',
+    });
+    await socket.trigger(WEB_EVENTS.join.create, {
+      userId: 'user-1',
+      teamId: 'team-1',
+    });
+    await socket.trigger(WEB_EVENTS.join.validate, {
+      code: 'join-1',
     });
     await socket.trigger(WEB_EVENTS.message.send, {
       userId: 'user-1',
@@ -163,6 +174,13 @@ describe('server-next socket handlers', () => {
     expect(app.switchTeam).toHaveBeenCalledWith({
       userId: 'user-1',
       teamId: 'team-2',
+    });
+    expect(app.createJoinLink).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+    });
+    expect(app.validateJoinLink).toHaveBeenCalledWith({
+      code: 'join-1',
     });
     expect(app.sendMessage).toHaveBeenCalledWith({
       userId: 'user-1',

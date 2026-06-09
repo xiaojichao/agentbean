@@ -42,6 +42,8 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.team.list, app, 'listTeams', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.team.create, app, 'createTeam', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.team.switch, app, 'switchTeam', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.join.create, app, 'createJoinLink', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.join.validate, app, 'validateJoinLink');
   bind(socket, WEB_EVENTS.device.get, app, 'getDevice', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.device.scan, app, 'requestDeviceScan', (_payload, result) => {
     if (!options.deviceScan || !isDeviceScanAck(result)) {

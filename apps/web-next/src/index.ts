@@ -12,6 +12,8 @@ import type {
   MessageDto,
   RuntimeDto,
   UpdateChannelCommandDto,
+  CreateJoinLinkCommandDto,
+  ValidateJoinLinkCommandDto,
 } from '../../../packages/contracts/src/index.js';
 
 export interface WebSocketTransport {
@@ -23,11 +25,13 @@ export interface RegisterInput {
   username: string;
   password: string;
   teamName: string;
+  joinCode?: string;
 }
 
 export interface LoginInput {
   username: string;
   password: string;
+  joinCode?: string;
 }
 
 export interface ListTeamsInput {
@@ -69,6 +73,7 @@ type SessionChannelHumanMemberInput = Omit<ChannelHumanMemberCommandDto, 'userId
 type SessionChannelAgentMemberInput = Omit<ChannelAgentMemberCommandDto, 'userId'> & { userId?: string };
 type SessionListChannelMembersInput = Omit<ListChannelMembersCommandDto, 'userId'> & { userId?: string };
 type SessionCreateAgentInput = Omit<CreateAgentCommandDto, 'userId'> & { userId?: string };
+type SessionCreateJoinLinkInput = Omit<CreateJoinLinkCommandDto, 'userId'> & { userId?: string };
 
 export interface WebSocketClient {
   register(input: RegisterInput): Promise<unknown>;
@@ -77,6 +82,8 @@ export interface WebSocketClient {
   listTeams(input: ListTeamsInput): Promise<unknown>;
   createTeam(input: CreateTeamInput): Promise<unknown>;
   switchTeam(input: SwitchTeamInput): Promise<unknown>;
+  createJoinLink(input: SessionCreateJoinLinkInput): Promise<unknown>;
+  validateJoinLink(input: ValidateJoinLinkCommandDto): Promise<unknown>;
   listDevices(input: SubscribeInput, onSnapshot?: (devices: DeviceDto[]) => void): Promise<unknown>;
   getDevice(input: SessionDeviceCommandInput): Promise<unknown>;
   scanDevice(input: SessionDeviceCommandInput): Promise<unknown>;
@@ -155,6 +162,12 @@ export function createWebSocketClient(transport: WebSocketTransport): WebSocketC
     },
     switchTeam(input) {
       return transport.emitWithAck(WEB_EVENTS.team.switch, input);
+    },
+    createJoinLink(input) {
+      return transport.emitWithAck(WEB_EVENTS.join.create, input);
+    },
+    validateJoinLink(input) {
+      return transport.emitWithAck(WEB_EVENTS.join.validate, input);
     },
     listDevices(input, onSnapshot) {
       deviceSubscription = input;

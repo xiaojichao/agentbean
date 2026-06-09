@@ -1,7 +1,7 @@
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DispatchDto, type DispatchRequestDto, type MessageDto, type RuntimeDto, type TeamDto, type UserDto } from '../../../../packages/contracts/src/index.js';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DispatchDto, type DispatchRequestDto, type JoinLinkDto, type MessageDto, type RuntimeDto, type TeamDto, type UserDto } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
-import type { ServerNextRepositories } from './repositories.js';
+import type { JoinLinkRecord, ServerNextRepositories, UserRecord } from './repositories.js';
 
 export interface ServerNextClock {
   now(): number;
@@ -11,6 +11,10 @@ export interface ServerNextIds {
   nextId(): string;
 }
 
+export interface ServerNextJoinCodes {
+  nextCode(): string;
+}
+
 export interface ServerNextUseCases {
   registerUser(input: RegisterUserInput): Promise<Ack<RegisterUserResult>>;
   loginUser(input: LoginUserInput): Promise<Ack<LoginUserResult>>;
@@ -18,6 +22,8 @@ export interface ServerNextUseCases {
   listTeams(input: { userId: string }): Promise<Ack<ListTeamsResult>>;
   createTeam(input: CreateTeamInput): Promise<Ack<CreateTeamResult>>;
   switchTeam(input: SwitchTeamInput): Promise<Ack<SwitchTeamResult>>;
+  createJoinLink(input: CreateJoinLinkInput): Promise<Ack<JoinLinkResult>>;
+  validateJoinLink(input: ValidateJoinLinkInput): Promise<Ack<JoinLinkResult>>;
   listDevices(input: { teamId: string; userId: string }): Promise<Ack<{ devices: DeviceDto[] }>>;
   getDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDetailDto }>>;
   requestDeviceScan(input: RequestDeviceScanInput): Promise<Ack<RequestDeviceScanResult>>;
@@ -48,6 +54,7 @@ export interface RegisterUserInput {
   username: string;
   password: string;
   teamName: string;
+  joinCode?: string;
 }
 
 export interface RegisterUserResult {
@@ -55,17 +62,20 @@ export interface RegisterUserResult {
   user: UserDto;
   currentTeam: TeamDto;
   defaultChannel: ChannelDto;
+  joinedTeam?: TeamDto;
 }
 
 export interface LoginUserInput {
   username: string;
   password: string;
+  joinCode?: string;
 }
 
 export interface LoginUserResult {
   token: string;
   user: UserDto;
   currentTeam: TeamDto;
+  joinedTeam?: TeamDto;
 }
 
 export interface WhoamiInput {
@@ -99,6 +109,22 @@ export interface SwitchTeamInput {
 
 export interface SwitchTeamResult {
   currentTeam: TeamDto;
+}
+
+export interface CreateJoinLinkInput {
+  userId: string;
+  teamId: string;
+  expiresAt?: number;
+  maxUses?: number;
+}
+
+export interface ValidateJoinLinkInput {
+  code: string;
+}
+
+export interface JoinLinkResult {
+  link: JoinLinkDto;
+  team: TeamDto;
 }
 
 export interface DeviceHelloInput {
@@ -262,11 +288,13 @@ export interface CreateServerNextUseCasesInput {
   repositories: ServerNextRepositories;
   clock: ServerNextClock;
   ids: ServerNextIds;
+  joinCodes?: ServerNextJoinCodes;
   sessionSecret?: string;
 }
 
 export function createServerNextUseCases(input: CreateServerNextUseCasesInput): ServerNextUseCases {
   const { repositories, clock, ids } = input;
+  const joinCodes = input.joinCodes ?? { nextCode: generateJoinCode };
   const sessionSecret = input.sessionSecret ?? 'agentbean-next-dev-session-secret';
 
   return {
@@ -274,6 +302,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const existing = await repositories.users.getByUsername(registerInput.username);
       if (existing) {
         return makeFailure('CONFLICT', 'Username already exists');
+      }
+      const joinLink = registerInput.joinCode
+        ? await getUsableJoinLink(repositories, clock, registerInput.joinCode)
+        : undefined;
+      if (joinLink && !joinLink.ok) {
+        return joinLink;
       }
 
       const now = clock.now();
@@ -321,11 +355,23 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         agentMemberIds: [],
       });
 
+      let currentTeam = toTeamDto(team, 'owner');
+      let joinedTeam: TeamDto | undefined;
+      if (joinLink?.ok) {
+        const joined = await joinTeamFromLink(repositories, clock, joinLink.link, user);
+        if (!joined.ok) {
+          return joined;
+        }
+        currentTeam = joined.currentTeam;
+        joinedTeam = joined.currentTeam;
+      }
+
       return makeSuccess({
         token: issueSessionToken(user.id, sessionSecret),
-        user: toUserDto(user),
-        currentTeam: toTeamDto(team, 'owner'),
+        user: { ...toUserDto(user), primaryTeamId: currentTeam.id },
+        currentTeam,
         defaultChannel,
+        ...(joinedTeam ? { joinedTeam } : {}),
       });
     },
 
@@ -335,7 +381,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('UNAUTHENTICATED', 'Invalid username or password');
       }
 
-      const currentTeam = await resolveCurrentTeam(repositories, user);
+      const joined = loginInput.joinCode
+        ? await consumeJoinCodeForUser(repositories, clock, loginInput.joinCode, user)
+        : undefined;
+      if (joined && !joined.ok) {
+        return joined;
+      }
+      const currentTeam = joined?.currentTeam ?? await resolveCurrentTeam(repositories, user);
       if (!currentTeam) {
         return makeFailure('FORBIDDEN', 'User has no team membership');
       }
@@ -346,6 +398,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         token: issueSessionToken(user.id, sessionSecret),
         user: { ...toUserDto(user), primaryTeamId: currentTeam.id },
         currentTeam: toTeamDto(currentTeam, currentTeam.currentUserRole),
+        ...(joined ? { joinedTeam: toTeamDto(joined.currentTeam, joined.currentTeam.currentUserRole) } : {}),
       });
     },
 
@@ -437,6 +490,48 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
       return makeSuccess({
         currentTeam: toTeamDto(team, role),
+      });
+    },
+
+    async createJoinLink(joinInput) {
+      const team = await repositories.teams.getById(joinInput.teamId);
+      if (!team) {
+        return makeFailure('NOT_FOUND', 'Team not found');
+      }
+      const role = await repositories.teams.getMemberRole(joinInput.teamId, joinInput.userId);
+      if (!role) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const linkId = ids.nextId();
+      const link = await repositories.joinLinks.create({
+        id: linkId,
+        code: joinCodes.nextCode(),
+        teamId: team.id,
+        createdBy: joinInput.userId,
+        createdAt: clock.now(),
+        expiresAt: joinInput.expiresAt,
+        maxUses: joinInput.maxUses ?? 1,
+        usesCount: 0,
+      });
+
+      return makeSuccess({
+        link: toJoinLinkDto(link),
+        team: toTeamDto(team, role),
+      });
+    },
+
+    async validateJoinLink(joinInput) {
+      const usable = await getUsableJoinLink(repositories, clock, joinInput.code);
+      if (!usable.ok) {
+        return usable;
+      }
+      const team = await repositories.teams.getById(usable.link.teamId);
+      if (!team) {
+        return makeFailure('INVITE_INVALID', 'Join link team no longer exists');
+      }
+      return makeSuccess({
+        link: toJoinLinkDto(usable.link),
+        team: toTeamDto(team, 'member'),
       });
     },
 
@@ -1107,6 +1202,20 @@ function toTeamDto(team: Omit<TeamDto, 'currentUserRole'>, currentUserRole: Team
   };
 }
 
+function toJoinLinkDto(link: JoinLinkRecord): JoinLinkDto {
+  return {
+    id: link.id,
+    code: link.code,
+    teamId: link.teamId,
+    createdBy: link.createdBy,
+    createdAt: link.createdAt,
+    expiresAt: link.expiresAt,
+    maxUses: link.maxUses,
+    usesCount: link.usesCount,
+    revokedAt: link.revokedAt,
+  };
+}
+
 function toDeviceDto(device: DeviceDto): DeviceDto {
   return {
     id: device.id,
@@ -1165,6 +1274,10 @@ function hashPassword(password: string): string {
   return createHash('sha256').update(password).digest('hex');
 }
 
+function generateJoinCode(): string {
+  return randomBytes(16).toString('base64url');
+}
+
 async function resolveCurrentTeam(
   repositories: ServerNextRepositories,
   user: { id: string; currentTeamId?: string; primaryTeamId?: string },
@@ -1182,6 +1295,68 @@ function resolveCurrentTeamFromList(
     teams.find((team) => team.id === user.primaryTeamId) ??
     teams[0]
   );
+}
+
+async function getUsableJoinLink(
+  repositories: ServerNextRepositories,
+  clock: ServerNextClock,
+  code: string,
+): Promise<{ ok: true; link: JoinLinkRecord } | Ack<Record<string, never>>> {
+  const link = await repositories.joinLinks.getByCode(code);
+  if (!link || link.revokedAt) {
+    return makeFailure('INVITE_INVALID', 'Join link is invalid');
+  }
+  if (link.expiresAt !== undefined && link.expiresAt <= clock.now()) {
+    return makeFailure('INVITE_EXPIRED', 'Join link has expired');
+  }
+  if (link.maxUses !== undefined && link.usesCount >= link.maxUses) {
+    return makeFailure('INVITE_ALREADY_USED', 'Join link has already been used');
+  }
+  return { ok: true, link };
+}
+
+async function consumeJoinCodeForUser(
+  repositories: ServerNextRepositories,
+  clock: ServerNextClock,
+  code: string,
+  user: UserRecord,
+): Promise<{ ok: true; currentTeam: TeamDto & { currentUserRole: 'owner' | 'admin' | 'member' } } | Ack<Record<string, never>>> {
+  const usable = await getUsableJoinLink(repositories, clock, code);
+  if (!usable.ok) {
+    return usable;
+  }
+  return joinTeamFromLink(repositories, clock, usable.link, user);
+}
+
+async function joinTeamFromLink(
+  repositories: ServerNextRepositories,
+  clock: ServerNextClock,
+  link: JoinLinkRecord,
+  user: UserRecord,
+): Promise<{ ok: true; currentTeam: TeamDto & { currentUserRole: 'owner' | 'admin' | 'member' } } | Ack<Record<string, never>>> {
+  const team = await repositories.teams.getById(link.teamId);
+  if (!team) {
+    return makeFailure('INVITE_INVALID', 'Join link team no longer exists');
+  }
+  const existingRole = await repositories.teams.getMemberRole(link.teamId, user.id);
+  if (!existingRole) {
+    await repositories.teams.addMember({
+      teamId: link.teamId,
+      userId: user.id,
+      username: user.username,
+      role: 'member',
+      joinedAt: clock.now(),
+    });
+    const consumed = await repositories.joinLinks.incrementUses(link.code);
+    if (!consumed) {
+      return makeFailure('INVITE_INVALID', 'Join link is invalid');
+    }
+  }
+  await repositories.users.setCurrentTeam(user.id, link.teamId);
+  return {
+    ok: true,
+    currentTeam: toTeamDto(team, existingRole ?? 'member') as TeamDto & { currentUserRole: 'owner' | 'admin' | 'member' },
+  };
 }
 
 function issueSessionToken(userId: string, secret: string): string {

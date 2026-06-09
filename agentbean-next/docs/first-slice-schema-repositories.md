@@ -331,11 +331,38 @@ Default channel 决策：
 - 第一切片保留 `all`，避免不必要的行为变更。
 - 如果后续产品 UX 偏好 `general`，在后续切片中作为显式 rename decision 处理。
 
+## User Join Link 数据
+
+`join_links` 位于 global DB，表示 browser 用户邀请链接：
+
+```sql
+CREATE TABLE join_links (
+  id          TEXT PRIMARY KEY,
+  code        TEXT NOT NULL UNIQUE,
+  team_id     TEXT NOT NULL,
+  created_by  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  expires_at  INTEGER,
+  max_uses    INTEGER,
+  uses_count  INTEGER NOT NULL DEFAULT 0,
+  revoked_at  INTEGER,
+  FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+);
+```
+
+行为边界：
+
+- `join_links` 只覆盖 user join link，不覆盖 device invite。
+- 创建者必须已经是目标 team 的 member。
+- 注册或登录时消费 `joinCode` 会添加目标 team membership，并把用户 current team 切到该 team。
+- `join:list` 与 `join:revoke` 是后续 invite management，不属于当前最小 PR。
+
 ## 显式延后的 Tables
 
 在对应 feature slice 开始前，不要添加这些 tables：
 
-- `invites`
+- `device_invites`
 - `tasks`
 - `artifacts`
 - `workspace_runs`

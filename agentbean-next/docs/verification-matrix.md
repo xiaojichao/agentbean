@@ -46,6 +46,8 @@ Phase 1 完成标准：
 | P2-02 | Team migrations 创建 channel/message/dispatch tables 与 indexes。 | Repository | Team schema exists。 | `first-slice-schema-repositories.md` |
 | P2-03 | Register user 创建 private team、owner membership、default `all` channel 与 current team。 | UseCase | Registration transaction。 | `acceptance-tests.md`, `first-slice-schema-repositories.md` |
 | P2-04 | Login 在 membership 有效时恢复 saved current team。 | UseCase | Current team behavior。 | `acceptance-tests.md` |
+| P2-04a | `join:create` 只允许 team member 创建 user join link，`join:validate` 可匿名返回目标 team display info，并区分无效、过期、已耗尽 code。 | UseCase/Socket | User join link 最小模型。 | `socket-protocol.md`, `contracts-dto.md`, `acceptance-tests.md` |
+| P2-04b | `auth:register` 与 `auth:login` 提供 `joinCode` 时会加入受邀 team、消费 code，并把 current team 切换到受邀 team。 | UseCase/Socket | User invite/join flow 与 current team 持久化。 | `socket-protocol.md`, `acceptance-tests.md` |
 | P2-05 | Device hello upsert device，并调和 `machineId + profileId`。 | UseCase | Agent dedupe 前的 device identity。 | `agent-identity-rules.md`, `first-slice-schema-repositories.md` |
 | P2-05a | `device:list` 成功后发送 initial snapshot，daemon hello/runtimes 后刷新 subscribed sockets。 | Socket | Device subscription broadcast。 | `socket-protocol.md`, `known-gaps.md` |
 | P2-05b | `device:get` 返回 device detail、runtimes 与该 device 的 visible agents，并拒绝非 team member。 | UseCase/Socket | Device detail shell。 | `socket-protocol.md`, `contracts-dto.md` |
@@ -171,7 +173,7 @@ Phase 4 完成标准：
 这些仍保留在 `docs/acceptance-tests.md` 中，但第一切片冻结前不强制要求：
 
 - Device invite token delivery。
-- User invite/join links。
+- Join link management UI、`join:list` 与 `join:revoke`。
 - Artifact upload/download 与 workspace run linkage。
 - Tasks。
 - Message search。
