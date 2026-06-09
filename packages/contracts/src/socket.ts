@@ -12,6 +12,12 @@ export const WEB_EVENTS = {
     update: 'team:update',
     delete: 'team:delete',
   },
+  join: {
+    create: 'join:create',
+    validate: 'join:validate',
+    list: 'join:list',
+    revoke: 'join:revoke',
+  },
   member: {
     list: 'members:list',
     updateHuman: 'member:update-human',

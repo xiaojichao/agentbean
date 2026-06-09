@@ -7,6 +7,7 @@ import type {
   DeviceRecord,
   DispatchRecord,
   AgentExecutionConfig,
+  JoinLinkRecord,
   MessageRecord,
   RuntimeRecord,
   ServerNextRepositories,
@@ -175,6 +176,35 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           role: member.role,
           displayName: member.displayName,
         }));
+      },
+    },
+    joinLinks: {
+      async create(link) {
+        globalDb
+          .prepare(
+            `INSERT INTO join_links (
+              id, code, team_id, created_by, created_at, expires_at, max_uses, uses_count, revoked_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            link.id,
+            link.code,
+            link.teamId,
+            link.createdBy,
+            link.createdAt,
+            link.expiresAt ?? null,
+            link.maxUses ?? null,
+            link.usesCount,
+            link.revokedAt ?? null,
+          );
+        return link;
+      },
+      async getByCode(code) {
+        return mapJoinLink(globalDb.prepare('SELECT * FROM join_links WHERE code = ?').get(code));
+      },
+      async incrementUses(code) {
+        globalDb.prepare('UPDATE join_links SET uses_count = uses_count + 1 WHERE code = ?').run(code);
+        return mapJoinLink(globalDb.prepare('SELECT * FROM join_links WHERE code = ?').get(code));
       },
     },
     channels: {
@@ -726,6 +756,23 @@ function mapTeam(row: unknown): TeamRecord | null {
     path: sqliteText(row, 'path'),
     visibility: sqliteText(row, 'visibility') as TeamRecord['visibility'],
     createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+function mapJoinLink(row: unknown): JoinLinkRecord | null {
+  if (!row) {
+    return null;
+  }
+  return {
+    id: sqliteText(row, 'id'),
+    code: sqliteText(row, 'code'),
+    teamId: sqliteText(row, 'team_id'),
+    createdBy: sqliteText(row, 'created_by'),
+    createdAt: sqliteNumber(row, 'created_at'),
+    expiresAt: sqliteNullableNumber(row, 'expires_at'),
+    maxUses: sqliteNullableNumber(row, 'max_uses'),
+    usesCount: sqliteNumber(row, 'uses_count'),
+    revokedAt: sqliteNullableNumber(row, 'revoked_at'),
   };
 }
 

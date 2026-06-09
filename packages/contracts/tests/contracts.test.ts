@@ -27,11 +27,14 @@ import {
   type RuntimeDto,
   type CreateTeamAckDto,
   type CreateTeamCommandDto,
+  type CreateJoinLinkCommandDto,
+  type JoinLinkAckDto,
   type ListTeamsAckDto,
   type SwitchTeamAckDto,
   type SwitchTeamCommandDto,
   type TeamDto,
   type UpdateChannelCommandDto,
+  type ValidateJoinLinkCommandDto,
   type UserDto,
 } from '../src/index';
 
@@ -97,6 +100,25 @@ describe('first-slice contract result shape', () => {
     };
     const switchTeamAck: SwitchTeamAckDto = {
       currentTeam: team,
+    };
+    const createJoinLinkCommand: CreateJoinLinkCommandDto = {
+      userId: user.id,
+      teamId: team.id,
+    };
+    const validateJoinLinkCommand: ValidateJoinLinkCommandDto = {
+      code: 'join-1',
+    };
+    const joinLinkAck: JoinLinkAckDto = {
+      link: {
+        id: 'join-1',
+        code: validateJoinLinkCommand.code,
+        teamId: createJoinLinkCommand.teamId,
+        createdBy: user.id,
+        createdAt: 3,
+        maxUses: 1,
+        usesCount: 0,
+      },
+      team,
     };
     const device: DeviceDto = {
       id: 'device-1',
@@ -228,6 +250,7 @@ describe('first-slice contract result shape', () => {
     expect(createTeamAck.defaultChannel.name).toBe('all');
     expect(createTeamAck.team.name).toBe(createTeamCommand.name);
     expect(switchTeamAck.currentTeam.id).toBe(switchTeamCommand.teamId);
+    expect(joinLinkAck.link.code).toBe(validateJoinLinkCommand.code);
     expect(runtime.installed).toBe(true);
     expect(runtime.normalizedCommandKey).toBe('/opt/homebrew/bin/codex');
     expect(agent.visibleTeamIds).toEqual(['team-1']);
@@ -248,6 +271,8 @@ describe('first-slice contract result shape', () => {
     expect(WEB_EVENTS.team.create).toBe('team:create');
     expect(WEB_EVENTS.team.switch).toBe('team:switch');
     expect(WEB_EVENTS.team.snapshot).toBe('teams:snapshot');
+    expect(WEB_EVENTS.join.create).toBe('join:create');
+    expect(WEB_EVENTS.join.validate).toBe('join:validate');
     expect(WEB_EVENTS.message.send).toBe('message:send');
     expect(AGENT_EVENTS.device.hello).toBe('device:hello');
     expect(AGENT_EVENTS.dispatch.request).toBe('dispatch:request');

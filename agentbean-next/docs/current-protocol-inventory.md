@@ -18,7 +18,7 @@ Browser clients 连接到 `/web`。当前实现允许 anonymous sockets 用于 a
 | `auth:change-password` | Web -> Server | 校验当前密码后修改密码。 | 保留，但延后到 account settings slice。 |
 | `auth:invite:validate` | Web/Daemon -> Server | 校验 device 或 user invite；对 device invite 还会记录等待中的 daemon socket。 | 拆分为显式 user-invite 与 device-invite flows。 |
 | `auth:device-login` | Web -> Server | 面向等待中 device invite 的 browser login；向 daemon 交付 token。 | 保留行为，重设计为 device invite completion use case。 |
-| `auth:join:validate` | Web -> Server | 校验 user join link，并返回目标 team display info。 | 保留行为，重命名到 join/invite domain 下。 |
+| `auth:join:validate` | Web -> Server | 校验 user join link，并返回目标 team display info。 | 已在 Next 中规范为 `join:validate`。 |
 | `auth:token:deliver` | Server -> Waiting socket | 向 daemon 或 invite session 交付 token。 | 保留行为，但让 delivery target 显式化。 |
 
 ### Teams
@@ -114,8 +114,9 @@ Browser clients 连接到 `/web`。当前实现允许 anonymous sockets 用于 a
 
 | 事件 | 方向 | 当前目的 | 重写处置 |
 |---|---|---|---|
-| `invite:create` | Web -> Server | 创建 user/device invite。 | 保留行为，拆成显式 user invite 与 device invite commands。 |
-| `join:create` | Web -> Server | 为 current team 创建 user join link。 | 保留，重命名到 invite/join domain 下。 |
+| `invite:create` | Web -> Server | 创建 user/device invite。 | 保留行为，拆成显式 user join link 与 device invite commands。 |
+| `join:create` | Web -> Server | 为 current team 创建 user join link。 | Next 已实现为 `join:create`，只覆盖 user join link。 |
+| `join:validate` | Web -> Server | 校验 user join link，并返回目标 team display info。 | Next 已实现为 anonymous-safe validate command。 |
 | `join:list` | Web -> Server | 列出 active join links。 | 保留，延后。 |
 | `join:revoke` | Web -> Server | 撤销 join link。 | 保留，延后。 |
 

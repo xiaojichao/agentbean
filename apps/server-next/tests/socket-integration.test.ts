@@ -191,6 +191,68 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('creates, validates, and consumes a user join link through web sockets', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1100,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'join-1', 'user-2', 'team-2', 'channel-2']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const ownerBootstrap = await connectClient(`${baseUrl}/web`);
+    cleanups.push(async () => {
+      ownerBootstrap.disconnect();
+    });
+    const ownerRegister = await ownerBootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    expect(ownerRegister).toMatchObject({
+      ok: true,
+      token: expect.any(String),
+      currentTeam: { id: 'team-1' },
+    });
+
+    const owner = await connectClient(`${baseUrl}/web`, { auth: { token: (ownerRegister as { token: string }).token } });
+    const guest = await connectClient(`${baseUrl}/web`);
+    cleanups.push(async () => {
+      owner.disconnect();
+      guest.disconnect();
+    });
+
+    await expect(owner.emitWithAck(WEB_EVENTS.join.create, { teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      link: { code: 'join-1', teamId: 'team-1', usesCount: 0 },
+      team: { id: 'team-1' },
+    });
+    await expect(guest.emitWithAck(WEB_EVENTS.join.validate, { code: 'join-1' })).resolves.toMatchObject({
+      ok: true,
+      link: { code: 'join-1', teamId: 'team-1' },
+      team: { id: 'team-1', name: 'AgentBean' },
+    });
+    await expect(
+      guest.emitWithAck(WEB_EVENTS.auth.register, {
+        username: 'lin',
+        password: 'secret',
+        teamName: 'Lin Private',
+        joinCode: 'join-1',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      user: { id: 'user-2', primaryTeamId: 'team-1' },
+      currentTeam: { id: 'team-1', currentUserRole: 'member' },
+      joinedTeam: { id: 'team-1', currentUserRole: 'member' },
+    });
+    await expect(guest.emitWithAck(WEB_EVENTS.join.validate, { code: 'join-1' })).resolves.toMatchObject({
+      ok: false,
+      error: 'INVITE_ALREADY_USED',
+    });
+  });
+
   test.each(['not-a-valid-token', ''])(
     'rejects invalid authenticated socket token %j instead of falling back to payload userId',
     async (token) => {

@@ -17,6 +17,18 @@ export interface TeamMemberRecord {
   joinedAt: UnixMs;
 }
 
+export interface JoinLinkRecord {
+  id: ID;
+  code: string;
+  teamId: ID;
+  createdBy: ID;
+  createdAt: UnixMs;
+  expiresAt?: UnixMs;
+  maxUses?: number;
+  usesCount: number;
+  revokedAt?: UnixMs;
+}
+
 export interface ChannelRecord extends ChannelDto {
   humanMemberIds: ID[];
   agentMemberIds: ID[];
@@ -68,6 +80,12 @@ export interface TeamRepository {
   isMember(teamId: ID, userId: ID): Promise<boolean>;
   getMemberRole(teamId: ID, userId: ID): Promise<'owner' | 'admin' | 'member' | null>;
   listMembersByIds(teamId: ID, userIds: ID[]): Promise<HumanMemberDto[]>;
+}
+
+export interface JoinLinkRepository {
+  create(input: JoinLinkRecord): Promise<JoinLinkRecord>;
+  getByCode(code: string): Promise<JoinLinkRecord | null>;
+  incrementUses(code: string): Promise<JoinLinkRecord | null>;
 }
 
 export interface ChannelRepository {
@@ -124,6 +142,7 @@ export interface DispatchRepository {
 export interface ServerNextRepositories {
   users: UserRepository;
   teams: TeamRepository;
+  joinLinks: JoinLinkRepository;
   channels: ChannelRepository;
   devices: DeviceRepository;
   runtimes: RuntimeRepository;

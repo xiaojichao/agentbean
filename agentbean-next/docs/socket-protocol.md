@@ -30,6 +30,9 @@ Error codes 应是稳定字符串：
 - `DEVICE_OFFLINE`
 - `AGENT_OFFLINE`
 - `DISPATCH_TIMEOUT`
+- `INVITE_INVALID`
+- `INVITE_EXPIRED`
+- `INVITE_ALREADY_USED`
 - `INTERNAL_ERROR`
 
 ## `/web` Namespace
@@ -48,13 +51,13 @@ Auth modes：
 客户端：
 
 ```ts
-{ username: string; password: string }
+{ username: string; password: string; joinCode?: string }
 ```
 
 Ack：
 
 ```ts
-Ack<{ token: string; user: UserDto; currentTeam: TeamDto }>
+Ack<{ token: string; user: UserDto; currentTeam: TeamDto; joinedTeam?: TeamDto }>
 ```
 
 #### `auth:register`
@@ -62,14 +65,22 @@ Ack<{ token: string; user: UserDto; currentTeam: TeamDto }>
 客户端：
 
 ```ts
-{ username: string; password: string; inviteCode?: string }
+{ username: string; password: string; teamName: string; joinCode?: string }
 ```
 
 Ack：
 
 ```ts
-Ack<{ token: string; user: UserDto; currentTeam: TeamDto }>
+Ack<{ token: string; user: UserDto; currentTeam: TeamDto; defaultChannel: ChannelDto; joinedTeam?: TeamDto }>
 ```
+
+带 `joinCode` 时的行为：
+
+- 该 code 只表示 user join link，不表示 device invite。
+- `joinCode` 可用于注册后加入受邀 team，也可用于已存在用户登录时加入受邀 team。
+- 消费成功后，server 将用户加入目标 team，并把 `users.current_team_id` 切换到该 team。
+- 注册仍会创建用户自己的 private team 与默认 `all` channel；受邀 team 会作为 `joinedTeam` 返回。
+- 无效、过期、已耗尽的 code 分别返回 `INVITE_INVALID`、`INVITE_EXPIRED`、`INVITE_ALREADY_USED`。
 
 #### `auth:whoami`
 
@@ -90,8 +101,6 @@ Ack<{ user: UserDto; currentTeam: TeamDto | null }>
 这些是目标行为，但不是第一切片要求：
 
 - `auth:change-password`：保留给 account settings。
-- `join:validate`：替换当前 `auth:join:validate`。
-- `join:create`：保留给 user invite links。
 - `join:list`：保留给 invite management。
 - `join:revoke`：保留给 invite management。
 - `device-invite:create`：显式替换 `purpose: "device"` 的 `invite:create`。
@@ -156,6 +165,49 @@ Ack<{ currentTeam: TeamDto }>
 
 - `team:update`：保留给 settings。
 - `team:delete`：如果 product UX 需要 owner delete，则保留。
+
+### Join Links
+
+#### `join:create`
+
+客户端：
+
+```ts
+{ userId?: string; teamId: string; expiresAt?: UnixMs; maxUses?: number }
+```
+
+Ack：
+
+```ts
+Ack<{ link: JoinLinkDto; team: TeamDto }>
+```
+
+行为：
+
+- 只创建 user join link，不创建 device invite。
+- Authenticated socket session 下允许省略 `userId`。
+- 只有目标 team 的 member 可以创建 join link；非成员返回 `FORBIDDEN`。
+- 默认 `maxUses` 为 1。
+
+#### `join:validate`
+
+客户端：
+
+```ts
+{ code: string }
+```
+
+Ack：
+
+```ts
+Ack<{ link: JoinLinkDto; team: TeamDto }>
+```
+
+行为：
+
+- Anonymous socket session 可调用。
+- 返回 link 目标 team 的展示信息，便于注册/登录前预览。
+- 无效、过期、已耗尽的 code 分别返回 `INVITE_INVALID`、`INVITE_EXPIRED`、`INVITE_ALREADY_USED`。
 
 ### Members
 
