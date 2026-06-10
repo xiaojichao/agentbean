@@ -4,9 +4,6 @@ on:
   pull_request:
     branches:
       - main
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       agentbean_deploy_target:
@@ -246,7 +243,7 @@ jobs:
     needs:
       - validate
       - validate-agentbean-next
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.run_production_deploy)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_production_deploy
     timeout-minutes: 30
 
     env:
@@ -421,7 +418,7 @@ jobs:
     needs:
       - validate-agentbean-next
       - deploy
-    if: always() && needs.validate-agentbean-next.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') && ((github.event_name == 'workflow_dispatch' && inputs.run_agentbean_next_production_smoke) || (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AGENTBEAN_DEPLOY_TARGET == 'next'))
+    if: always() && needs.validate-agentbean-next.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') && github.event_name == 'workflow_dispatch' && inputs.run_agentbean_next_production_smoke
     timeout-minutes: 15
 
     env:
@@ -512,7 +509,7 @@ jobs:
     needs:
       - validate
       - validate-agentbean-next
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env)
+    if: github.event_name == 'workflow_dispatch' && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env
     timeout-minutes: 15
 
     env:
