@@ -45,6 +45,24 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('applies device invite migration after an existing first-slice SQLite database', () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      globalDb.prepare("DELETE FROM schema_migrations WHERE id = 'global/0002_device_invites.sql'").run();
+      globalDb.prepare('DROP TABLE device_invites').run();
+
+      applyGlobalMigrations(globalDb);
+
+      expect(tableNames(globalDb)).toEqual(expect.arrayContaining(['device_invites']));
+      expect(globalDb.prepare("SELECT id FROM schema_migrations WHERE id = 'global/0002_device_invites.sql'").get()).toEqual({
+        id: 'global/0002_device_invites.sql',
+      });
+    } finally {
+      teamDb.exec('SELECT 1');
+      close();
+    }
+  });
+
   test('persists user join links and consumes them with SQLite', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {

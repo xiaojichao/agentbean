@@ -40,6 +40,7 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
   const webSubscribers = new Set<WebSocketSubscription>();
   const agentSocketsByDeviceId = new Map<string, SocketLike>();
   const waitingDeviceInviteSocketsByCode = new Map<string, SocketLike>();
+  const waitingDeviceInviteCodeBySocket = new Map<SocketLike, string>();
 
   server.of('/web').on('connection', (socket) => {
     const authenticatedUser = createAuthenticatedUserResolver(socket, app);
@@ -141,6 +142,11 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         }
         waitingDeviceInviteSocketsByCode.get(inviteCode)?.emit?.(AGENT_EVENTS.deviceInvite.credentials, credentials);
         waitingDeviceInviteSocketsByCode.delete(inviteCode);
+        for (const [socket, code] of waitingDeviceInviteCodeBySocket) {
+          if (code === inviteCode) {
+            waitingDeviceInviteCodeBySocket.delete(socket);
+          }
+        }
       },
       async afterChannelMutation(payload, result) {
         if (!isSuccessAck(result)) {
@@ -170,10 +176,10 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
       if (connectedDeviceId && agentSocketsByDeviceId.get(connectedDeviceId) === socket) {
         agentSocketsByDeviceId.delete(connectedDeviceId);
       }
-      for (const [code, waitingSocket] of waitingDeviceInviteSocketsByCode) {
-        if (waitingSocket === socket) {
-          waitingDeviceInviteSocketsByCode.delete(code);
-        }
+      const waitingInviteCode = waitingDeviceInviteCodeBySocket.get(socket);
+      if (waitingInviteCode) {
+        waitingDeviceInviteSocketsByCode.delete(waitingInviteCode);
+        waitingDeviceInviteCodeBySocket.delete(socket);
       }
     });
     registerAgentSocketHandlers(socket, app, {
@@ -183,7 +189,12 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         }
         const code = payloadDeviceInviteCode(payload) ?? resultDeviceInviteCode(result);
         if (code) {
+          const previousCode = waitingDeviceInviteCodeBySocket.get(socket);
+          if (previousCode) {
+            waitingDeviceInviteSocketsByCode.delete(previousCode);
+          }
           waitingDeviceInviteSocketsByCode.set(code, socket);
+          waitingDeviceInviteCodeBySocket.set(socket, code);
         }
       },
       async afterDeviceMutation(payload, result) {

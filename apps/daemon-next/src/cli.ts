@@ -13,6 +13,7 @@ interface SocketIoClientLike {
   disconnect(): void;
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
   on(event: string, handler: (...args: unknown[]) => void): void;
+  off?(event: string, handler: (...args: unknown[]) => void): void;
 }
 
 export interface DaemonNextCliConfig {
@@ -58,14 +59,24 @@ export function parseDaemonNextCliConfig(input: ParseDaemonNextCliConfigInput = 
 }
 
 export function createSocketIoDaemonSocket(socket: SocketIoClientLike): DaemonProtocolSocket {
+  const handlerMap = new WeakMap<(payload: unknown) => Promise<void>, (...args: unknown[]) => void>();
   return {
     emitWithAck(event, payload) {
       return socket.emitWithAck(event, payload);
     },
     on(event, handler) {
-      socket.on(event, (payload) => {
+      const runtimeHandler = (payload: unknown) => {
         void handler(payload);
-      });
+      };
+      handlerMap.set(handler, runtimeHandler);
+      socket.on(event, runtimeHandler);
+    },
+    off(event, handler) {
+      const runtimeHandler = handlerMap.get(handler);
+      if (runtimeHandler) {
+        socket.off?.(event, runtimeHandler);
+        handlerMap.delete(handler);
+      }
     },
     onReconnect(handler) {
       let hasConnected = socket.connected;
@@ -118,14 +129,43 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
 export async function waitForDeviceInviteCredentials(
   socket: DaemonProtocolSocket,
   input: { code: string; machineId?: string; profileId?: string; hostname?: string },
+  options: { timeoutMs?: number } = {},
 ): Promise<DeviceInviteCredentialsDto> {
-  const credentials = new Promise<DeviceInviteCredentialsDto>((resolve) => {
-    socket.on(AGENT_EVENTS.deviceInvite.credentials, async (payload) => {
+  const timeoutMs = options.timeoutMs ?? 5 * 60 * 1000;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let cleanup = () => {
+    if (timeout) {
+      clearTimeout(timeout);
+      timeout = undefined;
+    }
+  };
+  const credentials = new Promise<DeviceInviteCredentialsDto>((resolve, reject) => {
+    cleanup = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
+      socket.off?.(AGENT_EVENTS.deviceInvite.credentials, onCredentials);
+      socket.off?.('disconnect', onDisconnect);
+    };
+    const onCredentials = async (payload: unknown) => {
+      cleanup();
       resolve(payload as DeviceInviteCredentialsDto);
-    });
+    };
+    const onDisconnect = async () => {
+      cleanup();
+      reject(new Error('Socket disconnected while waiting for invite credentials'));
+    };
+    timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('Timed out waiting for invite credentials'));
+    }, timeoutMs);
+    socket.on(AGENT_EVENTS.deviceInvite.credentials, onCredentials);
+    socket.on('disconnect', onDisconnect);
   });
   const ack = await socket.emitWithAck(AGENT_EVENTS.deviceInvite.wait, input);
   if (isFailureAck(ack)) {
+    cleanup();
     throw new Error(ack.message ?? ack.error);
   }
   return credentials;

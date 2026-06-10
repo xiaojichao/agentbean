@@ -141,8 +141,8 @@ export function registerAgentSocketHandlers(
       const useCredentials =
         payload && typeof payload === 'object' && typeof (payload as { token?: unknown }).token === 'string';
       const result = useCredentials
-        ? await app.deviceHelloFromCredentials(payload as never)
-        : await app.deviceHello(payload as never);
+        ? await app.deviceHelloFromCredentials(payload as Parameters<ServerNextUseCases['deviceHelloFromCredentials']>[0])
+        : await app.deviceHello(payload as Parameters<ServerNextUseCases['deviceHello']>[0]);
       ack?.(result);
       await afterDeviceMutation(payload, result);
     } catch (error) {

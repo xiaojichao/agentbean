@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS } from '../../../packages/contracts/src/index';
 import { createSocketIoDaemonSocket, parseDaemonNextCliConfig, waitForDeviceInviteCredentials } from '../src/cli';
 
@@ -106,6 +106,32 @@ describe('daemon-next CLI wiring', () => {
     );
   });
 
+  test('rejects device invite onboarding when the socket disconnects before credentials arrive', async () => {
+    const runtimeSocket = new FakeRuntimeSocket();
+    const socket = createSocketIoDaemonSocket(runtimeSocket);
+    const waiting = waitForDeviceInviteCredentials(socket, { code: 'device-code-1' });
+
+    await runtimeSocket.trigger('disconnect');
+
+    await expect(waiting).rejects.toThrow('Socket disconnected while waiting for invite credentials');
+  });
+
+  test('rejects device invite onboarding when credentials are not delivered before timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const runtimeSocket = new FakeRuntimeSocket();
+      const socket = createSocketIoDaemonSocket(runtimeSocket);
+      const waiting = waitForDeviceInviteCredentials(socket, { code: 'device-code-1' }, { timeoutMs: 1000 });
+      const assertion = expect(waiting).rejects.toThrow('Timed out waiting for invite credentials');
+
+      await vi.advanceTimersByTimeAsync(1000);
+
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test('bridges Socket.IO client events to daemon protocol without treating first connect as reconnect', async () => {
     const runtimeSocket = new FakeRuntimeSocket();
     const socket = createSocketIoDaemonSocket(runtimeSocket);
@@ -153,6 +179,11 @@ class FakeRuntimeSocket {
     const handlers = this.handlers.get(event) ?? [];
     handlers.push(handler);
     this.handlers.set(event, handlers);
+  }
+
+  off(event: string, handler: (...args: unknown[]) => void): void {
+    const handlers = this.handlers.get(event) ?? [];
+    this.handlers.set(event, handlers.filter((candidate) => candidate !== handler));
   }
 
   async trigger(event: string, payload?: unknown): Promise<void> {

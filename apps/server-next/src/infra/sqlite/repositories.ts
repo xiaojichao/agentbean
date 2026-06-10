@@ -35,6 +35,7 @@ export interface CreateSqliteRepositoriesInput {
 
 export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0001_first_slice.sql');
+  applyMigration(db, 'global/0002_device_invites.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {

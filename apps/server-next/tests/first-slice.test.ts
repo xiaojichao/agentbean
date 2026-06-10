@@ -9,7 +9,10 @@ const migrationPath = (...parts: string[]) =>
 
 describe('server-next first-slice migrations', () => {
   test('defines global and team-scoped first-slice tables with team terminology', () => {
-    const globalSql = readFileSync(migrationPath('global/0001_first_slice.sql'), 'utf8');
+    const globalSql = [
+      readFileSync(migrationPath('global/0001_first_slice.sql'), 'utf8'),
+      readFileSync(migrationPath('global/0002_device_invites.sql'), 'utf8'),
+    ].join('\n');
     const teamSql = readFileSync(migrationPath('team/0001_first_slice.sql'), 'utf8');
 
     for (const tableName of [
