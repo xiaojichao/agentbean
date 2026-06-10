@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type {
   AgentRecord,
   ChannelRecord,
+  DeviceInviteRecord,
   DeviceRecord,
   DispatchRecord,
   AgentExecutionConfig,
@@ -34,6 +35,7 @@ export interface CreateSqliteRepositoriesInput {
 
 export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0001_first_slice.sql');
+  applyMigration(db, 'global/0002_device_invites.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
@@ -215,6 +217,57 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           return null;
         }
         return mapJoinLink(globalDb.prepare('SELECT * FROM join_links WHERE code = ?').get(code));
+      },
+    },
+    deviceInvites: {
+      async create(invite) {
+        globalDb
+          .prepare(
+            `INSERT INTO device_invites (
+              id, code, team_id, created_by, created_at, expires_at, completed_at, machine_id, profile_id, hostname
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            invite.id,
+            invite.code,
+            invite.teamId,
+            invite.createdBy,
+            invite.createdAt,
+            invite.expiresAt ?? null,
+            invite.completedAt ?? null,
+            invite.machineId ?? null,
+            invite.profileId ?? null,
+            invite.hostname ?? null,
+          );
+        return invite;
+      },
+      async getByCode(code) {
+        return mapDeviceInvite(globalDb.prepare('SELECT * FROM device_invites WHERE code = ?').get(code));
+      },
+      async updateWaiter(input) {
+        globalDb
+          .prepare(
+            `UPDATE device_invites
+             SET machine_id = ?, profile_id = COALESCE(?, profile_id), hostname = ?
+             WHERE code = ?
+             AND completed_at IS NULL`,
+          )
+          .run(input.machineId ?? null, input.profileId ?? null, input.hostname ?? null, input.code);
+        return mapDeviceInvite(globalDb.prepare('SELECT * FROM device_invites WHERE code = ?').get(input.code));
+      },
+      async complete(input) {
+        const result = globalDb
+          .prepare(
+            `UPDATE device_invites
+             SET completed_at = ?
+             WHERE code = ?
+             AND completed_at IS NULL`,
+          )
+          .run(input.completedAt, input.code);
+        if (sqliteChanges(result) === 0) {
+          return null;
+        }
+        return mapDeviceInvite(globalDb.prepare('SELECT * FROM device_invites WHERE code = ?').get(input.code));
       },
     },
     channels: {
@@ -783,6 +836,24 @@ function mapJoinLink(row: unknown): JoinLinkRecord | null {
     maxUses: sqliteNullableNumber(row, 'max_uses'),
     usesCount: sqliteNumber(row, 'uses_count'),
     revokedAt: sqliteNullableNumber(row, 'revoked_at'),
+  };
+}
+
+function mapDeviceInvite(row: unknown): DeviceInviteRecord | null {
+  if (!row) {
+    return null;
+  }
+  return {
+    id: sqliteText(row, 'id'),
+    code: sqliteText(row, 'code'),
+    teamId: sqliteText(row, 'team_id'),
+    createdBy: sqliteText(row, 'created_by'),
+    createdAt: sqliteNumber(row, 'created_at'),
+    expiresAt: sqliteNullableNumber(row, 'expires_at'),
+    completedAt: sqliteNullableNumber(row, 'completed_at'),
+    machineId: sqliteNullableText(row, 'machine_id'),
+    profileId: sqliteNullableText(row, 'profile_id'),
+    hostname: sqliteNullableText(row, 'hostname'),
   };
 }
 

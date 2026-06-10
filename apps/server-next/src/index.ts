@@ -10,6 +10,7 @@ export interface CreateInMemoryServerNextInput {
   now?: () => number;
   ids?: () => string;
   joinCodes?: () => string;
+  deviceInviteCodes?: () => string;
 }
 
 export function createInMemoryServerNext(input: CreateInMemoryServerNextInput = {}): ServerNextUseCases {
@@ -27,5 +28,6 @@ export function createInMemoryServerNext(input: CreateInMemoryServerNextInput = 
         }),
     },
     ...(input.joinCodes ? { joinCodes: { nextCode: input.joinCodes } } : {}),
+    ...(input.deviceInviteCodes ? { deviceInviteCodes: { nextCode: input.deviceInviteCodes } } : {}),
   });
 }

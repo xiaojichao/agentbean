@@ -8,6 +8,7 @@ export type { CommandExecutorOptions } from './executor.js';
 export interface DaemonProtocolSocket {
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
   on(event: string, handler: (payload: unknown) => Promise<void>): void;
+  off?(event: string, handler: (payload: unknown) => Promise<void>): void;
   onReconnect?(handler: () => Promise<void>): void;
 }
 
@@ -16,6 +17,7 @@ export type StubExecutor = (request: DispatchRequestPayload) => Promise<string>;
 export interface DaemonDeviceConfig {
   teamId: string;
   ownerId: string;
+  token?: string;
   machineId?: string;
   profileId?: string;
   hostname?: string;

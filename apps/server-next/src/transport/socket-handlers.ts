@@ -22,11 +22,13 @@ export interface WebSocketHandlerOptions {
   dispatchCancel?(request: DispatchRequestDto & { id: string }): void;
   dispatchStatus?(dispatch: unknown): void;
   deviceScan?(request: { requestId: string; deviceId: string }): void;
+  afterDeviceInviteComplete?(payload: unknown, result: unknown): Promise<void> | void;
   afterChannelMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
 
 export interface AgentSocketHandlerOptions {
+  afterDeviceInviteWait?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
@@ -44,6 +46,10 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.team.switch, app, 'switchTeam', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.join.create, app, 'createJoinLink', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.join.validate, app, 'validateJoinLink');
+  bind(socket, WEB_EVENTS.deviceInvite.create, app, 'createDeviceInvite', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.deviceInvite.complete, app, 'completeDeviceInvite', (payload, result) =>
+    options.afterDeviceInviteComplete?.(payload, result), { authenticatedUser: options.authenticatedUser },
+  );
   bind(socket, WEB_EVENTS.device.get, app, 'getDevice', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.device.scan, app, 'requestDeviceScan', (_payload, result) => {
     if (!options.deviceScan || !isDeviceScanAck(result)) {
@@ -125,9 +131,24 @@ export function registerAgentSocketHandlers(
   app: ServerNextUseCases,
   options: AgentSocketHandlerOptions = {},
 ): void {
+  bind(socket, AGENT_EVENTS.deviceInvite.wait, app, 'waitForDeviceInvite', (payload, result) =>
+    options.afterDeviceInviteWait?.(payload, result),
+  );
   const afterDeviceMutation = (payload: unknown, result: unknown) =>
     options.afterDeviceMutation?.(payload, result);
-  bind(socket, AGENT_EVENTS.device.hello, app, 'deviceHello', afterDeviceMutation);
+  socket.on(AGENT_EVENTS.device.hello, async (payload, ack) => {
+    try {
+      const useCredentials =
+        payload && typeof payload === 'object' && typeof (payload as { token?: unknown }).token === 'string';
+      const result = useCredentials
+        ? await app.deviceHelloFromCredentials(payload as Parameters<ServerNextUseCases['deviceHelloFromCredentials']>[0])
+        : await app.deviceHello(payload as Parameters<ServerNextUseCases['deviceHello']>[0]);
+      ack?.(result);
+      await afterDeviceMutation(payload, result);
+    } catch (error) {
+      ack?.(makeFailure('INTERNAL_ERROR', error instanceof Error ? error.message : 'Unhandled socket handler error'));
+    }
+  });
   bind(socket, AGENT_EVENTS.device.runtimes, app, 'reportDeviceRuntimes', afterDeviceMutation);
   const afterAgentMutation = (payload: unknown, result: unknown) =>
     options.afterAgentMutation?.(payload, result);

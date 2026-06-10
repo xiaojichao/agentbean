@@ -54,6 +54,21 @@ CREATE TABLE team_members (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE device_invites (
+  id           TEXT PRIMARY KEY,
+  code         TEXT NOT NULL UNIQUE,
+  team_id      TEXT NOT NULL,
+  created_by   TEXT NOT NULL,
+  created_at   INTEGER NOT NULL,
+  expires_at   INTEGER,
+  completed_at INTEGER,
+  machine_id   TEXT,
+  profile_id   TEXT,
+  hostname     TEXT,
+  FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE devices (
   id             TEXT PRIMARY KEY,
   team_id     TEXT NOT NULL,
@@ -358,11 +373,21 @@ CREATE TABLE join_links (
 - 注册或登录时消费 `joinCode` 会添加目标 team membership，并把用户 current team 切到该 team。
 - `join:list` 与 `join:revoke` 是后续 invite management，不属于当前最小 PR。
 
+## Device Invite 数据
+
+`device_invites` 位于 global DB，表示 daemon onboarding 的一次性邀请：
+
+行为边界：
+
+- `device_invites` 只覆盖 daemon onboarding，不覆盖 browser user join link。
+- 创建者必须已经是目标 team 的 member。
+- daemon 调用 `device-invite:wait` 时记录 `machineId`、`profileId` 与 `hostname`，browser 完成邀请后据此生成 device credentials。
+- 完成后的 code 不可再次使用。
+
 ## 显式延后的 Tables
 
 在对应 feature slice 开始前，不要添加这些 tables：
 
-- `device_invites`
 - `tasks`
 - `artifacts`
 - `workspace_runs`

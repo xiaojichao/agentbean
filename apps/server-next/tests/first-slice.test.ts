@@ -9,7 +9,10 @@ const migrationPath = (...parts: string[]) =>
 
 describe('server-next first-slice migrations', () => {
   test('defines global and team-scoped first-slice tables with team terminology', () => {
-    const globalSql = readFileSync(migrationPath('global/0001_first_slice.sql'), 'utf8');
+    const globalSql = [
+      readFileSync(migrationPath('global/0001_first_slice.sql'), 'utf8'),
+      readFileSync(migrationPath('global/0002_device_invites.sql'), 'utf8'),
+    ].join('\n');
     const teamSql = readFileSync(migrationPath('team/0001_first_slice.sql'), 'utf8');
 
     for (const tableName of [
@@ -18,6 +21,7 @@ describe('server-next first-slice migrations', () => {
       'team_members',
       'devices',
       'device_runtimes',
+      'device_invites',
       'agents',
       'agent_identity_links',
       'agent_publications',
@@ -730,6 +734,85 @@ describe('server-next first-slice use cases', () => {
     await expect(app.requestDeviceScan({ userId: 'user-1', deviceId: 'missing-device' })).resolves.toMatchObject({
       ok: false,
       error: 'NOT_FOUND',
+    });
+  });
+
+  test('device invite issues credentials to a waiting daemon and registers it without manual team config', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 720,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-invite-1', 'device-1']),
+      deviceInviteCodes: createIds(['device-code-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+
+    await expect(
+      app.createDeviceInvite({ userId: 'user-1', teamId: 'team-1', profileId: 'agentbean-next' }),
+    ).resolves.toMatchObject({
+      ok: true,
+      invite: {
+        id: 'device-invite-1',
+        code: 'device-code-1',
+        teamId: 'team-1',
+        createdBy: 'user-1',
+        profileId: 'agentbean-next',
+      },
+      team: { id: 'team-1', name: 'AgentBean' },
+    });
+
+    await expect(
+      app.waitForDeviceInvite({
+        code: 'device-code-1',
+        machineId: 'machine-1',
+        profileId: 'agentbean-next',
+        hostname: 'shaw-mbp',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      invite: { code: 'device-code-1', teamId: 'team-1' },
+      team: { id: 'team-1' },
+    });
+
+    const completed = await app.completeDeviceInvite({
+      userId: 'user-1',
+      code: 'device-code-1',
+      serverUrl: 'http://127.0.0.1:4000',
+    });
+    expect(completed).toMatchObject({
+      ok: true,
+      credentials: {
+        token: expect.stringMatching(/^abn_device\./),
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'agentbean-next',
+        hostname: 'shaw-mbp',
+        serverUrl: 'http://127.0.0.1:4000',
+      },
+    });
+    if (!completed.ok) {
+      throw new Error('device invite completion failed');
+    }
+
+    await expect(
+      app.deviceHelloFromCredentials({
+        token: completed.credentials.token,
+        machineId: completed.credentials.machineId,
+        profileId: completed.credentials.profileId,
+        hostname: completed.credentials.hostname,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      device: {
+        id: 'device-1',
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        name: 'shaw-mbp',
+      },
+    });
+
+    await expect(app.completeDeviceInvite({ userId: 'user-1', code: 'device-code-1' })).resolves.toMatchObject({
+      ok: false,
+      error: 'INVITE_ALREADY_USED',
     });
   });
 });

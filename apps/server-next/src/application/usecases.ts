@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DispatchDto, type DispatchRequestDto, type JoinLinkDto, type MessageDto, type RuntimeDto, type TeamDto, type UserDto } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchDto, type DispatchRequestDto, type JoinLinkDto, type MessageDto, type RuntimeDto, type TeamDto, type UserDto } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
-import type { JoinLinkRecord, ServerNextRepositories, UserRecord } from './repositories.js';
+import type { DeviceInviteRecord, JoinLinkRecord, ServerNextRepositories, UserRecord } from './repositories.js';
 
 export interface ServerNextClock {
   now(): number;
@@ -15,6 +15,10 @@ export interface ServerNextJoinCodes {
   nextCode(): string;
 }
 
+export interface ServerNextDeviceInviteCodes {
+  nextCode(): string;
+}
+
 export interface ServerNextUseCases {
   registerUser(input: RegisterUserInput): Promise<Ack<RegisterUserResult>>;
   loginUser(input: LoginUserInput): Promise<Ack<LoginUserResult>>;
@@ -24,6 +28,10 @@ export interface ServerNextUseCases {
   switchTeam(input: SwitchTeamInput): Promise<Ack<SwitchTeamResult>>;
   createJoinLink(input: CreateJoinLinkInput): Promise<Ack<JoinLinkResult>>;
   validateJoinLink(input: ValidateJoinLinkInput): Promise<Ack<JoinLinkResult>>;
+  createDeviceInvite(input: CreateDeviceInviteInput): Promise<Ack<DeviceInviteAckDto>>;
+  waitForDeviceInvite(input: WaitForDeviceInviteInput): Promise<Ack<DeviceInviteAckDto>>;
+  completeDeviceInvite(input: CompleteDeviceInviteInput): Promise<Ack<DeviceInviteAckDto & { credentials: DeviceInviteCredentialsDto }>>;
+  deviceHelloFromCredentials(input: DeviceHelloFromCredentialsInput): Promise<Ack<{ device: DeviceDto }>>;
   listDevices(input: { teamId: string; userId: string }): Promise<Ack<{ devices: DeviceDto[] }>>;
   getDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDetailDto }>>;
   requestDeviceScan(input: RequestDeviceScanInput): Promise<Ack<RequestDeviceScanResult>>;
@@ -125,6 +133,35 @@ export interface ValidateJoinLinkInput {
 export interface JoinLinkResult {
   link: JoinLinkDto;
   team: TeamDto;
+}
+
+export interface CreateDeviceInviteInput {
+  userId: string;
+  teamId: string;
+  profileId?: string;
+  expiresAt?: number;
+}
+
+export interface WaitForDeviceInviteInput {
+  code: string;
+  machineId?: string;
+  profileId?: string;
+  hostname?: string;
+}
+
+export interface CompleteDeviceInviteInput {
+  userId: string;
+  code: string;
+  serverUrl?: string;
+}
+
+export interface DeviceHelloFromCredentialsInput {
+  token: string;
+  machineId?: string;
+  profileId?: string;
+  hostname?: string;
+  daemonVersion?: string;
+  systemInfo?: DeviceDto['systemInfo'];
 }
 
 export interface DeviceHelloInput {
@@ -289,12 +326,14 @@ export interface CreateServerNextUseCasesInput {
   clock: ServerNextClock;
   ids: ServerNextIds;
   joinCodes?: ServerNextJoinCodes;
+  deviceInviteCodes?: ServerNextDeviceInviteCodes;
   sessionSecret?: string;
 }
 
 export function createServerNextUseCases(input: CreateServerNextUseCasesInput): ServerNextUseCases {
   const { repositories, clock, ids } = input;
   const joinCodes = input.joinCodes ?? { nextCode: generateJoinCode };
+  const deviceInviteCodes = input.deviceInviteCodes ?? { nextCode: generateJoinCode };
   const sessionSecret = input.sessionSecret ?? 'agentbean-next-dev-session-secret';
 
   return {
@@ -532,6 +571,115 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeSuccess({
         link: toJoinLinkDto(usable.link),
         team: toTeamDto(team, 'member'),
+      });
+    },
+
+    async createDeviceInvite(inviteInput) {
+      const team = await repositories.teams.getById(inviteInput.teamId);
+      if (!team) {
+        return makeFailure('NOT_FOUND', 'Team not found');
+      }
+      const role = await repositories.teams.getMemberRole(inviteInput.teamId, inviteInput.userId);
+      if (!role) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const invite = await repositories.deviceInvites.create({
+        id: ids.nextId(),
+        code: deviceInviteCodes.nextCode(),
+        teamId: team.id,
+        createdBy: inviteInput.userId,
+        createdAt: clock.now(),
+        expiresAt: inviteInput.expiresAt,
+        profileId: inviteInput.profileId,
+      });
+
+      return makeSuccess({
+        invite: toDeviceInviteDto(invite),
+        team: toTeamDto(team, role),
+      });
+    },
+
+    async waitForDeviceInvite(inviteInput) {
+      const usable = await getUsableDeviceInvite(repositories, clock, inviteInput.code);
+      if (!usable.ok) {
+        return usable;
+      }
+      const team = await repositories.teams.getById(usable.invite.teamId);
+      if (!team) {
+        return makeFailure('INVITE_INVALID', 'Device invite team no longer exists');
+      }
+      const updated = await repositories.deviceInvites.updateWaiter({
+        code: usable.invite.code,
+        machineId: inviteInput.machineId,
+        profileId: inviteInput.profileId,
+        hostname: inviteInput.hostname,
+      });
+      if (!updated) {
+        return makeFailure('INVITE_INVALID', 'Device invite is invalid');
+      }
+
+      return makeSuccess({
+        invite: toDeviceInviteDto(updated),
+        team: toTeamDto(team, 'member'),
+      });
+    },
+
+    async completeDeviceInvite(inviteInput) {
+      const usable = await getUsableDeviceInvite(repositories, clock, inviteInput.code);
+      if (!usable.ok) {
+        return usable;
+      }
+      const team = await repositories.teams.getById(usable.invite.teamId);
+      if (!team) {
+        return makeFailure('INVITE_INVALID', 'Device invite team no longer exists');
+      }
+      const role = await repositories.teams.getMemberRole(team.id, inviteInput.userId);
+      if (!role) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const completed = await repositories.deviceInvites.complete({
+        code: usable.invite.code,
+        completedAt: clock.now(),
+      });
+      if (!completed) {
+        return makeFailure('INVITE_ALREADY_USED', 'Device invite has already been used');
+      }
+      const credentials: DeviceInviteCredentialsDto = {
+        token: issueDeviceToken({
+          teamId: completed.teamId,
+          ownerId: inviteInput.userId,
+          machineId: completed.machineId,
+          profileId: completed.profileId,
+          hostname: completed.hostname,
+        }, sessionSecret),
+        teamId: completed.teamId,
+        ownerId: inviteInput.userId,
+        machineId: completed.machineId,
+        profileId: completed.profileId,
+        hostname: completed.hostname,
+        serverUrl: inviteInput.serverUrl,
+      };
+
+      return makeSuccess({
+        invite: toDeviceInviteDto(completed),
+        team: toTeamDto(team, role),
+        credentials,
+      });
+    },
+
+    async deviceHelloFromCredentials(deviceInput) {
+      const credentials = verifyDeviceToken(deviceInput.token, sessionSecret);
+      if (!credentials) {
+        return makeFailure('UNAUTHENTICATED', 'Invalid device credentials');
+      }
+      return this.deviceHello({
+        teamId: credentials.teamId,
+        ownerId: credentials.ownerId,
+        machineId: deviceInput.machineId ?? credentials.machineId,
+        profileId: deviceInput.profileId ?? credentials.profileId,
+        hostname: deviceInput.hostname ?? credentials.hostname,
+        daemonVersion: deviceInput.daemonVersion,
+        systemInfo: deviceInput.systemInfo,
       });
     },
 
@@ -1216,6 +1364,19 @@ function toJoinLinkDto(link: JoinLinkRecord): JoinLinkDto {
   };
 }
 
+function toDeviceInviteDto(invite: DeviceInviteRecord): DeviceInviteDto {
+  return {
+    id: invite.id,
+    code: invite.code,
+    teamId: invite.teamId,
+    createdBy: invite.createdBy,
+    createdAt: invite.createdAt,
+    expiresAt: invite.expiresAt,
+    completedAt: invite.completedAt,
+    profileId: invite.profileId,
+  };
+}
+
 function toDeviceDto(device: DeviceDto): DeviceDto {
   return {
     id: device.id,
@@ -1315,6 +1476,24 @@ async function getUsableJoinLink(
   return { ok: true, link };
 }
 
+async function getUsableDeviceInvite(
+  repositories: ServerNextRepositories,
+  clock: ServerNextClock,
+  code: string,
+): Promise<{ ok: true; invite: DeviceInviteRecord } | Ack<Record<string, never>>> {
+  const invite = await repositories.deviceInvites.getByCode(code);
+  if (!invite) {
+    return makeFailure('INVITE_INVALID', 'Device invite is invalid');
+  }
+  if (invite.expiresAt !== undefined && invite.expiresAt <= clock.now()) {
+    return makeFailure('INVITE_EXPIRED', 'Device invite has expired');
+  }
+  if (invite.completedAt !== undefined) {
+    return makeFailure('INVITE_ALREADY_USED', 'Device invite has already been used');
+  }
+  return { ok: true, invite };
+}
+
 async function consumeJoinCodeForUser(
   repositories: ServerNextRepositories,
   clock: ServerNextClock,
@@ -1381,6 +1560,57 @@ function verifySessionToken(token: string, secret: string): string | null {
   try {
     const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { userId?: unknown };
     return typeof decoded.userId === 'string' && decoded.userId ? decoded.userId : null;
+  } catch {
+    return null;
+  }
+}
+
+function issueDeviceToken(
+  credentials: Pick<DeviceInviteCredentialsDto, 'teamId' | 'ownerId' | 'machineId' | 'profileId' | 'hostname'>,
+  secret: string,
+): string {
+  const payload = Buffer.from(JSON.stringify(credentials), 'utf8').toString('base64url');
+  return `abn_device.${payload}.${signSessionPayload(payload, secret)}`;
+}
+
+function verifyDeviceToken(
+  token: string,
+  secret: string,
+): Pick<DeviceInviteCredentialsDto, 'teamId' | 'ownerId' | 'machineId' | 'profileId' | 'hostname'> | null {
+  const parts = token.split('.');
+  if (parts.length !== 3 || parts[0] !== 'abn_device') {
+    return null;
+  }
+  const payload = parts[1];
+  const signature = parts[2];
+  if (!payload || !signature) {
+    return null;
+  }
+  const expected = signSessionPayload(payload, secret);
+  if (!safeEqual(signature, expected)) {
+    return null;
+  }
+  try {
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
+      teamId?: unknown;
+      ownerId?: unknown;
+      machineId?: unknown;
+      profileId?: unknown;
+      hostname?: unknown;
+    };
+    if (typeof decoded.teamId !== 'string' || !decoded.teamId) {
+      return null;
+    }
+    if (typeof decoded.ownerId !== 'string' || !decoded.ownerId) {
+      return null;
+    }
+    return {
+      teamId: decoded.teamId,
+      ownerId: decoded.ownerId,
+      machineId: typeof decoded.machineId === 'string' ? decoded.machineId : undefined,
+      profileId: typeof decoded.profileId === 'string' ? decoded.profileId : undefined,
+      hostname: typeof decoded.hostname === 'string' ? decoded.hostname : undefined,
+    };
   } catch {
     return null;
   }

@@ -11,6 +11,7 @@
 - Agent/device snapshots。
 - Channel list/create/join。
 - User join links。
+- Device invite onboarding。
 - Message send。
 - Agent dispatch request/result/error。
 
@@ -19,7 +20,6 @@
 - Tasks。
 - Artifacts。
 - Workspace runs。
-- Device invites。
 - Admin。
 - Search。
 - 第一切片 create/join 之外的 channel settings。
@@ -138,6 +138,63 @@ export interface JoinLinkDto {
 - `JoinLinkDto` 只覆盖 user join link，不覆盖 device invite。
 - 第一版 `join:create` 默认 `maxUses` 为 1。
 - `join:validate` 和带 `joinCode` 的 auth flows 会复用 `INVITE_INVALID`、`INVITE_EXPIRED`、`INVITE_ALREADY_USED`。
+
+## DeviceInviteDto
+
+```ts
+export interface DeviceInviteDto {
+  id: ID;
+  code: string;
+  teamId: ID;
+  createdBy: ID;
+  createdAt: UnixMs;
+  expiresAt?: UnixMs;
+  completedAt?: UnixMs;
+  profileId?: string;
+}
+
+export interface CreateDeviceInviteCommandDto {
+  userId: ID;
+  teamId: ID;
+  profileId?: string;
+  expiresAt?: UnixMs;
+}
+
+export interface WaitForDeviceInviteCommandDto {
+  code: string;
+  machineId?: string;
+  profileId?: string;
+  hostname?: string;
+}
+
+export interface CompleteDeviceInviteCommandDto {
+  userId: ID;
+  code: string;
+  serverUrl?: string;
+}
+
+export interface DeviceInviteCredentialsDto {
+  token: string;
+  teamId: ID;
+  ownerId: ID;
+  serverUrl?: string;
+  machineId?: string;
+  profileId?: string;
+  hostname?: string;
+}
+
+export interface DeviceInviteAckDto {
+  invite: DeviceInviteDto;
+  team: TeamDto;
+}
+```
+
+说明：
+
+- `DeviceInviteDto` 只覆盖 daemon onboarding，不覆盖 user join link。
+- `device-invite:create` 与 `device-invite:complete` 是 web commands；`device-invite:wait` 与 `device-invite:credentials` 是 daemon onboarding 协议。
+- `DeviceInviteCredentialsDto.token` 是 daemon 后续 `device:hello` 的凭据来源，daemon 不需要手工配置 `teamId`/`ownerId`。
+- Device invite 复用 `INVITE_INVALID`、`INVITE_EXPIRED`、`INVITE_ALREADY_USED`。
 
 ## DeviceDto
 

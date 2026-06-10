@@ -19,6 +19,8 @@ describe('server-next socket handlers', () => {
       switchTeam: vi.fn(async (payload) => makeSuccess({ payload })),
       createJoinLink: vi.fn(async (payload) => makeSuccess({ payload })),
       validateJoinLink: vi.fn(async (payload) => makeSuccess({ payload })),
+      createDeviceInvite: vi.fn(async (payload) => makeSuccess({ payload })),
+      completeDeviceInvite: vi.fn(async (payload) => makeSuccess({ payload })),
       getDevice: vi.fn(async (payload) => makeSuccess({ payload })),
       requestDeviceScan: vi.fn(async (payload) =>
         makeSuccess({ request: { requestId: 'scan-1', deviceId: (payload as { deviceId: string }).deviceId } }),
@@ -52,6 +54,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.team.switch,
       WEB_EVENTS.join.create,
       WEB_EVENTS.join.validate,
+      WEB_EVENTS.deviceInvite.create,
+      WEB_EVENTS.deviceInvite.complete,
       WEB_EVENTS.device.get,
       WEB_EVENTS.device.scan,
       WEB_EVENTS.channel.create,
@@ -87,6 +91,14 @@ describe('server-next socket handlers', () => {
     });
     await socket.trigger(WEB_EVENTS.join.validate, {
       code: 'join-1',
+    });
+    await socket.trigger(WEB_EVENTS.deviceInvite.create, {
+      userId: 'user-1',
+      teamId: 'team-1',
+    });
+    await socket.trigger(WEB_EVENTS.deviceInvite.complete, {
+      userId: 'user-1',
+      code: 'device-code-1',
     });
     await socket.trigger(WEB_EVENTS.message.send, {
       userId: 'user-1',
@@ -182,6 +194,14 @@ describe('server-next socket handlers', () => {
     expect(app.validateJoinLink).toHaveBeenCalledWith({
       code: 'join-1',
     });
+    expect(app.createDeviceInvite).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+    });
+    expect(app.completeDeviceInvite).toHaveBeenCalledWith({
+      userId: 'user-1',
+      code: 'device-code-1',
+    });
     expect(app.sendMessage).toHaveBeenCalledWith({
       userId: 'user-1',
       teamId: 'team-1',
@@ -255,6 +275,7 @@ describe('server-next socket handlers', () => {
   test('registers first-slice agent events and forwards payloads to use cases', async () => {
     const socket = new FakeSocket();
     const app = {
+      waitForDeviceInvite: vi.fn(async (payload) => makeSuccess({ payload })),
       deviceHello: vi.fn(async (payload) => makeSuccess({ payload })),
       reportDeviceRuntimes: vi.fn(async (payload) => makeSuccess({ payload })),
       registerDiscoveredAgents: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -265,6 +286,7 @@ describe('server-next socket handlers', () => {
     registerAgentSocketHandlers(socket, app);
 
     expect(socket.eventNames()).toEqual([
+      AGENT_EVENTS.deviceInvite.wait,
       AGENT_EVENTS.device.hello,
       AGENT_EVENTS.device.runtimes,
       AGENT_EVENTS.agent.registerBatch,
@@ -275,6 +297,10 @@ describe('server-next socket handlers', () => {
     await socket.trigger(AGENT_EVENTS.device.hello, {
       teamId: 'team-1',
       ownerId: 'user-1',
+      machineId: 'machine-1',
+    });
+    await socket.trigger(AGENT_EVENTS.deviceInvite.wait, {
+      code: 'device-code-1',
       machineId: 'machine-1',
     });
     await socket.trigger(AGENT_EVENTS.dispatch.result, {
@@ -290,6 +316,10 @@ describe('server-next socket handlers', () => {
     expect(app.deviceHello).toHaveBeenCalledWith({
       teamId: 'team-1',
       ownerId: 'user-1',
+      machineId: 'machine-1',
+    });
+    expect(app.waitForDeviceInvite).toHaveBeenCalledWith({
+      code: 'device-code-1',
       machineId: 'machine-1',
     });
     expect(app.receiveDispatchResult).toHaveBeenCalledWith({

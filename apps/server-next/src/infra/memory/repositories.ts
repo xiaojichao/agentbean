@@ -1,6 +1,7 @@
 import type {
   AgentRecord,
   ChannelRecord,
+  DeviceInviteRecord,
   DeviceRecord,
   DispatchRecord,
   JoinLinkRecord,
@@ -17,6 +18,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const teams = new Map<string, TeamRecord>();
   const members = new Map<string, TeamMemberRecord>();
   const joinLinks = new Map<string, JoinLinkRecord>();
+  const deviceInvites = new Map<string, DeviceInviteRecord>();
   const channels = new Map<string, ChannelRecord>();
   const devices = new Map<string, DeviceRecord>();
   const runtimes = new Map<string, RuntimeRecord>();
@@ -115,6 +117,38 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         }
         const updated = { ...link, usesCount: link.usesCount + 1 };
         joinLinks.set(code, updated);
+        return updated;
+      },
+    },
+    deviceInvites: {
+      async create(input) {
+        deviceInvites.set(input.code, input);
+        return input;
+      },
+      async getByCode(code) {
+        return deviceInvites.get(code) ?? null;
+      },
+      async updateWaiter(input) {
+        const invite = deviceInvites.get(input.code);
+        if (!invite) {
+          return null;
+        }
+        const updated = {
+          ...invite,
+          machineId: input.machineId,
+          profileId: input.profileId ?? invite.profileId,
+          hostname: input.hostname,
+        };
+        deviceInvites.set(input.code, updated);
+        return updated;
+      },
+      async complete(input) {
+        const invite = deviceInvites.get(input.code);
+        if (!invite || invite.completedAt !== undefined) {
+          return null;
+        }
+        const updated = { ...invite, completedAt: input.completedAt };
+        deviceInvites.set(input.code, updated);
         return updated;
       },
     },

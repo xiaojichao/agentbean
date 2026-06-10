@@ -39,6 +39,8 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
   const agentNamespace = server.of('/agent');
   const webSubscribers = new Set<WebSocketSubscription>();
   const agentSocketsByDeviceId = new Map<string, SocketLike>();
+  const waitingDeviceInviteSocketsByCode = new Map<string, SocketLike>();
+  const waitingDeviceInviteCodeBySocket = new Map<SocketLike, string>();
 
   server.of('/web').on('connection', (socket) => {
     const authenticatedUser = createAuthenticatedUserResolver(socket, app);
@@ -132,6 +134,20 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
       deviceScan(request) {
         agentSocketsByDeviceId.get(request.deviceId)?.emit?.(AGENT_EVENTS.device.scanRequested, request);
       },
+      afterDeviceInviteComplete(_payload, result) {
+        const credentials = resultDeviceInviteCredentials(result);
+        const inviteCode = resultDeviceInviteCode(result);
+        if (!credentials || !inviteCode) {
+          return;
+        }
+        waitingDeviceInviteSocketsByCode.get(inviteCode)?.emit?.(AGENT_EVENTS.deviceInvite.credentials, credentials);
+        waitingDeviceInviteSocketsByCode.delete(inviteCode);
+        for (const [socket, code] of waitingDeviceInviteCodeBySocket) {
+          if (code === inviteCode) {
+            waitingDeviceInviteCodeBySocket.delete(socket);
+          }
+        }
+      },
       async afterChannelMutation(payload, result) {
         if (!isSuccessAck(result)) {
           return;
@@ -160,8 +176,27 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
       if (connectedDeviceId && agentSocketsByDeviceId.get(connectedDeviceId) === socket) {
         agentSocketsByDeviceId.delete(connectedDeviceId);
       }
+      const waitingInviteCode = waitingDeviceInviteCodeBySocket.get(socket);
+      if (waitingInviteCode) {
+        waitingDeviceInviteSocketsByCode.delete(waitingInviteCode);
+        waitingDeviceInviteCodeBySocket.delete(socket);
+      }
     });
     registerAgentSocketHandlers(socket, app, {
+      afterDeviceInviteWait(payload, result) {
+        if (!isSuccessAck(result)) {
+          return;
+        }
+        const code = payloadDeviceInviteCode(payload) ?? resultDeviceInviteCode(result);
+        if (code) {
+          const previousCode = waitingDeviceInviteCodeBySocket.get(socket);
+          if (previousCode) {
+            waitingDeviceInviteSocketsByCode.delete(previousCode);
+          }
+          waitingDeviceInviteSocketsByCode.set(code, socket);
+          waitingDeviceInviteCodeBySocket.set(socket, code);
+        }
+      },
       async afterDeviceMutation(payload, result) {
         if (!isSuccessAck(result)) {
           return;
@@ -411,6 +446,29 @@ function payloadTeamId(payload: unknown): string | null {
   }
   const teamId = (payload as { teamId?: unknown }).teamId;
   return typeof teamId === 'string' ? teamId : null;
+}
+
+function payloadDeviceInviteCode(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const code = (payload as { code?: unknown }).code;
+  return typeof code === 'string' ? code : null;
+}
+
+function resultDeviceInviteCode(result: unknown): string | null {
+  if (!result || typeof result !== 'object') {
+    return null;
+  }
+  const invite = (result as { invite?: { code?: unknown } }).invite;
+  return typeof invite?.code === 'string' ? invite.code : null;
+}
+
+function resultDeviceInviteCredentials(result: unknown): unknown | null {
+  if (!result || typeof result !== 'object') {
+    return null;
+  }
+  return (result as { credentials?: unknown }).credentials ?? null;
 }
 
 function resultDispatchTeamId(result: unknown): string | null {

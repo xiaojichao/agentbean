@@ -1,4 +1,5 @@
 import type { ID, UnixMs } from './common.js';
+import type { TeamDto } from './team.js';
 import type { AgentDto, RuntimeDto } from './agent.js';
 
 export type DeviceStatus = 'online' | 'offline' | 'unknown';
@@ -29,4 +30,50 @@ export interface DeviceDto {
 export interface DeviceDetailDto extends DeviceDto {
   runtimes: RuntimeDto[];
   agents: AgentDto[];
+}
+
+export interface DeviceInviteDto {
+  id: ID;
+  code: string;
+  teamId: ID;
+  createdBy: ID;
+  createdAt: UnixMs;
+  expiresAt?: UnixMs;
+  completedAt?: UnixMs;
+  profileId?: string;
+}
+
+export interface CreateDeviceInviteCommandDto {
+  userId: ID;
+  teamId: ID;
+  profileId?: string;
+  expiresAt?: UnixMs;
+}
+
+export interface CompleteDeviceInviteCommandDto {
+  userId: ID;
+  code: string;
+  serverUrl?: string;
+}
+
+export interface WaitForDeviceInviteCommandDto {
+  code: string;
+  machineId?: string;
+  profileId?: string;
+  hostname?: string;
+}
+
+export interface DeviceInviteCredentialsDto {
+  token: string;
+  teamId: ID;
+  ownerId: ID;
+  serverUrl?: string;
+  machineId?: string;
+  profileId?: string;
+  hostname?: string;
+}
+
+export interface DeviceInviteAckDto {
+  invite: DeviceInviteDto;
+  team: TeamDto;
 }
