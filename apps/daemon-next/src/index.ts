@@ -16,6 +16,7 @@ export type StubExecutor = (request: DispatchRequestPayload) => Promise<string>;
 export interface DaemonDeviceConfig {
   teamId: string;
   ownerId: string;
+  token?: string;
   machineId?: string;
   profileId?: string;
   hostname?: string;

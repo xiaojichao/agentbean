@@ -103,8 +103,6 @@ Ack<{ user: UserDto; currentTeam: TeamDto | null }>
 - `auth:change-password`：保留给 account settings。
 - `join:list`：保留给 invite management；当前不在 Next shared event constants 中暴露。
 - `join:revoke`：保留给 invite management；当前不在 Next shared event constants 中暴露。
-- `device-invite:create`：显式替换 `purpose: "device"` 的 `invite:create`。
-- `device-invite:complete`：显式替换 browser `auth:device-login` token delivery。
 
 ### Teams
 
@@ -208,6 +206,49 @@ Ack<{ link: JoinLinkDto; team: TeamDto }>
 - Anonymous socket session 可调用。
 - 返回 link 目标 team 的展示信息，便于注册/登录前预览。
 - 无效、过期、已耗尽的 code 分别返回 `INVITE_INVALID`、`INVITE_EXPIRED`、`INVITE_ALREADY_USED`。
+
+### Device Invites
+
+#### `device-invite:create`
+
+客户端：
+
+```ts
+{ userId?: string; teamId: string; profileId?: string; expiresAt?: UnixMs }
+```
+
+Ack：
+
+```ts
+Ack<{ invite: DeviceInviteDto; team: TeamDto }>
+```
+
+行为：
+
+- 显式替换旧 `invite:create` 中 `purpose: "device"` 的分支。
+- Authenticated socket session 下允许省略 `userId`。
+- 只有目标 team member 可以创建设备邀请；非成员返回 `FORBIDDEN`。
+
+#### `device-invite:complete`
+
+客户端：
+
+```ts
+{ userId?: string; code: string; serverUrl?: string }
+```
+
+Ack：
+
+```ts
+Ack<{ invite: DeviceInviteDto; team: TeamDto; credentials: DeviceInviteCredentialsDto }>
+```
+
+行为：
+
+- 显式替换旧 browser `auth:device-login` token delivery。
+- 只有邀请目标 team member 可以完成邀请。
+- 完成成功后，server 会把 `credentials` 通过 `/agent` 的 `device-invite:credentials` 发送给正在等待同一 code 的 daemon socket。
+- 已完成、过期或无效 code 分别返回稳定 invite error code。
 
 ### Members
 
@@ -752,6 +793,32 @@ Auth modes：
 - Device token。
 - Transitional user token 仅在 invite completion 或 local development 明确允许时使用。
 
+### Device Invite Onboarding
+
+#### `device-invite:wait`
+
+Daemon：
+
+```ts
+{ code: string; machineId?: string; profileId?: string; hostname?: string }
+```
+
+Ack：
+
+```ts
+Ack<{ invite: DeviceInviteDto; team: TeamDto }>
+```
+
+服务器事件：
+
+- `device-invite:credentials`：`DeviceInviteCredentialsDto`
+
+行为：
+
+- Daemon 在没有手工 `teamId`/`ownerId` 配置时，用 invite code 连接 `/agent` 并调用该事件。
+- Server 校验 code 后记录等待中的 daemon socket；browser 完成邀请后将凭据投递给同一 socket。
+- Daemon 收到凭据后用 `device:hello` 携带 `token` 注册 device。
+
 ### Device 注册
 
 #### `device:hello`
@@ -760,8 +827,9 @@ Daemon：
 
 ```ts
 {
-  deviceId: string;
-  teamId: string;
+  token?: string;
+  teamId?: string;
+  ownerId?: string;
   machineId?: string;
   profileId?: string;
   hostname?: string;
@@ -775,6 +843,12 @@ Ack：
 ```ts
 Ack<{ device: DeviceDto; scanIntervalMs: number }>
 ```
+
+行为：
+
+- invite onboarding 路径使用 `token` 推导 `teamId` 与 `ownerId`。
+- 兼容路径仍允许显式 `teamId`/`ownerId`，用于本地开发和迁移期配置。
+- `machineId + profileId` 用于同一 daemon profile 的重复 hello 调和。
 
 ### Runtime 与 Agent Discovery
 

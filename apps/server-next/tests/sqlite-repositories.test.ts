@@ -28,6 +28,7 @@ describe('server-next SQLite repositories', () => {
           'agent_identity_links',
           'agent_publications',
           'join_links',
+          'device_invites',
         ]),
       );
       expect(tableNames(teamDb)).toEqual(
@@ -94,6 +95,66 @@ describe('server-next SQLite repositories', () => {
       await expect(repositories.joinLinks.incrementUses('code-1')).resolves.toBeNull();
       expect(globalDb.prepare('SELECT uses_count AS usesCount FROM join_links WHERE code = ?').get('code-1')).toEqual({
         usesCount: 1,
+      });
+    } finally {
+      close();
+    }
+  });
+
+  test('persists device invites and completes daemon onboarding with SQLite', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 910 },
+        ids: {
+          nextId: createIds(['user-1', 'team-1', 'channel-1', 'device-invite-1', 'device-1']),
+        },
+        deviceInviteCodes: {
+          nextCode: createIds(['device-code-1']),
+        },
+      });
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+
+      await expect(
+        app.createDeviceInvite({ userId: 'user-1', teamId: 'team-1', profileId: 'agentbean-next' }),
+      ).resolves.toMatchObject({
+        ok: true,
+        invite: { id: 'device-invite-1', code: 'device-code-1', teamId: 'team-1' },
+      });
+      expect(
+        globalDb
+          .prepare('SELECT code, team_id AS teamId, profile_id AS profileId FROM device_invites WHERE code = ?')
+          .get('device-code-1'),
+      ).toEqual({
+        code: 'device-code-1',
+        teamId: 'team-1',
+        profileId: 'agentbean-next',
+      });
+
+      await app.waitForDeviceInvite({ code: 'device-code-1', machineId: 'machine-1', hostname: 'shaw-mbp' });
+      const completed = await app.completeDeviceInvite({ userId: 'user-1', code: 'device-code-1' });
+      expect(completed).toMatchObject({
+        ok: true,
+        credentials: {
+          token: expect.stringMatching(/^abn_device\./),
+          teamId: 'team-1',
+          ownerId: 'user-1',
+          machineId: 'machine-1',
+          profileId: 'agentbean-next',
+          hostname: 'shaw-mbp',
+        },
+      });
+      if (!completed.ok) {
+        throw new Error('device invite completion failed');
+      }
+      expect(globalDb.prepare('SELECT completed_at AS completedAt FROM device_invites WHERE code = ?').get('device-code-1')).toEqual({
+        completedAt: 910,
+      });
+      await expect(app.deviceHelloFromCredentials({ token: completed.credentials.token })).resolves.toMatchObject({
+        ok: true,
+        device: { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', name: 'shaw-mbp' },
       });
     } finally {
       close();

@@ -19,6 +19,11 @@ import {
   type CreateAgentCommandDto,
   type CreateChannelCommandDto,
   type DeviceDto,
+  type CreateDeviceInviteCommandDto,
+  type CompleteDeviceInviteCommandDto,
+  type DeviceInviteAckDto,
+  type DeviceInviteCredentialsDto,
+  type WaitForDeviceInviteCommandDto,
   type DiscoveredAgentDto,
   type DispatchRequestDto,
   type DispatchDto,
@@ -126,6 +131,40 @@ describe('first-slice contract result shape', () => {
       ownerId: user.id,
       status: 'online',
       lastSeenAt: 2,
+    };
+    const createDeviceInviteCommand: CreateDeviceInviteCommandDto = {
+      userId: user.id,
+      teamId: team.id,
+      profileId: 'agentbean-next',
+    };
+    const deviceInviteAck: DeviceInviteAckDto = {
+      invite: {
+        id: 'device-invite-1',
+        code: 'device-code-1',
+        teamId: team.id,
+        createdBy: user.id,
+        createdAt: 2,
+        expiresAt: 3,
+        profileId: 'agentbean-next',
+      },
+      team,
+    };
+    const waitForDeviceInviteCommand: WaitForDeviceInviteCommandDto = {
+      code: deviceInviteAck.invite.code,
+      machineId: 'machine-1',
+      profileId: 'agentbean-next',
+      hostname: 'shaw-mbp',
+    };
+    const completeDeviceInviteCommand: CompleteDeviceInviteCommandDto = {
+      userId: user.id,
+      code: deviceInviteAck.invite.code,
+    };
+    const deviceInviteCredentials: DeviceInviteCredentialsDto = {
+      token: 'device-token-1',
+      teamId: team.id,
+      ownerId: user.id,
+      profileId: 'agentbean-next',
+      serverUrl: 'http://127.0.0.1:4000',
     };
     const agent: AgentDto = {
       id: 'agent-1',
@@ -251,6 +290,9 @@ describe('first-slice contract result shape', () => {
     expect(createTeamAck.team.name).toBe(createTeamCommand.name);
     expect(switchTeamAck.currentTeam.id).toBe(switchTeamCommand.teamId);
     expect(joinLinkAck.link.code).toBe(validateJoinLinkCommand.code);
+    expect(deviceInviteAck.invite.code).toBe(waitForDeviceInviteCommand.code);
+    expect(completeDeviceInviteCommand.code).toBe(waitForDeviceInviteCommand.code);
+    expect(deviceInviteCredentials.ownerId).toBe(user.id);
     expect(runtime.installed).toBe(true);
     expect(runtime.normalizedCommandKey).toBe('/opt/homebrew/bin/codex');
     expect(agent.visibleTeamIds).toEqual(['team-1']);
@@ -273,8 +315,12 @@ describe('first-slice contract result shape', () => {
     expect(WEB_EVENTS.team.snapshot).toBe('teams:snapshot');
     expect(WEB_EVENTS.join.create).toBe('join:create');
     expect(WEB_EVENTS.join.validate).toBe('join:validate');
+    expect(WEB_EVENTS.deviceInvite.create).toBe('device-invite:create');
+    expect(WEB_EVENTS.deviceInvite.complete).toBe('device-invite:complete');
     expect(WEB_EVENTS.message.send).toBe('message:send');
     expect(AGENT_EVENTS.device.hello).toBe('device:hello');
+    expect(AGENT_EVENTS.deviceInvite.wait).toBe('device-invite:wait');
+    expect(AGENT_EVENTS.deviceInvite.credentials).toBe('device-invite:credentials');
     expect(AGENT_EVENTS.dispatch.request).toBe('dispatch:request');
     expect(Object.values(WEB_EVENTS.team)).not.toContain('network:list');
   });

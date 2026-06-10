@@ -254,6 +254,88 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('delivers completed device invite credentials to the waiting daemon socket', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1200,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-invite-1', 'device-1']),
+      deviceInviteCodes: createIds(['device-code-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const daemon = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      daemon.disconnect();
+    });
+    const register = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    const owner = await connectClient(`${baseUrl}/web`, { auth: { token: (register as { token: string }).token } });
+    cleanups.push(async () => {
+      owner.disconnect();
+    });
+
+    await expect(
+      owner.emitWithAck(WEB_EVENTS.deviceInvite.create, { teamId: 'team-1', profileId: 'agentbean-next' }),
+    ).resolves.toMatchObject({
+      ok: true,
+      invite: { code: 'device-code-1', teamId: 'team-1', profileId: 'agentbean-next' },
+    });
+    const deliveredCredentials: unknown[] = [];
+    daemon.on(AGENT_EVENTS.deviceInvite.credentials, (payload) => {
+      deliveredCredentials.push(payload);
+    });
+
+    await expect(
+      daemon.emitWithAck(AGENT_EVENTS.deviceInvite.wait, {
+        code: 'device-code-1',
+        machineId: 'machine-1',
+        hostname: 'shaw-mbp',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      invite: { code: 'device-code-1', teamId: 'team-1' },
+    });
+    const completed = await owner.emitWithAck(WEB_EVENTS.deviceInvite.complete, {
+      code: 'device-code-1',
+      serverUrl: baseUrl,
+    });
+    expect(completed).toMatchObject({
+      ok: true,
+      credentials: {
+        token: expect.stringMatching(/^abn_device\./),
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'agentbean-next',
+        hostname: 'shaw-mbp',
+        serverUrl: baseUrl,
+      },
+    });
+    await eventually(async () => {
+      expect(deliveredCredentials).toEqual([(completed as { credentials: unknown }).credentials]);
+    });
+
+    await expect(
+      daemon.emitWithAck(AGENT_EVENTS.device.hello, {
+        token: (completed as { credentials: { token: string } }).credentials.token,
+        machineId: 'machine-1',
+        profileId: 'agentbean-next',
+        hostname: 'shaw-mbp',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      device: { id: 'device-1', teamId: 'team-1', ownerId: 'user-1' },
+    });
+  });
+
   test.each(['not-a-valid-token', ''])(
     'rejects invalid authenticated socket token %j instead of falling back to payload userId',
     async (token) => {

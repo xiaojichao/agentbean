@@ -45,6 +45,21 @@ CREATE TABLE join_links (
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE device_invites (
+  id TEXT PRIMARY KEY,
+  code TEXT NOT NULL UNIQUE,
+  team_id TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER,
+  completed_at INTEGER,
+  machine_id TEXT,
+  profile_id TEXT,
+  hostname TEXT,
+  FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE devices (
   id TEXT PRIMARY KEY,
   team_id TEXT NOT NULL,
@@ -128,6 +143,7 @@ CREATE TABLE agent_publications (
 CREATE INDEX idx_users_current_team ON users(current_team_id);
 CREATE INDEX idx_team_members_user ON team_members(user_id);
 CREATE INDEX idx_join_links_team ON join_links(team_id);
+CREATE INDEX idx_device_invites_team ON device_invites(team_id);
 CREATE INDEX idx_devices_team ON devices(team_id);
 CREATE INDEX idx_devices_machine_profile ON devices(machine_id, profile_id);
 CREATE INDEX idx_device_runtimes_device ON device_runtimes(device_id);

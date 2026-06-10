@@ -28,6 +28,10 @@ export const WEB_EVENTS = {
     status: 'device:status',
     runtimes: 'device:runtimes',
   },
+  deviceInvite: {
+    create: 'device-invite:create',
+    complete: 'device-invite:complete',
+  },
   agent: {
     subscribe: 'agents:subscribe',
     create: 'agent:create',
@@ -64,6 +68,10 @@ export const WEB_EVENTS = {
 } as const;
 
 export const AGENT_EVENTS = {
+  deviceInvite: {
+    wait: 'device-invite:wait',
+    credentials: 'device-invite:credentials',
+  },
   device: {
     hello: 'device:hello',
     runtimes: 'device:runtimes',

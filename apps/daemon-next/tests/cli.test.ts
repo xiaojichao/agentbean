@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { createSocketIoDaemonSocket, parseDaemonNextCliConfig } from '../src/cli';
+import { AGENT_EVENTS } from '../../../packages/contracts/src/index';
+import { createSocketIoDaemonSocket, parseDaemonNextCliConfig, waitForDeviceInviteCredentials } from '../src/cli';
 
 describe('daemon-next CLI wiring', () => {
   test('parses required device config from args and env', () => {
@@ -30,6 +31,81 @@ describe('daemon-next CLI wiring', () => {
     });
   });
 
+  test('allows invite-code onboarding without manual team or owner config', () => {
+    const config = parseDaemonNextCliConfig({
+      hostname: 'host.local',
+      env: {
+        AGENTBEAN_NEXT_SERVER_URL: 'http://127.0.0.1:4100/',
+        AGENTBEAN_NEXT_INVITE_CODE: 'device-code-1',
+      },
+      argv: [
+        '--machine-id',
+        'machine-1',
+        '--profile-id',
+        'agentbean-next',
+      ],
+    });
+
+    expect(config).toEqual({
+      serverUrl: 'http://127.0.0.1:4100',
+      inviteCode: 'device-code-1',
+      machineId: 'machine-1',
+      profileId: 'agentbean-next',
+      hostname: 'host.local',
+      fallbackPrefix: 'daemon-next:',
+    });
+  });
+
+  test('waits for device invite credentials over the daemon socket', async () => {
+    const runtimeSocket = new FakeRuntimeSocket();
+    const socket = createSocketIoDaemonSocket(runtimeSocket);
+    const waiting = waitForDeviceInviteCredentials(socket, {
+      code: 'device-code-1',
+      machineId: 'machine-1',
+      profileId: 'agentbean-next',
+      hostname: 'host.local',
+    });
+
+    expect(runtimeSocket.emitted).toEqual([
+      [
+        AGENT_EVENTS.deviceInvite.wait,
+        {
+          code: 'device-code-1',
+          machineId: 'machine-1',
+          profileId: 'agentbean-next',
+          hostname: 'host.local',
+        },
+      ],
+    ]);
+    await runtimeSocket.trigger(AGENT_EVENTS.deviceInvite.credentials, {
+      token: 'device-token-1',
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'agentbean-next',
+      hostname: 'host.local',
+    });
+
+    await expect(waiting).resolves.toEqual({
+      token: 'device-token-1',
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'agentbean-next',
+      hostname: 'host.local',
+    });
+  });
+
+  test('rejects device invite onboarding when the wait ack fails', async () => {
+    const runtimeSocket = new FakeRuntimeSocket();
+    runtimeSocket.nextAck = { ok: false, error: 'INVITE_INVALID', message: 'Device invite is invalid' };
+    const socket = createSocketIoDaemonSocket(runtimeSocket);
+
+    await expect(waitForDeviceInviteCredentials(socket, { code: 'bad-code' })).rejects.toThrow(
+      'Device invite is invalid',
+    );
+  });
+
   test('bridges Socket.IO client events to daemon protocol without treating first connect as reconnect', async () => {
     const runtimeSocket = new FakeRuntimeSocket();
     const socket = createSocketIoDaemonSocket(runtimeSocket);
@@ -56,6 +132,8 @@ describe('daemon-next CLI wiring', () => {
 
 class FakeRuntimeSocket {
   connected = false;
+  nextAck: unknown;
+  readonly emitted: Array<[string, unknown]> = [];
   private readonly handlers = new Map<string, Array<(...args: unknown[]) => void>>();
 
   connect(): void {
@@ -67,7 +145,8 @@ class FakeRuntimeSocket {
   }
 
   async emitWithAck(event: string, payload: unknown): Promise<unknown> {
-    return { ok: true, event, payload };
+    this.emitted.push([event, payload]);
+    return this.nextAck ?? { ok: true, event, payload };
   }
 
   on(event: string, handler: (...args: unknown[]) => void): void {

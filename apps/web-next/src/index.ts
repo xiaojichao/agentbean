@@ -13,6 +13,8 @@ import type {
   RuntimeDto,
   UpdateChannelCommandDto,
   CreateJoinLinkCommandDto,
+  CreateDeviceInviteCommandDto,
+  CompleteDeviceInviteCommandDto,
   ValidateJoinLinkCommandDto,
 } from '../../../packages/contracts/src/index.js';
 
@@ -74,6 +76,8 @@ type SessionChannelAgentMemberInput = Omit<ChannelAgentMemberCommandDto, 'userId
 type SessionListChannelMembersInput = Omit<ListChannelMembersCommandDto, 'userId'> & { userId?: string };
 type SessionCreateAgentInput = Omit<CreateAgentCommandDto, 'userId'> & { userId?: string };
 type SessionCreateJoinLinkInput = Omit<CreateJoinLinkCommandDto, 'userId'> & { userId?: string };
+type SessionCreateDeviceInviteInput = Omit<CreateDeviceInviteCommandDto, 'userId'> & { userId?: string };
+type SessionCompleteDeviceInviteInput = Omit<CompleteDeviceInviteCommandDto, 'userId'> & { userId?: string };
 
 export interface WebSocketClient {
   register(input: RegisterInput): Promise<unknown>;
@@ -84,6 +88,8 @@ export interface WebSocketClient {
   switchTeam(input: SwitchTeamInput): Promise<unknown>;
   createJoinLink(input: SessionCreateJoinLinkInput): Promise<unknown>;
   validateJoinLink(input: ValidateJoinLinkCommandDto): Promise<unknown>;
+  createDeviceInvite(input: SessionCreateDeviceInviteInput): Promise<unknown>;
+  completeDeviceInvite(input: SessionCompleteDeviceInviteInput): Promise<unknown>;
   listDevices(input: SubscribeInput, onSnapshot?: (devices: DeviceDto[]) => void): Promise<unknown>;
   getDevice(input: SessionDeviceCommandInput): Promise<unknown>;
   scanDevice(input: SessionDeviceCommandInput): Promise<unknown>;
@@ -168,6 +174,12 @@ export function createWebSocketClient(transport: WebSocketTransport): WebSocketC
     },
     validateJoinLink(input) {
       return transport.emitWithAck(WEB_EVENTS.join.validate, input);
+    },
+    createDeviceInvite(input) {
+      return transport.emitWithAck(WEB_EVENTS.deviceInvite.create, input);
+    },
+    completeDeviceInvite(input) {
+      return transport.emitWithAck(WEB_EVENTS.deviceInvite.complete, input);
     },
     listDevices(input, onSnapshot) {
       deviceSubscription = input;

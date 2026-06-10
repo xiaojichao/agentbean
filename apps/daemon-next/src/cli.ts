@@ -2,6 +2,7 @@ import { hostname as readHostname } from 'node:os';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { AGENT_EVENTS, type DeviceInviteCredentialsDto } from '../../../packages/contracts/src/index.js';
 import { createBuiltinScanProvider } from './scanner.js';
 import { createCommandExecutor } from './executor.js';
 import { createDaemonProtocolClient, type DaemonDeviceConfig, type DaemonProtocolSocket } from './index.js';
@@ -16,8 +17,9 @@ interface SocketIoClientLike {
 
 export interface DaemonNextCliConfig {
   serverUrl: string;
-  teamId: string;
-  ownerId: string;
+  teamId?: string;
+  ownerId?: string;
+  inviteCode?: string;
   machineId?: string;
   profileId: string;
   hostname: string;
@@ -36,16 +38,18 @@ export function parseDaemonNextCliConfig(input: ParseDaemonNextCliConfigInput = 
   const args = parseArgs(argv);
   const teamId = args['team-id'] ?? env.AGENTBEAN_NEXT_TEAM_ID;
   const ownerId = args['owner-id'] ?? env.AGENTBEAN_NEXT_OWNER_ID;
-  if (!teamId) {
+  const inviteCode = args['invite-code'] ?? env.AGENTBEAN_NEXT_INVITE_CODE;
+  if (!inviteCode && !teamId) {
     throw new Error('AGENTBEAN_NEXT_TEAM_ID or --team-id is required');
   }
-  if (!ownerId) {
+  if (!inviteCode && !ownerId) {
     throw new Error('AGENTBEAN_NEXT_OWNER_ID or --owner-id is required');
   }
   return {
     serverUrl: trimTrailingSlash(args['server-url'] ?? env.AGENTBEAN_NEXT_SERVER_URL ?? 'http://127.0.0.1:4000'),
-    teamId,
-    ownerId,
+    ...(teamId ? { teamId } : {}),
+    ...(ownerId ? { ownerId } : {}),
+    ...(inviteCode ? { inviteCode } : {}),
     machineId: args['machine-id'] ?? env.AGENTBEAN_NEXT_MACHINE_ID,
     profileId: args['profile-id'] ?? env.AGENTBEAN_NEXT_PROFILE_ID ?? 'default',
     hostname: args.hostname ?? env.AGENTBEAN_NEXT_HOSTNAME ?? input.hostname ?? readHostname(),
@@ -78,22 +82,53 @@ export function createSocketIoDaemonSocket(socket: SocketIoClientLike): DaemonPr
 
 export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemonNextCliConfig()): Promise<void> {
   const socket = await connectSocketIoClient(config.serverUrl);
+  const protocolSocket = createSocketIoDaemonSocket(socket);
   const snapshot = await createBuiltinScanProvider()();
-  const device: DaemonDeviceConfig = {
-    teamId: config.teamId,
-    ownerId: config.ownerId,
+  const credentials = config.inviteCode
+    ? await waitForDeviceInviteCredentials(protocolSocket, {
+      code: config.inviteCode,
+      machineId: config.machineId,
+      profileId: config.profileId,
+      hostname: config.hostname,
+    })
+    : null;
+  const teamId = credentials?.teamId ?? config.teamId;
+  const ownerId = credentials?.ownerId ?? config.ownerId;
+  if (!teamId || !ownerId) {
+    throw new Error('Device credentials did not include teamId and ownerId');
+  }
+  const device: DaemonDeviceConfig & { token?: string } = {
+    teamId,
+    ownerId,
+    ...(credentials?.token ? { token: credentials.token } : {}),
     machineId: config.machineId,
     profileId: config.profileId,
     hostname: config.hostname,
   };
   await createDaemonProtocolClient({
-    socket: createSocketIoDaemonSocket(socket),
+    socket: protocolSocket,
     executor: createCommandExecutor({ fallbackPrefix: config.fallbackPrefix }),
     device,
     runtimes: snapshot.runtimes,
     agents: snapshot.agents,
     scan: createBuiltinScanProvider(),
   }).start();
+}
+
+export async function waitForDeviceInviteCredentials(
+  socket: DaemonProtocolSocket,
+  input: { code: string; machineId?: string; profileId?: string; hostname?: string },
+): Promise<DeviceInviteCredentialsDto> {
+  const credentials = new Promise<DeviceInviteCredentialsDto>((resolve) => {
+    socket.on(AGENT_EVENTS.deviceInvite.credentials, async (payload) => {
+      resolve(payload as DeviceInviteCredentialsDto);
+    });
+  });
+  const ack = await socket.emitWithAck(AGENT_EVENTS.deviceInvite.wait, input);
+  if (isFailureAck(ack)) {
+    throw new Error(ack.message ?? ack.error);
+  }
+  return credentials;
 }
 
 async function connectSocketIoClient(serverUrl: string): Promise<SocketIoClientLike> {
@@ -153,4 +188,13 @@ function parseArgs(argv: string[]): Record<string, string> {
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
+}
+
+function isFailureAck(ack: unknown): ack is { ok: false; error: string; message?: string } {
+  return Boolean(
+    ack &&
+    typeof ack === 'object' &&
+    (ack as { ok?: unknown }).ok === false &&
+    typeof (ack as { error?: unknown }).error === 'string',
+  );
 }

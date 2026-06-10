@@ -29,6 +29,19 @@ export interface JoinLinkRecord {
   revokedAt?: UnixMs;
 }
 
+export interface DeviceInviteRecord {
+  id: ID;
+  code: string;
+  teamId: ID;
+  createdBy: ID;
+  createdAt: UnixMs;
+  expiresAt?: UnixMs;
+  completedAt?: UnixMs;
+  machineId?: string;
+  profileId?: string;
+  hostname?: string;
+}
+
 export interface ChannelRecord extends ChannelDto {
   humanMemberIds: ID[];
   agentMemberIds: ID[];
@@ -88,6 +101,18 @@ export interface JoinLinkRepository {
   incrementUses(code: string): Promise<JoinLinkRecord | null>;
 }
 
+export interface DeviceInviteRepository {
+  create(input: DeviceInviteRecord): Promise<DeviceInviteRecord>;
+  getByCode(code: string): Promise<DeviceInviteRecord | null>;
+  updateWaiter(input: {
+    code: string;
+    machineId?: string;
+    profileId?: string;
+    hostname?: string;
+  }): Promise<DeviceInviteRecord | null>;
+  complete(input: { code: string; completedAt: UnixMs }): Promise<DeviceInviteRecord | null>;
+}
+
 export interface ChannelRepository {
   create(input: ChannelRecord): Promise<ChannelRecord>;
   getById(channelId: ID): Promise<ChannelRecord | null>;
@@ -143,6 +168,7 @@ export interface ServerNextRepositories {
   users: UserRepository;
   teams: TeamRepository;
   joinLinks: JoinLinkRepository;
+  deviceInvites: DeviceInviteRepository;
   channels: ChannelRepository;
   devices: DeviceRepository;
   runtimes: RuntimeRepository;
