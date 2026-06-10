@@ -112,7 +112,7 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes('AGENTBEAN_NEXT_ENTRY_URL: ${{ inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}') &&
         workflow.includes('npm run smoke:agentbean-next-entry') &&
         workflow.includes('npm run smoke:agentbean-next-business') &&
-        workflow.includes("github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AGENTBEAN_DEPLOY_TARGET == 'next'") &&
+        workflow.includes("github.event_name == 'workflow_dispatch' && inputs.run_agentbean_next_production_smoke") &&
         cutoverRunbook.includes('run_agentbean_next_production_smoke') &&
         cutoverRunbook.includes('agentbean_next_entry_url'),
       'CI must expose an explicit workflow_dispatch AgentBean Next production smoke gate',
