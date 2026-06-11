@@ -74,21 +74,25 @@ export function registerWebSocketHandlers(
         return;
       }
       const channels = await app.listChannels({ userId: input.userId, teamId: input.teamId });
-      if (!channels.ok) {
-        ack?.(channels);
+      if (channels.ok) {
+        const channel = channels.channels.find((candidate) => candidate.id === input.channelId);
+        if (channel) {
+          const messages = await app.listChannelMessages({ channelId: input.channelId, limit: input.limit });
+          if (!messages.ok) {
+            ack?.(messages);
+            return;
+          }
+          ack?.({ ok: true, channel, messages: messages.messages });
+          return;
+        }
+      }
+      // Channel not found in regular channels — try DM
+      const dmResult = await app.snapshotDirectMessage({ userId: input.userId, teamId: input.teamId, channelId: input.channelId, limit: input.limit });
+      if (!dmResult.ok) {
+        ack?.(dmResult);
         return;
       }
-      const channel = channels.channels.find((candidate) => candidate.id === input.channelId);
-      if (!channel) {
-        ack?.(makeFailure('NOT_FOUND', 'Channel not found'));
-        return;
-      }
-      const messages = await app.listChannelMessages({ channelId: input.channelId, limit: input.limit });
-      if (!messages.ok) {
-        ack?.(messages);
-        return;
-      }
-      ack?.({ ok: true, channel, messages: messages.messages });
+      ack?.({ ok: true, channel: dmResult.dm.channel, messages: dmResult.messages });
     } catch (error) {
       if (error instanceof UnauthenticatedSocketError) {
         ack?.(makeFailure('UNAUTHENTICATED', 'Invalid session token'));

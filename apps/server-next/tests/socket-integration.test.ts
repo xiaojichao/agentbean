@@ -1237,6 +1237,274 @@ describe('server-next Socket.IO namespaces', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(agentTwoScanRequests).toEqual([]);
   });
+
+  test('returns DM channel history through channel:join', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1', 'team-1', 'channel-all',
+        'device-1', 'agent-1',
+        'dm-channel-1', 'message-1', 'dispatch-1', 'request-1',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      agent.disconnect();
+    });
+
+    const register = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    const web = await connectClient(`${baseUrl}/web`, { auth: { token: (register as { token: string }).token } });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+    await agent.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+    });
+    await agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+    });
+
+    await expect(
+      web.emitWithAck(WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-1' }),
+    ).resolves.toMatchObject({ ok: true, channels: [{ id: 'channel-all' }] });
+    await expect(
+      web.emitWithAck(WEB_EVENTS.dm.start, { agentId: 'agent-1' }),
+    ).resolves.toMatchObject({
+      ok: true,
+      dm: { id: 'dm-channel-1', name: 'dm-user-1-agent-1', dmTargetId: 'agent-1' },
+    });
+    await expect(
+      web.emitWithAck(WEB_EVENTS.message.send, {
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'dm-channel-1',
+        body: 'hello',
+      }),
+    ).resolves.toMatchObject({ ok: true, message: { id: 'message-1', channelId: 'dm-channel-1' } });
+
+    await expect(
+      web.emitWithAck(WEB_EVENTS.channel.join, {
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'dm-channel-1',
+        limit: 50,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      channel: { id: 'dm-channel-1', kind: 'direct', name: 'dm-user-1-agent-1' },
+      messages: [{ id: 'message-1', body: 'hello', channelId: 'dm-channel-1' }],
+    });
+  });
+
+  test('rejects channel:join for DM when user is not a DM member', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1', 'team-1', 'channel-all',
+        'join-1',
+        'user-2', 'team-2', 'channel-2',
+        'device-1', 'agent-1',
+        'dm-channel-1', 'message-1', 'dispatch-1', 'request-1',
+      ]),
+      joinCodes: createIds(['code-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    // Owner registers and creates join link
+    const ownerBootstrap = await connectClient(`${baseUrl}/web`);
+    cleanups.push(async () => {
+      ownerBootstrap.disconnect();
+    });
+    const ownerRegister = await ownerBootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'owner',
+      password: 'secret',
+      teamName: 'OwnerTeam',
+    });
+    expect(ownerRegister).toMatchObject({ ok: true, currentTeam: { id: 'team-1' } });
+    const owner = await connectClient(`${baseUrl}/web`, { auth: { token: (ownerRegister as { token: string }).token } });
+    cleanups.push(async () => {
+      owner.disconnect();
+    });
+    await expect(owner.emitWithAck(WEB_EVENTS.join.create, { teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      link: { code: 'code-1', teamId: 'team-1' },
+    });
+
+    // Guest registers and joins owner's team
+    const guestBootstrap = await connectClient(`${baseUrl}/web`);
+    cleanups.push(async () => {
+      guestBootstrap.disconnect();
+    });
+    const guestRegister = await guestBootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'guest',
+      password: 'secret',
+      teamName: 'GuestTeam',
+      joinCode: 'code-1',
+    });
+    expect(guestRegister).toMatchObject({ ok: true, user: { id: 'user-2' }, joinedTeam: { id: 'team-1' } });
+    const guest = await connectClient(`${baseUrl}/web`, { auth: { token: (guestRegister as { token: string }).token } });
+    cleanups.push(async () => {
+      guest.disconnect();
+    });
+
+    // Set up device and agent
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      agent.disconnect();
+    });
+    await agent.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+    });
+    await agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+    });
+
+    // Owner starts DM and sends a message
+    await expect(
+      owner.emitWithAck(WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-1' }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      owner.emitWithAck(WEB_EVENTS.dm.start, { agentId: 'agent-1' }),
+    ).resolves.toMatchObject({
+      ok: true,
+      dm: { id: 'dm-channel-1' },
+    });
+    await expect(
+      owner.emitWithAck(WEB_EVENTS.message.send, {
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'dm-channel-1',
+        body: 'secret message',
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    // Guest tries channel:join with the DM channel → should be rejected
+    await expect(
+      guest.emitWithAck(WEB_EVENTS.channel.join, {
+        teamId: 'team-1',
+        channelId: 'dm-channel-1',
+        limit: 50,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/FORBIDDEN|NOT_FOUND/),
+    });
+  });
+
+  test('pushes DM agent reply to web client via channel:message', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1', 'team-1', 'channel-all',
+        'device-1', 'agent-1',
+        'dm-channel-1', 'message-1', 'dispatch-1', 'request-1', 'reply-1',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      agent.disconnect();
+    });
+
+    const register = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    const web = await connectClient(`${baseUrl}/web`, { auth: { token: (register as { token: string }).token } });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+    await agent.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+    });
+    await agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+    });
+
+    const channelMessages: unknown[] = [];
+    web.on(WEB_EVENTS.channel.message, (message) => {
+      channelMessages.push(message);
+    });
+    await expect(
+      web.emitWithAck(WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-1' }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      web.emitWithAck(WEB_EVENTS.dm.start, { agentId: 'agent-1' }),
+    ).resolves.toMatchObject({
+      ok: true,
+      dm: { id: 'dm-channel-1' },
+    });
+
+    // User sends message in DM → creates dispatch
+    await expect(
+      web.emitWithAck(WEB_EVENTS.message.send, {
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'dm-channel-1',
+        body: 'hello agent',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      message: { id: 'message-1', channelId: 'dm-channel-1' },
+      dispatches: [{ id: 'dispatch-1' }],
+    });
+
+    // Agent returns dispatch result
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.dispatch.result, {
+        dispatchId: 'dispatch-1',
+        agentId: 'agent-1',
+        body: 'done',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      message: { id: 'reply-1', senderKind: 'agent', body: 'done' },
+    });
+
+    // Web client should receive the agent reply via channel:message
+    await eventually(async () => {
+      expect(channelMessages).toEqual([
+        expect.objectContaining({ id: 'reply-1', senderKind: 'agent', channelId: 'dm-channel-1', body: 'done' }),
+      ]);
+    });
+  });
 });
 
 async function startSocketServer(app: ReturnType<typeof createInMemoryServerNext>) {

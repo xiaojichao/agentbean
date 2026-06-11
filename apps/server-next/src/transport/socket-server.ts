@@ -380,6 +380,12 @@ async function emitChannelMessageSubscribers(
     const channels = await app.listChannels(subscriber.channels);
     if (channels.ok && channels.channels.some((channel) => channel.id === message.channelId)) {
       subscriber.socket.emit?.(WEB_EVENTS.channel.message, message);
+      continue;
+    }
+    // Not found in regular channels — check DM membership
+    const dms = await app.listDirectMessages(subscriber.channels);
+    if (dms.ok && dms.dms.some((dm) => dm.channel.id === message.channelId)) {
+      subscriber.socket.emit?.(WEB_EVENTS.channel.message, message);
     }
   }
 }
