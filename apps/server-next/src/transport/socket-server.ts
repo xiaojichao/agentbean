@@ -61,6 +61,10 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         if (result.ok) {
           subscriber.channels = input;
           socket.emit?.(WEB_EVENTS.channel.snapshot, result.channels);
+          const dmResult = await app.listDirectMessages(input);
+          if (dmResult.ok) {
+            socket.emit?.(WEB_EVENTS.dm.snapshot, toFlatDmList(dmResult.dms));
+          }
         }
       } catch (error) {
         ack?.(subscriptionErrorAck(error));
@@ -176,6 +180,79 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         }
       },
     });
+    socket.on(WEB_EVENTS.dm.start, async (payload, ack) => {
+      try {
+        const userId = await resolveAuthenticatedUserId(authenticatedUser);
+        if (!userId) {
+          ack?.({ ok: false, error: 'UNAUTHENTICATED', message: 'Invalid session token' });
+          return;
+        }
+        const agentId = (payload as { agentId?: unknown }).agentId;
+        if (typeof agentId !== 'string') {
+          ack?.({ ok: false, error: 'VALIDATION_ERROR', message: 'agentId is required' });
+          return;
+        }
+        const teamId = subscriber.channels?.teamId;
+        if (!teamId) {
+          ack?.({ ok: false, error: 'VALIDATION_ERROR', message: 'No active channel subscription' });
+          return;
+        }
+        const result = await app.startDirectMessage({ userId, teamId, agentId });
+        if (result.ok && result.dm) {
+          ack?.({ ok: true, dm: toFlatDm(result.dm) });
+          await refreshDmSubscribers(webSubscribers, app, teamId);
+        } else {
+          ack?.(result);
+        }
+      } catch (error) {
+        ack?.(subscriptionErrorAck(error));
+      }
+    });
+    socket.on(WEB_EVENTS.dm.list, async (_payload, ack) => {
+      try {
+        const userId = await resolveAuthenticatedUserId(authenticatedUser);
+        if (!userId) {
+          ack?.({ ok: false, error: 'UNAUTHENTICATED', message: 'Invalid session token' });
+          return;
+        }
+        const teamId = subscriber.channels?.teamId;
+        if (!teamId) {
+          ack?.({ ok: false, error: 'VALIDATION_ERROR', message: 'No active channel subscription' });
+          return;
+        }
+        const result = await app.listDirectMessages({ userId, teamId });
+        if (result.ok) {
+          ack?.({ ok: true, dms: toFlatDmList(result.dms) });
+        } else {
+          ack?.(result);
+        }
+      } catch (error) {
+        ack?.(subscriptionErrorAck(error));
+      }
+    });
+    socket.on(WEB_EVENTS.dm.snapshot, async (payload, ack) => {
+      try {
+        const userId = await resolveAuthenticatedUserId(authenticatedUser);
+        if (!userId) {
+          ack?.({ ok: false, error: 'UNAUTHENTICATED', message: 'Invalid session token' });
+          return;
+        }
+        const channelId = (payload as { channelId?: unknown }).channelId;
+        const teamId = subscriber.channels?.teamId;
+        if (!teamId || typeof channelId !== 'string') {
+          ack?.({ ok: false, error: 'VALIDATION_ERROR', message: 'channelId and active subscription required' });
+          return;
+        }
+        const result = await app.snapshotDirectMessage({ userId, teamId, channelId });
+        if (result.ok && result.dm) {
+          ack?.({ ok: true, dm: toFlatDm(result.dm), messages: result.messages });
+        } else {
+          ack?.(result);
+        }
+      } catch (error) {
+        ack?.(subscriptionErrorAck(error));
+      }
+    });
   });
   agentNamespace.on('connection', (socket) => {
     let connectedDeviceId: string | undefined;
@@ -263,6 +340,10 @@ async function refreshChannelSubscribers(
     const result = await app.listChannels(subscriber.channels);
     if (result.ok) {
       subscriber.socket.emit?.(WEB_EVENTS.channel.snapshot, result.channels);
+    }
+    const dmResult = await app.listDirectMessages(subscriber.channels);
+    if (dmResult.ok) {
+      subscriber.socket.emit?.(WEB_EVENTS.dm.snapshot, toFlatDmList(dmResult.dms));
     }
   }
 }
@@ -578,4 +659,53 @@ function resultRuntimesPayload(result: unknown): { deviceId: string; runtimes: u
     deviceId: firstRuntime.deviceId,
     runtimes: candidate.runtimes,
   };
+}
+
+async function resolveAuthenticatedUserId(
+  authenticatedUser: () => Promise<AuthenticatedUserIdentity>,
+): Promise<string | null> {
+  const auth = await authenticatedUser();
+  if (!auth.hasToken) {
+    return null;
+  }
+  if (!auth.userId) {
+    throw new UnauthenticatedSocketError();
+  }
+  return auth.userId;
+}
+
+interface FlatDmChannel {
+  id: string;
+  name: string;
+  dmTargetId: string;
+  createdAt: number;
+}
+
+function toFlatDm(dm: { channel: { id: string; name: string; dmTargetAgentId?: string; createdAt: number } }): FlatDmChannel {
+  return {
+    id: dm.channel.id,
+    name: dm.channel.name,
+    dmTargetId: dm.channel.dmTargetAgentId ?? '',
+    createdAt: dm.channel.createdAt,
+  };
+}
+
+function toFlatDmList(dms: Array<{ channel: { id: string; name: string; dmTargetAgentId?: string; createdAt: number } }>): FlatDmChannel[] {
+  return dms.map(toFlatDm);
+}
+
+async function refreshDmSubscribers(
+  subscribers: Set<WebSocketSubscription>,
+  app: ServerNextUseCases,
+  teamId: string,
+): Promise<void> {
+  for (const subscriber of subscribers) {
+    if (subscriber.channels?.teamId !== teamId) {
+      continue;
+    }
+    const result = await app.listDirectMessages(subscriber.channels);
+    if (result.ok) {
+      subscriber.socket.emit?.(WEB_EVENTS.dm.snapshot, toFlatDmList(result.dms));
+    }
+  }
 }

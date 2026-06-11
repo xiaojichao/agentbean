@@ -75,9 +75,6 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.channel.addAgent,
       WEB_EVENTS.channel.removeAgent,
       WEB_EVENTS.channel.members,
-      WEB_EVENTS.dm.start,
-      WEB_EVENTS.dm.list,
-      WEB_EVENTS.dm.snapshot,
       WEB_EVENTS.channel.join,
       WEB_EVENTS.agent.create,
       WEB_EVENTS.agent.publish,
@@ -171,21 +168,6 @@ describe('server-next socket handlers', () => {
       userId: 'user-1',
       teamId: 'team-1',
       channelId: 'channel-2',
-    });
-    await socket.trigger(WEB_EVENTS.dm.start, {
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-1',
-    });
-    await socket.trigger(WEB_EVENTS.dm.list, {
-      userId: 'user-1',
-      teamId: 'team-1',
-    });
-    await socket.trigger(WEB_EVENTS.dm.snapshot, {
-      userId: 'user-1',
-      teamId: 'team-1',
-      channelId: 'dm-1',
-      limit: 25,
     });
     await expect(socket.trigger(WEB_EVENTS.channel.join, {
       userId: 'user-1',
@@ -311,21 +293,6 @@ describe('server-next socket handlers', () => {
       userId: 'user-1',
       teamId: 'team-1',
       channelId: 'channel-2',
-    });
-    expect(app.startDirectMessage).toHaveBeenCalledWith({
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-1',
-    });
-    expect(app.listDirectMessages).toHaveBeenCalledWith({
-      userId: 'user-1',
-      teamId: 'team-1',
-    });
-    expect(app.snapshotDirectMessage).toHaveBeenCalledWith({
-      userId: 'user-1',
-      teamId: 'team-1',
-      channelId: 'dm-1',
-      limit: 25,
     });
     expect(app.listChannels).toHaveBeenCalledWith({ userId: 'user-1', teamId: 'team-1' });
     expect(app.listChannelMessages).toHaveBeenCalledWith({ channelId: 'channel-2', limit: 25 });

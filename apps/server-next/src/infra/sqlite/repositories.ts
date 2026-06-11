@@ -340,6 +340,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .prepare(
             `SELECT * FROM channels
              WHERE team_id = ?
+             AND kind = 'channel'
              AND (
                visibility = 'public'
                OR id IN (SELECT channel_id FROM channel_human_members WHERE user_id = ?)

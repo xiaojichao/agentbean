@@ -60,7 +60,7 @@ export const WEB_EVENTS = {
   dm: {
     start: 'dm:start',
     list: 'dm:list',
-    snapshot: 'dm:snapshot',
+    snapshot: 'dms:snapshot',
   },
   message: {
     send: 'message:send',
