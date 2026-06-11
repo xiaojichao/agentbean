@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchDto, type DispatchRequestDto, type JoinLinkDto, type MessageDto, type RuntimeDto, type TeamDto, type UserDto } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TeamDto, type UserDto, type WorkspaceRunDto } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
-import type { DeviceInviteRecord, JoinLinkRecord, ServerNextRepositories, UserRecord } from './repositories.js';
+import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 
 export interface ServerNextClock {
   now(): number;
@@ -40,6 +40,10 @@ export interface ServerNextUseCases {
   registerDiscoveredAgents(input: RegisterDiscoveredAgentsInput): Promise<Ack<RegisterDiscoveredAgentsResult>>;
   listVisibleAgents(input: { teamId: string }): Promise<Ack<{ agents: AgentDto[] }>>;
   createCustomAgent(input: CreateCustomAgentInput): Promise<Ack<{ agent: AgentDto }>>;
+  publishAgent(input: PublishAgentInput): Promise<Ack<{ agent: AgentDto }>>;
+  unpublishAgent(input: UnpublishAgentInput): Promise<Ack<{ agent: AgentDto }>>;
+  updateAgentConfig(input: UpdateAgentConfigInput): Promise<Ack<{ agent: AgentDto }>>;
+  deleteAgent(input: DeleteAgentInput): Promise<Ack<{ agent: AgentDto }>>;
   listChannels(input: { teamId: string; userId: string }): Promise<Ack<{ channels: ChannelDto[] }>>;
   createChannel(input: CreateChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
   updateChannel(input: UpdateChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
@@ -48,11 +52,16 @@ export interface ServerNextUseCases {
   addChannelAgentMember(input: ChannelAgentMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
   removeChannelAgentMember(input: ChannelAgentMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
   listChannelMembers(input: ListChannelMembersInput): Promise<Ack<ChannelMembersDto>>;
+  startDirectMessage(input: StartDirectMessageInput): Promise<Ack<{ dm: DmChannelDto }>>;
+  listDirectMessages(input: ListDirectMessagesInput): Promise<Ack<{ dms: DmChannelDto[] }>>;
+  snapshotDirectMessage(input: SnapshotDirectMessageInput): Promise<Ack<{ dm: DmChannelDto; messages: MessageDto[] }>>;
   registerAgent(input: AgentDto): Promise<Ack<{ agent: AgentDto }>>;
   sendMessage(input: SendMessageInput): Promise<Ack<SendMessageResult>>;
   getDispatchRequest(input: { dispatchId: string }): Promise<Ack<{ request: DispatchRequestDto & { id: string } }>>;
   cancelDispatch(input: CancelDispatchInput): Promise<Ack<{ dispatch: DispatchDto }>>;
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
+  getArtifact(input: GetArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
+  getWorkspaceRun(input: GetWorkspaceRunInput): Promise<Ack<{ workspaceRun: WorkspaceRunDto }>>;
   failTimedOutDispatches(input: { olderThan: number }): Promise<Ack<{ dispatches: DispatchDto[] }>>;
   receiveDispatchResult(input: ReceiveDispatchResultInput): Promise<Ack<ReceiveDispatchResultResult>>;
   receiveDispatchError(input: ReceiveDispatchErrorInput): Promise<Ack<ReceiveDispatchErrorResult>>;
@@ -231,10 +240,45 @@ export interface CreateCustomAgentInput {
   env?: Record<string, string>;
 }
 
+export interface PublishAgentInput {
+  userId: string;
+  teamId: string;
+  agentId: string;
+  targetTeamId: string;
+}
+
+export interface UnpublishAgentInput {
+  userId: string;
+  teamId: string;
+  agentId: string;
+  targetTeamId: string;
+}
+
+export interface UpdateAgentConfigInput {
+  userId: string;
+  teamId: string;
+  agentId: string;
+  runtimeId?: string;
+  name?: string;
+  description?: string;
+  adapterKind?: string;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+}
+
+export interface DeleteAgentInput {
+  userId: string;
+  teamId: string;
+  agentId: string;
+}
+
 export interface SendMessageInput {
   userId: string;
   teamId: string;
   channelId: string;
+  threadId?: string;
   body: string;
   clientMessageId?: string;
   senderId?: string;
@@ -250,6 +294,18 @@ export interface SendMessageResult {
 export interface ListChannelMessagesInput {
   channelId: string;
   limit: number;
+}
+
+export interface GetArtifactInput {
+  userId: string;
+  teamId: string;
+  artifactId: string;
+}
+
+export interface GetWorkspaceRunInput {
+  userId: string;
+  teamId: string;
+  runId: string;
 }
 
 export interface CancelDispatchInput {
@@ -298,11 +354,51 @@ export interface ListChannelMembersInput {
   channelId: string;
 }
 
+export interface StartDirectMessageInput {
+  userId: string;
+  teamId: string;
+  agentId: string;
+}
+
+export interface ListDirectMessagesInput {
+  userId: string;
+  teamId: string;
+}
+
+export interface SnapshotDirectMessageInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
+  limit?: number;
+}
+
+export interface ReceiveDispatchArtifactInput {
+  id: string;
+  filename: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  storagePath?: string;
+  relativePath?: string;
+  pathKind?: ArtifactDto['pathKind'];
+  sha256?: string;
+}
+
+export interface ReceiveDispatchWorkspaceRunInput {
+  id?: string;
+  status?: WorkspaceRunDto['status'];
+  cwd?: string;
+  exitCode?: number;
+  startedAt?: number;
+  completedAt?: number;
+}
+
 export interface ReceiveDispatchResultInput {
   dispatchId: string;
   agentId: string;
   body: string;
   artifactIds?: string[];
+  artifacts?: ReceiveDispatchArtifactInput[];
+  workspaceRun?: ReceiveDispatchWorkspaceRunInput;
 }
 
 export interface ReceiveDispatchResultResult {
@@ -900,6 +996,153 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeSuccess({ agent });
     },
 
+    async publishAgent(agentInput) {
+      const managed = await agentForManagement(repositories, agentInput);
+      if (!managed.ok) {
+        return managed;
+      }
+      if (!(await repositories.teams.getById(agentInput.targetTeamId))) {
+        return makeFailure('NOT_FOUND', 'Target team not found');
+      }
+      if (!(await repositories.teams.isMember(agentInput.targetTeamId, agentInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a target team member');
+      }
+      if (agentInput.targetTeamId === managed.agent.primaryTeamId) {
+        return makeSuccess({ agent: managed.agent });
+      }
+      const agent = await repositories.agents.publish({
+        agentId: managed.agent.id,
+        teamId: agentInput.targetTeamId,
+        publishedBy: agentInput.userId,
+        timestamp: clock.now(),
+      });
+      if (!agent) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
+      return makeSuccess({ agent });
+    },
+
+    async unpublishAgent(agentInput) {
+      const managed = await agentForManagement(repositories, agentInput);
+      if (!managed.ok) {
+        return managed;
+      }
+      if (agentInput.targetTeamId === managed.agent.primaryTeamId) {
+        return makeFailure('VALIDATION_ERROR', 'Cannot unpublish agent from its primary team');
+      }
+      const agent = await repositories.agents.unpublish({
+        agentId: managed.agent.id,
+        teamId: agentInput.targetTeamId,
+      });
+      if (!agent) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
+      await repositories.channels.removeAgentFromTeamChannels({
+        teamId: agentInput.targetTeamId,
+        agentId: managed.agent.id,
+        timestamp: clock.now(),
+      });
+      return makeSuccess({ agent });
+    },
+
+    async updateAgentConfig(agentInput) {
+      const managed = await agentForManagement(repositories, agentInput);
+      if (!managed.ok) {
+        return managed;
+      }
+      if (managed.agent.source !== 'custom') {
+        return makeFailure('VALIDATION_ERROR', 'Only custom agents can be configured');
+      }
+
+      const now = clock.now();
+      const changes: AgentConfigUpdate = {};
+      if (agentInput.name !== undefined) {
+        changes.name = agentInput.name.trim();
+      }
+      if (agentInput.description !== undefined) {
+        changes.description = agentInput.description.trim();
+      }
+      if (agentInput.args !== undefined) {
+        changes.args = agentInput.args;
+      }
+      if (agentInput.cwd !== undefined) {
+        changes.cwd = agentInput.cwd;
+      }
+      if (agentInput.command !== undefined) {
+        changes.command = agentInput.command;
+      }
+      if (agentInput.env !== undefined) {
+        changes.env = agentInput.env;
+        changes.envKeys = Object.keys(agentInput.env).sort();
+      }
+
+      const runtime = agentInput.runtimeId
+        ? await repositories.runtimes.getById(agentInput.runtimeId)
+        : null;
+      if (agentInput.runtimeId) {
+        if (!runtime || runtime.teamId !== managed.agent.primaryTeamId) {
+          return makeFailure('NOT_FOUND', 'Runtime not found');
+        }
+        const device = await repositories.devices.getById(runtime.deviceId);
+        if (!device || device.teamId !== managed.agent.primaryTeamId) {
+          return makeFailure('NOT_FOUND', 'Device not found');
+        }
+        if (device.status !== 'online') {
+          return makeFailure('DEVICE_OFFLINE', 'Device is not online');
+        }
+        if (!runtime.installed) {
+          return makeFailure('VALIDATION_ERROR', 'Runtime is not installed');
+        }
+        changes.deviceId = runtime.deviceId;
+        changes.adapterKind = runtime.adapterKind;
+        changes.command = runtime.command;
+        changes.cwd = runtime.cwd;
+      } else if (agentInput.adapterKind !== undefined) {
+        const adapterKind = normalizeAdapterKind(agentInput.adapterKind);
+        if (!adapterKind) {
+          return makeFailure('VALIDATION_ERROR', 'adapterKind is invalid');
+        }
+        changes.adapterKind = adapterKind as AdapterKind;
+      }
+
+      const agent = await repositories.agents.updateConfig({
+        agentId: managed.agent.id,
+        changes: {
+          ...changes,
+          status: 'online',
+          lastSeenAt: now,
+        },
+        timestamp: now,
+      });
+      if (!agent) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
+      return makeSuccess({ agent });
+    },
+
+    async deleteAgent(agentInput) {
+      const managed = await agentForManagement(repositories, agentInput);
+      if (!managed.ok) {
+        return managed;
+      }
+      if (managed.agent.source !== 'custom') {
+        return makeFailure('VALIDATION_ERROR', 'Only custom agents can be deleted');
+      }
+      const now = clock.now();
+      for (const teamId of managed.agent.visibleTeamIds) {
+        await repositories.channels.removeAgentFromTeamChannels({
+          teamId,
+          agentId: managed.agent.id,
+          timestamp: now,
+        });
+      }
+      const agent = await repositories.agents.softDelete({ agentId: managed.agent.id, timestamp: now });
+      if (!agent) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
+      return makeSuccess({ agent });
+    },
+
     async listChannels(listInput) {
       if (!(await repositories.teams.isMember(listInput.teamId, listInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
@@ -1099,6 +1342,80 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
     },
 
+    async startDirectMessage(dmInput) {
+      if (!(await repositories.teams.isMember(dmInput.teamId, dmInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const agent = await repositories.agents.getById(dmInput.agentId);
+      if (!agent || !agent.visibleTeamIds.includes(dmInput.teamId)) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
+
+      const existing = await repositories.channels.getDirectByAgent({
+        teamId: dmInput.teamId,
+        userId: dmInput.userId,
+        agentId: dmInput.agentId,
+      });
+      if (existing) {
+        return makeSuccess({ dm: toDmChannelDto(existing, agent) });
+      }
+
+      const now = clock.now();
+      const channel = await repositories.channels.create({
+        id: ids.nextId(),
+        teamId: dmInput.teamId,
+        kind: 'direct',
+        name: `dm-${dmInput.userId}-${dmInput.agentId}`,
+        title: agent.name,
+        visibility: 'private',
+        dmTargetAgentId: agent.id,
+        createdBy: dmInput.userId,
+        createdAt: now,
+        humanMemberIds: [dmInput.userId],
+        agentMemberIds: [agent.id],
+      });
+
+      return makeSuccess({ dm: toDmChannelDto(channel, agent) });
+    },
+
+    async listDirectMessages(dmInput) {
+      if (!(await repositories.teams.isMember(dmInput.teamId, dmInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const channels = await repositories.channels.listDirectForUser(dmInput.teamId, dmInput.userId);
+      const dms: DmChannelDto[] = [];
+      for (const channel of channels) {
+        const agentId = channel.dmTargetAgentId ?? channel.agentMemberIds[0];
+        const agent = agentId ? await repositories.agents.getById(agentId) : null;
+        if (agent && agent.visibleTeamIds.includes(dmInput.teamId)) {
+          dms.push(toDmChannelDto(channel, agent));
+        }
+      }
+      return makeSuccess({ dms });
+    },
+
+    async snapshotDirectMessage(dmInput) {
+      if (!(await repositories.teams.isMember(dmInput.teamId, dmInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const channel = await repositories.channels.getById(dmInput.channelId);
+      if (!channel || channel.teamId !== dmInput.teamId || channel.kind !== 'direct') {
+        return makeFailure('NOT_FOUND', 'DM not found');
+      }
+      if (!channel.humanMemberIds.includes(dmInput.userId)) {
+        return makeFailure('FORBIDDEN', 'User cannot view DM');
+      }
+      const agentId = channel.dmTargetAgentId ?? channel.agentMemberIds[0];
+      const agent = agentId ? await repositories.agents.getById(agentId) : null;
+      if (!agent || !agent.visibleTeamIds.includes(dmInput.teamId)) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
+      return makeSuccess({
+        dm: toDmChannelDto(channel, agent),
+        messages: await repositories.messages.listByChannel(channel.id, normalizeLimit(dmInput.limit)),
+      });
+    },
+
     async registerAgent(agentInput) {
       const agent = await repositories.agents.upsert(agentInput);
       return makeSuccess({ agent });
@@ -1117,23 +1434,28 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
 
       const now = clock.now();
+      const messageId = ids.nextId();
+      const threadId = messageInput.threadId ?? messageId;
+      const visibleAgents = await repositories.agents.listVisibleInTeam(messageInput.teamId);
+      const route = routeMessageForChannel({
+        channel,
+        visibleAgents,
+        teamId: messageInput.teamId,
+        body: messageInput.body,
+      });
       const message = await repositories.messages.append({
-        id: ids.nextId(),
+        id: messageId,
         teamId: messageInput.teamId,
         channelId: messageInput.channelId,
+        threadId,
         senderKind: 'human',
         senderId: messageInput.userId,
         body: messageInput.body,
         createdAt: now,
-        meta: messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : undefined,
-      });
-      const visibleAgents = await repositories.agents.listVisibleInTeam(messageInput.teamId);
-      const route = routeMessage({
-        body: messageInput.body,
-        agents: visibleAgents,
-        humanMembers: [],
-        teamId: messageInput.teamId,
-        channelId: messageInput.channelId,
+        meta: {
+          ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
+          routeReason: toRouteReason(route),
+        },
       });
       const dispatches: DispatchDto[] = [];
 
@@ -1172,6 +1494,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const executionConfig = agent.source === 'custom'
         ? await repositories.agents.getExecutionConfig(agent.id)
         : null;
+      const originMessage = await repositories.messages.getById(dispatch.messageId);
+      const history = originMessage?.threadId
+        ? await repositories.messages.listThreadBefore({
+            channelId: dispatch.channelId,
+            threadId: originMessage.threadId,
+            beforeMessageId: originMessage.id,
+            limit: 20,
+          })
+        : [];
 
       return makeSuccess({
         request: {
@@ -1179,10 +1510,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           teamId: dispatch.teamId,
           channelId: dispatch.channelId,
           messageId: dispatch.messageId,
+          ...(originMessage?.threadId ? { threadId: originMessage.threadId } : {}),
           agentId: dispatch.agentId,
           deviceId: agent.deviceId,
           requestId: dispatch.requestId,
           prompt: dispatch.prompt,
+          history: history.map(toDispatchHistoryMessageDto),
           ...(executionConfig
             ? {
                 customAgent: {
@@ -1201,9 +1534,38 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async listChannelMessages(listInput) {
+      const messages = await repositories.messages.listByChannel(listInput.channelId, listInput.limit);
       return makeSuccess({
-        messages: await repositories.messages.listByChannel(listInput.channelId, listInput.limit),
+        messages: await enrichMessagesWithArtifacts(repositories, messages),
       });
+    },
+
+    async getArtifact(artifactInput) {
+      if (!(await repositories.teams.isMember(artifactInput.teamId, artifactInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const artifact = await repositories.artifacts.getForTeam({
+        teamId: artifactInput.teamId,
+        artifactId: artifactInput.artifactId,
+      });
+      if (!artifact) {
+        return makeFailure('NOT_FOUND', 'Artifact not found');
+      }
+      return makeSuccess({ artifact: toArtifactDto(artifact) });
+    },
+
+    async getWorkspaceRun(runInput) {
+      if (!(await repositories.teams.isMember(runInput.teamId, runInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const workspaceRun = await repositories.workspaceRuns.getForTeam({
+        teamId: runInput.teamId,
+        runId: runInput.runId,
+      });
+      if (!workspaceRun) {
+        return makeFailure('NOT_FOUND', 'Workspace run not found');
+      }
+      return makeSuccess({ workspaceRun });
     },
 
     async cancelDispatch(cancelInput) {
@@ -1256,6 +1618,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!isPendingDispatchStatus(dispatch.status)) {
         return makeFailure('CONFLICT', 'Dispatch is already completed');
       }
+      const agent = await repositories.agents.getById(resultInput.agentId);
+      if (!agent) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
 
       const now = clock.now();
       const completed = await repositories.dispatches.markSucceeded({
@@ -1268,26 +1634,81 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!completed.changed) {
         return makeFailure('CONFLICT', 'Dispatch is already completed');
       }
+      const originMessage = await repositories.messages.getById(completed.dispatch.messageId);
+      const reportedArtifactIds = uniqueIds([
+        ...(resultInput.artifactIds ?? []),
+        ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
+      ]);
+      const workspaceRunId = resultInput.workspaceRun
+        ? resultInput.workspaceRun.id ?? ids.nextId()
+        : undefined;
       const message = await repositories.messages.append({
         id: ids.nextId(),
         teamId: completed.dispatch.teamId,
         channelId: completed.dispatch.channelId,
+        threadId: originMessage?.threadId ?? originMessage?.id,
         senderKind: 'agent',
         senderId: resultInput.agentId,
         body: resultInput.body,
         createdAt: now,
         meta: {
           dispatchId: completed.dispatch.id,
-          ...(resultInput.artifactIds ? { artifactIds: resultInput.artifactIds } : {}),
+          ...(reportedArtifactIds.length > 0 ? { artifactIds: reportedArtifactIds } : {}),
+          ...(workspaceRunId ? { workspaceRunId } : {}),
         },
       });
+      const workspaceRun = resultInput.workspaceRun
+        ? await repositories.workspaceRuns.create({
+            id: workspaceRunId!,
+            teamId: completed.dispatch.teamId,
+            channelId: completed.dispatch.channelId,
+            messageId: message.id,
+            dispatchId: completed.dispatch.id,
+            agentId: resultInput.agentId,
+            deviceId: agent.deviceId,
+            status: resultInput.workspaceRun.status ?? 'succeeded',
+            cwd: resultInput.workspaceRun.cwd,
+            exitCode: resultInput.workspaceRun.exitCode,
+            startedAt: resultInput.workspaceRun.startedAt,
+            completedAt: resultInput.workspaceRun.completedAt ?? now,
+            createdAt: now,
+            updatedAt: now,
+            artifactIds: reportedArtifactIds,
+          })
+        : null;
+      const artifacts: ArtifactDto[] = [];
+      for (const artifactInput of resultInput.artifacts ?? []) {
+        const artifact = await repositories.artifacts.create({
+          id: artifactInput.id,
+          teamId: completed.dispatch.teamId,
+          channelId: completed.dispatch.channelId,
+          messageId: message.id,
+          dispatchId: completed.dispatch.id,
+          workspaceRunId: workspaceRun?.id,
+          uploaderId: resultInput.agentId,
+          filename: artifactInput.filename,
+          mimeType: artifactInput.mimeType ?? 'application/octet-stream',
+          sizeBytes: artifactInput.sizeBytes ?? 0,
+          storagePath: artifactInput.storagePath,
+          relativePath: artifactInput.relativePath,
+          pathKind: artifactInput.pathKind ?? (workspaceRun ? 'workspace' : 'generated'),
+          sha256: artifactInput.sha256,
+          createdAt: now,
+        });
+        artifacts.push(toArtifactDto(artifact));
+      }
+      const messageWithArtifacts: MessageDto = {
+        ...message,
+        ...(artifacts.length > 0 ? { artifacts } : {}),
+        ...(workspaceRun ? { workspaceRun } : {}),
+      };
       await repositories.agents.updateStatus({
         agentId: resultInput.agentId,
         status: 'online',
         lastSeenAt: now,
       });
 
-      return makeSuccess({ dispatch: toDispatchDto(completed.dispatch), message });
+      return makeSuccess({ dispatch: toDispatchDto(completed.dispatch), message: messageWithArtifacts });
     },
 
     async receiveDispatchError(errorInput) {
@@ -1421,6 +1842,107 @@ function toDispatchDto(dispatch: DispatchDto): DispatchDto {
     completedAt: dispatch.completedAt,
     error: dispatch.error,
   };
+}
+
+function toArtifactDto(artifact: ArtifactRecord): ArtifactDto {
+  return {
+    id: artifact.id,
+    teamId: artifact.teamId,
+    channelId: artifact.channelId,
+    messageId: artifact.messageId,
+    dispatchId: artifact.dispatchId,
+    workspaceRunId: artifact.workspaceRunId,
+    filename: artifact.filename,
+    mimeType: artifact.mimeType,
+    sizeBytes: artifact.sizeBytes,
+    relativePath: artifact.relativePath,
+    pathKind: artifact.pathKind,
+    sha256: artifact.sha256,
+    createdAt: artifact.createdAt,
+    downloadUrl: `/api/teams/${encodeURIComponent(artifact.teamId)}/artifacts/${encodeURIComponent(artifact.id)}/download`,
+    previewUrl: `/api/teams/${encodeURIComponent(artifact.teamId)}/artifacts/${encodeURIComponent(artifact.id)}/preview`,
+  };
+}
+
+async function enrichMessagesWithArtifacts(
+  repositories: ServerNextRepositories,
+  messages: MessageRecord[],
+): Promise<MessageDto[]> {
+  const enriched: MessageDto[] = [];
+  for (const message of messages) {
+    const artifacts = await repositories.artifacts.listByMessage(message.id);
+    const workspaceRunId = typeof message.meta?.workspaceRunId === 'string' ? message.meta.workspaceRunId : undefined;
+    const workspaceRun = workspaceRunId
+      ? await repositories.workspaceRuns.getForTeam({ teamId: message.teamId, runId: workspaceRunId })
+      : null;
+    enriched.push({
+      ...message,
+      ...(artifacts.length > 0 ? { artifacts: artifacts.map(toArtifactDto) } : {}),
+      ...(workspaceRun ? { workspaceRun } : {}),
+    });
+  }
+  return enriched;
+}
+
+function toDmChannelDto(channel: ChannelDto, agent: AgentDto): DmChannelDto {
+  return {
+    channel,
+    agent,
+  };
+}
+
+function toDispatchHistoryMessageDto(message: MessageRecord): DispatchHistoryMessageDto {
+  return {
+    messageId: message.id,
+    threadId: message.threadId,
+    senderKind: message.senderKind,
+    senderId: message.senderId,
+    body: message.body,
+    createdAt: message.createdAt,
+  };
+}
+
+function routeMessageForChannel(input: {
+  channel: ChannelRecord;
+  visibleAgents: AgentDto[];
+  teamId: string;
+  body: string;
+}): RouteResult {
+  if (input.channel.kind === 'direct') {
+    const targetAgentId = input.channel.dmTargetAgentId ?? input.channel.agentMemberIds[0];
+    const targetAgent = input.visibleAgents.find((agent) =>
+      agent.id === targetAgentId &&
+      agent.visibleTeamIds.includes(input.teamId) &&
+      agent.status === 'online'
+    );
+    return targetAgent
+      ? { kind: 'dispatch', agentId: targetAgent.id, reason: 'direct' }
+      : { kind: 'no-dispatch', reason: 'no-online-agent' };
+  }
+  return routeMessage({
+    body: input.body,
+    agents: input.visibleAgents,
+    humanMembers: [],
+    teamId: input.teamId,
+    channelId: input.channel.id,
+  });
+}
+
+function toRouteReason(route: RouteResult): RouteReason | undefined {
+  if (route.kind !== 'dispatch') {
+    return undefined;
+  }
+  if (route.reason === 'mention') {
+    return 'MENTION';
+  }
+  if (route.reason === 'direct') {
+    return 'DIRECT';
+  }
+  return 'CHANNEL_DEFAULT';
+}
+
+function normalizeLimit(limit: number | undefined): number {
+  return Math.min(Math.max(Number.isInteger(limit) ? limit as number : 50, 1), 200);
 }
 
 function normalizeUsername(username: string): string {
@@ -1658,6 +2180,30 @@ async function channelForCreatorManagement(
     return makeFailure('FORBIDDEN', 'User cannot manage channel');
   }
   return makeSuccess({ channel });
+}
+
+async function agentForManagement(
+  repositories: ServerNextRepositories,
+  input: { userId: string; teamId: string; agentId: string },
+): Promise<Ack<{ agent: AgentRecord }>> {
+  const agent = await repositories.agents.getById(input.agentId);
+  if (!agent || agent.deletedAt !== undefined) {
+    return makeFailure('NOT_FOUND', 'Agent not found');
+  }
+  if (agent.primaryTeamId !== input.teamId) {
+    return makeFailure('FORBIDDEN', 'Agent is not managed by this team');
+  }
+  const role = await repositories.teams.getMemberRole(agent.primaryTeamId, input.userId);
+  if (!role) {
+    return makeFailure('FORBIDDEN', 'User is not a team member');
+  }
+  if (role === 'owner' || role === 'admin') {
+    return makeSuccess({ agent });
+  }
+  if (agent.source === 'custom' && agent.ownerId === input.userId) {
+    return makeSuccess({ agent });
+  }
+  return makeFailure('FORBIDDEN', 'User cannot manage agent');
 }
 
 function uniqueIds(ids: string[]): string[] {

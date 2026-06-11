@@ -57,6 +57,11 @@ export const WEB_EVENTS = {
     removeAgent: 'channel:remove-agent',
     members: 'channel:members',
   },
+  dm: {
+    start: 'dm:start',
+    list: 'dm:list',
+    snapshot: 'dm:snapshot',
+  },
   message: {
     send: 'message:send',
     dispatchStatus: 'message:dispatch-status',

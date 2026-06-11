@@ -16,6 +16,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@agentbean/contracts": "file:../contracts"
+    "@agentbean/contracts": "file:../contracts",
+    "better-sqlite3": "^12.10.0"
   }
 }

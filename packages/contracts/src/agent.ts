@@ -75,3 +75,37 @@ export interface CreateAgentCommandDto {
   cwd?: string;
   env?: Record<string, string>;
 }
+
+export interface PublishAgentCommandDto {
+  userId: ID;
+  teamId: ID;
+  agentId: ID;
+  targetTeamId: ID;
+}
+
+export interface UnpublishAgentCommandDto {
+  userId: ID;
+  teamId: ID;
+  agentId: ID;
+  targetTeamId: ID;
+}
+
+export interface UpdateAgentConfigCommandDto {
+  userId: ID;
+  teamId: ID;
+  agentId: ID;
+  runtimeId?: ID;
+  name?: string;
+  description?: string;
+  adapterKind?: AdapterKind;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+}
+
+export interface DeleteAgentCommandDto {
+  userId: ID;
+  teamId: ID;
+  agentId: ID;
+}

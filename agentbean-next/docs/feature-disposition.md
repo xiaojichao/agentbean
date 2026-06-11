@@ -55,10 +55,10 @@
 | Daemon 上报的 agent discovery | First Slice | 用类型化 runtime/agent reports 替换旧 discovery payloads。 |
 | `agent:create` custom agent | Keep | 保留，在 device/runtime 切片之后实现。 |
 | `agent:update` broad update | Merge/Rename | 删除。拆分为 publish/unpublish 与 config update。 |
-| `agent:config:update` | Keep | 保留为显式 custom agent config update。 |
-| `agent:delete` | Defer | 保留给 custom agents；先定义权限和删除语义。 |
+| `agent:config:update` | Keep | 已收敛为 `agent:update-config`；只允许 custom agent，ack/snapshot 只暴露 `envKeys`。 |
+| `agent:delete` | Keep | 已保留给 custom agents；删除采用 server-side tombstone，隐藏 visible list 并保留 message/dispatch 历史。 |
 | `agent:custom:list` | Merge/Rename | 合并进 filtered agent list 或 device detail。 |
-| `agent:publish` / `agent:unpublish` | Keep | 保留。 |
+| `agent:publish` / `agent:unpublish` | Keep | 已定义 source/target team 权限与 visible projection 规则。 |
 | Agent metrics | Defer | 核心协作流程之后保留。 |
 | Legacy `standalone-cli` | Drop | 不保留。 |
 
@@ -82,11 +82,11 @@
 
 | 当前表面 | 状态 | 目标方向 |
 |---|---|---|
-| `dm:start` | Keep | 保留为 start/get DM with agent。 |
-| `dm:list` / `dms:snapshot` | Keep | 保留。 |
-| DM mention filtering | Keep | 在 UI 与 server routing 中保留该行为。 |
-| Thread message context | Keep | 保留。Dispatch history 不得重复当前 prompt。 |
-| Formal thread data model | Missing | 在重写版中加入显式 thread fields 或 model。 |
+| `dm:start` | Keep | Next server 已实现为 start/get DM with agent；重复调用复用同一 direct channel。 |
+| `dm:list` / `dm:snapshot` | Keep | Next server 已实现 DM list 与单 DM snapshot/history。 |
+| DM mention filtering | Keep | Direct channel 固定路由到 DM target agent；普通 channel mention 支持多词 agent name。 |
+| Thread message context | Keep | 使用 `messages.thread_id`；dispatch history 只包含同 thread 的 previous messages，不重复当前 prompt。 |
+| Formal thread data model | Keep | 第一版选择 root-message convention，不引入独立 `threads` table。 |
 
 ## Messages、Search、Dispatch
 

@@ -38,6 +38,8 @@ describe('server-next SQLite repositories', () => {
           'channel_agent_members',
           'messages',
           'dispatches',
+          'artifacts',
+          'workspace_runs',
         ]),
       );
     } finally {
@@ -56,6 +58,20 @@ describe('server-next SQLite repositories', () => {
       expect(tableNames(globalDb)).toEqual(expect.arrayContaining(['device_invites']));
       expect(globalDb.prepare("SELECT id FROM schema_migrations WHERE id = 'global/0002_device_invites.sql'").get()).toEqual({
         id: 'global/0002_device_invites.sql',
+      });
+    } finally {
+      teamDb.exec('SELECT 1');
+      close();
+    }
+  });
+
+  test('applies agent delete metadata migration', () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const agentColumns = columnNames(globalDb, 'agents');
+      expect(agentColumns).toContain('deleted_at');
+      expect(globalDb.prepare("SELECT id FROM schema_migrations WHERE id = 'global/0003_agent_deleted_at.sql'").get()).toEqual({
+        id: 'global/0003_agent_deleted_at.sql',
       });
     } finally {
       teamDb.exec('SELECT 1');
@@ -348,6 +364,79 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('persists direct messages and thread ids with SQLite', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 520 },
+        ids: {
+          nextId: createIds([
+            'user-1',
+            'team-1',
+            'channel-1',
+            'dm-1',
+            'message-1',
+            'dispatch-1',
+            'request-1',
+            'message-2',
+            'message-3',
+            'dispatch-2',
+            'request-2',
+          ]),
+        },
+      });
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+      await repositories.agents.upsert({
+        id: 'agent-1',
+        primaryTeamId: 'team-1',
+        visibleTeamIds: ['team-1'],
+        name: 'Codex',
+        adapterKind: 'codex',
+        category: 'executor-hosted',
+        source: 'scanned',
+        status: 'online',
+        lastSeenAt: 520,
+      });
+
+      await expect(app.startDirectMessage({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' })).resolves.toMatchObject({
+        ok: true,
+        dm: { channel: { id: 'dm-1', kind: 'direct', dmTargetAgentId: 'agent-1' } },
+      });
+      expect(teamDb.prepare('SELECT dm_target_agent_id AS dmTargetAgentId FROM channels WHERE id = ?').get('dm-1')).toEqual({
+        dmTargetAgentId: 'agent-1',
+      });
+
+      await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'dm-1', body: 'hello' });
+      await app.receiveDispatchResult({ dispatchId: 'dispatch-1', agentId: 'agent-1', body: 'reply' });
+      await app.sendMessage({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'dm-1',
+        threadId: 'message-1',
+        body: 'follow up',
+      });
+
+      expect(teamDb.prepare('SELECT thread_id AS threadId FROM messages WHERE id = ?').get('message-3')).toEqual({
+        threadId: 'message-1',
+      });
+      await expect(app.getDispatchRequest({ dispatchId: 'dispatch-2' })).resolves.toMatchObject({
+        ok: true,
+        request: {
+          threadId: 'message-1',
+          history: [
+            { messageId: 'message-1', body: 'hello' },
+            { messageId: 'message-2', body: 'reply' },
+          ],
+        },
+      });
+      expect(globalDb.prepare('SELECT COUNT(*) AS count FROM users').get()).toEqual({ count: 1 });
+    } finally {
+      close();
+    }
+  });
+
   test('marks stale queued dispatches as timed out without deleting the original message', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
@@ -579,6 +668,123 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('associates daemon-reported artifacts and workspace runs with team-scoped dispatch replies', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 1200 },
+        ids: {
+          nextId: createIds([
+            'user-1',
+            'team-1',
+            'channel-1',
+            'device-1',
+            'agent-1',
+            'message-1',
+            'dispatch-1',
+            'request-1',
+            'user-2',
+            'team-2',
+            'channel-2',
+            'workspace-run-1',
+            'reply-1',
+          ]),
+        },
+      });
+
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+      await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' });
+      await app.registerDiscoveredAgents({
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        agents: [{ name: 'Codex', adapterKind: 'codex', category: 'executor-hosted' }],
+      });
+      await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex produce docs' });
+      await app.registerUser({ username: 'lin', password: 'secret', teamName: 'Lin Team' });
+
+      await expect(
+        app.receiveDispatchResult({
+          dispatchId: 'dispatch-1',
+          agentId: 'agent-1',
+          body: 'done',
+          artifacts: [
+            {
+              id: 'artifact-1',
+              filename: 'result.md',
+              mimeType: 'text/markdown',
+              sizeBytes: 128,
+              storagePath: 'artifacts/artifact-1/result.md',
+              relativePath: 'outputs/result.md',
+              pathKind: 'workspace',
+              sha256: 'sha256-result',
+            },
+          ],
+          workspaceRun: {
+            cwd: '/Users/shaw/AgentBean',
+            exitCode: 0,
+            startedAt: 1190,
+          },
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        message: {
+          id: 'reply-1',
+          artifacts: [
+            {
+              id: 'artifact-1',
+              filename: 'result.md',
+              downloadUrl: '/api/teams/team-1/artifacts/artifact-1/download',
+              previewUrl: '/api/teams/team-1/artifacts/artifact-1/preview',
+              workspaceRunId: 'workspace-run-1',
+            },
+          ],
+          workspaceRun: {
+            id: 'workspace-run-1',
+            agentId: 'agent-1',
+            deviceId: 'device-1',
+            dispatchId: 'dispatch-1',
+            artifactIds: ['artifact-1'],
+          },
+        },
+      });
+
+      await expect(app.getArtifact({ userId: 'user-1', teamId: 'team-1', artifactId: 'artifact-1' })).resolves.toMatchObject({
+        ok: true,
+        artifact: { id: 'artifact-1', teamId: 'team-1', messageId: 'reply-1' },
+      });
+      await expect(app.getArtifact({ userId: 'user-2', teamId: 'team-2', artifactId: 'artifact-1' })).resolves.toMatchObject({
+        ok: false,
+        error: 'NOT_FOUND',
+      });
+      await expect(app.getWorkspaceRun({ userId: 'user-1', teamId: 'team-1', runId: 'workspace-run-1' })).resolves.toMatchObject({
+        ok: true,
+        workspaceRun: {
+          id: 'workspace-run-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          messageId: 'reply-1',
+          dispatchId: 'dispatch-1',
+          agentId: 'agent-1',
+          deviceId: 'device-1',
+          artifactIds: ['artifact-1'],
+        },
+      });
+
+      expect(teamDb.prepare('SELECT team_id AS teamId, message_id AS messageId FROM artifacts WHERE id = ?').get('artifact-1')).toEqual({
+        teamId: 'team-1',
+        messageId: 'reply-1',
+      });
+      expect(teamDb.prepare('SELECT agent_id AS agentId, device_id AS deviceId FROM workspace_runs WHERE id = ?').get('workspace-run-1')).toEqual({
+        agentId: 'agent-1',
+        deviceId: 'device-1',
+      });
+    } finally {
+      close();
+    }
+  });
+
   test('records dispatch error without appending an agent reply', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
@@ -636,6 +842,85 @@ describe('server-next SQLite repositories', () => {
       close();
     }
   });
+
+  test('persists custom agent management without deleting message or dispatch history', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 940 },
+        ids: {
+          nextId: createIds([
+            'user-1',
+            'team-1',
+            'channel-1',
+            'team-2',
+            'channel-2',
+            'device-1',
+            'runtime-1',
+            'agent-1',
+            'message-1',
+            'dispatch-1',
+            'request-1',
+          ]),
+        },
+      });
+
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+      await app.createTeam({ userId: 'user-1', name: 'Client Team' });
+      await app.switchTeam({ userId: 'user-1', teamId: 'team-1' });
+      await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' });
+      await app.reportDeviceRuntimes({
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        runtimes: [
+          {
+            adapterKind: 'codex',
+            name: 'Codex CLI',
+            command: '/opt/homebrew/bin/codex',
+            cwd: '/Users/shaw/AgentBean',
+            installed: true,
+          },
+        ],
+      });
+      await app.createCustomAgent({
+        userId: 'user-1',
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        runtimeId: 'runtime-1',
+        name: 'Custom Codex',
+        env: { OPENAI_API_KEY: 'old-secret' },
+      });
+      await app.publishAgent({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1', targetTeamId: 'team-2' });
+      await app.updateAgentConfig({
+        userId: 'user-1',
+        teamId: 'team-1',
+        agentId: 'agent-1',
+        name: 'Renamed Codex',
+        env: { OPENAI_API_KEY: 'new-secret' },
+      });
+      await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'hello from renamed config' });
+      await app.deleteAgent({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' });
+
+      await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({ ok: true, agents: [] });
+      await expect(app.listVisibleAgents({ teamId: 'team-2' })).resolves.toMatchObject({ ok: true, agents: [] });
+      expect(globalDb.prepare('SELECT deleted_at AS deletedAt, env_json AS envJson FROM agents WHERE id = ?').get('agent-1')).toEqual({
+        deletedAt: 940,
+        envJson: null,
+      });
+      expect(globalDb.prepare('SELECT COUNT(*) AS count FROM agent_publications WHERE agent_id = ?').get('agent-1')).toEqual({ count: 0 });
+      expect(teamDb.prepare('SELECT body FROM messages WHERE id = ?').get('message-1')).toEqual({
+        body: 'hello from renamed config',
+      });
+      expect(teamDb.prepare('SELECT agent_id AS agentId, status FROM dispatches WHERE id = ?').get('dispatch-1')).toEqual({
+        agentId: 'agent-1',
+        status: 'queued',
+      });
+    } finally {
+      close();
+    }
+  });
 });
 
 function openMigratedDatabases() {
@@ -656,6 +941,13 @@ function openMigratedDatabases() {
 function tableNames(db: SqliteDatabase): string[] {
   return db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+    .all()
+    .map((row) => (row as { name: string }).name);
+}
+
+function columnNames(db: SqliteDatabase, tableName: string): string[] {
+  return db
+    .prepare(`PRAGMA table_info(${tableName})`)
     .all()
     .map((row) => (row as { name: string }).name);
 }

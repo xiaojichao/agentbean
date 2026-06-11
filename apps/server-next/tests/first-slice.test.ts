@@ -12,6 +12,7 @@ describe('server-next first-slice migrations', () => {
     const globalSql = [
       readFileSync(migrationPath('global/0001_first_slice.sql'), 'utf8'),
       readFileSync(migrationPath('global/0002_device_invites.sql'), 'utf8'),
+      readFileSync(migrationPath('global/0003_agent_deleted_at.sql'), 'utf8'),
     ].join('\n');
     const teamSql = readFileSync(migrationPath('team/0001_first_slice.sql'), 'utf8');
 
@@ -434,6 +435,129 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('starts and restores direct messages while thread dispatch history excludes the current prompt', async () => {
+    let now = 410;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'dm-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+        'message-2',
+        'message-3',
+        'dispatch-2',
+        'request-2',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'executor-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+
+    await expect(app.startDirectMessage({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' })).resolves.toMatchObject({
+      ok: true,
+      dm: {
+        channel: {
+          id: 'dm-1',
+          kind: 'direct',
+          visibility: 'private',
+          dmTargetAgentId: 'agent-1',
+        },
+        agent: { id: 'agent-1' },
+      },
+    });
+    await expect(app.startDirectMessage({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' })).resolves.toMatchObject({
+      ok: true,
+      dm: { channel: { id: 'dm-1' } },
+    });
+    await expect(app.listDirectMessages({ userId: 'user-1', teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      dms: [{ channel: { id: 'dm-1' }, agent: { id: 'agent-1' } }],
+    });
+
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'dm-1',
+      body: 'hello in dm',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: {
+        id: 'message-1',
+        threadId: 'message-1',
+        meta: { routeReason: 'DIRECT' },
+      },
+      route: { kind: 'dispatch', agentId: 'agent-1', reason: 'direct' },
+      dispatches: [{ id: 'dispatch-1', messageId: 'message-1' }],
+    });
+
+    now = 411;
+    await expect(app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: 'first reply',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: { id: 'message-2', threadId: 'message-1', body: 'first reply' },
+    });
+
+    now = 412;
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'dm-1',
+      threadId: 'message-1',
+      body: 'follow up',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: { id: 'message-3', threadId: 'message-1' },
+      dispatches: [{ id: 'dispatch-2', messageId: 'message-3' }],
+    });
+    await expect(app.getDispatchRequest({ dispatchId: 'dispatch-2' })).resolves.toMatchObject({
+      ok: true,
+      request: {
+        id: 'dispatch-2',
+        threadId: 'message-1',
+        prompt: 'follow up',
+        history: [
+          { messageId: 'message-1', body: 'hello in dm' },
+          { messageId: 'message-2', body: 'first reply' },
+        ],
+      },
+    });
+    const request = await app.getDispatchRequest({ dispatchId: 'dispatch-2' });
+    if (!request.ok) {
+      throw new Error('dispatch request failed');
+    }
+    expect(request.request.history?.map((item) => item.body)).not.toContain('follow up');
+
+    await expect(app.snapshotDirectMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'dm-1' })).resolves.toMatchObject({
+      ok: true,
+      messages: [
+        { id: 'message-1' },
+        { id: 'message-2' },
+        { id: 'message-3' },
+      ],
+    });
+    await expect(app.snapshotDirectMessage({ userId: 'user-2', teamId: 'team-1', channelId: 'dm-1' })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+  });
+
   test('cancelDispatch marks a pending dispatch as cancelled for team members', async () => {
     let now = 430;
     const app = createInMemoryServerNext({
@@ -704,6 +828,144 @@ describe('server-next first-slice use cases', () => {
     ).resolves.toMatchObject({
       ok: false,
       error: 'FORBIDDEN',
+    });
+  });
+
+  test('manages custom agent publication, config, and delete without exposing secrets or removing history', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 700,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'team-2',
+        'channel-2',
+        'device-1',
+        'runtime-1',
+        'agent-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.createTeam({ userId: 'user-1', name: 'Client Team' });
+    await app.switchTeam({ userId: 'user-1', teamId: 'team-1' });
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+      hostname: 'shaw-mbp',
+    });
+    await app.reportDeviceRuntimes({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimes: [
+        {
+          adapterKind: 'codex',
+          name: 'Codex CLI',
+          command: '/opt/homebrew/bin/codex',
+          cwd: '/Users/shaw/AgentBean',
+          installed: true,
+        },
+      ],
+    });
+    await app.createCustomAgent({
+      userId: 'user-1',
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimeId: 'runtime-1',
+      name: 'Custom Codex',
+      env: { OPENAI_API_KEY: 'old-secret' },
+    });
+
+    await expect(
+      app.publishAgent({
+        userId: 'user-1',
+        teamId: 'team-1',
+        agentId: 'agent-1',
+        targetTeamId: 'team-2',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      agent: { id: 'agent-1', visibleTeamIds: ['team-1', 'team-2'] },
+    });
+    await expect(app.listVisibleAgents({ teamId: 'team-2' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', name: 'Custom Codex' }],
+    });
+
+    const updateAck = await app.updateAgentConfig({
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      name: 'Renamed Codex',
+      description: 'Updated custom agent',
+      args: ['--model', 'gpt-5.4'],
+      env: { OPENAI_API_KEY: 'new-secret' },
+    });
+    expect(updateAck).toMatchObject({
+      ok: true,
+      agent: {
+        id: 'agent-1',
+        name: 'Renamed Codex',
+        description: 'Updated custom agent',
+        envKeys: ['OPENAI_API_KEY'],
+      },
+    });
+    expect(JSON.stringify(updateAck)).not.toContain('new-secret');
+
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: 'hello from renamed config',
+    });
+    await expect(app.getDispatchRequest({ dispatchId: 'dispatch-1' })).resolves.toMatchObject({
+      ok: true,
+      request: {
+        customAgent: {
+          name: 'Renamed Codex',
+          args: ['--model', 'gpt-5.4'],
+          env: { OPENAI_API_KEY: 'new-secret' },
+        },
+      },
+    });
+
+    await expect(
+      app.unpublishAgent({
+        userId: 'user-1',
+        teamId: 'team-1',
+        agentId: 'agent-1',
+        targetTeamId: 'team-2',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      agent: { id: 'agent-1', visibleTeamIds: ['team-1'] },
+    });
+    await expect(app.listVisibleAgents({ teamId: 'team-2' })).resolves.toMatchObject({
+      ok: true,
+      agents: [],
+    });
+
+    await expect(
+      app.deleteAgent({
+        userId: 'user-1',
+        teamId: 'team-1',
+        agentId: 'agent-1',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      agent: { id: 'agent-1', visibleTeamIds: [], status: 'offline' },
+    });
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [],
+    });
+    await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
+      ok: true,
+      messages: [{ id: 'message-1', body: 'hello from renamed config' }],
     });
   });
 

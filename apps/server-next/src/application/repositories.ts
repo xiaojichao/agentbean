@@ -1,4 +1,4 @@
-import type { AgentDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, RuntimeDto, TeamDto, UnixMs, UserDto } from '../../../../packages/contracts/src/index.js';
+import type { AgentDto, ArtifactDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, RuntimeDto, TeamDto, UnixMs, UserDto, WorkspaceRunDto } from '../../../../packages/contracts/src/index.js';
 
 export interface UserRecord extends UserDto {
   passwordHash: string;
@@ -49,6 +49,11 @@ export interface ChannelRecord extends ChannelDto {
 
 export type MessageRecord = MessageDto;
 export type DispatchRecord = DispatchDto & { prompt: string };
+export interface ArtifactRecord extends Omit<ArtifactDto, 'downloadUrl' | 'previewUrl'> {
+  uploaderId: ID;
+  storagePath?: string;
+}
+export type WorkspaceRunRecord = WorkspaceRunDto;
 export interface DispatchMutationResult {
   dispatch: DispatchRecord;
   changed: boolean;
@@ -60,8 +65,22 @@ export interface AgentExecutionConfig {
   cwd?: string;
   env?: Record<string, string>;
 }
-export type AgentRecord = AgentDto;
+export type AgentRecord = AgentDto & { deletedAt?: UnixMs };
 export type AgentUpsertRecord = AgentRecord & { env?: Record<string, string> };
+
+export interface AgentConfigUpdate {
+  name?: string;
+  description?: string;
+  adapterKind?: AgentDto['adapterKind'];
+  deviceId?: ID;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  envKeys?: string[];
+  status?: AgentDto['status'];
+  lastSeenAt?: UnixMs;
+}
 export interface DeviceRecord extends DeviceDto {
   machineId?: string;
   profileId?: string;
@@ -116,11 +135,14 @@ export interface DeviceInviteRepository {
 export interface ChannelRepository {
   create(input: ChannelRecord): Promise<ChannelRecord>;
   getById(channelId: ID): Promise<ChannelRecord | null>;
+  getDirectByAgent(input: { teamId: ID; userId: ID; agentId: ID }): Promise<ChannelRecord | null>;
   listForUser(teamId: ID, userId: ID): Promise<ChannelRecord[]>;
+  listDirectForUser(teamId: ID, userId: ID): Promise<ChannelRecord[]>;
   update(input: {
     channelId: ID;
     changes: Partial<Pick<ChannelRecord, 'name' | 'title' | 'visibility' | 'humanMemberIds' | 'agentMemberIds' | 'updatedAt'>>;
   }): Promise<ChannelRecord | null>;
+  removeAgentFromTeamChannels(input: { teamId: ID; agentId: ID; timestamp: UnixMs }): Promise<void>;
 }
 
 export interface DeviceRepository {
@@ -141,6 +163,10 @@ export interface AgentRepository {
   getByIdentityKey(identityKey: string): Promise<AgentRecord | null>;
   getById(agentId: ID): Promise<AgentRecord | null>;
   getExecutionConfig(agentId: ID): Promise<AgentExecutionConfig | null>;
+  publish(input: { agentId: ID; teamId: ID; publishedBy: ID; timestamp: UnixMs }): Promise<AgentRecord | null>;
+  unpublish(input: { agentId: ID; teamId: ID }): Promise<AgentRecord | null>;
+  updateConfig(input: { agentId: ID; changes: AgentConfigUpdate; timestamp: UnixMs }): Promise<AgentRecord | null>;
+  softDelete(input: { agentId: ID; timestamp: UnixMs }): Promise<AgentRecord | null>;
   linkIdentity(input: { identityKey: string; agentId: ID; kind: string; timestamp: UnixMs }): Promise<void>;
   markMissingScannedOffline(input: { teamId: ID; deviceId: ID; seenIdentityKeys: string[]; timestamp: UnixMs }): Promise<ID[]>;
   updateStatus(input: { agentId: ID; status: AgentRecord['status']; lastSeenAt: UnixMs; lastError?: string }): Promise<void>;
@@ -151,6 +177,7 @@ export interface MessageRepository {
   append(input: MessageRecord): Promise<MessageRecord>;
   getById(messageId: ID): Promise<MessageRecord | null>;
   listByChannel(channelId: ID, limit: number): Promise<MessageRecord[]>;
+  listThreadBefore(input: { channelId: ID; threadId: ID; beforeMessageId: ID; limit: number }): Promise<MessageRecord[]>;
 }
 
 export interface DispatchRepository {
@@ -164,6 +191,19 @@ export interface DispatchRepository {
   listByMessage(messageId: ID): Promise<DispatchRecord[]>;
 }
 
+export interface ArtifactRepository {
+  create(input: ArtifactRecord): Promise<ArtifactRecord>;
+  getForTeam(input: { teamId: ID; artifactId: ID }): Promise<ArtifactRecord | null>;
+  listByMessage(messageId: ID): Promise<ArtifactRecord[]>;
+  listByWorkspaceRun(runId: ID): Promise<ArtifactRecord[]>;
+}
+
+export interface WorkspaceRunRepository {
+  create(input: WorkspaceRunRecord): Promise<WorkspaceRunRecord>;
+  getForTeam(input: { teamId: ID; runId: ID }): Promise<WorkspaceRunRecord | null>;
+  listByDispatch(dispatchId: ID): Promise<WorkspaceRunRecord[]>;
+}
+
 export interface ServerNextRepositories {
   users: UserRepository;
   teams: TeamRepository;
@@ -175,4 +215,6 @@ export interface ServerNextRepositories {
   agents: AgentRepository;
   messages: MessageRepository;
   dispatches: DispatchRepository;
+  artifacts: ArtifactRepository;
+  workspaceRuns: WorkspaceRunRepository;
 }

@@ -32,6 +32,9 @@ describe('server-next socket handlers', () => {
       addChannelAgentMember: vi.fn(async (payload) => makeSuccess({ payload })),
       removeChannelAgentMember: vi.fn(async (payload) => makeSuccess({ payload })),
       listChannelMembers: vi.fn(async (payload) => makeSuccess({ payload })),
+      startDirectMessage: vi.fn(async (payload) => makeSuccess({ payload })),
+      listDirectMessages: vi.fn(async (payload) => makeSuccess({ payload })),
+      snapshotDirectMessage: vi.fn(async (payload) => makeSuccess({ payload })),
       listChannels: vi.fn(async () => makeSuccess({
         channels: [{ id: 'channel-2', teamId: 'team-1', visibility: 'public' }],
       })),
@@ -39,6 +42,10 @@ describe('server-next socket handlers', () => {
         messages: [{ id: 'message-1', channelId: 'channel-2', body: 'hello' }],
       })),
       createCustomAgent: vi.fn(async (payload) => makeSuccess({ payload })),
+      publishAgent: vi.fn(async (payload) => makeSuccess({ payload })),
+      unpublishAgent: vi.fn(async (payload) => makeSuccess({ payload })),
+      updateAgentConfig: vi.fn(async (payload) => makeSuccess({ payload })),
+      deleteAgent: vi.fn(async (payload) => makeSuccess({ payload })),
       sendMessage: vi.fn(async (payload) => makeSuccess({ payload })),
       cancelDispatch: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
@@ -65,8 +72,15 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.channel.addAgent,
       WEB_EVENTS.channel.removeAgent,
       WEB_EVENTS.channel.members,
+      WEB_EVENTS.dm.start,
+      WEB_EVENTS.dm.list,
+      WEB_EVENTS.dm.snapshot,
       WEB_EVENTS.channel.join,
       WEB_EVENTS.agent.create,
+      WEB_EVENTS.agent.publish,
+      WEB_EVENTS.agent.unpublish,
+      WEB_EVENTS.agent.updateConfig,
+      WEB_EVENTS.agent.delete,
       WEB_EVENTS.message.send,
       WEB_EVENTS.dispatch.cancel,
     ]);
@@ -155,6 +169,21 @@ describe('server-next socket handlers', () => {
       teamId: 'team-1',
       channelId: 'channel-2',
     });
+    await socket.trigger(WEB_EVENTS.dm.start, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+    });
+    await socket.trigger(WEB_EVENTS.dm.list, {
+      userId: 'user-1',
+      teamId: 'team-1',
+    });
+    await socket.trigger(WEB_EVENTS.dm.snapshot, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'dm-1',
+      limit: 25,
+    });
     await expect(socket.trigger(WEB_EVENTS.channel.join, {
       userId: 'user-1',
       teamId: 'team-1',
@@ -171,6 +200,29 @@ describe('server-next socket handlers', () => {
       deviceId: 'device-1',
       runtimeId: 'runtime-1',
       name: 'Custom Codex',
+    });
+    await socket.trigger(WEB_EVENTS.agent.publish, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      targetTeamId: 'team-2',
+    });
+    await socket.trigger(WEB_EVENTS.agent.unpublish, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      targetTeamId: 'team-2',
+    });
+    await socket.trigger(WEB_EVENTS.agent.updateConfig, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      name: 'Renamed Codex',
+    });
+    await socket.trigger(WEB_EVENTS.agent.delete, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
     });
     await socket.trigger(WEB_EVENTS.dispatch.cancel, {
       userId: 'user-1',
@@ -257,6 +309,21 @@ describe('server-next socket handlers', () => {
       teamId: 'team-1',
       channelId: 'channel-2',
     });
+    expect(app.startDirectMessage).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+    });
+    expect(app.listDirectMessages).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+    });
+    expect(app.snapshotDirectMessage).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'dm-1',
+      limit: 25,
+    });
     expect(app.listChannels).toHaveBeenCalledWith({ userId: 'user-1', teamId: 'team-1' });
     expect(app.listChannelMessages).toHaveBeenCalledWith({ channelId: 'channel-2', limit: 25 });
     expect(app.createCustomAgent).toHaveBeenCalledWith({
@@ -265,6 +332,29 @@ describe('server-next socket handlers', () => {
       deviceId: 'device-1',
       runtimeId: 'runtime-1',
       name: 'Custom Codex',
+    });
+    expect(app.publishAgent).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      targetTeamId: 'team-2',
+    });
+    expect(app.unpublishAgent).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      targetTeamId: 'team-2',
+    });
+    expect(app.updateAgentConfig).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      name: 'Renamed Codex',
+    });
+    expect(app.deleteAgent).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
     });
     expect(app.cancelDispatch).toHaveBeenCalledWith({
       userId: 'user-1',

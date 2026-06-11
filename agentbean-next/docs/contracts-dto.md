@@ -355,10 +355,55 @@ export interface CreateAgentCommandDto {
 - 如果使用 `runtimeId`，server 会从 runtime capability 派生 `adapterKind`、`command` 与 `cwd`。
 - Public `AgentDto` 只返回 `envKeys`，不得把 raw `env` values 放入 ack、snapshot 或 logs。
 
+## Agent 管理命令 DTO
+
+```ts
+export interface PublishAgentCommandDto {
+  userId: ID;
+  teamId: ID;
+  agentId: ID;
+  targetTeamId: ID;
+}
+
+export interface UnpublishAgentCommandDto {
+  userId: ID;
+  teamId: ID;
+  agentId: ID;
+  targetTeamId: ID;
+}
+
+export interface UpdateAgentConfigCommandDto {
+  userId: ID;
+  teamId: ID;
+  agentId: ID;
+  runtimeId?: ID;
+  name?: string;
+  description?: string;
+  adapterKind?: AdapterKind;
+  command?: string | null;
+  args?: string[] | null;
+  cwd?: string | null;
+  env?: Record<string, string>;
+}
+
+export interface DeleteAgentCommandDto {
+  userId: ID;
+  teamId: ID;
+  agentId: ID;
+}
+```
+
+说明：
+
+- `agent:publish` / `agent:unpublish` 只改变 `visibleTeamIds` projection；source team 仍是 `primaryTeamId`。
+- `agent:update-config` 只允许 custom agent，raw `env` 仅替换 server-side execution config，ack/snapshot 仍只返回 `envKeys`。
+- `agent:delete` 第一版用于 custom agent。Server 会隐藏 agent、清理 channel agent membership，并保留既有 messages/dispatches 的历史引用。
+- 删除状态是 server-internal tombstone，不进入 public `AgentDto`；clients 通过 `agents:snapshot` 不再包含该 agent 来感知删除。
+
 ## ChannelDto
 
 ```ts
-export type ChannelKind = "channel" | "dm";
+export type ChannelKind = "channel" | "direct";
 export type ChannelVisibility = "public" | "private";
 
 export interface ChannelDto {
@@ -372,15 +417,23 @@ export interface ChannelDto {
   createdAt: UnixMs;
   archivedAt?: UnixMs | null;
   dmTargetAgentId?: ID | null;
-  humanMemberIds?: ID[];
-  agentMemberIds?: ID[];
 }
 ```
 
 说明：
 
 - 第一切片可能只创建 public channels。
-- Private channel 与 DM fields 已包含进来，是为了让第一切片 snapshots 后续不需要破坏性 DTO 变更。
+- Private channel 与 direct DM fields 已包含进来，是为了让后续 snapshots 不需要破坏性 DTO 变更。
+- `kind: "direct"` 表示一位 human user 与一个 agent 的 DM channel；第一版通过 `dmTargetAgentId` 与 channel membership 固定目标 agent。
+
+## DmChannelDto
+
+```ts
+export interface DmChannelDto {
+  channel: ChannelDto;
+  agent: AgentDto;
+}
+```
 
 ## ChannelMembersDto
 
@@ -421,7 +474,7 @@ export interface MessageDto {
 }
 
 export interface MessageMetaDto {
-  routeReason?: "MENTION" | "HUMAN_MENTION" | "FALLBACK" | "UNKNOWN_MENTION" | "NO_ONLINE";
+  routeReason?: "MENTION" | "DIRECT" | "CHANNEL_DEFAULT" | "MANUAL";
   mentionedName?: string | null;
   taskId?: ID | null;
 }
@@ -430,6 +483,7 @@ export interface MessageMetaDto {
 说明：
 
 - Server 设置 `senderKind` 与 `senderId`；sender identity 不可信任 clients。
+- 第一版 thread 使用 root-message convention：新 root message 默认 `threadId = message.id`，thread reply 复用 root `threadId`。
 - `threadId` 不应导致当前 prompt 在 dispatch history 中出现两次。
 
 ## DispatchDto
@@ -472,25 +526,27 @@ export interface DispatchDto {
 
 ```ts
 export interface DispatchRequestDto {
-  dispatchId: ID;
+  id: ID;
   requestId: string;
   teamId: ID;
   channelId: ID;
   messageId: ID;
+  threadId?: ID;
   agentId: ID;
   deviceId?: ID | null;
-  teamName?: string | null;
   prompt: string;
-  history: DispatchHistoryItemDto[];
+  history?: DispatchHistoryMessageDto[];
   attachments?: DispatchAttachmentDto[];
   customAgent?: DispatchCustomAgentDto | null;
 }
 
-export interface DispatchHistoryItemDto {
-  role: "user" | "assistant" | "system";
-  speaker: string;
+export interface DispatchHistoryMessageDto {
+  messageId: ID;
+  threadId?: ID;
+  senderKind: SenderKind;
+  senderId: ID;
   body: string;
-  at: UnixMs;
+  createdAt: UnixMs;
 }
 
 export interface DispatchAttachmentDto {
@@ -515,12 +571,61 @@ export interface DispatchCustomAgentDto {
 
 说明：
 
-- `prompt` 是当前 user input。
-- `history` 不得再次包含当前 user input。
+- `history` 由 server 从同 `threadId` 的 previous messages 构造，当前 message 不会出现在 `history` 中。
+- `prompt` 始终是当前 user input；daemon/executor 仍可只消费 `prompt`，`history` 是向后兼容的可选上下文。
+
 - `deviceId` 是 server-side dispatch target hint；custom agent dispatch 必须用它定向到拥有该 device 的 daemon socket。
 - 第一切片可以发送 raw `customAgent.env` values，但只能发给被选中执行该 custom agent 的单个 daemon，且只能放在 dispatch request 内。
 - Server 不得把 raw env values 广播到 web clients、snapshots、logs 或无关 daemons。
 - 后续切片应将 raw env transport 替换为 server-issued secret reference 或 daemon-local secret storage。
+
+## Artifacts 与 Workspace Runs 第一版
+
+AgentBean Next 第一版 artifacts 采用 daemon report 路径：旧 daemon 仍可只在 `dispatch:result` 里返回 `artifactIds`，新 daemon 可以同时返回 artifact metadata 与 workspace run metadata。Server 负责把 metadata 绑定到 agent reply message，并按 `teamId` 授权读取。
+
+```ts
+export interface ArtifactDto {
+  id: ID;
+  teamId: ID;
+  channelId: ID;
+  messageId?: ID;
+  dispatchId?: ID;
+  workspaceRunId?: ID;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  relativePath?: string;
+  pathKind?: 'upload' | 'workspace' | 'generated';
+  sha256?: string;
+  createdAt: UnixMs;
+  downloadUrl: string;
+  previewUrl: string;
+}
+
+export interface WorkspaceRunDto {
+  id: ID;
+  teamId: ID;
+  channelId: ID;
+  messageId?: ID;
+  dispatchId: ID;
+  agentId: ID;
+  deviceId?: ID;
+  status: 'running' | 'succeeded' | 'failed' | 'cancelled';
+  cwd?: string;
+  exitCode?: number;
+  startedAt?: UnixMs;
+  completedAt?: UnixMs;
+  createdAt: UnixMs;
+  updatedAt: UnixMs;
+  artifactIds: ID[];
+}
+```
+
+说明：
+
+- `MessageDto.artifacts` 与 `MessageDto.workspaceRun` 是 server-side projection；message `meta.artifactIds`/`meta.workspaceRunId` 仍保留为轻量索引。
+- `downloadUrl` / `previewUrl` 使用 `/api/teams/:teamId/artifacts/:artifactId/...` 第一版路径合同；HTTP upload/download handler 可以复用同一个 team-scoped repository 授权边界。
+- `WorkspaceRunDto` 必须回链 `dispatchId`、`agentId`，并尽量保存 `deviceId`；这让 agent output、执行设备与原始 prompt 可追溯。
 
 ## 第一切片 Event DTO 用法
 

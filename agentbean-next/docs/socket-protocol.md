@@ -405,7 +405,12 @@ Ack<{ agent: AgentDto }>
 客户端：
 
 ```ts
-{ agentId: string; teamId: string }
+{
+  userId?: string;
+  teamId: string;
+  agentId: string;
+  targetTeamId: string;
+}
 ```
 
 Ack：
@@ -413,13 +418,24 @@ Ack：
 ```ts
 Ack<{ agent: AgentDto }>
 ```
+
+服务器行为：
+
+- `teamId` 必须是 agent 的 `primaryTeamId`；操作者必须能管理该 agent。
+- 操作者还必须是 `targetTeamId` 的 member，避免把 agent 投影到自己不可见的 team。
+- 成功后，server 刷新 source team 与 target team active subscribers 的 `agents:snapshot`。
 
 #### `agent:unpublish`
 
 客户端：
 
 ```ts
-{ agentId: string; teamId: string }
+{
+  userId?: string;
+  teamId: string;
+  agentId: string;
+  targetTeamId: string;
+}
 ```
 
 Ack：
@@ -427,6 +443,69 @@ Ack：
 ```ts
 Ack<{ agent: AgentDto }>
 ```
+
+服务器行为：
+
+- `targetTeamId` 不得是 agent 的 primary team。
+- 成功后，server 从 target team projection 移除该 agent，并清理 target team channels 中的该 agent membership。
+- Source team 与 target team subscribers 都会收到新的 `agents:snapshot`。
+
+#### `agent:update-config`
+
+客户端：
+
+```ts
+{
+  userId?: string;
+  teamId: string;
+  agentId: string;
+  runtimeId?: string;
+  name?: string;
+  description?: string;
+  adapterKind?: AdapterKind;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+}
+```
+
+Ack：
+
+```ts
+Ack<{ agent: AgentDto }>
+```
+
+服务器行为：
+
+- 只允许 `source: "custom"` 的 agent。
+- 操作者必须是 agent owner，或 agent primary team 的 owner/admin。
+- 如果提供 `runtimeId`，server 会重新绑定该 runtime 的 device/adapter/command/cwd；runtime 必须属于 agent primary team 且 `installed: true`。
+- 如果提供 `env`，server 替换 execution config 中的 raw env；ack 与 `agents:snapshot` 仍只暴露 `envKeys`。
+
+#### `agent:delete`
+
+客户端：
+
+```ts
+{
+  userId?: string;
+  teamId: string;
+  agentId: string;
+}
+```
+
+Ack：
+
+```ts
+Ack<{ agent: AgentDto }>
+```
+
+服务器行为：
+
+- 第一版只允许删除 custom agent。
+- 操作者必须是 agent owner，或 agent primary team 的 owner/admin。
+- 删除是 server-side tombstone：agent 不再出现在 visible list，channel agent membership 被清理，但既有 messages/dispatches 的 agent id 历史不被重写。
 
 服务器事件：
 
@@ -436,8 +515,6 @@ Ack<{ agent: AgentDto }>
 
 延后的 agent commands：
 
-- `agent:update-config`：替换当前 `agent:config:update`。
-- `agent:delete`：在 delete semantics 指定后，保留给 custom-agent management。
 - `agent:metrics`：保留给 metrics slice。
 
 有意不保留的 commands：
@@ -629,6 +706,60 @@ Ack：
 Ack<{ channel: ChannelDto; messages: MessageDto[] }>
 ```
 
+#### `dm:start`
+
+客户端：
+
+```ts
+{ userId?: string; teamId: string; agentId: string }
+```
+
+Ack：
+
+```ts
+Ack<{ dm: DmChannelDto }>
+```
+
+服务器行为：
+
+- `userId` 必须是 `teamId` 的 member。
+- `agentId` 必须对该 team 可见。
+- 如果该 user 与 agent 已有 direct channel，则复用既有 channel。
+- 新建 DM 使用 `kind: "direct"`、`visibility: "private"`、`dmTargetAgentId = agentId`。
+
+#### `dm:list`
+
+客户端：
+
+```ts
+{ userId?: string; teamId: string }
+```
+
+Ack：
+
+```ts
+Ack<{ dms: DmChannelDto[] }>
+```
+
+#### `dm:snapshot`
+
+客户端：
+
+```ts
+{ userId?: string; teamId: string; channelId: string; limit?: number }
+```
+
+Ack：
+
+```ts
+Ack<{ dm: DmChannelDto; messages: MessageDto[] }>
+```
+
+服务器行为：
+
+- 只允许该 direct channel 的 human member snapshot。
+- 返回同 channel 的 message history；thread filtering 由 message/dispatch flow 使用 `threadId` 表达。
+
 #### `message:send`
 
 客户端：
@@ -656,6 +787,8 @@ Ack<{ message: MessageDto; dispatches: DispatchDto[] }>
 - 带 `auth.token` 的 web socket 会从 authenticated socket session 派生 `userId`；payload 中的 `userId` 只作为临时兼容路径保留。
 - `teamId` 仍由 payload 提供，用于 team/channel gate 与路由；后续 team switch 完成后可再评估是否从 current team 派生。
 - `senderKind` 与 `senderId` 仍由 server 派生，client 不应发送 sender identity。
+- direct channel 中的 message 固定 dispatch 给 `dmTargetAgentId`；普通 channel 中无 mention message 仍 fallback 到第一个 online agent。
+- `threadId` 为空时 server 将当前 message 作为 thread root；有值时 server 将 message 作为该 thread reply。
 
 #### `dispatch:cancel`
 
@@ -685,14 +818,12 @@ Ack<{ dispatch: DispatchDto }>
 - `channel:message`：`MessageDto`
 - `message:dispatch-status`：`DispatchDto`
 
-延后的 channel、DM 与 message commands：
+延后的 channel 与 message commands：
 
 - `channel:leave`：仅当 hidden/left channel UX 保留时保留。
 - `channel:archive`：延后；需要产品决策。
 - `channel:delete`：延后；需要产品决策。
 - `channel:stop-agents`：替换为 dispatch cancellation commands。
-- `dm:start`：保留。
-- `dm:list`：保留。
 - `message:search`：保留给 search slice。
 
 ### Tasks（延后切片）

@@ -106,32 +106,47 @@ Tasks 可以拥有 `assignee_id`，但目标类型还没有完全指定。
 
 - `dispatches` model，包含 request ID、agent ID、channel ID、message ID、status、error、timestamps、timeout 与 artifact links。
 
-### Workspace Runs 建模不足
+### Workspace Runs 第一版已定义
 
-当前产品期待 agent workspace views，但 persistence 没有清晰定义。
+Workspace run persistence 的第一版已经落地到 `server-next` repository/usecase 层。
 
-需要：
+已确认：
 
-- `workspace_runs` model。
-- run、agent、device、dispatch、artifacts 与 generated files 之间的链接。
+- `workspace_runs` model 记录 `teamId`、`channelId`、`messageId`、`dispatchId`、`agentId`、`deviceId` 与 `artifactIds`。
+- daemon 可以在 `dispatch:result` 上报 workspace run metadata，server 会把 run 绑定到 agent reply message。
 
-### Threads 定义不足
+剩余：
 
-Thread behavior 已存在，但 data model 应显式化。
+- Web workspace run 视图与真实 HTTP download/preview handler 仍需后续 UI/API slice 覆盖。
 
-需要：
+### Threads 第一版已定义
 
-- 要么使用 `messages.thread_id` 与 root-message convention，要么使用独立 `threads` table。
-- Threads 的 dispatch history rules。
+Thread behavior 的第一版边界已经落地到 `server-next`，不再需要在 #147 中悬置数据模型选择。
 
-### Artifact Access Control
+已确认：
 
-当前 artifact metadata 需要更清晰的 team/channel/message/workspace linkage。
+- 第一版使用 `messages.thread_id` 与 root-message convention，不引入独立 `threads` table。
+- 新 root message 默认 `threadId = message.id`；thread reply 由 client 传入既有 `threadId`。
+- Agent reply 继承原始 human message 的 `threadId`。
+- Dispatch request 的 `history` 只包含当前 message 之前、同一 `threadId` 的 messages；当前 user input 只出现在 `prompt`，避免重复。
 
-需要：
+剩余：
 
-- Team-scoped artifact authorization。
-- Message 与 workspace bindings。
+- Web thread UI 与 browser E2E 仍需在后续 UI/E2E slice 中覆盖。
+
+### Artifact Access Control 第一版已定义
+
+Artifact metadata 的第一版已经落地到 `server-next` repository/usecase 层。
+
+已确认：
+
+- `artifacts` model 记录 `teamId`、`channelId`、`messageId`、`dispatchId`、`workspaceRunId`、filename/mime/size/path/hash metadata。
+- `getArtifact` 按 team membership 与 artifact `teamId` 授权；跨 team 读取返回 `NOT_FOUND`。
+- `MessageDto.artifacts` 可以投影 agent reply 的 artifact metadata。
+
+剩余：
+
+- HTTP upload/download/preview route 与 web artifact viewer 需要后续接入第一版 repository 授权。
 
 ### Search Projection
 

@@ -1,5 +1,6 @@
 import type {
   AgentRecord,
+  ArtifactRecord,
   ChannelRecord,
   DeviceInviteRecord,
   DeviceRecord,
@@ -11,6 +12,7 @@ import type {
   TeamMemberRecord,
   TeamRecord,
   UserRecord,
+  WorkspaceRunRecord,
 } from '../../application/repositories.js';
 
 export function createInMemoryRepositories(): ServerNextRepositories {
@@ -27,6 +29,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const identityLinks = new Map<string, string>();
   const messages = new Map<string, MessageRecord>();
   const dispatches = new Map<string, DispatchRecord>();
+  const artifacts = new Map<string, ArtifactRecord>();
+  const workspaceRuns = new Map<string, WorkspaceRunRecord>();
 
   return {
     users: {
@@ -160,6 +164,14 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       async getById(channelId) {
         return channels.get(channelId) ?? null;
       },
+      async getDirectByAgent(input) {
+        return Array.from(channels.values()).find((channel) =>
+          channel.teamId === input.teamId &&
+          channel.kind === 'direct' &&
+          channel.humanMemberIds.includes(input.userId) &&
+          channel.agentMemberIds.includes(input.agentId)
+        ) ?? null;
+      },
       async listForUser(teamId, userId) {
         return Array.from(channels.values()).filter((channel) => {
           if (channel.teamId !== teamId) {
@@ -167,6 +179,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           }
           return channel.visibility === 'public' || channel.humanMemberIds.includes(userId);
         });
+      },
+      async listDirectForUser(teamId, userId) {
+        return Array.from(channels.values()).filter((channel) =>
+          channel.teamId === teamId &&
+          channel.kind === 'direct' &&
+          channel.humanMemberIds.includes(userId)
+        );
       },
       async update(input) {
         const channel = channels.get(input.channelId);
@@ -176,6 +195,18 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const updated = { ...channel, ...input.changes };
         channels.set(input.channelId, updated);
         return updated;
+      },
+      async removeAgentFromTeamChannels(input) {
+        for (const channel of channels.values()) {
+          if (channel.teamId !== input.teamId || !channel.agentMemberIds.includes(input.agentId)) {
+            continue;
+          }
+          channels.set(channel.id, {
+            ...channel,
+            agentMemberIds: channel.agentMemberIds.filter((agentId) => agentId !== input.agentId),
+            updatedAt: input.timestamp,
+          });
+        }
       },
     },
     devices: {
@@ -234,7 +265,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async getExecutionConfig(agentId) {
         const agent = agents.get(agentId);
-        if (!agent) {
+        if (!agent || agent.deletedAt !== undefined) {
           return null;
         }
         return {
@@ -244,6 +275,63 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           cwd: agent.cwd,
           env: agentEnv.get(agentId),
         };
+      },
+      async publish(input) {
+        const agent = agents.get(input.agentId);
+        if (!agent || agent.deletedAt !== undefined) {
+          return null;
+        }
+        const updated = {
+          ...agent,
+          visibleTeamIds: Array.from(new Set([...agent.visibleTeamIds, input.teamId])),
+        };
+        agents.set(agent.id, updated);
+        return updated;
+      },
+      async unpublish(input) {
+        const agent = agents.get(input.agentId);
+        if (!agent || agent.deletedAt !== undefined) {
+          return null;
+        }
+        const updated = {
+          ...agent,
+          visibleTeamIds: agent.visibleTeamIds.filter((teamId) => teamId === agent.primaryTeamId || teamId !== input.teamId),
+        };
+        agents.set(agent.id, updated);
+        return updated;
+      },
+      async updateConfig(input) {
+        const agent = agents.get(input.agentId);
+        if (!agent || agent.deletedAt !== undefined) {
+          return null;
+        }
+        const { env, ...changes } = input.changes;
+        const updated = {
+          ...agent,
+          ...changes,
+          lastSeenAt: changes.lastSeenAt ?? agent.lastSeenAt,
+        };
+        agents.set(agent.id, updated);
+        if (env) {
+          agentEnv.set(agent.id, env);
+        }
+        return updated;
+      },
+      async softDelete(input) {
+        const agent = agents.get(input.agentId);
+        if (!agent || agent.deletedAt !== undefined) {
+          return null;
+        }
+        const updated = {
+          ...agent,
+          visibleTeamIds: [],
+          status: 'offline' as const,
+          deletedAt: input.timestamp,
+          lastSeenAt: input.timestamp,
+        };
+        agents.set(agent.id, updated);
+        agentEnv.delete(agent.id);
+        return updated;
       },
       async linkIdentity(input) {
         identityLinks.set(input.identityKey, input.agentId);
@@ -277,7 +365,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         }
       },
       async listVisibleInTeam(teamId) {
-        return Array.from(agents.values()).filter((agent) => agent.visibleTeamIds.includes(teamId));
+        return Array.from(agents.values()).filter(
+          (agent) => agent.deletedAt === undefined && agent.visibleTeamIds.includes(teamId),
+        );
       },
     },
     messages: {
@@ -293,6 +383,21 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           .filter((message) => message.channelId === channelId)
           .sort((left, right) => left.createdAt - right.createdAt)
           .slice(-limit);
+      },
+      async listThreadBefore(input) {
+        const before = messages.get(input.beforeMessageId);
+        if (!before) {
+          return [];
+        }
+        return Array.from(messages.values())
+          .filter((message) =>
+            message.channelId === input.channelId &&
+            message.threadId === input.threadId &&
+            message.id !== input.beforeMessageId &&
+            message.createdAt <= before.createdAt
+          )
+          .sort((left, right) => left.createdAt - right.createdAt)
+          .slice(-input.limit);
       },
     },
     dispatches: {
@@ -385,6 +490,35 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async listByMessage(messageId) {
         return Array.from(dispatches.values()).filter((dispatch) => dispatch.messageId === messageId);
+      },
+    },
+    artifacts: {
+      async create(input) {
+        artifacts.set(input.id, input);
+        return input;
+      },
+      async getForTeam(input) {
+        const artifact = artifacts.get(input.artifactId);
+        return artifact?.teamId === input.teamId ? artifact : null;
+      },
+      async listByMessage(messageId) {
+        return Array.from(artifacts.values()).filter((artifact) => artifact.messageId === messageId);
+      },
+      async listByWorkspaceRun(runId) {
+        return Array.from(artifacts.values()).filter((artifact) => artifact.workspaceRunId === runId);
+      },
+    },
+    workspaceRuns: {
+      async create(input) {
+        workspaceRuns.set(input.id, input);
+        return input;
+      },
+      async getForTeam(input) {
+        const run = workspaceRuns.get(input.runId);
+        return run?.teamId === input.teamId ? run : null;
+      },
+      async listByDispatch(dispatchId) {
+        return Array.from(workspaceRuns.values()).filter((run) => run.dispatchId === dispatchId);
       },
     },
   };

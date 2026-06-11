@@ -165,7 +165,7 @@ jobs:
 
           git fetch origin "${{ github.base_ref }}" --depth=1
           changed_files="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
-          next_changed_files="$(printf '%s\n' "$changed_files" | grep -E '^agentbean-next/|^packages/|^apps/(server-next|daemon-next|web-next)/|^package\.json$|^railway\.json$|^\.github/workflows/ci-cd\.yml$' || true)"
+          next_changed_files="$(printf '%s\n' "$changed_files" | grep -E '^agentbean-next/|^packages/|^apps/(server-next|daemon-next|web-next)/|^scripts/(check-agentbean-next-readiness|audit-agentbean-next-cutover|smoke-agentbean-next-.*)\.mjs$|^package\.json$|^railway\.json$|^\.github/workflows/ci-cd\.yml$' || true)"
 
           if [ -n "$next_changed_files" ]; then
             echo "should_validate=true" >> "$GITHUB_OUTPUT"
@@ -236,6 +236,21 @@ jobs:
             --environment node \
             --api.host 127.0.0.1 \
             -t "runtime capability -> custom agent -> message -> daemon reply"
+
+      - name: Run AgentBean Next browser smoke
+        if: steps.changes.outputs.should_validate == 'true'
+        env:
+          AGENTBEAN_NEXT_BROWSER_SMOKE_ARTIFACTS_DIR: artifacts/agentbean-next-browser-smoke
+          CHROME_BIN: /usr/bin/google-chrome
+        run: npm run smoke:agentbean-next-browser -- --skip-build
+
+      - name: Upload AgentBean Next browser smoke artifacts
+        if: steps.changes.outputs.should_validate == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentbean-next-browser-smoke
+          path: artifacts/agentbean-next-browser-smoke
+          if-no-files-found: ignore
 
   deploy:
     name: Deploy production

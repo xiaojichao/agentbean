@@ -72,10 +72,12 @@ Phase 1 完成标准：
 | P2-13 | 无 online agent 的 `sendMessage` 持久化 message，并返回 no-online dispatch result。 | UseCase | Non-fatal no-dispatch path。 | `acceptance-tests.md` |
 | P2-14 | Dispatch timeout 将 dispatch 标记为 `timed_out`，并带有 `DISPATCH_TIMEOUT`。 | UseCase | Stable timeout error。 | `acceptance-tests.md`, `contracts-dto.md` |
 | P2-15 | Dispatch result 将 dispatch 标记为 succeeded，并追加 agent message。 | UseCase | Reply persistence。 | `acceptance-tests.md` |
+| P2-15a | Dispatch result 可以上报 artifact metadata 与 workspace run metadata，agent reply 投影 `MessageDto.artifacts` / `MessageDto.workspaceRun`，同 team 可读取 artifact，跨 team 返回 `NOT_FOUND`。 | Repository/UseCase | Agent output 可追溯性与 team-scoped artifact authorization 第一版。 | `contracts-dto.md`, `post-flip-gap-audit.md` |
 | P2-16 | Dispatch error 将 dispatch 标记为 failed，并更新 agent last error。 | UseCase | Error propagation。 | `acceptance-tests.md` |
 | P2-17 | `/web` login/team/channel/message socket flow 只使用 documented first-slice events。 | Socket | Transport adapter thinness。 | `socket-protocol.md`, `contracts-dto.md` |
 | P2-18 | `/agent` device hello/runtime/agent batch/dispatch result flow 使用 documented DTOs。 | Socket | Agent namespace contract。 | `socket-protocol.md`, `contracts-dto.md` |
 | P2-19 | custom agent dispatch request 会带上 private execution config，并只投递给绑定 device 的 daemon socket。 | UseCase/Socket | Dispatch-only secret transport，不向 web snapshot 或其他 daemon 泄露 raw env。 | `contracts-dto.md`, `socket-protocol.md` |
+| P2-19a | `agent:publish` / `agent:unpublish` / `agent:update-config` / `agent:delete` 遵守 owner/admin 权限、visible projection、envKeys-only snapshot 与 custom-agent tombstone 删除语义。 | UseCase/Socket/Web | Agent 管理面第一版；删除不重写既有 message/dispatch 历史。 | `contracts-dto.md`, `socket-protocol.md`, `feature-disposition.md` |
 | P2-20 | server-next 长驻 dev server 暴露 `/healthz`，并挂载真实 `/web` 与 `/agent` Socket.IO namespaces。 | Socket | 本地替换旧 server 的运行入口。 | `implementation-runbook.md`, `target-architecture.md` |
 | P2-21 | server-next dev server 在 SQLite 文件模式下重启后保留注册用户、current team、channel 与 message history。 | Repository/Socket | 本地替换旧 server 的持久化入口。 | `first-slice-schema-repositories.md`, `target-architecture.md`, `production-cutover-runbook.md` |
 | P2-22 | server-next 在平台提供 `PORT` 时默认监听 `0.0.0.0:$PORT`，并默认使用 SQLite storage。 | Config/Socket | 生产平台替换旧 server 的启动入口。 | `target-architecture.md`, `implementation-runbook.md` |
@@ -166,6 +168,7 @@ Phase 4 完成标准：
 | E2E-04 | Register -> daemon hello -> runtime report -> `agent:create` custom agent -> message send -> dispatch result -> agent reply visible。 | E2E | 本地 AgentBean Next preview flow。 | `socket-protocol.md`, `contract-alignment-handoff.md` |
 | E2E-05 | CI 在 AgentBean Next 相关路径变更时运行 readiness checks、phase tests、packages build 与 preview smoke，并阻止 deploy/publish 继续。 | CI | 替换旧系统前的持续验证 gate。 | `implementation-runbook.md`, `migration-plan.md` |
 | E2E-06 | production cutover 前必须按 runbook 完成 repository variable/secret、Railway volume/env、production readiness、deploy flip、entry smoke、business smoke、production smoke workflow gate 与 rollback 验证。 | Ops/CI | 防止把本地 preview readiness 或旧 Vercel 入口误当成生产替换完成。 | `production-cutover-runbook.md`, `migration-plan.md`, `forty-sixth-slice-status.md`, `forty-seventh-slice-status.md`, `forty-ninth-slice-status.md` |
+| E2E-07 | `npm run smoke:agentbean-next-browser` 启动或连接 AgentBean Next 入口，用真实 Chrome 完成浏览器登录/session restore、刷新重订阅、custom agent 创建、message dispatch 与 agent reply 可见，并输出 console log 与截图 artifacts。 | Browser E2E/CI | 防止只依赖 DOM harness 与 Socket.IO smoke，把替代旧 AgentBean 的核心用户路径放进浏览器级证据。 | `post-flip-gap-audit.md`, `apps/web-next/tests/preview-page.test.ts`, `scripts/smoke-agentbean-next-business.mjs` |
 
 只有全部 E2E gates 通过后，第一切片才可冻结。
 
@@ -174,7 +177,7 @@ Phase 4 完成标准：
 这些仍保留在 `docs/acceptance-tests.md` 中，但第一切片冻结前不强制要求：
 
 - Join link management UI、`join:list` 与 `join:revoke`。
-- Artifact upload/download 与 workspace run linkage。
+- Artifact HTTP upload/download/preview route 与 workspace run UI。
 - Tasks。
 - Message search。
 - Channel archive/delete。

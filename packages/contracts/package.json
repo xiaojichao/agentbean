@@ -18,5 +18,8 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.10.0"
   }
 }

@@ -23,7 +23,7 @@ export interface RouteMessageInput {
 }
 
 export type RouteResult =
-  | { kind: 'dispatch'; agentId: string; reason: 'mention' | 'fallback' }
+  | { kind: 'dispatch'; agentId: string; reason: 'mention' | 'fallback' | 'direct' }
   | { kind: 'no-dispatch'; reason: 'unknown-mention' | 'human-mention' | 'no-online-agent' };
 
 export function normalizeMentionName(value: string): string {
@@ -31,15 +31,14 @@ export function normalizeMentionName(value: string): string {
 }
 
 export function routeMessage(input: RouteMessageInput): RouteResult {
-  const mention = parseLeadingMention(input.body);
+  const mention = parseLeadingMentionText(input.body);
   const eligibleAgents = input.agents.filter((agent) => isEligibleOnlineAgent(agent, input));
 
   if (mention) {
-    const normalizedMention = normalizeMentionName(mention);
     const mentionedHuman = input.humanMembers.some((member) => {
       return [member.username, member.displayName]
         .filter((value): value is string => Boolean(value))
-        .some((name) => normalizeMentionName(name) === normalizedMention);
+        .some((name) => mentionMatchesName(mention, name));
     });
 
     if (mentionedHuman) {
@@ -47,7 +46,7 @@ export function routeMessage(input: RouteMessageInput): RouteResult {
     }
 
     const mentionedAgent = eligibleAgents.find(
-      (agent) => normalizeMentionName(agent.name) === normalizedMention,
+      (agent) => mentionMatchesName(mention, agent.name),
     );
 
     if (mentionedAgent) {
@@ -65,9 +64,15 @@ export function routeMessage(input: RouteMessageInput): RouteResult {
   return { kind: 'no-dispatch', reason: 'no-online-agent' };
 }
 
-function parseLeadingMention(body: string): string | undefined {
-  const match = body.trimStart().match(/^@([^\s@]+)/);
+function parseLeadingMentionText(body: string): string | undefined {
+  const match = body.trimStart().match(/^@(.+)/);
   return match?.[1];
+}
+
+function mentionMatchesName(mentionText: string, name: string): boolean {
+  const normalizedMention = normalizeMentionName(mentionText);
+  const normalizedName = normalizeMentionName(name);
+  return normalizedMention === normalizedName || normalizedMention.startsWith(`${normalizedName}-`);
 }
 
 function isEligibleOnlineAgent(agent: RouteAgent, input: RouteMessageInput): boolean {

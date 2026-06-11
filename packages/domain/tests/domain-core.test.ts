@@ -36,6 +36,20 @@ describe('Phase 1 message routing rules', () => {
     });
   });
 
+  test('routes a leading mention to a multi-word agent name', () => {
+    const result = routeMessage({
+      body: '@Renamed Codex please inspect this',
+      agents: [onlineAgent('agent-1', 'Renamed Codex')],
+      humanMembers: [],
+    });
+
+    expect(result).toEqual({
+      kind: 'dispatch',
+      agentId: 'agent-1',
+      reason: 'mention',
+    });
+  });
+
   test('does not fallback when the leading mention is unknown', () => {
     const result = routeMessage({
       body: '@Unknown please inspect this',
