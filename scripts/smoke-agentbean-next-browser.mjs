@@ -245,7 +245,10 @@ async function startLocalServer({ suffix, skipBuild, timeoutMs }) {
     output += chunk;
   });
 
-  const baseUrl = await waitForLocalServerUrl(server, () => output, timeoutMs);
+  const baseUrl = await waitForLocalServerUrl(server, () => output, timeoutMs).catch(async (error) => {
+    await stopProcess(server);
+    throw error;
+  });
   return {
     baseUrl,
     async close() {
@@ -257,11 +260,11 @@ async function startLocalServer({ suffix, skipBuild, timeoutMs }) {
 async function connectSmokeDaemon({ baseUrl, ioFactory, session, suffix, timeoutMs }) {
   const socket = await connectSocket(ioFactory, new URL('/agent', baseUrl).toString(), timeoutMs);
   socket.on(AGENT_EVENTS.dispatch.request, (request) => {
-    void emitAck(socket, AGENT_EVENTS.dispatch.result, {
+    emitAck(socket, AGENT_EVENTS.dispatch.result, {
       dispatchId: request.id,
       agentId: request.agentId,
       body: `browser-smoke:${request.prompt}`,
-    }, timeoutMs);
+    }, timeoutMs).catch(() => {});
   });
 
   const helloAck = await emitAck(socket, AGENT_EVENTS.device.hello, {
@@ -364,7 +367,10 @@ async function launchChrome({ chromeBin, artifactsDir, headed, timeoutMs }) {
   });
 
   const debugUrl = `http://127.0.0.1:${remoteDebuggingPort}`;
-  await waitForChromeDebugEndpoint(debugUrl, chrome, timeoutMs, () => stderr);
+  await waitForChromeDebugEndpoint(debugUrl, chrome, timeoutMs, () => stderr).catch(async (error) => {
+    await stopProcess(chrome);
+    throw error;
+  });
   return {
     debugUrl,
     async close() {
@@ -666,6 +672,7 @@ async function connectSocket(ioFactory, url, timeoutMs) {
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       cleanup();
+      socket.disconnect?.();
       reject(new Error(`Timed out connecting to ${url}`));
     }, timeoutMs);
     const cleanup = () => {
