@@ -410,7 +410,7 @@ describe('first-slice contract result shape', () => {
     expect(WEB_EVENTS.agent.delete).toBe('agent:delete');
     expect(WEB_EVENTS.dm.start).toBe('dm:start');
     expect(WEB_EVENTS.dm.list).toBe('dm:list');
-    expect(WEB_EVENTS.dm.snapshot).toBe('dm:snapshot');
+    expect(WEB_EVENTS.dm.snapshot).toBe('dms:snapshot');
     expect(WEB_EVENTS.message.send).toBe('message:send');
     expect(AGENT_EVENTS.device.hello).toBe('device:hello');
     expect(AGENT_EVENTS.deviceInvite.wait).toBe('device-invite:wait');

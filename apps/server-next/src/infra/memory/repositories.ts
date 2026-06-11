@@ -177,6 +177,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           if (channel.teamId !== teamId) {
             return false;
           }
+          if (channel.kind === 'direct') {
+            return false;
+          }
           return channel.visibility === 'public' || channel.humanMemberIds.includes(userId);
         });
       },
