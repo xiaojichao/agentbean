@@ -50,6 +50,8 @@
   - 参考：`apps/server-next/src/transport/socket-handlers.ts`、`apps/server-next/src/transport/socket-server.ts`
 - `customAgent.env` 不进入 web snapshot，但仍在 dispatch request 中以 raw env 发送给被选中的 daemon。第一版可接受，后续应改为 secret reference 或 daemon-local storage。
   - 参考：`apps/server-next/src/application/usecases.ts`、`agentbean-next/docs/contracts-dto.md`
+- Agent 管理面已补齐第一版：`agent:publish` / `agent:unpublish` 影响 target team visible projection，`agent:update-config` 只允许 custom agent 并只向 web 暴露 `envKeys`，`agent:delete` 使用 server-side tombstone 隐藏 agent 且保留既有 message/dispatch 历史。
+  - 参考：`packages/contracts/src/agent.ts`、`apps/server-next/src/application/usecases.ts`、`agentbean-next/docs/socket-protocol.md`
 - Old target rollback 路径与 old entry smoke 已保留。当前状态可接受，但真正替代旧版前建议至少做一次受控 rollback 演练或记录不演练的原因。
   - 参考：`scripts/smoke-agentbean-old-entry.mjs`、`agentbean-next/docs/fifty-fifth-slice-status.md`
 
@@ -67,15 +69,11 @@
    - 目标：实现 `dispatch:cancel`，并让 `failTimedOutDispatches` 在 server-next runtime 中被调度，而不是只存在 use case/test。
    - 参考：`packages/contracts/src/socket.ts`、`apps/server-next/src/application/usecases.ts`、`apps/server-next/src/dev-server.ts`、`apps/daemon-next/src/index.ts`
 
-4. Agent 管理面。
-   - 目标：补齐 `agent:publish`、`agent:unpublish`、`agent:update-config`、`agent:delete` 的产品规则和 socket handler，明确权限与删除语义。
-   - 参考：`packages/contracts/src/socket.ts`、`agentbean-next/docs/feature-disposition.md`
-
-5. DM/thread、artifacts/workspace runs、tasks/search。
+4. DM/thread、artifacts/workspace runs、tasks/search。
    - 目标：按产品优先级恢复旧 AgentBean 的协作长尾能力；其中 artifacts/workspace runs 影响 agent 输出可追溯性，tasks/search 更偏第二轮产品完整度。
    - 参考：`agentbean-next/docs/current-behavior.md`、`agentbean-next/docs/known-gaps.md`、`agentbean-next/docs/acceptance-tests.md`
 
-6. 真正浏览器级 E2E。
+5. 真正浏览器级 E2E。
    - 目标：覆盖生产或 staging 上的登录/session 恢复、刷新重订阅、custom agent 创建、消息发送、agent reply 可见，避免只依赖 DOM harness 和 socket smoke。
    - 参考：`agentbean-next/docs/verification-matrix.md`、`apps/web-next/tests/preview-page.test.ts`
 

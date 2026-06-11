@@ -60,8 +60,22 @@ export interface AgentExecutionConfig {
   cwd?: string;
   env?: Record<string, string>;
 }
-export type AgentRecord = AgentDto;
+export type AgentRecord = AgentDto & { deletedAt?: UnixMs };
 export type AgentUpsertRecord = AgentRecord & { env?: Record<string, string> };
+
+export interface AgentConfigUpdate {
+  name?: string;
+  description?: string;
+  adapterKind?: AgentDto['adapterKind'];
+  deviceId?: ID;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  envKeys?: string[];
+  status?: AgentDto['status'];
+  lastSeenAt?: UnixMs;
+}
 export interface DeviceRecord extends DeviceDto {
   machineId?: string;
   profileId?: string;
@@ -121,6 +135,7 @@ export interface ChannelRepository {
     channelId: ID;
     changes: Partial<Pick<ChannelRecord, 'name' | 'title' | 'visibility' | 'humanMemberIds' | 'agentMemberIds' | 'updatedAt'>>;
   }): Promise<ChannelRecord | null>;
+  removeAgentFromTeamChannels(input: { teamId: ID; agentId: ID; timestamp: UnixMs }): Promise<void>;
 }
 
 export interface DeviceRepository {
@@ -141,6 +156,10 @@ export interface AgentRepository {
   getByIdentityKey(identityKey: string): Promise<AgentRecord | null>;
   getById(agentId: ID): Promise<AgentRecord | null>;
   getExecutionConfig(agentId: ID): Promise<AgentExecutionConfig | null>;
+  publish(input: { agentId: ID; teamId: ID; publishedBy: ID; timestamp: UnixMs }): Promise<AgentRecord | null>;
+  unpublish(input: { agentId: ID; teamId: ID }): Promise<AgentRecord | null>;
+  updateConfig(input: { agentId: ID; changes: AgentConfigUpdate; timestamp: UnixMs }): Promise<AgentRecord | null>;
+  softDelete(input: { agentId: ID; timestamp: UnixMs }): Promise<AgentRecord | null>;
   linkIdentity(input: { identityKey: string; agentId: ID; kind: string; timestamp: UnixMs }): Promise<void>;
   markMissingScannedOffline(input: { teamId: ID; deviceId: ID; seenIdentityKeys: string[]; timestamp: UnixMs }): Promise<ID[]>;
   updateStatus(input: { agentId: ID; status: AgentRecord['status']; lastSeenAt: UnixMs; lastError?: string }): Promise<void>;

@@ -17,6 +17,7 @@ import {
   type ChannelMembersDto,
   type ChannelHumanMemberCommandDto,
   type CreateAgentCommandDto,
+  type DeleteAgentCommandDto,
   type CreateChannelCommandDto,
   type DeviceDto,
   type CreateDeviceInviteCommandDto,
@@ -29,6 +30,7 @@ import {
   type DispatchDto,
   type ListChannelMembersCommandDto,
   type MessageDto,
+  type PublishAgentCommandDto,
   type RuntimeDto,
   type CreateTeamAckDto,
   type CreateTeamCommandDto,
@@ -38,6 +40,8 @@ import {
   type SwitchTeamAckDto,
   type SwitchTeamCommandDto,
   type TeamDto,
+  type UnpublishAgentCommandDto,
+  type UpdateAgentConfigCommandDto,
   type UpdateChannelCommandDto,
   type ValidateJoinLinkCommandDto,
   type UserDto,
@@ -317,6 +321,10 @@ describe('first-slice contract result shape', () => {
     expect(WEB_EVENTS.join.validate).toBe('join:validate');
     expect(WEB_EVENTS.deviceInvite.create).toBe('device-invite:create');
     expect(WEB_EVENTS.deviceInvite.complete).toBe('device-invite:complete');
+    expect(WEB_EVENTS.agent.publish).toBe('agent:publish');
+    expect(WEB_EVENTS.agent.unpublish).toBe('agent:unpublish');
+    expect(WEB_EVENTS.agent.updateConfig).toBe('agent:update-config');
+    expect(WEB_EVENTS.agent.delete).toBe('agent:delete');
     expect(WEB_EVENTS.message.send).toBe('message:send');
     expect(AGENT_EVENTS.device.hello).toBe('device:hello');
     expect(AGENT_EVENTS.deviceInvite.wait).toBe('device-invite:wait');
@@ -376,6 +384,30 @@ describe('first-slice contract result shape', () => {
       name: 'Custom Codex',
       env: { OPENAI_API_KEY: 'secret-value' },
     };
+    const publishAgent: PublishAgentCommandDto = {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-custom-1',
+      targetTeamId: 'team-2',
+    };
+    const unpublishAgent: UnpublishAgentCommandDto = {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-custom-1',
+      targetTeamId: 'team-2',
+    };
+    const updateAgentConfig: UpdateAgentConfigCommandDto = {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-custom-1',
+      name: 'Renamed Codex',
+      env: { OPENAI_API_KEY: 'new-secret-value' },
+    };
+    const deleteAgent: DeleteAgentCommandDto = {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-custom-1',
+    };
 
     expect(customAgent.source).toBe('custom');
     expect(ADAPTER_KINDS).toEqual(['codex', 'claude-code', 'gemini', 'kimi-cli', 'hermes', 'openclaw']);
@@ -387,5 +419,9 @@ describe('first-slice contract result shape', () => {
     expect(discovered.source).toBe('self-register');
     expect(discovered.gatewayInstanceKey).toBe('gateway-1');
     expect(createAgent.runtimeId).toBe('runtime-1');
+    expect(publishAgent.targetTeamId).toBe('team-2');
+    expect(unpublishAgent.targetTeamId).toBe('team-2');
+    expect(updateAgentConfig.name).toBe('Renamed Codex');
+    expect(deleteAgent.agentId).toBe('agent-custom-1');
   });
 });

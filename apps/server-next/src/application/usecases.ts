@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchDto, type DispatchRequestDto, type JoinLinkDto, type MessageDto, type RuntimeDto, type TeamDto, type UserDto } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
-import type { DeviceInviteRecord, JoinLinkRecord, ServerNextRepositories, UserRecord } from './repositories.js';
+import type { AgentConfigUpdate, AgentRecord, DeviceInviteRecord, JoinLinkRecord, ServerNextRepositories, UserRecord } from './repositories.js';
 
 export interface ServerNextClock {
   now(): number;
@@ -40,6 +40,10 @@ export interface ServerNextUseCases {
   registerDiscoveredAgents(input: RegisterDiscoveredAgentsInput): Promise<Ack<RegisterDiscoveredAgentsResult>>;
   listVisibleAgents(input: { teamId: string }): Promise<Ack<{ agents: AgentDto[] }>>;
   createCustomAgent(input: CreateCustomAgentInput): Promise<Ack<{ agent: AgentDto }>>;
+  publishAgent(input: PublishAgentInput): Promise<Ack<{ agent: AgentDto }>>;
+  unpublishAgent(input: UnpublishAgentInput): Promise<Ack<{ agent: AgentDto }>>;
+  updateAgentConfig(input: UpdateAgentConfigInput): Promise<Ack<{ agent: AgentDto }>>;
+  deleteAgent(input: DeleteAgentInput): Promise<Ack<{ agent: AgentDto }>>;
   listChannels(input: { teamId: string; userId: string }): Promise<Ack<{ channels: ChannelDto[] }>>;
   createChannel(input: CreateChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
   updateChannel(input: UpdateChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
@@ -229,6 +233,40 @@ export interface CreateCustomAgentInput {
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
+}
+
+export interface PublishAgentInput {
+  userId: string;
+  teamId: string;
+  agentId: string;
+  targetTeamId: string;
+}
+
+export interface UnpublishAgentInput {
+  userId: string;
+  teamId: string;
+  agentId: string;
+  targetTeamId: string;
+}
+
+export interface UpdateAgentConfigInput {
+  userId: string;
+  teamId: string;
+  agentId: string;
+  runtimeId?: string;
+  name?: string;
+  description?: string;
+  adapterKind?: string;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+}
+
+export interface DeleteAgentInput {
+  userId: string;
+  teamId: string;
+  agentId: string;
 }
 
 export interface SendMessageInput {
@@ -897,6 +935,153 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         lastSeenAt: now,
       });
 
+      return makeSuccess({ agent });
+    },
+
+    async publishAgent(agentInput) {
+      const managed = await agentForManagement(repositories, agentInput);
+      if (!managed.ok) {
+        return managed;
+      }
+      if (!(await repositories.teams.getById(agentInput.targetTeamId))) {
+        return makeFailure('NOT_FOUND', 'Target team not found');
+      }
+      if (!(await repositories.teams.isMember(agentInput.targetTeamId, agentInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a target team member');
+      }
+      if (agentInput.targetTeamId === managed.agent.primaryTeamId) {
+        return makeSuccess({ agent: managed.agent });
+      }
+      const agent = await repositories.agents.publish({
+        agentId: managed.agent.id,
+        teamId: agentInput.targetTeamId,
+        publishedBy: agentInput.userId,
+        timestamp: clock.now(),
+      });
+      if (!agent) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
+      return makeSuccess({ agent });
+    },
+
+    async unpublishAgent(agentInput) {
+      const managed = await agentForManagement(repositories, agentInput);
+      if (!managed.ok) {
+        return managed;
+      }
+      if (agentInput.targetTeamId === managed.agent.primaryTeamId) {
+        return makeFailure('VALIDATION_ERROR', 'Cannot unpublish agent from its primary team');
+      }
+      const agent = await repositories.agents.unpublish({
+        agentId: managed.agent.id,
+        teamId: agentInput.targetTeamId,
+      });
+      if (!agent) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
+      await repositories.channels.removeAgentFromTeamChannels({
+        teamId: agentInput.targetTeamId,
+        agentId: managed.agent.id,
+        timestamp: clock.now(),
+      });
+      return makeSuccess({ agent });
+    },
+
+    async updateAgentConfig(agentInput) {
+      const managed = await agentForManagement(repositories, agentInput);
+      if (!managed.ok) {
+        return managed;
+      }
+      if (managed.agent.source !== 'custom') {
+        return makeFailure('VALIDATION_ERROR', 'Only custom agents can be configured');
+      }
+
+      const now = clock.now();
+      const changes: AgentConfigUpdate = {};
+      if (agentInput.name !== undefined) {
+        changes.name = agentInput.name.trim();
+      }
+      if (agentInput.description !== undefined) {
+        changes.description = agentInput.description.trim();
+      }
+      if (agentInput.args !== undefined) {
+        changes.args = agentInput.args;
+      }
+      if (agentInput.cwd !== undefined) {
+        changes.cwd = agentInput.cwd;
+      }
+      if (agentInput.command !== undefined) {
+        changes.command = agentInput.command;
+      }
+      if (agentInput.env !== undefined) {
+        changes.env = agentInput.env;
+        changes.envKeys = Object.keys(agentInput.env).sort();
+      }
+
+      const runtime = agentInput.runtimeId
+        ? await repositories.runtimes.getById(agentInput.runtimeId)
+        : null;
+      if (agentInput.runtimeId) {
+        if (!runtime || runtime.teamId !== managed.agent.primaryTeamId) {
+          return makeFailure('NOT_FOUND', 'Runtime not found');
+        }
+        const device = await repositories.devices.getById(runtime.deviceId);
+        if (!device || device.teamId !== managed.agent.primaryTeamId) {
+          return makeFailure('NOT_FOUND', 'Device not found');
+        }
+        if (device.status !== 'online') {
+          return makeFailure('DEVICE_OFFLINE', 'Device is not online');
+        }
+        if (!runtime.installed) {
+          return makeFailure('VALIDATION_ERROR', 'Runtime is not installed');
+        }
+        changes.deviceId = runtime.deviceId;
+        changes.adapterKind = runtime.adapterKind;
+        changes.command = runtime.command;
+        changes.cwd = runtime.cwd;
+      } else if (agentInput.adapterKind !== undefined) {
+        const adapterKind = normalizeAdapterKind(agentInput.adapterKind);
+        if (!adapterKind) {
+          return makeFailure('VALIDATION_ERROR', 'adapterKind is invalid');
+        }
+        changes.adapterKind = adapterKind as AdapterKind;
+      }
+
+      const agent = await repositories.agents.updateConfig({
+        agentId: managed.agent.id,
+        changes: {
+          ...changes,
+          status: 'online',
+          lastSeenAt: now,
+        },
+        timestamp: now,
+      });
+      if (!agent) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
+      return makeSuccess({ agent });
+    },
+
+    async deleteAgent(agentInput) {
+      const managed = await agentForManagement(repositories, agentInput);
+      if (!managed.ok) {
+        return managed;
+      }
+      if (managed.agent.source !== 'custom') {
+        return makeFailure('VALIDATION_ERROR', 'Only custom agents can be deleted');
+      }
+      const now = clock.now();
+      for (const teamId of managed.agent.visibleTeamIds) {
+        await repositories.channels.removeAgentFromTeamChannels({
+          teamId,
+          agentId: managed.agent.id,
+          timestamp: now,
+        });
+      }
+      const agent = await repositories.agents.softDelete({ agentId: managed.agent.id, timestamp: now });
+      if (!agent) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
       return makeSuccess({ agent });
     },
 
@@ -1658,6 +1843,30 @@ async function channelForCreatorManagement(
     return makeFailure('FORBIDDEN', 'User cannot manage channel');
   }
   return makeSuccess({ channel });
+}
+
+async function agentForManagement(
+  repositories: ServerNextRepositories,
+  input: { userId: string; teamId: string; agentId: string },
+): Promise<Ack<{ agent: AgentRecord }>> {
+  const agent = await repositories.agents.getById(input.agentId);
+  if (!agent || agent.deletedAt !== undefined) {
+    return makeFailure('NOT_FOUND', 'Agent not found');
+  }
+  if (agent.primaryTeamId !== input.teamId) {
+    return makeFailure('FORBIDDEN', 'Agent is not managed by this team');
+  }
+  const role = await repositories.teams.getMemberRole(agent.primaryTeamId, input.userId);
+  if (!role) {
+    return makeFailure('FORBIDDEN', 'User is not a team member');
+  }
+  if (role === 'owner' || role === 'admin') {
+    return makeSuccess({ agent });
+  }
+  if (agent.source === 'custom' && agent.ownerId === input.userId) {
+    return makeSuccess({ agent });
+  }
+  return makeFailure('FORBIDDEN', 'User cannot manage agent');
 }
 
 function uniqueIds(ids: string[]): string[] {

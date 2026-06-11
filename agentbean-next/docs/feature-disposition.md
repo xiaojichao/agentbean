@@ -55,10 +55,10 @@
 | Daemon 上报的 agent discovery | First Slice | 用类型化 runtime/agent reports 替换旧 discovery payloads。 |
 | `agent:create` custom agent | Keep | 保留，在 device/runtime 切片之后实现。 |
 | `agent:update` broad update | Merge/Rename | 删除。拆分为 publish/unpublish 与 config update。 |
-| `agent:config:update` | Keep | 保留为显式 custom agent config update。 |
-| `agent:delete` | Defer | 保留给 custom agents；先定义权限和删除语义。 |
+| `agent:config:update` | Keep | 已收敛为 `agent:update-config`；只允许 custom agent，ack/snapshot 只暴露 `envKeys`。 |
+| `agent:delete` | Keep | 已保留给 custom agents；删除采用 server-side tombstone，隐藏 visible list 并保留 message/dispatch 历史。 |
 | `agent:custom:list` | Merge/Rename | 合并进 filtered agent list 或 device detail。 |
-| `agent:publish` / `agent:unpublish` | Keep | 保留。 |
+| `agent:publish` / `agent:unpublish` | Keep | 已定义 source/target team 权限与 visible projection 规则。 |
 | Agent metrics | Defer | 核心协作流程之后保留。 |
 | Legacy `standalone-cli` | Drop | 不保留。 |
 

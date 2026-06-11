@@ -63,6 +63,20 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('applies agent delete metadata migration', () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const agentColumns = columnNames(globalDb, 'agents');
+      expect(agentColumns).toContain('deleted_at');
+      expect(globalDb.prepare("SELECT id FROM schema_migrations WHERE id = 'global/0003_agent_deleted_at.sql'").get()).toEqual({
+        id: 'global/0003_agent_deleted_at.sql',
+      });
+    } finally {
+      teamDb.exec('SELECT 1');
+      close();
+    }
+  });
+
   test('persists user join links and consumes them with SQLite', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
@@ -636,6 +650,85 @@ describe('server-next SQLite repositories', () => {
       close();
     }
   });
+
+  test('persists custom agent management without deleting message or dispatch history', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 940 },
+        ids: {
+          nextId: createIds([
+            'user-1',
+            'team-1',
+            'channel-1',
+            'team-2',
+            'channel-2',
+            'device-1',
+            'runtime-1',
+            'agent-1',
+            'message-1',
+            'dispatch-1',
+            'request-1',
+          ]),
+        },
+      });
+
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+      await app.createTeam({ userId: 'user-1', name: 'Client Team' });
+      await app.switchTeam({ userId: 'user-1', teamId: 'team-1' });
+      await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' });
+      await app.reportDeviceRuntimes({
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        runtimes: [
+          {
+            adapterKind: 'codex',
+            name: 'Codex CLI',
+            command: '/opt/homebrew/bin/codex',
+            cwd: '/Users/shaw/AgentBean',
+            installed: true,
+          },
+        ],
+      });
+      await app.createCustomAgent({
+        userId: 'user-1',
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        runtimeId: 'runtime-1',
+        name: 'Custom Codex',
+        env: { OPENAI_API_KEY: 'old-secret' },
+      });
+      await app.publishAgent({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1', targetTeamId: 'team-2' });
+      await app.updateAgentConfig({
+        userId: 'user-1',
+        teamId: 'team-1',
+        agentId: 'agent-1',
+        name: 'Renamed Codex',
+        env: { OPENAI_API_KEY: 'new-secret' },
+      });
+      await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'hello from renamed config' });
+      await app.deleteAgent({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' });
+
+      await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({ ok: true, agents: [] });
+      await expect(app.listVisibleAgents({ teamId: 'team-2' })).resolves.toMatchObject({ ok: true, agents: [] });
+      expect(globalDb.prepare('SELECT deleted_at AS deletedAt, env_json AS envJson FROM agents WHERE id = ?').get('agent-1')).toEqual({
+        deletedAt: 940,
+        envJson: null,
+      });
+      expect(globalDb.prepare('SELECT COUNT(*) AS count FROM agent_publications WHERE agent_id = ?').get('agent-1')).toEqual({ count: 0 });
+      expect(teamDb.prepare('SELECT body FROM messages WHERE id = ?').get('message-1')).toEqual({
+        body: 'hello from renamed config',
+      });
+      expect(teamDb.prepare('SELECT agent_id AS agentId, status FROM dispatches WHERE id = ?').get('dispatch-1')).toEqual({
+        agentId: 'agent-1',
+        status: 'queued',
+      });
+    } finally {
+      close();
+    }
+  });
 });
 
 function openMigratedDatabases() {
@@ -656,6 +749,13 @@ function openMigratedDatabases() {
 function tableNames(db: SqliteDatabase): string[] {
   return db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+    .all()
+    .map((row) => (row as { name: string }).name);
+}
+
+function columnNames(db: SqliteDatabase, tableName: string): string[] {
+  return db
+    .prepare(`PRAGMA table_info(${tableName})`)
     .all()
     .map((row) => (row as { name: string }).name);
 }

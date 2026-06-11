@@ -405,7 +405,12 @@ Ack<{ agent: AgentDto }>
 客户端：
 
 ```ts
-{ agentId: string; teamId: string }
+{
+  userId?: string;
+  teamId: string;
+  agentId: string;
+  targetTeamId: string;
+}
 ```
 
 Ack：
@@ -413,13 +418,24 @@ Ack：
 ```ts
 Ack<{ agent: AgentDto }>
 ```
+
+服务器行为：
+
+- `teamId` 必须是 agent 的 `primaryTeamId`；操作者必须能管理该 agent。
+- 操作者还必须是 `targetTeamId` 的 member，避免把 agent 投影到自己不可见的 team。
+- 成功后，server 刷新 source team 与 target team active subscribers 的 `agents:snapshot`。
 
 #### `agent:unpublish`
 
 客户端：
 
 ```ts
-{ agentId: string; teamId: string }
+{
+  userId?: string;
+  teamId: string;
+  agentId: string;
+  targetTeamId: string;
+}
 ```
 
 Ack：
@@ -427,6 +443,69 @@ Ack：
 ```ts
 Ack<{ agent: AgentDto }>
 ```
+
+服务器行为：
+
+- `targetTeamId` 不得是 agent 的 primary team。
+- 成功后，server 从 target team projection 移除该 agent，并清理 target team channels 中的该 agent membership。
+- Source team 与 target team subscribers 都会收到新的 `agents:snapshot`。
+
+#### `agent:update-config`
+
+客户端：
+
+```ts
+{
+  userId?: string;
+  teamId: string;
+  agentId: string;
+  runtimeId?: string;
+  name?: string;
+  description?: string;
+  adapterKind?: AdapterKind;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+}
+```
+
+Ack：
+
+```ts
+Ack<{ agent: AgentDto }>
+```
+
+服务器行为：
+
+- 只允许 `source: "custom"` 的 agent。
+- 操作者必须是 agent owner，或 agent primary team 的 owner/admin。
+- 如果提供 `runtimeId`，server 会重新绑定该 runtime 的 device/adapter/command/cwd；runtime 必须属于 agent primary team 且 `installed: true`。
+- 如果提供 `env`，server 替换 execution config 中的 raw env；ack 与 `agents:snapshot` 仍只暴露 `envKeys`。
+
+#### `agent:delete`
+
+客户端：
+
+```ts
+{
+  userId?: string;
+  teamId: string;
+  agentId: string;
+}
+```
+
+Ack：
+
+```ts
+Ack<{ agent: AgentDto }>
+```
+
+服务器行为：
+
+- 第一版只允许删除 custom agent。
+- 操作者必须是 agent owner，或 agent primary team 的 owner/admin。
+- 删除是 server-side tombstone：agent 不再出现在 visible list，channel agent membership 被清理，但既有 messages/dispatches 的 agent id 历史不被重写。
 
 服务器事件：
 
@@ -436,8 +515,6 @@ Ack<{ agent: AgentDto }>
 
 延后的 agent commands：
 
-- `agent:update-config`：替换当前 `agent:config:update`。
-- `agent:delete`：在 delete semantics 指定后，保留给 custom-agent management。
 - `agent:metrics`：保留给 metrics slice。
 
 有意不保留的 commands：

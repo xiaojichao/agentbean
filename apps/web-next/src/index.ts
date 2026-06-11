@@ -16,6 +16,10 @@ import type {
   CreateDeviceInviteCommandDto,
   CompleteDeviceInviteCommandDto,
   ValidateJoinLinkCommandDto,
+  DeleteAgentCommandDto,
+  PublishAgentCommandDto,
+  UnpublishAgentCommandDto,
+  UpdateAgentConfigCommandDto,
 } from '../../../packages/contracts/src/index.js';
 
 export interface WebSocketTransport {
@@ -75,6 +79,10 @@ type SessionChannelHumanMemberInput = Omit<ChannelHumanMemberCommandDto, 'userId
 type SessionChannelAgentMemberInput = Omit<ChannelAgentMemberCommandDto, 'userId'> & { userId?: string };
 type SessionListChannelMembersInput = Omit<ListChannelMembersCommandDto, 'userId'> & { userId?: string };
 type SessionCreateAgentInput = Omit<CreateAgentCommandDto, 'userId'> & { userId?: string };
+type SessionPublishAgentInput = Omit<PublishAgentCommandDto, 'userId'> & { userId?: string };
+type SessionUnpublishAgentInput = Omit<UnpublishAgentCommandDto, 'userId'> & { userId?: string };
+type SessionUpdateAgentConfigInput = Omit<UpdateAgentConfigCommandDto, 'userId'> & { userId?: string };
+type SessionDeleteAgentInput = Omit<DeleteAgentCommandDto, 'userId'> & { userId?: string };
 type SessionCreateJoinLinkInput = Omit<CreateJoinLinkCommandDto, 'userId'> & { userId?: string };
 type SessionCreateDeviceInviteInput = Omit<CreateDeviceInviteCommandDto, 'userId'> & { userId?: string };
 type SessionCompleteDeviceInviteInput = Omit<CompleteDeviceInviteCommandDto, 'userId'> & { userId?: string };
@@ -106,6 +114,10 @@ export interface WebSocketClient {
   removeChannelAgentMember(input: SessionChannelAgentMemberInput): Promise<unknown>;
   listChannelMembers(input: SessionListChannelMembersInput): Promise<unknown>;
   createAgent(input: SessionCreateAgentInput): Promise<unknown>;
+  publishAgent(input: SessionPublishAgentInput): Promise<unknown>;
+  unpublishAgent(input: SessionUnpublishAgentInput): Promise<unknown>;
+  updateAgentConfig(input: SessionUpdateAgentConfigInput): Promise<unknown>;
+  deleteAgent(input: SessionDeleteAgentInput): Promise<unknown>;
   sendMessage(input: SendMessageInput): Promise<unknown>;
   cancelDispatch(input: CancelDispatchInput): Promise<unknown>;
 }
@@ -240,6 +252,18 @@ export function createWebSocketClient(transport: WebSocketTransport): WebSocketC
     },
     createAgent(input) {
       return transport.emitWithAck(WEB_EVENTS.agent.create, input);
+    },
+    publishAgent(input) {
+      return transport.emitWithAck(WEB_EVENTS.agent.publish, input);
+    },
+    unpublishAgent(input) {
+      return transport.emitWithAck(WEB_EVENTS.agent.unpublish, input);
+    },
+    updateAgentConfig(input) {
+      return transport.emitWithAck(WEB_EVENTS.agent.updateConfig, input);
+    },
+    deleteAgent(input) {
+      return transport.emitWithAck(WEB_EVENTS.agent.delete, input);
     },
     sendMessage(input) {
       return transport.emitWithAck(WEB_EVENTS.message.send, input);
