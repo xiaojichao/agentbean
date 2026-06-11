@@ -903,6 +903,58 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('returns the existing artifact when an id conflict belongs to another team or channel', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      globalDb.exec('SELECT 1');
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const existing = await repositories.artifacts.create({
+        id: 'artifact-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        messageId: 'message-1',
+        dispatchId: 'dispatch-1',
+        workspaceRunId: 'workspace-run-1',
+        uploaderId: 'user-1',
+        filename: 'first.md',
+        mimeType: 'text/markdown',
+        sizeBytes: 128,
+        storagePath: 'artifacts/artifact-1/first.md',
+        relativePath: 'outputs/first.md',
+        pathKind: 'workspace',
+        sha256: 'sha256-first',
+        createdAt: 1200,
+      });
+
+      const result = await repositories.artifacts.create({
+        id: 'artifact-1',
+        teamId: 'team-2',
+        channelId: 'channel-2',
+        messageId: 'message-2',
+        dispatchId: 'dispatch-2',
+        workspaceRunId: 'workspace-run-2',
+        uploaderId: 'user-2',
+        filename: 'second.md',
+        mimeType: 'text/markdown',
+        sizeBytes: 256,
+        storagePath: 'artifacts/artifact-1/second.md',
+        relativePath: 'outputs/second.md',
+        pathKind: 'workspace',
+        sha256: 'sha256-second',
+        createdAt: 1300,
+      });
+
+      expect(result).toEqual(existing);
+      expect(teamDb.prepare('SELECT team_id AS teamId, channel_id AS channelId, filename FROM artifacts WHERE id = ?').get('artifact-1')).toEqual({
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        filename: 'first.md',
+      });
+    } finally {
+      close();
+    }
+  });
+
   test('records dispatch error without appending an agent reply', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
