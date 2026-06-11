@@ -706,6 +706,60 @@ Ack：
 Ack<{ channel: ChannelDto; messages: MessageDto[] }>
 ```
 
+#### `dm:start`
+
+客户端：
+
+```ts
+{ userId?: string; teamId: string; agentId: string }
+```
+
+Ack：
+
+```ts
+Ack<{ dm: DmChannelDto }>
+```
+
+服务器行为：
+
+- `userId` 必须是 `teamId` 的 member。
+- `agentId` 必须对该 team 可见。
+- 如果该 user 与 agent 已有 direct channel，则复用既有 channel。
+- 新建 DM 使用 `kind: "direct"`、`visibility: "private"`、`dmTargetAgentId = agentId`。
+
+#### `dm:list`
+
+客户端：
+
+```ts
+{ userId?: string; teamId: string }
+```
+
+Ack：
+
+```ts
+Ack<{ dms: DmChannelDto[] }>
+```
+
+#### `dm:snapshot`
+
+客户端：
+
+```ts
+{ userId?: string; teamId: string; channelId: string; limit?: number }
+```
+
+Ack：
+
+```ts
+Ack<{ dm: DmChannelDto; messages: MessageDto[] }>
+```
+
+服务器行为：
+
+- 只允许该 direct channel 的 human member snapshot。
+- 返回同 channel 的 message history；thread filtering 由 message/dispatch flow 使用 `threadId` 表达。
+
 #### `message:send`
 
 客户端：
@@ -733,6 +787,8 @@ Ack<{ message: MessageDto; dispatches: DispatchDto[] }>
 - 带 `auth.token` 的 web socket 会从 authenticated socket session 派生 `userId`；payload 中的 `userId` 只作为临时兼容路径保留。
 - `teamId` 仍由 payload 提供，用于 team/channel gate 与路由；后续 team switch 完成后可再评估是否从 current team 派生。
 - `senderKind` 与 `senderId` 仍由 server 派生，client 不应发送 sender identity。
+- direct channel 中的 message 固定 dispatch 给 `dmTargetAgentId`；普通 channel 中无 mention message 仍 fallback 到第一个 online agent。
+- `threadId` 为空时 server 将当前 message 作为 thread root；有值时 server 将 message 作为该 thread reply。
 
 #### `dispatch:cancel`
 
@@ -762,14 +818,12 @@ Ack<{ dispatch: DispatchDto }>
 - `channel:message`：`MessageDto`
 - `message:dispatch-status`：`DispatchDto`
 
-延后的 channel、DM 与 message commands：
+延后的 channel 与 message commands：
 
 - `channel:leave`：仅当 hidden/left channel UX 保留时保留。
 - `channel:archive`：延后；需要产品决策。
 - `channel:delete`：延后；需要产品决策。
 - `channel:stop-agents`：替换为 dispatch cancellation commands。
-- `dm:start`：保留。
-- `dm:list`：保留。
 - `message:search`：保留给 search slice。
 
 ### Tasks（延后切片）

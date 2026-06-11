@@ -1,5 +1,6 @@
 import type {
   AgentRecord,
+  ArtifactRecord,
   ChannelRecord,
   DeviceInviteRecord,
   DeviceRecord,
@@ -11,6 +12,7 @@ import type {
   TeamMemberRecord,
   TeamRecord,
   UserRecord,
+  WorkspaceRunRecord,
 } from '../../application/repositories.js';
 
 export function createInMemoryRepositories(): ServerNextRepositories {
@@ -27,6 +29,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const identityLinks = new Map<string, string>();
   const messages = new Map<string, MessageRecord>();
   const dispatches = new Map<string, DispatchRecord>();
+  const artifacts = new Map<string, ArtifactRecord>();
+  const workspaceRuns = new Map<string, WorkspaceRunRecord>();
 
   return {
     users: {
@@ -160,6 +164,14 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       async getById(channelId) {
         return channels.get(channelId) ?? null;
       },
+      async getDirectByAgent(input) {
+        return Array.from(channels.values()).find((channel) =>
+          channel.teamId === input.teamId &&
+          channel.kind === 'direct' &&
+          channel.humanMemberIds.includes(input.userId) &&
+          (channel.dmTargetAgentId === input.agentId || channel.agentMemberIds.includes(input.agentId))
+        ) ?? null;
+      },
       async listForUser(teamId, userId) {
         return Array.from(channels.values()).filter((channel) => {
           if (channel.teamId !== teamId) {
@@ -167,6 +179,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           }
           return channel.visibility === 'public' || channel.humanMemberIds.includes(userId);
         });
+      },
+      async listDirectForUser(teamId, userId) {
+        return Array.from(channels.values()).filter((channel) =>
+          channel.teamId === teamId &&
+          channel.kind === 'direct' &&
+          channel.humanMemberIds.includes(userId)
+        );
       },
       async update(input) {
         const channel = channels.get(input.channelId);
@@ -365,6 +384,21 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           .sort((left, right) => left.createdAt - right.createdAt)
           .slice(-limit);
       },
+      async listThreadBefore(input) {
+        const before = messages.get(input.beforeMessageId);
+        if (!before) {
+          return [];
+        }
+        return Array.from(messages.values())
+          .filter((message) =>
+            message.channelId === input.channelId &&
+            message.threadId === input.threadId &&
+            message.id !== input.beforeMessageId &&
+            message.createdAt <= before.createdAt
+          )
+          .sort((left, right) => left.createdAt - right.createdAt)
+          .slice(-input.limit);
+      },
     },
     dispatches: {
       async create(input) {
@@ -456,6 +490,35 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async listByMessage(messageId) {
         return Array.from(dispatches.values()).filter((dispatch) => dispatch.messageId === messageId);
+      },
+    },
+    artifacts: {
+      async create(input) {
+        artifacts.set(input.id, input);
+        return input;
+      },
+      async getForTeam(input) {
+        const artifact = artifacts.get(input.artifactId);
+        return artifact?.teamId === input.teamId ? artifact : null;
+      },
+      async listByMessage(messageId) {
+        return Array.from(artifacts.values()).filter((artifact) => artifact.messageId === messageId);
+      },
+      async listByWorkspaceRun(runId) {
+        return Array.from(artifacts.values()).filter((artifact) => artifact.workspaceRunId === runId);
+      },
+    },
+    workspaceRuns: {
+      async create(input) {
+        workspaceRuns.set(input.id, input);
+        return input;
+      },
+      async getForTeam(input) {
+        const run = workspaceRuns.get(input.runId);
+        return run?.teamId === input.teamId ? run : null;
+      },
+      async listByDispatch(dispatchId) {
+        return Array.from(workspaceRuns.values()).filter((run) => run.dispatchId === dispatchId);
       },
     },
   };

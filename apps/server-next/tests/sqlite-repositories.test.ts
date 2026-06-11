@@ -38,6 +38,8 @@ describe('server-next SQLite repositories', () => {
           'channel_agent_members',
           'messages',
           'dispatches',
+          'artifacts',
+          'workspace_runs',
         ]),
       );
     } finally {
@@ -362,6 +364,105 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('persists direct messages and thread ids with SQLite', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 520 },
+        ids: {
+          nextId: createIds([
+            'user-1',
+            'team-1',
+            'channel-1',
+            'dm-1',
+            'message-1',
+            'dispatch-1',
+            'request-1',
+            'message-2',
+            'message-3',
+            'dispatch-2',
+            'request-2',
+          ]),
+        },
+      });
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+      await repositories.agents.upsert({
+        id: 'agent-1',
+        primaryTeamId: 'team-1',
+        visibleTeamIds: ['team-1'],
+        name: 'Codex',
+        adapterKind: 'codex',
+        category: 'executor-hosted',
+        source: 'scanned',
+        status: 'online',
+        lastSeenAt: 520,
+      });
+
+      await expect(app.startDirectMessage({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' })).resolves.toMatchObject({
+        ok: true,
+        dm: { channel: { id: 'dm-1', kind: 'direct', dmTargetAgentId: 'agent-1' } },
+      });
+      expect(teamDb.prepare('SELECT dm_target_agent_id AS dmTargetAgentId FROM channels WHERE id = ?').get('dm-1')).toEqual({
+        dmTargetAgentId: 'agent-1',
+      });
+      teamDb.prepare('DELETE FROM channel_agent_members WHERE channel_id = ?').run('dm-1');
+      await expect(app.startDirectMessage({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' })).resolves.toMatchObject({
+        ok: true,
+        dm: { channel: { id: 'dm-1', kind: 'direct', dmTargetAgentId: 'agent-1' } },
+      });
+
+      await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'dm-1', body: 'hello' });
+      await app.receiveDispatchResult({
+        dispatchId: 'dispatch-1',
+        agentId: 'agent-1',
+        body: 'reply',
+        artifacts: [
+          {
+            id: 'artifact-1',
+            filename: 'reply.md',
+            mimeType: 'text/markdown',
+            sizeBytes: 12,
+            storagePath: 'artifacts/artifact-1/reply.md',
+          },
+        ],
+      });
+      await app.sendMessage({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'dm-1',
+        threadId: 'message-1',
+        body: 'follow up',
+      });
+
+      expect(teamDb.prepare('SELECT thread_id AS threadId FROM messages WHERE id = ?').get('message-3')).toEqual({
+        threadId: 'message-1',
+      });
+      await expect(app.getDispatchRequest({ dispatchId: 'dispatch-2' })).resolves.toMatchObject({
+        ok: true,
+        request: {
+          threadId: 'message-1',
+          history: [
+            { messageId: 'message-1', body: 'hello' },
+            { messageId: 'message-2', body: 'reply' },
+          ],
+        },
+      });
+      await expect(app.snapshotDirectMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'dm-1' })).resolves.toMatchObject({
+        ok: true,
+        messages: [
+          { id: 'message-1', body: 'hello' },
+          { id: 'message-2', body: 'reply', artifacts: [{ id: 'artifact-1', filename: 'reply.md' }] },
+          { id: 'message-3', body: 'follow up' },
+        ],
+      });
+      expect(globalDb.prepare('SELECT COUNT(*) AS count FROM users').get()).toEqual({ count: 1 });
+    } finally {
+      close();
+    }
+  });
+
   test('marks stale queued dispatches as timed out without deleting the original message', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
@@ -587,6 +688,215 @@ describe('server-next SQLite repositories', () => {
         senderId: 'agent-1',
         body: 'done',
         metaJson: JSON.stringify({ dispatchId: 'dispatch-1', artifactIds: ['artifact-1'] }),
+      });
+    } finally {
+      close();
+    }
+  });
+
+  test('rejects late dispatch completions for deleted agents', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 910 },
+        ids: {
+          nextId: createIds([
+            'user-1',
+            'team-1',
+            'channel-1',
+            'device-1',
+            'agent-1',
+            'message-1',
+            'dispatch-1',
+            'request-1',
+          ]),
+        },
+      });
+
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+      await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' });
+      await app.registerDiscoveredAgents({
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        agents: [{ name: 'Codex', adapterKind: 'codex', category: 'executor-hosted' }],
+      });
+      await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex hello' });
+      await repositories.agents.softDelete({ agentId: 'agent-1', timestamp: 905 });
+
+      await expect(
+        app.receiveDispatchResult({
+          dispatchId: 'dispatch-1',
+          agentId: 'agent-1',
+          body: 'late result',
+        }),
+      ).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+      await expect(
+        app.receiveDispatchError({
+          dispatchId: 'dispatch-1',
+          agentId: 'agent-1',
+          error: 'late error',
+        }),
+      ).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+
+      expect(teamDb.prepare('SELECT status FROM dispatches WHERE id = ?').get('dispatch-1')).toEqual({
+        status: 'queued',
+      });
+      expect(teamDb.prepare("SELECT COUNT(*) AS count FROM messages WHERE sender_kind = 'agent'").get()).toEqual({ count: 0 });
+    } finally {
+      close();
+    }
+  });
+
+  test('associates daemon-reported artifacts and workspace runs with team-scoped dispatch replies', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 1200 },
+        ids: {
+          nextId: createIds([
+            'user-1',
+            'team-1',
+            'channel-1',
+            'device-1',
+            'agent-1',
+            'join-1',
+            'user-2',
+            'team-2',
+            'channel-2',
+            'channel-3',
+            'message-1',
+            'dispatch-1',
+            'request-1',
+            'workspace-run-1',
+            'reply-1',
+          ]),
+        },
+        joinCodes: {
+          nextCode: createIds(['code-1']),
+        },
+      });
+
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+      await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' });
+      await app.registerDiscoveredAgents({
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        agents: [{ name: 'Codex', adapterKind: 'codex', category: 'executor-hosted' }],
+      });
+      await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
+      await app.registerUser({ username: 'lin', password: 'secret', teamName: 'Lin Team', joinCode: 'code-1' });
+      const privateChannelAck = await app.createChannel({
+        userId: 'user-1',
+        teamId: 'team-1',
+        name: 'private-artifacts',
+        title: 'Private Artifacts',
+        visibility: 'private',
+        agentMemberIds: ['agent-1'],
+      });
+      expect(privateChannelAck).toMatchObject({
+        ok: true,
+        channel: { visibility: 'private', humanMemberIds: ['user-1'], agentMemberIds: ['agent-1'] },
+      });
+      if (!privateChannelAck.ok) {
+        throw new Error('private channel setup failed');
+      }
+      const privateChannelId = privateChannelAck.channel.id;
+      const sendAck = await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: privateChannelId, body: '@Codex produce docs' });
+      expect(sendAck).toMatchObject({
+        ok: true,
+      });
+      if (!sendAck.ok || !sendAck.dispatches[0]) {
+        throw new Error('private channel dispatch setup failed');
+      }
+      const dispatchId = sendAck.dispatches[0].id;
+
+      const resultAck = await app.receiveDispatchResult({
+        dispatchId,
+        agentId: 'agent-1',
+        body: 'done',
+        artifacts: [
+          {
+            id: 'artifact-1',
+            filename: 'result.md',
+            mimeType: 'text/markdown',
+            sizeBytes: 128,
+            storagePath: 'artifacts/artifact-1/result.md',
+            relativePath: 'outputs/result.md',
+            pathKind: 'workspace',
+            sha256: 'sha256-result',
+          },
+        ],
+        workspaceRun: {
+          cwd: '/Users/shaw/AgentBean',
+          exitCode: 0,
+          startedAt: 1190,
+        },
+      });
+      expect(resultAck).toMatchObject({
+        ok: true,
+        message: {
+          artifacts: [
+            {
+              id: 'artifact-1',
+              filename: 'result.md',
+            },
+          ],
+          workspaceRun: {
+            agentId: 'agent-1',
+            deviceId: 'device-1',
+            dispatchId,
+            artifactIds: ['artifact-1'],
+          },
+        },
+      });
+      if (!resultAck.ok || !resultAck.message.workspaceRun) {
+        throw new Error('workspace run setup failed');
+      }
+      const replyId = resultAck.message.id;
+      const workspaceRunId = resultAck.message.workspaceRun.id;
+      expect(resultAck.message.artifacts?.[0]?.workspaceRunId).toBe(workspaceRunId);
+
+      await expect(app.getArtifact({ userId: 'user-1', teamId: 'team-1', artifactId: 'artifact-1' })).resolves.toMatchObject({
+        ok: true,
+        artifact: { id: 'artifact-1', teamId: 'team-1', messageId: replyId },
+      });
+      await expect(app.getArtifact({ userId: 'user-2', teamId: 'team-2', artifactId: 'artifact-1' })).resolves.toMatchObject({
+        ok: false,
+        error: 'NOT_FOUND',
+      });
+      await expect(app.getWorkspaceRun({ userId: 'user-1', teamId: 'team-1', runId: workspaceRunId })).resolves.toMatchObject({
+        ok: true,
+        workspaceRun: {
+          id: workspaceRunId,
+          teamId: 'team-1',
+          channelId: privateChannelId,
+          messageId: replyId,
+          dispatchId,
+          agentId: 'agent-1',
+          deviceId: 'device-1',
+          artifactIds: ['artifact-1'],
+        },
+      });
+      await expect(app.getArtifact({ userId: 'user-2', teamId: 'team-1', artifactId: 'artifact-1' })).resolves.toMatchObject({
+        ok: false,
+        error: 'FORBIDDEN',
+      });
+      await expect(app.getWorkspaceRun({ userId: 'user-2', teamId: 'team-1', runId: workspaceRunId })).resolves.toMatchObject({
+        ok: false,
+        error: 'FORBIDDEN',
+      });
+
+      expect(teamDb.prepare('SELECT team_id AS teamId, message_id AS messageId FROM artifacts WHERE id = ?').get('artifact-1')).toEqual({
+        teamId: 'team-1',
+        messageId: replyId,
+      });
+      expect(teamDb.prepare('SELECT agent_id AS agentId, device_id AS deviceId FROM workspace_runs WHERE id = ?').get(workspaceRunId)).toEqual({
+        agentId: 'agent-1',
+        deviceId: 'device-1',
       });
     } finally {
       close();

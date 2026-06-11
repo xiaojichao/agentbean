@@ -66,13 +66,15 @@ export interface Artifact {
   mimeType: string;
   sizeBytes: number;
   createdAt: number;
-  downloadUrl: string;
-  previewUrl: string;
+  downloadUrl?: string;
+  previewUrl?: string;
 }
 
 export interface AgentWorkspaceFile extends Artifact {
   pathKind: string;
   relativePath: string;
+  downloadUrl: string;
+  previewUrl: string;
   originalPath?: string | null;
   sha256?: string | null;
   deviceId?: string | null;

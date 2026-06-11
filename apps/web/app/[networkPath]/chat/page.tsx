@@ -1961,32 +1961,42 @@ function ConversationFiles({
             const isImage = file.artifact.mimeType.startsWith('image/');
             const previewUrl = artifactUrl(isImage ? file.artifact.previewUrl : file.artifact.downloadUrl);
             const downloadUrl = artifactUrl(file.artifact.downloadUrl);
+            const thumbnail = (
+              <span className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden border border-neutral-200 bg-neutral-50">
+                {isImage && previewUrl ? (
+                  <img src={previewUrl} alt={file.artifact.filename} className="h-full w-full object-cover" />
+                ) : (
+                  <Paperclip size={20} className="text-neutral-400" />
+                )}
+              </span>
+            );
+            const summary = (
+              <>
+                <div className="truncate text-sm font-semibold text-neutral-900">{file.artifact.filename}</div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
+                  <span>{formatFileSize(file.artifact.sizeBytes)}</span>
+                  <span className="text-neutral-300">·</span>
+                  <span>{formatDateTime(file.createdAt)}</span>
+                  <span className="text-neutral-300">·</span>
+                  <span>{speakerName({ id: file.messageId, channelId: '', senderKind: file.senderKind, senderId: file.senderId, body: '', createdAt: file.createdAt }, agents, { currentUser, humanProfiles, channelMembers })}</span>
+                </div>
+              </>
+            );
             return (
               <div key={`${file.messageId}-${file.artifact.id}`} className="flex min-h-20 items-center gap-3 border border-neutral-300 bg-white px-3 py-2 hover:border-neutral-900">
-                <a href={previewUrl} target="_blank" rel="noreferrer" className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden border border-neutral-200 bg-neutral-50" title="预览文件">
-                  {isImage ? (
-                    <img src={artifactUrl(file.artifact.previewUrl)} alt={file.artifact.filename} className="h-full w-full object-cover" />
-                  ) : (
-                    <Paperclip size={20} className="text-neutral-400" />
-                  )}
-                </a>
-                <a href={previewUrl} target="_blank" rel="noreferrer" className="min-w-0 flex-1" title="预览文件">
-                  <div className="truncate text-sm font-semibold text-neutral-900">{file.artifact.filename}</div>
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-                    <span>{formatFileSize(file.artifact.sizeBytes)}</span>
-                    <span className="text-neutral-300">·</span>
-                    <span>{formatDateTime(file.createdAt)}</span>
-                    <span className="text-neutral-300">·</span>
-                    <span>{speakerName({ id: file.messageId, channelId: '', senderKind: file.senderKind, senderId: file.senderId, body: '', createdAt: file.createdAt }, agents, { currentUser, humanProfiles, channelMembers })}</span>
-                  </div>
-                </a>
+                {previewUrl ? <a href={previewUrl} target="_blank" rel="noreferrer" title="预览文件">{thumbnail}</a> : thumbnail}
+                {previewUrl ? (
+                  <a href={previewUrl} target="_blank" rel="noreferrer" className="min-w-0 flex-1" title="预览文件">{summary}</a>
+                ) : (
+                  <div className="min-w-0 flex-1">{summary}</div>
+                )}
                 <div className="flex shrink-0 items-center gap-2">
                   <button onClick={() => onJump(file.messageId)} className="flex h-8 w-8 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="跳转到原消息">
                     <ExternalLink size={15} />
                   </button>
-                  <a href={downloadUrl} target="_blank" rel="noreferrer" className="flex h-8 w-8 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="下载文件">
+                  {downloadUrl && <a href={downloadUrl} target="_blank" rel="noreferrer" className="flex h-8 w-8 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="下载文件">
                     <Download size={15} />
-                  </a>
+                  </a>}
                 </div>
               </div>
             );
@@ -2910,7 +2920,7 @@ function safeMarkdownHref(href: string): string | null {
   const trimmed = href.trim();
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   if (/^mailto:/i.test(trimmed)) return trimmed;
-  if (trimmed.startsWith('/api/')) return artifactUrl(trimmed);
+  if (trimmed.startsWith('/api/')) return artifactUrl(trimmed) ?? null;
   return null;
 }
 
@@ -2932,7 +2942,8 @@ function displayMessageBody(msg: ChatMessage): string {
   });
 }
 
-function artifactUrl(path: string): string {
+function artifactUrl(path: string | undefined): string | null {
+  if (!path) return null;
   const token = getStoredAuthToken();
   const sep = path.includes('?') ? '&' : '?';
   return `${getResolvedServerUrl()}${path}${sep}token=${encodeURIComponent(token)}`;
@@ -3105,24 +3116,35 @@ function ChatArtifactPreview({ artifact }: { artifact: Artifact }) {
   const sizeLabel = formatFileSize(artifact.sizeBytes);
   const previewUrl = artifactUrl(artifact.previewUrl);
   const downloadUrl = artifactUrl(artifact.downloadUrl);
+  const canPreview = Boolean(previewUrl);
+  const openViewer = () => {
+    if (canPreview) setViewerOpen(true);
+  };
   if (artifact.mimeType.startsWith('image/')) {
     return (
       <>
         <div className="group relative block max-w-80">
-          <button onClick={() => setViewerOpen(true)} className="block text-left" title="预览图片">
-            <img
-              src={previewUrl}
-              alt={artifact.filename}
-              className="max-h-64 rounded-md border border-neutral-200 object-contain transition group-hover:border-neutral-400"
-            />
-          </button>
-          <div className="pointer-events-none absolute right-2 top-2 flex gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-            <button onClick={() => setViewerOpen(true)} className="flex h-7 w-7 items-center justify-center rounded-md bg-white/95 text-neutral-700 shadow-sm hover:bg-neutral-100" title="打开图片">
-              <Eye size={14} />
+          {previewUrl ? (
+            <button onClick={openViewer} className="block text-left" title="预览图片">
+              <img
+                src={previewUrl}
+                alt={artifact.filename}
+                className="max-h-64 rounded-md border border-neutral-200 object-contain transition group-hover:border-neutral-400"
+              />
             </button>
-            <a href={downloadUrl} target="_blank" rel="noreferrer" className="flex h-7 w-7 items-center justify-center rounded-md bg-white/95 text-neutral-700 shadow-sm hover:bg-neutral-100" title="下载图片">
+          ) : (
+            <div className="inline-flex min-h-16 max-w-96 items-center gap-3 border border-neutral-300 bg-white px-3 py-2 text-xs text-neutral-700">
+              <Paperclip size={15} />
+              <span className="truncate">{artifact.filename}</span>
+            </div>
+          )}
+          <div className="pointer-events-none absolute right-2 top-2 flex gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+            {previewUrl && <button onClick={openViewer} className="flex h-7 w-7 items-center justify-center rounded-md bg-white/95 text-neutral-700 shadow-sm hover:bg-neutral-100" title="打开图片">
+              <Eye size={14} />
+            </button>}
+            {downloadUrl && <a href={downloadUrl} target="_blank" rel="noreferrer" className="flex h-7 w-7 items-center justify-center rounded-md bg-white/95 text-neutral-700 shadow-sm hover:bg-neutral-100" title="下载图片">
               <Download size={14} />
-            </a>
+            </a>}
           </div>
           <div className="mt-1 truncate text-xs text-neutral-500">{artifact.filename}</div>
         </div>
@@ -3134,7 +3156,7 @@ function ChatArtifactPreview({ artifact }: { artifact: Artifact }) {
   return (
     <>
       <div className="group relative inline-flex min-h-16 max-w-96 border border-neutral-300 bg-white text-xs text-neutral-700 transition hover:border-neutral-500 hover:bg-neutral-50">
-        <button onClick={() => setViewerOpen(true)} className="inline-flex min-w-0 flex-1 items-center gap-3 px-3 py-2 pr-20 text-left" title="预览文件">
+        <button onClick={openViewer} disabled={!canPreview} className="inline-flex min-w-0 flex-1 items-center gap-3 px-3 py-2 pr-20 text-left disabled:cursor-default" title={canPreview ? '预览文件' : '文件暂不可预览'}>
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-neutral-50 text-neutral-500 group-hover:bg-white">
             <Paperclip size={15} />
           </span>
@@ -3145,12 +3167,12 @@ function ChatArtifactPreview({ artifact }: { artifact: Artifact }) {
           </span>
         </button>
         <div className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-          <button onClick={() => setViewerOpen(true)} className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-neutral-700 shadow-sm hover:bg-neutral-100" title="预览文件">
+          {previewUrl && <button onClick={openViewer} className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-neutral-700 shadow-sm hover:bg-neutral-100" title="预览文件">
             <Eye size={14} />
-          </button>
-          <a href={downloadUrl} target="_blank" rel="noreferrer" className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-neutral-700 shadow-sm hover:bg-neutral-100" title="下载文件">
+          </button>}
+          {downloadUrl && <a href={downloadUrl} target="_blank" rel="noreferrer" className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-neutral-700 shadow-sm hover:bg-neutral-100" title="下载文件">
             <Download size={14} />
-          </a>
+          </a>}
         </div>
       </div>
       {viewerOpen && <ArtifactViewer artifact={artifact} onClose={() => setViewerOpen(false)} />}
@@ -3165,6 +3187,10 @@ function ArtifactViewer({ artifact, onClose }: { artifact: Artifact; onClose: ()
   const downloadUrl = artifactUrl(artifact.downloadUrl);
   const fileKind = artifactKind(artifact);
   const inlineText = isInlineTextArtifact(artifact);
+
+  if (!previewUrl) {
+    return null;
+  }
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -3200,10 +3226,10 @@ function ArtifactViewer({ artifact, onClose }: { artifact: Artifact; onClose: ()
           <div className="truncate text-sm font-semibold text-neutral-900">{artifact.filename}</div>
           <div className="text-[11px] text-neutral-400">{fileKind.previewLabel} · {formatFileSize(artifact.sizeBytes)}</div>
         </div>
-        <a href={downloadUrl} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 px-2.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50" title="下载">
+        {downloadUrl && <a href={downloadUrl} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 px-2.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50" title="下载">
           <Download size={14} />
           下载
-        </a>
+        </a>}
         <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900" title="关闭预览">
           <X size={16} />
         </button>

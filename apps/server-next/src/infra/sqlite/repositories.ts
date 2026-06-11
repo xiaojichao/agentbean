@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import type {
   AgentRecord,
+  ArtifactRecord,
   ChannelRecord,
   DeviceInviteRecord,
   DeviceRecord,
@@ -15,6 +16,7 @@ import type {
   TeamMemberRecord,
   TeamRecord,
   UserRecord,
+  WorkspaceRunRecord,
 } from '../../application/repositories.js';
 
 export interface SqliteStatement {
@@ -41,6 +43,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0001_first_slice.sql');
+  applyMigration(db, 'team/0002_artifacts_workspace_runs.sql');
 }
 
 export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): ServerNextRepositories {
@@ -289,7 +292,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             channel.createdBy ?? null,
             channel.createdAt,
             null,
-            null,
+            channel.dmTargetAgentId ?? null,
           );
         for (const userId of channel.humanMemberIds) {
           teamDb
@@ -312,6 +315,26 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       async getById(channelId) {
         return mapChannel(teamDb, teamDb.prepare('SELECT * FROM channels WHERE id = ?').get(channelId));
       },
+      async getDirectByAgent(input) {
+        return mapChannel(
+          teamDb,
+          teamDb
+            .prepare(
+              `SELECT channels.* FROM channels
+               JOIN channel_human_members hm ON hm.channel_id = channels.id
+               WHERE channels.team_id = ?
+               AND channels.kind = 'direct'
+               AND hm.user_id = ?
+               AND (
+                 channels.dm_target_agent_id = ?
+                 OR channels.id IN (SELECT channel_id FROM channel_agent_members WHERE agent_id = ?)
+               )
+               ORDER BY channels.created_at
+               LIMIT 1`,
+            )
+            .get(input.teamId, input.userId, input.agentId, input.agentId),
+        );
+      },
       async listForUser(teamId, userId) {
         return teamDb
           .prepare(
@@ -331,6 +354,25 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             }
             return channel;
         });
+      },
+      async listDirectForUser(teamId, userId) {
+        return teamDb
+          .prepare(
+            `SELECT channels.* FROM channels
+             JOIN channel_human_members hm ON hm.channel_id = channels.id
+             WHERE channels.team_id = ?
+             AND channels.kind = 'direct'
+             AND hm.user_id = ?
+             ORDER BY channels.created_at`,
+          )
+          .all(teamId, userId)
+          .map((row) => {
+            const channel = mapChannel(teamDb, row);
+            if (!channel) {
+              throw new Error('SQLite direct channel row could not be mapped');
+            }
+            return channel;
+          });
       },
       async update(input) {
         const existing = mapChannel(teamDb, teamDb.prepare('SELECT * FROM channels WHERE id = ?').get(input.channelId));
@@ -711,7 +753,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             message.id,
             message.teamId,
             message.channelId,
-            null,
+            message.threadId ?? null,
             message.senderKind,
             message.senderId,
             null,
@@ -736,6 +778,31 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             }
             return message;
           });
+      },
+      async listThreadBefore(input) {
+        const before = mapMessage(teamDb.prepare('SELECT * FROM messages WHERE id = ?').get(input.beforeMessageId));
+        if (!before) {
+          return [];
+        }
+        return teamDb
+          .prepare(
+            `SELECT * FROM messages
+             WHERE channel_id = ?
+             AND thread_id = ?
+             AND id != ?
+             AND created_at <= ?
+             ORDER BY created_at DESC
+             LIMIT ?`,
+          )
+          .all(input.channelId, input.threadId, input.beforeMessageId, before.createdAt, input.limit)
+          .map((row) => {
+            const message = mapMessage(row);
+            if (!message) {
+              throw new Error('SQLite thread message row could not be mapped');
+            }
+            return message;
+          })
+          .reverse();
       },
     },
     dispatches: {
@@ -848,6 +915,136 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           });
       },
     },
+    artifacts: {
+      async create(artifact) {
+        teamDb
+          .prepare(
+            `INSERT INTO artifacts (
+              id, team_id, channel_id, message_id, dispatch_id, workspace_run_id, uploader_id,
+              filename, mime_type, size_bytes, storage_path, relative_path, path_kind, sha256, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              team_id = excluded.team_id,
+              channel_id = excluded.channel_id,
+              message_id = excluded.message_id,
+              dispatch_id = excluded.dispatch_id,
+              workspace_run_id = excluded.workspace_run_id,
+              uploader_id = excluded.uploader_id,
+              filename = excluded.filename,
+              mime_type = excluded.mime_type,
+              size_bytes = excluded.size_bytes,
+              storage_path = excluded.storage_path,
+              relative_path = excluded.relative_path,
+              path_kind = excluded.path_kind,
+              sha256 = excluded.sha256,
+              created_at = excluded.created_at`,
+          )
+          .run(
+            artifact.id,
+            artifact.teamId,
+            artifact.channelId,
+            artifact.messageId ?? null,
+            artifact.dispatchId ?? null,
+            artifact.workspaceRunId ?? null,
+            artifact.uploaderId,
+            artifact.filename,
+            artifact.mimeType,
+            artifact.sizeBytes,
+            artifact.storagePath ?? null,
+            artifact.relativePath ?? null,
+            artifact.pathKind ?? null,
+            artifact.sha256 ?? null,
+            artifact.createdAt,
+          );
+        return artifact;
+      },
+      async getForTeam(input) {
+        return mapArtifact(teamDb.prepare('SELECT * FROM artifacts WHERE team_id = ? AND id = ?').get(input.teamId, input.artifactId));
+      },
+      async listByMessage(messageId) {
+        return teamDb
+          .prepare('SELECT * FROM artifacts WHERE message_id = ? ORDER BY created_at')
+          .all(messageId)
+          .map((row) => {
+            const artifact = mapArtifact(row);
+            if (!artifact) {
+              throw new Error('SQLite artifact row could not be mapped');
+            }
+            return artifact;
+          });
+      },
+      async listByWorkspaceRun(runId) {
+        return teamDb
+          .prepare('SELECT * FROM artifacts WHERE workspace_run_id = ? ORDER BY created_at')
+          .all(runId)
+          .map((row) => {
+            const artifact = mapArtifact(row);
+            if (!artifact) {
+              throw new Error('SQLite workspace artifact row could not be mapped');
+            }
+            return artifact;
+          });
+      },
+    },
+    workspaceRuns: {
+      async create(run) {
+        teamDb
+          .prepare(
+            `INSERT INTO workspace_runs (
+              id, team_id, channel_id, message_id, dispatch_id, agent_id, device_id, status,
+              cwd, exit_code, started_at, completed_at, created_at, updated_at, artifact_ids_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              team_id = excluded.team_id,
+              channel_id = excluded.channel_id,
+              message_id = excluded.message_id,
+              dispatch_id = excluded.dispatch_id,
+              agent_id = excluded.agent_id,
+              device_id = excluded.device_id,
+              status = excluded.status,
+              cwd = excluded.cwd,
+              exit_code = excluded.exit_code,
+              started_at = excluded.started_at,
+              completed_at = excluded.completed_at,
+              created_at = excluded.created_at,
+              updated_at = excluded.updated_at,
+              artifact_ids_json = excluded.artifact_ids_json`,
+          )
+          .run(
+            run.id,
+            run.teamId,
+            run.channelId,
+            run.messageId ?? null,
+            run.dispatchId,
+            run.agentId,
+            run.deviceId ?? null,
+            run.status,
+            run.cwd ?? null,
+            run.exitCode ?? null,
+            run.startedAt ?? null,
+            run.completedAt ?? null,
+            run.createdAt,
+            run.updatedAt,
+            JSON.stringify(run.artifactIds),
+          );
+        return run;
+      },
+      async getForTeam(input) {
+        return mapWorkspaceRun(teamDb.prepare('SELECT * FROM workspace_runs WHERE team_id = ? AND id = ?').get(input.teamId, input.runId));
+      },
+      async listByDispatch(dispatchId) {
+        return teamDb
+          .prepare('SELECT * FROM workspace_runs WHERE dispatch_id = ? ORDER BY created_at')
+          .all(dispatchId)
+          .map((row) => {
+            const run = mapWorkspaceRun(row);
+            if (!run) {
+              throw new Error('SQLite workspace run row could not be mapped');
+            }
+            return run;
+          });
+      },
+    },
   };
 }
 
@@ -956,6 +1153,7 @@ function mapChannel(db: SqliteDatabase, row: unknown): ChannelRecord | null {
     kind: sqliteText(row, 'kind') as ChannelRecord['kind'],
     name: sqliteText(row, 'name'),
     title: sqliteNullableText(row, 'description'),
+    dmTargetAgentId: sqliteNullableText(row, 'dm_target_agent_id'),
     visibility: sqliteText(row, 'visibility') as ChannelRecord['visibility'],
     createdBy: sqliteNullableText(row, 'created_by'),
     createdAt: sqliteNumber(row, 'created_at'),
@@ -1068,6 +1266,7 @@ function mapMessage(row: unknown): MessageRecord | null {
     id: sqliteText(row, 'id'),
     teamId: sqliteText(row, 'team_id'),
     channelId: sqliteText(row, 'channel_id'),
+    threadId: sqliteNullableText(row, 'thread_id'),
     senderKind: sqliteText(row, 'sender_kind') as MessageRecord['senderKind'],
     senderId: sqliteText(row, 'sender_id'),
     body: sqliteText(row, 'body'),
@@ -1094,6 +1293,52 @@ function mapDispatch(row: unknown): DispatchRecord | null {
     acceptedAt: sqliteNullableNumber(row, 'accepted_at'),
     completedAt: sqliteNullableNumber(row, 'completed_at'),
     error: sqliteNullableText(row, 'error_message'),
+  };
+}
+
+function mapArtifact(row: unknown): ArtifactRecord | null {
+  if (!row) {
+    return null;
+  }
+  return {
+    id: sqliteText(row, 'id'),
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    messageId: sqliteNullableText(row, 'message_id'),
+    dispatchId: sqliteNullableText(row, 'dispatch_id'),
+    workspaceRunId: sqliteNullableText(row, 'workspace_run_id'),
+    uploaderId: sqliteText(row, 'uploader_id'),
+    filename: sqliteText(row, 'filename'),
+    mimeType: sqliteText(row, 'mime_type'),
+    sizeBytes: sqliteNumber(row, 'size_bytes'),
+    storagePath: sqliteNullableText(row, 'storage_path'),
+    relativePath: sqliteNullableText(row, 'relative_path'),
+    pathKind: sqliteNullableText(row, 'path_kind') as ArtifactRecord['pathKind'],
+    sha256: sqliteNullableText(row, 'sha256'),
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+function mapWorkspaceRun(row: unknown): WorkspaceRunRecord | null {
+  if (!row) {
+    return null;
+  }
+  return {
+    id: sqliteText(row, 'id'),
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    messageId: sqliteNullableText(row, 'message_id'),
+    dispatchId: sqliteText(row, 'dispatch_id'),
+    agentId: sqliteText(row, 'agent_id'),
+    deviceId: sqliteNullableText(row, 'device_id'),
+    status: sqliteText(row, 'status') as WorkspaceRunRecord['status'],
+    cwd: sqliteNullableText(row, 'cwd'),
+    exitCode: sqliteNullableNumber(row, 'exit_code'),
+    startedAt: sqliteNullableNumber(row, 'started_at'),
+    completedAt: sqliteNullableNumber(row, 'completed_at'),
+    createdAt: sqliteNumber(row, 'created_at'),
+    updatedAt: sqliteNumber(row, 'updated_at'),
+    artifactIds: parseJsonArray(sqliteNullableText(row, 'artifact_ids_json')) ?? [],
   };
 }
 

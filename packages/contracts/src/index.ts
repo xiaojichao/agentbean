@@ -6,4 +6,5 @@ export * from './device.js';
 export * from './channel.js';
 export * from './message.js';
 export * from './dispatch.js';
+export * from './artifact.js';
 export * from './socket.js';

@@ -87,6 +87,7 @@
 4. #144 `补齐 AgentBean Next dispatch cancel 与 timeout 调度`
 5. #145 `补齐 AgentBean Next agent publish/config/delete 管理面`
 6. #146 `定义并实现 AgentBean Next artifacts 与 workspace runs 第一版`
+   - 状态：server-next DTO/schema/repository/usecase 第一版已落地；HTTP upload/download/preview route 与 workspace run UI 仍作为后续 API/UI 接入项。
 7. #147 `定义 AgentBean Next DM/thread 第一版数据模型与协议`
 8. #148 `补齐 AgentBean Next 浏览器级 E2E smoke`
 

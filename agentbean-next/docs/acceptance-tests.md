@@ -135,6 +135,23 @@
 当：message 没有 mention，
 结果：server dispatch 给第一个符合条件的 online agent。
 
+### Agent DM 会建立或恢复 Direct Channel
+
+前提：team member 选择某个对该 team 可见的 agent，
+当：用户调用 `dm:start`，
+结果：server 创建或复用一个 private `direct` channel，
+该 channel 只包含该 human user 与目标 agent，
+并且 `dm:list` / `dm:snapshot` 可以恢复该 DM 与历史消息。
+
+### DM Message 会路由到目标 Agent
+
+前提：用户已经与某 agent 建立 DM，
+当：用户在该 DM 中发送不带 mention 的 message，
+结果：server 持久化 human message，
+并 dispatch 给该 DM target agent；
+当：非 DM human member 尝试 snapshot 该 DM，
+结果：server 拒绝访问。
+
 ### No Online Agent 是非致命状态
 
 前提：channel 中没有 online agents，

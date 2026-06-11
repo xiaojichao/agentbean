@@ -1,5 +1,6 @@
 import type { ID, UnixMs } from './common.js';
 import type { AdapterKind } from './agent.js';
+import type { SenderKind } from './message.js';
 
 export type DispatchStatus =
   | 'queued'
@@ -32,10 +33,12 @@ export interface DispatchRequestDto {
   teamId: ID;
   channelId: ID;
   messageId: ID;
+  threadId?: ID;
   agentId: ID;
   deviceId?: ID;
   requestId: string;
   prompt: string;
+  history?: DispatchHistoryMessageDto[];
   attachments?: DispatchAttachmentDto[];
   customAgent?: DispatchCustomAgentDto;
 }
@@ -57,4 +60,13 @@ export interface DispatchDto {
 
 export interface DispatchHistoryItemDto extends DispatchDto {
   promptPreview?: string;
+}
+
+export interface DispatchHistoryMessageDto {
+  messageId: ID;
+  threadId?: ID;
+  senderKind: SenderKind;
+  senderId: ID;
+  body: string;
+  createdAt: UnixMs;
 }

@@ -1,4 +1,4 @@
-import { AGENT_EVENTS, type AgentCategory, type DispatchCustomAgentDto } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, type AgentCategory, type DispatchCustomAgentDto, type DispatchHistoryMessageDto } from '../../../packages/contracts/src/index.js';
 
 export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner.js';
 export type { BuiltinScannerOptions } from './scanner.js';
@@ -51,10 +51,12 @@ export interface DispatchRequestPayload {
   teamId: string;
   channelId: string;
   messageId: string;
+  threadId?: string;
   agentId: string;
   deviceId?: string;
   requestId: string;
   prompt: string;
+  history?: DispatchHistoryMessageDto[];
   customAgent?: DispatchCustomAgentDto | null;
 }
 

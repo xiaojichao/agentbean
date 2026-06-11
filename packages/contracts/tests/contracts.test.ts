@@ -12,6 +12,7 @@ import {
   makeSuccess,
   type Ack,
   type AgentDto,
+  type ArtifactDto,
   type ChannelAgentMemberCommandDto,
   type ChannelDto,
   type ChannelMembersDto,
@@ -27,11 +28,16 @@ import {
   type WaitForDeviceInviteCommandDto,
   type DiscoveredAgentDto,
   type DispatchRequestDto,
+  type DmChannelDto,
   type DispatchDto,
+  type WorkspaceRunDto,
   type ListChannelMembersCommandDto,
+  type ListDmsCommandDto,
   type MessageDto,
   type PublishAgentCommandDto,
   type RuntimeDto,
+  type SnapshotDmCommandDto,
+  type StartDmCommandDto,
   type CreateTeamAckDto,
   type CreateTeamCommandDto,
   type CreateJoinLinkCommandDto,
@@ -208,11 +214,26 @@ describe('first-slice contract result shape', () => {
       id: 'message-1',
       teamId: team.id,
       channelId: channel.id,
+      threadId: 'thread-1',
       senderKind: 'human',
       senderId: user.id,
       body: '@Codex hello',
       createdAt: 5,
       meta: { routeReason: 'MENTION', mentionedName: 'Codex' },
+    };
+    const dmChannel: ChannelDto = {
+      id: 'dm-1',
+      teamId: team.id,
+      kind: 'direct',
+      name: 'dm-user-1-agent-1',
+      visibility: 'private',
+      dmTargetAgentId: agent.id,
+      createdBy: user.id,
+      createdAt: 5,
+    };
+    const dm: DmChannelDto = {
+      channel: dmChannel,
+      agent,
     };
     const dispatch: DispatchDto = {
       id: 'dispatch-1',
@@ -225,14 +246,53 @@ describe('first-slice contract result shape', () => {
       createdAt: 6,
       updatedAt: 6,
     };
+    const artifact: ArtifactDto = {
+      id: 'artifact-1',
+      teamId: team.id,
+      channelId: channel.id,
+      messageId: 'reply-1',
+      dispatchId: dispatch.id,
+      workspaceRunId: 'workspace-run-1',
+      filename: 'result.md',
+      mimeType: 'text/markdown',
+      sizeBytes: 128,
+      relativePath: 'outputs/result.md',
+      pathKind: 'workspace',
+      sha256: 'abc123',
+      createdAt: 7,
+    };
+    const workspaceRun: WorkspaceRunDto = {
+      id: 'workspace-run-1',
+      teamId: team.id,
+      channelId: channel.id,
+      messageId: 'reply-1',
+      dispatchId: dispatch.id,
+      agentId: agent.id,
+      deviceId: device.id,
+      status: 'succeeded',
+      createdAt: 7,
+      updatedAt: 7,
+      artifactIds: [artifact.id],
+    };
     const dispatchRequest: DispatchRequestDto = {
       teamId: team.id,
       channelId: channel.id,
       messageId: message.id,
+      threadId: message.threadId,
       agentId: agent.id,
       requestId: 'request-1',
       prompt: '@Codex hello',
       deviceId: device.id,
+      history: [
+        {
+          messageId: 'message-0',
+          threadId: message.threadId,
+          senderKind: 'human',
+          senderId: user.id,
+          body: 'previous turn',
+          createdAt: 4,
+        },
+      ],
       customAgent: {
         adapterKind: 'codex',
         command: '/opt/homebrew/bin/codex',
@@ -272,6 +332,21 @@ describe('first-slice contract result shape', () => {
       teamId: team.id,
       channelId: channel.id,
     };
+    const startDmCommand: StartDmCommandDto = {
+      userId: user.id,
+      teamId: team.id,
+      agentId: agent.id,
+    };
+    const listDmsCommand: ListDmsCommandDto = {
+      userId: user.id,
+      teamId: team.id,
+    };
+    const snapshotDmCommand: SnapshotDmCommandDto = {
+      userId: user.id,
+      teamId: team.id,
+      channelId: dmChannel.id,
+      limit: 50,
+    };
     const channelMembers: ChannelMembersDto = {
       humanMemberIds: [user.id],
       agentMemberIds: [agent.id],
@@ -301,12 +376,20 @@ describe('first-slice contract result shape', () => {
     expect(runtime.normalizedCommandKey).toBe('/opt/homebrew/bin/codex');
     expect(agent.visibleTeamIds).toEqual(['team-1']);
     expect(message.meta?.routeReason).toBe('MENTION');
+    expect(message.threadId).toBe('thread-1');
+    expect(dm.channel.dmTargetAgentId).toBe(agent.id);
+    expect(artifact.workspaceRunId).toBe(workspaceRun.id);
+    expect(workspaceRun.artifactIds).toEqual(['artifact-1']);
     expect(dispatchRequest.customAgent?.env?.OPENAI_API_KEY).toBe('secret-value');
+    expect(dispatchRequest.history?.[0]?.messageId).toBe('message-0');
     expect(createChannel.visibility).toBe('private');
     expect(updateChannel.title).toBe('Team-wide updates');
     expect(humanMemberCommand.memberUserId).toBe('user-2');
     expect(agentMemberCommand.agentId).toBe('agent-1');
     expect(listMembersCommand.channelId).toBe('channel-1');
+    expect(startDmCommand.agentId).toBe(agent.id);
+    expect(listDmsCommand.teamId).toBe(team.id);
+    expect(snapshotDmCommand.channelId).toBe(dmChannel.id);
     expect(channelMembers.humans[0]?.username).toBe('shaw');
     expect(channelMembers.agents[0]?.name).toBe('Codex');
   });
@@ -325,6 +408,9 @@ describe('first-slice contract result shape', () => {
     expect(WEB_EVENTS.agent.unpublish).toBe('agent:unpublish');
     expect(WEB_EVENTS.agent.updateConfig).toBe('agent:update-config');
     expect(WEB_EVENTS.agent.delete).toBe('agent:delete');
+    expect(WEB_EVENTS.dm.start).toBe('dm:start');
+    expect(WEB_EVENTS.dm.list).toBe('dm:list');
+    expect(WEB_EVENTS.dm.snapshot).toBe('dm:snapshot');
     expect(WEB_EVENTS.message.send).toBe('message:send');
     expect(AGENT_EVENTS.device.hello).toBe('device:hello');
     expect(AGENT_EVENTS.deviceInvite.wait).toBe('device-invite:wait');

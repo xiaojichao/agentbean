@@ -16,20 +16,29 @@ function artifactUrl(path: string): string {
 }
 
 function ArtifactPreview({ artifact }: { artifact: Artifact }) {
-  if (artifact.mimeType.startsWith('image/')) {
+  const downloadUrl = artifact.downloadUrl ? artifactUrl(artifact.downloadUrl) : undefined;
+  const previewUrl = artifact.previewUrl ? artifactUrl(artifact.previewUrl) : undefined;
+  if (artifact.mimeType.startsWith('image/') && downloadUrl && previewUrl) {
     return (
-      <a href={artifactUrl(artifact.downloadUrl)} target="_blank" rel="noreferrer">
+      <a href={downloadUrl} target="_blank" rel="noreferrer">
         <img
-          src={artifactUrl(artifact.previewUrl)}
+          src={previewUrl}
           alt={artifact.filename}
           className="max-h-48 rounded border border-neutral-100"
         />
       </a>
     );
   }
+  if (!downloadUrl) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded border border-neutral-200 bg-neutral-50 px-2 py-1 text-xs text-neutral-600">
+        {artifact.filename} ({(artifact.sizeBytes / 1024).toFixed(1)} KB)
+      </span>
+    );
+  }
   return (
     <a
-      href={artifactUrl(artifact.downloadUrl)}
+      href={downloadUrl}
       target="_blank"
       rel="noreferrer"
       className="inline-flex items-center gap-1 rounded border border-neutral-200 bg-neutral-50 px-2 py-1 text-xs text-blue-600 hover:underline"

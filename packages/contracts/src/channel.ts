@@ -12,6 +12,7 @@ export interface ChannelDto {
   name: string;
   visibility: ChannelVisibility;
   title?: string;
+  dmTargetAgentId?: ID;
   createdBy?: ID;
   createdAt: UnixMs;
   updatedAt?: UnixMs;
@@ -63,4 +64,27 @@ export interface ChannelMembersDto {
   agentMemberIds: ID[];
   humans: HumanMemberDto[];
   agents: AgentDto[];
+}
+
+export interface DmChannelDto {
+  channel: ChannelDto;
+  agent: AgentDto;
+}
+
+export interface StartDmCommandDto {
+  userId: ID;
+  teamId: ID;
+  agentId: ID;
+}
+
+export interface ListDmsCommandDto {
+  userId: ID;
+  teamId: ID;
+}
+
+export interface SnapshotDmCommandDto {
+  userId: ID;
+  teamId: ID;
+  channelId: ID;
+  limit?: number;
 }

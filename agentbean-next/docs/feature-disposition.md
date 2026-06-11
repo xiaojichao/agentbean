@@ -82,11 +82,11 @@
 
 | 当前表面 | 状态 | 目标方向 |
 |---|---|---|
-| `dm:start` | Keep | 保留为 start/get DM with agent。 |
-| `dm:list` / `dms:snapshot` | Keep | 保留。 |
-| DM mention filtering | Keep | 在 UI 与 server routing 中保留该行为。 |
-| Thread message context | Keep | 保留。Dispatch history 不得重复当前 prompt。 |
-| Formal thread data model | Missing | 在重写版中加入显式 thread fields 或 model。 |
+| `dm:start` | Keep | Next server 已实现为 start/get DM with agent；重复调用复用同一 direct channel。 |
+| `dm:list` / `dm:snapshot` | Keep | Next server 已实现 DM list 与单 DM snapshot/history。 |
+| DM mention filtering | Keep | Direct channel 固定路由到 DM target agent；普通 channel mention 支持多词 agent name。 |
+| Thread message context | Keep | 使用 `messages.thread_id`；dispatch history 只包含同 thread 的 previous messages，不重复当前 prompt。 |
+| Formal thread data model | Keep | 第一版选择 root-message convention，不引入独立 `threads` table。 |
 
 ## Messages、Search、Dispatch
 
