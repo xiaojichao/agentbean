@@ -256,7 +256,7 @@ export interface UpdateAgentConfigInput {
   runtimeId?: string;
   name?: string;
   description?: string;
-  adapterKind?: string;
+  adapterKind?: AdapterKind;
   command?: string;
   args?: string[];
   cwd?: string;
@@ -935,7 +935,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         lastSeenAt: now,
       });
 
-      return makeSuccess({ agent });
+      return makeSuccess({ agent: toPublicAgent(agent) });
     },
 
     async publishAgent(agentInput) {
@@ -950,7 +950,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('FORBIDDEN', 'User is not a target team member');
       }
       if (agentInput.targetTeamId === managed.agent.primaryTeamId) {
-        return makeSuccess({ agent: managed.agent });
+        return makeFailure('VALIDATION_ERROR', 'Cannot publish agent to its primary team');
       }
       const agent = await repositories.agents.publish({
         agentId: managed.agent.id,
@@ -961,7 +961,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!agent) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
-      return makeSuccess({ agent });
+      return makeSuccess({ agent: toPublicAgent(agent) });
     },
 
     async unpublishAgent(agentInput) {
@@ -984,7 +984,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         agentId: managed.agent.id,
         timestamp: clock.now(),
       });
-      return makeSuccess({ agent });
+      return makeSuccess({ agent: toPublicAgent(agent) });
     },
 
     async updateAgentConfig(agentInput) {
@@ -1059,7 +1059,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!agent) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
-      return makeSuccess({ agent });
+      return makeSuccess({ agent: toPublicAgent(agent) });
     },
 
     async deleteAgent(agentInput) {
@@ -1082,7 +1082,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!agent) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
-      return makeSuccess({ agent });
+      return makeSuccess({ agent: toPublicAgent(agent) });
     },
 
     async listChannels(listInput) {
@@ -1871,6 +1871,11 @@ async function agentForManagement(
 
 function uniqueIds(ids: string[]): string[] {
   return Array.from(new Set(ids.filter(Boolean)));
+}
+
+function toPublicAgent(agent: AgentRecord): AgentDto {
+  const { deletedAt: _deletedAt, ...publicAgent } = agent;
+  return publicAgent;
 }
 
 function agentIdentityKey(input: {

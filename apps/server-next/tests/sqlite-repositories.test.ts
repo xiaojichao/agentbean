@@ -668,6 +668,7 @@ describe('server-next SQLite repositories', () => {
             'device-1',
             'runtime-1',
             'agent-1',
+            'runtime-2',
             'message-1',
             'dispatch-1',
             'request-1',
@@ -701,14 +702,33 @@ describe('server-next SQLite repositories', () => {
         env: { OPENAI_API_KEY: 'old-secret' },
       });
       await app.publishAgent({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1', targetTeamId: 'team-2' });
+      await app.reportDeviceRuntimes({
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        runtimes: [
+          {
+            adapterKind: 'codex',
+            name: 'Codex CLI',
+            installed: true,
+          },
+        ],
+      });
       await app.updateAgentConfig({
         userId: 'user-1',
         teamId: 'team-1',
         agentId: 'agent-1',
+        runtimeId: 'runtime-2',
         name: 'Renamed Codex',
         env: { OPENAI_API_KEY: 'new-secret' },
       });
       await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'hello from renamed config' });
+      const request = await app.getDispatchRequest({ dispatchId: 'dispatch-1' });
+      expect(request.ok).toBe(true);
+      if (request.ok) {
+        expect(request.request.customAgent?.command).toBeUndefined();
+        expect(request.request.customAgent?.cwd).toBeUndefined();
+        expect(request.request.customAgent?.env).toEqual({ OPENAI_API_KEY: 'new-secret' });
+      }
       await app.deleteAgent({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' });
 
       await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({ ok: true, agents: [] });

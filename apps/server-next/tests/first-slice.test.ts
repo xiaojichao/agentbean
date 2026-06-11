@@ -761,6 +761,18 @@ describe('server-next first-slice use cases', () => {
         userId: 'user-1',
         teamId: 'team-1',
         agentId: 'agent-1',
+        targetTeamId: 'team-1',
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: 'VALIDATION_ERROR',
+    });
+
+    await expect(
+      app.publishAgent({
+        userId: 'user-1',
+        teamId: 'team-1',
+        agentId: 'agent-1',
         targetTeamId: 'team-2',
       }),
     ).resolves.toMatchObject({
@@ -825,16 +837,16 @@ describe('server-next first-slice use cases', () => {
       agents: [],
     });
 
-    await expect(
-      app.deleteAgent({
-        userId: 'user-1',
-        teamId: 'team-1',
-        agentId: 'agent-1',
-      }),
-    ).resolves.toMatchObject({
+    const deleteAck = await app.deleteAgent({
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+    });
+    expect(deleteAck).toMatchObject({
       ok: true,
       agent: { id: 'agent-1', visibleTeamIds: [], status: 'offline' },
     });
+    expect(JSON.stringify(deleteAck)).not.toContain('deletedAt');
     await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
       ok: true,
       agents: [],
@@ -952,6 +964,92 @@ describe('server-next first-slice use cases', () => {
       ok: false,
       error: 'INVITE_ALREADY_USED',
     });
+  });
+
+  test('rejects unauthorized or invalid custom agent management operations', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 720,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'join-1',
+        'user-2',
+        'team-2',
+        'channel-2',
+        'device-1',
+        'runtime-1',
+        'agent-1',
+        'agent-2',
+      ]),
+      joinCodes: createIds(['code-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
+    await app.registerUser({ username: 'lin', password: 'secret', teamName: 'Lin Private', joinCode: 'code-1' });
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+    });
+    await app.reportDeviceRuntimes({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimes: [{ adapterKind: 'codex', name: 'Codex CLI', installed: true }],
+    });
+    await app.createCustomAgent({
+      userId: 'user-1',
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimeId: 'runtime-1',
+      name: 'Custom Codex',
+    });
+    await app.registerDiscoveredAgents({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      agents: [{ adapterKind: 'claude-code', name: 'Scanned Claude', category: 'executor-hosted' }],
+    });
+
+    await expect(app.updateAgentConfig({
+      userId: 'user-2',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      name: 'Member Rename',
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    await expect(app.deleteAgent({
+      userId: 'user-2',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    await expect(app.publishAgent({
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      targetTeamId: 'team-2',
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    await expect(app.deleteAgent({
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-2',
+    })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+
+    await expect(app.deleteAgent({
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+    })).resolves.toMatchObject({ ok: true });
+    await expect(app.updateAgentConfig({
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      name: 'Deleted Rename',
+    })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+    await expect(app.deleteAgent({
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+    })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
   });
 });
 

@@ -276,7 +276,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         }
         const updated = {
           ...agent,
-          visibleTeamIds: agent.visibleTeamIds.filter((teamId) => teamId === agent.primaryTeamId || teamId !== input.teamId),
+          visibleTeamIds: agent.visibleTeamIds.filter((teamId) => teamId !== input.teamId || teamId === agent.primaryTeamId),
         };
         agents.set(agent.id, updated);
         return updated;
