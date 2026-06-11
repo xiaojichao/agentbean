@@ -50,6 +50,23 @@ describe('Phase 1 message routing rules', () => {
     });
   });
 
+  test('prefers the longest matching leading mention name', () => {
+    const result = routeMessage({
+      body: '@Codex Pro please inspect this',
+      agents: [
+        onlineAgent('agent-1', 'Codex'),
+        onlineAgent('agent-2', 'Codex Pro'),
+      ],
+      humanMembers: [],
+    });
+
+    expect(result).toEqual({
+      kind: 'dispatch',
+      agentId: 'agent-2',
+      reason: 'mention',
+    });
+  });
+
   test('does not fallback when the leading mention is unknown', () => {
     const result = routeMessage({
       body: '@Unknown please inspect this',

@@ -554,7 +554,7 @@ export interface DispatchAttachmentDto {
   filename: string;
   mimeType: string;
   sizeBytes: number;
-  downloadUrl: string;
+  downloadUrl?: string;
   previewUrl?: string | null;
 }
 
@@ -598,8 +598,8 @@ export interface ArtifactDto {
   pathKind?: 'upload' | 'workspace' | 'generated';
   sha256?: string;
   createdAt: UnixMs;
-  downloadUrl: string;
-  previewUrl: string;
+  downloadUrl?: string;
+  previewUrl?: string;
 }
 
 export interface WorkspaceRunDto {
@@ -624,7 +624,7 @@ export interface WorkspaceRunDto {
 说明：
 
 - `MessageDto.artifacts` 与 `MessageDto.workspaceRun` 是 server-side projection；message `meta.artifactIds`/`meta.workspaceRunId` 仍保留为轻量索引。
-- `downloadUrl` / `previewUrl` 使用 `/api/teams/:teamId/artifacts/:artifactId/...` 第一版路径合同；HTTP upload/download handler 可以复用同一个 team-scoped repository 授权边界。
+- `downloadUrl` / `previewUrl` 是可选字段；server-next 在 HTTP upload/download handler 落地前不返回未实现的链接。
 - `WorkspaceRunDto` 必须回链 `dispatchId`、`agentId`，并尽量保存 `deviceId`；这让 agent output、执行设备与原始 prompt 可追溯。
 
 ## 第一切片 Event DTO 用法

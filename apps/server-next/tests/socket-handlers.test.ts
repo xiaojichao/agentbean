@@ -41,6 +41,9 @@ describe('server-next socket handlers', () => {
       listChannelMessages: vi.fn(async () => makeSuccess({
         messages: [{ id: 'message-1', channelId: 'channel-2', body: 'hello' }],
       })),
+      listVisibleAgents: vi.fn(async () => makeSuccess({
+        agents: [{ id: 'agent-1', visibleTeamIds: ['team-1'] }],
+      })),
       createCustomAgent: vi.fn(async (payload) => makeSuccess({ payload })),
       publishAgent: vi.fn(async (payload) => makeSuccess({ payload })),
       unpublishAgent: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -418,6 +421,59 @@ describe('server-next socket handlers', () => {
       body: 'done',
     });
     expect(app.receiveDispatchError).toHaveBeenCalledWith({ dispatchId: 'dispatch-1' });
+  });
+
+  test('enriches agent management refresh payloads without changing client acknowledgements', async () => {
+    const socket = new FakeSocket();
+    const afterAgentMutation = vi.fn();
+    const app = {
+      listVisibleAgents: vi.fn(async () => makeSuccess({
+        agents: [{ id: 'agent-1', visibleTeamIds: ['team-1', 'team-2'] }],
+      })),
+      unpublishAgent: vi.fn(async () => makeSuccess({ agent: { id: 'agent-1', visibleTeamIds: ['team-1'] } })),
+      deleteAgent: vi.fn(async () => makeSuccess({ agent: { id: 'agent-1', visibleTeamIds: [] } })),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, { afterAgentMutation });
+
+    await expect(socket.trigger(WEB_EVENTS.agent.unpublish, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      targetTeamId: 'team-2',
+    })).resolves.toEqual({
+      ok: true,
+      agent: { id: 'agent-1', visibleTeamIds: ['team-1'] },
+    });
+    expect(afterAgentMutation).toHaveBeenNthCalledWith(1, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      targetTeamId: 'team-2',
+      channelTeamIds: ['team-2'],
+    }, {
+      ok: true,
+      agent: { id: 'agent-1', visibleTeamIds: ['team-1'] },
+    });
+
+    await expect(socket.trigger(WEB_EVENTS.agent.delete, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+    })).resolves.toEqual({
+      ok: true,
+      agent: { id: 'agent-1', visibleTeamIds: [] },
+    });
+    expect(afterAgentMutation).toHaveBeenNthCalledWith(2, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      affectedTeamIds: ['team-1', 'team-2'],
+      channelTeamIds: ['team-1', 'team-2'],
+    }, {
+      ok: true,
+      agent: { id: 'agent-1', visibleTeamIds: [] },
+    });
   });
 });
 

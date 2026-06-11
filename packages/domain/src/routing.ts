@@ -35,19 +35,16 @@ export function routeMessage(input: RouteMessageInput): RouteResult {
   const eligibleAgents = input.agents.filter((agent) => isEligibleOnlineAgent(agent, input));
 
   if (mention) {
-    const mentionedHuman = input.humanMembers.some((member) => {
-      return [member.username, member.displayName]
-        .filter((value): value is string => Boolean(value))
-        .some((name) => mentionMatchesName(mention, name));
-    });
+    const mentionedHuman = findBestMentionMatch(input.humanMembers, mention, (member) => [
+      member.username,
+      member.displayName,
+    ]);
 
     if (mentionedHuman) {
       return { kind: 'no-dispatch', reason: 'human-mention' };
     }
 
-    const mentionedAgent = eligibleAgents.find(
-      (agent) => mentionMatchesName(mention, agent.name),
-    );
+    const mentionedAgent = findBestMentionMatch(eligibleAgents, mention, (agent) => [agent.name]);
 
     if (mentionedAgent) {
       return { kind: 'dispatch', agentId: mentionedAgent.id, reason: 'mention' };
@@ -73,6 +70,24 @@ function mentionMatchesName(mentionText: string, name: string): boolean {
   const normalizedMention = normalizeMentionName(mentionText);
   const normalizedName = normalizeMentionName(name);
   return normalizedMention === normalizedName || normalizedMention.startsWith(`${normalizedName}-`);
+}
+
+function findBestMentionMatch<T>(
+  candidates: T[],
+  mentionText: string,
+  namesForCandidate: (candidate: T) => Array<string | undefined>,
+): T | undefined {
+  const matches: Array<{ candidate: T; nameLength: number }> = [];
+  for (const candidate of candidates) {
+    for (const name of namesForCandidate(candidate)) {
+      if (!name || !mentionMatchesName(mentionText, name)) {
+        continue;
+      }
+      matches.push({ candidate, nameLength: normalizeMentionName(name).length });
+    }
+  }
+  matches.sort((left, right) => right.nameLength - left.nameLength);
+  return matches[0]?.candidate;
 }
 
 function isEligibleOnlineAgent(agent: RouteAgent, input: RouteMessageInput): boolean {

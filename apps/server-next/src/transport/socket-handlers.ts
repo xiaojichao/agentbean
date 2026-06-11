@@ -106,15 +106,30 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.agent.publish, app, 'publishAgent', (payload, result) =>
     options.afterAgentMutation?.(payload, result), { authenticatedUser: options.authenticatedUser },
   );
-  bind(socket, WEB_EVENTS.agent.unpublish, app, 'unpublishAgent', (payload, result) =>
-    options.afterAgentMutation?.(payload, result), { authenticatedUser: options.authenticatedUser },
-  );
+  socket.on(WEB_EVENTS.agent.unpublish, async (payload, ack) => {
+    try {
+      const input = await withAuthenticatedUserId(payload, options.authenticatedUser);
+      const result = await app.unpublishAgent(input as Parameters<ServerNextUseCases['unpublishAgent']>[0]);
+      ack?.(result);
+      await options.afterAgentMutation?.(withChannelTeamIds(input, [payloadString(input, 'targetTeamId')]), result);
+    } catch (error) {
+      ack?.(socketErrorAck(error));
+    }
+  });
   bind(socket, WEB_EVENTS.agent.updateConfig, app, 'updateAgentConfig', (payload, result) =>
     options.afterAgentMutation?.(payload, result), { authenticatedUser: options.authenticatedUser },
   );
-  bind(socket, WEB_EVENTS.agent.delete, app, 'deleteAgent', (payload, result) =>
-    options.afterAgentMutation?.(payload, result), { authenticatedUser: options.authenticatedUser },
-  );
+  socket.on(WEB_EVENTS.agent.delete, async (payload, ack) => {
+    try {
+      const input = await withAuthenticatedUserId(payload, options.authenticatedUser);
+      const affectedTeamIds = await visibleAgentTeamIds(app, input);
+      const result = await app.deleteAgent(input as Parameters<ServerNextUseCases['deleteAgent']>[0]);
+      ack?.(result);
+      await options.afterAgentMutation?.(withAffectedAgentTeamIds(input, affectedTeamIds), result);
+    } catch (error) {
+      ack?.(socketErrorAck(error));
+    }
+  });
   bind(socket, WEB_EVENTS.message.send, app, 'sendMessage', async (_payload, result) => {
     if (!options.dispatch || !isSendMessageAck(result)) {
       return;
@@ -195,6 +210,55 @@ function bind(
       ack?.(makeFailure('INTERNAL_ERROR', error instanceof Error ? error.message : 'Unhandled socket handler error'));
     }
   });
+}
+
+async function visibleAgentTeamIds(app: ServerNextUseCases, payload: unknown): Promise<string[]> {
+  const teamId = payloadString(payload, 'teamId');
+  const agentId = payloadString(payload, 'agentId');
+  if (!teamId || !agentId) {
+    return [];
+  }
+  const result = await app.listVisibleAgents({ teamId });
+  if (!result.ok) {
+    return [];
+  }
+  return result.agents.find((agent) => agent.id === agentId)?.visibleTeamIds ?? [];
+}
+
+function withChannelTeamIds(payload: unknown, teamIds: Array<string | undefined>): unknown {
+  return withStringArrayPayload(payload, 'channelTeamIds', teamIds);
+}
+
+function withAffectedAgentTeamIds(payload: unknown, teamIds: string[]): unknown {
+  const withAffected = withStringArrayPayload(payload, 'affectedTeamIds', teamIds);
+  return withStringArrayPayload(withAffected, 'channelTeamIds', teamIds);
+}
+
+function withStringArrayPayload(payload: unknown, key: string, values: Array<string | undefined>): unknown {
+  const strings = uniqueStrings(values);
+  if (strings.length === 0 || !payload || typeof payload !== 'object') {
+    return payload;
+  }
+  return { ...payload, [key]: strings };
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return Array.from(new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0)));
+}
+
+function payloadString(payload: unknown, key: string): string | undefined {
+  if (!payload || typeof payload !== 'object') {
+    return undefined;
+  }
+  const value = (payload as Record<string, unknown>)[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function socketErrorAck(error: unknown) {
+  if (error instanceof UnauthenticatedSocketError) {
+    return makeFailure('UNAUTHENTICATED', 'Invalid session token');
+  }
+  return makeFailure('INTERNAL_ERROR', error instanceof Error ? error.message : 'Unhandled socket handler error');
 }
 
 async function withAuthenticatedUserId(

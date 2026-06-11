@@ -1210,12 +1210,24 @@ function AttachmentStrip({ attachments, onRemove }: { attachments: Artifact[]; o
 
 function ArtifactPreview({ artifact }: { artifact: Artifact }) {
   const downloadUrl = artifactUrl(artifact.downloadUrl);
-  if (artifact.mimeType.startsWith('image/')) {
+  const previewUrl = artifactUrl(artifact.previewUrl);
+  if (artifact.mimeType.startsWith('image/') && downloadUrl && previewUrl) {
     return (
       <a href={downloadUrl} target="_blank" rel="noreferrer" className="block max-w-80">
-        <img src={artifactUrl(artifact.previewUrl)} alt={artifact.filename} className="max-h-64 rounded-md border border-neutral-200 object-contain" />
+        <img src={previewUrl} alt={artifact.filename} className="max-h-64 rounded-md border border-neutral-200 object-contain" />
         <div className="mt-1 truncate text-xs text-neutral-500">{artifact.filename}</div>
       </a>
+    );
+  }
+  if (!downloadUrl) {
+    return (
+      <span className="group inline-flex min-h-16 max-w-96 items-center gap-3 rounded-md border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-700">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-neutral-50 text-neutral-500"><FileText size={15} /></span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium text-neutral-900">{artifact.filename}</span>
+          <span className="mt-0.5 block truncate text-[11px] text-neutral-500">{formatFileSize(artifact.sizeBytes)}</span>
+        </span>
+      </span>
     );
   }
   return (
@@ -1340,11 +1352,12 @@ function formatFileSize(bytes: number): string {
 function safeHref(href: string): string | null {
   const trimmed = href.trim();
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  if (trimmed.startsWith('/api/')) return artifactUrl(trimmed);
+  if (trimmed.startsWith('/api/')) return artifactUrl(trimmed) ?? null;
   return null;
 }
 
-function artifactUrl(path: string): string {
+function artifactUrl(path: string | undefined): string | null {
+  if (!path) return null;
   const token = getStoredAuthToken();
   const sep = path.includes('?') ? '&' : '?';
   return `${getResolvedServerUrl()}${path}${sep}token=${encodeURIComponent(token)}`;

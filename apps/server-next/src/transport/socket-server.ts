@@ -162,12 +162,17 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         if (!isSuccessAck(result)) {
           return;
         }
-        const teamIds = uniqueStrings([payloadTeamId(payload), payloadTargetTeamId(payload)]);
-        if (teamIds.length === 0) {
-          return;
-        }
-        for (const teamId of teamIds) {
+        const agentTeamIds = uniqueStrings([
+          payloadTeamId(payload),
+          payloadTargetTeamId(payload),
+          ...payloadTeamIds(payload, 'affectedTeamIds'),
+          ...resultAgentVisibleTeamIds(result),
+        ]);
+        for (const teamId of agentTeamIds) {
           await refreshAgentSubscribers(webSubscribers, app, teamId);
+        }
+        for (const teamId of payloadTeamIds(payload, 'channelTeamIds')) {
+          await refreshChannelSubscribers(webSubscribers, app, teamId);
         }
       },
     });
@@ -232,7 +237,8 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         }
         emitDispatchStatus(webSubscribers, resultDispatch(result));
         await emitChannelMessageSubscribers(webSubscribers, app, teamId, result);
-        for (const refreshTeamId of uniqueStrings([teamId, payloadTargetTeamId(payload)])) {
+        const refreshTeamIds = uniqueStrings([teamId, payloadTargetTeamId(payload), ...resultAgentVisibleTeamIds(result)]);
+        for (const refreshTeamId of refreshTeamIds) {
           await refreshAgentSubscribers(webSubscribers, app, refreshTeamId);
         }
       },
@@ -460,7 +466,29 @@ function payloadTargetTeamId(payload: unknown): string | null {
   return typeof teamId === 'string' ? teamId : null;
 }
 
-function uniqueStrings(values: Array<string | null>): string[] {
+function payloadTeamIds(payload: unknown, key: string): string[] {
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+  const value = (payload as Record<string, unknown>)[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return uniqueStrings(value.filter((teamId): teamId is string => typeof teamId === 'string'));
+}
+
+function resultAgentVisibleTeamIds(result: unknown): string[] {
+  if (!result || typeof result !== 'object') {
+    return [];
+  }
+  const agent = (result as { agent?: { visibleTeamIds?: unknown } }).agent;
+  if (!agent || !Array.isArray(agent.visibleTeamIds)) {
+    return [];
+  }
+  return uniqueStrings(agent.visibleTeamIds.filter((teamId): teamId is string => typeof teamId === 'string'));
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return Array.from(new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0)));
 }
 

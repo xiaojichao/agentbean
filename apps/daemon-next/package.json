@@ -25,7 +25,6 @@
   },
   "dependencies": {
     "@agentbean/contracts": "0.2.0",
-    "better-sqlite3": "^12.10.0",
     "socket.io-client": "^4.8.3"
   }
 }

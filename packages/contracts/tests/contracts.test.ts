@@ -260,8 +260,6 @@ describe('first-slice contract result shape', () => {
       pathKind: 'workspace',
       sha256: 'abc123',
       createdAt: 7,
-      downloadUrl: `/api/teams/${team.id}/artifacts/artifact-1/download`,
-      previewUrl: `/api/teams/${team.id}/artifacts/artifact-1/preview`,
     };
     const workspaceRun: WorkspaceRunDto = {
       id: 'workspace-run-1',

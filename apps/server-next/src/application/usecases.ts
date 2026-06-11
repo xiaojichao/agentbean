@@ -261,7 +261,7 @@ export interface UpdateAgentConfigInput {
   runtimeId?: string;
   name?: string;
   description?: string;
-  adapterKind?: string;
+  adapterKind?: AdapterKind;
   command?: string;
   args?: string[];
   cwd?: string;
@@ -993,7 +993,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         lastSeenAt: now,
       });
 
-      return makeSuccess({ agent });
+      return makeSuccess({ agent: toPublicAgent(agent) });
     },
 
     async publishAgent(agentInput) {
@@ -1008,7 +1008,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('FORBIDDEN', 'User is not a target team member');
       }
       if (agentInput.targetTeamId === managed.agent.primaryTeamId) {
-        return makeSuccess({ agent: managed.agent });
+        return makeFailure('VALIDATION_ERROR', 'Cannot publish agent to its primary team');
       }
       const agent = await repositories.agents.publish({
         agentId: managed.agent.id,
@@ -1019,7 +1019,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!agent) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
-      return makeSuccess({ agent });
+      return makeSuccess({ agent: toPublicAgent(agent) });
     },
 
     async unpublishAgent(agentInput) {
@@ -1042,7 +1042,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         agentId: managed.agent.id,
         timestamp: clock.now(),
       });
-      return makeSuccess({ agent });
+      return makeSuccess({ agent: toPublicAgent(agent) });
     },
 
     async updateAgentConfig(agentInput) {
@@ -1117,7 +1117,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!agent) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
-      return makeSuccess({ agent });
+      return makeSuccess({ agent: toPublicAgent(agent) });
     },
 
     async deleteAgent(agentInput) {
@@ -1140,7 +1140,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!agent) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
-      return makeSuccess({ agent });
+      return makeSuccess({ agent: toPublicAgent(agent) });
     },
 
     async listChannels(listInput) {
@@ -1410,9 +1410,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!agent || !agent.visibleTeamIds.includes(dmInput.teamId)) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
+      const messages = await repositories.messages.listByChannel(channel.id, normalizeLimit(dmInput.limit));
       return makeSuccess({
         dm: toDmChannelDto(channel, agent),
-        messages: await repositories.messages.listByChannel(channel.id, normalizeLimit(dmInput.limit)),
+        messages: await enrichMessagesWithArtifacts(repositories, messages),
       });
     },
 
@@ -1551,6 +1552,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!artifact) {
         return makeFailure('NOT_FOUND', 'Artifact not found');
       }
+      const channelAccess = await ensureUserCanViewChannel(repositories, {
+        userId: artifactInput.userId,
+        teamId: artifact.teamId,
+        channelId: artifact.channelId,
+      });
+      if (!channelAccess.ok) {
+        return channelAccess;
+      }
       return makeSuccess({ artifact: toArtifactDto(artifact) });
     },
 
@@ -1564,6 +1573,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
       if (!workspaceRun) {
         return makeFailure('NOT_FOUND', 'Workspace run not found');
+      }
+      const channelAccess = await ensureUserCanViewChannel(repositories, {
+        userId: runInput.userId,
+        teamId: workspaceRun.teamId,
+        channelId: workspaceRun.channelId,
+      });
+      if (!channelAccess.ok) {
+        return channelAccess;
       }
       return makeSuccess({ workspaceRun });
     },
@@ -1619,7 +1636,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('CONFLICT', 'Dispatch is already completed');
       }
       const agent = await repositories.agents.getById(resultInput.agentId);
-      if (!agent) {
+      if (!agent || agent.deletedAt !== undefined) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
 
@@ -1721,6 +1738,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       if (!isPendingDispatchStatus(dispatch.status)) {
         return makeFailure('CONFLICT', 'Dispatch is already completed');
+      }
+      const agent = await repositories.agents.getById(errorInput.agentId);
+      if (!agent || agent.deletedAt !== undefined) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
       }
 
       const now = clock.now();
@@ -1859,8 +1880,6 @@ function toArtifactDto(artifact: ArtifactRecord): ArtifactDto {
     pathKind: artifact.pathKind,
     sha256: artifact.sha256,
     createdAt: artifact.createdAt,
-    downloadUrl: `/api/teams/${encodeURIComponent(artifact.teamId)}/artifacts/${encodeURIComponent(artifact.id)}/download`,
-    previewUrl: `/api/teams/${encodeURIComponent(artifact.teamId)}/artifacts/${encodeURIComponent(artifact.id)}/preview`,
   };
 }
 
@@ -2182,6 +2201,20 @@ async function channelForCreatorManagement(
   return makeSuccess({ channel });
 }
 
+async function ensureUserCanViewChannel(
+  repositories: ServerNextRepositories,
+  input: { userId: string; teamId: string; channelId: string },
+): Promise<Ack<{ channel: ChannelDto & { humanMemberIds: string[]; agentMemberIds: string[] } }>> {
+  const channel = await repositories.channels.getById(input.channelId);
+  if (!channel || channel.teamId !== input.teamId) {
+    return makeFailure('NOT_FOUND', 'Channel not found');
+  }
+  if (channel.visibility === 'private' && !channel.humanMemberIds.includes(input.userId)) {
+    return makeFailure('FORBIDDEN', 'User cannot view channel');
+  }
+  return makeSuccess({ channel });
+}
+
 async function agentForManagement(
   repositories: ServerNextRepositories,
   input: { userId: string; teamId: string; agentId: string },
@@ -2208,6 +2241,11 @@ async function agentForManagement(
 
 function uniqueIds(ids: string[]): string[] {
   return Array.from(new Set(ids.filter(Boolean)));
+}
+
+function toPublicAgent(agent: AgentRecord): AgentDto {
+  const { deletedAt: _deletedAt, ...publicAgent } = agent;
+  return publicAgent;
 }
 
 function agentIdentityKey(input: {

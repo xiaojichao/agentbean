@@ -778,6 +778,160 @@ describe('server-next Socket.IO namespaces', () => {
     expect(JSON.stringify(agentSnapshots)).not.toContain('secret-value');
   });
 
+  test('refreshes published team agent and channel snapshots after custom agent management', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-all',
+        'team-2',
+        'channel-client',
+        'device-1',
+        'runtime-1',
+        'agent-1',
+        'channel-client-room',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const web = await connectClient(`${baseUrl}/web`);
+    const target = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      web.disconnect();
+      target.disconnect();
+      agent.disconnect();
+    });
+
+    const targetAgentSnapshots: unknown[][] = [];
+    const targetChannelSnapshots: unknown[][] = [];
+    target.on(WEB_EVENTS.agent.snapshot, (agents) => {
+      if (!Array.isArray(agents)) {
+        throw new Error('Expected agent snapshot payload to be an array');
+      }
+      targetAgentSnapshots.push(agents);
+    });
+    target.on(WEB_EVENTS.channel.snapshot, (channels) => {
+      if (!Array.isArray(channels)) {
+        throw new Error('Expected channel snapshot payload to be an array');
+      }
+      targetChannelSnapshots.push(channels);
+    });
+
+    await web.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    await expect(web.emitWithAck(WEB_EVENTS.team.create, { userId: 'user-1', name: 'Client Team' })).resolves.toMatchObject({
+      ok: true,
+      team: { id: 'team-2' },
+    });
+    await target.emitWithAck(WEB_EVENTS.agent.subscribe, { userId: 'user-1', teamId: 'team-2' });
+    await target.emitWithAck(WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-2' });
+    await eventually(async () => {
+      expect(targetAgentSnapshots.at(-1)).toEqual([]);
+      expect(channelIds(targetChannelSnapshots.at(-1))).toEqual(['channel-client']);
+    });
+
+    await agent.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+    });
+    await agent.emitWithAck(AGENT_EVENTS.device.runtimes, {
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimes: [{ adapterKind: 'codex', name: 'Codex CLI', installed: true }],
+    });
+    await expect(web.emitWithAck(WEB_EVENTS.agent.create, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimeId: 'runtime-1',
+      name: 'Custom Codex',
+    })).resolves.toMatchObject({ ok: true, agent: { id: 'agent-1' } });
+    await expect(web.emitWithAck(WEB_EVENTS.agent.publish, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      targetTeamId: 'team-2',
+    })).resolves.toMatchObject({ ok: true });
+    await eventually(async () => {
+      expect(targetAgentSnapshots.at(-1)).toMatchObject([{ id: 'agent-1', name: 'Custom Codex' }]);
+    });
+    await expect(web.emitWithAck(WEB_EVENTS.channel.create, {
+      userId: 'user-1',
+      teamId: 'team-2',
+      name: 'ops',
+      visibility: 'public',
+    })).resolves.toMatchObject({ ok: true, channel: { id: 'channel-client-room' } });
+
+    await expect(web.emitWithAck(WEB_EVENTS.channel.addAgent, {
+      userId: 'user-1',
+      teamId: 'team-2',
+      channelId: 'channel-client-room',
+      agentId: 'agent-1',
+    })).resolves.toMatchObject({ ok: true, channel: { agentMemberIds: ['agent-1'] } });
+    await eventually(async () => {
+      expect(targetChannelSnapshots.at(-1)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'channel-client-room', agentMemberIds: ['agent-1'] }),
+      ]));
+    });
+
+    await web.emitWithAck(WEB_EVENTS.agent.updateConfig, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      name: 'Renamed Codex',
+    });
+    await eventually(async () => {
+      expect(targetAgentSnapshots.at(-1)).toMatchObject([{ id: 'agent-1', name: 'Renamed Codex' }]);
+    });
+
+    await web.emitWithAck(WEB_EVENTS.agent.unpublish, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      targetTeamId: 'team-2',
+    });
+    await eventually(async () => {
+      expect(targetAgentSnapshots.at(-1)).toEqual([]);
+      expect(targetChannelSnapshots.at(-1)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'channel-client-room', agentMemberIds: [] }),
+      ]));
+    });
+
+    await web.emitWithAck(WEB_EVENTS.agent.publish, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      targetTeamId: 'team-2',
+    });
+    await web.emitWithAck(WEB_EVENTS.channel.addAgent, {
+      userId: 'user-1',
+      teamId: 'team-2',
+      channelId: 'channel-client-room',
+      agentId: 'agent-1',
+    });
+    await web.emitWithAck(WEB_EVENTS.agent.delete, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+    });
+    await eventually(async () => {
+      expect(targetAgentSnapshots.at(-1)).toEqual([]);
+      expect(targetChannelSnapshots.at(-1)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'channel-client-room', agentMemberIds: [] }),
+      ]));
+    });
+  });
+
   test('sends custom agent dispatch secrets only to the daemon that owns the target device', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,

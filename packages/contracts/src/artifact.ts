@@ -17,8 +17,8 @@ export interface ArtifactDto {
   pathKind?: ArtifactPathKind;
   sha256?: string;
   createdAt: UnixMs;
-  downloadUrl: string;
-  previewUrl: string;
+  downloadUrl?: string;
+  previewUrl?: string;
 }
 
 export interface WorkspaceRunDto {

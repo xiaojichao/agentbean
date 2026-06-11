@@ -169,7 +169,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           channel.teamId === input.teamId &&
           channel.kind === 'direct' &&
           channel.humanMemberIds.includes(input.userId) &&
-          channel.agentMemberIds.includes(input.agentId)
+          (channel.dmTargetAgentId === input.agentId || channel.agentMemberIds.includes(input.agentId))
         ) ?? null;
       },
       async listForUser(teamId, userId) {
@@ -295,7 +295,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         }
         const updated = {
           ...agent,
-          visibleTeamIds: agent.visibleTeamIds.filter((teamId) => teamId === agent.primaryTeamId || teamId !== input.teamId),
+          visibleTeamIds: agent.visibleTeamIds.filter((teamId) => teamId !== input.teamId || teamId === agent.primaryTeamId),
         };
         agents.set(agent.id, updated);
         return updated;
