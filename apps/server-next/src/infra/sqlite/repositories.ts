@@ -955,7 +955,11 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             artifact.sha256 ?? null,
             artifact.createdAt,
           );
-        return artifact;
+        const stored = mapArtifact(teamDb.prepare('SELECT * FROM artifacts WHERE id = ?').get(artifact.id));
+        if (!stored) {
+          throw new Error('SQLite artifact row could not be mapped');
+        }
+        return stored;
       },
       async getForTeam(input) {
         return mapArtifact(teamDb.prepare('SELECT * FROM artifacts WHERE team_id = ? AND id = ?').get(input.teamId, input.artifactId));
