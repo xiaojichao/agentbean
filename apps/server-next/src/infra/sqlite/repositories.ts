@@ -583,7 +583,10 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         if (!existing || existing.deletedAt !== undefined) {
           return null;
         }
-        const envJson = input.changes.env ? JSON.stringify(input.changes.env) : undefined;
+        const changes = input.changes;
+        const nextName = hasOwn(changes, 'name') ? changes.name ?? existing.name : existing.name;
+        const nextArgs = hasOwn(changes, 'args') ? changes.args : existing.args;
+        const envJson = hasOwn(changes, 'env') ? JSON.stringify(changes.env ?? {}) : undefined;
         globalDb
           .prepare(
             `UPDATE agents SET
@@ -602,17 +605,17 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
              WHERE id = ? AND deleted_at IS NULL`,
           )
           .run(
-            input.changes.name ?? existing.name,
-            normalizeName(input.changes.name ?? existing.name),
-            input.changes.description ?? existing.description ?? null,
-            input.changes.adapterKind ?? existing.adapterKind,
-            input.changes.deviceId ?? existing.deviceId ?? null,
-            input.changes.command ?? existing.command ?? null,
-            (input.changes.args ?? existing.args) ? JSON.stringify(input.changes.args ?? existing.args) : null,
-            input.changes.cwd ?? existing.cwd ?? null,
+            nextName,
+            normalizeName(nextName),
+            hasOwn(changes, 'description') ? changes.description ?? null : existing.description ?? null,
+            hasOwn(changes, 'adapterKind') ? changes.adapterKind ?? existing.adapterKind : existing.adapterKind,
+            hasOwn(changes, 'deviceId') ? changes.deviceId ?? null : existing.deviceId ?? null,
+            hasOwn(changes, 'command') ? changes.command ?? null : existing.command ?? null,
+            nextArgs ? JSON.stringify(nextArgs) : null,
+            hasOwn(changes, 'cwd') ? changes.cwd ?? null : existing.cwd ?? null,
             envJson ?? null,
-            input.changes.status ?? existing.status,
-            input.changes.lastSeenAt ?? existing.lastSeenAt ?? input.timestamp,
+            hasOwn(changes, 'status') ? changes.status ?? existing.status : existing.status,
+            hasOwn(changes, 'lastSeenAt') ? changes.lastSeenAt ?? existing.lastSeenAt ?? input.timestamp : existing.lastSeenAt ?? input.timestamp,
             input.timestamp,
             input.agentId,
           );
@@ -1163,6 +1166,10 @@ function parseJsonObject(value: string | undefined): Record<string, string> | un
     (entry): entry is [string, string] => typeof entry[1] === 'string',
   );
   return Object.fromEntries(entries);
+}
+
+function hasOwn(value: object, key: PropertyKey): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function sqliteValue(row: unknown, key: string): unknown {
