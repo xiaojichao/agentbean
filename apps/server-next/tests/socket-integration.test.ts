@@ -1,7 +1,7 @@
 import { createServer, type Server as HttpServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { AddressInfo } from 'node:net';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS, WEB_EVENTS, makeFailure, makeSuccess } from '../../../packages/contracts/src/index';
 import { createServerNextUseCases, type ServerNextUseCases } from '../src/application/usecases';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories';
@@ -449,6 +449,128 @@ describe('server-next Socket.IO namespaces', () => {
     await eventually(async () => {
       expect(ownerSnapshots.at(-1)).toEqual(['channel-all', 'channel-ops']);
       expect(teammateSnapshots.at(-1)).toEqual(['channel-all']);
+    });
+  });
+
+  test('keeps channel subscription ack successful when DM snapshot refresh fails', async () => {
+    const socket = new IntegrationFakeSocket();
+    const namespace = new IntegrationFakeNamespace();
+    namespace.nextSocket = socket;
+    const dmError = new Error('dm store unavailable');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = {
+      listChannels: async () => makeSuccess({ channels: [{ id: 'channel-1', teamId: 'team-1' }] }),
+      listDirectMessages: async () => {
+        throw dmError;
+      },
+    } as unknown as ServerNextUseCases;
+
+    try {
+      attachServerNextNamespaces(new IntegrationFakeServer(namespace), app);
+
+      await expect(socket.trigger(WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-1' })).resolves.toEqual({
+        ok: true,
+        channels: [{ id: 'channel-1', teamId: 'team-1' }],
+      });
+      expect(socket.emitted).toEqual([
+        { event: WEB_EVENTS.channel.snapshot, payload: [{ id: 'channel-1', teamId: 'team-1' }] },
+      ]);
+      expect(warn).toHaveBeenCalledWith('[socket] DM snapshot push failed (non-blocking):', dmError);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('handles DM start, list, and snapshot through custom socket handlers', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-all',
+        'device-1',
+        'agent-1',
+        'dm-channel-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      agent.disconnect();
+    });
+
+    const register = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    const web = await connectClient(`${baseUrl}/web`, { auth: { token: (register as { token: string }).token } });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+    await agent.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+    });
+    await agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+    });
+
+    const dmSnapshots: unknown[] = [];
+    web.on(WEB_EVENTS.dm.snapshot, (dms) => {
+      dmSnapshots.push(dms);
+    });
+    await expect(
+      web.emitWithAck(WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-1' }),
+    ).resolves.toMatchObject({ ok: true, channels: [{ id: 'channel-all' }] });
+    await eventually(async () => {
+      expect(dmSnapshots.at(-1)).toEqual([]);
+    });
+
+    await expect(
+      web.emitWithAck(WEB_EVENTS.dm.start, { agentId: 'agent-1' }),
+    ).resolves.toMatchObject({
+      ok: true,
+      dm: { id: 'dm-channel-1', name: 'dm-user-1-agent-1', dmTargetId: 'agent-1', createdAt: 1000 },
+    });
+    await eventually(async () => {
+      expect(dmSnapshots.at(-1)).toEqual([
+        { id: 'dm-channel-1', name: 'dm-user-1-agent-1', dmTargetId: 'agent-1', createdAt: 1000 },
+      ]);
+    });
+
+    await expect(web.emitWithAck(WEB_EVENTS.dm.list, {})).resolves.toEqual({
+      ok: true,
+      dms: [{ id: 'dm-channel-1', name: 'dm-user-1-agent-1', dmTargetId: 'agent-1', createdAt: 1000 }],
+    });
+
+    await expect(
+      web.emitWithAck(WEB_EVENTS.message.send, {
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'dm-channel-1',
+        body: 'hello',
+      }),
+    ).resolves.toMatchObject({ ok: true, message: { id: 'message-1', channelId: 'dm-channel-1' } });
+    await expect(
+      web.emitWithAck(WEB_EVENTS.dm.snapshot, { channelId: 'dm-channel-1' }),
+    ).resolves.toMatchObject({
+      ok: true,
+      dm: { id: 'dm-channel-1', dmTargetId: 'agent-1' },
+      messages: [{ id: 'message-1', body: 'hello' }],
     });
   });
 
@@ -1143,6 +1265,51 @@ async function connectClient(url: string, options: Record<string, unknown> = {})
     socket.connect();
   });
   return socket;
+}
+
+class IntegrationFakeServer {
+  constructor(private readonly webNamespace: IntegrationFakeNamespace) {}
+
+  of(namespace: '/web' | '/agent'): IntegrationFakeNamespace {
+    return namespace === '/web' ? this.webNamespace : new IntegrationFakeNamespace();
+  }
+}
+
+class IntegrationFakeNamespace {
+  nextSocket?: IntegrationFakeSocket;
+
+  on(event: 'connection', handler: (socket: IntegrationFakeSocket) => void): void {
+    if (event === 'connection' && this.nextSocket) {
+      handler(this.nextSocket);
+    }
+  }
+
+  emit(): void {}
+}
+
+class IntegrationFakeSocket {
+  readonly emitted: Array<{ event: string; payload: unknown }> = [];
+  private readonly handlers = new Map<string, (payload: unknown, ack?: (result: unknown) => void) => Promise<void> | void>();
+
+  on(event: string, handler: (payload: unknown, ack?: (result: unknown) => void) => Promise<void> | void): void {
+    this.handlers.set(event, handler);
+  }
+
+  emit(event: string, payload: unknown): void {
+    this.emitted.push({ event, payload });
+  }
+
+  async trigger(event: string, payload: unknown): Promise<unknown> {
+    const handler = this.handlers.get(event);
+    if (!handler) {
+      throw new Error(`No handler for ${event}`);
+    }
+    let ackResult: unknown;
+    await handler(payload, (result) => {
+      ackResult = result;
+    });
+    return ackResult;
+  }
 }
 
 async function eventually(assertion: () => Promise<void> | void, attempts = 20): Promise<void> {
