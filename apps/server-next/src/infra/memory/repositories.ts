@@ -497,6 +497,10 @@ export function createInMemoryRepositories(): ServerNextRepositories {
     },
     artifacts: {
       async create(input) {
+        const existing = artifacts.get(input.id);
+        if (existing && (existing.teamId !== input.teamId || existing.channelId !== input.channelId)) {
+          return existing;
+        }
         artifacts.set(input.id, input);
         return input;
       },

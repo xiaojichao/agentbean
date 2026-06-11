@@ -925,12 +925,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               filename, mime_type, size_bytes, storage_path, relative_path, path_kind, sha256, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
-              team_id = excluded.team_id,
-              channel_id = excluded.channel_id,
               message_id = excluded.message_id,
               dispatch_id = excluded.dispatch_id,
               workspace_run_id = excluded.workspace_run_id,
-              uploader_id = excluded.uploader_id,
               filename = excluded.filename,
               mime_type = excluded.mime_type,
               size_bytes = excluded.size_bytes,
@@ -938,7 +935,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               relative_path = excluded.relative_path,
               path_kind = excluded.path_kind,
               sha256 = excluded.sha256,
-              created_at = excluded.created_at`,
+              created_at = excluded.created_at
+            WHERE team_id = excluded.team_id AND channel_id = excluded.channel_id`,
           )
           .run(
             artifact.id,
