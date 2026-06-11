@@ -716,7 +716,7 @@ async function emitDmSnapshotForSubscriber(
     if (result.ok) {
       subscriber.socket.emit?.(WEB_EVENTS.dm.snapshot, toFlatDmList(result.dms));
     }
-  } catch {
-    // DM sidebar refresh should not turn a successful channel subscription into a failed ack.
+  } catch (error) {
+    console.warn('[socket] DM snapshot push failed (non-blocking):', error);
   }
 }

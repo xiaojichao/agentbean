@@ -1,7 +1,7 @@
 import { createServer, type Server as HttpServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { AddressInfo } from 'node:net';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS, WEB_EVENTS, makeFailure, makeSuccess } from '../../../packages/contracts/src/index';
 import { createServerNextUseCases, type ServerNextUseCases } from '../src/application/usecases';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories';
@@ -456,22 +456,29 @@ describe('server-next Socket.IO namespaces', () => {
     const socket = new IntegrationFakeSocket();
     const namespace = new IntegrationFakeNamespace();
     namespace.nextSocket = socket;
+    const dmError = new Error('dm store unavailable');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const app = {
       listChannels: async () => makeSuccess({ channels: [{ id: 'channel-1', teamId: 'team-1' }] }),
       listDirectMessages: async () => {
-        throw new Error('dm store unavailable');
+        throw dmError;
       },
     } as unknown as ServerNextUseCases;
 
-    attachServerNextNamespaces(new IntegrationFakeServer(namespace), app);
+    try {
+      attachServerNextNamespaces(new IntegrationFakeServer(namespace), app);
 
-    await expect(socket.trigger(WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-1' })).resolves.toEqual({
-      ok: true,
-      channels: [{ id: 'channel-1', teamId: 'team-1' }],
-    });
-    expect(socket.emitted).toEqual([
-      { event: WEB_EVENTS.channel.snapshot, payload: [{ id: 'channel-1', teamId: 'team-1' }] },
-    ]);
+      await expect(socket.trigger(WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-1' })).resolves.toEqual({
+        ok: true,
+        channels: [{ id: 'channel-1', teamId: 'team-1' }],
+      });
+      expect(socket.emitted).toEqual([
+        { event: WEB_EVENTS.channel.snapshot, payload: [{ id: 'channel-1', teamId: 'team-1' }] },
+      ]);
+      expect(warn).toHaveBeenCalledWith('[socket] DM snapshot push failed (non-blocking):', dmError);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test('handles DM start, list, and snapshot through custom socket handlers', async () => {

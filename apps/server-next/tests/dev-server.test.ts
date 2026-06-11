@@ -216,6 +216,7 @@ describe('server-next dev server entry', () => {
       listChannels: vi.fn(async (input: { teamId: string }) => makeSuccess({
         channels: [{ id: `${input.teamId}-channel`, teamId: input.teamId, visibility: 'public' }],
       })),
+      listDirectMessages: vi.fn(async () => makeSuccess({ dms: [] })),
       failTimedOutDispatches: vi.fn(async () => {
         if (!subscriptionsReady || returnedDispatch) {
           return makeSuccess({ dispatches: [] });
