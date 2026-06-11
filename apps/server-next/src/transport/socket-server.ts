@@ -61,10 +61,7 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         if (result.ok) {
           subscriber.channels = input;
           socket.emit?.(WEB_EVENTS.channel.snapshot, result.channels);
-          const dmResult = await app.listDirectMessages(input);
-          if (dmResult.ok) {
-            socket.emit?.(WEB_EVENTS.dm.snapshot, toFlatDmList(dmResult.dms));
-          }
+          await emitDmSnapshotForSubscriber(subscriber, app);
         }
       } catch (error) {
         ack?.(subscriptionErrorAck(error));
@@ -341,10 +338,7 @@ async function refreshChannelSubscribers(
     if (result.ok) {
       subscriber.socket.emit?.(WEB_EVENTS.channel.snapshot, result.channels);
     }
-    const dmResult = await app.listDirectMessages(subscriber.channels);
-    if (dmResult.ok) {
-      subscriber.socket.emit?.(WEB_EVENTS.dm.snapshot, toFlatDmList(dmResult.dms));
-    }
+    await emitDmSnapshotForSubscriber(subscriber, app);
   }
 }
 
@@ -707,5 +701,22 @@ async function refreshDmSubscribers(
     if (result.ok) {
       subscriber.socket.emit?.(WEB_EVENTS.dm.snapshot, toFlatDmList(result.dms));
     }
+  }
+}
+
+async function emitDmSnapshotForSubscriber(
+  subscriber: WebSocketSubscription,
+  app: ServerNextUseCases,
+): Promise<void> {
+  if (!subscriber.channels) {
+    return;
+  }
+  try {
+    const result = await app.listDirectMessages(subscriber.channels);
+    if (result.ok) {
+      subscriber.socket.emit?.(WEB_EVENTS.dm.snapshot, toFlatDmList(result.dms));
+    }
+  } catch {
+    // DM sidebar refresh should not turn a successful channel subscription into a failed ack.
   }
 }
