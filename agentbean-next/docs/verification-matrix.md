@@ -167,6 +167,7 @@ Phase 4 完成标准：
 | E2E-04 | Register -> daemon hello -> runtime report -> `agent:create` custom agent -> message send -> dispatch result -> agent reply visible。 | E2E | 本地 AgentBean Next preview flow。 | `socket-protocol.md`, `contract-alignment-handoff.md` |
 | E2E-05 | CI 在 AgentBean Next 相关路径变更时运行 readiness checks、phase tests、packages build 与 preview smoke，并阻止 deploy/publish 继续。 | CI | 替换旧系统前的持续验证 gate。 | `implementation-runbook.md`, `migration-plan.md` |
 | E2E-06 | production cutover 前必须按 runbook 完成 repository variable/secret、Railway volume/env、production readiness、deploy flip、entry smoke、business smoke、production smoke workflow gate 与 rollback 验证。 | Ops/CI | 防止把本地 preview readiness 或旧 Vercel 入口误当成生产替换完成。 | `production-cutover-runbook.md`, `migration-plan.md`, `forty-sixth-slice-status.md`, `forty-seventh-slice-status.md`, `forty-ninth-slice-status.md` |
+| E2E-07 | `npm run smoke:agentbean-next-browser` 启动或连接 AgentBean Next 入口，用真实 Chrome 完成浏览器登录/session restore、刷新重订阅、custom agent 创建、message dispatch 与 agent reply 可见，并输出 console log 与截图 artifacts。 | Browser E2E/CI | 防止只依赖 DOM harness 与 Socket.IO smoke，把替代旧 AgentBean 的核心用户路径放进浏览器级证据。 | `post-flip-gap-audit.md`, `apps/web-next/tests/preview-page.test.ts`, `scripts/smoke-agentbean-next-business.mjs` |
 
 只有全部 E2E gates 通过后，第一切片才可冻结。
 
