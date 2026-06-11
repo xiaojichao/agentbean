@@ -12,6 +12,10 @@ const AGENT_EVENTS = {
   dispatch: { request: 'dispatch:request', result: 'dispatch:result' },
 };
 
+const WEB_EVENTS = {
+  auth: { register: 'auth:register', login: 'auth:login' },
+};
+
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_VIEWPORT = { width: 1440, height: 1000 };
 
@@ -50,6 +54,17 @@ export async function runAgentBeanNextBrowserSmoke({
     cleanup.push(target.close);
     checks.push(check('browser-target-ready', true, `Browser smoke target is ${target.baseUrl}`));
 
+    const seededSession = await createSmokeBrowserSession({
+      baseUrl: target.baseUrl,
+      ioFactory,
+      suffix,
+      timeoutMs,
+    });
+    cleanup.push(async () => {
+      seededSession.socket.disconnect?.();
+    });
+    checks.push(check('browser-session-seeded', true, 'Created an isolated browser session for this smoke run'));
+
     const chrome = await launchChrome({
       chromeBin: chromeBin ?? process.env.CHROME_BIN,
       artifactsDir: resolvedArtifactsDir,
@@ -62,6 +77,12 @@ export async function runAgentBeanNextBrowserSmoke({
     page = await openPage(chrome.debugUrl, browserEvents);
     cleanup.push(page.close);
     await page.setViewport(DEFAULT_VIEWPORT);
+    await page.addScriptOnNewDocument(`
+      localStorage.setItem(
+        "agentbean-next-preview-session",
+        ${JSON.stringify(JSON.stringify(seededSession.session))}
+      );
+    `);
     await page.navigate(target.baseUrl);
 
     await page.waitForText('#connection-status', '已连接', timeoutMs);
@@ -273,6 +294,37 @@ async function connectSmokeDaemon({ baseUrl, ioFactory, session, suffix, timeout
   return socket;
 }
 
+async function createSmokeBrowserSession({ baseUrl, ioFactory, suffix, timeoutMs }) {
+  const socket = await connectSocket(ioFactory, new URL('/web', baseUrl).toString(), timeoutMs);
+  const username = `browser-smoke-${suffix}`;
+  const password = `secret-${suffix}`;
+  const teamName = `AgentBean Browser Smoke ${suffix}`;
+  const registerAck = await emitAck(socket, WEB_EVENTS.auth.register, { username, password, teamName }, timeoutMs);
+  const ack = registerAck?.ok
+    ? registerAck
+    : registerAck?.error === 'CONFLICT'
+      ? await emitAck(socket, WEB_EVENTS.auth.login, { username, password }, timeoutMs)
+      : registerAck;
+  if (
+    ack?.ok === true &&
+    typeof ack.token === 'string' &&
+    typeof ack.user?.id === 'string' &&
+    typeof ack.currentTeam?.id === 'string'
+  ) {
+    return {
+      socket,
+      session: {
+        token: ack.token,
+        user: ack.user,
+        team: ack.currentTeam,
+        channel: ack.defaultChannel ?? null,
+      },
+    };
+  }
+  socket.disconnect?.();
+  throw new Error(`Browser smoke session did not return token, user, and current team: ${formatAck(ack)}`);
+}
+
 async function sendBrowserMessage(page, body) {
   await page.setInputValue('#message-form [name="body"]', body);
   await page.click('#message-form button[type="submit"]');
@@ -343,6 +395,7 @@ async function connectCdp(webSocketUrl, events) {
   const pending = new Map();
   const listeners = new Map();
   let nextId = 1;
+  let closedError;
 
   await new Promise((resolve, reject) => {
     socket.addEventListener('open', resolve, { once: true });
@@ -363,6 +416,7 @@ async function connectCdp(webSocketUrl, events) {
       if (!entry) {
         return;
       }
+      clearTimeout(entry.timer);
       pending.delete(message.id);
       if (message.error) {
         entry.reject(new Error(`${entry.method} failed: ${message.error.message}`));
@@ -376,11 +430,40 @@ async function connectCdp(webSocketUrl, events) {
     }
   });
 
-  const send = (method, params = {}) => new Promise((resolve, reject) => {
+  const rejectPending = (error) => {
+    closedError = error;
+    for (const [id, entry] of pending) {
+      clearTimeout(entry.timer);
+      entry.reject(error);
+      pending.delete(id);
+    }
+  };
+  socket.addEventListener('close', () => {
+    rejectPending(new Error('Chrome DevTools WebSocket closed'));
+  });
+  socket.addEventListener('error', () => {
+    rejectPending(new Error('Chrome DevTools WebSocket errored'));
+  });
+
+  const send = (method, params = {}, timeoutMs = DEFAULT_TIMEOUT_MS) => new Promise((resolve, reject) => {
+    if (closedError) {
+      reject(closedError);
+      return;
+    }
     const id = nextId;
     nextId += 1;
-    pending.set(id, { method, resolve, reject });
-    socket.send(JSON.stringify({ id, method, params }));
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`${method} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    pending.set(id, { method, resolve, reject, timer });
+    try {
+      socket.send(JSON.stringify({ id, method, params }));
+    } catch (error) {
+      clearTimeout(timer);
+      pending.delete(id);
+      reject(error);
+    }
   });
 
   const on = (method, listener) => {
@@ -416,12 +499,19 @@ async function connectCdp(webSocketUrl, events) {
 
   return {
     async navigate(url) {
+      const navigation = this.waitForEvent('Page.frameNavigated', (params) => !params.frame.parentId, DEFAULT_TIMEOUT_MS);
       await send('Page.navigate', { url });
+      await navigation;
       await this.waitForFunction('document.readyState === "complete"', 'page load', DEFAULT_TIMEOUT_MS);
     },
     async reload() {
+      const navigation = this.waitForEvent('Page.frameNavigated', (params) => !params.frame.parentId, DEFAULT_TIMEOUT_MS);
       await send('Page.reload', { ignoreCache: true });
+      await navigation;
       await this.waitForFunction('document.readyState === "complete"', 'page reload', DEFAULT_TIMEOUT_MS);
+    },
+    async addScriptOnNewDocument(source) {
+      await send('Page.addScriptToEvaluateOnNewDocument', { source });
     },
     async setViewport({ width, height }) {
       await send('Emulation.setDeviceMetricsOverride', {
@@ -459,6 +549,23 @@ async function connectCdp(webSocketUrl, events) {
         `${selector} to contain ${text}`,
         timeoutMs,
       );
+    },
+    async waitForEvent(method, predicate, timeoutMs) {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error(`Timed out waiting for ${method}`));
+        }, timeoutMs);
+        const listener = (params) => {
+          if (!predicate(params)) {
+            return;
+          }
+          clearTimeout(timer);
+          const current = listeners.get(method) ?? [];
+          listeners.set(method, current.filter((candidate) => candidate !== listener));
+          resolve();
+        };
+        on(method, listener);
+      });
     },
     async setInputValue(selector, value) {
       await this.evaluateJson(`
