@@ -100,6 +100,18 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.agent.create, app, 'createCustomAgent', (payload, result) =>
     options.afterAgentMutation?.(payload, result), { authenticatedUser: options.authenticatedUser },
   );
+  bind(socket, WEB_EVENTS.agent.publish, app, 'publishAgent', (payload, result) =>
+    options.afterAgentMutation?.(payload, result), { authenticatedUser: options.authenticatedUser },
+  );
+  bind(socket, WEB_EVENTS.agent.unpublish, app, 'unpublishAgent', (payload, result) =>
+    options.afterAgentMutation?.(payload, result), { authenticatedUser: options.authenticatedUser },
+  );
+  bind(socket, WEB_EVENTS.agent.updateConfig, app, 'updateAgentConfig', (payload, result) =>
+    options.afterAgentMutation?.(payload, result), { authenticatedUser: options.authenticatedUser },
+  );
+  bind(socket, WEB_EVENTS.agent.delete, app, 'deleteAgent', (payload, result) =>
+    options.afterAgentMutation?.(payload, result), { authenticatedUser: options.authenticatedUser },
+  );
   bind(socket, WEB_EVENTS.message.send, app, 'sendMessage', async (_payload, result) => {
     if (!options.dispatch || !isSendMessageAck(result)) {
       return;

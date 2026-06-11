@@ -355,6 +355,51 @@ export interface CreateAgentCommandDto {
 - 如果使用 `runtimeId`，server 会从 runtime capability 派生 `adapterKind`、`command` 与 `cwd`。
 - Public `AgentDto` 只返回 `envKeys`，不得把 raw `env` values 放入 ack、snapshot 或 logs。
 
+## Agent 管理命令 DTO
+
+```ts
+export interface PublishAgentCommandDto {
+  userId: ID;
+  teamId: ID;
+  agentId: ID;
+  targetTeamId: ID;
+}
+
+export interface UnpublishAgentCommandDto {
+  userId: ID;
+  teamId: ID;
+  agentId: ID;
+  targetTeamId: ID;
+}
+
+export interface UpdateAgentConfigCommandDto {
+  userId: ID;
+  teamId: ID;
+  agentId: ID;
+  runtimeId?: ID;
+  name?: string;
+  description?: string;
+  adapterKind?: AdapterKind;
+  command?: string | null;
+  args?: string[] | null;
+  cwd?: string | null;
+  env?: Record<string, string>;
+}
+
+export interface DeleteAgentCommandDto {
+  userId: ID;
+  teamId: ID;
+  agentId: ID;
+}
+```
+
+说明：
+
+- `agent:publish` / `agent:unpublish` 只改变 `visibleTeamIds` projection；source team 仍是 `primaryTeamId`。
+- `agent:update-config` 只允许 custom agent，raw `env` 仅替换 server-side execution config，ack/snapshot 仍只返回 `envKeys`。
+- `agent:delete` 第一版用于 custom agent。Server 会隐藏 agent、清理 channel agent membership，并保留既有 messages/dispatches 的历史引用。
+- 删除状态是 server-internal tombstone，不进入 public `AgentDto`；clients 通过 `agents:snapshot` 不再包含该 agent 来感知删除。
+
 ## ChannelDto
 
 ```ts

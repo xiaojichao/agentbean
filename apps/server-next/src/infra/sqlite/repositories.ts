@@ -36,6 +36,7 @@ export interface CreateSqliteRepositoriesInput {
 export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0001_first_slice.sql');
   applyMigration(db, 'global/0002_device_invites.sql');
+  applyMigration(db, 'global/0003_agent_deleted_at.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
@@ -371,6 +372,15 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         }
         return mapChannel(teamDb, teamDb.prepare('SELECT * FROM channels WHERE id = ?').get(updated.id));
       },
+      async removeAgentFromTeamChannels(input) {
+        teamDb
+          .prepare(
+            `DELETE FROM channel_agent_members
+             WHERE agent_id = ?
+             AND channel_id IN (SELECT id FROM channels WHERE team_id = ?)`,
+          )
+          .run(input.agentId, input.teamId);
+      },
     },
     devices: {
       async upsertHello(device) {
@@ -481,8 +491,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .prepare(
             `INSERT INTO agents (
               id, primary_team_id, name, normalized_name, role, description, adapter_kind, category, source,
-              status, owner_id, device_id, command, args_json, cwd, env_json, last_seen_at, last_error, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              status, owner_id, device_id, command, args_json, cwd, env_json, last_seen_at, last_error, created_at, updated_at,
+              deleted_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               primary_team_id = excluded.primary_team_id,
               name = excluded.name,
@@ -516,6 +527,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             agent.lastError ?? null,
             agent.lastSeenAt ?? 0,
             agent.lastSeenAt ?? 0,
+            agent.deletedAt ?? null,
           );
         for (const teamId of agent.visibleTeamIds) {
           if (teamId === agent.primaryTeamId) {
@@ -547,9 +559,79 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       },
       async getExecutionConfig(agentId) {
         const row = globalDb
-          .prepare('SELECT adapter_kind, command, args_json, cwd, env_json FROM agents WHERE id = ?')
+          .prepare('SELECT adapter_kind, command, args_json, cwd, env_json FROM agents WHERE id = ? AND deleted_at IS NULL')
           .get(agentId);
         return mapAgentExecutionConfig(row);
+      },
+      async publish(input) {
+        globalDb
+          .prepare(
+            `INSERT OR IGNORE INTO agent_publications (agent_id, team_id, published_by, published_at)
+             SELECT id, ?, ?, ? FROM agents WHERE id = ? AND deleted_at IS NULL`,
+          )
+          .run(input.teamId, input.publishedBy, input.timestamp, input.agentId);
+        return mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId));
+      },
+      async unpublish(input) {
+        globalDb
+          .prepare('DELETE FROM agent_publications WHERE agent_id = ? AND team_id = ?')
+          .run(input.agentId, input.teamId);
+        return mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId));
+      },
+      async updateConfig(input) {
+        const existing = mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId));
+        if (!existing || existing.deletedAt !== undefined) {
+          return null;
+        }
+        const envJson = input.changes.env ? JSON.stringify(input.changes.env) : undefined;
+        globalDb
+          .prepare(
+            `UPDATE agents SET
+               name = ?,
+               normalized_name = ?,
+               description = ?,
+               adapter_kind = ?,
+               device_id = ?,
+               command = ?,
+               args_json = ?,
+               cwd = ?,
+               env_json = COALESCE(?, env_json),
+               status = ?,
+               last_seen_at = ?,
+               updated_at = ?
+             WHERE id = ? AND deleted_at IS NULL`,
+          )
+          .run(
+            input.changes.name ?? existing.name,
+            normalizeName(input.changes.name ?? existing.name),
+            input.changes.description ?? existing.description ?? null,
+            input.changes.adapterKind ?? existing.adapterKind,
+            input.changes.deviceId ?? existing.deviceId ?? null,
+            input.changes.command ?? existing.command ?? null,
+            (input.changes.args ?? existing.args) ? JSON.stringify(input.changes.args ?? existing.args) : null,
+            input.changes.cwd ?? existing.cwd ?? null,
+            envJson ?? null,
+            input.changes.status ?? existing.status,
+            input.changes.lastSeenAt ?? existing.lastSeenAt ?? input.timestamp,
+            input.timestamp,
+            input.agentId,
+          );
+        return mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId));
+      },
+      async softDelete(input) {
+        const existing = mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId));
+        if (!existing || existing.deletedAt !== undefined) {
+          return null;
+        }
+        globalDb.prepare('DELETE FROM agent_publications WHERE agent_id = ?').run(input.agentId);
+        globalDb
+          .prepare(
+            `UPDATE agents
+             SET status = 'offline', env_json = NULL, deleted_at = ?, updated_at = ?, last_seen_at = ?
+             WHERE id = ? AND deleted_at IS NULL`,
+          )
+          .run(input.timestamp, input.timestamp, input.timestamp, input.agentId);
+        return mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId));
       },
       async linkIdentity(input) {
         globalDb
@@ -571,7 +653,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
              JOIN agents ON agents.id = agent_identity_links.agent_id
              WHERE agents.primary_team_id = ?
              AND agents.device_id = ?
-             AND agents.source = 'scanned'`,
+             AND agents.source = 'scanned'
+             AND agents.deleted_at IS NULL`,
           )
           .all(input.teamId, input.deviceId);
         const seen = new Set(input.seenIdentityKeys);
@@ -595,10 +678,12 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .prepare(
             `SELECT agents.* FROM agents
              WHERE agents.primary_team_id = ?
+             AND agents.deleted_at IS NULL
              UNION
              SELECT agents.* FROM agent_publications
              JOIN agents ON agents.id = agent_publications.agent_id
-             WHERE agent_publications.team_id = ?`,
+             WHERE agent_publications.team_id = ?
+             AND agents.deleted_at IS NULL`,
           )
           .all(teamId, teamId)
           .map((row) => {
@@ -935,10 +1020,11 @@ function mapAgent(db: SqliteDatabase, row: unknown): AgentRecord | null {
     .all(id)
     .map((publication) => sqliteText(publication, 'team_id'));
   const rawEnv = parseJsonObject(sqliteNullableText(row, 'env_json'));
+  const deletedAt = sqliteNullableNumber(row, 'deleted_at');
   return {
     id,
     primaryTeamId,
-    visibleTeamIds: Array.from(new Set([primaryTeamId, ...publishedTeamIds])),
+    visibleTeamIds: deletedAt === undefined ? Array.from(new Set([primaryTeamId, ...publishedTeamIds])) : [],
     name: sqliteText(row, 'name'),
     adapterKind: sqliteText(row, 'adapter_kind') as AgentRecord['adapterKind'],
     category: sqliteText(row, 'category') as AgentRecord['category'],
@@ -950,8 +1036,10 @@ function mapAgent(db: SqliteDatabase, row: unknown): AgentRecord | null {
     args: parseJsonArray(sqliteNullableText(row, 'args_json')),
     cwd: sqliteNullableText(row, 'cwd'),
     envKeys: rawEnv ? Object.keys(rawEnv).sort() : undefined,
+    description: sqliteNullableText(row, 'description'),
     lastSeenAt: sqliteNumber(row, 'last_seen_at'),
     lastError: sqliteNullableText(row, 'last_error'),
+    deletedAt,
   };
 }
 

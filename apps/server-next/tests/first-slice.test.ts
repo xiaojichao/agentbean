@@ -707,6 +707,144 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('manages custom agent publication, config, and delete without exposing secrets or removing history', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 700,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'team-2',
+        'channel-2',
+        'device-1',
+        'runtime-1',
+        'agent-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.createTeam({ userId: 'user-1', name: 'Client Team' });
+    await app.switchTeam({ userId: 'user-1', teamId: 'team-1' });
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+      hostname: 'shaw-mbp',
+    });
+    await app.reportDeviceRuntimes({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimes: [
+        {
+          adapterKind: 'codex',
+          name: 'Codex CLI',
+          command: '/opt/homebrew/bin/codex',
+          cwd: '/Users/shaw/AgentBean',
+          installed: true,
+        },
+      ],
+    });
+    await app.createCustomAgent({
+      userId: 'user-1',
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimeId: 'runtime-1',
+      name: 'Custom Codex',
+      env: { OPENAI_API_KEY: 'old-secret' },
+    });
+
+    await expect(
+      app.publishAgent({
+        userId: 'user-1',
+        teamId: 'team-1',
+        agentId: 'agent-1',
+        targetTeamId: 'team-2',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      agent: { id: 'agent-1', visibleTeamIds: ['team-1', 'team-2'] },
+    });
+    await expect(app.listVisibleAgents({ teamId: 'team-2' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', name: 'Custom Codex' }],
+    });
+
+    const updateAck = await app.updateAgentConfig({
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      name: 'Renamed Codex',
+      description: 'Updated custom agent',
+      args: ['--model', 'gpt-5.4'],
+      env: { OPENAI_API_KEY: 'new-secret' },
+    });
+    expect(updateAck).toMatchObject({
+      ok: true,
+      agent: {
+        id: 'agent-1',
+        name: 'Renamed Codex',
+        description: 'Updated custom agent',
+        envKeys: ['OPENAI_API_KEY'],
+      },
+    });
+    expect(JSON.stringify(updateAck)).not.toContain('new-secret');
+
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: 'hello from renamed config',
+    });
+    await expect(app.getDispatchRequest({ dispatchId: 'dispatch-1' })).resolves.toMatchObject({
+      ok: true,
+      request: {
+        customAgent: {
+          name: 'Renamed Codex',
+          args: ['--model', 'gpt-5.4'],
+          env: { OPENAI_API_KEY: 'new-secret' },
+        },
+      },
+    });
+
+    await expect(
+      app.unpublishAgent({
+        userId: 'user-1',
+        teamId: 'team-1',
+        agentId: 'agent-1',
+        targetTeamId: 'team-2',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      agent: { id: 'agent-1', visibleTeamIds: ['team-1'] },
+    });
+    await expect(app.listVisibleAgents({ teamId: 'team-2' })).resolves.toMatchObject({
+      ok: true,
+      agents: [],
+    });
+
+    await expect(
+      app.deleteAgent({
+        userId: 'user-1',
+        teamId: 'team-1',
+        agentId: 'agent-1',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      agent: { id: 'agent-1', visibleTeamIds: [], status: 'offline' },
+    });
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [],
+    });
+    await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
+      ok: true,
+      messages: [{ id: 'message-1', body: 'hello from renamed config' }],
+    });
+  });
+
   test('creates device scan requests for online devices visible to team members', async () => {
     const app = createInMemoryServerNext({
       now: () => 500,

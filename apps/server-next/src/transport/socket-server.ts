@@ -162,11 +162,13 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         if (!isSuccessAck(result)) {
           return;
         }
-        const teamId = payloadTeamId(payload);
-        if (!teamId) {
+        const teamIds = uniqueStrings([payloadTeamId(payload), payloadTargetTeamId(payload)]);
+        if (teamIds.length === 0) {
           return;
         }
-        await refreshAgentSubscribers(webSubscribers, app, teamId);
+        for (const teamId of teamIds) {
+          await refreshAgentSubscribers(webSubscribers, app, teamId);
+        }
       },
     });
   });
@@ -230,7 +232,9 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         }
         emitDispatchStatus(webSubscribers, resultDispatch(result));
         await emitChannelMessageSubscribers(webSubscribers, app, teamId, result);
-        await refreshAgentSubscribers(webSubscribers, app, teamId);
+        for (const refreshTeamId of uniqueStrings([teamId, payloadTargetTeamId(payload)])) {
+          await refreshAgentSubscribers(webSubscribers, app, refreshTeamId);
+        }
       },
     });
   });
@@ -446,6 +450,18 @@ function payloadTeamId(payload: unknown): string | null {
   }
   const teamId = (payload as { teamId?: unknown }).teamId;
   return typeof teamId === 'string' ? teamId : null;
+}
+
+function payloadTargetTeamId(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const teamId = (payload as { targetTeamId?: unknown }).targetTeamId;
+  return typeof teamId === 'string' ? teamId : null;
+}
+
+function uniqueStrings(values: Array<string | null>): string[] {
+  return Array.from(new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0)));
 }
 
 function payloadDeviceInviteCode(payload: unknown): string | null {
