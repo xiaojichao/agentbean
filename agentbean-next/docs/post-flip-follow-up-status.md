@@ -41,22 +41,22 @@
 - 在 24-72 小时窗口内记录 production runtime logs、socket/API 错误日志与手工浏览器观察。
 - 如决定不做受控 rollback 演练，需要在 #140 或后续运维记录中写明原因。
 
-### P1：下一条推荐实现切片
+### P1：artifact HTTP/viewer 第一版
 
-优先补 `artifact HTTP upload/download/preview route + web artifact viewer`。
+`artifact HTTP upload/download/preview route + web artifact viewer` 第一版已经在第五十九切片落地。
 
-原因：
+已确认：
 
-- server-next 已有 artifacts/workspace runs 的 metadata model、authorization 与 message projection。
-- 旧 AgentBean 已有文件上传、下载、预览和 message attachment 体验。
-- 这一切片用户可见、范围清楚，并且能把已落地的 repository/usecase 能力接到真实 API/UI。
+- server-next 提供 JSON/base64 upload route、preview route 与 download route。
+- route 复用 session token、team membership 与 channel visibility 授权。
+- web-next preview 会在消息中展示 artifacts 与 workspace run id/status，并生成 preview/download links。
 
-建议切片边界：
+剩余边界：
 
-- server-next HTTP route：upload、download、preview 与 metadata read，必须复用 team/channel authorization。
-- web-next preview/product shell：展示 message artifacts 与 workspace run metadata，支持下载/预览。
-- tests：repository/usecase 保持现有覆盖，新增 HTTP route auth tests、web DOM/browser smoke 覆盖 artifact 可见性。
-- docs：更新 `known-gaps.md`、`verification-matrix.md` 与本文件，避免再把 metadata 第一版误判为完整 artifact 产品能力。
+- web composer 上传控件仍未接入。
+- HTTP upload 仍是 JSON/base64 第一版，尚未实现 multipart form upload。
+- workspace run detail UI、artifact grouping 与 workspace tree 仍需后续产品切片。
+- browser smoke 还没有覆盖真实 artifact upload/download/preview 交互。
 
 ### P2：后续产品 parity
 
@@ -69,4 +69,4 @@
 
 ## 下一步判定
 
-当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。下一步应先基于本文档开新的 scoped issue/PR，优先实现 artifact HTTP/viewer 切片；如果先做运维验证，则只处理 P0 生产观察证据，不混入产品功能改动。
+当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。下一步应基于本文档开新的 scoped issue/PR：如果继续产品能力，优先在 artifact composer upload、workspace run detail UI、tasks/search 中选一个小切片；如果先做运维验证，则只处理 P0 生产观察证据，不混入产品功能改动。

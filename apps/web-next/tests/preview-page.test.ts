@@ -11,6 +11,7 @@ interface FakeElement {
   children: FakeElement[];
   className: string;
   innerHTML: string;
+  parentElement: { scrollTop: number; scrollHeight: number };
   textContent: string;
   addEventListener(event: string, handler: (event: FakeEvent) => unknown): void;
   prepend(element: FakeElement): void;
@@ -215,6 +216,54 @@ describe('web-next preview page interactions', () => {
     expect(harness.element('agent-create-form:deviceId').innerHTML).toContain('current-device');
     expect(harness.element('agent-create-form:deviceId').innerHTML).not.toContain('stale-device');
   });
+
+  test('renders message artifacts with preview and download links scoped by session token', async () => {
+    const harness = createPreviewHarness({});
+    harness.localStorage.setItem(
+      'agentbean-next-preview-session',
+      JSON.stringify({
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        team: { id: 'team-1', name: 'AgentBean' },
+        channel: { id: 'channel-1', name: 'all' },
+      }),
+    );
+
+    await harness.socket.trigger('channel:message', {
+      id: 'message-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      senderKind: 'agent',
+      body: 'see attached',
+      artifacts: [
+        {
+          id: 'artifact-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          filename: 'reply.md',
+          mimeType: 'text/markdown',
+          sizeBytes: 42,
+        },
+      ],
+      workspaceRun: {
+        id: 'run-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        dispatchId: 'dispatch-1',
+        agentId: 'agent-1',
+        status: 'succeeded',
+        artifactIds: ['artifact-1'],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    });
+
+    const html = harness.element('messages').innerHTML;
+    expect(html).toContain('reply.md');
+    expect(html).toContain('Workspace run run-1');
+    expect(html).toContain('/api/teams/team-1/artifacts/artifact-1/preview?token=token-1');
+    expect(html).toContain('/api/teams/team-1/artifacts/artifact-1/download?token=token-1');
+  });
 });
 
 function createPreviewHarness(acks: Record<string, AckFactory>): PreviewHarness {
@@ -332,6 +381,7 @@ function createElement(id: string, fields: Record<string, string> = {}): FakeEle
     children: [],
     className: '',
     innerHTML: '',
+    parentElement: { scrollTop: 0, scrollHeight: 0 },
     textContent: '',
     addEventListener(event, handler) {
       this.listeners.set(event, handler);

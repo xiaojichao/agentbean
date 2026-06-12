@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { WEB_EVENTS, makeSuccess, type DispatchDto } from '../../../packages/contracts/src/index';
 import { createInMemoryServerNext } from '../src/index';
@@ -193,6 +193,117 @@ describe('server-next dev server entry', () => {
       ok: true,
       user: { username: 'shaw' },
       currentTeam: { name: 'AgentBean' },
+    });
+  });
+
+  test('serves team-scoped artifact upload, preview, and download over HTTP', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-artifacts-'));
+    const server = await startServerNextDevServer({
+      Server,
+      Database,
+      config: { host: '127.0.0.1', port: 0, storage: 'sqlite', dataDir, sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+    const ownerSocket = await connectClient(`${server.baseUrl}/web`);
+    const outsiderSocket = await connectClient(`${server.baseUrl}/web`);
+    cleanups.push(async () => {
+      ownerSocket.disconnect();
+      outsiderSocket.disconnect();
+    });
+    const owner = await ownerSocket.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    }) as {
+      ok: true;
+      token: string;
+      currentTeam: { id: string };
+      defaultChannel: { id: string };
+    };
+    const outsider = await outsiderSocket.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'outsider',
+      password: 'secret',
+      teamName: 'Other',
+    }) as { ok: true; token: string };
+
+    const upload = await fetch(`${server.baseUrl}/api/teams/${owner.currentTeam.id}/artifacts/upload`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token: owner.token,
+        channelId: owner.defaultChannel.id,
+        filename: 'reply.md',
+        mimeType: 'text/markdown',
+        contentBase64: Buffer.from('# hello artifact\n').toString('base64'),
+      }),
+    });
+    expect(upload.status).toBe(201);
+    const uploadJson = await upload.json() as {
+      ok: true;
+      artifact: { id: string; filename: string; previewUrl: string; downloadUrl: string };
+    };
+    expect(uploadJson).toMatchObject({
+      ok: true,
+      artifact: {
+        filename: 'reply.md',
+        previewUrl: `/api/teams/${owner.currentTeam.id}/artifacts/${uploadJson.artifact.id}/preview`,
+        downloadUrl: `/api/teams/${owner.currentTeam.id}/artifacts/${uploadJson.artifact.id}/download`,
+      },
+    });
+
+    const preview = await fetch(`${server.baseUrl}${uploadJson.artifact.previewUrl}?token=${encodeURIComponent(owner.token)}`);
+    expect(preview.status).toBe(200);
+    expect(preview.headers.get('content-type')).toContain('text/markdown');
+    expect(preview.headers.get('content-disposition')).toContain('inline');
+    await expect(preview.text()).resolves.toBe('# hello artifact\n');
+
+    const download = await fetch(`${server.baseUrl}${uploadJson.artifact.downloadUrl}?token=${encodeURIComponent(owner.token)}`);
+    expect(download.status).toBe(200);
+    expect(download.headers.get('content-disposition')).toContain('attachment');
+    expect(download.headers.get('content-disposition')).toContain('reply.md');
+
+    const forbidden = await fetch(
+      `${server.baseUrl}${uploadJson.artifact.previewUrl}?token=${encodeURIComponent(outsider.token)}`,
+    );
+    expect(forbidden.status).toBe(403);
+  });
+
+  test('keeps artifact file reads inside the configured data directory', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-artifact-root-'));
+    const outsideFilename = `${basename(dataDir)}-secret.txt`;
+    writeFileSync(join(dataDir, '..', outsideFilename), 'outside secret');
+    const app = {
+      whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),
+      getArtifactFile: vi.fn(async () =>
+        makeSuccess({
+          artifact: {
+            id: 'artifact-1',
+            teamId: 'team-1',
+            channelId: 'channel-1',
+            filename: 'secret.txt',
+            mimeType: 'text/plain',
+            sizeBytes: 14,
+            createdAt: 1,
+          },
+          storagePath: `../${outsideFilename}`,
+        }),
+      ),
+    } as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir, sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+
+    const response = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/artifact-1/preview?token=token-1`);
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({ ok: false, error: 'FILE_MISSING' });
+    expect(app.getArtifactFile).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      artifactId: 'artifact-1',
     });
   });
 

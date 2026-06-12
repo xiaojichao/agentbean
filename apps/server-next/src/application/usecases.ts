@@ -60,7 +60,9 @@ export interface ServerNextUseCases {
   getDispatchRequest(input: { dispatchId: string }): Promise<Ack<{ request: DispatchRequestDto & { id: string } }>>;
   cancelDispatch(input: CancelDispatchInput): Promise<Ack<{ dispatch: DispatchDto }>>;
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
+  uploadArtifact(input: UploadArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
   getArtifact(input: GetArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
+  getArtifactFile(input: GetArtifactInput): Promise<Ack<{ artifact: ArtifactDto; storagePath?: string }>>;
   getWorkspaceRun(input: GetWorkspaceRunInput): Promise<Ack<{ workspaceRun: WorkspaceRunDto }>>;
   failTimedOutDispatches(input: { olderThan: number }): Promise<Ack<{ dispatches: DispatchDto[] }>>;
   receiveDispatchResult(input: ReceiveDispatchResultInput): Promise<Ack<ReceiveDispatchResultResult>>;
@@ -300,6 +302,18 @@ export interface GetArtifactInput {
   userId: string;
   teamId: string;
   artifactId: string;
+}
+
+export interface UploadArtifactInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  storagePath: string;
+  relativePath?: string;
+  sha256?: string;
 }
 
 export interface GetWorkspaceRunInput {
@@ -1541,26 +1555,48 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
     },
 
-    async getArtifact(artifactInput) {
+    async uploadArtifact(artifactInput) {
       if (!(await repositories.teams.isMember(artifactInput.teamId, artifactInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
-      const artifact = await repositories.artifacts.getForTeam({
-        teamId: artifactInput.teamId,
-        artifactId: artifactInput.artifactId,
-      });
-      if (!artifact) {
-        return makeFailure('NOT_FOUND', 'Artifact not found');
-      }
       const channelAccess = await ensureUserCanViewChannel(repositories, {
         userId: artifactInput.userId,
-        teamId: artifact.teamId,
-        channelId: artifact.channelId,
+        teamId: artifactInput.teamId,
+        channelId: artifactInput.channelId,
       });
       if (!channelAccess.ok) {
         return channelAccess;
       }
+      const artifact = await repositories.artifacts.create({
+        id: ids.nextId(),
+        teamId: artifactInput.teamId,
+        channelId: artifactInput.channelId,
+        uploaderId: artifactInput.userId,
+        filename: artifactInput.filename,
+        mimeType: artifactInput.mimeType,
+        sizeBytes: artifactInput.sizeBytes,
+        storagePath: artifactInput.storagePath,
+        relativePath: artifactInput.relativePath,
+        pathKind: 'upload',
+        sha256: artifactInput.sha256,
+        createdAt: clock.now(),
+      });
       return makeSuccess({ artifact: toArtifactDto(artifact) });
+    },
+
+    async getArtifact(artifactInput) {
+      const result = await getAuthorizedArtifact(repositories, artifactInput);
+      if (!result.ok) return result;
+      return makeSuccess({ artifact: toArtifactDto(result.artifact) });
+    },
+
+    async getArtifactFile(artifactInput) {
+      const result = await getAuthorizedArtifact(repositories, artifactInput);
+      if (!result.ok) return result;
+      return makeSuccess({
+        artifact: toArtifactDto(result.artifact),
+        storagePath: result.artifact.storagePath,
+      });
     },
 
     async getWorkspaceRun(runInput) {
@@ -1766,6 +1802,31 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeSuccess({ dispatch: toDispatchDto(failed.dispatch) });
     },
   };
+}
+
+async function getAuthorizedArtifact(
+  repositories: ServerNextRepositories,
+  artifactInput: GetArtifactInput,
+): Promise<{ ok: true; artifact: ArtifactRecord } | Ack<Record<string, never>>> {
+  if (!(await repositories.teams.isMember(artifactInput.teamId, artifactInput.userId))) {
+    return makeFailure('FORBIDDEN', 'User is not a team member');
+  }
+  const artifact = await repositories.artifacts.getForTeam({
+    teamId: artifactInput.teamId,
+    artifactId: artifactInput.artifactId,
+  });
+  if (!artifact) {
+    return makeFailure('NOT_FOUND', 'Artifact not found');
+  }
+  const channelAccess = await ensureUserCanViewChannel(repositories, {
+    userId: artifactInput.userId,
+    teamId: artifact.teamId,
+    channelId: artifact.channelId,
+  });
+  if (!channelAccess.ok) {
+    return channelAccess;
+  }
+  return { ok: true, artifact };
 }
 
 function toUserDto(user: UserDto): UserDto {

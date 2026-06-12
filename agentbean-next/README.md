@@ -87,6 +87,7 @@
 - `docs/fifty-sixth-slice-status.md` 记录第五十六切片 manual rollback smoke guard。
 - `docs/fifty-seventh-slice-status.md` 记录第五十七切片 final flip repository variable guard。
 - `docs/fifty-eighth-slice-status.md` 记录第五十八切片 post-flip strict cutover audit。
+- `docs/fifty-ninth-slice-status.md` 记录第五十九切片 artifact HTTP route 与 preview viewer。
 - `docs/first-slice-schema-repositories.md` 定义第一切片的新 SQLite schema 与 repository 接口。
 - `docs/migration-plan.md` 给出分阶段实现计划。
 - `docs/verification-matrix.md` 将必需测试映射到阶段和来源文档。
@@ -145,4 +146,4 @@ npm run smoke:agentbean-next-persistence
 
 `docs/post-flip-follow-up-status.md` 是 final flip 后选择下一条切片的当前入口。旧的 post-flip follow-up 清单中，authenticated socket session、team/join/device invite 第一版、dispatch cancel/timeout 调度、agent 管理面、DM/thread、artifacts/workspace runs metadata 与 browser smoke gate 已经收敛到主线。
 
-下一条推荐产品切片是 artifact HTTP upload/download/preview route 与 web artifact viewer。生产观察证据、rollback 演练记录、tasks/search/saved reactions/admin/metrics 等仍应作为独立后续项推进。
+artifact HTTP upload/download/preview route 与 web artifact viewer 第一版已经落地。生产观察证据、rollback 演练记录、artifact composer 上传控件、workspace run detail UI、tasks/search/saved reactions/admin/metrics 等仍应作为独立后续项推进。
