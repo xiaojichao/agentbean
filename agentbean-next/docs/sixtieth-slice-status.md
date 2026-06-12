@@ -36,5 +36,5 @@ npm run test:web-next -- --api.host 127.0.0.1 tests/preview-page.test.ts -t "upl
 ## 剩余边界
 
 - HTTP upload 仍是 JSON/base64 第一版，尚未实现 multipart form upload。
-- browser smoke 尚未覆盖真实 artifact upload/preview/download 交互。
+- 后续第六十一切片已补上真实浏览器 artifact upload/preview/download smoke。
 - workspace run detail UI、artifact grouping 与 workspace tree 仍需后续 UI/API 切片。

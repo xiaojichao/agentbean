@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { accessSync, constants, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const AGENT_EVENTS = {
@@ -157,6 +157,13 @@ export async function runAgentBeanNextBrowserSmoke({
     await sendBrowserMessage(page, secondPrompt);
     await page.waitForText('#messages', `browser-smoke:${secondPrompt}`, timeoutMs);
     checks.push(check('browser-post-refresh-dispatch', true, 'Browser can dispatch and see replies after refresh'));
+
+    const artifactSmoke = await exerciseArtifactBrowserSmoke({ page, suffix, timeoutMs });
+    checks.push(
+      check('browser-artifact-upload-visible', true, `Browser uploaded and rendered ${artifactSmoke.filename}`),
+      check('browser-artifact-preview-readable', true, 'Browser can fetch artifact preview bytes from the rendered link'),
+      check('browser-artifact-download-readable', true, 'Browser can fetch artifact download bytes from the rendered link'),
+    );
 
     await page.screenshot(artifacts.screenshot);
     checks.push(check('browser-final-screenshot', true, `Saved final screenshot: ${artifacts.screenshot}`));
@@ -331,6 +338,65 @@ async function createSmokeBrowserSession({ baseUrl, ioFactory, suffix, timeoutMs
 async function sendBrowserMessage(page, body) {
   await page.setInputValue('#message-form [name="body"]', body);
   await page.click('#message-form button[type="submit"]');
+}
+
+export async function exerciseArtifactBrowserSmoke({ page, suffix, timeoutMs }) {
+  const filename = 'browser-smoke-artifact.md';
+  const content = '# artifact browser smoke\n';
+  await page.setFileInputFiles('#message-artifact-files', [{
+    name: filename,
+    type: 'text/markdown',
+    content,
+  }]);
+  await sendBrowserMessage(page, `artifact upload ${suffix}`);
+  await page.waitForText('#messages', filename, timeoutMs);
+  const renderedArtifact = await page.evaluateJson(`
+    (() => {
+      const filename = ${JSON.stringify(filename)};
+      const row = Array.from(document.querySelectorAll(".message-artifact"))
+        .find((candidate) => candidate.textContent.includes(filename));
+      if (!row) return null;
+      const links = Array.from(row.querySelectorAll("a"));
+      return {
+        filename,
+        previewHref: links.find((link) => link.textContent.includes("预览"))?.href,
+        downloadHref: links.find((link) => link.textContent.includes("下载"))?.href,
+      };
+    })()
+  `);
+  if (!renderedArtifact?.previewHref || !renderedArtifact?.downloadHref) {
+    throw new Error(`Browser artifact links were not rendered: ${formatAck(renderedArtifact)}`);
+  }
+  const http = await page.evaluateJson(`
+    (async () => {
+      const marker = "artifact-preview-download-smoke";
+      const previewResponse = await fetch(${JSON.stringify(renderedArtifact.previewHref)});
+      const downloadResponse = await fetch(${JSON.stringify(renderedArtifact.downloadHref)});
+      return {
+        marker,
+        preview: {
+          status: previewResponse.status,
+          body: await previewResponse.text(),
+        },
+        download: {
+          status: downloadResponse.status,
+          body: await downloadResponse.text(),
+          disposition: downloadResponse.headers.get("content-disposition") || "",
+        },
+      };
+    })()
+  `);
+  if (http?.preview?.status !== 200 || http.preview.body !== content) {
+    throw new Error(`Artifact preview fetch failed: ${formatAck(http?.preview)}`);
+  }
+  if (http?.download?.status !== 200 || http.download.body !== content || !http.download.disposition.includes(filename)) {
+    throw new Error(`Artifact download fetch failed: ${formatAck(http?.download)}`);
+  }
+  return {
+    filename,
+    previewBody: http.preview.body,
+    downloadBody: http.download.body,
+  };
 }
 
 async function launchChrome({ chromeBin, artifactsDir, headed, timeoutMs }) {
@@ -579,6 +645,34 @@ async function connectCdp(webSocketUrl, events) {
           const element = document.querySelector(${JSON.stringify(selector)});
           if (!element) throw new Error("Missing input: ${selector.replaceAll('"', '\\"')}");
           element.value = ${JSON.stringify(value)};
+          element.dispatchEvent(new Event("input", { bubbles: true }));
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        })()
+      `);
+    },
+    async setFileInputFiles(selector, files) {
+      const dir = mkdtempSync(join(tmpdir(), 'agentbean-next-browser-smoke-upload-'));
+      const paths = files.map((file) => {
+        const safeName = basename(file.name).replace(/[^\w .@-]/g, '_') || 'artifact.bin';
+        const path = join(dir, safeName);
+        writeFileSync(path, file.content);
+        return path;
+      });
+      const document = await send('DOM.getDocument', { depth: -1, pierce: true });
+      const rootNodeId = document.root?.nodeId;
+      if (!rootNodeId) {
+        throw new Error('Chrome DOM root was not available for file upload');
+      }
+      const target = await send('DOM.querySelector', { nodeId: rootNodeId, selector });
+      if (!target.nodeId) {
+        throw new Error(`Missing file input: ${selector}`);
+      }
+      await send('DOM.setFileInputFiles', { nodeId: target.nodeId, files: paths });
+      await this.evaluateJson(`
+        (() => {
+          const element = document.querySelector(${JSON.stringify(selector)});
+          if (!element) throw new Error("Missing file input: ${selector.replaceAll('"', '\\"')}");
           element.dispatchEvent(new Event("input", { bubbles: true }));
           element.dispatchEvent(new Event("change", { bubbles: true }));
           return true;
