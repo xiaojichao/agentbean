@@ -437,6 +437,33 @@
         color: #737373;
         font-size: 12px;
       }
+      .message-run-details {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 10px;
+        margin: 0;
+      }
+      .message-run-details div {
+        align-items: baseline;
+        display: flex;
+        gap: 4px;
+        min-width: 0;
+      }
+      .message-run-details dt {
+        color: #737373;
+        font-size: 11px;
+        font-weight: 650;
+        margin: 0;
+      }
+      .message-run-details dd {
+        color: #262626;
+        font-size: 12px;
+        margin: 0;
+        max-width: 260px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
       .composer {
         background: #ffffff;
         border-top: 1px solid #e5e5e5;
@@ -1031,9 +1058,7 @@
         const artifacts = Array.isArray(message.artifacts) ? message.artifacts : [];
         const workspaceRun = message.workspaceRun;
         if (artifacts.length === 0 && !workspaceRun) return "";
-        const run = workspaceRun
-          ? `<div class="message-artifact-run">Workspace run ${escapeHtml(workspaceRun.id)} · ${escapeHtml(workspaceRun.status || "unknown")}</div>`
-          : "";
+        const run = workspaceRun ? renderWorkspaceRunDetail(workspaceRun) : "";
         const files = artifacts.map((artifact) => {
           const previewUrl = artifact.previewUrl || artifactUrl(artifact, "preview");
           const downloadUrl = artifact.downloadUrl || artifactUrl(artifact, "download");
@@ -1045,6 +1070,33 @@
           </li>`;
         }).join("");
         return `<div class="message-artifacts">${run}${files ? `<ul>${files}</ul>` : ""}</div>`;
+      }
+
+      function renderWorkspaceRunDetail(workspaceRun) {
+        const artifactCount = Array.isArray(workspaceRun.artifactIds) ? workspaceRun.artifactIds.length : undefined;
+        const details = [
+          workspaceRun.cwd ? ["cwd", workspaceRun.cwd] : null,
+          workspaceRun.deviceId ? ["device", workspaceRun.deviceId] : null,
+          typeof workspaceRun.exitCode === "number" ? ["exit", `exit ${workspaceRun.exitCode}`] : null,
+          formatDuration(workspaceRun.startedAt, workspaceRun.completedAt),
+          typeof artifactCount === "number" ? ["artifacts", `${artifactCount} artifact${artifactCount === 1 ? "" : "s"}`] : null,
+        ].filter(Boolean);
+        const detailMarkup = details.length > 0
+          ? `<dl class="message-run-details">${details.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>`
+          : "";
+        return `<div>
+          <div class="message-artifact-run">Workspace run ${escapeHtml(workspaceRun.id)} · ${escapeHtml(workspaceRun.status || "unknown")}</div>
+          ${detailMarkup}
+        </div>`;
+      }
+
+      function formatDuration(startedAt, completedAt) {
+        if (typeof startedAt !== "number" || typeof completedAt !== "number" || completedAt < startedAt) {
+          return null;
+        }
+        const seconds = (completedAt - startedAt) / 1000;
+        const value = seconds < 10 ? Number(seconds.toFixed(1)) : Math.round(seconds);
+        return ["duration", `${value}s`];
       }
 
       function artifactUrl(artifact, mode) {
