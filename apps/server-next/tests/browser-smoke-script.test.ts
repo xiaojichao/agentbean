@@ -1,6 +1,48 @@
 import { describe, expect, test } from 'vitest';
 
 describe('AgentBean Next browser smoke script', () => {
+  test('exercises task create, status update, and refresh restore in the browser', async () => {
+    const { exerciseTaskBrowserSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
+    const calls: Array<[string, unknown]> = [];
+    const page = {
+      async setInputValue(selector: string, value: string) {
+        calls.push(['setInputValue', { selector, value }]);
+      },
+      async click(selector: string) {
+        calls.push(['click', selector]);
+      },
+      async waitForText(selector: string, text: string) {
+        calls.push(['waitForText', { selector, text }]);
+      },
+      async waitForFunction(expression: string, description: string) {
+        calls.push(['waitForFunction', { expression, description }]);
+      },
+      async reload() {
+        calls.push(['reload', undefined]);
+      },
+    };
+
+    const result = await exerciseTaskBrowserSmoke({
+      page,
+      suffix: 'task-smoke',
+      timeoutMs: 1000,
+    });
+
+    expect(calls).toContainEqual([
+      'setInputValue',
+      { selector: '#task-create-form [name="title"]', value: 'Browser task task-smoke' },
+    ]);
+    expect(calls).toContainEqual(['click', '#task-create-form button[type="submit"]']);
+    expect(calls).toContainEqual(['click', '#task-results button[data-status="done"]']);
+    expect(calls).toContainEqual(['reload', undefined]);
+    expect(calls).toContainEqual(['waitForText', { selector: '#task-results', text: 'Browser task task-smoke' }]);
+    expect(calls).toContainEqual(['waitForText', { selector: '#task-results', text: 'done' }]);
+    expect(result).toEqual({
+      title: 'Browser task task-smoke',
+      status: 'done',
+    });
+  });
+
   test('exercises artifact composer upload, preview, and download in the browser', async () => {
     const { exerciseArtifactBrowserSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];

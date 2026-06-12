@@ -185,8 +185,9 @@ Phase 4 完成标准：
 | E2E-06 | production cutover 前必须按 runbook 完成 repository variable/secret、Railway volume/env、production readiness、deploy flip、entry smoke、business smoke、production smoke workflow gate 与 rollback 验证。 | Ops/CI | 防止把本地 preview readiness 或旧 Vercel 入口误当成生产替换完成。 | `production-cutover-runbook.md`, `migration-plan.md`, `forty-sixth-slice-status.md`, `forty-seventh-slice-status.md`, `forty-ninth-slice-status.md` |
 | E2E-07 | `npm run smoke:agentbean-next-browser` 启动或连接 AgentBean Next 入口，用真实 Chrome 完成浏览器登录/session restore、刷新重订阅、custom agent 创建、message dispatch 与 agent reply 可见，并输出 console log 与截图 artifacts。 | Browser E2E/CI | 防止只依赖 DOM harness 与 Socket.IO smoke，把替代旧 AgentBean 的核心用户路径放进浏览器级证据。 | `post-flip-gap-audit.md`, `apps/web-next/tests/preview-page.test.ts`, `scripts/smoke-agentbean-next-business.mjs` |
 | E2E-08 | `npm run smoke:agentbean-next-browser` 在真实 Chrome 中选择 composer 文件、上传 artifact-backed human message、等待 viewer 渲染，并 fetch preview/download 链接校验 bytes。 | Browser E2E/CI | Artifact upload/viewer 不能只由 DOM harness 证明，必须在真实 browser/file input/HTTP route 链路中覆盖。 | `sixty-first-slice-status.md`, `scripts/smoke-agentbean-next-browser.mjs` |
+| E2E-09 | `npm run smoke:agentbean-next-browser` 在真实 Chrome 中通过 preview task form 创建 task、更新状态，并在刷新后通过 `task:list` 恢复同一 task。 | Browser E2E/CI | Tasks 第一版不能只由 usecase/socket/DOM harness 证明，必须覆盖真实浏览器 UI 与 session restore 路径。 | `sixty-ninth-slice-status.md`, `scripts/smoke-agentbean-next-browser.mjs` |
 
-当前 E2E-07 与 E2E-08 已进入 AgentBean Next CI gate。后续新增 tasks、更完整 search、settings/member/device 等产品切片时，应在本节追加对应 browser-level gate，而不是把已有 browser smoke 误判为覆盖全部旧产品表面。
+当前 E2E-07、E2E-08 与 E2E-09 已进入 AgentBean Next CI gate。后续新增更完整 search、完整 task page、settings/member/device 等产品切片时，应在本节追加对应 browser-level gate，而不是把已有 browser smoke 误判为覆盖全部旧产品表面。
 
 只有对应 phase 的 E2E gates 通过后，该 phase 才可冻结。
 

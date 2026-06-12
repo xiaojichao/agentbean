@@ -18,6 +18,7 @@
 - `task:create` 与 `task:update` 会验证 team membership、channel visibility、title、status 与 assignee visibility。
 - `assigneeId` 第一版支持 team human member 或当前 team 可见 agent。
 - web-next preview 右侧工作区新增轻量 task create/list/status update 入口。
+- 后续第六十九切片已把 task create/status update/refresh restore 纳入真实 Chrome browser smoke。
 - docs 已同步 socket protocol、DTO contract、known gaps、verification matrix 与 post-flip follow-up status。
 
 ## 验证命令
