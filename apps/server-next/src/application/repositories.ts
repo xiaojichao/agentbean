@@ -211,6 +211,7 @@ export interface TaskRepository {
   getById(taskId: ID): Promise<TaskRecord | null>;
   list(input: { teamId: ID; channelIds: ID[]; includeGlobal: boolean }): Promise<TaskRecord[]>;
   update(input: { taskId: ID; changes: Partial<Pick<TaskRecord, 'title' | 'description' | 'status' | 'assigneeId' | 'channelId' | 'tags' | 'sortOrder' | 'updatedAt'>> }): Promise<TaskRecord | null>;
+  delete(input: { taskId: ID }): Promise<TaskRecord | null>;
 }
 
 export interface ServerNextRepositories {

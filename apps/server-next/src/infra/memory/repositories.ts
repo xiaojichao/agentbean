@@ -565,6 +565,14 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         tasks.set(input.taskId, updated);
         return updated;
       },
+      async delete(input) {
+        const task = tasks.get(input.taskId);
+        if (!task) {
+          return null;
+        }
+        tasks.delete(input.taskId);
+        return task;
+      },
     },
   };
 }

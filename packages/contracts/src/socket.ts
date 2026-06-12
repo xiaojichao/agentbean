@@ -75,6 +75,8 @@ export const WEB_EVENTS = {
     list: 'task:list',
     create: 'task:create',
     update: 'task:update',
+    delete: 'task:delete',
+    reorder: 'task:reorder',
     snapshot: 'tasks:snapshot',
     updated: 'task:updated',
   },

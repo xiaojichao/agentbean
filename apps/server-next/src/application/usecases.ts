@@ -64,6 +64,8 @@ export interface ServerNextUseCases {
   listTasks(input: ListTasksInput): Promise<Ack<{ tasks: TaskDto[] }>>;
   createTask(input: CreateTaskInput): Promise<Ack<{ task: TaskDto }>>;
   updateTask(input: UpdateTaskInput): Promise<Ack<{ task: TaskDto }>>;
+  deleteTask(input: DeleteTaskInput): Promise<Ack<{ task: TaskDto }>>;
+  reorderTask(input: ReorderTaskInput): Promise<Ack<{ task: TaskDto }>>;
   uploadArtifact(input: UploadArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
   getArtifact(input: GetArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
   getArtifactFile(input: GetArtifactInput): Promise<Ack<{ artifact: ArtifactDto; storagePath?: string }>>;
@@ -338,6 +340,19 @@ export interface UpdateTaskInput {
   channelId?: string | null;
   tags?: string[];
   sortOrder?: number;
+}
+
+export interface DeleteTaskInput {
+  userId: string;
+  teamId: string;
+  taskId: string;
+}
+
+export interface ReorderTaskInput {
+  userId: string;
+  teamId: string;
+  taskId: string;
+  sortOrder: number;
 }
 
 export interface GetArtifactInput {
@@ -1770,6 +1785,45 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ...(hasOwn(taskInput, 'channelId') ? { channelId: nextChannelId } : {}),
           ...(taskInput.tags !== undefined ? { tags: normalizeTags(taskInput.tags) } : {}),
           ...(taskInput.sortOrder !== undefined ? { sortOrder: taskInput.sortOrder } : {}),
+          updatedAt: clock.now(),
+        },
+      });
+      if (!updated) {
+        return makeFailure('NOT_FOUND', 'Task not found');
+      }
+      return makeSuccess({ task: updated });
+    },
+
+    async deleteTask(taskInput) {
+      if (!(await repositories.teams.isMember(taskInput.teamId, taskInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const task = await repositories.tasks.getById(taskInput.taskId);
+      if (!task || task.teamId !== taskInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Task not found');
+      }
+      const deleted = await repositories.tasks.delete({ taskId: task.id });
+      if (!deleted) {
+        return makeFailure('NOT_FOUND', 'Task not found');
+      }
+      return makeSuccess({ task: deleted });
+    },
+
+    async reorderTask(taskInput) {
+      if (!(await repositories.teams.isMember(taskInput.teamId, taskInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      if (typeof taskInput.sortOrder !== 'number' || !Number.isFinite(taskInput.sortOrder)) {
+        return makeFailure('VALIDATION_ERROR', 'Task sortOrder must be a finite number');
+      }
+      const task = await repositories.tasks.getById(taskInput.taskId);
+      if (!task || task.teamId !== taskInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Task not found');
+      }
+      const updated = await repositories.tasks.update({
+        taskId: task.id,
+        changes: {
+          sortOrder: taskInput.sortOrder,
           updatedAt: clock.now(),
         },
       });

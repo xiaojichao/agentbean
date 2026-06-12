@@ -351,6 +351,98 @@ describe('server-next first-slice use cases', () => {
       ok: false,
       error: 'VALIDATION_ERROR',
     });
+
+    // delete: owner can delete their own task
+    await expect(app.deleteTask({
+      userId: 'user-1',
+      teamId: 'team-1',
+      taskId: 'task-private',
+    })).resolves.toMatchObject({
+      ok: true,
+      task: { id: 'task-private' },
+    });
+    // delete: non-member of another team cannot delete
+    await expect(app.deleteTask({
+      userId: 'user-1',
+      teamId: 'team-2',
+      taskId: 'task-public',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+    // delete: already-deleted task returns NOT_FOUND
+    await expect(app.deleteTask({
+      userId: 'user-1',
+      teamId: 'team-1',
+      taskId: 'task-private',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'NOT_FOUND',
+    });
+    // delete: nonexistent task returns NOT_FOUND
+    await expect(app.deleteTask({
+      userId: 'user-1',
+      teamId: 'team-1',
+      taskId: 'task-nope',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'NOT_FOUND',
+    });
+
+    // reorder: valid reorder
+    await expect(app.reorderTask({
+      userId: 'user-2',
+      teamId: 'team-1',
+      taskId: 'task-public',
+      sortOrder: 999,
+    })).resolves.toMatchObject({
+      ok: true,
+      task: { id: 'task-public', sortOrder: 999 },
+    });
+    // reorder: invalid sortOrder
+    await expect(app.reorderTask({
+      userId: 'user-1',
+      teamId: 'team-1',
+      taskId: 'task-global',
+      sortOrder: NaN,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'VALIDATION_ERROR',
+    });
+    // reorder: wrong team
+    await expect(app.reorderTask({
+      userId: 'user-1',
+      teamId: 'team-2',
+      taskId: 'task-global',
+      sortOrder: 50,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+    // reorder: after delete, task is gone
+    await expect(app.reorderTask({
+      userId: 'user-1',
+      teamId: 'team-1',
+      taskId: 'task-private',
+      sortOrder: 10,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'NOT_FOUND',
+    });
+    // delete remaining task
+    await expect(app.deleteTask({
+      userId: 'user-1',
+      teamId: 'team-1',
+      taskId: 'task-global',
+    })).resolves.toMatchObject({
+      ok: true,
+      task: { id: 'task-global' },
+    });
+    // list should now only contain task-public
+    await expect(app.listTasks({ userId: 'user-1', teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      tasks: [{ id: 'task-public' }],
+    });
   });
 
   test('creates and validates a user join link for an existing team member', async () => {

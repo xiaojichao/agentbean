@@ -55,6 +55,8 @@ describe('server-next socket handlers', () => {
       listTasks: vi.fn(async (payload) => makeSuccess({ payload })),
       createTask: vi.fn(async (payload) => makeSuccess({ payload })),
       updateTask: vi.fn(async (payload) => makeSuccess({ payload })),
+      deleteTask: vi.fn(async (payload) => makeSuccess({ payload })),
+      reorderTask: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
 
     registerWebSocketHandlers(socket, app);
@@ -91,6 +93,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.task.list,
       WEB_EVENTS.task.create,
       WEB_EVENTS.task.update,
+      WEB_EVENTS.task.delete,
+      WEB_EVENTS.task.reorder,
     ]);
     expect(socket.eventNames()).not.toContain('network:list');
 
@@ -241,6 +245,17 @@ describe('server-next socket handlers', () => {
       taskId: 'task-1',
       status: 'done',
     });
+    await socket.trigger(WEB_EVENTS.task.delete, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      taskId: 'task-1',
+    });
+    await socket.trigger(WEB_EVENTS.task.reorder, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      taskId: 'task-2',
+      sortOrder: 100,
+    });
 
     expect(app.registerUser).toHaveBeenCalledWith({ username: 'shaw' });
     expect(app.whoami).toHaveBeenCalledWith({ token: 'token-1' });
@@ -377,6 +392,17 @@ describe('server-next socket handlers', () => {
       teamId: 'team-1',
       taskId: 'task-1',
       status: 'done',
+    });
+    expect(app.deleteTask).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      taskId: 'task-1',
+    });
+    expect(app.reorderTask).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      taskId: 'task-2',
+      sortOrder: 100,
     });
   });
 
