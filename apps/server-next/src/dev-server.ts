@@ -198,36 +198,26 @@ async function handleArtifactHttp(input: ArtifactHttpInput): Promise<boolean> {
 }
 
 async function handleArtifactUpload(input: ArtifactHttpInput, teamId: string): Promise<void> {
-  const body = await readJsonBody(input.request);
-  const token = readToken(input.url, input.request, body);
+  const upload = await readArtifactUpload(input);
+  const token = readToken(input.url, input.request, upload.fields);
   const session = token ? await input.app.whoami({ token }) : makeFailure('UNAUTHENTICATED', 'Missing session token');
   if (!session.ok) {
     writeAckFailure(input.response, session);
     return;
   }
-  const filename = sanitizeFilename(readRequiredString(body, 'filename'));
-  const channelId = readRequiredString(body, 'channelId');
-  const contentBase64 = readRequiredString(body, 'contentBase64');
-  const mimeType = typeof body.mimeType === 'string' && body.mimeType.trim()
-    ? body.mimeType.trim()
-    : 'application/octet-stream';
-  const content = Buffer.from(contentBase64, 'base64');
-  if (content.length === 0 && contentBase64.length > 0) {
-    writeJson(input.response, 400, { ok: false, error: 'INVALID_CONTENT' });
-    return;
-  }
+  const filename = sanitizeFilename(upload.filename);
   const artifactId = randomUUID();
   const relativeStoragePath = join('artifacts', teamId, artifactId, filename);
   const result = await input.app.uploadArtifact({
     userId: session.user.id,
     teamId,
-    channelId,
+    channelId: upload.channelId,
     filename,
-    mimeType,
-    sizeBytes: content.length,
+    mimeType: upload.mimeType,
+    sizeBytes: upload.content.length,
     storagePath: relativeStoragePath,
     relativePath: filename,
-    sha256: createHash('sha256').update(content).digest('hex'),
+    sha256: createHash('sha256').update(upload.content).digest('hex'),
   });
   if (!result.ok) {
     writeAckFailure(input.response, result);
@@ -235,7 +225,7 @@ async function handleArtifactUpload(input: ArtifactHttpInput, teamId: string): P
   }
   const absoluteDir = join(input.config.dataDir, 'artifacts', teamId, artifactId);
   mkdirSync(absoluteDir, { recursive: true });
-  writeFileSync(join(absoluteDir, filename), content);
+  writeFileSync(join(absoluteDir, filename), upload.content);
   writeJson(input.response, 201, {
     ok: true,
     artifact: withArtifactUrls(result.artifact),
@@ -293,12 +283,56 @@ function withArtifactUrls(artifact: ArtifactDto): ArtifactDto {
 }
 
 async function readJsonBody(request: ArtifactHttpInput['request']): Promise<Record<string, unknown>> {
+  const rawBody = await readRequestBody(request);
+  if (rawBody.length === 0) return {};
+  return parseJsonBody(rawBody);
+}
+
+async function readArtifactUpload(input: ArtifactHttpInput): Promise<{
+  fields: Record<string, unknown>;
+  channelId: string;
+  filename: string;
+  mimeType: string;
+  content: Buffer;
+}> {
+  const contentType = input.request.headers['content-type'];
+  if (typeof contentType === 'string' && contentType.toLowerCase().startsWith('multipart/form-data')) {
+    const multipart = parseMultipartBody(await readRequestBody(input.request), contentType);
+    return {
+      fields: multipart.fields,
+      channelId: readRequiredString(multipart.fields, 'channelId'),
+      filename: multipart.file.filename,
+      mimeType: multipart.file.mimeType,
+      content: multipart.file.content,
+    };
+  }
+  const body = await readJsonBody(input.request);
+  const contentBase64 = readRequiredString(body, 'contentBase64');
+  const content = Buffer.from(contentBase64, 'base64');
+  if (content.length === 0 && contentBase64.length > 0) {
+    throw new ArtifactHttpError(400, { ok: false, error: 'INVALID_CONTENT' });
+  }
+  return {
+    fields: body,
+    channelId: readRequiredString(body, 'channelId'),
+    filename: readRequiredString(body, 'filename'),
+    mimeType: typeof body.mimeType === 'string' && body.mimeType.trim()
+      ? body.mimeType.trim()
+      : 'application/octet-stream',
+    content,
+  };
+}
+
+async function readRequestBody(request: ArtifactHttpInput['request']): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
   }
-  if (chunks.length === 0) return {};
-  const raw = Buffer.concat(chunks).toString('utf8');
+  return Buffer.concat(chunks);
+}
+
+function parseJsonBody(rawBody: Buffer): Record<string, unknown> {
+  const raw = rawBody.toString('utf8');
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -309,6 +343,79 @@ async function readJsonBody(request: ArtifactHttpInput['request']): Promise<Reco
     throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'Invalid JSON body' });
   }
   return parsed as Record<string, unknown>;
+}
+
+function parseMultipartBody(rawBody: Buffer, contentType: string): {
+  fields: Record<string, string>;
+  file: { filename: string; mimeType: string; content: Buffer };
+} {
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  const boundary = boundaryMatch?.[1] ?? boundaryMatch?.[2];
+  if (!boundary) {
+    throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'Missing multipart boundary' });
+  }
+  const fields: Record<string, string> = {};
+  let file: { filename: string; mimeType: string; content: Buffer } | undefined;
+  const delimiter = Buffer.from(`--${boundary}`);
+  let cursor = rawBody.indexOf(delimiter);
+  while (cursor >= 0) {
+    let partStart = cursor + delimiter.length;
+    if (rawBody.subarray(partStart, partStart + 2).toString('latin1') === '--') break;
+    if (rawBody.subarray(partStart, partStart + 2).toString('latin1') === '\r\n') {
+      partStart += 2;
+    } else if (rawBody.subarray(partStart, partStart + 1).toString('latin1') === '\n') {
+      partStart += 1;
+    }
+    const next = rawBody.indexOf(delimiter, partStart);
+    if (next < 0) break;
+    const part = trimTrailingLineBreak(rawBody.subarray(partStart, next));
+    const separator = part.indexOf(Buffer.from('\r\n\r\n'));
+    const fallbackSeparator = separator < 0 ? part.indexOf(Buffer.from('\n\n')) : -1;
+    const headerEnd = separator >= 0 ? separator : fallbackSeparator;
+    if (headerEnd >= 0) {
+      const separatorLength = separator >= 0 ? 4 : 2;
+      const headers = parseMultipartHeaders(part.subarray(0, headerEnd).toString('utf8'));
+      const disposition = headers['content-disposition'] ?? '';
+      const name = disposition.match(/(?:^|;\s*)name="([^"]+)"/)?.[1];
+      const filename = disposition.match(/(?:^|;\s*)filename="([^"]*)"/)?.[1];
+      const content = part.subarray(headerEnd + separatorLength);
+      if (name && filename !== undefined) {
+        file = {
+          filename: filename || 'artifact.bin',
+          mimeType: headers['content-type'] ?? 'application/octet-stream',
+          content,
+        };
+      } else if (name) {
+        fields[name] = content.toString('utf8');
+      }
+    }
+    cursor = next;
+  }
+  if (!file) {
+    throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'Missing multipart file' });
+  }
+  return { fields, file };
+}
+
+function parseMultipartHeaders(rawHeaders: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const line of rawHeaders.split(/\r?\n/)) {
+    const index = line.indexOf(':');
+    if (index > 0) {
+      headers[line.slice(0, index).trim().toLowerCase()] = line.slice(index + 1).trim();
+    }
+  }
+  return headers;
+}
+
+function trimTrailingLineBreak(value: Buffer): Buffer {
+  if (value.subarray(-2).toString('latin1') === '\r\n') {
+    return value.subarray(0, -2);
+  }
+  if (value.subarray(-1).toString('latin1') === '\n') {
+    return value.subarray(0, -1);
+  }
+  return value;
 }
 
 function readToken(url: URL, request: ArtifactHttpInput['request'], body: Record<string, unknown> = {}): string | undefined {

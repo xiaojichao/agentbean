@@ -46,6 +46,6 @@ npm run smoke:agentbean-next-browser -- --skip-build --timeout-ms 45000 --json
 
 ## 剩余边界
 
-- HTTP upload 仍是 JSON/base64 第一版，尚未实现 multipart form upload。
-- Workspace run detail UI、artifact grouping 与 workspace tree 仍需后续 UI/API 切片。
+- 后续第六十三切片已补上 multipart upload；本切片仍只记录 browser smoke 接入时的 artifact 链路证据。
+- 后续第六十二切片已补上 workspace run detail UI；artifact grouping 与 workspace tree 仍需后续 UI/API 切片。
 - Tasks、search、saved messages/reactions、admin/metrics 仍属于后续产品 parity。

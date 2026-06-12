@@ -328,13 +328,13 @@ describe('web-next preview page interactions', () => {
 
     expect(harness.fetches).toHaveLength(1);
     expect(harness.fetches[0]?.url).toBe('/api/teams/team-1/artifacts/upload');
-    expect(JSON.parse(String(harness.fetches[0]?.init?.body))).toEqual({
-      token: 'token-1',
-      channelId: 'channel-1',
-      filename: 'brief.md',
-      mimeType: 'text/markdown',
-      contentBase64: 'aGVsbG8gZmlsZQo=',
-    });
+    expect(harness.fetches[0]?.init?.headers).toBeUndefined();
+    expect(harness.fetches[0]?.init?.body).toBeInstanceOf(FakeFormData);
+    expect((harness.fetches[0]?.init?.body as FakeFormData).entries()).toEqual([
+      ['token', 'token-1'],
+      ['channelId', 'channel-1'],
+      ['file', { name: 'brief.md', type: 'text/markdown' }],
+    ]);
     expect(harness.emitted).toContainEqual([
       'message:send',
       {
@@ -536,9 +536,30 @@ class FakeLocalStorage {
 }
 
 class FakeFormData {
-  constructor(private readonly form: FakeElement) {}
+  private readonly values: Array<[string, string | FakeFile]> = [];
+
+  constructor(form?: FakeElement) {
+    if (form) {
+      this.values.push(...Object.entries(form.fields));
+    }
+  }
+
+  append(name: string, value: string | FakeFile): void {
+    this.values.push([name, value]);
+  }
+
+  entries(): Array<[string, string | { name: string; type: string }]> {
+    return this.values.map(([name, value]) => [
+      name,
+      typeof value === 'string' ? value : { name: value.name, type: value.type },
+    ]);
+  }
 
   *[Symbol.iterator](): IterableIterator<[string, string]> {
-    yield* Object.entries(this.form.fields);
+    for (const [name, value] of this.values) {
+      if (typeof value === 'string') {
+        yield [name, value];
+      }
+    }
   }
 }
