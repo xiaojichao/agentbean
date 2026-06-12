@@ -57,29 +57,35 @@
 
 ### 必须补齐
 
+以下是 2026-06-08 审计时的原始缺口分组。2026-06-12 后的 follow-up 收敛状态以 `post-flip-follow-up-status.md` 为准。
+
 1. Production volume 重启持久化证据。
    - 目标：记录 final flip 后生产重启、重新访问、跨 session 后 user/team/channel/message/device/runtime/agent 状态是否保留。
    - 参考：`scripts/smoke-agentbean-next-persistence.mjs`、`agentbean-next/docs/production-cutover-runbook.md`
 
-2. Team create/switch 与 invite/onboarding。
+2. Team create/switch 与 invite/onboarding 第一版。
    - 目标：补齐多 team 创建/切换、user invite、device invite/token delivery，恢复旧 AgentBean 的真实 onboarding 链路。
+   - 收敛：contracts、use cases 与 tests 已进入主线；后续剩余是 join list/revoke、完整 UI 与更细 onboarding UX。
    - 参考：`packages/contracts/src/socket.ts`、`agentbean-next/docs/feature-disposition.md`、`agentbean-next/docs/acceptance-tests.md`
 
-3. Dispatch lifecycle 完整化。
+3. Dispatch lifecycle 第一版。
    - 目标：实现 `dispatch:cancel`，并让 `failTimedOutDispatches` 在 server-next runtime 中被调度，而不是只存在 use case/test。
+   - 收敛：`dispatch:cancel`、daemon cancel handling 与 server-next timeout scheduler 已进入主线。
    - 参考：`packages/contracts/src/socket.ts`、`apps/server-next/src/application/usecases.ts`、`apps/server-next/src/dev-server.ts`、`apps/daemon-next/src/index.ts`
 
 4. DM/thread、artifacts/workspace runs、tasks/search。
    - 目标：按产品优先级恢复旧 AgentBean 的协作长尾能力；其中 artifacts/workspace runs 影响 agent 输出可追溯性，tasks/search 更偏第二轮产品完整度。
+   - 收敛：DM/thread 第一版与 artifacts/workspace runs metadata 第一版已进入主线；HTTP upload/download/preview route、web artifact viewer、tasks 与 search 仍需后续切片。
    - 参考：`agentbean-next/docs/current-behavior.md`、`agentbean-next/docs/known-gaps.md`、`agentbean-next/docs/acceptance-tests.md`
 
-5. 真正浏览器级 E2E。
+5. 真正浏览器级 E2E 第一版。
    - 目标：覆盖生产或 staging 上的登录/session 恢复、刷新重订阅、custom agent 创建、消息发送、agent reply 可见，避免只依赖 DOM harness 和 socket smoke。
+   - 收敛：`npm run smoke:agentbean-next-browser` 已进入 CI，覆盖真实 Chrome 路径并上传 console/screenshot artifacts。
    - 参考：`agentbean-next/docs/verification-matrix.md`、`apps/web-next/tests/preview-page.test.ts`
 
 ## 已拆分 follow-up issues
 
-已优先拆成小 issue，不在 #140 中堆实现细节：
+已优先拆成小 issue，不在 #140 中堆实现细节。2026-06-12 核对时 open issues 与 open PR 均为空，以下条目应视为历史 follow-up 索引，而不是当前活跃 backlog：
 
 1. #141 `补充 AgentBean Next production volume 重启持久化观察`
 2. #142 `为 AgentBean Next 引入 authenticated socket session`
@@ -91,6 +97,8 @@
 7. #147 `定义 AgentBean Next DM/thread 第一版数据模型与协议`
 8. #148 `补齐 AgentBean Next 浏览器级 E2E smoke`
 
+当前活跃路线图见 `post-flip-follow-up-status.md`。
+
 ## 当前结论
 
-AgentBean Next 已经能替代旧 AgentBean 的最小生产入口和核心 chat/daemon/custom-agent 业务闭环。要把判断提升到“可以长期替代旧 AgentBean”，下一步不应继续混合在 final flip 议题里，而应按上面的必须补齐项拆 issue/PR，并在 #140 里持续记录 24-72 小时生产观察证据。
+AgentBean Next 已经能替代旧 AgentBean 的最小生产入口和核心 chat/daemon/custom-agent 业务闭环。要把判断提升到“可以长期替代旧 AgentBean”，下一步不应继续混合在 final flip 议题里，也不应再直接照旧 #141-#148 清单挑项；应先按 `post-flip-follow-up-status.md` 的当前状态开新的 scoped issue/PR，优先推进 artifact HTTP/viewer 切片，或单独补生产观察证据。
