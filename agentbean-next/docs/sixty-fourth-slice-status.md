@@ -28,6 +28,6 @@ npm run smoke:agentbean-next-browser -- --skip-build --timeout-ms 45000 --json
 
 ## 剩余边界
 
-- Workspace tree 与独立 run detail 页面仍需后续 UI/API 切片。
+- 后续第六十五切片已补上 message inline workspace artifact tree；独立 run detail 页面仍需后续 UI/API 切片。
 - 分组仍是 message inline 第一版，尚未提供跨 run/dispatch 的 artifact browser。
 - Tasks、search、saved messages/reactions、admin/metrics 仍属于后续产品 parity。

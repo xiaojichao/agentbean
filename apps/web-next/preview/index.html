@@ -416,6 +416,11 @@
         font-size: 11px;
         font-weight: 700;
       }
+      .message-artifact-folder {
+        color: #737373;
+        font-size: 11px;
+        font-weight: 650;
+      }
       .message-artifact {
         align-items: center;
         background: #f7f7f6;
@@ -1064,12 +1069,14 @@
         const groups = [
           {
             title: "Workspace 输出",
+            kind: "workspace",
             artifacts: artifacts.filter((artifact) =>
               artifact.workspaceRunId === workspaceRun?.id || runArtifactIds.has(artifact.id) || artifact.pathKind === "workspace",
             ),
           },
           {
             title: "消息附件",
+            kind: "attachment",
             artifacts: artifacts.filter((artifact) =>
               artifact.workspaceRunId !== workspaceRun?.id && !runArtifactIds.has(artifact.id) && artifact.pathKind !== "workspace",
             ),
@@ -1078,8 +1085,26 @@
         if (groups.length === 0) return "";
         return groups.map((group) => `<div class="message-artifact-group">
           <div class="message-artifact-group-title">${escapeHtml(group.title)}</div>
-          <ul>${group.artifacts.map(renderArtifactListItem).join("")}</ul>
+          ${group.kind === "workspace" ? renderWorkspaceArtifactTree(group.artifacts) : `<ul>${group.artifacts.map(renderArtifactListItem).join("")}</ul>`}
         </div>`).join("");
+      }
+
+      function renderWorkspaceArtifactTree(artifacts) {
+        const groups = new Map();
+        for (const artifact of artifacts) {
+          const folder = artifactFolder(artifact.relativePath || artifact.filename || artifact.id);
+          groups.set(folder, [...(groups.get(folder) || []), artifact]);
+        }
+        return Array.from(groups.entries()).map(([folder, files]) => `
+          <div class="message-artifact-folder">${escapeHtml(folder)}</div>
+          <ul>${files.map(renderArtifactListItem).join("")}</ul>
+        `).join("");
+      }
+
+      function artifactFolder(path) {
+        const normalized = String(path || "").replace(/\\/g, "/").replace(/^\/+/, "");
+        const index = normalized.lastIndexOf("/");
+        return index > 0 ? `${normalized.slice(0, index)}/` : "./";
       }
 
       function renderArtifactListItem(artifact) {
