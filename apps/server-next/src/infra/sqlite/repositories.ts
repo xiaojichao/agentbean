@@ -1153,6 +1153,14 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           );
         return updated;
       },
+      async delete(input) {
+        const existing = mapTask(teamDb.prepare('SELECT * FROM tasks WHERE id = ?').get(input.taskId));
+        if (!existing) {
+          return null;
+        }
+        teamDb.prepare('DELETE FROM tasks WHERE id = ?').run(input.taskId);
+        return existing;
+      },
     },
   };
 }
