@@ -394,6 +394,49 @@
         overflow-wrap: anywhere;
         white-space: pre-wrap;
       }
+      .message-artifacts {
+        border-top: 1px solid #ececea;
+        display: grid;
+        gap: 6px;
+        padding-top: 6px;
+      }
+      .message-artifacts ul {
+        display: grid;
+        gap: 5px;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .message-artifact {
+        align-items: center;
+        background: #f7f7f6;
+        border: 1px solid #e7e5e4;
+        border-radius: 6px;
+        display: flex;
+        gap: 8px;
+        min-height: 30px;
+        padding: 5px 7px;
+      }
+      .message-artifact-name {
+        flex: 1;
+        font-size: 12px;
+        font-weight: 650;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .message-artifact a {
+        color: #2563eb;
+        font-size: 12px;
+        font-weight: 650;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+      .message-artifact-run {
+        color: #737373;
+        font-size: 12px;
+      }
       .composer {
         background: #ffffff;
         border-top: 1px solid #e5e5e5;
@@ -923,12 +966,47 @@
           const kind = message.senderKind || "system";
           const speaker = kind === "human" ? "你" : kind === "agent" ? "Agent" : "系统";
           const time = message.createdAt ? new Date(message.createdAt).toLocaleTimeString("zh-CN") : "";
+          const artifacts = renderMessageArtifacts(message);
           return `<article class="message ${escapeHtml(kind)}">
             <div class="message-head"><span class="message-speaker">${speaker}</span><span>${escapeHtml(time)}</span></div>
             <div class="message-body">${escapeHtml(message.body)}</div>
+            ${artifacts}
           </article>`;
         }).join("");
         el("messages").parentElement.scrollTop = el("messages").parentElement.scrollHeight;
+      }
+
+      function renderMessageArtifacts(message) {
+        const artifacts = Array.isArray(message.artifacts) ? message.artifacts : [];
+        const workspaceRun = message.workspaceRun;
+        if (artifacts.length === 0 && !workspaceRun) return "";
+        const run = workspaceRun
+          ? `<div class="message-artifact-run">Workspace run ${escapeHtml(workspaceRun.id)} · ${escapeHtml(workspaceRun.status || "unknown")}</div>`
+          : "";
+        const files = artifacts.map((artifact) => {
+          const previewUrl = artifact.previewUrl || artifactUrl(artifact, "preview");
+          const downloadUrl = artifact.downloadUrl || artifactUrl(artifact, "download");
+          return `<li class="message-artifact">
+            <span class="message-artifact-name">${escapeHtml(artifact.filename || artifact.id)}</span>
+            <span class="meta">${formatBytes(artifact.sizeBytes || 0)}</span>
+            <a href="${escapeHtml(previewUrl)}" target="_blank" rel="noreferrer">预览</a>
+            <a href="${escapeHtml(downloadUrl)}" download>下载</a>
+          </li>`;
+        }).join("");
+        return `<div class="message-artifacts">${run}${files ? `<ul>${files}</ul>` : ""}</div>`;
+      }
+
+      function artifactUrl(artifact, mode) {
+        const teamId = artifact.teamId || state.team?.id;
+        const session = state.token ? { token: state.token } : readSession();
+        const token = session?.token ? `?token=${encodeURIComponent(session.token)}` : "";
+        return `/api/teams/${encodeURIComponent(teamId)}/artifacts/${encodeURIComponent(artifact.id)}/${mode}${token}`;
+      }
+
+      function formatBytes(value) {
+        const bytes = Number(value) || 0;
+        if (bytes < 1024) return `${bytes} B`;
+        return `${Math.round(bytes / 1024)} KB`;
       }
 
       function renderActiveChannel() {

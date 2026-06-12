@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { createServer, type Server as HttpServer } from 'node:http';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
 import { createRequire } from 'node:module';
-import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createServerNextUseCases } from './application/usecases.js';
 import { createInMemoryRepositories } from './infra/memory/repositories.js';
@@ -13,6 +13,7 @@ import {
   type SqliteDatabase,
 } from './infra/sqlite/repositories.js';
 import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
+import { makeFailure, type ArtifactDto } from '../../../packages/contracts/src/index.js';
 import type { ServerNextUseCases } from './application/usecases.js';
 
 type SocketIoServerConstructor = new (server: HttpServer, options?: Record<string, unknown>) => SocketServerLike & {
@@ -91,15 +92,19 @@ export async function startServerNextDevServer(
     : createDefaultApp(config, input.Database);
   const app = appWithCleanup.app;
   const Server = input.Server ?? loadSocketIoServer();
-  const httpServer = createServer((request, response) => {
-    if (request.url === '/' || request.url === '/preview') {
+  const httpServer = createServer(async (request, response) => {
+    const url = new URL(request.url ?? '/', 'http://agentbean-next.local');
+    if (url.pathname === '/' || url.pathname === '/preview') {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       response.end(readPreviewHtml());
       return;
     }
-    if (request.url === '/healthz') {
+    if (url.pathname === '/healthz') {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ ok: true, service: 'agentbean-next-server' }));
+      return;
+    }
+    if (await handleArtifactHttp({ app, config, request, response, url })) {
       return;
     }
     response.writeHead(404, { 'content-type': 'application/json' });
@@ -152,6 +157,211 @@ function startDispatchTimeoutScheduler(
       realtime.emitDispatchStatus(dispatch);
     }
   }, config.intervalMs);
+}
+
+interface ArtifactHttpInput {
+  app: ServerNextUseCases;
+  config: ServerNextDevConfig;
+  request: IncomingMessage;
+  response: ServerResponse;
+  url: URL;
+}
+
+async function handleArtifactHttp(input: ArtifactHttpInput): Promise<boolean> {
+  const match = input.url.pathname.match(/^\/api\/teams\/([^/]+)\/artifacts(?:\/upload|\/([^/]+)\/(preview|download))$/);
+  if (!match) {
+    return false;
+  }
+  const teamId = decodeURIComponent(match[1] ?? '');
+  try {
+    if (input.request.method === 'POST' && input.url.pathname.endsWith('/upload')) {
+      await handleArtifactUpload(input, teamId);
+      return true;
+    }
+    const artifactId = match[2] ? decodeURIComponent(match[2]) : '';
+    const disposition = match[3] === 'download' ? 'attachment' : 'inline';
+    if (input.request.method === 'GET' && artifactId) {
+      await handleArtifactRead(input, { teamId, artifactId, disposition });
+      return true;
+    }
+    writeJson(input.response, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
+    return true;
+  } catch (error) {
+    if (error instanceof ArtifactHttpError) {
+      writeJson(input.response, error.status, error.payload);
+      return true;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    writeJson(input.response, 500, { ok: false, error: 'INTERNAL_ERROR', message });
+    return true;
+  }
+}
+
+async function handleArtifactUpload(input: ArtifactHttpInput, teamId: string): Promise<void> {
+  const body = await readJsonBody(input.request);
+  const token = readToken(input.url, input.request, body);
+  const session = token ? await input.app.whoami({ token }) : makeFailure('UNAUTHENTICATED', 'Missing session token');
+  if (!session.ok) {
+    writeAckFailure(input.response, session);
+    return;
+  }
+  const filename = sanitizeFilename(readRequiredString(body, 'filename'));
+  const channelId = readRequiredString(body, 'channelId');
+  const contentBase64 = readRequiredString(body, 'contentBase64');
+  const mimeType = typeof body.mimeType === 'string' && body.mimeType.trim()
+    ? body.mimeType.trim()
+    : 'application/octet-stream';
+  const content = Buffer.from(contentBase64, 'base64');
+  if (content.length === 0 && contentBase64.length > 0) {
+    writeJson(input.response, 400, { ok: false, error: 'INVALID_CONTENT' });
+    return;
+  }
+  const artifactId = randomUUID();
+  const relativeStoragePath = join('artifacts', teamId, artifactId, filename);
+  const result = await input.app.uploadArtifact({
+    userId: session.user.id,
+    teamId,
+    channelId,
+    filename,
+    mimeType,
+    sizeBytes: content.length,
+    storagePath: relativeStoragePath,
+    relativePath: filename,
+    sha256: createHash('sha256').update(content).digest('hex'),
+  });
+  if (!result.ok) {
+    writeAckFailure(input.response, result);
+    return;
+  }
+  const absoluteDir = join(input.config.dataDir, 'artifacts', teamId, artifactId);
+  mkdirSync(absoluteDir, { recursive: true });
+  writeFileSync(join(absoluteDir, filename), content);
+  writeJson(input.response, 201, {
+    ok: true,
+    artifact: withArtifactUrls(result.artifact),
+  });
+}
+
+async function handleArtifactRead(
+  input: ArtifactHttpInput,
+  options: { teamId: string; artifactId: string; disposition: 'inline' | 'attachment' },
+): Promise<void> {
+  const token = readToken(input.url, input.request);
+  const session = token ? await input.app.whoami({ token }) : makeFailure('UNAUTHENTICATED', 'Missing session token');
+  if (!session.ok) {
+    writeAckFailure(input.response, session);
+    return;
+  }
+  const result = await input.app.getArtifactFile({
+    userId: session.user.id,
+    teamId: options.teamId,
+    artifactId: options.artifactId,
+  });
+  if (!result.ok) {
+    writeAckFailure(input.response, result);
+    return;
+  }
+  if (!result.storagePath) {
+    writeJson(input.response, 404, { ok: false, error: 'FILE_MISSING' });
+    return;
+  }
+  const dataRoot = resolve(input.config.dataDir);
+  const absolutePath = resolve(dataRoot, result.storagePath);
+  if (!isPathInside(dataRoot, absolutePath)) {
+    writeJson(input.response, 404, { ok: false, error: 'FILE_MISSING' });
+    return;
+  }
+  if (!existsSync(absolutePath)) {
+    writeJson(input.response, 404, { ok: false, error: 'FILE_MISSING' });
+    return;
+  }
+  const body = readFileSync(absolutePath);
+  input.response.writeHead(200, {
+    'content-type': result.artifact.mimeType,
+    'content-length': String(body.length),
+    'content-disposition': `${options.disposition}; filename="${result.artifact.filename.replace(/"/g, '')}"`,
+  });
+  input.response.end(body);
+}
+
+function withArtifactUrls(artifact: ArtifactDto): ArtifactDto {
+  return {
+    ...artifact,
+    previewUrl: `/api/teams/${encodeURIComponent(artifact.teamId)}/artifacts/${encodeURIComponent(artifact.id)}/preview`,
+    downloadUrl: `/api/teams/${encodeURIComponent(artifact.teamId)}/artifacts/${encodeURIComponent(artifact.id)}/download`,
+  };
+}
+
+async function readJsonBody(request: ArtifactHttpInput['request']): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  }
+  if (chunks.length === 0) return {};
+  const raw = Buffer.concat(chunks).toString('utf8');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'Invalid JSON body' });
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'Invalid JSON body' });
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function readToken(url: URL, request: ArtifactHttpInput['request'], body: Record<string, unknown> = {}): string | undefined {
+  const auth = request.headers.authorization;
+  const bearer = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : undefined;
+  const queryToken = url.searchParams.get('token') ?? undefined;
+  const bodyToken = typeof body.token === 'string' ? body.token : undefined;
+  return bearer ?? queryToken ?? bodyToken;
+}
+
+function readRequiredString(body: Record<string, unknown>, field: string): string {
+  const value = body[field];
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: `Missing ${field}` });
+  }
+  return value.trim();
+}
+
+function sanitizeFilename(filename: string): string {
+  const safe = basename(filename).replace(/[^\w .@-]/g, '_').trim();
+  return safe || 'artifact.bin';
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+  const delta = relative(root, candidate);
+  return delta === '' || (!!delta && !delta.startsWith('..') && !isAbsolute(delta));
+}
+
+function writeAckFailure(response: ArtifactHttpInput['response'], ack: { error?: string; message?: string }): void {
+  const status = ack.error === 'UNAUTHENTICATED'
+    ? 401
+    : ack.error === 'FORBIDDEN'
+      ? 403
+      : ack.error === 'NOT_FOUND'
+        ? 404
+        : ack.error === 'CONFLICT'
+          ? 409
+          : 400;
+  writeJson(response, status, { ok: false, error: ack.error ?? 'ERROR', message: ack.message });
+}
+
+function writeJson(response: ArtifactHttpInput['response'], status: number, payload: unknown): void {
+  response.writeHead(status, { 'content-type': 'application/json' });
+  response.end(JSON.stringify(payload));
+}
+
+class ArtifactHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly payload: unknown,
+  ) {
+    super('Artifact HTTP request failed');
+  }
 }
 
 function readPreviewHtml(): string {

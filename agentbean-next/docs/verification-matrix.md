@@ -73,6 +73,7 @@ Phase 1 完成标准：
 | P2-14 | Dispatch timeout 将 dispatch 标记为 `timed_out`，并带有 `DISPATCH_TIMEOUT`。 | UseCase | Stable timeout error。 | `acceptance-tests.md`, `contracts-dto.md` |
 | P2-15 | Dispatch result 将 dispatch 标记为 succeeded，并追加 agent message。 | UseCase | Reply persistence。 | `acceptance-tests.md` |
 | P2-15a | Dispatch result 可以上报 artifact metadata 与 workspace run metadata，agent reply 投影 `MessageDto.artifacts` / `MessageDto.workspaceRun`，同 team 可读取 artifact，跨 team 返回 `NOT_FOUND`。 | Repository/UseCase | Agent output 可追溯性与 team-scoped artifact authorization 第一版。 | `contracts-dto.md`, `post-flip-gap-audit.md` |
+| P2-15b | server-next HTTP route 支持 team-scoped artifact JSON upload、preview 与 download，并拒绝非 team member token。 | HTTP/UseCase | Artifact file bytes 接入 repository 授权与 SQLite data dir。 | `known-gaps.md`, `fifty-ninth-slice-status.md` |
 | P2-16 | Dispatch error 将 dispatch 标记为 failed，并更新 agent last error。 | UseCase | Error propagation。 | `acceptance-tests.md` |
 | P2-17 | `/web` login/team/channel/message socket flow 只使用 documented first-slice events。 | Socket | Transport adapter thinness。 | `socket-protocol.md`, `contracts-dto.md` |
 | P2-18 | `/agent` device hello/runtime/agent batch/dispatch result flow 使用 documented DTOs。 | Socket | Agent namespace contract。 | `socket-protocol.md`, `contracts-dto.md` |
@@ -152,6 +153,7 @@ Phase 3 完成标准：
 | P4-13 | web-next preview 可以通过 `channel:create` 创建 channel，刷新 channel snapshot，并在新 channel 中继续发送消息。 | Web/Socket | 本地 preview 不只依赖默认 `all` channel，开始覆盖真实产品 channel 工作流。 | `socket-protocol.md`, `target-architecture.md` |
 | P4-14 | preview 内联脚本在 DOM harness 中覆盖 `auth:whoami` session restore、snapshot resubscribe、`channel:create` submit 与新 channel message selection。 | Web | 防止静态 preview 的关键交互在无浏览器测试时回退。 | `socket-protocol.md`, `known-gaps.md` |
 | P4-15 | 本地 preview 第一屏必须自动进入默认 team，并呈现旧 AgentBean 风格的左侧频道、中间聊天、右侧成员/设备/runtime/custom agent 工作台。 | Web/UX | 防止把临时协议验证器误当成可替换旧 AgentBean 的产品 UI。 | `target-architecture.md`, `known-gaps.md`, `forty-fifth-slice-status.md` |
+| P4-16 | web-next preview 在 message artifacts 中展示 filename、workspace run id/status，并生成带 session token 的 preview/download links。 | Web | Artifact metadata 不应只停在 server projection，用户需要在消息里看到并打开输出文件。 | `known-gaps.md`, `fifty-ninth-slice-status.md` |
 
 Phase 4 完成标准：
 
@@ -179,7 +181,7 @@ Phase 4 完成标准：
 这些仍保留在 `docs/acceptance-tests.md` 中，但第一切片冻结前不强制要求：
 
 - Join link management UI、`join:list` 与 `join:revoke`。
-- Artifact HTTP upload/download/preview route 与 workspace run UI。
+- Artifact composer 上传控件、multipart upload 与 workspace run detail UI。
 - Tasks。
 - Message search。
 - Channel archive/delete。
