@@ -156,6 +156,7 @@ Phase 3 完成标准：
 | P4-15 | 本地 preview 第一屏必须自动进入默认 team，并呈现旧 AgentBean 风格的左侧频道、中间聊天、右侧成员/设备/runtime/custom agent 工作台。 | Web/UX | 防止把临时协议验证器误当成可替换旧 AgentBean 的产品 UI。 | `target-architecture.md`, `known-gaps.md`, `forty-fifth-slice-status.md` |
 | P4-16 | web-next preview 在 message artifacts 中展示 filename、workspace run id/status，并生成带 session token 的 preview/download links。 | Web | Artifact metadata 不应只停在 server projection，用户需要在消息里看到并打开输出文件。 | `known-gaps.md`, `fifty-ninth-slice-status.md` |
 | P4-17 | web-next preview composer 会将选中文件上传到 artifact HTTP route，并把返回的 artifact ids 随 `message:send` 发送。 | Web/HTTP | 用户可以从 composer 创建 artifact-backed human message。 | `known-gaps.md`, `sixtieth-slice-status.md` |
+| P4-18 | web-next preview 在 message workspace run 区域展示 cwd、device、exit code、duration 与 artifact count。 | Web | Workspace run metadata 不应只停留在 id/status，用户需要看到执行上下文与输出规模。 | `known-gaps.md`, `sixty-second-slice-status.md` |
 
 Phase 4 完成标准：
 
@@ -184,7 +185,7 @@ Phase 4 完成标准：
 这些仍保留在 `docs/acceptance-tests.md` 中，但第一切片冻结前不强制要求：
 
 - Join link management UI、`join:list` 与 `join:revoke`。
-- Artifact multipart upload 与 workspace run detail UI。
+- Artifact multipart upload、artifact grouping 与 workspace tree。
 - Tasks。
 - Message search。
 - Channel archive/delete。

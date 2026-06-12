@@ -259,6 +259,11 @@ describe('web-next preview page interactions', () => {
         channelId: 'channel-1',
         dispatchId: 'dispatch-1',
         agentId: 'agent-1',
+        deviceId: 'device-1',
+        cwd: '/Users/shaw/AgentBean',
+        exitCode: 0,
+        startedAt: 1_000,
+        completedAt: 3_500,
         status: 'succeeded',
         artifactIds: ['artifact-1'],
         createdAt: 1,
@@ -269,6 +274,11 @@ describe('web-next preview page interactions', () => {
     const html = harness.element('messages').innerHTML;
     expect(html).toContain('reply.md');
     expect(html).toContain('Workspace run run-1');
+    expect(html).toContain('/Users/shaw/AgentBean');
+    expect(html).toContain('exit 0');
+    expect(html).toContain('device-1');
+    expect(html).toContain('2.5s');
+    expect(html).toContain('1 artifact');
     expect(html).toContain('/api/teams/team-1/artifacts/artifact-1/preview?token=token-1');
     expect(html).toContain('/api/teams/team-1/artifacts/artifact-1/download?token=token-1');
   });
