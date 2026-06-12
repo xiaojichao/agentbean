@@ -50,10 +50,10 @@
 - server-next 提供 JSON/base64 upload route、preview route 与 download route。
 - route 复用 session token、team membership 与 channel visibility 授权。
 - web-next preview 会在消息中展示 artifacts 与 workspace run id/status，并生成 preview/download links。
+- web-next preview composer 可以选择文件并随 human message 上传/绑定 artifact。
 
 剩余边界：
 
-- web composer 上传控件仍未接入。
 - HTTP upload 仍是 JSON/base64 第一版，尚未实现 multipart form upload。
 - workspace run detail UI、artifact grouping 与 workspace tree 仍需后续产品切片。
 - browser smoke 还没有覆盖真实 artifact upload/download/preview 交互。
@@ -69,4 +69,4 @@
 
 ## 下一步判定
 
-当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。下一步应基于本文档开新的 scoped issue/PR：如果继续产品能力，优先在 artifact composer upload、workspace run detail UI、tasks/search 中选一个小切片；如果先做运维验证，则只处理 P0 生产观察证据，不混入产品功能改动。
+当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。下一步应基于本文档开新的 scoped issue/PR：如果继续产品能力，优先在 artifact browser smoke、workspace run detail UI、tasks/search 中选一个小切片；如果先做运维验证，则只处理 P0 生产观察证据，不混入产品功能改动。

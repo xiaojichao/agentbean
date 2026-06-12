@@ -59,6 +59,7 @@ export interface SendMessageInput {
   teamId: string;
   channelId: string;
   body: string;
+  artifactIds?: string[];
   clientMessageId?: string;
 }
 

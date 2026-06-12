@@ -282,6 +282,7 @@ export interface SendMessageInput {
   channelId: string;
   threadId?: string;
   body: string;
+  artifactIds?: string[];
   clientMessageId?: string;
   senderId?: string;
   senderKind?: string;
@@ -1458,6 +1459,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         teamId: messageInput.teamId,
         body: messageInput.body,
       });
+      const attachmentResult = await getAttachableUploadedArtifacts(repositories, {
+        userId: messageInput.userId,
+        teamId: messageInput.teamId,
+        channelId: messageInput.channelId,
+        artifactIds: messageInput.artifactIds ?? [],
+      });
+      if (!attachmentResult.ok) {
+        return attachmentResult;
+      }
+      const attachedArtifactIds = attachmentResult.artifacts.map((artifact) => artifact.id);
       const message = await repositories.messages.append({
         id: messageId,
         teamId: messageInput.teamId,
@@ -1469,9 +1480,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         createdAt: now,
         meta: {
           ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
+          ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
           routeReason: toRouteReason(route),
         },
       });
+      const attachedArtifacts: ArtifactRecord[] = [];
+      for (const artifact of attachmentResult.artifacts) {
+        attachedArtifacts.push(await repositories.artifacts.create({
+          ...artifact,
+          messageId: message.id,
+        }));
+      }
       const dispatches: DispatchDto[] = [];
 
       if (route.kind === 'dispatch') {
@@ -1491,7 +1510,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
 
       return makeSuccess({
-        message,
+        message: attachedArtifacts.length > 0
+          ? { ...message, artifacts: attachedArtifacts.map(toArtifactDto) }
+          : message,
         dispatches,
         route,
       });
@@ -1827,6 +1848,31 @@ async function getAuthorizedArtifact(
     return channelAccess;
   }
   return { ok: true, artifact };
+}
+
+async function getAttachableUploadedArtifacts(
+  repositories: ServerNextRepositories,
+  input: { userId: string; teamId: string; channelId: string; artifactIds: string[] },
+): Promise<Ack<{ artifacts: ArtifactRecord[] }>> {
+  const artifacts: ArtifactRecord[] = [];
+  for (const artifactId of uniqueIds(input.artifactIds)) {
+    const artifact = await repositories.artifacts.getForTeam({
+      teamId: input.teamId,
+      artifactId,
+    });
+    if (!artifact) {
+      return makeFailure('NOT_FOUND', 'Artifact not found');
+    }
+    if (
+      artifact.channelId !== input.channelId ||
+      artifact.uploaderId !== input.userId ||
+      artifact.pathKind !== 'upload'
+    ) {
+      return makeFailure('FORBIDDEN', 'Artifact cannot be attached to this message');
+    }
+    artifacts.push(artifact);
+  }
+  return makeSuccess({ artifacts });
 }
 
 function toUserDto(user: UserDto): UserDto {
