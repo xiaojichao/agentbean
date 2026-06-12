@@ -50,6 +50,7 @@ describe('server-next socket handlers', () => {
       updateAgentConfig: vi.fn(async (payload) => makeSuccess({ payload })),
       deleteAgent: vi.fn(async (payload) => makeSuccess({ payload })),
       sendMessage: vi.fn(async (payload) => makeSuccess({ payload })),
+      searchMessages: vi.fn(async (payload) => makeSuccess({ payload })),
       cancelDispatch: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
 
@@ -82,6 +83,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.agent.updateConfig,
       WEB_EVENTS.agent.delete,
       WEB_EVENTS.message.send,
+      WEB_EVENTS.message.search,
       WEB_EVENTS.dispatch.cancel,
     ]);
     expect(socket.eventNames()).not.toContain('network:list');
@@ -119,6 +121,11 @@ describe('server-next socket handlers', () => {
       teamId: 'team-1',
       channelId: 'channel-1',
       body: 'hello',
+    });
+    await socket.trigger(WEB_EVENTS.message.search, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      query: 'hello',
     });
     await socket.trigger(WEB_EVENTS.device.get, {
       userId: 'user-1',
@@ -329,6 +336,11 @@ describe('server-next socket handlers', () => {
     expect(app.cancelDispatch).toHaveBeenCalledWith({
       userId: 'user-1',
       dispatchId: 'dispatch-1',
+    });
+    expect(app.searchMessages).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      query: 'hello',
     });
   });
 

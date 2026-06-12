@@ -790,6 +790,27 @@ Ack<{ message: MessageDto; dispatches: DispatchDto[] }>
 - direct channel 中的 message 固定 dispatch 给 `dmTargetAgentId`；普通 channel 中无 mention message 仍 fallback 到第一个 online agent。
 - `threadId` 为空时 server 将当前 message 作为 thread root；有值时 server 将 message 作为该 thread reply。
 
+#### `message:search`
+
+客户端：
+
+```ts
+{ userId?: string; teamId: string; query: string; limit?: number }
+```
+
+Ack：
+
+```ts
+Ack<{ messages: MessageDto[] }>
+```
+
+说明：
+
+- 带 `auth.token` 的 web socket 会从 authenticated socket session 派生 `userId`；payload 中的 `userId` 只作为临时兼容路径保留。
+- 第一版搜索当前用户在该 team 内可见的普通 channels，不包含 direct messages。
+- `query` 至少 2 个字符。
+- Server 使用 simple DB search；不引入 full-text indexing、ranking 或 saved filters。
+
 #### `dispatch:cancel`
 
 客户端：
@@ -824,7 +845,6 @@ Ack<{ dispatch: DispatchDto }>
 - `channel:archive`：延后；需要产品决策。
 - `channel:delete`：延后；需要产品决策。
 - `channel:stop-agents`：替换为 dispatch cancellation commands。
-- `message:search`：保留给 search slice。
 
 ### Tasks（延后切片）
 

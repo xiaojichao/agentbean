@@ -60,6 +60,8 @@ describe('web-next preview page interactions', () => {
     expect(html).toContain('添加自定义 Agent');
     expect(html).toContain('环境变量');
     expect(html).toContain('发送消息');
+    expect(html).toContain('id="message-search-form"');
+    expect(html).toContain('消息搜索');
   });
 
   test('restores saved session through auth:whoami and resubscribes snapshots on connect', async () => {
@@ -435,6 +437,53 @@ describe('web-next preview page interactions', () => {
     ]);
     expect(harness.element('messages').innerHTML).toContain('brief.md');
   });
+
+  test('searches messages through the preview form and renders results', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'message:search': () => ({
+        ok: true,
+        messages: [
+          {
+            id: 'message-1',
+            teamId: 'team-1',
+            channelId: 'channel-1',
+            senderKind: 'human',
+            senderId: 'user-1',
+            body: 'roadmap search result',
+            createdAt: 1,
+          },
+        ],
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+    harness.element('message-search-form').fields.query = 'roadmap';
+    await harness.submit('message-search-form');
+
+    expect(harness.emitted).toContainEqual([
+      'message:search',
+      {
+        userId: 'user-1',
+        teamId: 'team-1',
+        query: 'roadmap',
+        limit: 20,
+      },
+    ]);
+    expect(harness.element('message-search-results').innerHTML).toContain('roadmap search result');
+    expect(harness.element('message-search-results').innerHTML).toContain('All');
+  });
 });
 
 function createPreviewHarness(
@@ -453,6 +502,7 @@ function createPreviewHarness(
     'channel-create-form': { name: 'ops', title: 'Ops', visibility: 'private' },
     'agent-create-form': { deviceId: '', runtimeId: '', name: 'Codex', envKey: 'OPENAI_API_KEY', envValue: '' },
     'message-form': { channelId: '', body: '@Codex hello' },
+    'message-search-form': { query: 'roadmap' },
   };
   for (const [id, fields] of Object.entries(formFields)) {
     elements.set(id, createElement(id, fields));
@@ -469,6 +519,7 @@ function createPreviewHarness(
     'runtimes',
     'agents',
     'messages',
+    'message-search-results',
     'workspace-run-detail',
     'events',
     'session-summary',

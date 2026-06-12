@@ -97,7 +97,7 @@ Browser clients 连接到 `/web`。当前实现允许 anonymous sockets 用于 a
 | `dm:list` | Web -> Server | 列出 DMs。 | 保留。 |
 | `dms:snapshot` | Server -> Web | DM list snapshot。 | 保留。 |
 | `message:send` | Web -> Server | 持久化 human message，route 并 dispatch 给 agents。 | 保留为第一切片行为。 |
-| `message:search` | Web -> Server | 在 current team 中搜索 messages。 | 保留，延后到 search slice。 |
+| `message:search` | Web -> Server | 在 current team 中搜索 messages。 | 第一版已落地为 server-side simple DB search，仅覆盖当前用户可见普通 channels。 |
 
 ### Tasks
 

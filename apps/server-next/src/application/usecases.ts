@@ -60,6 +60,7 @@ export interface ServerNextUseCases {
   getDispatchRequest(input: { dispatchId: string }): Promise<Ack<{ request: DispatchRequestDto & { id: string } }>>;
   cancelDispatch(input: CancelDispatchInput): Promise<Ack<{ dispatch: DispatchDto }>>;
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
+  searchMessages(input: SearchMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   uploadArtifact(input: UploadArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
   getArtifact(input: GetArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
   getArtifactFile(input: GetArtifactInput): Promise<Ack<{ artifact: ArtifactDto; storagePath?: string }>>;
@@ -298,6 +299,13 @@ export interface SendMessageResult {
 export interface ListChannelMessagesInput {
   channelId: string;
   limit: number;
+}
+
+export interface SearchMessagesInput {
+  userId: string;
+  teamId: string;
+  query: string;
+  limit?: number;
 }
 
 export interface GetArtifactInput {
@@ -1572,6 +1580,26 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     async listChannelMessages(listInput) {
       const messages = await repositories.messages.listByChannel(listInput.channelId, listInput.limit);
+      return makeSuccess({
+        messages: await enrichMessagesWithArtifacts(repositories, messages),
+      });
+    },
+
+    async searchMessages(searchInput) {
+      if (!(await repositories.teams.isMember(searchInput.teamId, searchInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const query = searchInput.query.trim();
+      if (query.length < 2) {
+        return makeFailure('VALIDATION_ERROR', 'Search query must be at least 2 characters');
+      }
+      const channels = await repositories.channels.listForUser(searchInput.teamId, searchInput.userId);
+      const channelIds = channels.map((channel) => channel.id);
+      const messages = await repositories.messages.search({
+        channelIds,
+        query,
+        limit: normalizeLimit(searchInput.limit),
+      });
       return makeSuccess({
         messages: await enrichMessagesWithArtifacts(repositories, messages),
       });

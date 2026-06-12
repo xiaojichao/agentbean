@@ -614,6 +614,26 @@
         border-top: 1px solid #eeeeec;
         padding-top: 8px;
       }
+      .search-results {
+        display: grid;
+        gap: 6px;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .search-result {
+        background: #f7f7f6;
+        border: 1px solid #e7e5e4;
+        border-radius: 6px;
+        display: grid;
+        gap: 3px;
+        padding: 7px;
+      }
+      .search-result .message-body {
+        font-size: 12px;
+        max-height: 54px;
+        overflow: hidden;
+      }
       .events {
         max-height: 168px;
         overflow: auto;
@@ -771,6 +791,12 @@
           <div class="rail-heading"><h2>Workspace Run</h2><span class="meta">输出详情</span></div>
           <div class="rail-muted">选择消息里的 workspace run 查看详情。</div>
         </div>
+        <form class="panel compact-form" id="message-search-form">
+          <div class="rail-heading"><h2>消息搜索</h2><span class="meta">simple</span></div>
+          <label>关键词 <input name="query" placeholder="roadmap" /></label>
+          <button type="submit">搜索</button>
+          <ul class="search-results" id="message-search-results"></ul>
+        </form>
         <div class="panel">
           <div class="rail-heading"><h2>成员</h2><span class="meta">human / agent</span></div>
           <ul class="list" id="agents"></ul>
@@ -824,6 +850,9 @@
         selectedDeviceId: null,
         agents: [],
         messages: [],
+        searchResults: [],
+        searchError: null,
+        searchLoading: false,
         activeWorkspaceRunId: readWorkspaceRunIdFromUrl(),
         workspaceRunDetails: {},
         workspaceRunDetailLoadingId: null,
@@ -959,6 +988,11 @@
         void openWorkspaceRunDetail(row.dataset.workspaceRunId || null);
       });
 
+      el("message-search-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        await searchMessages();
+      });
+
       el("message-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         if (!state.user || !state.team || !state.channel) return;
@@ -1025,6 +1059,7 @@
         renderRuntimes(selectedRuntimes);
         renderAgents();
         renderMessages();
+        renderSearchResults();
         renderWorkspaceRunPanel();
         renderActiveChannel();
         renderAuthState();
@@ -1103,6 +1138,60 @@
           </article>`;
         }).join("");
         el("messages").parentElement.scrollTop = el("messages").parentElement.scrollHeight;
+      }
+
+      async function searchMessages() {
+        if (!state.user || !state.team) return;
+        const data = Object.fromEntries(new FormData(el("message-search-form")));
+        const query = String(data.query || "").trim();
+        if (query.length < 2) {
+          state.searchResults = [];
+          state.searchError = "至少输入 2 个字符。";
+          renderSearchResults();
+          return;
+        }
+        state.searchLoading = true;
+        state.searchError = null;
+        renderSearchResults();
+        const ack = await emit("message:search", {
+          userId: state.user.id,
+          teamId: state.team.id,
+          query,
+          limit: 20,
+        });
+        state.searchLoading = false;
+        if (ack.ok) {
+          state.searchResults = Array.isArray(ack.messages) ? ack.messages : [];
+          state.searchError = null;
+        } else {
+          state.searchResults = [];
+          state.searchError = ack.message || ack.error || "搜索失败。";
+        }
+        renderSearchResults();
+      }
+
+      function renderSearchResults() {
+        if (state.searchLoading) {
+          el("message-search-results").innerHTML = `<li class="rail-muted">搜索中。</li>`;
+          return;
+        }
+        if (state.searchError) {
+          el("message-search-results").innerHTML = `<li class="rail-muted">${escapeHtml(state.searchError)}</li>`;
+          return;
+        }
+        if (state.searchResults.length === 0) {
+          el("message-search-results").innerHTML = `<li class="rail-muted">暂无搜索结果。</li>`;
+          return;
+        }
+        el("message-search-results").innerHTML = state.searchResults.map((message) => {
+          const kind = message.senderKind === "human" ? "你" : message.senderKind === "agent" ? "Agent" : "系统";
+          const channel = state.channels.find((item) => item.id === message.channelId);
+          const channelName = channel?.title || channel?.name || message.channelId;
+          return `<li class="search-result">
+            <div class="meta">${escapeHtml(channelName)} · ${escapeHtml(kind)}</div>
+            <div class="message-body">${escapeHtml(message.body)}</div>
+          </li>`;
+        }).join("");
       }
 
       function renderMessageArtifacts(message) {
@@ -1465,6 +1554,9 @@
         state.selectedDeviceId = null;
         state.agents = [];
         state.messages = [];
+        state.searchResults = [];
+        state.searchError = null;
+        state.searchLoading = false;
         state.workspaceRunDetails = {};
         state.workspaceRunDetailLoadingId = null;
         state.workspaceRunDetailError = null;

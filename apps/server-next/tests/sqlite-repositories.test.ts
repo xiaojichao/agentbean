@@ -286,6 +286,39 @@ describe('server-next SQLite repositories', () => {
         message: { id: 'message-1', senderKind: 'human', senderId: 'user-1' },
         dispatches: [{ id: 'dispatch-1', requestId: 'request-1', agentId: 'agent-1' }],
       });
+      await repositories.messages.append({
+        id: 'message-search-public',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        threadId: 'message-search-public',
+        senderKind: 'human',
+        senderId: 'user-1',
+        body: 'public sqlite search',
+        createdAt: 501,
+      });
+      await repositories.messages.append({
+        id: 'message-search-private',
+        teamId: 'team-1',
+        channelId: 'channel-ops',
+        threadId: 'message-search-private',
+        senderKind: 'human',
+        senderId: 'user-1',
+        body: 'secret sqlite search',
+        createdAt: 502,
+      });
+      await expect(app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'sqlite' })).resolves.toMatchObject({
+        ok: true,
+        messages: [
+          { id: 'message-search-public', body: 'public sqlite search' },
+          { id: 'message-search-private', body: 'secret sqlite search' },
+        ],
+      });
+      await expect(app.searchMessages({ userId: 'user-2', teamId: 'team-1', query: 'sqlite' })).resolves.toMatchObject({
+        ok: true,
+        messages: [
+          { id: 'message-search-public', body: 'public sqlite search' },
+        ],
+      });
 
       expect(globalDb.prepare('SELECT current_team_id AS currentTeamId FROM users WHERE id = ?').get('user-1')).toEqual({
         currentTeamId: 'team-1',

@@ -94,7 +94,7 @@
 |---|---|---|
 | `message:send` | First Slice | 保留核心行为：持久化 human message、route、dispatch、持久化 reply。 |
 | `channel:message` broadcast | First Slice | 保留。 |
-| `message:search` | Defer | Message persistence 稳定后保留。 |
+| `message:search` | First Slice | 已保留为 server-side simple DB search，第一版只覆盖当前用户可见普通 channels。 |
 | Agent dispatch `dispatch` | First Slice | 重命名为 `dispatch:request`。 |
 | Agent reply `reply` | First Slice | 重命名为 `dispatch:result`。 |
 | Agent error `error_event` | First Slice | 重命名为 `dispatch:error`。 |

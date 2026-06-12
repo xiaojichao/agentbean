@@ -74,8 +74,8 @@
    - 参考：`packages/contracts/src/socket.ts`、`apps/server-next/src/application/usecases.ts`、`apps/server-next/src/dev-server.ts`、`apps/daemon-next/src/index.ts`
 
 4. DM/thread、artifacts/workspace runs、tasks/search。
-   - 目标：按产品优先级恢复旧 AgentBean 的协作长尾能力；其中 artifacts/workspace runs 影响 agent 输出可追溯性，tasks/search 更偏第二轮产品完整度。
-   - 收敛：DM/thread 第一版与 artifacts/workspace runs metadata 第一版已进入主线；HTTP upload/download/preview route、web artifact viewer、tasks 与 search 仍需后续切片。
+   - 目标：按产品优先级恢复旧 AgentBean 的协作长尾能力；其中 artifacts/workspace runs 影响 agent 输出可追溯性，tasks 与更完整 search 更偏第二轮产品完整度。
+   - 收敛：DM/thread 第一版、artifacts/workspace runs metadata 第一版、HTTP upload/download/preview route、web artifact viewer 与 message search 第一版已进入主线；tasks 与更完整 search 仍需后续切片。
    - 参考：`agentbean-next/docs/current-behavior.md`、`agentbean-next/docs/known-gaps.md`、`agentbean-next/docs/acceptance-tests.md`
 
 5. 真正浏览器级 E2E 第一版。

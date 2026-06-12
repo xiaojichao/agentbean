@@ -780,6 +780,29 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             return message;
           });
       },
+      async search(input) {
+        if (input.channelIds.length === 0) {
+          return [];
+        }
+        const placeholders = input.channelIds.map(() => '?').join(', ');
+        return teamDb
+          .prepare(
+            `SELECT * FROM messages
+             WHERE channel_id IN (${placeholders})
+             AND lower(body) LIKE ? ESCAPE '\\'
+             ORDER BY created_at DESC
+             LIMIT ?`,
+          )
+          .all(...input.channelIds, `%${escapeSqlLike(input.query.toLowerCase())}%`, input.limit)
+          .map((row) => {
+            const message = mapMessage(row);
+            if (!message) {
+              throw new Error('SQLite search message row could not be mapped');
+            }
+            return message;
+          })
+          .reverse();
+      },
       async listThreadBefore(input) {
         const before = mapMessage(teamDb.prepare('SELECT * FROM messages WHERE id = ?').get(input.beforeMessageId));
         if (!before) {
@@ -1425,6 +1448,10 @@ function sqliteValue(row: unknown, key: string): unknown {
     throw new Error(`Expected SQLite row object for column ${key}`);
   }
   return (row as Record<string, unknown>)[key];
+}
+
+function escapeSqlLike(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
 function normalizeName(value: string): string {
