@@ -22,6 +22,7 @@ export interface WebSocketHandlerOptions {
   dispatchCancel?(request: DispatchRequestDto & { id: string }): void;
   dispatchStatus?(dispatch: unknown): void;
   deviceScan?(request: { requestId: string; deviceId: string }): void;
+  afterMessageSend?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceInviteComplete?(payload: unknown, result: unknown): Promise<void> | void;
   afterChannelMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
@@ -82,6 +83,7 @@ export function registerWebSocketHandlers(
             ack?.(messages);
             return;
           }
+          socket.emit?.(WEB_EVENTS.channel.history, { channelId: input.channelId, messages: messages.messages });
           ack?.({ ok: true, channel, messages: messages.messages });
           return;
         }
@@ -92,6 +94,7 @@ export function registerWebSocketHandlers(
         ack?.(dmResult);
         return;
       }
+      socket.emit?.(WEB_EVENTS.channel.history, { channelId: input.channelId, messages: dmResult.messages });
       ack?.({ ok: true, channel: dmResult.dm.channel, messages: dmResult.messages });
     } catch (error) {
       if (error instanceof UnauthenticatedSocketError) {
@@ -132,6 +135,7 @@ export function registerWebSocketHandlers(
     }
   });
   bind(socket, WEB_EVENTS.message.send, app, 'sendMessage', async (_payload, result) => {
+    await options.afterMessageSend?.(_payload, result);
     if (!options.dispatch || !isSendMessageAck(result)) {
       return;
     }

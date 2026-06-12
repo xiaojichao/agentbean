@@ -48,6 +48,7 @@ export const WEB_EVENTS = {
     subscribe: 'channels:subscribe',
     create: 'channel:create',
     join: 'channel:join',
+    history: 'channel:history',
     snapshot: 'channels:snapshot',
     message: 'channel:message',
     update: 'channel:update',
