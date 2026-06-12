@@ -824,7 +824,10 @@
         selectedDeviceId: null,
         agents: [],
         messages: [],
-        activeWorkspaceRunId: null,
+        activeWorkspaceRunId: readWorkspaceRunIdFromUrl(),
+        workspaceRunDetails: {},
+        workspaceRunDetailLoadingId: null,
+        workspaceRunDetailError: null,
       };
       const el = (id) => document.getElementById(id);
 
@@ -832,6 +835,7 @@
         setStatus("已连接");
         if (state.user && state.team) {
           await subscribe();
+          await loadActiveWorkspaceRunDetail();
           return;
         }
         const restored = await restoreSession();
@@ -893,6 +897,7 @@
         state.channel = ack.defaultChannel || state.channel;
         saveSession();
         await subscribe();
+        await loadActiveWorkspaceRunDetail();
         render();
       }
 
@@ -951,8 +956,7 @@
       el("messages").addEventListener("click", (event) => {
         const row = event.target.closest("[data-workspace-run-id]");
         if (!row) return;
-        state.activeWorkspaceRunId = row.dataset.workspaceRunId || null;
-        render();
+        void openWorkspaceRunDetail(row.dataset.workspaceRunId || null);
       });
 
       el("message-form").addEventListener("submit", async (event) => {
@@ -1173,6 +1177,16 @@
       function renderWorkspaceRunPanel() {
         const detail = getWorkspaceRunDetail(state.activeWorkspaceRunId);
         if (!detail) {
+          if (state.workspaceRunDetailLoadingId === state.activeWorkspaceRunId) {
+            el("workspace-run-detail").innerHTML = `<div class="rail-heading"><h2>Workspace Run</h2><span class="meta">输出详情</span></div>
+              <div class="rail-muted">正在加载 workspace run 详情。</div>`;
+            return;
+          }
+          if (state.workspaceRunDetailError && state.activeWorkspaceRunId) {
+            el("workspace-run-detail").innerHTML = `<div class="rail-heading"><h2>Workspace Run</h2><span class="meta">输出详情</span></div>
+              <div class="rail-muted">${escapeHtml(state.workspaceRunDetailError)}</div>`;
+            return;
+          }
           el("workspace-run-detail").innerHTML = `<div class="rail-heading"><h2>Workspace Run</h2><span class="meta">输出详情</span></div>
             <div class="rail-muted">选择消息里的 workspace run 查看详情。</div>`;
           return;
@@ -1191,6 +1205,9 @@
 
       function getWorkspaceRunDetail(runId) {
         if (!runId) return null;
+        if (state.workspaceRunDetails[runId]) {
+          return state.workspaceRunDetails[runId];
+        }
         for (const message of state.messages) {
           if (message.workspaceRun?.id !== runId) continue;
           const artifacts = Array.isArray(message.artifacts) ? message.artifacts : [];
@@ -1200,6 +1217,67 @@
           };
         }
         return null;
+      }
+
+      async function openWorkspaceRunDetail(runId) {
+        if (!runId) return;
+        state.activeWorkspaceRunId = runId;
+        state.workspaceRunDetailError = null;
+        writeWorkspaceRunUrl(runId);
+        const detail = getWorkspaceRunDetail(runId);
+        if (detail) {
+          state.workspaceRunDetails[runId] = detail;
+        }
+        render();
+        await loadActiveWorkspaceRunDetail();
+      }
+
+      async function loadActiveWorkspaceRunDetail() {
+        const runId = state.activeWorkspaceRunId;
+        if (!runId || !state.team?.id || !state.token || state.workspaceRunDetails[runId] || state.workspaceRunDetailLoadingId === runId) {
+          return;
+        }
+        state.workspaceRunDetailLoadingId = runId;
+        state.workspaceRunDetailError = null;
+        render();
+        try {
+          const response = await fetch(`/api/teams/${encodeURIComponent(state.team.id)}/workspace-runs/${encodeURIComponent(runId)}?token=${encodeURIComponent(state.token)}`);
+          const ack = await response.json();
+          addEvent("workspace-run:get", ack);
+          if (ack.ok) {
+            state.workspaceRunDetails[runId] = {
+              workspaceRun: ack.workspaceRun,
+              artifacts: Array.isArray(ack.artifacts) ? ack.artifacts : [],
+            };
+          } else {
+            state.workspaceRunDetailError = ack.message || ack.error || "无法加载 workspace run 详情。";
+          }
+        } catch (error) {
+          state.workspaceRunDetailError = error instanceof Error ? error.message : "无法加载 workspace run 详情。";
+        } finally {
+          if (state.workspaceRunDetailLoadingId === runId) {
+            state.workspaceRunDetailLoadingId = null;
+          }
+          render();
+        }
+      }
+
+      function readWorkspaceRunIdFromUrl() {
+        try {
+          return new URL(window.location.href).searchParams.get("workspaceRunId");
+        } catch {
+          return null;
+        }
+      }
+
+      function writeWorkspaceRunUrl(runId) {
+        try {
+          const url = new URL(window.location.href);
+          url.searchParams.set("workspaceRunId", runId);
+          window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+        } catch {
+          // URL updates are best-effort in test and embedded preview contexts.
+        }
       }
 
       function getWorkspaceRunArtifacts(artifacts, workspaceRun) {
@@ -1349,6 +1427,7 @@
         saveSession();
         render();
         await subscribe();
+        await loadActiveWorkspaceRunDetail();
         return true;
       }
 
@@ -1386,6 +1465,9 @@
         state.selectedDeviceId = null;
         state.agents = [];
         state.messages = [];
+        state.workspaceRunDetails = {};
+        state.workspaceRunDetailLoadingId = null;
+        state.workspaceRunDetailError = null;
         render();
       }
 

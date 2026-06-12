@@ -320,6 +320,69 @@ describe('server-next dev server entry', () => {
     await expect(preview.text()).resolves.toBe('# hello multipart\n');
   });
 
+  test('serves authorized workspace run detail over HTTP', async () => {
+    const app = {
+      whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),
+      getWorkspaceRunDetail: vi.fn(async () =>
+        makeSuccess({
+          workspaceRun: {
+            id: 'run-1',
+            teamId: 'team-1',
+            channelId: 'channel-1',
+            messageId: 'message-1',
+            dispatchId: 'dispatch-1',
+            agentId: 'agent-1',
+            deviceId: 'device-1',
+            status: 'succeeded',
+            artifactIds: ['artifact-1'],
+            cwd: '/Users/shaw/AgentBean',
+            exitCode: 0,
+            startedAt: 1000,
+            completedAt: 2500,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+          artifacts: [
+            {
+              id: 'artifact-1',
+              teamId: 'team-1',
+              channelId: 'channel-1',
+              messageId: 'message-1',
+              dispatchId: 'dispatch-1',
+              workspaceRunId: 'run-1',
+              filename: 'result.md',
+              mimeType: 'text/markdown',
+              sizeBytes: 42,
+              relativePath: 'outputs/result.md',
+              pathKind: 'workspace',
+              createdAt: 2,
+            },
+          ],
+        }),
+      ),
+    } as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir: '.agentbean-next-test', sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+
+    const response = await fetch(`${server.baseUrl}/api/teams/team-1/workspace-runs/run-1?token=token-1`);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      workspaceRun: { id: 'run-1', cwd: '/Users/shaw/AgentBean' },
+      artifacts: [{ id: 'artifact-1', relativePath: 'outputs/result.md' }],
+    });
+    expect(app.getWorkspaceRunDetail).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      runId: 'run-1',
+    });
+  });
+
   test('keeps artifact file reads inside the configured data directory', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-artifact-root-'));
     const outsideFilename = `${basename(dataDir)}-secret.txt`;

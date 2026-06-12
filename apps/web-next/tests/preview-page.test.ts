@@ -29,6 +29,7 @@ interface FakeEvent {
 interface PreviewHarness {
   emitted: Array<[string, unknown]>;
   fetches: Array<{ url: string; init?: RequestInit }>;
+  historyReplacements: string[];
   localStorage: FakeLocalStorage;
   socket: {
     trigger(event: string, payload?: unknown): Promise<void>;
@@ -332,6 +333,42 @@ describe('web-next preview page interactions', () => {
     expect(detailHtml).toContain('reply.md');
     expect(detailHtml).toContain('run.log');
     expect(detailHtml).not.toContain('notes.txt');
+    expect(harness.historyReplacements).toContain('/preview?workspaceRunId=run-1');
+  });
+
+  test('loads workspace run detail from a shareable preview URL', async () => {
+    const harness = createPreviewHarness(
+      {
+        'auth:whoami': () => ({
+          ok: true,
+          user: { id: 'user-1', username: 'shaw' },
+          currentTeam: { id: 'team-1', name: 'AgentBean' },
+        }),
+        'device:list': () => ({ ok: true, devices: [] }),
+        'agents:subscribe': () => ({ ok: true, agents: [] }),
+        'channels:subscribe': () => ({ ok: true, channels: [] }),
+      },
+      { href: 'http://agentbean-next.local/preview?workspaceRunId=run-api-1' },
+    );
+    harness.localStorage.setItem(
+      'agentbean-next-preview-session',
+      JSON.stringify({
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        team: { id: 'team-1', name: 'AgentBean' },
+        channel: { id: 'channel-1', name: 'all' },
+      }),
+    );
+
+    await harness.socket.trigger('connect');
+
+    expect(harness.fetches.map((request) => request.url)).toContain(
+      '/api/teams/team-1/workspace-runs/run-api-1?token=token-1',
+    );
+    const detailHtml = harness.element('workspace-run-detail').innerHTML;
+    expect(detailHtml).toContain('run-api-1');
+    expect(detailHtml).toContain('outputs/');
+    expect(detailHtml).toContain('api-result.md');
   });
 
   test('uploads selected composer files before sending artifact-backed messages', async () => {
@@ -400,9 +437,13 @@ describe('web-next preview page interactions', () => {
   });
 });
 
-function createPreviewHarness(acks: Record<string, AckFactory>): PreviewHarness {
+function createPreviewHarness(
+  acks: Record<string, AckFactory>,
+  options: { href?: string } = {},
+): PreviewHarness {
   const elements = new Map<string, FakeElement>();
   const fetches: Array<{ url: string; init?: RequestInit }> = [];
+  const historyReplacements: string[] = [];
   const localStorage = new FakeLocalStorage();
   const socketHandlers = new Map<string, Array<(payload: unknown) => unknown>>();
   const emitted: Array<[string, unknown]> = [];
@@ -438,6 +479,16 @@ function createPreviewHarness(acks: Record<string, AckFactory>): PreviewHarness 
     elements.set(id, createElement(id));
   }
   const body = { dataset: {} as Record<string, string> };
+  const windowLocation = new URL(options.href ?? 'http://agentbean-next.local/preview');
+  const window = {
+    location: windowLocation,
+    history: {
+      replaceState(_state: unknown, _title: string, url: string): void {
+        historyReplacements.push(url);
+        windowLocation.href = new URL(url, windowLocation.href).href;
+      },
+    },
+  };
 
   const socket = {
     on(event: string, handler: (payload: unknown) => unknown): void {
@@ -461,6 +512,44 @@ function createPreviewHarness(acks: Record<string, AckFactory>): PreviewHarness 
     FormData: FakeFormData,
     fetch: async (url: string, init?: RequestInit) => {
       fetches.push({ url, init });
+      if (url.includes('/workspace-runs/')) {
+        return {
+          async json() {
+            return {
+              ok: true,
+              workspaceRun: {
+                id: 'run-api-1',
+                teamId: 'team-1',
+                channelId: 'channel-1',
+                dispatchId: 'dispatch-1',
+                agentId: 'agent-1',
+                deviceId: 'device-1',
+                cwd: '/Users/shaw/AgentBean',
+                exitCode: 0,
+                startedAt: 1_000,
+                completedAt: 2_000,
+                status: 'succeeded',
+                artifactIds: ['artifact-api-1'],
+                createdAt: 1,
+                updatedAt: 1,
+              },
+              artifacts: [
+                {
+                  id: 'artifact-api-1',
+                  teamId: 'team-1',
+                  channelId: 'channel-1',
+                  workspaceRunId: 'run-api-1',
+                  filename: 'api-result.md',
+                  mimeType: 'text/markdown',
+                  sizeBytes: 31,
+                  relativePath: 'outputs/api-result.md',
+                  pathKind: 'workspace',
+                },
+              ],
+            };
+          },
+        };
+      }
       return {
         async json() {
           return {
@@ -480,6 +569,7 @@ function createPreviewHarness(acks: Record<string, AckFactory>): PreviewHarness 
       };
     },
     btoa: (value: string) => Buffer.from(value, 'binary').toString('base64'),
+    URL,
     document: {
       body,
       createElement: (tagName: string) => createElement(tagName),
@@ -494,12 +584,14 @@ function createPreviewHarness(acks: Record<string, AckFactory>): PreviewHarness 
     },
     io: () => socket,
     localStorage,
+    window,
   });
   vm.runInContext(readPreviewScript(), context);
 
   return {
     emitted,
     fetches,
+    historyReplacements,
     localStorage,
     socket: {
       trigger: socket.trigger,

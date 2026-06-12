@@ -881,11 +881,31 @@ describe('server-next SQLite repositories', () => {
           artifactIds: ['artifact-1'],
         },
       });
+      await expect(app.getWorkspaceRunDetail({ userId: 'user-1', teamId: 'team-1', runId: workspaceRunId })).resolves.toMatchObject({
+        ok: true,
+        workspaceRun: {
+          id: workspaceRunId,
+          teamId: 'team-1',
+          channelId: privateChannelId,
+        },
+        artifacts: [
+          {
+            id: 'artifact-1',
+            filename: 'result.md',
+            workspaceRunId,
+            relativePath: 'outputs/result.md',
+          },
+        ],
+      });
       await expect(app.getArtifact({ userId: 'user-2', teamId: 'team-1', artifactId: 'artifact-1' })).resolves.toMatchObject({
         ok: false,
         error: 'FORBIDDEN',
       });
       await expect(app.getWorkspaceRun({ userId: 'user-2', teamId: 'team-1', runId: workspaceRunId })).resolves.toMatchObject({
+        ok: false,
+        error: 'FORBIDDEN',
+      });
+      await expect(app.getWorkspaceRunDetail({ userId: 'user-2', teamId: 'team-1', runId: workspaceRunId })).resolves.toMatchObject({
         ok: false,
         error: 'FORBIDDEN',
       });

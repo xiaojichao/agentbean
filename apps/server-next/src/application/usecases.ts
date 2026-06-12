@@ -64,6 +64,7 @@ export interface ServerNextUseCases {
   getArtifact(input: GetArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
   getArtifactFile(input: GetArtifactInput): Promise<Ack<{ artifact: ArtifactDto; storagePath?: string }>>;
   getWorkspaceRun(input: GetWorkspaceRunInput): Promise<Ack<{ workspaceRun: WorkspaceRunDto }>>;
+  getWorkspaceRunDetail(input: GetWorkspaceRunInput): Promise<Ack<{ workspaceRun: WorkspaceRunDto; artifacts: ArtifactDto[] }>>;
   failTimedOutDispatches(input: { olderThan: number }): Promise<Ack<{ dispatches: DispatchDto[] }>>;
   receiveDispatchResult(input: ReceiveDispatchResultInput): Promise<Ack<ReceiveDispatchResultResult>>;
   receiveDispatchError(input: ReceiveDispatchErrorInput): Promise<Ack<ReceiveDispatchErrorResult>>;
@@ -1621,25 +1622,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async getWorkspaceRun(runInput) {
-      if (!(await repositories.teams.isMember(runInput.teamId, runInput.userId))) {
-        return makeFailure('FORBIDDEN', 'User is not a team member');
-      }
-      const workspaceRun = await repositories.workspaceRuns.getForTeam({
-        teamId: runInput.teamId,
-        runId: runInput.runId,
+      const result = await getAuthorizedWorkspaceRun(repositories, runInput);
+      if (!result.ok) return result;
+      return makeSuccess({ workspaceRun: result.workspaceRun });
+    },
+
+    async getWorkspaceRunDetail(runInput) {
+      const result = await getAuthorizedWorkspaceRun(repositories, runInput);
+      if (!result.ok) return result;
+      const artifacts = await repositories.artifacts.listByWorkspaceRun(result.workspaceRun.id);
+      return makeSuccess({
+        workspaceRun: result.workspaceRun,
+        artifacts: artifacts.map(toArtifactDto),
       });
-      if (!workspaceRun) {
-        return makeFailure('NOT_FOUND', 'Workspace run not found');
-      }
-      const channelAccess = await ensureUserCanViewChannel(repositories, {
-        userId: runInput.userId,
-        teamId: workspaceRun.teamId,
-        channelId: workspaceRun.channelId,
-      });
-      if (!channelAccess.ok) {
-        return channelAccess;
-      }
-      return makeSuccess({ workspaceRun });
     },
 
     async cancelDispatch(cancelInput) {
@@ -1848,6 +1843,31 @@ async function getAuthorizedArtifact(
     return channelAccess;
   }
   return { ok: true, artifact };
+}
+
+async function getAuthorizedWorkspaceRun(
+  repositories: ServerNextRepositories,
+  runInput: GetWorkspaceRunInput,
+): Promise<{ ok: true; workspaceRun: WorkspaceRunRecord } | Ack<Record<string, never>>> {
+  if (!(await repositories.teams.isMember(runInput.teamId, runInput.userId))) {
+    return makeFailure('FORBIDDEN', 'User is not a team member');
+  }
+  const workspaceRun = await repositories.workspaceRuns.getForTeam({
+    teamId: runInput.teamId,
+    runId: runInput.runId,
+  });
+  if (!workspaceRun) {
+    return makeFailure('NOT_FOUND', 'Workspace run not found');
+  }
+  const channelAccess = await ensureUserCanViewChannel(repositories, {
+    userId: runInput.userId,
+    teamId: workspaceRun.teamId,
+    channelId: workspaceRun.channelId,
+  });
+  if (!channelAccess.ok) {
+    return channelAccess;
+  }
+  return { ok: true, workspaceRun };
 }
 
 async function getAttachableUploadedArtifacts(

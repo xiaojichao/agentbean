@@ -75,6 +75,7 @@ Phase 1 完成标准：
 | P2-15a | Dispatch result 可以上报 artifact metadata 与 workspace run metadata，agent reply 投影 `MessageDto.artifacts` / `MessageDto.workspaceRun`，同 team 可读取 artifact，跨 team 返回 `NOT_FOUND`。 | Repository/UseCase | Agent output 可追溯性与 team-scoped artifact authorization 第一版。 | `contracts-dto.md`, `post-flip-gap-audit.md` |
 | P2-15b | server-next HTTP route 支持 team-scoped artifact JSON/multipart upload、preview 与 download，并拒绝非 team member token。 | HTTP/UseCase | Artifact file bytes 接入 repository 授权与 SQLite data dir。 | `known-gaps.md`, `fifty-ninth-slice-status.md`, `sixty-third-slice-status.md` |
 | P2-15c | `sendMessage` 可以把当前用户上传、同 team/channel 的 upload artifact ids 绑定到 human message，并在 `MessageDto.artifacts` 中投影。 | UseCase | Composer 上传的 artifact 不只停在独立 metadata，而是能随消息进入 conversation。 | `known-gaps.md`, `sixtieth-slice-status.md` |
+| P2-15d | server-next HTTP route 支持按 session token 读取 workspace run detail，并返回该 run 的 artifact projection，非 team/channel 可见用户不能读取。 | HTTP/UseCase | Workspace run detail 不能只依赖消息内联投影，可分享入口需要有独立授权数据源。 | `known-gaps.md`, `sixty-sixth-slice-status.md` |
 | P2-16 | Dispatch error 将 dispatch 标记为 failed，并更新 agent last error。 | UseCase | Error propagation。 | `acceptance-tests.md` |
 | P2-17 | `/web` login/team/channel/message socket flow 只使用 documented first-slice events。 | Socket | Transport adapter thinness。 | `socket-protocol.md`, `contracts-dto.md` |
 | P2-18 | `/agent` device hello/runtime/agent batch/dispatch result flow 使用 documented DTOs。 | Socket | Agent namespace contract。 | `socket-protocol.md`, `contracts-dto.md` |
@@ -161,6 +162,7 @@ Phase 3 完成标准：
 | P4-20 | web-next preview 在同一条 message 内按 workspace output 与 message attachment 分组展示 artifacts。 | Web | Artifact metadata 不应只平铺展示，用户需要区分 agent workspace 输出与用户上传附件。 | `known-gaps.md`, `sixty-fourth-slice-status.md` |
 | P4-21 | web-next preview 在 Workspace 输出组内按 `relativePath` 展示轻量目录树。 | Web | Workspace output 不应只平铺文件名，用户需要看到输出文件的相对路径结构。 | `known-gaps.md`, `sixty-fifth-slice-status.md` |
 | P4-22 | web-next preview 可以从 message workspace run 摘要打开独立详情面板，并在面板内展示 run metadata 与 workspace output tree。 | Web | 用户需要脱离单条消息气泡查看一次 workspace run 的执行上下文与输出文件。 | `known-gaps.md`, `post-flip-follow-up-status.md` |
+| P4-23 | web-next preview 的 workspace run 详情入口会写入 `workspaceRunId` URL，并能在刷新/直达该 URL 后通过 HTTP API 恢复详情。 | Web/HTTP | Workspace run detail 需要可分享、可恢复，而不是只能依赖当前消息 DOM 状态。 | `known-gaps.md`, `sixty-sixth-slice-status.md` |
 
 Phase 4 完成标准：
 
@@ -189,7 +191,6 @@ Phase 4 完成标准：
 这些仍保留在 `docs/acceptance-tests.md` 中，但第一切片冻结前不强制要求：
 
 - Join link management UI、`join:list` 与 `join:revoke`。
-- workspace run detail 的可分享 URL 与独立 HTTP API route。
 - Tasks。
 - Message search。
 - Channel archive/delete。
