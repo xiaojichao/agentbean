@@ -25,3 +25,14 @@ export interface MessageDto {
   artifacts?: ArtifactDto[];
   workspaceRun?: WorkspaceRunDto;
 }
+
+export interface MessageSearchInputDto {
+  userId?: ID;
+  teamId: ID;
+  query: string;
+  limit?: number;
+}
+
+export interface MessageSearchResultDto {
+  messages: MessageDto[];
+}

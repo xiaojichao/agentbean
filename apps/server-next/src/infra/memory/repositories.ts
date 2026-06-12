@@ -387,6 +387,15 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           .sort((left, right) => left.createdAt - right.createdAt)
           .slice(-limit);
       },
+      async search(input) {
+        const channelIds = new Set(input.channelIds);
+        const query = input.query.toLowerCase();
+        return Array.from(messages.values())
+          .filter((message) => channelIds.has(message.channelId) && message.body.toLowerCase().includes(query))
+          .sort((left, right) => right.createdAt - left.createdAt)
+          .slice(0, input.limit)
+          .reverse();
+      },
       async listThreadBefore(input) {
         const before = messages.get(input.beforeMessageId);
         if (!before) {

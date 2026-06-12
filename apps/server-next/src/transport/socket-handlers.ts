@@ -142,6 +142,7 @@ export function registerWebSocketHandlers(
       }
     }
   }, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.message.search, app, 'searchMessages', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.dispatch.cancel, app, 'cancelDispatch', async (_payload, result) => {
     if (!isDispatchAck(result)) {
       return;

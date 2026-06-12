@@ -478,6 +478,17 @@ export interface MessageMetaDto {
   mentionedName?: string | null;
   taskId?: ID | null;
 }
+
+export interface MessageSearchInputDto {
+  userId?: ID;
+  teamId: ID;
+  query: string;
+  limit?: number;
+}
+
+export interface MessageSearchResultDto {
+  messages: MessageDto[];
+}
 ```
 
 说明：
@@ -485,6 +496,7 @@ export interface MessageMetaDto {
 - Server 设置 `senderKind` 与 `senderId`；sender identity 不可信任 clients。
 - 第一版 thread 使用 root-message convention：新 root message 默认 `threadId = message.id`，thread reply 复用 root `threadId`。
 - `threadId` 不应导致当前 prompt 在 dispatch history 中出现两次。
+- `message:search` 第一版只搜索当前用户可见的普通 channels，不包含 DM；搜索使用 simple DB query，不引入 FTS/ranking。
 
 ## DispatchDto
 

@@ -177,6 +177,7 @@ export interface MessageRepository {
   append(input: MessageRecord): Promise<MessageRecord>;
   getById(messageId: ID): Promise<MessageRecord | null>;
   listByChannel(channelId: ID, limit: number): Promise<MessageRecord[]>;
+  search(input: { channelIds: ID[]; query: string; limit: number }): Promise<MessageRecord[]>;
   listThreadBefore(input: { channelId: ID; threadId: ID; beforeMessageId: ID; limit: number }): Promise<MessageRecord[]>;
 }
 

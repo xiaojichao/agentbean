@@ -163,12 +163,17 @@ Artifact metadata、HTTP route 与 preview viewer 的第一版已经落地。
 
 ### Search Projection
 
-当前 message search 是直接 DB search。
+Message search 第一版已经落地为 server-side simple DB search。
 
-需要：
+已确认：
 
-- 决定第一版是否 simple SQL search 就足够。
-- 除非确实需要，否则延后 full-text indexing。
+- `message:search` 只搜索当前用户在 team 内可见的普通 channels。
+- private channel 搜索结果不会泄漏给非 channel member。
+- web-next preview 右侧工作区提供轻量消息搜索表单与结果列表。
+
+剩余：
+
+- Direct message search、full-text indexing、ranking/highlight 与 saved filters 仍需后续产品切片。
 
 ## Web 缺口
 
@@ -242,7 +247,7 @@ Native directory selection 有用，但不是第一切片核心。
 
 剩余：
 
-- 浏览器 smoke 仍主要覆盖核心 chat/custom-agent 路径与 artifact 基础链路；tasks/search、settings/member/device 等后续产品面需要随着切片补浏览器级证据。
+- 浏览器 smoke 仍主要覆盖核心 chat/custom-agent 路径与 artifact 基础链路；tasks、更完整 search、settings/member/device 等后续产品面需要随着切片补浏览器级证据。
 - production browser smoke 与 24-72 小时生产观察记录仍属于运维观察，不等同于每次 PR 的本地/CI smoke。
 
 ### Acceptance Tests 需要优先级

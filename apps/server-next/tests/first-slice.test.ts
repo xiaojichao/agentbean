@@ -184,6 +184,58 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('searchMessages returns only messages from channels visible to the user', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 245,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'join-1',
+        'user-2',
+        'team-2',
+        'channel-2',
+        'channel-private',
+        'message-public',
+        'message-private',
+      ]),
+      joinCodes: createIds(['code-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
+    await app.registerUser({ username: 'lin', password: 'secret', teamName: 'Lin Team', joinCode: 'code-1' });
+    await app.createChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      name: 'private-search',
+      visibility: 'private',
+    });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'public roadmap search' });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-private', body: 'secret roadmap search' });
+
+    await expect(app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'roadmap' })).resolves.toMatchObject({
+      ok: true,
+      messages: [
+        { id: 'message-private', body: 'secret roadmap search' },
+        { id: 'message-public', body: 'public roadmap search' },
+      ],
+    });
+    await expect(app.searchMessages({ userId: 'user-2', teamId: 'team-1', query: 'roadmap' })).resolves.toMatchObject({
+      ok: true,
+      messages: [
+        { id: 'message-public', body: 'public roadmap search' },
+      ],
+    });
+    await expect(app.searchMessages({ userId: 'user-2', teamId: 'team-1', query: 'secret' })).resolves.toMatchObject({
+      ok: true,
+      messages: [],
+    });
+    await expect(app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'r' })).resolves.toMatchObject({
+      ok: false,
+      error: 'VALIDATION_ERROR',
+    });
+  });
+
   test('creates and validates a user join link for an existing team member', async () => {
     const app = createInMemoryServerNext({
       now: () => 250,
