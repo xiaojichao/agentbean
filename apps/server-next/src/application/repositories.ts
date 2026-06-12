@@ -141,9 +141,11 @@ export interface ChannelRepository {
   listDirectForUser(teamId: ID, userId: ID): Promise<ChannelRecord[]>;
   update(input: {
     channelId: ID;
-    changes: Partial<Pick<ChannelRecord, 'name' | 'title' | 'visibility' | 'humanMemberIds' | 'agentMemberIds' | 'updatedAt'>>;
+    changes: Partial<Pick<ChannelRecord, 'name' | 'title' | 'visibility' | 'humanMemberIds' | 'agentMemberIds' | 'updatedAt' | 'archivedAt'>>;
   }): Promise<ChannelRecord | null>;
   removeAgentFromTeamChannels(input: { teamId: ID; agentId: ID; timestamp: UnixMs }): Promise<void>;
+  archive(input: { channelId: ID; timestamp: UnixMs }): Promise<ChannelRecord | null>;
+  delete(input: { channelId: ID }): Promise<ChannelRecord | null>;
 }
 
 export interface DeviceRepository {
@@ -180,6 +182,7 @@ export interface MessageRepository {
   listByChannel(channelId: ID, limit: number): Promise<MessageRecord[]>;
   search(input: { channelIds: ID[]; query: string; limit: number }): Promise<MessageRecord[]>;
   listThreadBefore(input: { channelId: ID; threadId: ID; beforeMessageId: ID; limit: number }): Promise<MessageRecord[]>;
+  deleteByChannel(channelId: ID): Promise<void>;
 }
 
 export interface DispatchRepository {
@@ -198,6 +201,7 @@ export interface ArtifactRepository {
   getForTeam(input: { teamId: ID; artifactId: ID }): Promise<ArtifactRecord | null>;
   listByMessage(messageId: ID): Promise<ArtifactRecord[]>;
   listByWorkspaceRun(runId: ID): Promise<ArtifactRecord[]>;
+  deleteByChannel(channelId: ID): Promise<void>;
 }
 
 export interface WorkspaceRunRepository {

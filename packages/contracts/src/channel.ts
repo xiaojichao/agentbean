@@ -16,6 +16,7 @@ export interface ChannelDto {
   createdBy?: ID;
   createdAt: UnixMs;
   updatedAt?: UnixMs;
+  archivedAt?: UnixMs | null;
 }
 
 export interface CreateChannelCommandDto {
