@@ -248,9 +248,20 @@ describe('web-next preview page interactions', () => {
           id: 'artifact-1',
           teamId: 'team-1',
           channelId: 'channel-1',
+          workspaceRunId: 'run-1',
           filename: 'reply.md',
           mimeType: 'text/markdown',
           sizeBytes: 42,
+          pathKind: 'workspace',
+        },
+        {
+          id: 'artifact-2',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          filename: 'notes.txt',
+          mimeType: 'text/plain',
+          sizeBytes: 12,
+          pathKind: 'upload',
         },
       ],
       workspaceRun: {
@@ -272,7 +283,10 @@ describe('web-next preview page interactions', () => {
     });
 
     const html = harness.element('messages').innerHTML;
+    expect(html).toContain('Workspace 输出');
+    expect(html).toContain('消息附件');
     expect(html).toContain('reply.md');
+    expect(html).toContain('notes.txt');
     expect(html).toContain('Workspace run run-1');
     expect(html).toContain('/Users/shaw/AgentBean');
     expect(html).toContain('exit 0');
@@ -281,6 +295,7 @@ describe('web-next preview page interactions', () => {
     expect(html).toContain('1 artifact');
     expect(html).toContain('/api/teams/team-1/artifacts/artifact-1/preview?token=token-1');
     expect(html).toContain('/api/teams/team-1/artifacts/artifact-1/download?token=token-1');
+    expect(html).toContain('/api/teams/team-1/artifacts/artifact-2/preview?token=token-1');
   });
 
   test('uploads selected composer files before sending artifact-backed messages', async () => {

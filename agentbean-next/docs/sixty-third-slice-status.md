@@ -42,5 +42,5 @@ npm run smoke:agentbean-next-browser -- --skip-build --timeout-ms 45000 --json
 ## 剩余边界
 
 - Multipart parser 是 server-next dev/preview route 的最小实现，不提供 streaming 大文件上传。
-- Workspace tree、独立 run detail 页面与 artifact grouping 仍需后续 UI/API 切片。
+- 后续第六十四切片已补上消息内 artifact grouping；workspace tree 与独立 run detail 页面仍需后续 UI/API 切片。
 - Tasks、search、saved messages/reactions、admin/metrics 仍属于后续产品 parity。

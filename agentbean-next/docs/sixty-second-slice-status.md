@@ -26,5 +26,5 @@ npm run test:web-next -- --api.host 127.0.0.1 tests/preview-page.test.ts -t "ren
 ## 剩余边界
 
 - Workspace run 仍是消息内联 detail 第一版，尚未提供独立 run detail 页面或 workspace tree。
-- Artifact grouping 仍未按 workspace run/dispatch 做更完整的信息架构。
+- 后续第六十四切片已补上消息内 workspace output / message attachment 分组；跨 run/dispatch 的 artifact browser 仍未落地。
 - Tasks、search、saved messages/reactions、admin/metrics 仍属于后续产品 parity。

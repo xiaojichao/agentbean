@@ -158,6 +158,7 @@ Phase 3 完成标准：
 | P4-17 | web-next preview composer 会将选中文件上传到 artifact HTTP route，并把返回的 artifact ids 随 `message:send` 发送。 | Web/HTTP | 用户可以从 composer 创建 artifact-backed human message。 | `known-gaps.md`, `sixtieth-slice-status.md` |
 | P4-18 | web-next preview 在 message workspace run 区域展示 cwd、device、exit code、duration 与 artifact count。 | Web | Workspace run metadata 不应只停留在 id/status，用户需要看到执行上下文与输出规模。 | `known-gaps.md`, `sixty-second-slice-status.md` |
 | P4-19 | web-next preview composer 使用 `FormData` multipart 上传文件，不再手动 base64 编码。 | Web/HTTP | 浏览器 file input 路径应走真实 multipart upload，而不是只依赖 JSON/base64 兼容入口。 | `known-gaps.md`, `sixty-third-slice-status.md` |
+| P4-20 | web-next preview 在同一条 message 内按 workspace output 与 message attachment 分组展示 artifacts。 | Web | Artifact metadata 不应只平铺展示，用户需要区分 agent workspace 输出与用户上传附件。 | `known-gaps.md`, `sixty-fourth-slice-status.md` |
 
 Phase 4 完成标准：
 
@@ -186,7 +187,7 @@ Phase 4 完成标准：
 这些仍保留在 `docs/acceptance-tests.md` 中，但第一切片冻结前不强制要求：
 
 - Join link management UI、`join:list` 与 `join:revoke`。
-- Artifact grouping 与 workspace tree。
+- Workspace tree 与独立 run detail 页面。
 - Tasks。
 - Message search。
 - Channel archive/delete。
