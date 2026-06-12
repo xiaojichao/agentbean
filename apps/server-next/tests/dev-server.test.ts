@@ -268,6 +268,58 @@ describe('server-next dev server entry', () => {
     expect(forbidden.status).toBe(403);
   });
 
+  test('accepts multipart artifact uploads over HTTP', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-artifacts-multipart-'));
+    const server = await startServerNextDevServer({
+      Server,
+      Database,
+      config: { host: '127.0.0.1', port: 0, storage: 'sqlite', dataDir, sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+    const ownerSocket = await connectClient(`${server.baseUrl}/web`);
+    cleanups.push(async () => {
+      ownerSocket.disconnect();
+    });
+    const owner = await ownerSocket.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    }) as {
+      ok: true;
+      token: string;
+      currentTeam: { id: string };
+      defaultChannel: { id: string };
+    };
+
+    const body = new FormData();
+    body.append('token', owner.token);
+    body.append('channelId', owner.defaultChannel.id);
+    body.append('file', new Blob(['# hello multipart\n'], { type: 'text/markdown' }), 'reply.md');
+
+    const upload = await fetch(`${server.baseUrl}/api/teams/${owner.currentTeam.id}/artifacts/upload`, {
+      method: 'POST',
+      body,
+    });
+    expect(upload.status).toBe(201);
+    const uploadJson = await upload.json() as {
+      ok: true;
+      artifact: { id: string; filename: string; mimeType: string; previewUrl: string };
+    };
+    expect(uploadJson).toMatchObject({
+      ok: true,
+      artifact: {
+        filename: 'reply.md',
+        mimeType: 'text/markdown',
+        previewUrl: `/api/teams/${owner.currentTeam.id}/artifacts/${uploadJson.artifact.id}/preview`,
+      },
+    });
+
+    const preview = await fetch(`${server.baseUrl}${uploadJson.artifact.previewUrl}?token=${encodeURIComponent(owner.token)}`);
+    expect(preview.status).toBe(200);
+    expect(preview.headers.get('content-type')).toContain('text/markdown');
+    await expect(preview.text()).resolves.toBe('# hello multipart\n');
+  });
+
   test('keeps artifact file reads inside the configured data directory', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-artifact-root-'));
     const outsideFilename = `${basename(dataDir)}-secret.txt`;

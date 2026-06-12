@@ -47,16 +47,15 @@
 
 已确认：
 
-- server-next 提供 JSON/base64 upload route、preview route 与 download route。
+- server-next 提供 JSON/base64 兼容 upload、multipart upload、preview route 与 download route。
 - route 复用 session token、team membership 与 channel visibility 授权。
 - web-next preview 会在消息中展示 artifacts 与 workspace run id/status，并生成 preview/download links。
-- web-next preview composer 可以选择文件并随 human message 上传/绑定 artifact。
+- web-next preview composer 可以选择文件并以 multipart `FormData` 随 human message 上传/绑定 artifact。
 - `npm run smoke:agentbean-next-browser` 已覆盖真实浏览器 artifact upload、preview 与 download bytes 验证。
 - web-next preview 会在 message workspace run 区域展示 cwd、device、exit code、duration 与 artifact count。
 
 剩余边界：
 
-- HTTP upload 仍是 JSON/base64 第一版，尚未实现 multipart form upload。
 - workspace tree、独立 run detail 页面与 artifact grouping 仍需后续产品切片。
 
 ### P2：后续产品 parity
@@ -70,4 +69,4 @@
 
 ## 下一步判定
 
-当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。下一步应基于本文档开新的 scoped issue/PR：如果继续产品能力，优先在 artifact multipart upload、workspace tree、tasks/search 中选一个小切片；如果先做运维验证，则只处理 P0 生产观察证据，不混入产品功能改动。
+当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。下一步应基于本文档开新的 scoped issue/PR：如果继续产品能力，优先在 workspace tree、artifact grouping、tasks/search 中选一个小切片；如果先做运维验证，则只处理 P0 生产观察证据，不混入产品功能改动。

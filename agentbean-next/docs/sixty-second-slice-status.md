@@ -27,5 +27,4 @@ npm run test:web-next -- --api.host 127.0.0.1 tests/preview-page.test.ts -t "ren
 
 - Workspace run 仍是消息内联 detail 第一版，尚未提供独立 run detail 页面或 workspace tree。
 - Artifact grouping 仍未按 workspace run/dispatch 做更完整的信息架构。
-- HTTP upload 仍是 JSON/base64 第一版，尚未实现 multipart form upload。
 - Tasks、search、saved messages/reactions、admin/metrics 仍属于后续产品 parity。

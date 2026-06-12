@@ -73,7 +73,7 @@ Phase 1 完成标准：
 | P2-14 | Dispatch timeout 将 dispatch 标记为 `timed_out`，并带有 `DISPATCH_TIMEOUT`。 | UseCase | Stable timeout error。 | `acceptance-tests.md`, `contracts-dto.md` |
 | P2-15 | Dispatch result 将 dispatch 标记为 succeeded，并追加 agent message。 | UseCase | Reply persistence。 | `acceptance-tests.md` |
 | P2-15a | Dispatch result 可以上报 artifact metadata 与 workspace run metadata，agent reply 投影 `MessageDto.artifacts` / `MessageDto.workspaceRun`，同 team 可读取 artifact，跨 team 返回 `NOT_FOUND`。 | Repository/UseCase | Agent output 可追溯性与 team-scoped artifact authorization 第一版。 | `contracts-dto.md`, `post-flip-gap-audit.md` |
-| P2-15b | server-next HTTP route 支持 team-scoped artifact JSON upload、preview 与 download，并拒绝非 team member token。 | HTTP/UseCase | Artifact file bytes 接入 repository 授权与 SQLite data dir。 | `known-gaps.md`, `fifty-ninth-slice-status.md` |
+| P2-15b | server-next HTTP route 支持 team-scoped artifact JSON/multipart upload、preview 与 download，并拒绝非 team member token。 | HTTP/UseCase | Artifact file bytes 接入 repository 授权与 SQLite data dir。 | `known-gaps.md`, `fifty-ninth-slice-status.md`, `sixty-third-slice-status.md` |
 | P2-15c | `sendMessage` 可以把当前用户上传、同 team/channel 的 upload artifact ids 绑定到 human message，并在 `MessageDto.artifacts` 中投影。 | UseCase | Composer 上传的 artifact 不只停在独立 metadata，而是能随消息进入 conversation。 | `known-gaps.md`, `sixtieth-slice-status.md` |
 | P2-16 | Dispatch error 将 dispatch 标记为 failed，并更新 agent last error。 | UseCase | Error propagation。 | `acceptance-tests.md` |
 | P2-17 | `/web` login/team/channel/message socket flow 只使用 documented first-slice events。 | Socket | Transport adapter thinness。 | `socket-protocol.md`, `contracts-dto.md` |
@@ -157,6 +157,7 @@ Phase 3 完成标准：
 | P4-16 | web-next preview 在 message artifacts 中展示 filename、workspace run id/status，并生成带 session token 的 preview/download links。 | Web | Artifact metadata 不应只停在 server projection，用户需要在消息里看到并打开输出文件。 | `known-gaps.md`, `fifty-ninth-slice-status.md` |
 | P4-17 | web-next preview composer 会将选中文件上传到 artifact HTTP route，并把返回的 artifact ids 随 `message:send` 发送。 | Web/HTTP | 用户可以从 composer 创建 artifact-backed human message。 | `known-gaps.md`, `sixtieth-slice-status.md` |
 | P4-18 | web-next preview 在 message workspace run 区域展示 cwd、device、exit code、duration 与 artifact count。 | Web | Workspace run metadata 不应只停留在 id/status，用户需要看到执行上下文与输出规模。 | `known-gaps.md`, `sixty-second-slice-status.md` |
+| P4-19 | web-next preview composer 使用 `FormData` multipart 上传文件，不再手动 base64 编码。 | Web/HTTP | 浏览器 file input 路径应走真实 multipart upload，而不是只依赖 JSON/base64 兼容入口。 | `known-gaps.md`, `sixty-third-slice-status.md` |
 
 Phase 4 完成标准：
 
@@ -185,7 +186,7 @@ Phase 4 完成标准：
 这些仍保留在 `docs/acceptance-tests.md` 中，但第一切片冻结前不强制要求：
 
 - Join link management UI、`join:list` 与 `join:revoke`。
-- Artifact multipart upload、artifact grouping 与 workspace tree。
+- Artifact grouping 与 workspace tree。
 - Tasks。
 - Message search。
 - Channel archive/delete。
