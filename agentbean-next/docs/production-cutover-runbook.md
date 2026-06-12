@@ -2,7 +2,13 @@
 
 本文档描述如何把生产部署从旧 AgentBean 切换到 AgentBean Next。它是操作清单，不是自动切换脚本。
 
-## 当前状态
+## 状态更新
+
+截至 2026-06-12，AgentBean Next final flip 已经完成，post-flip strict cutover audit、production entry smoke、business smoke 与 browser smoke gate 已进入主线验证。当前 follow-up 状态见 `post-flip-follow-up-status.md`。
+
+本文后续仍保留切换前 gate、manual deploy、rollback 与 smoke 的操作说明，供回放、审计或受控 rollback 演练使用；不要把下方历史 pre-flip 状态误读为当前仍未切换。
+
+## 切换前 gate 状态（历史）
 
 截至第五十五切片，仓库内替换前 gate 已具备：
 
@@ -41,7 +47,7 @@
 - persistence smoke 会在同一个 SQLite data dir 下启动 server-next 两次，验证 token session、current team、channel/message history 能在重启后恢复。
 - old entry smoke 会检查公开入口的旧生产 `/healthz` 返回 `{ "status": "ok" }`，并拒绝 AgentBean Next 的 `{ "ok": true, "service": "agentbean-next-server" }` 健康载荷，防止 rollback 后实际仍停在 Next server。
 
-当前真实外部配置状态：
+切换前真实外部配置状态：
 
 - GitHub repository variables 当前已有 `AGENTBEAN_NEXT_DATA_DIR=/data/agentbean-next`。
 - GitHub repository variable `AGENTBEAN_NEXT_ENTRY_URL=https://api.agentbean.dev` 已指向当前 production Railway backend 入口；final flip 后同一入口应返回 AgentBean Next 的 `/healthz` 与业务 smoke。
@@ -57,7 +63,7 @@
   - Railway variables 包含 `AGENTBEAN_NEXT_DATA_DIR` 与 `AGENTBEAN_NEXT_SESSION_SECRET`
 - 本机当前没有安装 `railway` CLI。
 
-因此，现在已经具备 final flip 前的生产配置证据。剩余关键门槛是获得用户对实际生产切换的明确批准，然后打开 `AGENTBEAN_DEPLOY_TARGET=next`。
+该段记录的是 final flip 前的生产配置证据。final flip 后的生产观察与后续产品缺口，以 `post-flip-gap-audit.md` 与 `post-flip-follow-up-status.md` 为准。
 
 如果已经有可访问的 AgentBean Next 部署 URL，可以先不部署、只运行生产 smoke：
 
@@ -142,7 +148,7 @@ gh workflow run "CI/CD" \
 PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run audit:agentbean-next-cutover
 ```
 
-此时 npm registry、data dir 与 session secret 相关检查已经通过；真正 production flip 仍会因为 `AGENTBEAN_DEPLOY_TARGET=next` 尚未打开而保持红灯。
+pre-flip 时，npm registry、data dir 与 session secret 相关检查已经通过；严格 production flip 仍会因为 `AGENTBEAN_DEPLOY_TARGET=next` 尚未打开而保持红灯。
 
 ## 本地重启持久化 Smoke
 
@@ -274,7 +280,7 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run audit:agentbean-n
 - GitHub secrets 已包含 `RAILWAY_TOKEN`、`NPM_TOKEN` 与 `AGENTBEAN_NEXT_SESSION_SECRET`。
 - npm registry 已包含 `@agentbean/contracts`、`@agentbean/daemon-next` 与 canonical `@agentbean/daemon` 的 next version。
 
-当前外部状态下，严格 cutover audit 预期只会因为 `AGENTBEAN_DEPLOY_TARGET=next` 尚未打开而失败。这个失败项是最终开关，不应在没有用户明确批准时提前设置。
+pre-flip 外部状态下，严格 cutover audit 预期只会因为 `AGENTBEAN_DEPLOY_TARGET=next` 尚未打开而失败。这个失败项是最终开关，不应在没有用户明确批准时提前设置。
 
 ## Production Flip
 

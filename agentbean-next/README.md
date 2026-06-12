@@ -28,6 +28,7 @@
 - `docs/implementation-runbook.md` 给出第一切片的逐步开发检查清单。
 - `docs/production-cutover-runbook.md` 给出真正替换旧 AgentBean 前的生产切换清单。
 - `docs/post-flip-gap-audit.md` 记录 production final flip 后的生产观察证据与替代旧服务缺口分级。
+- `docs/post-flip-follow-up-status.md` 记录 final flip 后 follow-up 的当前收敛状态与下一条推荐切片。
 - `docs/first-slice-status.md` 记录第一切片当前实现、验证证据与剩余边界。
 - `docs/second-slice-status.md` 记录第二切片 channel controls 的实现、验证证据与剩余边界。
 - `docs/third-slice-status.md` 记录第三切片 channel membership 的实现、验证证据与剩余边界。
@@ -139,3 +140,9 @@ npm run smoke:agentbean-next-persistence
 `npm run audit:agentbean-next-cutover` 是外部 cutover audit；只有 GitHub variables/secrets 与 npm registry next versions 都准备好后才应通过。当前它用于证明是否可以真正 flip，而不是日常本地开发 smoke。
 
 本机如果尚未安装根 workspace 依赖，可临时使用已安装的 `apps/server/node_modules` 运行同等测试；SQLite native module 当前与 Node v24.15.0 ABI 匹配。
+
+## Post-flip follow-up
+
+`docs/post-flip-follow-up-status.md` 是 final flip 后选择下一条切片的当前入口。旧的 post-flip follow-up 清单中，authenticated socket session、team/join/device invite 第一版、dispatch cancel/timeout 调度、agent 管理面、DM/thread、artifacts/workspace runs metadata 与 browser smoke gate 已经收敛到主线。
+
+下一条推荐产品切片是 artifact HTTP upload/download/preview route 与 web artifact viewer。生产观察证据、rollback 演练记录、tasks/search/saved reactions/admin/metrics 等仍应作为独立后续项推进。

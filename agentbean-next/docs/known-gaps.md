@@ -98,13 +98,20 @@ Tasks 可以拥有 `assignee_id`，但目标类型还没有完全指定。
 
 ## 数据模型缺口
 
-### Dispatch 不够一等
+### Dispatch lifecycle 第一版已定义
 
-当前 dispatch lifecycle 主要通过内存与 message metadata 协调。
+Dispatch lifecycle 的第一版已经落地到 `server-next` repository/usecase/runtime 层。
 
-需要：
+已确认：
 
 - `dispatches` model，包含 request ID、agent ID、channel ID、message ID、status、error、timestamps、timeout 与 artifact links。
+- `dispatch:cancel` 会把 pending dispatch 标记为 `cancelled`，late result/error 不再改写已完成状态。
+- server-next 长驻 runtime 会定期调用 `failTimedOutDispatches`，把超时 pending dispatch 标记为 `timed_out` 并广播 dispatch status。
+
+剩余：
+
+- Web 上的 cancel affordance 与更完整的 dispatch history/diagnostics UI 仍需后续产品切片覆盖。
+- 长时间运行 adapter 的真实进程级 cancel 语义仍需要按 adapter 逐个验证。
 
 ### Workspace Runs 第一版已定义
 
@@ -217,13 +224,19 @@ Native directory selection 有用，但不是第一切片核心。
 
 ## 测试缺口
 
-### 尚无真正端到端测试
+### 浏览器级 E2E 第一版已定义
 
-当前测试有用，但大多局限于单 app。
+真正浏览器级 E2E 的第一版已经落地。
 
-需要：
+已确认：
 
-- 一个覆盖 Web-like client、Server 与 Daemon-like client 的组合测试或 smoke script。
+- `npm run smoke:agentbean-next-browser` 可以启动或连接 AgentBean Next 入口，用真实 Chrome 覆盖登录/session restore、刷新重订阅、custom agent 创建、message dispatch 与 agent reply 可见。
+- CI 在 AgentBean Next 相关路径变更时运行 browser smoke，并上传 console log 与 screenshot artifacts。
+
+剩余：
+
+- 浏览器 smoke 仍主要覆盖核心 chat/custom-agent 路径；artifact viewer、tasks/search、settings/member/device 等后续产品面需要随着切片补浏览器级证据。
+- production browser smoke 与 24-72 小时生产观察记录仍属于运维观察，不等同于每次 PR 的本地/CI smoke。
 
 ### Acceptance Tests 需要优先级
 
@@ -233,11 +246,15 @@ Native directory selection 有用，但不是第一切片核心。
 
 - 标出 first-slice tests 与 later-feature tests。
 
-### Contract Tests
+### Contract Tests 第一版已定义
 
-需要：
+已确认：
 
-- 在 web 与 daemon 两侧边界验证 protocol DTOs。
+- `packages/contracts/tests` 覆盖核心 DTO、socket event constants、device invite、DM、artifacts/workspace runs 与 dispatch cancel event constants。
+
+剩余：
+
+- 后续每引入新的 HTTP route 或 product-facing DTO，都应同步补 contract fixtures 与 web/daemon 边界测试。
 
 ## 显式非缺口
 
