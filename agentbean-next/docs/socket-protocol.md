@@ -846,9 +846,9 @@ Ack<{ dispatch: DispatchDto }>
 - `channel:delete`：延后；需要产品决策。
 - `channel:stop-agents`：替换为 dispatch cancellation commands。
 
-### Tasks（延后切片）
+### Tasks（第一版）
 
-Task commands 仅保留产品方向。不要在第一切片实现这些 commands，也不要在 task slice 开始前定义 `TaskDto`。
+Task commands 第一版已落地到 server-next usecase/repository/socket binding，并在 web-next preview 提供轻量创建与状态更新入口。
 
 #### `task:list`
 
@@ -912,6 +912,14 @@ Ack<{ task: TaskDto }>
 
 - `tasks:snapshot`：`TaskDto[]`
 - `task:updated`：`TaskDto`
+
+服务器行为：
+
+- 带 `auth.token` 的 web socket 会从 authenticated socket session 派生 `userId`；payload 中的 `userId` 只作为临时兼容路径保留。
+- `task:list` 默认只返回 global tasks 与当前用户可见 channels/DMs 关联 tasks；指定 `channelId` 时必须先通过 channel visibility 授权。
+- `task:create` 需要 non-empty title；`channelId` 必须是当前用户可见 channel/DM。
+- `assigneeId` 第一版可以是 team human member，或当前 team 可见 agent。
+- `task:update` 可以更新 title/description/status/assignee/channel/tags/sortOrder；更新已有 private channel task 前，当前用户也必须能看见该 task 所属 channel。
 
 延后的 task commands：
 
@@ -1123,13 +1131,13 @@ DTOs 不应直接暴露 database rows。
 - `MessageDto`
 - `DispatchDto`
 - `DispatchRequestDto`
+- `TaskDto`
 
 ### 后续切片 DTOs
 
-这些 DTO families 在第一切片 contract 中有意不定义：
+这些 DTO families 已在后续切片中逐步定义；若继续新增，必须同步 `docs/contracts-dto.md`：
 
 - `ArtifactDto`
-- `TaskDto`
 - `WorkspaceRunDto`
 - `InviteDto`
 - `JoinLinkDto`

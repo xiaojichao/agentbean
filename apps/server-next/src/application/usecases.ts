@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TeamDto, type UserDto, type WorkspaceRunDto } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TaskDto, type TaskStatus, type TeamDto, type UserDto, type WorkspaceRunDto } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 
@@ -61,6 +61,9 @@ export interface ServerNextUseCases {
   cancelDispatch(input: CancelDispatchInput): Promise<Ack<{ dispatch: DispatchDto }>>;
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   searchMessages(input: SearchMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
+  listTasks(input: ListTasksInput): Promise<Ack<{ tasks: TaskDto[] }>>;
+  createTask(input: CreateTaskInput): Promise<Ack<{ task: TaskDto }>>;
+  updateTask(input: UpdateTaskInput): Promise<Ack<{ task: TaskDto }>>;
   uploadArtifact(input: UploadArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
   getArtifact(input: GetArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
   getArtifactFile(input: GetArtifactInput): Promise<Ack<{ artifact: ArtifactDto; storagePath?: string }>>;
@@ -306,6 +309,35 @@ export interface SearchMessagesInput {
   teamId: string;
   query: string;
   limit?: number;
+}
+
+export interface ListTasksInput {
+  userId: string;
+  teamId: string;
+  channelId?: string;
+}
+
+export interface CreateTaskInput {
+  userId: string;
+  teamId: string;
+  title: string;
+  description?: string;
+  channelId?: string;
+  assigneeId?: string;
+  tags?: string[];
+}
+
+export interface UpdateTaskInput {
+  userId: string;
+  teamId: string;
+  taskId: string;
+  title?: string;
+  description?: string | null;
+  status?: TaskStatus;
+  assigneeId?: string | null;
+  channelId?: string | null;
+  tags?: string[];
+  sortOrder?: number;
 }
 
 export interface GetArtifactInput {
@@ -1605,6 +1637,148 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
     },
 
+    async listTasks(taskInput) {
+      if (!(await repositories.teams.isMember(taskInput.teamId, taskInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const channelId = normalizeOptionalId(taskInput.channelId);
+      if (channelId) {
+        const channel = await ensureUserCanViewChannel(repositories, {
+          userId: taskInput.userId,
+          teamId: taskInput.teamId,
+          channelId,
+        });
+        if (!channel.ok) {
+          return channel;
+        }
+        return makeSuccess({
+          tasks: await repositories.tasks.list({
+            teamId: taskInput.teamId,
+            channelIds: [channelId],
+            includeGlobal: false,
+          }),
+        });
+      }
+      return makeSuccess({
+        tasks: await repositories.tasks.list({
+          teamId: taskInput.teamId,
+          channelIds: await visibleTaskChannelIds(repositories, taskInput.teamId, taskInput.userId),
+          includeGlobal: true,
+        }),
+      });
+    },
+
+    async createTask(taskInput) {
+      if (!(await repositories.teams.isMember(taskInput.teamId, taskInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const title = typeof taskInput.title === 'string' ? taskInput.title.trim() : '';
+      if (!title) {
+        return makeFailure('VALIDATION_ERROR', 'Task title is required');
+      }
+      const channelId = normalizeOptionalId(taskInput.channelId);
+      const assigneeId = normalizeOptionalId(taskInput.assigneeId);
+      if (channelId) {
+        const channel = await ensureUserCanViewChannel(repositories, {
+          userId: taskInput.userId,
+          teamId: taskInput.teamId,
+          channelId,
+        });
+        if (!channel.ok) {
+          return channel;
+        }
+      }
+      if (assigneeId && !(await isAssignableToTask(repositories, taskInput.teamId, assigneeId))) {
+        return makeFailure('FORBIDDEN', 'Task assignee is not visible in team');
+      }
+      const now = clock.now();
+      const task = await repositories.tasks.create({
+        id: ids.nextId(),
+        teamId: taskInput.teamId,
+        title,
+        description: normalizeOptionalText(taskInput.description),
+        status: 'todo',
+        creatorId: taskInput.userId,
+        assigneeId,
+        channelId,
+        tags: normalizeTags(taskInput.tags),
+        sortOrder: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+      return makeSuccess({ task });
+    },
+
+    async updateTask(taskInput) {
+      if (!(await repositories.teams.isMember(taskInput.teamId, taskInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const task = await repositories.tasks.getById(taskInput.taskId);
+      if (!task || task.teamId !== taskInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Task not found');
+      }
+      if (task.channelId) {
+        const channel = await ensureUserCanViewChannel(repositories, {
+          userId: taskInput.userId,
+          teamId: taskInput.teamId,
+          channelId: task.channelId,
+        });
+        if (!channel.ok) {
+          return channel;
+        }
+      }
+      const nextChannelId = hasOwn(taskInput, 'channelId') ? normalizeOptionalId(taskInput.channelId ?? undefined) : undefined;
+      const nextAssigneeId = hasOwn(taskInput, 'assigneeId') ? normalizeOptionalId(taskInput.assigneeId ?? undefined) : undefined;
+      if (nextChannelId) {
+        const channel = await ensureUserCanViewChannel(repositories, {
+          userId: taskInput.userId,
+          teamId: taskInput.teamId,
+          channelId: nextChannelId,
+        });
+        if (!channel.ok) {
+          return channel;
+        }
+      }
+      if (taskInput.status !== undefined && !isTaskStatus(taskInput.status)) {
+        return makeFailure('VALIDATION_ERROR', 'Task status is invalid');
+      }
+      if (
+        taskInput.assigneeId !== undefined &&
+        taskInput.assigneeId !== null &&
+        nextAssigneeId !== undefined &&
+        !(await isAssignableToTask(repositories, taskInput.teamId, nextAssigneeId))
+      ) {
+        return makeFailure('FORBIDDEN', 'Task assignee is not visible in team');
+      }
+      if (taskInput.sortOrder !== undefined && (typeof taskInput.sortOrder !== 'number' || !Number.isFinite(taskInput.sortOrder))) {
+        return makeFailure('VALIDATION_ERROR', 'Task sortOrder must be a finite number');
+      }
+      if (taskInput.title !== undefined && typeof taskInput.title !== 'string') {
+        return makeFailure('VALIDATION_ERROR', 'Task title is required');
+      }
+      const title = taskInput.title !== undefined ? taskInput.title.trim() : undefined;
+      if (title !== undefined && !title) {
+        return makeFailure('VALIDATION_ERROR', 'Task title is required');
+      }
+      const updated = await repositories.tasks.update({
+        taskId: task.id,
+        changes: {
+          ...(title !== undefined ? { title } : {}),
+          ...(hasOwn(taskInput, 'description') ? { description: normalizeOptionalText(taskInput.description ?? undefined) } : {}),
+          ...(taskInput.status !== undefined ? { status: taskInput.status } : {}),
+          ...(hasOwn(taskInput, 'assigneeId') ? { assigneeId: nextAssigneeId } : {}),
+          ...(hasOwn(taskInput, 'channelId') ? { channelId: nextChannelId } : {}),
+          ...(taskInput.tags !== undefined ? { tags: normalizeTags(taskInput.tags) } : {}),
+          ...(taskInput.sortOrder !== undefined ? { sortOrder: taskInput.sortOrder } : {}),
+          updatedAt: clock.now(),
+        },
+      });
+      if (!updated) {
+        return makeFailure('NOT_FOUND', 'Task not found');
+      }
+      return makeSuccess({ task: updated });
+    },
+
     async uploadArtifact(artifactInput) {
       if (!(await repositories.teams.isMember(artifactInput.teamId, artifactInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
@@ -2339,6 +2513,51 @@ async function allHumanMembersBelongToTeam(
   return true;
 }
 
+async function visibleTaskChannelIds(
+  repositories: ServerNextRepositories,
+  teamId: string,
+  userId: string,
+): Promise<string[]> {
+  const [channels, dms] = await Promise.all([
+    repositories.channels.listForUser(teamId, userId),
+    repositories.channels.listDirectForUser(teamId, userId),
+  ]);
+  return uniqueIds([...channels, ...dms].map((channel) => channel.id));
+}
+
+async function isAssignableToTask(
+  repositories: ServerNextRepositories,
+  teamId: string,
+  assigneeId: string,
+): Promise<boolean> {
+  if (await repositories.teams.isMember(teamId, assigneeId)) {
+    return true;
+  }
+  const agent = await repositories.agents.getById(assigneeId);
+  return Boolean(agent && agent.deletedAt === undefined && agent.visibleTeamIds.includes(teamId));
+}
+
+function isTaskStatus(status: string): status is TaskStatus {
+  return status === 'todo' || status === 'in_progress' || status === 'in_review' || status === 'done' || status === 'closed';
+}
+
+function normalizeOptionalText(value: unknown): string | undefined {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return normalized ? normalized : undefined;
+}
+
+function normalizeOptionalId(value: unknown): string | undefined {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return normalized ? normalized : undefined;
+}
+
+function normalizeTags(tags: string[] | undefined): string[] {
+  if (!Array.isArray(tags)) {
+    return [];
+  }
+  return uniqueIds(tags.map((tag) => typeof tag === 'string' ? tag.trim() : '').filter(Boolean)).slice(0, 20);
+}
+
 async function channelForCreatorManagement(
   repositories: ServerNextRepositories,
   input: { userId: string; teamId: string; channelId: string },
@@ -2396,6 +2615,10 @@ async function agentForManagement(
 
 function uniqueIds(ids: string[]): string[] {
   return Array.from(new Set(ids.filter(Boolean)));
+}
+
+function hasOwn(value: object, key: PropertyKey): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function toPublicAgent(agent: AgentRecord): AgentDto {

@@ -14,7 +14,11 @@ describe('server-next first-slice migrations', () => {
       readFileSync(migrationPath('global/0002_device_invites.sql'), 'utf8'),
       readFileSync(migrationPath('global/0003_agent_deleted_at.sql'), 'utf8'),
     ].join('\n');
-    const teamSql = readFileSync(migrationPath('team/0001_first_slice.sql'), 'utf8');
+    const teamSql = [
+      readFileSync(migrationPath('team/0001_first_slice.sql'), 'utf8'),
+      readFileSync(migrationPath('team/0002_artifacts_workspace_runs.sql'), 'utf8'),
+      readFileSync(migrationPath('team/0003_tasks.sql'), 'utf8'),
+    ].join('\n');
 
     for (const tableName of [
       'users',
@@ -36,6 +40,7 @@ describe('server-next first-slice migrations', () => {
       'channel_agent_members',
       'messages',
       'dispatches',
+      'tasks',
     ]) {
       expect(teamSql).toContain(`CREATE TABLE ${tableName}`);
     }
@@ -231,6 +236,118 @@ describe('server-next first-slice use cases', () => {
       messages: [],
     });
     await expect(app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'r' })).resolves.toMatchObject({
+      ok: false,
+      error: 'VALIDATION_ERROR',
+    });
+  });
+
+  test('tasks can be created, listed, and updated without leaking private channels', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 300,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'join-1',
+        'user-2',
+        'team-2',
+        'channel-2',
+        'channel-private',
+        'task-public',
+        'task-private',
+        'task-global',
+      ]),
+      joinCodes: createIds(['code-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
+    await app.registerUser({ username: 'lin', password: 'secret', teamName: 'Lin Team', joinCode: 'code-1' });
+    await app.createChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      name: 'private-tasks',
+      visibility: 'private',
+    });
+
+    await expect(app.createTask({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      assigneeId: 'user-2',
+      title: '  public task  ',
+      tags: ['ops', 'ops', ' ship '],
+    })).resolves.toMatchObject({
+      ok: true,
+      task: {
+        id: 'task-public',
+        title: 'public task',
+        status: 'todo',
+        creatorId: 'user-1',
+        assigneeId: 'user-2',
+        channelId: 'channel-1',
+        tags: ['ops', 'ship'],
+      },
+    });
+    await app.createTask({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-private',
+      title: 'private task',
+    });
+
+    await expect(app.listTasks({ userId: 'user-2', teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      tasks: [{ id: 'task-public' }],
+    });
+    await expect(app.listTasks({ userId: 'user-2', teamId: 'team-1', channelId: 'channel-private' })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+    await expect(app.updateTask({
+      userId: 'user-2',
+      teamId: 'team-1',
+      taskId: 'task-public',
+      status: 'in_progress',
+      assigneeId: null,
+    })).resolves.toMatchObject({
+      ok: true,
+      task: { id: 'task-public', status: 'in_progress', assigneeId: undefined },
+    });
+    await expect(app.updateTask({
+      userId: 'user-2',
+      teamId: 'team-1',
+      taskId: 'task-private',
+      status: 'done',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+    await expect(app.createTask({ userId: 'user-1', teamId: 'team-1', title: '   ' })).resolves.toMatchObject({
+      ok: false,
+      error: 'VALIDATION_ERROR',
+    });
+    await expect(app.createTask({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: '',
+      title: 'global task',
+    })).resolves.toMatchObject({
+      ok: true,
+      task: { id: 'task-global', channelId: undefined, title: 'global task' },
+    });
+    await expect(app.listTasks({ userId: 'user-2', teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      tasks: expect.arrayContaining([
+        expect.objectContaining({ id: 'task-global', channelId: undefined }),
+        expect.objectContaining({ id: 'task-public' }),
+      ]),
+    });
+    await expect(app.updateTask({
+      userId: 'user-1',
+      teamId: 'team-1',
+      taskId: 'task-global',
+      sortOrder: 'bad' as unknown as number,
+    })).resolves.toMatchObject({
       ok: false,
       error: 'VALIDATION_ERROR',
     });

@@ -13,6 +13,7 @@ import type {
   MessageRecord,
   RuntimeRecord,
   ServerNextRepositories,
+  TaskRecord,
   TeamMemberRecord,
   TeamRecord,
   UserRecord,
@@ -44,6 +45,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
 export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0001_first_slice.sql');
   applyMigration(db, 'team/0002_artifacts_workspace_runs.sql');
+  applyMigration(db, 'team/0003_tasks.sql');
 }
 
 export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): ServerNextRepositories {
@@ -1071,6 +1073,87 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           });
       },
     },
+    tasks: {
+      async create(task) {
+        teamDb
+          .prepare(
+            `INSERT INTO tasks (
+              id, team_id, title, description, status, creator_id, assignee_id, channel_id,
+              tags_json, sort_order, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            task.id,
+            task.teamId,
+            task.title,
+            task.description ?? null,
+            task.status,
+            task.creatorId,
+            task.assigneeId ?? null,
+            task.channelId ?? null,
+            JSON.stringify(task.tags),
+            task.sortOrder,
+            task.createdAt,
+            task.updatedAt,
+          );
+        return task;
+      },
+      async getById(taskId) {
+        return mapTask(teamDb.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId));
+      },
+      async list(input) {
+        const clauses = ['team_id = ?'];
+        const params: unknown[] = [input.teamId];
+        const channelClauses: string[] = [];
+        if (input.includeGlobal) {
+          channelClauses.push('channel_id IS NULL');
+        }
+        if (input.channelIds.length > 0) {
+          channelClauses.push(`channel_id IN (${input.channelIds.map(() => '?').join(', ')})`);
+          params.push(...input.channelIds);
+        }
+        if (channelClauses.length === 0) {
+          return [];
+        }
+        clauses.push(`(${channelClauses.join(' OR ')})`);
+        return teamDb
+          .prepare(`SELECT * FROM tasks WHERE ${clauses.join(' AND ')} ORDER BY sort_order ASC, created_at DESC`)
+          .all(...params)
+          .map((row) => {
+            const task = mapTask(row);
+            if (!task) {
+              throw new Error('SQLite task row could not be mapped');
+            }
+            return task;
+          });
+      },
+      async update(input) {
+        const existing = mapTask(teamDb.prepare('SELECT * FROM tasks WHERE id = ?').get(input.taskId));
+        if (!existing) {
+          return null;
+        }
+        const updated = { ...existing, ...input.changes };
+        teamDb
+          .prepare(
+            `UPDATE tasks SET
+              title = ?, description = ?, status = ?, assignee_id = ?, channel_id = ?,
+              tags_json = ?, sort_order = ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(
+            updated.title,
+            updated.description ?? null,
+            updated.status,
+            updated.assigneeId ?? null,
+            updated.channelId ?? null,
+            JSON.stringify(updated.tags),
+            updated.sortOrder,
+            updated.updatedAt,
+            input.taskId,
+          );
+        return updated;
+      },
+    },
   };
 }
 
@@ -1365,6 +1448,26 @@ function mapWorkspaceRun(row: unknown): WorkspaceRunRecord | null {
     createdAt: sqliteNumber(row, 'created_at'),
     updatedAt: sqliteNumber(row, 'updated_at'),
     artifactIds: parseJsonArray(sqliteNullableText(row, 'artifact_ids_json')) ?? [],
+  };
+}
+
+function mapTask(row: unknown): TaskRecord | null {
+  if (!row) {
+    return null;
+  }
+  return {
+    id: sqliteText(row, 'id'),
+    teamId: sqliteText(row, 'team_id'),
+    title: sqliteText(row, 'title'),
+    description: sqliteNullableText(row, 'description'),
+    status: sqliteText(row, 'status') as TaskRecord['status'],
+    creatorId: sqliteText(row, 'creator_id'),
+    assigneeId: sqliteNullableText(row, 'assignee_id'),
+    channelId: sqliteNullableText(row, 'channel_id'),
+    tags: parseJsonArray(sqliteNullableText(row, 'tags_json')) ?? [],
+    sortOrder: sqliteNumber(row, 'sort_order'),
+    createdAt: sqliteNumber(row, 'created_at'),
+    updatedAt: sqliteNumber(row, 'updated_at'),
   };
 }
 

@@ -115,12 +115,12 @@
 
 | 当前表面 | 状态 | 目标方向 |
 |---|---|---|
-| `task:create` | Defer | 核心 chat/dispatch 之后保留。 |
-| `task:list` | Defer | 保留。 |
-| `task:update` | Defer | 保留。 |
+| `task:create` | First Slice | 已实现 server-side create，支持可见 channel/DM 绑定与 human/agent assignee 第一版。 |
+| `task:list` | First Slice | 已实现，只返回 global tasks 与当前用户可见 channels/DMs 关联 tasks。 |
+| `task:update` | First Slice | 已实现 title/description/status/assignment/channel/tags/sortOrder 更新。 |
 | `task:delete` | Defer | 保留。 |
 | `task:reorder` | Merge/Rename | 除非 UI 明显受益于显式 command，否则合并进 `task:update`。 |
-| `task:updated` | Defer | 保留。 |
+| `task:updated` | Defer | 事件名保留；第一版 preview 仍以 ack/local state 更新为主。 |
 | Task-channel/message link | Keep | 作为产品行为保留。 |
 
 ## Invites 与 Join Links

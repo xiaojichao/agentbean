@@ -62,6 +62,8 @@ describe('web-next preview page interactions', () => {
     expect(html).toContain('发送消息');
     expect(html).toContain('id="message-search-form"');
     expect(html).toContain('消息搜索');
+    expect(html).toContain('id="task-create-form"');
+    expect(html).toContain('创建任务');
   });
 
   test('restores saved session through auth:whoami and resubscribes snapshots on connect', async () => {
@@ -74,6 +76,20 @@ describe('web-next preview page interactions', () => {
       'device:list': () => ({ ok: true, devices: [] }),
       'agents:subscribe': () => ({ ok: true, agents: [] }),
       'channels:subscribe': () => ({ ok: true, channels: [] }),
+      'task:list': () => ({
+        ok: true,
+        tasks: [{
+          id: 'task-1',
+          teamId: 'team-1',
+          title: 'Restored task',
+          status: 'todo',
+          creatorId: 'user-1',
+          tags: [],
+          sortOrder: 1,
+          createdAt: 1,
+          updatedAt: 1,
+        }],
+      }),
     });
     harness.localStorage.setItem(
       'agentbean-next-preview-session',
@@ -92,12 +108,14 @@ describe('web-next preview page interactions', () => {
       ['device:list', { userId: 'user-1', teamId: 'team-1' }],
       ['agents:subscribe', { userId: 'user-1', teamId: 'team-1' }],
       ['channels:subscribe', { userId: 'user-1', teamId: 'team-1' }],
+      ['task:list', { userId: 'user-1', teamId: 'team-1' }],
     ]);
     expect(JSON.parse(harness.localStorage.getItem('agentbean-next-preview-session') ?? '{}')).toMatchObject({
       token: 'token-1',
       user: { id: 'user-1' },
       team: { id: 'team-1' },
     });
+    expect(harness.element('task-results').innerHTML).toContain('Restored task');
   });
 
   test('auto-enters the default preview team when no saved session exists', async () => {
@@ -122,6 +140,7 @@ describe('web-next preview page interactions', () => {
       ['device:list', { userId: 'user-1', teamId: 'team-1' }],
       ['agents:subscribe', { userId: 'user-1', teamId: 'team-1' }],
       ['channels:subscribe', { userId: 'user-1', teamId: 'team-1' }],
+      ['task:list', { userId: 'user-1', teamId: 'team-1' }],
     ]);
     expect(JSON.parse(harness.localStorage.getItem('agentbean-next-preview-session') ?? '{}')).toMatchObject({
       token: 'token-1',
@@ -484,6 +503,80 @@ describe('web-next preview page interactions', () => {
     expect(harness.element('message-search-results').innerHTML).toContain('roadmap search result');
     expect(harness.element('message-search-results').innerHTML).toContain('All');
   });
+
+  test('creates and updates tasks through the preview task form', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'task:create': () => ({
+        ok: true,
+        task: {
+          id: 'task-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          title: 'Ship task',
+          status: 'todo',
+          creatorId: 'user-1',
+          tags: [],
+          sortOrder: 1,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      }),
+      'task:update': () => ({
+        ok: true,
+        task: {
+          id: 'task-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          title: 'Ship task',
+          status: 'done',
+          creatorId: 'user-1',
+          tags: [],
+          sortOrder: 1,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+    harness.element('task-create-form').fields.title = 'Ship task';
+    await harness.submit('task-create-form');
+
+    expect(harness.emitted).toContainEqual([
+      'task:create',
+      {
+        userId: 'user-1',
+        teamId: 'team-1',
+        title: 'Ship task',
+        channelId: 'channel-1',
+      },
+    ]);
+    expect(harness.element('task-results').innerHTML).toContain('Ship task');
+    await harness.click('task-results', 'button[data-task-id]', { taskId: 'task-1', status: 'done' });
+    expect(harness.emitted).toContainEqual([
+      'task:update',
+      {
+        userId: 'user-1',
+        teamId: 'team-1',
+        taskId: 'task-1',
+        status: 'done',
+      },
+    ]);
+    expect(harness.element('task-results').innerHTML).toContain('done');
+  });
 });
 
 function createPreviewHarness(
@@ -502,6 +595,7 @@ function createPreviewHarness(
     'channel-create-form': { name: 'ops', title: 'Ops', visibility: 'private' },
     'agent-create-form': { deviceId: '', runtimeId: '', name: 'Codex', envKey: 'OPENAI_API_KEY', envValue: '' },
     'message-form': { channelId: '', body: '@Codex hello' },
+    'task-create-form': { title: 'Ship task' },
     'message-search-form': { query: 'roadmap' },
   };
   for (const [id, fields] of Object.entries(formFields)) {
@@ -519,6 +613,7 @@ function createPreviewHarness(
     'runtimes',
     'agents',
     'messages',
+    'task-results',
     'message-search-results',
     'workspace-run-detail',
     'events',

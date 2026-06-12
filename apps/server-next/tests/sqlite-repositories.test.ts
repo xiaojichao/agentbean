@@ -203,7 +203,17 @@ describe('server-next SQLite repositories', () => {
         repositories,
         clock: { now: () => 500 },
         ids: {
-          nextId: createIds(['user-1', 'team-1', 'channel-1', 'channel-ops', 'message-1', 'dispatch-1', 'request-1']),
+          nextId: createIds([
+            'user-1',
+            'team-1',
+            'channel-1',
+            'channel-ops',
+            'message-1',
+            'dispatch-1',
+            'request-1',
+            'task-public',
+            'task-private',
+          ]),
         },
       });
 
@@ -318,6 +328,37 @@ describe('server-next SQLite repositories', () => {
         messages: [
           { id: 'message-search-public', body: 'public sqlite search' },
         ],
+      });
+      await expect(app.createTask({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        assigneeId: 'agent-1',
+        title: 'SQLite task',
+        tags: ['sqlite'],
+      })).resolves.toMatchObject({
+        ok: true,
+        task: { id: 'task-public', title: 'SQLite task', assigneeId: 'agent-1', tags: ['sqlite'] },
+      });
+      await app.createTask({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-ops',
+        title: 'Private SQLite task',
+      });
+      await expect(app.listTasks({ userId: 'user-2', teamId: 'team-1' })).resolves.toMatchObject({
+        ok: true,
+        tasks: [{ id: 'task-public' }],
+      });
+      await expect(app.updateTask({
+        userId: 'user-2',
+        teamId: 'team-1',
+        taskId: 'task-public',
+        status: 'done',
+        assigneeId: null,
+      })).resolves.toMatchObject({
+        ok: true,
+        task: { id: 'task-public', status: 'done', assigneeId: undefined },
       });
 
       expect(globalDb.prepare('SELECT current_team_id AS currentTeamId FROM users WHERE id = ?').get('user-1')).toEqual({
