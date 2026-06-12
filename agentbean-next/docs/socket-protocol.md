@@ -789,6 +789,7 @@ Ack<{ message: MessageDto; dispatches: DispatchDto[] }>
 - `senderKind` 与 `senderId` 仍由 server 派生，client 不应发送 sender identity。
 - direct channel 中的 message 固定 dispatch 给 `dmTargetAgentId`；普通 channel 中无 mention message 仍 fallback 到第一个 online agent。
 - `threadId` 为空时 server 将当前 message 作为 thread root；有值时 server 将 message 作为该 thread reply。
+- 成功后 server 会向可见该 channel 或 direct channel 的 web subscribers 广播已持久化的 human `channel:message`；agent reply 后续仍由 dispatch result 路径广播。
 
 #### `message:search`
 

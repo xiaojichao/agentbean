@@ -16,6 +16,7 @@ type ClientSocket = {
   connected: boolean;
   connect(): void;
   disconnect(): void;
+  emit(event: string, payload: unknown): void;
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
   on(event: string, handler: (...args: unknown[]) => void): void;
 };
@@ -136,6 +137,7 @@ describe('server-next Socket.IO namespaces', () => {
     });
     await eventually(async () => {
       expect(channelMessages).toEqual([
+        expect.objectContaining({ id: 'message-1', senderKind: 'human', body: '@Codex hello' }),
         expect.objectContaining({ id: 'reply-1', senderKind: 'agent', body: 'done' }),
       ]);
     });
@@ -1238,7 +1240,7 @@ describe('server-next Socket.IO namespaces', () => {
     expect(agentTwoScanRequests).toEqual([]);
   });
 
-  test('returns DM channel history through channel:join', async () => {
+  test('emits DM channel history through channel:join for web listeners', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,
       ids: createIds([
@@ -1298,6 +1300,10 @@ describe('server-next Socket.IO namespaces', () => {
       }),
     ).resolves.toMatchObject({ ok: true, message: { id: 'message-1', channelId: 'dm-channel-1' } });
 
+    const historyEvents: unknown[] = [];
+    web.on(WEB_EVENTS.channel.history, (payload) => {
+      historyEvents.push(payload);
+    });
     await expect(
       web.emitWithAck(WEB_EVENTS.channel.join, {
         userId: 'user-1',
@@ -1308,7 +1314,15 @@ describe('server-next Socket.IO namespaces', () => {
     ).resolves.toMatchObject({
       ok: true,
       channel: { id: 'dm-channel-1', kind: 'direct', name: 'dm-user-1-agent-1' },
-      messages: [{ id: 'message-1', body: 'hello', channelId: 'dm-channel-1' }],
+      messages: [expect.objectContaining({ id: 'message-1', body: 'hello', channelId: 'dm-channel-1' })],
+    });
+    await eventually(async () => {
+      expect(historyEvents).toEqual([
+        {
+          channelId: 'dm-channel-1',
+          messages: [expect.objectContaining({ id: 'message-1', body: 'hello', channelId: 'dm-channel-1' })],
+        },
+      ]);
     });
   });
 
@@ -1498,9 +1512,10 @@ describe('server-next Socket.IO namespaces', () => {
       message: { id: 'reply-1', senderKind: 'agent', body: 'done' },
     });
 
-    // Web client should receive the agent reply via channel:message
+    // Web client should receive both the human send and the agent reply via channel:message
     await eventually(async () => {
       expect(channelMessages).toEqual([
+        expect.objectContaining({ id: 'message-1', senderKind: 'human', channelId: 'dm-channel-1', body: 'hello agent' }),
         expect.objectContaining({ id: 'reply-1', senderKind: 'agent', channelId: 'dm-channel-1', body: 'done' }),
       ]);
     });

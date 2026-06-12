@@ -135,6 +135,16 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
       deviceScan(request) {
         agentSocketsByDeviceId.get(request.deviceId)?.emit?.(AGENT_EVENTS.device.scanRequested, request);
       },
+      async afterMessageSend(_payload, result) {
+        if (!isSuccessAck(result)) {
+          return;
+        }
+        const teamId = resultMessageTeamId(result);
+        if (!teamId) {
+          return;
+        }
+        await emitChannelMessageSubscribers(webSubscribers, app, teamId, result);
+      },
       afterDeviceInviteComplete(_payload, result) {
         const credentials = resultDeviceInviteCredentials(result);
         const inviteCode = resultDeviceInviteCode(result);
@@ -619,12 +629,17 @@ function dispatchTeamId(dispatch: unknown): string | null {
   return typeof teamId === 'string' ? teamId : null;
 }
 
-function resultMessage(result: unknown): { channelId: string } | null {
+function resultMessage(result: unknown): { channelId: string; teamId?: string } | null {
   if (!result || typeof result !== 'object') {
     return null;
   }
   const message = (result as { message?: { channelId?: unknown } }).message;
-  return typeof message?.channelId === 'string' ? message as { channelId: string } : null;
+  return typeof message?.channelId === 'string' ? message as { channelId: string; teamId?: string } : null;
+}
+
+function resultMessageTeamId(result: unknown): string | null {
+  const message = resultMessage(result);
+  return typeof message?.teamId === 'string' ? message.teamId : null;
 }
 
 function resultDeviceTeamId(result: unknown): string | null {
