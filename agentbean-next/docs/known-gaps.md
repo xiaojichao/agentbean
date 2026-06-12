@@ -152,11 +152,12 @@ Artifact metadata、HTTP route 与 preview viewer 的第一版已经落地。
 - `MessageDto.artifacts` 可以投影 agent reply 的 artifact metadata。
 - server-next 提供 `POST /api/teams/:teamId/artifacts/upload`、`GET /api/teams/:teamId/artifacts/:artifactId/preview` 与 `GET /api/teams/:teamId/artifacts/:artifactId/download`。
 - web-next preview 会在消息中展示 artifact 文件、workspace run id/status，并生成预览/下载链接。
+- web-next preview composer 可以选择文件，先通过 artifact HTTP upload route 上传，再将返回的 artifact id 绑定到 human message。
 
 剩余：
 
 - Upload route 目前是 JSON/base64 第一版，尚未实现 multipart form upload。
-- Web composer 上传控件、workspace run detail UI、artifact grouping 与 workspace tree 仍需后续 UI/API 切片。
+- Workspace run detail UI、artifact grouping 与 workspace tree 仍需后续 UI/API 切片。
 
 ### Search Projection
 
@@ -238,7 +239,7 @@ Native directory selection 有用，但不是第一切片核心。
 
 剩余：
 
-- 浏览器 smoke 仍主要覆盖核心 chat/custom-agent 路径；artifact upload/preview/download、tasks/search、settings/member/device 等后续产品面需要随着切片补浏览器级证据。
+- 浏览器 smoke 仍主要覆盖核心 chat/custom-agent 路径；artifact composer upload/preview/download、tasks/search、settings/member/device 等后续产品面需要随着切片补浏览器级证据。
 - production browser smoke 与 24-72 小时生产观察记录仍属于运维观察，不等同于每次 PR 的本地/CI smoke。
 
 ### Acceptance Tests 需要优先级

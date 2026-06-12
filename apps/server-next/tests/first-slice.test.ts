@@ -393,6 +393,57 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('sendMessage attaches same-channel uploaded artifacts to the human message', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 320,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'artifact-1', 'message-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.uploadArtifact({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      filename: 'brief.md',
+      mimeType: 'text/markdown',
+      sizeBytes: 12,
+      storagePath: 'artifacts/team-1/artifact-1/brief.md',
+      relativePath: 'brief.md',
+      sha256: 'hash-1',
+    });
+
+    const ack = await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: 'see attached',
+      artifactIds: ['artifact-1'],
+    });
+
+    expect(ack).toMatchObject({
+      ok: true,
+      message: {
+        id: 'message-1',
+        meta: { artifactIds: ['artifact-1'] },
+        artifacts: [
+          {
+            id: 'artifact-1',
+            filename: 'brief.md',
+            pathKind: 'upload',
+          },
+        ],
+      },
+    });
+    await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
+      ok: true,
+      messages: [
+        {
+          id: 'message-1',
+          artifacts: [{ id: 'artifact-1', filename: 'brief.md' }],
+        },
+      ],
+    });
+  });
+
   test('sendMessage creates a dispatch for the first eligible online agent', async () => {
     const app = createInMemoryServerNext({
       now: () => 400,

@@ -463,6 +463,17 @@
         max-width: 240px;
         width: 40%;
       }
+      .composer-upload {
+        align-items: center;
+        color: #737373;
+        display: flex;
+        flex-wrap: wrap;
+        font-size: 12px;
+        gap: 8px;
+      }
+      .composer-upload input {
+        max-width: 100%;
+      }
       .sidebar-action,
       .workbench-card {
         border: 1px solid #e5e5e5;
@@ -666,6 +677,7 @@
         <div class="composer">
           <form id="message-form">
             <label>内容 <textarea name="body">@Codex hello</textarea></label>
+            <label class="composer-upload">附件 <input id="message-artifact-files" name="artifacts" type="file" multiple />随消息上传</label>
             <div class="composer-actions">
               <label>频道 <select name="channelId"></select></label>
               <button type="submit">发送消息</button>
@@ -861,17 +873,56 @@
         event.preventDefault();
         if (!state.user || !state.team || !state.channel) return;
         const data = Object.fromEntries(new FormData(event.currentTarget));
+        const channelId = data.channelId || state.channel.id;
+        const uploadedArtifacts = await uploadSelectedArtifacts(channelId);
+        if (!uploadedArtifacts) return;
         const ack = await emit("message:send", {
           userId: state.user.id,
           teamId: state.team.id,
-          channelId: data.channelId || state.channel.id,
+          channelId,
           body: data.body,
+          ...(uploadedArtifacts.length > 0 ? { artifactIds: uploadedArtifacts.map((artifact) => artifact.id) } : {}),
         });
         if (ack.ok && ack.message) {
           state.messages.push(ack.message);
+          el("message-artifact-files").value = "";
           render();
         }
       });
+
+      async function uploadSelectedArtifacts(channelId) {
+        const input = el("message-artifact-files");
+        const files = Array.from(input?.files || []);
+        const artifacts = [];
+        for (const file of files) {
+          const response = await fetch(`/api/teams/${encodeURIComponent(state.team.id)}/artifacts/upload`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              token: state.token,
+              channelId,
+              filename: file.name,
+              mimeType: file.type || "application/octet-stream",
+              contentBase64: await fileToBase64(file),
+            }),
+          });
+          const ack = await response.json();
+          addEvent("artifact:upload", ack);
+          if (!ack.ok) return null;
+          artifacts.push(ack.artifact);
+        }
+        return artifacts;
+      }
+
+      async function fileToBase64(file) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const chunkSize = 0x8000;
+        let binary = "";
+        for (let index = 0; index < bytes.length; index += chunkSize) {
+          binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+        }
+        return btoa(binary);
+      }
 
       async function subscribe() {
         const payload = { userId: state.user.id, teamId: state.team.id };

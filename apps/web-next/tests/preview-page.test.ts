@@ -7,6 +7,7 @@ type AckFactory = (payload: unknown) => unknown | Promise<unknown>;
 interface FakeElement {
   id: string;
   fields: Record<string, string>;
+  files: FakeFile[];
   listeners: Map<string, (event: FakeEvent) => unknown>;
   children: FakeElement[];
   className: string;
@@ -24,12 +25,19 @@ interface FakeEvent {
 
 interface PreviewHarness {
   emitted: Array<[string, unknown]>;
+  fetches: Array<{ url: string; init?: RequestInit }>;
   localStorage: FakeLocalStorage;
   socket: {
     trigger(event: string, payload?: unknown): Promise<void>;
   };
   element(id: string): FakeElement;
   submit(formId: string): Promise<void>;
+}
+
+interface FakeFile {
+  name: string;
+  type: string;
+  arrayBuffer(): Promise<ArrayBuffer>;
 }
 
 describe('web-next preview page interactions', () => {
@@ -264,10 +272,76 @@ describe('web-next preview page interactions', () => {
     expect(html).toContain('/api/teams/team-1/artifacts/artifact-1/preview?token=token-1');
     expect(html).toContain('/api/teams/team-1/artifacts/artifact-1/download?token=token-1');
   });
+
+  test('uploads selected composer files before sending artifact-backed messages', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'message:send': (payload) => ({
+        ok: true,
+        message: {
+          id: 'message-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          senderKind: 'human',
+          senderId: 'user-1',
+          body: (payload as { body: string }).body,
+          artifacts: [
+            {
+              id: 'artifact-1',
+              teamId: 'team-1',
+              channelId: 'channel-1',
+              filename: 'brief.md',
+              mimeType: 'text/markdown',
+              sizeBytes: 11,
+            },
+          ],
+          createdAt: 1,
+        },
+      }),
+    });
+    harness.element('message-artifact-files').files = [
+      createFakeFile('brief.md', 'text/markdown', 'hello file\n'),
+    ];
+
+    await harness.submit('auth-form');
+    await harness.submit('message-form');
+
+    expect(harness.fetches).toHaveLength(1);
+    expect(harness.fetches[0]?.url).toBe('/api/teams/team-1/artifacts/upload');
+    expect(JSON.parse(String(harness.fetches[0]?.init?.body))).toEqual({
+      token: 'token-1',
+      channelId: 'channel-1',
+      filename: 'brief.md',
+      mimeType: 'text/markdown',
+      contentBase64: 'aGVsbG8gZmlsZQo=',
+    });
+    expect(harness.emitted).toContainEqual([
+      'message:send',
+      {
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        body: '@Codex hello',
+        artifactIds: ['artifact-1'],
+      },
+    ]);
+    expect(harness.element('messages').innerHTML).toContain('brief.md');
+  });
 });
 
 function createPreviewHarness(acks: Record<string, AckFactory>): PreviewHarness {
   const elements = new Map<string, FakeElement>();
+  const fetches: Array<{ url: string; init?: RequestInit }> = [];
   const localStorage = new FakeLocalStorage();
   const socketHandlers = new Map<string, Array<(payload: unknown) => unknown>>();
   const emitted: Array<[string, unknown]> = [];
@@ -297,6 +371,7 @@ function createPreviewHarness(acks: Record<string, AckFactory>): PreviewHarness 
     'session-summary',
     'team-display-name',
     'team-submit',
+    'message-artifact-files',
   ]) {
     elements.set(id, createElement(id));
   }
@@ -322,6 +397,27 @@ function createPreviewHarness(acks: Record<string, AckFactory>): PreviewHarness 
 
   const context = vm.createContext({
     FormData: FakeFormData,
+    fetch: async (url: string, init?: RequestInit) => {
+      fetches.push({ url, init });
+      return {
+        async json() {
+          return {
+            ok: true,
+            artifact: {
+              id: 'artifact-1',
+              teamId: 'team-1',
+              channelId: 'channel-1',
+              filename: 'brief.md',
+              mimeType: 'text/markdown',
+              sizeBytes: 11,
+              previewUrl: '/api/teams/team-1/artifacts/artifact-1/preview',
+              downloadUrl: '/api/teams/team-1/artifacts/artifact-1/download',
+            },
+          };
+        },
+      };
+    },
+    btoa: (value: string) => Buffer.from(value, 'binary').toString('base64'),
     document: {
       body,
       createElement: (tagName: string) => createElement(tagName),
@@ -341,6 +437,7 @@ function createPreviewHarness(acks: Record<string, AckFactory>): PreviewHarness 
 
   return {
     emitted,
+    fetches,
     localStorage,
     socket: {
       trigger: socket.trigger,
@@ -377,6 +474,7 @@ function createElement(id: string, fields: Record<string, string> = {}): FakeEle
   return {
     id,
     fields,
+    files: [],
     listeners: new Map(),
     children: [],
     className: '',
@@ -388,6 +486,17 @@ function createElement(id: string, fields: Record<string, string> = {}): FakeEle
     },
     prepend(element) {
       this.children.unshift(element);
+    },
+  };
+}
+
+function createFakeFile(name: string, type: string, content: string): FakeFile {
+  return {
+    name,
+    type,
+    async arrayBuffer() {
+      const buffer = Buffer.from(content, 'utf8');
+      return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
     },
   };
 }

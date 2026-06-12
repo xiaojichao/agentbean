@@ -624,7 +624,7 @@ export interface WorkspaceRunDto {
 说明：
 
 - `MessageDto.artifacts` 与 `MessageDto.workspaceRun` 是 server-side projection；message `meta.artifactIds`/`meta.workspaceRunId` 仍保留为轻量索引。
-- `downloadUrl` / `previewUrl` 是可选字段；server-next 在 HTTP upload/download handler 落地前不返回未实现的链接。
+- `downloadUrl` / `previewUrl` 是可选字段；server-next HTTP artifact route 会在 upload response 或 viewer projection 需要时生成这些链接。
 - `WorkspaceRunDto` 必须回链 `dispatchId`、`agentId`，并尽量保存 `deviceId`；这让 agent output、执行设备与原始 prompt 可追溯。
 
 ## 第一切片 Event DTO 用法
