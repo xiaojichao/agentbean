@@ -19,12 +19,13 @@
 - `../../node_modules/.bin/vitest run tests/preview-page.test.ts --config vitest.config.ts --api.host 127.0.0.1` 通过。
 - `npm run test:web-next -- --api.host 127.0.0.1` 通过。
 - `../../node_modules/.bin/vitest run tests/first-slice.test.ts --config vitest.config.ts --api.host 127.0.0.1` 通过。
+- `../../node_modules/.bin/vitest run tests/sqlite-repositories.test.ts --config vitest.config.ts --api.host 127.0.0.1 -t "associates daemon-reported artifacts"` 通过。
 - `npm run build:server-next` 通过。
 - `npm run build:web-next` 通过。
 
-## 本地未覆盖
+## 本地补验
 
-- `tests/sqlite-repositories.test.ts` 在当前本机 Node 20/22/24 下都无法加载现有 `better-sqlite3` native build；错误为 `No compatible better-sqlite3 installation found for this Node.js runtime` 或 `NODE_MODULE_VERSION 137` 与当前 Node ABI 不匹配。代码中仍保留了 SQLite/usecase 覆盖，等待 CI 或本机 native module rebuild 验证。
+- 此前本机 `better-sqlite3` native build 与 Node ABI 不匹配，导致 SQLite 目标测试未能跑到断言。该本地环境问题已经修复，并已在 Node `v24.15.0` 下补跑通过。
 
 ## 后续
 
