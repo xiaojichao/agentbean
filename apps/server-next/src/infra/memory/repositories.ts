@@ -9,6 +9,7 @@ import type {
   MessageRecord,
   RuntimeRecord,
   ServerNextRepositories,
+  TaskRecord,
   TeamMemberRecord,
   TeamRecord,
   UserRecord,
@@ -31,6 +32,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const dispatches = new Map<string, DispatchRecord>();
   const artifacts = new Map<string, ArtifactRecord>();
   const workspaceRuns = new Map<string, WorkspaceRunRecord>();
+  const tasks = new Map<string, TaskRecord>();
 
   return {
     users: {
@@ -535,6 +537,33 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async listByDispatch(dispatchId) {
         return Array.from(workspaceRuns.values()).filter((run) => run.dispatchId === dispatchId);
+      },
+    },
+    tasks: {
+      async create(input) {
+        tasks.set(input.id, input);
+        return input;
+      },
+      async getById(taskId) {
+        return tasks.get(taskId) ?? null;
+      },
+      async list(input) {
+        const channelIds = new Set(input.channelIds);
+        return Array.from(tasks.values())
+          .filter((task) =>
+            task.teamId === input.teamId &&
+            ((input.includeGlobal && !task.channelId) || (task.channelId ? channelIds.has(task.channelId) : false)),
+          )
+          .sort((left, right) => left.sortOrder - right.sortOrder || right.createdAt - left.createdAt);
+      },
+      async update(input) {
+        const task = tasks.get(input.taskId);
+        if (!task) {
+          return null;
+        }
+        const updated = { ...task, ...input.changes };
+        tasks.set(input.taskId, updated);
+        return updated;
       },
     },
   };

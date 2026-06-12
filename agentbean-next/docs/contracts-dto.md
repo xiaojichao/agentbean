@@ -14,10 +14,10 @@
 - Device invite onboarding。
 - Message send。
 - Agent dispatch request/result/error。
+- Tasks 第一版。
 
 第一轮 DTO 不包含：
 
-- Tasks。
 - Artifacts。
 - Workspace runs。
 - Admin。
@@ -497,6 +497,63 @@ export interface MessageSearchResultDto {
 - 第一版 thread 使用 root-message convention：新 root message 默认 `threadId = message.id`，thread reply 复用 root `threadId`。
 - `threadId` 不应导致当前 prompt 在 dispatch history 中出现两次。
 - `message:search` 第一版只搜索当前用户可见的普通 channels，不包含 DM；搜索使用 simple DB query，不引入 FTS/ranking。
+
+## TaskDto
+
+```ts
+export type TaskStatus = "todo" | "in_progress" | "in_review" | "done" | "closed";
+
+export interface TaskDto {
+  id: ID;
+  teamId: ID;
+  title: string;
+  description?: string;
+  status: TaskStatus;
+  creatorId: ID;
+  assigneeId?: ID;
+  channelId?: ID;
+  tags: string[];
+  sortOrder: number;
+  createdAt: UnixMs;
+  updatedAt: UnixMs;
+}
+
+export interface TaskListInputDto {
+  userId?: ID;
+  teamId: ID;
+  channelId?: ID;
+}
+
+export interface TaskCreateInputDto {
+  userId?: ID;
+  teamId: ID;
+  title: string;
+  description?: string;
+  channelId?: ID;
+  assigneeId?: ID;
+  tags?: string[];
+}
+
+export interface TaskUpdateInputDto {
+  userId?: ID;
+  teamId: ID;
+  taskId: ID;
+  title?: string;
+  description?: string | null;
+  status?: TaskStatus;
+  assigneeId?: ID | null;
+  channelId?: ID | null;
+  tags?: string[];
+  sortOrder?: number;
+}
+```
+
+说明：
+
+- Tasks 第一版支持 `task:list`、`task:create` 与 `task:update`。
+- `assigneeId` 第一版可以指向 team human member 或当前 team 可见 agent；后续如需要跨类型展示，可升级为 typed assignee。
+- `task:list` 默认只返回 global tasks 与当前用户可见 channels/DMs 关联 tasks；指定 `channelId` 时必须先通过 channel visibility 授权。
+- 第一版不包含 `task:delete`、独立 `task:reorder`、完整 kanban UI 或 task 自动生成。
 
 ## DispatchDto
 

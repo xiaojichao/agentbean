@@ -1,4 +1,4 @@
-import type { AgentDto, ArtifactDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, RuntimeDto, TeamDto, UnixMs, UserDto, WorkspaceRunDto } from '../../../../packages/contracts/src/index.js';
+import type { AgentDto, ArtifactDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, RuntimeDto, TaskDto, TeamDto, UnixMs, UserDto, WorkspaceRunDto } from '../../../../packages/contracts/src/index.js';
 
 export interface UserRecord extends UserDto {
   passwordHash: string;
@@ -54,6 +54,7 @@ export interface ArtifactRecord extends Omit<ArtifactDto, 'downloadUrl' | 'previ
   storagePath?: string;
 }
 export type WorkspaceRunRecord = WorkspaceRunDto;
+export type TaskRecord = TaskDto;
 export interface DispatchMutationResult {
   dispatch: DispatchRecord;
   changed: boolean;
@@ -205,6 +206,13 @@ export interface WorkspaceRunRepository {
   listByDispatch(dispatchId: ID): Promise<WorkspaceRunRecord[]>;
 }
 
+export interface TaskRepository {
+  create(input: TaskRecord): Promise<TaskRecord>;
+  getById(taskId: ID): Promise<TaskRecord | null>;
+  list(input: { teamId: ID; channelIds: ID[]; includeGlobal: boolean }): Promise<TaskRecord[]>;
+  update(input: { taskId: ID; changes: Partial<Pick<TaskRecord, 'title' | 'description' | 'status' | 'assigneeId' | 'channelId' | 'tags' | 'sortOrder' | 'updatedAt'>> }): Promise<TaskRecord | null>;
+}
+
 export interface ServerNextRepositories {
   users: UserRepository;
   teams: TeamRepository;
@@ -218,4 +226,5 @@ export interface ServerNextRepositories {
   dispatches: DispatchRepository;
   artifacts: ArtifactRepository;
   workspaceRuns: WorkspaceRunRepository;
+  tasks: TaskRepository;
 }

@@ -156,6 +156,9 @@ export function registerWebSocketHandlers(
       options.dispatchCancel(request.request);
     }
   }, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.task.list, app, 'listTasks', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.task.create, app, 'createTask', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.task.update, app, 'updateTask', undefined, { authenticatedUser: options.authenticatedUser });
 }
 
 export function registerAgentSocketHandlers(

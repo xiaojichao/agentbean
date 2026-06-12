@@ -52,6 +52,9 @@ describe('server-next socket handlers', () => {
       sendMessage: vi.fn(async (payload) => makeSuccess({ payload })),
       searchMessages: vi.fn(async (payload) => makeSuccess({ payload })),
       cancelDispatch: vi.fn(async (payload) => makeSuccess({ payload })),
+      listTasks: vi.fn(async (payload) => makeSuccess({ payload })),
+      createTask: vi.fn(async (payload) => makeSuccess({ payload })),
+      updateTask: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
 
     registerWebSocketHandlers(socket, app);
@@ -85,6 +88,9 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.message.send,
       WEB_EVENTS.message.search,
       WEB_EVENTS.dispatch.cancel,
+      WEB_EVENTS.task.list,
+      WEB_EVENTS.task.create,
+      WEB_EVENTS.task.update,
     ]);
     expect(socket.eventNames()).not.toContain('network:list');
 
@@ -220,6 +226,21 @@ describe('server-next socket handlers', () => {
       userId: 'user-1',
       dispatchId: 'dispatch-1',
     });
+    await socket.trigger(WEB_EVENTS.task.list, {
+      userId: 'user-1',
+      teamId: 'team-1',
+    });
+    await socket.trigger(WEB_EVENTS.task.create, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      title: 'Ship task',
+    });
+    await socket.trigger(WEB_EVENTS.task.update, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      taskId: 'task-1',
+      status: 'done',
+    });
 
     expect(app.registerUser).toHaveBeenCalledWith({ username: 'shaw' });
     expect(app.whoami).toHaveBeenCalledWith({ token: 'token-1' });
@@ -341,6 +362,21 @@ describe('server-next socket handlers', () => {
       userId: 'user-1',
       teamId: 'team-1',
       query: 'hello',
+    });
+    expect(app.listTasks).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+    });
+    expect(app.createTask).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      title: 'Ship task',
+    });
+    expect(app.updateTask).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      taskId: 'task-1',
+      status: 'done',
     });
   });
 

@@ -50,12 +50,20 @@ AgentBean 统一使用 `team` 作为产品与 domain model 术语。
 
 ### Assignee Model
 
-Tasks 可以拥有 `assignee_id`，但目标类型还没有完全指定。
+Tasks 第一版已经落地为 server-side task model。
 
-需要决策：
+已确认：
 
-- Tasks 能否分配给 humans、agents，或两者都可以？
-- Assignees 是否应类型化为 `{ kind, id }`？
+- `task:list`、`task:create` 与 `task:update` 已进入 contracts、server-next usecases/repositories 与 web socket binding。
+- `assigneeId` 第一版可以指向 team human member 或当前 team 可见 agent。
+- `task:list` 默认只返回 global tasks 与当前用户可见 channels/DMs 关联 tasks。
+- private channel task 不会泄漏给非 channel member。
+- web-next preview 右侧工作区提供轻量 task create/list/status update 入口。
+
+剩余：
+
+- 是否把 assignee 升级为 typed `{ kind, id }` 仍需后续产品决策。
+- `task:delete`、更完整 reorder semantics、完整 kanban/list task page 与 task 自动生成仍是后续切片。
 
 ## 协议缺口
 

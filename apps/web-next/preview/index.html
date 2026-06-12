@@ -634,6 +634,15 @@
         max-height: 54px;
         overflow: hidden;
       }
+      .task-actions {
+        display: flex;
+        gap: 6px;
+      }
+      .task-actions button {
+        height: 24px;
+        min-height: 24px;
+        padding: 0 8px;
+      }
       .events {
         max-height: 168px;
         overflow: auto;
@@ -791,6 +800,12 @@
           <div class="rail-heading"><h2>Workspace Run</h2><span class="meta">输出详情</span></div>
           <div class="rail-muted">选择消息里的 workspace run 查看详情。</div>
         </div>
+        <form class="panel compact-form" id="task-create-form">
+          <div class="rail-heading"><h2>任务</h2><span class="meta">first slice</span></div>
+          <label>标题 <input name="title" placeholder="整理发布清单" /></label>
+          <button type="submit">创建任务</button>
+          <ul class="search-results" id="task-results"></ul>
+        </form>
         <form class="panel compact-form" id="message-search-form">
           <div class="rail-heading"><h2>消息搜索</h2><span class="meta">simple</span></div>
           <label>关键词 <input name="query" placeholder="roadmap" /></label>
@@ -850,6 +865,9 @@
         selectedDeviceId: null,
         agents: [],
         messages: [],
+        tasks: [],
+        taskError: null,
+        taskLoading: false,
         searchResults: [],
         searchError: null,
         searchLoading: false,
@@ -993,6 +1011,17 @@
         await searchMessages();
       });
 
+      el("task-create-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        await createTask();
+      });
+
+      el("task-results").addEventListener("click", async (event) => {
+        const button = event.target.closest("button[data-task-id]");
+        if (!button) return;
+        await updateTaskStatus(button.dataset.taskId, button.dataset.status);
+      });
+
       el("message-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         if (!state.user || !state.team || !state.channel) return;
@@ -1040,8 +1069,17 @@
         const devices = await emit("device:list", payload);
         const agents = await emit("agents:subscribe", payload);
         const channels = await emit("channels:subscribe", payload);
+        const tasks = await emit("task:list", payload);
         if (!devices.ok || !agents.ok || !channels.ok) {
           clearSession();
+        }
+        if (tasks.ok) {
+          state.tasks = Array.isArray(tasks.tasks) ? tasks.tasks : [];
+          state.taskError = null;
+          renderTasks();
+        } else {
+          state.taskError = tasks.message || tasks.error || "加载任务失败。";
+          renderTasks();
         }
       }
 
@@ -1059,6 +1097,7 @@
         renderRuntimes(selectedRuntimes);
         renderAgents();
         renderMessages();
+        renderTasks();
         renderSearchResults();
         renderWorkspaceRunPanel();
         renderActiveChannel();
@@ -1168,6 +1207,79 @@
           state.searchError = ack.message || ack.error || "搜索失败。";
         }
         renderSearchResults();
+      }
+
+      async function createTask() {
+        if (!state.user || !state.team) return;
+        const data = Object.fromEntries(new FormData(el("task-create-form")));
+        const title = String(data.title || "").trim();
+        if (!title) {
+          state.taskError = "请输入任务标题。";
+          renderTasks();
+          return;
+        }
+        state.taskLoading = true;
+        state.taskError = null;
+        renderTasks();
+        const ack = await emit("task:create", {
+          userId: state.user.id,
+          teamId: state.team.id,
+          title,
+          ...(state.channel?.id ? { channelId: state.channel.id } : {}),
+        });
+        state.taskLoading = false;
+        if (ack.ok && ack.task) {
+          state.tasks = [ack.task, ...state.tasks.filter((task) => task.id !== ack.task.id)];
+          const titleInput = el("task-create-form").querySelector?.("input[name='title']");
+          if (titleInput) titleInput.value = "";
+          state.taskError = null;
+        } else {
+          state.taskError = ack.message || ack.error || "创建任务失败。";
+        }
+        renderTasks();
+      }
+
+      async function updateTaskStatus(taskId, status) {
+        if (!state.user || !state.team || !taskId || !status) return;
+        const ack = await emit("task:update", {
+          userId: state.user.id,
+          teamId: state.team.id,
+          taskId,
+          status,
+        });
+        if (ack.ok && ack.task) {
+          state.tasks = state.tasks.map((task) => task.id === ack.task.id ? ack.task : task);
+          state.taskError = null;
+        } else {
+          state.taskError = ack.message || ack.error || "更新任务失败。";
+        }
+        renderTasks();
+      }
+
+      function renderTasks() {
+        if (state.taskLoading) {
+          el("task-results").innerHTML = `<li class="rail-muted">任务处理中。</li>`;
+          return;
+        }
+        if (state.taskError) {
+          el("task-results").innerHTML = `<li class="rail-muted">${escapeHtml(state.taskError)}</li>`;
+          return;
+        }
+        if (state.tasks.length === 0) {
+          el("task-results").innerHTML = `<li class="rail-muted">暂无任务。</li>`;
+          return;
+        }
+        el("task-results").innerHTML = state.tasks.slice(0, 8).map((task) => {
+          const channel = state.channels.find((item) => item.id === task.channelId);
+          const channelName = channel?.title || channel?.name || "全局";
+          const nextStatus = task.status === "done" ? "todo" : "done";
+          const action = task.status === "done" ? "重开" : "完成";
+          return `<li class="search-result">
+            <div class="meta">${escapeHtml(channelName)} · ${escapeHtml(task.status || "todo")}</div>
+            <div class="message-body">${escapeHtml(task.title)}</div>
+            <div class="task-actions"><button type="button" data-task-id="${escapeHtml(task.id)}" data-status="${escapeHtml(nextStatus)}">${escapeHtml(action)}</button></div>
+          </li>`;
+        }).join("");
       }
 
       function renderSearchResults() {
@@ -1554,6 +1666,9 @@
         state.selectedDeviceId = null;
         state.agents = [];
         state.messages = [];
+        state.tasks = [];
+        state.taskError = null;
+        state.taskLoading = false;
         state.searchResults = [];
         state.searchError = null;
         state.searchLoading = false;

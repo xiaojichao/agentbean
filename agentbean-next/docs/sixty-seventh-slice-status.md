@@ -33,4 +33,4 @@ npm run check:agentbean-next-readiness
 
 - Direct message 搜索仍未纳入第一版。
 - Full-text indexing、ranking、highlight 与 saved filters 仍是后续 search 产品增强。
-- Tasks 与 assignee model、channel archive/delete、saved messages/reactions、admin/metrics 仍属于后续产品 parity。
+- Channel archive/delete、saved messages/reactions、admin/metrics 仍属于后续产品 parity；Tasks 第一版已在第六十八切片落地。

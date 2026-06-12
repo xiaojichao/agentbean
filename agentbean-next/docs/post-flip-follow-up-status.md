@@ -22,6 +22,8 @@
   - web socket 可以通过 session token 恢复 user/current team；preview/browser smoke 覆盖刷新后的 session restore 与 resubscribe。
 - Message search 第一版。
   - `message:search` 使用 server-side simple DB search，只返回当前用户可见普通 channels 的结果；preview 右侧工作区已有轻量搜索表单。
+- Tasks 第一版。
+  - `task:list`、`task:create` 与 `task:update` 使用 server-side task model；assignee 第一版支持 team human member 或当前 team 可见 agent；preview 右侧工作区已有轻量任务入口。
 - Team/join/device invite 第一版。
   - `team:create`、`team:switch`、`join:create`、`join:validate`、`device-invite:create`、`device-invite:wait`、`device-invite:complete` 已有 contracts、use cases 与 tests。
 - Dispatch lifecycle 第一版。
@@ -66,12 +68,12 @@
 
 ### P2：后续产品 parity
 
-- Tasks 与 assignee model。
 - Channel archive/delete。
 - Saved messages 与 reactions。
 - Admin、metrics 与 audit requirements。
 - 更完整的 settings/member/device 页面，而不是仅依赖 preview shell。
+- 更完整的 task page、typed assignee、task delete/reorder 与 task 自动生成。
 
 ## 下一步判定
 
-当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。下一步应基于本文档开新的 scoped issue/PR：如果继续产品能力，优先在 Tasks 与 assignee model、channel archive/delete 或更完整的 workspace run 专用页面中选一个小切片；如果先做运维验证，则只处理 P0 生产观察证据，不混入产品功能改动。
+当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。下一步应基于本文档开新的 scoped issue/PR：如果继续产品能力，优先在 channel archive/delete、更完整 task page 或更完整的 workspace run 专用页面中选一个小切片；如果先做运维验证，则只处理 P0 生产观察证据，不混入产品功能改动。

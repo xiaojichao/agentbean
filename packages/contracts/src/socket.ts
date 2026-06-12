@@ -70,6 +70,13 @@ export const WEB_EVENTS = {
   dispatch: {
     cancel: 'dispatch:cancel',
   },
+  task: {
+    list: 'task:list',
+    create: 'task:create',
+    update: 'task:update',
+    snapshot: 'tasks:snapshot',
+    updated: 'task:updated',
+  },
 } as const;
 
 export const AGENT_EVENTS = {

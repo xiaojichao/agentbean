@@ -77,6 +77,7 @@ Phase 1 完成标准：
 | P2-15c | `sendMessage` 可以把当前用户上传、同 team/channel 的 upload artifact ids 绑定到 human message，并在 `MessageDto.artifacts` 中投影。 | UseCase | Composer 上传的 artifact 不只停在独立 metadata，而是能随消息进入 conversation。 | `known-gaps.md`, `sixtieth-slice-status.md` |
 | P2-15d | server-next HTTP route 支持按 session token 读取 workspace run detail，并返回该 run 的 artifact projection，非 team/channel 可见用户不能读取。 | HTTP/UseCase | Workspace run detail 不能只依赖消息内联投影，可分享入口需要有独立授权数据源。 | `known-gaps.md`, `sixty-sixth-slice-status.md` |
 | P2-15e | `message:search` 使用 server-side simple DB search，并只返回当前用户可见普通 channels 的匹配消息。 | UseCase/Socket | Message search 不能由 web 本地过滤，也不能泄漏 private channel 内容。 | `known-gaps.md`, `sixty-seventh-slice-status.md` |
+| P2-15f | `task:list`、`task:create` 与 `task:update` 使用 server-side task model，并只暴露当前用户可见 channel/DM 关联 tasks。 | UseCase/Socket | Tasks 不能继续只存在旧 stack；private channel task 不能泄漏给非 channel member。 | `known-gaps.md`, `sixty-eighth-slice-status.md` |
 | P2-16 | Dispatch error 将 dispatch 标记为 failed，并更新 agent last error。 | UseCase | Error propagation。 | `acceptance-tests.md` |
 | P2-17 | `/web` login/team/channel/message socket flow 只使用 documented first-slice events。 | Socket | Transport adapter thinness。 | `socket-protocol.md`, `contracts-dto.md` |
 | P2-18 | `/agent` device hello/runtime/agent batch/dispatch result flow 使用 documented DTOs。 | Socket | Agent namespace contract。 | `socket-protocol.md`, `contracts-dto.md` |
@@ -165,6 +166,7 @@ Phase 3 完成标准：
 | P4-22 | web-next preview 可以从 message workspace run 摘要打开独立详情面板，并在面板内展示 run metadata 与 workspace output tree。 | Web | 用户需要脱离单条消息气泡查看一次 workspace run 的执行上下文与输出文件。 | `known-gaps.md`, `post-flip-follow-up-status.md` |
 | P4-23 | web-next preview 的 workspace run 详情入口会写入 `workspaceRunId` URL，并能在刷新/直达该 URL 后通过 HTTP API 恢复详情。 | Web/HTTP | Workspace run detail 需要可分享、可恢复，而不是只能依赖当前消息 DOM 状态。 | `known-gaps.md`, `sixty-sixth-slice-status.md` |
 | P4-24 | web-next preview 右侧工作区提供 message search 表单，并通过 `message:search` 渲染结果。 | Web/Socket | 用户需要在 preview shell 内直接查找历史消息，而不是依赖当前 DOM 或浏览器查找。 | `known-gaps.md`, `sixty-seventh-slice-status.md` |
+| P4-25 | web-next preview 右侧工作区提供轻量 task create/list/status update 入口。 | Web/Socket | Tasks 第一版需要在 preview shell 内可见可操作，而不是只停留在 server API。 | `known-gaps.md`, `sixty-eighth-slice-status.md` |
 
 Phase 4 完成标准：
 
@@ -193,7 +195,6 @@ Phase 4 完成标准：
 这些仍保留在 `docs/acceptance-tests.md` 中，但第一切片冻结前不强制要求：
 
 - Join link management UI、`join:list` 与 `join:revoke`。
-- Tasks。
 - Channel archive/delete。
 - Admin。
 - Metrics。
