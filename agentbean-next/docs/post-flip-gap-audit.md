@@ -75,12 +75,12 @@
 
 4. DM/thread、artifacts/workspace runs、tasks/search。
    - 目标：按产品优先级恢复旧 AgentBean 的协作长尾能力；其中 artifacts/workspace runs 影响 agent 输出可追溯性，tasks 与更完整 search 更偏第二轮产品完整度。
-   - 收敛：DM/thread 第一版、artifacts/workspace runs metadata 第一版、HTTP upload/download/preview route、web artifact viewer 与 message search 第一版已进入主线；tasks 与更完整 search 仍需后续切片。
+   - 收敛：DM/thread 第一版、artifacts/workspace runs metadata 第一版、HTTP upload/download/preview route、web artifact viewer、message search 第一版、tasks 第一版与 tasks browser smoke 已进入主线；完整 task page 与更完整 search 仍需后续切片。
    - 参考：`agentbean-next/docs/current-behavior.md`、`agentbean-next/docs/known-gaps.md`、`agentbean-next/docs/acceptance-tests.md`
 
 5. 真正浏览器级 E2E 第一版。
    - 目标：覆盖生产或 staging 上的登录/session 恢复、刷新重订阅、custom agent 创建、消息发送、agent reply 可见，避免只依赖 DOM harness 和 socket smoke。
-   - 收敛：`npm run smoke:agentbean-next-browser` 已进入 CI，覆盖真实 Chrome 路径并上传 console/screenshot artifacts。
+   - 收敛：`npm run smoke:agentbean-next-browser` 已进入 CI，覆盖真实 Chrome 路径、artifact upload/viewer 与 task create/status update/refresh restore，并上传 console/screenshot artifacts。
    - 参考：`agentbean-next/docs/verification-matrix.md`、`apps/web-next/tests/preview-page.test.ts`
 
 ## 已拆分 follow-up issues

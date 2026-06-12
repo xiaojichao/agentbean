@@ -158,6 +158,13 @@ export async function runAgentBeanNextBrowserSmoke({
     await page.waitForText('#messages', `browser-smoke:${secondPrompt}`, timeoutMs);
     checks.push(check('browser-post-refresh-dispatch', true, 'Browser can dispatch and see replies after refresh'));
 
+    const taskSmoke = await exerciseTaskBrowserSmoke({ page, suffix, timeoutMs });
+    checks.push(
+      check('browser-task-create-visible', true, `Browser created and rendered task ${taskSmoke.title}`),
+      check('browser-task-status-update', true, 'Browser updated the task status through the preview task controls'),
+      check('browser-task-refresh-restore', true, 'Browser refresh restored the task list through task:list'),
+    );
+
     const artifactSmoke = await exerciseArtifactBrowserSmoke({ page, suffix, timeoutMs });
     checks.push(
       check('browser-artifact-upload-visible', true, `Browser uploaded and rendered ${artifactSmoke.filename}`),
@@ -397,6 +404,28 @@ export async function exerciseArtifactBrowserSmoke({ page, suffix, timeoutMs }) 
     previewBody: http.preview.body,
     downloadBody: http.download.body,
   };
+}
+
+export async function exerciseTaskBrowserSmoke({ page, suffix, timeoutMs }) {
+  const title = `Browser task ${suffix}`;
+  await page.setInputValue('#task-create-form [name="title"]', title);
+  await page.click('#task-create-form button[type="submit"]');
+  await page.waitForText('#task-results', title, timeoutMs);
+  await page.waitForText('#task-results', 'todo', timeoutMs);
+
+  await page.click('#task-results button[data-status="done"]');
+  await page.waitForText('#task-results', 'done', timeoutMs);
+
+  await page.reload();
+  await page.waitForText('#connection-status', '已连接', timeoutMs);
+  await page.waitForFunction(
+    `document.body.dataset.auth === "true" && document.querySelector("#task-results")?.textContent.includes(${JSON.stringify(title)})`,
+    'refresh restores task list',
+    timeoutMs,
+  );
+  await page.waitForText('#task-results', 'done', timeoutMs);
+
+  return { title, status: 'done' };
 }
 
 async function launchChrome({ chromeBin, artifactsDir, headed, timeoutMs }) {

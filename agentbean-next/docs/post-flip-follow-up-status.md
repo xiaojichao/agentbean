@@ -23,7 +23,7 @@
 - Message search 第一版。
   - `message:search` 使用 server-side simple DB search，只返回当前用户可见普通 channels 的结果；preview 右侧工作区已有轻量搜索表单。
 - Tasks 第一版。
-  - `task:list`、`task:create` 与 `task:update` 使用 server-side task model；assignee 第一版支持 team human member 或当前 team 可见 agent；preview 右侧工作区已有轻量任务入口。
+  - `task:list`、`task:create` 与 `task:update` 使用 server-side task model；assignee 第一版支持 team human member 或当前 team 可见 agent；preview 右侧工作区已有轻量任务入口；browser smoke 已覆盖 task create/status update/refresh restore。
 - Team/join/device invite 第一版。
   - `team:create`、`team:switch`、`join:create`、`join:validate`、`device-invite:create`、`device-invite:wait`、`device-invite:complete` 已有 contracts、use cases 与 tests。
 - Dispatch lifecycle 第一版。
@@ -35,7 +35,7 @@
 - Artifacts/workspace runs repository/usecase 第一版。
   - daemon `dispatch:result` 可以上报 artifact metadata 与 workspace run metadata；server-next 已做 team-scoped metadata authorization。
 - 真正浏览器级 E2E 第一版。
-  - `npm run smoke:agentbean-next-browser` 已覆盖真实 Chrome 登录/session restore、刷新重订阅、custom agent 创建、message dispatch 与 agent reply 可见，并在 CI 上传截图/console artifacts。
+  - `npm run smoke:agentbean-next-browser` 已覆盖真实 Chrome 登录/session restore、刷新重订阅、custom agent 创建、message dispatch、agent reply、artifact upload/viewer 与 task create/status update/refresh restore，并在 CI 上传截图/console artifacts。
 
 ## 仍需补齐的边界
 
@@ -72,7 +72,7 @@
 - Saved messages 与 reactions。
 - Admin、metrics 与 audit requirements。
 - 更完整的 settings/member/device 页面，而不是仅依赖 preview shell。
-- 更完整的 task page、typed assignee、task delete/reorder 与 task 自动生成。
+- 完整 task page、typed assignee、task delete/reorder 与 task 自动生成。
 
 ## 下一步判定
 

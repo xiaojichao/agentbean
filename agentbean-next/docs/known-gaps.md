@@ -59,6 +59,7 @@ Tasks 第一版已经落地为 server-side task model。
 - `task:list` 默认只返回 global tasks 与当前用户可见 channels/DMs 关联 tasks。
 - private channel task 不会泄漏给非 channel member。
 - web-next preview 右侧工作区提供轻量 task create/list/status update 入口。
+- `npm run smoke:agentbean-next-browser` 已覆盖真实 Chrome 中的 task create、status update 与刷新后 `task:list` 恢复。
 
 剩余：
 
@@ -252,10 +253,11 @@ Native directory selection 有用，但不是第一切片核心。
 - `npm run smoke:agentbean-next-browser` 可以启动或连接 AgentBean Next 入口，用真实 Chrome 覆盖登录/session restore、刷新重订阅、custom agent 创建、message dispatch 与 agent reply 可见。
 - CI 在 AgentBean Next 相关路径变更时运行 browser smoke，并上传 console log 与 screenshot artifacts。
 - Browser smoke 现在也覆盖 artifact composer upload、消息内 artifact viewer、preview bytes 与 download bytes。
+- Browser smoke 现在也覆盖 task create、status update 与刷新后 task list restore。
 
 剩余：
 
-- 浏览器 smoke 仍主要覆盖核心 chat/custom-agent 路径与 artifact 基础链路；tasks、更完整 search、settings/member/device 等后续产品面需要随着切片补浏览器级证据。
+- 浏览器 smoke 仍主要覆盖核心 chat/custom-agent、artifact 基础链路与 tasks 第一版；更完整 search、完整 task page、settings/member/device 等后续产品面需要随着切片补浏览器级证据。
 - production browser smoke 与 24-72 小时生产观察记录仍属于运维观察，不等同于每次 PR 的本地/CI smoke。
 
 ### Acceptance Tests 需要优先级
