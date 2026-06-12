@@ -451,6 +451,18 @@
         color: #737373;
         font-size: 12px;
       }
+      .message-artifact-run button {
+        background: transparent;
+        border: 0;
+        color: #2563eb;
+        font-size: 12px;
+        min-height: auto;
+        padding: 0;
+        text-decoration: none;
+      }
+      .message-artifact-run button:hover {
+        text-decoration: underline;
+      }
       .message-run-details {
         display: flex;
         flex-wrap: wrap;
@@ -579,6 +591,28 @@
         border-radius: 8px;
         background: #ffffff;
         padding: 10px;
+      }
+      .workspace-run-detail {
+        display: grid;
+        gap: 8px;
+      }
+      .workspace-run-detail-body {
+        display: grid;
+        gap: 8px;
+      }
+      .workspace-run-detail-status {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .workspace-run-detail-status strong {
+        font-size: 13px;
+        overflow-wrap: anywhere;
+      }
+      .workspace-run-detail .message-run-details {
+        border-top: 1px solid #eeeeec;
+        padding-top: 8px;
       }
       .events {
         max-height: 168px;
@@ -733,6 +767,10 @@
           <button class="rail-tab" type="button">设备</button>
           <button class="rail-tab" type="button">Agent</button>
         </div>
+        <div class="panel workspace-run-detail" id="workspace-run-detail">
+          <div class="rail-heading"><h2>Workspace Run</h2><span class="meta">输出详情</span></div>
+          <div class="rail-muted">选择消息里的 workspace run 查看详情。</div>
+        </div>
         <div class="panel">
           <div class="rail-heading"><h2>成员</h2><span class="meta">human / agent</span></div>
           <ul class="list" id="agents"></ul>
@@ -786,6 +824,7 @@
         selectedDeviceId: null,
         agents: [],
         messages: [],
+        activeWorkspaceRunId: null,
       };
       const el = (id) => document.getElementById(id);
 
@@ -909,6 +948,12 @@
         state.selectedDeviceId = row.dataset.deviceId || null;
         render();
       });
+      el("messages").addEventListener("click", (event) => {
+        const row = event.target.closest("[data-workspace-run-id]");
+        if (!row) return;
+        state.activeWorkspaceRunId = row.dataset.workspaceRunId || null;
+        render();
+      });
 
       el("message-form").addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -976,6 +1021,7 @@
         renderRuntimes(selectedRuntimes);
         renderAgents();
         renderMessages();
+        renderWorkspaceRunPanel();
         renderActiveChannel();
         renderAuthState();
         fillSelect("agent-create-form", "deviceId", visibleDevices, (device) => [device.id, device.name || device.id]);
@@ -1059,27 +1105,25 @@
         const artifacts = Array.isArray(message.artifacts) ? message.artifacts : [];
         const workspaceRun = message.workspaceRun;
         if (artifacts.length === 0 && !workspaceRun) return "";
-        const run = workspaceRun ? renderWorkspaceRunDetail(workspaceRun) : "";
+        const workspaceArtifacts = workspaceRun ? getWorkspaceRunArtifacts(artifacts, workspaceRun) : [];
+        const run = workspaceRun ? renderWorkspaceRunDetail(workspaceRun, workspaceArtifacts.length) : "";
         const files = renderArtifactGroups(artifacts, workspaceRun);
         return `<div class="message-artifacts">${run}${files}</div>`;
       }
 
       function renderArtifactGroups(artifacts, workspaceRun) {
-        const runArtifactIds = new Set(Array.isArray(workspaceRun?.artifactIds) ? workspaceRun.artifactIds : []);
+        const workspaceArtifacts = workspaceRun ? getWorkspaceRunArtifacts(artifacts, workspaceRun) : [];
+        const workspaceArtifactIds = new Set(workspaceArtifacts.map((artifact) => artifact.id));
         const groups = [
           {
             title: "Workspace 输出",
             kind: "workspace",
-            artifacts: artifacts.filter((artifact) =>
-              artifact.workspaceRunId === workspaceRun?.id || runArtifactIds.has(artifact.id) || artifact.pathKind === "workspace",
-            ),
+            artifacts: workspaceArtifacts,
           },
           {
             title: "消息附件",
             kind: "attachment",
-            artifacts: artifacts.filter((artifact) =>
-              artifact.workspaceRunId !== workspaceRun?.id && !runArtifactIds.has(artifact.id) && artifact.pathKind !== "workspace",
-            ),
+            artifacts: artifacts.filter((artifact) => !workspaceArtifactIds.has(artifact.id)),
           },
         ].filter((group) => group.artifacts.length > 0);
         if (groups.length === 0) return "";
@@ -1118,8 +1162,55 @@
         </li>`;
       }
 
-      function renderWorkspaceRunDetail(workspaceRun) {
-        const artifactCount = Array.isArray(workspaceRun.artifactIds) ? workspaceRun.artifactIds.length : undefined;
+      function renderWorkspaceRunDetail(workspaceRun, artifactCount) {
+        const detailMarkup = renderWorkspaceRunDetails(workspaceRun, artifactCount);
+        return `<div>
+          <div class="message-artifact-run">Workspace run ${escapeHtml(workspaceRun.id)} · ${escapeHtml(workspaceRun.status || "unknown")} · <button type="button" data-workspace-run-id="${escapeHtml(workspaceRun.id)}">查看详情</button></div>
+          ${detailMarkup}
+        </div>`;
+      }
+
+      function renderWorkspaceRunPanel() {
+        const detail = getWorkspaceRunDetail(state.activeWorkspaceRunId);
+        if (!detail) {
+          el("workspace-run-detail").innerHTML = `<div class="rail-heading"><h2>Workspace Run</h2><span class="meta">输出详情</span></div>
+            <div class="rail-muted">选择消息里的 workspace run 查看详情。</div>`;
+          return;
+        }
+        const artifactCount = detail.artifacts.length;
+        el("workspace-run-detail").innerHTML = `<div class="rail-heading"><h2>Workspace Run</h2><span class="meta">输出详情</span></div>
+          <div class="workspace-run-detail-body">
+            <div class="workspace-run-detail-status"><strong>${escapeHtml(detail.workspaceRun.id)}</strong><span class="meta">${escapeHtml(detail.workspaceRun.status || "unknown")}</span></div>
+            ${renderWorkspaceRunDetails(detail.workspaceRun, artifactCount)}
+            <div class="message-artifact-group">
+              <div class="message-artifact-group-title">Workspace 输出</div>
+              ${artifactCount > 0 ? renderWorkspaceArtifactTree(detail.artifacts) : `<div class="rail-muted">这个 workspace run 暂无输出文件。</div>`}
+            </div>
+          </div>`;
+      }
+
+      function getWorkspaceRunDetail(runId) {
+        if (!runId) return null;
+        for (const message of state.messages) {
+          if (message.workspaceRun?.id !== runId) continue;
+          const artifacts = Array.isArray(message.artifacts) ? message.artifacts : [];
+          return {
+            workspaceRun: message.workspaceRun,
+            artifacts: getWorkspaceRunArtifacts(artifacts, message.workspaceRun),
+          };
+        }
+        return null;
+      }
+
+      function getWorkspaceRunArtifacts(artifacts, workspaceRun) {
+        if (!workspaceRun) return [];
+        const runArtifactIds = new Set(Array.isArray(workspaceRun.artifactIds) ? workspaceRun.artifactIds : []);
+        return artifacts.filter((artifact) =>
+          artifact.workspaceRunId === workspaceRun.id || runArtifactIds.has(artifact.id) || artifact.pathKind === "workspace",
+        );
+      }
+
+      function renderWorkspaceRunDetails(workspaceRun, artifactCount) {
         const details = [
           workspaceRun.cwd ? ["cwd", workspaceRun.cwd] : null,
           workspaceRun.deviceId ? ["device", workspaceRun.deviceId] : null,
@@ -1127,13 +1218,9 @@
           formatDuration(workspaceRun.startedAt, workspaceRun.completedAt),
           typeof artifactCount === "number" ? ["artifacts", `${artifactCount} artifact${artifactCount === 1 ? "" : "s"}`] : null,
         ].filter(Boolean);
-        const detailMarkup = details.length > 0
+        return details.length > 0
           ? `<dl class="message-run-details">${details.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>`
           : "";
-        return `<div>
-          <div class="message-artifact-run">Workspace run ${escapeHtml(workspaceRun.id)} · ${escapeHtml(workspaceRun.status || "unknown")}</div>
-          ${detailMarkup}
-        </div>`;
       }
 
       function formatDuration(startedAt, completedAt) {
