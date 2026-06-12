@@ -407,6 +407,15 @@
         margin: 0;
         padding: 0;
       }
+      .message-artifact-group {
+        display: grid;
+        gap: 5px;
+      }
+      .message-artifact-group-title {
+        color: #525252;
+        font-size: 11px;
+        font-weight: 700;
+      }
       .message-artifact {
         align-items: center;
         background: #f7f7f6;
@@ -1046,17 +1055,42 @@
         const workspaceRun = message.workspaceRun;
         if (artifacts.length === 0 && !workspaceRun) return "";
         const run = workspaceRun ? renderWorkspaceRunDetail(workspaceRun) : "";
-        const files = artifacts.map((artifact) => {
-          const previewUrl = artifact.previewUrl || artifactUrl(artifact, "preview");
-          const downloadUrl = artifact.downloadUrl || artifactUrl(artifact, "download");
-          return `<li class="message-artifact">
-            <span class="message-artifact-name">${escapeHtml(artifact.filename || artifact.id)}</span>
-            <span class="meta">${formatBytes(artifact.sizeBytes || 0)}</span>
-            <a href="${escapeHtml(previewUrl)}" target="_blank" rel="noreferrer">预览</a>
-            <a href="${escapeHtml(downloadUrl)}" download>下载</a>
-          </li>`;
-        }).join("");
-        return `<div class="message-artifacts">${run}${files ? `<ul>${files}</ul>` : ""}</div>`;
+        const files = renderArtifactGroups(artifacts, workspaceRun);
+        return `<div class="message-artifacts">${run}${files}</div>`;
+      }
+
+      function renderArtifactGroups(artifacts, workspaceRun) {
+        const runArtifactIds = new Set(Array.isArray(workspaceRun?.artifactIds) ? workspaceRun.artifactIds : []);
+        const groups = [
+          {
+            title: "Workspace 输出",
+            artifacts: artifacts.filter((artifact) =>
+              artifact.workspaceRunId === workspaceRun?.id || runArtifactIds.has(artifact.id) || artifact.pathKind === "workspace",
+            ),
+          },
+          {
+            title: "消息附件",
+            artifacts: artifacts.filter((artifact) =>
+              artifact.workspaceRunId !== workspaceRun?.id && !runArtifactIds.has(artifact.id) && artifact.pathKind !== "workspace",
+            ),
+          },
+        ].filter((group) => group.artifacts.length > 0);
+        if (groups.length === 0) return "";
+        return groups.map((group) => `<div class="message-artifact-group">
+          <div class="message-artifact-group-title">${escapeHtml(group.title)}</div>
+          <ul>${group.artifacts.map(renderArtifactListItem).join("")}</ul>
+        </div>`).join("");
+      }
+
+      function renderArtifactListItem(artifact) {
+        const previewUrl = artifact.previewUrl || artifactUrl(artifact, "preview");
+        const downloadUrl = artifact.downloadUrl || artifactUrl(artifact, "download");
+        return `<li class="message-artifact">
+          <span class="message-artifact-name">${escapeHtml(artifact.filename || artifact.id)}</span>
+          <span class="meta">${formatBytes(artifact.sizeBytes || 0)}</span>
+          <a href="${escapeHtml(previewUrl)}" target="_blank" rel="noreferrer">预览</a>
+          <a href="${escapeHtml(downloadUrl)}" download>下载</a>
+        </li>`;
       }
 
       function renderWorkspaceRunDetail(workspaceRun) {
