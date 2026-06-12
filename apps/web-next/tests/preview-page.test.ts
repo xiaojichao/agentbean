@@ -252,6 +252,18 @@ describe('web-next preview page interactions', () => {
           filename: 'reply.md',
           mimeType: 'text/markdown',
           sizeBytes: 42,
+          relativePath: 'outputs/reply.md',
+          pathKind: 'workspace',
+        },
+        {
+          id: 'artifact-3',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          workspaceRunId: 'run-1',
+          filename: 'run.log',
+          mimeType: 'text/plain',
+          sizeBytes: 90,
+          relativePath: 'outputs/logs/run.log',
           pathKind: 'workspace',
         },
         {
@@ -285,7 +297,10 @@ describe('web-next preview page interactions', () => {
     const html = harness.element('messages').innerHTML;
     expect(html).toContain('Workspace 输出');
     expect(html).toContain('消息附件');
+    expect(html).toContain('outputs/');
+    expect(html).toContain('outputs/logs/');
     expect(html).toContain('reply.md');
+    expect(html).toContain('run.log');
     expect(html).toContain('notes.txt');
     expect(html).toContain('Workspace run run-1');
     expect(html).toContain('/Users/shaw/AgentBean');
@@ -295,6 +310,7 @@ describe('web-next preview page interactions', () => {
     expect(html).toContain('1 artifact');
     expect(html).toContain('/api/teams/team-1/artifacts/artifact-1/preview?token=token-1');
     expect(html).toContain('/api/teams/team-1/artifacts/artifact-1/download?token=token-1');
+    expect(html).toContain('/api/teams/team-1/artifacts/artifact-3/preview?token=token-1');
     expect(html).toContain('/api/teams/team-1/artifacts/artifact-2/preview?token=token-1');
   });
 

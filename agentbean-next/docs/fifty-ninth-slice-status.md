@@ -41,5 +41,5 @@ npm run build:web-next
 
 - 本切片的 upload route 使用 JSON/base64 第一版，尚未实现 multipart form upload。
 - web-next preview 在本切片中只展示消息中已有 artifacts；后续第六十切片已补上 composer 上传控件。
-- 后续第六十二切片已补上 workspace run detail UI，第六十四切片已补上消息内 artifact grouping；真实 workspace tree 仍需后续 UI 切片。
+- 后续第六十二切片已补上 workspace run detail UI，第六十四切片已补上消息内 artifact grouping，第六十五切片已补上 message inline workspace artifact tree。
 - HTTP route 当前挂在 server-next dev/production entry；旧 AgentBean 的 Next.js App Router 产品页面仍未迁入。

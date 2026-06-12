@@ -54,10 +54,11 @@
 - `npm run smoke:agentbean-next-browser` 已覆盖真实浏览器 artifact upload、preview 与 download bytes 验证。
 - web-next preview 会在 message workspace run 区域展示 cwd、device、exit code、duration 与 artifact count。
 - web-next preview 会在 message artifact 区域按 workspace output 与 message attachment 分组展示 artifacts。
+- web-next preview 会在 Workspace 输出组内按 `relativePath` 展示轻量目录树。
 
 剩余边界：
 
-- workspace tree 与独立 run detail 页面仍需后续产品切片。
+- 独立 workspace run detail 页面仍需后续产品切片。
 
 ### P2：后续产品 parity
 
@@ -70,4 +71,4 @@
 
 ## 下一步判定
 
-当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。下一步应基于本文档开新的 scoped issue/PR：如果继续产品能力，优先在 workspace tree、tasks/search 中选一个小切片；如果先做运维验证，则只处理 P0 生产观察证据，不混入产品功能改动。
+当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。下一步应基于本文档开新的 scoped issue/PR：如果继续产品能力，优先在独立 workspace run detail 页面、tasks/search 中选一个小切片；如果先做运维验证，则只处理 P0 生产观察证据，不混入产品功能改动。

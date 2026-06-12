@@ -151,12 +151,12 @@ Artifact metadata、HTTP route 与 preview viewer 的第一版已经落地。
 - `getArtifact` 按 team membership 与 artifact `teamId` 授权；跨 team 读取返回 `NOT_FOUND`。
 - `MessageDto.artifacts` 可以投影 agent reply 的 artifact metadata。
 - server-next 提供 `POST /api/teams/:teamId/artifacts/upload`、`GET /api/teams/:teamId/artifacts/:artifactId/preview` 与 `GET /api/teams/:teamId/artifacts/:artifactId/download`，upload route 支持 JSON/base64 兼容入口与 multipart form-data 产品入口。
-- web-next preview 会在消息中按 workspace output 与 message attachment 分组展示 artifact 文件、workspace run id/status、cwd、device、exit code、duration、artifact count，并生成预览/下载链接。
+- web-next preview 会在消息中按 workspace output 与 message attachment 分组展示 artifact 文件，并在 Workspace 输出组内按 `relativePath` 呈现轻量目录树；workspace run id/status、cwd、device、exit code、duration、artifact count 与预览/下载链接也会一起展示。
 - web-next preview composer 可以选择文件，先通过 artifact HTTP upload route 以 `FormData` 上传，再将返回的 artifact id 绑定到 human message。
 
 剩余：
 
-- Workspace tree 与独立 run detail 页面仍需后续 UI/API 切片。
+- 独立 workspace run detail 页面仍需后续 UI/API 切片。
 
 ### Search Projection
 
