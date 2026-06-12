@@ -182,6 +182,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           if (channel.kind === 'direct') {
             return false;
           }
+          if (channel.archivedAt) {
+            return false;
+          }
           return channel.visibility === 'public' || channel.humanMemberIds.includes(userId);
         });
       },
@@ -212,6 +215,23 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             updatedAt: input.timestamp,
           });
         }
+      },
+      async archive(input) {
+        const channel = channels.get(input.channelId);
+        if (!channel) {
+          return null;
+        }
+        const archived = { ...channel, archivedAt: input.timestamp };
+        channels.set(input.channelId, archived);
+        return archived;
+      },
+      async delete(input) {
+        const channel = channels.get(input.channelId);
+        if (!channel) {
+          return null;
+        }
+        channels.delete(input.channelId);
+        return channel;
       },
     },
     devices: {
@@ -413,6 +433,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           .sort((left, right) => left.createdAt - right.createdAt)
           .slice(-input.limit);
       },
+      async deleteByChannel(channelId) {
+        for (const [id, message] of messages) {
+          if (message.channelId === channelId) {
+            messages.delete(id);
+          }
+        }
+      },
     },
     dispatches: {
       async create(input) {
@@ -524,6 +551,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async listByWorkspaceRun(runId) {
         return Array.from(artifacts.values()).filter((artifact) => artifact.workspaceRunId === runId);
+      },
+      async deleteByChannel(channelId) {
+        for (const [id, artifact] of artifacts) {
+          if (artifact.channelId === channelId) {
+            artifacts.delete(id);
+          }
+        }
       },
     },
     workspaceRuns: {

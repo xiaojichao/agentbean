@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TaskDto, type TaskStatus, type TeamDto, type UserDto, type WorkspaceRunDto } from '../../../../packages/contracts/src/index.js';
-import { canApplyChannelUpdate, channelHumanMembersForCreate, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
+import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 
 export interface ServerNextClock {
@@ -52,6 +52,8 @@ export interface ServerNextUseCases {
   addChannelAgentMember(input: ChannelAgentMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
   removeChannelAgentMember(input: ChannelAgentMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
   listChannelMembers(input: ListChannelMembersInput): Promise<Ack<ChannelMembersDto>>;
+  archiveChannel(input: ArchiveChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
+  deleteChannel(input: DeleteChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
   startDirectMessage(input: StartDirectMessageInput): Promise<Ack<{ dm: DmChannelDto }>>;
   listDirectMessages(input: ListDirectMessagesInput): Promise<Ack<{ dms: DmChannelDto[] }>>;
   snapshotDirectMessage(input: SnapshotDirectMessageInput): Promise<Ack<{ dm: DmChannelDto; messages: MessageDto[] }>>;
@@ -420,6 +422,18 @@ export interface ChannelAgentMemberInput {
 }
 
 export interface ListChannelMembersInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
+}
+
+export interface ArchiveChannelInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
+}
+
+export interface DeleteChannelInput {
   userId: string;
   teamId: string;
   channelId: string;
@@ -1411,6 +1425,55 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         humans: await repositories.teams.listMembersByIds(memberInput.teamId, channel.humanMemberIds),
         agents,
       });
+    },
+
+    async archiveChannel(archiveInput) {
+      if (!(await repositories.teams.isMember(archiveInput.teamId, archiveInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const channel = await repositories.channels.getById(archiveInput.channelId);
+      if (!channel || channel.teamId !== archiveInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Channel not found');
+      }
+      if (isDefaultChannel(channel)) {
+        return makeFailure('FORBIDDEN', 'Cannot archive default channel');
+      }
+      if (!canApplyChannelUpdate(channel, archiveInput.userId, {})) {
+        return makeFailure('FORBIDDEN', 'Only channel creator can archive');
+      }
+      const now = clock.now();
+      const archived = await repositories.channels.archive({
+        channelId: channel.id,
+        timestamp: now,
+      });
+      if (!archived) {
+        return makeFailure('NOT_FOUND', 'Channel not found');
+      }
+      return makeSuccess({ channel: archived });
+    },
+
+    async deleteChannel(deleteInput) {
+      if (!(await repositories.teams.isMember(deleteInput.teamId, deleteInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const channel = await repositories.channels.getById(deleteInput.channelId);
+      if (!channel || channel.teamId !== deleteInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Channel not found');
+      }
+      if (isDefaultChannel(channel)) {
+        return makeFailure('FORBIDDEN', 'Cannot delete default channel');
+      }
+      if (!canApplyChannelUpdate(channel, deleteInput.userId, {})) {
+        return makeFailure('FORBIDDEN', 'Only channel creator can delete');
+      }
+      // Cascade: artifacts → messages → channel
+      await repositories.artifacts.deleteByChannel(channel.id);
+      await repositories.messages.deleteByChannel(channel.id);
+      const deleted = await repositories.channels.delete({ channelId: channel.id });
+      if (!deleted) {
+        return makeFailure('NOT_FOUND', 'Channel not found');
+      }
+      return makeSuccess({ channel: deleted });
     },
 
     async startDirectMessage(dmInput) {

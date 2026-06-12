@@ -343,6 +343,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             `SELECT * FROM channels
              WHERE team_id = ?
              AND kind = 'channel'
+             AND archived_at IS NULL
              AND (
                visibility = 'public'
                OR id IN (SELECT channel_id FROM channel_human_members WHERE user_id = ?)
@@ -425,6 +426,24 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
              AND channel_id IN (SELECT id FROM channels WHERE team_id = ?)`,
           )
           .run(input.agentId, input.teamId);
+      },
+      async archive(input) {
+        const existing = mapChannel(teamDb, teamDb.prepare('SELECT * FROM channels WHERE id = ?').get(input.channelId));
+        if (!existing) {
+          return null;
+        }
+        teamDb.prepare('UPDATE channels SET archived_at = ? WHERE id = ?').run(input.timestamp, input.channelId);
+        return { ...existing, archivedAt: input.timestamp };
+      },
+      async delete(input) {
+        const existing = mapChannel(teamDb, teamDb.prepare('SELECT * FROM channels WHERE id = ?').get(input.channelId));
+        if (!existing) {
+          return null;
+        }
+        teamDb.prepare('DELETE FROM channel_human_members WHERE channel_id = ?').run(input.channelId);
+        teamDb.prepare('DELETE FROM channel_agent_members WHERE channel_id = ?').run(input.channelId);
+        teamDb.prepare('DELETE FROM channels WHERE id = ?').run(input.channelId);
+        return existing;
       },
     },
     devices: {
@@ -830,6 +849,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           })
           .reverse();
       },
+      async deleteByChannel(channelId) {
+        teamDb.prepare('DELETE FROM messages WHERE channel_id = ?').run(channelId);
+      },
     },
     dispatches: {
       async create(dispatch) {
@@ -1012,6 +1034,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             }
             return artifact;
           });
+      },
+      async deleteByChannel(channelId) {
+        teamDb.prepare('DELETE FROM artifacts WHERE channel_id = ?').run(channelId);
       },
     },
     workspaceRuns: {
@@ -1274,6 +1299,7 @@ function mapChannel(db: SqliteDatabase, row: unknown): ChannelRecord | null {
     visibility: sqliteText(row, 'visibility') as ChannelRecord['visibility'],
     createdBy: sqliteNullableText(row, 'created_by'),
     createdAt: sqliteNumber(row, 'created_at'),
+    archivedAt: sqliteNullableNumber(row, 'archived_at'),
     humanMemberIds: db
       .prepare('SELECT user_id FROM channel_human_members WHERE channel_id = ? ORDER BY joined_at')
       .all(id)

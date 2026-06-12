@@ -32,6 +32,8 @@ describe('server-next socket handlers', () => {
       addChannelAgentMember: vi.fn(async (payload) => makeSuccess({ payload })),
       removeChannelAgentMember: vi.fn(async (payload) => makeSuccess({ payload })),
       listChannelMembers: vi.fn(async (payload) => makeSuccess({ payload })),
+      archiveChannel: vi.fn(async (payload) => makeSuccess({ payload })),
+      deleteChannel: vi.fn(async (payload) => makeSuccess({ payload })),
       startDirectMessage: vi.fn(async (payload) => makeSuccess({ payload })),
       listDirectMessages: vi.fn(async (payload) => makeSuccess({ payload })),
       snapshotDirectMessage: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -81,6 +83,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.channel.addAgent,
       WEB_EVENTS.channel.removeAgent,
       WEB_EVENTS.channel.members,
+      WEB_EVENTS.channel.archive,
+      WEB_EVENTS.channel.delete,
       WEB_EVENTS.channel.join,
       WEB_EVENTS.agent.create,
       WEB_EVENTS.agent.publish,
@@ -185,6 +189,16 @@ describe('server-next socket handlers', () => {
       userId: 'user-1',
       teamId: 'team-1',
       channelId: 'channel-2',
+    });
+    await socket.trigger(WEB_EVENTS.channel.archive, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
+    });
+    await socket.trigger(WEB_EVENTS.channel.delete, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-3',
     });
     await expect(socket.trigger(WEB_EVENTS.channel.join, {
       userId: 'user-1',
@@ -336,6 +350,16 @@ describe('server-next socket handlers', () => {
       userId: 'user-1',
       teamId: 'team-1',
       channelId: 'channel-2',
+    });
+    expect(app.archiveChannel).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
+    });
+    expect(app.deleteChannel).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-3',
     });
     expect(app.listChannels).toHaveBeenCalledWith({ userId: 'user-1', teamId: 'team-1' });
     expect(app.listChannelMessages).toHaveBeenCalledWith({ channelId: 'channel-2', limit: 25 });

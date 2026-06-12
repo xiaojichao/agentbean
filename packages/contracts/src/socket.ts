@@ -57,6 +57,8 @@ export const WEB_EVENTS = {
     addAgent: 'channel:add-agent',
     removeAgent: 'channel:remove-agent',
     members: 'channel:members',
+    archive: 'channel:archive',
+    delete: 'channel:delete',
   },
   dm: {
     start: 'dm:start',

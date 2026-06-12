@@ -445,6 +445,140 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('channels can be archived (soft) and deleted (hard cascade) with proper access control', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 400,
+      ids: createIds([
+        'user-1', 'team-1', 'channel-1',
+        'join-1',
+        'user-2', 'team-2', 'channel-2',
+        'channel-archive', 'channel-delete',
+        'message-1', 'dispatch-1',
+      ]),
+      joinCodes: createIds(['code-join']),
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'OwnerTeam' });
+    await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
+    await app.registerUser({ username: 'member', password: 'secret', teamName: 'MemberTeam', joinCode: 'code-join' });
+
+    // Create channels for testing
+    await app.createChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      name: 'to-archive',
+      visibility: 'public',
+    });
+    await app.createChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      name: 'to-delete',
+      visibility: 'public',
+    });
+
+    // Archive: default channel is protected
+    await expect(app.archiveChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+
+    // Archive: non-creator cannot archive
+    await expect(app.archiveChannel({
+      userId: 'user-2',
+      teamId: 'team-1',
+      channelId: 'channel-archive',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+
+    // Archive: creator can archive
+    await expect(app.archiveChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-archive',
+    })).resolves.toMatchObject({
+      ok: true,
+      channel: { id: 'channel-archive', archivedAt: 400 },
+    });
+
+    // Archived channel excluded from listForUser
+    await expect(app.listChannels({ userId: 'user-1', teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      channels: expect.arrayContaining([
+        expect.objectContaining({ id: 'channel-1' }),
+        expect.objectContaining({ id: 'channel-delete' }),
+      ]),
+    });
+    const listResult = await app.listChannels({ userId: 'user-1', teamId: 'team-1' });
+    expect(listResult.channels?.some((c: any) => c.id === 'channel-archive')).toBe(false);
+
+    // Delete: default channel is protected
+    await expect(app.deleteChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+
+    // Delete: non-creator cannot delete
+    await expect(app.deleteChannel({
+      userId: 'user-2',
+      teamId: 'team-1',
+      channelId: 'channel-delete',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+
+    // Delete: wrong team — fails at membership check
+    await expect(app.deleteChannel({
+      userId: 'user-1',
+      teamId: 'team-2',
+      channelId: 'channel-delete',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+
+    // Delete: nonexistent channel
+    await expect(app.deleteChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-nope',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'NOT_FOUND',
+    });
+
+    // Add a message to the channel to verify cascade delete
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-delete',
+      body: 'this should be gone after delete',
+    });
+
+    // Delete: creator can delete (cascade removes messages)
+    await expect(app.deleteChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-delete',
+    })).resolves.toMatchObject({
+      ok: true,
+      channel: { id: 'channel-delete' },
+    });
+
+    // Deleted channel excluded from listForUser
+    const afterDelete = await app.listChannels({ userId: 'user-1', teamId: 'team-1' });
+    expect(afterDelete.channels?.some((c: any) => c.id === 'channel-delete')).toBe(false);
+  });
+
   test('creates and validates a user join link for an existing team member', async () => {
     const app = createInMemoryServerNext({
       now: () => 250,
