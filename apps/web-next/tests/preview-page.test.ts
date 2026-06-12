@@ -20,6 +20,9 @@ interface FakeElement {
 
 interface FakeEvent {
   currentTarget: FakeElement;
+  target?: {
+    closest(selector: string): { dataset: Record<string, string> } | null;
+  };
   preventDefault(): void;
 }
 
@@ -31,6 +34,7 @@ interface PreviewHarness {
     trigger(event: string, payload?: unknown): Promise<void>;
   };
   element(id: string): FakeElement;
+  click(elementId: string, selector: string, dataset: Record<string, string>): Promise<void>;
   submit(formId: string): Promise<void>;
 }
 
@@ -303,15 +307,31 @@ describe('web-next preview page interactions', () => {
     expect(html).toContain('run.log');
     expect(html).toContain('notes.txt');
     expect(html).toContain('Workspace run run-1');
+    expect(html).toContain('data-workspace-run-id="run-1"');
+    expect(html).toContain('查看详情');
     expect(html).toContain('/Users/shaw/AgentBean');
     expect(html).toContain('exit 0');
     expect(html).toContain('device-1');
     expect(html).toContain('2.5s');
-    expect(html).toContain('1 artifact');
+    expect(html).toContain('2 artifacts');
     expect(html).toContain('/api/teams/team-1/artifacts/artifact-1/preview?token=token-1');
     expect(html).toContain('/api/teams/team-1/artifacts/artifact-1/download?token=token-1');
     expect(html).toContain('/api/teams/team-1/artifacts/artifact-3/preview?token=token-1');
     expect(html).toContain('/api/teams/team-1/artifacts/artifact-2/preview?token=token-1');
+
+    await harness.click('messages', '[data-workspace-run-id]', { workspaceRunId: 'run-1' });
+
+    const detailHtml = harness.element('workspace-run-detail').innerHTML;
+    expect(detailHtml).toContain('run-1');
+    expect(detailHtml).toContain('succeeded');
+    expect(detailHtml).toContain('/Users/shaw/AgentBean');
+    expect(detailHtml).toContain('2 artifacts');
+    expect(detailHtml).toContain('Workspace 输出');
+    expect(detailHtml).toContain('outputs/');
+    expect(detailHtml).toContain('outputs/logs/');
+    expect(detailHtml).toContain('reply.md');
+    expect(detailHtml).toContain('run.log');
+    expect(detailHtml).not.toContain('notes.txt');
   });
 
   test('uploads selected composer files before sending artifact-backed messages', async () => {
@@ -408,6 +428,7 @@ function createPreviewHarness(acks: Record<string, AckFactory>): PreviewHarness 
     'runtimes',
     'agents',
     'messages',
+    'workspace-run-detail',
     'events',
     'session-summary',
     'team-display-name',
@@ -485,6 +506,24 @@ function createPreviewHarness(acks: Record<string, AckFactory>): PreviewHarness 
     },
     element(id) {
       return requiredElement(elements, id);
+    },
+    async click(elementId, selector, dataset) {
+      const element = requiredElement(elements, elementId);
+      const handler = element.listeners.get('click');
+      if (!handler) {
+        throw new Error(`No click handler for ${elementId}`);
+      }
+      await handler({
+        currentTarget: element,
+        target: {
+          closest(candidate) {
+            return candidate === selector ? { dataset } : null;
+          },
+        },
+        preventDefault() {
+          // Click handlers in the preview only update local UI state.
+        },
+      });
     },
     async submit(formId) {
       const form = requiredElement(elements, formId);
