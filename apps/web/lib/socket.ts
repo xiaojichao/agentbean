@@ -1,6 +1,6 @@
 'use client';
 import { io, type Socket } from 'socket.io-client';
-import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, NetworkSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, Artifact } from './schema.js';
+import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, NetworkSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact } from './schema.js';
 
 const configuredUrl = process.env.NEXT_PUBLIC_AGENT_BEAN_SERVER_URL ?? 'http://localhost:4000';
 const TOKEN_STORAGE_KEY = 'agentbean.token';
@@ -87,6 +87,20 @@ export async function fetchAgentWorkspace(networkId: string, agentId: string): P
     return await res.json();
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'Failed to fetch workspace' };
+  }
+}
+
+export async function fetchWorkspaceRunDetail(teamId: string, runId: string): Promise<{ ok: boolean; workspaceRun?: WorkspaceRunDetail; artifacts?: WorkspaceArtifact[]; error?: string }> {
+  try {
+    const path = `/api/teams/${encodeURIComponent(teamId)}/workspace-runs/${encodeURIComponent(runId)}`;
+    const res = await fetch(authedApiUrl(path));
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      return { ok: false, error: body?.error ?? body?.message ?? `${res.status} ${res.statusText}` };
+    }
+    return await res.json();
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to fetch workspace run' };
   }
 }
 

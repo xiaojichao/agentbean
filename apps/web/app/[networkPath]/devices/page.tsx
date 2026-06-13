@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, Check, FolderOpen, Paperclip, Image as ImageIcon, Trash2 } from 'lucide-react';
+import Link from 'next/link';
+import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, Check, FolderOpen, Paperclip, Image as ImageIcon, Trash2, ExternalLink } from 'lucide-react';
 import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl, fetchAgentWorkspace, authedApiUrl } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { daemonVersionDisplay } from '@/lib/daemon-version';
@@ -908,6 +909,7 @@ function DeviceWorkspaceAgentCard({ agent }: { agent: WorkspaceAgent }) {
   const fileCount = agent.runs.reduce((sum, run) => sum + run.files.length, 0);
   const latest = Math.max(...agent.runs.map((run) => run.updatedAt));
   const workspacePath = agent.cwd ? `${agent.cwd}/.agentbean/${agent.name}` : `~/.agentbean/${agent.name}`;
+  const np = useCurrentNetworkPath();
 
   return (
     <div className="rounded-md border border-neutral-200 bg-neutral-50 p-3">
@@ -928,9 +930,18 @@ function DeviceWorkspaceAgentCard({ agent }: { agent: WorkspaceAgent }) {
           <div key={run.runId} className="border-t border-neutral-200 pt-3 first:border-t-0 first:pt-0">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="min-w-0 truncate text-xs font-medium text-neutral-600">同步记录</div>
-              <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[11px] text-neutral-500 ring-1 ring-neutral-200">
-                {run.files.length} 个文件
-              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                <Link
+                  href={`/${np}/runs/${run.runId}`}
+                  className="inline-flex items-center gap-0.5 text-[11px] text-blue-600 hover:underline"
+                >
+                  查看详情
+                  <ExternalLink size={10} />
+                </Link>
+                <span className="rounded-full bg-white px-2 py-0.5 text-[11px] text-neutral-500 ring-1 ring-neutral-200">
+                  {run.files.length} 个文件
+                </span>
+              </div>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               {run.files.slice(0, 6).map((file) => (

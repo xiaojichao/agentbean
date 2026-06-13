@@ -175,3 +175,39 @@ export interface DeviceInfo {
     daemonVersion?: string;
   } | null;
 }
+
+export type WorkspaceRunStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
+
+export interface WorkspaceRunDetail {
+  id: string;
+  teamId: string;
+  channelId: string;
+  messageId?: string;
+  dispatchId: string;
+  agentId: string;
+  deviceId?: string;
+  status: WorkspaceRunStatus;
+  cwd?: string;
+  exitCode?: number;
+  startedAt?: number;
+  completedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+  artifactIds: string[];
+}
+
+export interface WorkspaceArtifact {
+  id: string;
+  teamId: string;
+  channelId: string;
+  messageId?: string;
+  dispatchId?: string;
+  workspaceRunId?: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  relativePath?: string;
+  pathKind?: string;
+  sha256?: string;
+  createdAt: number;
+}
