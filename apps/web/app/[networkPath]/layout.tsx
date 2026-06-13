@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { getWebSocket, networkEvents } from '@/lib/socket';
+import { getWebSocket, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 
 export default function NetworkLayout({ children }: { children: React.ReactNode }) {
@@ -20,7 +20,7 @@ export default function NetworkLayout({ children }: { children: React.ReactNode 
     if (conn !== 'open' || !resolved) return;
 
     setCurrentNetworkId(resolved.id);
-    networkEvents().switch(resolved.id).then(() => {
+    teamEvents().switch(resolved.id).then(() => {
       getWebSocket().emit('agents:subscribe', {});
       getWebSocket().emit('channels:subscribe', {});
       getWebSocket().emit('devices:subscribe', {});

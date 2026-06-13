@@ -533,20 +533,20 @@ export interface ListSavedMessagesInput {
 }
 
 export interface UpdateMemberRoleInput {
-  actorUserId: string;
+  userId: string;
   teamId: string;
   targetUserId: string;
   role: 'owner' | 'admin' | 'member';
 }
 
 export interface RemoveMemberInput {
-  actorUserId: string;
+  userId: string;
   teamId: string;
   targetUserId: string;
 }
 
 export interface TransferOwnerInput {
-  actorUserId: string;
+  userId: string;
   teamId: string;
   targetUserId: string;
 }
@@ -557,20 +557,20 @@ export interface ListMembersInput {
 }
 
 export interface UpdateMemberHumanInput {
-  actorUserId: string;
+  userId: string;
   teamId: string;
   targetUserId: string;
   description?: string | null;
 }
 
 export interface UpdateTeamInput {
-  actorUserId: string;
+  userId: string;
   teamId: string;
   name?: string;
 }
 
 export interface DeleteTeamInput {
-  actorUserId: string;
+  userId: string;
   teamId: string;
 }
 
@@ -2289,14 +2289,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async updateMemberRole(roleInput) {
-      const actorRole = await repositories.teams.getMemberRole(roleInput.teamId, roleInput.actorUserId);
+      const actorRole = await repositories.teams.getMemberRole(roleInput.teamId, roleInput.userId);
       if (!actorRole) {
         return makeFailure('FORBIDDEN', 'Actor is not a team member');
       }
       if (actorRole === 'member') {
         return makeFailure('FORBIDDEN', 'Only owner or admin can change roles');
       }
-      if (roleInput.actorUserId === roleInput.targetUserId) {
+      if (roleInput.userId === roleInput.targetUserId) {
         return makeFailure('FORBIDDEN', 'Cannot change your own role');
       }
       if (roleInput.role === 'owner') {
@@ -2335,14 +2335,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async removeMember(removeInput) {
-      const actorRole = await repositories.teams.getMemberRole(removeInput.teamId, removeInput.actorUserId);
+      const actorRole = await repositories.teams.getMemberRole(removeInput.teamId, removeInput.userId);
       if (!actorRole) {
         return makeFailure('FORBIDDEN', 'Actor is not a team member');
       }
       if (actorRole === 'member') {
         return makeFailure('FORBIDDEN', 'Only owner or admin can remove members');
       }
-      if (removeInput.actorUserId === removeInput.targetUserId) {
+      if (removeInput.userId === removeInput.targetUserId) {
         return makeFailure('FORBIDDEN', 'Cannot remove yourself, use leave team instead');
       }
       const targetMember = await repositories.teams.getMember({
@@ -2366,7 +2366,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async transferOwner(transferInput) {
-      const actorRole = await repositories.teams.getMemberRole(transferInput.teamId, transferInput.actorUserId);
+      const actorRole = await repositories.teams.getMemberRole(transferInput.teamId, transferInput.userId);
       if (actorRole !== 'owner') {
         return makeFailure('FORBIDDEN', 'Only owner can transfer ownership');
       }
@@ -2380,7 +2380,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       // Demote current owner to admin
       await repositories.teams.updateMemberRole({
         teamId: transferInput.teamId,
-        userId: transferInput.actorUserId,
+        userId: transferInput.userId,
         role: 'admin',
       });
       // Promote target to owner
@@ -2419,11 +2419,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async updateMemberHuman(humanInput) {
-      const actorRole = await repositories.teams.getMemberRole(humanInput.teamId, humanInput.actorUserId);
+      const actorRole = await repositories.teams.getMemberRole(humanInput.teamId, humanInput.userId);
       if (!actorRole) {
         return makeFailure('FORBIDDEN', 'Actor is not a team member');
       }
-      const isSelf = humanInput.actorUserId === humanInput.targetUserId;
+      const isSelf = humanInput.userId === humanInput.targetUserId;
       if (!isSelf && actorRole !== 'admin' && actorRole !== 'owner') {
         return makeFailure('FORBIDDEN', 'Only admin or owner can update other members');
       }
@@ -2452,7 +2452,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async updateTeam(updateInput) {
-      const actorRole = await repositories.teams.getMemberRole(updateInput.teamId, updateInput.actorUserId);
+      const actorRole = await repositories.teams.getMemberRole(updateInput.teamId, updateInput.userId);
       if (!actorRole) {
         return makeFailure('FORBIDDEN', 'Actor is not a team member');
       }
@@ -2476,7 +2476,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async deleteTeam(deleteInput) {
-      const actorRole = await repositories.teams.getMemberRole(deleteInput.teamId, deleteInput.actorUserId);
+      const actorRole = await repositories.teams.getMemberRole(deleteInput.teamId, deleteInput.userId);
       if (actorRole !== 'owner') {
         return makeFailure('FORBIDDEN', 'Only owner can delete team');
       }
@@ -2489,7 +2489,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const affectedUserIds = teamMembers.map((m) => m.userId);
       // Find a fallback team for the actor (pick another team they belong to)
       let fallbackTeam: { id: string; name: string; path: string } | null = null;
-      const actorTeams = await repositories.teams.listForUser(deleteInput.actorUserId);
+      const actorTeams = await repositories.teams.listForUser(deleteInput.userId);
       const otherTeam = actorTeams.find((t) => t.id !== deleteInput.teamId);
       if (otherTeam) {
         fallbackTeam = { id: otherTeam.id, name: otherTeam.name, path: otherTeam.path };

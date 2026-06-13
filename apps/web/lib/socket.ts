@@ -201,30 +201,33 @@ export interface NetworkEvents {
   subscribe(): void;
 }
 
-export function networkEvents(socket: Socket = getWebSocket()): NetworkEvents {
+export function teamEvents(socket: Socket = getWebSocket()): NetworkEvents {
   return {
     list() {
-      return emitWithTimeout(socket, 'network:list', {});
+      return emitWithTimeout(socket, 'team:list', {});
     },
     create(payload) {
-      return emitWithTimeout(socket, 'network:create', payload);
+      return emitWithTimeout(socket, 'team:create', payload);
     },
-    switch(networkId) {
-      return emitWithTimeout(socket, 'network:switch', { networkId });
+    switch(teamId) {
+      return emitWithTimeout(socket, 'team:switch', { teamId });
     },
     update(payload) {
-      return emitWithTimeout(socket, 'network:update', payload);
+      return emitWithTimeout(socket, 'team:update', payload);
     },
-    delete(networkId) {
-      return emitWithTimeout(socket, 'network:delete', { networkId });
+    delete(teamId) {
+      return emitWithTimeout(socket, 'team:delete', { teamId });
     },
     onSnapshot(handler) {
-      socket.on('networks:snapshot', handler);
-      return () => { socket.off('networks:snapshot', handler); };
+      socket.on('teams:snapshot', handler);
+      return () => { socket.off('teams:snapshot', handler); };
     },
-    subscribe() { socket.emit('network:list', {}); },
+    subscribe() { socket.emit('team:list', {}); },
   };
 }
+
+/** @deprecated Use teamEvents() instead */
+export const networkEvents = teamEvents;
 
 export interface ChannelEvents {
   update(payload: { channelId: string; name?: string; description?: string | null; visibility?: 'public' | 'private' }): Promise<{ ok: boolean; error?: string }>;

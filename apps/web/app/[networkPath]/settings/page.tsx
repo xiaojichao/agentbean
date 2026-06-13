@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2 } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
-import { authEvents, getWebSocket, joinEvents, networkEvents } from '@/lib/socket';
+import { authEvents, getWebSocket, joinEvents, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import type { JoinLinkInfo } from '@/lib/schema';
 import { useRouter } from 'next/navigation';
@@ -255,7 +255,7 @@ function ServerPanel() {
     if (nameSaved || !networkName.trim()) return;
     setNameSaving(true);
     setNameMsg(null);
-    const res = await networkEvents().update({ name: networkName.trim() });
+    const res = await teamEvents().update({ name: networkName.trim() });
     setNameSaving(false);
     if (res.ok) {
       setNameSaved(true);
@@ -269,7 +269,7 @@ function ServerPanel() {
     if (!currentNetwork || deleteSaving) return;
     setDeleteSaving(true);
     setDeleteMsg('');
-    const res = await networkEvents().delete(currentNetwork.id);
+    const res = await teamEvents().delete(currentNetwork.id);
     setDeleteSaving(false);
     if (!res.ok) {
       setDeleteMsg(res.error ?? '删除失败');

@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { getWebSocket, networkEvents } from '@/lib/socket';
+import { getWebSocket, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import type { NetworkSummary } from '@/lib/schema';
 
@@ -14,7 +14,7 @@ export default function NetworksPage() {
   const setCurrentNetworkId = useAgentBeanStore((s) => s.setCurrentNetworkId);
 
   const fetchNetworks = async () => {
-    const res = await networkEvents().list();
+    const res = await teamEvents().list();
     if (res.ok && res.networks) {
       setNetworks(res.networks);
     }
@@ -29,7 +29,7 @@ export default function NetworksPage() {
     e.preventDefault();
     const trimmed = name.trim();
     if (!trimmed) return;
-    const res = await networkEvents().create({ name: trimmed, description: description || undefined });
+    const res = await teamEvents().create({ name: trimmed, description: description || undefined });
     if (res.ok && res.network) {
       setNetworks((prev) => [...prev, res.network!]);
       setName('');
@@ -38,7 +38,7 @@ export default function NetworksPage() {
   };
 
   const handleSwitch = async (networkId: string) => {
-    const res = await networkEvents().switch(networkId);
+    const res = await teamEvents().switch(networkId);
     if (res.ok) {
       setCurrentNetworkId(networkId);
     }

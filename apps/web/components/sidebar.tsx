@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { Bot, MessagesSquare, ClipboardList, Users, ChevronDown, Settings, Monitor, LayoutDashboard, Plus, Check, Globe, Lock } from 'lucide-react';
-import { getWebSocket, networkEvents } from '@/lib/socket';
+import { getWebSocket, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 
 export function Sidebar() {
@@ -21,7 +21,7 @@ export function Sidebar() {
   useEffect(() => {
     if (conn !== 'open') return;
     const socket = getWebSocket();
-    const nets = networkEvents(socket);
+    const nets = teamEvents(socket);
     nets.list().then((res) => {
       if (res.ok && res.networks) applyNetworksSnapshot(res.networks);
     });
@@ -42,7 +42,7 @@ export function Sidebar() {
   const isAdmin = currentUser?.role === 'admin';
 
   const handleSwitch = async (networkId: string) => {
-    const res = await networkEvents().switch(networkId);
+    const res = await teamEvents().switch(networkId);
     if (res.ok) {
       setCurrentNetworkId(networkId);
       setShowNetworks(false);
@@ -200,7 +200,7 @@ function CreateNetworkDialog({ onClose, onCreated }: { onClose: () => void; onCr
     setPending(true);
     setError('');
     try {
-      const res = await networkEvents().create({ name: trimmedName, path: trimmedPath || undefined, visibility });
+      const res = await teamEvents().create({ name: trimmedName, path: trimmedPath || undefined, visibility });
       if (res.ok && res.network) {
         onClose();
         onCreated(res.network.id, res.network.path ?? 'default');
