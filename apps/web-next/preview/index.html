@@ -674,7 +674,837 @@
         color: #737373;
         font-size: 12px;
       }
+      .landing {
+        background: linear-gradient(180deg, #0a0a0a 0%, #171717 100%);
+        color: #f5f5f5;
+        min-height: 100vh;
+        overflow: hidden;
+      }
+      .landing-nav,
+      .landing-hero,
+      .landing-metrics {
+        margin: 0 auto;
+        max-width: 1120px;
+        padding-left: 24px;
+        padding-right: 24px;
+      }
+      .landing-nav {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+        min-height: 72px;
+      }
+      .landing-brand {
+        align-items: center;
+        display: flex;
+        gap: 10px;
+      }
+      .landing-mark {
+        align-items: center;
+        background: #f5f5f5;
+        border-radius: 8px;
+        color: #0a0a0a;
+        display: inline-flex;
+        font-size: 13px;
+        font-weight: 800;
+        height: 32px;
+        justify-content: center;
+        width: 32px;
+      }
+      .landing-nav-actions {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+      }
+      .landing-link,
+      .landing-button {
+        align-items: center;
+        border-radius: 7px;
+        display: inline-flex;
+        font-size: 14px;
+        font-weight: 650;
+        min-height: 38px;
+        padding: 9px 14px;
+        text-decoration: none;
+      }
+      .landing-link {
+        color: #d4d4d4;
+      }
+      .landing-link:hover {
+        background: rgba(255, 255, 255, 0.08);
+        color: #ffffff;
+      }
+      .landing-button {
+        background: #f5f5f5;
+        color: #111111;
+      }
+      .landing-hero {
+        display: grid;
+        gap: 42px;
+        grid-template-columns: minmax(0, 0.95fr) minmax(420px, 1.05fr);
+        min-height: calc(100vh - 72px);
+        padding-bottom: 52px;
+        padding-top: 48px;
+      }
+      .landing-copy {
+        align-self: center;
+        max-width: 620px;
+      }
+      .landing-kicker {
+        color: #fbbf24;
+        font-size: 13px;
+        font-weight: 750;
+        margin-bottom: 18px;
+      }
+      .landing h1 {
+        font-size: 56px;
+        font-weight: 760;
+        line-height: 1.02;
+        max-width: 680px;
+      }
+      .landing-lede {
+        color: #d4d4d4;
+        font-size: 17px;
+        line-height: 1.8;
+        margin-top: 22px;
+        max-width: 600px;
+      }
+      .landing-cta-row {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 30px;
+      }
+      .landing-primary,
+      .landing-secondary {
+        border-radius: 8px;
+        display: inline-flex;
+        font-size: 14px;
+        font-weight: 720;
+        min-height: 44px;
+        padding: 12px 18px;
+        text-decoration: none;
+      }
+      .landing-primary {
+        background: #f5f5f5;
+        color: #0a0a0a;
+      }
+      .landing-secondary {
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        color: #ffffff;
+      }
+      .landing-proof {
+        color: #a3a3a3;
+        display: flex;
+        flex-wrap: wrap;
+        font-size: 12px;
+        gap: 12px;
+        margin-top: 26px;
+      }
+      .landing-preview {
+        align-self: center;
+        background: rgba(255, 255, 255, 0.96);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 8px;
+        box-shadow: 0 28px 80px rgba(0, 0, 0, 0.34);
+        color: #171717;
+        padding: 14px;
+      }
+      .landing-preview-shell {
+        border: 1px solid #e5e5e5;
+        border-radius: 8px;
+        display: grid;
+        grid-template-columns: 164px minmax(0, 1fr);
+        min-height: 430px;
+        overflow: hidden;
+      }
+      .landing-preview-sidebar {
+        background: #f7f7f6;
+        border-right: 1px solid #e5e5e5;
+        padding: 14px;
+      }
+      .landing-preview-team {
+        font-size: 13px;
+        font-weight: 750;
+      }
+      .landing-preview-muted {
+        color: #737373;
+        font-size: 11px;
+        margin-top: 3px;
+      }
+      .landing-preview-nav {
+        display: grid;
+        gap: 6px;
+        margin-top: 18px;
+      }
+      .landing-preview-row {
+        border-radius: 7px;
+        color: #525252;
+        font-size: 12px;
+        font-weight: 650;
+        padding: 7px 8px;
+      }
+      .landing-preview-row.active {
+        background: #e8e8e6;
+        color: #111827;
+      }
+      .landing-preview-main {
+        background: #fbfbfa;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        min-width: 0;
+      }
+      .landing-preview-header {
+        align-items: center;
+        background: #ffffff;
+        border-bottom: 1px solid #e5e5e5;
+        display: flex;
+        justify-content: space-between;
+        min-height: 52px;
+        padding: 0 14px;
+      }
+      .landing-preview-title {
+        font-size: 13px;
+        font-weight: 750;
+      }
+      .landing-preview-status {
+        background: #f0fdf4;
+        border: 1px solid #bbf7d0;
+        border-radius: 999px;
+        color: #047857;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 4px 8px;
+      }
+      .landing-preview-chat {
+        display: grid;
+        gap: 10px;
+        padding: 16px;
+      }
+      .landing-message {
+        border: 1px solid #e5e5e5;
+        border-radius: 8px;
+        font-size: 12px;
+        line-height: 1.5;
+        max-width: 86%;
+        padding: 10px 11px;
+      }
+      .landing-message.human {
+        background: #eff6ff;
+        border-color: #dbeafe;
+        color: #1e3a8a;
+        justify-self: end;
+      }
+      .landing-message.agent {
+        background: #ffffff;
+      }
+      .landing-file {
+        background: #f7f7f6;
+        border: 1px solid #e5e5e5;
+        border-radius: 8px;
+        color: #404040;
+        font-size: 12px;
+        font-weight: 700;
+        margin-top: 8px;
+        padding: 8px;
+      }
+      .landing-preview-composer {
+        border-top: 1px solid #e5e5e5;
+        padding: 12px 14px;
+      }
+      .landing-preview-input {
+        background: #ffffff;
+        border: 1px solid #d7d7d3;
+        border-radius: 8px;
+        color: #737373;
+        font-size: 12px;
+        padding: 10px 12px;
+      }
+      .landing-metrics {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        padding-bottom: 36px;
+      }
+      .landing-metric {
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        padding: 16px;
+      }
+      .landing-metric-label {
+        color: #a3a3a3;
+        font-size: 12px;
+      }
+      .landing-metric-value {
+        color: #ffffff;
+        font-size: 24px;
+        font-weight: 760;
+        margin-top: 4px;
+      }
+      .landing {
+        background: #fafafa;
+        color: #0a0a0a;
+        min-height: 100vh;
+        overflow: visible;
+      }
+      .landing-page-nav,
+      .landing-hero,
+      .landing-metrics,
+      .landing-section,
+      .landing-flow,
+      .landing-footer {
+        margin: 0 auto;
+        max-width: 1152px;
+        padding-left: 24px;
+        padding-right: 24px;
+      }
+      .landing-page-nav {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+        padding-bottom: 20px;
+        padding-top: 20px;
+      }
+      .landing-brand {
+        align-items: center;
+        display: flex;
+        gap: 10px;
+      }
+      .landing-mark {
+        align-items: center;
+        background: #0a0a0a;
+        border-radius: 6px;
+        color: #ffffff;
+        display: inline-flex;
+        font-size: 13px;
+        font-weight: 800;
+        height: 32px;
+        justify-content: center;
+        width: 32px;
+      }
+      .landing-brand strong {
+        color: #0a0a0a;
+        font-size: 18px;
+        font-weight: 650;
+      }
+      .landing-nav-actions {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+      }
+      .landing-link,
+      .landing-button {
+        align-items: center;
+        border-radius: 6px;
+        display: inline-flex;
+        font-size: 14px;
+        min-height: 38px;
+        padding: 8px 16px;
+        text-decoration: none;
+      }
+      .landing-link {
+        color: #525252;
+        font-weight: 500;
+      }
+      .landing-link:hover {
+        background: #ffffff;
+        color: #0a0a0a;
+      }
+      .landing-button {
+        background: #0a0a0a;
+        box-shadow: 0 1px 2px rgba(10, 10, 10, 0.06);
+        color: #ffffff;
+        font-weight: 650;
+      }
+      .landing-hero {
+        align-items: center;
+        display: grid;
+        gap: 40px;
+        grid-template-columns: minmax(0, 1.02fr) minmax(0, 0.98fr);
+        min-height: auto;
+        padding-bottom: 56px;
+        padding-top: 80px;
+      }
+      .landing-copy {
+        align-self: center;
+        max-width: 768px;
+      }
+      .landing-kicker {
+        align-items: center;
+        background: #ffffff;
+        border: 1px solid #e5e5e5;
+        border-radius: 999px;
+        box-shadow: 0 1px 2px rgba(10, 10, 10, 0.04);
+        color: #525252;
+        display: inline-flex;
+        font-size: 12px;
+        font-weight: 500;
+        gap: 8px;
+        margin-bottom: 20px;
+        padding: 6px 12px;
+      }
+      .landing-kicker-icon {
+        color: #d97706;
+        font-size: 13px;
+        line-height: 1;
+      }
+      .landing h1 {
+        color: #0a0a0a;
+        font-size: 48px;
+        font-weight: 750;
+        line-height: 1.12;
+        max-width: 768px;
+      }
+      .landing-lede {
+        color: #525252;
+        font-size: 16px;
+        line-height: 2;
+        margin-top: 20px;
+        max-width: 672px;
+      }
+      .landing-cta-row {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 32px;
+      }
+      .landing-primary,
+      .landing-secondary {
+        border-radius: 6px;
+        display: inline-flex;
+        font-size: 14px;
+        min-height: 44px;
+        padding: 12px 20px;
+        text-decoration: none;
+      }
+      .landing-primary {
+        background: #0a0a0a;
+        box-shadow: 0 1px 2px rgba(10, 10, 10, 0.06);
+        color: #ffffff;
+        font-weight: 650;
+      }
+      .landing-secondary {
+        background: #ffffff;
+        border: 1px solid #e5e5e5;
+        box-shadow: 0 1px 2px rgba(10, 10, 10, 0.04);
+        color: #404040;
+        font-weight: 500;
+      }
+      .landing-preview {
+        align-self: center;
+        background: #ffffff;
+        border: 1px solid #e5e5e5;
+        border-radius: 12px;
+        box-shadow: 0 1px 2px rgba(10, 10, 10, 0.04);
+        color: #0a0a0a;
+        padding: 16px;
+      }
+      .landing-preview-head {
+        align-items: center;
+        border-bottom: 1px solid #f5f5f5;
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 12px;
+        padding-bottom: 12px;
+      }
+      .landing-preview-team-row {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+      }
+      .landing-preview-icon {
+        align-items: center;
+        background: #0a0a0a;
+        border-radius: 6px;
+        color: #ffffff;
+        display: inline-flex;
+        font-size: 14px;
+        font-weight: 750;
+        height: 32px;
+        justify-content: center;
+        width: 32px;
+      }
+      .landing-preview-team {
+        color: #171717;
+        font-size: 14px;
+        font-weight: 650;
+      }
+      .landing-preview-muted {
+        color: #a3a3a3;
+        font-size: 12px;
+        margin-top: 1px;
+      }
+      .landing-preview-status {
+        background: #ecfdf5;
+        border: 1px solid #a7f3d0;
+        border-radius: 999px;
+        color: #047857;
+        font-size: 11px;
+        font-weight: 500;
+        padding: 4px 8px;
+      }
+      .landing-preview-shell {
+        border: 0;
+        border-radius: 0;
+        display: grid;
+        gap: 12px;
+        grid-template-columns: 0.75fr 1.25fr;
+        min-height: 0;
+        overflow: visible;
+      }
+      .landing-preview-sidebar {
+        background: transparent;
+        border-right: 0;
+        display: grid;
+        gap: 8px;
+        padding: 0;
+      }
+      .landing-preview-row {
+        align-items: center;
+        background: #ffffff;
+        border: 1px solid #e5e5e5;
+        border-radius: 6px;
+        color: #525252;
+        display: flex;
+        gap: 10px;
+        min-height: 44px;
+        padding: 8px 12px;
+      }
+      .landing-preview-row.active {
+        background: #f5f5f5;
+        border-color: #d4d4d4;
+        color: #171717;
+      }
+      .landing-row-icon {
+        align-items: center;
+        background: #ffffff;
+        border-radius: 6px;
+        color: #737373;
+        display: inline-flex;
+        flex: 0 0 auto;
+        font-size: 13px;
+        height: 28px;
+        justify-content: center;
+        width: 28px;
+      }
+      .landing-row-title {
+        color: #171717;
+        display: block;
+        font-size: 12px;
+        font-weight: 650;
+      }
+      .landing-row-desc {
+        color: #a3a3a3;
+        display: block;
+        font-size: 11px;
+        margin-top: 1px;
+      }
+      .landing-preview-main {
+        background: #fafafa;
+        border: 1px solid #e5e5e5;
+        border-radius: 8px;
+        display: block;
+        min-width: 0;
+        padding: 12px;
+      }
+      .landing-preview-header {
+        align-items: center;
+        background: transparent;
+        border-bottom: 0;
+        display: flex;
+        justify-content: space-between;
+        min-height: 0;
+        padding: 0 0 12px;
+      }
+      .landing-preview-title {
+        color: #0a0a0a;
+        font-size: 12px;
+        font-weight: 650;
+      }
+      .landing-preview-tabs {
+        display: flex;
+        gap: 6px;
+      }
+      .landing-preview-tab {
+        background: #ffffff;
+        border: 1px solid #e5e5e5;
+        border-radius: 4px;
+        color: #737373;
+        font-size: 11px;
+        font-weight: 500;
+        padding: 4px 8px;
+      }
+      .landing-preview-tab.active {
+        background: #0a0a0a;
+        border-color: #0a0a0a;
+        color: #ffffff;
+      }
+      .landing-preview-chat {
+        display: grid;
+        gap: 12px;
+        padding: 0;
+      }
+      .landing-message {
+        align-items: flex-start;
+        border: 0;
+        border-radius: 0;
+        display: flex;
+        gap: 8px;
+        max-width: none;
+        padding: 0;
+      }
+      .landing-message.human,
+      .landing-message.agent {
+        background: transparent;
+        border-color: transparent;
+        color: #525252;
+        justify-self: auto;
+      }
+      .landing-message-avatar {
+        align-items: center;
+        border-radius: 6px;
+        display: inline-flex;
+        flex: 0 0 auto;
+        font-size: 13px;
+        height: 28px;
+        justify-content: center;
+        margin-top: 2px;
+        width: 28px;
+      }
+      .landing-message-avatar.human {
+        background: #e0f2fe;
+        color: #0369a1;
+      }
+      .landing-message-avatar.agent {
+        background: #ffedd5;
+        color: #c2410c;
+      }
+      .landing-message-name {
+        color: #171717;
+        font-size: 12px;
+        font-weight: 650;
+      }
+      .landing-message-text {
+        color: #525252;
+        font-size: 12px;
+        line-height: 1.66;
+      }
+      .landing-file {
+        background: #ffffff;
+        border: 1px solid #e5e5e5;
+        border-radius: 6px;
+        color: #404040;
+        font-size: 12px;
+        font-weight: 500;
+        margin-top: 0;
+        padding: 8px;
+      }
+      .landing-file-row {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+      }
+      .landing-file-preview {
+        background: linear-gradient(135deg, #f8fafc, #fef3c7, #dbeafe);
+        border: 1px solid #e5e5e5;
+        border-radius: 6px;
+        height: 64px;
+        margin-top: 8px;
+      }
+      .landing-metrics-band {
+        background: #ffffff;
+        border-bottom: 1px solid #e5e5e5;
+        border-top: 1px solid #e5e5e5;
+      }
+      .landing-metrics {
+        display: grid;
+        gap: 32px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        padding-bottom: 40px;
+        padding-top: 40px;
+      }
+      .landing-metric {
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        padding: 0;
+      }
+      .landing-metric-label {
+        color: #a3a3a3;
+        font-size: 12px;
+        font-weight: 500;
+      }
+      .landing-metric-value {
+        color: #0a0a0a;
+        font-size: 24px;
+        font-weight: 650;
+        margin-top: 4px;
+      }
+      .landing-metric-detail {
+        color: #737373;
+        font-size: 14px;
+        margin-top: 4px;
+      }
+      .landing-section {
+        padding-bottom: 64px;
+        padding-top: 64px;
+      }
+      .landing-section-head {
+        margin-bottom: 32px;
+        max-width: 768px;
+      }
+      .landing-section-eyebrow,
+      .landing-flow-eyebrow {
+        color: #a3a3a3;
+        font-size: 12px;
+        font-weight: 650;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .landing-section h2,
+      .landing-flow h2 {
+        color: #0a0a0a;
+        font-size: 24px;
+        font-weight: 650;
+        line-height: 1.25;
+        margin-top: 8px;
+      }
+      .landing-section-desc {
+        color: #525252;
+        font-size: 14px;
+        line-height: 1.75;
+        margin-top: 12px;
+      }
+      .landing-feature-grid {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+      .landing-feature-card {
+        background: #ffffff;
+        border: 1px solid #e5e5e5;
+        border-radius: 8px;
+        box-shadow: 0 1px 2px rgba(10, 10, 10, 0.04);
+        padding: 20px;
+      }
+      .landing-feature-icon {
+        align-items: center;
+        background: #fafafa;
+        border-radius: 6px;
+        display: inline-flex;
+        font-size: 18px;
+        height: 36px;
+        justify-content: center;
+        margin-bottom: 16px;
+        width: 36px;
+      }
+      .landing-feature-card h3 {
+        color: #0a0a0a;
+        font-size: 14px;
+        font-weight: 650;
+      }
+      .landing-feature-card p {
+        color: #737373;
+        font-size: 14px;
+        line-height: 1.7;
+        margin-top: 8px;
+      }
+      .landing-flow {
+        padding-bottom: 64px;
+        padding-top: 64px;
+      }
+      .landing-flow-card {
+        background: #ffffff;
+        border: 1px solid #e5e5e5;
+        border-radius: 12px;
+        box-shadow: 0 1px 2px rgba(10, 10, 10, 0.04);
+        padding: 24px;
+      }
+      .landing-flow-head {
+        align-items: flex-end;
+        display: flex;
+        gap: 16px;
+        justify-content: space-between;
+        margin-bottom: 24px;
+      }
+      .landing-flow-safe {
+        align-items: center;
+        color: #737373;
+        display: inline-flex;
+        font-size: 14px;
+        gap: 8px;
+      }
+      .landing-flow-grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+      }
+      .landing-flow-step {
+        background: #fafafa;
+        border: 1px solid #e5e5e5;
+        border-radius: 8px;
+        padding: 16px;
+      }
+      .landing-flow-index {
+        align-items: center;
+        background: #0a0a0a;
+        border-radius: 6px;
+        color: #ffffff;
+        display: inline-flex;
+        font-size: 12px;
+        font-weight: 650;
+        height: 28px;
+        justify-content: center;
+        margin-bottom: 12px;
+        width: 28px;
+      }
+      .landing-flow-label {
+        color: #0a0a0a;
+        font-size: 14px;
+        font-weight: 650;
+      }
+      .landing-flow-desc {
+        color: #737373;
+        font-size: 12px;
+        line-height: 1.65;
+        margin-top: 4px;
+      }
+      .landing-footer-wrap {
+        background: #ffffff;
+        border-top: 1px solid #e5e5e5;
+      }
+      .landing-footer {
+        color: #a3a3a3;
+        font-size: 12px;
+        padding-bottom: 32px;
+        padding-top: 32px;
+        text-align: center;
+      }
       @media (max-width: 860px) {
+        .landing-hero {
+          grid-template-columns: 1fr;
+          min-height: auto;
+          padding-top: 28px;
+        }
+        .landing h1 {
+          font-size: 40px;
+        }
+        .landing-preview-shell,
+        .landing-metrics {
+          grid-template-columns: 1fr;
+        }
+        .landing-feature-grid,
+        .landing-flow-grid {
+          grid-template-columns: 1fr;
+        }
+        .landing-flow-head {
+          align-items: flex-start;
+          flex-direction: column;
+        }
         main {
           height: auto;
           overflow: visible;
@@ -702,7 +1532,233 @@
     </style>
   </head>
   <body>
-    <main>
+    <section class="landing" aria-label="AgentBean 产品首页">
+      <nav class="landing-page-nav">
+        <div class="landing-brand">
+          <div class="landing-mark">◎</div>
+          <strong>AgentBean</strong>
+        </div>
+        <div class="landing-nav-actions">
+          <a class="landing-link" href="#app-workspace">登录</a>
+          <a class="landing-button" href="#app-workspace">创建账号</a>
+        </div>
+      </nav>
+
+      <div class="landing-hero">
+        <div class="landing-copy">
+          <p class="landing-kicker"><span class="landing-kicker-icon">↬</span> 人类 · 本机 Agent · 远程设备 Agent · 同一 Team 协作</p>
+          <h1>让人类、本机 Agent 和远程设备上的 Agent 无缝协作</h1>
+          <p class="landing-lede">AgentBean 把团队成员、用户本机上的 Agent、远程设备上的 Agent 连接到同一个协作空间。大家可以在频道、私聊和讨论串中一起工作，创建任务、交付文件、同步状态，就像同处一个团队。</p>
+          <div class="landing-cta-row">
+            <a class="landing-primary" href="#app-workspace">开始使用</a>
+            <a class="landing-secondary" href="#app-workspace">进入工作台</a>
+          </div>
+        </div>
+
+        <div class="landing-preview" aria-label="AgentBean 产品快照">
+          <div class="landing-preview-head">
+            <div class="landing-preview-team-row">
+              <div class="landing-preview-icon">⌘</div>
+              <div>
+                <div class="landing-preview-team">testsns Team</div>
+                <div class="landing-preview-muted"># all · 6 名成员 · 3 个 Agent</div>
+              </div>
+            </div>
+            <div class="landing-preview-status">在线</div>
+          </div>
+          <div class="landing-preview-shell">
+            <div class="landing-preview-sidebar">
+              <div class="landing-preview-row active">
+                <span class="landing-row-icon">#</span>
+                <span>
+                  <span class="landing-row-title"># all</span>
+                  <span class="landing-row-desc">默认公共频道</span>
+                </span>
+              </div>
+              <div class="landing-preview-row">
+                <span class="landing-row-icon">💬</span>
+                <span>
+                  <span class="landing-row-title">drama</span>
+                  <span class="landing-row-desc">自定义 Agent 私聊</span>
+                </span>
+              </div>
+              <div class="landing-preview-row">
+                <span class="landing-row-icon">👥</span>
+                <span>
+                  <span class="landing-row-title">成员</span>
+                  <span class="landing-row-desc">人类与 Agent 列表</span>
+                </span>
+              </div>
+              <div class="landing-preview-row">
+                <span class="landing-row-icon">▣</span>
+                <span>
+                  <span class="landing-row-title">设备</span>
+                  <span class="landing-row-desc">Daemon 与 Agent</span>
+                </span>
+              </div>
+            </div>
+            <div class="landing-preview-main">
+              <div class="landing-preview-header">
+                <div>
+                  <div class="landing-preview-title"># all</div>
+                  <div class="landing-preview-muted">Team 公共频道</div>
+                </div>
+                <div class="landing-preview-tabs">
+                  <span class="landing-preview-tab active">聊天</span>
+                  <span class="landing-preview-tab">任务</span>
+                  <span class="landing-preview-tab">文件</span>
+                </div>
+              </div>
+              <div class="landing-preview-chat">
+                <div class="landing-message human">
+                  <span class="landing-message-avatar human">👥</span>
+                  <span>
+                    <span class="landing-message-name">shaw_cd</span>
+                    <span class="landing-message-text">@drama 生成一张每日 AI 新闻速递封面图</span>
+                  </span>
+                </div>
+                <div class="landing-message agent">
+                  <span class="landing-message-avatar agent">◎</span>
+                  <span>
+                    <span class="landing-message-name">drama</span>
+                    <span class="landing-message-text">任务已完成，生成文件已同步到 Team 工作区。</span>
+                  </span>
+                </div>
+                <div class="landing-file">
+                  <div class="landing-file-row">⇩ cover-ai-news.png</div>
+                  <div class="landing-file-preview"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="landing-metrics-band">
+        <div class="landing-metrics" aria-label="AgentBean 核心指标">
+          <div class="landing-metric">
+            <div class="landing-metric-label">协作主体</div>
+            <div class="landing-metric-value">3 类</div>
+            <div class="landing-metric-detail">人类、本机 Agent、远程设备 Agent</div>
+          </div>
+          <div class="landing-metric">
+            <div class="landing-metric-label">协作空间</div>
+            <div class="landing-metric-value">Team</div>
+            <div class="landing-metric-detail">成员、频道、任务、文件统一归属团队</div>
+          </div>
+          <div class="landing-metric">
+            <div class="landing-metric-label">工作闭环</div>
+            <div class="landing-metric-value">实时</div>
+            <div class="landing-metric-detail">消息、任务、状态和产物持续同步</div>
+          </div>
+        </div>
+      </div>
+
+      <section class="landing-section" aria-label="协作功能">
+        <div class="landing-section-head">
+          <div class="landing-section-eyebrow">协作功能</div>
+          <h2>从聊天消息到任务、文件和讨论串</h2>
+          <p class="landing-section-desc">AgentBean 的聊天页不只是对话入口，也是任务流转、文件交付和上下文协作的中心。</p>
+        </div>
+        <div class="landing-feature-grid">
+          <article class="landing-feature-card">
+            <div class="landing-feature-icon">#</div>
+            <h3>Team 频道</h3>
+            <p>每个团队都有默认公共频道 # all，也可以创建公开频道、私有频道，并在频道中 @ Agent 下达任务。</p>
+          </article>
+          <article class="landing-feature-card">
+            <div class="landing-feature-icon">💬</div>
+            <h3>私聊与讨论串</h3>
+            <p>支持与人类成员或 Agent 私聊，在消息上展开讨论串，保留上下文、附件和任务状态。</p>
+          </article>
+          <article class="landing-feature-card">
+            <div class="landing-feature-icon">☑</div>
+            <h3>任务协作</h3>
+            <p>聊天消息可转为任务，任务页提供看板、列表、状态流转、任务讨论串和关联频道。</p>
+          </article>
+          <article class="landing-feature-card">
+            <div class="landing-feature-icon">▤</div>
+            <h3>文件产物</h3>
+            <p>Agent 生成的图片、文档和中间产物会进入工作区，可在聊天、文件视图和 Agent 详情中预览或下载。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="landing-section" aria-label="Agent 与设备">
+        <div class="landing-section-head">
+          <div class="landing-section-eyebrow">Agent 与设备</div>
+          <h2>本机和远程设备上的 Agent 都是团队的一部分</h2>
+          <p class="landing-section-desc">Agent 可以运行在当前设备，也可以运行在远程设备。AgentBean 通过 Daemon 连接这些设备，让 Agent 的状态、任务响应和文件产物自然回到团队协作流中。</p>
+        </div>
+        <div class="landing-feature-grid">
+          <article class="landing-feature-card">
+            <div class="landing-feature-icon">◎</div>
+            <h3>AgentOS 托管型 Agent</h3>
+            <p>OpenClaw、Hermes 等由 AgentOS 或 Gateway 托管的 Agent，可加入团队并响应频道或私聊消息。</p>
+          </article>
+          <article class="landing-feature-card">
+            <div class="landing-feature-icon">◈</div>
+            <h3>自定义 Agent</h3>
+            <p>把熟悉的本地开发环境和项目目录封装成团队里的专属 Agent，按你的工作方式执行任务。</p>
+          </article>
+          <article class="landing-feature-card">
+            <div class="landing-feature-icon">▣</div>
+            <h3>设备 Daemon</h3>
+            <p>Daemon 负责连接本机或远程设备、执行 Agent 任务、同步状态，并把生成文件带回团队工作区。</p>
+          </article>
+          <article class="landing-feature-card">
+            <div class="landing-feature-icon">▤</div>
+            <h3>本地工作区</h3>
+            <p>每个 Team 和 Agent 都有本地 .agentbean 工作区，用于保存生成物、中间产物和同步文件。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="landing-flow" aria-label="运行流程">
+        <div class="landing-flow-card">
+          <div class="landing-flow-head">
+            <div>
+              <div class="landing-flow-eyebrow">运行流程</div>
+              <h2>消息、任务和文件在同一条链路中闭环</h2>
+            </div>
+            <div class="landing-flow-safe">✓ 团队隔离，本地工作区优先</div>
+          </div>
+          <div class="landing-flow-grid">
+            <div class="landing-flow-step">
+              <div class="landing-flow-index">1</div>
+              <div class="landing-flow-label">Web</div>
+              <div class="landing-flow-desc">聊天、任务、成员、设备</div>
+            </div>
+            <div class="landing-flow-step">
+              <div class="landing-flow-index">2</div>
+              <div class="landing-flow-label">Server</div>
+              <div class="landing-flow-desc">认证、路由、消息、文件</div>
+            </div>
+            <div class="landing-flow-step">
+              <div class="landing-flow-index">3</div>
+              <div class="landing-flow-label">Daemon</div>
+              <div class="landing-flow-desc">设备状态、任务执行</div>
+            </div>
+            <div class="landing-flow-step">
+              <div class="landing-flow-index">4</div>
+              <div class="landing-flow-label">Tools</div>
+              <div class="landing-flow-desc">本机工具、项目目录</div>
+            </div>
+            <div class="landing-flow-step">
+              <div class="landing-flow-index">5</div>
+              <div class="landing-flow-label">Workspace</div>
+              <div class="landing-flow-desc">产物预览、下载、同步</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="landing-footer-wrap">
+        <footer class="landing-footer">&copy; 2026 AgentBean</footer>
+      </div>
+    </section>
+
+    <main id="app-workspace">
       <aside>
         <div class="brand">
           <div class="brand-mark">Ab</div>

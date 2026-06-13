@@ -12,9 +12,14 @@ describe('AgentBean Next entry smoke', () => {
         '/healthz': json({ ok: true, service: 'agentbean-next-server' }),
         '/': html(`
           <title>AgentBean</title>
+          <section class="landing">
+            <h1>让人类、本机 Agent 和远程设备上的 Agent 无缝协作</h1>
+          </section>
+          <main id="app-workspace">
           <p>私有 Agent 团队</p>
           <button class="team-switcher">AgentBean</button>
           <h2>添加自定义 Agent</h2>
+          </main>
         `),
         '/socket.io/socket.io.js': text('/* socket.io */ var io = {};'),
       }),
