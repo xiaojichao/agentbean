@@ -91,7 +91,7 @@ export interface ServerNextUseCases {
 export interface RegisterUserInput {
   username: string;
   password: string;
-  teamName: string;
+  teamName?: string;
   joinCode?: string;
 }
 
@@ -607,7 +607,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const teamId = ids.nextId();
       const channelId = ids.nextId();
       const username = normalizeUsername(registerInput.username);
-      const teamPath = slugify(registerInput.teamName);
+      const teamName = registerInput.teamName?.trim() || registerInput.username;
+      const teamPath = slugify(teamName);
 
       const user = await repositories.users.create({
         id: userId,
@@ -621,7 +622,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
       const team = await repositories.teams.create({
         id: teamId,
-        name: registerInput.teamName.trim(),
+        name: teamName,
         path: teamPath,
         visibility: 'private',
         ownerId: userId,
