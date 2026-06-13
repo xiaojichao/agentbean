@@ -511,16 +511,21 @@ function AgentActivity({ agent, device, metrics, runs }: { agent: AgentSnapshot;
   );
 }
 
-export function HumanDetail({ human, currentUser, onUpdated }: { human: HumanMember; currentUser?: UserInfo | null; onUpdated?: (human: HumanMember) => void }) {
+export function HumanDetail({ human, currentUser, currentMemberRole, onUpdated }: { human: HumanMember; currentUser?: UserInfo | null; currentMemberRole?: 'owner' | 'admin' | 'member'; onUpdated?: (human: HumanMember) => void }) {
   const np = useCurrentNetworkPath();
   const agents = useAgentBeanStore((s) => s.agents);
   const ownedAgents = ownedAgentsForMember(agents, human.userId);
   const isSelf = currentUser?.id === human.userId;
   const canEdit = isSelf || currentUser?.role === 'admin';
+  const isOwner = currentMemberRole === 'owner';
+  const isAdmin = currentMemberRole === 'admin' || isOwner;
   const [editingDescription, setEditingDescription] = useState(false);
   const [description, setDescription] = useState(human.description ?? '');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<'remove' | 'transfer' | null>(null);
 
   useEffect(() => {
     setDescription(human.description ?? '');
@@ -540,6 +545,41 @@ export function HumanDetail({ human, currentUser, onUpdated }: { human: HumanMem
     }
     if (res.human) onUpdated?.(res.human);
     setEditingDescription(false);
+  };
+
+  const handleRoleChange = async (role: 'admin' | 'member') => {
+    setActionLoading('role');
+    setActionError(null);
+    const res = await memberEvents().updateRole({ targetUserId: human.userId, role });
+    setActionLoading(null);
+    if (!res.ok) {
+      setActionError(res.error ?? '角色变更失败');
+      return;
+    }
+    onUpdated?.({ ...human, role });
+  };
+
+  const handleConfirmAction = async (action: 'remove' | 'transfer') => {
+    setActionLoading(action);
+    setActionError(null);
+    if (action === 'remove') {
+      const res = await memberEvents().remove({ targetUserId: human.userId });
+      setActionLoading(null);
+      if (!res.ok) {
+        setActionError(res.error ?? '移除失败');
+        return;
+      }
+      onUpdated?.({ ...human, _removed: true } as any);
+    } else if (action === 'transfer') {
+      const res = await memberEvents().transferOwner({ targetUserId: human.userId });
+      setActionLoading(null);
+      if (!res.ok) {
+        setActionError(res.error ?? '转让失败');
+        return;
+      }
+      onUpdated?.({ ...human, role: 'owner' });
+    }
+    setConfirmAction(null);
   };
 
   return (
@@ -591,10 +631,56 @@ export function HumanDetail({ human, currentUser, onUpdated }: { human: HumanMem
       </Section>
 
       <Section title="信息" icon={<User size={15} />} compactGrid>
-        <InfoRow label="角色" value={<span className="rounded-md bg-orange-50 px-2 py-0.5 text-xs font-semibold text-orange-700">{human.role === 'owner' ? '所有者' : '成员'}</span>} />
+        <InfoRow label="角色" value={<span className="rounded-md bg-orange-50 px-2 py-0.5 text-xs font-semibold text-orange-700">{human.role === 'owner' ? '所有者' : human.role === 'admin' ? '管理员' : '成员'}</span>} />
         <InfoRow label="邮箱" value={human.email ?? (isSelf ? currentUser?.email ?? '未设置' : '未设置')} />
         <InfoRow label="加入时间" value={joinedAt ? new Date(joinedAt).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }) : '未知'} />
       </Section>
+
+      {/* Member management: role change, remove, transfer owner */}
+      {isAdmin && !isSelf && human.role !== 'owner' && (
+        <Section title="成员管理" icon={<Shield size={15} />}>
+          {actionError && <div className="mb-3 rounded-md bg-rose-50 px-3 py-2 text-xs text-rose-700">{actionError}</div>}
+          {confirmAction && (
+            <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {confirmAction === 'remove' && <p>确定要从团队中移除 <strong>{human.username}</strong> 吗？此操作不可撤销。</p>}
+              {confirmAction === 'transfer' && <p>确定要将团队所有权转让给 <strong>{human.username}</strong> 吗？你将降为管理员。</p>}
+              <div className="mt-2 flex gap-2">
+                <button onClick={() => handleConfirmAction(confirmAction)} disabled={!!actionLoading} className="rounded-md bg-rose-600 px-3 py-1 text-xs font-medium text-white hover:bg-rose-700 disabled:opacity-50">
+                  {actionLoading ? '处理中...' : '确认'}
+                </button>
+                <button onClick={() => setConfirmAction(null)} className="rounded-md border border-neutral-200 px-3 py-1 text-xs font-medium text-neutral-600 hover:bg-neutral-50">取消</button>
+              </div>
+            </div>
+          )}
+          <div className="flex flex-wrap gap-2">
+            {/* Role change */}
+            {isOwner && human.role !== 'admin' && (
+              <button onClick={() => handleRoleChange('admin')} disabled={!!actionLoading} className="inline-flex items-center gap-1 rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50">
+                <Shield size={13} />
+                设为管理员
+              </button>
+            )}
+            {isAdmin && human.role === 'admin' && (
+              <button onClick={() => handleRoleChange('member')} disabled={!!actionLoading} className="inline-flex items-center gap-1 rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50">
+                <User size={13} />
+                设为普通成员
+              </button>
+            )}
+            {/* Remove member */}
+            <button onClick={() => { setActionError(null); setConfirmAction('remove'); }} disabled={!!actionLoading} className="inline-flex items-center gap-1 rounded-md border border-rose-200 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50">
+              <X size={13} />
+              移除成员
+            </button>
+            {/* Transfer owner */}
+            {isOwner && (
+              <button onClick={() => { setActionError(null); setConfirmAction('transfer'); }} disabled={!!actionLoading} className="inline-flex items-center gap-1 rounded-md border border-amber-200 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-50">
+                <Zap size={13} />
+                转让所有权
+              </button>
+            )}
+          </div>
+        </Section>
+      )}
 
       <Section title={`创建的智能体 ${ownedAgents.length}`} icon={<Users size={15} />}>
         {ownedAgents.length === 0 ? (
