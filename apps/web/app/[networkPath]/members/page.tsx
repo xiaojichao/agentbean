@@ -205,7 +205,15 @@ export default function MembersPage() {
             <HumanDetail
               human={selectedHuman}
               currentUser={currentUser}
-              onUpdated={(next) => setHumanMembers((members) => members.map((member) => member.userId === next.userId ? { ...member, ...next } : member))}
+              currentMemberRole={humanMembers.find((h) => h.userId === currentUser?.id)?.role as 'owner' | 'admin' | 'member' | undefined}
+              onUpdated={(next) => {
+                if ((next as any)._removed) {
+                  setHumanMembers((members) => members.filter((m) => m.userId !== next.userId));
+                  setSelectedId(null);
+                } else {
+                  setHumanMembers((members) => members.map((member) => member.userId === next.userId ? { ...member, ...next } : member));
+                }
+              }}
             />
           )}
           {selectedId && !selectedAgent && tab !== 'profile' && <PlaceholderTab name={TABS.find((t) => t.id === tab)?.label ?? ''} />}

@@ -1,7 +1,7 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
-import { getWebSocket } from '@/lib/socket';
+import { getWebSocket, memberEvents } from '@/lib/socket';
 import { useRouter } from 'next/navigation';
 import { Globe, Lock, ChevronRight } from 'lucide-react';
 
@@ -16,6 +16,13 @@ export function NewChannelDialog({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [showUsers, setShowUsers] = useState(false);
+  const [teamHumans, setTeamHumans] = useState<Array<{ userId: string; username: string; role: string }>>([]);
+
+  useEffect(() => {
+    memberEvents().list().then((res) => {
+      if (res.ok && res.humans) setTeamHumans(res.humans);
+    });
+  }, []);
   const router = useRouter();
 
   const toggleAgent = (id: string) => {
@@ -117,13 +124,17 @@ export function NewChannelDialog({ onClose }: { onClose: () => void }) {
             </button>
             {showUsers && (
               <div className="space-y-1 max-h-32 overflow-auto rounded-md border border-neutral-200 p-2">
-                {mockUsers.map((u) => (
-                  <label key={u.id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-neutral-100 cursor-pointer">
-                    <input type="checkbox" checked={selectedUsers.has(u.id)} onChange={() => toggleUser(u.id)} />
-                    <span className="font-medium text-sm">{u.username}</span>
-                    <span className="text-xs text-neutral-400">{u.role}</span>
-                  </label>
-                ))}
+                {teamHumans.filter((u) => u.userId !== currentUser?.id).length === 0 ? (
+                  <div className="text-sm text-neutral-500 py-2 text-center">暂无其他成员</div>
+                ) : (
+                  teamHumans.filter((u) => u.userId !== currentUser?.id).map((u) => (
+                    <label key={u.userId} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-neutral-100 cursor-pointer">
+                      <input type="checkbox" checked={selectedUsers.has(u.userId)} onChange={() => toggleUser(u.userId)} />
+                      <span className="font-medium text-sm">{u.username}</span>
+                      <span className="text-xs text-neutral-400">{u.role === 'owner' ? '所有者' : u.role === 'admin' ? '管理员' : '成员'}</span>
+                    </label>
+                  ))
+                )}
               </div>
             )}
           </div>

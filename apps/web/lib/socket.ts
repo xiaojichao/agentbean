@@ -418,6 +418,9 @@ export function taskEvents(socket: Socket = getWebSocket()): TaskEvents {
 export interface MemberEvents {
   list(): Promise<{ ok: boolean; humans?: { userId: string; role: string; username: string; email?: string | null; description?: string | null; joinedAt?: number; createdAt?: number }[]; agents?: import('./schema').AgentSnapshot[]; error?: string }>;
   updateHuman(payload: { userId: string; description?: string | null }): Promise<{ ok: boolean; human?: { userId: string; role: string; username: string; email?: string | null; description?: string | null; joinedAt?: number; createdAt?: number }; error?: string }>;
+  updateRole(payload: { targetUserId: string; role: 'owner' | 'admin' | 'member' }): Promise<{ ok: boolean; member?: { id: string; teamId: string; userId: string; username: string; role: string }; error?: string }>;
+  remove(payload: { targetUserId: string }): Promise<{ ok: boolean; userId?: string; error?: string }>;
+  transferOwner(payload: { targetUserId: string }): Promise<{ ok: boolean; team?: { id: string; name: string }; member?: { id: string; teamId: string; userId: string; username: string; role: string }; error?: string }>;
 }
 
 export function memberEvents(socket: Socket = getWebSocket()): MemberEvents {
@@ -427,6 +430,15 @@ export function memberEvents(socket: Socket = getWebSocket()): MemberEvents {
     },
     updateHuman(payload) {
       return emitWithTimeout(socket, 'member:update-human', payload);
+    },
+    updateRole(payload) {
+      return emitWithTimeout(socket, 'member:update-role', payload);
+    },
+    remove(payload) {
+      return emitWithTimeout(socket, 'member:remove', payload);
+    },
+    transferOwner(payload) {
+      return emitWithTimeout(socket, 'member:transfer-owner', payload);
     },
   };
 }
