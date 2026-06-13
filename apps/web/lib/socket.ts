@@ -177,7 +177,7 @@ export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
       return emitWithTimeout(socket, 'agent:custom:list', payload);
     },
     updateConfig(payload) {
-      return emitWithTimeout(socket, 'agent:config:update', payload);
+      return emitWithTimeout(socket, 'agent:update-config', payload);
     },
     publish(agentId, networkId) {
       return emitWithTimeout(socket, 'agent:publish', { agentId, networkId });
@@ -324,7 +324,7 @@ export function joinEvents(socket: Socket = getWebSocket()): JoinEvents {
       return emitWithTimeout(socket, 'join:revoke', payload);
     },
     validate(payload) {
-      return emitWithTimeout(socket, 'auth:join:validate', payload);
+      return emitWithTimeout(socket, 'join:validate', payload);
     },
   };
 }
@@ -368,7 +368,7 @@ export interface DeviceEvents {
 export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
   return {
     list() {
-      return emitWithTimeout(socket, 'devices:list', {});
+      return emitWithTimeout(socket, 'device:list', {});
     },
     get(payload) {
       return emitWithTimeout(socket, 'device:get', payload);
