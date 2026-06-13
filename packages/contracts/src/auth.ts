@@ -10,6 +10,7 @@ export interface UserDto {
   displayName?: string;
   avatarUrl?: string;
   primaryTeamId?: ID;
+  email?: string | null;
 }
 
 export interface HumanMemberDto {
