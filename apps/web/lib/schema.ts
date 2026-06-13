@@ -110,6 +110,7 @@ export interface UserInfo {
   username: string;
   email: string | null;
   role: 'admin' | 'user';
+  primaryTeamId?: string;
 }
 
 export interface InviteInfo {
