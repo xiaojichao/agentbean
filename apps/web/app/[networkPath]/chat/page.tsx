@@ -263,6 +263,16 @@ export default function ChatPage() {
     } catch {
       setSavedIds(new Set());
     }
+    // Hydrate from server
+    messageReactionEvents().listSaved().then((res) => {
+      if (res.ok && res.messages) {
+        setSavedIds((prev) => {
+          const next = new Set(prev);
+          for (const msg of res.messages!) next.add(msg.id);
+          return next;
+        });
+      }
+    }).catch(() => {});
     setLoadedSavedKey(savedKey);
   }, [savedKey]);
 

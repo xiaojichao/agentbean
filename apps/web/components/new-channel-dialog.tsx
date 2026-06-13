@@ -59,8 +59,6 @@ export function NewChannelDialog({ onClose }: { onClose: () => void }) {
     });
   };
 
-  // Mock user list — in a real app this would come from members:list
-  const mockUsers = currentUser ? [currentUser] : [];
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
