@@ -176,8 +176,8 @@ export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
     listCustom(payload = {}) {
       return emitWithTimeout(socket, 'agent:custom:list', payload);
     },
-    updateConfig(payload) {
-      return emitWithTimeout(socket, 'agent:update-config', payload);
+    updateConfig({ id, ...rest }) {
+      return emitWithTimeout(socket, 'agent:update-config', { agentId: id, ...rest });
     },
     publish(agentId, networkId) {
       return emitWithTimeout(socket, 'agent:publish', { agentId, networkId });
@@ -248,9 +248,9 @@ export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
     update(payload) { return emitWithTimeout(socket, 'channel:update', payload); },
     members(channelId) { return emitWithTimeout(socket, 'channel:members', { channelId }); },
     addAgent(channelId, agentId) { return emitWithTimeout(socket, 'channel:add-agent', { channelId, agentId }); },
-    addMember(channelId, userId) { return emitWithTimeout(socket, 'channel:add-member', { channelId, userId }); },
+    addMember(channelId, userId) { return emitWithTimeout(socket, 'channel:add-member', { channelId, memberUserId: userId }); },
     removeAgent(channelId, agentId) { return emitWithTimeout(socket, 'channel:remove-agent', { channelId, agentId }); },
-    removeMember(channelId, userId) { return emitWithTimeout(socket, 'channel:remove-member', { channelId, userId }); },
+    removeMember(channelId, userId) { return emitWithTimeout(socket, 'channel:remove-member', { channelId, memberUserId: userId }); },
     leave(channelId) { return emitWithTimeout(socket, 'channel:leave', { channelId }); },
     archive(channelId) { return emitWithTimeout(socket, 'channel:archive', { channelId }); },
     delete(channelId) { return emitWithTimeout(socket, 'channel:delete', { channelId }); },
@@ -370,8 +370,8 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
     list() {
       return emitWithTimeout(socket, 'device:list', {});
     },
-    get(payload) {
-      return emitWithTimeout(socket, 'device:get', payload);
+    get({ id }) {
+      return emitWithTimeout(socket, 'device:get', { deviceId: id });
     },
     agentsList(deviceId) {
       return emitWithTimeout(socket, 'device:agents:list', { deviceId });
@@ -412,9 +412,9 @@ export function taskEvents(socket: Socket = getWebSocket()): TaskEvents {
   return {
     create(payload) { return emitWithTimeout(socket, 'task:create', payload); },
     list(channelId) { return emitWithTimeout(socket, 'task:list', { channelId }); },
-    update(payload) { return emitWithTimeout(socket, 'task:update', payload); },
-    delete(id) { return emitWithTimeout(socket, 'task:delete', { id }); },
-    reorder(id, sortOrder) { return emitWithTimeout(socket, 'task:reorder', { id, sortOrder }); },
+    update({ id, ...rest }) { return emitWithTimeout(socket, 'task:update', { taskId: id, ...rest }); },
+    delete(id) { return emitWithTimeout(socket, 'task:delete', { taskId: id }); },
+    reorder(id, sortOrder) { return emitWithTimeout(socket, 'task:reorder', { taskId: id, sortOrder }); },
   };
 }
 
@@ -431,8 +431,8 @@ export function memberEvents(socket: Socket = getWebSocket()): MemberEvents {
     list() {
       return emitWithTimeout(socket, 'members:list', {});
     },
-    updateHuman(payload) {
-      return emitWithTimeout(socket, 'member:update-human', payload);
+    updateHuman({ userId, ...rest }) {
+      return emitWithTimeout(socket, 'member:update-human', { targetUserId: userId, ...rest });
     },
     updateRole(payload) {
       return emitWithTimeout(socket, 'member:update-role', payload);
