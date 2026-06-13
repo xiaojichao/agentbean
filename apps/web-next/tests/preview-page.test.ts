@@ -49,6 +49,12 @@ describe('web-next preview page interactions', () => {
   test('renders an AgentBean-style preview workspace shell', () => {
     const html = readFileSync(new URL('../preview/index.html', import.meta.url), 'utf8');
 
+    expect(html).toContain('class="landing"');
+    expect(html).toContain('AgentBean 产品首页');
+    expect(html).toContain('让人类、本机 Agent 和远程设备上的 Agent 无缝协作');
+    expect(html).toContain('href="#app-workspace"');
+    expect(html).toContain('id="app-workspace"');
+    expect(html).toContain('cover-ai-news.png');
     expect(html).toContain('class="brand"');
     expect(html).toContain('私有 Agent 团队');
     expect(html).toContain('class="team-switcher"');

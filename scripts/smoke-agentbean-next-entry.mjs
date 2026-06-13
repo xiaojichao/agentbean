@@ -34,13 +34,16 @@ export async function collectAgentBeanNextEntrySmoke({
       'entry-root-html-agentbean',
       html.ok &&
         html.value.includes('<title>AgentBean</title>') &&
+        html.value.includes('class="landing"') &&
+        html.value.includes('让人类、本机 Agent 和远程设备上的 Agent 无缝协作') &&
+        html.value.includes('id="app-workspace"') &&
         html.value.includes('私有 Agent 团队') &&
         html.value.includes('team-switcher') &&
         html.value.includes('添加自定义 Agent') &&
         !html.value.includes('AgentBean Next Preview') &&
         !html.value.includes('Next local'),
       html.ok
-        ? 'AgentBean Next entry root page must serve the product preview shell, not the old or harness entry'
+        ? 'AgentBean Next entry root page must serve the landing-first product entry and preview workspace, not the old or harness entry'
         : `AgentBean Next entry root page could not be read: ${html.error}`,
     ),
     check(
@@ -147,4 +150,3 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log(args.json ? JSON.stringify(summary, null, 2) : formatText(summary));
   process.exitCode = summary.ok ? 0 : 1;
 }
-
