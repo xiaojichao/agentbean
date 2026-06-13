@@ -62,6 +62,9 @@ describe('server-next socket handlers', () => {
       reactMessage: vi.fn(async (payload) => makeSuccess({ payload })),
       saveMessage: vi.fn(async (payload) => makeSuccess({ payload })),
       listSavedMessages: vi.fn(async (payload) => makeSuccess({ payload })),
+      updateMemberRole: vi.fn(async (payload) => makeSuccess({ payload })),
+      removeMember: vi.fn(async (payload) => makeSuccess({ payload })),
+      transferOwner: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
 
     registerWebSocketHandlers(socket, app);
@@ -99,6 +102,9 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.message.react,
       WEB_EVENTS.message.save,
       WEB_EVENTS.message.listSaved,
+      WEB_EVENTS.member.updateRole,
+      WEB_EVENTS.member.remove,
+      WEB_EVENTS.member.transferOwner,
       WEB_EVENTS.dispatch.cancel,
       WEB_EVENTS.task.list,
       WEB_EVENTS.task.create,
