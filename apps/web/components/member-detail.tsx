@@ -154,7 +154,7 @@ export function AgentTopBar({ agent, device }: { agent: AgentSnapshot; device?: 
 }
 
 export function AgentDetail({ agent, device, tab }: { agent: AgentSnapshot; device?: DeviceInfo; tab: AgentMemberTab }) {
-  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const dms = useAgentBeanStore((s) => s.dms);
   const applyAgentStatus = useAgentBeanStore((s) => s.applyAgentStatus);
   const [workspaceRuns, setWorkspaceRuns] = useState<AgentWorkspaceRun[]>([]);
@@ -162,10 +162,10 @@ export function AgentDetail({ agent, device, tab }: { agent: AgentSnapshot; devi
   const [metrics, setMetrics] = useState<AgentMetricsSummary | null>(null);
 
   useEffect(() => {
-    if (!agent.id || !currentNetworkId) return;
+    if (!agent.id || !currentTeamId) return;
     let cancelled = false;
     setWorkspaceLoading(true);
-    fetchAgentWorkspace(currentNetworkId, agent.id)
+    fetchAgentWorkspace(currentTeamId, agent.id)
       .then((res) => {
         if (!cancelled && res.ok) setWorkspaceRuns(res.runs ?? []);
       })
@@ -173,7 +173,7 @@ export function AgentDetail({ agent, device, tab }: { agent: AgentSnapshot; devi
         if (!cancelled) setWorkspaceLoading(false);
       });
     return () => { cancelled = true; };
-  }, [agent.id, currentNetworkId]);
+  }, [agent.id, currentTeamId]);
 
   useEffect(() => {
     let cancelled = false;

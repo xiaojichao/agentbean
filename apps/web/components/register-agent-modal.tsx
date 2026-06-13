@@ -14,10 +14,10 @@ interface Props {
 }
 
 export function RegisterAgentModal({ open, onClose, discoveredAgent, mode = 'create' }: Props) {
-  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
-  const [networkId, setNetworkId] = useState(currentNetworkId);
+  const [networkId, setNetworkId] = useState(currentTeamId);
   const [visibility, setVisibility] = useState<'public' | 'private'>('private');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -26,11 +26,11 @@ export function RegisterAgentModal({ open, onClose, discoveredAgent, mode = 'cre
     if (discoveredAgent) {
       setName(discoveredAgent.name);
       setRole('');
-      setNetworkId(currentNetworkId);
+      setNetworkId(currentTeamId);
       setVisibility('private');
       setError('');
     }
-  }, [discoveredAgent, currentNetworkId]);
+  }, [discoveredAgent, currentTeamId]);
 
   if (!open || !discoveredAgent) return null;
 
@@ -82,7 +82,7 @@ export function RegisterAgentModal({ open, onClose, discoveredAgent, mode = 'cre
         if (res.ok) {
           setName('');
           setRole('');
-          setNetworkId(currentNetworkId);
+          setNetworkId(currentTeamId);
           setVisibility('private');
           onClose();
           alert('Agent 注册成功');

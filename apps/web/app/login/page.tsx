@@ -35,7 +35,7 @@ export default function LoginPage() {
         localStorage.setItem('agentbean.token', res.token);
         useAgentBeanStore.getState().setAuthToken(res.token);
         if (res.currentTeam?.id) {
-          useAgentBeanStore.getState().setCurrentNetworkId(res.currentTeam.id);
+          useAgentBeanStore.getState().setCurrentTeamId(res.currentTeam.id);
         }
         useAgentBeanStore.getState().setCurrentUser({
           id: user.id,

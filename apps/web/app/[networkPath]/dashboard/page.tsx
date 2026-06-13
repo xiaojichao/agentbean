@@ -7,7 +7,7 @@ import { getWebSocket } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import { daemonVersionDisplay } from '@/lib/daemon-version';
 
-type Tab = 'networks' | 'users' | 'devices' | 'agents';
+type Tab = 'teams' | 'users' | 'devices' | 'agents';
 
 interface AdminNetwork { id: string; ownerId: string; name: string; path: string | null; visibility: string; createdAt: number; members: { userId: string; role: string; username: string }[]; }
 interface AdminUser { id: string; username: string; email: string | null; role: string; createdAt: number; }
@@ -72,7 +72,7 @@ interface AdminAgent {
 }
 
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
-  { key: 'networks', label: '团队', icon: <Globe size={14} /> },
+  { key: 'teams', label: '团队', icon: <Globe size={14} /> },
   { key: 'users', label: '用户', icon: <Users size={14} /> },
   { key: 'devices', label: '设备', icon: <Monitor size={14} /> },
   { key: 'agents', label: 'Agent', icon: <Bot size={14} /> },
@@ -88,8 +88,8 @@ function emitWithTimeout(socket: any, event: string, payload: any): Promise<any>
 export default function AdminDashboardPage() {
   const conn = useAgentBeanStore((s) => s.conn);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
-  const [tab, setTab] = useState<Tab>('networks');
-  const [networks, setNetworks] = useState<AdminNetwork[]>([]);
+  const [tab, setTab] = useState<Tab>('teams');
+  const [teams, setNetworks] = useState<AdminNetwork[]>([]);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [devices, setDevices] = useState<AdminDevice[]>([]);
   const [agents, setAgents] = useState<AdminAgent[]>([]);
@@ -105,7 +105,7 @@ export default function AdminDashboardPage() {
     try {
       const res = await emitWithTimeout(socket, `admin:list-${t}`, {});
       if (res?.ok) {
-        if (t === 'networks') setNetworks(res.networks ?? []);
+        if (t === 'teams') setNetworks(res.teams ?? []);
         if (t === 'users') setUsers(res.users ?? []);
         if (t === 'devices') {
           setDevices(res.devices ?? []);
@@ -186,10 +186,10 @@ export default function AdminDashboardPage() {
       {/* Content */}
       {loading && <div className="py-8 text-center text-sm text-neutral-400">加载中...</div>}
 
-      {!loading && tab === 'networks' && <NetworksTable networks={networks} onDelete={(id) => handleDelete('network', id)} />}
+      {!loading && tab === 'teams' && <NetworksTable teams={teams} onDelete={(id) => handleDelete('network', id)} />}
       {!loading && tab === 'users' && <UsersTable users={users} onDelete={(id) => handleDelete('user', id)} />}
-      {!loading && tab === 'devices' && <DevicesTable devices={devices} networks={networks} onSelect={setSelectedDevice} />}
-      {!loading && tab === 'agents' && <AgentsTable agents={agents} networks={networks} onSelect={setSelectedAgent} onDelete={(id) => handleDelete('agent', id)} />}
+      {!loading && tab === 'devices' && <DevicesTable devices={devices} teams={teams} onSelect={setSelectedDevice} />}
+      {!loading && tab === 'agents' && <AgentsTable agents={agents} teams={teams} onSelect={setSelectedAgent} onDelete={(id) => handleDelete('agent', id)} />}
       {selectedDevice && <DeviceDetailDialog device={selectedDevice} users={users} onTransferOwner={handleTransferDeviceOwner} onClose={() => setSelectedDevice(null)} />}
       {selectedAgent && <AgentDetailDialog agent={selectedAgent} onClose={() => setSelectedAgent(null)} />}
       </div>
@@ -301,12 +301,12 @@ function DeleteButton({ onClick, disabled, label }: { onClick: () => void; disab
   );
 }
 
-function NetworksTable({ networks, onDelete }: { networks: AdminNetwork[]; onDelete: (id: string) => void }) {
+function NetworksTable({ teams, onDelete }: { teams: AdminNetwork[]; onDelete: (id: string) => void }) {
   const [expanded, setExpanded] = useState<string | null>(null);
-  if (networks.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无团队</div>;
+  if (teams.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无团队</div>;
   return (
     <div className="space-y-3">
-      {networks.map((n) => (
+      {teams.map((n) => (
         <div key={n.id} className="rounded-lg border border-neutral-200 overflow-hidden">
           <div className="flex items-center justify-between bg-neutral-50 px-4 py-3">
             <div className="flex items-center gap-3">
@@ -363,7 +363,7 @@ function UsersTable({ users, onDelete }: { users: AdminUser[]; onDelete: (id: st
   );
 }
 
-function DevicesTable({ devices, networks, onSelect }: { devices: AdminDevice[]; networks: AdminNetwork[]; onSelect: (device: AdminDevice) => void }) {
+function DevicesTable({ devices, teams, onSelect }: { devices: AdminDevice[]; teams: AdminNetwork[]; onSelect: (device: AdminDevice) => void }) {
   if (devices.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无设备</div>;
   return (
     <Table headers={['设备名称', '所属用户', '状态', 'Agent 数', '团队', '最后心跳']}>
@@ -377,7 +377,7 @@ function DevicesTable({ devices, networks, onSelect }: { devices: AdminDevice[];
           <td className="px-4 py-2.5 text-xs text-neutral-600">{d.userName ?? '未知用户'}</td>
           <td className="px-4 py-2.5"><StatusPill status={d.status} /></td>
           <td className="px-4 py-2.5">{d.agentCount}</td>
-          <td className="px-4 py-2.5 text-xs text-neutral-500">{d.networkName ?? networks.find((n) => n.id === d.networkId)?.name ?? '未知团队'}</td>
+          <td className="px-4 py-2.5 text-xs text-neutral-500">{d.networkName ?? teams.find((n) => n.id === d.networkId)?.name ?? '未知团队'}</td>
           <td className="px-4 py-2.5 text-xs text-neutral-500">{formatDateTime(d.lastSeenAt)}</td>
         </tr>
       ))}
@@ -385,7 +385,7 @@ function DevicesTable({ devices, networks, onSelect }: { devices: AdminDevice[];
   );
 }
 
-function AgentsTable({ agents, networks, onSelect, onDelete }: { agents: AdminAgent[]; networks: AdminNetwork[]; onSelect: (agent: AdminAgent) => void; onDelete: (id: string) => void }) {
+function AgentsTable({ agents, teams, onSelect, onDelete }: { agents: AdminAgent[]; teams: AdminNetwork[]; onSelect: (agent: AdminAgent) => void; onDelete: (id: string) => void }) {
   if (agents.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无 Agent</div>;
   return (
     <Table headers={['名称', '所属设备', '所属用户', '适配器', '状态', '可见性', '团队', '']}>
@@ -401,7 +401,7 @@ function AgentsTable({ agents, networks, onSelect, onDelete }: { agents: AdminAg
           <td className="px-4 py-2.5 font-mono text-xs text-neutral-500">{a.adapterKind}</td>
           <td className="px-4 py-2.5"><StatusPill status={a.status} /></td>
           <td className="px-4 py-2.5"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${a.visibility === 'public' ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'}`}>{visibilityLabel(a.visibility)}</span></td>
-          <td className="px-4 py-2.5 text-xs text-neutral-500">{a.networkName ?? networks.find((n) => n.id === a.networkId)?.name ?? '默认团队'}</td>
+          <td className="px-4 py-2.5 text-xs text-neutral-500">{a.networkName ?? teams.find((n) => n.id === a.networkId)?.name ?? '默认团队'}</td>
           <td className="px-4 py-2.5"><DeleteButton onClick={() => onDelete(a.id)} label="Agent" /></td>
         </tr>
       ))}

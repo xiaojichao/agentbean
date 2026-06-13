@@ -344,11 +344,11 @@ function ChoiceButton({
 }
 
 function ServerPanel() {
-  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
-  const networks = useAgentBeanStore((s) => s.networks);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
+  const teams = useAgentBeanStore((s) => s.teams);
   const agents = useAgentBeanStore((s) => s.agents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
-  const setCurrentNetworkId = useAgentBeanStore((s) => s.setCurrentNetworkId);
+  const setCurrentTeamId = useAgentBeanStore((s) => s.setCurrentTeamId);
   const router = useRouter();
 
   const [networkName, setNetworkName] = useState('');
@@ -365,7 +365,7 @@ function ServerPanel() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [joinError, setJoinError] = useState('');
 
-  const currentNetwork = networks.find((n) => n.id === currentNetworkId);
+  const currentNetwork = teams.find((n) => n.id === currentTeamId);
 
   const displayedName = currentNetwork?.name ?? '当前团队';
   if (!networkName && displayedName) {
@@ -444,9 +444,9 @@ function ServerPanel() {
       return;
     }
     setShowDeleteConfirm(false);
-    const fallback = res.fallbackNetwork ?? networks.find((network) => network.id !== currentNetwork.id) ?? null;
+    const fallback = res.fallbackTeam ?? teams.find((network) => network.id !== currentNetwork.id) ?? null;
     if (fallback) {
-      setCurrentNetworkId(fallback.id);
+      setCurrentTeamId(fallback.id);
       router.replace(`/${fallback.path ?? 'default'}/settings`);
     } else {
       router.replace('/login');

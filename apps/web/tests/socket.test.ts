@@ -7,14 +7,14 @@ afterEach(() => {
 
 describe('artifactUploadUrl', () => {
   it('builds a backend authenticated upload URL', () => {
-    expect(artifactUploadUrl('team one/x')).toBe('http://localhost:4000/api/networks/team%20one%2Fx/artifacts/upload?token=');
+    expect(artifactUploadUrl('team one/x')).toBe('http://localhost:4000/api/teams/team%20one%2Fx/artifacts/upload?token=');
   });
 
   it('keeps the same-origin proxy as an upload fallback', () => {
-    expect(artifactUploadProxyUrl('team one/x')).toBe('/api/networks/team%20one%2Fx/artifacts/upload?token=');
+    expect(artifactUploadProxyUrl('team one/x')).toBe('/api/teams/team%20one%2Fx/artifacts/upload?token=');
     expect(artifactUploadFallbackUrls('team one/x')).toEqual([
-      'http://localhost:4000/api/networks/team%20one%2Fx/artifacts/upload?token=',
-      '/api/networks/team%20one%2Fx/artifacts/upload?token=',
+      'http://localhost:4000/api/teams/team%20one%2Fx/artifacts/upload?token=',
+      '/api/teams/team%20one%2Fx/artifacts/upload?token=',
     ]);
   });
 
@@ -37,7 +37,7 @@ describe('artifactUploadUrl', () => {
     form.append('file', new Blob(['hello'], { type: 'text/plain' }), 'hello.txt');
 
     await expect(uploadArtifact('default', form)).resolves.toMatchObject({ id: 'artifact-1' });
-    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://localhost:4000/api/networks/default/artifacts/upload?token=', expect.objectContaining({ method: 'POST' }));
-    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/networks/default/artifacts/upload?token=', expect.objectContaining({ method: 'POST' }));
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://localhost:4000/api/teams/default/artifacts/upload?token=', expect.objectContaining({ method: 'POST' }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/teams/default/artifacts/upload?token=', expect.objectContaining({ method: 'POST' }));
   });
 });

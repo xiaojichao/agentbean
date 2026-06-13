@@ -79,7 +79,7 @@ export default function TasksPage() {
   const dms = useAgentBeanStore((s) => s.dms);
   const agents = useAgentBeanStore((s) => s.agents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
-  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
   const applyChannelsSnapshot = useAgentBeanStore((s) => s.applyChannelsSnapshot);
   const applyDmsSnapshot = useAgentBeanStore((s) => s.applyDmsSnapshot);
@@ -376,7 +376,7 @@ export default function TasksPage() {
         form.append('channelId', selectedTask.channelId);
         form.append('uploaderId', currentUser.id);
         form.append('file', file);
-        uploaded.push(await uploadArtifact(currentNetworkId, form));
+        uploaded.push(await uploadArtifact(currentTeamId, form));
       }
       setThreadAttachments((prev) => [...prev, ...uploaded]);
     } catch (err) {

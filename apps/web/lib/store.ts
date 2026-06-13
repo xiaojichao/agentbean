@@ -1,6 +1,6 @@
 'use client';
 import { create } from 'zustand';
-import type { AgentSnapshot, ChannelSummary, ChatMessage, ConnState, OutboundMessage, DiscoveredAgent, RuntimeInfo, NetworkSummary, AgentMetricsSummary, UserInfo, DeviceInfo } from './schema.js';
+import type { AgentSnapshot, ChannelSummary, ChatMessage, ConnState, OutboundMessage, DiscoveredAgent, RuntimeInfo, TeamSummary, AgentMetricsSummary, UserInfo, DeviceInfo } from './schema.js';
 import type { DmChannel } from './socket.js';
 import { agentVisibleInNetwork } from './agent-scope';
 
@@ -165,8 +165,8 @@ interface State {
   discovered: DiscoveredAgent[];
   runtimes: RuntimeInfo[];
   discovering: boolean;
-  networks: NetworkSummary[];
-  currentNetworkId: string;
+  teams: TeamSummary[];
+  currentTeamId: string;
   currentUser: UserInfo | null;
   authToken: string | null;
   agentMetrics: Record<string, AgentMetricsSummary>;
@@ -185,11 +185,11 @@ interface State {
   setDiscovered(list: DiscoveredAgent[]): void;
   setRuntimes(list: RuntimeInfo[]): void;
   setDiscovering(v: boolean): void;
-  applyNetworksSnapshot(list: NetworkSummary[]): void;
-  setCurrentNetworkId(id: string): void;
+  applyTeamsSnapshot(list: TeamSummary[]): void;
+  setCurrentTeamId(id: string): void;
   setCurrentUser(user: UserInfo | null): void;
   setAuthToken(token: string | null): void;
-  addNetwork(n: NetworkSummary): void;
+  addTeam(n: TeamSummary): void;
   applyAgentMetrics(list: AgentMetricsSummary[]): void;
   applyDevicesSnapshot(list: DeviceInfo[]): void;
   applyDeviceStatus(device: DeviceInfo): void;
@@ -205,19 +205,19 @@ export const useAgentBeanStore = create<State>((set) => ({
   discovered: [],
   runtimes: [],
   discovering: false,
-  networks: [],
-  currentNetworkId: 'default',
+  teams: [],
+  currentTeamId: 'default',
   currentUser: null,
   authToken: null,
   agentMetrics: {},
   devices: {},
   setConn(conn) { set({ conn }); },
   applyAgentsSnapshot(list) {
-    set((s) => ({ agents: agentListToMap(list, s.currentNetworkId) }));
+    set((s) => ({ agents: agentListToMap(list, s.currentTeamId) }));
   },
   applyAgentStatus(snap) {
     set((s) => {
-      if (!agentVisibleInNetwork(snap, s.currentNetworkId)) {
+      if (!agentVisibleInNetwork(snap, s.currentTeamId)) {
         if (!s.agents[snap.id]) return s;
         const next = { ...s.agents };
         delete next[snap.id];
@@ -225,7 +225,7 @@ export const useAgentBeanStore = create<State>((set) => ({
       }
       const merged = { ...s.agents[snap.id], ...snap };
       const others = Object.values(s.agents).filter((agent) => agent.id !== snap.id);
-      return { agents: agentListToMap([...others, merged], s.currentNetworkId) };
+      return { agents: agentListToMap([...others, merged], s.currentTeamId) };
     });
   },
   addAgent(agent) {
@@ -260,12 +260,12 @@ export const useAgentBeanStore = create<State>((set) => ({
   setDiscovered(list) { set({ discovered: list }); },
   setRuntimes(list) { set({ runtimes: list }); },
   setDiscovering(v) { set({ discovering: v }); },
-  applyNetworksSnapshot(list) { set({ networks: list }); },
-  setCurrentNetworkId(id) {
+  applyTeamsSnapshot(list) { set({ teams: list }); },
+  setCurrentTeamId(id) {
     set((s) => {
-      if (s.currentNetworkId === id) return s;
+      if (s.currentTeamId === id) return s;
       return {
-        currentNetworkId: id,
+        currentTeamId: id,
         agents: {},
         channels: [],
         dms: [],
@@ -278,7 +278,7 @@ export const useAgentBeanStore = create<State>((set) => ({
   },
   setCurrentUser(user) { set({ currentUser: user }); },
   setAuthToken(token) { set({ authToken: token }); },
-  addNetwork(n) { set((s) => ({ networks: [...s.networks, n] })); },
+  addTeam(n) { set((s) => ({ teams: [...s.teams, n] })); },
   applyAgentMetrics(list) {
     const map: Record<string, AgentMetricsSummary> = {};
     for (const m of list) map[m.agentId] = m;
@@ -291,7 +291,7 @@ export const useAgentBeanStore = create<State>((set) => ({
   },
   applyDeviceStatus(device) {
     set((s) => {
-      if (device.networkId && device.networkId !== s.currentNetworkId) {
+      if (device.networkId && device.networkId !== s.currentTeamId) {
         const existing = s.devices[device.id];
         if (!existing) return s;
         return { devices: { ...s.devices, [device.id]: { ...existing, ...device } } };
@@ -302,7 +302,7 @@ export const useAgentBeanStore = create<State>((set) => ({
 }));
 
 export function useCurrentNetworkPath(): string {
-  const networks = useAgentBeanStore((s) => s.networks);
-  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
-  return networks.find((n) => n.id === currentNetworkId)?.path ?? 'default';
+  const teams = useAgentBeanStore((s) => s.teams);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
+  return teams.find((n) => n.id === currentTeamId)?.path ?? 'default';
 }

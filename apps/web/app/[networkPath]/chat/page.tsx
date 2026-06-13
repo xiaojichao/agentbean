@@ -117,7 +117,7 @@ export default function ChatPage() {
   const channels = useAgentBeanStore((s) => s.channels);
   const agents = useAgentBeanStore((s) => s.agents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
-  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
   const applyChannelsSnapshot = useAgentBeanStore((s) => s.applyChannelsSnapshot);
   const dms = useAgentBeanStore((s) => s.dms);
@@ -206,7 +206,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     setProfileAgentCache({});
-  }, [currentNetworkId]);
+  }, [currentTeamId]);
 
   // Subscribe to channels + DMs
   useEffect(() => {
@@ -663,7 +663,7 @@ export default function ChatPage() {
         form.append('uploaderId', currentUser.id);
         form.append('file', file);
         try {
-          const artifact = await uploadArtifact(currentNetworkId, form);
+          const artifact = await uploadArtifact(currentTeamId, form);
           setTargetAttachments((prev) => prev.map((item) => item.localId === attachment.localId
             ? { ...item, status: 'ready', artifact, mimeType: artifact.mimeType || item.mimeType, sizeBytes: artifact.sizeBytes }
             : item));
@@ -3550,14 +3550,14 @@ function ActivityView({ onJump, humanProfiles }: { onJump: (channelId: string) =
   const dms = useAgentBeanStore((s) => s.dms);
   const agents = useAgentBeanStore((s) => s.agents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
-  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const visibleIds = visibleConversationIds(channels, dms);
 
   useEffect(() => {
     channelEvents().searchMessages('', 100).then((res) => {
       if (res.ok && res.messages) setRecent(res.messages);
     });
-  }, [currentNetworkId]);
+  }, [currentTeamId]);
 
   const allMessages = messagesForVisibleConversations(uniqueMessages([...recent, ...Object.values(messagesByChannel).flat()]), visibleIds)
     .filter((m) => m.senderKind !== 'system')
@@ -3637,14 +3637,14 @@ function SavedView({ savedIds, onUnsave, onJump, humanProfiles }: { savedIds: Se
   const dms = useAgentBeanStore((s) => s.dms);
   const agents = useAgentBeanStore((s) => s.agents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
-  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const visibleIds = visibleConversationIds(channels, dms);
 
   useEffect(() => {
     channelEvents().searchMessages('', 200).then((res) => {
       if (res.ok && res.messages) setRecent(res.messages);
     });
-  }, [currentNetworkId]);
+  }, [currentTeamId]);
 
   const savedMessages = messagesForVisibleConversations(uniqueMessages([...recent, ...Object.values(messagesByChannel).flat()]), visibleIds)
     .filter((m) => savedIds.has(m.id))

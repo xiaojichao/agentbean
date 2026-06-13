@@ -180,7 +180,7 @@ export default function DevicesPage() {
   const devices = useAgentBeanStore((s) => s.devices);
   const applyDevicesSnapshot = useAgentBeanStore((s) => s.applyDevicesSnapshot);
   const applyDeviceStatus = useAgentBeanStore((s) => s.applyDeviceStatus);
-  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const routeDeviceId = typeof params.id === 'string' ? params.id : null;
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -281,14 +281,14 @@ export default function DevicesPage() {
             setDeviceName={setDeviceName}
             showDeleteConfirm={showDeleteConfirm}
             setShowDeleteConfirm={setShowDeleteConfirm}
-            currentNetworkId={currentNetworkId}
+            currentTeamId={currentTeamId}
           />
         )}
         </div>
       </div>
 
       {/* Add Device Dialog */}
-      {showAddDialog && <AddDeviceDialog onClose={() => setShowAddDialog(false)} currentNetworkId={currentNetworkId} />}
+      {showAddDialog && <AddDeviceDialog onClose={() => setShowAddDialog(false)} currentTeamId={currentTeamId} />}
     </div>
   );
 }
@@ -302,7 +302,7 @@ function EmptyState() {
   );
 }
 
-function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName, showDeleteConfirm, setShowDeleteConfirm, currentNetworkId }: {
+function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName, showDeleteConfirm, setShowDeleteConfirm, currentTeamId }: {
   device: { id: string; userId?: string | null; ownerName?: string | null; userName?: string | null; canManage?: boolean; isLocal?: boolean; hostname?: string; status: string; lastSeenAt: number; agentIds: string[]; runtimes?: any[]; connectCommand?: string | null; latestDaemonVersion?: string | null; daemonUpdateAvailable?: boolean; daemonVersionInfo?: { current: string | null; latest: string | null; updateAvailable: boolean; status: 'current' | 'update-available' | 'unknown' }; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string; daemonVersion?: string } | null };
   editName: boolean;
   setEditName: (v: boolean) => void;
@@ -310,7 +310,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   setDeviceName: (v: string) => void;
   showDeleteConfirm: boolean;
   setShowDeleteConfirm: (v: boolean) => void;
-  currentNetworkId: string | null;
+  currentTeamId: string | null;
 }) {
   const [inviteCommand, setInviteCommand] = useState('');
   const [copied, setCopied] = useState(false);
@@ -409,12 +409,12 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   }, [agentosAgents, customAgents]);
 
   const scanWorkspaces = async () => {
-    if (!currentNetworkId) return;
+    if (!currentTeamId) return;
     setWorkspaceLoading(true);
     setWorkspaceError('');
     try {
       const results = await Promise.all(workspaceCandidates.map(async (agent) => {
-        const res = await fetchAgentWorkspace(currentNetworkId, agent.id);
+        const res = await fetchAgentWorkspace(currentTeamId, agent.id);
         return {
           id: agent.id,
           name: agent.name,
@@ -446,7 +446,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const generateConnect = async () => {
     setGenError('');
     setInviteCommand('');
-    const res = await authEvents().inviteCreate({ networkId: currentNetworkId ?? undefined, purpose: 'device' });
+    const res = await authEvents().inviteCreate({ networkId: currentTeamId ?? undefined, purpose: 'device' });
     if (res.ok && res.invite?.command) {
       const resolved = getResolvedServerUrl();
       const command = res.invite.command.replace(/--server-url\s+\S+/, `--server-url ${resolved}`);
@@ -669,7 +669,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
       {showAddCustom && (
         <AddCustomAgentDialog
           deviceId={device.id}
-          networkId={currentNetworkId}
+          networkId={currentTeamId}
           daemonVersion={device.systemInfo?.daemonVersion ?? device.daemonVersionInfo?.current ?? null}
           runtimes={runtimeList}
           onClose={() => setShowAddCustom(false)}
@@ -717,7 +717,7 @@ function InfoCard({ label, value, hint, tone }: { label: string; value: string; 
   );
 }
 
-function AddDeviceDialog({ onClose, currentNetworkId }: { onClose: () => void; currentNetworkId: string | null }) {
+function AddDeviceDialog({ onClose, currentTeamId }: { onClose: () => void; currentTeamId: string | null }) {
   const [inviteCommand, setInviteCommand] = useState('');
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -726,7 +726,7 @@ function AddDeviceDialog({ onClose, currentNetworkId }: { onClose: () => void; c
   const generateCommand = async () => {
     setLoading(true);
     setError('');
-    const res = await authEvents().inviteCreate({ networkId: currentNetworkId ?? undefined, purpose: 'device' });
+    const res = await authEvents().inviteCreate({ networkId: currentTeamId ?? undefined, purpose: 'device' });
     setLoading(false);
     if (res.ok && res.invite?.command) {
       const resolved = getResolvedServerUrl();
@@ -1023,15 +1023,15 @@ function AgentRow({ agent, icon, iconBg, onSelectNetwork, onSelectAgent, onDelet
 }
 
 function SelectNetworkDialog({ agent, onClose, onPublishedChange }: { agent: any; onClose: () => void; onPublishedChange: (agentId: string, networkId: string, published: boolean) => void }) {
-  const networks = useAgentBeanStore((s) => s.networks);
+  const teams = useAgentBeanStore((s) => s.teams);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const [publishedIds, setPublishedIds] = useState<Set<string>>(new Set(agent.publishedNetworkIds ?? []));
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
   const isCustom = agent.source === 'custom' || agent.category === 'executor-hosted';
   const visibleNetworks = isCustom
-    ? networks.filter((n) => n.visibility === 'private' || n.ownerId === currentUser?.id)
-    : networks;
+    ? teams.filter((n) => n.visibility === 'private' || n.ownerId === currentUser?.id)
+    : teams;
 
   const toggle = async (networkId: string) => {
     setLoadingId(networkId);

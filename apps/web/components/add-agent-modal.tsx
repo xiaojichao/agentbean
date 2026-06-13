@@ -34,12 +34,12 @@ const CATEGORY_OPTIONS: { value: AgentCategory; label: string }[] = [
 ];
 
 export function AddAgentModal({ open, onClose }: Props) {
-  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
   const [adapterKind, setAdapterKind] = useState<AdapterKind | ''>('claude-code');
   const [category, setCategory] = useState<AgentCategory>('executor-hosted');
-  const [networkId, setNetworkId] = useState(currentNetworkId);
+  const [networkId, setNetworkId] = useState(currentTeamId);
   const [visibility, setVisibility] = useState<'public' | 'private'>('private');
   const [command, setCommand] = useState('');
   const [argsStr, setArgsStr] = useState('');
@@ -55,9 +55,9 @@ export function AddAgentModal({ open, onClose }: Props) {
       setArgsStr('');
       setCwd('');
       setOwnerId('');
-      setNetworkId(currentNetworkId);
+      setNetworkId(currentTeamId);
     }
-  }, [open, currentNetworkId]);
+  }, [open, currentTeamId]);
 
   if (!open) return null;
 
@@ -102,7 +102,7 @@ export function AddAgentModal({ open, onClose }: Props) {
           setRole('');
           setAdapterKind('claude-code');
           setCategory('executor-hosted');
-          setNetworkId(currentNetworkId);
+          setNetworkId(currentTeamId);
           setVisibility('private');
           setCommand('');
           setArgsStr('');
