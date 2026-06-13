@@ -256,6 +256,20 @@ export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
   };
 }
 
+export interface MessageReactionEvents {
+  react(messageId: string, on: boolean, emoji?: string): Promise<{ ok: boolean; messageId?: string; error?: string }>;
+  save(messageId: string, on: boolean): Promise<{ ok: boolean; messageId?: string; error?: string }>;
+  listSaved(): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
+}
+
+export function messageReactionEvents(socket: Socket = getWebSocket()): MessageReactionEvents {
+  return {
+    react(messageId, on, emoji) { return emitWithTimeout(socket, 'message:react', { messageId, on, emoji: emoji || '❤️' }); },
+    save(messageId, on) { return emitWithTimeout(socket, 'message:save', { messageId, on }); },
+    listSaved() { return emitWithTimeout(socket, 'message:list-saved', {}); },
+  };
+}
+
 export interface AuthEvents {
   register(payload: { username: string; password: string; email?: string; inviteToken?: string; sessionId?: string }): Promise<{ ok: boolean; token?: string; userId?: string; username?: string; email?: string | null; role?: 'admin' | 'user'; networkId?: string; networkPath?: string; error?: string }>;
   login(payload: { username: string; password: string; joinCode?: string }): Promise<{ ok: boolean; token?: string; userId?: string; username?: string; email?: string | null; role?: 'admin' | 'user'; networkId?: string; networkPath?: string; error?: string }>;

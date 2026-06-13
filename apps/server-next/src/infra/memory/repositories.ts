@@ -33,6 +33,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const artifacts = new Map<string, ArtifactRecord>();
   const workspaceRuns = new Map<string, WorkspaceRunRecord>();
   const tasks = new Map<string, TaskRecord>();
+  const reactions = new Map<string, { id: string; messageId: string; userId: string; emoji: string; createdAt: number }>();
+  const savedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
 
   return {
     users: {
@@ -606,6 +608,51 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         }
         tasks.delete(input.taskId);
         return task;
+      },
+    },
+    reactions: {
+      async toggle(input) {
+        const key = `${input.messageId}:${input.userId}:${input.emoji}`;
+        if (input.on) {
+          reactions.set(key, { id: input.id, messageId: input.messageId, userId: input.userId, emoji: input.emoji, createdAt: input.createdAt });
+        } else {
+          reactions.delete(key);
+        }
+      },
+      async countByMessage(messageId) {
+        const counts: Record<string, number> = {};
+        for (const r of reactions.values()) {
+          if (r.messageId === messageId) {
+            counts[r.emoji] = (counts[r.emoji] ?? 0) + 1;
+          }
+        }
+        return counts;
+      },
+      async getUserReaction(messageId, userId) {
+        for (const r of reactions.values()) {
+          if (r.messageId === messageId && r.userId === userId) {
+            return r.emoji;
+          }
+        }
+        return null;
+      },
+    },
+    savedMessages: {
+      async toggle(input) {
+        const key = `${input.messageId}:${input.userId}`;
+        if (input.on) {
+          savedMessages.set(key, { id: input.id, messageId: input.messageId, userId: input.userId, teamId: input.teamId, channelId: input.channelId, createdAt: input.createdAt });
+        } else {
+          savedMessages.delete(key);
+        }
+      },
+      async listByUser(input) {
+        return Array.from(savedMessages.values())
+          .filter((s) => s.userId === input.userId && s.teamId === input.teamId)
+          .sort((a, b) => b.createdAt - a.createdAt);
+      },
+      async isSaved(messageId, userId) {
+        return savedMessages.has(`${messageId}:${userId}`);
       },
     },
   };

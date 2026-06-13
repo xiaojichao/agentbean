@@ -1187,6 +1187,67 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return existing;
       },
     },
+    reactions: {
+      async toggle(input) {
+        if (input.on) {
+          teamDb
+            .prepare('INSERT OR IGNORE INTO message_reactions (id, message_id, user_id, emoji, created_at) VALUES (?, ?, ?, ?, ?)')
+            .run(input.id, input.messageId, input.userId, input.emoji, input.createdAt);
+        } else {
+          teamDb
+            .prepare('DELETE FROM message_reactions WHERE message_id = ? AND user_id = ? AND emoji = ?')
+            .run(input.messageId, input.userId, input.emoji);
+        }
+      },
+      async countByMessage(messageId) {
+        const rows = teamDb
+          .prepare('SELECT emoji, COUNT(*) as cnt FROM message_reactions WHERE message_id = ? GROUP BY emoji')
+          .all(messageId);
+        const counts: Record<string, number> = {};
+        for (const row of rows) {
+          counts[sqliteText(row, 'emoji')] = sqliteNumber(row, 'cnt');
+        }
+        return counts;
+      },
+      async getUserReaction(messageId, userId) {
+        const row = teamDb
+          .prepare('SELECT emoji FROM message_reactions WHERE message_id = ? AND user_id = ? LIMIT 1')
+          .get(messageId, userId);
+        return row ? sqliteText(row, 'emoji') : null;
+      },
+    },
+    savedMessages: {
+      async toggle(input) {
+        if (input.on) {
+          teamDb
+            .prepare('INSERT OR IGNORE INTO saved_messages (id, message_id, user_id, team_id, channel_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+            .run(input.id, input.messageId, input.userId, input.teamId, input.channelId, input.createdAt);
+        } else {
+          teamDb
+            .prepare('DELETE FROM saved_messages WHERE message_id = ? AND user_id = ?')
+            .run(input.messageId, input.userId);
+        }
+      },
+      async listByUser(input) {
+        return teamDb
+          .prepare('SELECT * FROM saved_messages WHERE user_id = ? AND team_id = ? ORDER BY created_at DESC')
+          .all(input.userId, input.teamId)
+          .map((row) => ({
+            id: sqliteText(row, 'id'),
+            messageId: sqliteText(row, 'message_id'),
+            userId: sqliteText(row, 'user_id'),
+            teamId: sqliteText(row, 'team_id'),
+            channelId: sqliteText(row, 'channel_id'),
+            createdAt: sqliteNumber(row, 'created_at'),
+          }));
+      },
+      async isSaved(messageId, userId) {
+        const row = teamDb
+          .prepare('SELECT 1 FROM saved_messages WHERE message_id = ? AND user_id = ?')
+          .get(messageId, userId);
+        return !!row;
+      },
+    },
   };
 }
 

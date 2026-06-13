@@ -76,6 +76,9 @@ export interface ServerNextUseCases {
   failTimedOutDispatches(input: { olderThan: number }): Promise<Ack<{ dispatches: DispatchDto[] }>>;
   receiveDispatchResult(input: ReceiveDispatchResultInput): Promise<Ack<ReceiveDispatchResultResult>>;
   receiveDispatchError(input: ReceiveDispatchErrorInput): Promise<Ack<ReceiveDispatchErrorResult>>;
+  reactMessage(input: ReactMessageInput): Promise<Ack<{ messageId: string }>>;
+  saveMessage(input: SaveMessageInput): Promise<Ack<{ messageId: string }>>;
+  listSavedMessages(input: ListSavedMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
 }
 
 export interface RegisterUserInput {
@@ -500,6 +503,26 @@ export interface ReceiveDispatchErrorInput {
 
 export interface ReceiveDispatchErrorResult {
   dispatch: DispatchDto;
+}
+
+export interface ReactMessageInput {
+  userId: string;
+  teamId: string;
+  messageId: string;
+  emoji?: string;
+  on: boolean;
+}
+
+export interface SaveMessageInput {
+  userId: string;
+  teamId: string;
+  messageId: string;
+  on: boolean;
+}
+
+export interface ListSavedMessagesInput {
+  userId: string;
+  teamId: string;
 }
 
 export interface CreateServerNextUseCasesInput {
@@ -2135,6 +2158,85 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
 
       return makeSuccess({ dispatch: toDispatchDto(failed.dispatch) });
+    },
+
+    async reactMessage(reactInput) {
+      if (!(await repositories.teams.isMember(reactInput.teamId, reactInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const message = await repositories.messages.getById(reactInput.messageId);
+      if (!message || message.teamId !== reactInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Message not found');
+      }
+      const channelAccess = await ensureUserCanViewChannel(repositories, {
+        userId: reactInput.userId,
+        teamId: reactInput.teamId,
+        channelId: message.channelId,
+      });
+      if (!channelAccess.ok) {
+        return channelAccess;
+      }
+      const emoji = reactInput.emoji || '❤️';
+      await repositories.reactions.toggle({
+        id: ids.nextId(),
+        messageId: message.id,
+        userId: reactInput.userId,
+        emoji,
+        createdAt: clock.now(),
+        on: reactInput.on,
+      });
+      return makeSuccess({ messageId: message.id });
+    },
+
+    async saveMessage(saveInput) {
+      if (!(await repositories.teams.isMember(saveInput.teamId, saveInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const message = await repositories.messages.getById(saveInput.messageId);
+      if (!message || message.teamId !== saveInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Message not found');
+      }
+      const channelAccess = await ensureUserCanViewChannel(repositories, {
+        userId: saveInput.userId,
+        teamId: saveInput.teamId,
+        channelId: message.channelId,
+      });
+      if (!channelAccess.ok) {
+        return channelAccess;
+      }
+      await repositories.savedMessages.toggle({
+        id: ids.nextId(),
+        messageId: message.id,
+        userId: saveInput.userId,
+        teamId: saveInput.teamId,
+        channelId: message.channelId,
+        createdAt: clock.now(),
+        on: saveInput.on,
+      });
+      return makeSuccess({ messageId: message.id });
+    },
+
+    async listSavedMessages(listInput) {
+      if (!(await repositories.teams.isMember(listInput.teamId, listInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const saved = await repositories.savedMessages.listByUser({
+        userId: listInput.userId,
+        teamId: listInput.teamId,
+      });
+      const messages: MessageDto[] = [];
+      for (const s of saved) {
+        const msg = await repositories.messages.getById(s.messageId);
+        if (!msg) continue;
+        const channelAccess = await ensureUserCanViewChannel(repositories, {
+          userId: listInput.userId,
+          teamId: listInput.teamId,
+          channelId: msg.channelId,
+        });
+        if (!channelAccess.ok) continue;
+        messages.push(msg);
+      }
+      return makeSuccess({ messages });
     },
   };
 }

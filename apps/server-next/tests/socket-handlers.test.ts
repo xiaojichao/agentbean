@@ -59,6 +59,9 @@ describe('server-next socket handlers', () => {
       updateTask: vi.fn(async (payload) => makeSuccess({ payload })),
       deleteTask: vi.fn(async (payload) => makeSuccess({ payload })),
       reorderTask: vi.fn(async (payload) => makeSuccess({ payload })),
+      reactMessage: vi.fn(async (payload) => makeSuccess({ payload })),
+      saveMessage: vi.fn(async (payload) => makeSuccess({ payload })),
+      listSavedMessages: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
 
     registerWebSocketHandlers(socket, app);
@@ -93,6 +96,9 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.agent.delete,
       WEB_EVENTS.message.send,
       WEB_EVENTS.message.search,
+      WEB_EVENTS.message.react,
+      WEB_EVENTS.message.save,
+      WEB_EVENTS.message.listSaved,
       WEB_EVENTS.dispatch.cancel,
       WEB_EVENTS.task.list,
       WEB_EVENTS.task.create,
@@ -270,6 +276,22 @@ describe('server-next socket handlers', () => {
       taskId: 'task-2',
       sortOrder: 100,
     });
+    await socket.trigger(WEB_EVENTS.message.react, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    });
+    await socket.trigger(WEB_EVENTS.message.save, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    });
+    await socket.trigger(WEB_EVENTS.message.listSaved, {
+      userId: 'user-1',
+      teamId: 'team-1',
+    });
 
     expect(app.registerUser).toHaveBeenCalledWith({ username: 'shaw' });
     expect(app.whoami).toHaveBeenCalledWith({ token: 'token-1' });
@@ -427,6 +449,22 @@ describe('server-next socket handlers', () => {
       teamId: 'team-1',
       taskId: 'task-2',
       sortOrder: 100,
+    });
+    expect(app.reactMessage).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    });
+    expect(app.saveMessage).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    });
+    expect(app.listSavedMessages).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
     });
   });
 

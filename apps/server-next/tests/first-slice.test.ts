@@ -579,6 +579,105 @@ describe('server-next first-slice use cases', () => {
     expect(afterDelete.channels?.some((c: any) => c.id === 'channel-delete')).toBe(false);
   });
 
+  test('reactions and saved messages persist with proper access control', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 500,
+      ids: createIds([
+        'user-1', 'team-1', 'channel-1',
+        'join-1',
+        'user-2', 'team-2', 'channel-2',
+        'msg-1', 'dispatch-1',
+        'r1', 'r2', 'r3', 'r4', 's1', 's2',
+      ]),
+      joinCodes: createIds(['code-join']),
+    });
+    await app.registerUser({ username: 'alice', password: 'secret', teamName: 'AliceTeam' });
+    await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
+    await app.registerUser({ username: 'bob', password: 'secret', teamName: 'BobTeam', joinCode: 'code-join' });
+
+    // Send a message to react to
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: 'Hello world',
+    });
+
+    // React: team member can react
+    await expect(app.reactMessage({
+      userId: 'user-2',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: true, messageId: 'msg-1' });
+
+    // React: non-member cannot react
+    await expect(app.reactMessage({
+      userId: 'user-1',
+      teamId: 'team-2',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    // React: toggle off
+    await expect(app.reactMessage({
+      userId: 'user-2',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: false,
+    })).resolves.toMatchObject({ ok: true });
+
+    // React: nonexistent message
+    await expect(app.reactMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-nope',
+      on: true,
+    })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+
+    // Save: team member can save
+    await expect(app.saveMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: true, messageId: 'msg-1' });
+
+    // Save: non-member cannot save
+    await expect(app.saveMessage({
+      userId: 'user-1',
+      teamId: 'team-2',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    // List saved: returns saved messages
+    await expect(app.listSavedMessages({
+      userId: 'user-1',
+      teamId: 'team-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      messages: [{ id: 'msg-1', body: 'Hello world' }],
+    });
+
+    // Unsave
+    await expect(app.saveMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: false,
+    })).resolves.toMatchObject({ ok: true });
+
+    // List saved: empty after unsave
+    await expect(app.listSavedMessages({
+      userId: 'user-1',
+      teamId: 'team-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      messages: [],
+    });
+  });
+
   test('creates and validates a user join link for an existing team member', async () => {
     const app = createInMemoryServerNext({
       now: () => 250,

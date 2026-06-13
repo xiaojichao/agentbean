@@ -27,7 +27,7 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, memberEvents, taskEvents } from '@/lib/socket';
+import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, memberEvents, taskEvents, messageReactionEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, Artifact, ChannelSummary, ChatMessage } from '@/lib/schema';
 import {
@@ -545,8 +545,16 @@ export default function TasksPage() {
           onSend={sendThreadMessage}
           onUpload={uploadFiles}
           onRemoveAttachment={(id) => setThreadAttachments((prev) => prev.filter((artifact) => artifact.id !== id))}
-          onToggleSave={(id) => setSavedIds((prev) => toggleSet(prev, id))}
-          onToggleReaction={(id) => setReactionIds((prev) => toggleSet(prev, id))}
+          onToggleSave={(id) => {
+            const isSaved = savedIds.has(id);
+            setSavedIds((prev) => toggleSet(prev, id));
+            messageReactionEvents().save(id, !isSaved).catch(() => setSavedIds((prev) => toggleSet(prev, id)));
+          }}
+          onToggleReaction={(id) => {
+            const isReacted = reactionIds.has(id);
+            setReactionIds((prev) => toggleSet(prev, id));
+            messageReactionEvents().react(id, !isReacted).catch(() => setReactionIds((prev) => toggleSet(prev, id)));
+          }}
           onReply={(msg) => setThreadInput((prev) => appendReplyPrefix(prev, speakerName(msg, agents, currentUser?.username)))}
           onClose={closeThread}
           onViewInChannel={() => {
