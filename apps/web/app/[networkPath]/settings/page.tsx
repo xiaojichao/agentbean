@@ -1,12 +1,20 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2 } from 'lucide-react';
+import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2, Bell, Volume2, Keyboard, PanelRight, RotateCcw } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { authEvents, getWebSocket, joinEvents, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import type { JoinLinkInfo } from '@/lib/schema';
 import { useRouter } from 'next/navigation';
+import {
+  DEFAULT_BROWSER_SETTINGS,
+  readBrowserSettings,
+  resetBrowserSettings,
+  writeBrowserSettings,
+  type AttachmentOpenMode,
+  type BrowserSettings,
+} from '@/lib/browser-settings';
 
 type Tab = 'account' | 'browser' | 'server' | 'releases';
 
@@ -164,14 +172,174 @@ function AccountPanel() {
 }
 
 function BrowserPanel() {
+  const [settings, setSettings] = useState<BrowserSettings>(DEFAULT_BROWSER_SETTINGS);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    setSettings(readBrowserSettings(typeof window === 'undefined' ? null : window.localStorage));
+    setLoaded(true);
+  }, []);
+
+  const updateSettings = (patch: Partial<BrowserSettings>) => {
+    setSettings((current) => {
+      const next = { ...current, ...patch };
+      writeBrowserSettings(typeof window === 'undefined' ? null : window.localStorage, next);
+      return next;
+    });
+  };
+
+  const resetSettings = () => {
+    setSettings(resetBrowserSettings(typeof window === 'undefined' ? null : window.localStorage));
+  };
+
   return (
-    <div className="mx-auto max-w-xl space-y-6">
-      <h2 className="text-xl font-semibold">浏览器</h2>
-      <section className="rounded-lg border border-neutral-200 p-5">
-        <h3 className="mb-3 text-sm font-semibold text-neutral-700">浏览器设置</h3>
-        <div className="text-sm text-neutral-500">浏览器相关配置开发中...</div>
+    <div className="mx-auto max-w-2xl space-y-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-semibold">浏览器</h2>
+          <p className="mt-1 text-sm text-neutral-500">这些偏好保存在当前浏览器中。</p>
+        </div>
+        <button onClick={resetSettings} className="inline-flex items-center gap-2 rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50">
+          <RotateCcw size={13} />
+          恢复默认
+        </button>
+      </div>
+
+      <section className="rounded-lg border border-neutral-200 bg-white">
+        <BrowserSettingSwitch
+          icon={<Bell size={16} />}
+          title="桌面通知"
+          description="新消息到达时显示系统通知。"
+          checked={settings.desktopNotifications}
+          disabled={!loaded}
+          onChange={(checked) => updateSettings({ desktopNotifications: checked })}
+        />
+        <BrowserSettingSwitch
+          icon={<Volume2 size={16} />}
+          title="提示音"
+          description="频道、私聊和任务更新时播放轻提示音。"
+          checked={settings.sound}
+          disabled={!loaded}
+          onChange={(checked) => updateSettings({ sound: checked })}
+        />
+        <BrowserSettingSwitch
+          icon={<PanelRight size={16} />}
+          title="紧凑布局"
+          description="缩小列表行高，让聊天和任务页面显示更多内容。"
+          checked={settings.compactMode}
+          disabled={!loaded}
+          onChange={(checked) => updateSettings({ compactMode: checked })}
+        />
+      </section>
+
+      <section className="rounded-lg border border-neutral-200 bg-white p-5">
+        <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-neutral-800">
+          <Keyboard size={16} className="text-neutral-500" />
+          输入与文件
+        </div>
+        <div className="space-y-5">
+          <div>
+            <label className="mb-2 block text-xs font-medium text-neutral-500">发送消息</label>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <ChoiceButton
+                selected={settings.messageSendMode === 'mod-enter'}
+                title="⌘ / Ctrl + Enter"
+                description="Enter 保留换行。"
+                disabled={!loaded}
+                onClick={() => updateSettings({ messageSendMode: 'mod-enter' })}
+              />
+              <ChoiceButton
+                selected={settings.messageSendMode === 'enter'}
+                title="Enter"
+                description="Shift + Enter 换行。"
+                disabled={!loaded}
+                onClick={() => updateSettings({ messageSendMode: 'enter' })}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-2 block text-xs font-medium text-neutral-500">打开附件</label>
+            <select
+              value={settings.attachmentOpenMode}
+              onChange={(event) => updateSettings({ attachmentOpenMode: event.target.value as AttachmentOpenMode })}
+              disabled={!loaded}
+              className="h-9 w-full rounded-md border border-neutral-200 bg-white px-3 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50"
+            >
+              <option value="inline">在 AgentBean 内预览</option>
+              <option value="new-tab">在新标签页打开</option>
+              <option value="download">直接下载</option>
+            </select>
+          </div>
+        </div>
       </section>
     </div>
+  );
+}
+
+function BrowserSettingSwitch({
+  icon,
+  title,
+  description,
+  checked,
+  disabled,
+  onChange,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="flex items-center gap-4 border-b border-neutral-100 px-5 py-4 last:border-b-0">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-neutral-100 text-neutral-600">{icon}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium text-neutral-900">{title}</span>
+        <span className="mt-0.5 block text-xs text-neutral-500">{description}</span>
+      </span>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        className="peer sr-only"
+      />
+      <span className="relative h-6 w-11 shrink-0 rounded-full bg-neutral-200 transition peer-checked:bg-neutral-900 peer-disabled:opacity-50">
+        <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition ${checked ? 'left-5' : 'left-0.5'}`} />
+      </span>
+    </label>
+  );
+}
+
+function ChoiceButton({
+  selected,
+  title,
+  description,
+  disabled,
+  onClick,
+}: {
+  selected: boolean;
+  title: string;
+  description: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`min-h-16 rounded-md border px-3 py-2 text-left transition disabled:opacity-50 ${
+        selected
+          ? 'border-neutral-900 bg-neutral-900 text-white'
+          : 'border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-50'
+      }`}
+    >
+      <span className="block text-sm font-semibold">{title}</span>
+      <span className={`mt-1 block text-xs ${selected ? 'text-neutral-200' : 'text-neutral-500'}`}>{description}</span>
+    </button>
   );
 }
 
