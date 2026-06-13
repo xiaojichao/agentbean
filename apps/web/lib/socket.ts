@@ -291,7 +291,7 @@ export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
       return emitWithTimeout(socket, 'auth:login', payload, 20000);
     },
     whoami() {
-      return emitWithTimeout(socket, 'auth:whoami', {});
+      return emitWithTimeout(socket, 'auth:whoami', { token: getStoredAuthToken() });
     },
     inviteCreate(payload = {}) {
       return emitWithTimeout(socket, 'invite:create', payload);
