@@ -1,11 +1,14 @@
 'use client';
 
-import { FolderOpen, Image as ImageIcon, Paperclip } from 'lucide-react';
+import Link from 'next/link';
+import { FolderOpen, Image as ImageIcon, Paperclip, ExternalLink } from 'lucide-react';
 import { authedApiUrl } from '@/lib/socket';
+import { useCurrentNetworkPath } from '@/lib/store';
 import { formatRelative } from '@/lib/format-time';
 import type { AgentWorkspaceFile, AgentWorkspaceRun } from '@/lib/schema';
 
 export function AgentWorkspaceSection({ runs, loading }: { runs: AgentWorkspaceRun[]; loading: boolean }) {
+  const np = useCurrentNetworkPath();
   return (
     <section className="rounded-lg border border-neutral-200 bg-white p-4">
       <div className="mb-3 flex items-center justify-between">
@@ -25,9 +28,18 @@ export function AgentWorkspaceSection({ runs, loading }: { runs: AgentWorkspaceR
                   <div className="truncate text-xs font-medium text-neutral-600">同步记录</div>
                   <div className="text-[11px] text-neutral-400">{formatRelative(run.updatedAt)}</div>
                 </div>
-                <span className="shrink-0 rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-500">
-                  {run.files.length} 个文件
-                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Link
+                    href={`/${np}/runs/${run.runId}`}
+                    className="inline-flex items-center gap-0.5 text-[11px] text-blue-600 hover:underline"
+                  >
+                    查看详情
+                    <ExternalLink size={10} />
+                  </Link>
+                  <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-500">
+                    {run.files.length} 个文件
+                  </span>
+                </div>
               </div>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {run.files.map((file) => (
