@@ -113,6 +113,10 @@ export interface TeamRepository {
   isMember(teamId: ID, userId: ID): Promise<boolean>;
   getMemberRole(teamId: ID, userId: ID): Promise<'owner' | 'admin' | 'member' | null>;
   listMembersByIds(teamId: ID, userIds: ID[]): Promise<HumanMemberDto[]>;
+  getMember(input: { teamId: ID; userId: ID }): Promise<TeamMemberRecord | null>;
+  updateMemberRole(input: { teamId: ID; userId: ID; role: TeamMemberRecord['role'] }): Promise<TeamMemberRecord | null>;
+  removeMember(input: { teamId: ID; userId: ID }): Promise<void>;
+  updateOwner(input: { teamId: ID; ownerId: ID }): Promise<TeamRecord | null>;
 }
 
 export interface JoinLinkRepository {

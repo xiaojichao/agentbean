@@ -106,6 +106,27 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           ];
         });
       },
+      async getMember(input) {
+        return members.get(`${input.teamId}:${input.userId}`) ?? null;
+      },
+      async updateMemberRole(input) {
+        const key = `${input.teamId}:${input.userId}`;
+        const member = members.get(key);
+        if (!member) return null;
+        const updated = { ...member, role: input.role };
+        members.set(key, updated);
+        return updated;
+      },
+      async removeMember(input) {
+        members.delete(`${input.teamId}:${input.userId}`);
+      },
+      async updateOwner(input) {
+        const team = teams.get(input.teamId);
+        if (!team) return null;
+        const updated = { ...team, ownerId: input.ownerId };
+        teams.set(input.teamId, updated);
+        return updated;
+      },
     },
     joinLinks: {
       async create(input) {

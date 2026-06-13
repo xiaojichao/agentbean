@@ -79,6 +79,9 @@ export interface ServerNextUseCases {
   reactMessage(input: ReactMessageInput): Promise<Ack<{ messageId: string }>>;
   saveMessage(input: SaveMessageInput): Promise<Ack<{ messageId: string }>>;
   listSavedMessages(input: ListSavedMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
+  updateMemberRole(input: UpdateMemberRoleInput): Promise<Ack<{ member: { id: string; teamId: string; userId: string; username: string; role: string } }>>;
+  removeMember(input: RemoveMemberInput): Promise<Ack<{ userId: string }>>;
+  transferOwner(input: TransferOwnerInput): Promise<Ack<{ team: { id: string; name: string }; member: { id: string; teamId: string; userId: string; username: string; role: string } }>>;
 }
 
 export interface RegisterUserInput {
@@ -523,6 +526,25 @@ export interface SaveMessageInput {
 export interface ListSavedMessagesInput {
   userId: string;
   teamId: string;
+}
+
+export interface UpdateMemberRoleInput {
+  actorUserId: string;
+  teamId: string;
+  targetUserId: string;
+  role: 'owner' | 'admin' | 'member';
+}
+
+export interface RemoveMemberInput {
+  actorUserId: string;
+  teamId: string;
+  targetUserId: string;
+}
+
+export interface TransferOwnerInput {
+  actorUserId: string;
+  teamId: string;
+  targetUserId: string;
 }
 
 export interface CreateServerNextUseCasesInput {
@@ -2237,6 +2259,127 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         messages.push(msg);
       }
       return makeSuccess({ messages });
+    },
+
+    async updateMemberRole(roleInput) {
+      const actorRole = await repositories.teams.getMemberRole(roleInput.teamId, roleInput.actorUserId);
+      if (!actorRole) {
+        return makeFailure('FORBIDDEN', 'Actor is not a team member');
+      }
+      if (actorRole === 'member') {
+        return makeFailure('FORBIDDEN', 'Only owner or admin can change roles');
+      }
+      if (roleInput.actorUserId === roleInput.targetUserId) {
+        return makeFailure('FORBIDDEN', 'Cannot change your own role');
+      }
+      if (roleInput.role === 'owner') {
+        return makeFailure('FORBIDDEN', 'Use transferOwner to change ownership');
+      }
+      const targetMember = await repositories.teams.getMember({
+        teamId: roleInput.teamId,
+        userId: roleInput.targetUserId,
+      });
+      if (!targetMember) {
+        return makeFailure('NOT_FOUND', 'Target user is not a team member');
+      }
+      if (targetMember.role === 'owner') {
+        return makeFailure('FORBIDDEN', 'Cannot change owner role');
+      }
+      if (actorRole === 'admin' && targetMember.role === 'admin') {
+        return makeFailure('FORBIDDEN', 'Admin cannot change other admin roles');
+      }
+      const updated = await repositories.teams.updateMemberRole({
+        teamId: roleInput.teamId,
+        userId: roleInput.targetUserId,
+        role: roleInput.role,
+      });
+      if (!updated) {
+        return makeFailure('NOT_FOUND', 'Member not found');
+      }
+      return makeSuccess({
+        member: {
+          id: `${updated.teamId}:${updated.userId}`,
+          teamId: updated.teamId,
+          userId: updated.userId,
+          username: updated.username,
+          role: updated.role,
+        },
+      });
+    },
+
+    async removeMember(removeInput) {
+      const actorRole = await repositories.teams.getMemberRole(removeInput.teamId, removeInput.actorUserId);
+      if (!actorRole) {
+        return makeFailure('FORBIDDEN', 'Actor is not a team member');
+      }
+      if (actorRole === 'member') {
+        return makeFailure('FORBIDDEN', 'Only owner or admin can remove members');
+      }
+      if (removeInput.actorUserId === removeInput.targetUserId) {
+        return makeFailure('FORBIDDEN', 'Cannot remove yourself, use leave team instead');
+      }
+      const targetMember = await repositories.teams.getMember({
+        teamId: removeInput.teamId,
+        userId: removeInput.targetUserId,
+      });
+      if (!targetMember) {
+        return makeFailure('NOT_FOUND', 'Target user is not a team member');
+      }
+      if (targetMember.role === 'owner') {
+        return makeFailure('FORBIDDEN', 'Cannot remove owner');
+      }
+      if (actorRole === 'admin' && targetMember.role === 'admin') {
+        return makeFailure('FORBIDDEN', 'Admin cannot remove other admins');
+      }
+      await repositories.teams.removeMember({
+        teamId: removeInput.teamId,
+        userId: removeInput.targetUserId,
+      });
+      return makeSuccess({ userId: removeInput.targetUserId });
+    },
+
+    async transferOwner(transferInput) {
+      const actorRole = await repositories.teams.getMemberRole(transferInput.teamId, transferInput.actorUserId);
+      if (actorRole !== 'owner') {
+        return makeFailure('FORBIDDEN', 'Only owner can transfer ownership');
+      }
+      const targetMember = await repositories.teams.getMember({
+        teamId: transferInput.teamId,
+        userId: transferInput.targetUserId,
+      });
+      if (!targetMember) {
+        return makeFailure('NOT_FOUND', 'Target user is not a team member');
+      }
+      // Demote current owner to admin
+      await repositories.teams.updateMemberRole({
+        teamId: transferInput.teamId,
+        userId: transferInput.actorUserId,
+        role: 'admin',
+      });
+      // Promote target to owner
+      const updated = await repositories.teams.updateMemberRole({
+        teamId: transferInput.teamId,
+        userId: transferInput.targetUserId,
+        role: 'owner',
+      });
+      // Update team owner_id
+      const team = await repositories.teams.updateOwner({
+        teamId: transferInput.teamId,
+        ownerId: transferInput.targetUserId,
+      });
+      if (!updated || !team) {
+        return makeFailure('NOT_FOUND', 'Failed to update ownership');
+      }
+      return makeSuccess({
+        team: { id: team.id, name: team.name },
+        member: {
+          id: `${updated.teamId}:${updated.userId}`,
+          teamId: updated.teamId,
+          userId: updated.userId,
+          username: updated.username,
+          role: updated.role,
+        },
+      });
     },
   };
 }

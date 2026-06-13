@@ -185,6 +185,56 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           displayName: member.displayName,
         }));
       },
+      async getMember(input) {
+        const row = globalDb
+          .prepare(
+            `SELECT team_members.*, users.username
+             FROM team_members
+             JOIN users ON users.id = team_members.user_id
+             WHERE team_members.team_id = ? AND team_members.user_id = ?`,
+          )
+          .get(input.teamId, input.userId);
+        if (!row) return null;
+        return {
+          teamId: sqliteText(row, 'team_id'),
+          userId: sqliteText(row, 'user_id'),
+          username: sqliteText(row, 'username'),
+          role: sqliteText(row, 'role') as TeamMemberRecord['role'],
+          joinedAt: sqliteNumber(row, 'joined_at'),
+        };
+      },
+      async updateMemberRole(input) {
+        globalDb
+          .prepare('UPDATE team_members SET role = ? WHERE team_id = ? AND user_id = ?')
+          .run(input.role, input.teamId, input.userId);
+        const row = globalDb
+          .prepare(
+            `SELECT team_members.*, users.username
+             FROM team_members
+             JOIN users ON users.id = team_members.user_id
+             WHERE team_members.team_id = ? AND team_members.user_id = ?`,
+          )
+          .get(input.teamId, input.userId);
+        if (!row) return null;
+        return {
+          teamId: sqliteText(row, 'team_id'),
+          userId: sqliteText(row, 'user_id'),
+          username: sqliteText(row, 'username'),
+          role: sqliteText(row, 'role') as TeamMemberRecord['role'],
+          joinedAt: sqliteNumber(row, 'joined_at'),
+        };
+      },
+      async removeMember(input) {
+        globalDb
+          .prepare('DELETE FROM team_members WHERE team_id = ? AND user_id = ?')
+          .run(input.teamId, input.userId);
+      },
+      async updateOwner(input) {
+        globalDb
+          .prepare('UPDATE teams SET owner_id = ? WHERE id = ?')
+          .run(input.ownerId, input.teamId);
+        return mapTeam(globalDb.prepare('SELECT * FROM teams WHERE id = ?').get(input.teamId));
+      },
     },
     joinLinks: {
       async create(link) {

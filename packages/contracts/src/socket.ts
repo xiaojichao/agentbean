@@ -19,6 +19,9 @@ export const WEB_EVENTS = {
   member: {
     list: 'members:list',
     updateHuman: 'member:update-human',
+    updateRole: 'member:update-role',
+    remove: 'member:remove',
+    transferOwner: 'member:transfer-owner',
   },
   device: {
     list: 'device:list',
