@@ -170,8 +170,8 @@ export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
       return emitWithTimeout(socket, 'agent:metrics', {});
     },
     subscribe() { socket.emit('agents:subscribe', {}); },
-    create(payload) {
-      return emitWithTimeout(socket, 'agent:create', payload);
+    create({ networkId, ...rest }) {
+      return emitWithTimeout(socket, 'agent:create', { teamId: networkId, ...rest });
     },
     listCustom(payload = {}) {
       return emitWithTimeout(socket, 'agent:custom:list', payload);
@@ -180,10 +180,10 @@ export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
       return emitWithTimeout(socket, 'agent:update-config', { agentId: id, ...rest });
     },
     publish(agentId, networkId) {
-      return emitWithTimeout(socket, 'agent:publish', { agentId, networkId });
+      return emitWithTimeout(socket, 'agent:publish', { agentId, targetTeamId: networkId });
     },
     unpublish(agentId, networkId) {
-      return emitWithTimeout(socket, 'agent:unpublish', { agentId, networkId });
+      return emitWithTimeout(socket, 'agent:unpublish', { agentId, targetTeamId: networkId });
     },
     delete(agentId) {
       return emitWithTimeout(socket, 'agent:delete', { agentId });
