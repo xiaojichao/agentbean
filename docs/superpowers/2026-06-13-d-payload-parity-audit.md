@@ -63,7 +63,7 @@
 | `team:switch` | web `{teamId}` vs server `{userId,teamId}` ✅ | web `{network}` vs server `{currentTeam}`：network↔currentTeam（D1） | ❌ D1 |
 | `team:update` | web `{name}` vs server `{userId,teamId,name}`：web 缺 teamId（用 currentTeam?） | web `{network}` vs server `{team:{id,name,path}}`（D1） | ❌ D1 |
 | `team:delete` | web `{teamId}` vs server `{userId,teamId}` ✅ | web `{fallbackNetwork}` vs server `{fallbackTeam}`（D1） | ❌ D1 |
-| 订阅 `teams:snapshot` | — | server 静态引用未见广播（C 类待核实） | ❓ C |
+| 订阅 `teams:snapshot` | — | **✅ 核实（2026-06-14）：server 未广播**（grep `WEB_EVENTS.team.snapshot` 无 emit；web `sidebar.tsx:28` 订阅但收不到） | ❌ C（确认缺失） |
 
 ### 3.3 MEMBER
 
@@ -106,7 +106,7 @@
 | `task:update` | web `{id,...}` vs server `{userId,teamId,taskId,...}`：**`id`↔`taskId`**（D2） | `{task}` ✅ | ⚠️ D2 |
 | `task:delete` | web `{id}` vs server `taskId`：D2 | ✅ | ⚠️ D2 |
 | `task:reorder` | web `{id,sortOrder}` vs server `taskId`：D2 | `{task}` ✅ | ⚠️ D2 |
-| 订阅 `tasks:snapshot`/`task:updated` | — | server 静态引用未见（C 类） | ❓ C |
+| 订阅 `tasks:snapshot`/`task:updated` | — | **✅ 核实（2026-06-14）：server 未广播**（grep 无 emit） | ❌ C（确认缺失） |
 
 ### 3.7 DEVICE
 
@@ -117,7 +117,7 @@
 | `device:scan` | web `{deviceId}` ✅ | `{request}` ✅ | ✅ |
 | `device:agents:list` | `{deviceId}` | server 无（B 类） | ❌ B |
 | `device:select-directory`/`delete`/`rename` | — | server 无 | ❌ B |
-| 订阅 `devices:snapshot`/`device:status` | — | device:status server 引用未见（C 类） | ❓ C |
+| 订阅 `devices:snapshot`/`device:status` | — | `devices:snapshot` ✅ 有；**`device:status` ✅ 核实（2026-06-14）：未广播** | ⚠️ C（device:status 确认缺失） |
 
 ### 3.8 AGENT
 
@@ -129,7 +129,7 @@
 | `agent:delete` | web `{agentId}` ✅ | `{agent}` ✅ | ✅ |
 | `agent:custom:list` | `{deviceId?}` | server 无（B 类） | ❌ B |
 | `agent:metrics` | `{}` | server 无 metrics use case | ❌ B/C |
-| 订阅 `agents:snapshot`/`agent:status`/`agents:discovered` | — | snapshot ✅；status/discovered 引用未见（C 类） | ❓ C |
+| 订阅 `agents:snapshot`/`agent:status`/`agents:discovered` | — | `agents:snapshot` ✅ 有；**`agent:status`/`agents:discovered`/`agent:metrics` ✅ 核实（2026-06-14）：未广播** | ⚠️ C（部分确认缺失） |
 
 ### 3.9 DM
 
@@ -162,7 +162,7 @@
 | **D6** web 多余字段 | 多事件 | 非致命 | 清理 web 多余字段或 server 显式忽略 |
 | **D7** networkId↔teamId / description↔title | agent/channel | 概念迁移 | web 改 `networkId`→`teamId`、`description`→`title`（channel.update） |
 | **B 类**（contracts 无定义） | 13 项 | device 长尾/auth/join/channel/agent | 逐项决策补 server 还是裁 UI |
-| **C 类**（广播待核实） | 7 项 | snapshot/status/metrics | 本地探针核实 |
+| **C 类**（已核实 2026-06-14） | 7 项 | server 未广播：`teams:snapshot`、`tasks:snapshot`/`task:updated`、`agent:status`/`agents:discovered`/`agent:metrics`、`device:status` | **grep 核实确认缺失**。非阻塞：web 单用户操作用 ack 响应更新（task:update 返回 task 直接更新 store），snapshot 仅影响多用户实时同步。`channel/agent/device/dm:snapshot` server 有广播。 |
 
 ---
 
