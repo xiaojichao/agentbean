@@ -82,6 +82,12 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       async setCurrentTeam(userId, teamId) {
         globalDb.prepare('UPDATE users SET current_team_id = ?, updated_at = updated_at WHERE id = ?').run(teamId, userId);
       },
+      async updateDescription(input) {
+        globalDb
+          .prepare('UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?')
+          .run(input.description, input.updatedAt, input.userId);
+        return mapUser(globalDb.prepare('SELECT * FROM users WHERE id = ?').get(input.userId));
+      },
     },
     teams: {
       async create(team) {
@@ -234,6 +240,48 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .prepare('UPDATE teams SET owner_id = ? WHERE id = ?')
           .run(input.ownerId, input.teamId);
         return mapTeam(globalDb.prepare('SELECT * FROM teams WHERE id = ?').get(input.teamId));
+      },
+      async listAllMembers(teamId) {
+        const rows = globalDb
+          .prepare(
+            `SELECT tm.user_id, tm.role, tm.joined_at, u.username, u.display_name
+             FROM team_members tm
+             JOIN users u ON u.id = tm.user_id
+             WHERE tm.team_id = ?
+             ORDER BY tm.joined_at`,
+          )
+          .all(teamId);
+        return rows.map((row: any) => ({
+          id: `${teamId}:${sqliteText(row, 'user_id')}`,
+          teamId,
+          userId: sqliteText(row, 'user_id'),
+          username: sqliteText(row, 'username'),
+          role: sqliteText(row, 'role') as 'owner' | 'admin' | 'member',
+          displayName: sqliteText(row, 'display_name') ?? undefined,
+          joinedAt: sqliteNumber(row, 'joined_at'),
+        }));
+      },
+      async update(input) {
+        const sets: string[] = [];
+        const values: unknown[] = [];
+        if (input.name !== undefined) { sets.push('name = ?'); values.push(input.name); }
+        if (input.path !== undefined) { sets.push('path = ?'); values.push(input.path); }
+        if (input.description !== undefined) { sets.push('description = ?'); values.push(input.description); }
+        if (input.visibility !== undefined) { sets.push('visibility = ?'); values.push(input.visibility); }
+        if (sets.length === 0) return mapTeam(globalDb.prepare('SELECT * FROM teams WHERE id = ?').get(input.teamId));
+        values.push(input.teamId);
+        globalDb.prepare(`UPDATE teams SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+        return mapTeam(globalDb.prepare('SELECT * FROM teams WHERE id = ?').get(input.teamId));
+      },
+      async delete(teamId) {
+        globalDb.prepare('DELETE FROM messages WHERE channel_id IN (SELECT id FROM channels WHERE team_id = ?)').run(teamId);
+        globalDb.prepare('DELETE FROM dispatches WHERE channel_id IN (SELECT id FROM channels WHERE team_id = ?)').run(teamId);
+        globalDb.prepare('DELETE FROM channel_members WHERE channel_id IN (SELECT id FROM channels WHERE team_id = ?)').run(teamId);
+        globalDb.prepare('DELETE FROM channels WHERE team_id = ?').run(teamId);
+        globalDb.prepare('DELETE FROM agents WHERE team_id = ?').run(teamId);
+        globalDb.prepare('DELETE FROM team_members WHERE team_id = ?').run(teamId);
+        globalDb.prepare('DELETE FROM join_links WHERE team_id = ?').run(teamId);
+        globalDb.prepare('DELETE FROM teams WHERE id = ?').run(teamId);
       },
     },
     joinLinks: {

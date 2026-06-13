@@ -103,6 +103,7 @@ export interface UserRepository {
   getById(id: ID): Promise<UserRecord | null>;
   getByUsername(username: string): Promise<UserRecord | null>;
   setCurrentTeam(userId: ID, teamId: ID): Promise<void>;
+  updateDescription(input: { userId: ID; description: string | null; updatedAt: UnixMs }): Promise<UserRecord | null>;
 }
 
 export interface TeamRepository {
@@ -117,6 +118,9 @@ export interface TeamRepository {
   updateMemberRole(input: { teamId: ID; userId: ID; role: TeamMemberRecord['role'] }): Promise<TeamMemberRecord | null>;
   removeMember(input: { teamId: ID; userId: ID }): Promise<void>;
   updateOwner(input: { teamId: ID; ownerId: ID }): Promise<TeamRecord | null>;
+  listAllMembers(teamId: ID): Promise<Array<HumanMemberDto & { joinedAt: UnixMs }>>;
+  update(input: { teamId: ID; name?: string; path?: string; description?: string; visibility?: string }): Promise<TeamRecord | null>;
+  delete(teamId: ID): Promise<void>;
 }
 
 export interface JoinLinkRepository {
