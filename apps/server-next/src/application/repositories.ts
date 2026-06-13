@@ -232,4 +232,35 @@ export interface ServerNextRepositories {
   artifacts: ArtifactRepository;
   workspaceRuns: WorkspaceRunRepository;
   tasks: TaskRepository;
+  reactions: ReactionRepository;
+  savedMessages: SavedMessageRepository;
+}
+
+export interface ReactionRecord {
+  id: ID;
+  messageId: ID;
+  userId: ID;
+  emoji: string;
+  createdAt: UnixMs;
+}
+
+export interface SavedMessageRecord {
+  id: ID;
+  messageId: ID;
+  userId: ID;
+  teamId: ID;
+  channelId: ID;
+  createdAt: UnixMs;
+}
+
+export interface ReactionRepository {
+  toggle(input: { id: ID; messageId: ID; userId: ID; emoji: string; createdAt: UnixMs; on: boolean }): Promise<void>;
+  countByMessage(messageId: ID): Promise<Record<string, number>>;
+  getUserReaction(messageId: ID, userId: ID): Promise<string | null>;
+}
+
+export interface SavedMessageRepository {
+  toggle(input: { id: ID; messageId: ID; userId: ID; teamId: ID; channelId: ID; createdAt: UnixMs; on: boolean }): Promise<void>;
+  listByUser(input: { userId: ID; teamId: ID }): Promise<SavedMessageRecord[]>;
+  isSaved(messageId: ID, userId: ID): Promise<boolean>;
 }

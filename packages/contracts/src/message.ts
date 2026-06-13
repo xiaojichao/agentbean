@@ -24,6 +24,28 @@ export interface MessageDto {
   meta?: MessageMetaDto;
   artifacts?: ArtifactDto[];
   workspaceRun?: WorkspaceRunDto;
+  reactionCounts?: Record<string, number>;
+  saved?: boolean;
+}
+
+export interface ReactInputDto {
+  userId?: ID;
+  teamId: ID;
+  messageId: ID;
+  emoji?: string;
+  on: boolean;
+}
+
+export interface SaveInputDto {
+  userId?: ID;
+  teamId: ID;
+  messageId: ID;
+  on: boolean;
+}
+
+export interface ListSavedInputDto {
+  userId?: ID;
+  teamId: ID;
 }
 
 export interface MessageSearchInputDto {

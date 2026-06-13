@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback, type MouseEvent, type ReactNode, type RefObject } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2 } from 'lucide-react';
-import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents } from '@/lib/socket';
+import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage } from '@/lib/schema';
 import { ownedAgentsForMember } from '@/lib/agent-list';
@@ -767,18 +767,40 @@ export default function ChatPage() {
     } satisfies ConversationFile)))
     .sort((a, b) => b.createdAt - a.createdAt);
   const toggleSave = (msgId: string) => {
+    const isSaved = savedIds.has(msgId);
+    // Optimistic update
     setSavedIds((prev) => {
       const next = new Set(prev);
       if (next.has(msgId)) next.delete(msgId); else next.add(msgId);
       return next;
     });
+    // Persist to server
+    messageReactionEvents().save(msgId, !isSaved).catch(() => {
+      // Revert on failure
+      setSavedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(msgId)) next.delete(msgId); else next.add(msgId);
+        return next;
+      });
+    });
   };
 
   const toggleReaction = (msgId: string) => {
+    const isReacted = reactionIds.has(msgId);
+    // Optimistic update
     setReactionIds((prev) => {
       const next = new Set(prev);
       if (next.has(msgId)) next.delete(msgId); else next.add(msgId);
       return next;
+    });
+    // Persist to server
+    messageReactionEvents().react(msgId, !isReacted).catch(() => {
+      // Revert on failure
+      setReactionIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(msgId)) next.delete(msgId); else next.add(msgId);
+        return next;
+      });
     });
   };
 
