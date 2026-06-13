@@ -1389,6 +1389,7 @@ function mapUser(row: unknown): UserRecord | null {
     passwordHash: sqliteText(row, 'password_hash'),
     currentTeamId: sqliteNullableText(row, 'current_team_id'),
     primaryTeamId: sqliteNullableText(row, 'current_team_id'),
+    email: sqliteNullableText(row, 'email'),
     createdAt: sqliteNumber(row, 'created_at'),
     updatedAt: sqliteNumber(row, 'updated_at'),
   };

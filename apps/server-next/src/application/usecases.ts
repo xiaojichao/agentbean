@@ -2593,6 +2593,7 @@ function toUserDto(user: UserDto): UserDto {
     displayName: user.displayName,
     avatarUrl: user.avatarUrl,
     primaryTeamId: user.primaryTeamId,
+    email: user.email,
   };
 }
 
