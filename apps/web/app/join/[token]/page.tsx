@@ -75,20 +75,19 @@ export default function JoinPage() {
       const res = await authEvents(socket).register({ username, password, email: email || undefined, inviteToken: code });
       socket.disconnect();
 
-      if (res.ok && res.token) {
+      const user = res.user;
+      if (res.ok && res.token && user) {
         localStorage.setItem('agentbean.token', res.token);
         useAgentBeanStore.getState().setAuthToken(res.token);
-        if (res.networkId) useAgentBeanStore.getState().setCurrentNetworkId(res.networkId);
-        if (res.username) {
-          useAgentBeanStore.getState().setCurrentUser({
-            id: res.userId ?? '',
-            username: res.username,
-            email: res.email ?? null,
-            role: res.role ?? 'user',
-          });
-        }
+        if (res.currentTeam?.id) useAgentBeanStore.getState().setCurrentNetworkId(res.currentTeam.id);
+        useAgentBeanStore.getState().setCurrentUser({
+          id: user.id,
+          username: user.username,
+          email: user.email ?? null,
+          role: user.role ?? 'user',
+        });
         resetWebSocket();
-        const np = res.networkPath || 'default';
+        const np = res.currentTeam?.path || 'default';
         localStorage.setItem('agentbean.networkPath', np);
         router.replace(`/${np}/chat`);
       } else {
@@ -117,20 +116,19 @@ export default function JoinPage() {
       const res = await authEvents(socket).login({ username: loginUser, password: loginPw, joinCode: code });
       socket.disconnect();
 
-      if (res.ok && res.token) {
+      const user = res.user;
+      if (res.ok && res.token && user) {
         localStorage.setItem('agentbean.token', res.token);
         useAgentBeanStore.getState().setAuthToken(res.token);
-        if (res.networkId) useAgentBeanStore.getState().setCurrentNetworkId(res.networkId);
-        if (res.username) {
-          useAgentBeanStore.getState().setCurrentUser({
-            id: res.userId ?? '',
-            username: res.username,
-            email: res.email ?? null,
-            role: res.role ?? 'user',
-          });
-        }
+        if (res.currentTeam?.id) useAgentBeanStore.getState().setCurrentNetworkId(res.currentTeam.id);
+        useAgentBeanStore.getState().setCurrentUser({
+          id: user.id,
+          username: user.username,
+          email: user.email ?? null,
+          role: user.role ?? 'user',
+        });
         resetWebSocket();
-        const np = res.networkPath || 'default';
+        const np = res.currentTeam?.path || 'default';
         localStorage.setItem('agentbean.networkPath', np);
         router.replace(`/${np}/chat`);
       } else {

@@ -34,20 +34,19 @@ export default function SignupPage() {
       const res = await authEvents(socket).register({ username, password, email: email || undefined });
       socket.disconnect();
 
-      if (res.ok && res.token) {
+      const user = res.user;
+      if (res.ok && res.token && user) {
         localStorage.setItem('agentbean.token', res.token);
         useAgentBeanStore.getState().setAuthToken(res.token);
-        if (res.username) {
-          useAgentBeanStore.getState().setCurrentUser({
-            id: res.userId ?? '',
-            username: res.username,
-            email: res.email ?? null,
-            role: res.role ?? 'user',
-          });
-        }
+        useAgentBeanStore.getState().setCurrentUser({
+          id: user.id,
+          username: user.username,
+          email: user.email ?? null,
+          role: user.role ?? 'user',
+        });
         resetWebSocket();
         const savedNp = localStorage.getItem('agentbean.networkPath');
-        const np = savedNp || res.networkPath || 'default';
+        const np = res.currentTeam?.path || savedNp || user.primaryTeamId || 'default';
         router.replace(`/${np}/chat`);
       } else {
         setError(res.error ?? '注册失败');
