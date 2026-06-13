@@ -65,6 +65,10 @@ describe('server-next socket handlers', () => {
       updateMemberRole: vi.fn(async (payload) => makeSuccess({ payload })),
       removeMember: vi.fn(async (payload) => makeSuccess({ payload })),
       transferOwner: vi.fn(async (payload) => makeSuccess({ payload })),
+      listMembers: vi.fn(async (payload) => makeSuccess({ payload })),
+      updateMemberHuman: vi.fn(async (payload) => makeSuccess({ payload })),
+      updateTeam: vi.fn(async (payload) => makeSuccess({ payload })),
+      deleteTeam: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
 
     registerWebSocketHandlers(socket, app);
@@ -76,10 +80,13 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.team.list,
       WEB_EVENTS.team.create,
       WEB_EVENTS.team.switch,
+      WEB_EVENTS.team.update,
+      WEB_EVENTS.team.delete,
       WEB_EVENTS.join.create,
       WEB_EVENTS.join.validate,
       WEB_EVENTS.deviceInvite.create,
       WEB_EVENTS.deviceInvite.complete,
+      WEB_EVENTS.device.list,
       WEB_EVENTS.device.get,
       WEB_EVENTS.device.scan,
       WEB_EVENTS.channel.create,
@@ -105,6 +112,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.member.updateRole,
       WEB_EVENTS.member.remove,
       WEB_EVENTS.member.transferOwner,
+      WEB_EVENTS.member.list,
+      WEB_EVENTS.member.updateHuman,
       WEB_EVENTS.dispatch.cancel,
       WEB_EVENTS.task.list,
       WEB_EVENTS.task.create,

@@ -82,6 +82,10 @@ export interface ServerNextUseCases {
   updateMemberRole(input: UpdateMemberRoleInput): Promise<Ack<{ member: { id: string; teamId: string; userId: string; username: string; role: string } }>>;
   removeMember(input: RemoveMemberInput): Promise<Ack<{ userId: string }>>;
   transferOwner(input: TransferOwnerInput): Promise<Ack<{ team: { id: string; name: string }; member: { id: string; teamId: string; userId: string; username: string; role: string } }>>;
+  listMembers(input: ListMembersInput): Promise<Ack<{ humans: Array<{ id: string; teamId: string; userId: string; username: string; role: string; displayName?: string; joinedAt: number }>; agents: any[] }>>;
+  updateMemberHuman(input: UpdateMemberHumanInput): Promise<Ack<{ human: { id: string; teamId: string; userId: string; username: string; role: string; displayName?: string; joinedAt: number } }>>;
+  updateTeam(input: UpdateTeamInput): Promise<Ack<{ team: { id: string; name: string; path: string } }>>;
+  deleteTeam(input: DeleteTeamInput): Promise<Ack<{ fallbackTeam: { id: string; name: string; path: string } | null }>>;
 }
 
 export interface RegisterUserInput {
@@ -545,6 +549,29 @@ export interface TransferOwnerInput {
   actorUserId: string;
   teamId: string;
   targetUserId: string;
+}
+
+export interface ListMembersInput {
+  userId: string;
+  teamId: string;
+}
+
+export interface UpdateMemberHumanInput {
+  actorUserId: string;
+  teamId: string;
+  targetUserId: string;
+  description?: string | null;
+}
+
+export interface UpdateTeamInput {
+  actorUserId: string;
+  teamId: string;
+  name?: string;
+}
+
+export interface DeleteTeamInput {
+  actorUserId: string;
+  teamId: string;
 }
 
 export interface CreateServerNextUseCasesInput {
@@ -2380,6 +2407,104 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           role: updated.role,
         },
       });
+    },
+
+    async listMembers(listInput) {
+      const isMember = await repositories.teams.isMember(listInput.teamId, listInput.userId);
+      if (!isMember) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const humans = await repositories.teams.listAllMembers(listInput.teamId);
+      return makeSuccess({ humans, agents: [] });
+    },
+
+    async updateMemberHuman(humanInput) {
+      const actorRole = await repositories.teams.getMemberRole(humanInput.teamId, humanInput.actorUserId);
+      if (!actorRole) {
+        return makeFailure('FORBIDDEN', 'Actor is not a team member');
+      }
+      const isSelf = humanInput.actorUserId === humanInput.targetUserId;
+      if (!isSelf && actorRole !== 'admin' && actorRole !== 'owner') {
+        return makeFailure('FORBIDDEN', 'Only admin or owner can update other members');
+      }
+      const targetMember = await repositories.teams.getMember({
+        teamId: humanInput.teamId,
+        userId: humanInput.targetUserId,
+      });
+      if (!targetMember) {
+        return makeFailure('NOT_FOUND', 'Target user is not a team member');
+      }
+      const description = humanInput.description?.trim() || null;
+      const updatedUser = await repositories.users.updateDescription({
+        userId: humanInput.targetUserId,
+        description,
+        updatedAt: clock.now(),
+      });
+      if (!updatedUser) {
+        return makeFailure('NOT_FOUND', 'User not found');
+      }
+      const humans = await repositories.teams.listAllMembers(humanInput.teamId);
+      const human = humans.find((h) => h.userId === humanInput.targetUserId);
+      if (!human) {
+        return makeFailure('NOT_FOUND', 'Member not found after update');
+      }
+      return makeSuccess({ human });
+    },
+
+    async updateTeam(updateInput) {
+      const actorRole = await repositories.teams.getMemberRole(updateInput.teamId, updateInput.actorUserId);
+      if (!actorRole) {
+        return makeFailure('FORBIDDEN', 'Actor is not a team member');
+      }
+      if (actorRole === 'member') {
+        return makeFailure('FORBIDDEN', 'Only owner or admin can update team');
+      }
+      const name = updateInput.name?.trim();
+      if (!name) {
+        return makeFailure('BAD_REQUEST', 'Team name cannot be empty');
+      }
+      const updated = await repositories.teams.update({
+        teamId: updateInput.teamId,
+        name,
+      });
+      if (!updated) {
+        return makeFailure('NOT_FOUND', 'Team not found');
+      }
+      return makeSuccess({
+        team: { id: updated.id, name: updated.name, path: updated.path },
+      });
+    },
+
+    async deleteTeam(deleteInput) {
+      const actorRole = await repositories.teams.getMemberRole(deleteInput.teamId, deleteInput.actorUserId);
+      if (actorRole !== 'owner') {
+        return makeFailure('FORBIDDEN', 'Only owner can delete team');
+      }
+      const team = await repositories.teams.getById(deleteInput.teamId);
+      if (!team) {
+        return makeFailure('NOT_FOUND', 'Team not found');
+      }
+      // Find fallback team for each affected user before cascade
+      const teamMembers = await repositories.teams.listAllMembers(deleteInput.teamId);
+      const affectedUserIds = teamMembers.map((m) => m.userId);
+      // Find a fallback team for the actor (pick another team they belong to)
+      let fallbackTeam: { id: string; name: string; path: string } | null = null;
+      const actorTeams = await repositories.teams.listForUser(deleteInput.actorUserId);
+      const otherTeam = actorTeams.find((t) => t.id !== deleteInput.teamId);
+      if (otherTeam) {
+        fallbackTeam = { id: otherTeam.id, name: otherTeam.name, path: otherTeam.path };
+        // Switch affected users to their fallback teams
+        for (const userId of affectedUserIds) {
+          const userTeams = await repositories.teams.listForUser(userId);
+          const userFallback = userTeams.find((t) => t.id !== deleteInput.teamId);
+          if (userFallback) {
+            await repositories.users.setCurrentTeam(userId, userFallback.id);
+          }
+        }
+      }
+      // Cascade delete
+      await repositories.teams.delete(deleteInput.teamId);
+      return makeSuccess({ fallbackTeam });
     },
   };
 }

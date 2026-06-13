@@ -54,6 +54,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           users.set(userId, { ...user, currentTeamId: teamId, primaryTeamId: teamId });
         }
       },
+      async updateDescription(input) {
+        const user = users.get(input.userId);
+        if (!user) return null;
+        const updated = { ...user, displayName: input.description ?? undefined, updatedAt: input.updatedAt };
+        users.set(input.userId, updated);
+        return updated;
+      },
     },
     teams: {
       async create(input) {
@@ -126,6 +133,51 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const updated = { ...team, ownerId: input.ownerId };
         teams.set(input.teamId, updated);
         return updated;
+      },
+      async listAllMembers(teamId) {
+        return Array.from(members.values())
+          .filter((m) => m.teamId === teamId)
+          .map((m) => ({
+            id: `${m.teamId}:${m.userId}`,
+            teamId: m.teamId,
+            userId: m.userId,
+            username: m.username,
+            role: m.role,
+            joinedAt: m.joinedAt,
+          }));
+      },
+      async update(input) {
+        const team = teams.get(input.teamId);
+        if (!team) return null;
+        const updated = {
+          ...team,
+          ...(input.name !== undefined && { name: input.name }),
+          ...(input.path !== undefined && { path: input.path }),
+          ...(input.description !== undefined && { description: input.description }),
+        };
+        teams.set(input.teamId, updated);
+        return updated;
+      },
+      async delete(teamId) {
+        // Cascade: remove all members of this team
+        for (const [key, member] of members.entries()) {
+          if (member.teamId === teamId) {
+            members.delete(key);
+          }
+        }
+        // Remove associated channels
+        for (const [key, channel] of channels.entries()) {
+          if (channel.teamId === teamId) {
+            channels.delete(key);
+          }
+        }
+        // Remove associated agents
+        for (const [key, agent] of agents.entries()) {
+          if (agent.primaryTeamId === teamId) {
+            agents.delete(key);
+          }
+        }
+        teams.delete(teamId);
       },
     },
     joinLinks: {

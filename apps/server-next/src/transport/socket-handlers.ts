@@ -45,12 +45,15 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.team.list, app, 'listTeams', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.team.create, app, 'createTeam', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.team.switch, app, 'switchTeam', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.team.update, app, 'updateTeam', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.team.delete, app, 'deleteTeam', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.join.create, app, 'createJoinLink', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.join.validate, app, 'validateJoinLink');
   bind(socket, WEB_EVENTS.deviceInvite.create, app, 'createDeviceInvite', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.deviceInvite.complete, app, 'completeDeviceInvite', (payload, result) =>
     options.afterDeviceInviteComplete?.(payload, result), { authenticatedUser: options.authenticatedUser },
   );
+  bind(socket, WEB_EVENTS.device.list, app, 'listDevices', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.device.get, app, 'getDevice', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.device.scan, app, 'requestDeviceScan', (_payload, result) => {
     if (!options.deviceScan || !isDeviceScanAck(result)) {
@@ -155,6 +158,8 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.member.updateRole, app, 'updateMemberRole', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.member.remove, app, 'removeMember', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.member.transferOwner, app, 'transferOwner', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.member.list, app, 'listMembers', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.member.updateHuman, app, 'updateMemberHuman', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.dispatch.cancel, app, 'cancelDispatch', async (_payload, result) => {
     if (!isDispatchAck(result)) {
       return;
