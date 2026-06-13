@@ -11,7 +11,7 @@ function serverUrl(path: string): string {
 export async function POST(req: NextRequest, { params }: { params: { networkId: string } }) {
   const token = req.nextUrl.searchParams.get('token') ?? '';
   const form = await req.formData();
-  const upstream = await fetch(serverUrl(`/api/networks/${encodeURIComponent(params.networkId)}/artifacts/upload`), {
+  const upstream = await fetch(serverUrl(`/api/teams/${encodeURIComponent(params.networkId)}/artifacts/upload`), {
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     body: form,

@@ -1,6 +1,6 @@
 'use client';
 import { io, type Socket } from 'socket.io-client';
-import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, NetworkSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact } from './schema.js';
+import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact } from './schema.js';
 
 const configuredUrl = process.env.NEXT_PUBLIC_AGENT_BEAN_SERVER_URL ?? 'http://localhost:4000';
 const TOKEN_STORAGE_KEY = 'agentbean.token';
@@ -42,11 +42,11 @@ export function authedApiUrl(path: string): string {
 }
 
 export function artifactUploadUrl(networkId: string): string {
-  return authedApiUrl(`/api/networks/${encodeURIComponent(networkId)}/artifacts/upload`);
+  return authedApiUrl(`/api/teams/${encodeURIComponent(networkId)}/artifacts/upload`);
 }
 
 export function artifactUploadProxyUrl(networkId: string): string {
-  return `/api/networks/${encodeURIComponent(networkId)}/artifacts/upload?token=${encodeURIComponent(getStoredAuthToken())}`;
+  return `/api/teams/${encodeURIComponent(networkId)}/artifacts/upload?token=${encodeURIComponent(getStoredAuthToken())}`;
 }
 
 export function artifactUploadFallbackUrls(networkId: string): string[] {
@@ -82,7 +82,7 @@ export async function uploadArtifact(networkId: string, form: FormData): Promise
 
 export async function fetchAgentWorkspace(networkId: string, agentId: string): Promise<{ ok: boolean; runs?: AgentWorkspaceRun[]; error?: string }> {
   try {
-    const res = await fetch(authedApiUrl(`/api/networks/${encodeURIComponent(networkId)}/agents/${encodeURIComponent(agentId)}/workspace`));
+    const res = await fetch(authedApiUrl(`/api/teams/${encodeURIComponent(networkId)}/agents/${encodeURIComponent(agentId)}/workspace`));
     if (!res.ok) return { ok: false, error: await res.text() };
     return await res.json();
   } catch (err) {
@@ -191,17 +191,17 @@ export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
   };
 }
 
-export interface NetworkEvents {
-  list(): Promise<{ ok: boolean; networks?: NetworkSummary[]; error?: string }>;
-  create(payload: { name: string; path?: string; description?: string; visibility?: 'public' | 'private' }): Promise<{ ok: boolean; network?: NetworkSummary; error?: string }>;
-  switch(networkId: string): Promise<{ ok: boolean; network?: NetworkSummary; error?: string }>;
-  update(payload: { name?: string }): Promise<{ ok: boolean; network?: NetworkSummary; error?: string }>;
-  delete(networkId: string): Promise<{ ok: boolean; fallbackNetwork?: NetworkSummary | null; error?: string }>;
-  onSnapshot(handler: (nets: NetworkSummary[]) => void): () => void;
+export interface TeamEvents {
+  list(): Promise<{ ok: boolean; teams?: TeamSummary[]; error?: string }>;
+  create(payload: { name: string; path?: string; description?: string; visibility?: 'public' | 'private' }): Promise<{ ok: boolean; team?: TeamSummary; defaultChannel?: { id: string; name: string }; error?: string }>;
+  switch(teamId: string): Promise<{ ok: boolean; currentTeam?: TeamSummary; error?: string }>;
+  update(payload: { name?: string }): Promise<{ ok: boolean; team?: TeamSummary; error?: string }>;
+  delete(networkId: string): Promise<{ ok: boolean; fallbackTeam?: TeamSummary | null; error?: string }>;
+  onSnapshot(handler: (nets: TeamSummary[]) => void): () => void;
   subscribe(): void;
 }
 
-export function teamEvents(socket: Socket = getWebSocket()): NetworkEvents {
+export function teamEvents(socket: Socket = getWebSocket()): TeamEvents {
   return {
     list() {
       return emitWithTimeout(socket, 'team:list', {});

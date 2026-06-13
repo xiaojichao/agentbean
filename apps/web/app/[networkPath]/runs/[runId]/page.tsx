@@ -60,7 +60,7 @@ function artifactPreviewUrl(teamId: string, artifactId: string): string {
 export default function RunDetailPage() {
   const params = useParams<{ runId: string }>();
   const np = useCurrentNetworkPath();
-  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const agents = useAgentBeanStore((s) => s.agents);
 
   const [data, setData] = useState<{ workspaceRun: WorkspaceRunDetail; artifacts: WorkspaceArtifact[] } | null>(null);
@@ -70,11 +70,11 @@ export default function RunDetailPage() {
   const runId = params.runId;
 
   useEffect(() => {
-    if (!currentNetworkId || !runId) return;
+    if (!currentTeamId || !runId) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetchWorkspaceRunDetail(currentNetworkId, runId)
+    fetchWorkspaceRunDetail(currentTeamId, runId)
       .then((res) => {
         if (!cancelled) {
           if (res.ok && res.workspaceRun && res.artifacts) {
@@ -90,7 +90,7 @@ export default function RunDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [currentNetworkId, runId]);
+  }, [currentTeamId, runId]);
 
   if (loading) {
     return (

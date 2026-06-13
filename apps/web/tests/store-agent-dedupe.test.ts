@@ -26,7 +26,7 @@ describe('agent store dedupe', () => {
   beforeEach(() => {
     useAgentBeanStore.setState({
       agents: {},
-      currentNetworkId: 'default',
+      currentTeamId: 'default',
     });
   });
 

@@ -10,11 +10,11 @@ export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const conn = useAgentBeanStore((s) => s.conn);
-  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
-  const networks = useAgentBeanStore((s) => s.networks);
-  const setCurrentNetworkId = useAgentBeanStore((s) => s.setCurrentNetworkId);
-  const applyNetworksSnapshot = useAgentBeanStore((s) => s.applyNetworksSnapshot);
+  const teams = useAgentBeanStore((s) => s.teams);
+  const setCurrentTeamId = useAgentBeanStore((s) => s.setCurrentTeamId);
+  const applyTeamsSnapshot = useAgentBeanStore((s) => s.applyTeamsSnapshot);
   const [showNetworks, setShowNetworks] = useState(false);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
 
@@ -23,11 +23,11 @@ export function Sidebar() {
     const socket = getWebSocket();
     const nets = teamEvents(socket);
     nets.list().then((res) => {
-      if (res.ok && res.networks) applyNetworksSnapshot(res.networks);
+      if (res.ok && res.teams) applyTeamsSnapshot(res.teams);
     });
-    const unsub = nets.onSnapshot((list) => applyNetworksSnapshot(list));
+    const unsub = nets.onSnapshot((list) => applyTeamsSnapshot(list));
     return () => { unsub(); };
-  }, [conn, applyNetworksSnapshot]);
+  }, [conn, applyTeamsSnapshot]);
 
   // Close popover on outside click
   useEffect(() => {
@@ -37,16 +37,16 @@ export function Sidebar() {
     return () => document.removeEventListener('click', handler);
   }, [showNetworks]);
 
-  const currentNetwork = networks.find((n) => n.id === currentNetworkId);
+  const currentNetwork = teams.find((n) => n.id === currentTeamId);
   const np = currentNetwork?.path ?? 'default';
   const isAdmin = currentUser?.role === 'admin';
 
   const handleSwitch = async (networkId: string) => {
     const res = await teamEvents().switch(networkId);
     if (res.ok) {
-      setCurrentNetworkId(networkId);
+      setCurrentTeamId(networkId);
       setShowNetworks(false);
-      const target = networks.find((n) => n.id === networkId);
+      const target = teams.find((n) => n.id === networkId);
       if (target) {
         localStorage.setItem('agentbean.networkPath', target.path);
         const segments = pathname.split('/');
@@ -87,21 +87,21 @@ export function Sidebar() {
               onClick={(e) => e.stopPropagation()}
             >
               <div className="p-1.5">
-                {networks.length === 0 ? (
+                {teams.length === 0 ? (
                   <div className="px-3 py-2 text-xs text-neutral-400">没有可用团队</div>
                 ) : (
-                  networks.map((n) => (
+                  teams.map((n) => (
                     <button
                       key={n.id}
                       onClick={() => handleSwitch(n.id)}
                       className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs hover:bg-neutral-50 transition-colors"
                     >
-                      {n.id === currentNetworkId ? (
+                      {n.id === currentTeamId ? (
                         <Check size={14} className="shrink-0 text-neutral-900" />
                       ) : (
                         <span className="w-3.5" />
                       )}
-                      <span className={`truncate ${n.id === currentNetworkId ? 'font-medium text-neutral-900' : 'text-neutral-600'}`}>
+                      <span className={`truncate ${n.id === currentTeamId ? 'font-medium text-neutral-900' : 'text-neutral-600'}`}>
                         {n.name}
                       </span>
                       {n.type === 'public' ? (
@@ -146,7 +146,7 @@ export function Sidebar() {
         <CreateNetworkDialog
           onClose={() => setShowCreateDialog(false)}
           onCreated={(networkId, networkPath) => {
-            setCurrentNetworkId(networkId);
+            setCurrentTeamId(networkId);
             const segments = pathname.split('/');
             const subPath = segments.length > 2 ? segments.slice(2).join('/') : 'chat';
             router.push(`/${networkPath}/${subPath}`);
@@ -201,9 +201,9 @@ function CreateNetworkDialog({ onClose, onCreated }: { onClose: () => void; onCr
     setError('');
     try {
       const res = await teamEvents().create({ name: trimmedName, path: trimmedPath || undefined, visibility });
-      if (res.ok && res.network) {
+      if (res.ok && res.team) {
         onClose();
-        onCreated(res.network.id, res.network.path ?? 'default');
+        onCreated(res.team.id, res.team.path ?? 'default');
       } else {
         setError(res.error === 'RESERVED_PATH' ? '该路径为系统保留路径，请使用其他名称' : (res.error ?? '创建失败'));
       }

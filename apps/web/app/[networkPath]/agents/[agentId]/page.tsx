@@ -19,8 +19,8 @@ export default function AgentDetailPage() {
   const np = useCurrentNetworkPath();
   const [publishing, setPublishing] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const networks = useAgentBeanStore((s) => s.networks);
-  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
+  const teams = useAgentBeanStore((s) => s.teams);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const [workspaceRuns, setWorkspaceRuns] = useState<AgentWorkspaceRun[]>([]);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
 
@@ -36,10 +36,10 @@ export default function AgentDetailPage() {
   }, [setAgents, upsert]);
 
   useEffect(() => {
-    if (!agent?.id || !currentNetworkId) return;
+    if (!agent?.id || !currentTeamId) return;
     let cancelled = false;
     setWorkspaceLoading(true);
-    fetchAgentWorkspace(currentNetworkId, agent.id)
+    fetchAgentWorkspace(currentTeamId, agent.id)
       .then((res) => {
         if (!cancelled && res.ok) setWorkspaceRuns(res.runs ?? []);
       })
@@ -47,7 +47,7 @@ export default function AgentDetailPage() {
         if (!cancelled) setWorkspaceLoading(false);
       });
     return () => { cancelled = true; };
-  }, [agent?.id, currentNetworkId]);
+  }, [agent?.id, currentTeamId]);
 
   const handleTogglePublish = async (networkId: string) => {
     if (!agent || publishing) return;
@@ -117,7 +117,7 @@ export default function AgentDetailPage() {
       <section className="rounded-lg border border-neutral-200 p-4">
         <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">团队发布</h3>
         <div className="space-y-2">
-          {networks.map((net) => {
+          {teams.map((net) => {
             const isHome = net.id === agent.networkId;
             const isPublished = (agent.publishedNetworkIds ?? []).includes(net.id);
             const isBusy = publishing === net.id;
@@ -150,7 +150,7 @@ export default function AgentDetailPage() {
               </div>
             );
           })}
-          {networks.length <= 1 && (
+          {teams.length <= 1 && (
             <div className="text-xs text-neutral-400 py-2">仅有一个团队，无需发布管理。</div>
           )}
         </div>
@@ -167,7 +167,7 @@ export default function AgentDetailPage() {
         </div>
         <div>
           <dt className="text-neutral-500">团队</dt>
-          <dd>{networks.find((net) => net.id === agent.networkId)?.name ?? '默认团队'}</dd>
+          <dd>{teams.find((net) => net.id === agent.networkId)?.name ?? '默认团队'}</dd>
         </div>
         {agent.source && (
           <div>

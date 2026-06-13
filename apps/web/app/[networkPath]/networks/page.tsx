@@ -2,21 +2,21 @@
 import { useEffect, useState } from 'react';
 import { getWebSocket, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
-import type { NetworkSummary } from '@/lib/schema';
+import type { TeamSummary } from '@/lib/schema';
 
 export default function NetworksPage() {
-  const [networks, setNetworks] = useState<NetworkSummary[]>([]);
+  const [teams, setNetworks] = useState<TeamSummary[]>([]);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [loading, setLoading] = useState(true);
   const conn = useAgentBeanStore((s) => s.conn);
-  const currentNetworkId = useAgentBeanStore((s) => s.currentNetworkId);
-  const setCurrentNetworkId = useAgentBeanStore((s) => s.setCurrentNetworkId);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
+  const setCurrentTeamId = useAgentBeanStore((s) => s.setCurrentTeamId);
 
   const fetchNetworks = async () => {
     const res = await teamEvents().list();
-    if (res.ok && res.networks) {
-      setNetworks(res.networks);
+    if (res.ok && res.teams) {
+      setNetworks(res.teams);
     }
     setLoading(false);
   };
@@ -30,8 +30,8 @@ export default function NetworksPage() {
     const trimmed = name.trim();
     if (!trimmed) return;
     const res = await teamEvents().create({ name: trimmed, description: description || undefined });
-    if (res.ok && res.network) {
-      setNetworks((prev) => [...prev, res.network!]);
+    if (res.ok && res.team) {
+      setNetworks((prev) => [...prev, res.team!]);
       setName('');
       setDescription('');
     }
@@ -40,7 +40,7 @@ export default function NetworksPage() {
   const handleSwitch = async (networkId: string) => {
     const res = await teamEvents().switch(networkId);
     if (res.ok) {
-      setCurrentNetworkId(networkId);
+      setCurrentTeamId(networkId);
     }
   };
 
@@ -76,17 +76,17 @@ export default function NetworksPage() {
 
       {loading ? (
         <div className="text-sm text-neutral-500">加载中...</div>
-      ) : networks.length === 0 ? (
+      ) : teams.length === 0 ? (
         <div className="rounded-lg border border-dashed border-neutral-300 p-10 text-center text-neutral-500">
           还没有团队。
         </div>
       ) : (
         <ul className="space-y-2">
-          {networks.map((n) => (
+          {teams.map((n) => (
             <li
               key={n.id}
               className={`flex items-center justify-between rounded border px-3 py-2 ${
-                n.id === currentNetworkId ? 'border-neutral-900 bg-neutral-50' : 'border-neutral-200 hover:bg-neutral-50'
+                n.id === currentTeamId ? 'border-neutral-900 bg-neutral-50' : 'border-neutral-200 hover:bg-neutral-50'
               }`}
             >
               <div className="min-w-0">
@@ -96,7 +96,7 @@ export default function NetworksPage() {
                 )}
               </div>
               <div className="shrink-0 ml-4">
-                {n.id === currentNetworkId ? (
+                {n.id === currentTeamId ? (
                   <span className="text-xs rounded bg-neutral-900 text-white px-2 py-1">当前团队</span>
                 ) : (
                   <button

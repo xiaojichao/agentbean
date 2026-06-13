@@ -56,7 +56,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (authToken && marketing) {
       const savedNp = localStorage.getItem('agentbean.networkPath');
       const s = useAgentBeanStore.getState();
-      const net = s.networks.find((n) => n.id === s.currentNetworkId);
+      const net = s.teams.find((n) => n.id === s.currentTeamId);
       router.replace(`/${savedNp || net?.path || 'default'}/chat`);
     }
     if (!authToken && networked) {

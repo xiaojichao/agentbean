@@ -94,7 +94,7 @@ export interface OutboundMessage {
   status: 'pending' | 'sent' | 'failed';
 }
 
-export interface NetworkSummary {
+export interface TeamSummary {
   id: string;
   ownerId: string;
   name: string;

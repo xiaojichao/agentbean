@@ -79,7 +79,7 @@ export default function JoinPage() {
       if (res.ok && res.token && user) {
         localStorage.setItem('agentbean.token', res.token);
         useAgentBeanStore.getState().setAuthToken(res.token);
-        if (res.currentTeam?.id) useAgentBeanStore.getState().setCurrentNetworkId(res.currentTeam.id);
+        if (res.currentTeam?.id) useAgentBeanStore.getState().setCurrentTeamId(res.currentTeam.id);
         useAgentBeanStore.getState().setCurrentUser({
           id: user.id,
           username: user.username,
@@ -120,7 +120,7 @@ export default function JoinPage() {
       if (res.ok && res.token && user) {
         localStorage.setItem('agentbean.token', res.token);
         useAgentBeanStore.getState().setAuthToken(res.token);
-        if (res.currentTeam?.id) useAgentBeanStore.getState().setCurrentNetworkId(res.currentTeam.id);
+        if (res.currentTeam?.id) useAgentBeanStore.getState().setCurrentTeamId(res.currentTeam.id);
         useAgentBeanStore.getState().setCurrentUser({
           id: user.id,
           username: user.username,
