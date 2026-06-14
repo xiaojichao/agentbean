@@ -27,6 +27,7 @@ export interface WebSocketHandlerOptions {
   afterChannelMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterTeamMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  afterTaskMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
 
 export interface AgentSocketHandlerOptions {
@@ -177,10 +178,12 @@ export function registerWebSocketHandlers(
     }
   }, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.task.list, app, 'listTasks', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.task.create, app, 'createTask', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.task.update, app, 'updateTask', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.task.delete, app, 'deleteTask', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.task.reorder, app, 'reorderTask', undefined, { authenticatedUser: options.authenticatedUser });
+  const afterTaskMutation = (payload: unknown, result: unknown) =>
+    options.afterTaskMutation?.(payload, result);
+  bind(socket, WEB_EVENTS.task.create, app, 'createTask', afterTaskMutation, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.task.update, app, 'updateTask', afterTaskMutation, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.task.delete, app, 'deleteTask', afterTaskMutation, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.task.reorder, app, 'reorderTask', afterTaskMutation, { authenticatedUser: options.authenticatedUser });
 }
 
 export function registerAgentSocketHandlers(
