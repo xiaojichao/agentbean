@@ -1060,6 +1060,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             return dispatch;
           });
       },
+      async listByTeam(teamId) {
+        return teamDb
+          .prepare('SELECT * FROM dispatches WHERE team_id = ? ORDER BY created_at')
+          .all(teamId)
+          .map((row) => {
+            const dispatch = mapDispatch(row);
+            if (!dispatch) {
+              throw new Error('SQLite dispatch row could not be mapped');
+            }
+            return dispatch;
+          });
+      },
     },
     artifacts: {
       async create(artifact) {

@@ -117,11 +117,12 @@ function AgentMetricsPanel({
 export default function AgentMetricsPage() {
   const agents = useAgentBeanStore((s) => s.agents);
   const agentMetrics = useAgentBeanStore((s) => s.agentMetrics);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const np = useCurrentNetworkPath();
   const [loading, setLoading] = useState(true);
 
   const fetchMetrics = async () => {
-    const res = await agentEvents().metrics();
+    const res = await agentEvents().metrics(currentTeamId);
     if (res.ok && res.summaries) {
       useAgentBeanStore.getState().applyAgentMetrics(res.summaries);
     }
@@ -129,10 +130,11 @@ export default function AgentMetricsPage() {
   };
 
   useEffect(() => {
+    if (!currentTeamId) return;
     fetchMetrics();
     const interval = setInterval(fetchMetrics, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [currentTeamId]);
 
   const metricsList = Object.values(agentMetrics).sort(
     (a, b) => b.totalRequests - a.totalRequests

@@ -143,6 +143,7 @@ export function registerWebSocketHandlers(
       ack?.(socketErrorAck(error));
     }
   });
+  bind(socket, WEB_EVENTS.agent.metrics, app, 'summarizeAgentMetrics', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.send, app, 'sendMessage', async (_payload, result) => {
     await options.afterMessageSend?.(_payload, result);
     if (!options.dispatch || !isSendMessageAck(result)) {

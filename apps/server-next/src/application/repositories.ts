@@ -202,6 +202,7 @@ export interface DispatchRepository {
   markCancelled(input: { dispatchId: ID; completedAt: UnixMs }): Promise<DispatchMutationResult | null>;
   listPendingOlderThan(timestamp: UnixMs): Promise<DispatchRecord[]>;
   listByMessage(messageId: ID): Promise<DispatchRecord[]>;
+  listByTeam(teamId: ID): Promise<DispatchRecord[]>;
 }
 
 export interface ArtifactRepository {

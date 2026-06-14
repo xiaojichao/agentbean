@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TaskDto, type TaskStatus, type TeamDto, type UserDto, type WorkspaceRunDto } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TaskDto, type TaskStatus, type TeamDto, type UserDto, type WorkspaceRunDto } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 
@@ -64,6 +64,7 @@ export interface ServerNextUseCases {
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   searchMessages(input: SearchMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   listTasks(input: ListTasksInput): Promise<Ack<{ tasks: TaskDto[] }>>;
+  summarizeAgentMetrics(input: { userId: string; teamId: string }): Promise<Ack<{ summaries: AgentMetricsSummary[] }>>;
   createTask(input: CreateTaskInput): Promise<Ack<{ task: TaskDto }>>;
   updateTask(input: UpdateTaskInput): Promise<Ack<{ task: TaskDto }>>;
   deleteTask(input: DeleteTaskInput): Promise<Ack<{ task: TaskDto }>>;
@@ -1819,6 +1820,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
     },
 
+    async summarizeAgentMetrics(metricsInput) {
+      if (!(await repositories.teams.isMember(metricsInput.teamId, metricsInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const dispatches = await repositories.dispatches.listByTeam(metricsInput.teamId);
+      return makeSuccess({ summaries: summarizeDispatchMetrics(dispatches) });
+    },
+
     async createTask(taskInput) {
       if (!(await repositories.teams.isMember(taskInput.teamId, taskInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
@@ -2664,6 +2673,46 @@ function toRuntimeDto(runtime: RuntimeDto): RuntimeDto {
     version: runtime.version,
     lastSeenAt: runtime.lastSeenAt,
   };
+}
+
+function summarizeDispatchMetrics(dispatches: DispatchDto[]): AgentMetricsSummary[] {
+  const byAgent = new Map<string, DispatchDto[]>();
+  for (const dispatch of dispatches) {
+    const list = byAgent.get(dispatch.agentId);
+    if (list) {
+      list.push(dispatch);
+    } else {
+      byAgent.set(dispatch.agentId, [dispatch]);
+    }
+  }
+  const summaries: AgentMetricsSummary[] = [];
+  for (const [agentId, list] of byAgent) {
+    const latencies = list
+      .filter((d) => d.completedAt !== undefined)
+      .map((d) => d.completedAt! - d.createdAt)
+      .sort((a, b) => a - b);
+    const successCount = list.filter((d) => d.status === 'succeeded').length;
+    const failCount = list.filter((d) => d.status === 'failed' || d.status === 'timed_out').length;
+    const avgResponseMs = latencies.length > 0
+      ? Math.round(latencies.reduce((sum, ms) => sum + ms, 0) / latencies.length)
+      : 0;
+    const p95Index = Math.floor(latencies.length * 0.95);
+    const p95ResponseMs = latencies.length > 0 ? latencies[Math.min(p95Index, latencies.length - 1)]! : 0;
+    const lastFailed = list
+      .filter((d) => (d.status === 'failed' || d.status === 'timed_out') && d.completedAt !== undefined)
+      .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0))[0];
+    summaries.push({
+      agentId,
+      totalRequests: list.length,
+      successCount,
+      failCount,
+      avgResponseMs,
+      p95ResponseMs,
+      lastError: lastFailed?.error,
+      lastErrorAt: lastFailed?.completedAt,
+    });
+  }
+  return summaries;
 }
 
 function toDispatchDto(dispatch: DispatchDto): DispatchDto {

@@ -135,7 +135,7 @@ export interface AgentEvents {
   onSnapshot(handler: (snap: AgentSnapshot[]) => void): () => void;
   onStatus(handler: (snap: AgentSnapshot) => void): () => void;
   onDiscovered(handler: (payload: { runtimes: RuntimeInfo[]; agents: DiscoveredAgent[] }) => void): () => void;
-  metrics(): Promise<{ ok: boolean; summaries?: AgentMetricsSummary[]; error?: string }>;
+  metrics(teamId: string): Promise<{ ok: boolean; summaries?: AgentMetricsSummary[]; error?: string }>;
   publish(agentId: string, networkId: string): Promise<{ ok: boolean; error?: string }>;
   unpublish(agentId: string, networkId: string): Promise<{ ok: boolean; error?: string }>;
   delete(agentId: string): Promise<{ ok: boolean; error?: string }>;
@@ -174,8 +174,8 @@ export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
       socket.on('agents:discovered', handler);
       return () => { socket.off('agents:discovered', handler); };
     },
-    metrics() {
-      return emitWithTimeout(socket, 'agent:metrics', {});
+    metrics(teamId) {
+      return emitWithTimeout(socket, 'agent:metrics', { teamId });
     },
     subscribe() { socket.emit('agents:subscribe', {}); },
     create({ networkId, ...rest }) {
