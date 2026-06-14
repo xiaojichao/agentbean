@@ -133,7 +133,7 @@ sidebar 同时靠两条路径拿团队列表：① `nets.list()` ack；② `nets
 1. **修 §四 unhandled rejection**（小 PR，加 catch + 时序守卫），消除 console 噪音并加固初始化。
 2. **补 D2/D7 客户端实测**：本轮未在 apps/web 点进 tasks/agents 页操作；建议补一次 tasks CRUD 实测，坐实 D2（taskId 命名）在客户端的表现。
 3. **C 类决策**：7 项未广播事件当前非阻塞，但 `teams:snapshot`/`tasks:snapshot` 影响多用户实时同步。若 cutover 在即，建议至少补 `teams:snapshot`（与 §四 路径 ② 直接相关）。
-4. **生产 cutover**：readiness 31/31 + 主干跑通，功能性 gate 已满足。cutover 为高风险生产操作，需明确授权后走 `audit:agentbean-next-ready-to-flip` + production smoke gate。
+4. **生产 cutover** ✅ **已完成（2026-06-14，见 §七）**：readiness 31/31 + 主干跑通 + cutover audit 11/11，production smoke gate 全绿，`api.agentbean.dev` 已切到 server-next。
 
 ---
 
@@ -155,3 +155,46 @@ node apps/server-next/dist/apps/server-next/src/bin.js \
 cd apps/web && npx next dev -p 3100
 # 浏览器开 http://localhost:3100/signup → 注册 → 观察跳转 /default/chat
 ```
+
+---
+
+## 七、生产 Cutover 完成（2026-06-14）
+
+**生产环境已从 old `apps/server` 切换到 `apps/server-next`。**
+
+- **生产 URL**：https://api.agentbean.dev
+- **healthz ground truth**：`{"ok":true,"service":"agentbean-next-server"}`
+- **CI run**：[27485765684](https://github.com/xiaojichao/agentbean/actions/runs/27485765684)（conclusion=success）
+- **触发**：workflow_dispatch（`agentbean_deploy_target=next` + `run_production_deploy=true` + `run_agentbean_next_production_smoke=true`）
+
+### CI 防护链（全绿）
+
+ready-to-flip audit（11/11）→ npm 发布（contracts@0.2.0 / daemon-next@0.2.0 / canonical daemon@0.2.0）→ Railway 部署 server-next → strict-cutover audit → production entry/business smoke
+
+### 关键 job 结果
+
+| Job | 结果 |
+|---|---|
+| Validate server / AgentBean Next / web / daemon | success |
+| Publish agent to npm | success |
+| **Deploy production** | success |
+| **AgentBean Next production smoke** | success |
+| Old smoke / Railway env sync / preflight | skipped（预期，next 部署） |
+
+### Cutover 前置 gate
+
+- cutover readiness check：**31/31**
+- cutover audit（ready-to-flip）：**11/11**（含 `AGENTBEAN_DEPLOY_TARGET=next`、secrets、npm 包发布）
+
+### 前置 PR（cutover 前的协议/修复链）
+
+- #214 端到端协议对等性验证（本文档）
+- #215 emitWithTimeout 超时 resolve，消除 unhandled rejection
+- #216 whoami 超时不再误登出（#215 回归修复）
+
+### Cutover 后状态
+
+- production smoke 已通过真实生产环境验证
+- 建议留意真实流量一段时间
+- **C 类 7 项广播**（teams:snapshot / tasks:snapshot / task:updated / agent:status / agents:discovered / agent:metrics / device:status）仍未实现——影响多用户实时同步（非阻塞，单用户操作正常）。cutover 后若需要多端实时同步，建议优先补 `teams:snapshot` / `tasks:snapshot`。
+- **客户端 unhandled rejection**（§四）：production 实测仍有 1 个，源未精确定位（minified 栈限制，非 emitWithTimeout），非致命。
