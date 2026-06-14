@@ -788,6 +788,68 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('pushes agent:status increments after daemon agent reports change status', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-all', 'device-1', 'agent-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const web = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      web.disconnect();
+      agent.disconnect();
+    });
+
+    await web.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    await agent.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+    });
+
+    const statuses: Array<{ id: string; status: string }> = [];
+    web.on(WEB_EVENTS.agent.status, (status) => {
+      statuses.push(agentStatusSummary(status));
+    });
+    await expect(
+      web.emitWithAck(WEB_EVENTS.agent.subscribe, { userId: 'user-1', teamId: 'team-1' }),
+    ).resolves.toMatchObject({ ok: true, agents: [] });
+
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      }),
+    ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-1', status: 'online' }] });
+
+    await eventually(async () => {
+      expect(statuses.at(-1)).toEqual({ id: 'agent-1', status: 'online' });
+    });
+
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        agents: [],
+      }),
+    ).resolves.toMatchObject({ ok: true, missingOfflineIds: ['agent-1'] });
+
+    await eventually(async () => {
+      expect(statuses.at(-1)).toEqual({ id: 'agent-1', status: 'offline' });
+    });
+  });
+
   test('stops refreshing agent snapshots when a subscribed user loses team access', async () => {
     let channelGateCalls = 0;
     let visibleAgentCalls = 0;
@@ -1790,6 +1852,13 @@ function agentSummaries(payload: unknown): Array<{ id: string; status: string }>
     }
     return { id: String(agent.id), status: String(agent.status) };
   });
+}
+
+function agentStatusSummary(payload: unknown): { id: string; status: string } {
+  if (!payload || typeof payload !== 'object' || !('id' in payload) || !('status' in payload)) {
+    throw new Error('Expected agent status payload to include id and status');
+  }
+  return { id: String(payload.id), status: String(payload.status) };
 }
 
 function deviceSummaries(payload: unknown): Array<{ id: string; status: string }> {
