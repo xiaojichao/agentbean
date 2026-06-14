@@ -40,7 +40,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     authEvents().whoami().then((res) => {
       if (res.ok && res.user) {
         useAgentBeanStore.getState().setCurrentUser(res.user);
-      } else if (res.error) {
+      } else if (res.error === 'UNAUTHENTICATED') {
+        // 仅 token 真正无效才登出；超时('timeout')/网络错误保持登录态，下次重试
         localStorage.removeItem('agentbean.token');
         useAgentBeanStore.getState().setAuthToken(null);
         useAgentBeanStore.getState().setCurrentUser(null);
