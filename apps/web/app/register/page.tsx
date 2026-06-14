@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Search, Bot } from 'lucide-react';
 import { useAgentBeanStore } from '@/lib/store';
-import { getWebSocket, agentEvents } from '@/lib/socket';
+import { getWebSocket, agentEvents, deviceEvents } from '@/lib/socket';
 import type { DiscoveredAgent } from '@/lib/schema';
 import { RegisterAgentModal } from '@/components/register-agent-modal';
 
@@ -32,9 +32,12 @@ export default function RegisterPage() {
   const discovered = useAgentBeanStore((s) => s.discovered);
   const existingAgents = useAgentBeanStore((s) => s.agents);
   const discovering = useAgentBeanStore((s) => s.discovering);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<DiscoveredAgent | null>(null);
   const [modalMode, setModalMode] = useState<'create' | 'update'>('create');
+  const [scanDeviceId, setScanDeviceId] = useState<string | null>(null);
+  const [scanError, setScanError] = useState('');
 
   useEffect(() => {
     const socket = getWebSocket();
@@ -44,6 +47,7 @@ export default function RegisterPage() {
       useAgentBeanStore.getState().setDiscovered(payload.agents ?? []);
       useAgentBeanStore.getState().setRuntimes(payload.runtimes ?? []);
       useAgentBeanStore.getState().setDiscovering(false);
+      setScanError('');
     });
 
     return () => {
@@ -51,11 +55,37 @@ export default function RegisterPage() {
     };
   }, []);
 
-  const handleDiscover = () => {
+  useEffect(() => {
+    if (!currentTeamId || currentTeamId === 'default') {
+      setScanDeviceId(null);
+      return;
+    }
+    let cancelled = false;
+    deviceEvents().list(currentTeamId).then((res) => {
+      if (cancelled) return;
+      const devices = res.ok ? (res.devices ?? []) : [];
+      const device = devices.find((item) => item.status === 'online') ?? devices[0] ?? null;
+      setScanDeviceId(device?.id ?? null);
+      setScanError(device ? '' : '未找到可扫描的在线设备');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTeamId]);
+
+  const handleDiscover = async () => {
+    if (!scanDeviceId) {
+      setScanError('未找到可扫描的在线设备');
+      return;
+    }
+    setScanError('');
     useAgentBeanStore.getState().setDiscovering(true);
     useAgentBeanStore.getState().setDiscovered([]);
-    const socket = getWebSocket();
-    socket.emit('agents:discover');
+    const res = await deviceEvents().scan(scanDeviceId);
+    if (!res.ok) {
+      useAgentBeanStore.getState().setDiscovering(false);
+      setScanError(res.error ?? '扫描请求发送失败');
+    }
   };
 
   const handleRegister = (agent: DiscoveredAgent) => {
@@ -81,13 +111,18 @@ export default function RegisterPage() {
         </div>
         <button
           onClick={handleDiscover}
-          disabled={discovering}
+          disabled={discovering || !scanDeviceId}
           className="inline-flex items-center gap-1.5 rounded bg-neutral-900 px-4 py-2 text-sm text-white hover:bg-neutral-800 disabled:opacity-50"
         >
           <Search size={16} />
           {discovering ? '扫描中...' : '扫描本机 Agent'}
         </button>
       </div>
+      {scanError && (
+        <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+          {scanError}
+        </div>
+      )}
 
       {discovering && discovered.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-neutral-400">
