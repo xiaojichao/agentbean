@@ -548,6 +548,56 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('pushes tasks:snapshot to channel subscribers after task mutations', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'task-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const registerAck = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    bootstrap.disconnect();
+
+    const owner = await connectClient(`${baseUrl}/web`, {
+      auth: { token: (registerAck as { token: string }).token },
+    });
+    cleanups.push(async () => {
+      owner.disconnect();
+    });
+
+    const snapshots: Array<Array<{ id: string; title?: string }>> = [];
+    owner.on(WEB_EVENTS.task.snapshot, (tasks) => {
+      snapshots.push(taskSnapshotSummary(tasks));
+    });
+
+    await expect(
+      owner.emitWithAck(WEB_EVENTS.channel.subscribe, {
+        teamId: 'team-1',
+      }),
+    ).resolves.toMatchObject({ ok: true, channels: [{ id: 'channel-1' }] });
+
+    await expect(
+      owner.emitWithAck(WEB_EVENTS.task.create, {
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        title: 'My Task',
+      }),
+    ).resolves.toMatchObject({ ok: true, task: { title: 'My Task' } });
+
+    await eventually(async () => {
+      expect(snapshots.at(-1)).toEqual([{ id: 'task-1', title: 'My Task' }]);
+    });
+  });
+
   test('summarizes agent metrics from dispatch history on agent:metrics', async () => {
     const repositories = createInMemoryRepositories();
     const app = createServerNextUseCases({
@@ -1944,6 +1994,22 @@ function channelIds(payload: unknown): string[] {
       throw new Error('Expected channel snapshot item to include id');
     }
     return String(channel.id);
+  });
+}
+
+function taskSnapshotSummary(payload: unknown): Array<{ id: string; title?: string }> {
+  if (!Array.isArray(payload)) {
+    throw new Error('Expected task snapshot payload to be an array');
+  }
+  return payload.map((task) => {
+    if (!task || typeof task !== 'object' || !('id' in task)) {
+      throw new Error('Expected task snapshot item to include id');
+    }
+    const item = task as { id: unknown; title?: unknown };
+    return {
+      id: String(item.id),
+      title: typeof item.title === 'string' ? item.title : undefined,
+    };
   });
 }
 

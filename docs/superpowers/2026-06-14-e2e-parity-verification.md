@@ -130,7 +130,7 @@ sidebar 同时靠两条路径拿团队列表：① `nets.list()` ack；② `nets
 
 1. **React #185 已修复**（见 §八）：`NetworkLayout` 不再在 render 期间更新 Router，unresolved path fallback 也不再硬编码 `/default/chat`。
 2. **补 D2/D7 客户端实测**：本轮未在 apps/web 点进 tasks/agents 页操作；建议补一次 tasks CRUD 实测，坐实 D2（taskId 命名）在客户端的表现。
-3. **C 类决策**：C 类已从 7 项收敛到剩余 1 项：`tasks:snapshot`。其中 `task:updated`、`teams:snapshot`、`agent:status`、`device:status`、`agents:discovered` 已覆盖更关键的增量同步路径；`tasks:snapshot` 需要先决策 task subscription 语义。
+3. **C 类决策**：C 类已从 7 项全部收敛。`tasks:snapshot` 最终复用 `channels:subscribe` 的 team 任务上下文；`task:updated`、`teams:snapshot`、`agent:status`、`device:status`、`agents:discovered` 也已覆盖对应增量/快照路径。
 4. **生产 cutover** ✅ **已完成（2026-06-14，见 §七）**：readiness 31/31 + 主干跑通 + cutover audit 11/11，production smoke gate 全绿，`api.agentbean.dev` 已切到 server-next。
 
 ---
@@ -194,7 +194,7 @@ ready-to-flip audit（11/11）→ npm 发布（contracts@0.2.0 / daemon-next@0.2
 
 - production smoke 已通过真实生产环境验证
 - 建议留意真实流量一段时间
-- **C 类剩余广播**：`tasks:snapshot` 仍未实现；`teams:snapshot` / `task:updated` / `agent:status` / `device:status` / `agents:discovered` 已回填，`agent:metrics` 已作为 request/ack 实现。剩余项需要先决策 task subscription 语义（非阻塞，单用户操作正常）。
+- **C 类广播**：原 7 项已全部回填；`agent:metrics` 已作为 request/ack 实现。`tasks:snapshot` 语义收敛为复用 `channels:subscribe` 的 team 任务上下文。
 - **客户端 unhandled rejection**（§四）：production 实测仍有 1 个，源未精确定位（minified 栈限制，非 emitWithTimeout），非致命。
 
 ---

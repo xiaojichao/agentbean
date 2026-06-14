@@ -208,6 +208,7 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         const task = (result as { task?: unknown }).task;
         if (task) {
           emitTaskUpdated(webSubscribers, task);
+          await refreshTaskSubscribers(webSubscribers, app, task);
         }
       },
     });
@@ -443,6 +444,26 @@ async function resolveSubscriberUserId(
 function emitTaskUpdated(subscribers: Set<WebSocketSubscription>, task: unknown): void {
   for (const subscriber of subscribers) {
     subscriber.socket.emit?.(WEB_EVENTS.task.updated, task);
+  }
+}
+
+async function refreshTaskSubscribers(
+  subscribers: Set<WebSocketSubscription>,
+  app: ServerNextUseCases,
+  task: unknown,
+): Promise<void> {
+  const teamId = taskTeamId(task);
+  if (!teamId) {
+    return;
+  }
+  for (const subscriber of subscribers) {
+    if (subscriber.channels?.teamId !== teamId) {
+      continue;
+    }
+    const result = await app.listTasks(subscriber.channels);
+    if (result.ok) {
+      subscriber.socket.emit?.(WEB_EVENTS.task.snapshot, result.tasks);
+    }
   }
 }
 
@@ -801,6 +822,14 @@ function resultMessage(result: unknown): { channelId: string; teamId?: string } 
 function resultMessageTeamId(result: unknown): string | null {
   const message = resultMessage(result);
   return typeof message?.teamId === 'string' ? message.teamId : null;
+}
+
+function taskTeamId(task: unknown): string | null {
+  if (!task || typeof task !== 'object') {
+    return null;
+  }
+  const teamId = (task as { teamId?: unknown }).teamId;
+  return typeof teamId === 'string' ? teamId : null;
 }
 
 function resultDeviceTeamId(result: unknown): string | null {

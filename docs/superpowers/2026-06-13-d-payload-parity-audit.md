@@ -106,7 +106,7 @@
 | `task:update` | web `{id,...}` vs server `{userId,teamId,taskId,...}`：**`id`↔`taskId`**（D2） | `{task}` ✅ | ⚠️ D2 |
 | `task:delete` | web `{id}` vs server `taskId`：D2 | ✅ | ⚠️ D2 |
 | `task:reorder` | web `{id,sortOrder}` vs server `taskId`：D2 | `{task}` ✅ | ⚠️ D2 |
-| 订阅 `tasks:snapshot`/`task:updated` | — | `task:updated` ✅ 已在 task mutation 后广播；`tasks:snapshot` 仍未见 server-next 广播路径 | ⚠️ C（snapshot 剩余缺口） |
+| 订阅 `tasks:snapshot`/`task:updated` | — | `task:updated` ✅ 已在 task mutation 后广播；`tasks:snapshot` ✅ 已随 channel subscription 的 team 任务上下文广播 | ✅ |
 
 ### 3.7 DEVICE
 
@@ -162,7 +162,7 @@
 | **D6** web 多余字段 | 多事件 | 非致命 | 清理 web 多余字段或 server 显式忽略 |
 | **D7** networkId↔teamId / description↔title | agent/channel | 概念迁移 | web 改 `networkId`→`teamId`、`description`→`title`（channel.update） |
 | **B 类**（contracts 无定义） | 13 项 | device 长尾/auth/join/channel/agent | 逐项决策补 server 还是裁 UI |
-| **C 类**（2026-06-14 续核实） | 剩余 1 项 | 仍未见 server-next 广播：`tasks:snapshot` | `teams:snapshot`、`task:updated`、`agent:status`、`device:status`、`agents:discovered` 已回填；`agent:metrics` 已作为 request/ack 实现。剩余项需要先决策 task subscription 语义，单用户操作仍可依赖 ack 与 `task:updated` 增量。 |
+| **C 类**（2026-06-15 续核实） | 0 项 | 原 7 项已全部收敛 | `teams:snapshot`、`task:updated`、`tasks:snapshot`、`agent:status`、`device:status`、`agents:discovered` 已回填；`agent:metrics` 已作为 request/ack 实现。`tasks:snapshot` 语义收敛为复用 `channels:subscribe` 的 team 任务上下文。 |
 
 ---
 
