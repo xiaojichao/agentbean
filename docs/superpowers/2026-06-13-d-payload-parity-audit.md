@@ -189,3 +189,17 @@ D1/D2/D3/D7 都是 **web 端遗留旧协议**，方向统一为**改 web 对齐 
 ### 预期效果
 
 修完 D1-D5（系统性模式）后，web 应能**注册→进工作台→看团队→操作 task/agent/device** 的主干流程跑通，即可推进生产 UI 入口切换。B/C 类是长尾，不阻塞主干。
+
+---
+
+## 六、端到端验证结论（2026-06-14，回填）
+
+D1-D5 + D7 全部修完后（PR #205/#208/#209/#210/#211/#212），已实测验证主干流程跑通，详见 `2026-06-14-e2e-parity-verification.md`。摘要：
+
+- ✅ **browser smoke 19/19 全过**（含 `browser-console-clean`）—— server-next 协议实现健康
+- ✅ **apps/web 注册→进工作台实测通过**：D3（嵌套结构）/D4（token session）/D1（currentTeam.path）在客户端验证
+- ✅ **cutover readiness 31/31**
+- ⚠️ **残留**：apps/web 进工作台有 1 类 `Uncaught (in promise)`，根因是 `emitWithTimeout` 超时 reject 未被调用方 `.catch()`（sidebar.tsx:25 `team:list`、chat:306 `members:list`），非阻塞，修复见验证文档 §四
+- ⏸️ **D2/D7 客户端实测**：本轮未点进 tasks/agents 页，待补
+
+**审计既定目标「修完 D1-D5 主干跑通」达成。**
