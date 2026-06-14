@@ -1,4 +1,5 @@
 'use client';
+import { WEB_EVENTS } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact } from './schema.js';
 
@@ -163,38 +164,38 @@ function emitWithTimeout(socket: Socket, event: string, payload: any, timeoutMs 
 export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
   return {
     onSnapshot(handler) {
-      socket.on('agents:snapshot', handler);
-      return () => { socket.off('agents:snapshot', handler); };
+      socket.on(WEB_EVENTS.agent.snapshot, handler);
+      return () => { socket.off(WEB_EVENTS.agent.snapshot, handler); };
     },
     onStatus(handler) {
-      socket.on('agent:status', handler);
-      return () => { socket.off('agent:status', handler); };
+      socket.on(WEB_EVENTS.agent.status, handler);
+      return () => { socket.off(WEB_EVENTS.agent.status, handler); };
     },
     onDiscovered(handler) {
-      socket.on('agents:discovered', handler);
-      return () => { socket.off('agents:discovered', handler); };
+      socket.on(WEB_EVENTS.agent.discovered, handler);
+      return () => { socket.off(WEB_EVENTS.agent.discovered, handler); };
     },
     metrics(teamId) {
-      return emitWithTimeout(socket, 'agent:metrics', { teamId });
+      return emitWithTimeout(socket, WEB_EVENTS.agent.metrics, { teamId });
     },
-    subscribe() { socket.emit('agents:subscribe', {}); },
+    subscribe() { socket.emit(WEB_EVENTS.agent.subscribe, {}); },
     create({ networkId, ...rest }) {
-      return emitWithTimeout(socket, 'agent:create', { teamId: networkId, ...rest });
+      return emitWithTimeout(socket, WEB_EVENTS.agent.create, { teamId: networkId, ...rest });
     },
     listCustom(payload = {}) {
       return emitWithTimeout(socket, 'agent:custom:list', payload);
     },
     updateConfig({ id, ...rest }) {
-      return emitWithTimeout(socket, 'agent:update-config', { agentId: id, ...rest });
+      return emitWithTimeout(socket, WEB_EVENTS.agent.updateConfig, { agentId: id, ...rest });
     },
     publish(agentId, networkId) {
-      return emitWithTimeout(socket, 'agent:publish', { agentId, targetTeamId: networkId });
+      return emitWithTimeout(socket, WEB_EVENTS.agent.publish, { agentId, targetTeamId: networkId });
     },
     unpublish(agentId, networkId) {
-      return emitWithTimeout(socket, 'agent:unpublish', { agentId, targetTeamId: networkId });
+      return emitWithTimeout(socket, WEB_EVENTS.agent.unpublish, { agentId, targetTeamId: networkId });
     },
     delete(agentId) {
-      return emitWithTimeout(socket, 'agent:delete', { agentId });
+      return emitWithTimeout(socket, WEB_EVENTS.agent.delete, { agentId });
     },
   };
 }
@@ -212,25 +213,25 @@ export interface TeamEvents {
 export function teamEvents(socket: Socket = getWebSocket()): TeamEvents {
   return {
     list() {
-      return emitWithTimeout(socket, 'team:list', {});
+      return emitWithTimeout(socket, WEB_EVENTS.team.list, {});
     },
     create(payload) {
-      return emitWithTimeout(socket, 'team:create', payload);
+      return emitWithTimeout(socket, WEB_EVENTS.team.create, payload);
     },
     switch(teamId) {
-      return emitWithTimeout(socket, 'team:switch', { teamId });
+      return emitWithTimeout(socket, WEB_EVENTS.team.switch, { teamId });
     },
     update(payload) {
-      return emitWithTimeout(socket, 'team:update', payload);
+      return emitWithTimeout(socket, WEB_EVENTS.team.update, payload);
     },
     delete(teamId) {
-      return emitWithTimeout(socket, 'team:delete', { teamId });
+      return emitWithTimeout(socket, WEB_EVENTS.team.delete, { teamId });
     },
     onSnapshot(handler) {
-      socket.on('teams:snapshot', handler);
-      return () => { socket.off('teams:snapshot', handler); };
+      socket.on(WEB_EVENTS.team.snapshot, handler);
+      return () => { socket.off(WEB_EVENTS.team.snapshot, handler); };
     },
-    subscribe() { socket.emit('team:list', {}); },
+    subscribe() { socket.emit(WEB_EVENTS.team.list, {}); },
   };
 }
 
@@ -253,17 +254,17 @@ export interface ChannelEvents {
 
 export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
   return {
-    update(payload) { return emitWithTimeout(socket, 'channel:update', payload); },
-    members(channelId) { return emitWithTimeout(socket, 'channel:members', { channelId }); },
-    addAgent(channelId, agentId) { return emitWithTimeout(socket, 'channel:add-agent', { channelId, agentId }); },
-    addMember(channelId, userId) { return emitWithTimeout(socket, 'channel:add-member', { channelId, memberUserId: userId }); },
-    removeAgent(channelId, agentId) { return emitWithTimeout(socket, 'channel:remove-agent', { channelId, agentId }); },
-    removeMember(channelId, userId) { return emitWithTimeout(socket, 'channel:remove-member', { channelId, memberUserId: userId }); },
+    update(payload) { return emitWithTimeout(socket, WEB_EVENTS.channel.update, payload); },
+    members(channelId) { return emitWithTimeout(socket, WEB_EVENTS.channel.members, { channelId }); },
+    addAgent(channelId, agentId) { return emitWithTimeout(socket, WEB_EVENTS.channel.addAgent, { channelId, agentId }); },
+    addMember(channelId, userId) { return emitWithTimeout(socket, WEB_EVENTS.channel.addMember, { channelId, memberUserId: userId }); },
+    removeAgent(channelId, agentId) { return emitWithTimeout(socket, WEB_EVENTS.channel.removeAgent, { channelId, agentId }); },
+    removeMember(channelId, userId) { return emitWithTimeout(socket, WEB_EVENTS.channel.removeMember, { channelId, memberUserId: userId }); },
     leave(channelId) { return emitWithTimeout(socket, 'channel:leave', { channelId }); },
-    archive(channelId) { return emitWithTimeout(socket, 'channel:archive', { channelId }); },
-    delete(channelId) { return emitWithTimeout(socket, 'channel:delete', { channelId }); },
+    archive(channelId) { return emitWithTimeout(socket, WEB_EVENTS.channel.archive, { channelId }); },
+    delete(channelId) { return emitWithTimeout(socket, WEB_EVENTS.channel.delete, { channelId }); },
     stopAgents(channelId) { return emitWithTimeout(socket, 'channel:stop-agents', { channelId }); },
-    searchMessages(query, limit) { return emitWithTimeout(socket, 'message:search', { query, limit }); },
+    searchMessages(query, limit) { return emitWithTimeout(socket, WEB_EVENTS.message.search, { query, limit }); },
   };
 }
 
@@ -275,9 +276,9 @@ export interface MessageReactionEvents {
 
 export function messageReactionEvents(socket: Socket = getWebSocket()): MessageReactionEvents {
   return {
-    react(messageId, on, emoji) { return emitWithTimeout(socket, 'message:react', { messageId, on, emoji: emoji || '❤️' }); },
-    save(messageId, on) { return emitWithTimeout(socket, 'message:save', { messageId, on }); },
-    listSaved() { return emitWithTimeout(socket, 'message:list-saved', {}); },
+    react(messageId, on, emoji) { return emitWithTimeout(socket, WEB_EVENTS.message.react, { messageId, on, emoji: emoji || '❤️' }); },
+    save(messageId, on) { return emitWithTimeout(socket, WEB_EVENTS.message.save, { messageId, on }); },
+    listSaved() { return emitWithTimeout(socket, WEB_EVENTS.message.listSaved, {}); },
   };
 }
 
@@ -293,13 +294,13 @@ export interface AuthEvents {
 export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
   return {
     register(payload) {
-      return emitWithTimeout(socket, 'auth:register', payload, 20000);
+      return emitWithTimeout(socket, WEB_EVENTS.auth.register, payload, 20000);
     },
     login(payload) {
-      return emitWithTimeout(socket, 'auth:login', payload, 20000);
+      return emitWithTimeout(socket, WEB_EVENTS.auth.login, payload, 20000);
     },
     whoami() {
-      return emitWithTimeout(socket, 'auth:whoami', { token: getStoredAuthToken() });
+      return emitWithTimeout(socket, WEB_EVENTS.auth.whoami, { token: getStoredAuthToken() });
     },
     inviteCreate(payload = {}) {
       return emitWithTimeout(socket, 'invite:create', payload);
@@ -323,7 +324,7 @@ export interface JoinEvents {
 export function joinEvents(socket: Socket = getWebSocket()): JoinEvents {
   return {
     create(payload) {
-      return emitWithTimeout(socket, 'join:create', payload);
+      return emitWithTimeout(socket, WEB_EVENTS.join.create, payload);
     },
     list() {
       return emitWithTimeout(socket, 'join:list', {});
@@ -332,7 +333,7 @@ export function joinEvents(socket: Socket = getWebSocket()): JoinEvents {
       return emitWithTimeout(socket, 'join:revoke', payload);
     },
     validate(payload) {
-      return emitWithTimeout(socket, 'join:validate', payload);
+      return emitWithTimeout(socket, WEB_EVENTS.join.validate, payload);
     },
   };
 }
@@ -376,16 +377,16 @@ export interface DeviceEvents {
 export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
   return {
     list(teamId) {
-      return emitWithTimeout(socket, 'device:list', teamId ? { teamId } : {});
+      return emitWithTimeout(socket, WEB_EVENTS.device.list, teamId ? { teamId } : {});
     },
     get({ id }) {
-      return emitWithTimeout(socket, 'device:get', { deviceId: id });
+      return emitWithTimeout(socket, WEB_EVENTS.device.get, { deviceId: id });
     },
     agentsList(deviceId) {
       return emitWithTimeout(socket, 'device:agents:list', { deviceId });
     },
     scan(deviceId) {
-      return emitWithTimeout(socket, 'device:scan', { deviceId });
+      return emitWithTimeout(socket, WEB_EVENTS.device.scan, { deviceId });
     },
     selectDirectory(deviceId) {
       return emitWithTimeout(socket, 'device:select-directory', { deviceId }, 35000);
@@ -397,12 +398,12 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
       return emitWithTimeout(socket, 'device:rename', { id, hostname });
     },
     onSnapshot(handler) {
-      socket.on('devices:snapshot', handler);
-      return () => { socket.off('devices:snapshot', handler); };
+      socket.on(WEB_EVENTS.device.snapshot, handler);
+      return () => { socket.off(WEB_EVENTS.device.snapshot, handler); };
     },
     onStatus(handler) {
-      socket.on('device:status', handler);
-      return () => { socket.off('device:status', handler); };
+      socket.on(WEB_EVENTS.device.status, handler);
+      return () => { socket.off(WEB_EVENTS.device.status, handler); };
     },
     subscribe() { socket.emit('devices:subscribe', {}); },
   };
@@ -419,14 +420,14 @@ export interface TaskEvents {
 
 export function taskEvents(socket: Socket = getWebSocket()): TaskEvents {
   return {
-    create(payload) { return emitWithTimeout(socket, 'task:create', payload); },
-    list(channelId) { return emitWithTimeout(socket, 'task:list', { channelId }); },
-    update({ id, ...rest }) { return emitWithTimeout(socket, 'task:update', { taskId: id, ...rest }); },
-    delete(id) { return emitWithTimeout(socket, 'task:delete', { taskId: id }); },
-    reorder(id, sortOrder) { return emitWithTimeout(socket, 'task:reorder', { taskId: id, sortOrder }); },
+    create(payload) { return emitWithTimeout(socket, WEB_EVENTS.task.create, payload); },
+    list(channelId) { return emitWithTimeout(socket, WEB_EVENTS.task.list, { channelId }); },
+    update({ id, ...rest }) { return emitWithTimeout(socket, WEB_EVENTS.task.update, { taskId: id, ...rest }); },
+    delete(id) { return emitWithTimeout(socket, WEB_EVENTS.task.delete, { taskId: id }); },
+    reorder(id, sortOrder) { return emitWithTimeout(socket, WEB_EVENTS.task.reorder, { taskId: id, sortOrder }); },
     onSnapshot(handler) {
-      socket.on('tasks:snapshot', handler);
-      return () => { socket.off('tasks:snapshot', handler); };
+      socket.on(WEB_EVENTS.task.snapshot, handler);
+      return () => { socket.off(WEB_EVENTS.task.snapshot, handler); };
     },
   };
 }
@@ -442,19 +443,19 @@ export interface MemberEvents {
 export function memberEvents(socket: Socket = getWebSocket()): MemberEvents {
   return {
     list() {
-      return emitWithTimeout(socket, 'members:list', {});
+      return emitWithTimeout(socket, WEB_EVENTS.member.list, {});
     },
     updateHuman({ userId, ...rest }) {
-      return emitWithTimeout(socket, 'member:update-human', { targetUserId: userId, ...rest });
+      return emitWithTimeout(socket, WEB_EVENTS.member.updateHuman, { targetUserId: userId, ...rest });
     },
     updateRole(payload) {
-      return emitWithTimeout(socket, 'member:update-role', payload);
+      return emitWithTimeout(socket, WEB_EVENTS.member.updateRole, payload);
     },
     remove(payload) {
-      return emitWithTimeout(socket, 'member:remove', payload);
+      return emitWithTimeout(socket, WEB_EVENTS.member.remove, payload);
     },
     transferOwner(payload) {
-      return emitWithTimeout(socket, 'member:transfer-owner', payload);
+      return emitWithTimeout(socket, WEB_EVENTS.member.transferOwner, payload);
     },
   };
 }
@@ -469,11 +470,11 @@ export interface DmEvents {
 
 export function dmEvents(socket: Socket = getWebSocket()): DmEvents {
   return {
-    start(agentId) { return emitWithTimeout(socket, 'dm:start', { agentId }); },
-    list() { return emitWithTimeout(socket, 'dm:list', {}); },
+    start(agentId) { return emitWithTimeout(socket, WEB_EVENTS.dm.start, { agentId }); },
+    list() { return emitWithTimeout(socket, WEB_EVENTS.dm.list, {}); },
     onSnapshot(handler) {
-      socket.on('dms:snapshot', handler);
-      return () => { socket.off('dms:snapshot', handler); };
+      socket.on(WEB_EVENTS.dm.snapshot, handler);
+      return () => { socket.off(WEB_EVENTS.dm.snapshot, handler); };
     },
   };
 }
