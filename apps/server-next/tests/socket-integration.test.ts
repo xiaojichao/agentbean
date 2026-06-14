@@ -1456,6 +1456,104 @@ describe('server-next Socket.IO namespaces', () => {
     expect(agentTwoScanRequests).toEqual([]);
   });
 
+  test('pushes agents:discovered after a daemon scan reports runtimes and agents', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-all', 'device-1', 'scan-1', 'runtime-1', 'agent-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const web = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      web.disconnect();
+      agent.disconnect();
+    });
+
+    await web.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    await agent.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+    });
+
+    const scanRequests: unknown[] = [];
+    const discoveredEvents: Array<{
+      runtimes: Array<{ name: string; adapterKind: string; command?: string; cwd?: string; installed?: boolean }>;
+      agents: Array<{ name: string; adapterKind: string; category: string; source: string; command?: string; cwd?: string }>;
+    }> = [];
+    agent.on(AGENT_EVENTS.device.scanRequested, (payload) => {
+      scanRequests.push(payload);
+    });
+    web.on(WEB_EVENTS.agent.discovered, (payload) => {
+      discoveredEvents.push(discoveredPayloadSummary(payload));
+    });
+
+    await expect(
+      web.emitWithAck(WEB_EVENTS.device.list, { userId: 'user-1', teamId: 'team-1' }),
+    ).resolves.toMatchObject({ ok: true, devices: [{ id: 'device-1' }] });
+    await expect(
+      web.emitWithAck(WEB_EVENTS.device.scan, { userId: 'user-1', deviceId: 'device-1' }),
+    ).resolves.toMatchObject({ ok: true, request: { requestId: 'scan-1', deviceId: 'device-1' } });
+    await eventually(async () => {
+      expect(scanRequests).toEqual([{ requestId: 'scan-1', deviceId: 'device-1' }]);
+    });
+
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.device.runtimes, {
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        runtimes: [
+          {
+            adapterKind: 'codex-cli',
+            name: 'Codex CLI',
+            command: '/opt/homebrew/bin/codex',
+            cwd: '/Users/shaw/AgentBean',
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({ ok: true, runtimes: [{ id: 'runtime-1', adapterKind: 'codex' }] });
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      }),
+    ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-1', status: 'online' }] });
+
+    await eventually(async () => {
+      expect(discoveredEvents.at(-1)).toEqual({
+        runtimes: [
+          {
+            name: 'Codex CLI',
+            adapterKind: 'codex',
+            command: '/opt/homebrew/bin/codex',
+            cwd: '/Users/shaw/AgentBean',
+            installed: true,
+          },
+        ],
+        agents: [
+          {
+            name: 'Codex',
+            adapterKind: 'codex',
+            category: 'executor-hosted',
+            source: 'filesystem',
+            command: '/opt/homebrew/bin/codex',
+            cwd: '/Users/shaw/AgentBean',
+          },
+        ],
+      });
+    });
+  });
+
   test('emits DM channel history through channel:join for web listeners', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,
@@ -1921,6 +2019,48 @@ function runtimeSummary(payload: unknown): {
         command: typeof candidateRuntime.command === 'string' ? candidateRuntime.command : undefined,
         normalizedCommandKey:
           typeof candidateRuntime.normalizedCommandKey === 'string' ? candidateRuntime.normalizedCommandKey : undefined,
+      };
+    }),
+  };
+}
+
+function discoveredPayloadSummary(payload: unknown): {
+  runtimes: Array<{ name: string; adapterKind: string; command?: string; cwd?: string; installed?: boolean }>;
+  agents: Array<{ name: string; adapterKind: string; category: string; source: string; command?: string; cwd?: string }>;
+} {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('Expected agents:discovered payload to be an object');
+  }
+  const candidate = payload as { runtimes?: unknown; agents?: unknown };
+  if (!Array.isArray(candidate.runtimes) || !Array.isArray(candidate.agents)) {
+    throw new Error('Expected agents:discovered payload to include runtimes and agents arrays');
+  }
+  return {
+    runtimes: candidate.runtimes.map((runtime) => {
+      if (!runtime || typeof runtime !== 'object' || !('name' in runtime) || !('adapterKind' in runtime)) {
+        throw new Error('Expected discovered runtime to include name and adapterKind');
+      }
+      const item = runtime as { name: unknown; adapterKind: unknown; command?: unknown; cwd?: unknown; installed?: unknown };
+      return {
+        name: String(item.name),
+        adapterKind: String(item.adapterKind),
+        command: typeof item.command === 'string' ? item.command : undefined,
+        cwd: typeof item.cwd === 'string' ? item.cwd : undefined,
+        installed: typeof item.installed === 'boolean' ? item.installed : undefined,
+      };
+    }),
+    agents: candidate.agents.map((agent) => {
+      if (!agent || typeof agent !== 'object' || !('name' in agent) || !('adapterKind' in agent) || !('category' in agent) || !('source' in agent)) {
+        throw new Error('Expected discovered agent to include name, adapterKind, category, and source');
+      }
+      const item = agent as { name: unknown; adapterKind: unknown; category: unknown; source: unknown; command?: unknown; cwd?: unknown };
+      return {
+        name: String(item.name),
+        adapterKind: String(item.adapterKind),
+        category: String(item.category),
+        source: String(item.source),
+        command: typeof item.command === 'string' ? item.command : undefined,
+        cwd: typeof item.cwd === 'string' ? item.cwd : undefined,
       };
     }),
   };

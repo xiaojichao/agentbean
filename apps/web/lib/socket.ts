@@ -361,7 +361,7 @@ export interface DeviceRuntime {
 }
 
 export interface DeviceEvents {
-  list(): Promise<{ ok: boolean; devices?: DeviceInfo[]; error?: string }>;
+  list(teamId?: string): Promise<{ ok: boolean; devices?: DeviceInfo[]; error?: string }>;
   get(payload: { id: string }): Promise<{ ok: boolean; device?: any; error?: string }>;
   agentsList(deviceId: string): Promise<{ ok: boolean; agents?: DeviceAgent[]; runtimes?: DeviceRuntime[]; error?: string }>;
   scan(deviceId: string): Promise<{ ok: boolean; error?: string }>;
@@ -375,8 +375,8 @@ export interface DeviceEvents {
 
 export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
   return {
-    list() {
-      return emitWithTimeout(socket, 'device:list', {});
+    list(teamId) {
+      return emitWithTimeout(socket, 'device:list', teamId ? { teamId } : {});
     },
     get({ id }) {
       return emitWithTimeout(socket, 'device:get', { deviceId: id });

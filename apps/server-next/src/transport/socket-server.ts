@@ -1,5 +1,6 @@
 import type { ServerNextUseCases } from '../application/usecases.js';
 import { AGENT_EVENTS, WEB_EVENTS } from '../../../../packages/contracts/src/index.js';
+import { normalizeAdapterKind } from '../../../../packages/domain/src/index.js';
 import {
   registerAgentSocketHandlers,
   registerWebSocketHandlers,
@@ -34,6 +35,13 @@ interface WebSocketSubscription {
   channels?: ChannelSubscription;
   agents?: AgentSubscription;
   devices?: ChannelSubscription;
+}
+
+interface DiscoveredAgentReport {
+  name: string;
+  adapterKind: string;
+  category: string;
+  gatewayInstanceKey?: string;
 }
 
 export function attachServerNextNamespaces(server: SocketServerLike, app: ServerNextUseCases): ServerNextRealtime {
@@ -341,6 +349,7 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         for (const refreshTeamId of refreshTeamIds) {
           await refreshAgentSubscribers(webSubscribers, app, refreshTeamId);
         }
+        await emitDiscoveredAgents(webSubscribers, app, payload);
       },
     });
   });
@@ -570,6 +579,48 @@ function emitDeviceRuntimes(subscribers: Set<WebSocketSubscription>, teamId: str
   }
 }
 
+async function emitDiscoveredAgents(
+  subscribers: Set<WebSocketSubscription>,
+  app: ServerNextUseCases,
+  payload: unknown,
+): Promise<void> {
+  const teamId = payloadTeamId(payload);
+  const deviceId = payloadDeviceId(payload);
+  const agents = payloadDiscoveredAgents(payload);
+  if (!teamId || !deviceId || agents.length === 0) {
+    return;
+  }
+
+  for (const subscriber of subscribers) {
+    if (subscriber.devices?.teamId !== teamId) {
+      continue;
+    }
+    const result = await app.getDevice({ userId: subscriber.devices.userId, deviceId });
+    if (!result.ok) {
+      continue;
+    }
+    const runtimes = result.device.runtimes ?? [];
+    const runtimesByAdapter = new Map(
+      runtimes.map((runtime) => [normalizeAdapterKind(runtime.adapterKind), runtime]),
+    );
+    subscriber.socket.emit?.(WEB_EVENTS.agent.discovered, {
+      runtimes,
+      agents: agents.map((agent) => {
+        const adapterKind = normalizeAdapterKind(agent.adapterKind);
+        const runtime = runtimesByAdapter.get(adapterKind);
+        return {
+          name: agent.name,
+          adapterKind,
+          category: agent.category,
+          source: agent.gatewayInstanceKey ? 'gateway' : 'filesystem',
+          command: runtime?.command ?? '',
+          cwd: runtime?.cwd,
+        };
+      }),
+    });
+  }
+}
+
 function emitDispatchStatus(subscribers: Set<WebSocketSubscription>, dispatch: unknown): void {
   const teamId = dispatchTeamId(dispatch);
   if (!teamId) {
@@ -624,6 +675,14 @@ function payloadTargetTeamId(payload: unknown): string | null {
   return typeof teamId === 'string' ? teamId : null;
 }
 
+function payloadDeviceId(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const deviceId = (payload as { deviceId?: unknown }).deviceId;
+  return typeof deviceId === 'string' ? deviceId : null;
+}
+
 function payloadTeamIds(payload: unknown, key: string): string[] {
   if (!payload || typeof payload !== 'object') {
     return [];
@@ -633,6 +692,41 @@ function payloadTeamIds(payload: unknown, key: string): string[] {
     return [];
   }
   return uniqueStrings(value.filter((teamId): teamId is string => typeof teamId === 'string'));
+}
+
+function payloadDiscoveredAgents(payload: unknown): DiscoveredAgentReport[] {
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+  const agents = (payload as { agents?: unknown }).agents;
+  if (!Array.isArray(agents)) {
+    return [];
+  }
+  return agents.flatMap((agent) => {
+    if (!agent || typeof agent !== 'object') {
+      return [];
+    }
+    const candidate = agent as {
+      name?: unknown;
+      adapterKind?: unknown;
+      category?: unknown;
+      gatewayInstanceKey?: unknown;
+    };
+    if (
+      typeof candidate.name !== 'string' ||
+      typeof candidate.adapterKind !== 'string' ||
+      typeof candidate.category !== 'string'
+    ) {
+      return [];
+    }
+    return [{
+      name: candidate.name,
+      adapterKind: candidate.adapterKind,
+      category: candidate.category,
+      gatewayInstanceKey:
+        typeof candidate.gatewayInstanceKey === 'string' ? candidate.gatewayInstanceKey : undefined,
+    }];
+  });
 }
 
 function resultAgentVisibleTeamIds(result: unknown): string[] {
