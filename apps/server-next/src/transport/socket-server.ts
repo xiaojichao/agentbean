@@ -30,6 +30,7 @@ type AgentSubscription = ChannelSubscription;
 
 interface WebSocketSubscription {
   socket: SocketLike;
+  userId?: string;
   channels?: ChannelSubscription;
   agents?: AgentSubscription;
   devices?: ChannelSubscription;
@@ -185,6 +186,12 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         for (const teamId of payloadTeamIds(payload, 'channelTeamIds')) {
           await refreshChannelSubscribers(webSubscribers, app, teamId);
         }
+      },
+      async afterTeamMutation(_payload, result) {
+        if (!isSuccessAck(result)) {
+          return;
+        }
+        await refreshTeamSubscribers(webSubscribers, app);
       },
     });
     socket.on(WEB_EVENTS.dm.start, async (payload, ack) => {
@@ -371,6 +378,45 @@ async function refreshAgentSubscribers(
       subscriber.socket.emit?.(WEB_EVENTS.agent.snapshot, result.agents);
     }
   }
+}
+
+async function refreshTeamSubscribers(
+  subscribers: Set<WebSocketSubscription>,
+  app: ServerNextUseCases,
+): Promise<void> {
+  for (const subscriber of subscribers) {
+    try {
+      const userId = await resolveSubscriberUserId(subscriber, app);
+      if (!userId) {
+        continue;
+      }
+      const result = await app.listTeams({ userId });
+      if (result.ok) {
+        subscriber.socket.emit?.(WEB_EVENTS.team.snapshot, result.teams);
+      }
+    } catch (error) {
+      console.warn('[socket] team snapshot push failed (non-blocking):', error);
+    }
+  }
+}
+
+async function resolveSubscriberUserId(
+  subscriber: WebSocketSubscription,
+  app: ServerNextUseCases,
+): Promise<string | null> {
+  if (subscriber.userId) {
+    return subscriber.userId;
+  }
+  const authToken = socketAuthToken(subscriber.socket);
+  if (!authToken.token) {
+    return null;
+  }
+  const result = await app.whoami({ token: authToken.token });
+  if (!result.ok) {
+    return null;
+  }
+  subscriber.userId = result.user.id;
+  return subscriber.userId;
 }
 
 async function emitChannelMessageSubscribers(

@@ -454,6 +454,51 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('refreshes team snapshots after team mutations', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'channel-all']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const registerAck = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    bootstrap.disconnect();
+
+    const owner = await connectClient(`${baseUrl}/web`, {
+      auth: { token: (registerAck as { token: string }).token },
+    });
+    cleanups.push(async () => {
+      owner.disconnect();
+    });
+
+    const snapshots: Array<Array<{ id: string; name: string }>> = [];
+    owner.on(WEB_EVENTS.team.snapshot, (teams) => {
+      if (!Array.isArray(teams)) {
+        throw new Error('Expected team snapshot payload to be an array');
+      }
+      snapshots.push(teams);
+    });
+
+    await expect(
+      owner.emitWithAck(WEB_EVENTS.team.update, { userId: 'user-1', teamId: 'team-1', name: 'Renamed Team' }),
+    ).resolves.toMatchObject({ ok: true });
+
+    await eventually(async () => {
+      expect(snapshots.length).toBeGreaterThan(0);
+      const last = snapshots.at(-1)!;
+      expect(last.find((t) => t.id === 'team-1')?.name).toBe('Renamed Team');
+    });
+  });
+
   test('keeps channel subscription ack successful when DM snapshot refresh fails', async () => {
     const socket = new IntegrationFakeSocket();
     const namespace = new IntegrationFakeNamespace();
