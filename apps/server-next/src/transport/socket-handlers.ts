@@ -26,6 +26,7 @@ export interface WebSocketHandlerOptions {
   afterDeviceInviteComplete?(payload: unknown, result: unknown): Promise<void> | void;
   afterChannelMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  afterTeamMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
 
 export interface AgentSocketHandlerOptions {
@@ -43,10 +44,12 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.auth.login, app, 'loginUser');
   bind(socket, WEB_EVENTS.auth.whoami, app, 'whoami');
   bind(socket, WEB_EVENTS.team.list, app, 'listTeams', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.team.create, app, 'createTeam', undefined, { authenticatedUser: options.authenticatedUser });
+  const afterTeamMutation = (payload: unknown, result: unknown) =>
+    options.afterTeamMutation?.(payload, result);
+  bind(socket, WEB_EVENTS.team.create, app, 'createTeam', afterTeamMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.team.switch, app, 'switchTeam', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.team.update, app, 'updateTeam', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.team.delete, app, 'deleteTeam', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.team.update, app, 'updateTeam', afterTeamMutation, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.team.delete, app, 'deleteTeam', afterTeamMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.join.create, app, 'createJoinLink', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.join.validate, app, 'validateJoinLink');
   bind(socket, WEB_EVENTS.deviceInvite.create, app, 'createDeviceInvite', undefined, { authenticatedUser: options.authenticatedUser });
