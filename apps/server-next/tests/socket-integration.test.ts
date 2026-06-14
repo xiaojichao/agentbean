@@ -548,6 +548,59 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('summarizes agent metrics from dispatch history on agent:metrics', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 5000 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'agent-1', 'message-1', 'dispatch-1', 'dispatch-2']) },
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await repositories.dispatches.create({
+      id: 'dispatch-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
+      agentId: 'agent-1', status: 'succeeded', requestId: 'req-1',
+      createdAt: 1000, updatedAt: 1500, acceptedAt: 1200, completedAt: 2000, prompt: 'hello',
+    });
+    await repositories.dispatches.create({
+      id: 'dispatch-2', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
+      agentId: 'agent-1', status: 'failed', requestId: 'req-2',
+      createdAt: 2000, updatedAt: 2500, completedAt: 3000, error: 'boom', prompt: 'hello',
+    });
+
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const loginAck = await bootstrap.emitWithAck(WEB_EVENTS.auth.login, {
+      username: 'shaw',
+      password: 'secret',
+    });
+    bootstrap.disconnect();
+    const owner = await connectClient(`${baseUrl}/web`, {
+      auth: { token: (loginAck as { token: string }).token },
+    });
+    cleanups.push(async () => {
+      owner.disconnect();
+    });
+
+    const res = await owner.emitWithAck(WEB_EVENTS.agent.metrics, { teamId: 'team-1' });
+    expect(res).toMatchObject({ ok: true });
+    const summaries = (res as {
+      summaries?: Array<{ agentId: string; totalRequests: number; successCount: number; failCount: number; lastError?: string }>;
+    }).summaries;
+    expect(summaries).toHaveLength(1);
+    expect(summaries![0]).toMatchObject({
+      agentId: 'agent-1',
+      totalRequests: 2,
+      successCount: 1,
+      failCount: 1,
+      lastError: 'boom',
+    });
+  });
+
   test('keeps channel subscription ack successful when DM snapshot refresh fails', async () => {
     const socket = new IntegrationFakeSocket();
     const namespace = new IntegrationFakeNamespace();

@@ -607,6 +607,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       async listByMessage(messageId) {
         return Array.from(dispatches.values()).filter((dispatch) => dispatch.messageId === messageId);
       },
+      async listByTeam(teamId) {
+        return Array.from(dispatches.values()).filter((dispatch) => dispatch.teamId === teamId);
+      },
     },
     artifacts: {
       async create(input) {

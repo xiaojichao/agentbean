@@ -109,3 +109,14 @@ export interface DeleteAgentCommandDto {
   teamId: ID;
   agentId: ID;
 }
+
+export interface AgentMetricsSummary {
+  agentId: ID;
+  totalRequests: number;
+  successCount: number;
+  failCount: number;
+  avgResponseMs: number;
+  p95ResponseMs: number;
+  lastError?: string;
+  lastErrorAt?: UnixMs;
+}
