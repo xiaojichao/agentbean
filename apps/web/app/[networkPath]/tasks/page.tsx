@@ -136,6 +136,7 @@ export default function TasksPage() {
     socket.emit('channels:subscribe', {});
     const onChannels = (list: ChannelSummary[]) => applyChannelsSnapshot(list);
     socket.on('channels:snapshot', onChannels);
+    const unsubscribeTasks = taskEvents(socket).onSnapshot((list) => setTasks(list as Task[]));
     const unsubscribeDms = dmEvents(socket).onSnapshot(applyDmsSnapshot);
     loadTasks();
     memberEvents().list().then((res) => {
@@ -145,6 +146,7 @@ export default function TasksPage() {
     });
     return () => {
       socket.off('channels:snapshot', onChannels);
+      unsubscribeTasks();
       unsubscribeDms();
     };
   }, [conn, applyChannelsSnapshot, applyDmsSnapshot, loadTasks]);

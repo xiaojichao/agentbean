@@ -414,6 +414,7 @@ export interface TaskEvents {
   update(payload: { id: string; title?: string; description?: string; status?: string; assigneeId?: string | null; channelId?: string | null; tags?: string[]; sortOrder?: number }): Promise<{ ok: boolean; task?: any; error?: string }>;
   delete(id: string): Promise<{ ok: boolean; error?: string }>;
   reorder(id: string, sortOrder: number): Promise<{ ok: boolean; error?: string }>;
+  onSnapshot(handler: (tasks: any[]) => void): () => void;
 }
 
 export function taskEvents(socket: Socket = getWebSocket()): TaskEvents {
@@ -423,6 +424,10 @@ export function taskEvents(socket: Socket = getWebSocket()): TaskEvents {
     update({ id, ...rest }) { return emitWithTimeout(socket, 'task:update', { taskId: id, ...rest }); },
     delete(id) { return emitWithTimeout(socket, 'task:delete', { taskId: id }); },
     reorder(id, sortOrder) { return emitWithTimeout(socket, 'task:reorder', { taskId: id, sortOrder }); },
+    onSnapshot(handler) {
+      socket.on('tasks:snapshot', handler);
+      return () => { socket.off('tasks:snapshot', handler); };
+    },
   };
 }
 
