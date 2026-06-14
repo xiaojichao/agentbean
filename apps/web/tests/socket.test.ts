@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { artifactUploadFallbackUrls, artifactUploadProxyUrl, artifactUploadUrl, uploadArtifact } from '../lib/socket';
+import {
+  agentEvents,
+  artifactUploadFallbackUrls,
+  artifactUploadProxyUrl,
+  artifactUploadUrl,
+  channelEvents,
+  deviceEvents,
+  taskEvents,
+  uploadArtifact,
+} from '../lib/socket';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -41,3 +50,106 @@ describe('artifactUploadUrl', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/teams/default/artifacts/upload?token=', expect.objectContaining({ method: 'POST' }));
   });
 });
+
+describe('socket event payload adapters', () => {
+  it('maps task page ids to server taskId payloads', async () => {
+    const { socket, calls } = createAckSocket();
+    const tasks = taskEvents(socket);
+
+    await tasks.update({ id: 'task-1', title: 'Renamed' });
+    expect(calls.at(-1)).toEqual({
+      event: 'task:update',
+      payload: { taskId: 'task-1', title: 'Renamed' },
+    });
+
+    await tasks.delete('task-1');
+    expect(calls.at(-1)).toEqual({
+      event: 'task:delete',
+      payload: { taskId: 'task-1' },
+    });
+
+    await tasks.reorder('task-1', 42);
+    expect(calls.at(-1)).toEqual({
+      event: 'task:reorder',
+      payload: { taskId: 'task-1', sortOrder: 42 },
+    });
+  });
+
+  it('maps agent network ids to server team payloads', async () => {
+    const { socket, calls } = createAckSocket();
+    const agents = agentEvents(socket);
+
+    await agents.create({
+      name: 'Codex',
+      adapterKind: 'codex',
+      command: 'codex',
+      deviceId: 'device-1',
+      networkId: 'team-1',
+    });
+    expect(calls.at(-1)?.event).toBe('agent:create');
+    expect(calls.at(-1)?.payload).toMatchObject({
+      name: 'Codex',
+      adapterKind: 'codex',
+      command: 'codex',
+      deviceId: 'device-1',
+      teamId: 'team-1',
+    });
+    expect(calls.at(-1)?.payload).not.toHaveProperty('networkId');
+
+    await agents.publish('agent-1', 'team-1');
+    expect(calls.at(-1)).toEqual({
+      event: 'agent:publish',
+      payload: { agentId: 'agent-1', targetTeamId: 'team-1' },
+    });
+
+    await agents.unpublish('agent-1', 'team-1');
+    expect(calls.at(-1)).toEqual({
+      event: 'agent:unpublish',
+      payload: { agentId: 'agent-1', targetTeamId: 'team-1' },
+    });
+
+    await agents.updateConfig({ id: 'agent-1', name: 'Codex' });
+    expect(calls.at(-1)).toEqual({
+      event: 'agent:update-config',
+      payload: { agentId: 'agent-1', name: 'Codex' },
+    });
+  });
+
+  it('maps device and channel member ids to server payload names', async () => {
+    const { socket, calls } = createAckSocket();
+
+    await deviceEvents(socket).get({ id: 'device-1' });
+    expect(calls.at(-1)).toEqual({
+      event: 'device:get',
+      payload: { deviceId: 'device-1' },
+    });
+
+    await channelEvents(socket).addMember('channel-1', 'user-1');
+    expect(calls.at(-1)).toEqual({
+      event: 'channel:add-member',
+      payload: { channelId: 'channel-1', memberUserId: 'user-1' },
+    });
+
+    await channelEvents(socket).removeMember('channel-1', 'user-1');
+    expect(calls.at(-1)).toEqual({
+      event: 'channel:remove-member',
+      payload: { channelId: 'channel-1', memberUserId: 'user-1' },
+    });
+  });
+});
+
+function createAckSocket(): {
+  socket: Parameters<typeof taskEvents>[0];
+  calls: Array<{ event: string; payload: unknown }>;
+} {
+  const calls: Array<{ event: string; payload: unknown }> = [];
+  const socket = {
+    emit: vi.fn((event: string, payload: unknown, ack?: (res: unknown) => void) => {
+      calls.push({ event, payload });
+      ack?.({ ok: true });
+    }),
+    on: vi.fn(),
+    off: vi.fn(),
+  };
+  return { socket: socket as Parameters<typeof taskEvents>[0], calls };
+}
