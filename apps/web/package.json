@@ -5,12 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "next dev -p 3100",
+    "prebuild": "tsc -p ../../packages/contracts/tsconfig.json",
     "build": "next build",
     "start": "next start -p 3100",
     "lint": "next lint",
+    "pretest": "tsc -p ../../packages/contracts/tsconfig.json",
     "test": "vitest run"
   },
   "dependencies": {
+    "@agentbean/contracts": "file:../../packages/contracts",
     "@xyflow/react": "^12.10.2",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",

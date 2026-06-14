@@ -184,7 +184,7 @@ D1/D2/D3/D7 都是 **web 端遗留旧协议**，方向统一为**改 web 对齐 
 
 - **批量 PR**：按 D1/D2 系统性模式各开一个 PR（一个模式改 N 处 web 字段，一次性解决一批），而非逐事件 PR。
 - **每批后探针验证**：修完 auth 域(D3/D4/D5)→探针验证进工作台；修完 D1→探针验证 team 显示；以此类推。
-- **web 全量迁移 WEB_EVENTS 常量**：本次审计再次暴露"web 硬编码事件名/字段"的漂移根源，建议后续把 socket.ts 全量改用 `@agentbean/contracts` 的 `WEB_EVENTS` + DTO 类型（需加依赖），从根本上锁死对齐。
+- **web 事件常量迁移**：`apps/web/lib/socket.ts` 已将 contracts 已定义事件迁到 `@agentbean/contracts` 的 `WEB_EVENTS`；仍保留的硬编码项均是 contracts 尚未定义的长尾事件，需单独协议决策后再收敛。
 
 ### 预期效果
 
