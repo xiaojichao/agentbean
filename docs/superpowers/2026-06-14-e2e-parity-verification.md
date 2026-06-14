@@ -11,7 +11,7 @@
 
 ## 一、结论摘要
 
-**主干流程跑通，D1-D5 修复验证达成。** cutover 基建 readiness 31/31。残留 1 类非致命的客户端健壮性缺陷（emitWithTimeout 未 catch），已定位根因。
+**主干流程跑通，D1-D5 修复验证达成。** cutover 基建 readiness 31/31。cutover 后复测发现的客户端 `React #185` 无限更新问题已定位并修复（见 §八）；§四 的 `emitWithTimeout` 归因是早期假设，已被 §八 纠正。
 
 | 验证项 | 结果 | 证据来源 |
 |---|---|---|
@@ -21,7 +21,7 @@
 | D1 team 域 currentTeam.path | ✅ | 跳转用 `res.currentTeam?.path`，成功进工作台 |
 | chat / tasks 页编译 | ✅ | web dev 日志：`✓ Compiled /[networkPath]/{chat,tasks}` 全 200，无编译错误 |
 | cutover 基建 readiness | ✅ | `check:agentbean-next-readiness` **31/31** |
-| 客户端 unhandled rejection | ⚠️ | 进工作台 console 1 个 `Uncaught (in promise)`，根因已定位（见 §四），非阻塞 |
+| 客户端 React #185 | ✅ | `NetworkLayout` render 期 redirect 已移入 effect，本地 Playwright 复现零 `pageerror`（见 §八） |
 | D2 / D7 在 apps/web 客户端实测 | ⏸️ | 本轮未点进 tasks/agents 页操作；browser smoke 已覆盖 server 端 task CRUD |
 
 ---
@@ -83,13 +83,13 @@ if (res.ok && res.token && user) {        // D3 res.token
 
 ---
 
-## 四、残留缺陷：客户端 unhandled rejection（已定位根因）
+## 四、早期诊断：客户端 unhandled rejection（已被 §八 纠正）
 
 ### 4.1 现象
 
 apps/web 进工作台后 console 出现 `Uncaught (in promise)`（0 args，信息少）。
 
-### 4.2 根因
+### 4.2 早期根因假设
 
 `emitWithTimeout`（`apps/web/lib/socket.ts:148-153`）超时时 `reject(new Error('socket timeout'))`：
 ```js
@@ -118,19 +118,17 @@ browser smoke 未踩到（预置 session + 服务端自启，时序不同）；a
 
 sidebar 同时靠两条路径拿团队列表：① `nets.list()` ack；② `nets.onSnapshot()` 订阅 `teams:snapshot`。而 `teams:snapshot` 正是 C 类未广播项之一（#213 核实），故路径 ② 失效，团队列表更依赖路径 ①，使其健壮性更关键。
 
-### 4.5 性质与修复
+### 4.5 后续结论
 
-**非致命，不阻塞主干**（browser smoke 19/19 证明 server 端 team:list 本身正常；apps/web 实测也成功进工作台，UI 可用 fallback `/default`）。修复方向：
+本节是 #215 前的早期判断。#215 将 `emitWithTimeout` 超时改为 resolve 是正确的防御性改进，但 cutover 后 production 复测仍能触发 `Uncaught (in promise)`，证明它不是最终真源。最终根因与修复见 §八。
 
-- **最小**：给 sidebar.tsx:25、chat:306 等 emitWithTimeout 调用加 `.catch(() => {})`，消除 console 噪音。
-- **彻底**：emit 前等 socket `authenticated` 事件而非仅 `conn==='open'`，根治初始化时序。
-- **全局**：审计所有 `emitWithTimeout(...).then(` 无 `.catch` 的调用点统一加 catch（grep 可枚举）。
+**历史修复方向（已由 #215 覆盖一部分）**：给 socket ack 超时统一降级，避免调用方未 catch 时产生额外噪音。该方向仍可作为健壮性措施保留，但不再视为 React #185 的根因修复。
 
 ---
 
 ## 五、下一步建议
 
-1. **修 §四 unhandled rejection**（小 PR，加 catch + 时序守卫），消除 console 噪音并加固初始化。
+1. **React #185 已修复**（见 §八）：`NetworkLayout` 不再在 render 期间更新 Router，unresolved path fallback 也不再硬编码 `/default/chat`。
 2. **补 D2/D7 客户端实测**：本轮未在 apps/web 点进 tasks/agents 页操作；建议补一次 tasks CRUD 实测，坐实 D2（taskId 命名）在客户端的表现。
 3. **C 类决策**：7 项未广播事件当前非阻塞，但 `teams:snapshot`/`tasks:snapshot` 影响多用户实时同步。若 cutover 在即，建议至少补 `teams:snapshot`（与 §四 路径 ② 直接相关）。
 4. **生产 cutover** ✅ **已完成（2026-06-14，见 §七）**：readiness 31/31 + 主干跑通 + cutover audit 11/11，production smoke gate 全绿，`api.agentbean.dev` 已切到 server-next。
@@ -198,3 +196,18 @@ ready-to-flip audit（11/11）→ npm 发布（contracts@0.2.0 / daemon-next@0.2
 - 建议留意真实流量一段时间
 - **C 类 7 项广播**（teams:snapshot / tasks:snapshot / task:updated / agent:status / agents:discovered / agent:metrics / device:status）仍未实现——影响多用户实时同步（非阻塞，单用户操作正常）。cutover 后若需要多端实时同步，建议优先补 `teams:snapshot` / `tasks:snapshot`。
 - **客户端 unhandled rejection**（§四）：production 实测仍有 1 个，源未精确定位（minified 栈限制，非 emitWithTimeout），非致命。
+
+---
+
+## 八、客户端 unhandled rejection 真源纠正：React #185（2026-06-14 补）
+
+production sourcemap rebuild + 注入 `unhandledrejection` 监听抓到 reason：**`Minified React error #185` = Maximum update depth exceeded（无限 re-render）**。
+
+- **纠正 §四**：§四 把 unhandled rejection 归因 `emitWithTimeout` 超时未 catch。#215（emitWithTimeout 超时改 resolve）合并后 production 实测 rejection **仍在**——证明 emitWithTimeout **不是**真源。真源是 **React #185 无限 re-render**。（注：#215 仍是正确的防御性改进，只是没命中这个 rejection。）
+- **性质**：真实的无限 re-render bug（某处 setState 循环）。production main 区域实际崩溃（snapshot 显示 main 空 = React error boundary 兜底）；空频道下用户因 main 本就无内容而感知不到，**有消息时 main 会崩**。
+- **栈限制**：minified 栈全在 React chunk（React 检测 max-depth 后内部抛），不指向应用 throw 点；需 sourcemap + 组件栈。
+- **已排除**（代码审查）：socket.on 累积、render-time setState、activeChannelObj/activeDm（`?.` 安全）、lastLoadedMessage（length 守卫）、profileAgent useEffect（守卫 + 初始 null）、conn 抖动（管理正常）、各 useEffect 依赖（多为 primitive/稳定 store action）。
+- **已定位并修复（2026-06-14 续）**：dev 复现抓到 React warning：`Cannot update a component (Router) while rendering a different component (NetworkLayout)`，随后触发 `Maximum update depth exceeded`。真源是 `apps/web/app/[networkPath]/layout.tsx` 在 render 分支里对 unresolved network path 直接调用 `router.replace('/default/chat')`。
+- **修复方式**：将 unresolved network redirect 移入 `useEffect`，render 分支只返回 `null`；同时 fallback 不再硬编码 `/default/chat`，而是跳到 `teams[0]?.path ?? 'default'` 对应的真实团队 path，避免新注册团队 path 尚未稳定时落到不存在的 default route。
+- **回归保护**：新增 `apps/web/tests/network-layout-redirect.test.ts`，锁住两点：render 期间不更新 Router；unresolved path fallback 使用可用团队 path 而非硬编码 default。
+- **验证结果**：本地 apps/web + server-next + Playwright 复现从 `Maximum update depth exceeded` / render-time Router warning 变为零 `pageerror`，URL 保持在新注册团队真实 path，chat 主区正常渲染空会话态；`npx vitest run tests --api.host 127.0.0.1` 46/46 通过；`apps/web` 的 `npm run build` 通过。
