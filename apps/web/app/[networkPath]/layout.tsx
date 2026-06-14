@@ -15,6 +15,8 @@ export default function NetworkLayout({ children }: { children: React.ReactNode 
   const setCurrentTeamId = useAgentBeanStore((s) => s.setCurrentTeamId);
 
   const resolved = teams.find((n) => n.path === networkPath);
+  const unresolvedNetworkPath = teams.length > 0 && !resolved;
+  const fallbackNetworkPath = teams[0]?.path ?? 'default';
 
   useEffect(() => {
     if (conn !== 'open' || !resolved) return;
@@ -27,12 +29,16 @@ export default function NetworkLayout({ children }: { children: React.ReactNode 
     });
   }, [resolved?.id, conn]);
 
+  useEffect(() => {
+    if (!unresolvedNetworkPath) return;
+    router.replace(`/${fallbackNetworkPath}/chat`);
+  }, [fallbackNetworkPath, router, unresolvedNetworkPath]);
+
   if (teams.length === 0 && conn === 'connecting') {
     return <div className="flex h-[calc(100vh-40px)] items-center justify-center"><div className="h-6 w-6 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-700" /></div>;
   }
 
-  if (teams.length > 0 && !resolved) {
-    router.replace('/default/chat');
+  if (unresolvedNetworkPath) {
     return null;
   }
 
