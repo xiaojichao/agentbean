@@ -499,6 +499,55 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('pushes task:updated to subscribers after task mutations', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'task-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const registerAck = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    bootstrap.disconnect();
+
+    const owner = await connectClient(`${baseUrl}/web`, {
+      auth: { token: (registerAck as { token: string }).token },
+    });
+    cleanups.push(async () => {
+      owner.disconnect();
+    });
+
+    const updates: Array<{ id: string; title?: string }> = [];
+    owner.on(WEB_EVENTS.task.updated, (task) => {
+      if (typeof task !== 'object' || task === null) {
+        throw new Error('Expected task:updated payload to be an object');
+      }
+      updates.push(task as { id: string; title?: string });
+    });
+
+    await expect(
+      owner.emitWithAck(WEB_EVENTS.task.create, {
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        title: 'My Task',
+      }),
+    ).resolves.toMatchObject({ ok: true, task: { title: 'My Task' } });
+
+    await eventually(async () => {
+      expect(updates.length).toBeGreaterThan(0);
+      expect(updates.at(-1)!.title).toBe('My Task');
+    });
+  });
+
   test('keeps channel subscription ack successful when DM snapshot refresh fails', async () => {
     const socket = new IntegrationFakeSocket();
     const namespace = new IntegrationFakeNamespace();

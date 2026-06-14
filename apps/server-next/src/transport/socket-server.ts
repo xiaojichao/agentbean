@@ -193,6 +193,15 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         }
         await refreshTeamSubscribers(webSubscribers, app);
       },
+      async afterTaskMutation(_payload, result) {
+        if (!isSuccessAck(result)) {
+          return;
+        }
+        const task = (result as { task?: unknown }).task;
+        if (task) {
+          emitTaskUpdated(webSubscribers, task);
+        }
+      },
     });
     socket.on(WEB_EVENTS.dm.start, async (payload, ack) => {
       try {
@@ -417,6 +426,12 @@ async function resolveSubscriberUserId(
   }
   subscriber.userId = result.user.id;
   return subscriber.userId;
+}
+
+function emitTaskUpdated(subscribers: Set<WebSocketSubscription>, task: unknown): void {
+  for (const subscriber of subscribers) {
+    subscriber.socket.emit?.(WEB_EVENTS.task.updated, task);
+  }
 }
 
 async function emitChannelMessageSubscribers(
