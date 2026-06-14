@@ -116,7 +116,7 @@ browser smoke 未踩到（预置 session + 服务端自启，时序不同）；a
 
 ### 4.4 与 C 类的关联
 
-sidebar 同时靠两条路径拿团队列表：① `nets.list()` ack；② `nets.onSnapshot()` 订阅 `teams:snapshot`。而 `teams:snapshot` 正是 C 类未广播项之一（#213 核实），故路径 ② 失效，团队列表更依赖路径 ①，使其健壮性更关键。
+sidebar 同时靠两条路径拿团队列表：① `nets.list()` ack；② `nets.onSnapshot()` 订阅 `teams:snapshot`。早期 #213 曾核实 `teams:snapshot` 未广播；后续 server-next 已回填 team mutation 后的 `teams:snapshot`，因此路径 ② 不再是已知缺口。
 
 ### 4.5 后续结论
 
@@ -130,7 +130,7 @@ sidebar 同时靠两条路径拿团队列表：① `nets.list()` ack；② `nets
 
 1. **React #185 已修复**（见 §八）：`NetworkLayout` 不再在 render 期间更新 Router，unresolved path fallback 也不再硬编码 `/default/chat`。
 2. **补 D2/D7 客户端实测**：本轮未在 apps/web 点进 tasks/agents 页操作；建议补一次 tasks CRUD 实测，坐实 D2（taskId 命名）在客户端的表现。
-3. **C 类决策**：7 项未广播事件当前非阻塞，但 `teams:snapshot`/`tasks:snapshot` 影响多用户实时同步。若 cutover 在即，建议至少补 `teams:snapshot`（与 §四 路径 ② 直接相关）。
+3. **C 类决策**：C 类已从 7 项收敛到剩余 3 项：`tasks:snapshot`、`agents:discovered`、`device:status`。其中 `task:updated`、`teams:snapshot`、`agent:status` 已覆盖更关键的增量同步路径；后续按真实 UI 使用频率继续补齐。
 4. **生产 cutover** ✅ **已完成（2026-06-14，见 §七）**：readiness 31/31 + 主干跑通 + cutover audit 11/11，production smoke gate 全绿，`api.agentbean.dev` 已切到 server-next。
 
 ---
@@ -194,7 +194,7 @@ ready-to-flip audit（11/11）→ npm 发布（contracts@0.2.0 / daemon-next@0.2
 
 - production smoke 已通过真实生产环境验证
 - 建议留意真实流量一段时间
-- **C 类 7 项广播**（teams:snapshot / tasks:snapshot / task:updated / agent:status / agents:discovered / agent:metrics / device:status）仍未实现——影响多用户实时同步（非阻塞，单用户操作正常）。cutover 后若需要多端实时同步，建议优先补 `teams:snapshot` / `tasks:snapshot`。
+- **C 类剩余广播**：`tasks:snapshot` / `agents:discovered` / `device:status` 仍未实现；`teams:snapshot` / `task:updated` / `agent:status` 已回填，`agent:metrics` 已作为 request/ack 实现。剩余项影响多用户/多端实时同步（非阻塞，单用户操作正常）。
 - **客户端 unhandled rejection**（§四）：production 实测仍有 1 个，源未精确定位（minified 栈限制，非 emitWithTimeout），非致命。
 
 ---

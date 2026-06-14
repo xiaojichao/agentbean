@@ -63,7 +63,7 @@
 | `team:switch` | web `{teamId}` vs server `{userId,teamId}` ✅ | web `{network}` vs server `{currentTeam}`：network↔currentTeam（D1） | ❌ D1 |
 | `team:update` | web `{name}` vs server `{userId,teamId,name}`：web 缺 teamId（用 currentTeam?） | web `{network}` vs server `{team:{id,name,path}}`（D1） | ❌ D1 |
 | `team:delete` | web `{teamId}` vs server `{userId,teamId}` ✅ | web `{fallbackNetwork}` vs server `{fallbackTeam}`（D1） | ❌ D1 |
-| 订阅 `teams:snapshot` | — | **✅ 核实（2026-06-14）：server 未广播**（grep `WEB_EVENTS.team.snapshot` 无 emit；web `sidebar.tsx:28` 订阅但收不到） | ❌ C（确认缺失） |
+| 订阅 `teams:snapshot` | — | **✅ 回填核实（2026-06-14）：server-next 已在 team mutation 后广播 `teams:snapshot`**，覆盖团队列表实时刷新 | ✅ |
 
 ### 3.3 MEMBER
 
@@ -106,7 +106,7 @@
 | `task:update` | web `{id,...}` vs server `{userId,teamId,taskId,...}`：**`id`↔`taskId`**（D2） | `{task}` ✅ | ⚠️ D2 |
 | `task:delete` | web `{id}` vs server `taskId`：D2 | ✅ | ⚠️ D2 |
 | `task:reorder` | web `{id,sortOrder}` vs server `taskId`：D2 | `{task}` ✅ | ⚠️ D2 |
-| 订阅 `tasks:snapshot`/`task:updated` | — | **✅ 核实（2026-06-14）：server 未广播**（grep 无 emit） | ❌ C（确认缺失） |
+| 订阅 `tasks:snapshot`/`task:updated` | — | `task:updated` ✅ 已在 task mutation 后广播；`tasks:snapshot` 仍未见 server-next 广播路径 | ⚠️ C（snapshot 剩余缺口） |
 
 ### 3.7 DEVICE
 
@@ -128,8 +128,8 @@
 | `agent:publish`/`unpublish` | web `{agentId,networkId}` vs server `{userId,teamId,agentId,targetTeamId}`：**`networkId`↔`targetTeamId`**（D7） | `{agent}` ✅ | ⚠️ D7 |
 | `agent:delete` | web `{agentId}` ✅ | `{agent}` ✅ | ✅ |
 | `agent:custom:list` | `{deviceId?}` | server 无（B 类） | ❌ B |
-| `agent:metrics` | `{}` | server 无 metrics use case | ❌ B/C |
-| 订阅 `agents:snapshot`/`agent:status`/`agents:discovered` | — | `agents:snapshot` ✅ 有；**`agent:status`/`agents:discovered`/`agent:metrics` ✅ 核实（2026-06-14）：未广播** | ⚠️ C（部分确认缺失） |
+| `agent:metrics` | `{}` | server-next 已绑定 `summarizeAgentMetrics` request/ack，用 dispatch history 汇总 | ✅ |
+| 订阅 `agents:snapshot`/`agent:status`/`agents:discovered` | — | `agents:snapshot` ✅ 有；`agent:status` ✅ 已随 agent subscriber refresh 增量广播；`agents:discovered` 仍未见广播路径 | ⚠️ C（discovered 剩余缺口） |
 
 ### 3.9 DM
 
@@ -162,7 +162,7 @@
 | **D6** web 多余字段 | 多事件 | 非致命 | 清理 web 多余字段或 server 显式忽略 |
 | **D7** networkId↔teamId / description↔title | agent/channel | 概念迁移 | web 改 `networkId`→`teamId`、`description`→`title`（channel.update） |
 | **B 类**（contracts 无定义） | 13 项 | device 长尾/auth/join/channel/agent | 逐项决策补 server 还是裁 UI |
-| **C 类**（已核实 2026-06-14） | 7 项 | server 未广播：`teams:snapshot`、`tasks:snapshot`/`task:updated`、`agent:status`/`agents:discovered`/`agent:metrics`、`device:status` | **grep 核实确认缺失**。非阻塞：web 单用户操作用 ack 响应更新（task:update 返回 task 直接更新 store），snapshot 仅影响多用户实时同步。`channel/agent/device/dm:snapshot` server 有广播。 |
+| **C 类**（2026-06-14 续核实） | 剩余 3 项 | 仍未见 server-next 广播：`tasks:snapshot`、`agents:discovered`、`device:status` | `teams:snapshot`、`task:updated`、`agent:status` 已回填；`agent:metrics` 已作为 request/ack 实现。剩余项主要影响多用户/多端实时同步，单用户操作仍可依赖 ack 响应更新。 |
 
 ---
 

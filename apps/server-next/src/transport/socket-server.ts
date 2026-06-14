@@ -385,6 +385,9 @@ async function refreshAgentSubscribers(
     const result = await app.listVisibleAgents({ teamId: subscriber.agents.teamId });
     if (result.ok) {
       subscriber.socket.emit?.(WEB_EVENTS.agent.snapshot, result.agents);
+      for (const agent of result.agents) {
+        subscriber.socket.emit?.(WEB_EVENTS.agent.status, agent);
+      }
     }
   }
 }
