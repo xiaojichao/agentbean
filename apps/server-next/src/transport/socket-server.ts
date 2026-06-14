@@ -551,6 +551,9 @@ async function refreshDeviceSubscribers(
     const result = await app.listDevices(subscriber.devices);
     if (result.ok) {
       subscriber.socket.emit?.(WEB_EVENTS.device.snapshot, result.devices);
+      for (const device of result.devices) {
+        subscriber.socket.emit?.(WEB_EVENTS.device.status, device);
+      }
     }
   }
 }

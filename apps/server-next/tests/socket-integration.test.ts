@@ -929,12 +929,16 @@ describe('server-next Socket.IO namespaces', () => {
     });
 
     const deviceSnapshots: Array<Array<{ id: string; status: string }>> = [];
+    const deviceStatuses: Array<{ id: string; status: string }> = [];
     const runtimeEvents: Array<{
       deviceId: string;
       runtimes: Array<{ id: string; name: string; installed: boolean; command?: string; normalizedCommandKey?: string }>;
     }> = [];
     web.on(WEB_EVENTS.device.snapshot, (devices) => {
       deviceSnapshots.push(deviceSummaries(devices));
+    });
+    web.on(WEB_EVENTS.device.status, (device) => {
+      deviceStatuses.push(deviceStatusSummary(device));
     });
     web.on(WEB_EVENTS.device.runtimes, (payload) => {
       runtimeEvents.push(runtimeSummary(payload));
@@ -957,6 +961,9 @@ describe('server-next Socket.IO namespaces', () => {
     ).resolves.toMatchObject({ ok: true, device: { id: 'device-1', status: 'online' } });
     await eventually(async () => {
       expect(deviceSnapshots.at(-1)).toEqual([{ id: 'device-1', status: 'online' }]);
+    });
+    await eventually(async () => {
+      expect(deviceStatuses.at(-1)).toEqual({ id: 'device-1', status: 'online' });
     });
 
     await expect(
@@ -1871,6 +1878,13 @@ function deviceSummaries(payload: unknown): Array<{ id: string; status: string }
     }
     return { id: String(device.id), status: String(device.status) };
   });
+}
+
+function deviceStatusSummary(payload: unknown): { id: string; status: string } {
+  if (!payload || typeof payload !== 'object' || !('id' in payload) || !('status' in payload)) {
+    throw new Error('Expected device status payload to include id and status');
+  }
+  return { id: String(payload.id), status: String(payload.status) };
 }
 
 function runtimeSummary(payload: unknown): {
