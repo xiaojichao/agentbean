@@ -104,6 +104,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.agent.unpublish,
       WEB_EVENTS.agent.updateConfig,
       WEB_EVENTS.agent.delete,
+      WEB_EVENTS.agent.metrics,
       WEB_EVENTS.message.send,
       WEB_EVENTS.message.search,
       WEB_EVENTS.message.react,
