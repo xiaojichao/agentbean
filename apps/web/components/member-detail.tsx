@@ -176,13 +176,14 @@ export function AgentDetail({ agent, device, tab }: { agent: AgentSnapshot; devi
   }, [agent.id, currentTeamId]);
 
   useEffect(() => {
+    if (!currentTeamId) return;
     let cancelled = false;
-    agentEvents().metrics().then((res) => {
+    agentEvents().metrics(currentTeamId).then((res) => {
       if (cancelled || !res.ok) return;
       setMetrics(res.summaries?.find((item) => item.agentId === agent.id) ?? null);
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [agent.id]);
+  }, [agent.id, currentTeamId]);
 
   const relatedDms = dms.filter((dm) => dm.dmTargetId === agent.id);
 
