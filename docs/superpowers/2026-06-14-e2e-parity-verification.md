@@ -22,7 +22,7 @@
 | chat / tasks 页编译 | ✅ | web dev 日志：`✓ Compiled /[networkPath]/{chat,tasks}` 全 200，无编译错误 |
 | cutover 基建 readiness | ✅ | `check:agentbean-next-readiness` **31/31** |
 | 客户端 React #185 | ✅ | `NetworkLayout` render 期 redirect 已移入 effect，本地 Playwright 复现零 `pageerror`（见 §八） |
-| D2 / D7 在 apps/web 客户端实测 | ⏸️ | 本轮未点进 tasks/agents 页操作；browser smoke 已覆盖 server 端 task CRUD |
+| D2 / D7 在 apps/web 客户端实测 | ✅ | apps/web socket payload regression 覆盖 taskId / agentId / deviceId / memberUserId 与 networkId→teamId/targetTeamId 适配；browser smoke 已覆盖 server 端 task CRUD |
 
 ---
 
@@ -129,7 +129,7 @@ sidebar 同时靠两条路径拿团队列表：① `nets.list()` ack；② `nets
 ## 五、下一步建议
 
 1. **React #185 已修复**（见 §八）：`NetworkLayout` 不再在 render 期间更新 Router，unresolved path fallback 也不再硬编码 `/default/chat`。
-2. **补 D2/D7 客户端实测**：本轮未在 apps/web 点进 tasks/agents 页操作；建议补一次 tasks CRUD 实测，坐实 D2（taskId 命名）在客户端的表现。
+2. **D2/D7 客户端适配已补自动化覆盖**：apps/web socket payload regression 已坐实 task/agent/device/channel member 的字段名映射；后续若要进一步增强，可补真实浏览器页面流。
 3. **C 类决策**：C 类已从 7 项全部收敛。`tasks:snapshot` 最终复用 `channels:subscribe` 的 team 任务上下文；`task:updated`、`teams:snapshot`、`agent:status`、`device:status`、`agents:discovered` 也已覆盖对应增量/快照路径。
 4. **生产 cutover** ✅ **已完成（2026-06-14，见 §七）**：readiness 31/31 + 主干跑通 + cutover audit 11/11，production smoke gate 全绿，`api.agentbean.dev` 已切到 server-next。
 
