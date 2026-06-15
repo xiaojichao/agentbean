@@ -29,6 +29,7 @@
   - `task:list`、`task:create` 与 `task:update` 使用 server-side task model；assignee 第一版支持 team human member 或当前 team 可见 agent；preview 右侧工作区已有轻量任务入口；browser smoke 已覆盖 task create/status update/refresh restore。
 - Team/join/device invite 第一版。
   - `team:create`、`team:switch`、`join:create`、`join:validate`、`device-invite:create`、`device-invite:wait`、`device-invite:complete` 已有 contracts、use cases 与 tests。
+  - `join:list`、`join:revoke` 与 invite management UI 仍在后续 P2，不属于已收敛的第一版范围。
 - Dispatch lifecycle 第一版。
   - `dispatch:cancel` 已进入 web/agent event contract；server-next runtime 会定期调度 `failTimedOutDispatches` 并广播 dispatch status。
 - Agent 管理面第一版。
