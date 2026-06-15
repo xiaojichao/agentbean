@@ -27,7 +27,7 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, memberEvents, taskEvents, messageReactionEvents } from '@/lib/socket';
+import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, channelEvents, dmEvents, memberEvents, taskEvents, messageReactionEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, Artifact, ChannelSummary, ChatMessage } from '@/lib/schema';
 import {
@@ -131,9 +131,9 @@ export default function TasksPage() {
   }, []);
 
   useEffect(() => {
-    if (conn !== 'open') return;
+    if (conn !== 'open' || !currentTeamId) return;
     const socket = getWebSocket();
-    socket.emit('channels:subscribe', {});
+    channelEvents(socket).subscribe(currentTeamId);
     const onChannels = (list: ChannelSummary[]) => applyChannelsSnapshot(list);
     socket.on('channels:snapshot', onChannels);
     const unsubscribeTasks = taskEvents(socket).onSnapshot((list) => setTasks(list as Task[]));
@@ -149,7 +149,7 @@ export default function TasksPage() {
       unsubscribeTasks();
       unsubscribeDms();
     };
-  }, [conn, applyChannelsSnapshot, applyDmsSnapshot, loadTasks]);
+  }, [conn, currentTeamId, applyChannelsSnapshot, applyDmsSnapshot, loadTasks]);
 
   useEffect(() => {
     const next = searchParams.get('view') === 'list' ? 'list' : 'board';

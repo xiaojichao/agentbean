@@ -24,7 +24,6 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     socket.on('disconnect', onDisconnect);
     socket.on('connect_error', onConnectError);
     setConn(socket.connected ? 'open' : 'connecting');
-    ev.subscribe();
 
     return () => {
       unsubSnapshot();

@@ -190,12 +190,12 @@ export default function DevicesPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   useEffect(() => {
-    if (conn !== 'open') return;
-    deviceEvents().subscribe();
+    if (conn !== 'open' || !currentTeamId) return;
+    deviceEvents().subscribe(currentTeamId);
     const unsub = deviceEvents().onSnapshot((list) => applyDevicesSnapshot(list));
     const unsubStatus = deviceEvents().onStatus((device) => applyDeviceStatus(device));
     return () => { unsub(); unsubStatus(); };
-  }, [conn, applyDevicesSnapshot, applyDeviceStatus]);
+  }, [conn, currentTeamId, applyDevicesSnapshot, applyDeviceStatus]);
 
   const deviceList = useMemo(() => Object.values(devices).sort(compareDevices), [devices]);
   const deviceGroups = useMemo(() => {
