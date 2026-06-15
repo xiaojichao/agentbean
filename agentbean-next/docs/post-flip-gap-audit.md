@@ -7,6 +7,7 @@
 - 日期：2026-06-08
 - 生产入口：`https://api.agentbean.dev/`
 - 当前目标：判断 Next 是否达到替代旧 AgentBean 的产品完成度，而不是继续证明 final flip 能否执行。
+- 2026-06-15 复核：#140 与 #141 已 completed 关闭；strict cutover audit、entry smoke 与 business smoke 当前仍通过。
 
 ## 生产观察证据
 
@@ -17,13 +18,16 @@
 - 生产业务 smoke 通过：`npm run smoke:agentbean-next-business -- --url https://api.agentbean.dev` 通过 `8/8`，覆盖 web/daemon socket 连接、注册/登录、daemon hello、runtime 上报、custom agent 创建、message dispatch、agent reply 可见。
 - GitHub Actions post-flip 复验通过：CI/CD run `27120700026` 为 `success`，其中 `AgentBean Next production smoke` job 运行 strict cutover audit、public entry smoke、business smoke，均为 success。
 - Railway env / volume preflight 有切换前证据：CI/CD run `27067398886` 中 `Railway Next env sync` 为 success，包含 production readiness checks、Railway env sync 和 Railway preflight。
+- Production volume 重部署持久化观察已通过 #141 关闭：生产写入 marker message 后执行受控 Railway Next 重部署，同账号重登读取 channel history，确认 marker message 仍存在。
+- 2026-06-15 当前生产复核通过：
+  - `npm run audit:agentbean-next-cutover -- --json`：`ok: true`，`11/11`，`pendingFinalFlip: false`。
+  - `npm run smoke:agentbean-next-entry -- --url https://api.agentbean.dev`：`4/4`。
+  - `npm run smoke:agentbean-next-business -- --url https://api.agentbean.dev`：`8/8`。
 
 ### 仍需继续观察
 
-- Railway production volume 的真实重启后数据保留仍需 post-flip 观察证据。现有证据证明 `/data/agentbean-next` 配置和 preflight 通过，但还没有把 final flip 后的真实生产重启、重新访问、跨 session 数据保留记录到 #140。
-- 浏览器手工观察已在 #138 记录过一次，但 #140 的 24-72 小时窗口仍应继续记录 session 恢复、刷新、重新打开后的表现。
-- Railway runtime logs 与生产 socket/API 错误日志需要在观察窗口内追加记录。当前 smoke 证明业务链路可用，不等价于 24-72 小时无错误日志。
-- Old target rollback 路径和 old entry smoke 保留，但当前公开入口已经是 Next；old entry smoke 应在 rollback/old deploy 演练时运行，不能直接拿当前入口证明旧服务仍在提供流量。
+- #140 的 24-72 小时生产观察 baseline 已完成并关闭；后续 production logs、socket/API 错误、浏览器手工观察应随 deploy、incident 或 rollback drill 追加到新的运维记录。
+- Old target rollback 路径和 old entry smoke 保留；当前公开入口已经是 Next，old entry smoke 应在 rollback/old deploy 演练时运行，不能直接拿当前入口证明旧服务仍在提供流量。
 
 ## 能力分级
 
@@ -61,6 +65,7 @@
 
 1. Production volume 重启持久化证据。
    - 目标：记录 final flip 后生产重启、重新访问、跨 session 后 user/team/channel/message/device/runtime/agent 状态是否保留。
+   - 收敛：#141 已关闭，已记录生产 marker message 在受控 Railway Next 重部署后仍可从 channel history 读取；2026-06-15 当前 strict cutover audit、entry smoke 与 business smoke 仍通过。
    - 参考：`scripts/smoke-agentbean-next-persistence.mjs`、`agentbean-next/docs/production-cutover-runbook.md`
 
 2. Team create/switch 与 invite/onboarding 第一版。
@@ -97,8 +102,8 @@
 7. #147 `定义 AgentBean Next DM/thread 第一版数据模型与协议`
 8. #148 `补齐 AgentBean Next 浏览器级 E2E smoke`
 
-当前活跃路线图见 `post-flip-follow-up-status.md`。
+当前活跃路线图见 `post-flip-follow-up-status.md`。其中 #140/#141 已完成关闭，不应继续作为活跃 blocker。
 
 ## 当前结论
 
-AgentBean Next 已经能替代旧 AgentBean 的最小生产入口和核心 chat/daemon/custom-agent 业务闭环。要把判断提升到“可以长期替代旧 AgentBean”，下一步不应继续混合在 final flip 议题里，也不应再直接照旧 #141-#148 清单挑项；应先按 `post-flip-follow-up-status.md` 的当前状态开新的 scoped issue/PR，优先推进 artifact HTTP/viewer 切片，或单独补生产观察证据。
+AgentBean Next 已经能替代旧 AgentBean 的最小生产入口和核心 chat/daemon/custom-agent 业务闭环。#140/#141 的 post-flip 生产观察 baseline 已完成；下一步不应继续混合在 final flip 议题里，也不应再直接照旧 #141-#148 清单挑项。应按 `post-flip-follow-up-status.md` 的当前状态开新的 scoped issue/PR，优先推进更完整的 workspace run 专用页面/日志体验、admin/audit 产品面、settings/device 后续页等产品切片。
