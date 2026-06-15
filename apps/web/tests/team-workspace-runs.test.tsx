@@ -11,6 +11,10 @@ vi.mock('next/link', () => ({
     <a href={typeof href === 'string' ? href : ''} {...rest}>{children}</a>
   ),
 }));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: () => {}, replace: () => {}, refresh: () => {} }),
+  useSearchParams: () => new URLSearchParams(),
+}));
 vi.mock('@/lib/format-time', () => ({
   formatRelative: () => 'recently',
 }));
@@ -93,9 +97,11 @@ function makeTeamRun(
 describe('team workspace runs page', () => {
   it('renders the latest runs with status, command, file count, and a detail link', async () => {
     fetchMock.mockResolvedValue({ ok: true, runs: [makeTeamRun()] });
-    render(<TeamWorkspaceRunsPage />);
+    const { container } = render(<TeamWorkspaceRunsPage />);
     await waitFor(() => expect(screen.getByText('npm test')).toBeInTheDocument());
-    expect(screen.getByText('成功')).toBeInTheDocument();
+    // The status pill lives inside the run <article>; the filter <select> also renders
+    // "成功" as an <option>, so scope the assertion to the article to avoid the collision.
+    expect(container.querySelector('article')?.textContent).toContain('成功');
     expect(screen.getByText('查看详情').closest('a')?.getAttribute('href')).toBe('/acme/runs/run-1');
     expect(screen.getByText('1 个文件')).toBeInTheDocument();
   });
