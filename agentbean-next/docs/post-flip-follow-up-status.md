@@ -30,10 +30,18 @@
   - `dispatch:cancel` 已进入 web/agent event contract；server-next runtime 会定期调度 `failTimedOutDispatches` 并广播 dispatch status。
 - Agent 管理面第一版。
   - `agent:publish`、`agent:unpublish`、`agent:update-config` 与 `agent:delete` 已覆盖 owner/admin 权限、visible projection、envKeys-only snapshot 与 tombstone 删除语义。
+- Channel archive/delete 第一版。
+  - `channel:archive` 与 `channel:delete` 已进入 contracts、server-next use cases/repositories 与 apps/web 客户端；server 侧覆盖 default channel 保护、creator 权限、archive 从列表隐藏、delete cascade。
 - DM/thread 第一版。
   - direct channel model、DM snapshot/history、thread id 继承与 dispatch history 去重已在 server-next 层落地。
 - Artifacts/workspace runs repository/usecase 第一版。
   - daemon `dispatch:result` 可以上报 artifact metadata 与 workspace run metadata；server-next 已做 team-scoped metadata authorization。
+- Saved messages 与 reactions 第一版。
+  - `message:react`、`message:save` 与 `message:list-saved` 已由 server-side repository 持久化；apps/web 的 chat/tasks surface 已接入 socket-backed optimistic update，保留 local cache 只作为界面恢复兜底。
+- Task delete/reorder 第一版。
+  - `task:delete` 与 `task:reorder` 已进入 contracts、server-next use cases/repositories 与 apps/web payload adapter；server 侧覆盖可见性、已删除任务与无效 sortOrder 边界。
+- Member role management 第一版。
+  - `member:update-role`、`member:remove` 与 `member:transfer-owner` 已进入 socket/usecase/web detail surface；owner/admin 边界、admin 不能管理其他 admin、自我管理保护与 owner transfer 均有回归测试。
 - 真正浏览器级 E2E 第一版。
   - `npm run smoke:agentbean-next-browser` 已覆盖真实 Chrome 登录/session restore、刷新重订阅、custom agent 创建、message dispatch、agent reply、artifact upload/viewer 与 task create/status update/refresh restore，并在 CI 上传截图/console artifacts。
 
@@ -61,19 +69,20 @@
 - web-next preview 会在 Workspace 输出组内按 `relativePath` 展示轻量目录树。
 - web-next preview 可以从 message workspace run 摘要打开右侧独立详情面板，集中查看 run metadata 与 workspace output tree。
 - server-next 与 web-next preview 支持 workspace run detail 的授权 HTTP API 与 `workspaceRunId` URL 恢复路径。
+- apps/web 的 workspace run 专页已支持从 agent/device 工作区列表进入，在 run 有 `messageId` 时回链到原 chat message，并在 daemon 上报时展示执行命令与可折叠日志摘要。
 
 剩余边界：
 
-- 更完整的 workspace run 专用页面布局、日志/命令展开与跨页面导航仍需后续产品切片。
+- 更完整的 workspace run 专用页面布局与完整日志体验仍需后续产品切片；跨页面导航、执行命令投影与受限日志摘要已补第一步。
 
 ### P2：后续产品 parity
 
-- Channel archive/delete。
-- Saved messages 与 reactions。
-- Admin、metrics 与 audit requirements。
-- 更完整的 settings/member/device 页面，而不是仅依赖 preview shell。
-- 完整 task page、typed assignee、task delete/reorder 与 task 自动生成。
+- 更完整的 workspace run 专用页面布局与完整日志体验。
+- Admin、metrics 与 audit requirements；`agent:metrics` request/ack 已有，但完整 admin/metrics/audit 产品面仍未冻结。
+- 更完整的 settings/device 页面，以及 member management 的浏览器级 smoke 覆盖。
+- Typed assignee、task 自动生成与更丰富的 task 产品流；delete/reorder 的协议与 usecase 第一版已收敛。
+- Join link management UI、`join:list` 与 `join:revoke`。
 
 ## 下一步判定
 
-当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。下一步应基于本文档开新的 scoped issue/PR：如果继续产品能力，优先在 channel archive/delete、更完整 task page 或更完整的 workspace run 专用页面中选一个小切片；如果先做运维验证，则只处理 P0 生产观察证据，不混入产品功能改动。
+当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。下一步应基于本文档开新的 scoped issue/PR：如果先做替换退场信心，优先处理 P0 生产观察证据；如果继续产品能力，优先在更完整的 workspace run 专用页面、admin/audit 产品面、settings/device 后续页中选一个小切片。

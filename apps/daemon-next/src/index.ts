@@ -1,4 +1,4 @@
-import { AGENT_EVENTS, type AgentCategory, type DispatchCustomAgentDto, type DispatchHistoryMessageDto } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, type AgentCategory, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 
 export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner.js';
 export type { BuiltinScannerOptions } from './scanner.js';
@@ -12,7 +12,22 @@ export interface DaemonProtocolSocket {
   onReconnect?(handler: () => Promise<void>): void;
 }
 
-export type StubExecutor = (request: DispatchRequestPayload) => Promise<string>;
+export interface DaemonWorkspaceRunResult {
+  status?: WorkspaceRunStatus;
+  cwd?: string;
+  command?: string;
+  logExcerpt?: string;
+  exitCode?: number;
+  startedAt?: number;
+  completedAt?: number;
+}
+
+export interface DaemonDispatchResult {
+  body: string;
+  workspaceRun?: DaemonWorkspaceRunResult;
+}
+
+export type StubExecutor = (request: DispatchRequestPayload) => Promise<string | DaemonDispatchResult>;
 
 export interface DaemonDeviceConfig {
   teamId: string;
@@ -103,14 +118,15 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           return;
         }
         try {
-          const body = await executor(request);
+          const result = normalizeDispatchResult(await executor(request));
           if (cancelledDispatchIds.delete(request.id)) {
             return;
           }
           await socket.emitWithAck(AGENT_EVENTS.dispatch.result, {
             dispatchId: request.id,
             agentId: request.agentId,
-            body,
+            body: result.body,
+            ...(result.workspaceRun ? { workspaceRun: result.workspaceRun } : {}),
           });
         } catch (error) {
           if (cancelledDispatchIds.delete(request.id)) {
@@ -125,6 +141,13 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       });
     },
   };
+}
+
+function normalizeDispatchResult(result: string | DaemonDispatchResult): DaemonDispatchResult {
+  if (typeof result === 'string') {
+    return { body: result };
+  }
+  return result;
 }
 
 async function announceDeviceSnapshot(

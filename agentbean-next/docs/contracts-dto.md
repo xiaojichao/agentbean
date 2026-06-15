@@ -550,10 +550,10 @@ export interface TaskUpdateInputDto {
 
 说明：
 
-- Tasks 第一版支持 `task:list`、`task:create` 与 `task:update`。
+- Tasks 第一版支持 `task:list`、`task:create`、`task:update`、`task:delete` 与 `task:reorder`。
 - `assigneeId` 第一版可以指向 team human member 或当前 team 可见 agent；后续如需要跨类型展示，可升级为 typed assignee。
 - `task:list` 默认只返回 global tasks 与当前用户可见 channels/DMs 关联 tasks；指定 `channelId` 时必须先通过 channel visibility 授权。
-- 第一版不包含 `task:delete`、独立 `task:reorder`、完整 kanban UI 或 task 自动生成。
+- 完整 kanban UI、typed assignee 与 task 自动生成仍属于后续产品增强。
 
 ## DispatchDto
 
@@ -681,6 +681,8 @@ export interface WorkspaceRunDto {
   deviceId?: ID;
   status: 'running' | 'succeeded' | 'failed' | 'cancelled';
   cwd?: string;
+  command?: string;
+  logExcerpt?: string;
   exitCode?: number;
   startedAt?: UnixMs;
   completedAt?: UnixMs;
@@ -695,6 +697,9 @@ export interface WorkspaceRunDto {
 - `MessageDto.artifacts` 与 `MessageDto.workspaceRun` 是 server-side projection；message `meta.artifactIds`/`meta.workspaceRunId` 仍保留为轻量索引。
 - `downloadUrl` / `previewUrl` 是可选字段；server-next HTTP artifact route 会在 upload response 或 viewer projection 需要时生成这些链接。
 - `WorkspaceRunDto` 必须回链 `dispatchId`、`agentId`，并尽量保存 `deviceId`；这让 agent output、执行设备与原始 prompt 可追溯。
+- `command` 是 daemon 上报的 display command，用于 workspace run 详情页回看执行入口。
+- `logExcerpt` 是 daemon 上报的受限日志摘要；daemon-next custom command executor 会从 stdout/stderr 生成摘要并做基础脱敏，server-next 仍会再次保留尾部、限制长度并对常见 secret assignment 做基础脱敏。完整日志分段存储、检索与更强脱敏规则仍属于后续切片。
+- daemon-next custom command executor 会从本地执行时钟填充 `startedAt` / `completedAt`，用于 workspace run 详情页计算真实执行耗时。
 
 ## 第一切片 Event DTO 用法
 

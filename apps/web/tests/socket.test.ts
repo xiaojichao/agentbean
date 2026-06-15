@@ -6,6 +6,7 @@ import {
   artifactUploadUrl,
   channelEvents,
   deviceEvents,
+  memberEvents,
   taskEvents,
   uploadArtifact,
 } from '../lib/socket';
@@ -134,6 +135,29 @@ describe('socket event payload adapters', () => {
     expect(calls.at(-1)).toEqual({
       event: 'channel:remove-member',
       payload: { channelId: 'channel-1', memberUserId: 'user-1' },
+    });
+  });
+
+  it('maps member management commands to server payload names', async () => {
+    const { socket, calls } = createAckSocket();
+    const members = memberEvents(socket);
+
+    await members.updateRole({ targetUserId: 'user-2', role: 'admin' });
+    expect(calls.at(-1)).toEqual({
+      event: 'member:update-role',
+      payload: { targetUserId: 'user-2', role: 'admin' },
+    });
+
+    await members.remove({ targetUserId: 'user-2' });
+    expect(calls.at(-1)).toEqual({
+      event: 'member:remove',
+      payload: { targetUserId: 'user-2' },
+    });
+
+    await members.transferOwner({ targetUserId: 'user-2' });
+    expect(calls.at(-1)).toEqual({
+      event: 'member:transfer-owner',
+      payload: { targetUserId: 'user-2' },
     });
   });
 

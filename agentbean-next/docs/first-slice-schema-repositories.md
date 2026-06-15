@@ -391,10 +391,10 @@ CREATE TABLE join_links (
 - `tasks`
 - `artifacts`
 - `workspace_runs`
-- `saved_messages`
-- `message_reactions`
 - `agent_metrics`
 - `audit_events`
+
+说明：`tasks`、`artifacts` 与 `workspace_runs` 的第一版已经在后续切片落地；本清单保留为初始切片边界记录，不再代表当前缺口。
 
 ## Schema 验证清单
 

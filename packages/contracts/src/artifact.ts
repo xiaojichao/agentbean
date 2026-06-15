@@ -31,6 +31,8 @@ export interface WorkspaceRunDto {
   deviceId?: ID;
   status: WorkspaceRunStatus;
   cwd?: string;
+  command?: string;
+  logExcerpt?: string;
   exitCode?: number;
   startedAt?: UnixMs;
   completedAt?: UnixMs;

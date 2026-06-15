@@ -18,6 +18,9 @@ describe('server-next first-slice migrations', () => {
       readFileSync(migrationPath('team/0001_first_slice.sql'), 'utf8'),
       readFileSync(migrationPath('team/0002_artifacts_workspace_runs.sql'), 'utf8'),
       readFileSync(migrationPath('team/0003_tasks.sql'), 'utf8'),
+      readFileSync(migrationPath('team/0004_reactions_saved.sql'), 'utf8'),
+      readFileSync(migrationPath('team/0005_workspace_run_command.sql'), 'utf8'),
+      readFileSync(migrationPath('team/0006_workspace_run_log_excerpt.sql'), 'utf8'),
     ].join('\n');
 
     for (const tableName of [
@@ -41,11 +44,15 @@ describe('server-next first-slice migrations', () => {
       'messages',
       'dispatches',
       'tasks',
+      'message_reactions',
+      'saved_messages',
     ]) {
       expect(teamSql).toContain(`CREATE TABLE ${tableName}`);
     }
 
     expect(`${globalSql}\n${teamSql}`).toContain('team_id');
+    expect(teamSql).toContain('ADD COLUMN command TEXT');
+    expect(teamSql).toContain('ADD COLUMN log_excerpt TEXT');
     expect(`${globalSql}\n${teamSql}`).not.toMatch(/\bnetwork/i);
   });
 });
@@ -675,6 +682,111 @@ describe('server-next first-slice use cases', () => {
     })).resolves.toMatchObject({
       ok: true,
       messages: [],
+    });
+  });
+
+  test('manages member roles, removal, and owner transfer with role boundaries', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 520,
+      ids: createIds([
+        'user-owner', 'team-main', 'channel-main',
+        'join-admin',
+        'user-admin', 'team-admin', 'channel-admin',
+        'join-member',
+        'user-member', 'team-member', 'channel-member',
+      ]),
+      joinCodes: createIds(['code-admin', 'code-member']),
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'MainTeam' });
+    await app.createJoinLink({ userId: 'user-owner', teamId: 'team-main' });
+    await app.registerUser({ username: 'admin', password: 'secret', teamName: 'AdminTeam', joinCode: 'code-admin' });
+    await app.createJoinLink({ userId: 'user-owner', teamId: 'team-main' });
+    await app.registerUser({ username: 'member', password: 'secret', teamName: 'MemberTeam', joinCode: 'code-member' });
+
+    await expect(app.updateMemberRole({
+      userId: 'user-member',
+      teamId: 'team-main',
+      targetUserId: 'user-admin',
+      role: 'admin',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+
+    await expect(app.updateMemberRole({
+      userId: 'user-owner',
+      teamId: 'team-main',
+      targetUserId: 'user-admin',
+      role: 'admin',
+    })).resolves.toMatchObject({
+      ok: true,
+      member: { userId: 'user-admin', role: 'admin' },
+    });
+
+    await expect(app.updateMemberRole({
+      userId: 'user-admin',
+      teamId: 'team-main',
+      targetUserId: 'user-member',
+      role: 'admin',
+    })).resolves.toMatchObject({
+      ok: true,
+      member: { userId: 'user-member', role: 'admin' },
+    });
+
+    await expect(app.updateMemberRole({
+      userId: 'user-admin',
+      teamId: 'team-main',
+      targetUserId: 'user-member',
+      role: 'member',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+
+    await expect(app.updateMemberRole({
+      userId: 'user-owner',
+      teamId: 'team-main',
+      targetUserId: 'user-member',
+      role: 'member',
+    })).resolves.toMatchObject({
+      ok: true,
+      member: { userId: 'user-member', role: 'member' },
+    });
+
+    await expect(app.removeMember({
+      userId: 'user-admin',
+      teamId: 'team-main',
+      targetUserId: 'user-member',
+    })).resolves.toMatchObject({
+      ok: true,
+      userId: 'user-member',
+    });
+
+    await expect(app.transferOwner({
+      userId: 'user-admin',
+      teamId: 'team-main',
+      targetUserId: 'user-owner',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+
+    await expect(app.transferOwner({
+      userId: 'user-owner',
+      teamId: 'team-main',
+      targetUserId: 'user-admin',
+    })).resolves.toMatchObject({
+      ok: true,
+      member: { userId: 'user-admin', role: 'owner' },
+      team: { id: 'team-main' },
+    });
+
+    await expect(app.listMembers({ userId: 'user-admin', teamId: 'team-main' })).resolves.toMatchObject({
+      ok: true,
+      humans: expect.arrayContaining([
+        expect.objectContaining({ userId: 'user-owner', role: 'admin' }),
+        expect.objectContaining({ userId: 'user-admin', role: 'owner' }),
+      ]),
     });
   });
 

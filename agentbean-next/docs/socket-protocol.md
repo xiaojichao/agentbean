@@ -921,11 +921,8 @@ Ack<{ task: TaskDto }>
 - `task:create` 需要 non-empty title；`channelId` 必须是当前用户可见 channel/DM。
 - `assigneeId` 第一版可以是 team human member，或当前 team 可见 agent。
 - `task:update` 可以更新 title/description/status/assignee/channel/tags/sortOrder；更新已有 private channel task 前，当前用户也必须能看见该 task 所属 channel。
-
-延后的 task commands：
-
-- `task:delete`：保留。
-- `task:reorder`：除非 dedicated command 仍更清晰，否则合并进 `task:update`。
+- `task:delete` 删除当前用户可见 task，并对非成员、不可见 channel task、已删除 task 返回稳定 failure ack。
+- `task:reorder` 作为独立 command 保留，更新 `sortOrder` 并校验有限数值输入。
 
 ## 从目标协议中移除
 

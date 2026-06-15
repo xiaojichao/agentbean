@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { AGENT_EVENTS } from '../../../packages/contracts/src/index';
 import {
   createDaemonProtocolClient,
+  type DaemonDispatchResult,
   type DispatchRequestPayload,
   type DaemonProtocolSocket,
   type StubExecutor,
@@ -45,6 +46,58 @@ describe('daemon-next protocol client', () => {
     expect(socket.emitted.at(-1)).toEqual([
       AGENT_EVENTS.dispatch.result,
       { dispatchId: 'dispatch-1', agentId: 'agent-1', body: 'stub:hello' },
+    ]);
+  });
+
+  test('forwards structured executor workspace run metadata with dispatch results', async () => {
+    const socket = new FakeAgentSocket();
+    const executor: StubExecutor = async (request): Promise<DaemonDispatchResult> => ({
+      body: `stub:${request.prompt}`,
+      workspaceRun: {
+        status: 'succeeded',
+        cwd: '/workspace',
+        command: 'codex --model gpt-5.4',
+        logExcerpt: 'OPENAI_API_KEY=[redacted]\nfinished',
+        exitCode: 0,
+        startedAt: 1000,
+        completedAt: 1010,
+      },
+    });
+    const client = createDaemonProtocolClient({
+      socket,
+      executor,
+      device: { teamId: 'team-1', ownerId: 'user-1' },
+      runtimes: [],
+      agents: [],
+    });
+
+    await client.start();
+    await socket.trigger(AGENT_EVENTS.dispatch.request, {
+      id: 'dispatch-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'hello',
+    });
+
+    expect(socket.emitted.at(-1)).toEqual([
+      AGENT_EVENTS.dispatch.result,
+      {
+        dispatchId: 'dispatch-1',
+        agentId: 'agent-1',
+        body: 'stub:hello',
+        workspaceRun: {
+          status: 'succeeded',
+          cwd: '/workspace',
+          command: 'codex --model gpt-5.4',
+          logExcerpt: 'OPENAI_API_KEY=[redacted]\nfinished',
+          exitCode: 0,
+          startedAt: 1000,
+          completedAt: 1010,
+        },
+      },
     ]);
   });
 

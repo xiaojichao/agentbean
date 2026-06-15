@@ -189,6 +189,8 @@ export interface WorkspaceRunDetail {
   deviceId?: string;
   status: WorkspaceRunStatus;
   cwd?: string;
+  command?: string;
+  logExcerpt?: string;
   exitCode?: number;
   startedAt?: number;
   completedAt?: number;

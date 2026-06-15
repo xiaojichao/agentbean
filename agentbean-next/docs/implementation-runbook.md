@@ -246,8 +246,7 @@ apps/
 - Workspace runs。
 - Device invite flow。
 - User join links。
-- Admin。
 - Search。
-- Channel archive/delete。
-- Saved messages/reactions。
-- Metrics UI。
+- Admin / audit requirements。
+- Metrics UI；`agent:metrics` request/ack 已进入主线。
+- 更完整 workspace run 专页、settings/device 后续页、typed assignee 与 task 自动生成。

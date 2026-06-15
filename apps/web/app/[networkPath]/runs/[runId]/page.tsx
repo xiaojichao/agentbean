@@ -16,6 +16,7 @@ import {
   AlertCircle,
   Download,
   ExternalLink,
+  MessageSquare,
 } from 'lucide-react';
 import { fetchWorkspaceRunDetail, authedApiUrl } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
@@ -62,6 +63,7 @@ export default function RunDetailPage() {
   const np = useCurrentNetworkPath();
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const agents = useAgentBeanStore((s) => s.agents);
+  const dms = useAgentBeanStore((s) => s.dms);
 
   const [data, setData] = useState<{ workspaceRun: WorkspaceRunDetail; artifacts: WorkspaceArtifact[] } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -126,6 +128,10 @@ export default function RunDetailPage() {
   const StatusIcon = statusCfg.icon;
   const agentName = agents[run.agentId]?.name ?? run.agentId;
   const duration = formatDuration(run.startedAt, run.completedAt);
+  const sourceRouteKind = dms.some((dm) => dm.id === run.channelId) ? 'dm' : 'channel';
+  const sourceMessageHref = run.messageId
+    ? `/${np}/${sourceRouteKind}/${encodeURIComponent(run.channelId)}?message=${encodeURIComponent(`${run.channelId}:${run.messageId}`)}`
+    : null;
 
   // Group artifacts by directory
   const artifactsByDir = new Map<string, WorkspaceArtifact[]>();
@@ -149,6 +155,15 @@ export default function RunDetailPage() {
             {run.id.slice(0, 8)}... · {formatRelative(run.createdAt)}
           </p>
         </div>
+        {sourceMessageHref && (
+          <Link
+            href={sourceMessageHref}
+            className="inline-flex items-center gap-1 rounded-md border border-neutral-200 px-2.5 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900"
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            返回消息
+          </Link>
+        )}
         <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${statusCfg.bg}`}>
           <StatusIcon className="w-3.5 h-3.5" />
           {statusCfg.label}
@@ -220,6 +235,30 @@ export default function RunDetailPage() {
               <FolderOpen className="w-3.5 h-3.5 shrink-0" />
               {run.cwd}
             </span>
+          </div>
+        )}
+
+        {/* Command */}
+        {run.command && (
+          <div className="col-span-2 sm:col-span-3">
+            <p className="text-xs text-neutral-500 mb-1">命令</p>
+            <span className="block overflow-x-auto whitespace-pre rounded-md bg-neutral-950 px-3 py-2 text-xs font-mono text-neutral-100">
+              {run.command}
+            </span>
+          </div>
+        )}
+
+        {/* Logs */}
+        {run.logExcerpt && (
+          <div className="col-span-2 sm:col-span-3">
+            <details className="rounded-md border border-neutral-200 bg-neutral-50">
+              <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-neutral-700">
+                日志摘要
+              </summary>
+              <pre className="max-h-80 overflow-auto border-t border-neutral-200 bg-neutral-950 px-3 py-2 text-xs leading-relaxed text-neutral-100">
+                {run.logExcerpt}
+              </pre>
+            </details>
           </div>
         )}
 

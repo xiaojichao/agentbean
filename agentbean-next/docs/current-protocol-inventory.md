@@ -106,8 +106,8 @@ Browser clients 连接到 `/web`。当前实现允许 anonymous sockets 用于 a
 | `task:create` | Web -> Server | 创建 team/channel task。 | 第一版已落地；channel 必须对当前用户可见，assignee 可为 team human 或 visible agent。 |
 | `task:list` | Web -> Server | 列出 tasks，可选按 channel 过滤。 | 第一版已落地；默认只返回 global 与可见 channel/DM tasks。 |
 | `task:update` | Web -> Server | 更新 fields/status/assignment/sort。 | 第一版已落地。 |
-| `task:delete` | Web -> Server | 删除 task。 | 保留。 |
-| `task:reorder` | Web -> Server | 更新 task sort order。 | 除非专用 command 更清晰，否则合并进 `task:update`。 |
+| `task:delete` | Web -> Server | 删除 task。 | 第一版已落地；遵守 team/channel 可见性与已删除任务边界。 |
+| `task:reorder` | Web -> Server | 更新 task sort order。 | 第一版已落地为独立 command；校验有限数值输入。 |
 | `task:updated` | Server -> Web | 广播 task update。 | 保留给后续实时同步；第一版 preview 依赖 command ack。 |
 
 ### Invites 与 Join Links
