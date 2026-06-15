@@ -2,7 +2,7 @@
 
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { accessSync, constants, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -371,7 +371,10 @@ export async function exerciseArtifactBrowserSmoke({ page, suffix, timeoutMs }) 
       };
     })()
   `);
-  if (!renderedArtifact?.previewHref || !renderedArtifact?.downloadHref) {
+  if (!renderedArtifact) {
+    throw new Error(`Browser artifact row was not rendered for ${filename}`);
+  }
+  if (!renderedArtifact.previewHref || !renderedArtifact.downloadHref) {
     throw new Error(`Browser artifact links were not rendered: ${formatAck(renderedArtifact)}`);
   }
   const http = await page.evaluateJson(`
@@ -495,6 +498,7 @@ async function connectCdp(webSocketUrl, events) {
   const socket = new WebSocketCtor(webSocketUrl);
   const pending = new Map();
   const listeners = new Map();
+  const temporaryDirectories = new Set();
   let nextId = 1;
   let closedError;
 
@@ -682,6 +686,7 @@ async function connectCdp(webSocketUrl, events) {
     },
     async setFileInputFiles(selector, files) {
       const dir = mkdtempSync(join(tmpdir(), 'agentbean-next-browser-smoke-upload-'));
+      temporaryDirectories.add(dir);
       const paths = files.map((file) => {
         const safeName = basename(file.name).replace(/[^\w .@-]/g, '_') || 'artifact.bin';
         const path = join(dir, safeName);
@@ -726,7 +731,14 @@ async function connectCdp(webSocketUrl, events) {
       writeFileSync(path, Buffer.from(result.data, 'base64'));
     },
     async close() {
-      socket.close();
+      try {
+        socket.close();
+      } finally {
+        for (const dir of temporaryDirectories) {
+          rmSync(dir, { recursive: true, force: true });
+        }
+        temporaryDirectories.clear();
+      }
     },
     send,
   };
