@@ -63,6 +63,7 @@ export default function RunDetailPage() {
   const np = useCurrentNetworkPath();
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const agents = useAgentBeanStore((s) => s.agents);
+  const dms = useAgentBeanStore((s) => s.dms);
 
   const [data, setData] = useState<{ workspaceRun: WorkspaceRunDetail; artifacts: WorkspaceArtifact[] } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -127,8 +128,9 @@ export default function RunDetailPage() {
   const StatusIcon = statusCfg.icon;
   const agentName = agents[run.agentId]?.name ?? run.agentId;
   const duration = formatDuration(run.startedAt, run.completedAt);
+  const sourceRouteKind = dms.some((dm) => dm.id === run.channelId) ? 'dm' : 'channel';
   const sourceMessageHref = run.messageId
-    ? `/${np}/chat?message=${encodeURIComponent(`${run.channelId}:${run.messageId}`)}`
+    ? `/${np}/${sourceRouteKind}/${encodeURIComponent(run.channelId)}?message=${encodeURIComponent(`${run.channelId}:${run.messageId}`)}`
     : null;
 
   // Group artifacts by directory

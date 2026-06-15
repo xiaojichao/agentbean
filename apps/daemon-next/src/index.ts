@@ -1,4 +1,4 @@
-import { AGENT_EVENTS, type AgentCategory, type DispatchCustomAgentDto, type DispatchHistoryMessageDto } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, type AgentCategory, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 
 export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner.js';
 export type { BuiltinScannerOptions } from './scanner.js';
@@ -13,6 +13,7 @@ export interface DaemonProtocolSocket {
 }
 
 export interface DaemonWorkspaceRunResult {
+  status?: WorkspaceRunStatus;
   cwd?: string;
   command?: string;
   logExcerpt?: string;

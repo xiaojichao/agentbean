@@ -59,21 +59,20 @@ async function runCustomAgentCommand(
     child.on('close', (code) => {
       clearTimeout(timer);
       const completedAt = clock.now();
-      if (code === 0) {
-        resolve({
-          body: stdout.trimEnd(),
-          workspaceRun: {
-            cwd: customAgent.cwd,
-            command: formatCommand(customAgent.command as string, customAgent.args ?? []),
-            exitCode: 0,
-            startedAt,
-            completedAt,
-            logExcerpt: buildLogExcerpt(stdout, stderr),
-          },
-        });
-        return;
-      }
-      reject(new Error(stderr.trim() || `custom agent command exited with code ${code ?? 'unknown'}`));
+      const exitCode = code ?? 1;
+      const command = formatCommand(customAgent.command as string, customAgent.args ?? []);
+      resolve({
+        body: code === 0 ? stdout.trimEnd() : `custom agent command exited with code ${exitCode}`,
+        workspaceRun: {
+          status: code === 0 ? 'succeeded' : 'failed',
+          cwd: customAgent.cwd,
+          command,
+          exitCode,
+          startedAt,
+          completedAt,
+          logExcerpt: buildLogExcerpt(stdout, stderr),
+        },
+      });
     });
 
     child.stdin.end(request.prompt);
@@ -81,7 +80,7 @@ async function runCustomAgentCommand(
 }
 
 const LOG_EXCERPT_MAX_CHARS = 16000;
-const SENSITIVE_LOG_ASSIGNMENT_RE = /\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)[A-Z0-9_]*)\s*=\s*([^\s"'`]+)/gi;
+const SENSITIVE_LOG_ASSIGNMENT_RE = /\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)[A-Z0-9_]*)\s*=\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|`[^`\r\n]*`|[^\s"'`]+)/gi;
 
 function buildLogExcerpt(stdout: string, stderr: string): string {
   const combined = [

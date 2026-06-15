@@ -2836,7 +2836,7 @@ function normalizeLimit(limit: number | undefined): number {
 }
 
 const WORKSPACE_RUN_LOG_EXCERPT_MAX_CHARS = 16000;
-const SENSITIVE_LOG_ASSIGNMENT_RE = /\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)[A-Z0-9_]*)\s*=\s*([^\s"'`]+)/gi;
+const SENSITIVE_LOG_ASSIGNMENT_RE = /\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)[A-Z0-9_]*)\s*=\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|`[^`\r\n]*`|[^\s"'`]+)/gi;
 
 function normalizeWorkspaceRunLogExcerpt(value: string | undefined): string | undefined {
   if (value === undefined) {

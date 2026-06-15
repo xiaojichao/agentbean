@@ -54,6 +54,7 @@ describe('daemon-next protocol client', () => {
     const executor: StubExecutor = async (request): Promise<DaemonDispatchResult> => ({
       body: `stub:${request.prompt}`,
       workspaceRun: {
+        status: 'succeeded',
         cwd: '/workspace',
         command: 'codex --model gpt-5.4',
         logExcerpt: 'OPENAI_API_KEY=[redacted]\nfinished',
@@ -88,6 +89,7 @@ describe('daemon-next protocol client', () => {
         agentId: 'agent-1',
         body: 'stub:hello',
         workspaceRun: {
+          status: 'succeeded',
           cwd: '/workspace',
           command: 'codex --model gpt-5.4',
           logExcerpt: 'OPENAI_API_KEY=[redacted]\nfinished',

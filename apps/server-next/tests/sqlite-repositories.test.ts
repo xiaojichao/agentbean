@@ -909,7 +909,7 @@ describe('server-next SQLite repositories', () => {
         workspaceRun: {
           cwd: '/Users/shaw/AgentBean',
           command: 'npm run test:server-next -- tests/sqlite-repositories.test.ts',
-          logExcerpt: `starting workspace run\n${'x'.repeat(17000)}\nOPENAI_API_KEY=sk-test\nfinished workspace run`,
+          logExcerpt: `starting workspace run\n${'x'.repeat(17000)}\nOPENAI_API_KEY="sk-test"\nSECRET_TOKEN='quoted-secret'\nfinished workspace run`,
           exitCode: 0,
           startedAt: 1190,
         },
@@ -1003,6 +1003,9 @@ describe('server-next SQLite repositories', () => {
         command: 'npm run test:server-next -- tests/sqlite-repositories.test.ts',
       });
       expect((persistedRun as { logExcerpt?: string }).logExcerpt).toContain('OPENAI_API_KEY=[redacted]');
+      expect((persistedRun as { logExcerpt?: string }).logExcerpt).toContain('SECRET_TOKEN=[redacted]');
+      expect((persistedRun as { logExcerpt?: string }).logExcerpt).not.toContain('sk-test');
+      expect((persistedRun as { logExcerpt?: string }).logExcerpt).not.toContain('quoted-secret');
       expect((persistedRun as { logExcerpt?: string }).logExcerpt).toContain('finished workspace run');
       expect((persistedRun as { logExcerpt?: string }).logExcerpt?.length).toBeLessThanOrEqual(16000);
     } finally {
