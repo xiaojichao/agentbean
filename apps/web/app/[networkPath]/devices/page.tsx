@@ -27,6 +27,13 @@ const STATUS_BG: Record<string, string> = {
   connecting: 'bg-blue-50 text-blue-700',
 };
 
+const WORKSPACE_RUN_STATUS: Record<string, { label: string; className: string }> = {
+  running: { label: '运行中', className: 'bg-blue-50 text-blue-700' },
+  succeeded: { label: '成功', className: 'bg-emerald-50 text-emerald-700' },
+  failed: { label: '失败', className: 'bg-red-50 text-red-700' },
+  cancelled: { label: '已取消', className: 'bg-neutral-100 text-neutral-500' },
+};
+
 function formatDaemonVersion(device: Parameters<typeof daemonVersionDisplay>[0]) {
   return daemonVersionDisplay(device).currentLabel;
 }
@@ -929,7 +936,19 @@ function DeviceWorkspaceAgentCard({ agent }: { agent: WorkspaceAgent }) {
         {agent.runs.slice(0, 4).map((run) => (
           <div key={run.runId} className="border-t border-neutral-200 pt-3 first:border-t-0 first:pt-0">
             <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="min-w-0 truncate text-xs font-medium text-neutral-600">同步记录</div>
+              <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-medium ${(WORKSPACE_RUN_STATUS[run.status] ?? WORKSPACE_RUN_STATUS.running).className}`}>
+                    {(WORKSPACE_RUN_STATUS[run.status] ?? WORKSPACE_RUN_STATUS.running).label}
+                  </span>
+                  <div className="truncate text-xs font-medium text-neutral-600">Workspace run</div>
+                </div>
+                <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-neutral-400">
+                  <span>{formatRelative(run.updatedAt)}</span>
+                  {run.exitCode !== undefined && <span>exit {run.exitCode}</span>}
+                  {run.command && <span className="max-w-[12rem] truncate font-mono">{run.command}</span>}
+                </div>
+              </div>
               <div className="flex items-center gap-2 shrink-0">
                 <Link
                   href={`/${np}/runs/${run.runId}`}

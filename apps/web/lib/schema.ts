@@ -84,6 +84,10 @@ export interface AgentWorkspaceRun {
   runId: string;
   createdAt: number;
   updatedAt: number;
+  status: WorkspaceRunStatus;
+  cwd?: string;
+  command?: string;
+  exitCode?: number;
   files: AgentWorkspaceFile[];
 }
 

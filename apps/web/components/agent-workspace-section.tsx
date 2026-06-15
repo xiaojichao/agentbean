@@ -1,11 +1,18 @@
 'use client';
 
 import Link from 'next/link';
-import { FolderOpen, Image as ImageIcon, Paperclip, ExternalLink } from 'lucide-react';
+import { FolderOpen, Image as ImageIcon, Paperclip, ExternalLink, CheckCircle2, XCircle, Clock, AlertCircle } from 'lucide-react';
 import { authedApiUrl } from '@/lib/socket';
 import { useCurrentNetworkPath } from '@/lib/store';
 import { formatRelative } from '@/lib/format-time';
-import type { AgentWorkspaceFile, AgentWorkspaceRun } from '@/lib/schema';
+import type { AgentWorkspaceFile, AgentWorkspaceRun, WorkspaceRunStatus } from '@/lib/schema';
+
+const RUN_STATUS: Record<WorkspaceRunStatus, { label: string; className: string; icon: typeof CheckCircle2 }> = {
+  running: { label: '运行中', className: 'bg-blue-50 text-blue-700', icon: Clock },
+  succeeded: { label: '成功', className: 'bg-emerald-50 text-emerald-700', icon: CheckCircle2 },
+  failed: { label: '失败', className: 'bg-red-50 text-red-700', icon: XCircle },
+  cancelled: { label: '已取消', className: 'bg-neutral-100 text-neutral-500', icon: AlertCircle },
+};
 
 export function AgentWorkspaceSection({ runs, loading }: { runs: AgentWorkspaceRun[]; loading: boolean }) {
   const np = useCurrentNetworkPath();
@@ -25,8 +32,15 @@ export function AgentWorkspaceSection({ runs, loading }: { runs: AgentWorkspaceR
             <div key={run.runId} className="border-t border-neutral-100 pt-3 first:border-t-0 first:pt-0">
               <div className="mb-2 flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="truncate text-xs font-medium text-neutral-600">同步记录</div>
-                  <div className="text-[11px] text-neutral-400">{formatRelative(run.updatedAt)}</div>
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <RunStatusPill status={run.status} />
+                    <div className="truncate text-xs font-medium text-neutral-600">Workspace run</div>
+                  </div>
+                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-neutral-400">
+                    <span>{formatRelative(run.updatedAt)}</span>
+                    {run.exitCode !== undefined && <span>exit {run.exitCode}</span>}
+                    {run.command && <span className="max-w-[16rem] truncate font-mono">{run.command}</span>}
+                  </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <Link
@@ -51,6 +65,17 @@ export function AgentWorkspaceSection({ runs, loading }: { runs: AgentWorkspaceR
         </div>
       )}
     </section>
+  );
+}
+
+function RunStatusPill({ status }: { status: WorkspaceRunStatus }) {
+  const config = RUN_STATUS[status] ?? RUN_STATUS.running;
+  const Icon = config.icon;
+  return (
+    <span className={`inline-flex h-5 shrink-0 items-center gap-1 rounded-full px-1.5 text-[11px] font-medium ${config.className}`}>
+      <Icon size={11} />
+      {config.label}
+    </span>
   );
 }
 
