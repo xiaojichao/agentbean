@@ -74,6 +74,7 @@ export interface ServerNextUseCases {
   getArtifactFile(input: GetArtifactInput): Promise<Ack<{ artifact: ArtifactDto; storagePath?: string }>>;
   getWorkspaceRun(input: GetWorkspaceRunInput): Promise<Ack<{ workspaceRun: WorkspaceRunDto }>>;
   getWorkspaceRunDetail(input: GetWorkspaceRunInput): Promise<Ack<{ workspaceRun: WorkspaceRunDto; artifacts: ArtifactDto[] }>>;
+  listAgentWorkspaceRuns(input: ListAgentWorkspaceRunsInput): Promise<Ack<{ runs: AgentWorkspaceRunListItemDto[] }>>;
   failTimedOutDispatches(input: { olderThan: number }): Promise<Ack<{ dispatches: DispatchDto[] }>>;
   receiveDispatchResult(input: ReceiveDispatchResultInput): Promise<Ack<ReceiveDispatchResultResult>>;
   receiveDispatchError(input: ReceiveDispatchErrorInput): Promise<Ack<ReceiveDispatchErrorResult>>;
@@ -390,6 +391,23 @@ export interface GetWorkspaceRunInput {
   userId: string;
   teamId: string;
   runId: string;
+}
+
+export interface ListAgentWorkspaceRunsInput {
+  userId: string;
+  teamId: string;
+  agentId: string;
+}
+
+export interface AgentWorkspaceRunListItemDto {
+  runId: string;
+  createdAt: number;
+  updatedAt: number;
+  status: WorkspaceRunDto['status'];
+  cwd?: string;
+  command?: string;
+  exitCode?: number;
+  files: ArtifactDto[];
 }
 
 export interface CancelDispatchInput {
@@ -2040,6 +2058,34 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
     },
 
+    async listAgentWorkspaceRuns(runInput) {
+      if (!(await repositories.teams.isMember(runInput.teamId, runInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const runs = await repositories.workspaceRuns.listByAgent({
+        teamId: runInput.teamId,
+        agentId: runInput.agentId,
+        limit: 200,
+      });
+      const visibleRuns: AgentWorkspaceRunListItemDto[] = [];
+      for (const run of runs) {
+        const channelAccess = await ensureUserCanViewChannel(repositories, {
+          userId: runInput.userId,
+          teamId: run.teamId,
+          channelId: run.channelId,
+        });
+        if (!channelAccess.ok) {
+          continue;
+        }
+        const artifacts = await repositories.artifacts.listByWorkspaceRun(run.id);
+        visibleRuns.push(toAgentWorkspaceRunListItem(run, artifacts));
+        if (visibleRuns.length >= 50) {
+          break;
+        }
+      }
+      return makeSuccess({ runs: visibleRuns });
+    },
+
     async cancelDispatch(cancelInput) {
       const dispatch = await repositories.dispatches.getById(cancelInput.dispatchId);
       if (!dispatch) {
@@ -2751,6 +2797,26 @@ function toArtifactDto(artifact: ArtifactRecord): ArtifactDto {
     pathKind: artifact.pathKind,
     sha256: artifact.sha256,
     createdAt: artifact.createdAt,
+  };
+}
+
+function toAgentWorkspaceRunListItem(
+  run: WorkspaceRunRecord,
+  artifacts: ArtifactRecord[],
+): AgentWorkspaceRunListItemDto {
+  return {
+    runId: run.id,
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+    status: run.status,
+    cwd: run.cwd,
+    command: run.command,
+    exitCode: run.exitCode,
+    files: artifacts.map((artifact) => ({
+      ...toArtifactDto(artifact),
+      pathKind: artifact.pathKind ?? 'workspace',
+      relativePath: artifact.relativePath ?? artifact.filename,
+    })),
   };
 }
 

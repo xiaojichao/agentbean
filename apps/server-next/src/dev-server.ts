@@ -104,6 +104,9 @@ export async function startServerNextDevServer(
       response.end(JSON.stringify({ ok: true, service: 'agentbean-next-server' }));
       return;
     }
+    if (await handleAgentWorkspaceHttp({ app, config, request, response, url })) {
+      return;
+    }
     if (await handleWorkspaceRunHttp({ app, config, request, response, url })) {
       return;
     }
@@ -168,6 +171,44 @@ interface ArtifactHttpInput {
   request: IncomingMessage;
   response: ServerResponse;
   url: URL;
+}
+
+async function handleAgentWorkspaceHttp(input: ArtifactHttpInput): Promise<boolean> {
+  const match = input.url.pathname.match(/^\/api\/teams\/([^/]+)\/agents\/([^/]+)\/workspace$/);
+  if (!match) {
+    return false;
+  }
+  if (input.request.method !== 'GET') {
+    writeJson(input.response, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
+    return true;
+  }
+  const teamId = decodeURIComponent(match[1] ?? '');
+  const agentId = decodeURIComponent(match[2] ?? '');
+  const token = readToken(input.url, input.request);
+  const session = token ? await input.app.whoami({ token }) : makeFailure('UNAUTHENTICATED', 'Missing session token');
+  if (!session.ok) {
+    writeAckFailure(input.response, session);
+    return true;
+  }
+  const result = await input.app.listAgentWorkspaceRuns({
+    userId: session.user.id,
+    teamId,
+    agentId,
+  });
+  if (!result.ok) {
+    writeAckFailure(input.response, result);
+    return true;
+  }
+  writeJson(input.response, 200, {
+    ok: true,
+    teamId,
+    agentId,
+    runs: result.runs.map((run) => ({
+      ...run,
+      files: run.files.map(withArtifactUrls),
+    })),
+  });
+  return true;
 }
 
 async function handleWorkspaceRunHttp(input: ArtifactHttpInput): Promise<boolean> {
