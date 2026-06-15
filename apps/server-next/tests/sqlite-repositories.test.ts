@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { describe, expect, test, vi } from 'vitest';
 import { createServerNextUseCases } from '../src/application/usecases';
+import type { WorkspaceRunRecord } from '../src/application/repositories';
 import {
   applyGlobalMigrations,
   applyTeamMigrations,
@@ -1114,6 +1115,80 @@ describe('server-next SQLite repositories', () => {
       expect((persistedRun as { logExcerpt?: string }).logExcerpt).not.toContain('quoted-secret');
       expect((persistedRun as { logExcerpt?: string }).logExcerpt).toContain('finished workspace run');
       expect((persistedRun as { logExcerpt?: string }).logExcerpt?.length).toBeLessThanOrEqual(16000);
+    } finally {
+      close();
+    }
+  });
+
+  test('workspaceRuns.listByTeam filters by agentId, deviceId and status while keeping team isolation', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const mk = (
+        id: string,
+        teamId: string,
+        agentId: string,
+        deviceId: string,
+        status: WorkspaceRunRecord['status'],
+        updatedAt: number,
+      ): WorkspaceRunRecord => ({
+        id,
+        teamId,
+        channelId: `${teamId}-channel`,
+        dispatchId: `d-${id}`,
+        agentId,
+        deviceId,
+        status,
+        createdAt: 1000,
+        updatedAt,
+        artifactIds: [],
+      });
+      await repositories.workspaceRuns.create(mk('run-a', 'team-1', 'agent-1', 'device-1', 'succeeded', 3000));
+      await repositories.workspaceRuns.create(mk('run-b', 'team-1', 'agent-2', 'device-1', 'failed', 2000));
+      await repositories.workspaceRuns.create(mk('run-c', 'team-1', 'agent-1', 'device-2', 'running', 1500));
+      await repositories.workspaceRuns.create(mk('run-x', 'team-2', 'agent-1', 'device-1', 'succeeded', 5000));
+
+      const ids = (runs: WorkspaceRunRecord[]) => runs.map((run) => run.id);
+
+      // No filter: team-1 only, ordered by updatedAt DESC.
+      expect(ids(await repositories.workspaceRuns.listByTeam({ teamId: 'team-1', limit: 100 }))).toEqual([
+        'run-a',
+        'run-b',
+        'run-c',
+      ]);
+
+      // agentId filter.
+      expect(
+        ids(await repositories.workspaceRuns.listByTeam({ teamId: 'team-1', limit: 100, agentId: 'agent-1' })),
+      ).toEqual(['run-a', 'run-c']);
+
+      // deviceId filter.
+      expect(
+        ids(await repositories.workspaceRuns.listByTeam({ teamId: 'team-1', limit: 100, deviceId: 'device-1' })),
+      ).toEqual(['run-a', 'run-b']);
+
+      // status filter.
+      expect(
+        ids(await repositories.workspaceRuns.listByTeam({ teamId: 'team-1', limit: 100, status: 'failed' })),
+      ).toEqual(['run-b']);
+
+      // Combined AND: agent-1 + succeeded.
+      expect(
+        ids(
+          await repositories.workspaceRuns.listByTeam({
+            teamId: 'team-1',
+            limit: 100,
+            agentId: 'agent-1',
+            status: 'succeeded',
+          }),
+        ),
+      ).toEqual(['run-a']);
+
+      // Team isolation: team-2 only sees its own run, never team-1's.
+      expect(ids(await repositories.workspaceRuns.listByTeam({ teamId: 'team-2', limit: 100 }))).toEqual(['run-x']);
+      expect(
+        ids(await repositories.workspaceRuns.listByTeam({ teamId: 'team-2', limit: 100, agentId: 'agent-1' })),
+      ).toEqual(['run-x']);
     } finally {
       close();
     }

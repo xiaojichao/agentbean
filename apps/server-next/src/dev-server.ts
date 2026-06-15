@@ -13,7 +13,7 @@ import {
   type SqliteDatabase,
 } from './infra/sqlite/repositories.js';
 import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
-import { makeFailure, type ArtifactDto } from '../../../packages/contracts/src/index.js';
+import { makeFailure, type ArtifactDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { ServerNextUseCases } from './application/usecases.js';
 
 type SocketIoServerConstructor = new (server: HttpServer, options?: Record<string, unknown>) => SocketServerLike & {
@@ -61,6 +61,12 @@ const ACTIVE_PREVIEW_MIME_TYPES = new Set([
   'text/ecmascript',
   'text/html',
   'text/javascript',
+]);
+const WORKSPACE_RUN_STATUSES = new Set<WorkspaceRunStatus>([
+  'running',
+  'succeeded',
+  'failed',
+  'cancelled',
 ]);
 
 export interface DispatchTimeoutSchedulerConfig {
@@ -241,9 +247,17 @@ async function handleTeamWorkspaceRunsHttp(input: ArtifactHttpInput): Promise<bo
     writeAckFailure(input.response, session);
     return true;
   }
+  const status = parseWorkspaceRunStatus(input.url.searchParams.get('status'));
+  if (status === 'invalid') {
+    writeJson(input.response, 400, { ok: false, error: 'BAD_REQUEST', message: 'Invalid workspace run status' });
+    return true;
+  }
   const result = await input.app.listTeamWorkspaceRuns({
     userId: session.user.id,
     teamId,
+    agentId: readOptionalQueryString(input.url, 'agentId'),
+    deviceId: readOptionalQueryString(input.url, 'deviceId'),
+    status,
   });
   if (!result.ok) {
     writeAckFailure(input.response, result);
@@ -573,6 +587,17 @@ function readToken(url: URL, request: ArtifactHttpInput['request'], body: Record
   const queryToken = url.searchParams.get('token') ?? undefined;
   const bodyToken = typeof body.token === 'string' ? body.token : undefined;
   return bearer ?? queryToken ?? bodyToken;
+}
+
+function readOptionalQueryString(url: URL, field: string): string | undefined {
+  const value = url.searchParams.get(field);
+  return value?.trim() || undefined;
+}
+
+function parseWorkspaceRunStatus(value: string | null): WorkspaceRunStatus | 'invalid' | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return WORKSPACE_RUN_STATUSES.has(trimmed as WorkspaceRunStatus) ? trimmed as WorkspaceRunStatus : 'invalid';
 }
 
 function readRequiredString(body: Record<string, unknown>, field: string): string {

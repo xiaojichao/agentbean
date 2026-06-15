@@ -1,4 +1,4 @@
-import type { AgentDto, ArtifactDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, RuntimeDto, TaskDto, TeamDto, UnixMs, UserDto, WorkspaceRunDto } from '../../../../packages/contracts/src/index.js';
+import type { AgentDto, ArtifactDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, RuntimeDto, TaskDto, TeamDto, UnixMs, UserDto, WorkspaceRunDto, WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 
 export interface UserRecord extends UserDto {
   passwordHash: string;
@@ -216,7 +216,7 @@ export interface ArtifactRepository {
 export interface WorkspaceRunRepository {
   create(input: WorkspaceRunRecord): Promise<WorkspaceRunRecord>;
   getForTeam(input: { teamId: ID; runId: ID }): Promise<WorkspaceRunRecord | null>;
-  listByTeam(input: { teamId: ID; limit: number }): Promise<WorkspaceRunRecord[]>;
+  listByTeam(input: { teamId: ID; limit: number; agentId?: ID; deviceId?: ID; status?: WorkspaceRunStatus }): Promise<WorkspaceRunRecord[]>;
   listByAgent(input: { teamId: ID; agentId: ID; limit: number }): Promise<WorkspaceRunRecord[]>;
   listByDispatch(dispatchId: ID): Promise<WorkspaceRunRecord[]>;
 }

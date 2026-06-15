@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   AlertCircle,
   CheckCircle2,
@@ -54,6 +55,22 @@ export default function TeamWorkspaceRunsPage() {
   const [runs, setRuns] = useState<TeamWorkspaceRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const statusFilter = searchParams.get('status') ?? '';
+  const agentFilter = searchParams.get('agentId') ?? '';
+  const deviceFilter = searchParams.get('deviceId') ?? '';
+  const hasFilter = Boolean(statusFilter || agentFilter || deviceFilter);
+  const updateFilter = useCallback(
+    (key: string, value: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (value) params.set(key, value);
+      else params.delete(key);
+      const query = params.toString();
+      router.replace(`/${np}/runs${query ? `?${query}` : ''}`, { scroll: false });
+    },
+    [np, router, searchParams],
+  );
 
   useEffect(() => {
     if (conn !== 'open' || !currentTeamId) return;
@@ -86,7 +103,11 @@ export default function TeamWorkspaceRunsPage() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetchTeamWorkspaceRuns(currentTeamId)
+    fetchTeamWorkspaceRuns(currentTeamId, {
+      agentId: agentFilter || undefined,
+      deviceId: deviceFilter || undefined,
+      status: (statusFilter || undefined) as WorkspaceRunStatus | undefined,
+    })
       .then((res) => {
         if (cancelled) return;
         if (res.ok) {
@@ -101,7 +122,7 @@ export default function TeamWorkspaceRunsPage() {
     return () => {
       cancelled = true;
     };
-  }, [currentTeamId]);
+  }, [currentTeamId, agentFilter, deviceFilter, statusFilter]);
 
   const orderedRuns = useMemo(
     () => [...runs].sort((a, b) => b.workspaceRun.updatedAt - a.workspaceRun.updatedAt),
@@ -141,6 +162,62 @@ export default function TeamWorkspaceRunsPage() {
         <span className="rounded-full bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-600">
           {orderedRuns.length} 条
         </span>
+      </div>
+
+      <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-neutral-200 bg-white p-3">
+        <label className="flex items-center gap-1.5 text-xs text-neutral-600">
+          <span>状态</span>
+          <select
+            value={statusFilter}
+            onChange={(e) => updateFilter('status', e.target.value)}
+            className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-sm"
+          >
+            <option value="">全部</option>
+            <option value="running">运行中</option>
+            <option value="succeeded">成功</option>
+            <option value="failed">失败</option>
+            <option value="cancelled">已取消</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-neutral-600">
+          <span>Agent</span>
+          <select
+            value={agentFilter}
+            onChange={(e) => updateFilter('agentId', e.target.value)}
+            className="max-w-[12rem] rounded-md border border-neutral-200 bg-white px-2 py-1 text-sm"
+          >
+            <option value="">全部</option>
+            {Object.values(agents).map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-neutral-600">
+          <span>设备</span>
+          <select
+            value={deviceFilter}
+            onChange={(e) => updateFilter('deviceId', e.target.value)}
+            className="max-w-[12rem] rounded-md border border-neutral-200 bg-white px-2 py-1 text-sm"
+          >
+            <option value="">全部</option>
+            {Object.values(devices).map((device) => (
+              <option key={device.id} value={device.id}>
+                {device.hostname ?? device.id}
+              </option>
+            ))}
+          </select>
+        </label>
+        {hasFilter && (
+          <button
+            type="button"
+            onClick={() => router.replace(`/${np}/runs`, { scroll: false })}
+            className="ml-auto rounded-md border border-neutral-200 px-2.5 py-1 text-xs font-medium text-neutral-600 hover:bg-neutral-50"
+          >
+            清除筛选
+          </button>
+        )}
       </div>
 
       {orderedRuns.length === 0 ? (
