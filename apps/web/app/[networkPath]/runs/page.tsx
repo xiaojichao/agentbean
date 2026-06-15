@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -57,6 +57,7 @@ export default function TeamWorkspaceRunsPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const requestVersion = useRef(0);
   const router = useRouter();
   const searchParams = useSearchParams();
   const statusFilter = searchParams.get('status') ?? '';
@@ -111,12 +112,15 @@ export default function TeamWorkspaceRunsPage() {
 
   useEffect(() => {
     if (!currentTeamId) return;
+    const version = requestVersion.current + 1;
+    requestVersion.current = version;
     let cancelled = false;
     setLoading(true);
+    setLoadingMore(false);
     setError(null);
     fetchTeamWorkspaceRuns(currentTeamId, filters)
       .then((res) => {
-        if (cancelled) return;
+        if (cancelled || requestVersion.current !== version) return;
         if (res.ok) {
           setRuns(res.runs ?? []);
           setNextCursor(res.nextCursor ?? null);
@@ -125,7 +129,7 @@ export default function TeamWorkspaceRunsPage() {
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && requestVersion.current === version) setLoading(false);
       });
     return () => {
       cancelled = true;
@@ -134,15 +138,19 @@ export default function TeamWorkspaceRunsPage() {
 
   const loadMore = useCallback(() => {
     if (!currentTeamId || !nextCursor || loadingMore) return;
+    const version = requestVersion.current;
     setLoadingMore(true);
     fetchTeamWorkspaceRuns(currentTeamId, filters, { cursor: nextCursor })
       .then((res) => {
+        if (requestVersion.current !== version) return;
         if (res.ok) {
           setRuns((prev) => [...prev, ...(res.runs ?? [])]);
           setNextCursor(res.nextCursor ?? null);
         }
       })
-      .finally(() => setLoadingMore(false));
+      .finally(() => {
+        if (requestVersion.current === version) setLoadingMore(false);
+      });
   }, [currentTeamId, nextCursor, loadingMore, filters]);
 
   const orderedRuns = useMemo(

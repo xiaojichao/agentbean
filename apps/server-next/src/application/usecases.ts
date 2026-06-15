@@ -2138,11 +2138,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const hasMore = visibleRuns.length > pageSize;
       const page = hasMore ? visibleRuns.slice(0, pageSize) : visibleRuns;
+      const lastVisibleRun = page.at(-1)?.workspaceRun;
       const nextCursor =
-        hasMore && page.length > 0
+        hasMore && lastVisibleRun
           ? encodeWorkspaceRunCursor({
-              updatedAt: page[page.length - 1].workspaceRun.updatedAt,
-              id: page[page.length - 1].workspaceRun.id,
+              updatedAt: lastVisibleRun.updatedAt,
+              id: lastVisibleRun.id,
             })
           : undefined;
       return makeSuccess({ runs: page, nextCursor });

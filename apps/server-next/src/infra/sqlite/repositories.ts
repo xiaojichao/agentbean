@@ -49,6 +49,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0004_reactions_saved.sql');
   applyMigration(db, 'team/0005_workspace_run_command.sql');
   applyMigration(db, 'team/0006_workspace_run_log_excerpt.sql');
+  applyMigration(db, 'team/0007_workspace_run_pagination_index.sql');
 }
 
 export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): ServerNextRepositories {

@@ -82,6 +82,19 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('applies workspace run pagination index migration', () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      globalDb.exec('SELECT 1');
+      expect(indexNames(teamDb, 'workspace_runs')).toContain('idx_workspace_runs_team_updated_id');
+      expect(teamDb.prepare("SELECT id FROM schema_migrations WHERE id = 'team/0007_workspace_run_pagination_index.sql'").get()).toEqual({
+        id: 'team/0007_workspace_run_pagination_index.sql',
+      });
+    } finally {
+      close();
+    }
+  });
+
   test('persists user join links and consumes them with SQLite', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
@@ -1554,6 +1567,13 @@ function tableNames(db: SqliteDatabase): string[] {
 function columnNames(db: SqliteDatabase, tableName: string): string[] {
   return db
     .prepare(`PRAGMA table_info(${tableName})`)
+    .all()
+    .map((row) => (row as { name: string }).name);
+}
+
+function indexNames(db: SqliteDatabase, tableName: string): string[] {
+  return db
+    .prepare(`PRAGMA index_list(${tableName})`)
     .all()
     .map((row) => (row as { name: string }).name);
 }
