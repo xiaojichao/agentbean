@@ -52,6 +52,17 @@ export interface ServerNextDevServerHandle {
 
 type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { close(): void };
 
+const MAX_ARTIFACT_UPLOAD_BODY_BYTES = 10 * 1024 * 1024;
+const ACTIVE_PREVIEW_MIME_TYPES = new Set([
+  'application/ecmascript',
+  'application/javascript',
+  'application/xhtml+xml',
+  'image/svg+xml',
+  'text/ecmascript',
+  'text/html',
+  'text/javascript',
+]);
+
 export interface DispatchTimeoutSchedulerConfig {
   timeoutMs: number;
   intervalMs: number;
@@ -382,10 +393,13 @@ async function handleArtifactRead(
     return;
   }
   const body = readFileSync(absolutePath);
+  const disposition = shouldForceArtifactDownload(result.artifact.mimeType)
+    ? 'attachment'
+    : options.disposition;
   input.response.writeHead(200, {
     'content-type': result.artifact.mimeType,
     'content-length': String(body.length),
-    'content-disposition': `${options.disposition}; filename="${result.artifact.filename.replace(/"/g, '')}"`,
+    'content-disposition': buildContentDisposition(disposition, result.artifact.filename),
   });
   input.response.end(body);
 }
@@ -399,7 +413,7 @@ function withArtifactUrls(artifact: ArtifactDto): ArtifactDto {
 }
 
 async function readJsonBody(request: ArtifactHttpInput['request']): Promise<Record<string, unknown>> {
-  const rawBody = await readRequestBody(request);
+  const rawBody = await readRequestBody(request, MAX_ARTIFACT_UPLOAD_BODY_BYTES);
   if (rawBody.length === 0) return {};
   return parseJsonBody(rawBody);
 }
@@ -413,7 +427,7 @@ async function readArtifactUpload(input: ArtifactHttpInput): Promise<{
 }> {
   const contentType = input.request.headers['content-type'];
   if (typeof contentType === 'string' && contentType.toLowerCase().startsWith('multipart/form-data')) {
-    const multipart = parseMultipartBody(await readRequestBody(input.request), contentType);
+    const multipart = parseMultipartBody(await readRequestBody(input.request, MAX_ARTIFACT_UPLOAD_BODY_BYTES), contentType);
     return {
       fields: multipart.fields,
       channelId: readRequiredString(multipart.fields, 'channelId'),
@@ -439,12 +453,31 @@ async function readArtifactUpload(input: ArtifactHttpInput): Promise<{
   };
 }
 
-async function readRequestBody(request: ArtifactHttpInput['request']): Promise<Buffer> {
+async function readRequestBody(request: ArtifactHttpInput['request'], maxBytes: number): Promise<Buffer> {
+  const contentLength = readContentLength(request);
+  if (contentLength !== undefined && contentLength > maxBytes) {
+    throw new ArtifactHttpError(413, { ok: false, error: 'PAYLOAD_TOO_LARGE' });
+  }
   const chunks: Buffer[] = [];
+  let received = 0;
   for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    received += buffer.length;
+    if (received > maxBytes) {
+      throw new ArtifactHttpError(413, { ok: false, error: 'PAYLOAD_TOO_LARGE' });
+    }
+    chunks.push(buffer);
   }
   return Buffer.concat(chunks);
+}
+
+function readContentLength(request: ArtifactHttpInput['request']): number | undefined {
+  const rawLength = request.headers['content-length'];
+  if (typeof rawLength !== 'string') {
+    return undefined;
+  }
+  const parsed = Number(rawLength);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 function parseJsonBody(rawBody: Buffer): Record<string, unknown> {
@@ -553,6 +586,24 @@ function readRequiredString(body: Record<string, unknown>, field: string): strin
 function sanitizeFilename(filename: string): string {
   const safe = basename(filename).replace(/[^\w .@-]/g, '_').trim();
   return safe || 'artifact.bin';
+}
+
+function buildContentDisposition(disposition: 'inline' | 'attachment', filename: string): string {
+  const fallback = basename(filename)
+    .replace(/[^\x20-\x7E]/g, '')
+    .replace(/["\\]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim() || 'artifact.bin';
+  return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encodeRfc5987Value(filename)}`;
+}
+
+function shouldForceArtifactDownload(mimeType: string): boolean {
+  return ACTIVE_PREVIEW_MIME_TYPES.has(mimeType.toLowerCase().split(';', 1)[0]?.trim() ?? '');
+}
+
+function encodeRfc5987Value(value: string): string {
+  return encodeURIComponent(value).replace(/['()*]/g, (character) =>
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 function isPathInside(root: string, candidate: string): boolean {

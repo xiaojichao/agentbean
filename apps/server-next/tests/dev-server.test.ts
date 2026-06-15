@@ -320,6 +320,105 @@ describe('server-next dev server entry', () => {
     await expect(preview.text()).resolves.toBe('# hello multipart\n');
   });
 
+  test('encodes artifact download filenames from stored artifact metadata', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-artifact-filename-'));
+    writeFileSync(join(dataDir, 'stored.txt'), 'stored content');
+    const app = {
+      whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),
+      getArtifactFile: vi.fn(async () =>
+        makeSuccess({
+          artifact: {
+            id: 'artifact-1',
+            teamId: 'team-1',
+            channelId: 'channel-1',
+            filename: '报告 "Q2"\n✅.txt',
+            mimeType: 'text/plain',
+            sizeBytes: 14,
+            createdAt: 1,
+          },
+          storagePath: 'stored.txt',
+        }),
+      ),
+    } as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir, sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+
+    const response = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/artifact-1/download?token=token-1`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-disposition')).toBe(
+      `attachment; filename="Q2.txt"; filename*=UTF-8''${encodeURIComponent('报告 "Q2"\n✅.txt')}`,
+    );
+    await expect(response.text()).resolves.toBe('stored content');
+  });
+
+  test('forces active artifact preview content to download', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-artifact-active-preview-'));
+    writeFileSync(join(dataDir, 'active.html'), '<script>localStorage.token</script>');
+    const app = {
+      whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),
+      getArtifactFile: vi.fn(async () =>
+        makeSuccess({
+          artifact: {
+            id: 'artifact-1',
+            teamId: 'team-1',
+            channelId: 'channel-1',
+            filename: 'active.html',
+            mimeType: 'text/html',
+            sizeBytes: 35,
+            createdAt: 1,
+          },
+          storagePath: 'active.html',
+        }),
+      ),
+    } as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir, sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+
+    const response = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/artifact-1/preview?token=token-1`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-disposition')).toContain('attachment');
+    expect(response.headers.get('content-disposition')).toContain('active.html');
+    await expect(response.text()).resolves.toBe('<script>localStorage.token</script>');
+  });
+
+  test('rejects oversized artifact upload bodies before authentication', async () => {
+    const app = {
+      whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),
+    } as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: {
+        host: '127.0.0.1',
+        port: 0,
+        storage: 'memory',
+        dataDir: '.agentbean-next-test',
+        sessionSecret: 'test-secret',
+      },
+    });
+    cleanups.push(() => server.close());
+
+    const response = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/upload`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: 'token-1', contentBase64: 'a'.repeat(10 * 1024 * 1024 + 1) }),
+    });
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toMatchObject({ ok: false, error: 'PAYLOAD_TOO_LARGE' });
+    expect(app.whoami).not.toHaveBeenCalled();
+  });
+
   test('serves authorized workspace run detail over HTTP', async () => {
     const app = {
       whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),
