@@ -132,10 +132,11 @@ Workspace run persistence 的第一版已经落地到 `server-next` repository/u
 - daemon 可以在 `dispatch:result` 上报 workspace run metadata，server 会把 run 绑定到 agent reply message；daemon-next custom command executor 会把执行命令、cwd、exitCode 与脱敏日志摘要带入该 metadata。
 - server-next 提供授权 HTTP workspace run detail route，web-next preview 可以从消息摘要打开详情面板，并通过 `workspaceRunId` URL 恢复。
 - apps/web 的 workspace run 专页可从 agent/device 工作区列表进入，在 run 有 `messageId` 时回链到原 chat message，并在 daemon 上报时展示执行命令与可折叠日志摘要。
+- apps/web 的 workspace run 专页为受限日志摘要提供失败默认展开、复制、下载、换行切换、行数/字符数与尾部摘要提示，方便直接排障。
 
 剩余：
 
-- 更完整的 workspace run 专用页面布局与完整日志体验仍需后续产品切片覆盖；分段存储、检索与更强脱敏规则尚未冻结。
+- 更完整的 workspace run 专用页面布局与完整日志存储仍需后续产品切片覆盖；分段存储、检索与更强脱敏规则尚未冻结。
 
 ### Threads 第一版已定义
 
@@ -170,7 +171,7 @@ Artifact metadata、HTTP route 与 preview viewer 的第一版已经落地。
 
 剩余：
 
-- 更完整的 workspace run 专用页面布局与完整日志体验仍需后续产品切片。
+- 更完整的 workspace run 专用页面布局与完整日志存储仍需后续产品切片。
 
 ### Search Projection
 

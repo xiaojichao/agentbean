@@ -20,4 +20,16 @@ describe('workspace run detail page', () => {
     expect(runPage).toContain('run.logExcerpt');
     expect(runPage).toContain('日志摘要');
   });
+
+  it('provides troubleshooting controls for workspace run log excerpts', () => {
+    expect(runPage).toContain('copyLogExcerpt');
+    expect(runPage).toContain('downloadLogExcerpt');
+    expect(runPage).toContain('wrapLog');
+    expect(runPage).toContain('复制日志');
+    expect(runPage).toContain('下载日志');
+    expect(runPage).toContain('自动换行');
+    expect(runPage).toContain("data.workspaceRun.status === 'failed'");
+    expect(runPage).toContain('LOG_EXCERPT_MAX_CHARS');
+    expect(runPage).toContain('尾部摘要');
+  });
 });
