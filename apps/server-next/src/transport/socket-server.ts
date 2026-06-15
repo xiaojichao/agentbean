@@ -442,7 +442,14 @@ async function resolveSubscriberUserId(
 }
 
 function emitTaskUpdated(subscribers: Set<WebSocketSubscription>, task: unknown): void {
+  const teamId = taskTeamId(task);
+  if (!teamId) {
+    return;
+  }
   for (const subscriber of subscribers) {
+    if (!subscriberBelongsToTeam(subscriber, teamId)) {
+      continue;
+    }
     subscriber.socket.emit?.(WEB_EVENTS.task.updated, task);
   }
 }

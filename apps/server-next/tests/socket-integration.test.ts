@@ -533,6 +533,11 @@ describe('server-next Socket.IO namespaces', () => {
       updates.push(task as { id: string; title?: string });
     });
 
+    // task:updated is team-scoped: subscribe so the owner belongs to team-1.
+    await expect(
+      owner.emitWithAck(WEB_EVENTS.channel.subscribe, { teamId: 'team-1' }),
+    ).resolves.toMatchObject({ ok: true });
+
     await expect(
       owner.emitWithAck(WEB_EVENTS.task.create, {
         userId: 'user-1',
@@ -546,6 +551,87 @@ describe('server-next Socket.IO namespaces', () => {
       expect(updates.length).toBeGreaterThan(0);
       expect(updates.at(-1)!.title).toBe('My Task');
     });
+  });
+
+  test('does not leak task:updated to subscribers of another team', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'user-2', 'team-2', 'channel-2', 'task-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrapA = await connectClient(`${baseUrl}/web`);
+    const ackA = (await bootstrapA.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'owner-a',
+      password: 'secret',
+      teamName: 'Team A',
+    })) as { token: string };
+    bootstrapA.disconnect();
+    const ownerA = await connectClient(`${baseUrl}/web`, { auth: { token: ackA.token } });
+    cleanups.push(async () => {
+      ownerA.disconnect();
+    });
+
+    const bootstrapB = await connectClient(`${baseUrl}/web`);
+    const ackB = (await bootstrapB.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'owner-b',
+      password: 'secret',
+      teamName: 'Team B',
+    })) as { token: string };
+    bootstrapB.disconnect();
+    const ownerB = await connectClient(`${baseUrl}/web`, { auth: { token: ackB.token } });
+    cleanups.push(async () => {
+      ownerB.disconnect();
+    });
+
+    await expect(
+      ownerA.emitWithAck(WEB_EVENTS.channel.subscribe, { teamId: 'team-1' }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      ownerB.emitWithAck(WEB_EVENTS.channel.subscribe, { teamId: 'team-2' }),
+    ).resolves.toMatchObject({ ok: true });
+
+    const aUpdates: Array<{ id: string; title?: string }> = [];
+    const bUpdates: Array<{ id: string; title?: string }> = [];
+    ownerA.on(WEB_EVENTS.task.updated, (task) => {
+      if (typeof task !== 'object' || task === null) {
+        throw new Error('Expected task:updated payload to be an object');
+      }
+      aUpdates.push(task as { id: string; title?: string });
+    });
+    ownerB.on(WEB_EVENTS.task.updated, (task) => {
+      if (typeof task !== 'object' || task === null) {
+        throw new Error('Expected task:updated payload to be an object');
+      }
+      bUpdates.push(task as { id: string; title?: string });
+    });
+
+    await expect(
+      ownerA.emitWithAck(WEB_EVENTS.task.create, {
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        title: 'Team A Task',
+      }),
+    ).resolves.toMatchObject({ ok: true, task: { title: 'Team A Task' } });
+
+    // Prove the broadcast actually happened (ownerA received it)...
+    await eventually(async () => {
+      expect(aUpdates.length).toBeGreaterThan(0);
+      expect(aUpdates.at(-1)!.title).toBe('Team A Task');
+    });
+
+    // ...then give any leaked broadcast time to arrive at ownerB before asserting isolation.
+    // (eventually returns the moment ownerA is satisfied, so a leaked packet to ownerB could
+    // still be in flight; without this buffer the assertion is a false-green.)
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Cross-team isolation: ownerB (team-2) must NOT receive team-1's task:updated.
+    expect(bUpdates).toHaveLength(0);
   });
 
   test('pushes tasks:snapshot to channel subscribers after task mutations', async () => {
