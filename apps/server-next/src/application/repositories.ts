@@ -216,6 +216,7 @@ export interface ArtifactRepository {
 export interface WorkspaceRunRepository {
   create(input: WorkspaceRunRecord): Promise<WorkspaceRunRecord>;
   getForTeam(input: { teamId: ID; runId: ID }): Promise<WorkspaceRunRecord | null>;
+  listByTeam(input: { teamId: ID; limit: number }): Promise<WorkspaceRunRecord[]>;
   listByAgent(input: { teamId: ID; agentId: ID; limit: number }): Promise<WorkspaceRunRecord[]>;
   listByDispatch(dispatchId: ID): Promise<WorkspaceRunRecord[]>;
 }

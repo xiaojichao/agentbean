@@ -91,6 +91,11 @@ export interface AgentWorkspaceRun {
   files: AgentWorkspaceFile[];
 }
 
+export interface TeamWorkspaceRun {
+  workspaceRun: WorkspaceRunDetail;
+  artifacts: WorkspaceArtifact[];
+}
+
 export interface OutboundMessage {
   id: string;
   channelId: string;

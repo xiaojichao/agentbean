@@ -647,6 +647,12 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const run = workspaceRuns.get(input.runId);
         return run?.teamId === input.teamId ? run : null;
       },
+      async listByTeam(input) {
+        return Array.from(workspaceRuns.values())
+          .filter((run) => run.teamId === input.teamId)
+          .sort((a, b) => b.updatedAt - a.updatedAt)
+          .slice(0, input.limit);
+      },
       async listByAgent(input) {
         return Array.from(workspaceRuns.values())
           .filter((run) => run.teamId === input.teamId && run.agentId === input.agentId)
