@@ -1,0 +1,242 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import {
+  AlertCircle,
+  CheckCircle2,
+  Clock,
+  ExternalLink,
+  FileText,
+  Loader2,
+  MessageSquare,
+  Monitor,
+  Terminal,
+  XCircle,
+} from 'lucide-react';
+import { agentEvents, channelEvents, deviceEvents, dmEvents, fetchTeamWorkspaceRuns, getWebSocket } from '@/lib/socket';
+import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { formatRelative } from '@/lib/format-time';
+import type { TeamWorkspaceRun, WorkspaceRunStatus } from '@/lib/schema';
+
+const STATUS_CONFIG: Record<WorkspaceRunStatus, { bg: string; icon: typeof CheckCircle2; label: string }> = {
+  running: { bg: 'bg-blue-50 text-blue-700', icon: Clock, label: '运行中' },
+  succeeded: { bg: 'bg-emerald-50 text-emerald-700', icon: CheckCircle2, label: '成功' },
+  failed: { bg: 'bg-red-50 text-red-700', icon: XCircle, label: '失败' },
+  cancelled: { bg: 'bg-neutral-100 text-neutral-500', icon: AlertCircle, label: '已取消' },
+};
+
+function shortId(id: string): string {
+  return `${id.slice(0, 8)}...`;
+}
+
+function sourceMessageHref(np: string, channelId: string, messageId: string | undefined, dms: Array<{ id: string }>): string | null {
+  if (!messageId) return null;
+  const routeKind = dms.some((dm) => dm.id === channelId) ? 'dm' : 'channel';
+  return `/${np}/${routeKind}/${encodeURIComponent(channelId)}?message=${encodeURIComponent(`${channelId}:${messageId}`)}`;
+}
+
+export default function TeamWorkspaceRunsPage() {
+  const np = useCurrentNetworkPath();
+  const conn = useAgentBeanStore((s) => s.conn);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
+  const agents = useAgentBeanStore((s) => s.agents);
+  const devices = useAgentBeanStore((s) => s.devices);
+  const channels = useAgentBeanStore((s) => s.channels);
+  const dms = useAgentBeanStore((s) => s.dms);
+  const applyAgentsSnapshot = useAgentBeanStore((s) => s.applyAgentsSnapshot);
+  const applyAgentStatus = useAgentBeanStore((s) => s.applyAgentStatus);
+  const applyChannelsSnapshot = useAgentBeanStore((s) => s.applyChannelsSnapshot);
+  const applyDmsSnapshot = useAgentBeanStore((s) => s.applyDmsSnapshot);
+  const applyDevicesSnapshot = useAgentBeanStore((s) => s.applyDevicesSnapshot);
+  const applyDeviceStatus = useAgentBeanStore((s) => s.applyDeviceStatus);
+
+  const [runs, setRuns] = useState<TeamWorkspaceRun[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (conn !== 'open' || !currentTeamId) return;
+    const socket = getWebSocket();
+    const agentsApi = agentEvents(socket);
+    agentsApi.subscribe(currentTeamId);
+    channelEvents(socket).subscribe(currentTeamId);
+    dmEvents(socket).list().then((res) => {
+      if (res.ok && res.dms) applyDmsSnapshot(res.dms);
+    });
+    deviceEvents(socket).subscribe(currentTeamId);
+    const unsubAgents = agentsApi.onSnapshot(applyAgentsSnapshot);
+    const unsubAgentStatus = agentsApi.onStatus(applyAgentStatus);
+    const unsubDevices = deviceEvents(socket).onSnapshot(applyDevicesSnapshot);
+    const unsubDeviceStatus = deviceEvents(socket).onStatus(applyDeviceStatus);
+    const unsubDms = dmEvents(socket).onSnapshot(applyDmsSnapshot);
+    socket.on('channels:snapshot', applyChannelsSnapshot);
+    return () => {
+      unsubAgents();
+      unsubAgentStatus();
+      unsubDevices();
+      unsubDeviceStatus();
+      unsubDms();
+      socket.off('channels:snapshot', applyChannelsSnapshot);
+    };
+  }, [conn, currentTeamId, applyAgentsSnapshot, applyAgentStatus, applyChannelsSnapshot, applyDmsSnapshot, applyDevicesSnapshot, applyDeviceStatus]);
+
+  useEffect(() => {
+    if (!currentTeamId) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetchTeamWorkspaceRuns(currentTeamId)
+      .then((res) => {
+        if (cancelled) return;
+        if (res.ok) {
+          setRuns(res.runs ?? []);
+        } else {
+          setError(res.error ?? '加载失败');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTeamId]);
+
+  const orderedRuns = useMemo(
+    () => [...runs].sort((a, b) => b.workspaceRun.updatedAt - a.workspaceRun.updatedAt),
+    [runs],
+  );
+
+  if (loading) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-neutral-400" />
+        <span className="ml-2 text-sm text-neutral-500">加载中...</span>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="mx-auto max-w-3xl p-6">
+        <div className="flex items-start gap-3 rounded-lg bg-red-50 p-4 text-red-700">
+          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+          <div>
+            <p className="font-medium">加载失败</p>
+            <p className="mt-1 text-sm">{error}</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-5xl p-6">
+      <div className="mb-5 flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-lg font-semibold text-neutral-900">Workspace Runs</h1>
+          <p className="mt-1 text-sm text-neutral-500">团队最近可见的 workspace run</p>
+        </div>
+        <span className="rounded-full bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-600">
+          {orderedRuns.length} 条
+        </span>
+      </div>
+
+      {orderedRuns.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-neutral-300 bg-white p-10 text-center">
+          <Terminal className="mx-auto mb-3 h-8 w-8 text-neutral-300" />
+          <p className="text-sm font-medium text-neutral-700">暂无 workspace runs</p>
+          <p className="mt-1 text-sm text-neutral-400">有 agent 产出 workspace 文件后会出现在这里。</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {orderedRuns.map(({ workspaceRun, artifacts }) => {
+            const statusCfg = STATUS_CONFIG[workspaceRun.status] ?? STATUS_CONFIG.running;
+            const StatusIcon = statusCfg.icon;
+            const agent = agents[workspaceRun.agentId];
+            const device = workspaceRun.deviceId ? devices[workspaceRun.deviceId] : undefined;
+            const channel = channels.find((item) => item.id === workspaceRun.channelId);
+            const dm = dms.find((item) => item.id === workspaceRun.channelId);
+            const messageHref = sourceMessageHref(np, workspaceRun.channelId, workspaceRun.messageId, dms);
+            const agentLabel = agent?.name ?? shortId(workspaceRun.agentId);
+            const deviceLabel = device?.hostname ?? (workspaceRun.deviceId ? shortId(workspaceRun.deviceId) : '未绑定设备');
+            const sourceLabel = dm?.name ?? channel?.name ?? shortId(workspaceRun.channelId);
+
+            return (
+              <article key={workspaceRun.id} className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${statusCfg.bg}`}>
+                        <StatusIcon className="h-3.5 w-3.5" />
+                        {statusCfg.label}
+                      </span>
+                      <span className="text-xs text-neutral-400">{formatRelative(workspaceRun.updatedAt)}</span>
+                      <span className="text-xs font-mono text-neutral-400">{shortId(workspaceRun.id)}</span>
+                    </div>
+                    <Link
+                      href={`/${np}/runs/${workspaceRun.id}`}
+                      className="block truncate text-sm font-semibold text-neutral-900 hover:text-blue-600"
+                    >
+                      {workspaceRun.command || workspaceRun.cwd || workspaceRun.id}
+                    </Link>
+                    {workspaceRun.cwd && (
+                      <p className="mt-1 truncate text-xs font-mono text-neutral-500">{workspaceRun.cwd}</p>
+                    )}
+                  </div>
+                  <Link
+                    href={`/${np}/runs/${workspaceRun.id}`}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-neutral-200 px-2.5 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+                  >
+                    查看详情
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </Link>
+                </div>
+
+                <div className="mt-4 grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
+                  <Link href={`/${np}/agents/${workspaceRun.agentId}`} className="min-w-0 rounded-md bg-neutral-50 px-3 py-2 hover:bg-neutral-100">
+                    <p className="mb-1 text-neutral-400">Agent</p>
+                    <p className="truncate font-medium text-neutral-700">{agentLabel}</p>
+                  </Link>
+                  <Link href={workspaceRun.deviceId ? `/${np}/devices/${workspaceRun.deviceId}` : `/${np}/devices`} className="min-w-0 rounded-md bg-neutral-50 px-3 py-2 hover:bg-neutral-100">
+                    <p className="mb-1 text-neutral-400">设备</p>
+                    <p className="flex min-w-0 items-center gap-1.5 font-medium text-neutral-700">
+                      <Monitor className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate">{deviceLabel}</span>
+                    </p>
+                  </Link>
+                  <div className="min-w-0 rounded-md bg-neutral-50 px-3 py-2">
+                    <p className="mb-1 text-neutral-400">输出</p>
+                    <p className="flex items-center gap-1.5 font-medium text-neutral-700">
+                      <FileText className="h-3.5 w-3.5" />
+                      {artifacts.length} 个文件
+                    </p>
+                  </div>
+                  <div className="min-w-0 rounded-md bg-neutral-50 px-3 py-2">
+                    <p className="mb-1 text-neutral-400">退出码</p>
+                    <p className={`font-mono font-medium ${workspaceRun.exitCode === 0 ? 'text-emerald-600' : workspaceRun.exitCode === undefined ? 'text-neutral-400' : 'text-red-600'}`}>
+                      {workspaceRun.exitCode ?? '未完成'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
+                  <span className="inline-flex items-center gap-1">
+                    <MessageSquare className="h-3.5 w-3.5" />
+                    {sourceLabel}
+                  </span>
+                  {messageHref && (
+                    <Link href={messageHref} className="font-medium text-blue-600 hover:underline">
+                      返回消息
+                    </Link>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

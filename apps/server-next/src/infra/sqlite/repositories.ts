@@ -1202,6 +1202,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       async getForTeam(input) {
         return mapWorkspaceRun(teamDb.prepare('SELECT * FROM workspace_runs WHERE team_id = ? AND id = ?').get(input.teamId, input.runId));
       },
+      async listByTeam(input) {
+        return teamDb
+          .prepare('SELECT * FROM workspace_runs WHERE team_id = ? ORDER BY updated_at DESC LIMIT ?')
+          .all(input.teamId, input.limit)
+          .map((row) => {
+            const run = mapWorkspaceRun(row);
+            if (!run) {
+              throw new Error('SQLite workspace run row could not be mapped');
+            }
+            return run;
+          });
+      },
       async listByAgent(input) {
         return teamDb
           .prepare('SELECT * FROM workspace_runs WHERE team_id = ? AND agent_id = ? ORDER BY updated_at DESC LIMIT ?')

@@ -383,6 +383,90 @@ describe('server-next dev server entry', () => {
     });
   });
 
+  test('serves authorized team workspace runs over HTTP', async () => {
+    const app = {
+      whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),
+      listTeamWorkspaceRuns: vi.fn(async () =>
+        makeSuccess({
+          runs: [
+            {
+              workspaceRun: {
+                id: 'run-1',
+                teamId: 'team-1',
+                channelId: 'channel-1',
+                messageId: 'message-1',
+                dispatchId: 'dispatch-1',
+                agentId: 'agent-1',
+                deviceId: 'device-1',
+                status: 'succeeded',
+                artifactIds: ['artifact-1'],
+                cwd: '/Users/shaw/AgentBean',
+                command: 'npm test',
+                exitCode: 0,
+                startedAt: 1000,
+                completedAt: 2500,
+                createdAt: 1,
+                updatedAt: 2,
+              },
+              artifacts: [
+                {
+                  id: 'artifact-1',
+                  teamId: 'team-1',
+                  channelId: 'channel-1',
+                  messageId: 'message-1',
+                  dispatchId: 'dispatch-1',
+                  workspaceRunId: 'run-1',
+                  filename: 'result.md',
+                  mimeType: 'text/markdown',
+                  sizeBytes: 42,
+                  relativePath: 'outputs/result.md',
+                  pathKind: 'workspace',
+                  createdAt: 2,
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    } as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir: '.agentbean-next-test', sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+
+    const response = await fetch(`${server.baseUrl}/api/teams/team-1/workspace-runs?token=token-1`);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      teamId: 'team-1',
+      runs: [
+        {
+          workspaceRun: {
+            id: 'run-1',
+            status: 'succeeded',
+            cwd: '/Users/shaw/AgentBean',
+            command: 'npm test',
+          },
+          artifacts: [
+            {
+              id: 'artifact-1',
+              relativePath: 'outputs/result.md',
+              previewUrl: '/api/teams/team-1/artifacts/artifact-1/preview',
+              downloadUrl: '/api/teams/team-1/artifacts/artifact-1/download',
+            },
+          ],
+        },
+      ],
+    });
+    expect(app.listTeamWorkspaceRuns).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+    });
+  });
+
   test('serves authorized agent workspace runs over HTTP', async () => {
     const app = {
       whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),

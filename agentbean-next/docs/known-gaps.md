@@ -134,10 +134,11 @@ Workspace run persistence 的第一版已经落地到 `server-next` repository/u
 - apps/web 的 workspace run 专页可从 agent/device 工作区列表进入，在 run 有 `messageId` 时回链到原 chat message，并在 daemon 上报时展示执行命令与可折叠日志摘要。
 - apps/web 的 workspace run 专页为受限日志摘要提供失败默认展开、复制、下载、换行切换、行数/字符数与尾部摘要提示，方便直接排障。
 - server-next 原生 agent workspace run 列表 route 已补齐，apps/web 的 agent/device 工作区入口可按 team membership 与 channel visibility 展示最新 runs、状态、命令上下文与关联 workspace artifacts。
+- server-next 提供团队级最新 workspace runs route，apps/web 侧栏新增“运行”入口，可按当前用户可见 channel 展示团队最近 runs、来源消息跳转、agent/device、退出码与文件数量。
 
 剩余：
 
-- 更完整的 workspace run 专用页面布局、team-wide workspace explorer 与完整日志存储仍需后续产品切片覆盖；分段存储、检索与更强脱敏规则尚未冻结。
+- 更完整的 workspace run 专用页面布局、复杂 team-wide workspace explorer 与完整日志存储仍需后续产品切片覆盖；分段存储、检索与更强脱敏规则尚未冻结。
 
 ### Threads 第一版已定义
 
@@ -165,6 +166,7 @@ Artifact metadata、HTTP route 与 preview viewer 的第一版已经落地。
 - `MessageDto.artifacts` 可以投影 agent reply 的 artifact metadata。
 - server-next 提供 `POST /api/teams/:teamId/artifacts/upload`、`GET /api/teams/:teamId/artifacts/:artifactId/preview` 与 `GET /api/teams/:teamId/artifacts/:artifactId/download`，upload route 支持 JSON/base64 兼容入口与 multipart form-data 产品入口。
 - server-next 提供 `GET /api/teams/:teamId/workspace-runs/:runId`，按 session token、team membership 与 channel visibility 返回 workspace run detail 及其 artifact projection。
+- server-next 提供 `GET /api/teams/:teamId/workspace-runs`，按 session token、team membership 与 channel visibility 返回当前用户可见的团队最新 workspace runs 及其 artifact projection。
 - web-next preview 会在消息中按 workspace output 与 message attachment 分组展示 artifact 文件，并在 Workspace 输出组内按 `relativePath` 呈现轻量目录树；workspace run id/status、cwd、device、exit code、duration、artifact count 与预览/下载链接也会一起展示。
 - web-next preview 可以从消息里的 workspace run 摘要打开独立详情面板，在右侧工作区查看该 run 的 metadata 与 workspace output tree。
 - web-next preview 的 workspace run 详情入口会写入 `workspaceRunId` URL，并能在刷新/直达该 URL 后通过 HTTP API 恢复详情。
@@ -172,7 +174,7 @@ Artifact metadata、HTTP route 与 preview viewer 的第一版已经落地。
 
 剩余：
 
-- 更完整的 workspace run 专用页面布局、team-wide workspace explorer 与完整日志存储仍需后续产品切片。
+- 更完整的 workspace run 专用页面布局、复杂 team-wide workspace explorer 与完整日志存储仍需后续产品切片。
 
 ### Search Projection
 

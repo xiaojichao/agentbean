@@ -83,10 +83,11 @@ P0 baseline 已经收敛，不应继续作为下一条产品切片 blocker。
 - apps/web 的 workspace run 专页已支持从 agent/device 工作区列表进入，在 run 有 `messageId` 时回链到原 chat message，并在 daemon 上报时展示执行命令与可折叠日志摘要。
 - apps/web 的 workspace run 专页已提供日志摘要排障工具：失败默认展开、复制、下载、换行切换、行数/字符数与尾部摘要提示。
 - server-next 原生 agent workspace run 列表 route 已补齐；apps/web 的 agent/device 工作区入口可展示最新 runs、状态、命令上下文与关联 workspace artifacts，并继续链接到 workspace run 专页。
+- server-next 团队级 workspace runs 最新列表 route 已补齐；apps/web 侧栏新增“运行”入口，可按当前用户可见 channel 展示团队最近 runs、来源消息跳转、agent/device、退出码与文件数量。
 
 剩余边界：
 
-- 更完整的 workspace run 专用页面布局、team-wide workspace explorer 与完整日志存储仍需后续产品切片；跨页面导航、执行命令投影、受限日志摘要排障工具与 agent/device 列表入口已补第一步。
+- 更完整的 workspace run 专用页面布局、复杂 team-wide workspace explorer 与完整日志存储仍需后续产品切片；跨页面导航、执行命令投影、受限日志摘要排障工具、agent/device 列表入口与团队 latest list 已补第一步。
 
 ### P2：后续产品 parity
 
@@ -98,4 +99,4 @@ P0 baseline 已经收敛，不应继续作为下一条产品切片 blocker。
 
 ## 下一步判定
 
-当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。P0 生产观察 baseline 已完成，下一步应开新的 scoped issue/PR 继续产品能力或运维增强；若沿当前替换主线推进，优先在更完整的 workspace run 专用页面、team-wide workspace explorer、完整日志存储、admin/audit 产品面、settings/device 后续页中选一个小切片。
+当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。P0 生产观察 baseline 已完成，下一步应开新的 scoped issue/PR 继续产品能力或运维增强；若沿当前替换主线推进，优先在更完整的 workspace run 专用页面、复杂 team-wide workspace explorer、完整日志存储、admin/audit 产品面、settings/device 后续页中选一个小切片。

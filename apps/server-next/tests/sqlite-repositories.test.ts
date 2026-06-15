@@ -1015,6 +1015,34 @@ describe('server-next SQLite repositories', () => {
         ok: true,
         runs: [],
       });
+      await expect(app.listTeamWorkspaceRuns({ userId: 'user-1', teamId: 'team-1' })).resolves.toMatchObject({
+        ok: true,
+        runs: [
+          {
+            workspaceRun: {
+              id: workspaceRunId,
+              teamId: 'team-1',
+              channelId: privateChannelId,
+              agentId: 'agent-1',
+              deviceId: 'device-1',
+              status: 'succeeded',
+              command: 'npm run test:server-next -- tests/sqlite-repositories.test.ts',
+            },
+            artifacts: [
+              {
+                id: 'artifact-1',
+                filename: 'result.md',
+                relativePath: 'outputs/result.md',
+                pathKind: 'workspace',
+              },
+            ],
+          },
+        ],
+      });
+      await expect(app.listTeamWorkspaceRuns({ userId: 'user-2', teamId: 'team-1' })).resolves.toMatchObject({
+        ok: true,
+        runs: [],
+      });
 
       expect(teamDb.prepare('SELECT team_id AS teamId, message_id AS messageId FROM artifacts WHERE id = ?').get('artifact-1')).toEqual({
         teamId: 'team-1',
