@@ -17,6 +17,9 @@ import {
   Download,
   ExternalLink,
   MessageSquare,
+  Copy,
+  FileDown,
+  WrapText,
 } from 'lucide-react';
 import { fetchWorkspaceRunDetail, authedApiUrl } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
@@ -29,6 +32,8 @@ const STATUS_CONFIG: Record<WorkspaceRunStatus, { bg: string; icon: typeof Check
   failed: { bg: 'bg-red-50 text-red-700', icon: XCircle, label: '失败' },
   cancelled: { bg: 'bg-neutral-100 text-neutral-500', icon: AlertCircle, label: '已取消' },
 };
+
+const LOG_EXCERPT_MAX_CHARS = 16000;
 
 function formatDuration(start?: number, end?: number): string | null {
   if (!start || !end) return null;
@@ -68,6 +73,9 @@ export default function RunDetailPage() {
   const [data, setData] = useState<{ workspaceRun: WorkspaceRunDetail; artifacts: WorkspaceArtifact[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [copiedLog, setCopiedLog] = useState(false);
+  const [wrapLog, setWrapLog] = useState(true);
+  const [logOpen, setLogOpen] = useState(false);
 
   const runId = params.runId;
 
@@ -93,6 +101,16 @@ export default function RunDetailPage() {
       cancelled = true;
     };
   }, [currentTeamId, runId]);
+
+  useEffect(() => {
+    if (!data?.workspaceRun.logExcerpt) {
+      setLogOpen(false);
+      return;
+    }
+    setLogOpen(data.workspaceRun.status === 'failed');
+    setCopiedLog(false);
+    setWrapLog(true);
+  }, [data?.workspaceRun.id]);
 
   if (loading) {
     return (
@@ -132,6 +150,29 @@ export default function RunDetailPage() {
   const sourceMessageHref = run.messageId
     ? `/${np}/${sourceRouteKind}/${encodeURIComponent(run.channelId)}?message=${encodeURIComponent(`${run.channelId}:${run.messageId}`)}`
     : null;
+  const logLines = run.logExcerpt?.split(/\r\n|\r|\n/) ?? [];
+  const logCharCount = run.logExcerpt?.length ?? 0;
+  const logLooksTruncated = logCharCount >= LOG_EXCERPT_MAX_CHARS;
+
+  const copyLogExcerpt = () => {
+    if (!run.logExcerpt) return;
+    navigator.clipboard.writeText(run.logExcerpt);
+    setCopiedLog(true);
+    window.setTimeout(() => setCopiedLog(false), 1600);
+  };
+
+  const downloadLogExcerpt = () => {
+    if (!run.logExcerpt) return;
+    const blob = new Blob([run.logExcerpt], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `workspace-run-${run.id.slice(0, 8)}-log.txt`;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
 
   // Group artifacts by directory
   const artifactsByDir = new Map<string, WorkspaceArtifact[]>();
@@ -251,11 +292,57 @@ export default function RunDetailPage() {
         {/* Logs */}
         {run.logExcerpt && (
           <div className="col-span-2 sm:col-span-3">
-            <details className="rounded-md border border-neutral-200 bg-neutral-50">
+            <details
+              open={logOpen}
+              onToggle={(event) => setLogOpen(event.currentTarget.open)}
+              className="rounded-md border border-neutral-200 bg-neutral-50"
+            >
               <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-neutral-700">
-                日志摘要
+                <span className="inline-flex items-center gap-2">
+                  日志摘要
+                  <span className="font-normal text-neutral-400">
+                    {logLines.length} 行 · {logCharCount.toLocaleString()} 字符
+                    {logLooksTruncated ? ' · 尾部摘要' : ''}
+                  </span>
+                </span>
               </summary>
-              <pre className="max-h-80 overflow-auto border-t border-neutral-200 bg-neutral-950 px-3 py-2 text-xs leading-relaxed text-neutral-100">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-neutral-200 bg-white px-3 py-2">
+                <p className="text-xs text-neutral-500">
+                  {logLooksTruncated
+                    ? '当前只保留最近 16,000 字符的受限日志摘要。'
+                    : '当前展示 daemon 上报并经 server 兜底脱敏后的日志摘要。'}
+                </p>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={copyLogExcerpt}
+                    className="inline-flex h-8 items-center gap-1 rounded-md border border-neutral-200 px-2 text-xs font-medium text-neutral-600 hover:bg-neutral-50"
+                    title="复制日志"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    {copiedLog ? '已复制' : '复制日志'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={downloadLogExcerpt}
+                    className="inline-flex h-8 items-center gap-1 rounded-md border border-neutral-200 px-2 text-xs font-medium text-neutral-600 hover:bg-neutral-50"
+                    title="下载日志"
+                  >
+                    <FileDown className="h-3.5 w-3.5" />
+                    下载日志
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWrapLog((value) => !value)}
+                    className={`inline-flex h-8 items-center gap-1 rounded-md border px-2 text-xs font-medium ${wrapLog ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-neutral-200 text-neutral-600 hover:bg-neutral-50'}`}
+                    title="自动换行"
+                  >
+                    <WrapText className="h-3.5 w-3.5" />
+                    自动换行
+                  </button>
+                </div>
+              </div>
+              <pre className={`max-h-96 overflow-auto bg-neutral-950 px-3 py-2 text-xs leading-relaxed text-neutral-100 ${wrapLog ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}`}>
                 {run.logExcerpt}
               </pre>
             </details>
