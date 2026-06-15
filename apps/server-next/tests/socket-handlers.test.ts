@@ -551,6 +551,16 @@ describe('server-next socket handlers', () => {
       dispatchId: 'dispatch-1',
       agentId: 'agent-1',
       body: 'done',
+      artifacts: [
+        {
+          id: 'workspace-log-1',
+          filename: 'workspace-run.log',
+          mimeType: 'text/plain',
+          relativePath: 'logs/workspace-run.log',
+          pathKind: 'workspace',
+          contentBase64: Buffer.from('stdout:\nhello').toString('base64'),
+        },
+      ],
     });
     await expect(socket.trigger(AGENT_EVENTS.dispatch.error, { dispatchId: 'dispatch-1' })).resolves.toEqual({
       ok: true,
@@ -570,6 +580,16 @@ describe('server-next socket handlers', () => {
       dispatchId: 'dispatch-1',
       agentId: 'agent-1',
       body: 'done',
+      artifacts: [
+        {
+          id: 'workspace-log-1',
+          filename: 'workspace-run.log',
+          mimeType: 'text/plain',
+          relativePath: 'logs/workspace-run.log',
+          pathKind: 'workspace',
+          contentBase64: Buffer.from('stdout:\nhello').toString('base64'),
+        },
+      ],
     });
     expect(app.receiveDispatchError).toHaveBeenCalledWith({ dispatchId: 'dispatch-1' });
   });

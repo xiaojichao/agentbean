@@ -32,4 +32,11 @@ describe('workspace run detail page', () => {
     expect(runPage).toContain('LOG_EXCERPT_MAX_CHARS');
     expect(runPage).toContain('尾部摘要');
   });
+
+  it('distinguishes log excerpts from downloadable full log artifacts', () => {
+    expect(runPage).toContain('fullLogArtifact');
+    expect(runPage).toContain('完整日志');
+    expect(runPage).toContain("artifact.relativePath === 'logs/workspace-run.log'");
+    expect(runPage).toContain('摘要用于快速排障');
+  });
 });

@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createServerNextUseCases } from './application/usecases.js';
+import { createServerNextUseCases, type ArtifactContentStore } from './application/usecases.js';
 import { createInMemoryRepositories } from './infra/memory/repositories.js';
 import {
   applyGlobalMigrations,
@@ -610,6 +610,7 @@ function createDefaultApp(
   config: ServerNextDevConfig,
   Database: BetterSqlite3Constructor | undefined,
 ): { app: ServerNextUseCases; close(): Promise<void> } {
+  const artifactContentStore = createFileArtifactContentStore(config.dataDir);
   if (config.storage === 'memory') {
     return {
       app: createServerNextUseCases({
@@ -619,6 +620,7 @@ function createDefaultApp(
           nextId: () => randomUUID(),
         },
         sessionSecret: config.sessionSecret,
+        artifactContentStore,
       }),
       close: async () => undefined,
     };
@@ -638,10 +640,28 @@ function createDefaultApp(
         nextId: () => randomUUID(),
       },
       sessionSecret: config.sessionSecret,
+      artifactContentStore,
     }),
     async close() {
       globalDb.close();
       teamDb.close();
+    },
+  };
+}
+
+function createFileArtifactContentStore(dataDir: string): ArtifactContentStore {
+  return {
+    async writeContent(input) {
+      const filename = sanitizeFilename(input.filename);
+      const relativeStoragePath = join('artifacts', input.teamId, input.artifactId, filename);
+      const absoluteDir = join(dataDir, 'artifacts', input.teamId, input.artifactId);
+      mkdirSync(absoluteDir, { recursive: true });
+      writeFileSync(join(absoluteDir, filename), input.content);
+      return {
+        storagePath: relativeStoragePath,
+        sizeBytes: input.content.length,
+        sha256: createHash('sha256').update(input.content).digest('hex'),
+      };
     },
   };
 }

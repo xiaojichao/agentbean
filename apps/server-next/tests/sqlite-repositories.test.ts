@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { createServerNextUseCases } from '../src/application/usecases';
 import {
   applyGlobalMigrations,
@@ -829,6 +829,13 @@ describe('server-next SQLite repositories', () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
       const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const artifactContentStore = {
+        writeContent: vi.fn(async (input: { teamId: string; artifactId: string; filename: string; content: Buffer }) => ({
+          storagePath: `artifacts/${input.teamId}/${input.artifactId}/${input.filename}`,
+          sizeBytes: input.content.length,
+          sha256: 'sha256-log',
+        })),
+      };
       const app = createServerNextUseCases({
         repositories,
         clock: { now: () => 1200 },
@@ -854,6 +861,7 @@ describe('server-next SQLite repositories', () => {
         joinCodes: {
           nextCode: createIds(['code-1']),
         },
+        artifactContentStore,
       });
 
       await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
@@ -905,6 +913,14 @@ describe('server-next SQLite repositories', () => {
             pathKind: 'workspace',
             sha256: 'sha256-result',
           },
+          {
+            id: 'workspace-log-1',
+            filename: 'workspace-run.log',
+            mimeType: 'text/plain',
+            relativePath: 'logs/workspace-run.log',
+            pathKind: 'workspace',
+            contentBase64: Buffer.from('stdout:\nhello\nOPENAI_API_KEY=[redacted]\nfinished').toString('base64'),
+          },
         ],
         workspaceRun: {
           cwd: '/Users/shaw/AgentBean',
@@ -917,19 +933,13 @@ describe('server-next SQLite repositories', () => {
       expect(resultAck).toMatchObject({
         ok: true,
         message: {
-          artifacts: [
-            {
-              id: 'artifact-1',
-              filename: 'result.md',
-            },
-          ],
           workspaceRun: {
             agentId: 'agent-1',
             deviceId: 'device-1',
             command: 'npm run test:server-next -- tests/sqlite-repositories.test.ts',
             logExcerpt: expect.stringContaining('OPENAI_API_KEY=[redacted]'),
             dispatchId,
-            artifactIds: ['artifact-1'],
+            artifactIds: ['artifact-1', 'workspace-log-1'],
           },
         },
       });
@@ -938,11 +948,32 @@ describe('server-next SQLite repositories', () => {
       }
       const replyId = resultAck.message.id;
       const workspaceRunId = resultAck.message.workspaceRun.id;
+      expect(resultAck.message.artifacts?.map((artifact) => artifact.id)).toEqual(['artifact-1', 'workspace-log-1']);
       expect(resultAck.message.artifacts?.[0]?.workspaceRunId).toBe(workspaceRunId);
+      expect(resultAck.message.artifacts?.[1]).toMatchObject({
+        id: 'workspace-log-1',
+        filename: 'workspace-run.log',
+        workspaceRunId,
+        relativePath: 'logs/workspace-run.log',
+        pathKind: 'workspace',
+        sizeBytes: Buffer.byteLength('stdout:\nhello\nOPENAI_API_KEY=[redacted]\nfinished'),
+        sha256: 'sha256-log',
+      });
+      expect(artifactContentStore.writeContent).toHaveBeenCalledWith({
+        teamId: 'team-1',
+        artifactId: 'workspace-log-1',
+        filename: 'workspace-run.log',
+        content: Buffer.from('stdout:\nhello\nOPENAI_API_KEY=[redacted]\nfinished'),
+      });
 
       await expect(app.getArtifact({ userId: 'user-1', teamId: 'team-1', artifactId: 'artifact-1' })).resolves.toMatchObject({
         ok: true,
         artifact: { id: 'artifact-1', teamId: 'team-1', messageId: replyId },
+      });
+      await expect(app.getArtifactFile({ userId: 'user-1', teamId: 'team-1', artifactId: 'workspace-log-1' })).resolves.toMatchObject({
+        ok: true,
+        artifact: { id: 'workspace-log-1', teamId: 'team-1', messageId: replyId },
+        storagePath: 'artifacts/team-1/workspace-log-1/workspace-run.log',
       });
       await expect(app.getArtifact({ userId: 'user-2', teamId: 'team-2', artifactId: 'artifact-1' })).resolves.toMatchObject({
         ok: false,
@@ -958,7 +989,7 @@ describe('server-next SQLite repositories', () => {
           dispatchId,
           agentId: 'agent-1',
           deviceId: 'device-1',
-          artifactIds: ['artifact-1'],
+          artifactIds: ['artifact-1', 'workspace-log-1'],
         },
       });
       await expect(app.getWorkspaceRunDetail({ userId: 'user-1', teamId: 'team-1', runId: workspaceRunId })).resolves.toMatchObject({
@@ -977,9 +1008,20 @@ describe('server-next SQLite repositories', () => {
             workspaceRunId,
             relativePath: 'outputs/result.md',
           },
+          {
+            id: 'workspace-log-1',
+            filename: 'workspace-run.log',
+            workspaceRunId,
+            relativePath: 'logs/workspace-run.log',
+            pathKind: 'workspace',
+          },
         ],
       });
       await expect(app.getArtifact({ userId: 'user-2', teamId: 'team-1', artifactId: 'artifact-1' })).resolves.toMatchObject({
+        ok: false,
+        error: 'FORBIDDEN',
+      });
+      await expect(app.getArtifactFile({ userId: 'user-2', teamId: 'team-1', artifactId: 'workspace-log-1' })).resolves.toMatchObject({
         ok: false,
         error: 'FORBIDDEN',
       });
@@ -1005,6 +1047,12 @@ describe('server-next SQLite repositories', () => {
                 id: 'artifact-1',
                 filename: 'result.md',
                 relativePath: 'outputs/result.md',
+                pathKind: 'workspace',
+              },
+              {
+                id: 'workspace-log-1',
+                filename: 'workspace-run.log',
+                relativePath: 'logs/workspace-run.log',
                 pathKind: 'workspace',
               },
             ],
@@ -1033,6 +1081,12 @@ describe('server-next SQLite repositories', () => {
                 id: 'artifact-1',
                 filename: 'result.md',
                 relativePath: 'outputs/result.md',
+                pathKind: 'workspace',
+              },
+              {
+                id: 'workspace-log-1',
+                filename: 'workspace-run.log',
+                relativePath: 'logs/workspace-run.log',
                 pathKind: 'workspace',
               },
             ],

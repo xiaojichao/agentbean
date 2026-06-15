@@ -1,4 +1,4 @@
-import { AGENT_EVENTS, type AgentCategory, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, type AgentCategory, type ArtifactPathKind, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 
 export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner.js';
 export type { BuiltinScannerOptions } from './scanner.js';
@@ -22,8 +22,18 @@ export interface DaemonWorkspaceRunResult {
   completedAt?: number;
 }
 
+export interface DaemonDispatchArtifactResult {
+  id: string;
+  filename: string;
+  mimeType?: string;
+  relativePath?: string;
+  pathKind?: ArtifactPathKind;
+  contentBase64?: string;
+}
+
 export interface DaemonDispatchResult {
   body: string;
+  artifacts?: DaemonDispatchArtifactResult[];
   workspaceRun?: DaemonWorkspaceRunResult;
 }
 
@@ -126,6 +136,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             dispatchId: request.id,
             agentId: request.agentId,
             body: result.body,
+            ...(result.artifacts ? { artifacts: result.artifacts } : {}),
             ...(result.workspaceRun ? { workspaceRun: result.workspaceRun } : {}),
           });
         } catch (error) {
