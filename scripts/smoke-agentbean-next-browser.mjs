@@ -379,11 +379,9 @@ export async function exerciseArtifactBrowserSmoke({ page, suffix, timeoutMs }) 
   }
   const http = await page.evaluateJson(`
     (async () => {
-      const marker = "artifact-preview-download-smoke";
       const previewResponse = await fetch(${JSON.stringify(renderedArtifact.previewHref)});
       const downloadResponse = await fetch(${JSON.stringify(renderedArtifact.downloadHref)});
       return {
-        marker,
         preview: {
           status: previewResponse.status,
           body: await previewResponse.text(),
