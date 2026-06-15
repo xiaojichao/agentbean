@@ -483,6 +483,8 @@ export interface ReceiveDispatchWorkspaceRunInput {
   id?: string;
   status?: WorkspaceRunDto['status'];
   cwd?: string;
+  command?: string;
+  logExcerpt?: string;
   exitCode?: number;
   startedAt?: number;
   completedAt?: number;
@@ -2138,6 +2140,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             deviceId: agent.deviceId,
             status: resultInput.workspaceRun.status ?? 'succeeded',
             cwd: resultInput.workspaceRun.cwd,
+            command: resultInput.workspaceRun.command,
+            logExcerpt: normalizeWorkspaceRunLogExcerpt(resultInput.workspaceRun.logExcerpt),
             exitCode: resultInput.workspaceRun.exitCode,
             startedAt: resultInput.workspaceRun.startedAt,
             completedAt: resultInput.workspaceRun.completedAt ?? now,
@@ -2829,6 +2833,20 @@ function toRouteReason(route: RouteResult): RouteReason | undefined {
 
 function normalizeLimit(limit: number | undefined): number {
   return Math.min(Math.max(Number.isInteger(limit) ? limit as number : 50, 1), 200);
+}
+
+const WORKSPACE_RUN_LOG_EXCERPT_MAX_CHARS = 16000;
+const SENSITIVE_LOG_ASSIGNMENT_RE = /\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)[A-Z0-9_]*)\s*=\s*([^\s"'`]+)/gi;
+
+function normalizeWorkspaceRunLogExcerpt(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const redacted = value.replace(SENSITIVE_LOG_ASSIGNMENT_RE, '$1=[redacted]');
+  if (redacted.length <= WORKSPACE_RUN_LOG_EXCERPT_MAX_CHARS) {
+    return redacted;
+  }
+  return redacted.slice(redacted.length - WORKSPACE_RUN_LOG_EXCERPT_MAX_CHARS);
 }
 
 function normalizeUsername(username: string): string {

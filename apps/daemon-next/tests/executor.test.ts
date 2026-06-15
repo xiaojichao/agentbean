@@ -16,11 +16,14 @@ describe('daemon-next command executor', () => {
         'process.stdin.on("data", (chunk) => { input += chunk; });',
         'process.stdin.on("end", () => {',
         '  console.log(JSON.stringify({ input, args: process.argv.slice(2), cwd: process.cwd(), token: process.env.SECRET_TOKEN }));',
+        '  console.error("SECRET_TOKEN=" + process.env.SECRET_TOKEN);',
         '});',
       ].join('\n'),
     );
 
-    const executor = createCommandExecutor();
+    const executor = createCommandExecutor({
+      clock: createClock([1000, 1010]),
+    });
     const output = await executor({
       id: 'dispatch-1',
       teamId: 'team-1',
@@ -38,11 +41,23 @@ describe('daemon-next command executor', () => {
       },
     });
 
-    expect(JSON.parse(output)).toEqual({
+    expect(typeof output).toBe('object');
+    if (typeof output !== 'object') {
+      throw new Error('expected structured command result');
+    }
+    expect(JSON.parse(output.body)).toEqual({
       input: 'hello custom agent',
       args: ['--model', 'gpt-5.4'],
       cwd,
       token: 'secret-value',
+    });
+    expect(output.workspaceRun).toMatchObject({
+      cwd,
+      command: `${process.execPath} ${scriptPath} --model gpt-5.4`,
+      exitCode: 0,
+      startedAt: 1000,
+      completedAt: 1010,
+      logExcerpt: expect.stringContaining('SECRET_TOKEN=[redacted]'),
     });
   });
 
@@ -62,3 +77,17 @@ describe('daemon-next command executor', () => {
     ).resolves.toBe('daemon-next:hello');
   });
 });
+
+function createClock(values: number[]) {
+  let index = 0;
+  return {
+    now() {
+      const value = values[index];
+      index += 1;
+      if (value === undefined) {
+        throw new Error('clock sequence exhausted');
+      }
+      return value;
+    },
+  };
+}

@@ -118,8 +118,8 @@
 | `task:create` | First Slice | 已实现 server-side create，支持可见 channel/DM 绑定与 human/agent assignee 第一版。 |
 | `task:list` | First Slice | 已实现，只返回 global tasks 与当前用户可见 channels/DMs 关联 tasks。 |
 | `task:update` | First Slice | 已实现 title/description/status/assignment/channel/tags/sortOrder 更新。 |
-| `task:delete` | Defer | 保留。 |
-| `task:reorder` | Merge/Rename | 除非 UI 明显受益于显式 command，否则合并进 `task:update`。 |
+| `task:delete` | First Slice | 已实现 server-side delete，遵守 team/channel 可见性与已删除任务边界。 |
+| `task:reorder` | First Slice | 已实现独立 command，更新 `sortOrder` 并校验输入边界。 |
 | `task:updated` | Defer | 事件名保留；第一版 preview 仍以 ack/local state 更新为主。 |
 | Task-channel/message link | Keep | 作为产品行为保留。 |
 

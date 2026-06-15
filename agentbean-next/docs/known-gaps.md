@@ -64,7 +64,7 @@ Tasks 第一版已经落地为 server-side task model。
 剩余：
 
 - 是否把 assignee 升级为 typed `{ kind, id }` 仍需后续产品决策。
-- `task:delete`、更完整 reorder semantics、完整 kanban/list task page 与 task 自动生成仍是后续切片。
+- 更完整 kanban/list task page、typed assignee、task 自动生成与更丰富的 browser-level 产品流仍是后续切片。`task:delete` 与 `task:reorder` 第一版已进入 server/web 主线。
 
 ## 协议缺口
 
@@ -128,12 +128,14 @@ Workspace run persistence 的第一版已经落地到 `server-next` repository/u
 
 已确认：
 
-- `workspace_runs` model 记录 `teamId`、`channelId`、`messageId`、`dispatchId`、`agentId`、`deviceId` 与 `artifactIds`。
-- daemon 可以在 `dispatch:result` 上报 workspace run metadata，server 会把 run 绑定到 agent reply message。
+- `workspace_runs` model 记录 `teamId`、`channelId`、`messageId`、`dispatchId`、`agentId`、`deviceId`、`command`、受限 `logExcerpt` 与 `artifactIds`。
+- daemon 可以在 `dispatch:result` 上报 workspace run metadata，server 会把 run 绑定到 agent reply message；daemon-next custom command executor 会把执行命令、cwd、exitCode 与脱敏日志摘要带入该 metadata。
+- server-next 提供授权 HTTP workspace run detail route，web-next preview 可以从消息摘要打开详情面板，并通过 `workspaceRunId` URL 恢复。
+- apps/web 的 workspace run 专页可从 agent/device 工作区列表进入，在 run 有 `messageId` 时回链到原 chat message，并在 daemon 上报时展示执行命令与可折叠日志摘要。
 
 剩余：
 
-- Web workspace run 视图与真实 HTTP download/preview handler 仍需后续 UI/API slice 覆盖。
+- 更完整的 workspace run 专用页面布局与完整日志体验仍需后续产品切片覆盖；分段存储、检索与更强脱敏规则尚未冻结。
 
 ### Threads 第一版已定义
 
@@ -168,7 +170,7 @@ Artifact metadata、HTTP route 与 preview viewer 的第一版已经落地。
 
 剩余：
 
-- 更完整的 workspace run 专用页面布局、日志/命令展开与跨页面导航仍需后续产品切片。
+- 更完整的 workspace run 专用页面布局与完整日志体验仍需后续产品切片。
 
 ### Search Projection
 
@@ -205,11 +207,17 @@ Message search 第一版已经落地为 server-side simple DB search。
 
 ### Saved Messages 与 Reactions
 
-当前 UI 有 saved/reaction local state。
+Saved messages 与 reactions 的第一版已经落地为 server-side persistence。
 
-需要决策：
+已确认：
 
-- 作为 local-only UX 保留、server-side 持久化，或从 first release 删除。
+- `message:react`、`message:save` 与 `message:list-saved` 已进入 contracts、server-next socket/usecase/repository 与 SQLite/memory repositories。
+- `apps/web` 的 chat/tasks surfaces 已通过 `messageReactionEvents` 接入 socket-backed optimistic update。
+- 本地 `localStorage` 只作为界面恢复兜底，不再是唯一 source of truth。
+
+剩余：
+
+- 更完整 reaction counts/multi-emoji 展示、saved filters 与 browser-level saved/reaction smoke 仍属后续产品增强。
 
 ## Daemon 缺口
 

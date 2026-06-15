@@ -40,6 +40,8 @@ describe('server-next SQLite repositories', () => {
           'dispatches',
           'artifacts',
           'workspace_runs',
+          'message_reactions',
+          'saved_messages',
         ]),
       );
     } finally {
@@ -906,6 +908,8 @@ describe('server-next SQLite repositories', () => {
         ],
         workspaceRun: {
           cwd: '/Users/shaw/AgentBean',
+          command: 'npm run test:server-next -- tests/sqlite-repositories.test.ts',
+          logExcerpt: `starting workspace run\n${'x'.repeat(17000)}\nOPENAI_API_KEY=sk-test\nfinished workspace run`,
           exitCode: 0,
           startedAt: 1190,
         },
@@ -922,6 +926,8 @@ describe('server-next SQLite repositories', () => {
           workspaceRun: {
             agentId: 'agent-1',
             deviceId: 'device-1',
+            command: 'npm run test:server-next -- tests/sqlite-repositories.test.ts',
+            logExcerpt: expect.stringContaining('OPENAI_API_KEY=[redacted]'),
             dispatchId,
             artifactIds: ['artifact-1'],
           },
@@ -961,6 +967,8 @@ describe('server-next SQLite repositories', () => {
           id: workspaceRunId,
           teamId: 'team-1',
           channelId: privateChannelId,
+          command: 'npm run test:server-next -- tests/sqlite-repositories.test.ts',
+          logExcerpt: expect.stringContaining('finished workspace run'),
         },
         artifacts: [
           {
@@ -988,10 +996,15 @@ describe('server-next SQLite repositories', () => {
         teamId: 'team-1',
         messageId: replyId,
       });
-      expect(teamDb.prepare('SELECT agent_id AS agentId, device_id AS deviceId FROM workspace_runs WHERE id = ?').get(workspaceRunId)).toEqual({
+      const persistedRun = teamDb.prepare('SELECT agent_id AS agentId, device_id AS deviceId, command, log_excerpt AS logExcerpt FROM workspace_runs WHERE id = ?').get(workspaceRunId);
+      expect(persistedRun).toMatchObject({
         agentId: 'agent-1',
         deviceId: 'device-1',
+        command: 'npm run test:server-next -- tests/sqlite-repositories.test.ts',
       });
+      expect((persistedRun as { logExcerpt?: string }).logExcerpt).toContain('OPENAI_API_KEY=[redacted]');
+      expect((persistedRun as { logExcerpt?: string }).logExcerpt).toContain('finished workspace run');
+      expect((persistedRun as { logExcerpt?: string }).logExcerpt?.length).toBeLessThanOrEqual(16000);
     } finally {
       close();
     }

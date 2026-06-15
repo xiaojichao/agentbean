@@ -48,6 +48,7 @@ describe('AgentBean Next first-slice smoke', () => {
         'message-1',
         'dispatch-1',
         'request-1',
+        'workspace-run-1',
         'reply-1',
       ]),
     });
@@ -80,7 +81,17 @@ describe('AgentBean Next first-slice smoke', () => {
 
     const daemon = createDaemonProtocolClient({
       socket: agentSocket,
-      executor: async (request) => `preview:${request.prompt}`,
+      executor: async (request) => ({
+        body: `preview:${request.prompt}`,
+        workspaceRun: {
+          cwd: '/Users/shaw/AgentBean',
+          command: '/opt/homebrew/bin/codex --model gpt-5.4',
+          logExcerpt: 'OPENAI_API_KEY=[redacted]\nfinished',
+          exitCode: 0,
+          startedAt: 1000,
+          completedAt: 1100,
+        },
+      }),
       device: {
         teamId: 'team-1',
         ownerId: 'user-1',
@@ -137,7 +148,19 @@ describe('AgentBean Next first-slice smoke', () => {
         ok: true,
         messages: [
           { id: 'message-1', senderKind: 'human', body: '@Codex hello' },
-          { id: 'reply-1', senderKind: 'agent', body: 'preview:@Codex hello' },
+          {
+            id: 'reply-1',
+            senderKind: 'agent',
+            body: 'preview:@Codex hello',
+            workspaceRun: {
+              cwd: '/Users/shaw/AgentBean',
+              command: '/opt/homebrew/bin/codex --model gpt-5.4',
+              logExcerpt: 'OPENAI_API_KEY=[redacted]\nfinished',
+              exitCode: 0,
+              startedAt: 1000,
+              completedAt: 1100,
+            },
+          },
         ],
       });
     });

@@ -308,6 +308,22 @@ describe('server-next socket handlers', () => {
       userId: 'user-1',
       teamId: 'team-1',
     });
+    await socket.trigger(WEB_EVENTS.member.updateRole, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      targetUserId: 'user-2',
+      role: 'admin',
+    });
+    await socket.trigger(WEB_EVENTS.member.remove, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      targetUserId: 'user-2',
+    });
+    await socket.trigger(WEB_EVENTS.member.transferOwner, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      targetUserId: 'user-2',
+    });
 
     expect(app.registerUser).toHaveBeenCalledWith({ username: 'shaw' });
     expect(app.whoami).toHaveBeenCalledWith({ token: 'token-1' });
@@ -481,6 +497,22 @@ describe('server-next socket handlers', () => {
     expect(app.listSavedMessages).toHaveBeenCalledWith({
       userId: 'user-1',
       teamId: 'team-1',
+    });
+    expect(app.updateMemberRole).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      targetUserId: 'user-2',
+      role: 'admin',
+    });
+    expect(app.removeMember).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      targetUserId: 'user-2',
+    });
+    expect(app.transferOwner).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      targetUserId: 'user-2',
     });
   });
 

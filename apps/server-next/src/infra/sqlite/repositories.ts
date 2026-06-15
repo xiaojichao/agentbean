@@ -46,6 +46,9 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0001_first_slice.sql');
   applyMigration(db, 'team/0002_artifacts_workspace_runs.sql');
   applyMigration(db, 'team/0003_tasks.sql');
+  applyMigration(db, 'team/0004_reactions_saved.sql');
+  applyMigration(db, 'team/0005_workspace_run_command.sql');
+  applyMigration(db, 'team/0006_workspace_run_log_excerpt.sql');
 }
 
 export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): ServerNextRepositories {
@@ -1155,8 +1158,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .prepare(
             `INSERT INTO workspace_runs (
               id, team_id, channel_id, message_id, dispatch_id, agent_id, device_id, status,
-              cwd, exit_code, started_at, completed_at, created_at, updated_at, artifact_ids_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              cwd, command, log_excerpt, exit_code, started_at, completed_at, created_at, updated_at, artifact_ids_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               team_id = excluded.team_id,
               channel_id = excluded.channel_id,
@@ -1166,6 +1169,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               device_id = excluded.device_id,
               status = excluded.status,
               cwd = excluded.cwd,
+              command = excluded.command,
+              log_excerpt = excluded.log_excerpt,
               exit_code = excluded.exit_code,
               started_at = excluded.started_at,
               completed_at = excluded.completed_at,
@@ -1183,6 +1188,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             run.deviceId ?? null,
             run.status,
             run.cwd ?? null,
+            run.command ?? null,
+            run.logExcerpt ?? null,
             run.exitCode ?? null,
             run.startedAt ?? null,
             run.completedAt ?? null,
@@ -1648,6 +1655,8 @@ function mapWorkspaceRun(row: unknown): WorkspaceRunRecord | null {
     deviceId: sqliteNullableText(row, 'device_id'),
     status: sqliteText(row, 'status') as WorkspaceRunRecord['status'],
     cwd: sqliteNullableText(row, 'cwd'),
+    command: sqliteNullableText(row, 'command'),
+    logExcerpt: sqliteNullableText(row, 'log_excerpt'),
     exitCode: sqliteNullableNumber(row, 'exit_code'),
     startedAt: sqliteNullableNumber(row, 'started_at'),
     completedAt: sqliteNullableNumber(row, 'completed_at'),

@@ -78,6 +78,9 @@ Phase 1 完成标准：
 | P2-15d | server-next HTTP route 支持按 session token 读取 workspace run detail，并返回该 run 的 artifact projection，非 team/channel 可见用户不能读取。 | HTTP/UseCase | Workspace run detail 不能只依赖消息内联投影，可分享入口需要有独立授权数据源。 | `known-gaps.md`, `sixty-sixth-slice-status.md` |
 | P2-15e | `message:search` 使用 server-side simple DB search，并只返回当前用户可见普通 channels 的匹配消息。 | UseCase/Socket | Message search 不能由 web 本地过滤，也不能泄漏 private channel 内容。 | `known-gaps.md`, `sixty-seventh-slice-status.md` |
 | P2-15f | `task:list`、`task:create` 与 `task:update` 使用 server-side task model，并只暴露当前用户可见 channel/DM 关联 tasks。 | UseCase/Socket | Tasks 不能继续只存在旧 stack；private channel task 不能泄漏给非 channel member。 | `known-gaps.md`, `sixty-eighth-slice-status.md` |
+| P2-15g | `message:react`、`message:save` 与 `message:list-saved` 使用 server-side SQLite/memory repositories，并由 fresh team migrations 创建对应 tables。 | Repository/UseCase/Socket | Saved/reaction 不能只停在 web local state；生产 fresh SQLite DB 必须具备持久化表。 | `known-gaps.md`, `first-slice-schema-repositories.md` |
+| P2-15h | Daemon 上报 workspace run command 后，server-next SQLite/memory repositories、detail API 与 apps/web run 专页都保留并展示该 display command。 | Repository/UseCase/Web | Workspace run 详情不能只展示输出文件；替换旧版前需要能回看一次运行的执行入口。 | `contracts-dto.md`, `known-gaps.md`, `post-flip-follow-up-status.md` |
+| P2-15i | Daemon 上报 workspace run `logExcerpt` 后，server-next 保存长度受限、基础脱敏后的尾部摘要，并由 detail API 与 apps/web run 专页展示。 | Repository/UseCase/Web | 替换旧版前需要能回看运行失败的关键日志片段，同时不能无界保存日志或直接暴露常见 secret assignment。 | `contracts-dto.md`, `known-gaps.md`, `post-flip-follow-up-status.md` |
 | P2-16 | Dispatch error 将 dispatch 标记为 failed，并更新 agent last error。 | UseCase | Error propagation。 | `acceptance-tests.md` |
 | P2-17 | `/web` login/team/channel/message socket flow 只使用 documented first-slice events。 | Socket | Transport adapter thinness。 | `socket-protocol.md`, `contracts-dto.md` |
 | P2-18 | `/agent` device hello/runtime/agent batch/dispatch result flow 使用 documented DTOs。 | Socket | Agent namespace contract。 | `socket-protocol.md`, `contracts-dto.md` |
@@ -115,6 +118,7 @@ Phase 2 完成标准：
 | P3-09 | Daemon 收到匹配当前 device 的 `device:scan-requested` 后重新扫描并上报 runtimes 与 agents；不匹配 deviceId 不触发扫描。 | Daemon | Targeted rescan command。 | `socket-protocol.md`, `current-protocol-inventory.md` |
 | P3-10 | Builtin scanner 发现 known CLI runtimes，并只为 installed runtimes 生成 runtime capability，不生成 visible product agent report。 | Daemon | Runtime capability scan provider。 | `contracts-dto.md`, `agent-identity-rules.md`, `contract-alignment-handoff.md` |
 | P3-11 | Daemon-next CLI 可以解析本地 device config、桥接 Socket.IO reconnect，并在 custom dispatch 中执行 server 发送的 command/args/cwd/env。 | Daemon | 真实 daemon-next 运行入口与 custom command executor。 | `implementation-runbook.md`, `contracts-dto.md` |
+| P3-11a | Daemon-next custom command executor 返回结构化 dispatch result，包含 body、workspace run display command、cwd、exitCode、started/completed timing 与脱敏后的日志摘要，并由 protocol client 上报到 `dispatch:result.workspaceRun`。 | Daemon/Socket | Workspace run command/log/timing 不能只停在 server 接收能力，真实 daemon 执行路径必须产生这些 metadata。 | `contracts-dto.md`, `known-gaps.md` |
 | P3-12 | `@agentbean/contracts` 与 `@agentbean/daemon-next` 具备 public npm package manifest，daemon-next 依赖 registry contracts 与 `socket.io-client`，CI 在 `next` 目标下先发布 contracts 再发布 daemon-next。 | Daemon/CI | 替换旧 daemon 前，用户必须能从 npm 安装 daemon-next。 | `production-cutover-runbook.md`, `target-architecture.md` |
 | P3-13 | CI 在 `next` 目标下基于 daemon-next 生成 canonical `@agentbean/daemon` release package，保留旧 `daemon` / `agentbean-daemon` bin，并使用高于 `0.1.35` 的版本发布。 | Daemon/CI | 替换旧 daemon npm 用户入口，而不要求用户改装另一个包名。 | `production-cutover-runbook.md`, `target-architecture.md` |
 | P3-14 | CI 在 build 后执行 daemon install smoke：pack `@agentbean/contracts` 与 canonical `@agentbean/daemon`，在临时空项目安装 tarball，并确认 `daemon` / `agentbean-daemon` / `agentbean-next-daemon` 三个 bin 能进入 daemon-next CLI。 | Daemon/CI | 替换旧 daemon 前，必须验证旧 npm 用户入口不是只在 manifest 上存在，而是在真实安装路径中可执行。 | `production-cutover-runbook.md`, `target-architecture.md` |
@@ -196,7 +200,6 @@ Phase 4 完成标准：
 这些仍保留在 `docs/acceptance-tests.md` 中，但第一切片冻结前不强制要求：
 
 - Join link management UI、`join:list` 与 `join:revoke`。
-- Channel archive/delete。
 - Admin。
 - Metrics。
-- Saved messages 与 reactions。
+- Audit requirements。
