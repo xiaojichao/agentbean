@@ -62,6 +62,12 @@ const ACTIVE_PREVIEW_MIME_TYPES = new Set([
   'text/html',
   'text/javascript',
 ]);
+const WORKSPACE_RUN_STATUSES = new Set<WorkspaceRunStatus>([
+  'running',
+  'succeeded',
+  'failed',
+  'cancelled',
+]);
 
 export interface DispatchTimeoutSchedulerConfig {
   timeoutMs: number;
@@ -241,13 +247,17 @@ async function handleTeamWorkspaceRunsHttp(input: ArtifactHttpInput): Promise<bo
     writeAckFailure(input.response, session);
     return true;
   }
-  const statusParam = input.url.searchParams.get('status');
+  const status = parseWorkspaceRunStatus(input.url.searchParams.get('status'));
+  if (status === 'invalid') {
+    writeJson(input.response, 400, { ok: false, error: 'BAD_REQUEST', message: 'Invalid workspace run status' });
+    return true;
+  }
   const result = await input.app.listTeamWorkspaceRuns({
     userId: session.user.id,
     teamId,
-    agentId: input.url.searchParams.get('agentId') ?? undefined,
-    deviceId: input.url.searchParams.get('deviceId') ?? undefined,
-    status: statusParam ? (statusParam as WorkspaceRunStatus) : undefined,
+    agentId: readOptionalQueryString(input.url, 'agentId'),
+    deviceId: readOptionalQueryString(input.url, 'deviceId'),
+    status,
   });
   if (!result.ok) {
     writeAckFailure(input.response, result);
@@ -577,6 +587,17 @@ function readToken(url: URL, request: ArtifactHttpInput['request'], body: Record
   const queryToken = url.searchParams.get('token') ?? undefined;
   const bodyToken = typeof body.token === 'string' ? body.token : undefined;
   return bearer ?? queryToken ?? bodyToken;
+}
+
+function readOptionalQueryString(url: URL, field: string): string | undefined {
+  const value = url.searchParams.get(field);
+  return value?.trim() || undefined;
+}
+
+function parseWorkspaceRunStatus(value: string | null): WorkspaceRunStatus | 'invalid' | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return WORKSPACE_RUN_STATUSES.has(trimmed as WorkspaceRunStatus) ? trimmed as WorkspaceRunStatus : 'invalid';
 }
 
 function readRequiredString(body: Record<string, unknown>, field: string): string {
