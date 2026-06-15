@@ -691,6 +691,55 @@ describe('server-next dev server entry', () => {
     expect(app.listTeamWorkspaceRuns).not.toHaveBeenCalled();
   });
 
+  test('forwards cursor and pageSize query to listTeamWorkspaceRuns', async () => {
+    const app = {
+      whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),
+      listTeamWorkspaceRuns: vi.fn(async () => makeSuccess({ runs: [], nextCursor: 'next-token' })),
+    } as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir: '.agentbean-next-test', sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+
+    const response = await fetch(
+      `${server.baseUrl}/api/teams/team-1/workspace-runs?token=token-1&cursor=abc&pageSize=15`,
+    );
+
+    expect(response.status).toBe(200);
+    expect(app.listTeamWorkspaceRuns).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: undefined,
+      deviceId: undefined,
+      status: undefined,
+      cursor: 'abc',
+      pageSize: 15,
+    });
+    await expect(response.json()).resolves.toMatchObject({ ok: true, nextCursor: 'next-token' });
+  });
+
+  test('returns 400 when listTeamWorkspaceRuns rejects an invalid cursor', async () => {
+    const app = {
+      whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),
+      listTeamWorkspaceRuns: vi.fn(async () => ({ ok: false, error: 'BAD_REQUEST', message: 'Invalid workspace run cursor' })),
+    } as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir: '.agentbean-next-test', sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+
+    const response = await fetch(
+      `${server.baseUrl}/api/teams/team-1/workspace-runs?token=token-1&cursor=bad`,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ ok: false, error: 'BAD_REQUEST' });
+  });
+
   test('serves authorized agent workspace runs over HTTP', async () => {
     const app = {
       whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),

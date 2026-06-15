@@ -1217,10 +1217,14 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           conditions.push('status = ?');
           params.push(input.status);
         }
+        if (input.cursor !== undefined) {
+          conditions.push('(updated_at < ? OR (updated_at = ? AND id < ?))');
+          params.push(input.cursor.updatedAt, input.cursor.updatedAt, input.cursor.id);
+        }
         params.push(input.limit);
         return teamDb
           .prepare(
-            `SELECT * FROM workspace_runs WHERE ${conditions.join(' AND ')} ORDER BY updated_at DESC LIMIT ?`,
+            `SELECT * FROM workspace_runs WHERE ${conditions.join(' AND ')} ORDER BY updated_at DESC, id DESC LIMIT ?`,
           )
           .all(...params)
           .map((row) => {

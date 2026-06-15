@@ -54,7 +54,9 @@ export default function TeamWorkspaceRunsPage() {
 
   const [runs, setRuns] = useState<TeamWorkspaceRun[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
   const statusFilter = searchParams.get('status') ?? '';
@@ -70,6 +72,15 @@ export default function TeamWorkspaceRunsPage() {
       router.replace(`/${np}/runs${query ? `?${query}` : ''}`, { scroll: false });
     },
     [np, router, searchParams],
+  );
+
+  const filters = useMemo(
+    () => ({
+      agentId: agentFilter || undefined,
+      deviceId: deviceFilter || undefined,
+      status: (statusFilter || undefined) as WorkspaceRunStatus | undefined,
+    }),
+    [agentFilter, deviceFilter, statusFilter],
   );
 
   useEffect(() => {
@@ -103,15 +114,12 @@ export default function TeamWorkspaceRunsPage() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetchTeamWorkspaceRuns(currentTeamId, {
-      agentId: agentFilter || undefined,
-      deviceId: deviceFilter || undefined,
-      status: (statusFilter || undefined) as WorkspaceRunStatus | undefined,
-    })
+    fetchTeamWorkspaceRuns(currentTeamId, filters)
       .then((res) => {
         if (cancelled) return;
         if (res.ok) {
           setRuns(res.runs ?? []);
+          setNextCursor(res.nextCursor ?? null);
         } else {
           setError(res.error ?? '加载失败');
         }
@@ -122,7 +130,20 @@ export default function TeamWorkspaceRunsPage() {
     return () => {
       cancelled = true;
     };
-  }, [currentTeamId, agentFilter, deviceFilter, statusFilter]);
+  }, [currentTeamId, filters]);
+
+  const loadMore = useCallback(() => {
+    if (!currentTeamId || !nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    fetchTeamWorkspaceRuns(currentTeamId, filters, { cursor: nextCursor })
+      .then((res) => {
+        if (res.ok) {
+          setRuns((prev) => [...prev, ...(res.runs ?? [])]);
+          setNextCursor(res.nextCursor ?? null);
+        }
+      })
+      .finally(() => setLoadingMore(false));
+  }, [currentTeamId, nextCursor, loadingMore, filters]);
 
   const orderedRuns = useMemo(
     () => [...runs].sort((a, b) => b.workspaceRun.updatedAt - a.workspaceRun.updatedAt),
@@ -312,6 +333,20 @@ export default function TeamWorkspaceRunsPage() {
               </article>
             );
           })}
+        </div>
+      )}
+
+      {nextCursor && !loading && !error && (
+        <div className="mt-5 flex justify-center">
+          <button
+            type="button"
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="inline-flex items-center gap-2 rounded-md border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {loadingMore && <Loader2 className="h-4 w-4 animate-spin" />}
+            {loadingMore ? '加载中...' : '加载更多'}
+          </button>
         </div>
       )}
     </div>
