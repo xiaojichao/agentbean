@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TaskDto, type TaskStatus, type TeamDto, type UserDto, type WorkspaceRunDto } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TaskDto, type TaskStatus, type TeamDto, type UserDto, type WorkspaceRunDto } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 
@@ -1783,6 +1783,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             limit: 20,
           })
         : [];
+      const attachments = await repositories.artifacts.listByMessage(dispatch.messageId);
 
       return makeSuccess({
         request: {
@@ -1796,6 +1797,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           requestId: dispatch.requestId,
           prompt: dispatch.prompt,
           history: history.map(toDispatchHistoryMessageDto),
+          ...(attachments.length > 0 ? { attachments: attachments.map(toDispatchAttachmentDto) } : {}),
           ...(executionConfig
             ? {
                 customAgent: {
@@ -2703,7 +2705,8 @@ async function getAttachableUploadedArtifacts(
     if (
       artifact.channelId !== input.channelId ||
       artifact.uploaderId !== input.userId ||
-      artifact.pathKind !== 'upload'
+      artifact.pathKind !== 'upload' ||
+      artifact.messageId !== undefined
     ) {
       return makeFailure('FORBIDDEN', 'Artifact cannot be attached to this message');
     }
@@ -2865,6 +2868,15 @@ function toArtifactDto(artifact: ArtifactRecord): ArtifactDto {
     pathKind: artifact.pathKind,
     sha256: artifact.sha256,
     createdAt: artifact.createdAt,
+  };
+}
+
+function toDispatchAttachmentDto(artifact: ArtifactRecord): DispatchAttachmentDto {
+  return {
+    id: artifact.id,
+    name: artifact.filename,
+    mimeType: artifact.mimeType,
+    sizeBytes: artifact.sizeBytes,
   };
 }
 

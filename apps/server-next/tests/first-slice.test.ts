@@ -1050,6 +1050,110 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('sendMessage passes uploaded artifacts through to the dispatch request', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 330,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'artifact-1', 'message-1', 'dispatch-1', 'request-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'executor-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 330,
+    });
+    await app.uploadArtifact({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      filename: 'brief.md',
+      mimeType: 'text/markdown',
+      sizeBytes: 12,
+      storagePath: 'artifacts/team-1/artifact-1/brief.md',
+      relativePath: 'brief.md',
+      sha256: 'hash-1',
+    });
+
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex read this',
+      artifactIds: ['artifact-1'],
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [{ id: 'dispatch-1', messageId: 'message-1' }],
+    });
+
+    await expect(app.getDispatchRequest({ dispatchId: 'dispatch-1' })).resolves.toMatchObject({
+      ok: true,
+      request: {
+        id: 'dispatch-1',
+        messageId: 'message-1',
+        attachments: [
+          {
+            id: 'artifact-1',
+            name: 'brief.md',
+            mimeType: 'text/markdown',
+            sizeBytes: 12,
+          },
+        ],
+      },
+    });
+  });
+
+  test('sendMessage rejects artifacts that are already bound to another message', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 340,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'artifact-1', 'message-1', 'message-2']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.uploadArtifact({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      filename: 'brief.md',
+      mimeType: 'text/markdown',
+      sizeBytes: 12,
+      storagePath: 'artifacts/team-1/artifact-1/brief.md',
+      relativePath: 'brief.md',
+      sha256: 'hash-1',
+    });
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: 'first attach',
+      artifactIds: ['artifact-1'],
+    })).resolves.toMatchObject({
+      ok: true,
+      message: { id: 'message-1', artifacts: [{ id: 'artifact-1' }] },
+    });
+
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: 'reuse attach',
+      artifactIds: ['artifact-1'],
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+    await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
+      ok: true,
+      messages: [
+        { id: 'message-1', artifacts: [{ id: 'artifact-1' }] },
+      ],
+    });
+  });
+
   test('sendMessage creates a dispatch for the first eligible online agent', async () => {
     const app = createInMemoryServerNext({
       now: () => 400,
