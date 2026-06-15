@@ -1,8 +1,8 @@
-import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { createCommandExecutor } from '../src/executor';
+import { buildChildEnv, createCommandExecutor } from '../src/executor';
 
 describe('daemon-next command executor', () => {
   test('runs a custom agent command with prompt stdin, args, cwd, and dispatch-only env', async () => {
@@ -187,6 +187,116 @@ describe('daemon-next command executor', () => {
       }),
     ).resolves.toBe('daemon-next:hello');
   });
+
+  test('forwards only safe host env keys plus custom agent env to the child process', () => {
+    const env = buildChildEnv(
+      {
+        PATH: '/usr/bin',
+        HOME: '/home/u',
+        USER: 'u',
+        OPENAI_API_KEY: 'sk-leak',
+        DATABASE_URL: 'postgres://x',
+        AWS_ACCESS_KEY_ID: 'AKIA',
+        GH_TOKEN: 'ghp_leak',
+        LC_ALL: 'en_US.UTF-8',
+        TMPDIR: '/tmp',
+      },
+      { CUSTOM_TOOL_TOKEN: 'injected', PATH: '/custom/bin' },
+    );
+
+    expect(env.HOME).toBe('/home/u');
+    expect(env.USER).toBe('u');
+    expect(env.LC_ALL).toBe('en_US.UTF-8');
+    expect(env.TMPDIR).toBe('/tmp');
+    expect(env.PATH).toBe('/custom/bin');
+    expect(env.CUSTOM_TOOL_TOKEN).toBe('injected');
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(env.GH_TOKEN).toBeUndefined();
+  });
+
+  test('force-kills a custom agent command that ignores SIGTERM after timeout', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
+    const pidFile = join(cwd, 'child.pid');
+    const scriptPath = join(cwd, 'stubborn.mjs');
+    writeFileSync(
+      scriptPath,
+      [
+        `import { writeFileSync } from 'node:fs';`,
+        `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+        `process.on('SIGTERM', () => {});`,
+        `setInterval(() => {}, 1000);`,
+      ].join('\n'),
+    );
+
+    const executor = createCommandExecutor({
+      timeoutMs: 50,
+      killGraceMs: 30,
+      clock: createClock([5000, 5080]),
+    });
+
+    await expect(
+      executor({
+        id: 'dispatch-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        messageId: 'message-1',
+        agentId: 'agent-1',
+        requestId: 'request-1',
+        prompt: 'hello',
+        customAgent: {
+          adapterKind: 'codex',
+          command: process.execPath,
+          args: [scriptPath],
+          cwd,
+        },
+      }),
+    ).rejects.toThrow('timed out after 50ms');
+
+    await waitForFile(pidFile);
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    // SIGTERM is ignored, so SIGKILL must fire at timeoutMs + killGraceMs.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(isProcessAlive(pid)).toBe(false);
+  });
+
+  test('terminates a custom agent command whose output exceeds the accumulated byte cap', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
+    const scriptPath = join(cwd, 'flood.mjs');
+    writeFileSync(
+      scriptPath,
+      [
+        `const block = 'x'.repeat(8192);`,
+        `setInterval(() => { process.stdout.write(block); }, 1);`,
+      ].join('\n'),
+    );
+
+    const executor = createCommandExecutor({
+      maxAccumulatedBytes: 4096,
+      clock: createClock([1000, 1010]),
+    });
+
+    const output = await executor({
+      id: 'dispatch-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'hello',
+      customAgent: {
+        adapterKind: 'codex',
+        command: process.execPath,
+        args: [scriptPath],
+        cwd,
+      },
+    });
+
+    expect(output).toMatchObject({
+      workspaceRun: { status: 'failed' },
+    });
+  });
 });
 
 function createClock(values: number[]) {
@@ -201,4 +311,23 @@ function createClock(values: number[]) {
       return value;
     },
   };
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForFile(path: string, attempts = 50): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (existsSync(path)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`expected file was not written: ${path}`);
 }
