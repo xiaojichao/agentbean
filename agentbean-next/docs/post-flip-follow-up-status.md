@@ -84,14 +84,15 @@ P0 baseline 已经收敛，不应继续作为下一条产品切片 blocker。
 - apps/web 的 workspace run 专页已提供日志摘要排障工具：失败默认展开、复制、下载、换行切换、行数/字符数与尾部摘要提示。
 - server-next 原生 agent workspace run 列表 route 已补齐；apps/web 的 agent/device 工作区入口可展示最新 runs、状态、命令上下文与关联 workspace artifacts，并继续链接到 workspace run 专页。
 - server-next 团队级 workspace runs 最新列表 route 已补齐；apps/web 侧栏新增“运行”入口，可按当前用户可见 channel 展示团队最近 runs、来源消息跳转、agent/device、退出码与文件数量。
+- daemon-next custom command 的完整 stdout/stderr 日志已 artifact 化为 `logs/workspace-run.log`，server-next 写入自身 artifact storage 后复用现有 preview/download 授权，apps/web run detail 会提示完整日志可在文件列表下载。
 
 剩余边界：
 
-- 更完整的 workspace run 专用页面布局、复杂 team-wide workspace explorer 与完整日志存储仍需后续产品切片；跨页面导航、执行命令投影、受限日志摘要排障工具、agent/device 列表入口与团队 latest list 已补第一步。
+- 更完整的 workspace run 专用页面布局、复杂 team-wide workspace explorer 与分段日志存储/检索仍需后续产品切片；跨页面导航、执行命令投影、受限日志摘要排障工具、agent/device 列表入口、团队 latest list 与完整日志 artifact v1 已补第一步。
 
 ### P2：后续产品 parity
 
-- 更完整的 workspace run 专用页面布局、team-wide workspace explorer 与完整日志存储/检索。
+- 更完整的 workspace run 专用页面布局、team-wide workspace explorer 与分段日志存储/检索。
 - Admin、metrics 与 audit requirements；`agent:metrics` request/ack 已有，但完整 admin/metrics/audit 产品面仍未冻结。
 - 更完整的 settings/device 页面，以及 member management 的浏览器级 smoke 覆盖。
 - Typed assignee、task 自动生成与更丰富的 task 产品流；delete/reorder 的协议与 usecase 第一版已收敛。
@@ -99,4 +100,4 @@ P0 baseline 已经收敛，不应继续作为下一条产品切片 blocker。
 
 ## 下一步判定
 
-当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。P0 生产观察 baseline 已完成，下一步应开新的 scoped issue/PR 继续产品能力或运维增强；若沿当前替换主线推进，优先在更完整的 workspace run 专用页面、复杂 team-wide workspace explorer、完整日志存储、admin/audit 产品面、settings/device 后续页中选一个小切片。
+当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。P0 生产观察 baseline 已完成，下一步应开新的 scoped issue/PR 继续产品能力或运维增强；若沿当前替换主线推进，优先在更完整的 workspace run 专用页面、复杂 team-wide workspace explorer、分段日志存储/检索、admin/audit 产品面、settings/device 后续页中选一个小切片。

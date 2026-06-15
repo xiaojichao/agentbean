@@ -153,6 +153,10 @@ export default function RunDetailPage() {
   const logLines = run.logExcerpt?.split(/\r\n|\r|\n/) ?? [];
   const logCharCount = run.logExcerpt?.length ?? 0;
   const logLooksTruncated = logCharCount >= LOG_EXCERPT_MAX_CHARS;
+  const fullLogArtifact = artifacts.find((artifact) =>
+    artifact.relativePath === 'logs/workspace-run.log' ||
+    artifact.filename === 'workspace-run.log'
+  );
 
   const copyLogExcerpt = () => {
     if (!run.logExcerpt) return;
@@ -309,8 +313,10 @@ export default function RunDetailPage() {
               <div className="flex flex-wrap items-center justify-between gap-2 border-t border-neutral-200 bg-white px-3 py-2">
                 <p className="text-xs text-neutral-500">
                   {logLooksTruncated
-                    ? '当前只保留最近 16,000 字符的受限日志摘要。'
-                    : '当前展示 daemon 上报并经 server 兜底脱敏后的日志摘要。'}
+                    ? '摘要用于快速排障：当前只展示最近 16,000 字符，完整日志可在文件列表下载。'
+                    : fullLogArtifact
+                      ? '摘要用于快速排障，完整日志可在文件列表下载。'
+                      : '当前展示 daemon 上报并经 server 兜底脱敏后的日志摘要。'}
                 </p>
                 <div className="flex items-center gap-1">
                   <button
@@ -366,6 +372,11 @@ export default function RunDetailPage() {
           <p className="text-sm text-neutral-400 py-4 text-center">无文件输出</p>
         ) : (
           <div className="space-y-4">
+            {fullLogArtifact && (
+              <p className="rounded-md bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                完整日志已作为文件保存，可在 logs/workspace-run.log 中预览或下载。
+              </p>
+            )}
             {Array.from(artifactsByDir.entries()).map(([dir, files]) => (
               <div key={dir || '__root__'}>
                 {dir && (

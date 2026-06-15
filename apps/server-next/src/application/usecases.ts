@@ -19,6 +19,23 @@ export interface ServerNextDeviceInviteCodes {
   nextCode(): string;
 }
 
+export interface ArtifactContentStoreWriteInput {
+  teamId: string;
+  artifactId: string;
+  filename: string;
+  content: Buffer;
+}
+
+export interface ArtifactContentStoreWriteResult {
+  storagePath: string;
+  sizeBytes: number;
+  sha256: string;
+}
+
+export interface ArtifactContentStore {
+  writeContent(input: ArtifactContentStoreWriteInput): Promise<ArtifactContentStoreWriteResult>;
+}
+
 export interface ServerNextUseCases {
   registerUser(input: RegisterUserInput): Promise<Ack<RegisterUserResult>>;
   loginUser(input: LoginUserInput): Promise<Ack<LoginUserResult>>;
@@ -506,6 +523,7 @@ export interface ReceiveDispatchArtifactInput {
   relativePath?: string;
   pathKind?: ArtifactDto['pathKind'];
   sha256?: string;
+  contentBase64?: string;
 }
 
 export interface ReceiveDispatchWorkspaceRunInput {
@@ -613,6 +631,7 @@ export interface CreateServerNextUseCasesInput {
   joinCodes?: ServerNextJoinCodes;
   deviceInviteCodes?: ServerNextDeviceInviteCodes;
   sessionSecret?: string;
+  artifactContentStore?: ArtifactContentStore;
 }
 
 export function createServerNextUseCases(input: CreateServerNextUseCasesInput): ServerNextUseCases {
@@ -620,6 +639,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const joinCodes = input.joinCodes ?? { nextCode: generateJoinCode };
   const deviceInviteCodes = input.deviceInviteCodes ?? { nextCode: generateJoinCode };
   const sessionSecret = input.sessionSecret ?? 'agentbean-next-dev-session-secret';
+  const artifactContentStore = input.artifactContentStore;
 
   return {
     async registerUser(registerInput) {
@@ -2239,6 +2259,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         : null;
       const artifacts: ArtifactDto[] = [];
       for (const artifactInput of resultInput.artifacts ?? []) {
+        const contentResult = await resolveDispatchArtifactContent(artifactContentStore, {
+          teamId: completed.dispatch.teamId,
+          artifact: artifactInput,
+        });
+        if (!contentResult.ok) {
+          return contentResult;
+        }
         const artifact = await repositories.artifacts.create({
           id: artifactInput.id,
           teamId: completed.dispatch.teamId,
@@ -2249,11 +2276,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           uploaderId: resultInput.agentId,
           filename: artifactInput.filename,
           mimeType: artifactInput.mimeType ?? 'application/octet-stream',
-          sizeBytes: artifactInput.sizeBytes ?? 0,
-          storagePath: artifactInput.storagePath,
+          sizeBytes: contentResult.content?.sizeBytes ?? artifactInput.sizeBytes ?? 0,
+          storagePath: contentResult.content?.storagePath ?? artifactInput.storagePath,
           relativePath: artifactInput.relativePath,
           pathKind: artifactInput.pathKind ?? (workspaceRun ? 'workspace' : 'generated'),
-          sha256: artifactInput.sha256,
+          sha256: contentResult.content?.sha256 ?? artifactInput.sha256,
           createdAt: now,
         });
         artifacts.push(toArtifactDto(artifact));
@@ -2943,6 +2970,7 @@ function normalizeLimit(limit: number | undefined): number {
 }
 
 const WORKSPACE_RUN_LOG_EXCERPT_MAX_CHARS = 16000;
+const DISPATCH_INLINE_ARTIFACT_CONTENT_MAX_BYTES = 2 * 1024 * 1024 + 1024;
 const SENSITIVE_LOG_ASSIGNMENT_RE = /\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)[A-Z0-9_]*)\s*=\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|`[^`\r\n]*`|[^\s"'`]+)/gi;
 
 function normalizeWorkspaceRunLogExcerpt(value: string | undefined): string | undefined {
@@ -2954,6 +2982,43 @@ function normalizeWorkspaceRunLogExcerpt(value: string | undefined): string | un
     return redacted;
   }
   return redacted.slice(redacted.length - WORKSPACE_RUN_LOG_EXCERPT_MAX_CHARS);
+}
+
+async function resolveDispatchArtifactContent(
+  artifactContentStore: ArtifactContentStore | undefined,
+  input: { teamId: string; artifact: ReceiveDispatchArtifactInput },
+): Promise<{ ok: true; content?: ArtifactContentStoreWriteResult } | Ack<Record<string, never>>> {
+  const contentBase64 = input.artifact.contentBase64;
+  if (contentBase64 === undefined) {
+    return { ok: true };
+  }
+  if (!artifactContentStore) {
+    return makeFailure('VALIDATION_ERROR', 'Artifact content store is not configured');
+  }
+  if (!isBase64Like(contentBase64)) {
+    return makeFailure('VALIDATION_ERROR', 'Invalid artifact content');
+  }
+  const content = Buffer.from(contentBase64, 'base64');
+  if (content.length > DISPATCH_INLINE_ARTIFACT_CONTENT_MAX_BYTES) {
+    return makeFailure('VALIDATION_ERROR', 'Artifact content is too large');
+  }
+  const stored = await artifactContentStore.writeContent({
+    teamId: input.teamId,
+    artifactId: input.artifact.id,
+    filename: input.artifact.filename,
+    content,
+  });
+  return { ok: true, content: stored };
+}
+
+function isBase64Like(value: string): boolean {
+  if (value.length === 0) {
+    return true;
+  }
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(value) || value.length % 4 !== 0) {
+    return false;
+  }
+  return Buffer.from(value, 'base64').toString('base64').replace(/=+$/, '') === value.replace(/=+$/, '');
 }
 
 function normalizeUsername(username: string): string {

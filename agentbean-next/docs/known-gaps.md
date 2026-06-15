@@ -135,10 +135,11 @@ Workspace run persistence 的第一版已经落地到 `server-next` repository/u
 - apps/web 的 workspace run 专页为受限日志摘要提供失败默认展开、复制、下载、换行切换、行数/字符数与尾部摘要提示，方便直接排障。
 - server-next 原生 agent workspace run 列表 route 已补齐，apps/web 的 agent/device 工作区入口可按 team membership 与 channel visibility 展示最新 runs、状态、命令上下文与关联 workspace artifacts。
 - server-next 提供团队级最新 workspace runs route，apps/web 侧栏新增“运行”入口，可按当前用户可见 channel 展示团队最近 runs、来源消息跳转、agent/device、退出码与文件数量。
+- daemon-next custom command executor 会把脱敏后的 stdout/stderr 作为 `logs/workspace-run.log` workspace artifact 上报；server-next 将 inline content 写入自身 artifact storage，apps/web run detail 可通过现有文件列表预览/下载完整日志 artifact。
 
 剩余：
 
-- 更完整的 workspace run 专用页面布局、复杂 team-wide workspace explorer 与完整日志存储仍需后续产品切片覆盖；分段存储、检索与更强脱敏规则尚未冻结。
+- 更完整的 workspace run 专用页面布局、复杂 team-wide workspace explorer 与分段日志存储/检索仍需后续产品切片覆盖；更强脱敏规则尚未冻结。
 
 ### Threads 第一版已定义
 
@@ -171,10 +172,11 @@ Artifact metadata、HTTP route 与 preview viewer 的第一版已经落地。
 - web-next preview 可以从消息里的 workspace run 摘要打开独立详情面板，在右侧工作区查看该 run 的 metadata 与 workspace output tree。
 - web-next preview 的 workspace run 详情入口会写入 `workspaceRunId` URL，并能在刷新/直达该 URL 后通过 HTTP API 恢复详情。
 - web-next preview composer 可以选择文件，先通过 artifact HTTP upload route 以 `FormData` 上传，再将返回的 artifact id 绑定到 human message。
+- daemon-next custom command 的完整日志第一版复用 artifacts：`logs/workspace-run.log` 会绑定到对应 workspace run，并继续沿用 artifact preview/download 的访问控制。
 
 剩余：
 
-- 更完整的 workspace run 专用页面布局、复杂 team-wide workspace explorer 与完整日志存储仍需后续产品切片。
+- 更完整的 workspace run 专用页面布局、复杂 team-wide workspace explorer 与分段日志存储/检索仍需后续产品切片。
 
 ### Search Projection
 

@@ -53,6 +53,16 @@ describe('daemon-next protocol client', () => {
     const socket = new FakeAgentSocket();
     const executor: StubExecutor = async (request): Promise<DaemonDispatchResult> => ({
       body: `stub:${request.prompt}`,
+      artifacts: [
+        {
+          id: 'workspace-log-dispatch-1',
+          filename: 'workspace-run.log',
+          mimeType: 'text/plain',
+          relativePath: 'logs/workspace-run.log',
+          pathKind: 'workspace',
+          contentBase64: Buffer.from('stdout:\nhello').toString('base64'),
+        },
+      ],
       workspaceRun: {
         status: 'succeeded',
         cwd: '/workspace',
@@ -88,6 +98,16 @@ describe('daemon-next protocol client', () => {
         dispatchId: 'dispatch-1',
         agentId: 'agent-1',
         body: 'stub:hello',
+        artifacts: [
+          {
+            id: 'workspace-log-dispatch-1',
+            filename: 'workspace-run.log',
+            mimeType: 'text/plain',
+            relativePath: 'logs/workspace-run.log',
+            pathKind: 'workspace',
+            contentBase64: Buffer.from('stdout:\nhello').toString('base64'),
+          },
+        ],
         workspaceRun: {
           status: 'succeeded',
           cwd: '/workspace',

@@ -61,8 +61,19 @@ async function runCustomAgentCommand(
       const completedAt = clock.now();
       const exitCode = code ?? 1;
       const command = formatCommand(customAgent.command as string, customAgent.args ?? []);
+      const logContent = buildLogArtifactContent(stdout, stderr);
       resolve({
         body: code === 0 ? stdout.trimEnd() : `custom agent command exited with code ${exitCode}`,
+        artifacts: [
+          {
+            id: `workspace-log-${request.id}`,
+            filename: 'workspace-run.log',
+            mimeType: 'text/plain',
+            relativePath: 'logs/workspace-run.log',
+            pathKind: 'workspace',
+            contentBase64: Buffer.from(logContent, 'utf8').toString('base64'),
+          },
+        ],
         workspaceRun: {
           status: code === 0 ? 'succeeded' : 'failed',
           cwd: customAgent.cwd,
@@ -80,18 +91,32 @@ async function runCustomAgentCommand(
 }
 
 const LOG_EXCERPT_MAX_CHARS = 16000;
+const LOG_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
 const SENSITIVE_LOG_ASSIGNMENT_RE = /\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)[A-Z0-9_]*)\s*=\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|`[^`\r\n]*`|[^\s"'`]+)/gi;
 
-function buildLogExcerpt(stdout: string, stderr: string): string {
-  const combined = [
+function buildRedactedLog(stdout: string, stderr: string): string {
+  return [
     stdout ? `stdout:\n${stdout.trimEnd()}` : '',
     stderr ? `stderr:\n${stderr.trimEnd()}` : '',
-  ].filter(Boolean).join('\n\n');
-  const redacted = combined.replace(SENSITIVE_LOG_ASSIGNMENT_RE, '$1=[redacted]');
+  ].filter(Boolean).join('\n\n').replace(SENSITIVE_LOG_ASSIGNMENT_RE, '$1=[redacted]');
+}
+
+function buildLogExcerpt(stdout: string, stderr: string): string {
+  const redacted = buildRedactedLog(stdout, stderr);
   if (redacted.length <= LOG_EXCERPT_MAX_CHARS) {
     return redacted;
   }
   return redacted.slice(redacted.length - LOG_EXCERPT_MAX_CHARS);
+}
+
+function buildLogArtifactContent(stdout: string, stderr: string): string {
+  const redacted = buildRedactedLog(stdout, stderr);
+  const content = Buffer.from(redacted, 'utf8');
+  if (content.length <= LOG_ARTIFACT_MAX_BYTES) {
+    return redacted;
+  }
+  const tail = content.subarray(content.length - LOG_ARTIFACT_MAX_BYTES).toString('utf8');
+  return `[workspace run log truncated to last ${LOG_ARTIFACT_MAX_BYTES} bytes]\n\n${tail}`;
 }
 
 function formatCommand(command: string, args: string[]): string {

@@ -61,6 +61,19 @@ describe('daemon-next command executor', () => {
       logExcerpt: expect.stringContaining('SECRET_TOKEN=[redacted]'),
     });
     expect(output.workspaceRun?.logExcerpt).not.toContain('secret-value');
+    expect(output.artifacts).toEqual([
+      expect.objectContaining({
+        id: expect.stringMatching(/^workspace-log-/),
+        filename: 'workspace-run.log',
+        mimeType: 'text/plain',
+        relativePath: 'logs/workspace-run.log',
+        pathKind: 'workspace',
+        contentBase64: expect.any(String),
+      }),
+    ]);
+    const logContent = Buffer.from(output.artifacts?.[0]?.contentBase64 ?? '', 'base64').toString('utf8');
+    expect(logContent).toContain('SECRET_TOKEN=[redacted]');
+    expect(logContent).not.toContain('secret-value');
   });
 
   test('returns failed workspace run metadata when a custom agent command exits non-zero', async () => {
@@ -94,7 +107,7 @@ describe('daemon-next command executor', () => {
       },
     });
 
-    expect(output).toEqual({
+    expect(output).toMatchObject({
       body: 'custom agent command exited with code 7',
       workspaceRun: {
         status: 'failed',
@@ -109,7 +122,54 @@ describe('daemon-next command executor', () => {
     if (typeof output === 'object') {
       expect(output.workspaceRun?.logExcerpt).toContain('stdout before failure');
       expect(output.workspaceRun?.logExcerpt).not.toContain('sk-failed');
+      expect(output.artifacts?.[0]).toMatchObject({
+        filename: 'workspace-run.log',
+        relativePath: 'logs/workspace-run.log',
+        pathKind: 'workspace',
+      });
+      const logContent = Buffer.from(output.artifacts?.[0]?.contentBase64 ?? '', 'base64').toString('utf8');
+      expect(logContent).toContain('stdout before failure');
+      expect(logContent).toContain('OPENAI_API_KEY=[redacted]');
+      expect(logContent).not.toContain('sk-failed');
     }
+  });
+
+  test('caps full workspace run log artifacts while preserving the tail', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
+    const scriptPath = join(cwd, 'long-log-agent.mjs');
+    writeFileSync(
+      scriptPath,
+      [
+        `process.stdout.write("start-" + "x".repeat(${2 * 1024 * 1024 + 4096}) + "-tail");`,
+      ].join('\n'),
+    );
+
+    const executor = createCommandExecutor({
+      clock: createClock([3000, 3030]),
+    });
+    const output = await executor({
+      id: 'dispatch-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'hello custom agent',
+      customAgent: {
+        adapterKind: 'codex',
+        command: process.execPath,
+        args: [scriptPath],
+        cwd,
+      },
+    });
+
+    if (typeof output !== 'object') {
+      throw new Error('expected structured command result');
+    }
+    const logContent = Buffer.from(output.artifacts?.[0]?.contentBase64 ?? '', 'base64').toString('utf8');
+    expect(logContent).toContain('workspace run log truncated');
+    expect(logContent).toContain('-tail');
+    expect(logContent.length).toBeLessThanOrEqual(2 * 1024 * 1024 + 256);
   });
 
   test('falls back to a deterministic stub reply when no custom command is present', async () => {
