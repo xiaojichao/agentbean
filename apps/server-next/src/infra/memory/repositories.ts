@@ -649,7 +649,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async listByTeam(input) {
         return Array.from(workspaceRuns.values())
-          .filter((run) => run.teamId === input.teamId)
+          .filter((run) => {
+            if (run.teamId !== input.teamId) return false;
+            if (input.agentId !== undefined && run.agentId !== input.agentId) return false;
+            if (input.deviceId !== undefined && run.deviceId !== input.deviceId) return false;
+            if (input.status !== undefined && run.status !== input.status) return false;
+            return true;
+          })
           .sort((a, b) => b.updatedAt - a.updatedAt)
           .slice(0, input.limit);
       },

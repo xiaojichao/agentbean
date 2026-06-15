@@ -13,7 +13,7 @@ import {
   type SqliteDatabase,
 } from './infra/sqlite/repositories.js';
 import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
-import { makeFailure, type ArtifactDto } from '../../../packages/contracts/src/index.js';
+import { makeFailure, type ArtifactDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { ServerNextUseCases } from './application/usecases.js';
 
 type SocketIoServerConstructor = new (server: HttpServer, options?: Record<string, unknown>) => SocketServerLike & {
@@ -241,9 +241,13 @@ async function handleTeamWorkspaceRunsHttp(input: ArtifactHttpInput): Promise<bo
     writeAckFailure(input.response, session);
     return true;
   }
+  const statusParam = input.url.searchParams.get('status');
   const result = await input.app.listTeamWorkspaceRuns({
     userId: session.user.id,
     teamId,
+    agentId: input.url.searchParams.get('agentId') ?? undefined,
+    deviceId: input.url.searchParams.get('deviceId') ?? undefined,
+    status: statusParam ? (statusParam as WorkspaceRunStatus) : undefined,
   });
   if (!result.ok) {
     writeAckFailure(input.response, result);

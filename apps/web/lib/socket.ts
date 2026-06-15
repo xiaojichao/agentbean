@@ -1,7 +1,7 @@
 'use client';
 import { WEB_EVENTS } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
-import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact } from './schema.js';
+import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunStatus } from './schema.js';
 
 const configuredUrl = process.env.NEXT_PUBLIC_AGENT_BEAN_SERVER_URL ?? 'http://localhost:4000';
 const TOKEN_STORAGE_KEY = 'agentbean.token';
@@ -91,9 +91,19 @@ export async function fetchAgentWorkspace(networkId: string, agentId: string): P
   }
 }
 
-export async function fetchTeamWorkspaceRuns(teamId: string): Promise<{ ok: boolean; runs?: TeamWorkspaceRun[]; error?: string }> {
+export async function fetchTeamWorkspaceRuns(
+  teamId: string,
+  filters?: { agentId?: string; deviceId?: string; status?: WorkspaceRunStatus },
+): Promise<{ ok: boolean; runs?: TeamWorkspaceRun[]; error?: string }> {
   try {
-    const res = await fetch(authedApiUrl(`/api/teams/${encodeURIComponent(teamId)}/workspace-runs`));
+    const params = new URLSearchParams();
+    if (filters?.agentId) params.set('agentId', filters.agentId);
+    if (filters?.deviceId) params.set('deviceId', filters.deviceId);
+    if (filters?.status) params.set('status', filters.status);
+    const query = params.toString();
+    const res = await fetch(
+      authedApiUrl(`/api/teams/${encodeURIComponent(teamId)}/workspace-runs${query ? `?${query}` : ''}`),
+    );
     if (!res.ok) {
       const body = await res.json().catch(() => null);
       return { ok: false, error: body?.error ?? body?.message ?? `${res.status} ${res.statusText}` };

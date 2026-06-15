@@ -566,6 +566,32 @@ describe('server-next dev server entry', () => {
     });
   });
 
+  test('forwards agentId, deviceId and status query filters to listTeamWorkspaceRuns', async () => {
+    const app = {
+      whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),
+      listTeamWorkspaceRuns: vi.fn(async () => makeSuccess({ runs: [] })),
+    } as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir: '.agentbean-next-test', sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+
+    const response = await fetch(
+      `${server.baseUrl}/api/teams/team-1/workspace-runs?token=token-1&agentId=agent-9&deviceId=device-9&status=failed`,
+    );
+
+    expect(response.status).toBe(200);
+    expect(app.listTeamWorkspaceRuns).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-9',
+      deviceId: 'device-9',
+      status: 'failed',
+    });
+  });
+
   test('serves authorized agent workspace runs over HTTP', async () => {
     const app = {
       whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),

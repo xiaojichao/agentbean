@@ -1203,9 +1203,26 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return mapWorkspaceRun(teamDb.prepare('SELECT * FROM workspace_runs WHERE team_id = ? AND id = ?').get(input.teamId, input.runId));
       },
       async listByTeam(input) {
+        const conditions: string[] = ['team_id = ?'];
+        const params: unknown[] = [input.teamId];
+        if (input.agentId !== undefined) {
+          conditions.push('agent_id = ?');
+          params.push(input.agentId);
+        }
+        if (input.deviceId !== undefined) {
+          conditions.push('device_id = ?');
+          params.push(input.deviceId);
+        }
+        if (input.status !== undefined) {
+          conditions.push('status = ?');
+          params.push(input.status);
+        }
+        params.push(input.limit);
         return teamDb
-          .prepare('SELECT * FROM workspace_runs WHERE team_id = ? ORDER BY updated_at DESC LIMIT ?')
-          .all(input.teamId, input.limit)
+          .prepare(
+            `SELECT * FROM workspace_runs WHERE ${conditions.join(' AND ')} ORDER BY updated_at DESC LIMIT ?`,
+          )
+          .all(...params)
           .map((row) => {
             const run = mapWorkspaceRun(row);
             if (!run) {
