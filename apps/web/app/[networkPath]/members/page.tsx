@@ -49,6 +49,7 @@ export default function MembersPage() {
   const devices = useAgentBeanStore((s) => s.devices);
   const agents = useAgentBeanStore((s) => s.agents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const applyDevicesSnapshot = useAgentBeanStore((s) => s.applyDevicesSnapshot);
   const applyDeviceStatus = useAgentBeanStore((s) => s.applyDeviceStatus);
   const applyAgentsSnapshot = useAgentBeanStore((s) => s.applyAgentsSnapshot);
@@ -63,8 +64,8 @@ export default function MembersPage() {
   const routeTab = searchParams.get('agentTab') as AgentMemberTab | null;
 
   useEffect(() => {
-    if (conn !== 'open') return;
-    deviceEvents().subscribe();
+    if (conn !== 'open' || !currentTeamId) return;
+    deviceEvents().subscribe(currentTeamId);
     const unsubDevices = deviceEvents().onSnapshot((list) => applyDevicesSnapshot(list));
     const unsubDeviceStatus = deviceEvents().onStatus((device) => applyDeviceStatus(device));
     const unsubStatus = agentEvents().onStatus((snap) => applyAgentStatus(snap));
@@ -73,7 +74,7 @@ export default function MembersPage() {
       if (res.ok && res.agents) applyAgentsSnapshot(res.agents);
     });
     return () => { unsubDevices(); unsubDeviceStatus(); unsubStatus(); };
-  }, [conn, applyDevicesSnapshot, applyDeviceStatus, applyAgentsSnapshot, applyAgentStatus]);
+  }, [conn, currentTeamId, applyDevicesSnapshot, applyDeviceStatus, applyAgentsSnapshot, applyAgentStatus]);
 
   const agentList = useMemo(() => Object.values(agents), [agents]);
 

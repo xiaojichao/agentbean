@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo } from 'react';
 import { Bot, Circle, Hash, Lock, MessageSquare, Users } from 'lucide-react';
-import { agentEvents, dmEvents, getWebSocket } from '@/lib/socket';
+import { agentEvents, channelEvents, dmEvents, getWebSocket } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import { ChannelInput } from '@/components/channel-input';
 import { ChannelMessage } from '@/components/channel-message';
@@ -18,11 +18,13 @@ export function ConversationPage({ channelId, mode }: { channelId: string; mode:
   const applyDmsSnapshot = useAgentBeanStore((s) => s.applyDmsSnapshot);
   const applyChannelHistory = useAgentBeanStore((s) => s.applyChannelHistory);
   const appendMessage = useAgentBeanStore((s) => s.appendMessage);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
 
   useEffect(() => {
+    if (!currentTeamId) return;
     const socket = getWebSocket();
-    agentEvents(socket).subscribe();
-    socket.emit('channels:subscribe', {});
+    agentEvents(socket).subscribe(currentTeamId);
+    channelEvents(socket).subscribe(currentTeamId);
     dmEvents(socket).list().then((res) => {
       if (res.ok && res.dms) applyDmsSnapshot(res.dms);
     });
@@ -49,7 +51,7 @@ export function ConversationPage({ channelId, mode }: { channelId: string; mode:
       socket.off('channel:history', onHistory);
       socket.off('channel:message', onMessage);
     };
-  }, [channelId, applyAgentsSnapshot, applyAgentStatus, applyChannelsSnapshot, applyDmsSnapshot, applyChannelHistory, appendMessage]);
+  }, [channelId, currentTeamId, applyAgentsSnapshot, applyAgentStatus, applyChannelsSnapshot, applyDmsSnapshot, applyChannelHistory, appendMessage]);
 
   const sorted = useMemo(
     () => [...messages].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)),

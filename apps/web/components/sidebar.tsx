@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { Bot, MessagesSquare, ClipboardList, Users, ChevronDown, Settings, Monitor, LayoutDashboard, Plus, Check, Globe, Lock } from 'lucide-react';
-import { getWebSocket, teamEvents } from '@/lib/socket';
+import { agentEvents, channelEvents, deviceEvents, getWebSocket, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 
 export function Sidebar() {
@@ -53,9 +53,10 @@ export function Sidebar() {
         const subPath = segments.length > 2 ? segments.slice(2).join('/') : 'chat';
         router.push(`/${target.path}/${subPath}`);
       }
-      getWebSocket().emit('agents:subscribe', {});
-      getWebSocket().emit('channels:subscribe', {});
-      getWebSocket().emit('devices:subscribe', {});
+      const socket = getWebSocket();
+      agentEvents(socket).subscribe(networkId);
+      channelEvents(socket).subscribe(networkId);
+      deviceEvents(socket).subscribe(networkId);
     }
   };
 
@@ -150,9 +151,10 @@ export function Sidebar() {
             const segments = pathname.split('/');
             const subPath = segments.length > 2 ? segments.slice(2).join('/') : 'chat';
             router.push(`/${networkPath}/${subPath}`);
-            getWebSocket().emit('agents:subscribe', {});
-            getWebSocket().emit('channels:subscribe', {});
-            getWebSocket().emit('devices:subscribe', {});
+            const socket = getWebSocket();
+            agentEvents(socket).subscribe(networkId);
+            channelEvents(socket).subscribe(networkId);
+            deviceEvents(socket).subscribe(networkId);
           }}
         />
       )}

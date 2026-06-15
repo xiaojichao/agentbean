@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { getWebSocket, agentEvents } from '@/lib/socket';
+import { agentEvents, channelEvents, getWebSocket } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 
@@ -11,6 +11,7 @@ export default function ChannelsPage() {
   const applyAgentStatus = useAgentBeanStore((s) => s.applyAgentStatus);
   const applyChannelsSnapshot = useAgentBeanStore((s) => s.applyChannelsSnapshot);
   const setConn = useAgentBeanStore((s) => s.setConn);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const np = useCurrentNetworkPath();
   const [open, setOpen] = useState(false);
 
@@ -22,13 +23,20 @@ export default function ChannelsPage() {
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
 
+    if (!currentTeamId) {
+      return () => {
+        socket.off('connect', onConnect);
+        socket.off('disconnect', onDisconnect);
+      };
+    }
+
     const ag = agentEvents(socket);
     const offSnap = ag.onSnapshot(applyAgentsSnapshot);
     const offStatus = ag.onStatus(applyAgentStatus);
-    ag.subscribe();
+    ag.subscribe(currentTeamId);
 
     socket.on('channels:snapshot', applyChannelsSnapshot);
-    socket.emit('channels:subscribe', {});
+    channelEvents(socket).subscribe(currentTeamId);
 
     return () => {
       socket.off('connect', onConnect);
@@ -36,7 +44,7 @@ export default function ChannelsPage() {
       offSnap(); offStatus();
       socket.off('channels:snapshot', applyChannelsSnapshot);
     };
-  }, [setConn, applyAgentsSnapshot, applyAgentStatus, applyChannelsSnapshot]);
+  }, [setConn, currentTeamId, applyAgentsSnapshot, applyAgentStatus, applyChannelsSnapshot]);
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">

@@ -136,6 +136,28 @@ describe('socket event payload adapters', () => {
       payload: { channelId: 'channel-1', memberUserId: 'user-1' },
     });
   });
+
+  it('sends team-scoped subscription payloads for realtime snapshots', () => {
+    const { socket, calls } = createAckSocket();
+
+    agentEvents(socket).subscribe('team-1');
+    expect(calls.at(-1)).toEqual({
+      event: 'agents:subscribe',
+      payload: { teamId: 'team-1' },
+    });
+
+    channelEvents(socket).subscribe('team-1');
+    expect(calls.at(-1)).toEqual({
+      event: 'channels:subscribe',
+      payload: { teamId: 'team-1' },
+    });
+
+    deviceEvents(socket).subscribe('team-1');
+    expect(calls.at(-1)).toEqual({
+      event: 'device:list',
+      payload: { teamId: 'team-1' },
+    });
+  });
 });
 
 function createAckSocket(): {

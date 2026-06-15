@@ -143,7 +143,7 @@ export interface AgentEvents {
   create(payload: { name: string; adapterKind: string; command: string; args?: string[]; category?: string; cwd?: string; env?: Record<string, string>; description?: string; deviceId?: string; networkId?: string }): Promise<{ ok: boolean; agent?: any; error?: string }>;
   updateConfig(payload: { id: string; name: string; adapterKind?: string; command?: string; cwd?: string | null; description?: string | null }): Promise<{ ok: boolean; agent?: any; error?: string }>;
   listCustom(payload?: { deviceId?: string }): Promise<{ ok: boolean; agents?: AgentSnapshot[]; error?: string }>;
-  subscribe(): void;
+  subscribe(teamId: string): void;
 }
 
 // 超时不再 reject（避免调用方未 catch 时变 Uncaught (in promise)），
@@ -178,7 +178,7 @@ export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
     metrics(teamId) {
       return emitWithTimeout(socket, WEB_EVENTS.agent.metrics, { teamId });
     },
-    subscribe() { socket.emit(WEB_EVENTS.agent.subscribe, {}); },
+    subscribe(teamId) { socket.emit(WEB_EVENTS.agent.subscribe, { teamId }); },
     create({ networkId, ...rest }) {
       return emitWithTimeout(socket, WEB_EVENTS.agent.create, { teamId: networkId, ...rest });
     },
@@ -239,6 +239,7 @@ export function teamEvents(socket: Socket = getWebSocket()): TeamEvents {
 export const networkEvents = teamEvents;
 
 export interface ChannelEvents {
+  subscribe(teamId: string): void;
   update(payload: { channelId: string; name?: string; description?: string | null; visibility?: 'public' | 'private' }): Promise<{ ok: boolean; error?: string }>;
   members(channelId: string): Promise<{ ok: boolean; humans?: { userId: string; role: string; username: string }[]; agents?: import('./schema').AgentSnapshot[]; error?: string }>;
   addAgent(channelId: string, agentId: string): Promise<{ ok: boolean; error?: string }>;
@@ -254,6 +255,7 @@ export interface ChannelEvents {
 
 export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
   return {
+    subscribe(teamId) { socket.emit(WEB_EVENTS.channel.subscribe, { teamId }); },
     update(payload) { return emitWithTimeout(socket, WEB_EVENTS.channel.update, payload); },
     members(channelId) { return emitWithTimeout(socket, WEB_EVENTS.channel.members, { channelId }); },
     addAgent(channelId, agentId) { return emitWithTimeout(socket, WEB_EVENTS.channel.addAgent, { channelId, agentId }); },
@@ -371,7 +373,7 @@ export interface DeviceEvents {
   rename(id: string, hostname: string): Promise<{ ok: boolean; error?: string }>;
   onSnapshot(handler: (devices: DeviceInfo[]) => void): () => void;
   onStatus(handler: (device: DeviceInfo) => void): () => void;
-  subscribe(): void;
+  subscribe(teamId: string): void;
 }
 
 export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
@@ -405,7 +407,7 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
       socket.on(WEB_EVENTS.device.status, handler);
       return () => { socket.off(WEB_EVENTS.device.status, handler); };
     },
-    subscribe() { socket.emit('devices:subscribe', {}); },
+    subscribe(teamId) { socket.emit(WEB_EVENTS.device.list, { teamId }); },
   };
 }
 

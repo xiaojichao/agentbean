@@ -25,15 +25,16 @@ export default function AgentDetailPage() {
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
 
   useEffect(() => {
+    if (!currentTeamId) return;
     const ev = agentEvents();
     const unsubSnapshot = ev.onSnapshot(setAgents);
     const unsubStatus = ev.onStatus(upsert);
-    ev.subscribe();
+    ev.subscribe(currentTeamId);
     return () => {
       unsubSnapshot();
       unsubStatus();
     };
-  }, [setAgents, upsert]);
+  }, [currentTeamId, setAgents, upsert]);
 
   useEffect(() => {
     if (!agent?.id || !currentTeamId) return;

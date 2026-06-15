@@ -112,7 +112,7 @@
 
 | 事件 | 请求 gap | 响应 gap | 状态 |
 |---|---|---|---|
-| `device:list`（A 类已修） | web `{}` vs server `{teamId,userId}`（注入）✅ | `{devices}` ✅ | ✅ |
+| `device:list`（A 类已修） | web 可发 `{teamId}`（订阅路径）或 `{}`（普通 list）；server 注入 `userId` ✅ | `{devices}` ✅ | ✅ |
 | `device:get` | web `{id}` vs server `{userId,deviceId}`：**`id`↔`deviceId`**（D2） | `{device}` ✅ | ⚠️ D2 |
 | `device:scan` | web `{deviceId}` ✅ | `{request}` ✅ | ✅ |
 | `device:agents:list` | `{deviceId}` | server 无（B 类） | ❌ B |
@@ -161,7 +161,7 @@
 | **D5** email 缺失 | DTO 层 | server DTO | server `toUserDto` 加 `email`（从 users 表读，表有 email 列） |
 | **D6** web 多余字段 | 多事件 | 非致命 | 清理 web 多余字段或 server 显式忽略 |
 | **D7** networkId↔teamId / description↔title | agent/channel | 概念迁移 | web 改 `networkId`→`teamId`、`description`→`title`（channel.update） |
-| **B 类**（contracts 无定义） | 13 项 | device 长尾/auth/join/channel/agent | 逐项决策补 server 还是裁 UI |
+| **B 类**（contracts 无定义） | 12 项 | device 长尾/auth/join/channel/agent | 逐项决策补 server 还是裁 UI；`devices:subscribe` 已裁掉，设备订阅复用 `device:list` + `{teamId}` |
 | **C 类**（2026-06-15 续核实） | 0 项 | 原 7 项已全部收敛 | `teams:snapshot`、`task:updated`、`tasks:snapshot`、`agent:status`、`device:status`、`agents:discovered` 已回填；`agent:metrics` 已作为 request/ack 实现。`tasks:snapshot` 语义收敛为复用 `channels:subscribe` 的 team 任务上下文。 |
 
 ---

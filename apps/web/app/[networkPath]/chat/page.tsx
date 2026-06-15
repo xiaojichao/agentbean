@@ -210,9 +210,9 @@ export default function ChatPage() {
 
   // Subscribe to channels + DMs
   useEffect(() => {
-    if (conn !== 'open') return;
+    if (conn !== 'open' || !currentTeamId) return;
     const socket = getWebSocket();
-    socket.emit('channels:subscribe', {});
+    channelEvents(socket).subscribe(currentTeamId);
     const handler = (list: any[]) => {
       applyChannelsSnapshot(list);
       setActiveChannel((prev) => {
@@ -234,7 +234,7 @@ export default function ChatPage() {
       }
     });
     return () => { socket.off('channels:snapshot', handler); unsubDm(); };
-  }, [conn, applyChannelsSnapshot, applyDmsSnapshot, dmParam, routeChannelId, routeDmId]);
+  }, [conn, currentTeamId, applyChannelsSnapshot, applyDmsSnapshot, dmParam, routeChannelId, routeDmId]);
 
   const handleMessage = useCallback((msg: ChatMessage) => {
     appendMessage(msg);
