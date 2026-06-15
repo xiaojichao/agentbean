@@ -4,11 +4,11 @@
 
 ## 核对时间
 
-- 日期：2026-06-12
-- 本地分支：`main` 与 `origin/main` 对齐后创建本文档分支
-- GitHub 状态：核对时 open issues 与 open PR 均为空
-- 最近 CI/CD：最近 8 个 `CI/CD` run 均为 `success`
-- 本地 readiness：`npm run check:agentbean-next-readiness` 通过 `31/31`
+- 日期：2026-06-15
+- 本地分支：`codex/post-flip-status-convergence` 基于 `origin/main`
+- GitHub 状态：#140 与 #141 均已 completed 关闭；#239 已合并并自动关闭 #238
+- 当前生产复核：`npm run audit:agentbean-next-cutover -- --json` 通过 `11/11`，`pendingFinalFlip: false`
+- 当前生产 smoke：`npm run smoke:agentbean-next-entry -- --url https://api.agentbean.dev` 通过 `4/4`；`npm run smoke:agentbean-next-business -- --url https://api.agentbean.dev` 通过 `8/8`
 
 这些状态会随 GitHub 与生产环境变化而漂移；执行外部操作前仍应重新核对。
 
@@ -18,6 +18,9 @@
 
 - Final flip 与 post-flip production smoke gate。
   - strict cutover audit、public entry smoke、business smoke、rollback old-entry smoke guard 与 browser smoke CI gate 已进入主线验证。
+- 生产观察证据 baseline。
+  - #141 已关闭：生产写入 marker message、受控 Railway Next 重部署、同账号重登读取 channel history 后确认 marker message 仍存在；#140 已完成总审计并关闭。
+  - 2026-06-15 再次复核 strict cutover audit、public entry smoke 与 business smoke 均通过。
 - Authenticated socket session 与 current team 恢复。
   - web socket 可以通过 session token 恢复 user/current team；preview/browser smoke 覆盖刷新后的 session restore 与 resubscribe。
 - Message search 第一版。
@@ -49,9 +52,17 @@
 
 ### P0：生产观察证据
 
-- 记录 final flip 后真实 Railway production volume 重启持久化证据。
-- 在 24-72 小时窗口内记录 production runtime logs、socket/API 错误日志与手工浏览器观察。
-- 如决定不做受控 rollback 演练，需要在 #140 或后续运维记录中写明原因。
+P0 baseline 已经收敛，不应继续作为下一条产品切片 blocker。
+
+已确认：
+
+- #141 已关闭，记录了 final flip 后真实 Railway production volume 重部署持久化证据。
+- #140 已关闭，作为 post-flip 生产观察与替代旧服务 gap audit 的总审计入口已经完成。
+- 2026-06-15 当前生产复核仍通过 strict cutover audit、entry smoke 与 business smoke。
+
+剩余边界：
+
+- production logs、socket/API 错误与 rollback 演练仍应在实际 deploy、incident、rollback drill 时作为运维记录追加；它们不再阻塞当前替换主线的下一条产品切片。
 
 ### P1：artifact HTTP/viewer 第一版
 
@@ -85,4 +96,4 @@
 
 ## 下一步判定
 
-当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。下一步应基于本文档开新的 scoped issue/PR：如果先做替换退场信心，优先处理 P0 生产观察证据；如果继续产品能力，优先在更完整的 workspace run 专用页面、admin/audit 产品面、settings/device 后续页中选一个小切片。
+当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。P0 生产观察 baseline 已完成，下一步应开新的 scoped issue/PR 继续产品能力或运维增强；若沿当前替换主线推进，优先在更完整的 workspace run 专用页面/日志体验、admin/audit 产品面、settings/device 后续页中选一个小切片。

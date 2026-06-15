@@ -266,7 +266,7 @@ Native directory selection 有用，但不是第一切片核心。
 剩余：
 
 - 浏览器 smoke 仍主要覆盖核心 chat/custom-agent、artifact 基础链路与 tasks 第一版；更完整 search、完整 task page、settings/member/device 等后续产品面需要随着切片补浏览器级证据。
-- production browser smoke 与 24-72 小时生产观察记录仍属于运维观察，不等同于每次 PR 的本地/CI smoke。
+- production browser smoke 与 post-flip 生产观察 baseline 已经有独立证据；后续 production logs、socket/API 错误与 rollback drill 仍属于运维观察，不等同于每次 PR 的本地/CI smoke。
 
 ### Acceptance Tests 需要优先级
 
