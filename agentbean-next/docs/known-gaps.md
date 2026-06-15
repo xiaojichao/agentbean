@@ -113,7 +113,9 @@ Dispatch lifecycle 的第一版已经落地到 `server-next` repository/usecase/
 
 已确认：
 
-- `dispatches` model，包含 request ID、agent ID、channel ID、message ID、status、error、timestamps、timeout 与 artifact links。
+- `dispatches` model，包含 request ID、agent ID、channel ID、message ID、status、error 与 timestamps。
+- Timeout 由 server-next 长驻 runtime 的 scheduler 判定并更新 dispatch status，不是 `DispatchDto` 或 `dispatches` table 的 per-dispatch 字段。
+- Artifact/workspace run metadata 通过 message meta、`artifacts` 与 `workspace_runs` 的 `dispatchId` 关联 dispatch，不是 dispatch DTO/table 的内联 artifact links。
 - `dispatch:cancel` 会把 pending dispatch 标记为 `cancelled`，late result/error 不再改写已完成状态。
 - server-next 长驻 runtime 会定期调用 `failTimedOutDispatches`，把超时 pending dispatch 标记为 `timed_out` 并广播 dispatch status。
 
