@@ -110,7 +110,7 @@ export default function RunDetailPage() {
     setLogOpen(data.workspaceRun.status === 'failed');
     setCopiedLog(false);
     setWrapLog(true);
-  }, [data?.workspaceRun.id]);
+  }, [data?.workspaceRun.id, data?.workspaceRun.status, data?.workspaceRun.logExcerpt]);
 
   if (loading) {
     return (
@@ -132,10 +132,10 @@ export default function RunDetailPage() {
           </div>
         </div>
         <Link
-          href={`/${np}/agents`}
+          href={`/${np}/runs`}
           className="mt-4 inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
         >
-          <ArrowLeft className="w-4 h-4" /> 返回 Agent 列表
+          <ArrowLeft className="w-4 h-4" /> 返回运行列表
         </Link>
       </div>
     );
