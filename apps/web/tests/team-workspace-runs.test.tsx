@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import type { TeamWorkspaceRun } from '@/lib/schema';
 
@@ -11,9 +11,10 @@ vi.mock('next/link', () => ({
     <a href={typeof href === 'string' ? href : ''} {...rest}>{children}</a>
   ),
 }));
+const { nav } = vi.hoisted(() => ({ nav: { searchParams: new URLSearchParams() } }));
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: () => {}, replace: () => {}, refresh: () => {} }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => nav.searchParams,
 }));
 vi.mock('@/lib/format-time', () => ({
   formatRelative: () => 'recently',
@@ -57,6 +58,8 @@ import TeamWorkspaceRunsPage from '@/app/[networkPath]/runs/page';
 afterEach(() => {
   cleanup();
   fetchMock.mockReset();
+  vi.useRealTimers();
+  nav.searchParams = new URLSearchParams();
 });
 
 function makeTeamRun(
@@ -116,5 +119,57 @@ describe('team workspace runs page', () => {
     fetchMock.mockResolvedValue({ ok: false, error: 'boom' });
     render(<TeamWorkspaceRunsPage />);
     await waitFor(() => expect(screen.getByText('加载失败')).toBeInTheDocument());
+  });
+
+  it('keeps a flat list when groupBy is unset', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      runs: [makeTeamRun({ id: 'run-1' }), makeTeamRun({ id: 'run-2' })],
+    });
+    const { container } = render(<TeamWorkspaceRunsPage />);
+    await waitFor(() => expect(screen.getAllByText('查看详情').length).toBe(2));
+    expect(container.querySelectorAll('details').length).toBe(0);
+  });
+
+  it('groups runs into collapsible sections when groupBy=status', async () => {
+    nav.searchParams = new URLSearchParams('groupBy=status');
+    fetchMock.mockResolvedValue({
+      ok: true,
+      runs: [
+        makeTeamRun({ id: 'run-1', status: 'succeeded' }),
+        makeTeamRun({ id: 'run-2', status: 'failed' }),
+      ],
+    });
+    const { container } = render(<TeamWorkspaceRunsPage />);
+    await waitFor(() => expect(screen.getAllByText('查看详情').length).toBe(2));
+    expect(container.querySelectorAll('details').length).toBe(2);
+  });
+
+  it('ignores unsupported groupBy values from the URL', async () => {
+    nav.searchParams = new URLSearchParams('groupBy=bogus');
+    fetchMock.mockResolvedValue({
+      ok: true,
+      runs: [makeTeamRun({ id: 'run-1' }), makeTeamRun({ id: 'run-2' })],
+    });
+    const { container } = render(<TeamWorkspaceRunsPage />);
+    await waitFor(() => expect(screen.getAllByText('查看详情').length).toBe(2));
+    expect(container.querySelectorAll('details').length).toBe(0);
+  });
+
+  it('uses the calendar week for date grouping', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 5, 16, 12));
+    nav.searchParams = new URLSearchParams('groupBy=date');
+    fetchMock.mockResolvedValue({
+      ok: true,
+      runs: [makeTeamRun({ id: 'run-sunday', updatedAt: new Date(2026, 5, 14, 12).getTime() })],
+    });
+    const { container } = render(<TeamWorkspaceRunsPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText('npm test')).toBeInTheDocument();
+    expect(container.querySelector('summary')?.textContent).toContain('更早');
   });
 });
