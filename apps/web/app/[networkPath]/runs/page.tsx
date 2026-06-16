@@ -38,21 +38,29 @@ const DATE_BUCKET_LABELS: Record<string, string> = {
   older: '更早',
 };
 const DATE_BUCKET_ORDER = ['today', 'yesterday', 'this-week', 'older'];
+type RunGroupBy = '' | 'agent' | 'date' | 'status';
+
+function normalizeGroupBy(value: string | null): RunGroupBy {
+  if (value === 'agent' || value === 'date' || value === 'status') return value;
+  return '';
+}
 
 function dateBucketKey(updatedAt: number): string {
   const dayMs = 24 * 60 * 60 * 1000;
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
   const todayMs = startOfToday.getTime();
+  const startOfWeek = new Date(startOfToday);
+  startOfWeek.setDate(startOfWeek.getDate() - ((startOfWeek.getDay() + 6) % 7));
   if (updatedAt >= todayMs) return 'today';
   if (updatedAt >= todayMs - dayMs) return 'yesterday';
-  if (updatedAt >= todayMs - 7 * dayMs) return 'this-week';
+  if (updatedAt >= startOfWeek.getTime()) return 'this-week';
   return 'older';
 }
 
 function groupKeyFor(
   run: TeamWorkspaceRun['workspaceRun'],
-  groupBy: string,
+  groupBy: Exclude<RunGroupBy, ''>,
   agents: Record<string, AgentSnapshot>,
 ): { key: string; label: string } {
   if (groupBy === 'agent') {
@@ -98,7 +106,7 @@ export default function TeamWorkspaceRunsPage() {
   const statusFilter = searchParams.get('status') ?? '';
   const agentFilter = searchParams.get('agentId') ?? '';
   const deviceFilter = searchParams.get('deviceId') ?? '';
-  const groupBy = searchParams.get('groupBy') ?? '';
+  const groupBy = normalizeGroupBy(searchParams.get('groupBy'));
   const hasFilter = Boolean(statusFilter || agentFilter || deviceFilter);
   const updateFilter = useCallback(
     (key: string, value: string) => {
