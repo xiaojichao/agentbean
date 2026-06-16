@@ -552,15 +552,19 @@ function createAuthenticatedUserResolver(
     }
     const authToken = socketAuthToken(socket);
     if (!authToken.hasToken) {
-      cached = { hasToken: false, userId: null };
+      cached = { hasToken: false, userId: null, currentTeamId: null };
       return cached;
     }
     if (!authToken.token) {
-      cached = { hasToken: true, userId: null };
+      cached = { hasToken: true, userId: null, currentTeamId: null };
       return cached;
     }
     const result = await app.whoami({ token: authToken.token });
-    cached = { hasToken: true, userId: result.ok ? result.user.id : null };
+    cached = {
+      hasToken: true,
+      userId: result.ok ? result.user.id : null,
+      currentTeamId: result.ok ? (result.currentTeam?.id ?? null) : null,
+    };
     return cached;
   };
 }

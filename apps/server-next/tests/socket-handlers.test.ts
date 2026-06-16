@@ -84,6 +84,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.team.delete,
       WEB_EVENTS.join.create,
       WEB_EVENTS.join.validate,
+      WEB_EVENTS.join.list,
+      WEB_EVENTS.join.revoke,
       WEB_EVENTS.deviceInvite.create,
       WEB_EVENTS.deviceInvite.complete,
       WEB_EVENTS.device.list,

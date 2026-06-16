@@ -326,6 +326,27 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         }
         return mapJoinLink(globalDb.prepare('SELECT * FROM join_links WHERE code = ?').get(code));
       },
+      async listByTeam(teamId) {
+        return globalDb
+          .prepare('SELECT * FROM join_links WHERE team_id = ? ORDER BY created_at DESC')
+          .all(teamId)
+          .map((row) => {
+            const link = mapJoinLink(row);
+            if (!link) {
+              throw new Error('SQLite join link row could not be mapped');
+            }
+            return link;
+          });
+      },
+      async revoke(input) {
+        const result = globalDb
+          .prepare('UPDATE join_links SET revoked_at = ? WHERE code = ? AND revoked_at IS NULL')
+          .run(input.revokedAt, input.code);
+        if (sqliteChanges(result) === 0) {
+          return null;
+        }
+        return mapJoinLink(globalDb.prepare('SELECT * FROM join_links WHERE code = ?').get(input.code));
+      },
     },
     deviceInvites: {
       async create(invite) {

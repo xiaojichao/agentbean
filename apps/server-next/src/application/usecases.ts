@@ -45,6 +45,8 @@ export interface ServerNextUseCases {
   switchTeam(input: SwitchTeamInput): Promise<Ack<SwitchTeamResult>>;
   createJoinLink(input: CreateJoinLinkInput): Promise<Ack<JoinLinkResult>>;
   validateJoinLink(input: ValidateJoinLinkInput): Promise<Ack<JoinLinkResult>>;
+  listJoinLinks(input: { userId: string; teamId: string }): Promise<Ack<{ links: JoinLinkDto[] }>>;
+  revokeJoinLink(input: { userId: string; teamId: string; code: string }): Promise<Ack<{ link: JoinLinkDto }>>;
   createDeviceInvite(input: CreateDeviceInviteInput): Promise<Ack<DeviceInviteAckDto>>;
   waitForDeviceInvite(input: WaitForDeviceInviteInput): Promise<Ack<DeviceInviteAckDto>>;
   completeDeviceInvite(input: CompleteDeviceInviteInput): Promise<Ack<DeviceInviteAckDto & { credentials: DeviceInviteCredentialsDto }>>;
@@ -868,6 +870,34 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         link: toJoinLinkDto(link),
         team: toTeamDto(team, role),
       });
+    },
+
+    async listJoinLinks(listInput) {
+      const role = await repositories.teams.getMemberRole(listInput.teamId, listInput.userId);
+      if (!role) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const links = await repositories.joinLinks.listByTeam(listInput.teamId);
+      return makeSuccess({ links: links.map(toJoinLinkDto) });
+    },
+
+    async revokeJoinLink(revokeInput) {
+      const role = await repositories.teams.getMemberRole(revokeInput.teamId, revokeInput.userId);
+      if (!role) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const link = await repositories.joinLinks.getByCode(revokeInput.code);
+      if (!link || link.teamId !== revokeInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Join link not found');
+      }
+      const updated = await repositories.joinLinks.revoke({
+        code: revokeInput.code,
+        revokedAt: clock.now(),
+      });
+      if (!updated) {
+        return makeFailure('NOT_FOUND', 'Join link not found');
+      }
+      return makeSuccess({ link: toJoinLinkDto(updated) });
     },
 
     async validateJoinLink(joinInput) {

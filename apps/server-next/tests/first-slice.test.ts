@@ -817,6 +817,46 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('team members can list and revoke join links for their own team', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 290,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'join-1', 'join-2', 'user-2', 'team-2', 'channel-2']),
+      joinCodes: createIds(['code-1', 'code-2']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
+    await app.createJoinLink({ userId: 'user-1', teamId: 'team-1', maxUses: 5 });
+    await app.registerUser({ username: 'lin', password: 'secret', teamName: 'Lin' });
+
+    await expect(app.listJoinLinks({ userId: 'user-1', teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      links: expect.arrayContaining([
+        expect.objectContaining({ code: 'code-1', teamId: 'team-1', revokedAt: undefined }),
+        expect.objectContaining({ code: 'code-2', teamId: 'team-1', maxUses: 5 }),
+      ]),
+    });
+
+    await expect(app.listJoinLinks({ userId: 'user-2', teamId: 'team-1' })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+
+    await expect(app.revokeJoinLink({ userId: 'user-1', teamId: 'team-1', code: 'code-1' })).resolves.toMatchObject({
+      ok: true,
+      link: { code: 'code-1', revokedAt: expect.any(Number) },
+    });
+
+    await expect(app.validateJoinLink({ code: 'code-1' })).resolves.toMatchObject({
+      ok: false,
+      error: 'INVITE_INVALID',
+    });
+
+    await expect(app.revokeJoinLink({ userId: 'user-2', teamId: 'team-2', code: 'code-2' })).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/FORBIDDEN|NOT_FOUND/),
+    });
+  });
+
   test('registerUser with a join code joins the invited team and switches current team', async () => {
     const app = createInMemoryServerNext({
       now: () => 260,

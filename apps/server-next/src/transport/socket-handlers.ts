@@ -4,6 +4,7 @@ import type { ServerNextUseCases } from '../application/usecases.js';
 export interface AuthenticatedUserIdentity {
   hasToken: boolean;
   userId: string | null;
+  currentTeamId: string | null;
 }
 
 export interface SocketLike {
@@ -53,6 +54,8 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.team.delete, app, 'deleteTeam', afterTeamMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.join.create, app, 'createJoinLink', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.join.validate, app, 'validateJoinLink');
+  bind(socket, WEB_EVENTS.join.list, app, 'listJoinLinks', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.join.revoke, app, 'revokeJoinLink', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.deviceInvite.create, app, 'createDeviceInvite', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.deviceInvite.complete, app, 'completeDeviceInvite', (payload, result) =>
     options.afterDeviceInviteComplete?.(payload, result), { authenticatedUser: options.authenticatedUser },
@@ -306,7 +309,11 @@ async function withAuthenticatedUserId(
   if (!auth.userId) {
     throw new UnauthenticatedSocketError();
   }
-  return { ...payload, userId: auth.userId };
+  const enriched: Record<string, unknown> = { ...payload, userId: auth.userId };
+  if (auth.currentTeamId && enriched.teamId === undefined) {
+    enriched.teamId = auth.currentTeamId;
+  }
+  return enriched;
 }
 
 export class UnauthenticatedSocketError extends Error {
