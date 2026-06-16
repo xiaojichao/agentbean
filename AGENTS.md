@@ -24,6 +24,8 @@ When using the GitHub publish/yeet workflow, the PR title must be a natural Chin
 TypeScript changes to `apps/server-next`, `apps/daemon-next`, `apps/web-next`, `apps/web`, or `packages/*` MUST run the matching `build:*` (tsc) in addition to `vitest` before claiming done:
 
 - `npm run build:server-next` after `apps/server-next` changes
+- `npm run build:daemon-next` after `apps/daemon-next` changes
+- `npm run build:web-next` after `apps/web-next` changes
 - `npm run build:contracts` / `npm run build:domain` after `packages/*` changes
 - `cd apps/web && npm run build` after `apps/web` changes
 
