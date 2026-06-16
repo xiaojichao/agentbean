@@ -320,6 +320,54 @@ describe('server-next dev server entry', () => {
     await expect(preview.text()).resolves.toBe('# hello multipart\n');
   });
 
+  test('keeps multipart file bytes that contain the request boundary text', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-artifacts-multipart-boundary-'));
+    const server = await startServerNextDevServer({
+      Server,
+      Database,
+      config: { host: '127.0.0.1', port: 0, storage: 'sqlite', dataDir, sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+    const ownerSocket = await connectClient(`${server.baseUrl}/web`);
+    cleanups.push(async () => {
+      ownerSocket.disconnect();
+    });
+    const owner = await ownerSocket.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'boundary-shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    }) as {
+      ok: true;
+      token: string;
+      currentTeam: { id: string };
+      defaultChannel: { id: string };
+    };
+    const boundary = 'agentbean-fixed-boundary';
+    const fileContent = `before --${boundary} inside file after\n`;
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="token"\r\n\r\n${owner.token}\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="channelId"\r\n\r\n${owner.defaultChannel.id}\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="boundary.md"\r\nContent-Type: text/markdown\r\n\r\n`),
+      Buffer.from(fileContent),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+
+    const upload = await fetch(`${server.baseUrl}/api/teams/${owner.currentTeam.id}/artifacts/upload`, {
+      method: 'POST',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      body,
+    });
+    expect(upload.status).toBe(201);
+    const uploadJson = await upload.json() as {
+      ok: true;
+      artifact: { id: string; previewUrl: string };
+    };
+
+    const preview = await fetch(`${server.baseUrl}${uploadJson.artifact.previewUrl}?token=${encodeURIComponent(owner.token)}`);
+    expect(preview.status).toBe(200);
+    await expect(preview.text()).resolves.toBe(fileContent);
+  });
+
   test('encodes artifact download filenames from stored artifact metadata', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-artifact-filename-'));
     writeFileSync(join(dataDir, 'stored.txt'), 'stored content');
