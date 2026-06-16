@@ -18,3 +18,13 @@ When using the GitHub publish/yeet workflow, the PR title must be a natural Chin
 - 用户或开发者影响
 - 根因分析（修复类 PR 必填）
 - 验证结果
+
+## Local Verification Contract
+
+TypeScript changes to `apps/server-next`, `apps/daemon-next`, `apps/web-next`, `apps/web`, or `packages/*` MUST run the matching `build:*` (tsc) in addition to `vitest` before claiming done:
+
+- `npm run build:server-next` after `apps/server-next` changes
+- `npm run build:contracts` / `npm run build:domain` after `packages/*` changes
+- `cd apps/web && npm run build` after `apps/web` changes
+
+Why: `vitest` transpiles with esbuild and skips type checking; strict-mode errors (e.g. `noUncheckedIndexedAccess` making `arr[i]` possibly `undefined`) only surface under `tsc`. Running only `vitest` hides build breaks (see PR #259 review P1).
