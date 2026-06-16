@@ -199,7 +199,7 @@ Phase 4 完成标准：
 
 这些仍保留在 `docs/acceptance-tests.md` 中，但第一切片冻结前不强制要求：
 
-- Join link management UI、`join:list` 与 `join:revoke`。
+- Join link management UI（web-next 客户端 list/revoke 绑定 + preview 邀请管理面板）；`join:list` / `join:revoke` 协议层已由 #267 落地。
 - Admin。
 - Metrics。
 - Audit requirements。
