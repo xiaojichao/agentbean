@@ -520,7 +520,7 @@ function parseMultipartBody(rawBody: Buffer, contentType: string): {
   const fields: Record<string, string> = {};
   let file: { filename: string; mimeType: string; content: Buffer } | undefined;
   const delimiter = Buffer.from(`--${boundary}`);
-  let cursor = rawBody.indexOf(delimiter);
+  let cursor = findMultipartBoundary(rawBody, delimiter, 0);
   while (cursor >= 0) {
     let partStart = cursor + delimiter.length;
     if (rawBody.subarray(partStart, partStart + 2).toString('latin1') === '--') break;
@@ -529,7 +529,7 @@ function parseMultipartBody(rawBody: Buffer, contentType: string): {
     } else if (rawBody.subarray(partStart, partStart + 1).toString('latin1') === '\n') {
       partStart += 1;
     }
-    const next = rawBody.indexOf(delimiter, partStart);
+    const next = findMultipartBoundary(rawBody, delimiter, partStart);
     if (next < 0) break;
     const part = trimTrailingLineBreak(rawBody.subarray(partStart, next));
     const separator = part.indexOf(Buffer.from('\r\n\r\n'));
@@ -558,6 +558,24 @@ function parseMultipartBody(rawBody: Buffer, contentType: string): {
     throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'Missing multipart file' });
   }
   return { fields, file };
+}
+
+function findMultipartBoundary(rawBody: Buffer, delimiter: Buffer, from: number): number {
+  let cursor = rawBody.indexOf(delimiter, from);
+  while (cursor >= 0) {
+    if (isMultipartBoundary(rawBody, delimiter, cursor)) return cursor;
+    cursor = rawBody.indexOf(delimiter, cursor + 1);
+  }
+  return -1;
+}
+
+function isMultipartBoundary(rawBody: Buffer, delimiter: Buffer, cursor: number): boolean {
+  const isAtLineStart = cursor === 0 || rawBody[cursor - 1] === 0x0a;
+  if (!isAtLineStart) return false;
+  const afterDelimiter = cursor + delimiter.length;
+  return rawBody.subarray(afterDelimiter, afterDelimiter + 2).toString('latin1') === '--'
+    || rawBody.subarray(afterDelimiter, afterDelimiter + 2).toString('latin1') === '\r\n'
+    || rawBody.subarray(afterDelimiter, afterDelimiter + 1).toString('latin1') === '\n';
 }
 
 function parseMultipartHeaders(rawHeaders: string): Record<string, string> {
