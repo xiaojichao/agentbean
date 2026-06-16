@@ -518,6 +518,52 @@ describe('server-next socket handlers', () => {
     });
   });
 
+  test('derives join management team from the authenticated session', async () => {
+    const socket = new FakeSocket();
+    const app = {
+      registerUser: vi.fn(async (payload) => makeSuccess({ payload })),
+      loginUser: vi.fn(async (payload) => makeSuccess({ payload })),
+      whoami: vi.fn(async (payload) => makeSuccess({ payload })),
+      createJoinLink: vi.fn(async (payload) => makeSuccess({ payload })),
+      validateJoinLink: vi.fn(async (payload) => makeSuccess({ payload })),
+      listJoinLinks: vi.fn(async (payload) => makeSuccess({ payload })),
+      revokeJoinLink: vi.fn(async (payload) => makeSuccess({ payload })),
+      switchTeam: vi.fn(async (payload) => makeSuccess({ payload })),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, {
+      authenticatedUser: async () => ({
+        hasToken: true,
+        userId: 'user-session',
+        currentTeamId: 'team-session',
+      }),
+    });
+
+    await socket.trigger(WEB_EVENTS.join.create, { teamId: 'team-client', maxUses: 2 });
+    await socket.trigger(WEB_EVENTS.join.list, { teamId: 'team-client' });
+    await socket.trigger(WEB_EVENTS.join.revoke, { teamId: 'team-client', code: 'code-1' });
+    await socket.trigger(WEB_EVENTS.team.switch, { teamId: 'team-target' });
+
+    expect(app.createJoinLink).toHaveBeenCalledWith({
+      userId: 'user-session',
+      teamId: 'team-session',
+      maxUses: 2,
+    });
+    expect(app.listJoinLinks).toHaveBeenCalledWith({
+      userId: 'user-session',
+      teamId: 'team-session',
+    });
+    expect(app.revokeJoinLink).toHaveBeenCalledWith({
+      userId: 'user-session',
+      teamId: 'team-session',
+      code: 'code-1',
+    });
+    expect(app.switchTeam).toHaveBeenCalledWith({
+      userId: 'user-session',
+      teamId: 'team-target',
+    });
+  });
+
   test('registers first-slice agent events and forwards payloads to use cases', async () => {
     const socket = new FakeSocket();
     const app = {

@@ -878,7 +878,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
       const links = await repositories.joinLinks.listByTeam(listInput.teamId);
-      return makeSuccess({ links: links.map(toJoinLinkDto) });
+      return makeSuccess({ links: links.filter((link) => link.revokedAt === undefined).map(toJoinLinkDto) });
     },
 
     async revokeJoinLink(revokeInput) {
@@ -891,6 +891,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('NOT_FOUND', 'Join link not found');
       }
       const updated = await repositories.joinLinks.revoke({
+        teamId: revokeInput.teamId,
         code: revokeInput.code,
         revokedAt: clock.now(),
       });

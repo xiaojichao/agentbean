@@ -340,8 +340,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       },
       async revoke(input) {
         const result = globalDb
-          .prepare('UPDATE join_links SET revoked_at = ? WHERE code = ? AND revoked_at IS NULL')
-          .run(input.revokedAt, input.code);
+          .prepare('UPDATE join_links SET revoked_at = ? WHERE team_id = ? AND code = ? AND revoked_at IS NULL')
+          .run(input.revokedAt, input.teamId, input.code);
         if (sqliteChanges(result) === 0) {
           return null;
         }

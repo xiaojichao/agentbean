@@ -851,6 +851,13 @@ describe('server-next first-slice use cases', () => {
       error: 'INVITE_INVALID',
     });
 
+    await expect(app.listJoinLinks({ userId: 'user-1', teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      links: [
+        expect.objectContaining({ code: 'code-2', teamId: 'team-1' }),
+      ],
+    });
+
     await expect(app.revokeJoinLink({ userId: 'user-2', teamId: 'team-2', code: 'code-2' })).resolves.toMatchObject({
       ok: false,
       error: expect.stringMatching(/FORBIDDEN|NOT_FOUND/),

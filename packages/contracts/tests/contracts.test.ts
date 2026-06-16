@@ -402,6 +402,8 @@ describe('first-slice contract result shape', () => {
     expect(WEB_EVENTS.team.snapshot).toBe('teams:snapshot');
     expect(WEB_EVENTS.join.create).toBe('join:create');
     expect(WEB_EVENTS.join.validate).toBe('join:validate');
+    expect(WEB_EVENTS.join.list).toBe('join:list');
+    expect(WEB_EVENTS.join.revoke).toBe('join:revoke');
     expect(WEB_EVENTS.deviceInvite.create).toBe('device-invite:create');
     expect(WEB_EVENTS.deviceInvite.complete).toBe('device-invite:complete');
     expect(WEB_EVENTS.agent.publish).toBe('agent:publish');

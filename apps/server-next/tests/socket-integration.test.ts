@@ -256,6 +256,69 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('uses the refreshed current team for join management on a persistent web socket', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1150,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'join-1', 'team-2', 'channel-2', 'join-2']),
+      joinCodes: createIds(['code-1', 'code-2']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+    });
+    const register = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    expect(register).toMatchObject({
+      ok: true,
+      token: expect.any(String),
+      currentTeam: { id: 'team-1' },
+    });
+
+    const owner = await connectClient(`${baseUrl}/web`, { auth: { token: (register as { token: string }).token } });
+    cleanups.push(async () => {
+      owner.disconnect();
+    });
+
+    await expect(owner.emitWithAck(WEB_EVENTS.join.create, {})).resolves.toMatchObject({
+      ok: true,
+      link: { code: 'code-1', teamId: 'team-1' },
+    });
+    await expect(owner.emitWithAck(WEB_EVENTS.team.create, { name: 'Ops' })).resolves.toMatchObject({
+      ok: true,
+      team: { id: 'team-2' },
+    });
+    await expect(owner.emitWithAck(WEB_EVENTS.join.create, { teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      link: { code: 'code-2', teamId: 'team-2' },
+    });
+    await expect(owner.emitWithAck(WEB_EVENTS.join.list, { teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      links: [
+        expect.objectContaining({ code: 'code-2', teamId: 'team-2' }),
+      ],
+    });
+
+    await expect(owner.emitWithAck(WEB_EVENTS.team.switch, { teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      currentTeam: { id: 'team-1' },
+    });
+    await expect(owner.emitWithAck(WEB_EVENTS.join.list, {})).resolves.toMatchObject({
+      ok: true,
+      links: [
+        expect.objectContaining({ code: 'code-1', teamId: 'team-1' }),
+      ],
+    });
+  });
+
   test('delivers completed device invite credentials to the waiting daemon socket', async () => {
     const app = createInMemoryServerNext({
       now: () => 1200,

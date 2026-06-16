@@ -6,6 +6,7 @@ import {
   registerWebSocketHandlers,
   UnauthenticatedSocketError,
   type AuthenticatedUserIdentity,
+  type AuthenticatedUserProvider,
   type SocketLike,
 } from './socket-handlers.js';
 
@@ -544,9 +545,9 @@ function subscriptionErrorAck(error: unknown): { ok: false; error: string; messa
 function createAuthenticatedUserResolver(
   socket: SocketLike,
   app: ServerNextUseCases,
-): () => Promise<AuthenticatedUserIdentity> {
+): AuthenticatedUserProvider {
   let cached: AuthenticatedUserIdentity | undefined;
-  return async () => {
+  const resolve = (async () => {
     if (cached) {
       return cached;
     }
@@ -566,7 +567,14 @@ function createAuthenticatedUserResolver(
       currentTeamId: result.ok ? (result.currentTeam?.id ?? null) : null,
     };
     return cached;
+  }) as AuthenticatedUserProvider;
+  resolve.setCurrentTeamId = (teamId) => {
+    if (!cached || !cached.hasToken || !cached.userId) {
+      return;
+    }
+    cached = { ...cached, currentTeamId: teamId };
   };
+  return resolve;
 }
 
 function socketAuthToken(socket: SocketLike): { hasToken: boolean; token: string | null } {

@@ -207,7 +207,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async revoke(input) {
         const link = joinLinks.get(input.code);
-        if (!link || link.revokedAt !== undefined) {
+        if (!link || link.teamId !== input.teamId || link.revokedAt !== undefined) {
           return null;
         }
         const updated = { ...link, revokedAt: input.revokedAt };
