@@ -252,12 +252,16 @@ async function handleTeamWorkspaceRunsHttp(input: ArtifactHttpInput): Promise<bo
     writeJson(input.response, 400, { ok: false, error: 'BAD_REQUEST', message: 'Invalid workspace run status' });
     return true;
   }
+  const pageSizeParam = readOptionalQueryString(input.url, 'pageSize');
+  const pageSize = pageSizeParam === undefined ? undefined : Number(pageSizeParam);
   const result = await input.app.listTeamWorkspaceRuns({
     userId: session.user.id,
     teamId,
     agentId: readOptionalQueryString(input.url, 'agentId'),
     deviceId: readOptionalQueryString(input.url, 'deviceId'),
     status,
+    cursor: readOptionalQueryString(input.url, 'cursor'),
+    pageSize: pageSize !== undefined && Number.isFinite(pageSize) ? pageSize : undefined,
   });
   if (!result.ok) {
     writeAckFailure(input.response, result);
@@ -270,6 +274,7 @@ async function handleTeamWorkspaceRunsHttp(input: ArtifactHttpInput): Promise<bo
       workspaceRun: run.workspaceRun,
       artifacts: run.artifacts.map(withArtifactUrls),
     })),
+    nextCursor: result.nextCursor,
   });
   return true;
 }

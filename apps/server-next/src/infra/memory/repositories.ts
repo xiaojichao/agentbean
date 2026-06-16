@@ -654,9 +654,18 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             if (input.agentId !== undefined && run.agentId !== input.agentId) return false;
             if (input.deviceId !== undefined && run.deviceId !== input.deviceId) return false;
             if (input.status !== undefined && run.status !== input.status) return false;
+            if (input.cursor !== undefined) {
+              if (run.updatedAt > input.cursor.updatedAt) return false;
+              if (run.updatedAt === input.cursor.updatedAt && run.id >= input.cursor.id) return false;
+            }
             return true;
           })
-          .sort((a, b) => b.updatedAt - a.updatedAt)
+          .sort((a, b) => {
+            if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
+            if (a.id > b.id) return -1;
+            if (a.id < b.id) return 1;
+            return 0;
+          })
           .slice(0, input.limit);
       },
       async listByAgent(input) {

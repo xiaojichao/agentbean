@@ -363,6 +363,86 @@ describe('web-next preview page interactions', () => {
     expect(harness.historyReplacements).toContain('/preview?workspaceRunId=run-1');
   });
 
+  test('preserves workspace run artifactIds counts when artifact metadata is not hydrated', async () => {
+    const harness = createPreviewHarness({});
+
+    await harness.socket.trigger('channel:message', {
+      id: 'message-artifact-ids-only',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      senderKind: 'agent',
+      body: 'legacy report',
+      artifacts: [],
+      workspaceRun: {
+        id: 'run-artifact-ids-only',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        dispatchId: 'dispatch-1',
+        agentId: 'agent-1',
+        deviceId: 'device-1',
+        cwd: '/Users/shaw/AgentBean',
+        exitCode: 0,
+        startedAt: 1_000,
+        completedAt: 2_000,
+        status: 'succeeded',
+        artifactIds: ['artifact-legacy-1', 'artifact-legacy-2'],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    });
+
+    const html = harness.element('messages').innerHTML;
+    expect(html).toContain('Workspace run run-artifact-ids-only');
+    expect(html).toContain('2 artifacts');
+
+    await harness.click('messages', '[data-workspace-run-id]', { workspaceRunId: 'run-artifact-ids-only' });
+
+    const detailHtml = harness.element('workspace-run-detail').innerHTML;
+    expect(detailHtml).toContain('run-artifact-ids-only');
+    expect(detailHtml).toContain('2 artifacts');
+    expect(detailHtml).not.toContain('这个 workspace run 暂无输出文件。');
+    expect(detailHtml).toContain('输出文件元数据尚未加载');
+  });
+
+  test('renders upload-only message artifacts as attachments without a workspace run', async () => {
+    const harness = createPreviewHarness({});
+    harness.localStorage.setItem(
+      'agentbean-next-preview-session',
+      JSON.stringify({
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        team: { id: 'team-1', name: 'AgentBean' },
+        channel: { id: 'channel-1', name: 'all' },
+      }),
+    );
+
+    await harness.socket.trigger('channel:message', {
+      id: 'message-upload-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      senderKind: 'human',
+      body: 'see upload',
+      artifacts: [
+        {
+          id: 'artifact-upload-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          filename: 'notes.txt',
+          mimeType: 'text/plain',
+          sizeBytes: 12,
+          pathKind: 'upload',
+        },
+      ],
+    });
+
+    const html = harness.element('messages').innerHTML;
+    expect(html).toContain('消息附件');
+    expect(html).not.toContain('Workspace 输出');
+    expect(html).not.toContain('message-artifact-folder');
+    expect(html).toContain('notes.txt');
+    expect(html).toContain('/api/teams/team-1/artifacts/artifact-upload-1/preview?token=token-1');
+  });
+
   test('loads workspace run detail from a shareable preview URL', async () => {
     const harness = createPreviewHarness(
       {
