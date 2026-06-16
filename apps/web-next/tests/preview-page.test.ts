@@ -363,6 +363,45 @@ describe('web-next preview page interactions', () => {
     expect(harness.historyReplacements).toContain('/preview?workspaceRunId=run-1');
   });
 
+  test('renders upload-only message artifacts as attachments without a workspace run', async () => {
+    const harness = createPreviewHarness({});
+    harness.localStorage.setItem(
+      'agentbean-next-preview-session',
+      JSON.stringify({
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        team: { id: 'team-1', name: 'AgentBean' },
+        channel: { id: 'channel-1', name: 'all' },
+      }),
+    );
+
+    await harness.socket.trigger('channel:message', {
+      id: 'message-upload-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      senderKind: 'human',
+      body: 'see upload',
+      artifacts: [
+        {
+          id: 'artifact-upload-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          filename: 'notes.txt',
+          mimeType: 'text/plain',
+          sizeBytes: 12,
+          pathKind: 'upload',
+        },
+      ],
+    });
+
+    const html = harness.element('messages').innerHTML;
+    expect(html).toContain('消息附件');
+    expect(html).not.toContain('Workspace 输出');
+    expect(html).not.toContain('message-artifact-folder');
+    expect(html).toContain('notes.txt');
+    expect(html).toContain('/api/teams/team-1/artifacts/artifact-upload-1/preview?token=token-1');
+  });
+
   test('loads workspace run detail from a shareable preview URL', async () => {
     const harness = createPreviewHarness(
       {
