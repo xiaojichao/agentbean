@@ -91,7 +91,7 @@ export interface ServerNextUseCases {
   getArtifactFile(input: GetArtifactInput): Promise<Ack<{ artifact: ArtifactDto; storagePath?: string }>>;
   getWorkspaceRun(input: GetWorkspaceRunInput): Promise<Ack<{ workspaceRun: WorkspaceRunDto }>>;
   getWorkspaceRunDetail(input: GetWorkspaceRunInput): Promise<Ack<{ workspaceRun: WorkspaceRunDto; artifacts: ArtifactDto[] }>>;
-  listTeamWorkspaceRuns(input: ListTeamWorkspaceRunsInput): Promise<Ack<{ runs: TeamWorkspaceRunListItemDto[] }>>;
+  listTeamWorkspaceRuns(input: ListTeamWorkspaceRunsInput): Promise<Ack<{ runs: TeamWorkspaceRunListItemDto[]; nextCursor?: string }>>;
   listAgentWorkspaceRuns(input: ListAgentWorkspaceRunsInput): Promise<Ack<{ runs: AgentWorkspaceRunListItemDto[] }>>;
   failTimedOutDispatches(input: { olderThan: number }): Promise<Ack<{ dispatches: DispatchDto[] }>>;
   receiveDispatchResult(input: ReceiveDispatchResultInput): Promise<Ack<ReceiveDispatchResultResult>>;
@@ -417,6 +417,8 @@ export interface ListTeamWorkspaceRunsInput {
   agentId?: string;
   deviceId?: string;
   status?: WorkspaceRunStatus;
+  cursor?: string;
+  pageSize?: number;
 }
 
 export interface ListAgentWorkspaceRunsInput {
@@ -2098,15 +2100,28 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!(await repositories.teams.isMember(runInput.teamId, runInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
+      const pageSize = clampWorkspaceRunPageSize(runInput.pageSize);
+      let cursor: { updatedAt: number; id: string } | undefined;
+      if (runInput.cursor !== undefined) {
+        const decoded = decodeWorkspaceRunCursor(runInput.cursor);
+        if (decoded === 'invalid') {
+          return makeFailure('BAD_REQUEST', 'Invalid workspace run cursor');
+        }
+        cursor = decoded;
+      }
       const runs = await repositories.workspaceRuns.listByTeam({
         teamId: runInput.teamId,
-        limit: 300,
+        limit: pageSize * 10,
         agentId: runInput.agentId,
         deviceId: runInput.deviceId,
         status: runInput.status,
+        cursor,
       });
       const visibleRuns: TeamWorkspaceRunListItemDto[] = [];
       for (const run of runs) {
+        if (visibleRuns.length >= pageSize + 1) {
+          break;
+        }
         const channelAccess = await ensureUserCanViewChannel(repositories, {
           userId: runInput.userId,
           teamId: run.teamId,
@@ -2120,11 +2135,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           workspaceRun: run,
           artifacts: artifacts.map(toArtifactDto),
         });
-        if (visibleRuns.length >= 100) {
-          break;
-        }
       }
-      return makeSuccess({ runs: visibleRuns });
+      const hasMore = visibleRuns.length > pageSize;
+      const page = hasMore ? visibleRuns.slice(0, pageSize) : visibleRuns;
+      const lastVisibleRun = page.at(-1)?.workspaceRun;
+      const nextCursor =
+        hasMore && lastVisibleRun
+          ? encodeWorkspaceRunCursor({
+              updatedAt: lastVisibleRun.updatedAt,
+              id: lastVisibleRun.id,
+            })
+          : undefined;
+      return makeSuccess({ runs: page, nextCursor });
     },
 
     async listAgentWorkspaceRuns(runInput) {
@@ -3000,6 +3022,35 @@ function normalizeWorkspaceRunLogExcerpt(value: string | undefined): string | un
     return redacted;
   }
   return redacted.slice(redacted.length - WORKSPACE_RUN_LOG_EXCERPT_MAX_CHARS);
+}
+
+function clampWorkspaceRunPageSize(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return 30;
+  }
+  const n = Math.floor(value);
+  if (n < 1) return 1;
+  if (n > 100) return 100;
+  return n;
+}
+
+function encodeWorkspaceRunCursor(run: { updatedAt: number; id: string }): string {
+  return Buffer.from(`${run.updatedAt}:${run.id}`, 'utf8').toString('base64url');
+}
+
+function decodeWorkspaceRunCursor(cursor: string): { updatedAt: number; id: string } | 'invalid' {
+  let decoded: string;
+  try {
+    decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+  } catch {
+    return 'invalid';
+  }
+  const separator = decoded.lastIndexOf(':');
+  if (separator <= 0) return 'invalid';
+  const updatedAt = Number(decoded.slice(0, separator));
+  const id = decoded.slice(separator + 1);
+  if (!Number.isFinite(updatedAt) || !id) return 'invalid';
+  return { updatedAt, id };
 }
 
 async function resolveDispatchArtifactContent(

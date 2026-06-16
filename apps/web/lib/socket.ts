@@ -94,12 +94,15 @@ export async function fetchAgentWorkspace(networkId: string, agentId: string): P
 export async function fetchTeamWorkspaceRuns(
   teamId: string,
   filters?: { agentId?: string; deviceId?: string; status?: WorkspaceRunStatus },
-): Promise<{ ok: boolean; runs?: TeamWorkspaceRun[]; error?: string }> {
+  pagination?: { cursor?: string; pageSize?: number },
+): Promise<{ ok: boolean; runs?: TeamWorkspaceRun[]; nextCursor?: string; error?: string }> {
   try {
     const params = new URLSearchParams();
     if (filters?.agentId) params.set('agentId', filters.agentId);
     if (filters?.deviceId) params.set('deviceId', filters.deviceId);
     if (filters?.status) params.set('status', filters.status);
+    if (pagination?.cursor) params.set('cursor', pagination.cursor);
+    if (pagination?.pageSize) params.set('pageSize', String(pagination.pageSize));
     const query = params.toString();
     const res = await fetch(
       authedApiUrl(`/api/teams/${encodeURIComponent(teamId)}/workspace-runs${query ? `?${query}` : ''}`),

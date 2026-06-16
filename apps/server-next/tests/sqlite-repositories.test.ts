@@ -82,6 +82,19 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('applies workspace run pagination index migration', () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      globalDb.exec('SELECT 1');
+      expect(indexNames(teamDb, 'workspace_runs')).toContain('idx_workspace_runs_team_updated_id');
+      expect(teamDb.prepare("SELECT id FROM schema_migrations WHERE id = 'team/0007_workspace_run_pagination_index.sql'").get()).toEqual({
+        id: 'team/0007_workspace_run_pagination_index.sql',
+      });
+    } finally {
+      close();
+    }
+  });
+
   test('persists user join links and consumes them with SQLite', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
@@ -1194,6 +1207,131 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('workspaceRuns.listByTeam paginates by cursor on (updatedAt DESC, id DESC)', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const mk = (id: string, updatedAt: number): WorkspaceRunRecord => ({
+        id,
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        dispatchId: `d-${id}`,
+        agentId: 'agent-1',
+        deviceId: 'device-1',
+        status: 'succeeded',
+        createdAt: 1000,
+        updatedAt,
+        artifactIds: [],
+      });
+      // run-1 and run-2 share updatedAt=3000; id DESC breaks the tie (run-2 before run-1).
+      await repositories.workspaceRuns.create(mk('run-1', 3000));
+      await repositories.workspaceRuns.create(mk('run-2', 3000));
+      await repositories.workspaceRuns.create(mk('run-3', 2000));
+      await repositories.workspaceRuns.create(mk('run-4', 1000));
+
+      const ids = (runs: WorkspaceRunRecord[]) => runs.map((run) => run.id);
+
+      // First page (no cursor), limit 2: updatedAt DESC then id DESC.
+      expect(ids(await repositories.workspaceRuns.listByTeam({ teamId: 'team-1', limit: 2 }))).toEqual([
+        'run-2',
+        'run-1',
+      ]);
+
+      // Next page: cursor = last item (3000, run-1) -> strictly older.
+      expect(
+        ids(
+          await repositories.workspaceRuns.listByTeam({
+            teamId: 'team-1',
+            limit: 2,
+            cursor: { updatedAt: 3000, id: 'run-1' },
+          }),
+        ),
+      ).toEqual(['run-3', 'run-4']);
+
+      // cursor = (2000, run-3) -> only updatedAt < 2000 remains.
+      expect(
+        ids(
+          await repositories.workspaceRuns.listByTeam({
+            teamId: 'team-1',
+            limit: 10,
+            cursor: { updatedAt: 2000, id: 'run-3' },
+          }),
+        ),
+      ).toEqual(['run-4']);
+
+      // cursor = (3000, run-2) -> same updatedAt, id < run-2 (run-1) plus everything older.
+      expect(
+        ids(
+          await repositories.workspaceRuns.listByTeam({
+            teamId: 'team-1',
+            limit: 10,
+            cursor: { updatedAt: 3000, id: 'run-2' },
+          }),
+        ),
+      ).toEqual(['run-1', 'run-3', 'run-4']);
+    } finally {
+      close();
+    }
+  });
+
+  test('listTeamWorkspaceRuns paginates by pageSize with nextCursor and rejects invalid cursor', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const artifactContentStore = {
+        writeContent: vi.fn(async (input: { teamId: string; artifactId: string; filename: string; content: Buffer }) => ({
+          storagePath: `artifacts/${input.teamId}/${input.artifactId}/${input.filename}`,
+          sizeBytes: input.content.length,
+          sha256: 'sha',
+        })),
+      };
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 9000 },
+        ids: { nextId: createIds(Array.from({ length: 30 }, (_, index) => `seq-${index}`)) },
+        joinCodes: { nextCode: createIds(['join-code-1']) },
+        artifactContentStore,
+      });
+      const reg = await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'Bean' });
+      if (!reg.ok) throw new Error('register failed');
+      const userId = reg.user.id;
+      const teamId = reg.currentTeam.id;
+      const channelId = reg.defaultChannel.id;
+
+      // 4 runs, updatedAt DESC order: run-0 (4000) > run-1 (3000) > run-2 (2000) > run-3 (1000).
+      for (let i = 0; i < 4; i++) {
+        await repositories.workspaceRuns.create({
+          id: `run-${i}`,
+          teamId,
+          channelId,
+          dispatchId: `dispatch-${i}`,
+          agentId: 'agent-1',
+          status: 'succeeded',
+          createdAt: 1000 + i,
+          updatedAt: 4000 - i * 1000,
+          artifactIds: [],
+        });
+      }
+
+      const page1 = await app.listTeamWorkspaceRuns({ userId, teamId, pageSize: 2 });
+      expect(page1.ok).toBe(true);
+      if (!page1.ok) throw new Error('page1 failed');
+      expect(page1.runs.map((r) => r.workspaceRun.id)).toEqual(['run-0', 'run-1']);
+      expect(typeof page1.nextCursor).toBe('string');
+
+      const page2 = await app.listTeamWorkspaceRuns({ userId, teamId, pageSize: 2, cursor: page1.nextCursor });
+      expect(page2.ok).toBe(true);
+      if (!page2.ok) throw new Error('page2 failed');
+      expect(page2.runs.map((r) => r.workspaceRun.id)).toEqual(['run-2', 'run-3']);
+      expect(page2.nextCursor).toBeUndefined();
+
+      const bad = await app.listTeamWorkspaceRuns({ userId, teamId, cursor: '@@@' });
+      expect(bad).toMatchObject({ ok: false, error: 'BAD_REQUEST' });
+    } finally {
+      close();
+    }
+  });
+
   test('returns the existing artifact when an id conflict belongs to another team or channel', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
@@ -1429,6 +1567,13 @@ function tableNames(db: SqliteDatabase): string[] {
 function columnNames(db: SqliteDatabase, tableName: string): string[] {
   return db
     .prepare(`PRAGMA table_info(${tableName})`)
+    .all()
+    .map((row) => (row as { name: string }).name);
+}
+
+function indexNames(db: SqliteDatabase, tableName: string): string[] {
+  return db
+    .prepare(`PRAGMA index_list(${tableName})`)
     .all()
     .map((row) => (row as { name: string }).name);
 }
