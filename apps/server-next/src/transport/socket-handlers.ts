@@ -4,6 +4,12 @@ import type { ServerNextUseCases } from '../application/usecases.js';
 export interface AuthenticatedUserIdentity {
   hasToken: boolean;
   userId: string | null;
+  currentTeamId: string | null;
+}
+
+export interface AuthenticatedUserProvider {
+  (): Promise<AuthenticatedUserIdentity>;
+  setCurrentTeamId?(teamId: string | null): void;
 }
 
 export interface SocketLike {
@@ -15,9 +21,12 @@ export type SocketAck = (result: unknown) => void;
 export type SocketHandler = (payload: unknown, ack?: SocketAck) => Promise<void>;
 
 type UseCaseName = keyof ServerNextUseCases;
+type BindOptions = Pick<WebSocketHandlerOptions, 'authenticatedUser'> & {
+  currentTeamFromSession?: boolean;
+};
 
 export interface WebSocketHandlerOptions {
-  authenticatedUser?(): Promise<AuthenticatedUserIdentity>;
+  authenticatedUser?: AuthenticatedUserProvider;
   dispatch?(request: DispatchRequestDto & { id: string }): void;
   dispatchCancel?(request: DispatchRequestDto & { id: string }): void;
   dispatchStatus?(dispatch: unknown): void;
@@ -47,12 +56,22 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.team.list, app, 'listTeams', undefined, { authenticatedUser: options.authenticatedUser });
   const afterTeamMutation = (payload: unknown, result: unknown) =>
     options.afterTeamMutation?.(payload, result);
-  bind(socket, WEB_EVENTS.team.create, app, 'createTeam', afterTeamMutation, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.team.switch, app, 'switchTeam', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.team.create, app, 'createTeam', async (payload, result) => {
+    updateAuthenticatedCurrentTeam(options.authenticatedUser, result, 'team');
+    await afterTeamMutation(payload, result);
+  }, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.team.switch, app, 'switchTeam', (_payload, result) => {
+    updateAuthenticatedCurrentTeam(options.authenticatedUser, result, 'currentTeam');
+  }, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.team.update, app, 'updateTeam', afterTeamMutation, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.team.delete, app, 'deleteTeam', afterTeamMutation, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.join.create, app, 'createJoinLink', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.team.delete, app, 'deleteTeam', async (payload, result) => {
+    updateAuthenticatedCurrentTeam(options.authenticatedUser, result, 'fallbackTeam');
+    await afterTeamMutation(payload, result);
+  }, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.join.create, app, 'createJoinLink', undefined, { authenticatedUser: options.authenticatedUser, currentTeamFromSession: true });
   bind(socket, WEB_EVENTS.join.validate, app, 'validateJoinLink');
+  bind(socket, WEB_EVENTS.join.list, app, 'listJoinLinks', undefined, { authenticatedUser: options.authenticatedUser, currentTeamFromSession: true });
+  bind(socket, WEB_EVENTS.join.revoke, app, 'revokeJoinLink', undefined, { authenticatedUser: options.authenticatedUser, currentTeamFromSession: true });
   bind(socket, WEB_EVENTS.deviceInvite.create, app, 'createDeviceInvite', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.deviceInvite.complete, app, 'completeDeviceInvite', (payload, result) =>
     options.afterDeviceInviteComplete?.(payload, result), { authenticatedUser: options.authenticatedUser },
@@ -78,7 +97,7 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.channel.delete, app, 'deleteChannel', afterChannelMutation, { authenticatedUser: options.authenticatedUser });
   socket.on(WEB_EVENTS.channel.join, async (payload, ack) => {
     try {
-      const input = asChannelJoinInput(await withAuthenticatedUserId(payload, options.authenticatedUser));
+      const input = asChannelJoinInput(await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser }));
       if (!input) {
         ack?.(makeFailure('VALIDATION_ERROR', 'Invalid channel join payload'));
         return;
@@ -121,7 +140,7 @@ export function registerWebSocketHandlers(
   );
   socket.on(WEB_EVENTS.agent.unpublish, async (payload, ack) => {
     try {
-      const input = await withAuthenticatedUserId(payload, options.authenticatedUser);
+      const input = await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser });
       const result = await app.unpublishAgent(input as Parameters<ServerNextUseCases['unpublishAgent']>[0]);
       ack?.(result);
       await options.afterAgentMutation?.(withChannelTeamIds(input, [payloadString(input, 'targetTeamId')]), result);
@@ -134,7 +153,7 @@ export function registerWebSocketHandlers(
   );
   socket.on(WEB_EVENTS.agent.delete, async (payload, ack) => {
     try {
-      const input = await withAuthenticatedUserId(payload, options.authenticatedUser);
+      const input = await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser });
       const affectedTeamIds = await visibleAgentTeamIds(app, input);
       const result = await app.deleteAgent(input as Parameters<ServerNextUseCases['deleteAgent']>[0]);
       ack?.(result);
@@ -224,12 +243,12 @@ function bind(
   app: ServerNextUseCases,
   methodName: UseCaseName,
   afterResult?: (payload: unknown, result: unknown) => Promise<void> | void,
-  options: Pick<WebSocketHandlerOptions, 'authenticatedUser'> = {},
+  options: BindOptions = {},
 ): void {
   socket.on(event, async (payload, ack) => {
     try {
       const method = app[methodName] as (input: unknown) => Promise<unknown>;
-      const input = await withAuthenticatedUserId(payload, options.authenticatedUser);
+      const input = await withAuthenticatedUserId(payload, options);
       const result = await method(input);
       ack?.(result);
       await afterResult?.(input, result);
@@ -292,10 +311,36 @@ function socketErrorAck(error: unknown) {
   return makeFailure('INTERNAL_ERROR', error instanceof Error ? error.message : 'Unhandled socket handler error');
 }
 
+function updateAuthenticatedCurrentTeam(
+  authenticatedUser: AuthenticatedUserProvider | undefined,
+  result: unknown,
+  key: 'team' | 'currentTeam' | 'fallbackTeam',
+): void {
+  if (!isSuccessResult(result)) {
+    return;
+  }
+  const team = (result as Record<string, unknown>)[key];
+  if (team === null) {
+    authenticatedUser?.setCurrentTeamId?.(null);
+    return;
+  }
+  if (team && typeof team === 'object') {
+    const id = (team as { id?: unknown }).id;
+    if (typeof id === 'string') {
+      authenticatedUser?.setCurrentTeamId?.(id);
+    }
+  }
+}
+
+function isSuccessResult(result: unknown): result is { ok: true } {
+  return Boolean(result && typeof result === 'object' && (result as { ok?: unknown }).ok === true);
+}
+
 async function withAuthenticatedUserId(
   payload: unknown,
-  authenticatedUser?: () => Promise<AuthenticatedUserIdentity>,
+  options: BindOptions = {},
 ): Promise<unknown> {
+  const { authenticatedUser } = options;
   if (!payload || typeof payload !== 'object' || !authenticatedUser) {
     return payload;
   }
@@ -306,7 +351,11 @@ async function withAuthenticatedUserId(
   if (!auth.userId) {
     throw new UnauthenticatedSocketError();
   }
-  return { ...payload, userId: auth.userId };
+  const enriched: Record<string, unknown> = { ...payload, userId: auth.userId };
+  if (auth.currentTeamId && (options.currentTeamFromSession || enriched.teamId === undefined)) {
+    enriched.teamId = auth.currentTeamId;
+  }
+  return enriched;
 }
 
 export class UnauthenticatedSocketError extends Error {

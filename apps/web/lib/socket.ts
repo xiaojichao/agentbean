@@ -355,10 +355,10 @@ export function joinEvents(socket: Socket = getWebSocket()): JoinEvents {
       return emitWithTimeout(socket, WEB_EVENTS.join.create, payload);
     },
     list() {
-      return emitWithTimeout(socket, 'join:list', {});
+      return emitWithTimeout(socket, WEB_EVENTS.join.list, {});
     },
     revoke(payload) {
-      return emitWithTimeout(socket, 'join:revoke', payload);
+      return emitWithTimeout(socket, WEB_EVENTS.join.revoke, payload);
     },
     validate(payload) {
       return emitWithTimeout(socket, WEB_EVENTS.join.validate, payload);

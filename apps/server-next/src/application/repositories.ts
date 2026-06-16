@@ -127,6 +127,8 @@ export interface JoinLinkRepository {
   create(input: JoinLinkRecord): Promise<JoinLinkRecord>;
   getByCode(code: string): Promise<JoinLinkRecord | null>;
   incrementUses(code: string): Promise<JoinLinkRecord | null>;
+  listByTeam(teamId: ID): Promise<JoinLinkRecord[]>;
+  revoke(input: { teamId: ID; code: string; revokedAt: UnixMs }): Promise<JoinLinkRecord | null>;
 }
 
 export interface DeviceInviteRepository {

@@ -200,6 +200,20 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         joinLinks.set(code, updated);
         return updated;
       },
+      async listByTeam(teamId) {
+        return Array.from(joinLinks.values())
+          .filter((link) => link.teamId === teamId)
+          .sort((a, b) => b.createdAt - a.createdAt);
+      },
+      async revoke(input) {
+        const link = joinLinks.get(input.code);
+        if (!link || link.teamId !== input.teamId || link.revokedAt !== undefined) {
+          return null;
+        }
+        const updated = { ...link, revokedAt: input.revokedAt };
+        joinLinks.set(input.code, updated);
+        return updated;
+      },
     },
     deviceInvites: {
       async create(input) {

@@ -6,6 +6,7 @@ import {
   registerWebSocketHandlers,
   UnauthenticatedSocketError,
   type AuthenticatedUserIdentity,
+  type AuthenticatedUserProvider,
   type SocketLike,
 } from './socket-handlers.js';
 
@@ -544,25 +545,36 @@ function subscriptionErrorAck(error: unknown): { ok: false; error: string; messa
 function createAuthenticatedUserResolver(
   socket: SocketLike,
   app: ServerNextUseCases,
-): () => Promise<AuthenticatedUserIdentity> {
+): AuthenticatedUserProvider {
   let cached: AuthenticatedUserIdentity | undefined;
-  return async () => {
+  const resolve = (async () => {
     if (cached) {
       return cached;
     }
     const authToken = socketAuthToken(socket);
     if (!authToken.hasToken) {
-      cached = { hasToken: false, userId: null };
+      cached = { hasToken: false, userId: null, currentTeamId: null };
       return cached;
     }
     if (!authToken.token) {
-      cached = { hasToken: true, userId: null };
+      cached = { hasToken: true, userId: null, currentTeamId: null };
       return cached;
     }
     const result = await app.whoami({ token: authToken.token });
-    cached = { hasToken: true, userId: result.ok ? result.user.id : null };
+    cached = {
+      hasToken: true,
+      userId: result.ok ? result.user.id : null,
+      currentTeamId: result.ok ? (result.currentTeam?.id ?? null) : null,
+    };
     return cached;
+  }) as AuthenticatedUserProvider;
+  resolve.setCurrentTeamId = (teamId) => {
+    if (!cached || !cached.hasToken || !cached.userId) {
+      return;
+    }
+    cached = { ...cached, currentTeamId: teamId };
   };
+  return resolve;
 }
 
 function socketAuthToken(socket: SocketLike): { hasToken: boolean; token: string | null } {
