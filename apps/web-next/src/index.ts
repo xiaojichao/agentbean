@@ -13,6 +13,8 @@ import type {
   RuntimeDto,
   UpdateChannelCommandDto,
   CreateJoinLinkCommandDto,
+  ListJoinLinksCommandDto,
+  RevokeJoinLinkCommandDto,
   CreateDeviceInviteCommandDto,
   CompleteDeviceInviteCommandDto,
   ValidateJoinLinkCommandDto,
@@ -85,6 +87,8 @@ type SessionUnpublishAgentInput = Omit<UnpublishAgentCommandDto, 'userId'> & { u
 type SessionUpdateAgentConfigInput = Omit<UpdateAgentConfigCommandDto, 'userId'> & { userId?: string };
 type SessionDeleteAgentInput = Omit<DeleteAgentCommandDto, 'userId'> & { userId?: string };
 type SessionCreateJoinLinkInput = Omit<CreateJoinLinkCommandDto, 'userId'> & { userId?: string };
+type SessionListJoinLinksInput = Omit<ListJoinLinksCommandDto, 'userId'> & { userId?: string };
+type SessionRevokeJoinLinkInput = Omit<RevokeJoinLinkCommandDto, 'userId'> & { userId?: string };
 type SessionCreateDeviceInviteInput = Omit<CreateDeviceInviteCommandDto, 'userId'> & { userId?: string };
 type SessionCompleteDeviceInviteInput = Omit<CompleteDeviceInviteCommandDto, 'userId'> & { userId?: string };
 
@@ -97,6 +101,8 @@ export interface WebSocketClient {
   switchTeam(input: SwitchTeamInput): Promise<unknown>;
   createJoinLink(input: SessionCreateJoinLinkInput): Promise<unknown>;
   validateJoinLink(input: ValidateJoinLinkCommandDto): Promise<unknown>;
+  listJoinLinks(input: SessionListJoinLinksInput): Promise<unknown>;
+  revokeJoinLink(input: SessionRevokeJoinLinkInput): Promise<unknown>;
   createDeviceInvite(input: SessionCreateDeviceInviteInput): Promise<unknown>;
   completeDeviceInvite(input: SessionCompleteDeviceInviteInput): Promise<unknown>;
   listDevices(input: SubscribeInput, onSnapshot?: (devices: DeviceDto[]) => void): Promise<unknown>;
@@ -187,6 +193,12 @@ export function createWebSocketClient(transport: WebSocketTransport): WebSocketC
     },
     validateJoinLink(input) {
       return transport.emitWithAck(WEB_EVENTS.join.validate, input);
+    },
+    listJoinLinks(input) {
+      return transport.emitWithAck(WEB_EVENTS.join.list, input);
+    },
+    revokeJoinLink(input) {
+      return transport.emitWithAck(WEB_EVENTS.join.revoke, input);
     },
     createDeviceInvite(input) {
       return transport.emitWithAck(WEB_EVENTS.deviceInvite.create, input);
