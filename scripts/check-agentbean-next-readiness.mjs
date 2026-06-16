@@ -45,6 +45,15 @@ export function collectAgentBeanNextReadinessChecks({
       'AgentBean Next CI change detection must include root railway.json',
     ),
     check(
+      'ci-runs-on-main-push',
+      workflow.includes('push:') &&
+        workflow.includes('branches:') &&
+        workflow.includes('- main') &&
+        workflow.includes('pull_request:') &&
+        cutoverRunbook.includes('推送 `main` 触发生产部署'),
+      'CI/CD workflow must run automatically after changes land on main',
+    ),
+    check(
       'ci-runs-readiness-checker',
       workflow.includes('npm run check:agentbean-next-readiness'),
       'AgentBean Next CI must run the readiness checker before deploy/publish can continue',
@@ -109,7 +118,7 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes('AgentBean Next production smoke') &&
         workflow.includes("needs.validate-agentbean-next.result == 'success'") &&
         workflow.includes("needs.deploy.result == 'success' || needs.deploy.result == 'skipped'") &&
-        workflow.includes('AGENTBEAN_NEXT_ENTRY_URL: ${{ inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}') &&
+        workflow.includes("AGENTBEAN_NEXT_ENTRY_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}") &&
         workflow.includes('npm run smoke:agentbean-next-entry') &&
         workflow.includes('npm run smoke:agentbean-next-business') &&
         workflow.includes("github.event_name == 'workflow_dispatch' && inputs.run_agentbean_next_production_smoke") &&
@@ -173,7 +182,7 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes("AGENTBEAN_DEPLOY_TARGET: ${{ vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}") &&
         workflow.includes('AGENTBEAN_NEXT_DATA_DIR: ${{ vars.AGENTBEAN_NEXT_DATA_DIR }}') &&
         workflow.includes('AGENTBEAN_NEXT_AUDIT_ENTRY_URL: ${{ vars.AGENTBEAN_NEXT_ENTRY_URL }}') &&
-        workflow.includes('AGENTBEAN_NEXT_ENTRY_URL: ${{ inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}') &&
+        workflow.includes("AGENTBEAN_NEXT_ENTRY_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}") &&
         workflow.includes('AGENTBEAN_NEXT_SESSION_SECRET: ${{ secrets.AGENTBEAN_NEXT_SESSION_SECRET }}') &&
         workflow.includes('NPM_TOKEN: ${{ secrets.NPM_TOKEN }}') &&
         workflow.includes('RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}') &&
@@ -195,6 +204,14 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes('deploy_path="apps/server"') &&
         workflow.includes('deploy_path="."'),
       'CI deploy job must keep old|next deployment target gate',
+    ),
+    check(
+      'ci-deploys-production-on-main-push',
+      workflow.includes("if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run_production_deploy)") &&
+        workflow.includes('Deploy Railway backend') &&
+        workflow.includes('RAILWAY_TOKEN') &&
+        cutoverRunbook.includes('推送 `main` 触发生产部署'),
+      'CI deploy job must start automatically after a successful main push validation',
     ),
     check(
       'ci-bounds-railway-deploy-command',
@@ -294,6 +311,21 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes('Verify Railway AgentBean Next preflight') &&
         workflow.includes("!inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env"),
       'CI must allow explicitly syncing Railway Next runtime env without deploy or npm publish',
+    ),
+    check(
+      'ci-publishes-on-main-push',
+      workflow.includes("if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env)") &&
+        workflow.includes('Publish agent to npm') &&
+        workflow.includes('NPM_TOKEN') &&
+        cutoverRunbook.includes('推送 `main` 触发生产部署'),
+      'CI publish job must start automatically after a successful main push validation',
+    ),
+    check(
+      'ci-runs-next-production-smoke-after-main-push',
+      workflow.includes("github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AGENTBEAN_DEPLOY_TARGET == 'next'") &&
+        workflow.includes("AGENTBEAN_NEXT_ENTRY_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}") &&
+        cutoverRunbook.includes('push run 的 deploy 成功后自动运行 `AgentBean Next production smoke`'),
+      'CI must run AgentBean Next production smoke automatically after main-push deploys when the repository deploy target is next',
     ),
   ];
 
