@@ -363,6 +363,47 @@ describe('web-next preview page interactions', () => {
     expect(harness.historyReplacements).toContain('/preview?workspaceRunId=run-1');
   });
 
+  test('preserves workspace run artifactIds counts when artifact metadata is not hydrated', async () => {
+    const harness = createPreviewHarness({});
+
+    await harness.socket.trigger('channel:message', {
+      id: 'message-artifact-ids-only',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      senderKind: 'agent',
+      body: 'legacy report',
+      artifacts: [],
+      workspaceRun: {
+        id: 'run-artifact-ids-only',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        dispatchId: 'dispatch-1',
+        agentId: 'agent-1',
+        deviceId: 'device-1',
+        cwd: '/Users/shaw/AgentBean',
+        exitCode: 0,
+        startedAt: 1_000,
+        completedAt: 2_000,
+        status: 'succeeded',
+        artifactIds: ['artifact-legacy-1', 'artifact-legacy-2'],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    });
+
+    const html = harness.element('messages').innerHTML;
+    expect(html).toContain('Workspace run run-artifact-ids-only');
+    expect(html).toContain('2 artifacts');
+
+    await harness.click('messages', '[data-workspace-run-id]', { workspaceRunId: 'run-artifact-ids-only' });
+
+    const detailHtml = harness.element('workspace-run-detail').innerHTML;
+    expect(detailHtml).toContain('run-artifact-ids-only');
+    expect(detailHtml).toContain('2 artifacts');
+    expect(detailHtml).not.toContain('这个 workspace run 暂无输出文件。');
+    expect(detailHtml).toContain('输出文件元数据尚未加载');
+  });
+
   test('renders upload-only message artifacts as attachments without a workspace run', async () => {
     const harness = createPreviewHarness({});
     harness.localStorage.setItem(
