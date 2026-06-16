@@ -35,3 +35,15 @@ When using the GitHub publish/yeet workflow, the PR title must be a natural Chin
   在该目录里干活，**不要 `cd` 回主 worktree**。
 - worktree 的分支一旦被占用，其他 worktree（含主 worktree）物理上无法再 `checkout` 它（Git 报 `fatal: already used by worktree`），这是天然护栏——主动利用它来防止串台。
 - 任务完成或分支合并后，清理对应 worktree：`git worktree remove .worktrees/<分支名>`；已合并的本地分支用 `git branch -d` 删除。
+
+## Local Verification Contract
+
+TypeScript changes to `apps/server-next`, `apps/daemon-next`, `apps/web-next`, `apps/web`, or `packages/*` MUST run the matching `build:*` (tsc) in addition to `vitest` before claiming done:
+
+- `npm run build:server-next` after `apps/server-next` changes
+- `npm run build:daemon-next` after `apps/daemon-next` changes
+- `npm run build:web-next` after `apps/web-next` changes
+- `npm run build:contracts` / `npm run build:domain` after `packages/*` changes
+- `cd apps/web && npm run build` after `apps/web` changes
+
+Why: `vitest` transpiles with esbuild and skips type checking; strict-mode errors (e.g. `noUncheckedIndexedAccess` making `arr[i]` possibly `undefined`) only surface under `tsc`. Running only `vitest` hides build breaks (see PR #259 review P1).
