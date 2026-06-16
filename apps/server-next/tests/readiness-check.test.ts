@@ -15,6 +15,7 @@ describe('AgentBean Next readiness checker', () => {
       'railway-build-command',
       'railway-start-healthcheck',
       'ci-validates-root-railway-config',
+      'ci-runs-on-main-push',
       'ci-runs-readiness-checker',
       'ci-runs-production-readiness-before-next-deploy',
       'daemon-install-smoke-script',
@@ -31,6 +32,7 @@ describe('AgentBean Next readiness checker', () => {
       'ci-provides-production-env-for-production-smoke-audits',
       'ci-runs-daemon-install-smoke',
       'deploy-target-gate',
+      'ci-deploys-production-on-main-push',
       'ci-bounds-railway-deploy-command',
       'ready-to-flip-audit-script',
       'contracts-package-publishable',
@@ -41,6 +43,8 @@ describe('AgentBean Next readiness checker', () => {
       'ci-decouples-next-npm-publish-from-production-deploy',
       'ci-runs-railway-next-preflight-without-deploy',
       'ci-syncs-railway-next-env-without-deploy',
+      'ci-publishes-on-main-push',
+      'ci-runs-next-production-smoke-after-main-push',
     ]);
   });
 

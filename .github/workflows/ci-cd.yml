@@ -1,6 +1,9 @@
 name: CI/CD
 
 on:
+  push:
+    branches:
+      - main
   pull_request:
     branches:
       - main
@@ -258,7 +261,7 @@ jobs:
     needs:
       - validate
       - validate-agentbean-next
-    if: github.event_name == 'workflow_dispatch' && inputs.run_production_deploy
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run_production_deploy)
     timeout-minutes: 30
 
     env:
@@ -433,14 +436,14 @@ jobs:
     needs:
       - validate-agentbean-next
       - deploy
-    if: always() && needs.validate-agentbean-next.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') && github.event_name == 'workflow_dispatch' && inputs.run_agentbean_next_production_smoke
+    if: always() && needs.validate-agentbean-next.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') && ((github.event_name == 'workflow_dispatch' && inputs.run_agentbean_next_production_smoke) || (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AGENTBEAN_DEPLOY_TARGET == 'next'))
     timeout-minutes: 15
 
     env:
       AGENTBEAN_DEPLOY_TARGET: ${{ vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
       AGENTBEAN_NEXT_DATA_DIR: ${{ vars.AGENTBEAN_NEXT_DATA_DIR }}
       AGENTBEAN_NEXT_AUDIT_ENTRY_URL: ${{ vars.AGENTBEAN_NEXT_ENTRY_URL }}
-      AGENTBEAN_NEXT_ENTRY_URL: ${{ inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}
+      AGENTBEAN_NEXT_ENTRY_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}
       AGENTBEAN_NEXT_SESSION_SECRET: ${{ secrets.AGENTBEAN_NEXT_SESSION_SECRET }}
       GH_TOKEN: ${{ github.token }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -538,7 +541,7 @@ jobs:
     needs:
       - validate
       - validate-agentbean-next
-    if: github.event_name == 'workflow_dispatch' && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env)
     timeout-minutes: 15
 
     env:

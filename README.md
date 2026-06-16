@@ -303,16 +303,18 @@ npm run build
 
 ## CI/CD
 
-GitHub Actions 会在 push 到 `main` 时验证：
+GitHub Actions 会在 PR 和 push 到 `main` 时验证：
 
 - `apps/web`
 - `apps/server`
 - `apps/daemon`
+- `agentbean-next`、`apps/*-next` 与 `packages/*` 的 readiness、测试、build 和 smoke gate
 
-验证通过后：
+合并到 `main` 且验证通过后：
 
-- 发布 `@agentbean/daemon` 到 npm。
-- 尝试部署 Server 到 Railway。
+- 发布 `@agentbean/daemon` 到 npm；当 `AGENTBEAN_NPM_PUBLISH_TARGET=next` 时，也会发布 AgentBean Next 相关包。
+- 根据 `AGENTBEAN_DEPLOY_TARGET` 尝试部署旧 Server 或 AgentBean Next Server 到 Railway。
+- 当 `AGENTBEAN_DEPLOY_TARGET=next` 时，部署后自动运行 AgentBean Next production smoke。
 
 注意：Railway 偶发 `500 Internal Server Error` 会导致 deploy job 失败，这不代表 npm 发布失败。发布状态应以 npm registry 查询为准：
 
