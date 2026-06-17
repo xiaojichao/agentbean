@@ -349,13 +349,33 @@ export interface JoinEvents {
   validate(payload: { code: string }): Promise<{ ok: boolean; networkName?: string; expiresAt?: number | null; error?: string; message?: string }>;
 }
 
+// server 的 JoinLinkDto 只返回 code，不含 url；前端按 /join/[code] 路由构造完整邀请链接
+function joinLinkUrl(code: string): string {
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  return `${origin}/join/${code}`;
+}
+
 export function joinEvents(socket: Socket = getWebSocket()): JoinEvents {
   return {
     create(payload) {
-      return emitWithTimeout(socket, WEB_EVENTS.join.create, payload);
+      return emitWithTimeout(socket, WEB_EVENTS.join.create, payload).then((res) => {
+        if (res?.ok && res.link && !res.link.url) {
+          res.link.url = joinLinkUrl(res.link.code);
+        }
+        return res;
+      });
     },
     list() {
-      return emitWithTimeout(socket, WEB_EVENTS.join.list, {});
+      return emitWithTimeout(socket, WEB_EVENTS.join.list, {}).then((res) => {
+        if (res?.ok && Array.isArray(res.links)) {
+          for (const link of res.links) {
+            if (link && !link.url) {
+              link.url = joinLinkUrl(link.code);
+            }
+          }
+        }
+        return res;
+      });
     },
     revoke(payload) {
       return emitWithTimeout(socket, WEB_EVENTS.join.revoke, payload);
