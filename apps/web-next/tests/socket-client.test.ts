@@ -18,6 +18,8 @@ describe('web-next socket client', () => {
     await client.switchTeam({ userId: 'user-1', teamId: 'team-2' });
     await client.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
     await client.validateJoinLink({ code: 'join-1' });
+    await client.listJoinLinks({ userId: 'user-1', teamId: 'team-1' });
+    await client.revokeJoinLink({ userId: 'user-1', teamId: 'team-1', code: 'join-1' });
     await client.createDeviceInvite({ userId: 'user-1', teamId: 'team-1', profileId: 'agentbean-next' });
     await client.completeDeviceInvite({ userId: 'user-1', code: 'device-code-1' });
     await client.listDevices({ userId: 'user-1', teamId: 'team-1' });
@@ -114,6 +116,8 @@ describe('web-next socket client', () => {
       [WEB_EVENTS.team.switch, { userId: 'user-1', teamId: 'team-2' }],
       [WEB_EVENTS.join.create, { userId: 'user-1', teamId: 'team-1' }],
       [WEB_EVENTS.join.validate, { code: 'join-1' }],
+      [WEB_EVENTS.join.list, { userId: 'user-1', teamId: 'team-1' }],
+      [WEB_EVENTS.join.revoke, { userId: 'user-1', teamId: 'team-1', code: 'join-1' }],
       [WEB_EVENTS.deviceInvite.create, { userId: 'user-1', teamId: 'team-1', profileId: 'agentbean-next' }],
       [WEB_EVENTS.deviceInvite.complete, { userId: 'user-1', code: 'device-code-1' }],
       [WEB_EVENTS.device.list, { userId: 'user-1', teamId: 'team-1' }],
@@ -256,6 +260,8 @@ describe('web-next socket client', () => {
     await client.createTeam({ name: 'Ops Team' });
     await client.switchTeam({ teamId: 'team-2' });
     await client.createJoinLink({ teamId: 'team-1' });
+    await client.listJoinLinks({ teamId: 'team-1' });
+    await client.revokeJoinLink({ teamId: 'team-1', code: 'join-1' });
     await client.createDeviceInvite({ teamId: 'team-1' });
     await client.completeDeviceInvite({ code: 'device-code-1' });
     await client.subscribeChannels({ teamId: 'team-1' }, () => undefined);
@@ -277,6 +283,8 @@ describe('web-next socket client', () => {
       [WEB_EVENTS.team.create, { name: 'Ops Team' }],
       [WEB_EVENTS.team.switch, { teamId: 'team-2' }],
       [WEB_EVENTS.join.create, { teamId: 'team-1' }],
+      [WEB_EVENTS.join.list, { teamId: 'team-1' }],
+      [WEB_EVENTS.join.revoke, { teamId: 'team-1', code: 'join-1' }],
       [WEB_EVENTS.deviceInvite.create, { teamId: 'team-1' }],
       [WEB_EVENTS.deviceInvite.complete, { code: 'device-code-1' }],
       [WEB_EVENTS.channel.subscribe, { teamId: 'team-1' }],

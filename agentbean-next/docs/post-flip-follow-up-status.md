@@ -29,7 +29,7 @@
   - `task:list`、`task:create` 与 `task:update` 使用 server-side task model；assignee 第一版支持 team human member 或当前 team 可见 agent；preview 右侧工作区已有轻量任务入口；browser smoke 已覆盖 task create/status update/refresh restore。
 - Team/join/device invite 第一版。
   - `team:create`、`team:switch`、`join:create`、`join:validate`、`device-invite:create`、`device-invite:wait`、`device-invite:complete` 已有 contracts、use cases 与 tests。
-  - `join:list`、`join:revoke` 与 invite management UI 仍在后续 P2，不属于已收敛的第一版范围。
+  - `join:list` 与 `join:revoke` 的协议层（contracts 常量 + server-next handler + usecase + memory/sqlite repository）已由 #267 进入主线；web-next 客户端绑定与 invite management UI 仍在后续 P2。
 - Dispatch lifecycle 第一版。
   - `dispatch:cancel` 已进入 web/agent event contract；server-next runtime 会定期调度 `failTimedOutDispatches` 并广播 dispatch status。
 - Agent 管理面第一版。
@@ -38,6 +38,7 @@
   - `channel:archive` 与 `channel:delete` 已进入 contracts、server-next use cases/repositories 与 apps/web 客户端；server 侧覆盖 default channel 保护、creator 权限、archive 从列表隐藏、delete cascade。
 - DM/thread 第一版。
   - direct channel model、DM snapshot/history、thread id 继承与 dispatch history 去重已在 server-next 层落地。
+  - web thread UI 与 browser E2E 已在 thread UI slice（P4-26 / E2E-10）覆盖：preview 按 `threadId` 嵌套渲染讨论串并可回复。
 - Artifacts/workspace runs repository/usecase 第一版。
   - daemon `dispatch:result` 可以上报 artifact metadata 与 workspace run metadata；server-next 已做 team-scoped metadata authorization。
 - Saved messages 与 reactions 第一版。
@@ -97,7 +98,11 @@ P0 baseline 已经收敛，不应继续作为下一条产品切片 blocker。
 - Admin、metrics 与 audit requirements；`agent:metrics` request/ack 已有，但完整 admin/metrics/audit 产品面仍未冻结。
 - 更完整的 settings/device 页面，以及 member management 的浏览器级 smoke 覆盖。
 - Typed assignee、task 自动生成与更丰富的 task 产品流；delete/reorder 的协议与 usecase 第一版已收敛。
-- Join link management UI、`join:list` 与 `join:revoke`。
+- Join link management UI（web-next 客户端 list/revoke 绑定 + preview 邀请管理面板）；`join:list` / `join:revoke` 协议层已由 #267 落地。
+
+### npm canonical 入口 dist-tag
+
+canonical npm 包 `@agentbean/daemon` 已发布基于 daemon-next 的 `0.2.0`，但 npm `@latest` dist-tag 目前仍指向旧守护进程 `0.1.35`（2026-06-16 核对 `npm view @agentbean/daemon dist-tags` = `{ latest: '0.1.35' }`）。也就是说默认 `npm install @agentbean/daemon` 仍安装旧守护进程，daemon-next 只能通过显式 `@agentbean/daemon-next@0.2.0` / `@agentbean/daemon@0.2.0` 安装。根因：旧 `0.1.x` 仍在迭代并在发布时回占 `latest`。推进 `@latest` 到 daemon-next（并停止旧 `0.1.x` 回占 latest）是替换主线尚未收尾的一条 npm 用户入口边界，不属于 runtime/生产部署范畴。
 
 ## 下一步判定
 

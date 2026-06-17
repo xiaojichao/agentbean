@@ -171,6 +171,7 @@ Phase 3 完成标准：
 | P4-23 | web-next preview 的 workspace run 详情入口会写入 `workspaceRunId` URL，并能在刷新/直达该 URL 后通过 HTTP API 恢复详情。 | Web/HTTP | Workspace run detail 需要可分享、可恢复，而不是只能依赖当前消息 DOM 状态。 | `known-gaps.md`, `sixty-sixth-slice-status.md` |
 | P4-24 | web-next preview 右侧工作区提供 message search 表单，并通过 `message:search` 渲染结果。 | Web/Socket | 用户需要在 preview shell 内直接查找历史消息，而不是依赖当前 DOM 或浏览器查找。 | `known-gaps.md`, `sixty-seventh-slice-status.md` |
 | P4-25 | web-next preview 右侧工作区提供轻量 task create/list/status update 入口。 | Web/Socket | Tasks 第一版需要在 preview shell 内可见可操作，而不是只停留在 server API。 | `known-gaps.md`, `sixty-eighth-slice-status.md` |
+| P4-26 | web-next preview 按 `threadId` 将讨论串回复嵌套渲染在 root message 之下，root 提供「回复讨论串」按钮，message-form 在回复态携带 `threadId` 发送 thread reply。 | Web/Socket | Threads 第一版不能只在 server 层定义，用户必须在 preview shell 内看到嵌套讨论串并能回复。 | `known-gaps.md`, `seventieth-slice-status.md` |
 
 Phase 4 完成标准：
 
@@ -190,8 +191,9 @@ Phase 4 完成标准：
 | E2E-07 | `npm run smoke:agentbean-next-browser` 启动或连接 AgentBean Next 入口，用真实 Chrome 完成浏览器登录/session restore、刷新重订阅、custom agent 创建、message dispatch 与 agent reply 可见，并输出 console log 与截图 artifacts。 | Browser E2E/CI | 防止只依赖 DOM harness 与 Socket.IO smoke，把替代旧 AgentBean 的核心用户路径放进浏览器级证据。 | `post-flip-gap-audit.md`, `apps/web-next/tests/preview-page.test.ts`, `scripts/smoke-agentbean-next-business.mjs` |
 | E2E-08 | `npm run smoke:agentbean-next-browser` 在真实 Chrome 中选择 composer 文件、上传 artifact-backed human message、等待 viewer 渲染，并 fetch preview/download 链接校验 bytes。 | Browser E2E/CI | Artifact upload/viewer 不能只由 DOM harness 证明，必须在真实 browser/file input/HTTP route 链路中覆盖。 | `sixty-first-slice-status.md`, `scripts/smoke-agentbean-next-browser.mjs` |
 | E2E-09 | `npm run smoke:agentbean-next-browser` 在真实 Chrome 中通过 preview task form 创建 task、更新状态，并在刷新后通过 `task:list` 恢复同一 task。 | Browser E2E/CI | Tasks 第一版不能只由 usecase/socket/DOM harness 证明，必须覆盖真实浏览器 UI 与 session restore 路径。 | `sixty-ninth-slice-status.md`, `scripts/smoke-agentbean-next-browser.mjs` |
+| E2E-10 | `npm run smoke:agentbean-next-browser` 在真实 Chrome 中点击 root message 的「回复讨论串」按钮、输入 thread reply、提交，并断言 reply 嵌套在 root 之下（`.thread-reply`）。 | Browser E2E/CI | Thread UI 不能只由 DOM harness 证明，必须覆盖真实浏览器点击/输入/提交/嵌套渲染链路。 | `seventieth-slice-status.md`, `scripts/smoke-agentbean-next-browser.mjs` |
 
-当前 E2E-07、E2E-08 与 E2E-09 已进入 AgentBean Next CI gate。后续新增更完整 search、完整 task page、settings/member/device 等产品切片时，应在本节追加对应 browser-level gate，而不是把已有 browser smoke 误判为覆盖全部旧产品表面。
+当前 E2E-07、E2E-08、E2E-09 与 E2E-10 已进入 AgentBean Next CI gate。后续新增更完整 search、完整 task page、settings/member/device 等产品切片时，应在本节追加对应 browser-level gate，而不是把已有 browser smoke 误判为覆盖全部旧产品表面。
 
 只有对应 phase 的 E2E gates 通过后，该 phase 才可冻结。
 
@@ -199,7 +201,7 @@ Phase 4 完成标准：
 
 这些仍保留在 `docs/acceptance-tests.md` 中，但第一切片冻结前不强制要求：
 
-- Join link management UI、`join:list` 与 `join:revoke`。
+- Join link management UI（web-next 客户端 list/revoke 绑定 + preview 邀请管理面板）；`join:list` / `join:revoke` 协议层已由 #267 落地。
 - Admin。
 - Metrics。
 - Audit requirements。

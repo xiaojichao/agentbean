@@ -70,6 +70,9 @@ describe('web-next preview page interactions', () => {
     expect(html).toContain('消息搜索');
     expect(html).toContain('id="task-create-form"');
     expect(html).toContain('创建任务');
+    expect(html).toContain('.composer-thread-indicator:not([hidden])');
+    expect(html).toContain('id="join-link-panel"');
+    expect(html).toContain('邀请链接');
   });
 
   test('restores saved session through auth:whoami and resubscribes snapshots on connect', async () => {
@@ -115,6 +118,7 @@ describe('web-next preview page interactions', () => {
       ['agents:subscribe', { userId: 'user-1', teamId: 'team-1' }],
       ['channels:subscribe', { userId: 'user-1', teamId: 'team-1' }],
       ['task:list', { userId: 'user-1', teamId: 'team-1' }],
+      ['join:list', { userId: 'user-1', teamId: 'team-1' }],
     ]);
     expect(JSON.parse(harness.localStorage.getItem('agentbean-next-preview-session') ?? '{}')).toMatchObject({
       token: 'token-1',
@@ -147,6 +151,7 @@ describe('web-next preview page interactions', () => {
       ['agents:subscribe', { userId: 'user-1', teamId: 'team-1' }],
       ['channels:subscribe', { userId: 'user-1', teamId: 'team-1' }],
       ['task:list', { userId: 'user-1', teamId: 'team-1' }],
+      ['join:list', { userId: 'user-1', teamId: 'team-1' }],
     ]);
     expect(JSON.parse(harness.localStorage.getItem('agentbean-next-preview-session') ?? '{}')).toMatchObject({
       token: 'token-1',
@@ -663,6 +668,256 @@ describe('web-next preview page interactions', () => {
     ]);
     expect(harness.element('task-results').innerHTML).toContain('done');
   });
+
+  test('lists and revokes join links through the invite panel', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'join:list': () => ({
+        ok: true,
+        links: [
+          { id: 'join-1', code: 'ABC123', teamId: 'team-1', createdBy: 'user-1', createdAt: 1, maxUses: 1, usesCount: 0 },
+        ],
+      }),
+      'join:revoke': () => ({
+        ok: true,
+        link: { id: 'join-1', code: 'ABC123', teamId: 'team-1', createdBy: 'user-1', createdAt: 1, maxUses: 1, usesCount: 0, revokedAt: 2 },
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    expect(harness.emitted).toContainEqual(['join:list', { userId: 'user-1', teamId: 'team-1' }]);
+    expect(harness.element('join-link-results').innerHTML).toContain('ABC123');
+
+    await harness.click('join-link-results', 'button[data-join-code]', { joinCode: 'ABC123' });
+    expect(harness.emitted).toContainEqual([
+      'join:revoke',
+      { userId: 'user-1', teamId: 'team-1', code: 'ABC123' },
+    ]);
+  });
+
+  test('sends a thread reply and nests it under the root message', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'message:send': (payload) => ({
+        ok: true,
+        message: {
+          id: 'msg-reply-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          threadId: (payload as { threadId?: string }).threadId,
+          senderKind: 'human',
+          senderId: 'user-1',
+          body: 'thread reply body',
+          createdAt: 2_000,
+        },
+        dispatches: [],
+        route: { kind: 'none' },
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.socket.trigger('channel:message', {
+      id: 'msg-root-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'msg-root-1',
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: 'root body',
+      createdAt: 1_000,
+    });
+
+    const rootHtml = harness.element('messages').innerHTML;
+    expect(rootHtml).toContain('root body');
+    expect(rootHtml).toContain('data-thread-id="msg-root-1"');
+
+    await harness.click('messages', 'button[data-thread-id]', { threadId: 'msg-root-1' });
+    expect(harness.element('message-reply-indicator').hidden).toBe(false);
+
+    harness.element('message-form').fields.body = 'thread reply body';
+    await harness.submit('message-form');
+
+    expect(harness.emitted).toContainEqual([
+      'message:send',
+      expect.objectContaining({ threadId: 'msg-root-1', body: 'thread reply body' }),
+    ]);
+    const html = harness.element('messages').innerHTML;
+    expect(html).toContain('讨论串');
+    expect(html).toContain('thread reply body');
+    expect(html).toContain('<div class="thread-replies">');
+    expect(html.indexOf('root body')).toBeLessThan(html.indexOf('thread reply body'));
+    expect(harness.element('message-reply-indicator').hidden).toBe(true);
+  });
+
+  test('drops a stale thread reply target when the composer channel changes', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const otherChannel = { id: 'channel-2', name: 'ops', title: 'Ops', visibility: 'private' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel, otherChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'message:send': (payload) => ({
+        ok: true,
+        message: {
+          id: 'msg-channel-2',
+          teamId: 'team-1',
+          channelId: (payload as { channelId: string }).channelId,
+          senderKind: 'human',
+          senderId: 'user-1',
+          body: (payload as { body: string }).body,
+          createdAt: 2_000,
+        },
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel, otherChannel]);
+    await harness.socket.trigger('channel:message', {
+      id: 'msg-root-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'msg-root-1',
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: 'channel one root',
+      createdAt: 1_000,
+    });
+
+    await harness.click('messages', 'button[data-thread-id]', { threadId: 'msg-root-1' });
+    harness.element('message-form').fields.channelId = 'channel-2';
+    harness.element('message-form').fields.body = 'send to channel two';
+    await harness.submit('message-form');
+
+    expect(harness.emitted).toContainEqual([
+      'message:send',
+      expect.not.objectContaining({ threadId: 'msg-root-1' }),
+    ]);
+    expect(harness.emitted).toContainEqual([
+      'message:send',
+      expect.objectContaining({ channelId: 'channel-2', body: 'send to channel two' }),
+    ]);
+    expect(harness.element('message-reply-indicator').hidden).toBe(true);
+  });
+
+  test('deduplicates root messages before nesting thread replies', async () => {
+    const harness = createPreviewHarness({});
+
+    await harness.socket.trigger('channel:message', {
+      id: 'root-duplicate',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'root-duplicate',
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: 'root duplicate body',
+      createdAt: 1_000,
+    });
+    await harness.socket.trigger('channel:message', {
+      id: 'root-duplicate',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'root-duplicate',
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: 'root duplicate body',
+      createdAt: 1_000,
+    });
+    await harness.socket.trigger('channel:message', {
+      id: 'reply-once',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'root-duplicate',
+      senderKind: 'agent',
+      senderId: 'agent-1',
+      body: 'reply rendered once',
+      createdAt: 2_000,
+    });
+
+    const html = harness.element('messages').innerHTML;
+    expect(html.match(/root duplicate body/g)).toHaveLength(1);
+    expect(html.match(/reply rendered once/g)).toHaveLength(1);
+    expect(html).toContain('<div class="thread-replies">');
+  });
+
+  test('nests an agent reply that inherits the root threadId via channel:message', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.socket.trigger('channel:message', {
+      id: 'root-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'root-1',
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: 'root hello',
+      createdAt: 1_000,
+    });
+    await harness.socket.trigger('channel:message', {
+      id: 'agent-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'root-1',
+      senderKind: 'agent',
+      senderId: 'agent-1',
+      body: 'agent nested reply',
+      createdAt: 2_000,
+    });
+
+    const html = harness.element('messages').innerHTML;
+    expect(html).toContain('root hello');
+    expect(html).toContain('agent nested reply');
+    expect(html).toContain('thread-reply');
+    expect(html).toContain('讨论串');
+  });
 });
 
 function createPreviewHarness(
@@ -701,12 +956,18 @@ function createPreviewHarness(
     'messages',
     'task-results',
     'message-search-results',
+    'join-link-panel',
+    'join-link-create',
+    'join-link-refresh',
+    'join-link-results',
     'workspace-run-detail',
     'events',
     'session-summary',
     'team-display-name',
     'team-submit',
     'message-artifact-files',
+    'message-reply-indicator',
+    'message-reply-cancel',
   ]) {
     elements.set(id, createElement(id));
   }
