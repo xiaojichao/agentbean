@@ -2938,7 +2938,7 @@
           el("members-results").innerHTML = `<li class="rail-muted">暂无成员。点击刷新加载。</li>`;
           return;
         }
-        el("members-results").innerHTML = state.members.slice(0, 12).map((member) => {
+        el("members-results").innerHTML = state.members.map((member) => {
           const role = member.role || "member";
           const roleLabel = role === "owner" ? "拥有者" : role === "admin" ? "管理员" : "成员";
           const roleToggle = role === "member"
@@ -2985,6 +2985,9 @@
 
       async function transferOwner(targetUserId) {
         if (!state.user || !state.team || !targetUserId) return;
+        const target = state.members.find((member) => member.userId === targetUserId);
+        const label = target?.username || targetUserId;
+        if (!window.confirm(`转让拥有者给「${label}」会变更团队最高权限，确定继续吗？`)) return;
         const ack = await emit("member:transfer-owner", { userId: state.user.id, teamId: state.team.id, targetUserId });
         if (ack.ok) {
           state.membersError = null;
