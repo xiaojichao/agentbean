@@ -158,6 +158,15 @@ export async function runAgentBeanNextBrowserSmoke({
     await page.waitForText('#messages', `browser-smoke:${secondPrompt}`, timeoutMs);
     checks.push(check('browser-post-refresh-dispatch', true, 'Browser can dispatch and see replies after refresh'));
 
+    const threadSmoke = await exerciseThreadBrowserSmoke({ page, suffix, timeoutMs });
+    checks.push(
+      check(
+        'browser-thread-reply-nested',
+        true,
+        `Browser sent a thread reply (threadId=${threadSmoke.rootThreadId}) and it rendered nested under the root message`,
+      ),
+    );
+
     const taskSmoke = await exerciseTaskBrowserSmoke({ page, suffix, timeoutMs });
     checks.push(
       check('browser-task-create-visible', true, `Browser created and rendered task ${taskSmoke.title}`),
@@ -345,6 +354,52 @@ async function createSmokeBrowserSession({ baseUrl, ioFactory, suffix, timeoutMs
 async function sendBrowserMessage(page, body) {
   await page.setInputValue('#message-form [name="body"]', body);
   await page.click('#message-form button[type="submit"]');
+}
+
+export async function exerciseThreadBrowserSmoke({ page, suffix, timeoutMs }) {
+  await page.waitForFunction(
+    `document.querySelector('#messages button[data-thread-id]') !== null`,
+    'a root message renders a thread reply button',
+    timeoutMs,
+  );
+  const rootThreadId = await page.evaluateJson(`
+    (() => {
+      const btn = document.querySelector('#messages button[data-thread-id]');
+      return btn ? btn.dataset.threadId : null;
+    })()
+  `);
+  if (!rootThreadId) {
+    throw new Error('Browser smoke could not resolve a root thread id for the thread reply step');
+  }
+  await page.click('#messages button[data-thread-id]');
+  await page.waitForFunction(
+    `document.getElementById('message-reply-indicator') && document.getElementById('message-reply-indicator').hidden === false`,
+    'thread reply indicator shows after clicking reply',
+    timeoutMs,
+  );
+  const threadReplyBody = `browser-smoke:thread-reply:${suffix}`;
+  await sendBrowserMessage(page, threadReplyBody);
+  await page.waitForText('#messages', threadReplyBody, timeoutMs);
+  await page.waitForFunction(
+    `
+    (() => {
+      const rootThreadId = ${JSON.stringify(rootThreadId)};
+      const threadReplyBody = ${JSON.stringify(threadReplyBody)};
+      const replyButton = Array.from(document.querySelectorAll('#messages button[data-thread-id]'))
+        .find((button) => button.dataset.threadId === rootThreadId);
+      const rootMessage = replyButton?.closest('article.message');
+      const replies = rootMessage?.nextElementSibling;
+      return Boolean(
+        replies?.classList.contains('thread-replies')
+        && Array.from(replies.querySelectorAll('.thread-reply'))
+          .some((reply) => reply.textContent.includes(threadReplyBody)),
+      );
+    })()
+    `,
+    'new thread reply is nested under the selected root message',
+    timeoutMs,
+  );
+  return { rootThreadId, threadReplyBody };
 }
 
 export async function exerciseArtifactBrowserSmoke({ page, suffix, timeoutMs }) {
