@@ -1947,6 +1947,13 @@
           <div class="rail-heading"><h2>Workspace Run</h2><span class="meta">输出详情</span></div>
           <div class="rail-muted">选择消息里的 workspace run 查看详情。</div>
         </div>
+        <div class="panel" id="team-runs-panel">
+          <div class="rail-heading"><h2>团队运行</h2><span class="meta">workspace runs</span></div>
+          <div class="task-actions">
+            <button type="button" id="team-runs-refresh">刷新</button>
+          </div>
+          <ul class="search-results" id="team-runs-results"></ul>
+        </div>
         <form class="panel compact-form" id="task-create-form">
           <div class="rail-heading"><h2>任务</h2><span class="meta">first slice</span></div>
           <label>标题 <input name="title" placeholder="整理发布清单" /></label>
@@ -2054,6 +2061,9 @@
         savedMessages: [],
         savedError: null,
         savedLoading: false,
+        teamRuns: [],
+        teamRunsLoading: false,
+        teamRunsError: null,
         members: [],
         membersError: null,
         membersLoading: false,
@@ -2307,6 +2317,16 @@
         await listSavedMessages();
       });
 
+      el("team-runs-refresh").addEventListener("click", async () => {
+        await listTeamRuns();
+      });
+
+      el("team-runs-results").addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-workspace-run-id]");
+        if (!button) return;
+        void openWorkspaceRunDetail(button.dataset.workspaceRunId || null);
+      });
+
       el("members-refresh").addEventListener("click", async () => {
         await listMembers();
       });
@@ -2416,6 +2436,7 @@
         renderSearchResults();
         renderJoinLinks();
         renderSavedMessages();
+        renderTeamRuns();
         renderMembers();
         renderWorkspaceRunPanel();
         renderActiveChannel();
@@ -2998,6 +3019,55 @@
         }
       }
 
+      async function listTeamRuns() {
+        if (!state.team?.id || !state.token) return;
+        state.teamRunsLoading = true;
+        state.teamRunsError = null;
+        renderTeamRuns();
+        try {
+          const response = await fetch(`/api/teams/${encodeURIComponent(state.team.id)}/workspace-runs?token=${encodeURIComponent(state.token)}`);
+          const ack = await response.json();
+          addEvent("workspace-run:list", ack);
+          if (ack.ok && Array.isArray(ack.runs)) {
+            state.teamRuns = ack.runs;
+            state.teamRunsError = null;
+          } else {
+            state.teamRunsError = ack.message || ack.error || "加载运行列表失败。";
+          }
+        } catch (error) {
+          state.teamRunsError = error instanceof Error ? error.message : "加载运行列表失败。";
+        }
+        state.teamRunsLoading = false;
+        renderTeamRuns();
+      }
+
+      function renderTeamRuns() {
+        if (state.teamRunsLoading) {
+          el("team-runs-results").innerHTML = `<li class="rail-muted">运行列表加载中。</li>`;
+          return;
+        }
+        if (state.teamRunsError) {
+          el("team-runs-results").innerHTML = `<li class="rail-muted">${escapeHtml(state.teamRunsError)}</li>`;
+          return;
+        }
+        if (state.teamRuns.length === 0) {
+          el("team-runs-results").innerHTML = `<li class="rail-muted">暂无 workspace 运行。</li>`;
+          return;
+        }
+        el("team-runs-results").innerHTML = state.teamRuns.slice(0, 10).map((entry) => {
+          const run = entry.workspaceRun || {};
+          const artifacts = Array.isArray(entry.artifacts) ? entry.artifacts : [];
+          const status = run.status || "unknown";
+          const exit = typeof run.exitCode === "number" ? ` · exit ${run.exitCode}` : "";
+          const command = run.command || run.cwd || run.id;
+          return `<li class="search-result">
+            <div class="meta">${escapeHtml(status)}${escapeHtml(exit)} · ${artifacts.length} 文件</div>
+            <div class="message-body">${escapeHtml(command)}</div>
+            <div class="task-actions"><button type="button" data-workspace-run-id="${escapeHtml(run.id)}">查看详情</button></div>
+          </li>`;
+        }).join("");
+      }
+
       async function listSavedMessages() {
         if (!state.user || !state.team) return;
         state.savedLoading = true;
@@ -3495,6 +3565,9 @@
         state.savedMessages = [];
         state.savedError = null;
         state.savedLoading = false;
+        state.teamRuns = [];
+        state.teamRunsLoading = false;
+        state.teamRunsError = null;
         state.members = [];
         state.membersError = null;
         state.membersLoading = false;
