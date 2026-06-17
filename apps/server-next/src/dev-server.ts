@@ -245,7 +245,7 @@ async function handleAgentEnvHttp(input: ArtifactHttpInput): Promise<boolean> {
   }
   const teamId = decodeURIComponent(match[1] ?? '');
   const agentId = decodeURIComponent(match[2] ?? '');
-  const token = readToken(input.url, input.request);
+  const token = readBearerToken(input.request);
   if (!token) {
     writeJson(input.response, 401, { ok: false, error: 'UNAUTHENTICATED' });
     return true;
@@ -633,11 +633,14 @@ function trimTrailingLineBreak(value: Buffer): Buffer {
 }
 
 function readToken(url: URL, request: ArtifactHttpInput['request'], body: Record<string, unknown> = {}): string | undefined {
-  const auth = request.headers.authorization;
-  const bearer = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : undefined;
   const queryToken = url.searchParams.get('token') ?? undefined;
   const bodyToken = typeof body.token === 'string' ? body.token : undefined;
-  return bearer ?? queryToken ?? bodyToken;
+  return readBearerToken(request) ?? queryToken ?? bodyToken;
+}
+
+function readBearerToken(request: ArtifactHttpInput['request']): string | undefined {
+  const auth = request.headers.authorization;
+  return typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : undefined;
 }
 
 function readOptionalQueryString(url: URL, field: string): string | undefined {

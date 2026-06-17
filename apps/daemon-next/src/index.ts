@@ -134,7 +134,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           return;
         }
         try {
-          if (request.customAgent?.envRef && !request.customAgent.env && envResolver) {
+          if (request.customAgent?.envRef && !request.customAgent.env) {
+            if (!envResolver) {
+              throw new Error('Custom agent env resolver is not configured');
+            }
             const env = await envResolver(request.customAgent.envRef);
             request.customAgent = { ...request.customAgent, env };
           }

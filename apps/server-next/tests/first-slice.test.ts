@@ -1780,6 +1780,126 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('returns custom agent env only to the bound device token', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 610,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'device-invite-1',
+        'device-1',
+        'runtime-1',
+        'agent-1',
+        'user-2',
+        'team-2',
+        'channel-2',
+        'device-invite-2',
+        'device-2',
+      ]),
+      deviceInviteCodes: createIds(['device-code-1', 'device-code-2']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.createDeviceInvite({ userId: 'user-1', teamId: 'team-1', profileId: 'agentbean-next' });
+    await app.waitForDeviceInvite({
+      code: 'device-code-1',
+      machineId: 'machine-1',
+      profileId: 'agentbean-next',
+      hostname: 'shaw-mbp',
+    });
+    const completed = await app.completeDeviceInvite({
+      userId: 'user-1',
+      code: 'device-code-1',
+      serverUrl: 'http://127.0.0.1:4000',
+    });
+    if (!completed.ok) {
+      throw new Error('device invite completion failed');
+    }
+    await app.deviceHelloFromCredentials({
+      token: completed.credentials.token,
+      machineId: completed.credentials.machineId,
+      profileId: completed.credentials.profileId,
+      hostname: completed.credentials.hostname,
+    });
+    await app.reportDeviceRuntimes({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimes: [
+        {
+          adapterKind: 'codex',
+          name: 'Codex CLI',
+          command: '/opt/homebrew/bin/codex',
+          cwd: '/Users/shaw/AgentBean',
+          installed: true,
+        },
+      ],
+    });
+    await app.createCustomAgent({
+      userId: 'user-1',
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimeId: 'runtime-1',
+      name: 'Custom Codex',
+      env: { OPENAI_API_KEY: 'secret-value' },
+    });
+
+    await expect(
+      app.getAgentEnvForDevice({
+        token: completed.credentials.token,
+        teamId: 'team-1',
+        agentId: 'agent-1',
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      env: { OPENAI_API_KEY: 'secret-value' },
+    });
+
+    await expect(
+      app.getAgentEnvForDevice({
+        token: completed.credentials.token,
+        teamId: 'team-1',
+        agentId: 'missing-agent',
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: 'NOT_FOUND',
+    });
+
+    await app.registerUser({ username: 'outsider', password: 'secret', teamName: 'Other' });
+    await app.createDeviceInvite({ userId: 'user-2', teamId: 'team-2', profileId: 'agentbean-next' });
+    await app.waitForDeviceInvite({
+      code: 'device-code-2',
+      machineId: 'machine-1',
+      profileId: 'agentbean-next',
+      hostname: 'shaw-mbp',
+    });
+    const outsiderCompleted = await app.completeDeviceInvite({
+      userId: 'user-2',
+      code: 'device-code-2',
+      serverUrl: 'http://127.0.0.1:4000',
+    });
+    if (!outsiderCompleted.ok) {
+      throw new Error('outsider device invite completion failed');
+    }
+    await app.deviceHelloFromCredentials({
+      token: outsiderCompleted.credentials.token,
+      machineId: outsiderCompleted.credentials.machineId,
+      profileId: outsiderCompleted.credentials.profileId,
+      hostname: outsiderCompleted.credentials.hostname,
+    });
+
+    await expect(
+      app.getAgentEnvForDevice({
+        token: outsiderCompleted.credentials.token,
+        teamId: 'team-1',
+        agentId: 'agent-1',
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: 'UNAUTHENTICATED',
+    });
+  });
+
   test('manages custom agent publication, config, and delete without exposing secrets or removing history', async () => {
     const app = createInMemoryServerNext({
       now: () => 700,
