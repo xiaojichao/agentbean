@@ -225,13 +225,15 @@ describe('server-next first-slice use cases', () => {
     await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'public roadmap search' });
     await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-private', body: 'secret roadmap search' });
 
-    await expect(app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'roadmap' })).resolves.toMatchObject({
-      ok: true,
-      messages: [
+    const ownSearch = await app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'roadmap' });
+    expect(ownSearch).toMatchObject({ ok: true });
+    expect(ownSearch.messages).toHaveLength(2);
+    expect(ownSearch.messages.map((message) => ({ id: message.id, body: message.body }))).toEqual(
+      expect.arrayContaining([
         { id: 'message-private', body: 'secret roadmap search' },
         { id: 'message-public', body: 'public roadmap search' },
-      ],
-    });
+      ]),
+    );
     await expect(app.searchMessages({ userId: 'user-2', teamId: 'team-1', query: 'roadmap' })).resolves.toMatchObject({
       ok: true,
       messages: [
@@ -246,6 +248,27 @@ describe('server-next first-slice use cases', () => {
       ok: false,
       error: 'VALIDATION_ERROR',
     });
+  });
+
+  test('searchMessages requires all terms and ranks phrase matches above scattered matches', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 300,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'm-phrase', 'm-scattered', 'm-partial']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'the roadmap shipping plan' });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'roadmap needs more shipping' });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'roadmap only' });
+
+    const result = await app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'roadmap shipping' });
+    expect(result).toMatchObject({ ok: true });
+    // partial match (only "roadmap") is filtered out; both remaining messages contain every term.
+    expect(result.messages.map((message) => message.body)).toEqual([
+      'the roadmap shipping plan',
+      'roadmap needs more shipping',
+    ]);
+    // the phrase match ("roadmap shipping" contiguous) ranks above the scattered match.
+    expect(result.messages[0].body).toBe('the roadmap shipping plan');
   });
 
   test('searchMessages includes direct messages visible to the user without leaking to non-participants', async () => {
