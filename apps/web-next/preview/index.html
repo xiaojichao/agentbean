@@ -1978,6 +1978,13 @@
           <div class="rail-heading"><h2>成员</h2><span class="meta">human / agent</span></div>
           <ul class="list" id="agents"></ul>
         </div>
+        <div class="panel" id="members-panel">
+          <div class="rail-heading"><h2>成员管理</h2><span class="meta">roles</span></div>
+          <div class="task-actions">
+            <button type="button" id="members-refresh">刷新</button>
+          </div>
+          <ul class="search-results" id="members-results"></ul>
+        </div>
         <div class="panel">
           <div class="rail-heading"><h2>设备</h2><span class="meta">daemon</span></div>
           <ul class="list" id="devices"></ul>
@@ -2047,6 +2054,9 @@
         savedMessages: [],
         savedError: null,
         savedLoading: false,
+        members: [],
+        membersError: null,
+        membersLoading: false,
         activeWorkspaceRunId: readWorkspaceRunIdFromUrl(),
         workspaceRunDetails: {},
         workspaceRunDetailLoadingId: null,
@@ -2297,6 +2307,28 @@
         await listSavedMessages();
       });
 
+      el("members-refresh").addEventListener("click", async () => {
+        await listMembers();
+      });
+
+      el("members-results").addEventListener("click", async (event) => {
+        const roleBtn = event.target.closest("button[data-member-role]");
+        if (roleBtn) {
+          await updateMemberRole(roleBtn.dataset.memberRole, roleBtn.dataset.role);
+          return;
+        }
+        const removeBtn = event.target.closest("button[data-member-remove]");
+        if (removeBtn) {
+          await removeMember(removeBtn.dataset.memberRemove);
+          return;
+        }
+        const transferBtn = event.target.closest("button[data-member-transfer]");
+        if (transferBtn) {
+          await transferOwner(transferBtn.dataset.memberTransfer);
+          return;
+        }
+      });
+
       el("message-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         if (!state.user || !state.team || !state.channel) return;
@@ -2384,6 +2416,7 @@
         renderSearchResults();
         renderJoinLinks();
         renderSavedMessages();
+        renderMembers();
         renderWorkspaceRunPanel();
         renderActiveChannel();
         renderAuthState();
@@ -2874,6 +2907,95 @@
           state.joinError = ack.message || ack.error || "加载邀请失败。";
         }
         renderJoinLinks();
+      }
+
+      async function listMembers() {
+        if (!state.user || !state.team) return;
+        state.membersLoading = true;
+        state.membersError = null;
+        renderMembers();
+        const ack = await emit("members:list", { userId: state.user.id, teamId: state.team.id });
+        state.membersLoading = false;
+        if (ack.ok && Array.isArray(ack.humans)) {
+          state.members = ack.humans;
+          state.membersError = null;
+        } else {
+          state.membersError = ack.message || ack.error || "加载成员失败。";
+        }
+        renderMembers();
+      }
+
+      function renderMembers() {
+        if (state.membersLoading) {
+          el("members-results").innerHTML = `<li class="rail-muted">成员加载中。</li>`;
+          return;
+        }
+        if (state.membersError) {
+          el("members-results").innerHTML = `<li class="rail-muted">${escapeHtml(state.membersError)}</li>`;
+          return;
+        }
+        if (state.members.length === 0) {
+          el("members-results").innerHTML = `<li class="rail-muted">暂无成员。点击刷新加载。</li>`;
+          return;
+        }
+        el("members-results").innerHTML = state.members.map((member) => {
+          const role = member.role || "member";
+          const roleLabel = role === "owner" ? "拥有者" : role === "admin" ? "管理员" : "成员";
+          const roleToggle = role === "member"
+            ? `<button type="button" data-member-role="${escapeHtml(member.userId)}" data-role="admin">设为管理员</button>`
+            : role === "admin"
+            ? `<button type="button" data-member-role="${escapeHtml(member.userId)}" data-role="member">设为成员</button>`
+            : ``;
+          const transfer = role !== "owner"
+            ? `<button type="button" data-member-transfer="${escapeHtml(member.userId)}">转让拥有者</button>`
+            : ``;
+          const remove = role !== "owner"
+            ? `<button type="button" data-member-remove="${escapeHtml(member.userId)}">移除</button>`
+            : ``;
+          return `<li class="search-result">
+            <div class="meta">${escapeHtml(member.username || member.userId)} · ${roleLabel}</div>
+            <div class="task-actions">${roleToggle}${transfer}${remove}</div>
+          </li>`;
+        }).join("");
+      }
+
+      async function updateMemberRole(targetUserId, role) {
+        if (!state.user || !state.team || !targetUserId || !role) return;
+        const ack = await emit("member:update-role", { userId: state.user.id, teamId: state.team.id, targetUserId, role });
+        if (ack.ok && ack.member) {
+          state.members = state.members.map((member) => member.userId === ack.member.userId ? { ...member, role: ack.member.role } : member);
+          state.membersError = null;
+        } else {
+          state.membersError = ack.message || ack.error || "更新角色失败。";
+        }
+        renderMembers();
+      }
+
+      async function removeMember(targetUserId) {
+        if (!state.user || !state.team || !targetUserId) return;
+        const ack = await emit("member:remove", { userId: state.user.id, teamId: state.team.id, targetUserId });
+        if (ack.ok) {
+          state.members = state.members.filter((member) => member.userId !== targetUserId);
+          state.membersError = null;
+        } else {
+          state.membersError = ack.message || ack.error || "移除成员失败。";
+        }
+        renderMembers();
+      }
+
+      async function transferOwner(targetUserId) {
+        if (!state.user || !state.team || !targetUserId) return;
+        const target = state.members.find((member) => member.userId === targetUserId);
+        const label = target?.username || targetUserId;
+        if (!window.confirm(`转让拥有者给「${label}」会变更团队最高权限，确定继续吗？`)) return;
+        const ack = await emit("member:transfer-owner", { userId: state.user.id, teamId: state.team.id, targetUserId });
+        if (ack.ok) {
+          state.membersError = null;
+          await listMembers();
+        } else {
+          state.membersError = ack.message || ack.error || "转让拥有者失败。";
+          renderMembers();
+        }
       }
 
       async function listSavedMessages() {
@@ -3373,6 +3495,9 @@
         state.savedMessages = [];
         state.savedError = null;
         state.savedLoading = false;
+        state.members = [];
+        state.membersError = null;
+        state.membersLoading = false;
         state.workspaceRunDetails = {};
         state.workspaceRunDetailLoadingId = null;
         state.workspaceRunDetailError = null;
