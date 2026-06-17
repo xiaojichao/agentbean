@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS } from '../../../packages/contracts/src/index';
 import {
   createDaemonProtocolClient,
+  type DaemonDeviceConfig,
   type DaemonDispatchResult,
   type DispatchRequestPayload,
   type DaemonProtocolSocket,
@@ -147,6 +148,45 @@ describe('daemon-next protocol client', () => {
       [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-2', runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }] }],
       [AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-2', agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }] }],
     ]);
+  });
+
+  test('uses refreshed device credentials from hello acknowledgements for env resolution', async () => {
+    const socket = new FakeAgentSocket();
+    socket.helloAcks.push({
+      ok: true,
+      device: { id: 'device-1' },
+      credentials: { token: 'fresh-device-token' },
+    });
+    const device: DaemonDeviceConfig = { teamId: 'team-1', ownerId: 'user-1' };
+    const resolvedTokens: string[] = [];
+    const client = createDaemonProtocolClient({
+      socket,
+      executor: async () => 'ok',
+      device,
+      runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }],
+      agents: [{ name: 'Custom Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      envResolver: async () => {
+        resolvedTokens.push(device.token ?? '');
+        return { SECRET_TOKEN: 'secret-value' };
+      },
+    });
+
+    await client.start();
+    await socket.trigger(AGENT_EVENTS.dispatch.request, {
+      id: 'dispatch-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'hello',
+      customAgent: {
+        command: 'codex',
+        envRef: { agentId: 'agent-1', teamId: 'team-1' },
+      },
+    });
+
+    expect(resolvedTokens).toEqual(['fresh-device-token']);
   });
 
   test('handles targeted scan requests by reporting fresh runtimes and agents', async () => {
@@ -329,6 +369,55 @@ describe('daemon-next protocol client', () => {
     ]);
   });
 
+  test('does not execute a dispatch cancelled while env resolution is pending', async () => {
+    const socket = new FakeAgentSocket();
+    const executor = vi.fn(async () => 'ok');
+    let resolveEnv: ((env: Record<string, string>) => void) | undefined;
+    let envStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      envStarted = resolve;
+    });
+    const client = createDaemonProtocolClient({
+      socket,
+      executor,
+      device: { teamId: 'team-1', ownerId: 'user-1' },
+      runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }],
+      agents: [{ name: 'Custom Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      envResolver: async () => {
+        envStarted();
+        return new Promise((envResolve) => {
+          resolveEnv = envResolve;
+        });
+      },
+    });
+
+    await client.start();
+    const running = socket.trigger(AGENT_EVENTS.dispatch.request, {
+      id: 'dispatch-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'hello',
+      customAgent: {
+        command: 'codex',
+        envRef: { agentId: 'agent-1', teamId: 'team-1' },
+      },
+    });
+    await started;
+    await socket.trigger(AGENT_EVENTS.dispatch.cancel, {
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+    });
+    resolveEnv?.({ SECRET_TOKEN: 'secret-value' });
+    await running;
+
+    expect(executor).not.toHaveBeenCalled();
+    expect(socket.emitted.some(([event]) => event === AGENT_EVENTS.dispatch.result)).toBe(false);
+    expect(socket.emitted.some(([event]) => event === AGENT_EVENTS.dispatch.error)).toBe(false);
+  });
+
   test('ignores dispatch results after a cancel request', async () => {
     const socket = new FakeAgentSocket();
     let resolveExecutor: ((body: string) => void) | undefined;
@@ -415,6 +504,7 @@ describe('daemon-next protocol client', () => {
 
 class FakeAgentSocket implements DaemonProtocolSocket {
   readonly emitted: Array<[string, unknown]> = [];
+  readonly helloAcks: unknown[] = [];
   private readonly handlers = new Map<string, (payload: unknown) => Promise<void>>();
   private reconnectHandler: (() => Promise<void>) | undefined;
   private deviceCounter = 0;
@@ -422,6 +512,10 @@ class FakeAgentSocket implements DaemonProtocolSocket {
   async emitWithAck(event: string, payload: unknown): Promise<unknown> {
     this.emitted.push([event, payload]);
     if (event === AGENT_EVENTS.device.hello) {
+      const ack = this.helloAcks.shift();
+      if (ack) {
+        return ack;
+      }
       this.deviceCounter += 1;
       return { ok: true, device: { id: `device-${this.deviceCounter}` } };
     }

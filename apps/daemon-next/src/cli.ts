@@ -123,9 +123,12 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
     runtimes: snapshot.runtimes,
     agents: snapshot.agents,
     scan: createBuiltinScanProvider(),
-    envResolver: device.token
-      ? createHttpEnvResolver({ serverUrl: config.serverUrl, token: device.token })
-      : undefined,
+    envResolver: async (envRef) => {
+      if (!device.token) {
+        throw new Error('Custom agent env resolver is not configured');
+      }
+      return createHttpEnvResolver({ serverUrl: config.serverUrl, token: device.token })(envRef);
+    },
   }).start();
 }
 
