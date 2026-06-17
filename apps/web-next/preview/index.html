@@ -429,6 +429,24 @@
         justify-self: start;
         padding: 2px 8px;
       }
+      .message-actions {
+        display: inline-flex;
+        gap: 6px;
+      }
+      .message-action {
+        background: transparent;
+        border: 1px solid #e5e5e5;
+        border-radius: 999px;
+        color: #68747b;
+        font-size: 11px;
+        min-height: 0;
+        padding: 2px 8px;
+      }
+      .message-action.active {
+        background: #eff6ff;
+        border-color: #dbeafe;
+        color: #1e3a8a;
+      }
       .composer-thread-indicator {
         align-items: center;
         background: #eff6ff;
@@ -2014,6 +2032,7 @@
         searchError: null,
         searchLoading: false,
         replyThreadId: null,
+        reactedMessageIds: new Set(),
         replyChannelId: null,
         joinLinks: [],
         joinError: null,
@@ -2165,7 +2184,17 @@
         if (!row) return;
         await selectDevice(row.dataset.deviceId || null);
       });
-      el("messages").addEventListener("click", (event) => {
+      el("messages").addEventListener("click", async (event) => {
+        const reactBtn = event.target.closest("button[data-message-react]");
+        if (reactBtn) {
+          await reactMessage(reactBtn.dataset.messageReact);
+          return;
+        }
+        const saveBtn = event.target.closest("button[data-message-save]");
+        if (saveBtn) {
+          await saveMessage(saveBtn.dataset.messageSave);
+          return;
+        }
         const wsRun = event.target.closest("[data-workspace-run-id]");
         if (wsRun) {
           void openWorkspaceRunDetail(wsRun.dataset.workspaceRunId || null);
@@ -2545,6 +2574,13 @@
         const replyButton = !threaded
           ? `<button class="message-reply-btn" type="button" data-thread-id="${escapeHtml(message.threadId || message.id)}">回复讨论串</button>`
           : ``;
+        const reactCount = (message.reactionCounts && message.reactionCounts["👍"]) || 0;
+        const reacted = state.reactedMessageIds.has(message.id);
+        const saved = Boolean(message.saved);
+        const messageActions = `<span class="message-actions">
+          <button type="button" class="message-action${reacted ? " active" : ""}" data-message-react="${escapeHtml(message.id)}">👍 ${reactCount}</button>
+          <button type="button" class="message-action${saved ? " active" : ""}" data-message-save="${escapeHtml(message.id)}">${saved ? "★ 已收藏" : "☆ 收藏"}</button>
+        </span>`;
         const repliesHtml = replies && replies.length > 0
           ? `<div class="thread-replies">${replies
               .slice()
@@ -2557,7 +2593,49 @@
           <div class="message-body">${escapeHtml(message.body)}</div>
           ${artifacts}
           ${replyButton}
+          ${messageActions}
         </article>${repliesHtml}`;
+      }
+
+      function findMessage(messageId) {
+        return state.messages.find((message) => message.id === messageId);
+      }
+
+      async function reactMessage(messageId) {
+        if (!state.user || !state.team || !messageId) return;
+        const on = !state.reactedMessageIds.has(messageId);
+        const ack = await emit("message:react", {
+          userId: state.user.id,
+          teamId: state.team.id,
+          messageId,
+          emoji: "👍",
+          on,
+        });
+        if (!ack.ok) return;
+        if (on) state.reactedMessageIds.add(messageId); else state.reactedMessageIds.delete(messageId);
+        const message = findMessage(messageId);
+        if (message) {
+          const counts = { ...(message.reactionCounts || {}) };
+          counts["👍"] = Math.max(0, (counts["👍"] || 0) + (on ? 1 : -1));
+          message.reactionCounts = counts;
+        }
+        render();
+      }
+
+      async function saveMessage(messageId) {
+        if (!state.user || !state.team || !messageId) return;
+        const message = findMessage(messageId);
+        const on = message ? !message.saved : true;
+        const ack = await emit("message:save", {
+          userId: state.user.id,
+          teamId: state.team.id,
+          messageId,
+          on,
+        });
+        if (ack.ok && message) {
+          message.saved = on;
+          render();
+        }
       }
 
       async function searchMessages() {
