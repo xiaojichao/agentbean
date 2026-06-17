@@ -1548,7 +1548,9 @@ describe('server-next SQLite repositories', () => {
       if (request.ok) {
         expect(request.request.customAgent?.command).toBeUndefined();
         expect(request.request.customAgent?.cwd).toBeUndefined();
-        expect(request.request.customAgent?.env).toEqual({ OPENAI_API_KEY: 'new-secret' });
+        expect(request.request.customAgent?.envRef).toEqual({ agentId: 'agent-1', teamId: 'team-1' });
+        expect(request.request.customAgent?.env).toBeUndefined();
+        expect(JSON.stringify(request)).not.toContain('new-secret');
       }
       await app.deleteAgent({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' });
 

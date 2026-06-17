@@ -1583,7 +1583,7 @@ describe('server-next Socket.IO namespaces', () => {
         command: '/opt/homebrew/bin/codex',
         args: ['--model', 'gpt-5.4'],
         cwd: '/Users/shaw/AgentBean',
-        env: { OPENAI_API_KEY: 'secret-value' },
+        envRef: { agentId: 'agent-1', teamId: 'team-1' },
       },
     });
     expect(otherDispatches).toEqual([]);
