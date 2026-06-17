@@ -1483,6 +1483,67 @@ describe('web-next preview page interactions', () => {
     expect(harness.element('team-runs-results').innerHTML).toContain('npm test');
     expect(harness.element('team-runs-results').innerHTML).toContain('查看详情');
   });
+
+  test('paginates team workspace runs with a load-more control', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.click('team-runs-refresh', 'button', {});
+    expect(harness.element('team-runs-results').innerHTML).toContain('npm test');
+    expect(harness.element('team-runs-results').innerHTML).toContain('加载更多');
+
+    await harness.click('team-runs-results', 'button[data-team-runs-more]', {});
+    expect(harness.element('team-runs-results').innerHTML).toContain('npm run build');
+    expect(harness.element('team-runs-results').innerHTML).not.toContain('加载更多');
+    expect(harness.fetches.some((entry) => entry.url.includes('cursor=cursor-1'))).toBe(true);
+  });
+
+  test('ignores concurrent team workspace run load-more clicks', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.click('team-runs-refresh', 'button', {});
+    await Promise.all([
+      harness.click('team-runs-results', 'button[data-team-runs-more]', {}),
+      harness.click('team-runs-results', 'button[data-team-runs-more]', {}),
+    ]);
+
+    const cursorFetches = harness.fetches.filter((entry) => entry.url.includes('cursor=cursor-1'));
+    expect(cursorFetches).toHaveLength(1);
+    expect(harness.element('team-runs-results').innerHTML.match(/npm run build/g)).toHaveLength(1);
+  });
 });
 
 function createPreviewHarness(
@@ -1588,33 +1649,55 @@ function createPreviewHarness(
     fetch: async (url: string, init?: RequestInit) => {
       fetches.push({ url, init });
       if (url.includes('/workspace-runs') && !url.includes('/workspace-runs/')) {
+        const hasCursor = url.includes('cursor=');
         return {
           async json() {
             return {
               ok: true,
-              runs: [
-                {
-                  workspaceRun: {
-                    id: 'run-list-1',
-                    teamId: 'team-1',
-                    channelId: 'channel-1',
-                    dispatchId: 'dispatch-1',
-                    agentId: 'agent-1',
-                    deviceId: 'device-1',
-                    command: 'npm test',
-                    cwd: '/repo',
-                    exitCode: 0,
-                    status: 'succeeded',
-                    artifactIds: ['artifact-list-1'],
-                    createdAt: 1,
-                    updatedAt: 1,
-                  },
-                  artifacts: [
-                    { id: 'artifact-list-1', teamId: 'team-1', channelId: 'channel-1', workspaceRunId: 'run-list-1', filename: 'out.txt', mimeType: 'text/plain', sizeBytes: 5, relativePath: 'out.txt', pathKind: 'workspace' },
+              runs: hasCursor
+                ? [
+                    {
+                      workspaceRun: {
+                        id: 'run-list-2',
+                        teamId: 'team-1',
+                        channelId: 'channel-1',
+                        dispatchId: 'dispatch-2',
+                        agentId: 'agent-1',
+                        deviceId: 'device-1',
+                        command: 'npm run build',
+                        cwd: '/repo',
+                        exitCode: 1,
+                        status: 'failed',
+                        artifactIds: [],
+                        createdAt: 2,
+                        updatedAt: 2,
+                      },
+                      artifacts: [],
+                    },
+                  ]
+                : [
+                    {
+                      workspaceRun: {
+                        id: 'run-list-1',
+                        teamId: 'team-1',
+                        channelId: 'channel-1',
+                        dispatchId: 'dispatch-1',
+                        agentId: 'agent-1',
+                        deviceId: 'device-1',
+                        command: 'npm test',
+                        cwd: '/repo',
+                        exitCode: 0,
+                        status: 'succeeded',
+                        artifactIds: ['artifact-list-1'],
+                        createdAt: 1,
+                        updatedAt: 1,
+                      },
+                      artifacts: [
+                        { id: 'artifact-list-1', teamId: 'team-1', channelId: 'channel-1', workspaceRunId: 'run-list-1', filename: 'out.txt', mimeType: 'text/plain', sizeBytes: 5, relativePath: 'out.txt', pathKind: 'workspace' },
+                      ],
+                    },
                   ],
-                },
-              ],
-              nextCursor: null,
+              nextCursor: hasCursor ? null : 'cursor-1',
             };
           },
         };
