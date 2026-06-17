@@ -160,14 +160,18 @@ canonical npm 包 `@agentbean/daemon` 已发布基于 daemon-next 的 `0.2.0`，
 gh workflow run "CI/CD" \
   --repo xiaojichao/agentbean \
   --ref main \
-  -f promote_agentbean_daemon_latest=true
+  -f promote_agentbean_daemon_latest=true \
+  -f agentbean_npm_publish_target=next
 ```
 
 已确认：
 
-- `Promote canonical daemon npm latest` job 会执行，且仅在 `AGENTBEAN_NPM_PUBLISH_TARGET` 解析为 `next` 时才允许推进（rollback/old 模式会被拒绝）。
+- `Promote canonical daemon npm latest` job 会执行，且仅在 `AGENTBEAN_NPM_PUBLISH_TARGET` 解析为 `next` 时才允许推进（rollback/old 模式会被拒绝）；命令必须同时传入 `agentbean_npm_publish_target=next`，否则 workflow_dispatch 默认值会解析为 `old` 并被 gate 拒绝。
+- 如果 `NPM_TOKEN` 缺失，promote job 会失败而不是静默跳过，避免维护者看到绿色 workflow 却没有推进 npm `latest`。
 - job 读取 `apps/daemon-next/package.json` 的版本，校验对应 canonical `@agentbean/daemon@<version>` 已发布，再执行 `npm dist-tag add @agentbean/daemon@<version> latest`，最后回读 `dist-tags.latest` 校验已落到 daemon-next。
-- 当 `AGENTBEAN_NPM_PUBLISH_TARGET=next` 时，旧 `apps/daemon` 包以 `--tag legacy` 发布，不会再回占 npm `latest`；`npm install @agentbean/daemon@legacy` 仍可取到旧守护进程作 rollback。
+- promote job 会先把当前旧 `apps/daemon` 版本补打为 `@agentbean/daemon@legacy`，再推进 `latest` 到 daemon-next，确保 `npm install @agentbean/daemon@legacy` 在默认入口切换后仍可作为 rollback 入口。
+- 当 `AGENTBEAN_NPM_PUBLISH_TARGET=next` 时，旧 `apps/daemon` 包以 `--tag legacy` 发布，并会对已发布版本显式补打 `legacy` tag，不会再回占 npm `latest`。
+- strict cutover audit 在 final flip 后会要求 npm `@latest` dist-tag 已指向 daemon-next；如果只发布了 `@agentbean/daemon@0.2.0` 但没有推进 `latest`，production smoke 会继续失败。
 
 推进前后可用以下命令核对：
 

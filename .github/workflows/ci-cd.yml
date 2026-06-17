@@ -578,6 +578,7 @@ jobs:
           npm --workspaces=false ci
           npm --workspaces=false run build
           PKG_VERSION="$(node -p "require('./package.json').version")"
+          echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
           if npm view "@agentbean/daemon@$PKG_VERSION" version >/dev/null 2>&1; then
             echo "::notice::@agentbean/daemon@$PKG_VERSION is already published; skipping npm publish."
             echo "should_publish=false" >> "$GITHUB_OUTPUT"
@@ -596,6 +597,27 @@ jobs:
             npm publish --access public --tag legacy
           else
             npm publish --access public
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Ensure legacy daemon rollback dist-tag
+        if: env.NPM_TOKEN != '' && env.AGENTBEAN_NPM_PUBLISH_TARGET == 'next'
+        run: |
+          LEGACY_VERSION="${{ steps.agent-package.outputs.pkg_version }}"
+          if [ -z "$LEGACY_VERSION" ]; then
+            echo "::error::Could not resolve legacy daemon package version."
+            exit 1
+          fi
+          if ! npm view "@agentbean/daemon@$LEGACY_VERSION" version >/dev/null 2>&1; then
+            echo "::error::@agentbean/daemon@$LEGACY_VERSION is not published; cannot create rollback legacy dist-tag."
+            exit 1
+          fi
+          npm dist-tag add "@agentbean/daemon@$LEGACY_VERSION" legacy
+          LEGACY_TAG="$(npm view "@agentbean/daemon" dist-tags --json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).legacy || ''")"
+          if [ "$LEGACY_TAG" != "$LEGACY_VERSION" ]; then
+            echo "::error::npm legacy ($LEGACY_TAG) does not match legacy daemon ($LEGACY_VERSION)."
+            exit 1
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -674,6 +696,12 @@ jobs:
       AGENTBEAN_NPM_PUBLISH_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.agentbean_npm_publish_target || vars.AGENTBEAN_NPM_PUBLISH_TARGET || vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
 
     steps:
+      - name: Require NPM_TOKEN for latest promotion
+        if: env.NPM_TOKEN == ''
+        run: |
+          echo "::error::NPM_TOKEN is required when promote_agentbean_daemon_latest=true; latest promotion cannot be skipped silently."
+          exit 1
+
       - name: Check out repository
         if: env.NPM_TOKEN != ''
         uses: actions/checkout@v6
@@ -702,6 +730,24 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Ensure legacy daemon rollback tag before latest promotion
+        if: env.NPM_TOKEN != ''
+        run: |
+          LEGACY_DAEMON_VERSION="$(node -p "require('./apps/daemon/package.json').version")"
+          if ! npm view "@agentbean/daemon@$LEGACY_DAEMON_VERSION" version >/dev/null 2>&1; then
+            echo "::error::@agentbean/daemon@$LEGACY_DAEMON_VERSION is not published; cannot create rollback legacy dist-tag before promoting latest."
+            exit 1
+          fi
+          npm dist-tag add "@agentbean/daemon@$LEGACY_DAEMON_VERSION" legacy
+          LEGACY_TAG="$(npm view "@agentbean/daemon" dist-tags --json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).legacy || ''")"
+          echo "npm @agentbean/daemon dist-tags.legacy=$LEGACY_TAG"
+          if [ "$LEGACY_TAG" != "$LEGACY_DAEMON_VERSION" ]; then
+            echo "::error::npm legacy ($LEGACY_TAG) does not match legacy daemon ($LEGACY_DAEMON_VERSION)."
+            exit 1
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Promote canonical daemon to npm latest
         if: env.NPM_TOKEN != ''
         run: |
@@ -721,7 +767,3 @@ jobs:
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Skip when NPM_TOKEN absent
-        if: env.NPM_TOKEN == ''
-        run: echo "::notice::NPM_TOKEN is not configured; skipping npm latest promotion."

@@ -47,6 +47,7 @@ describe('AgentBean Next readiness checker', () => {
       'ci-runs-next-production-smoke-after-main-push',
       'ci-promotes-canonical-daemon-latest-on-demand',
       'ci-legacy-daemon-does-not-reclaim-latest-when-next',
+      'cutover-audit-requires-canonical-daemon-latest',
     ]);
   });
 

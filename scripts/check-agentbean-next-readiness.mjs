@@ -332,6 +332,11 @@ export function collectAgentBeanNextReadinessChecks({
       workflow.includes('promote_agentbean_daemon_latest') &&
         workflow.includes('Promote canonical daemon npm latest') &&
         workflow.includes("if: github.event_name == 'workflow_dispatch' && inputs.promote_agentbean_daemon_latest") &&
+        workflow.includes('Require NPM_TOKEN for latest promotion') &&
+        workflow.includes('NPM_TOKEN is required when promote_agentbean_daemon_latest=true') &&
+        workflow.includes('Ensure legacy daemon rollback tag before latest promotion') &&
+        workflow.indexOf('Ensure legacy daemon rollback tag before latest promotion') <
+          workflow.indexOf('Promote canonical daemon to npm latest') &&
         workflow.includes('npm dist-tag add') &&
         workflow.includes('Verify npm latest points to daemon-next'),
       'CI must expose an explicit, gated workflow_dispatch to promote canonical @agentbean/daemon npm latest to the daemon-next version, so the default npm install entry can be flipped to next on demand',
@@ -339,8 +344,18 @@ export function collectAgentBeanNextReadinessChecks({
     check(
       'ci-legacy-daemon-does-not-reclaim-latest-when-next',
       workflow.includes('npm publish --access public --tag legacy') &&
-        workflow.includes('AGENTBEAN_NPM_PUBLISH_TARGET" = "next"'),
+        workflow.includes('AGENTBEAN_NPM_PUBLISH_TARGET" = "next"') &&
+        workflow.includes('Ensure legacy daemon rollback dist-tag') &&
+        workflow.includes('npm dist-tag add "@agentbean/daemon@$LEGACY_VERSION" legacy'),
       'When npm publish target is next, the legacy apps/daemon package must publish under a non-latest dist-tag so it cannot reclaim the canonical @agentbean/daemon npm latest entry',
+    ),
+    check(
+      'cutover-audit-requires-canonical-daemon-latest',
+      workflow.includes('Run AgentBean Next strict cutover audit') &&
+        workflow.includes('npm run audit:agentbean-next-cutover') &&
+        cutoverRunbook.includes('npm `@latest` dist-tag 已指向 daemon-next') &&
+        readFileSync(join(root, 'scripts/audit-agentbean-next-cutover.mjs'), 'utf8').includes('npm-canonical-daemon-latest-dist-tag'),
+      'Strict cutover audit must require npm @agentbean/daemon dist-tags.latest to point at the daemon-next canonical version before declaring final replacement readiness',
     ),
   ];
 
