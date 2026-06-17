@@ -409,10 +409,12 @@
         border: 1px solid #dbeafe;
         border-radius: 6px;
         color: #1e3a8a;
-        display: flex;
         font-size: 12px;
         gap: 8px;
         padding: 4px 8px;
+      }
+      .composer-thread-indicator:not([hidden]) {
+        display: flex;
       }
       .message-head {
         align-items: center;
@@ -1968,6 +1970,7 @@
         searchError: null,
         searchLoading: false,
         replyThreadId: null,
+        replyChannelId: null,
         activeWorkspaceRunId: readWorkspaceRunIdFromUrl(),
         workspaceRunDetails: {},
         workspaceRunDetailLoadingId: null,
@@ -2011,7 +2014,11 @@
       });
       socket.on("channels:snapshot", (channels) => {
         state.channels = channels || [];
+        const previousChannelId = state.channel?.id || null;
         state.channel = state.channels.find((channel) => channel.id === state.channel?.id) || state.channels[0] || state.channel;
+        if (previousChannelId && state.channel?.id !== previousChannelId) {
+          clearReplyState();
+        }
         saveSession();
         render();
       });
@@ -2087,7 +2094,11 @@
         if (!row) return;
         const channel = state.channels.find((item) => item.id === row.dataset.channelId);
         if (!channel) return;
+        const previousChannelId = state.channel?.id || null;
         state.channel = channel;
+        if (previousChannelId !== channel.id) {
+          clearReplyState();
+        }
         saveSession();
         render();
       });
@@ -2106,15 +2117,22 @@
         const replyBtn = event.target.closest("button[data-thread-id]");
         if (replyBtn) {
           state.replyThreadId = replyBtn.dataset.threadId || null;
+          const message = replyBtn.closest?.("article[data-message-channel-id]");
+          state.replyChannelId = message?.dataset.messageChannelId || state.channel?.id || null;
           renderReplyIndicator();
           el("message-form").querySelector?.('[name="body"]')?.focus();
         }
       });
 
       el("message-reply-cancel").addEventListener("click", () => {
-        state.replyThreadId = null;
-        renderReplyIndicator();
+        clearReplyState();
       });
+
+      function clearReplyState() {
+        state.replyThreadId = null;
+        state.replyChannelId = null;
+        renderReplyIndicator();
+      }
 
       function renderReplyIndicator() {
         el("message-reply-indicator").hidden = !state.replyThreadId;
@@ -2141,6 +2159,10 @@
         if (!state.user || !state.team || !state.channel) return;
         const data = Object.fromEntries(new FormData(event.currentTarget));
         const channelId = data.channelId || state.channel.id;
+        const threadId = state.replyThreadId && state.replyChannelId === channelId ? state.replyThreadId : null;
+        if (state.replyThreadId && !threadId) {
+          clearReplyState();
+        }
         const uploadedArtifacts = await uploadSelectedArtifacts(channelId);
         if (!uploadedArtifacts) return;
         const ack = await emit("message:send", {
@@ -2148,13 +2170,12 @@
           teamId: state.team.id,
           channelId,
           body: data.body,
-          ...(state.replyThreadId ? { threadId: state.replyThreadId } : {}),
+          ...(threadId ? { threadId } : {}),
           ...(uploadedArtifacts.length > 0 ? { artifactIds: uploadedArtifacts.map((artifact) => artifact.id) } : {}),
         });
         if (ack.ok && ack.message) {
           state.messages.push(ack.message);
-          state.replyThreadId = null;
-          renderReplyIndicator();
+          clearReplyState();
           el("message-artifact-files").value = "";
           render();
         }
@@ -2219,6 +2240,7 @@
         renderWorkspaceRunPanel();
         renderActiveChannel();
         renderAuthState();
+        renderReplyIndicator();
         fillSelect("agent-create-form", "deviceId", visibleDevices, (device) => [device.id, device.name || device.id]);
         fillSelect("agent-create-form", "runtimeId", selectedRuntimes, (runtime) => [runtime.id, runtime.name]);
         fillSelect("message-form", "channelId", state.channels, (channel) => [channel.id, channel.title || channel.name]);
@@ -2284,7 +2306,7 @@
         }
         const repliesByThread = new Map();
         const roots = [];
-        for (const message of state.messages) {
+        for (const message of uniqueMessagesById(state.messages)) {
           const isRoot = !message.threadId || message.threadId === message.id;
           if (isRoot) {
             roots.push(message);
@@ -2307,6 +2329,16 @@
         el("messages").parentElement.scrollTop = el("messages").parentElement.scrollHeight;
       }
 
+      function uniqueMessagesById(messages) {
+        const seenIds = new Set();
+        return messages.filter((message) => {
+          if (!message?.id) return true;
+          if (seenIds.has(message.id)) return false;
+          seenIds.add(message.id);
+          return true;
+        });
+      }
+
       function renderMessage(message, { threaded, replies }) {
         const kind = message.senderKind || "system";
         const speaker = kind === "human" ? "你" : kind === "agent" ? "Agent" : "系统";
@@ -2323,7 +2355,7 @@
               .map((reply) => renderMessage(reply, { threaded: true, replies: [] }))
               .join("")}</div>`
           : ``;
-        return `<article class="message ${escapeHtml(kind)}${threaded ? " thread-reply" : ""}" data-message-id="${escapeHtml(message.id)}">
+        return `<article class="message ${escapeHtml(kind)}${threaded ? " thread-reply" : ""}" data-message-id="${escapeHtml(message.id)}" data-message-channel-id="${escapeHtml(message.channelId || "")}">
           <div class="message-head">${threadBadge}<span class="message-speaker">${speaker}</span><span>${escapeHtml(time)}</span></div>
           <div class="message-body">${escapeHtml(message.body)}</div>
           ${artifacts}

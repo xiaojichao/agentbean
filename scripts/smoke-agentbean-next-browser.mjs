@@ -381,8 +381,22 @@ export async function exerciseThreadBrowserSmoke({ page, suffix, timeoutMs }) {
   await sendBrowserMessage(page, threadReplyBody);
   await page.waitForText('#messages', threadReplyBody, timeoutMs);
   await page.waitForFunction(
-    `document.querySelector('#messages .thread-reply') !== null`,
-    'thread reply is nested under the root message',
+    `
+    (() => {
+      const rootThreadId = ${JSON.stringify(rootThreadId)};
+      const threadReplyBody = ${JSON.stringify(threadReplyBody)};
+      const replyButton = Array.from(document.querySelectorAll('#messages button[data-thread-id]'))
+        .find((button) => button.dataset.threadId === rootThreadId);
+      const rootMessage = replyButton?.closest('article.message');
+      const replies = rootMessage?.nextElementSibling;
+      return Boolean(
+        replies?.classList.contains('thread-replies')
+        && Array.from(replies.querySelectorAll('.thread-reply'))
+          .some((reply) => reply.textContent.includes(threadReplyBody)),
+      );
+    })()
+    `,
+    'new thread reply is nested under the selected root message',
     timeoutMs,
   );
   return { rootThreadId, threadReplyBody };

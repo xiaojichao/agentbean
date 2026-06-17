@@ -70,6 +70,7 @@ describe('web-next preview page interactions', () => {
     expect(html).toContain('消息搜索');
     expect(html).toContain('id="task-create-form"');
     expect(html).toContain('创建任务');
+    expect(html).toContain('.composer-thread-indicator:not([hidden])');
   });
 
   test('restores saved session through auth:whoami and resubscribes snapshots on connect', async () => {
@@ -729,6 +730,104 @@ describe('web-next preview page interactions', () => {
     expect(html).toContain('<div class="thread-replies">');
     expect(html.indexOf('root body')).toBeLessThan(html.indexOf('thread reply body'));
     expect(harness.element('message-reply-indicator').hidden).toBe(true);
+  });
+
+  test('drops a stale thread reply target when the composer channel changes', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const otherChannel = { id: 'channel-2', name: 'ops', title: 'Ops', visibility: 'private' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel, otherChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'message:send': (payload) => ({
+        ok: true,
+        message: {
+          id: 'msg-channel-2',
+          teamId: 'team-1',
+          channelId: (payload as { channelId: string }).channelId,
+          senderKind: 'human',
+          senderId: 'user-1',
+          body: (payload as { body: string }).body,
+          createdAt: 2_000,
+        },
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel, otherChannel]);
+    await harness.socket.trigger('channel:message', {
+      id: 'msg-root-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'msg-root-1',
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: 'channel one root',
+      createdAt: 1_000,
+    });
+
+    await harness.click('messages', 'button[data-thread-id]', { threadId: 'msg-root-1' });
+    harness.element('message-form').fields.channelId = 'channel-2';
+    harness.element('message-form').fields.body = 'send to channel two';
+    await harness.submit('message-form');
+
+    expect(harness.emitted).toContainEqual([
+      'message:send',
+      expect.not.objectContaining({ threadId: 'msg-root-1' }),
+    ]);
+    expect(harness.emitted).toContainEqual([
+      'message:send',
+      expect.objectContaining({ channelId: 'channel-2', body: 'send to channel two' }),
+    ]);
+    expect(harness.element('message-reply-indicator').hidden).toBe(true);
+  });
+
+  test('deduplicates root messages before nesting thread replies', async () => {
+    const harness = createPreviewHarness({});
+
+    await harness.socket.trigger('channel:message', {
+      id: 'root-duplicate',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'root-duplicate',
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: 'root duplicate body',
+      createdAt: 1_000,
+    });
+    await harness.socket.trigger('channel:message', {
+      id: 'root-duplicate',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'root-duplicate',
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: 'root duplicate body',
+      createdAt: 1_000,
+    });
+    await harness.socket.trigger('channel:message', {
+      id: 'reply-once',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'root-duplicate',
+      senderKind: 'agent',
+      senderId: 'agent-1',
+      body: 'reply rendered once',
+      createdAt: 2_000,
+    });
+
+    const html = harness.element('messages').innerHTML;
+    expect(html.match(/root duplicate body/g)).toHaveLength(1);
+    expect(html.match(/reply rendered once/g)).toHaveLength(1);
+    expect(html).toContain('<div class="thread-replies">');
   });
 
   test('nests an agent reply that inherits the root threadId via channel:message', async () => {

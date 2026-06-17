@@ -165,6 +165,8 @@ describe('AgentBean Next browser smoke script', () => {
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('data-thread-id'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('message-reply-indicator'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('.thread-reply'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('browser-smoke:thread-reply:thread-smoke'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('root-thread-1'))).toBe(true);
     expect(result).toEqual({
       rootThreadId: 'root-thread-1',
       threadReplyBody: 'browser-smoke:thread-reply:thread-smoke',
