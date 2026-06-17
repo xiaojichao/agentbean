@@ -124,4 +124,50 @@ describe('AgentBean Next browser smoke script', () => {
       timeoutMs: 1000,
     })).rejects.toThrow('Browser artifact row was not rendered');
   });
+
+  test('exercises thread reply click, indicator, and nested render in the browser', async () => {
+    const { exerciseThreadBrowserSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
+    const calls: Array<[string, unknown]> = [];
+    const page = {
+      async setInputValue(selector: string, value: string) {
+        calls.push(['setInputValue', { selector, value }]);
+      },
+      async click(selector: string) {
+        calls.push(['click', selector]);
+      },
+      async waitForText(selector: string, text: string) {
+        calls.push(['waitForText', { selector, text }]);
+      },
+      async waitForFunction(expression: string, description: string) {
+        calls.push(['waitForFunction', { expression, description }]);
+      },
+      async evaluateJson() {
+        return 'root-thread-1';
+      },
+    };
+
+    const result = await exerciseThreadBrowserSmoke({
+      page,
+      suffix: 'thread-smoke',
+      timeoutMs: 1000,
+    });
+
+    expect(calls).toContainEqual(['click', '#messages button[data-thread-id]']);
+    expect(calls).toContainEqual([
+      'setInputValue',
+      { selector: '#message-form [name="body"]', value: 'browser-smoke:thread-reply:thread-smoke' },
+    ]);
+    expect(calls).toContainEqual(['click', '#message-form button[type="submit"]']);
+    expect(calls).toContainEqual(['waitForText', { selector: '#messages', text: 'browser-smoke:thread-reply:thread-smoke' }]);
+    const waitForFunctionCalls = calls.filter(
+      (call): call is ['waitForFunction', { expression: string }] => call[0] === 'waitForFunction',
+    );
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('data-thread-id'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('message-reply-indicator'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('.thread-reply'))).toBe(true);
+    expect(result).toEqual({
+      rootThreadId: 'root-thread-1',
+      threadReplyBody: 'browser-smoke:thread-reply:thread-smoke',
+    });
+  });
 });

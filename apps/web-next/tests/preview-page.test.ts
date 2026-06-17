@@ -663,6 +663,118 @@ describe('web-next preview page interactions', () => {
     ]);
     expect(harness.element('task-results').innerHTML).toContain('done');
   });
+
+  test('sends a thread reply and nests it under the root message', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'message:send': (payload) => ({
+        ok: true,
+        message: {
+          id: 'msg-reply-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          threadId: (payload as { threadId?: string }).threadId,
+          senderKind: 'human',
+          senderId: 'user-1',
+          body: 'thread reply body',
+          createdAt: 2_000,
+        },
+        dispatches: [],
+        route: { kind: 'none' },
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.socket.trigger('channel:message', {
+      id: 'msg-root-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'msg-root-1',
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: 'root body',
+      createdAt: 1_000,
+    });
+
+    const rootHtml = harness.element('messages').innerHTML;
+    expect(rootHtml).toContain('root body');
+    expect(rootHtml).toContain('data-thread-id="msg-root-1"');
+
+    await harness.click('messages', 'button[data-thread-id]', { threadId: 'msg-root-1' });
+    expect(harness.element('message-reply-indicator').hidden).toBe(false);
+
+    harness.element('message-form').fields.body = 'thread reply body';
+    await harness.submit('message-form');
+
+    expect(harness.emitted).toContainEqual([
+      'message:send',
+      expect.objectContaining({ threadId: 'msg-root-1', body: 'thread reply body' }),
+    ]);
+    const html = harness.element('messages').innerHTML;
+    expect(html).toContain('讨论串');
+    expect(html).toContain('thread reply body');
+    expect(harness.element('message-reply-indicator').hidden).toBe(true);
+  });
+
+  test('nests an agent reply that inherits the root threadId via channel:message', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.socket.trigger('channel:message', {
+      id: 'root-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'root-1',
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: 'root hello',
+      createdAt: 1_000,
+    });
+    await harness.socket.trigger('channel:message', {
+      id: 'agent-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'root-1',
+      senderKind: 'agent',
+      senderId: 'agent-1',
+      body: 'agent nested reply',
+      createdAt: 2_000,
+    });
+
+    const html = harness.element('messages').innerHTML;
+    expect(html).toContain('root hello');
+    expect(html).toContain('agent nested reply');
+    expect(html).toContain('thread-reply');
+    expect(html).toContain('讨论串');
+  });
 });
 
 function createPreviewHarness(
@@ -707,6 +819,8 @@ function createPreviewHarness(
     'team-display-name',
     'team-submit',
     'message-artifact-files',
+    'message-reply-indicator',
+    'message-reply-cancel',
   ]) {
     elements.set(id, createElement(id));
   }

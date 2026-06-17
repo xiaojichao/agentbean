@@ -38,6 +38,7 @@
   - `channel:archive` 与 `channel:delete` 已进入 contracts、server-next use cases/repositories 与 apps/web 客户端；server 侧覆盖 default channel 保护、creator 权限、archive 从列表隐藏、delete cascade。
 - DM/thread 第一版。
   - direct channel model、DM snapshot/history、thread id 继承与 dispatch history 去重已在 server-next 层落地。
+  - web thread UI 与 browser E2E 已在 thread UI slice（P4-26 / E2E-10）覆盖：preview 按 `threadId` 嵌套渲染讨论串并可回复。
 - Artifacts/workspace runs repository/usecase 第一版。
   - daemon `dispatch:result` 可以上报 artifact metadata 与 workspace run metadata；server-next 已做 team-scoped metadata authorization。
 - Saved messages 与 reactions 第一版。
