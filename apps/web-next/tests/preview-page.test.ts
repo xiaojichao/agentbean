@@ -726,6 +726,8 @@ describe('web-next preview page interactions', () => {
     const html = harness.element('messages').innerHTML;
     expect(html).toContain('讨论串');
     expect(html).toContain('thread reply body');
+    expect(html).toContain('<div class="thread-replies">');
+    expect(html.indexOf('root body')).toBeLessThan(html.indexOf('thread reply body'));
     expect(harness.element('message-reply-indicator').hidden).toBe(true);
   });
 
