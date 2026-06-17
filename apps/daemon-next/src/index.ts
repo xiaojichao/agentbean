@@ -109,10 +109,18 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
 
   return {
     async start() {
-      let currentDeviceId = await announceDeviceSnapshot(socket, device, runtimes, agents);
+      const initialAnnouncement = await announceDeviceSnapshot(socket, device, runtimes, agents);
+      let currentDeviceId = initialAnnouncement.deviceId;
+      if (initialAnnouncement.token) {
+        device.token = initialAnnouncement.token;
+      }
       const cancelledDispatchIds = new Set<string>();
       socket.onReconnect?.(async () => {
-        currentDeviceId = await announceDeviceSnapshot(socket, device, runtimes, agents);
+        const announcement = await announceDeviceSnapshot(socket, device, runtimes, agents);
+        currentDeviceId = announcement.deviceId;
+        if (announcement.token) {
+          device.token = announcement.token;
+        }
       });
 
       socket.on(AGENT_EVENTS.device.scanRequested, async (payload) => {
@@ -130,7 +138,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
 
       socket.on(AGENT_EVENTS.dispatch.request, async (payload) => {
         const request = payload as DispatchRequestPayload;
-        if (cancelledDispatchIds.has(request.id)) {
+        if (cancelledDispatchIds.delete(request.id)) {
           return;
         }
         try {
@@ -140,6 +148,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             }
             const env = await envResolver(request.customAgent.envRef);
             request.customAgent = { ...request.customAgent, env };
+            if (cancelledDispatchIds.delete(request.id)) {
+              return;
+            }
           }
           const result = normalizeDispatchResult(await executor(request));
           if (cancelledDispatchIds.delete(request.id)) {
@@ -179,12 +190,13 @@ async function announceDeviceSnapshot(
   device: DaemonDeviceConfig,
   runtimes: DaemonRuntimeReport[],
   agents: DaemonAgentReport[],
-): Promise<string> {
+): Promise<{ deviceId: string; token?: string }> {
   const helloAck = await socket.emitWithAck(AGENT_EVENTS.device.hello, device);
   const deviceId = readAckDeviceId(helloAck);
+  const token = readAckDeviceToken(helloAck);
 
   await reportDeviceSnapshot(socket, device.teamId, deviceId, runtimes, agents);
-  return deviceId;
+  return { deviceId, ...(token ? { token } : {}) };
 }
 
 async function reportDeviceSnapshot(
@@ -226,6 +238,18 @@ function readAckDeviceId(ack: unknown): string {
     throw new Error('device:hello ack missing device id');
   }
   return device.id;
+}
+
+function readAckDeviceToken(ack: unknown): string | undefined {
+  if (!ack || typeof ack !== 'object') {
+    return undefined;
+  }
+  const credentials = (ack as { credentials?: unknown }).credentials;
+  if (!credentials || typeof credentials !== 'object') {
+    return undefined;
+  }
+  const token = (credentials as { token?: unknown }).token;
+  return typeof token === 'string' && token.length > 0 ? token : undefined;
 }
 
 function readErrorMessage(error: unknown): string {

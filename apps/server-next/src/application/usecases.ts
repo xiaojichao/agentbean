@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TaskDto, type TaskStatus, type TeamDto, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
-import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
+import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 
 export interface ServerNextClock {
   now(): number;
@@ -50,11 +50,11 @@ export interface ServerNextUseCases {
   createDeviceInvite(input: CreateDeviceInviteInput): Promise<Ack<DeviceInviteAckDto>>;
   waitForDeviceInvite(input: WaitForDeviceInviteInput): Promise<Ack<DeviceInviteAckDto>>;
   completeDeviceInvite(input: CompleteDeviceInviteInput): Promise<Ack<DeviceInviteAckDto & { credentials: DeviceInviteCredentialsDto }>>;
-  deviceHelloFromCredentials(input: DeviceHelloFromCredentialsInput): Promise<Ack<{ device: DeviceDto }>>;
+  deviceHelloFromCredentials(input: DeviceHelloFromCredentialsInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto }>>;
   listDevices(input: { teamId: string; userId: string }): Promise<Ack<{ devices: DeviceDto[] }>>;
   getDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDetailDto }>>;
   requestDeviceScan(input: RequestDeviceScanInput): Promise<Ack<RequestDeviceScanResult>>;
-  deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto }>>;
+  deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto }>>;
   reportDeviceRuntimes(input: ReportDeviceRuntimesInput): Promise<Ack<{ runtimes: RuntimeDto[] }>>;
   registerDiscoveredAgents(input: RegisterDiscoveredAgentsInput): Promise<Ack<RegisterDiscoveredAgentsResult>>;
   listVisibleAgents(input: { teamId: string }): Promise<Ack<{ agents: AgentDto[] }>>;
@@ -1031,12 +1031,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!credentials || credentials.teamId !== envInput.teamId) {
         return makeFailure('UNAUTHENTICATED', 'Invalid device credentials');
       }
-      const teamDevices = credentials.machineId && credentials.profileId
-        ? await repositories.devices.listByTeam(envInput.teamId)
-        : [];
-      const device = teamDevices.find(
-        (candidate) => candidate.machineId === credentials.machineId && candidate.profileId === credentials.profileId,
-      ) ?? null;
+      const device = credentials.deviceId
+        ? await repositories.devices.getById(credentials.deviceId)
+        : await findDeviceByCredentials(repositories, envInput.teamId, credentials);
       if (!device || device.teamId !== envInput.teamId) {
         return makeFailure('UNAUTHENTICATED', 'Unknown device for team');
       }
@@ -1079,7 +1076,25 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         updatedAt: now,
       });
 
-      return makeSuccess({ device: toDeviceDto(device) });
+      return makeSuccess({
+        device: toDeviceDto(device),
+        credentials: {
+          token: issueDeviceToken({
+            teamId: device.teamId,
+            ownerId: device.ownerId,
+            deviceId: device.id,
+            machineId: device.machineId,
+            profileId: device.profileId,
+            hostname: device.name,
+          }, sessionSecret),
+          teamId: device.teamId,
+          ownerId: device.ownerId,
+          deviceId: device.id,
+          machineId: device.machineId,
+          profileId: device.profileId,
+          hostname: device.name,
+        },
+      });
     },
 
     async listDevices(deviceListInput) {
@@ -1865,7 +1880,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                   command: executionConfig.command,
                   args: executionConfig.args,
                   cwd: executionConfig.cwd,
-                  envRef: { agentId: agent.id, teamId: dispatch.teamId },
+                  envRef: { agentId: agent.id, teamId: agent.primaryTeamId },
                 },
               }
             : {}),
@@ -3218,6 +3233,20 @@ async function getUsableDeviceInvite(
   return { ok: true, invite };
 }
 
+async function findDeviceByCredentials(
+  repositories: ServerNextRepositories,
+  teamId: string,
+  credentials: Pick<DeviceInviteCredentialsDto, 'machineId' | 'profileId'>,
+): Promise<DeviceRecord | null> {
+  if (!credentials.machineId || !credentials.profileId) {
+    return null;
+  }
+  const teamDevices = await repositories.devices.listByTeam(teamId);
+  return teamDevices.find(
+    (candidate) => candidate.machineId === credentials.machineId && candidate.profileId === credentials.profileId,
+  ) ?? null;
+}
+
 async function consumeJoinCodeForUser(
   repositories: ServerNextRepositories,
   clock: ServerNextClock,
@@ -3290,7 +3319,7 @@ function verifySessionToken(token: string, secret: string): string | null {
 }
 
 function issueDeviceToken(
-  credentials: Pick<DeviceInviteCredentialsDto, 'teamId' | 'ownerId' | 'machineId' | 'profileId' | 'hostname'>,
+  credentials: Pick<DeviceInviteCredentialsDto, 'teamId' | 'ownerId' | 'deviceId' | 'machineId' | 'profileId' | 'hostname'>,
   secret: string,
 ): string {
   const payload = Buffer.from(JSON.stringify(credentials), 'utf8').toString('base64url');
@@ -3300,7 +3329,7 @@ function issueDeviceToken(
 function verifyDeviceToken(
   token: string,
   secret: string,
-): Pick<DeviceInviteCredentialsDto, 'teamId' | 'ownerId' | 'machineId' | 'profileId' | 'hostname'> | null {
+): Pick<DeviceInviteCredentialsDto, 'teamId' | 'ownerId' | 'deviceId' | 'machineId' | 'profileId' | 'hostname'> | null {
   const parts = token.split('.');
   if (parts.length !== 3 || parts[0] !== 'abn_device') {
     return null;
@@ -3318,6 +3347,7 @@ function verifyDeviceToken(
     const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
       teamId?: unknown;
       ownerId?: unknown;
+      deviceId?: unknown;
       machineId?: unknown;
       profileId?: unknown;
       hostname?: unknown;
@@ -3331,6 +3361,7 @@ function verifyDeviceToken(
     return {
       teamId: decoded.teamId,
       ownerId: decoded.ownerId,
+      deviceId: typeof decoded.deviceId === 'string' ? decoded.deviceId : undefined,
       machineId: typeof decoded.machineId === 'string' ? decoded.machineId : undefined,
       profileId: typeof decoded.profileId === 'string' ? decoded.profileId : undefined,
       hostname: typeof decoded.hostname === 'string' ? decoded.hostname : undefined,

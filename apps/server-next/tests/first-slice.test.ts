@@ -1679,6 +1679,9 @@ describe('server-next first-slice use cases', () => {
         'message-1',
         'dispatch-1',
         'request-1',
+        'message-2',
+        'dispatch-2',
+        'request-2',
       ]),
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
@@ -1803,7 +1806,6 @@ describe('server-next first-slice use cases', () => {
     await app.createDeviceInvite({ userId: 'user-1', teamId: 'team-1', profileId: 'agentbean-next' });
     await app.waitForDeviceInvite({
       code: 'device-code-1',
-      machineId: 'machine-1',
       profileId: 'agentbean-next',
       hostname: 'shaw-mbp',
     });
@@ -1815,12 +1817,24 @@ describe('server-next first-slice use cases', () => {
     if (!completed.ok) {
       throw new Error('device invite completion failed');
     }
-    await app.deviceHelloFromCredentials({
+    const hello = await app.deviceHelloFromCredentials({
       token: completed.credentials.token,
       machineId: completed.credentials.machineId,
       profileId: completed.credentials.profileId,
       hostname: completed.credentials.hostname,
     });
+    expect(hello).toMatchObject({
+      ok: true,
+      credentials: {
+        token: expect.stringMatching(/^abn_device\./),
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        deviceId: 'device-1',
+      },
+    });
+    if (!hello.ok || !hello.credentials) {
+      throw new Error('device hello did not issue refreshed credentials');
+    }
     await app.reportDeviceRuntimes({
       teamId: 'team-1',
       deviceId: 'device-1',
@@ -1849,6 +1863,16 @@ describe('server-next first-slice use cases', () => {
         teamId: 'team-1',
         agentId: 'agent-1',
       }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: 'UNAUTHENTICATED',
+    });
+    await expect(
+      app.getAgentEnvForDevice({
+        token: hello.credentials.token,
+        teamId: 'team-1',
+        agentId: 'agent-1',
+      }),
     ).resolves.toEqual({
       ok: true,
       env: { OPENAI_API_KEY: 'secret-value' },
@@ -1856,7 +1880,7 @@ describe('server-next first-slice use cases', () => {
 
     await expect(
       app.getAgentEnvForDevice({
-        token: completed.credentials.token,
+        token: hello.credentials.token,
         teamId: 'team-1',
         agentId: 'missing-agent',
       }),
@@ -1915,6 +1939,9 @@ describe('server-next first-slice use cases', () => {
         'message-1',
         'dispatch-1',
         'request-1',
+        'message-2',
+        'dispatch-2',
+        'request-2',
       ]),
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
@@ -2009,6 +2036,22 @@ describe('server-next first-slice use cases', () => {
         customAgent: {
           name: 'Renamed Codex',
           args: ['--model', 'gpt-5.4'],
+          envRef: { agentId: 'agent-1', teamId: 'team-1' },
+        },
+      },
+    });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-2',
+      channelId: 'channel-2',
+      body: '@Renamed Codex hello from published team',
+    });
+    await expect(app.getDispatchRequest({ dispatchId: 'dispatch-2' })).resolves.toMatchObject({
+      ok: true,
+      request: {
+        teamId: 'team-2',
+        customAgent: {
+          name: 'Renamed Codex',
           envRef: { agentId: 'agent-1', teamId: 'team-1' },
         },
       },

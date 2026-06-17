@@ -67,6 +67,7 @@ export interface DeviceInviteCredentialsDto {
   token: string;
   teamId: ID;
   ownerId: ID;
+  deviceId?: ID;
   serverUrl?: string;
   machineId?: string;
   profileId?: string;
