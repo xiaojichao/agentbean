@@ -1677,15 +1677,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!(await repositories.teams.isMember(dmInput.teamId, dmInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
-      const channels = await repositories.channels.listDirectForUser(dmInput.teamId, dmInput.userId);
-      const dms: DmChannelDto[] = [];
-      for (const channel of channels) {
-        const agentId = channel.dmTargetAgentId ?? channel.agentMemberIds[0];
-        const agent = agentId ? await repositories.agents.getById(agentId) : null;
-        if (agent && agent.visibleTeamIds.includes(dmInput.teamId)) {
-          dms.push(toDmChannelDto(channel, agent));
-        }
-      }
+      const visibleDms = await visibleDirectChannelsForUser(repositories, dmInput.teamId, dmInput.userId);
+      const dms = visibleDms.map(({ channel, agent }) => toDmChannelDto(channel, agent));
       return makeSuccess({ dms });
     },
 
@@ -1867,8 +1860,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('VALIDATION_ERROR', 'Search query must be at least 2 characters');
       }
       const channels = await repositories.channels.listForUser(searchInput.teamId, searchInput.userId);
-      const directChannels = await repositories.channels.listDirectForUser(searchInput.teamId, searchInput.userId);
-      const channelIds = [...channels, ...directChannels].map((channel) => channel.id);
+      const directChannels = await visibleDirectChannelsForUser(repositories, searchInput.teamId, searchInput.userId);
+      const channelIds = [
+        ...channels.map((channel) => channel.id),
+        ...directChannels.map(({ channel }) => channel.id),
+      ];
       const messages = await repositories.messages.search({
         channelIds,
         query,
@@ -3349,9 +3345,29 @@ async function visibleTaskChannelIds(
 ): Promise<string[]> {
   const [channels, dms] = await Promise.all([
     repositories.channels.listForUser(teamId, userId),
-    repositories.channels.listDirectForUser(teamId, userId),
+    visibleDirectChannelsForUser(repositories, teamId, userId),
   ]);
-  return uniqueIds([...channels, ...dms].map((channel) => channel.id));
+  return uniqueIds([
+    ...channels.map((channel) => channel.id),
+    ...dms.map(({ channel }) => channel.id),
+  ]);
+}
+
+async function visibleDirectChannelsForUser(
+  repositories: ServerNextRepositories,
+  teamId: string,
+  userId: string,
+): Promise<Array<{ channel: ChannelRecord; agent: AgentRecord }>> {
+  const channels = await repositories.channels.listDirectForUser(teamId, userId);
+  const visible: Array<{ channel: ChannelRecord; agent: AgentRecord }> = [];
+  for (const channel of channels) {
+    const agentId = channel.dmTargetAgentId ?? channel.agentMemberIds[0];
+    const agent = agentId ? await repositories.agents.getById(agentId) : null;
+    if (agent && agent.visibleTeamIds.includes(teamId)) {
+      visible.push({ channel, agent });
+    }
+  }
+  return visible;
 }
 
 async function isAssignableToTask(

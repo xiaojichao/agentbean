@@ -298,6 +298,74 @@ describe('server-next first-slice use cases', () => {
     expect(otherResult.messages.map((message) => message.body)).toEqual(['public roadmap note']);
   });
 
+  test('searchMessages excludes direct messages whose target agent is no longer visible', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 270,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'device-1',
+        'runtime-1',
+        'agent-1',
+        'dm-1',
+        'message-dm',
+        'dispatch-1',
+        'request-1',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+      hostname: 'shaw-mbp',
+    });
+    await app.reportDeviceRuntimes({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimes: [
+        {
+          adapterKind: 'codex',
+          name: 'Codex CLI',
+          command: '/opt/homebrew/bin/codex',
+          cwd: '/Users/shaw/AgentBean',
+          installed: true,
+        },
+      ],
+    });
+    await app.createCustomAgent({
+      userId: 'user-1',
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimeId: 'runtime-1',
+      name: 'Custom Codex',
+    });
+    await app.startDirectMessage({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'dm-1', body: 'hidden dm roadmap note' });
+
+    await expect(app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'roadmap' })).resolves.toMatchObject({
+      ok: true,
+      messages: [{ id: 'message-dm', body: 'hidden dm roadmap note' }],
+    });
+
+    await app.deleteAgent({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' });
+
+    await expect(app.listDirectMessages({ userId: 'user-1', teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      dms: [],
+    });
+    await expect(app.snapshotDirectMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'dm-1' })).resolves.toMatchObject({
+      ok: false,
+      error: 'NOT_FOUND',
+    });
+    await expect(app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'roadmap' })).resolves.toMatchObject({
+      ok: true,
+      messages: [],
+    });
+  });
+
   test('tasks can be created, listed, and updated without leaking private channels', async () => {
     const app = createInMemoryServerNext({
       now: () => 300,
