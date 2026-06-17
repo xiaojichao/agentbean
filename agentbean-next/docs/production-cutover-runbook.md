@@ -150,6 +150,35 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run audit:agentbean-n
 
 pre-flip 时，npm registry、data dir 与 session secret 相关检查已经通过；严格 production flip 仍会因为 `AGENTBEAN_DEPLOY_TARGET=next` 尚未打开而保持红灯。
 
+## 推进 npm canonical daemon latest 到 daemon-next
+
+canonical npm 包 `@agentbean/daemon` 已发布基于 daemon-next 的 `0.2.0`，但 npm `@latest` dist-tag 默认仍可能指向旧守护进程（例如 `0.1.35`）。也就是说 `npm install @agentbean/daemon` 默认可能仍装到旧守护进程，daemon-next 需显式 `@agentbean/daemon-next@0.2.0` / `@agentbean/daemon@0.2.0` 才能安装。
+
+把默认 npm 安装入口正式切到 daemon-next（outward-facing，影响所有 `npm install @agentbean/daemon` 用户），使用 gated、按需触发的 workflow：
+
+```bash
+gh workflow run "CI/CD" \
+  --repo xiaojichao/agentbean \
+  --ref main \
+  -f promote_agentbean_daemon_latest=true \
+  -f agentbean_npm_publish_target=next
+```
+
+已确认：
+
+- `Promote canonical daemon npm latest` job 会执行，且仅在 `AGENTBEAN_NPM_PUBLISH_TARGET` 解析为 `next` 时才允许推进（rollback/old 模式会被拒绝）；命令必须同时传入 `agentbean_npm_publish_target=next`，否则 workflow_dispatch 默认值会解析为 `old` 并被 gate 拒绝。
+- 如果 `NPM_TOKEN` 缺失，promote job 会失败而不是静默跳过，避免维护者看到绿色 workflow 却没有推进 npm `latest`。
+- job 读取 `apps/daemon-next/package.json` 的版本，校验对应 canonical `@agentbean/daemon@<version>` 已发布，再执行 `npm dist-tag add @agentbean/daemon@<version> latest`，最后回读 `dist-tags.latest` 校验已落到 daemon-next。
+- promote job 会先把当前旧 `apps/daemon` 版本补打为 `@agentbean/daemon@legacy`，再推进 `latest` 到 daemon-next，确保 `npm install @agentbean/daemon@legacy` 在默认入口切换后仍可作为 rollback 入口。
+- 当 `AGENTBEAN_NPM_PUBLISH_TARGET=next` 时，旧 `apps/daemon` 包以 `--tag legacy` 发布，并会对已发布版本显式补打 `legacy` tag，不会再回占 npm `latest`。
+- strict cutover audit 在 final flip 后会要求 npm `@latest` dist-tag 已指向 daemon-next；如果只发布了 `@agentbean/daemon@0.2.0` 但没有推进 `latest`，production smoke 会继续失败。
+
+推进前后可用以下命令核对：
+
+```bash
+npm view @agentbean/daemon dist-tags --registry=https://registry.npmjs.org
+```
+
 ## 本地重启持久化 Smoke
 
 final flip 前先在本机运行 SQLite 重启持久化 smoke：

@@ -23,13 +23,16 @@ describe('AgentBean Next cutover audit', () => {
           '@agentbean/daemon-next@0.2.0': '0.2.0',
           '@agentbean/daemon@0.2.0': '0.2.0',
         },
+        distTags: {
+          '@agentbean/daemon': { latest: '0.2.0' },
+        },
       }),
     });
 
     expect(summarizeCutoverAudit(checks)).toMatchObject({
       ok: true,
       failed: 0,
-      total: 11,
+      total: 12,
     });
   });
 
@@ -40,6 +43,9 @@ describe('AgentBean Next cutover audit', () => {
         secrets: [{ name: 'RAILWAY_TOKEN' }, { name: 'NPM_TOKEN' }],
         npmVersions: {
           '@agentbean/daemon-next@0.2.0': '0.2.0',
+        },
+        distTags: {
+          '@agentbean/daemon': { latest: '0.1.35' },
         },
       }),
     });
@@ -53,6 +59,7 @@ describe('AgentBean Next cutover audit', () => {
       'github-secret-next-session-secret',
       'npm-contracts-next-version',
       'npm-canonical-daemon-next-version',
+      'npm-canonical-daemon-latest-dist-tag',
     ]);
   });
 
@@ -73,6 +80,9 @@ describe('AgentBean Next cutover audit', () => {
           '@agentbean/daemon-next@0.2.0': '0.2.0',
           '@agentbean/daemon@0.2.0': '0.2.0',
         },
+        distTags: {
+          '@agentbean/daemon': { latest: '0.2.0' },
+        },
       }),
     });
 
@@ -85,7 +95,7 @@ describe('AgentBean Next cutover audit', () => {
       ok: true,
       failed: 0,
       pendingFinalFlip: true,
-      total: 11,
+      total: 12,
     });
   });
 
@@ -129,6 +139,9 @@ describe('AgentBean Next cutover audit', () => {
           throw new Error('GitHub CLI listing is not available in this CI job');
         }
         if (args[0] === 'view') {
+          if (args[2] === 'dist-tags') {
+            return `${JSON.stringify({ latest: '0.2.0' })}\n`;
+          }
           const versions: Record<string, string> = {
             '@agentbean/contracts@0.2.0': '0.2.0',
             '@agentbean/daemon-next@0.2.0': '0.2.0',
@@ -147,7 +160,7 @@ describe('AgentBean Next cutover audit', () => {
     expect(summarizeCutoverAudit(checks)).toMatchObject({
       ok: true,
       failed: 0,
-      total: 11,
+      total: 12,
     });
   });
 
@@ -166,6 +179,9 @@ describe('AgentBean Next cutover audit', () => {
           throw new Error('GitHub CLI listing is not available in this CI job');
         }
         if (args[0] === 'view') {
+          if (args[2] === 'dist-tags') {
+            return `${JSON.stringify({ latest: '0.2.0' })}\n`;
+          }
           const versions: Record<string, string> = {
             '@agentbean/contracts@0.2.0': '0.2.0',
             '@agentbean/daemon-next@0.2.0': '0.2.0',
@@ -194,10 +210,12 @@ function createFakeRunCommand({
   variables,
   secrets,
   npmVersions,
+  distTags = {},
 }: {
   variables: Array<{ name: string; value?: string }>;
   secrets: Array<{ name: string }>;
   npmVersions: Record<string, string>;
+  distTags?: Record<string, Record<string, string>>;
 }) {
   return (_command: string, args: string[]) => {
     if (args[0] === 'variable') {
@@ -207,6 +225,13 @@ function createFakeRunCommand({
       return `${JSON.stringify(secrets)}\n`;
     }
     if (args[0] === 'view') {
+      if (args[2] === 'dist-tags') {
+        const tags = distTags[args[1]];
+        if (!tags) {
+          throw new Error(`missing npm dist-tags for ${args[1]}`);
+        }
+        return `${JSON.stringify(tags)}\n`;
+      }
       const version = npmVersions[args[1]];
       if (!version) {
         throw new Error(`missing npm version for ${args[1]}`);

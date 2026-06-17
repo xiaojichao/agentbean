@@ -22,6 +22,7 @@ export function collectAgentBeanNextCutoverAudit({
     contracts: npmVersionExists(runCommand, '@agentbean/contracts', contractsPackage.version),
     daemonNext: npmVersionExists(runCommand, '@agentbean/daemon-next', daemonNextPackage.version),
     canonicalDaemon: npmVersionExists(runCommand, '@agentbean/daemon', canonicalDaemonVersion),
+    canonicalDaemonLatest: npmDistTagVersion(runCommand, '@agentbean/daemon', 'latest'),
   };
 
   const variableMap = new Map(variablesResult.items.map((variable) => [variable.name, variable.value]));
@@ -87,6 +88,11 @@ export function collectAgentBeanNextCutoverAudit({
       'npm-canonical-daemon-next-version',
       registry.canonicalDaemon,
       `npm registry must contain canonical @agentbean/daemon@${canonicalDaemonVersion}`,
+    ),
+    check(
+      'npm-canonical-daemon-latest-dist-tag',
+      registry.canonicalDaemonLatest === canonicalDaemonVersion,
+      `npm @agentbean/daemon dist-tags.latest must point to daemon-next canonical version ${canonicalDaemonVersion}`,
     ),
   ];
 }
@@ -162,6 +168,15 @@ function npmVersionExists(runCommand, packageName, version) {
     return runCommand('npm', ['view', `${packageName}@${version}`, 'version']).trim() === version;
   } catch {
     return false;
+  }
+}
+
+function npmDistTagVersion(runCommand, packageName, tag) {
+  try {
+    const distTags = JSON.parse(runCommand('npm', ['view', packageName, 'dist-tags', '--json']));
+    return typeof distTags[tag] === 'string' ? distTags[tag] : null;
+  } catch {
+    return null;
   }
 }
 
