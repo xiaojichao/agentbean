@@ -19,6 +19,7 @@ import type {
   UserRecord,
   WorkspaceRunRecord,
 } from '../../application/repositories.js';
+import { rankMessageSearch, splitSearchTerms } from '../../../../../packages/domain/src/index.js';
 
 export interface SqliteStatement {
   run(...params: unknown[]): unknown;
@@ -928,24 +929,28 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         if (input.channelIds.length === 0) {
           return [];
         }
+        const terms = splitSearchTerms(input.query);
+        if (terms.length === 0) {
+          return [];
+        }
         const placeholders = input.channelIds.map(() => '?').join(', ');
-        return teamDb
+        const likeClauses = terms.map(() => `lower(body) LIKE ? ESCAPE '\\'`).join(' AND ');
+        const pool = teamDb
           .prepare(
             `SELECT * FROM messages
              WHERE channel_id IN (${placeholders})
-             AND lower(body) LIKE ? ESCAPE '\\'
+             AND ${likeClauses}
              ORDER BY created_at DESC
              LIMIT ?`,
           )
-          .all(...input.channelIds, `%${escapeSqlLike(input.query.toLowerCase())}%`, input.limit)
-          .map((row) => {
-            const message = mapMessage(row);
-            if (!message) {
-              throw new Error('SQLite search message row could not be mapped');
-            }
-            return message;
-          })
-          .reverse();
+          .all(
+            ...input.channelIds,
+            ...terms.map((term) => `%${escapeSqlLike(term)}%`),
+            Math.max(input.limit * 5, 100),
+          )
+          .map((row) => mapMessage(row))
+          .filter((message): message is NonNullable<typeof message> => message !== null);
+        return rankMessageSearch(pool, input.query, input.limit);
       },
       async listThreadBefore(input) {
         const before = mapMessage(teamDb.prepare('SELECT * FROM messages WHERE id = ?').get(input.beforeMessageId));

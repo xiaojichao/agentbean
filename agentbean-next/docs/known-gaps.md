@@ -193,7 +193,8 @@ Message search 第一版已经落地为 server-side simple DB search。
 剩余：
 
 - Direct message search 已收敛：`message:search` 现在同时纳入用户可见的 direct channels（`listDirectForUser`），且不会泄漏给 DM 非参与者。
-- full-text indexing、ranking/highlight 与 saved filters 仍需后续产品切片。
+- 多词匹配 + 相关性排序已收敛：`message:search` 现在按词拆分、要求所有词命中（AND），并按相关性排序（短语连续命中 > 词边界 > 更早位置，平局按时间倒序），逻辑集中在 `packages/domain` 的 `rankMessageSearch`，sqlite 与 memory repository 共用。
+- FTS5 全文索引、命中高亮与 saved filters 仍需后续产品切片。
 
 ## Web 缺口
 

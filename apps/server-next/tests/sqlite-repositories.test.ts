@@ -332,13 +332,15 @@ describe('server-next SQLite repositories', () => {
         body: 'secret sqlite search',
         createdAt: 502,
       });
-      await expect(app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'sqlite' })).resolves.toMatchObject({
-        ok: true,
-        messages: [
+      const sqliteSearch = await app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'sqlite' });
+      expect(sqliteSearch).toMatchObject({ ok: true });
+      expect(sqliteSearch.messages).toHaveLength(2);
+      expect(sqliteSearch.messages.map((message) => ({ id: message.id, body: message.body }))).toEqual(
+        expect.arrayContaining([
           { id: 'message-search-public', body: 'public sqlite search' },
           { id: 'message-search-private', body: 'secret sqlite search' },
-        ],
-      });
+        ]),
+      );
       await expect(app.searchMessages({ userId: 'user-2', teamId: 'team-1', query: 'sqlite' })).resolves.toMatchObject({
         ok: true,
         messages: [

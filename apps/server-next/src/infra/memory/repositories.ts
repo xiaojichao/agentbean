@@ -15,6 +15,7 @@ import type {
   UserRecord,
   WorkspaceRunRecord,
 } from '../../application/repositories.js';
+import { rankMessageSearch } from '../../../../../packages/domain/src/index.js';
 
 export function createInMemoryRepositories(): ServerNextRepositories {
   const users = new Map<string, UserRecord>();
@@ -500,12 +501,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async search(input) {
         const channelIds = new Set(input.channelIds);
-        const query = input.query.toLowerCase();
-        return Array.from(messages.values())
-          .filter((message) => channelIds.has(message.channelId) && message.body.toLowerCase().includes(query))
-          .sort((left, right) => right.createdAt - left.createdAt)
-          .slice(0, input.limit)
-          .reverse();
+        const pool = Array.from(messages.values()).filter((message) => channelIds.has(message.channelId));
+        return rankMessageSearch(pool, input.query, input.limit);
       },
       async listThreadBefore(input) {
         const before = messages.get(input.beforeMessageId);
