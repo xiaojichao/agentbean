@@ -1762,7 +1762,7 @@ describe('server-next first-slice use cases', () => {
           command: '/opt/homebrew/bin/codex',
           args: ['--model', 'gpt-5.4'],
           cwd: '/Users/shaw/AgentBean',
-          env: { OPENAI_API_KEY: 'secret-value' },
+          envRef: { agentId: 'agent-1', teamId: 'team-1' },
         },
       },
     });
@@ -1889,7 +1889,7 @@ describe('server-next first-slice use cases', () => {
         customAgent: {
           name: 'Renamed Codex',
           args: ['--model', 'gpt-5.4'],
-          env: { OPENAI_API_KEY: 'new-secret' },
+          envRef: { agentId: 'agent-1', teamId: 'team-1' },
         },
       },
     });

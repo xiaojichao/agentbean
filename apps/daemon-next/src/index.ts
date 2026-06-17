@@ -4,6 +4,7 @@ export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner.j
 export type { BuiltinScannerOptions } from './scanner.js';
 export { createCommandExecutor } from './executor.js';
 export type { CommandExecutorOptions } from './executor.js';
+export { createHttpEnvResolver } from './env-fetcher.js';
 
 export interface DaemonProtocolSocket {
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
@@ -71,6 +72,8 @@ export interface DaemonScanSnapshot {
 
 export type DaemonScanProvider = () => Promise<DaemonScanSnapshot>;
 
+export type DaemonCustomAgent = DispatchCustomAgentDto & { env?: Record<string, string> };
+
 export interface DispatchRequestPayload {
   id: string;
   teamId: string;
@@ -82,8 +85,10 @@ export interface DispatchRequestPayload {
   requestId: string;
   prompt: string;
   history?: DispatchHistoryMessageDto[];
-  customAgent?: DispatchCustomAgentDto | null;
+  customAgent?: DaemonCustomAgent | null;
 }
+
+export type AgentEnvResolver = (envRef: { agentId: string; teamId: string }) => Promise<Record<string, string>>;
 
 export interface CreateDaemonProtocolClientInput {
   socket: DaemonProtocolSocket;
@@ -92,6 +97,7 @@ export interface CreateDaemonProtocolClientInput {
   runtimes: DaemonRuntimeReport[];
   agents: DaemonAgentReport[];
   scan?: DaemonScanProvider;
+  envResolver?: AgentEnvResolver;
 }
 
 export interface DaemonProtocolClient {
@@ -99,7 +105,7 @@ export interface DaemonProtocolClient {
 }
 
 export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInput): DaemonProtocolClient {
-  const { socket, executor, device, runtimes, agents, scan } = input;
+  const { socket, executor, device, runtimes, agents, scan, envResolver } = input;
 
   return {
     async start() {
@@ -128,6 +134,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           return;
         }
         try {
+          if (request.customAgent?.envRef && !request.customAgent.env && envResolver) {
+            const env = await envResolver(request.customAgent.envRef);
+            request.customAgent = { ...request.customAgent, env };
+          }
           const result = normalizeDispatchResult(await executor(request));
           if (cancelledDispatchIds.delete(request.id)) {
             return;

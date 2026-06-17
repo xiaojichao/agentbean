@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { AGENT_EVENTS, type DeviceInviteCredentialsDto } from '../../../packages/contracts/src/index.js';
 import { createBuiltinScanProvider } from './scanner.js';
 import { createCommandExecutor } from './executor.js';
-import { createDaemonProtocolClient, type DaemonDeviceConfig, type DaemonProtocolSocket } from './index.js';
+import { createDaemonProtocolClient, createHttpEnvResolver, type DaemonDeviceConfig, type DaemonProtocolSocket } from './index.js';
 
 interface SocketIoClientLike {
   connected: boolean;
@@ -123,6 +123,9 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
     runtimes: snapshot.runtimes,
     agents: snapshot.agents,
     scan: createBuiltinScanProvider(),
+    envResolver: device.token
+      ? createHttpEnvResolver({ serverUrl: config.serverUrl, token: device.token })
+      : undefined,
   }).start();
 }
 

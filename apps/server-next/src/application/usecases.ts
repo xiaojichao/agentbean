@@ -105,6 +105,7 @@ export interface ServerNextUseCases {
   removeMember(input: RemoveMemberInput): Promise<Ack<{ userId: string }>>;
   transferOwner(input: TransferOwnerInput): Promise<Ack<{ team: { id: string; name: string }; member: { id: string; teamId: string; userId: string; username: string; role: string } }>>;
   listMembers(input: ListMembersInput): Promise<Ack<{ humans: Array<{ id: string; teamId: string; userId: string; username: string; role: string; displayName?: string; joinedAt: number }>; agents: any[] }>>;
+  getAgentEnvForDevice(input: { token: string; teamId: string; agentId: string }): Promise<Ack<{ env: Record<string, string> }>>;
   updateMemberHuman(input: UpdateMemberHumanInput): Promise<Ack<{ human: { id: string; teamId: string; userId: string; username: string; role: string; displayName?: string; joinedAt: number } }>>;
   updateTeam(input: UpdateTeamInput): Promise<Ack<{ team: { id: string; name: string; path: string } }>>;
   deleteTeam(input: DeleteTeamInput): Promise<Ack<{ fallbackTeam: { id: string; name: string; path: string } | null }>>;
@@ -1025,6 +1026,31 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
     },
 
+    async getAgentEnvForDevice(envInput) {
+      const credentials = verifyDeviceToken(envInput.token, sessionSecret);
+      if (!credentials || credentials.teamId !== envInput.teamId) {
+        return makeFailure('UNAUTHENTICATED', 'Invalid device credentials');
+      }
+      const device = credentials.machineId && credentials.profileId
+        ? await repositories.devices.findByMachineProfile(credentials.machineId, credentials.profileId)
+        : null;
+      if (!device || device.teamId !== envInput.teamId) {
+        return makeFailure('UNAUTHENTICATED', 'Unknown device for team');
+      }
+      const agent = await repositories.agents.getById(envInput.agentId);
+      if (!agent || agent.primaryTeamId !== envInput.teamId || agent.deletedAt) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
+      if (agent.deviceId !== device.id) {
+        return makeFailure('FORBIDDEN', 'Device is not bound to this agent');
+      }
+      if (agent.source !== 'custom') {
+        return makeFailure('FORBIDDEN', 'Agent is not custom');
+      }
+      const config = await repositories.agents.getExecutionConfig(envInput.agentId);
+      return makeSuccess({ env: config?.env ?? {} });
+    },
+
     async deviceHello(deviceInput) {
       if (!(await repositories.teams.isMember(deviceInput.teamId, deviceInput.ownerId))) {
         return makeFailure('FORBIDDEN', 'Device owner is not a team member');
@@ -1836,7 +1862,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                   command: executionConfig.command,
                   args: executionConfig.args,
                   cwd: executionConfig.cwd,
-                  env: executionConfig.env,
+                  envRef: { agentId: agent.id, teamId: dispatch.teamId },
                 },
               }
             : {}),
