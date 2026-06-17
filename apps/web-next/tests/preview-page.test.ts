@@ -956,6 +956,113 @@ describe('web-next preview page interactions', () => {
     ]);
     expect(harness.element('team-display-name').textContent).toBe('Ops Team');
   });
+
+  test('loads device detail with system info when a device is auto-selected', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'online', name: 'Mac' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'device:get': () => ({
+        ok: true,
+        device: {
+          ...device,
+          systemInfo: { hostname: 'mbp', platform: 'darwin', arch: 'arm64' },
+          runtimes: [],
+          agents: [{ id: 'agent-1', name: 'Codex' }],
+        },
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.socket.trigger('devices:snapshot', [device]);
+
+    expect(harness.emitted).toContainEqual(['device:get', { userId: 'user-1', deviceId: 'device-1' }]);
+    const detailHtml = harness.element('device-detail').innerHTML;
+    expect(detailHtml).toContain('设备详情');
+    expect(detailHtml).toContain('mbp');
+    expect(detailHtml).toContain('Codex');
+  });
+
+  test('renders a terminal device detail error when device:get fails', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'offline', name: 'Mac' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'device:get': () => ({ ok: false, error: 'NOT_FOUND' }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('devices:snapshot', [device]);
+
+    const detailHtml = harness.element('device-detail').innerHTML;
+    expect(detailHtml).toContain('设备详情加载失败');
+    expect(detailHtml).toContain('NOT_FOUND');
+    expect(detailHtml).not.toContain('加载设备详情…');
+  });
+
+  test('refreshes device detail bound agents from the latest agent snapshot', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'online', name: 'Mac' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'device:get': () => ({
+        ok: true,
+        device: {
+          ...device,
+          systemInfo: { hostname: 'mbp', platform: 'darwin', arch: 'arm64' },
+          runtimes: [],
+          agents: [{ id: 'agent-old', name: 'Old Agent', deviceId: 'device-1' }],
+        },
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('devices:snapshot', [device]);
+    expect(harness.element('device-detail').innerHTML).toContain('Old Agent');
+
+    await harness.socket.trigger('agents:snapshot', [
+      { id: 'agent-new', name: 'New Agent', deviceId: 'device-1', status: 'online' },
+    ]);
+
+    const detailHtml = harness.element('device-detail').innerHTML;
+    expect(detailHtml).toContain('New Agent');
+    expect(detailHtml).not.toContain('Old Agent');
+  });
 });
 
 function createPreviewHarness(
@@ -1007,6 +1114,7 @@ function createPreviewHarness(
     'message-artifact-files',
     'message-reply-indicator',
     'message-reply-cancel',
+    'device-detail',
   ]) {
     elements.set(id, createElement(id));
   }
