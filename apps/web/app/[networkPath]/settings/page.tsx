@@ -393,7 +393,8 @@ function ServerPanel() {
       setMaxUses('');
       setExpiresAt('');
     } else {
-      setJoinError(res.error ?? '创建失败');
+      // 优先显示服务端返回的真实 message（如 "no such table: join_links"），而非泛化的 error code
+      setJoinError(res.message ?? res.error ?? '创建失败');
     }
   };
 
