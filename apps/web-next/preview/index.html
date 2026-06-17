@@ -1967,6 +1967,13 @@
           </div>
           <ul class="search-results" id="join-link-results"></ul>
         </div>
+        <div class="panel" id="saved-messages-panel">
+          <div class="rail-heading"><h2>收藏消息</h2><span class="meta">saved</span></div>
+          <div class="task-actions">
+            <button type="button" id="saved-messages-refresh">刷新</button>
+          </div>
+          <ul class="search-results" id="saved-messages-results"></ul>
+        </div>
         <div class="panel">
           <div class="rail-heading"><h2>成员</h2><span class="meta">human / agent</span></div>
           <ul class="list" id="agents"></ul>
@@ -2037,6 +2044,9 @@
         joinLinks: [],
         joinError: null,
         joinLoading: false,
+        savedMessages: [],
+        savedError: null,
+        savedLoading: false,
         activeWorkspaceRunId: readWorkspaceRunIdFromUrl(),
         workspaceRunDetails: {},
         workspaceRunDetailLoadingId: null,
@@ -2276,6 +2286,10 @@
         await listJoinLinks();
       });
 
+      el("saved-messages-refresh").addEventListener("click", async () => {
+        await listSavedMessages();
+      });
+
       el("message-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         if (!state.user || !state.team || !state.channel) return;
@@ -2362,6 +2376,7 @@
         renderTasks();
         renderSearchResults();
         renderJoinLinks();
+        renderSavedMessages();
         renderWorkspaceRunPanel();
         renderActiveChannel();
         renderAuthState();
@@ -2771,6 +2786,40 @@
           state.joinError = ack.message || ack.error || "加载邀请失败。";
         }
         renderJoinLinks();
+      }
+
+      async function listSavedMessages() {
+        if (!state.user || !state.team) return;
+        state.savedLoading = true;
+        state.savedError = null;
+        renderSavedMessages();
+        const ack = await emit("message:list-saved", { userId: state.user.id, teamId: state.team.id });
+        state.savedLoading = false;
+        if (ack.ok && Array.isArray(ack.messages)) {
+          state.savedMessages = ack.messages;
+          state.savedError = null;
+        } else {
+          state.savedError = ack.message || ack.error || "加载收藏失败。";
+        }
+        renderSavedMessages();
+      }
+
+      function renderSavedMessages() {
+        if (state.savedLoading) {
+          el("saved-messages-results").innerHTML = `<li class="rail-muted">收藏加载中。</li>`;
+          return;
+        }
+        if (state.savedError) {
+          el("saved-messages-results").innerHTML = `<li class="rail-muted">${escapeHtml(state.savedError)}</li>`;
+          return;
+        }
+        if (state.savedMessages.length === 0) {
+          el("saved-messages-results").innerHTML = `<li class="rail-muted">暂无收藏消息。点击消息上的 ☆ 收藏。</li>`;
+          return;
+        }
+        el("saved-messages-results").innerHTML = state.savedMessages.slice(0, 8).map((message) => {
+          return `<li class="search-result"><div class="message-body">${escapeHtml(message.body || "")}</div></li>`;
+        }).join("");
       }
 
       async function createJoinLink() {
@@ -3233,6 +3282,9 @@
         state.joinLinks = [];
         state.joinError = null;
         state.joinLoading = false;
+        state.savedMessages = [];
+        state.savedError = null;
+        state.savedLoading = false;
         state.workspaceRunDetails = {};
         state.workspaceRunDetailLoadingId = null;
         state.workspaceRunDetailError = null;

@@ -1220,6 +1220,45 @@ describe('web-next preview page interactions', () => {
     expect(detailHtml).toContain('New Agent');
     expect(detailHtml).not.toContain('Old Agent');
   });
+
+  test('lists saved messages through the saved-messages panel', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'message:list-saved': () => ({
+        ok: true,
+        messages: [{
+          id: 'message-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          threadId: 'message-1',
+          senderKind: 'human',
+          senderId: 'user-1',
+          body: 'saved note',
+          createdAt: 1000,
+          saved: true,
+        }],
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.click('saved-messages-refresh', 'button', {});
+    expect(harness.emitted).toContainEqual(['message:list-saved', { userId: 'user-1', teamId: 'team-1' }]);
+    expect(harness.element('saved-messages-results').innerHTML).toContain('saved note');
+  });
 });
 
 function createPreviewHarness(
@@ -1274,6 +1313,9 @@ function createPreviewHarness(
     'message-reply-indicator',
     'message-reply-cancel',
     'device-detail',
+    'saved-messages-panel',
+    'saved-messages-refresh',
+    'saved-messages-results',
   ]) {
     elements.set(id, createElement(id));
   }
