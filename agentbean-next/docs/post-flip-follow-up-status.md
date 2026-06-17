@@ -96,7 +96,7 @@ P0 baseline 已经收敛，不应继续作为下一条产品切片 blocker。
 
 - 更完整的 workspace run 专用页面布局、team-wide workspace explorer 与分段日志存储/检索。
 - Admin、metrics 与 audit requirements；`agent:metrics` request/ack 已有，但完整 admin/metrics/audit 产品面仍未冻结。
-- 更完整的 settings/device 页面，以及 member management 的浏览器级 smoke 覆盖。
+- 团队改名（`team:update`）已在 preview 团队设置面板覆盖；更完整的 settings/device 页面（如 team delete、device rename 等）与 member management 的浏览器级 smoke 覆盖仍待后续切片。
 - Typed assignee、task 自动生成与更丰富的 task 产品流；delete/reorder 的协议与 usecase 第一版已收敛。
 - Join link management UI（web-next 客户端 list/revoke 绑定 + preview 邀请管理面板）；`join:list` / `join:revoke` 协议层已由 #267 落地。
 

@@ -73,6 +73,8 @@ describe('web-next preview page interactions', () => {
     expect(html).toContain('.composer-thread-indicator:not([hidden])');
     expect(html).toContain('id="join-link-panel"');
     expect(html).toContain('邀请链接');
+    expect(html).toContain('id="team-settings-form"');
+    expect(html).toContain('重命名团队');
   });
 
   test('restores saved session through auth:whoami and resubscribes snapshots on connect', async () => {
@@ -918,6 +920,42 @@ describe('web-next preview page interactions', () => {
     expect(html).toContain('thread-reply');
     expect(html).toContain('讨论串');
   });
+
+  test('renames the current team through the settings form', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'team:update': (payload) => ({
+        ok: true,
+        team: { id: 'team-1', name: (payload as { name?: string }).name || 'AgentBean', path: 'agentbean' },
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    expect(harness.element('team-display-name').textContent).toBe('AgentBean');
+
+    harness.element('team-settings-form').fields.name = 'Ops Team';
+    await harness.submit('team-settings-form');
+
+    expect(harness.emitted).toContainEqual([
+      'team:update',
+      { userId: 'user-1', teamId: 'team-1', name: 'Ops Team' },
+    ]);
+    expect(harness.element('team-display-name').textContent).toBe('Ops Team');
+  });
 });
 
 function createPreviewHarness(
@@ -938,6 +976,7 @@ function createPreviewHarness(
     'message-form': { channelId: '', body: '@Codex hello' },
     'task-create-form': { title: 'Ship task' },
     'message-search-form': { query: 'roadmap' },
+    'team-settings-form': { name: '' },
   };
   for (const [id, fields] of Object.entries(formFields)) {
     elements.set(id, createElement(id, fields));
