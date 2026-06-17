@@ -1220,6 +1220,42 @@ describe('web-next preview page interactions', () => {
     expect(detailHtml).toContain('New Agent');
     expect(detailHtml).not.toContain('Old Agent');
   });
+
+  test('reorders tasks through the up/down controls', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const task1 = { id: 'task-1', teamId: 'team-1', channelId: 'channel-1', title: 'First', status: 'todo', creatorId: 'user-1', tags: [], sortOrder: 1, createdAt: 1, updatedAt: 1 };
+    const task2 = { id: 'task-2', teamId: 'team-1', channelId: 'channel-1', title: 'Second', status: 'todo', creatorId: 'user-1', tags: [], sortOrder: 2, createdAt: 2, updatedAt: 2 };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [task1, task2] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'task:reorder': (payload) => ({ ok: true, task: { ...task2, sortOrder: (payload as { sortOrder?: number }).sortOrder ?? 0 } }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    const initialHtml = harness.element('task-results').innerHTML;
+    expect(initialHtml.indexOf('First')).toBeLessThan(initialHtml.indexOf('Second'));
+
+    await harness.click('task-results', 'button[data-task-move]', { taskMove: 'task-2', direction: 'up' });
+    expect(harness.emitted).toContainEqual([
+      'task:reorder',
+      expect.objectContaining({ userId: 'user-1', teamId: 'team-1', taskId: 'task-2' }),
+    ]);
+
+    const reorderedHtml = harness.element('task-results').innerHTML;
+    expect(reorderedHtml.indexOf('Second')).toBeLessThan(reorderedHtml.indexOf('First'));
+  });
 });
 
 function createPreviewHarness(

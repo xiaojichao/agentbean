@@ -2252,6 +2252,11 @@
       }
 
       el("task-results").addEventListener("click", async (event) => {
+        const moveButton = event.target.closest("button[data-task-move]");
+        if (moveButton) {
+          await reorderTask(moveButton.dataset.taskMove, moveButton.dataset.direction);
+          return;
+        }
         const deleteButton = event.target.closest("button[data-task-delete]");
         if (deleteButton) {
           await deleteTask(deleteButton.dataset.taskDelete);
@@ -2731,6 +2736,44 @@
         renderTasks();
       }
 
+      function computeReorderSortOrder(index, direction) {
+        const target = direction === "up" ? index - 1 : index + 1;
+        if (target < 0 || target >= state.tasks.length) return null;
+        const neighbor = state.tasks[target].sortOrder ?? 0;
+        let edge;
+        if (direction === "up") {
+          edge = target - 1 >= 0 ? (state.tasks[target - 1].sortOrder ?? 0) : neighbor - 2;
+        } else {
+          edge = target + 1 < state.tasks.length ? (state.tasks[target + 1].sortOrder ?? 0) : neighbor + 2;
+        }
+        return { target, sortOrder: (edge + neighbor) / 2 };
+      }
+
+      async function reorderTask(taskId, direction) {
+        if (!state.user || !state.team || !taskId) return;
+        const index = state.tasks.findIndex((task) => task.id === taskId);
+        if (index < 0) return;
+        const move = computeReorderSortOrder(index, direction);
+        if (!move) return;
+        const ack = await emit("task:reorder", {
+          userId: state.user.id,
+          teamId: state.team.id,
+          taskId,
+          sortOrder: move.sortOrder,
+        });
+        if (ack.ok && ack.task) {
+          const tasks = state.tasks.slice();
+          const [moved] = tasks.splice(index, 1);
+          moved.sortOrder = ack.task.sortOrder;
+          tasks.splice(move.target, 0, moved);
+          state.tasks = tasks;
+          state.taskError = null;
+        } else {
+          state.taskError = ack.message || ack.error || "排序任务失败。";
+        }
+        renderTasks();
+      }
+
       function renderTasks() {
         if (state.taskLoading) {
           el("task-results").innerHTML = `<li class="rail-muted">任务处理中。</li>`;
@@ -2752,7 +2795,7 @@
           return `<li class="search-result">
             <div class="meta">${escapeHtml(channelName)} · ${escapeHtml(task.status || "todo")}</div>
             <div class="message-body">${escapeHtml(task.title)}</div>
-            <div class="task-actions"><button type="button" data-task-id="${escapeHtml(task.id)}" data-status="${escapeHtml(nextStatus)}">${escapeHtml(action)}</button><button type="button" data-task-delete="${escapeHtml(task.id)}">删除</button></div>
+            <div class="task-actions"><button type="button" data-task-id="${escapeHtml(task.id)}" data-status="${escapeHtml(nextStatus)}">${escapeHtml(action)}</button><button type="button" data-task-move="${escapeHtml(task.id)}" data-direction="up">↑</button><button type="button" data-task-move="${escapeHtml(task.id)}" data-direction="down">↓</button><button type="button" data-task-delete="${escapeHtml(task.id)}">删除</button></div>
           </li>`;
         }).join("");
       }
