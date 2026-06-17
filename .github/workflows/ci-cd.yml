@@ -250,7 +250,7 @@ jobs:
         env:
           AGENTBEAN_NEXT_BROWSER_SMOKE_ARTIFACTS_DIR: artifacts/agentbean-next-browser-smoke
           CHROME_BIN: /usr/bin/google-chrome
-        run: npm run smoke:agentbean-next-browser -- --skip-build
+        run: npm run smoke:agentbean-next-browser -- --skip-build --timeout-ms 60000
 
       - name: Upload AgentBean Next browser smoke artifacts
         if: steps.changes.outputs.should_validate == 'true' && always()
