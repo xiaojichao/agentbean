@@ -79,6 +79,7 @@ describe('AgentBean Next first-slice smoke', () => {
       defaultChannel: { id: 'channel-1' },
     });
 
+    const resolvedEnvRefs: unknown[] = [];
     const daemon = createDaemonProtocolClient({
       socket: agentSocket,
       executor: async (request) => ({
@@ -108,6 +109,10 @@ describe('AgentBean Next first-slice smoke', () => {
         },
       ],
       agents: [],
+      envResolver: async (envRef) => {
+        resolvedEnvRefs.push(envRef);
+        return { OPENAI_API_KEY: 'secret-value' };
+      },
     });
     await daemon.start();
 
@@ -164,6 +169,7 @@ describe('AgentBean Next first-slice smoke', () => {
         ],
       });
     });
+    expect(resolvedEnvRefs).toEqual([{ agentId: 'agent-1', teamId: 'team-1' }]);
   });
 
   test('runs register -> daemon hello -> agent batch -> message send -> dispatch result', async () => {

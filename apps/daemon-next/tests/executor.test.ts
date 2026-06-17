@@ -231,30 +231,28 @@ describe('daemon-next command executor', () => {
     );
 
     const executor = createCommandExecutor({
-      timeoutMs: 50,
+      timeoutMs: 500,
       killGraceMs: 30,
-      clock: createClock([5000, 5080]),
+      clock: createClock([5000, 5530]),
     });
 
-    await expect(
-      executor({
-        id: 'dispatch-1',
-        teamId: 'team-1',
-        channelId: 'channel-1',
-        messageId: 'message-1',
-        agentId: 'agent-1',
-        requestId: 'request-1',
-        prompt: 'hello',
-        customAgent: {
-          adapterKind: 'codex',
-          command: process.execPath,
-          args: [scriptPath],
-          cwd,
-        },
-      }),
-    ).rejects.toThrow('timed out after 50ms');
-
+    const running = executor({
+      id: 'dispatch-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'hello',
+      customAgent: {
+        adapterKind: 'codex',
+        command: process.execPath,
+        args: [scriptPath],
+        cwd,
+      },
+    });
     await waitForFile(pidFile);
+    await expect(running).rejects.toThrow('timed out after 500ms');
     const pid = Number(readFileSync(pidFile, 'utf8'));
     // SIGTERM is ignored, so SIGKILL must fire at timeoutMs + killGraceMs.
     await new Promise((resolve) => setTimeout(resolve, 200));

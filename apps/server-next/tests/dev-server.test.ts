@@ -439,6 +439,36 @@ describe('server-next dev server entry', () => {
     await expect(response.text()).resolves.toBe('<script>localStorage.token</script>');
   });
 
+  test('serves custom agent env only with bearer device credentials', async () => {
+    const app = {
+      getAgentEnvForDevice: vi.fn(async () => makeSuccess({ env: { OPENAI_API_KEY: 'secret-value' } })),
+    } as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir: '.agentbean-next-test', sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+
+    const queryToken = await fetch(`${server.baseUrl}/api/teams/team-1/agents/agent-1/env?token=device-token`);
+    expect(queryToken.status).toBe(401);
+    expect(app.getAgentEnvForDevice).not.toHaveBeenCalled();
+
+    const bearer = await fetch(`${server.baseUrl}/api/teams/team-1/agents/agent-1/env`, {
+      headers: { Authorization: 'Bearer device-token' },
+    });
+    expect(bearer.status).toBe(200);
+    await expect(bearer.json()).resolves.toEqual({
+      ok: true,
+      env: { OPENAI_API_KEY: 'secret-value' },
+    });
+    expect(app.getAgentEnvForDevice).toHaveBeenCalledWith({
+      token: 'device-token',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+    });
+  });
+
   test('rejects oversized artifact upload bodies before authentication', async () => {
     const app = {
       whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),

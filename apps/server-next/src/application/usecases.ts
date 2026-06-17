@@ -1031,9 +1031,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!credentials || credentials.teamId !== envInput.teamId) {
         return makeFailure('UNAUTHENTICATED', 'Invalid device credentials');
       }
-      const device = credentials.machineId && credentials.profileId
-        ? await repositories.devices.findByMachineProfile(credentials.machineId, credentials.profileId)
-        : null;
+      const teamDevices = credentials.machineId && credentials.profileId
+        ? await repositories.devices.listByTeam(envInput.teamId)
+        : [];
+      const device = teamDevices.find(
+        (candidate) => candidate.machineId === credentials.machineId && candidate.profileId === credentials.profileId,
+      ) ?? null;
       if (!device || device.teamId !== envInput.teamId) {
         return makeFailure('UNAUTHENTICATED', 'Unknown device for team');
       }
