@@ -100,9 +100,9 @@ P0 baseline 已经收敛，不应继续作为下一条产品切片 blocker。
 - Typed assignee、task 自动生成与更丰富的 task 产品流；delete/reorder 的协议与 usecase 第一版已收敛。
 - Join link management UI（web-next 客户端 list/revoke 绑定 + preview 邀请管理面板）；`join:list` / `join:revoke` 协议层已由 #267 落地。
 
-### npm canonical 入口 dist-tag
+### npm canonical 入口 dist-tag（已收敛）
 
-canonical npm 包 `@agentbean/daemon` 已发布基于 daemon-next 的 `0.2.0`，但 npm `@latest` dist-tag 目前仍指向旧守护进程 `0.1.35`（2026-06-16 核对 `npm view @agentbean/daemon dist-tags` = `{ latest: '0.1.35' }`）。也就是说默认 `npm install @agentbean/daemon` 仍安装旧守护进程，daemon-next 只能通过显式 `@agentbean/daemon-next@0.2.0` / `@agentbean/daemon@0.2.0` 安装。根因：旧 `0.1.x` 仍在迭代并在发布时回占 `latest`。推进 `@latest` 到 daemon-next（并停止旧 `0.1.x` 回占 latest）是替换主线尚未收尾的一条 npm 用户入口边界，不属于 runtime/生产部署范畴。
+canonical npm 包 `@agentbean/daemon` 的 `@latest` dist-tag 已推进到基于 daemon-next 的 `0.2.0`（2026-06-17 核对 `npm view @agentbean/daemon dist-tags` = `{ latest: '0.2.0', legacy: '0.1.35' }`）。默认 `npm install @agentbean/daemon` 现在安装 daemon-next；旧守护进程 `0.1.35` 保留在 `legacy` dist-tag 作 rollback。cutover audit 的 `npm-canonical-daemon-latest-dist-tag` check 持续验证 latest 指向 daemon-next 版本，防止回退。该 npm 用户入口边界已随 #269 的受控推进机制 + 一次性 flip 关闭。
 
 ## 下一步判定
 
