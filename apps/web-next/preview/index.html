@@ -2064,6 +2064,7 @@
         teamRuns: [],
         teamRunsLoading: false,
         teamRunsError: null,
+        teamRunsCursor: null,
         members: [],
         membersError: null,
         membersLoading: false,
@@ -2321,7 +2322,12 @@
         await listTeamRuns();
       });
 
-      el("team-runs-results").addEventListener("click", (event) => {
+      el("team-runs-results").addEventListener("click", async (event) => {
+        const moreButton = event.target.closest("button[data-team-runs-more]");
+        if (moreButton) {
+          await loadMoreTeamRuns();
+          return;
+        }
         const button = event.target.closest("button[data-workspace-run-id]");
         if (!button) return;
         void openWorkspaceRunDetail(button.dataset.workspaceRunId || null);
@@ -3023,13 +3029,30 @@
         if (!state.team?.id || !state.token) return;
         state.teamRunsLoading = true;
         state.teamRunsError = null;
+        state.teamRuns = [];
+        state.teamRunsCursor = null;
         renderTeamRuns();
+        await fetchTeamRunsPage(null);
+        state.teamRunsLoading = false;
+        renderTeamRuns();
+      }
+
+      async function loadMoreTeamRuns() {
+        if (!state.teamRunsCursor) return;
+        await fetchTeamRunsPage(state.teamRunsCursor);
+        renderTeamRuns();
+      }
+
+      async function fetchTeamRunsPage(cursor) {
+        if (!state.team?.id || !state.token) return;
+        const cursorParam = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
         try {
-          const response = await fetch(`/api/teams/${encodeURIComponent(state.team.id)}/workspace-runs?token=${encodeURIComponent(state.token)}`);
+          const response = await fetch(`/api/teams/${encodeURIComponent(state.team.id)}/workspace-runs?token=${encodeURIComponent(state.token)}${cursorParam}`);
           const ack = await response.json();
           addEvent("workspace-run:list", ack);
           if (ack.ok && Array.isArray(ack.runs)) {
-            state.teamRuns = ack.runs;
+            state.teamRuns = cursor ? [...state.teamRuns, ...ack.runs] : ack.runs;
+            state.teamRunsCursor = typeof ack.nextCursor === "string" && ack.nextCursor ? ack.nextCursor : null;
             state.teamRunsError = null;
           } else {
             state.teamRunsError = ack.message || ack.error || "加载运行列表失败。";
@@ -3037,8 +3060,6 @@
         } catch (error) {
           state.teamRunsError = error instanceof Error ? error.message : "加载运行列表失败。";
         }
-        state.teamRunsLoading = false;
-        renderTeamRuns();
       }
 
       function renderTeamRuns() {
@@ -3054,7 +3075,7 @@
           el("team-runs-results").innerHTML = `<li class="rail-muted">暂无 workspace 运行。</li>`;
           return;
         }
-        el("team-runs-results").innerHTML = state.teamRuns.slice(0, 10).map((entry) => {
+        const rows = state.teamRuns.map((entry) => {
           const run = entry.workspaceRun || {};
           const artifacts = Array.isArray(entry.artifacts) ? entry.artifacts : [];
           const status = run.status || "unknown";
@@ -3065,7 +3086,11 @@
             <div class="message-body">${escapeHtml(command)}</div>
             <div class="task-actions"><button type="button" data-workspace-run-id="${escapeHtml(run.id)}">查看详情</button></div>
           </li>`;
-        }).join("");
+        });
+        if (state.teamRunsCursor) {
+          rows.push(`<li class="rail-muted"><button type="button" data-team-runs-more="1">加载更多</button></li>`);
+        }
+        el("team-runs-results").innerHTML = rows.join("");
       }
 
       async function listSavedMessages() {
@@ -3568,6 +3593,7 @@
         state.teamRuns = [];
         state.teamRunsLoading = false;
         state.teamRunsError = null;
+        state.teamRunsCursor = null;
         state.members = [];
         state.membersError = null;
         state.membersLoading = false;
