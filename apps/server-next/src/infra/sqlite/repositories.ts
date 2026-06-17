@@ -939,15 +939,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .prepare(
             `SELECT * FROM messages
              WHERE channel_id IN (${placeholders})
-             AND ${likeClauses}
-             ORDER BY created_at DESC
-             LIMIT ?`,
+             AND ${likeClauses}`,
           )
-          .all(
-            ...input.channelIds,
-            ...terms.map((term) => `%${escapeSqlLike(term)}%`),
-            Math.max(input.limit * 5, 100),
-          )
+          .all(...input.channelIds, ...terms.map((term) => `%${escapeSqlLike(term)}%`))
           .map((row) => mapMessage(row))
           .filter((message): message is NonNullable<typeof message> => message !== null);
         return rankMessageSearch(pool, input.query, input.limit);

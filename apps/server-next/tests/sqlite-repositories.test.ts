@@ -341,6 +341,34 @@ describe('server-next SQLite repositories', () => {
           { id: 'message-search-private', body: 'secret sqlite search' },
         ]),
       );
+      await repositories.messages.append({
+        id: 'message-search-old-phrase',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        threadId: 'message-search-old-phrase',
+        senderKind: 'human',
+        senderId: 'user-1',
+        body: 'alpha beta exact phrase',
+        createdAt: 600,
+      });
+      for (let index = 0; index < 250; index += 1) {
+        await repositories.messages.append({
+          id: `message-search-new-scattered-${index}`,
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          threadId: `message-search-new-scattered-${index}`,
+          senderKind: 'human',
+          senderId: 'user-1',
+          body: `alpha scattered filler ${index} beta`,
+          createdAt: 700 + index,
+        });
+      }
+      const sqliteRanking = await app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'alpha beta' });
+      expect(sqliteRanking).toMatchObject({ ok: true });
+      expect(sqliteRanking.messages[0]).toMatchObject({
+        id: 'message-search-old-phrase',
+        body: 'alpha beta exact phrase',
+      });
       await expect(app.searchMessages({ userId: 'user-2', teamId: 'team-1', query: 'sqlite' })).resolves.toMatchObject({
         ok: true,
         messages: [
