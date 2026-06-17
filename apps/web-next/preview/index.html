@@ -3038,8 +3038,11 @@
       }
 
       async function loadMoreTeamRuns() {
-        if (!state.teamRunsCursor) return;
+        if (!state.teamRunsCursor || state.teamRunsLoading) return;
+        state.teamRunsLoading = true;
+        renderTeamRuns();
         await fetchTeamRunsPage(state.teamRunsCursor);
+        state.teamRunsLoading = false;
         renderTeamRuns();
       }
 

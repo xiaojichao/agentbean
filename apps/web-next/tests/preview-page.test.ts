@@ -1513,6 +1513,37 @@ describe('web-next preview page interactions', () => {
     expect(harness.element('team-runs-results').innerHTML).not.toContain('加载更多');
     expect(harness.fetches.some((entry) => entry.url.includes('cursor=cursor-1'))).toBe(true);
   });
+
+  test('ignores concurrent team workspace run load-more clicks', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.click('team-runs-refresh', 'button', {});
+    await Promise.all([
+      harness.click('team-runs-results', 'button[data-team-runs-more]', {}),
+      harness.click('team-runs-results', 'button[data-team-runs-more]', {}),
+    ]);
+
+    const cursorFetches = harness.fetches.filter((entry) => entry.url.includes('cursor=cursor-1'));
+    expect(cursorFetches).toHaveLength(1);
+    expect(harness.element('team-runs-results').innerHTML.match(/npm run build/g)).toHaveLength(1);
+  });
 });
 
 function createPreviewHarness(
