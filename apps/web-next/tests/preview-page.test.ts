@@ -1007,6 +1007,67 @@ describe('web-next preview page interactions', () => {
     expect(harness.element('channels').innerHTML).not.toContain('Ops');
   });
 
+  test('reacts to and saves a message through the message actions', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'message:react': () => ({ ok: true, messageId: 'message-1' }),
+      'message:save': () => ({ ok: true, messageId: 'message-1' }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+    await harness.socket.trigger('channel:message', {
+      id: 'message-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'message-1',
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: 'react to me',
+      createdAt: 1000,
+    });
+
+    await harness.click('messages', 'button[data-message-react]', { messageReact: 'message-1' });
+    expect(harness.emitted).toContainEqual([
+      'message:react',
+      { userId: 'user-1', teamId: 'team-1', messageId: 'message-1', emoji: '👍', on: true },
+    ]);
+    expect(harness.element('messages').innerHTML).toContain('👍 1');
+
+    await harness.click('messages', 'button[data-message-react]', { messageReact: 'message-1' });
+    expect(harness.emitted).toContainEqual([
+      'message:react',
+      { userId: 'user-1', teamId: 'team-1', messageId: 'message-1', emoji: '👍', on: false },
+    ]);
+    expect(harness.element('messages').innerHTML).toContain('👍 0');
+
+    await harness.click('messages', 'button[data-message-save]', { messageSave: 'message-1' });
+    expect(harness.emitted).toContainEqual([
+      'message:save',
+      { userId: 'user-1', teamId: 'team-1', messageId: 'message-1', on: true },
+    ]);
+    expect(harness.element('messages').innerHTML).toContain('已收藏');
+
+    await harness.click('messages', 'button[data-message-save]', { messageSave: 'message-1' });
+    expect(harness.emitted).toContainEqual([
+      'message:save',
+      { userId: 'user-1', teamId: 'team-1', messageId: 'message-1', on: false },
+    ]);
+    expect(harness.element('messages').innerHTML).toContain('☆ 收藏');
+  });
+
   test('deletes a task through the preview task controls', async () => {
     const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
     const harness = createPreviewHarness({
