@@ -41,6 +41,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0001_first_slice.sql');
   applyMigration(db, 'global/0002_device_invites.sql');
   applyMigration(db, 'global/0003_agent_deleted_at.sql');
+  applyMigration(db, 'global/0004_join_links.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {

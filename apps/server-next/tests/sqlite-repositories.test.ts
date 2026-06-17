@@ -95,6 +95,41 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('recreates join_links on a drifted database missing the table (regression for INTERNAL_ERROR)', () => {
+    const { globalDb, close } = openMigratedDatabases();
+    try {
+      // 模拟生产 schema 漂移：0001_first_slice.sql 在 join_links 加入前已应用，
+      // 导致 schema_migrations 记录 0001 完成但 join_links 表缺失。
+      globalDb.exec('DROP TABLE join_links');
+      // 生产此前从未应用过 0004（本修复新增），回退到该状态
+      globalDb
+        .prepare('DELETE FROM schema_migrations WHERE id = ?')
+        .run('global/0004_join_links.sql');
+      expect(tableNames(globalDb)).not.toContain('join_links');
+
+      // 模拟生产重启：重新应用 migrations
+      applyGlobalMigrations(globalDb);
+
+      // 修复后：新 migration 必须补建 join_links（CREATE TABLE IF NOT EXISTS）
+      expect(tableNames(globalDb)).toContain('join_links');
+      expect(columnNames(globalDb, 'join_links')).toEqual(
+        expect.arrayContaining([
+          'id',
+          'code',
+          'team_id',
+          'created_by',
+          'created_at',
+          'expires_at',
+          'max_uses',
+          'uses_count',
+          'revoked_at',
+        ]),
+      );
+    } finally {
+      close();
+    }
+  });
+
   test('persists user join links and consumes them with SQLite', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
