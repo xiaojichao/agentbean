@@ -1894,6 +1894,11 @@
           <button class="rail-tab" type="button">设备</button>
           <button class="rail-tab" type="button">Agent</button>
         </div>
+        <form class="panel compact-form" id="team-settings-form">
+          <div class="rail-heading"><h2>团队设置</h2><span class="meta">rename</span></div>
+          <label>名称 <input name="name" placeholder="团队名称" /></label>
+          <button type="submit">重命名团队</button>
+        </form>
         <div class="panel workspace-run-detail" id="workspace-run-detail">
           <div class="rail-heading"><h2>Workspace Run</h2><span class="meta">输出详情</span></div>
           <div class="rail-muted">选择消息里的 workspace run 查看详情。</div>
@@ -2158,6 +2163,23 @@
         event.preventDefault();
         await createTask();
       });
+
+      el("team-settings-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        await renameTeam();
+      });
+
+      async function renameTeam() {
+        if (!state.user || !state.team) return;
+        const data = Object.fromEntries(new FormData(el("team-settings-form")));
+        const name = String(data.name || "").trim();
+        if (!name) return;
+        const ack = await emit("team:update", { userId: state.user.id, teamId: state.team.id, name });
+        if (ack.ok && ack.team) {
+          state.team = { ...state.team, name: ack.team.name };
+          render();
+        }
+      }
 
       el("task-results").addEventListener("click", async (event) => {
         const button = event.target.closest("button[data-task-id]");
