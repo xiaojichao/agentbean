@@ -614,7 +614,15 @@ jobs:
             exit 1
           fi
           npm dist-tag add "@agentbean/daemon@$LEGACY_VERSION" legacy
-          LEGACY_TAG="$(npm view "@agentbean/daemon" dist-tags --json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).legacy || ''")"
+          LEGACY_TAG=""
+          for attempt in $(seq 1 12); do
+            LEGACY_TAG="$(npm view "@agentbean/daemon" dist-tags --json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).legacy || ''")"
+            if [ "$LEGACY_TAG" = "$LEGACY_VERSION" ]; then
+              break
+            fi
+            echo "::notice::Waiting for npm legacy dist-tag propagation (${attempt}/12); observed '$LEGACY_TAG'."
+            sleep 5
+          done
           if [ "$LEGACY_TAG" != "$LEGACY_VERSION" ]; then
             echo "::error::npm legacy ($LEGACY_TAG) does not match legacy daemon ($LEGACY_VERSION)."
             exit 1
@@ -739,7 +747,15 @@ jobs:
             exit 1
           fi
           npm dist-tag add "@agentbean/daemon@$LEGACY_DAEMON_VERSION" legacy
-          LEGACY_TAG="$(npm view "@agentbean/daemon" dist-tags --json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).legacy || ''")"
+          LEGACY_TAG=""
+          for attempt in $(seq 1 12); do
+            LEGACY_TAG="$(npm view "@agentbean/daemon" dist-tags --json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).legacy || ''")"
+            if [ "$LEGACY_TAG" = "$LEGACY_DAEMON_VERSION" ]; then
+              break
+            fi
+            echo "::notice::Waiting for npm legacy dist-tag propagation (${attempt}/12); observed '$LEGACY_TAG'."
+            sleep 5
+          done
           echo "npm @agentbean/daemon dist-tags.legacy=$LEGACY_TAG"
           if [ "$LEGACY_TAG" != "$LEGACY_DAEMON_VERSION" ]; then
             echo "::error::npm legacy ($LEGACY_TAG) does not match legacy daemon ($LEGACY_DAEMON_VERSION)."
@@ -759,7 +775,15 @@ jobs:
       - name: Verify npm latest points to daemon-next
         if: env.NPM_TOKEN != ''
         run: |
-          LATEST="$(npm view "@agentbean/daemon" dist-tags --json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).latest")"
+          LATEST=""
+          for attempt in $(seq 1 12); do
+            LATEST="$(npm view "@agentbean/daemon" dist-tags --json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).latest || ''")"
+            if [ "$LATEST" = "${{ steps.versions.outputs.daemon_next_version }}" ]; then
+              break
+            fi
+            echo "::notice::Waiting for npm latest dist-tag propagation (${attempt}/12); observed '$LATEST'."
+            sleep 5
+          done
           echo "npm @agentbean/daemon dist-tags.latest=$LATEST"
           if [ "$LATEST" != "${{ steps.versions.outputs.daemon_next_version }}" ]; then
             echo "::error::npm latest ($LATEST) does not match daemon-next (${{ steps.versions.outputs.daemon_next_version }})."
