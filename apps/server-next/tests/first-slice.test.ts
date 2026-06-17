@@ -248,6 +248,56 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('searchMessages includes direct messages visible to the user without leaking to non-participants', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 260,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'join-1',
+        'user-2',
+        'team-2',
+        'channel-2',
+        'dm-1',
+        'dm-human-member-1',
+        'dm-agent-member-1',
+        'message-public',
+        'message-dm',
+      ]),
+      joinCodes: createIds(['code-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
+    await app.registerUser({ username: 'lin', password: 'secret', teamName: 'Lin Team', joinCode: 'code-1' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'executor-hosted',
+      source: 'scanned',
+      status: 'offline',
+      deviceId: 'device-1',
+      lastSeenAt: 260,
+    });
+    await app.startDirectMessage({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'public roadmap note' });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'dm-1', body: 'private dm roadmap note' });
+
+    const ownResult = await app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'roadmap' });
+    expect(ownResult).toMatchObject({ ok: true });
+    expect(ownResult.messages.map((message) => message.body)).toEqual(
+      expect.arrayContaining(['public roadmap note', 'private dm roadmap note']),
+    );
+
+    // user-2 is a team member but NOT a participant of dm-1, so the DM message must not leak into their search.
+    const otherResult = await app.searchMessages({ userId: 'user-2', teamId: 'team-1', query: 'roadmap' });
+    expect(otherResult).toMatchObject({ ok: true });
+    expect(otherResult.messages.map((message) => message.body)).toEqual(['public roadmap note']);
+  });
+
   test('tasks can be created, listed, and updated without leaking private channels', async () => {
     const app = createInMemoryServerNext({
       now: () => 300,

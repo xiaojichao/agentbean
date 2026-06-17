@@ -1867,7 +1867,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('VALIDATION_ERROR', 'Search query must be at least 2 characters');
       }
       const channels = await repositories.channels.listForUser(searchInput.teamId, searchInput.userId);
-      const channelIds = channels.map((channel) => channel.id);
+      const directChannels = await repositories.channels.listDirectForUser(searchInput.teamId, searchInput.userId);
+      const channelIds = [...channels, ...directChannels].map((channel) => channel.id);
       const messages = await repositories.messages.search({
         channelIds,
         query,

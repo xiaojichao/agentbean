@@ -192,7 +192,8 @@ Message search 第一版已经落地为 server-side simple DB search。
 
 剩余：
 
-- Direct message search、full-text indexing、ranking/highlight 与 saved filters 仍需后续产品切片。
+- Direct message search 已收敛：`message:search` 现在同时纳入用户可见的 direct channels（`listDirectForUser`），且不会泄漏给 DM 非参与者。
+- full-text indexing、ranking/highlight 与 saved filters 仍需后续产品切片。
 
 ## Web 缺口
 
