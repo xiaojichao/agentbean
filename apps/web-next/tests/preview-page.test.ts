@@ -1257,6 +1257,76 @@ describe('web-next preview page interactions', () => {
     expect(reorderedHtml.indexOf('Second')).toBeLessThan(reorderedHtml.indexOf('First'));
   });
 
+  test('keeps newly-created tasks in persisted task order', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const task1 = { id: 'task-1', teamId: 'team-1', channelId: 'channel-1', title: 'First', status: 'todo', creatorId: 'user-1', tags: [], sortOrder: 100, createdAt: 1, updatedAt: 1 };
+    const task2 = { id: 'task-2', teamId: 'team-1', channelId: 'channel-1', title: 'Second', status: 'todo', creatorId: 'user-1', tags: [], sortOrder: 200, createdAt: 2, updatedAt: 2 };
+    const task3 = { id: 'task-3', teamId: 'team-1', channelId: 'channel-1', title: 'Created', status: 'todo', creatorId: 'user-1', tags: [], sortOrder: 300, createdAt: 3, updatedAt: 3 };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [task1, task2] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'task:create': () => ({ ok: true, task: task3 }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+    harness.element('task-create-form').fields.title = 'Created';
+    await harness.submit('task-create-form');
+
+    const html = harness.element('task-results').innerHTML;
+    expect(html.indexOf('First')).toBeLessThan(html.indexOf('Second'));
+    expect(html.indexOf('Second')).toBeLessThan(html.indexOf('Created'));
+  });
+
+  test('renumbers tasks when adjacent sort orders have no gap', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const task1 = { id: 'task-1', teamId: 'team-1', channelId: 'channel-1', title: 'First', status: 'todo', creatorId: 'user-1', tags: [], sortOrder: 0, createdAt: 3, updatedAt: 3 };
+    const task2 = { id: 'task-2', teamId: 'team-1', channelId: 'channel-1', title: 'Second', status: 'todo', creatorId: 'user-1', tags: [], sortOrder: 0, createdAt: 2, updatedAt: 2 };
+    const task3 = { id: 'task-3', teamId: 'team-1', channelId: 'channel-1', title: 'Third', status: 'todo', creatorId: 'user-1', tags: [], sortOrder: 0, createdAt: 1, updatedAt: 1 };
+    const tasksById = new Map([task1, task2, task3].map((task) => [task.id, task]));
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [task1, task2, task3] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'task:reorder': (payload) => {
+        const update = payload as { taskId: string; sortOrder: number };
+        const task = tasksById.get(update.taskId);
+        return task ? { ok: true, task: { ...task, sortOrder: update.sortOrder } } : { ok: false, error: 'NOT_FOUND' };
+      },
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+    await harness.click('task-results', 'button[data-task-move]', { taskMove: 'task-3', direction: 'up' });
+
+    expect(harness.emitted).toContainEqual(['task:reorder', { userId: 'user-1', teamId: 'team-1', taskId: 'task-1', sortOrder: 1000 }]);
+    expect(harness.emitted).toContainEqual(['task:reorder', { userId: 'user-1', teamId: 'team-1', taskId: 'task-3', sortOrder: 2000 }]);
+    expect(harness.emitted).toContainEqual(['task:reorder', { userId: 'user-1', teamId: 'team-1', taskId: 'task-2', sortOrder: 3000 }]);
+
+    const html = harness.element('task-results').innerHTML;
+    expect(html.indexOf('First')).toBeLessThan(html.indexOf('Third'));
+    expect(html.indexOf('Third')).toBeLessThan(html.indexOf('Second'));
+  });
+
   test('lists saved messages through the saved-messages panel', async () => {
     const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
     const harness = createPreviewHarness({

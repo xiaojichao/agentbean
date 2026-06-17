@@ -2052,6 +2052,8 @@
         workspaceRunDetailLoadingId: null,
         workspaceRunDetailError: null,
       };
+      const TASK_REORDER_STEP = 1000;
+      const TASK_REORDER_MIN_GAP = 1e-6;
       const el = (id) => document.getElementById(id);
 
       socket.on("connect", async () => {
@@ -2353,7 +2355,7 @@
           clearSession();
         }
         if (tasks.ok) {
-          state.tasks = Array.isArray(tasks.tasks) ? tasks.tasks : [];
+          state.tasks = normalizeTasks(Array.isArray(tasks.tasks) ? tasks.tasks : []);
           state.taskError = null;
           renderTasks();
         } else {
@@ -2708,7 +2710,7 @@
         });
         state.taskLoading = false;
         if (ack.ok && ack.task) {
-          state.tasks = [ack.task, ...state.tasks.filter((task) => task.id !== ack.task.id)];
+          state.tasks = normalizeTasks([ack.task, ...state.tasks.filter((task) => task.id !== ack.task.id)]);
           const titleInput = el("task-create-form").querySelector?.("input[name='title']");
           if (titleInput) titleInput.value = "";
           state.taskError = null;
@@ -2727,7 +2729,7 @@
           status,
         });
         if (ack.ok && ack.task) {
-          state.tasks = state.tasks.map((task) => task.id === ack.task.id ? ack.task : task);
+          state.tasks = normalizeTasks(state.tasks.map((task) => task.id === ack.task.id ? ack.task : task));
           state.taskError = null;
         } else {
           state.taskError = ack.message || ack.error || "更新任务失败。";
@@ -2743,7 +2745,7 @@
           taskId,
         });
         if (ack.ok && ack.task) {
-          state.tasks = state.tasks.filter((task) => task.id !== ack.task.id);
+          state.tasks = normalizeTasks(state.tasks.filter((task) => task.id !== ack.task.id));
           state.taskError = null;
         } else {
           state.taskError = ack.message || ack.error || "删除任务失败。";
@@ -2751,41 +2753,84 @@
         renderTasks();
       }
 
-      function computeReorderSortOrder(index, direction) {
-        const target = direction === "up" ? index - 1 : index + 1;
-        if (target < 0 || target >= state.tasks.length) return null;
-        const neighbor = state.tasks[target].sortOrder ?? 0;
-        let edge;
-        if (direction === "up") {
-          edge = target - 1 >= 0 ? (state.tasks[target - 1].sortOrder ?? 0) : neighbor - 2;
-        } else {
-          edge = target + 1 < state.tasks.length ? (state.tasks[target + 1].sortOrder ?? 0) : neighbor + 2;
+      function compareTasksByPersistedOrder(left, right) {
+        const leftOrder = left.sortOrder ?? 0;
+        const rightOrder = right.sortOrder ?? 0;
+        if (Math.abs(leftOrder - rightOrder) > TASK_REORDER_MIN_GAP) {
+          return leftOrder - rightOrder;
         }
-        return { target, sortOrder: (edge + neighbor) / 2 };
+        return (right.createdAt ?? 0) - (left.createdAt ?? 0);
+      }
+
+      function normalizeTasks(tasks) {
+        return tasks.slice().sort(compareTasksByPersistedOrder);
+      }
+
+      function planReorder(taskId, direction) {
+        if (direction !== "up" && direction !== "down") return null;
+        const orderedTasks = normalizeTasks(state.tasks);
+        const index = orderedTasks.findIndex((task) => task.id === taskId);
+        if (index < 0) return null;
+        const target = direction === "up" ? index - 1 : index + 1;
+        if (target < 0 || target >= orderedTasks.length) return null;
+        const reorderedTasks = orderedTasks.slice();
+        const [moved] = reorderedTasks.splice(index, 1);
+        reorderedTasks.splice(target, 0, moved);
+
+        const previous = reorderedTasks[target - 1];
+        const next = reorderedTasks[target + 1];
+        if (!previous && !next) return null;
+        if (!previous) {
+          return {
+            tasks: reorderedTasks,
+            updates: [{ taskId, sortOrder: (next.sortOrder ?? 0) - TASK_REORDER_STEP }],
+          };
+        }
+        if (!next) {
+          return {
+            tasks: reorderedTasks,
+            updates: [{ taskId, sortOrder: (previous.sortOrder ?? 0) + TASK_REORDER_STEP }],
+          };
+        }
+
+        const previousOrder = previous.sortOrder ?? 0;
+        const nextOrder = next.sortOrder ?? 0;
+        if (nextOrder - previousOrder > TASK_REORDER_MIN_GAP) {
+          return {
+            tasks: reorderedTasks,
+            updates: [{ taskId, sortOrder: (previousOrder + nextOrder) / 2 }],
+          };
+        }
+        return {
+          tasks: reorderedTasks,
+          updates: reorderedTasks.map((task, taskIndex) => ({
+            taskId: task.id,
+            sortOrder: (taskIndex + 1) * TASK_REORDER_STEP,
+          })),
+        };
       }
 
       async function reorderTask(taskId, direction) {
         if (!state.user || !state.team || !taskId) return;
-        const index = state.tasks.findIndex((task) => task.id === taskId);
-        if (index < 0) return;
-        const move = computeReorderSortOrder(index, direction);
-        if (!move) return;
-        const ack = await emit("task:reorder", {
-          userId: state.user.id,
-          teamId: state.team.id,
-          taskId,
-          sortOrder: move.sortOrder,
-        });
-        if (ack.ok && ack.task) {
-          const tasks = state.tasks.slice();
-          const [moved] = tasks.splice(index, 1);
-          moved.sortOrder = ack.task.sortOrder;
-          tasks.splice(move.target, 0, moved);
-          state.tasks = tasks;
-          state.taskError = null;
-        } else {
-          state.taskError = ack.message || ack.error || "排序任务失败。";
+        const plan = planReorder(taskId, direction);
+        if (!plan) return;
+        const updatedTasks = new Map();
+        for (const update of plan.updates) {
+          const ack = await emit("task:reorder", {
+            userId: state.user.id,
+            teamId: state.team.id,
+            taskId: update.taskId,
+            sortOrder: update.sortOrder,
+          });
+          if (!ack.ok || !ack.task) {
+            state.taskError = ack.message || ack.error || "排序任务失败。";
+            renderTasks();
+            return;
+          }
+          updatedTasks.set(ack.task.id, ack.task);
         }
+        state.tasks = normalizeTasks(plan.tasks.map((task) => updatedTasks.get(task.id) || task));
+        state.taskError = null;
         renderTasks();
       }
 
