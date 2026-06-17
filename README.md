@@ -9,7 +9,7 @@ AgentBean 是一个面向人类与 Agent 协作的本地优先团队平台。它
 - **AgentOS 托管型 Agent**：由 OpenClaw、Hermes 等 AgentOS / Gateway 托管，可以作为团队成员响应频道或私聊消息。
 - **自定义 Agent**：用户创建的专属 Agent，连接某台设备上的项目目录和本地工具，把个人工作流转化为团队可协作的能力。
 
-> **当前默认入口是 AgentBean Next**（`apps/*-next` + `packages/*`）。生产 `https://api.agentbean.dev/` 已切换到 `server-next`，`AGENTBEAN_DEPLOY_TARGET=next` 已生效，npm canonical `@agentbean/daemon` 已发布基于 `daemon-next` 的 `0.2.0`（npm `@latest` dist-tag 暂仍为旧版，详见下文）。旧的 `apps/web`、`apps/server`、`apps/daemon` 仅作为 **legacy / rollback** 路径保留，不再是默认开发或生产入口（见文末「Legacy / Rollback」段落）。
+> **当前默认入口是 AgentBean Next**（`apps/*-next` + `packages/*`）。截至 2026-06-17 核对，生产 `https://api.agentbean.dev/` 已切换到 `server-next`，`AGENTBEAN_DEPLOY_TARGET=next` 已生效，npm canonical `@agentbean/daemon` 已发布基于 `daemon-next` 的 `0.2.0`（npm `@latest` dist-tag 暂仍为旧版，详见下文）。旧的 `apps/web`、`apps/server`、`apps/daemon` 仅作为 **legacy / rollback** 路径保留，不再是默认开发或生产入口（见文末「Legacy / Rollback」段落）。
 
 ## 仓库结构
 
@@ -215,8 +215,11 @@ npm run build:packages
 # readiness 契约检查（35/35）
 npm run check:agentbean-next-readiness
 
-# 生产切换审计（ok / pendingFinalFlip）
+# strict 生产切换审计（通过时 ok=true；未完成 final flip 会失败）
 npm run audit:agentbean-next-cutover -- --json
+
+# final flip 前预检（允许 pendingFinalFlip）
+npm run audit:agentbean-next-ready-to-flip -- --json
 
 # phase 测试（contracts / domain / server-next / daemon-next / web-next）
 npm run test:phase1
@@ -229,16 +232,18 @@ npm run test:server-next
 npm run test:daemon-next
 npm run test:web-next
 npm run smoke:agentbean-next-browser      # 真实 Chrome 端到端
-npm run smoke:agentbean-next-business     # 业务链路 smoke
+AGENTBEAN_NEXT_ENTRY_URL=http://127.0.0.1:4100 npm run smoke:agentbean-next-business
 ```
 
 完整的验证矩阵与每一切片的验证证据见 `agentbean-next/docs/verification-matrix.md`。
 
 ## 生产状态与发布
 
+以下状态是截至 2026-06-17 的核对结果；执行生产操作前请重新运行 cutover audit、smoke 与 npm registry 查询。
+
 - 生产部署目标：`AGENTBEAN_DEPLOY_TARGET=next`（已生效）。生产入口 `https://api.agentbean.dev/` 由 `server-next` 提供服务。
 - 生产切换门禁持续通过：strict cutover audit `11/11`、readiness `35/35`、public entry smoke `4/4`、business smoke `8/8`。
-- npm 发布：当 `AGENTBEAN_NPM_PUBLISH_TARGET=next`（未设置时 CI 回退到 `AGENTBEAN_DEPLOY_TARGET`，当前即 next）时，CI 依次发布 `@agentbean/contracts`、`@agentbean/daemon-next`，再发布 canonical `@agentbean/daemon`（基于 daemon-next）。
+- npm 发布：当 `AGENTBEAN_NPM_PUBLISH_TARGET=next`（未单独设置时 CI 回退到 `AGENTBEAN_DEPLOY_TARGET`）时，CI 依次发布 `@agentbean/contracts`、`@agentbean/daemon-next`，再发布 canonical `@agentbean/daemon`（基于 daemon-next）。
   - 已发布版本：`@agentbean/contracts@0.2.0`、`@agentbean/daemon-next@0.2.0`、canonical `@agentbean/daemon@0.2.0`（指向 daemon-next，`main` 为 `./dist/apps/daemon-next/src/index.js`）。
   - ⚠ npm 入口边界：canonical `@agentbean/daemon` 的 `@latest` dist-tag **目前仍指向旧守护进程 `0.1.35`**，尚未推进到 `0.2.0`。也就是说默认 `npm install @agentbean/daemon` 仍安装旧守护进程；要安装 daemon-next 请显式指定 `npm install @agentbean/daemon-next@0.2.0` 或 `npm install @agentbean/daemon@0.2.0`。推进 `@latest` 到 daemon-next（并停止旧 `0.1.x` 回占 latest）是当前替换主线尚未收尾的一条 npm 用户入口边界。
   - 如果本机 npm registry 使用 `npmmirror`，可能会暂时只看到旧版本；以 `https://registry.npmjs.org` 为准：
@@ -266,7 +271,7 @@ GitHub Actions 会在 PR 和 push 到 `main` 时验证：
 
 ## Legacy / Rollback（旧 AgentBean）
 
-旧的 `apps/web`（Next.js 14）、`apps/server`（Express + Socket.IO）、`apps/daemon`（旧守护进程）**不再是默认开发或生产入口**，仅作为 rollback / 历史参考保留。
+旧的 `apps/web`（Next.js 14）、`apps/server`（Express + Socket.IO）、`apps/daemon`（旧守护进程）**不再是默认开发或生产入口**，仅作为 rollback / 历史参考保留。旧栈仍是 CI 支持的显式 rollback deploy target（`AGENTBEAN_DEPLOY_TARGET=old`）。
 
 - 旧 web 页面（`/[team]/chat`、`/[team]/members`、`/[team]/devices`、`/[team]/settings`、`/[team]/tasks` 等）属于旧 Next.js 应用，已不在生产提供流量；生产 web 入口是 server-next 托管的 web-next preview。
 - npm 包名 `@agentbean/daemon` 已发布基于 daemon-next 的 `0.2.0`（canonical 入口，保留旧 `daemon` / `agentbean-daemon` bin），但 npm `@latest` dist-tag 目前仍指向旧守护进程 `0.1.35`（详见上文「生产状态与发布」）。也就是说默认 `npm install @agentbean/daemon` 当前仍装旧守护进程；旧守护进程即仍在 registry 的 `0.1.35`。
@@ -274,7 +279,7 @@ GitHub Actions 会在 PR 和 push 到 `main` 时验证：
 
 ```bash
 # 旧入口 rollback smoke（验证旧服务 health payload 可恢复）
-npm run smoke:agentbean-old-entry
+AGENTBEAN_OLD_ENTRY_URL=https://<old-entry> npm run smoke:agentbean-old-entry
 ```
 
 - 旧的 per-app 开发命令（`cd apps/server && npm run dev` 等）仅作 legacy 参考，默认开发请使用上文「本地开发」中的 AgentBean Next 命令。
