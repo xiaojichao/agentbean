@@ -1457,6 +1457,32 @@ describe('web-next preview page interactions', () => {
       { userId: 'user-1', teamId: 'team-1', targetUserId: 'user-2' },
     ]);
   });
+
+  test('lists team workspace runs through the team-runs panel', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.click('team-runs-refresh', 'button', {});
+    expect(harness.fetches.some((entry) => entry.url.includes('/workspace-runs?token='))).toBe(true);
+    expect(harness.element('team-runs-results').innerHTML).toContain('npm test');
+    expect(harness.element('team-runs-results').innerHTML).toContain('查看详情');
+  });
 });
 
 function createPreviewHarness(
@@ -1517,6 +1543,9 @@ function createPreviewHarness(
     'members-panel',
     'members-refresh',
     'members-results',
+    'team-runs-panel',
+    'team-runs-refresh',
+    'team-runs-results',
   ]) {
     elements.set(id, createElement(id));
   }
@@ -1558,6 +1587,38 @@ function createPreviewHarness(
     FormData: FakeFormData,
     fetch: async (url: string, init?: RequestInit) => {
       fetches.push({ url, init });
+      if (url.includes('/workspace-runs') && !url.includes('/workspace-runs/')) {
+        return {
+          async json() {
+            return {
+              ok: true,
+              runs: [
+                {
+                  workspaceRun: {
+                    id: 'run-list-1',
+                    teamId: 'team-1',
+                    channelId: 'channel-1',
+                    dispatchId: 'dispatch-1',
+                    agentId: 'agent-1',
+                    deviceId: 'device-1',
+                    command: 'npm test',
+                    cwd: '/repo',
+                    exitCode: 0,
+                    status: 'succeeded',
+                    artifactIds: ['artifact-list-1'],
+                    createdAt: 1,
+                    updatedAt: 1,
+                  },
+                  artifacts: [
+                    { id: 'artifact-list-1', teamId: 'team-1', channelId: 'channel-1', workspaceRunId: 'run-list-1', filename: 'out.txt', mimeType: 'text/plain', sizeBytes: 5, relativePath: 'out.txt', pathKind: 'workspace' },
+                  ],
+                },
+              ],
+              nextCursor: null,
+            };
+          },
+        };
+      }
       if (url.includes('/workspace-runs/')) {
         return {
           async json() {
