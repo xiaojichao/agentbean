@@ -29,6 +29,7 @@ interface ChannelSubscription {
 }
 
 type AgentSubscription = ChannelSubscription;
+const INTERNAL_SOCKET_ERROR_MESSAGE = 'Internal server error';
 
 interface WebSocketSubscription {
   socket: SocketLike;
@@ -542,7 +543,7 @@ function subscriptionErrorAck(error: unknown, event?: string): { ok: false; erro
   return {
     ok: false,
     error: 'INTERNAL_ERROR',
-    message: error instanceof Error ? error.message : 'Unhandled socket handler error',
+    message: INTERNAL_SOCKET_ERROR_MESSAGE,
   };
 }
 

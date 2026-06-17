@@ -24,6 +24,7 @@ type UseCaseName = keyof ServerNextUseCases;
 type BindOptions = Pick<WebSocketHandlerOptions, 'authenticatedUser'> & {
   currentTeamFromSession?: boolean;
 };
+const INTERNAL_SOCKET_ERROR_MESSAGE = 'Internal server error';
 
 export interface WebSocketHandlerOptions {
   authenticatedUser?: AuthenticatedUserProvider;
@@ -306,7 +307,7 @@ function socketErrorAck(error: unknown, event?: string) {
     `[server-next] socket handler${event ? ` "${event}"` : ''} threw:`,
     error instanceof Error ? error.stack ?? error.message : error,
   );
-  return makeFailure('INTERNAL_ERROR', error instanceof Error ? error.message : 'Unhandled socket handler error');
+  return makeFailure('INTERNAL_ERROR', INTERNAL_SOCKET_ERROR_MESSAGE);
 }
 
 function updateAuthenticatedCurrentTeam(

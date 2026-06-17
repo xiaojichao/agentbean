@@ -24,6 +24,14 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'server', label: '团队', icon: <Server size={16} /> },
   { id: 'releases', label: '更新日志', icon: <FileText size={16} /> },
 ];
+const JOIN_INTERNAL_ERROR_MESSAGE = '创建失败，请稍后重试';
+
+function joinFailureMessage(result: { error?: string; message?: string }): string {
+  if (result.error === 'INTERNAL_ERROR') {
+    return JOIN_INTERNAL_ERROR_MESSAGE;
+  }
+  return result.message ?? result.error ?? '创建失败';
+}
 
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>('account');
@@ -393,8 +401,7 @@ function ServerPanel() {
       setMaxUses('');
       setExpiresAt('');
     } else {
-      // 优先显示服务端返回的真实 message（如 "no such table: join_links"），而非泛化的 error code
-      setJoinError(res.message ?? res.error ?? '创建失败');
+      setJoinError(joinFailureMessage(res));
     }
   };
 
