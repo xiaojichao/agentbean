@@ -1259,6 +1259,49 @@ describe('web-next preview page interactions', () => {
     expect(harness.emitted).toContainEqual(['message:list-saved', { userId: 'user-1', teamId: 'team-1' }]);
     expect(harness.element('saved-messages-results').innerHTML).toContain('saved note');
   });
+
+  test('manages member roles through the members panel', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'members:list': () => ({
+        ok: true,
+        humans: [
+          { id: 'member-1', teamId: 'team-1', userId: 'user-1', username: 'shaw', role: 'owner', joinedAt: 1 },
+          { id: 'member-2', teamId: 'team-1', userId: 'user-2', username: 'lin', role: 'member', joinedAt: 2 },
+        ],
+      }),
+      'member:update-role': (payload) => ({
+        ok: true,
+        member: { id: 'member-2', teamId: 'team-1', userId: 'user-2', username: 'lin', role: (payload as { role?: string }).role || 'admin' },
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.click('members-refresh', 'button', {});
+    expect(harness.emitted).toContainEqual(['members:list', { userId: 'user-1', teamId: 'team-1' }]);
+    expect(harness.element('members-results').innerHTML).toContain('lin');
+
+    await harness.click('members-results', 'button[data-member-role]', { memberRole: 'user-2', role: 'admin' });
+    expect(harness.emitted).toContainEqual([
+      'member:update-role',
+      { userId: 'user-1', teamId: 'team-1', targetUserId: 'user-2', role: 'admin' },
+    ]);
+    expect(harness.element('members-results').innerHTML).toContain('管理员');
+  });
 });
 
 function createPreviewHarness(
@@ -1316,6 +1359,9 @@ function createPreviewHarness(
     'saved-messages-panel',
     'saved-messages-refresh',
     'saved-messages-results',
+    'members-panel',
+    'members-refresh',
+    'members-results',
   ]) {
     elements.set(id, createElement(id));
   }
