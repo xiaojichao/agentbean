@@ -1931,6 +1931,7 @@
           <div class="rail-heading"><h2>设备</h2><span class="meta">daemon</span></div>
           <ul class="list" id="devices"></ul>
         </div>
+        <div class="panel" id="device-detail"></div>
         <div class="panel">
           <div class="rail-heading"><h2>运行时</h2><span class="meta">Codex / Claude / Gemini</span></div>
           <ul class="list" id="runtimes"></ul>
@@ -1974,7 +1975,11 @@
         devices: [],
         runtimesByDevice: {},
         selectedDeviceId: null,
+        deviceDetail: null,
+        deviceDetailId: null,
+        deviceDetailError: null,
         agents: [],
+        agentsLoaded: false,
         messages: [],
         tasks: [],
         taskError: null,
@@ -2007,25 +2012,27 @@
         }
       });
       socket.on("disconnect", () => setStatus("已断开"));
-      socket.on("devices:snapshot", (devices) => {
+      socket.on("devices:snapshot", async (devices) => {
         state.devices = devices || [];
         const visibleDevices = getVisibleDevices();
-        if (!state.selectedDeviceId || !visibleDevices.some((device) => device.id === state.selectedDeviceId)) {
-          state.selectedDeviceId = visibleDevices[0]?.id || null;
-        }
-        render();
+        const nextDeviceId = !state.selectedDeviceId || !visibleDevices.some((device) => device.id === state.selectedDeviceId)
+          ? visibleDevices[0]?.id || null
+          : state.selectedDeviceId;
+        await selectDevice(nextDeviceId);
       });
-      socket.on("device:runtimes", (payload) => {
+      socket.on("device:runtimes", async (payload) => {
         if (payload?.deviceId) {
           state.runtimesByDevice[payload.deviceId] = payload.runtimes || [];
           if (!state.selectedDeviceId || getSelectedDeviceRuntimes().length === 0) {
-            state.selectedDeviceId = payload.deviceId;
+            await selectDevice(payload.deviceId);
+            return;
           }
         }
         render();
       });
       socket.on("agents:snapshot", (agents) => {
         state.agents = agents;
+        state.agentsLoaded = true;
         render();
       });
       socket.on("channels:snapshot", (channels) => {
@@ -2101,9 +2108,8 @@
           env,
         });
       });
-      document.querySelector('#agent-create-form [name="deviceId"]').addEventListener("change", (event) => {
-        state.selectedDeviceId = event.currentTarget.value || null;
-        render();
+      document.querySelector('#agent-create-form [name="deviceId"]').addEventListener("change", async (event) => {
+        await selectDevice(event.currentTarget.value || null);
       });
       el("channels").addEventListener("click", (event) => {
         const row = event.target.closest("[data-channel-id]");
@@ -2118,11 +2124,10 @@
         saveSession();
         render();
       });
-      el("devices").addEventListener("click", (event) => {
+      el("devices").addEventListener("click", async (event) => {
         const row = event.target.closest("[data-device-id]");
         if (!row) return;
-        state.selectedDeviceId = row.dataset.deviceId || null;
-        render();
+        await selectDevice(row.dataset.deviceId || null);
       });
       el("messages").addEventListener("click", (event) => {
         const wsRun = event.target.closest("[data-workspace-run-id]");
@@ -2281,6 +2286,7 @@
         renderChannels();
         renderDevices(visibleDevices);
         renderRuntimes(selectedRuntimes);
+        renderDeviceDetail();
         renderAgents();
         renderMessages();
         renderTasks();
@@ -2327,6 +2333,77 @@
 
       function renderRuntimes(runtimes) {
         renderList("runtimes", runtimes, (runtime) => renderItem(runtime.name, runtime.command || "未安装"));
+      }
+
+      async function selectDevice(deviceId) {
+        const nextDeviceId = deviceId || null;
+        const changed = state.selectedDeviceId !== nextDeviceId;
+        state.selectedDeviceId = nextDeviceId;
+        if (!nextDeviceId) {
+          state.deviceDetail = null;
+          state.deviceDetailId = null;
+          state.deviceDetailError = null;
+          render();
+          return;
+        }
+        render();
+        if (changed || state.deviceDetailId !== nextDeviceId || (!state.deviceDetail && !state.deviceDetailError)) {
+          await loadDeviceDetail(nextDeviceId);
+          return;
+        }
+      }
+
+      async function loadDeviceDetail(deviceId) {
+        if (!state.user || !deviceId) {
+          state.deviceDetail = null;
+          state.deviceDetailId = null;
+          state.deviceDetailError = null;
+          renderDeviceDetail();
+          return;
+        }
+        state.deviceDetail = null;
+        state.deviceDetailId = deviceId;
+        state.deviceDetailError = null;
+        renderDeviceDetail();
+        const ack = await emit("device:get", { userId: state.user.id, deviceId });
+        if (state.deviceDetailId !== deviceId) return;
+        if (ack.ok && ack.device) {
+          state.deviceDetail = ack.device;
+          state.deviceDetailError = null;
+        } else {
+          state.deviceDetail = null;
+          state.deviceDetailError = ack.error || "设备详情不可用";
+        }
+        renderDeviceDetail();
+      }
+
+      function renderDeviceDetail() {
+        const panel = el("device-detail");
+        if (!state.selectedDeviceId) {
+          panel.innerHTML = `<div class="rail-muted">选择设备查看详情。</div>`;
+          return;
+        }
+        if (state.deviceDetailError && state.deviceDetailId === state.selectedDeviceId) {
+          panel.innerHTML = `<div class="rail-muted">设备详情加载失败：${escapeHtml(state.deviceDetailError)}</div>`;
+          return;
+        }
+        if (state.deviceDetailId !== state.selectedDeviceId) {
+          panel.innerHTML = `<div class="rail-muted">加载设备详情…</div>`;
+          return;
+        }
+        if (!state.deviceDetail) {
+          panel.innerHTML = `<div class="rail-muted">加载设备详情…</div>`;
+          return;
+        }
+        const device = state.deviceDetail;
+        const sys = device.systemInfo || {};
+        const sysLine = [sys.hostname, sys.platform, sys.arch].filter(Boolean).map(escapeHtml).join(" · ") || "—";
+        const snapshotAgents = state.agents.filter((agent) => agent.deviceId === state.selectedDeviceId);
+        const boundAgents = state.agentsLoaded ? snapshotAgents : device.agents || [];
+        const agentNames = boundAgents.map((agent) => escapeHtml(agent.name || agent.id)).join("、") || "无";
+        panel.innerHTML = `<div class="rail-heading"><h2>设备详情</h2><span class="meta">${escapeHtml(device.name || device.id)}</span></div>
+          <div class="meta">系统：${sysLine}</div>
+          <div class="meta">Agent：${agentNames}</div>`;
       }
 
       function renderAgents() {
@@ -2980,6 +3057,7 @@
         state.runtimesByDevice = {};
         state.selectedDeviceId = null;
         state.agents = [];
+        state.agentsLoaded = false;
         state.messages = [];
         state.tasks = [];
         state.taskError = null;
