@@ -2181,6 +2181,7 @@
         renderMessages();
         renderTasks();
         renderSearchResults();
+        renderJoinLinks();
         renderWorkspaceRunPanel();
         renderActiveChannel();
         renderAuthState();
@@ -2836,6 +2837,9 @@
         state.searchResults = [];
         state.searchError = null;
         state.searchLoading = false;
+        state.joinLinks = [];
+        state.joinError = null;
+        state.joinLoading = false;
         state.workspaceRunDetails = {};
         state.workspaceRunDetailLoadingId = null;
         state.workspaceRunDetailError = null;
