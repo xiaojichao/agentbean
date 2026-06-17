@@ -957,6 +957,52 @@ describe('web-next preview page interactions', () => {
     expect(harness.element('team-display-name').textContent).toBe('Ops Team');
   });
 
+  test('deletes a task through the preview task controls', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'task:create': () => ({
+        ok: true,
+        task: {
+          id: 'task-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          title: 'Ship task',
+          status: 'todo',
+          creatorId: 'user-1',
+          tags: [],
+          sortOrder: 1,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      }),
+      'task:delete': () => ({ ok: true, task: { id: 'task-1', teamId: 'team-1', title: 'Ship task', status: 'todo' } }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    harness.element('task-create-form').fields.title = 'Ship task';
+    await harness.submit('task-create-form');
+    expect(harness.element('task-results').innerHTML).toContain('Ship task');
+
+    await harness.click('task-results', 'button[data-task-delete]', { taskDelete: 'task-1' });
+
+    expect(harness.emitted).toContainEqual(['task:delete', { userId: 'user-1', teamId: 'team-1', taskId: 'task-1' }]);
+    expect(harness.element('task-results').innerHTML).not.toContain('Ship task');
+  });
+
   test('loads device detail with system info when a device is auto-selected', async () => {
     const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
     const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'online', name: 'Mac' };

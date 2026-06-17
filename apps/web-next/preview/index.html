@@ -2187,6 +2187,11 @@
       }
 
       el("task-results").addEventListener("click", async (event) => {
+        const deleteButton = event.target.closest("button[data-task-delete]");
+        if (deleteButton) {
+          await deleteTask(deleteButton.dataset.taskDelete);
+          return;
+        }
         const button = event.target.closest("button[data-task-id]");
         if (!button) return;
         await updateTaskStatus(button.dataset.taskId, button.dataset.status);
@@ -2566,6 +2571,22 @@
         renderTasks();
       }
 
+      async function deleteTask(taskId) {
+        if (!state.user || !state.team || !taskId) return;
+        const ack = await emit("task:delete", {
+          userId: state.user.id,
+          teamId: state.team.id,
+          taskId,
+        });
+        if (ack.ok && ack.task) {
+          state.tasks = state.tasks.filter((task) => task.id !== ack.task.id);
+          state.taskError = null;
+        } else {
+          state.taskError = ack.message || ack.error || "删除任务失败。";
+        }
+        renderTasks();
+      }
+
       function renderTasks() {
         if (state.taskLoading) {
           el("task-results").innerHTML = `<li class="rail-muted">任务处理中。</li>`;
@@ -2587,7 +2608,7 @@
           return `<li class="search-result">
             <div class="meta">${escapeHtml(channelName)} · ${escapeHtml(task.status || "todo")}</div>
             <div class="message-body">${escapeHtml(task.title)}</div>
-            <div class="task-actions"><button type="button" data-task-id="${escapeHtml(task.id)}" data-status="${escapeHtml(nextStatus)}">${escapeHtml(action)}</button></div>
+            <div class="task-actions"><button type="button" data-task-id="${escapeHtml(task.id)}" data-status="${escapeHtml(nextStatus)}">${escapeHtml(action)}</button><button type="button" data-task-delete="${escapeHtml(task.id)}">删除</button></div>
           </li>`;
         }).join("");
       }
