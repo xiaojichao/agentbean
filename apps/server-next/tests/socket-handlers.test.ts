@@ -564,6 +564,40 @@ describe('server-next socket handlers', () => {
     });
   });
 
+  test('does not expose internal socket exception messages in failure acks', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const socket = new FakeSocket();
+      const app = {
+        createJoinLink: vi.fn(async () => {
+          throw new Error('no such table: join_links');
+        }),
+      } as unknown as ServerNextUseCases;
+
+      registerWebSocketHandlers(socket, app, {
+        authenticatedUser: async () => ({
+          hasToken: true,
+          userId: 'user-session',
+          currentTeamId: 'team-session',
+        }),
+      });
+
+      const ack = await socket.trigger(WEB_EVENTS.join.create, {});
+      expect(ack).toEqual({
+        ok: false,
+        error: 'INTERNAL_ERROR',
+        message: 'Internal server error',
+      });
+      expect(JSON.stringify(ack)).not.toContain('join_links');
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining(WEB_EVENTS.join.create),
+        expect.stringContaining('no such table: join_links'),
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   test('registers first-slice agent events and forwards payloads to use cases', async () => {
     const socket = new FakeSocket();
     const app = {

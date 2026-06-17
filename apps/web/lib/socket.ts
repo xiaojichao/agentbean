@@ -343,10 +343,10 @@ export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
 }
 
 export interface JoinEvents {
-  create(payload: { maxUses?: number; expiresAt?: number }): Promise<{ ok: boolean; link?: import('./schema').JoinLinkInfo; error?: string }>;
-  list(): Promise<{ ok: boolean; links?: import('./schema').JoinLinkInfo[]; error?: string }>;
-  revoke(payload: { code: string }): Promise<{ ok: boolean; error?: string }>;
-  validate(payload: { code: string }): Promise<{ ok: boolean; networkName?: string; expiresAt?: number | null; error?: string }>;
+  create(payload: { maxUses?: number; expiresAt?: number }): Promise<{ ok: boolean; link?: import('./schema').JoinLinkInfo; error?: string; message?: string }>;
+  list(): Promise<{ ok: boolean; links?: import('./schema').JoinLinkInfo[]; error?: string; message?: string }>;
+  revoke(payload: { code: string }): Promise<{ ok: boolean; error?: string; message?: string }>;
+  validate(payload: { code: string }): Promise<{ ok: boolean; networkName?: string; expiresAt?: number | null; error?: string; message?: string }>;
 }
 
 export function joinEvents(socket: Socket = getWebSocket()): JoinEvents {

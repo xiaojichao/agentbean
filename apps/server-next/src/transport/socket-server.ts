@@ -29,6 +29,7 @@ interface ChannelSubscription {
 }
 
 type AgentSubscription = ChannelSubscription;
+const INTERNAL_SOCKET_ERROR_MESSAGE = 'Internal server error';
 
 interface WebSocketSubscription {
   socket: SocketLike;
@@ -74,7 +75,7 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
           await emitDmSnapshotForSubscriber(subscriber, app);
         }
       } catch (error) {
-        ack?.(subscriptionErrorAck(error));
+        ack?.(subscriptionErrorAck(error, WEB_EVENTS.channel.subscribe));
       }
     });
     socket.on(WEB_EVENTS.agent.subscribe, async (payload, ack) => {
@@ -96,7 +97,7 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
           socket.emit?.(WEB_EVENTS.agent.snapshot, result.agents);
         }
       } catch (error) {
-        ack?.(subscriptionErrorAck(error));
+        ack?.(subscriptionErrorAck(error, WEB_EVENTS.agent.subscribe));
       }
     });
     socket.on(WEB_EVENTS.device.list, async (payload, ack) => {
@@ -114,7 +115,7 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
           await emitStoredDeviceRuntimes(socket, app, input, result.devices);
         }
       } catch (error) {
-        ack?.(subscriptionErrorAck(error));
+        ack?.(subscriptionErrorAck(error, WEB_EVENTS.device.list));
       }
     });
     registerWebSocketHandlers(socket, app, {
@@ -531,14 +532,18 @@ async function readSubscriptionInput(
   return asChannelSubscription(payload, authenticatedUser);
 }
 
-function subscriptionErrorAck(error: unknown): { ok: false; error: string; message: string } {
+function subscriptionErrorAck(error: unknown, event?: string): { ok: false; error: string; message: string } {
   if (error instanceof UnauthenticatedSocketError) {
     return { ok: false, error: 'UNAUTHENTICATED', message: 'Invalid session token' };
   }
+  console.error(
+    `[server-next] subscription handler${event ? ` "${event}"` : ''} threw:`,
+    error instanceof Error ? error.stack ?? error.message : error,
+  );
   return {
     ok: false,
     error: 'INTERNAL_ERROR',
-    message: error instanceof Error ? error.message : 'Unhandled socket handler error',
+    message: INTERNAL_SOCKET_ERROR_MESSAGE,
   };
 }
 

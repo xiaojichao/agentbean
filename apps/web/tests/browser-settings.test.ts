@@ -76,3 +76,11 @@ describe('settings browser tab', () => {
     expect(settingsPage).not.toContain('浏览器相关配置开发中');
   });
 });
+
+describe('settings join link errors', () => {
+  it('does not render raw INTERNAL_ERROR details from socket acknowledgements', () => {
+    expect(settingsPage).toContain("result.error === 'INTERNAL_ERROR'");
+    expect(settingsPage).toContain('创建失败，请稍后重试');
+    expect(settingsPage).not.toContain('no such table');
+  });
+});

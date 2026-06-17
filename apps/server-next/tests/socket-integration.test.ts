@@ -143,6 +143,40 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('does not expose internal subscription exception messages in failure acks', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const app = createInMemoryServerNext();
+      app.listChannels = vi.fn(async () => {
+        throw new Error('/private/data/global.sqlite no such table: channels');
+      }) as ServerNextUseCases['listChannels'];
+      const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+      cleanups.push(async () => {
+        await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+        await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      });
+
+      const web = await connectClient(`${baseUrl}/web`);
+      cleanups.push(async () => {
+        web.disconnect();
+      });
+
+      await expect(
+        web.emitWithAck(WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-1' }),
+      ).resolves.toEqual({
+        ok: false,
+        error: 'INTERNAL_ERROR',
+        message: 'Internal server error',
+      });
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining(WEB_EVENTS.channel.subscribe),
+        expect.stringContaining('no such table: channels'),
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   test('derives web command user identity from authenticated socket session', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,
