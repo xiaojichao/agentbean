@@ -71,7 +71,8 @@
 2. Team create/switch 与 invite/onboarding 第一版。
    - 目标：补齐多 team 创建/切换、user invite、device invite/token delivery，恢复旧 AgentBean 的真实 onboarding 链路。
    - 收敛：`team:create`、`team:switch`、`join:create`、`join:validate`、auth `joinCode` 消费与 `device-invite:*` 第一版的 contracts、use cases 与 tests 已进入主线。
-   - 剩余：`join:list`、`join:revoke`、invite management UI/UX 与完整 onboarding parity 仍需后续产品切片覆盖。
+   - 收敛：`join:list` 与 `join:revoke` 的协议层（contracts 常量、server-next handler、usecase、memory/sqlite repository）已由 #267 进入主线。
+   - 剩余：web-next 客户端 list/revoke 绑定、invite management UI/UX 与完整 onboarding parity 仍需后续产品切片覆盖。
    - 参考：`packages/contracts/src/socket.ts`、`agentbean-next/docs/feature-disposition.md`、`agentbean-next/docs/acceptance-tests.md`
 
 3. Dispatch lifecycle 第一版。

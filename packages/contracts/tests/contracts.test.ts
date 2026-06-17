@@ -42,6 +42,10 @@ import {
   type CreateTeamCommandDto,
   type CreateJoinLinkCommandDto,
   type JoinLinkAckDto,
+  type ListJoinLinksAckDto,
+  type ListJoinLinksCommandDto,
+  type RevokeJoinLinkAckDto,
+  type RevokeJoinLinkCommandDto,
   type ListTeamsAckDto,
   type SwitchTeamAckDto,
   type SwitchTeamCommandDto,
@@ -134,6 +138,21 @@ describe('first-slice contract result shape', () => {
         usesCount: 0,
       },
       team,
+    };
+    const listJoinLinksCommand: ListJoinLinksCommandDto = {
+      userId: user.id,
+      teamId: team.id,
+    };
+    const revokeJoinLinkCommand: RevokeJoinLinkCommandDto = {
+      userId: user.id,
+      teamId: team.id,
+      code: validateJoinLinkCommand.code,
+    };
+    const listJoinLinksAck: ListJoinLinksAckDto = {
+      links: [joinLinkAck.link],
+    };
+    const revokeJoinLinkAck: RevokeJoinLinkAckDto = {
+      link: joinLinkAck.link,
     };
     const device: DeviceDto = {
       id: 'device-1',

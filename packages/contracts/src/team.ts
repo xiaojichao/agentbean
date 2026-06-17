@@ -74,3 +74,22 @@ export interface JoinLinkAckDto {
   link: JoinLinkDto;
   team: TeamDto;
 }
+
+export interface ListJoinLinksCommandDto {
+  userId: ID;
+  teamId: ID;
+}
+
+export interface RevokeJoinLinkCommandDto {
+  userId: ID;
+  teamId: ID;
+  code: string;
+}
+
+export interface ListJoinLinksAckDto {
+  links: JoinLinkDto[];
+}
+
+export interface RevokeJoinLinkAckDto {
+  link: JoinLinkDto;
+}

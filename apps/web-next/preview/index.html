@@ -1910,6 +1910,14 @@
           <button type="submit">搜索</button>
           <ul class="search-results" id="message-search-results"></ul>
         </form>
+        <div class="panel" id="join-link-panel">
+          <div class="rail-heading"><h2>邀请链接</h2><span class="meta">join list / revoke</span></div>
+          <div class="task-actions">
+            <button type="button" id="join-link-create">创建邀请</button>
+            <button type="button" id="join-link-refresh">刷新</button>
+          </div>
+          <ul class="search-results" id="join-link-results"></ul>
+        </div>
         <div class="panel">
           <div class="rail-heading"><h2>成员</h2><span class="meta">human / agent</span></div>
           <ul class="list" id="agents"></ul>
@@ -1971,6 +1979,9 @@
         searchLoading: false,
         replyThreadId: null,
         replyChannelId: null,
+        joinLinks: [],
+        joinError: null,
+        joinLoading: false,
         activeWorkspaceRunId: readWorkspaceRunIdFromUrl(),
         workspaceRunDetails: {},
         workspaceRunDetailLoadingId: null,
@@ -2154,6 +2165,20 @@
         await updateTaskStatus(button.dataset.taskId, button.dataset.status);
       });
 
+      el("join-link-results").addEventListener("click", async (event) => {
+        const button = event.target.closest("button[data-join-code]");
+        if (!button) return;
+        await revokeJoinLink(button.dataset.joinCode);
+      });
+
+      el("join-link-create").addEventListener("click", async () => {
+        await createJoinLink();
+      });
+
+      el("join-link-refresh").addEventListener("click", async () => {
+        await listJoinLinks();
+      });
+
       el("message-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         if (!state.user || !state.team || !state.channel) return;
@@ -2219,6 +2244,7 @@
           state.taskError = tasks.message || tasks.error || "加载任务失败。";
           renderTasks();
         }
+        await listJoinLinks();
       }
 
       async function emit(event, payload) {
@@ -2237,6 +2263,7 @@
         renderMessages();
         renderTasks();
         renderSearchResults();
+        renderJoinLinks();
         renderWorkspaceRunPanel();
         renderActiveChannel();
         renderAuthState();
@@ -2462,6 +2489,72 @@
             <div class="meta">${escapeHtml(channelName)} · ${escapeHtml(task.status || "todo")}</div>
             <div class="message-body">${escapeHtml(task.title)}</div>
             <div class="task-actions"><button type="button" data-task-id="${escapeHtml(task.id)}" data-status="${escapeHtml(nextStatus)}">${escapeHtml(action)}</button></div>
+          </li>`;
+        }).join("");
+      }
+
+      async function listJoinLinks() {
+        if (!state.user || !state.team) return;
+        state.joinLoading = true;
+        state.joinError = null;
+        renderJoinLinks();
+        const ack = await emit("join:list", { userId: state.user.id, teamId: state.team.id });
+        state.joinLoading = false;
+        if (ack.ok && Array.isArray(ack.links)) {
+          state.joinLinks = ack.links;
+          state.joinError = null;
+        } else {
+          state.joinError = ack.message || ack.error || "加载邀请失败。";
+        }
+        renderJoinLinks();
+      }
+
+      async function createJoinLink() {
+        if (!state.user || !state.team) return;
+        state.joinLoading = true;
+        state.joinError = null;
+        renderJoinLinks();
+        const ack = await emit("join:create", { userId: state.user.id, teamId: state.team.id });
+        state.joinLoading = false;
+        if (ack.ok && ack.link) {
+          state.joinError = null;
+          await listJoinLinks();
+        } else {
+          state.joinError = ack.message || ack.error || "创建邀请失败。";
+          renderJoinLinks();
+        }
+      }
+
+      async function revokeJoinLink(code) {
+        if (!state.user || !state.team || !code) return;
+        const ack = await emit("join:revoke", { userId: state.user.id, teamId: state.team.id, code });
+        if (ack.ok) {
+          await listJoinLinks();
+        } else {
+          state.joinError = ack.message || ack.error || "撤销邀请失败。";
+          renderJoinLinks();
+        }
+      }
+
+      function renderJoinLinks() {
+        if (state.joinLoading) {
+          el("join-link-results").innerHTML = `<li class="rail-muted">邀请处理中。</li>`;
+          return;
+        }
+        if (state.joinError) {
+          el("join-link-results").innerHTML = `<li class="rail-muted">${escapeHtml(state.joinError)}</li>`;
+          return;
+        }
+        const active = state.joinLinks.filter((link) => !link.revokedAt);
+        if (active.length === 0) {
+          el("join-link-results").innerHTML = `<li class="rail-muted">暂无邀请链接。</li>`;
+          return;
+        }
+        el("join-link-results").innerHTML = active.slice(0, 8).map((link) => {
+          const uses = `${link.usesCount ?? 0}${link.maxUses ? "/" + link.maxUses : ""}`;
+          return `<li class="search-result">
+            <div class="meta">${escapeHtml(link.code)} · 使用 ${escapeHtml(String(uses))}</div>
+            <div class="task-actions"><button type="button" data-join-code="${escapeHtml(link.code)}">撤销</button></div>
           </li>`;
         }).join("");
       }
@@ -2872,6 +2965,9 @@
         state.searchResults = [];
         state.searchError = null;
         state.searchLoading = false;
+        state.joinLinks = [];
+        state.joinError = null;
+        state.joinLoading = false;
         state.workspaceRunDetails = {};
         state.workspaceRunDetailLoadingId = null;
         state.workspaceRunDetailError = null;

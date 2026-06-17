@@ -101,8 +101,11 @@ Ack<{ user: UserDto; currentTeam: TeamDto | null }>
 这些是目标行为，但不是第一切片要求：
 
 - `auth:change-password`：保留给 account settings。
-- `join:list`：保留给 invite management；当前不在 Next shared event constants 中暴露。
-- `join:revoke`：保留给 invite management；当前不在 Next shared event constants 中暴露。
+
+#### Join invite management（协议已落地，UI 待补）
+
+- `join:list`：invite management 用途。已进入 Next shared event constants（`packages/contracts/src/socket.ts`），并由 server-next handler / usecase / repository 实现列表能力；仅 web-next 客户端绑定与 preview 邀请管理 UI 仍待补。
+- `join:revoke`：invite management 用途。已进入 Next shared event constants，并由 server-next handler / usecase / repository 实现撤销能力；仅 web-next 客户端绑定与 preview 邀请管理 UI 仍待补。
 
 ### Teams
 
