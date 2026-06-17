@@ -29,6 +29,7 @@ interface FakeEvent {
 interface PreviewHarness {
   emitted: Array<[string, unknown]>;
   fetches: Array<{ url: string; init?: RequestInit }>;
+  confirms: string[];
   historyReplacements: string[];
   localStorage: FakeLocalStorage;
   socket: {
@@ -957,6 +958,55 @@ describe('web-next preview page interactions', () => {
     expect(harness.element('team-display-name').textContent).toBe('Ops Team');
   });
 
+  test('archives and deletes a channel through accessible channel controls', async () => {
+    const html = readFileSync(new URL('../preview/index.html', import.meta.url), 'utf8');
+    expect(html).toContain('.channel-row:focus-within .channel-actions');
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const createdChannel = { id: 'channel-2', name: 'ops', title: 'Ops', visibility: 'private' };
+    const harness = createPreviewHarness(
+      {
+        'auth:register': () => ({
+          ok: true,
+          token: 'token-1',
+          user: { id: 'user-1', username: 'shaw' },
+          currentTeam: { id: 'team-1', name: 'AgentBean' },
+          defaultChannel,
+        }),
+        'device:list': () => ({ ok: true, devices: [] }),
+        'agents:subscribe': () => ({ ok: true, agents: [] }),
+        'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+        'task:list': () => ({ ok: true, tasks: [] }),
+        'join:list': () => ({ ok: true, links: [] }),
+        'channel:create': () => ({ ok: true, channel: createdChannel }),
+        'channel:archive': () => ({ ok: true, channel: createdChannel }),
+        'channel:delete': () => ({ ok: true, channel: createdChannel }),
+      },
+      { confirmResponses: [false, true] },
+    );
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.submit('channel-create-form');
+    expect(harness.element('channels').innerHTML).toContain('Ops');
+
+    await harness.click('channels', 'button[data-channel-archive]', { channelArchive: 'channel-2' });
+    expect(harness.emitted).toContainEqual(['channel:archive', { userId: 'user-1', teamId: 'team-1', channelId: 'channel-2' }]);
+    expect(harness.element('channels').innerHTML).not.toContain('Ops');
+
+    await harness.submit('channel-create-form');
+    expect(harness.element('channels').innerHTML).toContain('Ops');
+
+    await harness.click('channels', 'button[data-channel-delete]', { channelDelete: 'channel-2' });
+    expect(harness.confirms[0]).toContain('永久移除');
+    expect(harness.emitted).not.toContainEqual(['channel:delete', { userId: 'user-1', teamId: 'team-1', channelId: 'channel-2' }]);
+    expect(harness.element('channels').innerHTML).toContain('Ops');
+
+    await harness.click('channels', 'button[data-channel-delete]', { channelDelete: 'channel-2' });
+    expect(harness.emitted).toContainEqual(['channel:delete', { userId: 'user-1', teamId: 'team-1', channelId: 'channel-2' }]);
+    expect(harness.element('channels').innerHTML).not.toContain('Ops');
+  });
+
   test('deletes a task through the preview task controls', async () => {
     const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
     const harness = createPreviewHarness({
@@ -1113,9 +1163,11 @@ describe('web-next preview page interactions', () => {
 
 function createPreviewHarness(
   acks: Record<string, AckFactory>,
-  options: { href?: string } = {},
+  options: { confirmResponses?: boolean[]; href?: string } = {},
 ): PreviewHarness {
   const elements = new Map<string, FakeElement>();
+  const confirmResponses = [...(options.confirmResponses ?? [true])];
+  const confirms: string[] = [];
   const fetches: Array<{ url: string; init?: RequestInit }> = [];
   const historyReplacements: string[] = [];
   const localStorage = new FakeLocalStorage();
@@ -1168,6 +1220,10 @@ function createPreviewHarness(
   const windowLocation = new URL(options.href ?? 'http://agentbean-next.local/preview');
   const window = {
     location: windowLocation,
+    confirm(message: string): boolean {
+      confirms.push(message);
+      return confirmResponses.length > 0 ? Boolean(confirmResponses.shift()) : true;
+    },
     history: {
       replaceState(_state: unknown, _title: string, url: string): void {
         historyReplacements.push(url);
@@ -1275,6 +1331,7 @@ function createPreviewHarness(
   vm.runInContext(readPreviewScript(), context);
 
   return {
+    confirms,
     emitted,
     fetches,
     historyReplacements,

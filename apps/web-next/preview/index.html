@@ -259,6 +259,32 @@
       .nav-row:hover {
         background: #f0f0ee;
       }
+      .channel-row {
+        align-items: center;
+        display: flex;
+        gap: 4px;
+      }
+      .channel-row .nav-row {
+        flex: 1;
+        min-width: 0;
+      }
+      .channel-actions {
+        display: none;
+        gap: 4px;
+      }
+      .channel-row:hover .channel-actions,
+      .channel-row:focus-within .channel-actions {
+        display: inline-flex;
+      }
+      .channel-action {
+        background: transparent;
+        border: 1px solid #d7d7d3;
+        border-radius: 4px;
+        color: #68747b;
+        font-size: 11px;
+        min-height: 0;
+        padding: 2px 6px;
+      }
       .section-title {
         color: #737373;
         font-size: 11px;
@@ -2111,7 +2137,17 @@
       document.querySelector('#agent-create-form [name="deviceId"]').addEventListener("change", async (event) => {
         await selectDevice(event.currentTarget.value || null);
       });
-      el("channels").addEventListener("click", (event) => {
+      el("channels").addEventListener("click", async (event) => {
+        const archiveBtn = event.target.closest("button[data-channel-archive]");
+        if (archiveBtn) {
+          await archiveChannel(archiveBtn.dataset.channelArchive);
+          return;
+        }
+        const deleteBtn = event.target.closest("button[data-channel-delete]");
+        if (deleteBtn) {
+          await deleteChannel(deleteBtn.dataset.channelDelete);
+          return;
+        }
         const row = event.target.closest("[data-channel-id]");
         if (!row) return;
         const channel = state.channels.find((item) => item.id === row.dataset.channelId);
@@ -2315,10 +2351,40 @@
         el("channels").innerHTML = state.channels.map((channel) => {
           const active = channel.id === activeId ? " active" : "";
           const icon = channel.visibility === "private" ? "▣" : "#";
-          return `<li><button class="nav-row${active}" type="button" data-channel-id="${escapeHtml(channel.id)}">
+          return `<li class="channel-row"><button class="nav-row${active}" type="button" data-channel-id="${escapeHtml(channel.id)}">
             <span>${icon}</span><span class="primary">${escapeHtml(channel.title || channel.name)}</span>
-          </button></li>`;
+          </button><span class="channel-actions">
+            <button type="button" class="channel-action" data-channel-archive="${escapeHtml(channel.id)}">归档</button>
+            <button type="button" class="channel-action" data-channel-delete="${escapeHtml(channel.id)}">删除</button>
+          </span></li>`;
         }).join("");
+      }
+
+      async function archiveChannel(channelId) {
+        if (!state.user || !state.team || !channelId) return;
+        const ack = await emit("channel:archive", { userId: state.user.id, teamId: state.team.id, channelId });
+        if (ack.ok && ack.channel) {
+          removeChannelLocally(ack.channel.id);
+        }
+      }
+
+      async function deleteChannel(channelId) {
+        if (!state.user || !state.team || !channelId) return;
+        const channel = state.channels.find((item) => item.id === channelId);
+        const label = channel?.title || channel?.name || "该频道";
+        if (!window.confirm(`删除「${label}」会永久移除该频道及其内容，确定继续吗？`)) return;
+        const ack = await emit("channel:delete", { userId: state.user.id, teamId: state.team.id, channelId });
+        if (ack.ok && ack.channel) {
+          removeChannelLocally(ack.channel.id);
+        }
+      }
+
+      function removeChannelLocally(channelId) {
+        state.channels = state.channels.filter((channel) => channel.id !== channelId);
+        if (state.channel?.id === channelId) {
+          state.channel = state.channels[0] || null;
+        }
+        render();
       }
 
       function renderDevices(devices) {
