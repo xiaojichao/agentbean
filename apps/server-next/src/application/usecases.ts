@@ -53,11 +53,11 @@ export interface ServerNextUseCases {
   completeDeviceInvite(input: CompleteDeviceInviteInput): Promise<Ack<DeviceInviteAckDto & { credentials: DeviceInviteCredentialsDto }>>;
   deviceHelloFromCredentials(input: DeviceHelloFromCredentialsInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto }>>;
   listDevices(input: { teamId: string; userId: string }): Promise<Ack<{ devices: DeviceDto[] }>>;
-  listDeviceAgents(input: { teamId: string; userId: string; deviceId: string }): Promise<Ack<{ agents: AgentDto[]; runtimes: RuntimeDto[] }>>;
+  listDeviceAgents(input: { teamId: string; userId: string; deviceId: string }): Promise<Ack<{ agents: DeviceAgentListDto[]; runtimes: RuntimeDto[] }>>;
   getDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDetailDto }>>;
   requestDeviceScan(input: RequestDeviceScanInput): Promise<Ack<RequestDeviceScanResult>>;
   deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto }>>;
-  markDeviceOffline(input: { deviceId: string; timestamp: UnixMs }): Promise<Ack<{ device: DeviceDto }>>;
+  markDeviceOffline(input: { deviceId: string; timestamp: UnixMs }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[] }>>;
   reportDeviceRuntimes(input: ReportDeviceRuntimesInput): Promise<Ack<{ runtimes: RuntimeDto[] }>>;
   registerDiscoveredAgents(input: RegisterDiscoveredAgentsInput): Promise<Ack<RegisterDiscoveredAgentsResult>>;
   listVisibleAgents(input: { teamId: string }): Promise<Ack<{ agents: AgentDto[] }>>;
@@ -128,6 +128,12 @@ export interface RegisterUserResult {
   defaultChannel: ChannelDto;
   joinedTeam?: TeamDto;
 }
+
+type DeviceAgentListDto = AgentDto & {
+  networkId: string;
+  publishedNetworkIds: string[];
+  unpublishedNetworkIds: string[];
+};
 
 export interface LoginUserInput {
   username: string;
@@ -1114,6 +1120,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!device) {
         return makeFailure('NOT_FOUND', 'Device not found');
       }
+      const hostedAgents = await repositories.agents.listByDevice(device.id);
       const updated = await repositories.devices.markOffline({
         deviceId: offlineInput.deviceId,
         timestamp: offlineInput.timestamp,
@@ -1121,7 +1128,21 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!updated) {
         return makeFailure('NOT_FOUND', 'Device not found');
       }
-      return makeSuccess({ device: toDeviceDto(updated) });
+      for (const agent of hostedAgents) {
+        if (agent.status === 'offline') {
+          continue;
+        }
+        await repositories.agents.updateStatus({
+          agentId: agent.id,
+          status: 'offline',
+          lastSeenAt: offlineInput.timestamp,
+          lastError: agent.lastError,
+        });
+      }
+      return makeSuccess({
+        device: toDeviceDto(updated),
+        affectedTeamIds: uniqueIds([device.teamId, ...hostedAgents.flatMap((agent) => agent.visibleTeamIds)]),
+      });
     },
 
     async listDeviceAgents(deviceAgentsInput) {
@@ -1141,7 +1162,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         repositories.runtimes.listByDevice(device.id),
       ]);
       return makeSuccess({
-        agents: agents.map(toPublicAgent),
+        agents: agents.map(toDeviceAgentListDto),
         runtimes: runtimes.map(toRuntimeDto),
       });
     },
@@ -3570,6 +3591,15 @@ function hasOwn(value: object, key: PropertyKey): boolean {
 function toPublicAgent(agent: AgentRecord): AgentDto {
   const { deletedAt: _deletedAt, ...publicAgent } = agent;
   return publicAgent;
+}
+
+function toDeviceAgentListDto(agent: AgentRecord): DeviceAgentListDto {
+  return {
+    ...toPublicAgent(agent),
+    networkId: agent.primaryTeamId,
+    publishedNetworkIds: uniqueIds(agent.visibleTeamIds),
+    unpublishedNetworkIds: [],
+  };
 }
 
 function agentIdentityKey(input: {

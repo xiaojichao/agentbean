@@ -414,7 +414,7 @@ export interface DeviceRuntime {
 export interface DeviceEvents {
   list(teamId?: string): Promise<{ ok: boolean; devices?: DeviceInfo[]; error?: string }>;
   get(payload: { id: string }): Promise<{ ok: boolean; device?: any; error?: string }>;
-  agentsList(deviceId: string): Promise<{ ok: boolean; agents?: DeviceAgent[]; runtimes?: DeviceRuntime[]; error?: string }>;
+  agentsList(deviceId: string, networkId?: string | null): Promise<{ ok: boolean; agents?: DeviceAgent[]; runtimes?: DeviceRuntime[]; error?: string }>;
   scan(deviceId: string): Promise<{ ok: boolean; error?: string }>;
   selectDirectory(deviceId: string): Promise<{ ok: boolean; path?: string; error?: string }>;
   delete(id: string): Promise<{ ok: boolean; error?: string }>;
@@ -432,8 +432,8 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
     get({ id }) {
       return emitWithTimeout(socket, WEB_EVENTS.device.get, { deviceId: id });
     },
-    agentsList(deviceId) {
-      return emitWithTimeout(socket, WEB_EVENTS.device.agentsList, { deviceId });
+    agentsList(deviceId, networkId) {
+      return emitWithTimeout(socket, WEB_EVENTS.device.agentsList, networkId ? { deviceId, teamId: networkId } : { deviceId });
     },
     scan(deviceId) {
       return emitWithTimeout(socket, WEB_EVENTS.device.scan, { deviceId });
