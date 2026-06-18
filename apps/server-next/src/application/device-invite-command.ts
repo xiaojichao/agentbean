@@ -4,7 +4,7 @@
 // - 否则返回 production 默认命令 `npx @agentbean/daemon@latest ...`
 //   （去掉旧版基于 process.cwd() 的本地 tsx 分支：server-next 从 dist 运行，相对路径判断不可靠，
 //    本地调试可用 AGENT_BEAN_INVITE_COMMAND_TEMPLATE 覆盖）
-// profile slug 由 team.path 派生（旧版用 networkId），保留多设备 profile 隔离能力。
+// profile slug 优先使用 explicit profileId，未提供时由 team.path 派生，保留多设备 profile 隔离能力。
 
 const DEFAULT_PUBLIC_SERVER_URL = 'http://localhost:4000';
 
@@ -30,6 +30,6 @@ export function buildDeviceInviteCommand(code: string, profileSource?: string | 
       .replaceAll('{serverUrl}', serverUrl)
       .replaceAll('{profile}', profile);
   }
-  const profileArg = profileSource ? ` --profile ${profile}` : '';
-  return `npx @agentbean/daemon@latest --invite ${code} --server-url ${serverUrl}${profileArg}`;
+  const profileArg = profileSource ? ` --profile-id ${profile}` : '';
+  return `npx @agentbean/daemon@latest --invite-code ${code} --server-url ${serverUrl}${profileArg}`;
 }

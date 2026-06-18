@@ -938,7 +938,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
 
       return makeSuccess({
-        invite: toDeviceInviteDto(invite, buildDeviceInviteCommand(invite.code, team.path)),
+        invite: toDeviceInviteDto(invite, buildDeviceInviteCommand(invite.code, invite.profileId ?? team.path)),
         team: toTeamDto(team, role),
       });
     },

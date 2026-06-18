@@ -332,7 +332,8 @@ export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
     },
     inviteCreate(payload = {}) {
       const { networkId, ...rest } = payload;
-      return emitWithTimeout(socket, WEB_EVENTS.deviceInvite.create, { teamId: networkId, ...rest });
+      const teamId = networkId && networkId !== 'default' ? networkId : undefined;
+      return emitWithTimeout(socket, WEB_EVENTS.deviceInvite.create, { ...rest, ...(teamId ? { teamId } : {}) });
     },
     deviceLogin(payload) {
       return emitWithTimeout(socket, 'auth:device-login', payload, 20000);

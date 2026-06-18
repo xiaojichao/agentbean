@@ -382,17 +382,18 @@ describe('server-next Socket.IO namespaces', () => {
     });
 
     const created = await owner.emitWithAck(WEB_EVENTS.deviceInvite.create, { teamId: 'team-1', profileId: 'agentbean-next' });
-    // createDeviceInvite 必须返回可直接运行的 daemon 连接命令（含 invite code 与 server-url）
+    // createDeviceInvite 必须返回可直接运行的 daemon-next 连接命令（含 invite code、server-url 与 profile）
     expect(created).toMatchObject({
       ok: true,
       invite: {
         code: 'device-code-1',
         teamId: 'team-1',
         profileId: 'agentbean-next',
-        command: expect.stringContaining('--invite device-code-1'),
+        command: expect.stringContaining('--invite-code device-code-1'),
       },
     });
     expect(created.invite.command).toContain('--server-url');
+    expect(created.invite.command).toContain('--profile-id agentbean-next');
     const deliveredCredentials: unknown[] = [];
     daemon.on(AGENT_EVENTS.deviceInvite.credentials, (payload) => {
       deliveredCredentials.push(payload);
