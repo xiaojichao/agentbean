@@ -342,6 +342,20 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       async listByTeam(teamId) {
         return Array.from(devices.values()).filter((device) => device.teamId === teamId);
       },
+      async markOffline(input) {
+        const device = devices.get(input.deviceId);
+        if (!device) {
+          return null;
+        }
+        const updated: DeviceRecord = {
+          ...device,
+          status: 'offline',
+          lastSeenAt: device.lastSeenAt ?? input.timestamp,
+          updatedAt: input.timestamp,
+        };
+        devices.set(device.id, updated);
+        return updated;
+      },
     },
     runtimes: {
       async replaceForDevice(input) {

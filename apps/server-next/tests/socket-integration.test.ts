@@ -2066,6 +2066,62 @@ describe('server-next Socket.IO namespaces', () => {
       ]);
     });
   });
+
+  test('marks device offline when the daemon socket disconnects', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-all', 'device-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const daemon = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      daemon.disconnect();
+    });
+    const register = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    const web = await connectClient(`${baseUrl}/web`, { auth: { token: (register as { token: string }).token } });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+
+    const deviceStatuses: Array<{ id: string; status: string }> = [];
+    web.on(WEB_EVENTS.device.status, (payload) => {
+      deviceStatuses.push(deviceStatusSummary(payload));
+    });
+
+    await web.emitWithAck(WEB_EVENTS.device.list, { userId: 'user-1', teamId: 'team-1' });
+
+    // daemon 连接并 device:hello → device 应为 online
+    await expect(
+      daemon.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'device-1', status: 'online' } });
+
+    await eventually(async () => {
+      expect(deviceStatuses.some((device) => device.id === 'device-1' && device.status === 'online')).toBe(true);
+    });
+
+    // daemon 断开 → device 应变为 offline
+    daemon.disconnect();
+
+    await eventually(async () => {
+      expect(deviceStatuses.some((device) => device.id === 'device-1' && device.status === 'offline')).toBe(true);
+    });
+  });
 });
 
 async function startSocketServer(app: ReturnType<typeof createInMemoryServerNext>) {

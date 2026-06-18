@@ -163,6 +163,7 @@ export interface DeviceRepository {
   getById(id: ID): Promise<DeviceRecord | null>;
   findByMachineProfile(machineId: string, profileId: string): Promise<DeviceRecord | null>;
   listByTeam(teamId: ID): Promise<DeviceRecord[]>;
+  markOffline(input: { deviceId: ID; timestamp: UnixMs }): Promise<DeviceRecord | null>;
 }
 
 export interface RuntimeRepository {

@@ -629,6 +629,28 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             return device;
           });
       },
+      async markOffline(input) {
+        const row = globalDb
+          .prepare('SELECT * FROM devices WHERE id = ?')
+          .get(input.deviceId);
+        const device = mapDevice(row);
+        if (!device) {
+          return null;
+        }
+        globalDb
+          .prepare(
+            `UPDATE devices
+             SET status = 'offline', last_seen_at = ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(device.lastSeenAt ?? input.timestamp, input.timestamp, input.deviceId);
+        return {
+          ...device,
+          status: 'offline',
+          lastSeenAt: device.lastSeenAt ?? input.timestamp,
+          updatedAt: input.timestamp,
+        };
+      },
     },
     runtimes: {
       async replaceForDevice(input) {
