@@ -143,6 +143,100 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('device:agents:list returns runtimes + agents reported by the daemon', async () => {
+    // 协议漂移修复：web emit 'device:agents:list' 后 server 必须回 agents + runtimes。
+    // 先 daemon report runtimes/agents，再让 web 查询该 device，校验拿到完整列表。
+    const app = createInMemoryServerNext({
+      now: () => 2000,
+      ids: createIds([
+        'user-list-1',
+        'team-list-1',
+        'channel-list-1',
+        'team-list-2',
+        'channel-list-2',
+        'device-list-1',
+        'runtime-list-1',
+        'agent-list-1',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const web = await connectClient(`${baseUrl}/web`);
+    const daemon = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      web.disconnect();
+      daemon.disconnect();
+    });
+
+    await expect(
+      web.emitWithAck(WEB_EVENTS.auth.register, {
+        username: 'listuser',
+        password: 'secret',
+        teamName: 'ListTeam',
+      }),
+    ).resolves.toMatchObject({ ok: true, user: { id: 'user-list-1', primaryTeamId: 'team-list-1' } });
+    await expect(app.createTeam({ userId: 'user-list-1', name: 'Published Team' })).resolves.toMatchObject({
+      ok: true,
+      team: { id: 'team-list-2' },
+    });
+
+    await expect(
+      daemon.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-list-1',
+        ownerId: 'user-list-1',
+        machineId: 'machine-list-1',
+        profileId: 'default',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'device-list-1', status: 'online' } });
+
+    await expect(
+      daemon.emitWithAck(AGENT_EVENTS.device.runtimes, {
+        teamId: 'team-list-1',
+        deviceId: 'device-list-1',
+        runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }],
+      }),
+    ).resolves.toMatchObject({ ok: true, runtimes: [{ id: 'runtime-list-1', adapterKind: 'codex' }] });
+
+    await expect(
+      daemon.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
+        teamId: 'team-list-1',
+        deviceId: 'device-list-1',
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      }),
+    ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-list-1', status: 'online' }] });
+    await expect(
+      app.publishAgent({
+        userId: 'user-list-1',
+        teamId: 'team-list-1',
+        agentId: 'agent-list-1',
+        targetTeamId: 'team-list-2',
+      }),
+    ).resolves.toMatchObject({ ok: true, agent: { id: 'agent-list-1', visibleTeamIds: ['team-list-1', 'team-list-2'] } });
+
+    // 协议漂移修复前：此处会超时/回 INTERNAL_ERROR，因为 server 没注册 device:agents:list
+    await expect(
+      web.emitWithAck(WEB_EVENTS.device.agentsList, {
+        userId: 'user-list-1',
+        teamId: 'team-list-1',
+        deviceId: 'device-list-1',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      agents: [{
+        id: 'agent-list-1',
+        deviceId: 'device-list-1',
+        status: 'online',
+        networkId: 'team-list-1',
+        publishedNetworkIds: ['team-list-1', 'team-list-2'],
+      }],
+      runtimes: [{ id: 'runtime-list-1', deviceId: 'device-list-1', adapterKind: 'codex' }],
+    });
+  });
+
   test('does not expose internal subscription exception messages in failure acks', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -2066,6 +2160,129 @@ describe('server-next Socket.IO namespaces', () => {
       ]);
     });
   });
+
+  test('marks device offline when the daemon socket disconnects', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-all', 'device-1', 'agent-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const daemon = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      daemon.disconnect();
+    });
+    const register = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    const web = await connectClient(`${baseUrl}/web`, { auth: { token: (register as { token: string }).token } });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+
+    const deviceStatuses: Array<{ id: string; status: string }> = [];
+    const agentStatuses: Array<{ id: string; status: string }> = [];
+    web.on(WEB_EVENTS.device.status, (payload) => {
+      deviceStatuses.push(deviceStatusSummary(payload));
+    });
+    web.on(WEB_EVENTS.agent.status, (payload) => {
+      agentStatuses.push(agentStatusSummary(payload));
+    });
+
+    await web.emitWithAck(WEB_EVENTS.device.list, { userId: 'user-1', teamId: 'team-1' });
+    await web.emitWithAck(WEB_EVENTS.agent.subscribe, { userId: 'user-1', teamId: 'team-1' });
+
+    // daemon 连接并 device:hello → device 应为 online
+    await expect(
+      daemon.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'device-1', status: 'online' } });
+
+    await eventually(async () => {
+      expect(deviceStatuses.some((device) => device.id === 'device-1' && device.status === 'online')).toBe(true);
+    });
+    await expect(
+      daemon.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      }),
+    ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-1', status: 'online' }] });
+    await eventually(async () => {
+      expect(agentStatuses.some((agent) => agent.id === 'agent-1' && agent.status === 'online')).toBe(true);
+    });
+
+    // daemon 断开 → device 与其 hosted agents 都应变为 offline
+    daemon.disconnect();
+
+    await eventually(async () => {
+      expect(deviceStatuses.some((device) => device.id === 'device-1' && device.status === 'offline')).toBe(true);
+    });
+    await eventually(async () => {
+      expect(agentStatuses.some((agent) => agent.id === 'agent-1' && agent.status === 'offline')).toBe(true);
+    });
+  });
+
+  test('keeps device online when an older daemon socket disconnects after reconnect', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-all', 'device-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const oldDaemon = await connectClient(`${baseUrl}/agent`);
+    const newDaemon = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      oldDaemon.disconnect();
+      newDaemon.disconnect();
+    });
+    await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+
+    const helloPayload = {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+    };
+    await expect(oldDaemon.emitWithAck(AGENT_EVENTS.device.hello, helloPayload)).resolves.toMatchObject({
+      ok: true,
+      device: { id: 'device-1', status: 'online' },
+    });
+    await expect(newDaemon.emitWithAck(AGENT_EVENTS.device.hello, helloPayload)).resolves.toMatchObject({
+      ok: true,
+      device: { id: 'device-1', status: 'online' },
+    });
+
+    oldDaemon.disconnect();
+    await delay(50);
+
+    await expect(app.getDevice({ userId: 'user-1', deviceId: 'device-1' })).resolves.toMatchObject({
+      ok: true,
+      device: { id: 'device-1', status: 'online' },
+    });
+  });
 });
 
 async function startSocketServer(app: ReturnType<typeof createInMemoryServerNext>) {
@@ -2153,6 +2370,10 @@ async function eventually(assertion: () => Promise<void> | void, attempts = 20):
     }
   }
   throw lastError;
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function createIds(ids: string[]) {

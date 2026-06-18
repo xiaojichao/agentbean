@@ -89,6 +89,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.deviceInvite.create,
       WEB_EVENTS.deviceInvite.complete,
       WEB_EVENTS.device.list,
+      WEB_EVENTS.device.agentsList,
       WEB_EVENTS.device.get,
       WEB_EVENTS.device.scan,
       WEB_EVENTS.channel.create,

@@ -629,6 +629,28 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             return device;
           });
       },
+      async markOffline(input) {
+        const row = globalDb
+          .prepare('SELECT * FROM devices WHERE id = ?')
+          .get(input.deviceId);
+        const device = mapDevice(row);
+        if (!device) {
+          return null;
+        }
+        globalDb
+          .prepare(
+            `UPDATE devices
+             SET status = 'offline', last_seen_at = ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(device.lastSeenAt ?? input.timestamp, input.timestamp, input.deviceId);
+        return {
+          ...device,
+          status: 'offline',
+          lastSeenAt: device.lastSeenAt ?? input.timestamp,
+          updatedAt: input.timestamp,
+        };
+      },
     },
     runtimes: {
       async replaceForDevice(input) {
@@ -878,6 +900,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
              AND agents.deleted_at IS NULL`,
           )
           .all(teamId, teamId)
+          .map((row) => {
+            const agent = mapAgent(globalDb, row);
+            if (!agent) {
+              throw new Error('SQLite agent row could not be mapped');
+            }
+            return agent;
+          });
+      },
+      async listByDevice(deviceId) {
+        return globalDb
+          .prepare('SELECT * FROM agents WHERE device_id = ? AND deleted_at IS NULL ORDER BY created_at, id')
+          .all(deviceId)
           .map((row) => {
             const agent = mapAgent(globalDb, row);
             if (!agent) {

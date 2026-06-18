@@ -346,7 +346,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const isLocalDevice = device.isLocal === true;
 
   const refreshDeviceAgents = () => {
-    return deviceEvents().agentsList(device.id).then((res) => {
+    return deviceEvents().agentsList(device.id, currentTeamId).then((res) => {
       if (res.ok && res.agents) setDeviceAgents(res.agents);
       if (res.ok && res.runtimes) setDeviceRuntimes(res.runtimes);
     });

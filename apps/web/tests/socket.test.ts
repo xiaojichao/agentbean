@@ -143,6 +143,12 @@ describe('socket event payload adapters', () => {
       payload: { deviceId: 'device-1' },
     });
 
+    await deviceEvents(socket).agentsList('device-1', 'team-1');
+    expect(calls.at(-1)).toEqual({
+      event: 'device:agents:list',
+      payload: { deviceId: 'device-1', teamId: 'team-1' },
+    });
+
     await channelEvents(socket).addMember('channel-1', 'user-1');
     expect(calls.at(-1)).toEqual({
       event: 'channel:add-member',

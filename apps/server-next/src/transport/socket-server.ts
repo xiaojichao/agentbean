@@ -296,14 +296,33 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
   });
   agentNamespace.on('connection', (socket) => {
     let connectedDeviceId: string | undefined;
+    let connectedDeviceTeamId: string | undefined;
     socket.on('disconnect', async () => {
-      if (connectedDeviceId && agentSocketsByDeviceId.get(connectedDeviceId) === socket) {
+      const ownsConnectedDevice = Boolean(
+        connectedDeviceId && agentSocketsByDeviceId.get(connectedDeviceId) === socket,
+      );
+      if (connectedDeviceId && ownsConnectedDevice) {
         agentSocketsByDeviceId.delete(connectedDeviceId);
       }
       const waitingInviteCode = waitingDeviceInviteCodeBySocket.get(socket);
       if (waitingInviteCode) {
         waitingDeviceInviteSocketsByCode.delete(waitingInviteCode);
         waitingDeviceInviteCodeBySocket.delete(socket);
+      }
+      if (connectedDeviceId && ownsConnectedDevice) {
+        const deviceId = connectedDeviceId;
+        const teamId = connectedDeviceTeamId;
+        try {
+          const result = await app.markDeviceOffline({ deviceId, timestamp: Date.now() });
+          if (result.ok && teamId) {
+            await refreshDeviceSubscribers(webSubscribers, app, teamId);
+            for (const affectedTeamId of result.affectedTeamIds) {
+              await refreshAgentSubscribers(webSubscribers, app, affectedTeamId);
+            }
+          }
+        } catch (error) {
+          console.warn('[socket] markDeviceOffline failed (non-blocking):', error);
+        }
       }
     });
     registerAgentSocketHandlers(socket, app, {
@@ -353,6 +372,7 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         if (!teamId) {
           return;
         }
+        connectedDeviceTeamId = teamId;
         await refreshDeviceSubscribers(webSubscribers, app, teamId);
         emitDeviceRuntimes(webSubscribers, teamId, result);
       },
