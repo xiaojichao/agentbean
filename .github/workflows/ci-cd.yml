@@ -441,7 +441,8 @@ jobs:
     needs:
       - validate-agentbean-next
       - deploy
-    if: always() && needs.validate-agentbean-next.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') && ((github.event_name == 'workflow_dispatch' && inputs.run_agentbean_next_production_smoke) || (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AGENTBEAN_DEPLOY_TARGET == 'next'))
+      - publish
+    if: always() && needs.validate-agentbean-next.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') && (needs.publish.result == 'success' || needs.publish.result == 'skipped') && ((github.event_name == 'workflow_dispatch' && inputs.run_agentbean_next_production_smoke) || (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AGENTBEAN_DEPLOY_TARGET == 'next'))
     timeout-minutes: 15
 
     env:
