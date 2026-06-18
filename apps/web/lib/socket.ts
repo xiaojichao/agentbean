@@ -331,7 +331,8 @@ export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
       return emitWithTimeout(socket, WEB_EVENTS.auth.whoami, { token: getStoredAuthToken() });
     },
     inviteCreate(payload = {}) {
-      return emitWithTimeout(socket, 'invite:create', payload);
+      const { networkId, ...rest } = payload;
+      return emitWithTimeout(socket, WEB_EVENTS.deviceInvite.create, { teamId: networkId, ...rest });
     },
     deviceLogin(payload) {
       return emitWithTimeout(socket, 'auth:device-login', payload, 20000);
