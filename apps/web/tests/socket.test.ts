@@ -9,6 +9,7 @@ import {
   memberEvents,
   taskEvents,
   uploadArtifact,
+  authEvents,
 } from '../lib/socket';
 
 afterEach(() => {
@@ -113,6 +114,23 @@ describe('socket event payload adapters', () => {
     expect(calls.at(-1)).toEqual({
       event: 'agent:update-config',
       payload: { agentId: 'agent-1', name: 'Codex' },
+    });
+  });
+
+  it('maps device invite creation to server-next device invite payloads', async () => {
+    const { socket, calls } = createAckSocket();
+    const auth = authEvents(socket);
+
+    await auth.inviteCreate({ networkId: 'team-1', purpose: 'device' });
+    expect(calls.at(-1)).toEqual({
+      event: 'device-invite:create',
+      payload: { purpose: 'device', teamId: 'team-1' },
+    });
+
+    await auth.inviteCreate({ networkId: 'default', purpose: 'device' });
+    expect(calls.at(-1)).toEqual({
+      event: 'device-invite:create',
+      payload: { purpose: 'device' },
     });
   });
 

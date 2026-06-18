@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TaskDto, type TaskStatus, type TeamDto, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
+import { buildDeviceInviteCommand } from './device-invite-command.js';
 
 export interface ServerNextClock {
   now(): number;
@@ -937,7 +938,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
 
       return makeSuccess({
-        invite: toDeviceInviteDto(invite),
+        invite: toDeviceInviteDto(invite, buildDeviceInviteCommand(invite.code, invite.profileId ?? team.path)),
         team: toTeamDto(team, role),
       });
     },
@@ -2854,7 +2855,7 @@ function toJoinLinkDto(link: JoinLinkRecord): JoinLinkDto {
   };
 }
 
-function toDeviceInviteDto(invite: DeviceInviteRecord): DeviceInviteDto {
+function toDeviceInviteDto(invite: DeviceInviteRecord, command?: string): DeviceInviteDto {
   return {
     id: invite.id,
     code: invite.code,
@@ -2864,6 +2865,7 @@ function toDeviceInviteDto(invite: DeviceInviteRecord): DeviceInviteDto {
     expiresAt: invite.expiresAt,
     completedAt: invite.completedAt,
     profileId: invite.profileId,
+    command,
   };
 }
 
