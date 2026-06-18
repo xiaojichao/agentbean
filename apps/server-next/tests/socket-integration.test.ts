@@ -409,29 +409,21 @@ describe('server-next Socket.IO namespaces', () => {
       ok: true,
       invite: { code: 'device-code-1', teamId: 'team-1' },
     });
-    const completed = await owner.emitWithAck(WEB_EVENTS.deviceInvite.complete, {
-      code: 'device-code-1',
-      serverUrl: baseUrl,
-    });
-    expect(completed).toMatchObject({
-      ok: true,
-      credentials: {
-        token: expect.stringMatching(/^abn_device\./),
-        teamId: 'team-1',
-        ownerId: 'user-1',
-        machineId: 'machine-1',
-        profileId: 'agentbean-next',
-        hostname: 'shaw-mbp',
-        serverUrl: baseUrl,
-      },
-    });
+    // 自动加入：daemon wait 后 server 自动 complete（invite.createdBy 即 owner 授权），
+    // credentials 自动投递给 waiting daemon socket，无需 owner 手动 emit device-invite:complete
     await eventually(async () => {
-      expect(deliveredCredentials).toEqual([(completed as { credentials: unknown }).credentials]);
+      expect(deliveredCredentials).toHaveLength(1);
+    });
+    const credentials = deliveredCredentials[0] as { token: string; teamId: string; ownerId: string };
+    expect(credentials).toMatchObject({
+      token: expect.stringMatching(/^abn_device\./),
+      teamId: 'team-1',
+      ownerId: 'user-1',
     });
 
     await expect(
       daemon.emitWithAck(AGENT_EVENTS.device.hello, {
-        token: (completed as { credentials: { token: string } }).credentials.token,
+        token: credentials.token,
         machineId: 'machine-1',
         profileId: 'agentbean-next',
         hostname: 'shaw-mbp',

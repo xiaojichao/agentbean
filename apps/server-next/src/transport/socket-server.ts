@@ -53,6 +53,23 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
   const waitingDeviceInviteSocketsByCode = new Map<string, SocketLike>();
   const waitingDeviceInviteCodeBySocket = new Map<SocketLike, string>();
 
+  // 将 completeDeviceInvite 的结果（credentials）投递给正在等待该 invite code 的 daemon socket。
+  // web 手动 complete 与 agent 端 wait 后自动 complete 共用此路径。
+  function deliverDeviceInviteCredentials(completeResult: unknown): void {
+    const credentials = resultDeviceInviteCredentials(completeResult);
+    const inviteCode = resultDeviceInviteCode(completeResult);
+    if (!credentials || !inviteCode) {
+      return;
+    }
+    waitingDeviceInviteSocketsByCode.get(inviteCode)?.emit?.(AGENT_EVENTS.deviceInvite.credentials, credentials);
+    waitingDeviceInviteSocketsByCode.delete(inviteCode);
+    for (const [waitingSocket, code] of waitingDeviceInviteCodeBySocket) {
+      if (code === inviteCode) {
+        waitingDeviceInviteCodeBySocket.delete(waitingSocket);
+      }
+    }
+  }
+
   server.of('/web').on('connection', (socket) => {
     const authenticatedUser = createAuthenticatedUserResolver(socket, app);
     const subscriber: WebSocketSubscription = { socket };
@@ -157,18 +174,7 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         await emitChannelMessageSubscribers(webSubscribers, app, teamId, result);
       },
       afterDeviceInviteComplete(_payload, result) {
-        const credentials = resultDeviceInviteCredentials(result);
-        const inviteCode = resultDeviceInviteCode(result);
-        if (!credentials || !inviteCode) {
-          return;
-        }
-        waitingDeviceInviteSocketsByCode.get(inviteCode)?.emit?.(AGENT_EVENTS.deviceInvite.credentials, credentials);
-        waitingDeviceInviteSocketsByCode.delete(inviteCode);
-        for (const [socket, code] of waitingDeviceInviteCodeBySocket) {
-          if (code === inviteCode) {
-            waitingDeviceInviteCodeBySocket.delete(socket);
-          }
-        }
+        deliverDeviceInviteCredentials(result);
       },
       async afterChannelMutation(payload, result) {
         if (!isSuccessAck(result)) {
@@ -301,19 +307,31 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
       }
     });
     registerAgentSocketHandlers(socket, app, {
-      afterDeviceInviteWait(payload, result) {
+      async afterDeviceInviteWait(payload, result) {
         if (!isSuccessAck(result)) {
           return;
         }
         const code = payloadDeviceInviteCode(payload) ?? resultDeviceInviteCode(result);
-        if (code) {
-          const previousCode = waitingDeviceInviteCodeBySocket.get(socket);
-          if (previousCode) {
-            waitingDeviceInviteSocketsByCode.delete(previousCode);
-          }
-          waitingDeviceInviteSocketsByCode.set(code, socket);
-          waitingDeviceInviteCodeBySocket.set(socket, code);
+        if (!code) {
+          return;
         }
+        const previousCode = waitingDeviceInviteCodeBySocket.get(socket);
+        if (previousCode) {
+          waitingDeviceInviteSocketsByCode.delete(previousCode);
+        }
+        waitingDeviceInviteSocketsByCode.set(code, socket);
+        waitingDeviceInviteCodeBySocket.set(socket, code);
+        // 自动完成邀请：invite code 是 owner 主动创建的授权凭证，daemon wait 时即用
+        // invite.createdBy（owner）自动 approve，无需 web 端手动 emit device-invite:complete。
+        const createdBy = resultDeviceInviteCreatedBy(result);
+        if (!createdBy) {
+          return;
+        }
+        const completeResult = await app.completeDeviceInvite({ code, userId: createdBy });
+        if (!isSuccessAck(completeResult)) {
+          return;
+        }
+        deliverDeviceInviteCredentials(completeResult);
       },
       async afterDeviceMutation(payload, result) {
         if (!isSuccessAck(result)) {
@@ -810,6 +828,14 @@ function resultDeviceInviteCredentials(result: unknown): unknown | null {
     return null;
   }
   return (result as { credentials?: unknown }).credentials ?? null;
+}
+
+function resultDeviceInviteCreatedBy(result: unknown): string | null {
+  if (!result || typeof result !== 'object') {
+    return null;
+  }
+  const invite = (result as { invite?: { createdBy?: unknown } }).invite;
+  return typeof invite?.createdBy === 'string' ? invite.createdBy : null;
 }
 
 function resultDispatchTeamId(result: unknown): string | null {
