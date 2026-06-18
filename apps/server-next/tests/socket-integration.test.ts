@@ -143,6 +143,80 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('device:agents:list returns runtimes + agents reported by the daemon', async () => {
+    // 协议漂移修复：web emit 'device:agents:list' 后 server 必须回 agents + runtimes。
+    // 先 daemon report runtimes/agents，再让 web 查询该 device，校验拿到完整列表。
+    const app = createInMemoryServerNext({
+      now: () => 2000,
+      ids: createIds([
+        'user-list-1',
+        'team-list-1',
+        'channel-list-1',
+        'device-list-1',
+        'runtime-list-1',
+        'agent-list-1',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const web = await connectClient(`${baseUrl}/web`);
+    const daemon = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      web.disconnect();
+      daemon.disconnect();
+    });
+
+    await expect(
+      web.emitWithAck(WEB_EVENTS.auth.register, {
+        username: 'listuser',
+        password: 'secret',
+        teamName: 'ListTeam',
+      }),
+    ).resolves.toMatchObject({ ok: true, user: { id: 'user-list-1', primaryTeamId: 'team-list-1' } });
+
+    await expect(
+      daemon.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-list-1',
+        ownerId: 'user-list-1',
+        machineId: 'machine-list-1',
+        profileId: 'default',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'device-list-1', status: 'online' } });
+
+    await expect(
+      daemon.emitWithAck(AGENT_EVENTS.device.runtimes, {
+        teamId: 'team-list-1',
+        deviceId: 'device-list-1',
+        runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }],
+      }),
+    ).resolves.toMatchObject({ ok: true, runtimes: [{ id: 'runtime-list-1', adapterKind: 'codex' }] });
+
+    await expect(
+      daemon.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
+        teamId: 'team-list-1',
+        deviceId: 'device-list-1',
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      }),
+    ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-list-1', status: 'online' }] });
+
+    // 协议漂移修复前：此处会超时/回 INTERNAL_ERROR，因为 server 没注册 device:agents:list
+    await expect(
+      web.emitWithAck(WEB_EVENTS.device.agentsList, {
+        userId: 'user-list-1',
+        teamId: 'team-list-1',
+        deviceId: 'device-list-1',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-list-1', deviceId: 'device-list-1', status: 'online' }],
+      runtimes: [{ id: 'runtime-list-1', deviceId: 'device-list-1', adapterKind: 'codex' }],
+    });
+  });
+
   test('does not expose internal subscription exception messages in failure acks', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {

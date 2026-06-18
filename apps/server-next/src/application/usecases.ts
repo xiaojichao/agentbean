@@ -53,6 +53,7 @@ export interface ServerNextUseCases {
   completeDeviceInvite(input: CompleteDeviceInviteInput): Promise<Ack<DeviceInviteAckDto & { credentials: DeviceInviteCredentialsDto }>>;
   deviceHelloFromCredentials(input: DeviceHelloFromCredentialsInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto }>>;
   listDevices(input: { teamId: string; userId: string }): Promise<Ack<{ devices: DeviceDto[] }>>;
+  listDeviceAgents(input: { teamId: string; userId: string; deviceId: string }): Promise<Ack<{ agents: AgentDto[]; runtimes: RuntimeDto[] }>>;
   getDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDetailDto }>>;
   requestDeviceScan(input: RequestDeviceScanInput): Promise<Ack<RequestDeviceScanResult>>;
   deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto }>>;
@@ -1121,6 +1122,28 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('NOT_FOUND', 'Device not found');
       }
       return makeSuccess({ device: toDeviceDto(updated) });
+    },
+
+    async listDeviceAgents(deviceAgentsInput) {
+      const device = await repositories.devices.getById(deviceAgentsInput.deviceId);
+      if (!device) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      // 校验 device 属于该 team 且调用者是 team 成员（与 getDevice 一致）
+      if (device.teamId !== deviceAgentsInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      if (!(await repositories.teams.isMember(device.teamId, deviceAgentsInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const [agents, runtimes] = await Promise.all([
+        repositories.agents.listByDevice(device.id),
+        repositories.runtimes.listByDevice(device.id),
+      ]);
+      return makeSuccess({
+        agents: agents.map(toPublicAgent),
+        runtimes: runtimes.map(toRuntimeDto),
+      });
     },
 
     async getDevice(deviceDetailInput) {

@@ -433,7 +433,7 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
       return emitWithTimeout(socket, WEB_EVENTS.device.get, { deviceId: id });
     },
     agentsList(deviceId) {
-      return emitWithTimeout(socket, 'device:agents:list', { deviceId });
+      return emitWithTimeout(socket, WEB_EVENTS.device.agentsList, { deviceId });
     },
     scan(deviceId) {
       return emitWithTimeout(socket, WEB_EVENTS.device.scan, { deviceId });

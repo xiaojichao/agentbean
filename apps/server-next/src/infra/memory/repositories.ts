@@ -498,6 +498,11 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           (agent) => agent.deletedAt === undefined && agent.visibleTeamIds.includes(teamId),
         );
       },
+      async listByDevice(deviceId) {
+        return Array.from(agents.values()).filter(
+          (agent) => agent.deviceId === deviceId && agent.deletedAt === undefined,
+        );
+      },
     },
     messages: {
       async append(input) {

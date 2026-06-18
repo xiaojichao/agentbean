@@ -908,6 +908,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             return agent;
           });
       },
+      async listByDevice(deviceId) {
+        return globalDb
+          .prepare('SELECT * FROM agents WHERE device_id = ? AND deleted_at IS NULL ORDER BY created_at, id')
+          .all(deviceId)
+          .map((row) => {
+            const agent = mapAgent(globalDb, row);
+            if (!agent) {
+              throw new Error('SQLite agent row could not be mapped');
+            }
+            return agent;
+          });
+      },
     },
     messages: {
       async append(message) {

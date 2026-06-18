@@ -185,6 +185,7 @@ export interface AgentRepository {
   markMissingScannedOffline(input: { teamId: ID; deviceId: ID; seenIdentityKeys: string[]; timestamp: UnixMs }): Promise<ID[]>;
   updateStatus(input: { agentId: ID; status: AgentRecord['status']; lastSeenAt: UnixMs; lastError?: string }): Promise<void>;
   listVisibleInTeam(teamId: ID): Promise<AgentRecord[]>;
+  listByDevice(deviceId: ID): Promise<AgentRecord[]>;
 }
 
 export interface MessageRepository {

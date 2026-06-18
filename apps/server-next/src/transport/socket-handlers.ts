@@ -78,6 +78,7 @@ export function registerWebSocketHandlers(
     options.afterDeviceInviteComplete?.(payload, result), { authenticatedUser: options.authenticatedUser },
   );
   bind(socket, WEB_EVENTS.device.list, app, 'listDevices', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.device.agentsList, app, 'listDeviceAgents', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.device.get, app, 'getDevice', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.device.scan, app, 'requestDeviceScan', (_payload, result) => {
     if (!options.deviceScan || !isDeviceScanAck(result)) {
