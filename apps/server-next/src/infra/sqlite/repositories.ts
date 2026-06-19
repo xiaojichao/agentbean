@@ -597,8 +597,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .prepare(
             `INSERT INTO devices (
               id, team_id, owner_id, machine_id, profile_id, hostname, status, daemon_version,
-              system_info, last_seen_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              system_info, connect_command, last_seen_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               team_id = excluded.team_id,
               owner_id = excluded.owner_id,
@@ -608,6 +608,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               status = excluded.status,
               daemon_version = excluded.daemon_version,
               system_info = excluded.system_info,
+              connect_command = excluded.connect_command,
               last_seen_at = excluded.last_seen_at,
               updated_at = excluded.updated_at`,
           )
@@ -621,6 +622,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             device.status,
             device.daemonVersion ?? null,
             device.systemInfo ? JSON.stringify(device.systemInfo) : null,
+            device.connectCommand ?? null,
             device.lastSeenAt ?? device.updatedAt,
             device.createdAt,
             device.updatedAt,
