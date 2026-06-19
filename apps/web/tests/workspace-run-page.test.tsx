@@ -17,7 +17,7 @@ vi.mock('next/link', () => ({
 vi.mock('@/lib/store', () => ({
   useAgentBeanStore: (selector: (s: unknown) => unknown) =>
     selector({ currentTeamId: 'team-1', agents: {}, dms: [] }),
-  useCurrentNetworkPath: () => 'acme',
+  useCurrentTeamPath: () => 'acme',
 }));
 vi.mock('@/lib/format-time', () => ({
   formatRelative: () => 'recently',
@@ -29,7 +29,7 @@ vi.mock('@/lib/socket', () => ({
   authedApiUrl: (url: string) => url,
 }));
 
-import RunDetailPage from '../app/[networkPath]/runs/[runId]/page';
+import RunDetailPage from '../app/[teamPath]/runs/[runId]/page';
 
 afterEach(() => {
   cleanup();

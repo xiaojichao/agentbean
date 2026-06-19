@@ -6,11 +6,12 @@ import { Sidebar } from '@/components/sidebar';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { authEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
+import { readStoredTeamPath } from '@/lib/team-path';
 
 const MARKETING_ROUTES = ['/', '/login', '/signup', '/register'];
 const RESERVED_PREFIXES = ['/join/', '/device-login/'];
 
-function isNetworkRoute(pathname: string): boolean {
+function isTeamRoute(pathname: string): boolean {
   if (MARKETING_ROUTES.includes(pathname)) return false;
   for (const prefix of RESERVED_PREFIXES) {
     if (pathname.startsWith(prefix)) return false;
@@ -50,26 +51,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [authToken, conn]);
 
   const marketing = MARKETING_ROUTES.includes(pathname);
-  const networked = isNetworkRoute(pathname);
+  const teamScoped = isTeamRoute(pathname);
 
   useEffect(() => {
     if (!hydrated) return;
     if (authToken && marketing) {
-      const savedNp = localStorage.getItem('agentbean.networkPath');
+      const savedTeamPath = readStoredTeamPath();
       const s = useAgentBeanStore.getState();
       const net = s.teams.find((n) => n.id === s.currentTeamId);
-      router.replace(`/${savedNp || net?.path || 'default'}/chat`);
+      router.replace(`/${savedTeamPath || net?.path || 'default'}/chat`);
     }
-    if (!authToken && networked) {
+    if (!authToken && teamScoped) {
       router.replace('/');
     }
-  }, [hydrated, authToken, marketing, networked, router]);
+  }, [hydrated, authToken, marketing, teamScoped, router]);
 
   if (!hydrated) {
     return <div className="min-h-screen bg-neutral-950" />;
   }
 
-  if (authToken && networked) {
+  if (authToken && teamScoped) {
     return (
       <div className="flex h-screen overflow-hidden">
         <Sidebar />

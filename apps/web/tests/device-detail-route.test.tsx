@@ -15,7 +15,7 @@ const { deviceGetMock, deviceDeleteMock, agentsListMock, listCustomMock, routerP
 }));
 
 vi.mock('next/navigation', () => ({
-  useParams: () => ({ networkPath: 'acme', id: routeDeviceIdMock() }),
+  useParams: () => ({ teamPath: 'acme', id: routeDeviceIdMock() }),
   useRouter: () => ({ push: routerPushMock }),
 }));
 
@@ -45,7 +45,7 @@ vi.mock('@/lib/socket', () => ({
   }),
 }));
 
-import DeviceDetailPage from '@/app/[networkPath]/devices/[id]/page';
+import DeviceDetailPage from '@/app/[teamPath]/devices/[id]/page';
 
 function makeDevice(overrides: Partial<DeviceInfo> = {}): DeviceInfo {
   return {

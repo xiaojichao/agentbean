@@ -4,6 +4,7 @@ import { FormEvent, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createInviteSocket, authEvents, resetWebSocket, setStoredDeviceId } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
+import { readStoredTeamPath } from '@/lib/team-path';
 
 export default function DeviceLoginPage() {
   const params = useParams();
@@ -40,9 +41,9 @@ export default function DeviceLoginPage() {
             role: res.role ?? 'user',
       });
       resetWebSocket();
-      const savedNp = localStorage.getItem('agentbean.networkPath');
-      const np = savedNp || res.networkPath || 'default';
-      router.push(`/${np}/devices`);
+      const savedTeamPath = readStoredTeamPath();
+      const teamPath = savedTeamPath || res.teamPath || res.networkPath || 'default';
+      router.push(`/${teamPath}/devices`);
     } catch (err: any) {
       setError(err?.message ?? 'LOGIN_FAILED');
     } finally {

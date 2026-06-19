@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const chatPage = readFileSync(new URL('../app/[networkPath]/chat/page.tsx', import.meta.url), 'utf8');
+const chatPage = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
 
 describe('chat page dispatch status integration', () => {
   it('listens for dispatch status updates on the routed chat page', () => {

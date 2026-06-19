@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, Check, FolderOpen, Paperclip, Image as ImageIcon, Trash2, ExternalLink } from 'lucide-react';
 import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl, fetchAgentWorkspace, authedApiUrl } from '@/lib/socket';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { daemonVersionDisplay } from '@/lib/daemon-version';
 import { formatRelative } from '@/lib/format-time';
 import type { AgentWorkspaceFile, AgentWorkspaceRun } from '@/lib/schema';
@@ -182,7 +182,7 @@ function DirectoryBrowseButton({
 export default function DevicesView({ standalone = false }: { standalone?: boolean } = {}) {
   const params = useParams();
   const { push } = useRouter();
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
   const conn = useAgentBeanStore((s) => s.conn);
   const devices = useAgentBeanStore((s) => s.devices);
   const applyDevicesSnapshot = useAgentBeanStore((s) => s.applyDevicesSnapshot);
@@ -993,7 +993,7 @@ function DeviceWorkspaceAgentCard({ agent }: { agent: WorkspaceAgent }) {
   const fileCount = agent.runs.reduce((sum, run) => sum + run.files.length, 0);
   const latest = Math.max(...agent.runs.map((run) => run.updatedAt));
   const workspacePath = agent.cwd ? `${agent.cwd}/.agentbean/${agent.name}` : `~/.agentbean/${agent.name}`;
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
 
   return (
     <div className="rounded-md border border-neutral-200 bg-neutral-50 p-3">

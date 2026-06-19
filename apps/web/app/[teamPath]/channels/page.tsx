@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { agentEvents, channelEvents, getWebSocket } from '@/lib/socket';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 
 export default function ChannelsPage() {
@@ -12,7 +12,7 @@ export default function ChannelsPage() {
   const applyChannelsSnapshot = useAgentBeanStore((s) => s.applyChannelsSnapshot);
   const setConn = useAgentBeanStore((s) => s.setConn);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
   const [open, setOpen] = useState(false);
 
   useEffect(() => {

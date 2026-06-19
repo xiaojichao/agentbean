@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, AlertTriangle, Copy, Check, Globe, Lock, Monitor, Terminal, User } from 'lucide-react';
 import { agentEvents, fetchAgentWorkspace } from '@/lib/socket';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { AgentStatusBadge } from '@/components/agent-status-badge';
 import { formatRelative } from '@/lib/format-time';
 import type { AgentWorkspaceRun } from '@/lib/schema';
@@ -16,7 +16,7 @@ export default function AgentDetailPage() {
   const agent = useAgentBeanStore((s) => s.agents[params.agentId] ?? null);
   const setAgents = useAgentBeanStore((s) => s.applyAgentsSnapshot);
   const upsert = useAgentBeanStore((s) => s.applyAgentStatus);
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
   const [publishing, setPublishing] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const teams = useAgentBeanStore((s) => s.teams);

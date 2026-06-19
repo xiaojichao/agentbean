@@ -28,7 +28,7 @@ import {
   X,
 } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, channelEvents, dmEvents, memberEvents, taskEvents, messageReactionEvents } from '@/lib/socket';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, Artifact, ChannelSummary, ChatMessage } from '@/lib/schema';
 import {
   TASK_STATUS_BY_ID as STATUS_BY_ID,
@@ -85,7 +85,7 @@ export default function TasksPage() {
   const applyDmsSnapshot = useAgentBeanStore((s) => s.applyDmsSnapshot);
   const applyChannelHistory = useAgentBeanStore((s) => s.applyChannelHistory);
   const appendMessage = useAgentBeanStore((s) => s.appendMessage);
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
   const router = useRouter();
   const searchParams = useSearchParams();
 
