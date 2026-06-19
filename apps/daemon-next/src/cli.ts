@@ -117,6 +117,7 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
     hostname: config.hostname,
   };
   await createDaemonProtocolClient({
+    serverUrl: config.serverUrl,
     socket: protocolSocket,
     executor: createCommandExecutor({ fallbackPrefix: config.fallbackPrefix }),
     device,
