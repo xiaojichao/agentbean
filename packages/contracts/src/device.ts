@@ -44,6 +44,7 @@ export interface DeviceDto {
   daemonVersionInfo?: DaemonVersionInfo;
   latestDaemonVersion?: string | null;
   daemonUpdateAvailable?: boolean;
+  connectCommand?: string;
   lastSeenAt?: UnixMs;
 }
 

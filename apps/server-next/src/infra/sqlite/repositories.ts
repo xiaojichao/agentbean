@@ -42,6 +42,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0002_device_invites.sql');
   applyMigration(db, 'global/0003_agent_deleted_at.sql');
   applyMigration(db, 'global/0004_join_links.sql');
+  applyMigration(db, 'global/0005_device_connect_command.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
@@ -1640,6 +1641,7 @@ function mapDevice(row: unknown): DeviceRecord | null {
     machineId: sqliteNullableText(row, 'machine_id'),
     profileId: sqliteNullableText(row, 'profile_id'),
     daemonVersion: sqliteNullableText(row, 'daemon_version'),
+    connectCommand: sqliteNullableText(row, 'connect_command'),
     systemInfo: systemInfoJson ? JSON.parse(systemInfoJson) as DeviceRecord['systemInfo'] : undefined,
     lastSeenAt: sqliteNumber(row, 'last_seen_at'),
     createdAt: sqliteNumber(row, 'created_at'),
