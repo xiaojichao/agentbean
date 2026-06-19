@@ -70,8 +70,10 @@ let cachedNpmLatestVersion: string | null = null;
 let lastNpmLatestCheckedAt = 0;
 let pendingNpmLatestRefresh: Promise<string | null> | null = null;
 
+// npm registry 查用户安装的 @agentbean/daemon（与 device-invite-command 的 npx 命令一致）；
+// packaged fallback 查 daemon-next（server-next bundle 的本地包）。
 function npmRegistryUrl(): string {
-  return process.env.AGENT_BEAN_DAEMON_NPM_REGISTRY_URL ?? 'https://registry.npmjs.org/%40agentbean%2Fdaemon-next';
+  return process.env.AGENT_BEAN_DAEMON_NPM_REGISTRY_URL ?? 'https://registry.npmjs.org/%40agentbean%2Fdaemon';
 }
 
 function npmRefreshIntervalMs(): number {
