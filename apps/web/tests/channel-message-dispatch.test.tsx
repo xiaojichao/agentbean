@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import type { ChatMessage } from '@/lib/schema';
 
 const emitMock = vi.fn((event: string, payload: unknown, cb: (res: unknown) => void) => cb({ ok: true }));
+let emitWithTimeoutResult: unknown = { ok: true, dispatch: { id: 'd1', status: 'cancelled' } };
 const applyDispatchStatusMock = vi.fn();
 vi.mock('@/lib/store', () => ({
   useAgentBeanStore: Object.assign(
@@ -18,7 +19,7 @@ vi.mock('@/lib/socket', () => ({
   getStoredAuthToken: () => 'tok',
   emitWithTimeout: (socket: { emit: typeof emitMock }, event: string, payload: unknown) => {
     socket.emit(event, payload, () => {});
-    return Promise.resolve({ ok: true });
+    return Promise.resolve(emitWithTimeoutResult);
   },
 }));
 vi.mock('@/lib/display-names', () => ({
@@ -38,6 +39,7 @@ afterEach(() => {
   cleanup();
   emitMock.mockReset();
   applyDispatchStatusMock.mockReset();
+  emitWithTimeoutResult = { ok: true, dispatch: { id: 'd1', status: 'cancelled' } };
 });
 
 describe('ChannelMessage dispatch indicator', () => {
@@ -68,5 +70,13 @@ describe('ChannelMessage dispatch indicator', () => {
     render(<ChannelMessage msg={makeMsg({ dispatchStatus: 'running', dispatchId: 'd1' })} />);
     fireEvent.click(screen.getByRole('button', { name: '取消' }));
     expect(emitMock).toHaveBeenCalledWith('dispatch:cancel', { dispatchId: 'd1' }, expect.any(Function));
+  });
+
+  it('updates from the server dispatch status returned by cancel ack', async () => {
+    render(<ChannelMessage msg={makeMsg({ dispatchStatus: 'running', dispatchId: 'd1' })} />);
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    await waitFor(() => {
+      expect(applyDispatchStatusMock).toHaveBeenCalledWith('c1', 'm1', 'cancelled', 'd1');
+    });
   });
 });

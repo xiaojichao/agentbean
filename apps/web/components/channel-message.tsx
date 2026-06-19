@@ -84,9 +84,14 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
   function cancelDispatch() {
     if (!msg.dispatchId) return;
     emitWithTimeout(getWebSocket(), 'dispatch:cancel', { dispatchId: msg.dispatchId })
-      .then((res: { ok?: boolean }) => {
-        if (res?.ok) {
-          useAgentBeanStore.getState().applyDispatchStatus(msg.channelId, msg.id, 'cancelled');
+      .then((res: { ok?: boolean; dispatch?: { id?: string; status?: DispatchStatus } }) => {
+        if (res?.ok && res.dispatch?.status) {
+          useAgentBeanStore.getState().applyDispatchStatus(
+            msg.channelId,
+            msg.id,
+            res.dispatch.status,
+            res.dispatch.id,
+          );
         }
       })
       .catch(() => { /* swallow */ });

@@ -2,10 +2,10 @@
 
 import { useEffect, useState, useRef, useCallback, type MouseEvent, type ReactNode, type RefObject } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2 } from 'lucide-react';
-import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents } from '@/lib/socket';
+import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
+import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, emitWithTimeout } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
-import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage } from '@/lib/schema';
+import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus } from '@/lib/schema';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
@@ -31,6 +31,17 @@ type ProfileTarget = { kind: 'human' | 'agent'; id: string };
 type MentionProfileMember = { id: string; name: string; kind: ProfileTarget['kind'] };
 type ChatTaskMenuTarget = { surface: 'main' | 'thread'; messageId: string } | null;
 type ComposerAttachmentStatus = 'uploading' | 'ready' | 'failed';
+
+interface SendMessageAck {
+  ok?: boolean;
+  error?: string;
+  message?: ChatMessage;
+  dispatches?: Array<{
+    id: string;
+    messageId: string;
+    status?: DispatchStatus;
+  }>;
+}
 
 interface ComposerAttachment {
   localId: string;
@@ -124,6 +135,7 @@ export default function ChatPage() {
   const applyDmsSnapshot = useAgentBeanStore((s) => s.applyDmsSnapshot);
   const applyChannelHistory = useAgentBeanStore((s) => s.applyChannelHistory);
   const appendMessage = useAgentBeanStore((s) => s.appendMessage);
+  const applyDispatchStatus = useAgentBeanStore((s) => s.applyDispatchStatus);
   const router = useRouter();
   const params = useParams();
   const np = useCurrentNetworkPath();
@@ -247,10 +259,20 @@ export default function ChatPage() {
     const onHistory = (payload: { channelId: string; messages: ChatMessage[] }) => {
       if (payload.channelId === activeChannel) applyChannelHistory(activeChannel, payload.messages);
     };
+    const onDispatchStatus = (dispatch: { messageId: string; channelId: string; status: DispatchStatus; id?: string }) => {
+      if (dispatch.channelId === activeChannel) {
+        applyDispatchStatus(activeChannel, dispatch.messageId, dispatch.status, dispatch.id);
+      }
+    };
     socket.on('channel:history', onHistory);
     socket.on('channel:message', handleMessage);
-    return () => { socket.off('channel:history', onHistory); socket.off('channel:message', handleMessage); };
-  }, [activeChannel, conn, applyChannelHistory, handleMessage]);
+    socket.on('message:dispatch-status', onDispatchStatus);
+    return () => {
+      socket.off('channel:history', onHistory);
+      socket.off('channel:message', handleMessage);
+      socket.off('message:dispatch-status', onDispatchStatus);
+    };
+  }, [activeChannel, conn, applyChannelHistory, applyDispatchStatus, handleMessage]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -678,6 +700,15 @@ export default function ChatPage() {
     }
   };
 
+  const appendAckMessage = useCallback((res?: SendMessageAck) => {
+    if (!res?.ok || !res.message) return;
+    const dispatch = res.dispatches?.find((item) => item.messageId === res.message?.id);
+    appendMessage({
+      ...res.message,
+      ...(dispatch ? { dispatchStatus: dispatch.status ?? 'queued', dispatchId: dispatch.id } : {}),
+    });
+  }, [appendMessage]);
+
   const sendMessage = () => {
     const artifacts = readyArtifacts(pendingAttachments);
     if (
@@ -690,8 +721,9 @@ export default function ChatPage() {
     const body = input.trim();
     const artifactIds = artifacts.map((a) => a.id);
     const createTask = asTask;
-    getWebSocket().emit('message:send', { channelId, body: body || '附件', asTask, artifactIds }, (res?: { ok?: boolean; error?: string }) => {
+    getWebSocket().emit('message:send', { channelId, body: body || '附件', asTask, artifactIds }, (res?: SendMessageAck) => {
       if (res?.ok) {
+        appendAckMessage(res);
         if (createTask) setTimeout(() => loadTasks(), 150);
         return;
       }
@@ -723,8 +755,11 @@ export default function ChatPage() {
     const channelId = activeChannel;
     const body = threadInput.trim() || '附件';
     const artifactIds = artifacts.map((a) => a.id);
-    getWebSocket().emit('message:send', { channelId, body, parentMessageId: threadRootId, artifactIds }, (res?: { ok?: boolean; error?: string }) => {
-      if (res?.ok) return;
+    getWebSocket().emit('message:send', { channelId, body, parentMessageId: threadRootId, artifactIds }, (res?: SendMessageAck) => {
+      if (res?.ok) {
+        appendAckMessage(res);
+        return;
+      }
       appendMessage({
         id: `local-thread-error-${Date.now()}`,
         channelId,
@@ -2475,6 +2510,7 @@ function ChatBubble({
   const agents = useAgentBeanStore((s) => s.agents);
   const agent = msg.senderId ? agents[msg.senderId] : undefined;
   const currentUser = useAgentBeanStore((s) => s.currentUser);
+  const applyDispatchStatus = useAgentBeanStore((s) => s.applyDispatchStatus);
   const meta = parseMeta(msg);
 
   if (msg.senderKind === 'system') {
@@ -2505,6 +2541,56 @@ function ChatBubble({
   const profileTarget = msg.senderKind === 'agent'
     ? { kind: 'agent' as const, id: msg.senderId ?? '' }
     : { kind: 'human' as const, id: msg.senderId ?? '' };
+  const dispatch = isHuman ? msg.dispatchStatus : undefined;
+
+  const cancelDispatch = () => {
+    if (!msg.dispatchId) return;
+    emitWithTimeout(getWebSocket(), 'dispatch:cancel', { dispatchId: msg.dispatchId })
+      .then((res: { ok?: boolean; dispatch?: { id?: string; status?: DispatchStatus } }) => {
+        if (res?.ok && res.dispatch?.status) {
+          applyDispatchStatus(msg.channelId, msg.id, res.dispatch.status, res.dispatch.id);
+        }
+      })
+      .catch(() => {});
+  };
+
+  const renderDispatchStatus = () => {
+    if (!dispatch || dispatch === 'succeeded') return null;
+    if (dispatch === 'queued' || dispatch === 'sent' || dispatch === 'accepted' || dispatch === 'running') {
+      return (
+        <div className="mt-2 flex items-center gap-2 text-xs text-neutral-500">
+          <Loader2 size={12} className="animate-spin text-blue-500" />
+          <span>agent 正在处理...</span>
+          {msg.dispatchId && (
+            <button
+              type="button"
+              onClick={cancelDispatch}
+              className="inline-flex h-5 items-center gap-1 border border-neutral-200 bg-white px-1.5 text-[11px] font-medium text-neutral-600 hover:bg-neutral-50"
+              title="取消 dispatch"
+            >
+              <X size={10} />
+              <span>取消</span>
+            </button>
+          )}
+        </div>
+      );
+    }
+    if (dispatch === 'cancelled') {
+      return <div className="mt-2 text-xs text-neutral-400">已取消</div>;
+    }
+    if (dispatch === 'failed') {
+      return (
+        <div className="mt-2 flex items-center gap-1 text-xs text-red-500">
+          <AlertCircle size={12} />
+          <span>处理失败</span>
+        </div>
+      );
+    }
+    if (dispatch === 'timed_out') {
+      return <div className="mt-2 text-xs text-amber-600">处理超时</div>;
+    }
+    return null;
+  };
 
   return (
     <div
@@ -2544,6 +2630,7 @@ function ChatBubble({
           <span className="text-[10px] text-neutral-400">{time}</span>
         </div>
         <MarkdownMessage body={displayMessageBody(msg)} mentionMembers={messageMentionMembers} onOpenMention={onOpenProfile} />
+        {renderDispatchStatus()}
         {msg.artifacts && msg.artifacts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">
             {msg.artifacts.map((artifact) => (
