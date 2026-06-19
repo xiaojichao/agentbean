@@ -139,6 +139,14 @@ describe('daemon-next CLI wiring', () => {
     }
   });
 
+  test('parseDaemonNextCliConfig exposes profileId for scan cache', () => {
+    const config = parseDaemonNextCliConfig({
+      argv: ['--team-id', 't1', '--owner-id', 'o1', '--profile-id', 'laptop'],
+      env: {},
+    });
+    expect(config.profileId).toBe('laptop');
+  });
+
   test('bridges Socket.IO client events to daemon protocol without treating first connect as reconnect', async () => {
     const runtimeSocket = new FakeRuntimeSocket();
     const socket = createSocketIoDaemonSocket(runtimeSocket);

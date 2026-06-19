@@ -19,6 +19,7 @@ export { uploadArtifacts } from './artifact-uploader.js';
 export type { UploadedArtifact } from './artifact-uploader.js';
 export { createHttpEnvResolver } from './env-fetcher.js';
 import { createRescanController, type RescanController } from './rescan.js';
+import { saveScanCache } from './scan-cache.js';
 
 export interface DaemonProtocolSocket {
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
@@ -273,6 +274,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           intervalMs: input.rescanIntervalMs,
           report: async (snap) => {
             await reportDeviceSnapshot(socket, device.teamId, currentDeviceId, snap.runtimes, snap.agents);
+            saveScanCache(snap, device.profileId);
           },
         });
         rescan.start();
