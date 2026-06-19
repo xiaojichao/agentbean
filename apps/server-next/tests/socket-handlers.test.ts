@@ -25,6 +25,8 @@ describe('server-next socket handlers', () => {
       requestDeviceScan: vi.fn(async (payload) =>
         makeSuccess({ request: { requestId: 'scan-1', deviceId: (payload as { deviceId: string }).deviceId } }),
       ),
+      renameDevice: vi.fn(async (payload) => makeSuccess({ payload })),
+      deleteDevice: vi.fn(async (payload) => makeSuccess({ payload })),
       createChannel: vi.fn(async (payload) => makeSuccess({ payload })),
       updateChannel: vi.fn(async (payload) => makeSuccess({ payload })),
       addChannelHumanMember: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -92,6 +94,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.device.agentsList,
       WEB_EVENTS.device.get,
       WEB_EVENTS.device.scan,
+      WEB_EVENTS.device.rename,
+      WEB_EVENTS.device.delete,
       WEB_EVENTS.channel.create,
       WEB_EVENTS.channel.update,
       WEB_EVENTS.channel.addMember,
@@ -171,6 +175,15 @@ describe('server-next socket handlers', () => {
       deviceId: 'device-1',
     });
     await socket.trigger(WEB_EVENTS.device.scan, {
+      userId: 'user-1',
+      deviceId: 'device-1',
+    });
+    await socket.trigger(WEB_EVENTS.device.rename, {
+      userId: 'user-1',
+      deviceId: 'device-1',
+      hostname: 'new-name',
+    });
+    await socket.trigger(WEB_EVENTS.device.delete, {
       userId: 'user-1',
       deviceId: 'device-1',
     });
@@ -364,6 +377,15 @@ describe('server-next socket handlers', () => {
       deviceId: 'device-1',
     });
     expect(app.requestDeviceScan).toHaveBeenCalledWith({
+      userId: 'user-1',
+      deviceId: 'device-1',
+    });
+    expect(app.renameDevice).toHaveBeenCalledWith({
+      userId: 'user-1',
+      deviceId: 'device-1',
+      hostname: 'new-name',
+    });
+    expect(app.deleteDevice).toHaveBeenCalledWith({
       userId: 'user-1',
       deviceId: 'device-1',
     });

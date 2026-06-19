@@ -86,6 +86,8 @@ export function registerWebSocketHandlers(
     }
     options.deviceScan(result.request);
   }, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.device.rename, app, 'renameDevice', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.device.delete, app, 'deleteDevice', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.channel.create, app, 'createChannel', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.channel.update, app, 'updateChannel', undefined, { authenticatedUser: options.authenticatedUser });
   const afterChannelMutation = (payload: unknown, result: unknown) =>
