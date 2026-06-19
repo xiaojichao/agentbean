@@ -23,11 +23,6 @@ export interface CollectArtifactsInput {
   cwd: string;
   /** command start timestamp (ms); used as mtime threshold for the cwd fallback. */
   startedAt: number;
-  fs?: {
-    readdir: typeof readdirSync;
-    stat: typeof statSync;
-    readFile: typeof readFileSync;
-  };
 }
 
 /**
@@ -36,7 +31,6 @@ export interface CollectArtifactsInput {
  * semantic filename). Returns the candidate artifacts to upload.
  */
 export async function collectArtifacts(input: CollectArtifactsInput): Promise<CollectedArtifact[]> {
-  const fs = input.fs ?? { readdir: readdirSync, stat: statSync, readFile: readFileSync };
   const bySha = new Map<string, CollectedArtifact>();
 
   const ingest = (rootAbs: string, rootForRelative: string, timeFilter: boolean): void => {
@@ -44,9 +38,9 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
     const stack: string[] = [rootAbs];
     while (stack.length > 0) {
       const current = stack.pop()!;
-      let entries: ReturnType<typeof fs.readdir>;
+      let entries;
       try {
-        entries = fs.readdir(current, { withFileTypes: true });
+        entries = readdirSync(current, { withFileTypes: true });
       } catch {
         continue;
       }
@@ -62,16 +56,16 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
           stack.push(abs);
         } else if (entry.isFile() && OUTPUT_FILE_EXT_RE.test(entry.name)) {
           visited += 1;
-          let stat: ReturnType<typeof fs.stat>;
+          let stat;
           try {
-            stat = fs.stat(abs);
+            stat = statSync(abs);
           } catch {
             continue;
           }
           if (timeFilter && stat.mtimeMs <= input.startedAt) {
             continue;
           }
-          const content = fs.readFile(abs);
+          const content = readFileSync(abs);
           const sha256 = createHash('sha256').update(content).digest('hex');
           const candidate: CollectedArtifact = {
             absolutePath: abs,
