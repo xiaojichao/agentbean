@@ -34,6 +34,7 @@ export interface WebSocketHandlerOptions {
   deviceScan?(request: { requestId: string; deviceId: string }): void;
   afterMessageSend?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceInviteComplete?(payload: unknown, result: unknown): Promise<void> | void;
+  afterDeviceMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterChannelMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterTeamMutation?(payload: unknown, result: unknown): Promise<void> | void;
@@ -86,6 +87,10 @@ export function registerWebSocketHandlers(
     }
     options.deviceScan(result.request);
   }, { authenticatedUser: options.authenticatedUser });
+  const afterDeviceMutation = (payload: unknown, result: unknown) =>
+    options.afterDeviceMutation?.(payload, result);
+  bind(socket, WEB_EVENTS.device.rename, app, 'renameDevice', afterDeviceMutation, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.device.delete, app, 'deleteDevice', afterDeviceMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.channel.create, app, 'createChannel', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.channel.update, app, 'updateChannel', undefined, { authenticatedUser: options.authenticatedUser });
   const afterChannelMutation = (payload: unknown, result: unknown) =>

@@ -356,6 +356,37 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         devices.set(device.id, updated);
         return updated;
       },
+      async updateName(input) {
+        const device = devices.get(input.deviceId);
+        if (!device) {
+          return null;
+        }
+        const updated: DeviceRecord = {
+          ...device,
+          name: input.hostname,
+          updatedAt: input.updatedAt,
+        };
+        devices.set(device.id, updated);
+        return updated;
+      },
+      async delete(input) {
+        for (const runtime of Array.from(runtimes.values())) {
+          if (runtime.deviceId === input.deviceId) runtimes.delete(runtime.id);
+        }
+        for (const agent of Array.from(agents.values())) {
+          if (agent.deviceId === input.deviceId && agent.deletedAt === undefined) {
+            agents.set(agent.id, {
+              ...agent,
+              visibleTeamIds: [],
+              status: 'offline',
+              deletedAt: input.timestamp,
+              lastSeenAt: input.timestamp,
+            });
+            agentEnv.delete(agent.id);
+          }
+        }
+        devices.delete(input.deviceId);
+      },
     },
     runtimes: {
       async replaceForDevice(input) {

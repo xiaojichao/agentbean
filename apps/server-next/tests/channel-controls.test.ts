@@ -258,6 +258,64 @@ describe('server-next second-slice channel controls', () => {
       channel: { id: 'channel-ops', agentMemberIds: [] },
     });
   });
+
+  test('removes device-hosted agents from channels when their device is deleted', async () => {
+    const { app, repositories } = createApp(['user-1', 'team-1', 'channel-all', 'channel-ops']);
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await repositories.devices.upsertHello({
+      id: 'device-1',
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+      name: 'Mac',
+      status: 'online',
+      lastSeenAt: 100,
+      createdAt: 100,
+      updatedAt: 100,
+    });
+    await repositories.agents.upsert({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'executor-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 100,
+    });
+    await app.createChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      name: 'ops',
+      visibility: 'private',
+      agentMemberIds: ['agent-1'],
+    });
+
+    await expect(
+      app.deleteDevice({
+        userId: 'user-1',
+        deviceId: 'device-1',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      affectedTeamIds: ['team-1'],
+      channelTeamIds: ['team-1'],
+    });
+    await expect(
+      app.listChannelMembers({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-ops',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      agentMemberIds: [],
+      agents: [],
+    });
+  });
 });
 
 function createApp(ids: string[]) {

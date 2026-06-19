@@ -651,6 +651,29 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           updatedAt: input.timestamp,
         };
       },
+      async updateName(input) {
+        const result = globalDb
+          .prepare('UPDATE devices SET hostname = ?, updated_at = ? WHERE id = ?')
+          .run(input.hostname, input.updatedAt, input.deviceId);
+        if (sqliteChanges(result) === 0) {
+          return null;
+        }
+        return mapDevice(globalDb.prepare('SELECT * FROM devices WHERE id = ?').get(input.deviceId));
+      },
+      async delete(input) {
+        globalDb.prepare('DELETE FROM device_runtimes WHERE device_id = ?').run(input.deviceId);
+        globalDb
+          .prepare('DELETE FROM agent_publications WHERE agent_id IN (SELECT id FROM agents WHERE device_id = ? AND deleted_at IS NULL)')
+          .run(input.deviceId);
+        globalDb
+          .prepare(
+            `UPDATE agents
+             SET status = 'offline', env_json = NULL, deleted_at = ?, updated_at = ?, last_seen_at = ?
+             WHERE device_id = ? AND deleted_at IS NULL`,
+          )
+          .run(input.timestamp, input.timestamp, input.timestamp, input.deviceId);
+        globalDb.prepare('DELETE FROM devices WHERE id = ?').run(input.deviceId);
+      },
     },
     runtimes: {
       async replaceForDevice(input) {

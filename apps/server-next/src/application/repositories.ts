@@ -164,6 +164,8 @@ export interface DeviceRepository {
   findByMachineProfile(machineId: string, profileId: string): Promise<DeviceRecord | null>;
   listByTeam(teamId: ID): Promise<DeviceRecord[]>;
   markOffline(input: { deviceId: ID; timestamp: UnixMs }): Promise<DeviceRecord | null>;
+  updateName(input: { deviceId: ID; hostname: string; updatedAt: UnixMs }): Promise<DeviceRecord | null>;
+  delete(input: { deviceId: ID; timestamp: UnixMs }): Promise<void>;
 }
 
 export interface RuntimeRepository {

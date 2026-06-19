@@ -206,6 +206,22 @@ describe('socket event payload adapters', () => {
       payload: { teamId: 'team-1' },
     });
   });
+
+  it('sends device id payloads compatible with server-next and the legacy server', async () => {
+    const { socket, calls } = createAckSocket();
+
+    await deviceEvents(socket).rename('device-1', 'new-name');
+    expect(calls.at(-1)).toEqual({
+      event: 'device:rename',
+      payload: { id: 'device-1', deviceId: 'device-1', hostname: 'new-name' },
+    });
+
+    await deviceEvents(socket).delete('device-1');
+    expect(calls.at(-1)).toEqual({
+      event: 'device:delete',
+      payload: { id: 'device-1', deviceId: 'device-1' },
+    });
+  });
 });
 
 function createAckSocket(): {

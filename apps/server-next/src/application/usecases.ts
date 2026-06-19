@@ -55,6 +55,8 @@ export interface ServerNextUseCases {
   listDevices(input: { teamId: string; userId: string }): Promise<Ack<{ devices: DeviceDto[] }>>;
   listDeviceAgents(input: { teamId: string; userId: string; deviceId: string }): Promise<Ack<{ agents: DeviceAgentListDto[]; runtimes: RuntimeDto[] }>>;
   getDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDetailDto }>>;
+  renameDevice(input: { userId: string; deviceId: string; hostname: string }): Promise<Ack<{ device: DeviceDto }>>;
+  deleteDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[]; channelTeamIds: string[] }>>;
   requestDeviceScan(input: RequestDeviceScanInput): Promise<Ack<RequestDeviceScanResult>>;
   deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto }>>;
   markDeviceOffline(input: { deviceId: string; timestamp: UnixMs }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[] }>>;
@@ -1183,6 +1185,56 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           agents: visibleAgents.filter((agent) => agent.deviceId === device.id),
         },
       });
+    },
+
+    async renameDevice(renameInput) {
+      const device = await repositories.devices.getById(renameInput.deviceId);
+      if (!device) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      if (!(await repositories.teams.isMember(device.teamId, renameInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const updated = await repositories.devices.updateName({
+        deviceId: device.id,
+        hostname: renameInput.hostname,
+        updatedAt: clock.now(),
+      });
+      if (!updated) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      return makeSuccess({ device: toDeviceDto(updated) });
+    },
+
+    async deleteDevice(deleteInput) {
+      const device = await repositories.devices.getById(deleteInput.deviceId);
+      if (!device) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      const actorRole = await repositories.teams.getMemberRole(device.teamId, deleteInput.userId);
+      if (!actorRole) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      if (device.ownerId !== deleteInput.userId && actorRole !== 'owner' && actorRole !== 'admin') {
+        return makeFailure('FORBIDDEN', 'User cannot manage device');
+      }
+      const now = clock.now();
+      const hostedAgents = await repositories.agents.listByDevice(device.id);
+      const affectedTeamIds = uniqueIds([
+        device.teamId,
+        ...hostedAgents.flatMap((agent) => agent.visibleTeamIds),
+      ]);
+      for (const agent of hostedAgents) {
+        for (const teamId of agent.visibleTeamIds) {
+          await repositories.channels.removeAgentFromTeamChannels({
+            teamId,
+            agentId: agent.id,
+            timestamp: now,
+          });
+        }
+      }
+      await repositories.devices.delete({ deviceId: device.id, timestamp: now });
+      return makeSuccess({ device: toDeviceDto(device), affectedTeamIds, channelTeamIds: affectedTeamIds });
     },
 
     async requestDeviceScan(scanInput) {
