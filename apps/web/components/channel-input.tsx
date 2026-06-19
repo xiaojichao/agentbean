@@ -2,12 +2,23 @@
 import { useState } from 'react';
 import { getWebSocket } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
-import type { OutboundMessage } from '@/lib/schema';
+import type { ChatMessage, DispatchStatus, OutboundMessage } from '@/lib/schema';
+
+interface SendMessageAck {
+  ok?: boolean;
+  message?: ChatMessage;
+  dispatches?: Array<{
+    id: string;
+    messageId: string;
+    status?: DispatchStatus;
+  }>;
+}
 
 export function ChannelInput({ channelId }: { channelId: string }) {
   const [body, setBody] = useState('');
   const addOutbound = useAgentBeanStore((s) => s.addOutbound);
   const resolveOutbound = useAgentBeanStore((s) => s.resolveOutbound);
+  const appendMessage = useAgentBeanStore((s) => s.appendMessage);
 
   const send = () => {
     const trimmed = body.trim();
@@ -24,7 +35,15 @@ export function ChannelInput({ channelId }: { channelId: string }) {
     addOutbound(out);
     socket.emit('message:send',
       { channelId, body: trimmed, clientMsgId: id },
-      (res: any) => resolveOutbound(id, res?.ok ? 'sent' : 'failed'),
+      (res: SendMessageAck) => {
+        resolveOutbound(id, res?.ok ? 'sent' : 'failed');
+        if (!res?.ok || !res.message) return;
+        const dispatch = res.dispatches?.find((item) => item.messageId === res.message?.id);
+        appendMessage({
+          ...res.message,
+          ...(dispatch ? { dispatchStatus: dispatch.status ?? 'queued', dispatchId: dispatch.id } : {}),
+        });
+      },
     );
     setBody('');
   };

@@ -18,6 +18,7 @@ export function ConversationPage({ channelId, mode }: { channelId: string; mode:
   const applyDmsSnapshot = useAgentBeanStore((s) => s.applyDmsSnapshot);
   const applyChannelHistory = useAgentBeanStore((s) => s.applyChannelHistory);
   const appendMessage = useAgentBeanStore((s) => s.appendMessage);
+  const applyDispatchStatus = useAgentBeanStore((s) => s.applyDispatchStatus);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
 
   useEffect(() => {
@@ -40,8 +41,14 @@ export function ConversationPage({ channelId, mode }: { channelId: string; mode:
     const onMessage = (msg: any) => {
       if (msg.channelId === channelId) appendMessage(msg);
     };
+    const onDispatchStatus = (dispatch: { messageId: string; channelId: string; status: string; id?: string }) => {
+      if (dispatch.channelId === channelId) {
+        applyDispatchStatus(channelId, dispatch.messageId, dispatch.status as any, dispatch.id);
+      }
+    };
     socket.on('channel:history', onHistory);
     socket.on('channel:message', onMessage);
+    socket.on('message:dispatch-status', onDispatchStatus);
 
     return () => {
       offAgents();
@@ -50,8 +57,9 @@ export function ConversationPage({ channelId, mode }: { channelId: string; mode:
       socket.off('channels:snapshot', applyChannelsSnapshot);
       socket.off('channel:history', onHistory);
       socket.off('channel:message', onMessage);
+      socket.off('message:dispatch-status', onDispatchStatus);
     };
-  }, [channelId, currentTeamId, applyAgentsSnapshot, applyAgentStatus, applyChannelsSnapshot, applyDmsSnapshot, applyChannelHistory, appendMessage]);
+  }, [channelId, currentTeamId, applyAgentsSnapshot, applyAgentStatus, applyChannelsSnapshot, applyDmsSnapshot, applyChannelHistory, appendMessage, applyDispatchStatus]);
 
   const sorted = useMemo(
     () => [...messages].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)),

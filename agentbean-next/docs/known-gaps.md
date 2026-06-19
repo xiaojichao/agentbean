@@ -121,7 +121,7 @@ Dispatch lifecycle 的第一版已经落地到 `server-next` repository/usecase/
 
 剩余：
 
-- Web 上的 cancel affordance 与更完整的 dispatch history/diagnostics UI 仍需后续产品切片覆盖。
+- Web 上的 dispatch 状态展示与取消按钮已落地（`apps/web/components/{conversation-page,channel-message}.tsx`：监听 `message:dispatch-status` 更新 `ChatMessage.dispatchStatus`，running 时显示「正在处理…」+ 取消按钮发 `dispatch:cancel`）；更完整的 dispatch history/diagnostics UI 仍需后续产品切片覆盖。
 - 长时间运行 adapter 的真实进程级 cancel 语义仍需要按 adapter 逐个验证。
 
 ### Workspace Runs 第一版已定义
