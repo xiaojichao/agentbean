@@ -31,6 +31,13 @@ describe('daemon-next CLI wiring', () => {
     });
   });
 
+  test('parseDaemonNextCliConfig reads server-url', () => {
+    const config = parseDaemonNextCliConfig({
+      argv: ['--team-id', 't1', '--owner-id', 'o1', '--server-url', 'https://api.example.com'],
+    });
+    expect(config.serverUrl).toBe('https://api.example.com');
+  });
+
   test('allows invite-code onboarding without manual team or owner config', () => {
     const config = parseDaemonNextCliConfig({
       hostname: 'host.local',

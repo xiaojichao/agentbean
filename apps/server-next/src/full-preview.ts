@@ -125,6 +125,7 @@ export async function startAgentBeanNextPreview(
     const scan = createBuiltinScanProvider();
     const snapshot = await scan();
     await createDaemonProtocolClient({
+      serverUrl: server.baseUrl,
       socket: createDaemonSocket(agentSocket),
       executor: input.executor ?? createCommandExecutor({ fallbackPrefix: config.fallbackPrefix }),
       device: {

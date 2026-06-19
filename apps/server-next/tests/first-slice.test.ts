@@ -1569,6 +1569,92 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('receiveDispatchResult links uploaded artifact ids without clearing storage path', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 465,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'artifact-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+        'workspace-run-1',
+        'reply-1',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'executor-hosted',
+      source: 'scanned',
+      status: 'online',
+      lastSeenAt: 465,
+    });
+    await app.uploadArtifact({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      filename: 'result.png',
+      mimeType: 'image/png',
+      sizeBytes: 12,
+      storagePath: 'artifacts/team-1/artifact-1/result.png',
+      relativePath: 'outputs/result.png',
+      sha256: 'sha-result',
+    });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex render',
+    });
+
+    await expect(app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: 'done',
+      artifactIds: ['artifact-1'],
+      workspaceRun: {
+        cwd: '/tmp/agentbean',
+        exitCode: 0,
+        startedAt: 450,
+        completedAt: 465,
+      },
+    })).resolves.toMatchObject({
+      ok: true,
+      message: {
+        id: 'reply-1',
+        meta: { artifactIds: ['artifact-1'], workspaceRunId: 'workspace-run-1' },
+        artifacts: [
+          {
+            id: 'artifact-1',
+            messageId: 'reply-1',
+            dispatchId: 'dispatch-1',
+            workspaceRunId: 'workspace-run-1',
+            pathKind: 'generated',
+          },
+        ],
+        workspaceRun: {
+          id: 'workspace-run-1',
+          artifactIds: ['artifact-1'],
+        },
+      },
+    });
+    await expect(app.getArtifactFile({
+      userId: 'user-1',
+      teamId: 'team-1',
+      artifactId: 'artifact-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      storagePath: 'artifacts/team-1/artifact-1/result.png',
+    });
+  });
+
   test('receiveDispatchResult is idempotent against same-millisecond duplicate results', async () => {
     const app = createInMemoryServerNext({
       now: () => 470,

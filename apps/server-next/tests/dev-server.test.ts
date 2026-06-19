@@ -469,6 +469,79 @@ describe('server-next dev server entry', () => {
     });
   });
 
+  test('accepts bearer device credentials for artifact upload and download', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-device-artifacts-'));
+    writeFileSync(join(dataDir, 'stored.txt'), 'stored content');
+    const app = {
+      uploadArtifactForDevice: vi.fn(async (input) =>
+        makeSuccess({
+          artifact: {
+            id: 'artifact-1',
+            teamId: input.teamId,
+            channelId: input.channelId,
+            filename: input.filename,
+            mimeType: input.mimeType,
+            sizeBytes: input.sizeBytes,
+            storagePath: input.storagePath,
+            relativePath: input.relativePath,
+            pathKind: 'upload',
+            sha256: input.sha256,
+            createdAt: 1,
+          },
+        }),
+      ),
+      getArtifactFileForDevice: vi.fn(async () =>
+        makeSuccess({
+          artifact: {
+            id: 'artifact-1',
+            teamId: 'team-1',
+            channelId: 'channel-1',
+            filename: 'stored.txt',
+            mimeType: 'text/plain',
+            sizeBytes: 14,
+            storagePath: 'stored.txt',
+            createdAt: 1,
+          },
+          storagePath: 'stored.txt',
+        }),
+      ),
+    } as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir, sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+
+    const form = new FormData();
+    form.append('channelId', 'channel-1');
+    form.append('file', new Blob(['device artifact'], { type: 'text/plain' }), 'device.txt');
+    const upload = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/upload`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer abn_device.test' },
+      body: form,
+    });
+    expect(upload.status).toBe(201);
+    expect(app.uploadArtifactForDevice).toHaveBeenCalledWith(expect.objectContaining({
+      token: 'abn_device.test',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      filename: 'device.txt',
+      mimeType: 'text/plain',
+    }));
+
+    const download = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/artifact-1/download`, {
+      headers: { Authorization: 'Bearer abn_device.test' },
+    });
+    expect(download.status).toBe(200);
+    await expect(download.text()).resolves.toBe('stored content');
+    expect(app.getArtifactFileForDevice).toHaveBeenCalledWith({
+      token: 'abn_device.test',
+      teamId: 'team-1',
+      artifactId: 'artifact-1',
+    });
+  });
+
   test('rejects oversized artifact upload bodies before authentication', async () => {
     const app = {
       whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),

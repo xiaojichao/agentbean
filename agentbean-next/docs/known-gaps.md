@@ -231,6 +231,19 @@ Saved messages 与 reactions 的第一版已经落地为 server-side persistence
 
 ## Daemon 缺口
 
+### 附件支持与产物归档（已落地）
+
+custom agent dispatch 的输入附件下载与输出产物归档第一版已在 daemon-next 落地：
+
+- 附件：dispatch 携带 attachments 时，daemon 从 server HTTP download route 下载到 per-run `inputs/`，清单注入 prompt，本地路径经 `AGENTBEAN_INPUT_DIR` 暴露给命令。
+- 产物：命令执行后扫描 `outputs/` + cwd 兜底（mtime/扩展名/忽略目录过滤、SHA256 去重），HTTP multipart upload 后以 artifact id 引用随 `dispatch:result` 上报，server 自动关联 message/workspaceRun。
+- per-run 目录：`{customAgent.cwd}/.agentbean/runs/{runId}/{inputs,outputs,logs}` + `manifest.json` + `response.md`，并发 dispatch 互不污染。
+- 错误语义：附件下载、产物上传、manifest 持久化任一失败均跳过，不阻断 `dispatch:result`。
+- 编排位置：附件/目录/扫描/上传/manifest 编排在 dispatch handler（`apps/daemon-next/src/index.ts`），executor 保持纯执行（只 spawn）；产物 artifact 以 id 引用合并进 `dispatch.result`，workspace-run.log 仍走 inline。
+- 参考实现：`apps/daemon-next/src/{attachments,workspace-run,artifact-collector,artifact-uploader}.ts`、`apps/daemon-next/src/index.ts`（dispatch handler 编排）。server-next 零改动。
+
+注：`.agentbean/` 目录建议在用户项目 `.gitignore` 中忽略（per-run 产物与本地运行历史不纳入版本控制）。
+
 ### Runtime Resolution
 
 当前 daemon 有有用的 runtime matching rules，但 source of truth 分散在 daemon、server 与 web 中。
