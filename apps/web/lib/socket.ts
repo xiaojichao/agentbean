@@ -430,7 +430,7 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
       return emitWithTimeout(socket, WEB_EVENTS.device.list, teamId ? { teamId } : {});
     },
     get({ id }) {
-      return emitWithTimeout(socket, WEB_EVENTS.device.get, { deviceId: id });
+      return emitWithTimeout(socket, WEB_EVENTS.device.get, { id, deviceId: id });
     },
     agentsList(deviceId, networkId) {
       return emitWithTimeout(socket, WEB_EVENTS.device.agentsList, networkId ? { deviceId, teamId: networkId } : { deviceId });

@@ -193,6 +193,7 @@ interface State {
   addTeam(n: TeamSummary): void;
   applyAgentMetrics(list: AgentMetricsSummary[]): void;
   applyDevicesSnapshot(list: DeviceInfo[]): void;
+  upsertDevice(device: DeviceInfo): void;
   applyDeviceStatus(device: DeviceInfo): void;
 }
 
@@ -319,6 +320,12 @@ export const useAgentBeanStore = create<State>((set) => ({
     const map: Record<string, DeviceInfo> = {};
     for (const d of list) map[d.id] = d;
     set({ devices: map });
+  },
+  upsertDevice(device) {
+    set((s) => {
+      if (device.networkId && device.networkId !== s.currentTeamId) return s;
+      return { devices: { ...s.devices, [device.id]: { ...s.devices[device.id], ...device } } };
+    });
   },
   applyDeviceStatus(device) {
     set((s) => {
