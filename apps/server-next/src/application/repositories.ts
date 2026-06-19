@@ -40,6 +40,7 @@ export interface DeviceInviteRecord {
   machineId?: string;
   profileId?: string;
   hostname?: string;
+  serverUrl?: string;
 }
 
 export interface ChannelRecord extends ChannelDto {
@@ -140,9 +141,10 @@ export interface DeviceInviteRepository {
     machineId?: string;
     profileId?: string;
     hostname?: string;
+    serverUrl?: string;
   }): Promise<DeviceInviteRecord | null>;
-  complete(input: { code: string; completedAt: UnixMs }): Promise<DeviceInviteRecord | null>;
-  findCompletedByMachineProfile(input: { teamId: ID; machineId?: string; profileId?: string }): Promise<DeviceInviteRecord | null>;
+  complete(input: { code: string; completedAt: UnixMs; serverUrl?: string }): Promise<DeviceInviteRecord | null>;
+  findCompletedByMachineProfile(input: { teamId: ID; machineId: string; profileId: string }): Promise<DeviceInviteRecord | null>;
 }
 
 export interface ChannelRepository {

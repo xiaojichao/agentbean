@@ -86,6 +86,7 @@ describe('server-next SQLite repositories', () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
       expect(columnNames(globalDb, 'devices')).toContain('connect_command');
+      expect(columnNames(globalDb, 'device_invites')).toContain('server_url');
       expect(globalDb.prepare("SELECT id FROM schema_migrations WHERE id = 'global/0005_device_connect_command.sql'").get()).toEqual({
         id: 'global/0005_device_connect_command.sql',
       });
@@ -231,7 +232,12 @@ describe('server-next SQLite repositories', () => {
         profileId: 'agentbean-next',
       });
 
-      await app.waitForDeviceInvite({ code: 'device-code-1', machineId: 'machine-1', hostname: 'shaw-mbp' });
+      await app.waitForDeviceInvite({
+        code: 'device-code-1',
+        machineId: 'machine-1',
+        hostname: 'shaw-mbp',
+        serverUrl: 'https://agentbean.example',
+      });
       const completed = await app.completeDeviceInvite({ userId: 'user-1', code: 'device-code-1' });
       expect(completed).toMatchObject({
         ok: true,
@@ -242,6 +248,7 @@ describe('server-next SQLite repositories', () => {
           machineId: 'machine-1',
           profileId: 'agentbean-next',
           hostname: 'shaw-mbp',
+          serverUrl: 'https://agentbean.example',
         },
       });
       if (!completed.ok) {
@@ -249,6 +256,9 @@ describe('server-next SQLite repositories', () => {
       }
       expect(globalDb.prepare('SELECT completed_at AS completedAt FROM device_invites WHERE code = ?').get('device-code-1')).toEqual({
         completedAt: 910,
+      });
+      expect(globalDb.prepare('SELECT server_url AS serverUrl FROM device_invites WHERE code = ?').get('device-code-1')).toEqual({
+        serverUrl: 'https://agentbean.example',
       });
       const hello = await app.deviceHelloFromCredentials({ token: completed.credentials.token });
       expect(hello).toMatchObject({
@@ -265,6 +275,12 @@ describe('server-next SQLite repositories', () => {
         ok: true,
         device: {
           connectCommand: expect.stringContaining('--profile-id agentbean-next'),
+        },
+      });
+      expect(hello).toMatchObject({
+        ok: true,
+        device: {
+          connectCommand: expect.stringContaining('--server-url https://agentbean.example'),
         },
       });
       expect(globalDb.prepare('SELECT connect_command AS connectCommand FROM devices WHERE id = ?').get('device-1')).toEqual({

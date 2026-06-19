@@ -215,6 +215,7 @@ export interface WaitForDeviceInviteInput {
   machineId?: string;
   profileId?: string;
   hostname?: string;
+  serverUrl?: string;
 }
 
 export interface CompleteDeviceInviteInput {
@@ -981,6 +982,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         machineId: inviteInput.machineId,
         profileId: inviteInput.profileId,
         hostname: inviteInput.hostname,
+        serverUrl: inviteInput.serverUrl,
       });
       if (!updated) {
         return makeFailure('INVITE_INVALID', 'Device invite is invalid');
@@ -1008,6 +1010,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const completed = await repositories.deviceInvites.complete({
         code: usable.invite.code,
         completedAt: clock.now(),
+        serverUrl: inviteInput.serverUrl,
       });
       if (!completed) {
         return makeFailure('INVITE_ALREADY_USED', 'Device invite has already been used');
@@ -1025,7 +1028,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         machineId: completed.machineId,
         profileId: completed.profileId,
         hostname: completed.hostname,
-        serverUrl: inviteInput.serverUrl,
+        serverUrl: completed.serverUrl ?? inviteInput.serverUrl,
       };
 
       return makeSuccess({
@@ -1088,7 +1091,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           : null;
 
       let connectCommand = existing?.connectCommand;
-      if (!existing && connectCommand === undefined && (deviceInput.machineId || deviceInput.profileId)) {
+      if (!existing && connectCommand === undefined && deviceInput.machineId && deviceInput.profileId) {
         const invite = await repositories.deviceInvites.findCompletedByMachineProfile({
           teamId: deviceInput.teamId,
           machineId: deviceInput.machineId,
@@ -1096,7 +1099,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         });
         if (invite) {
           const team = await repositories.teams.getById(deviceInput.teamId);
-          connectCommand = buildDeviceInviteCommand(invite.code, invite.profileId ?? team?.path);
+          connectCommand = buildDeviceInviteCommand(invite.code, invite.profileId ?? team?.path, invite.serverUrl);
         }
       }
 

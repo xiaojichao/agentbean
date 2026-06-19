@@ -20,8 +20,8 @@ export function resolveDeviceInviteServerUrl(): string {
   return process.env.AGENT_BEAN_PUBLIC_SERVER_URL ?? DEFAULT_PUBLIC_SERVER_URL;
 }
 
-export function buildDeviceInviteCommand(code: string, profileSource?: string | null): string {
-  const serverUrl = resolveDeviceInviteServerUrl();
+export function buildDeviceInviteCommand(code: string, profileSource?: string | null, serverUrlOverride?: string | null): string {
+  const serverUrl = serverUrlOverride ?? resolveDeviceInviteServerUrl();
   const template = process.env.AGENT_BEAN_INVITE_COMMAND_TEMPLATE;
   const profile = slugifyProfile(profileSource);
   if (template) {

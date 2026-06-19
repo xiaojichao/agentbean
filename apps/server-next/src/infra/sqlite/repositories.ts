@@ -356,8 +356,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         globalDb
           .prepare(
             `INSERT INTO device_invites (
-              id, code, team_id, created_by, created_at, expires_at, completed_at, machine_id, profile_id, hostname
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              id, code, team_id, created_by, created_at, expires_at, completed_at, machine_id, profile_id, hostname, server_url
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             invite.id,
@@ -370,6 +370,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             invite.machineId ?? null,
             invite.profileId ?? null,
             invite.hostname ?? null,
+            invite.serverUrl ?? null,
           );
         return invite;
       },
@@ -380,22 +381,22 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         globalDb
           .prepare(
             `UPDATE device_invites
-             SET machine_id = ?, profile_id = COALESCE(?, profile_id), hostname = ?
+             SET machine_id = ?, profile_id = COALESCE(?, profile_id), hostname = ?, server_url = COALESCE(?, server_url)
              WHERE code = ?
              AND completed_at IS NULL`,
           )
-          .run(input.machineId ?? null, input.profileId ?? null, input.hostname ?? null, input.code);
+          .run(input.machineId ?? null, input.profileId ?? null, input.hostname ?? null, input.serverUrl ?? null, input.code);
         return mapDeviceInvite(globalDb.prepare('SELECT * FROM device_invites WHERE code = ?').get(input.code));
       },
       async complete(input) {
         const result = globalDb
           .prepare(
             `UPDATE device_invites
-             SET completed_at = ?
-             WHERE code = ?
-             AND completed_at IS NULL`,
+              SET completed_at = ?, server_url = COALESCE(?, server_url)
+              WHERE code = ?
+              AND completed_at IS NULL`,
           )
-          .run(input.completedAt, input.code);
+          .run(input.completedAt, input.serverUrl ?? null, input.code);
         if (sqliteChanges(result) === 0) {
           return null;
         }
@@ -407,16 +408,14 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             `SELECT * FROM device_invites
              WHERE team_id = ?
              AND completed_at IS NOT NULL
-             AND (? IS NULL OR machine_id IS ?)
-             AND (? IS NULL OR profile_id IS ?)
+             AND machine_id = ?
+             AND profile_id = ?
              ORDER BY completed_at DESC LIMIT 1`,
           )
           .get(
             input.teamId,
-            input.machineId ?? null,
-            input.machineId ?? null,
-            input.profileId ?? null,
-            input.profileId ?? null,
+            input.machineId,
+            input.profileId,
           );
         return row ? mapDeviceInvite(row) : null;
       },
@@ -1618,6 +1617,7 @@ function mapDeviceInvite(row: unknown): DeviceInviteRecord | null {
     machineId: sqliteNullableText(row, 'machine_id'),
     profileId: sqliteNullableText(row, 'profile_id'),
     hostname: sqliteNullableText(row, 'hostname'),
+    serverUrl: sqliteNullableText(row, 'server_url'),
   };
 }
 
