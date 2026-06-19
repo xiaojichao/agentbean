@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { AGENT_EVENTS, type DeviceInviteCredentialsDto } from '../../../packages/contracts/src/index.js';
 import { createBuiltinScanProvider } from './scanner.js';
+import { collectSystemInfo, readDaemonVersion } from './system-info.js';
 import { createCommandExecutor } from './executor.js';
 import { createDaemonProtocolClient, createHttpEnvResolver, type DaemonDeviceConfig, type DaemonProtocolSocket } from './index.js';
 
@@ -115,6 +116,8 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
     machineId: config.machineId,
     profileId: config.profileId,
     hostname: config.hostname,
+    daemonVersion: readDaemonVersion(),
+    systemInfo: { ...collectSystemInfo(), daemonVersion: readDaemonVersion() },
   };
   await createDaemonProtocolClient({
     socket: protocolSocket,

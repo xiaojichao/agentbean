@@ -47,6 +47,8 @@ export interface DaemonDeviceConfig {
   machineId?: string;
   profileId?: string;
   hostname?: string;
+  daemonVersion?: string;
+  systemInfo?: import('../../../packages/contracts/src/index.js').DeviceDto['systemInfo'];
 }
 
 export interface DaemonRuntimeReport {
