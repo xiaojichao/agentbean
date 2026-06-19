@@ -1,9 +1,18 @@
 import { AGENT_EVENTS, type AgentCategory, type ArtifactPathKind, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import type { DispatchAttachment } from './attachments.js';
 
 export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner.js';
 export type { BuiltinScannerOptions } from './scanner.js';
 export { createCommandExecutor } from './executor.js';
 export type { CommandExecutorOptions } from './executor.js';
+export { downloadAttachments } from './attachments.js';
+export type { DispatchAttachment, DownloadedAttachment } from './attachments.js';
+export { prepareWorkspaceRun, workspaceRunEnv, persistWorkspaceRunManifest, persistWorkspaceRunResponse } from './workspace-run.js';
+export type { WorkspaceRunDir, WorkspaceRunManifest } from './workspace-run.js';
+export { collectArtifacts } from './artifact-collector.js';
+export type { CollectedArtifact } from './artifact-collector.js';
+export { uploadArtifacts } from './artifact-uploader.js';
+export type { UploadedArtifact } from './artifact-uploader.js';
 
 export interface DaemonProtocolSocket {
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
@@ -82,6 +91,7 @@ export interface DispatchRequestPayload {
   requestId: string;
   prompt: string;
   history?: DispatchHistoryMessageDto[];
+  attachments?: DispatchAttachment[];
   customAgent?: DispatchCustomAgentDto | null;
 }
 
@@ -92,6 +102,9 @@ export interface CreateDaemonProtocolClientInput {
   runtimes: DaemonRuntimeReport[];
   agents: DaemonAgentReport[];
   scan?: DaemonScanProvider;
+  serverUrl: string;
+  /** Injectable fetch for tests; defaults to global fetch. */
+  fetch?: typeof fetch;
 }
 
 export interface DaemonProtocolClient {
