@@ -88,6 +88,7 @@ export default function RunDetailPage() {
       .then((res) => {
         if (!cancelled) {
           if (res.ok && res.workspaceRun && res.artifacts) {
+            setLogOpen(res.workspaceRun.status === 'failed' && Boolean(res.workspaceRun.logExcerpt));
             setData({ workspaceRun: res.workspaceRun, artifacts: res.artifacts });
           } else {
             setError(res.error ?? '加载失败');
