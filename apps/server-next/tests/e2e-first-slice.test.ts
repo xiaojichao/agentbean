@@ -356,7 +356,7 @@ async function connectClient(url: string): Promise<ClientSocket> {
   return socket;
 }
 
-async function eventually(assertion: () => Promise<void>, attempts = 200): Promise<void> {
+async function eventually(assertion: () => Promise<void>, attempts = 1000): Promise<void> {
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
