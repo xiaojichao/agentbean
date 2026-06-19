@@ -2983,7 +2983,10 @@ function toDeviceInviteDto(invite: DeviceInviteRecord, command?: string): Device
 }
 
 function toDeviceDto(device: DeviceDto): DeviceDto {
-  const daemonVersionInfo = buildDaemonVersionInfo(device.systemInfo as Record<string, unknown> | null | undefined);
+  const daemonVersionInfo = buildDaemonVersionInfo(
+    device.systemInfo as Record<string, unknown> | null | undefined,
+    device.daemonVersion,
+  );
   return {
     id: device.id,
     teamId: device.teamId,

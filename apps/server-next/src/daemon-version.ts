@@ -105,6 +105,8 @@ async function fetchNpmLatestDaemonVersion(): Promise<string | null> {
 }
 
 export function getLatestDaemonVersion(): string | null {
+  const fromEnv = cleanVersion(process.env.AGENT_BEAN_DAEMON_LATEST_VERSION);
+  if (fromEnv) return fromEnv;
   return cachedNpmLatestVersion ?? getPackagedLatestDaemonVersion();
 }
 
@@ -157,8 +159,11 @@ export function startDaemonVersionRefresh(onRefresh?: () => void): () => void {
   };
 }
 
-export function buildDaemonVersionInfo(systemInfo?: Record<string, unknown> | null): DaemonVersionInfo {
-  const current = cleanVersion(systemInfo?.daemonVersion);
+export function buildDaemonVersionInfo(
+  systemInfo?: Record<string, unknown> | null,
+  daemonVersion?: string | null,
+): DaemonVersionInfo {
+  const current = cleanVersion(systemInfo?.daemonVersion) ?? cleanVersion(daemonVersion);
   const latest = getLatestDaemonVersion();
   if (!current || !latest) {
     return { current, latest, updateAvailable: false, status: 'unknown' };
