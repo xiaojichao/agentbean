@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, type MouseEvent, type ReactNo
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, emitWithTimeout } from '@/lib/socket';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus } from '@/lib/schema';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
@@ -138,8 +138,8 @@ export default function ChatPage() {
   const applyDispatchStatus = useAgentBeanStore((s) => s.applyDispatchStatus);
   const router = useRouter();
   const params = useParams();
-  const np = useCurrentNetworkPath();
-  const routeNetworkPath = typeof params.networkPath === 'string' ? params.networkPath : np;
+  const np = useCurrentTeamPath();
+  const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : np;
 
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
   const searchParams = useSearchParams();
@@ -203,8 +203,8 @@ export default function ChatPage() {
   const threadImageInputRef = useRef<HTMLInputElement>(null);
   const threadFileInputRef = useRef<HTMLInputElement>(null);
   const dmsRef = useRef(dms);
-  const savedKey = `agentbean:chat:saved:${routeNetworkPath}`;
-  const reactionsKey = `agentbean:chat:reactions:${routeNetworkPath}`;
+  const savedKey = `agentbean:chat:saved:${routeTeamPath}`;
+  const reactionsKey = `agentbean:chat:reactions:${routeTeamPath}`;
 
   useEffect(() => {
     dmsRef.current = dms;

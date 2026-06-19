@@ -12,7 +12,7 @@ vi.mock('next/link', () => ({
   ),
 }));
 vi.mock('@/lib/store', () => ({
-  useCurrentNetworkPath: () => 'acme',
+  useCurrentTeamPath: () => 'acme',
 }));
 vi.mock('@/lib/socket', () => ({
   authedApiUrl: (url: string) => url,

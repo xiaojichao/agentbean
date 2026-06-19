@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { getWebSocket, memberEvents } from '@/lib/socket';
 import { useRouter } from 'next/navigation';
 import { Globe, Lock, ChevronRight } from 'lucide-react';
@@ -8,7 +8,7 @@ import { Globe, Lock, ChevronRight } from 'lucide-react';
 export function NewChannelDialog({ onClose }: { onClose: () => void }) {
   const agents = useAgentBeanStore((s) => Object.values(s.agents));
   const currentUser = useAgentBeanStore((s) => s.currentUser);
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
   const [name, setName] = useState('');
   const [visibility, setVisibility] = useState<'public' | 'private'>('public');
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());

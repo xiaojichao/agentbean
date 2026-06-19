@@ -22,7 +22,7 @@ import {
   WrapText,
 } from 'lucide-react';
 import { fetchWorkspaceRunDetail, authedApiUrl } from '@/lib/socket';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { formatRelative } from '@/lib/format-time';
 import type { WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunStatus } from '@/lib/schema';
 
@@ -65,7 +65,7 @@ function artifactPreviewUrl(teamId: string, artifactId: string): string {
 
 export default function RunDetailPage() {
   const params = useParams<{ runId: string }>();
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const agents = useAgentBeanStore((s) => s.agents);
   const dms = useAgentBeanStore((s) => s.dms);

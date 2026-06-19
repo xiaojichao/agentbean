@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Bot, Circle, ChevronRight, Monitor, User } from 'lucide-react';
 import { memberEvents, deviceEvents, agentEvents } from '@/lib/socket';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { AgentDetail, AgentTopBar, HumanDetail, type AgentMemberTab, type HumanMember } from '@/components/member-detail';
 import type { AgentSnapshot } from '@/lib/schema';
 import { agentDeviceDisplayName } from '@/lib/agent-device';
@@ -44,7 +44,7 @@ export default function MembersPage() {
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
   const conn = useAgentBeanStore((s) => s.conn);
   const devices = useAgentBeanStore((s) => s.devices);
   const agents = useAgentBeanStore((s) => s.agents);

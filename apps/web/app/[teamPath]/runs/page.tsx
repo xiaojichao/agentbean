@@ -16,7 +16,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { agentEvents, channelEvents, deviceEvents, dmEvents, fetchTeamWorkspaceRuns, getWebSocket } from '@/lib/socket';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { formatRelative } from '@/lib/format-time';
 import type { AgentSnapshot, TeamWorkspaceRun, WorkspaceRunStatus } from '@/lib/schema';
 
@@ -81,7 +81,7 @@ function sourceMessageHref(np: string, channelId: string, messageId: string | un
 }
 
 export default function TeamWorkspaceRunsPage() {
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
   const conn = useAgentBeanStore((s) => s.conn);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const agents = useAgentBeanStore((s) => s.agents);

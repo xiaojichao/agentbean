@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { Bot } from 'lucide-react';
 import { createInviteSocket, authEvents, resetWebSocket } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
+import { readStoredTeamPath } from '@/lib/team-path';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -44,9 +45,9 @@ export default function LoginPage() {
           role: user.role ?? 'user',
         });
         resetWebSocket();
-        const savedNp = localStorage.getItem('agentbean.networkPath');
-        const np = res.currentTeam?.path || savedNp || user.primaryTeamId || 'default';
-        router.replace(`/${np}/chat`);
+        const savedTeamPath = readStoredTeamPath();
+        const teamPath = res.currentTeam?.path || savedTeamPath || user.primaryTeamId || 'default';
+        router.replace(`/${teamPath}/chat`);
       } else {
         setError(res.error ?? '登录失败');
       }

@@ -24,7 +24,7 @@ class MemoryStorage {
   }
 }
 
-const settingsPage = readFileSync(new URL('../app/[networkPath]/settings/page.tsx', import.meta.url), 'utf8');
+const settingsPage = readFileSync(new URL('../app/[teamPath]/settings/page.tsx', import.meta.url), 'utf8');
 
 describe('browser settings preferences', () => {
   it('reads defaults when no browser settings are stored', () => {

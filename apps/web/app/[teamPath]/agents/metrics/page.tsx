@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Activity, CheckCircle, XCircle, Clock, AlertTriangle } from 'lucide-react';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { getWebSocket, agentEvents } from '@/lib/socket';
 import type { AgentMetricsSummary } from '@/lib/schema';
 
@@ -118,7 +118,7 @@ export default function AgentMetricsPage() {
   const agents = useAgentBeanStore((s) => s.agents);
   const agentMetrics = useAgentBeanStore((s) => s.agentMetrics);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
   const [loading, setLoading] = useState(true);
 
   const fetchMetrics = async () => {

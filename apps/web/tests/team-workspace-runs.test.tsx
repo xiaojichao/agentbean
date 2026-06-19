@@ -34,7 +34,7 @@ vi.mock('@/lib/socket', () => ({
   }),
 }));
 vi.mock('@/lib/store', () => ({
-  useCurrentNetworkPath: () => 'acme',
+  useCurrentTeamPath: () => 'acme',
   useAgentBeanStore: (selector: (s: unknown) => unknown) =>
     selector({
       // conn != 'open' skips the socket-subscription effect so we can focus on the fetch render.
@@ -53,7 +53,7 @@ vi.mock('@/lib/store', () => ({
     }),
 }));
 
-import TeamWorkspaceRunsPage from '@/app/[networkPath]/runs/page';
+import TeamWorkspaceRunsPage from '@/app/[teamPath]/runs/page';
 
 afterEach(() => {
   cleanup();

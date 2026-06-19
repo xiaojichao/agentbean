@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const membersPage = readFileSync(new URL('../app/[networkPath]/members/page.tsx', import.meta.url), 'utf8');
+const membersPage = readFileSync(new URL('../app/[teamPath]/members/page.tsx', import.meta.url), 'utf8');
 const memberDetail = readFileSync(new URL('../components/member-detail.tsx', import.meta.url), 'utf8');
 
 describe('member detail layout', () => {

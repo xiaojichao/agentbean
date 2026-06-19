@@ -4,8 +4,8 @@ const nextConfig = {
   async redirects() {
     return [
       {
-        source: '/:networkPath/computer/:id',
-        destination: '/:networkPath/devices/:id',
+        source: '/:teamPath/computer/:id',
+        destination: '/:teamPath/devices/:id',
         permanent: true,
       },
     ];
