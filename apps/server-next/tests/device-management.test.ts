@@ -250,6 +250,92 @@ describe('device rename and delete (end-to-end)', () => {
     });
     expect(after).toMatchObject({ ok: false, error: 'NOT_FOUND' });
   });
+
+  test('device hello rich fields surface through getDevice', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'device-1',
+        'runtime-1',
+        'agent-1',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      agent.disconnect();
+    });
+    const registerAck = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    expect(registerAck).toMatchObject({ ok: true, user: { id: 'user-1', primaryTeamId: 'team-1' } });
+    const web = await connectClient(`${baseUrl}/web`, {
+      auth: { token: (registerAck as { token: string }).token },
+    });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+
+    // daemon hello 上报富 systemInfo + daemonVersion（模拟 daemon collect 后上报）
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+        hostname: 'mac',
+        daemonVersion: '0.2.1',
+        systemInfo: {
+          hostname: 'mac',
+          platform: 'darwin',
+          arch: 'arm64',
+          release: '24.0',
+          osVersion: '24.0',
+          cpuModel: 'M1',
+          cpuCores: 8,
+          totalMemoryGB: 16,
+          freeMemoryGB: 8,
+          nodeVersion: 'v22.0.0',
+          daemonVersion: '0.2.1',
+        },
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'device-1', status: 'online' } });
+
+    // getDevice 透传 daemonVersion + 富 systemInfo
+    const got = await web.emitWithAck(WEB_EVENTS.device.get, { deviceId: 'device-1' });
+    expect(got).toMatchObject({
+      ok: true,
+      device: {
+        id: 'device-1',
+        daemonVersion: '0.2.1',
+        systemInfo: {
+          hostname: 'mac',
+          platform: 'darwin',
+          arch: 'arm64',
+          release: '24.0',
+          osVersion: '24.0',
+          cpuModel: 'M1',
+          cpuCores: 8,
+          totalMemoryGB: 16,
+          freeMemoryGB: 8,
+          nodeVersion: 'v22.0.0',
+          daemonVersion: '0.2.1',
+        },
+      },
+    });
+  });
 });
 
 async function startSocketServer(app: ReturnType<typeof createInMemoryServerNext>) {
