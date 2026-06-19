@@ -651,6 +651,15 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           updatedAt: input.timestamp,
         };
       },
+      async updateName(input) {
+        const result = globalDb
+          .prepare('UPDATE devices SET hostname = ?, updated_at = ? WHERE id = ?')
+          .run(input.hostname, input.updatedAt, input.deviceId);
+        if (sqliteChanges(result) === 0) {
+          return null;
+        }
+        return mapDevice(globalDb.prepare('SELECT * FROM devices WHERE id = ?').get(input.deviceId));
+      },
     },
     runtimes: {
       async replaceForDevice(input) {

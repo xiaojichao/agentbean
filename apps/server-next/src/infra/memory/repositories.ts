@@ -356,6 +356,19 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         devices.set(device.id, updated);
         return updated;
       },
+      async updateName(input) {
+        const device = devices.get(input.deviceId);
+        if (!device) {
+          return null;
+        }
+        const updated: DeviceRecord = {
+          ...device,
+          name: input.hostname,
+          updatedAt: input.updatedAt,
+        };
+        devices.set(device.id, updated);
+        return updated;
+      },
     },
     runtimes: {
       async replaceForDevice(input) {
