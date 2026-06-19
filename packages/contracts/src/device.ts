@@ -4,6 +4,15 @@ import type { AgentDto, RuntimeDto } from './agent.js';
 
 export type DeviceStatus = 'online' | 'offline' | 'unknown';
 
+export type DaemonVersionStatus = 'current' | 'update-available' | 'unknown';
+
+export interface DaemonVersionInfo {
+  current: string | null;
+  latest: string | null;
+  updateAvailable: boolean;
+  status: DaemonVersionStatus;
+}
+
 export interface DeviceSystemInfoDto {
   hostname?: string;
   platform?: string;
@@ -32,6 +41,9 @@ export interface DeviceDto {
   systemInfo?: DeviceSystemInfoDto;
   capabilities?: DeviceCapabilitiesDto;
   daemonVersion?: string;
+  daemonVersionInfo?: DaemonVersionInfo;
+  latestDaemonVersion?: string | null;
+  daemonUpdateAvailable?: boolean;
   lastSeenAt?: UnixMs;
 }
 
