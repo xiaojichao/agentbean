@@ -60,14 +60,15 @@ export function parseDaemonNextCliConfig(input: ParseDaemonNextCliConfigInput = 
 }
 
 export function createSocketIoDaemonSocket(socket: SocketIoClientLike): DaemonProtocolSocket {
-  const handlerMap = new WeakMap<(payload: unknown) => Promise<void>, (...args: unknown[]) => void>();
+  const handlerMap = new WeakMap<(payload: unknown, ack?: (result: unknown) => void) => Promise<void>, (...args: unknown[]) => void>();
   return {
     emitWithAck(event, payload) {
       return socket.emitWithAck(event, payload);
     },
     on(event, handler) {
-      const runtimeHandler = (payload: unknown) => {
-        void handler(payload);
+      const runtimeHandler = (payload: unknown, ackLike?: unknown) => {
+        const ack = typeof ackLike === 'function' ? ackLike as (result: unknown) => void : undefined;
+        void handler(payload, ack);
       };
       handlerMap.set(handler, runtimeHandler);
       socket.on(event, runtimeHandler);

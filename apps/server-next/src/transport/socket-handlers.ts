@@ -16,6 +16,7 @@ export interface SocketLike {
   on(event: string, handler: SocketHandler): void;
   emit?(event: string, payload: unknown): void;
   emitWithAck?(event: string, payload: unknown): Promise<unknown>;
+  timeout?(timeoutMs: number): { emitWithAck?(event: string, payload: unknown): Promise<unknown> };
 }
 
 export type SocketAck = (result: unknown) => void;

@@ -48,7 +48,7 @@ function isMissingCommandError(err: unknown): boolean {
 function isDirectoryPickerCancel(err: unknown): boolean {
   const e = err as { code?: number; message?: string; stderr?: string };
   const message = `${e?.message ?? ''}\n${e?.stderr ?? ''}`;
-  return e?.code === 1 || /cancel|canceled|cancelled|User canceled|No file selected/i.test(message);
+  return /cancel|canceled|cancelled|User canceled|No file selected/i.test(message);
 }
 
 export async function selectNativeDirectory(commands = nativeDirectoryPickerCommands()): Promise<string | null> {

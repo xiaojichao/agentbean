@@ -37,6 +37,13 @@ describe('directory-picker', () => {
     expect(path).toBeNull();
   });
 
+  it('selectNativeDirectory reports non-cancel picker failures', async () => {
+    (execFile as any).mockImplementation((_cmd, _args, _opts, cb) => cb({ code: 1, message: 'cannot open display' }, '', ''));
+    await expect(selectNativeDirectory([{ command: 'zenity', args: [] }])).rejects.toMatchObject({
+      message: 'cannot open display',
+    });
+  });
+
   it('selectNativeDirectory falls through on ENOENT to next command', async () => {
     (execFile as any)
       .mockImplementationOnce((_c, _a, _o, cb) => cb({ code: 'ENOENT' }, '', ''))
