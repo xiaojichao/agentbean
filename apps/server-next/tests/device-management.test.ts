@@ -488,6 +488,62 @@ describe('device rename and delete (end-to-end)', () => {
       },
     });
   });
+
+  test('device select-directory returns path from daemon via request-response', async () => {
+    // 端到端验证 request-response 链路：
+    // web emitWithAck device:select-directory → server handler → options.deviceSelectDirectory →
+    // socket.emitWithAck daemon selectDirectoryRequested → daemon（mock）ack path → server ack web path。
+    // daemon 端用测试 client 监听 selectDirectoryRequested + ack 固定 path（模拟用户选目录，不真弹 OS 对话框）。
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    // 注册用户（建立 authenticated web session）
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      agent.disconnect();
+    });
+    const registerAck = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    expect(registerAck).toMatchObject({ ok: true, user: { id: 'user-1', primaryTeamId: 'team-1' } });
+    const web = await connectClient(`${baseUrl}/web`, {
+      auth: { token: (registerAck as { token: string }).token },
+    });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+
+    // device hello（daemon 上线，afterDeviceMutation 进 agentSocketsByDeviceId；device-1 = createIds 第 4）
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'm-1',
+        profileId: 'default',
+        hostname: 'mac',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'device-1', status: 'online' } });
+
+    // daemon 端：监听 selectDirectoryRequested，ack 固定 path（socket.io client on handler 第二参数是 ack）
+    agent.on(AGENT_EVENTS.device.selectDirectoryRequested, (_payload: unknown, ack?: (r: unknown) => void) => {
+      ack?.({ ok: true, path: '/home/user/project' });
+    });
+
+    // web 发 select-directory，应通过 server 转发拿到 daemon 返回的 path
+    const result = await web.emitWithAck(WEB_EVENTS.device.selectDirectory, { deviceId: 'device-1' });
+    expect(result).toMatchObject({ ok: true, path: '/home/user/project' });
+  });
 });
 
 async function startSocketServer(app: ReturnType<typeof createInMemoryServerNext>) {

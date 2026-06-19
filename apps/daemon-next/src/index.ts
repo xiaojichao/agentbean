@@ -4,6 +4,7 @@ import { downloadAttachments } from './attachments.js';
 import { prepareWorkspaceRun, workspaceRunEnv, persistWorkspaceRunManifest, persistWorkspaceRunResponse } from './workspace-run.js';
 import { collectArtifacts } from './artifact-collector.js';
 import { uploadArtifacts } from './artifact-uploader.js';
+import { selectNativeDirectory } from './directory-picker.js';
 
 export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner.js';
 export type { BuiltinScannerOptions } from './scanner.js';
@@ -22,8 +23,8 @@ import { createRescanController, type RescanController } from './rescan.js';
 
 export interface DaemonProtocolSocket {
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
-  on(event: string, handler: (payload: unknown) => Promise<void>): void;
-  off?(event: string, handler: (payload: unknown) => Promise<void>): void;
+  on(event: string, handler: (payload: unknown, ack?: (result: unknown) => void) => Promise<void>): void;
+  off?(event: string, handler: (payload: unknown, ack?: (result: unknown) => void) => Promise<void>): void;
   onReconnect?(handler: () => Promise<void>): void;
 }
 
@@ -160,6 +161,19 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         latestSnapshot = snapshot;
         await reportDeviceSnapshot(socket, device.teamId, currentDeviceId, snapshot.runtimes, snapshot.agents);
         await input.onScanChanged?.(snapshot);
+      });
+
+      socket.on(AGENT_EVENTS.device.selectDirectoryRequested, async (_payload: unknown, ack?: (result: unknown) => void) => {
+        try {
+          const selected = await selectNativeDirectory();
+          if (!selected) {
+            ack?.({ ok: false, error: 'CANCELLED' });
+            return;
+          }
+          ack?.({ ok: true, path: selected });
+        } catch (err) {
+          ack?.({ ok: false, error: err instanceof Error ? err.message : 'directory picker failed' });
+        }
       });
 
       socket.on(AGENT_EVENTS.dispatch.cancel, async (payload) => {

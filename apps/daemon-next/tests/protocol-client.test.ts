@@ -596,7 +596,7 @@ describe('daemon-next protocol client', () => {
 class FakeAgentSocket implements DaemonProtocolSocket {
   readonly emitted: Array<[string, unknown]> = [];
   readonly helloAcks: unknown[] = [];
-  private readonly handlers = new Map<string, (payload: unknown) => Promise<void>>();
+  private readonly handlers = new Map<string, (payload: unknown, ack?: (result: unknown) => void) => Promise<void>>();
   private reconnectHandler: (() => Promise<void>) | undefined;
   private deviceCounter = 0;
 
@@ -613,7 +613,7 @@ class FakeAgentSocket implements DaemonProtocolSocket {
     return { ok: true };
   }
 
-  on(event: string, handler: (payload: unknown) => Promise<void>): void {
+  on(event: string, handler: (payload: unknown, ack?: (result: unknown) => void) => Promise<void>): void {
     this.handlers.set(event, handler);
   }
 
@@ -621,12 +621,12 @@ class FakeAgentSocket implements DaemonProtocolSocket {
     this.reconnectHandler = handler;
   }
 
-  async trigger(event: string, payload: unknown): Promise<void> {
+  async trigger(event: string, payload: unknown, ack?: (result: unknown) => void): Promise<void> {
     const handler = this.handlers.get(event);
     if (!handler) {
       throw new Error(`No handler for ${event}`);
     }
-    await handler(payload);
+    await handler(payload, ack);
   }
 
   async triggerReconnect(): Promise<void> {

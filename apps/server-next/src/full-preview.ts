@@ -206,8 +206,8 @@ function createDaemonSocket(socket: PreviewSocketLike): DaemonProtocolSocket {
       return socket.emitWithAck(event, payload);
     },
     on(event, handler) {
-      socket.on(event, (payload) => {
-        void handler(payload);
+      socket.on(event, (payload, ack) => {
+        void handler(payload, ack as ((result: unknown) => void) | undefined);
       });
     },
     onReconnect(handler) {
