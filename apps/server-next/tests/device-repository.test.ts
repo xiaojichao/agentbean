@@ -77,3 +77,29 @@ describe('devices repository', () => {
     expect(tombstoned?.status).toBe('offline');
   });
 });
+
+describe('deviceInvites repository', () => {
+  test('findCompletedByMachineProfile returns the completed invite', async () => {
+    const repos = createInMemoryRepositories();
+    await repos.deviceInvites.create({
+      id: 'inv-1', code: 'CODE1', teamId: 'team-1', createdBy: 'user-1',
+      createdAt: 1000, machineId: 'mac-1', profileId: 'default',
+    });
+    await repos.deviceInvites.updateWaiter({ code: 'CODE1', machineId: 'mac-1', profileId: 'default', hostname: 'mac' });
+    await repos.deviceInvites.complete({ code: 'CODE1', completedAt: 2000 });
+
+    const found = await repos.deviceInvites.findCompletedByMachineProfile({
+      teamId: 'team-1', machineId: 'mac-1', profileId: 'default',
+    });
+    expect(found?.code).toBe('CODE1');
+    expect(found?.completedAt).toBe(2000);
+  });
+
+  test('findCompletedByMachineProfile returns null when no completed match', async () => {
+    const repos = createInMemoryRepositories();
+    const found = await repos.deviceInvites.findCompletedByMachineProfile({
+      teamId: 'team-1', machineId: 'mac-x', profileId: 'default',
+    });
+    expect(found).toBeNull();
+  });
+});

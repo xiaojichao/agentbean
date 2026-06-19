@@ -401,6 +401,25 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         }
         return mapDeviceInvite(globalDb.prepare('SELECT * FROM device_invites WHERE code = ?').get(input.code));
       },
+      async findCompletedByMachineProfile(input) {
+        const row = globalDb
+          .prepare(
+            `SELECT * FROM device_invites
+             WHERE team_id = ?
+             AND completed_at IS NOT NULL
+             AND (? IS NULL OR machine_id IS ?)
+             AND (? IS NULL OR profile_id IS ?)
+             ORDER BY completed_at DESC LIMIT 1`,
+          )
+          .get(
+            input.teamId,
+            input.machineId ?? null,
+            input.machineId ?? null,
+            input.profileId ?? null,
+            input.profileId ?? null,
+          );
+        return row ? mapDeviceInvite(row) : null;
+      },
     },
     channels: {
       async create(channel) {
