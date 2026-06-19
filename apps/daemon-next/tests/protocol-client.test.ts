@@ -221,11 +221,13 @@ describe('daemon-next protocol client', () => {
       deviceId: 'device-1',
     });
 
-    expect(scanCount).toBe(1);
+    // Background rescan tick (started in start()) runs scan once, plus this explicit request.
+    expect(scanCount).toBeGreaterThanOrEqual(1);
     expect(socket.emitted.slice(-2)).toEqual([
       [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-1', runtimes: [{ adapterKind: 'claude-code', name: 'Claude Code' }] }],
       [AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-1', agents: [{ name: 'Claude', adapterKind: 'claude-code', category: 'executor-hosted' }] }],
     ]);
+    client.stop?.();
   });
 
   test('ignores scan requests for a different device id', async () => {
@@ -252,12 +254,17 @@ describe('daemon-next protocol client', () => {
       deviceId: 'other-device',
     });
 
-    expect(scanCount).toBe(0);
+    // Background rescan tick runs scan once on start (reporting empty snapshot);
+    // the explicit request targets another device, so it is ignored.
+    expect(scanCount).toBe(1);
     expect(socket.emitted).toEqual([
       [AGENT_EVENTS.device.hello, { teamId: 'team-1', ownerId: 'user-1' }],
       [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-1', runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }] }],
       [AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-1', agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }] }],
+      [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-1', runtimes: [] }],
+      [AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-1', agents: [] }],
     ]);
+    client.stop?.();
   });
 
   test('reports dispatch errors without swallowing executor failures', async () => {

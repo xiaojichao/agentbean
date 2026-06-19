@@ -18,6 +18,7 @@ export type { CollectedArtifact } from './artifact-collector.js';
 export { uploadArtifacts } from './artifact-uploader.js';
 export type { UploadedArtifact } from './artifact-uploader.js';
 export { createHttpEnvResolver } from './env-fetcher.js';
+import { createRescanController, type RescanController } from './rescan.js';
 
 export interface DaemonProtocolSocket {
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
@@ -118,19 +119,24 @@ export interface CreateDaemonProtocolClientInput {
   /** Injectable fetch for tests; defaults to global fetch. */
   fetch?: typeof fetch;
   envResolver?: AgentEnvResolver;
+  rescanIntervalMs?: number;
 }
 
 export interface DaemonProtocolClient {
   start(): Promise<void>;
+  rescanNow?(): Promise<void>;
+  stop?(): void;
 }
 
 export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInput): DaemonProtocolClient {
   const { socket, executor, device, runtimes, agents, scan, serverUrl, fetch: fetchFn, envResolver } = input;
+  let currentDeviceId: string;
+  let rescan: RescanController | undefined;
 
   return {
     async start() {
       const initialAnnouncement = await announceDeviceSnapshot(socket, device, runtimes, agents);
-      let currentDeviceId = initialAnnouncement.deviceId;
+      currentDeviceId = initialAnnouncement.deviceId;
       if (initialAnnouncement.token) {
         device.token = initialAnnouncement.token;
       }
@@ -259,7 +265,21 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           });
         }
       });
+
+      if (scan) {
+        rescan = createRescanController({
+          scan,
+          initial: { runtimes, agents },
+          intervalMs: input.rescanIntervalMs,
+          report: async (snap) => {
+            await reportDeviceSnapshot(socket, device.teamId, currentDeviceId, snap.runtimes, snap.agents);
+          },
+        });
+        rescan.start();
+      }
     },
+    rescanNow: () => rescan?.tickNow() ?? Promise.resolve(),
+    stop: () => rescan?.stop(),
   };
 }
 
