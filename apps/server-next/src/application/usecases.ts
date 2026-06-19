@@ -56,7 +56,7 @@ export interface ServerNextUseCases {
   listDeviceAgents(input: { teamId: string; userId: string; deviceId: string }): Promise<Ack<{ agents: DeviceAgentListDto[]; runtimes: RuntimeDto[] }>>;
   getDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDetailDto }>>;
   renameDevice(input: { userId: string; deviceId: string; hostname: string }): Promise<Ack<{ device: DeviceDto }>>;
-  deleteDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDto }>>;
+  deleteDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[]; channelTeamIds: string[] }>>;
   requestDeviceScan(input: RequestDeviceScanInput): Promise<Ack<RequestDeviceScanResult>>;
   deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto }>>;
   markDeviceOffline(input: { deviceId: string; timestamp: UnixMs }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[] }>>;
@@ -1214,8 +1214,23 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!(await repositories.teams.isMember(device.teamId, deleteInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
-      await repositories.devices.delete({ deviceId: device.id, timestamp: clock.now() });
-      return makeSuccess({ device: toDeviceDto(device) });
+      const now = clock.now();
+      const hostedAgents = await repositories.agents.listByDevice(device.id);
+      const affectedTeamIds = uniqueIds([
+        device.teamId,
+        ...hostedAgents.flatMap((agent) => agent.visibleTeamIds),
+      ]);
+      for (const agent of hostedAgents) {
+        for (const teamId of agent.visibleTeamIds) {
+          await repositories.channels.removeAgentFromTeamChannels({
+            teamId,
+            agentId: agent.id,
+            timestamp: now,
+          });
+        }
+      }
+      await repositories.devices.delete({ deviceId: device.id, timestamp: now });
+      return makeSuccess({ device: toDeviceDto(device), affectedTeamIds, channelTeamIds: affectedTeamIds });
     },
 
     async requestDeviceScan(scanInput) {

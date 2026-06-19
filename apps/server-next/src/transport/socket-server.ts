@@ -374,6 +374,12 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         }
         connectedDeviceTeamId = teamId;
         await refreshDeviceSubscribers(webSubscribers, app, teamId);
+        for (const affectedTeamId of payloadTeamIds(result, 'affectedTeamIds')) {
+          await refreshAgentSubscribers(webSubscribers, app, affectedTeamId);
+        }
+        for (const channelTeamId of payloadTeamIds(result, 'channelTeamIds')) {
+          await refreshChannelSubscribers(webSubscribers, app, channelTeamId);
+        }
         emitDeviceRuntimes(webSubscribers, teamId, result);
       },
       async afterAgentMutation(payload, result) {

@@ -751,6 +751,50 @@ describe('server-next socket handlers', () => {
       agent: { id: 'agent-1', visibleTeamIds: [] },
     });
   });
+
+  test('refreshes device subscribers after web rename and delete mutations', async () => {
+    const socket = new FakeSocket();
+    const afterDeviceMutation = vi.fn();
+    const renamedAck = makeSuccess({ device: { id: 'device-1', name: 'new-name' } });
+    const deletedAck = makeSuccess({
+      device: { id: 'device-1', name: 'new-name' },
+      affectedTeamIds: ['team-session'],
+      channelTeamIds: ['team-session'],
+    });
+    const app = {
+      renameDevice: vi.fn(async () => renamedAck),
+      deleteDevice: vi.fn(async () => deletedAck),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, {
+      afterDeviceMutation,
+      authenticatedUser: async () => ({
+        hasToken: true,
+        userId: 'user-session',
+        currentTeamId: 'team-session',
+      }),
+    });
+
+    await expect(socket.trigger(WEB_EVENTS.device.rename, {
+      deviceId: 'device-1',
+      hostname: 'new-name',
+    })).resolves.toEqual(renamedAck);
+    expect(afterDeviceMutation).toHaveBeenNthCalledWith(1, {
+      userId: 'user-session',
+      teamId: 'team-session',
+      deviceId: 'device-1',
+      hostname: 'new-name',
+    }, renamedAck);
+
+    await expect(socket.trigger(WEB_EVENTS.device.delete, {
+      deviceId: 'device-1',
+    })).resolves.toEqual(deletedAck);
+    expect(afterDeviceMutation).toHaveBeenNthCalledWith(2, {
+      userId: 'user-session',
+      teamId: 'team-session',
+      deviceId: 'device-1',
+    }, deletedAck);
+  });
 });
 
 class FakeSocket implements SocketLike {
