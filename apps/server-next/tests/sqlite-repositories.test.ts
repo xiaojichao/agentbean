@@ -82,6 +82,19 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('applies device connect command migration', () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      expect(columnNames(globalDb, 'devices')).toContain('connect_command');
+      expect(globalDb.prepare("SELECT id FROM schema_migrations WHERE id = 'global/0005_device_connect_command.sql'").get()).toEqual({
+        id: 'global/0005_device_connect_command.sql',
+      });
+    } finally {
+      teamDb.exec('SELECT 1');
+      close();
+    }
+  });
+
   test('applies workspace run pagination index migration', () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
@@ -237,9 +250,25 @@ describe('server-next SQLite repositories', () => {
       expect(globalDb.prepare('SELECT completed_at AS completedAt FROM device_invites WHERE code = ?').get('device-code-1')).toEqual({
         completedAt: 910,
       });
-      await expect(app.deviceHelloFromCredentials({ token: completed.credentials.token })).resolves.toMatchObject({
+      const hello = await app.deviceHelloFromCredentials({ token: completed.credentials.token });
+      expect(hello).toMatchObject({
         ok: true,
-        device: { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', name: 'shaw-mbp' },
+        device: {
+          id: 'device-1',
+          teamId: 'team-1',
+          ownerId: 'user-1',
+          name: 'shaw-mbp',
+          connectCommand: expect.stringContaining('device-code-1'),
+        },
+      });
+      expect(hello).toMatchObject({
+        ok: true,
+        device: {
+          connectCommand: expect.stringContaining('--profile-id agentbean-next'),
+        },
+      });
+      expect(globalDb.prepare('SELECT connect_command AS connectCommand FROM devices WHERE id = ?').get('device-1')).toEqual({
+        connectCommand: hello.ok ? hello.device.connectCommand : undefined,
       });
     } finally {
       close();
