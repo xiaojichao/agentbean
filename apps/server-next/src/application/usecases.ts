@@ -1211,8 +1211,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!device) {
         return makeFailure('NOT_FOUND', 'Device not found');
       }
-      if (!(await repositories.teams.isMember(device.teamId, deleteInput.userId))) {
+      const actorRole = await repositories.teams.getMemberRole(device.teamId, deleteInput.userId);
+      if (!actorRole) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      if (device.ownerId !== deleteInput.userId && actorRole !== 'owner' && actorRole !== 'admin') {
+        return makeFailure('FORBIDDEN', 'User cannot manage device');
       }
       const now = clock.now();
       const hostedAgents = await repositories.agents.listByDevice(device.id);

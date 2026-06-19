@@ -207,19 +207,19 @@ describe('socket event payload adapters', () => {
     });
   });
 
-  it('sends deviceId for device rename and delete', async () => {
+  it('sends device id payloads compatible with server-next and the legacy server', async () => {
     const { socket, calls } = createAckSocket();
 
     await deviceEvents(socket).rename('device-1', 'new-name');
     expect(calls.at(-1)).toEqual({
       event: 'device:rename',
-      payload: { deviceId: 'device-1', hostname: 'new-name' },
+      payload: { id: 'device-1', deviceId: 'device-1', hostname: 'new-name' },
     });
 
     await deviceEvents(socket).delete('device-1');
     expect(calls.at(-1)).toEqual({
       event: 'device:delete',
-      payload: { deviceId: 'device-1' },
+      payload: { id: 'device-1', deviceId: 'device-1' },
     });
   });
 });
