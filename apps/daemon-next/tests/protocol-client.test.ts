@@ -153,6 +153,35 @@ describe('daemon-next protocol client', () => {
     ]);
   });
 
+  test('reconnect uses the latest successful scan snapshot', async () => {
+    const socket = new FakeAgentSocket();
+    const latest = {
+      runtimes: [{ adapterKind: 'claude-code', name: 'Claude Code' }],
+      agents: [{ name: 'Claude', adapterKind: 'claude-code', category: 'executor-hosted' as const }],
+    };
+    const client = createDaemonProtocolClient({
+      socket,
+      executor: async (request) => `stub:${request.prompt}`,
+      device: { teamId: 'team-1', ownerId: 'user-1' },
+      runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }],
+      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      scan: async () => latest,
+    });
+
+    await client.start();
+    await vi.waitFor(() => expect(socket.emitted).toContainEqual([
+      AGENT_EVENTS.agent.registerBatch,
+      { teamId: 'team-1', deviceId: 'device-1', agents: latest.agents },
+    ]));
+    await socket.triggerReconnect();
+
+    expect(socket.emitted.slice(-2)).toEqual([
+      [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-2', runtimes: latest.runtimes }],
+      [AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-2', agents: latest.agents }],
+    ]);
+    client.stop?.();
+  });
+
   test('uses refreshed device credentials from hello acknowledgements for env resolution', async () => {
     const socket = new FakeAgentSocket();
     socket.helloAcks.push({
@@ -213,6 +242,7 @@ describe('daemon-next protocol client', () => {
           agents: [{ name: 'Claude', adapterKind: 'claude-code', category: 'executor-hosted' }],
         };
       },
+      rescanIntervalMs: 60000,
     });
 
     await client.start();
@@ -246,6 +276,7 @@ describe('daemon-next protocol client', () => {
           agents: [],
         };
       },
+      rescanIntervalMs: 60000,
     });
 
     await client.start();

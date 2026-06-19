@@ -19,7 +19,6 @@ export { uploadArtifacts } from './artifact-uploader.js';
 export type { UploadedArtifact } from './artifact-uploader.js';
 export { createHttpEnvResolver } from './env-fetcher.js';
 import { createRescanController, type RescanController } from './rescan.js';
-import { saveScanCache } from './scan-cache.js';
 
 export interface DaemonProtocolSocket {
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
@@ -121,6 +120,7 @@ export interface CreateDaemonProtocolClientInput {
   fetch?: typeof fetch;
   envResolver?: AgentEnvResolver;
   rescanIntervalMs?: number;
+  onScanChanged?: (snapshot: DaemonScanSnapshot) => Promise<void> | void;
 }
 
 export interface DaemonProtocolClient {
@@ -133,17 +133,18 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   const { socket, executor, device, runtimes, agents, scan, serverUrl, fetch: fetchFn, envResolver } = input;
   let currentDeviceId: string;
   let rescan: RescanController | undefined;
+  let latestSnapshot: DaemonScanSnapshot = { runtimes, agents };
 
   return {
     async start() {
-      const initialAnnouncement = await announceDeviceSnapshot(socket, device, runtimes, agents);
+      const initialAnnouncement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents);
       currentDeviceId = initialAnnouncement.deviceId;
       if (initialAnnouncement.token) {
         device.token = initialAnnouncement.token;
       }
       const cancelledDispatchIds = new Set<string>();
       socket.onReconnect?.(async () => {
-        const announcement = await announceDeviceSnapshot(socket, device, runtimes, agents);
+        const announcement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents);
         currentDeviceId = announcement.deviceId;
         if (announcement.token) {
           device.token = announcement.token;
@@ -155,8 +156,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         if (request.deviceId !== currentDeviceId) {
           return;
         }
-        const snapshot = scan ? await scan() : { runtimes, agents };
+        const snapshot = scan ? await scan() : latestSnapshot;
+        latestSnapshot = snapshot;
         await reportDeviceSnapshot(socket, device.teamId, currentDeviceId, snapshot.runtimes, snapshot.agents);
+        await input.onScanChanged?.(snapshot);
       });
 
       socket.on(AGENT_EVENTS.dispatch.cancel, async (payload) => {
@@ -274,7 +277,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           intervalMs: input.rescanIntervalMs,
           report: async (snap) => {
             await reportDeviceSnapshot(socket, device.teamId, currentDeviceId, snap.runtimes, snap.agents);
-            saveScanCache(snap, device.profileId);
+            latestSnapshot = snap;
+            await input.onScanChanged?.(snap);
           },
         });
         rescan.start();

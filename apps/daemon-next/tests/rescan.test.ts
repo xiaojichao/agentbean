@@ -64,4 +64,26 @@ describe('createRescanController', () => {
     await vi.waitFor(() => expect(scan).toHaveBeenCalled());
     controller.stop();
   });
+
+  it('skips overlapping ticks while a scan is still running', async () => {
+    let resolveScan: ((snapshot: DaemonScanSnapshot) => void) | undefined;
+    const scan = vi.fn(() => new Promise<DaemonScanSnapshot>((resolve) => {
+      resolveScan = resolve;
+    }));
+    const reported: DaemonScanSnapshot[] = [];
+    const controller = createRescanController({
+      scan: scan as any,
+      report: async (s) => { reported.push(s); },
+      initial: snap(),
+    });
+
+    const first = controller.tickNow();
+    await vi.waitFor(() => expect(scan).toHaveBeenCalledTimes(1));
+    await controller.tickNow();
+    expect(scan).toHaveBeenCalledTimes(1);
+    resolveScan?.(snap([{ adapterKind: 'codex', name: 'Codex', command: '/x' }]));
+    await first;
+
+    expect(reported).toHaveLength(1);
+  });
 });

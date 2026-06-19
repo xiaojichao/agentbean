@@ -14,9 +14,27 @@ describe('scan-cache', () => {
 
   it('returns null for corrupt JSON', () => {
     const dir = join(baseDir, 'corrupt');
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'scanned-agents.json'), '{ not json');
+    mkdirSync(join(dir, 'teams', 'corrupt'), { recursive: true });
+    writeFileSync(join(dir, 'teams', 'corrupt', 'scanned-agents.json'), '{ not json');
     expect(loadScanCache('corrupt', baseDir)).toBeNull();
+  });
+
+  it('returns null when cached runtime entries are malformed', () => {
+    const profile = 'malformed-runtime';
+    const dir = join(baseDir, 'teams', profile);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'scanned-agents.json'), JSON.stringify({ runtimes: [null], agents: [] }));
+
+    expect(loadScanCache(profile, baseDir)).toBeNull();
+  });
+
+  it('returns null when cached agent entries are malformed', () => {
+    const profile = 'malformed-agent';
+    const dir = join(baseDir, 'teams', profile);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'scanned-agents.json'), JSON.stringify({ runtimes: [], agents: [{ name: 'Codex' }] }));
+
+    expect(loadScanCache(profile, baseDir)).toBeNull();
   });
 
   it('round-trips a snapshot through save then load', () => {

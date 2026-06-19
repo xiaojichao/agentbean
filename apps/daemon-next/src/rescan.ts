@@ -37,8 +37,13 @@ export function createRescanController(options: RescanControllerOptions): Rescan
   const setIntervalFn = options.setIntervalFn ?? setInterval;
   let last: DaemonScanSnapshot = options.initial;
   let timer: ReturnType<typeof setInterval> | undefined;
+  let isTicking = false;
 
   async function tick(): Promise<void> {
+    if (isTicking) {
+      return;
+    }
+    isTicking = true;
     try {
       const fresh = await options.scan();
       if (hasChanged(last, fresh)) {
@@ -47,6 +52,8 @@ export function createRescanController(options: RescanControllerOptions): Rescan
       }
     } catch {
       // best-effort; next tick retries
+    } finally {
+      isTicking = false;
     }
   }
 

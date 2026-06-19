@@ -133,6 +133,7 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
     runtimes: snapshot.runtimes,
     agents: snapshot.agents,
     scan: createBuiltinScanProvider(),
+    onScanChanged: (fresh) => saveScanCache(fresh, config.profileId),
     envResolver: async (envRef) => {
       if (!device.token) {
         throw new Error('Custom agent env resolver is not configured');
