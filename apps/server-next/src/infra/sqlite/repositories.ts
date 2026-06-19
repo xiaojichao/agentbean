@@ -660,6 +660,11 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         }
         return mapDevice(globalDb.prepare('SELECT * FROM devices WHERE id = ?').get(input.deviceId));
       },
+      async delete(input) {
+        globalDb.prepare('DELETE FROM device_runtimes WHERE device_id = ?').run(input.deviceId);
+        globalDb.prepare('DELETE FROM agents WHERE device_id = ?').run(input.deviceId);
+        globalDb.prepare('DELETE FROM devices WHERE id = ?').run(input.deviceId);
+      },
     },
     runtimes: {
       async replaceForDevice(input) {

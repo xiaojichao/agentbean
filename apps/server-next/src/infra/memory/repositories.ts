@@ -369,6 +369,15 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         devices.set(device.id, updated);
         return updated;
       },
+      async delete(input) {
+        for (const runtime of Array.from(runtimes.values())) {
+          if (runtime.deviceId === input.deviceId) runtimes.delete(runtime.id);
+        }
+        for (const agent of Array.from(agents.values())) {
+          if (agent.deviceId === input.deviceId) agents.delete(agent.id);
+        }
+        devices.delete(input.deviceId);
+      },
     },
     runtimes: {
       async replaceForDevice(input) {

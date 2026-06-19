@@ -36,4 +36,25 @@ describe('devices repository', () => {
     });
     expect(updated).toBeNull();
   });
+
+  test('delete removes device and cascades runtimes', async () => {
+    const repos = createInMemoryRepositories();
+    await repos.devices.upsertHello({
+      id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'online', name: 'mac',
+      machineId: 'm-1', profileId: 'default', daemonVersion: null, systemInfo: undefined,
+      lastSeenAt: 1000, createdAt: 1000, updatedAt: 1000,
+    });
+    await repos.runtimes.replaceForDevice({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimes: [
+        { id: 'rt-1', deviceId: 'device-1', teamId: 'team-1', adapterKind: 'codex', name: 'Codex', installed: true, lastSeenAt: 1000 },
+      ],
+    });
+
+    await repos.devices.delete({ deviceId: 'device-1' });
+
+    expect(await repos.devices.getById('device-1')).toBeNull();
+    expect((await repos.runtimes.listByDevice('device-1')).length).toBe(0);
+  });
 });
