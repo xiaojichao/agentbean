@@ -268,9 +268,9 @@ Native directory selection 有用，但不是第一切片核心。
 
 需要：
 
-- 定义 heartbeat interval。
-- 定义 offline timeout。
-- 定义 scan interval。
+- 定义 heartbeat interval。（延后：daemon-next 与 server-next 依赖 socket.io 内置 ping/pong 覆盖连接活性，应用层心跳边际价值低、且 server-next 无 heartbeat handler）
+- 定义 offline timeout。（server-next 纯靠 socket disconnect 事件判 offline，socket.io ping 超时即 disconnect 兜底半开/网络分区）
+- 定义 scan interval。（已落地：daemon-next 定时重扫 5min，`apps/daemon-next/src/rescan.ts`，`hasChanged` 变化才上报；scan 缓存 `apps/daemon-next/src/scan-cache.ts` 供首次连接快速 announce）
 - 定义 daemon 以相同 device ID reconnect 时的 server behavior。
 
 ## 测试缺口
