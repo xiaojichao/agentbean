@@ -543,9 +543,9 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
         {isOwnedByCurrentUser && device.status === 'offline' && (
           <section className="rounded-lg border border-neutral-200 p-4">
             <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">连接命令</h3>
-            {device.connectCommand ? (
+            {device.connectCommand && (
               <div className="space-y-2">
-                <p className="text-xs text-neutral-500">使用以下命令重新启动此设备上的 Daemon：</p>
+                <p className="text-xs text-neutral-500">首次接入命令（历史参考，invite code 可能已失效）：</p>
                 <div className="flex items-center gap-2">
                   <code className="flex-1 overflow-x-auto whitespace-nowrap rounded-md bg-neutral-900 px-3 py-2 text-xs text-emerald-400">{device.connectCommand}</code>
                   <button onClick={() => { navigator.clipboard.writeText(device.connectCommand ?? ''); setCopied(true); setTimeout(() => setCopied(false), 2000); }} className="shrink-0 rounded-md border border-neutral-300 px-3 py-2 text-xs hover:bg-neutral-50 flex items-center gap-1">
@@ -553,22 +553,24 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
                   </button>
                 </div>
               </div>
-            ) : (
-              <div>
-                <button onClick={generateConnect} className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-50">
-                  生成连接命令
-                </button>
-                {inviteCommand && (
-                  <div className="mt-3 flex items-center gap-2">
+            )}
+            <div className={device.connectCommand ? 'mt-3' : ''}>
+              <button onClick={generateConnect} className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-50">
+                {device.connectCommand ? '生成新连接命令' : '生成连接命令'}
+              </button>
+              {inviteCommand && (
+                <div className="mt-3 space-y-1">
+                  <p className="text-xs text-neutral-500">新连接命令（可用）：</p>
+                  <div className="flex items-center gap-2">
                     <code className="flex-1 overflow-x-auto whitespace-nowrap rounded-md bg-neutral-900 px-3 py-2 text-xs text-emerald-400">{inviteCommand}</code>
                     <button onClick={copy} className="shrink-0 rounded-md border border-neutral-300 px-3 py-2 text-xs hover:bg-neutral-50 flex items-center gap-1">
                       <Copy size={10} /> {copied ? '已复制' : '复制'}
                     </button>
                   </div>
-                )}
-                {genError && <p className="mt-2 text-sm text-red-600">{genError}</p>}
-              </div>
-            )}
+                </div>
+              )}
+              {genError && <p className="mt-2 text-sm text-red-600">{genError}</p>}
+            </div>
           </section>
         )}
 
