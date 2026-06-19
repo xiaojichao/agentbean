@@ -51,6 +51,12 @@ export interface ServerNextDevServerHandle {
   close(): Promise<void>;
 }
 
+interface AppWithCleanup {
+  app: ServerNextUseCases;
+  reconcileDisconnectedDevicesOnStart: boolean;
+  close(): Promise<void>;
+}
+
 type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { close(): void };
 
 const MAX_ARTIFACT_UPLOAD_BODY_BYTES = 10 * 1024 * 1024;
@@ -106,9 +112,12 @@ export async function startServerNextDevServer(
 ): Promise<ServerNextDevServerHandle> {
   const config = input.config ?? parseServerNextDevConfig();
   const appWithCleanup = input.app
-    ? { app: input.app, close: async () => undefined }
+    ? { app: input.app, reconcileDisconnectedDevicesOnStart: false, close: async () => undefined }
     : createDefaultApp(config, input.Database);
   const app = appWithCleanup.app;
+  if (appWithCleanup.reconcileDisconnectedDevicesOnStart) {
+    await app.reconcileDisconnectedDevices({ timestamp: Date.now() });
+  }
   const Server = input.Server ?? loadSocketIoServer();
   const httpServer = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://agentbean-next.local');
@@ -776,7 +785,7 @@ function readPreviewHtml(): string {
 function createDefaultApp(
   config: ServerNextDevConfig,
   Database: BetterSqlite3Constructor | undefined,
-): { app: ServerNextUseCases; close(): Promise<void> } {
+): AppWithCleanup {
   const artifactContentStore = createFileArtifactContentStore(config.dataDir);
   if (config.storage === 'memory') {
     return {
@@ -789,6 +798,7 @@ function createDefaultApp(
         sessionSecret: config.sessionSecret,
         artifactContentStore,
       }),
+      reconcileDisconnectedDevicesOnStart: false,
       close: async () => undefined,
     };
   }
@@ -809,6 +819,7 @@ function createDefaultApp(
       sessionSecret: config.sessionSecret,
       artifactContentStore,
     }),
+    reconcileDisconnectedDevicesOnStart: true,
     async close() {
       globalDb.close();
       teamDb.close();

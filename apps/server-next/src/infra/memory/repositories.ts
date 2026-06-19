@@ -342,6 +342,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       async listByTeam(teamId) {
         return Array.from(devices.values()).filter((device) => device.teamId === teamId);
       },
+      async listConnected() {
+        return Array.from(devices.values()).filter((device) => device.status !== 'offline');
+      },
       async markOffline(input) {
         const device = devices.get(input.deviceId);
         if (!device) {

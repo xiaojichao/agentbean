@@ -786,6 +786,56 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('reconciles connected devices and hosted agents to offline after process restart', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 900 },
+        ids: {
+          nextId: createIds([
+            'user-1',
+            'team-1',
+            'channel-1',
+            'device-1',
+            'agent-1',
+          ]),
+        },
+      });
+
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+      await app.deviceHello({
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+        hostname: 'MacBook',
+      });
+      await app.registerDiscoveredAgents({
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      });
+
+      await expect(app.reconcileDisconnectedDevices({ timestamp: 1200 })).resolves.toMatchObject({
+        ok: true,
+        devices: [{ id: 'device-1', status: 'offline' }],
+        affectedTeamIds: ['team-1'],
+      });
+      await expect(app.listDevices({ teamId: 'team-1', userId: 'user-1' })).resolves.toMatchObject({
+        ok: true,
+        devices: [{ id: 'device-1', status: 'offline' }],
+      });
+      await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+        ok: true,
+        agents: [{ id: 'agent-1', status: 'offline', lastSeenAt: 1200 }],
+      });
+    } finally {
+      close();
+    }
+  });
+
   test('persists dispatch result as an agent message and succeeded dispatch', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {

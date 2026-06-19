@@ -61,6 +61,7 @@ export interface ServerNextUseCases {
   requestDeviceScan(input: RequestDeviceScanInput): Promise<Ack<RequestDeviceScanResult>>;
   deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto }>>;
   markDeviceOffline(input: { deviceId: string; timestamp: UnixMs }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[] }>>;
+  reconcileDisconnectedDevices(input: { timestamp: UnixMs }): Promise<Ack<{ devices: DeviceDto[]; affectedTeamIds: string[] }>>;
   reportDeviceRuntimes(input: ReportDeviceRuntimesInput): Promise<Ack<{ runtimes: RuntimeDto[] }>>;
   registerDiscoveredAgents(input: RegisterDiscoveredAgentsInput): Promise<Ack<RegisterDiscoveredAgentsResult>>;
   listVisibleAgents(input: { teamId: string }): Promise<Ack<{ agents: AgentDto[] }>>;
@@ -1135,29 +1136,37 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!device) {
         return makeFailure('NOT_FOUND', 'Device not found');
       }
-      const hostedAgents = await repositories.agents.listByDevice(device.id);
-      const updated = await repositories.devices.markOffline({
-        deviceId: offlineInput.deviceId,
-        timestamp: offlineInput.timestamp,
-      });
+      const { updated, hostedAgents } = await markDeviceAndHostedAgentsOffline(
+        repositories,
+        device,
+        offlineInput.timestamp,
+      );
       if (!updated) {
         return makeFailure('NOT_FOUND', 'Device not found');
-      }
-      for (const agent of hostedAgents) {
-        if (agent.status === 'offline') {
-          continue;
-        }
-        await repositories.agents.updateStatus({
-          agentId: agent.id,
-          status: 'offline',
-          lastSeenAt: offlineInput.timestamp,
-          lastError: agent.lastError,
-        });
       }
       return makeSuccess({
         device: toDeviceDto(updated),
         affectedTeamIds: uniqueIds([device.teamId, ...hostedAgents.flatMap((agent) => agent.visibleTeamIds)]),
       });
+    },
+
+    async reconcileDisconnectedDevices(disconnectedInput) {
+      const connectedDevices = await repositories.devices.listConnected();
+      const devices: DeviceDto[] = [];
+      const affectedTeamIds: string[] = [];
+      for (const device of connectedDevices) {
+        const { updated, hostedAgents } = await markDeviceAndHostedAgentsOffline(
+          repositories,
+          device,
+          disconnectedInput.timestamp,
+        );
+        if (!updated) {
+          continue;
+        }
+        devices.push(toDeviceDto(updated));
+        affectedTeamIds.push(device.teamId, ...hostedAgents.flatMap((agent) => agent.visibleTeamIds));
+      }
+      return makeSuccess({ devices, affectedTeamIds: uniqueIds(affectedTeamIds) });
     },
 
     async listDeviceAgents(deviceAgentsInput) {
@@ -3056,6 +3065,30 @@ function toDeviceInviteDto(invite: DeviceInviteRecord, command?: string): Device
     profileId: invite.profileId,
     command,
   };
+}
+
+async function markDeviceAndHostedAgentsOffline(
+  repositories: ServerNextRepositories,
+  device: DeviceRecord,
+  timestamp: UnixMs,
+): Promise<{ updated: DeviceRecord | null; hostedAgents: AgentRecord[] }> {
+  const hostedAgents = await repositories.agents.listByDevice(device.id);
+  const updated = await repositories.devices.markOffline({
+    deviceId: device.id,
+    timestamp,
+  });
+  for (const agent of hostedAgents) {
+    if (agent.status === 'offline') {
+      continue;
+    }
+    await repositories.agents.updateStatus({
+      agentId: agent.id,
+      status: 'offline',
+      lastSeenAt: timestamp,
+      lastError: agent.lastError,
+    });
+  }
+  return { updated, hostedAgents };
 }
 
 function toDeviceDto(device: DeviceDto): DeviceDto {
