@@ -1,6 +1,6 @@
 'use client';
 import { create } from 'zustand';
-import type { AgentSnapshot, ChannelSummary, ChatMessage, ConnState, OutboundMessage, DiscoveredAgent, RuntimeInfo, TeamSummary, AgentMetricsSummary, UserInfo, DeviceInfo } from './schema.js';
+import type { AgentSnapshot, ChannelSummary, ChatMessage, ConnState, DispatchStatus, OutboundMessage, DiscoveredAgent, RuntimeInfo, TeamSummary, AgentMetricsSummary, UserInfo, DeviceInfo } from './schema.js';
 import type { DmChannel } from './socket.js';
 import { agentVisibleInNetwork } from './agent-scope';
 
@@ -180,6 +180,7 @@ interface State {
   applyDmsSnapshot(list: DmChannel[]): void;
   applyChannelHistory(channelId: string, msgs: ChatMessage[]): void;
   appendMessage(msg: ChatMessage): void;
+  applyDispatchStatus(channelId: string, messageId: string, dispatchStatus: DispatchStatus, dispatchId?: string): void;
   addOutbound(msg: OutboundMessage): void;
   resolveOutbound(id: string, status: 'sent' | 'failed'): void;
   setDiscovered(list: DiscoveredAgent[]): void;
@@ -247,6 +248,24 @@ export const useAgentBeanStore = create<State>((set) => ({
     set((s) => {
       const list = s.messagesByChannel[msg.channelId] ?? [];
       return { messagesByChannel: { ...s.messagesByChannel, [msg.channelId]: [...list, msg] } };
+    });
+  },
+  applyDispatchStatus(channelId, messageId, dispatchStatus, dispatchId) {
+    set((s) => {
+      const list = s.messagesByChannel[channelId];
+      if (!list) return s;
+      let changed = false;
+      const next = list.map((msg) => {
+        if (msg.id !== messageId) return msg;
+        changed = true;
+        return {
+          ...msg,
+          dispatchStatus,
+          ...(dispatchId !== undefined ? { dispatchId } : {}),
+        };
+      });
+      if (!changed) return s;
+      return { messagesByChannel: { ...s.messagesByChannel, [channelId]: next } };
     });
   },
   addOutbound(msg) { set((s) => ({ outbox: { ...s.outbox, [msg.id]: msg } })); },

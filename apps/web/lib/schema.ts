@@ -49,6 +49,10 @@ export type ConnState = 'connecting' | 'open' | 'lost';
 
 export interface ChannelSummary { id: string; name: string; description?: string | null; visibility?: 'public' | 'private'; createdBy?: string | null; createdAt: number; archivedAt?: number | null; }
 
+export type DispatchStatus =
+  | 'queued' | 'sent' | 'accepted' | 'running'
+  | 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
+
 export interface ChatMessage {
   id: string;
   channelId: string;
@@ -58,6 +62,8 @@ export interface ChatMessage {
   createdAt: number;
   metaJson?: string | null;
   artifacts?: Artifact[];
+  dispatchStatus?: DispatchStatus;
+  dispatchId?: string;
 }
 
 export interface Artifact {
