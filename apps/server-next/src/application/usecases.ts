@@ -1085,6 +1085,20 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         deviceInput.machineId && deviceInput.profileId
           ? await repositories.devices.findByMachineProfile(deviceInput.machineId, deviceInput.profileId)
           : null;
+
+      let connectCommand = existing?.connectCommand;
+      if (!existing && connectCommand === undefined && (deviceInput.machineId || deviceInput.profileId)) {
+        const invite = await repositories.deviceInvites.findCompletedByMachineProfile({
+          teamId: deviceInput.teamId,
+          machineId: deviceInput.machineId,
+          profileId: deviceInput.profileId,
+        });
+        if (invite) {
+          const team = await repositories.teams.getById(deviceInput.teamId);
+          connectCommand = buildDeviceInviteCommand(invite.code, invite.profileId ?? team?.path);
+        }
+      }
+
       const device = await repositories.devices.upsertHello({
         id: existing?.id ?? ids.nextId(),
         teamId: deviceInput.teamId,
@@ -1095,6 +1109,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         profileId: deviceInput.profileId,
         daemonVersion: deviceInput.daemonVersion,
         systemInfo: deviceInput.systemInfo,
+        connectCommand,
         lastSeenAt: now,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
