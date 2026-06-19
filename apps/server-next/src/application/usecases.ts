@@ -3108,6 +3108,7 @@ function toDeviceDto(device: DeviceDto): DeviceDto {
     daemonVersionInfo,
     latestDaemonVersion: daemonVersionInfo.latest,
     daemonUpdateAvailable: daemonVersionInfo.updateAvailable,
+    connectCommand: device.connectCommand,
     lastSeenAt: device.lastSeenAt,
   };
 }
