@@ -1,0 +1,24 @@
+import { describe, expect, test } from 'vitest';
+import { collectSystemInfo, readDaemonVersion } from '../src/system-info';
+
+describe('system-info', () => {
+  test('collectSystemInfo returns os-derived fields with expected shapes', () => {
+    const info = collectSystemInfo();
+    expect(typeof info.hostname).toBe('string');
+    expect(typeof info.platform).toBe('string');
+    expect(typeof info.arch).toBe('string');
+    expect(typeof info.osVersion).toBe('string');
+    expect(typeof info.cpuModel).toBe('string');
+    expect(typeof info.cpuCores).toBe('number');
+    expect(info.cpuCores).toBeGreaterThan(0);
+    expect(typeof info.totalMemoryGB).toBe('number');
+    expect(info.totalMemoryGB).toBeGreaterThan(0);
+    expect(typeof info.freeMemoryGB).toBe('number');
+    expect(info.nodeVersion).toMatch(/^v\d+\.\d+\.\d+/);
+  });
+
+  test('readDaemonVersion returns the package version', () => {
+    const version = readDaemonVersion();
+    expect(version).toMatch(/^\d+\.\d+\.\d+/);
+  });
+});
