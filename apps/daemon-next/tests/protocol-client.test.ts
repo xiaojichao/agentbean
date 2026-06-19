@@ -1,3 +1,6 @@
+import { mkdtempSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { AGENT_EVENTS } from '../../../packages/contracts/src/index';
 import {
@@ -290,6 +293,7 @@ describe('daemon-next protocol client', () => {
   test('passes raw custom agent env only inside selected dispatch request', async () => {
     const socket = new FakeAgentSocket();
     const received: DispatchRequestPayload[] = [];
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'proto-env-')));
     const client = createDaemonProtocolClient({
       socket,
       executor: async (request) => {
@@ -317,12 +321,19 @@ describe('daemon-next protocol client', () => {
       customAgent: {
         command: 'codex',
         args: ['--model', 'gpt-5.4'],
-        cwd: '/workspace',
+        cwd,
         env: { SECRET_TOKEN: 'secret-value' },
       },
     });
 
-    expect(received[0]?.customAgent?.env).toEqual({ SECRET_TOKEN: 'secret-value' });
+    // The user's secret env reaches the executor merged with the per-run workspace env.
+    expect(received[0]?.customAgent?.env).toEqual({
+      AGENTBEAN_RUN_ID: 'dispatch-1',
+      AGENTBEAN_WORKSPACE: `${cwd}/.agentbean/runs/dispatch-1`,
+      AGENTBEAN_INPUT_DIR: `${cwd}/.agentbean/runs/dispatch-1/inputs`,
+      AGENTBEAN_OUTPUT_DIR: `${cwd}/.agentbean/runs/dispatch-1/outputs`,
+      SECRET_TOKEN: 'secret-value',
+    });
     expect(socket.emitted.at(-1)).toEqual([
       AGENT_EVENTS.dispatch.result,
       { dispatchId: 'dispatch-1', agentId: 'agent-1', body: 'ok' },

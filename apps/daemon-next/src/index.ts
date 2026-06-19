@@ -1,5 +1,9 @@
 import { AGENT_EVENTS, type AgentCategory, type ArtifactPathKind, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
+import { downloadAttachments } from './attachments.js';
+import { prepareWorkspaceRun, workspaceRunEnv, persistWorkspaceRunManifest, persistWorkspaceRunResponse } from './workspace-run.js';
+import { collectArtifacts } from './artifact-collector.js';
+import { uploadArtifacts } from './artifact-uploader.js';
 
 export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner.js';
 export type { BuiltinScannerOptions } from './scanner.js';
@@ -112,7 +116,7 @@ export interface DaemonProtocolClient {
 }
 
 export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInput): DaemonProtocolClient {
-  const { socket, executor, device, runtimes, agents, scan } = input;
+  const { socket, executor, device, runtimes, agents, scan, serverUrl, fetch: fetchFn } = input;
 
   return {
     async start() {
@@ -141,15 +145,80 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           return;
         }
         try {
+          // Per-run workspace + input attachments (only when customAgent.cwd is set).
+          const workspace = request.customAgent?.cwd
+            ? prepareWorkspaceRun(request.customAgent.cwd, request.id)
+            : undefined;
+          if (workspace && request.attachments?.length && device.token) {
+            const downloaded = await downloadAttachments(
+              { serverUrl, token: device.token, teamId: device.teamId, inputDir: workspace.inputDir, fetch: fetchFn },
+              request.attachments,
+            );
+            if (downloaded.length > 0) {
+              const list = downloaded
+                .map((file) => `- ${file.name} (${file.mimeType ?? 'unknown'}, ${file.sizeBytes ?? 0} bytes): ${file.localPath}`)
+                .join('\n');
+              request.prompt = `${request.prompt}\n\n用户随消息附加了以下本地文件，请在需要时读取并使用：\n${list}`;
+            }
+          }
+          if (workspace && request.customAgent) {
+            request.customAgent = {
+              ...request.customAgent,
+              env: { ...workspaceRunEnv(workspace), ...(request.customAgent.env ?? {}) },
+            };
+          }
+
           const result = normalizeDispatchResult(await executor(request));
           if (cancelledDispatchIds.delete(request.id)) {
             return;
           }
+
+          // Scan outputs + cwd fallback, upload, then merge with the executor's log artifact.
+          let productArtifacts: DaemonDispatchArtifactResult[] = [];
+          if (workspace && result.workspaceRun?.startedAt !== undefined) {
+            const collected = await collectArtifacts({
+              outputDir: workspace.outputDir,
+              cwd: workspace.cwd,
+              startedAt: result.workspaceRun.startedAt,
+            });
+            if (collected.length > 0 && device.token) {
+              const uploaded = await uploadArtifacts(
+                { serverUrl, token: device.token, teamId: device.teamId, channelId: request.channelId, fetch: fetchFn },
+                collected,
+              );
+              productArtifacts = uploaded.map((u) => ({
+                id: u.id,
+                filename: u.filename,
+                relativePath: u.relativePath,
+                pathKind: 'generated',
+              }));
+            }
+            try {
+              persistWorkspaceRunResponse(workspace, result.body);
+              persistWorkspaceRunManifest(workspace, {
+                runId: workspace.runId,
+                status: result.workspaceRun.status,
+                startedAt: result.workspaceRun.startedAt,
+                completedAt: result.workspaceRun.completedAt,
+                exitCode: result.workspaceRun.exitCode,
+                files: collected.map((c) => ({
+                  relativePath: c.relativePath,
+                  sha256: c.sha256,
+                  sizeBytes: c.sizeBytes,
+                  filename: c.filename,
+                })),
+              });
+            } catch {
+              // manifest persistence is best-effort; never block the dispatch result
+            }
+          }
+
+          const artifacts = [...(result.artifacts ?? []), ...productArtifacts];
           await socket.emitWithAck(AGENT_EVENTS.dispatch.result, {
             dispatchId: request.id,
             agentId: request.agentId,
             body: result.body,
-            ...(result.artifacts ? { artifacts: result.artifacts } : {}),
+            ...(artifacts.length > 0 ? { artifacts } : {}),
             ...(result.workspaceRun ? { workspaceRun: result.workspaceRun } : {}),
           });
         } catch (error) {
