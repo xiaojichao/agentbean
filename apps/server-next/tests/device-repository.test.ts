@@ -85,7 +85,13 @@ describe('deviceInvites repository', () => {
       id: 'inv-1', code: 'CODE1', teamId: 'team-1', createdBy: 'user-1',
       createdAt: 1000, machineId: 'mac-1', profileId: 'default',
     });
-    await repos.deviceInvites.updateWaiter({ code: 'CODE1', machineId: 'mac-1', profileId: 'default', hostname: 'mac' });
+    await repos.deviceInvites.updateWaiter({
+      code: 'CODE1',
+      machineId: 'mac-1',
+      profileId: 'default',
+      hostname: 'mac',
+      serverUrl: 'https://agentbean.example',
+    });
     await repos.deviceInvites.complete({ code: 'CODE1', completedAt: 2000 });
 
     const found = await repos.deviceInvites.findCompletedByMachineProfile({
@@ -93,6 +99,23 @@ describe('deviceInvites repository', () => {
     });
     expect(found?.code).toBe('CODE1');
     expect(found?.completedAt).toBe(2000);
+    expect(found?.serverUrl).toBe('https://agentbean.example');
+  });
+
+  test('findCompletedByMachineProfile requires exact machine and profile match', async () => {
+    const repos = createInMemoryRepositories();
+    await repos.deviceInvites.create({
+      id: 'inv-1', code: 'CODE1', teamId: 'team-1', createdBy: 'user-1',
+      createdAt: 1000, machineId: 'mac-1', profileId: 'default',
+    });
+    await repos.deviceInvites.updateWaiter({ code: 'CODE1', machineId: 'mac-1', profileId: 'default', hostname: 'mac' });
+    await repos.deviceInvites.complete({ code: 'CODE1', completedAt: 2000 });
+
+    await expect(
+      repos.deviceInvites.findCompletedByMachineProfile({
+        teamId: 'team-1', machineId: 'mac-2', profileId: 'default',
+      }),
+    ).resolves.toBeNull();
   });
 
   test('findCompletedByMachineProfile returns null when no completed match', async () => {

@@ -84,6 +84,7 @@ export interface WaitForDeviceInviteCommandDto {
   machineId?: string;
   profileId?: string;
   hostname?: string;
+  serverUrl?: string;
 }
 
 export interface DeviceInviteCredentialsDto {

@@ -395,12 +395,17 @@ describe('device rename and delete (end-to-end)', () => {
         machineId: 'mac-1',
         profileId: 'default',
         hostname: 'mac',
+        serverUrl: 'https://agentbean.example',
       }),
     ).resolves.toMatchObject({ ok: true, invite: { createdBy: 'user-1' } });
 
     // 等待 owner approve 自动 complete（异步后置钩子）——用 device-invite:credentials 推送做同步信号
     const credentials = await credentialsPromise;
-    expect(credentials).toMatchObject({ token: expect.any(String), ownerId: 'user-1' });
+    expect(credentials).toMatchObject({
+      token: expect.any(String),
+      ownerId: 'user-1',
+      serverUrl: 'https://agentbean.example',
+    });
 
     // daemon hello（agent）：machineId/profileId 匹配 invite → 反查 completed invite 生成 connectCommand
     await expect(
@@ -421,6 +426,7 @@ describe('device rename and delete (end-to-end)', () => {
     const connectCommand = (got as { device?: { connectCommand?: string } }).device?.connectCommand;
     expect(connectCommand).toEqual(expect.stringContaining('npx @agentbean/daemon'));
     expect(connectCommand).toContain(code);
+    expect(connectCommand).toContain('--server-url https://agentbean.example');
   });
 
   test('device getDevice surfaces daemonVersionInfo with update-available', async () => {

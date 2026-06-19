@@ -102,6 +102,7 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
       machineId: config.machineId,
       profileId: config.profileId,
       hostname: config.hostname,
+      serverUrl: config.serverUrl,
     })
     : null;
   const teamId = credentials?.teamId ?? config.teamId;
@@ -138,7 +139,7 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
 
 export async function waitForDeviceInviteCredentials(
   socket: DaemonProtocolSocket,
-  input: { code: string; machineId?: string; profileId?: string; hostname?: string },
+  input: { code: string; machineId?: string; profileId?: string; hostname?: string; serverUrl?: string },
   options: { timeoutMs?: number } = {},
 ): Promise<DeviceInviteCredentialsDto> {
   const timeoutMs = options.timeoutMs ?? 5 * 60 * 1000;

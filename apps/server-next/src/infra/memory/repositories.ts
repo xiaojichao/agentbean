@@ -234,6 +234,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           machineId: input.machineId,
           profileId: input.profileId ?? invite.profileId,
           hostname: input.hostname,
+          serverUrl: input.serverUrl ?? invite.serverUrl,
         };
         deviceInvites.set(input.code, updated);
         return updated;
@@ -243,7 +244,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         if (!invite || invite.completedAt !== undefined) {
           return null;
         }
-        const updated = { ...invite, completedAt: input.completedAt };
+        const updated = { ...invite, completedAt: input.completedAt, serverUrl: input.serverUrl ?? invite.serverUrl };
         deviceInvites.set(input.code, updated);
         return updated;
       },
@@ -253,8 +254,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             (invite) =>
               invite.teamId === input.teamId &&
               invite.completedAt !== undefined &&
-              (input.machineId === undefined || invite.machineId === input.machineId) &&
-              (input.profileId === undefined || invite.profileId === input.profileId),
+              invite.machineId === input.machineId &&
+              invite.profileId === input.profileId,
           )
           .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0));
         return matches[0] ?? null;
