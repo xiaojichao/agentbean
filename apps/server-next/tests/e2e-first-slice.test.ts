@@ -1,6 +1,9 @@
 import { createServer, type Server as HttpServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { AddressInfo } from 'node:net';
+import { mkdtempSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import { AGENT_EVENTS, type DispatchRequestDto } from '../../../packages/contracts/src/index';
 import { createDaemonProtocolClient, type DaemonProtocolSocket } from '../../daemon-next/src/index';
@@ -66,6 +69,7 @@ describe('AgentBean Next first-slice smoke', () => {
     });
 
     const web = createWebSocketClient(webSocket);
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-e2e-')));
     await expect(
       web.register({
         username: 'shaw',
@@ -85,7 +89,7 @@ describe('AgentBean Next first-slice smoke', () => {
       executor: async (request) => ({
         body: `preview:${request.prompt}`,
         workspaceRun: {
-          cwd: '/Users/shaw/AgentBean',
+          cwd,
           command: '/opt/homebrew/bin/codex --model gpt-5.4',
           logExcerpt: 'OPENAI_API_KEY=[redacted]\nfinished',
           exitCode: 0,
@@ -104,7 +108,7 @@ describe('AgentBean Next first-slice smoke', () => {
           adapterKind: 'codex',
           name: 'Codex CLI',
           command: '/opt/homebrew/bin/codex',
-          cwd: '/Users/shaw/AgentBean',
+          cwd,
           installed: true,
         },
       ],
@@ -158,7 +162,7 @@ describe('AgentBean Next first-slice smoke', () => {
             senderKind: 'agent',
             body: 'preview:@Codex hello',
             workspaceRun: {
-              cwd: '/Users/shaw/AgentBean',
+              cwd,
               command: '/opt/homebrew/bin/codex --model gpt-5.4',
               logExcerpt: 'OPENAI_API_KEY=[redacted]\nfinished',
               exitCode: 0,
