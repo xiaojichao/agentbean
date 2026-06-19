@@ -9,6 +9,13 @@ export interface DeviceSystemInfoDto {
   platform?: string;
   arch?: string;
   release?: string;
+  osVersion?: string;
+  cpuModel?: string;
+  cpuCores?: number;
+  totalMemoryGB?: number;
+  freeMemoryGB?: number;
+  nodeVersion?: string;
+  daemonVersion?: string;
 }
 
 export interface DeviceCapabilitiesDto {
@@ -24,6 +31,7 @@ export interface DeviceDto {
   name?: string;
   systemInfo?: DeviceSystemInfoDto;
   capabilities?: DeviceCapabilitiesDto;
+  daemonVersion?: string;
   lastSeenAt?: UnixMs;
 }
 

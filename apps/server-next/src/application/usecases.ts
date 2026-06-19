@@ -2990,6 +2990,7 @@ function toDeviceDto(device: DeviceDto): DeviceDto {
     name: device.name,
     systemInfo: device.systemInfo,
     capabilities: device.capabilities,
+    daemonVersion: device.daemonVersion,
     lastSeenAt: device.lastSeenAt,
   };
 }
