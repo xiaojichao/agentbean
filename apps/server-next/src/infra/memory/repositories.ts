@@ -374,7 +374,16 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           if (runtime.deviceId === input.deviceId) runtimes.delete(runtime.id);
         }
         for (const agent of Array.from(agents.values())) {
-          if (agent.deviceId === input.deviceId) agents.delete(agent.id);
+          if (agent.deviceId === input.deviceId && agent.deletedAt === undefined) {
+            agents.set(agent.id, {
+              ...agent,
+              visibleTeamIds: [],
+              status: 'offline',
+              deletedAt: input.timestamp,
+              lastSeenAt: input.timestamp,
+            });
+            agentEnv.delete(agent.id);
+          }
         }
         devices.delete(input.deviceId);
       },

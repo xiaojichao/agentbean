@@ -37,7 +37,7 @@ describe('devices repository', () => {
     expect(updated).toBeNull();
   });
 
-  test('delete removes device and cascades runtimes and agents', async () => {
+  test('delete soft-deletes agents (tombstone) and hard-deletes runtimes/device', async () => {
     const repos = createInMemoryRepositories();
     await repos.devices.upsertHello({
       id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'online', name: 'mac',
@@ -63,10 +63,17 @@ describe('devices repository', () => {
       deviceId: 'device-1',
     });
 
-    await repos.devices.delete({ deviceId: 'device-1' });
+    await repos.devices.delete({ deviceId: 'device-1', timestamp: 5000 });
 
+    // device + runtimes hard-deleted
     expect(await repos.devices.getById('device-1')).toBeNull();
     expect((await repos.runtimes.listByDevice('device-1')).length).toBe(0);
+    // agent soft-deleted: hidden from visible list (filtered by deleted_at IS NULL)
     expect((await repos.agents.listByDevice('device-1')).length).toBe(0);
+    // ...but the row + history is preserved with a tombstone (not hard-deleted)
+    const tombstoned = await repos.agents.getById('agent-1');
+    expect(tombstoned).not.toBeNull();
+    expect(tombstoned?.deletedAt).toBe(5000);
+    expect(tombstoned?.status).toBe('offline');
   });
 });
