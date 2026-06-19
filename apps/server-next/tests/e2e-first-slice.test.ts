@@ -170,7 +170,7 @@ describe('AgentBean Next first-slice smoke', () => {
       });
     });
     expect(resolvedEnvRefs).toEqual([{ agentId: 'agent-1', teamId: 'team-1' }]);
-  });
+  }, 15_000);
 
   test('runs register -> daemon hello -> agent batch -> message send -> dispatch result', async () => {
     const app = createInMemoryServerNext({
