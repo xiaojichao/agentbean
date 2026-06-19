@@ -57,4 +57,14 @@ describe('attachments', () => {
 
     expect(downloaded.map((d) => d.id)).toEqual(['att-good']);
   });
+
+  test('downloadAttachments falls back to "attachment" when sanitized name is empty', async () => {
+    const inputDir = realpathSync(mkdtempSync(join(tmpdir(), 'attachments-')));
+    const fakeFetch: typeof fetch = async () => new Response('body', { status: 200 });
+    const [downloaded] = await downloadAttachments(
+      { serverUrl: 'http://server.test', token: 'tok', teamId: 'team-1', inputDir, fetch: fakeFetch },
+      [{ id: 'att-x', name: '中文文件' }],
+    );
+    expect(downloaded.localPath).toBe(join(inputDir, 'att-x-attachment'));
+  });
 });

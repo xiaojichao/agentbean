@@ -46,7 +46,8 @@ export async function downloadAttachments(
         continue;
       }
       const bytes = Buffer.from(await response.arrayBuffer());
-      const localPath = join(input.inputDir, `${attachment.id}-${safeAttachmentFilename(attachment.name)}`);
+      const safeName = safeAttachmentFilename(attachment.name) || 'attachment';
+      const localPath = join(input.inputDir, `${attachment.id}-${safeName}`);
       writeFileSync(localPath, bytes);
       results.push({ ...attachment, localPath });
     } catch {
