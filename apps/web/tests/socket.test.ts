@@ -206,6 +206,22 @@ describe('socket event payload adapters', () => {
       payload: { teamId: 'team-1' },
     });
   });
+
+  it('sends deviceId for device rename and delete', async () => {
+    const { socket, calls } = createAckSocket();
+
+    await deviceEvents(socket).rename('device-1', 'new-name');
+    expect(calls.at(-1)).toEqual({
+      event: 'device:rename',
+      payload: { deviceId: 'device-1', hostname: 'new-name' },
+    });
+
+    await deviceEvents(socket).delete('device-1');
+    expect(calls.at(-1)).toEqual({
+      event: 'device:delete',
+      payload: { deviceId: 'device-1' },
+    });
+  });
 });
 
 function createAckSocket(): {

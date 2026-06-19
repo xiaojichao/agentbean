@@ -442,10 +442,10 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
       return emitWithTimeout(socket, 'device:select-directory', { deviceId }, 35000);
     },
     delete(id) {
-      return emitWithTimeout(socket, 'device:delete', { id });
+      return emitWithTimeout(socket, WEB_EVENTS.device.delete, { deviceId: id });
     },
     rename(id, hostname) {
-      return emitWithTimeout(socket, 'device:rename', { id, hostname });
+      return emitWithTimeout(socket, WEB_EVENTS.device.rename, { deviceId: id, hostname });
     },
     onSnapshot(handler) {
       socket.on(WEB_EVENTS.device.snapshot, handler);
