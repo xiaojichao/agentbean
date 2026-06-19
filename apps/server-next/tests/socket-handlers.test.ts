@@ -96,6 +96,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.device.scan,
       WEB_EVENTS.device.rename,
       WEB_EVENTS.device.delete,
+      WEB_EVENTS.device.selectDirectory,
       WEB_EVENTS.channel.create,
       WEB_EVENTS.channel.update,
       WEB_EVENTS.channel.addMember,

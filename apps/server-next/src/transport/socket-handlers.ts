@@ -93,6 +93,24 @@ export function registerWebSocketHandlers(
     options.afterDeviceMutation?.(payload, result);
   bind(socket, WEB_EVENTS.device.rename, app, 'renameDevice', afterDeviceMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.device.delete, app, 'deleteDevice', afterDeviceMutation, { authenticatedUser: options.authenticatedUser });
+  socket.on(WEB_EVENTS.device.selectDirectory, async (payload, ack) => {
+    try {
+      const input = await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser });
+      const deviceId = (input as { deviceId?: string } | null)?.deviceId;
+      if (!deviceId) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'deviceId is required'));
+        return;
+      }
+      if (!options.deviceSelectDirectory) {
+        ack?.(makeFailure('INTERNAL_ERROR', 'deviceSelectDirectory not configured'));
+        return;
+      }
+      const result = await options.deviceSelectDirectory({ deviceId });
+      ack?.(result);
+    } catch (error) {
+      ack?.(socketErrorAck(error, WEB_EVENTS.device.selectDirectory));
+    }
+  });
   bind(socket, WEB_EVENTS.channel.create, app, 'createChannel', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.channel.update, app, 'updateChannel', undefined, { authenticatedUser: options.authenticatedUser });
   const afterChannelMutation = (payload: unknown, result: unknown) =>
