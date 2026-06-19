@@ -2,6 +2,13 @@ import { hostname, platform, arch, release, version, cpus, totalmem, freemem } f
 import { createRequire } from 'node:module';
 import type { DeviceSystemInfoDto } from '../../../packages/contracts/src/index.js';
 
+type PackageRequire = (id: string) => unknown;
+
+const DAEMON_PACKAGE_JSON_CANDIDATES = [
+  '../package.json',
+  '../../../../package.json',
+] as const;
+
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -22,8 +29,16 @@ export function collectSystemInfo(): DeviceSystemInfoDto {
   };
 }
 
-export function readDaemonVersion(): string {
-  const requireFromHere = createRequire(import.meta.url);
-  const pkg = requireFromHere('../package.json') as { version?: string };
-  return pkg.version ?? 'unknown';
+export function readDaemonVersion(requireFromHere: PackageRequire = createRequire(import.meta.url)): string {
+  for (const candidate of DAEMON_PACKAGE_JSON_CANDIDATES) {
+    try {
+      const pkg = requireFromHere(candidate) as { version?: string };
+      if (pkg.version) {
+        return pkg.version;
+      }
+    } catch {
+      // Source and built output sit at different depths; try the next package root candidate.
+    }
+  }
+  return 'unknown';
 }

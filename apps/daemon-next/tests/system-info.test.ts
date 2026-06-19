@@ -21,4 +21,18 @@ describe('system-info', () => {
     const version = readDaemonVersion();
     expect(version).toMatch(/^\d+\.\d+\.\d+/);
   });
+
+  test('readDaemonVersion falls back to the built output package root', () => {
+    const requested: string[] = [];
+    const version = readDaemonVersion((id) => {
+      requested.push(id);
+      if (id === '../package.json') {
+        throw new Error('package not copied next to built source');
+      }
+      return { version: '9.8.7' };
+    });
+
+    expect(version).toBe('9.8.7');
+    expect(requested).toEqual(['../package.json', '../../../../package.json']);
+  });
 });
