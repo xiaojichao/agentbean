@@ -142,6 +142,7 @@ export interface DeviceInviteRepository {
     hostname?: string;
   }): Promise<DeviceInviteRecord | null>;
   complete(input: { code: string; completedAt: UnixMs }): Promise<DeviceInviteRecord | null>;
+  findCompletedByMachineProfile(input: { teamId: ID; machineId?: string; profileId?: string }): Promise<DeviceInviteRecord | null>;
 }
 
 export interface ChannelRepository {

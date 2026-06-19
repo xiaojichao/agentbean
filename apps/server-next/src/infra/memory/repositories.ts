@@ -247,6 +247,18 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         deviceInvites.set(input.code, updated);
         return updated;
       },
+      async findCompletedByMachineProfile(input) {
+        const matches = Array.from(deviceInvites.values())
+          .filter(
+            (invite) =>
+              invite.teamId === input.teamId &&
+              invite.completedAt !== undefined &&
+              (input.machineId === undefined || invite.machineId === input.machineId) &&
+              (input.profileId === undefined || invite.profileId === input.profileId),
+          )
+          .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0));
+        return matches[0] ?? null;
+      },
     },
     channels: {
       async create(input) {
