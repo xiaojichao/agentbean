@@ -86,6 +86,7 @@ export interface DeviceRecord extends DeviceDto {
   machineId?: string;
   profileId?: string;
   daemonVersion?: string;
+  connectCommand?: string;
   createdAt: UnixMs;
   updatedAt: UnixMs;
 }
