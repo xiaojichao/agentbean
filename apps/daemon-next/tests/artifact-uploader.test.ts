@@ -26,6 +26,7 @@ describe('artifact-uploader', () => {
       seenBodies.push(String((init?.body as FormData)?.get('channelId')));
       const form = init?.body as FormData;
       const file = form.get('file') as File;
+      expect(file.type).toBe(file.name === 'a.png' ? 'image/png' : 'text/plain');
       const id = `id-${file.name}`;
       return new Response(JSON.stringify({ ok: true, artifact: { id } }), {
         status: 201,
@@ -39,7 +40,7 @@ describe('artifact-uploader', () => {
     );
 
     expect(uploaded.map((u) => u.id).sort()).toEqual(['id-a.png', 'id-b.txt']);
-    expect(uploaded[0]).toMatchObject({ filename: 'a.png', pathKind: 'generated', sha256: 'sha-a.png' });
+    expect(uploaded[0]).toMatchObject({ filename: 'a.png', mimeType: 'image/png', pathKind: 'generated', sha256: 'sha-a.png' });
     expect(seenBodies).toEqual(['chan-1', 'chan-1']);
   });
 

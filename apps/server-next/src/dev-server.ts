@@ -374,16 +374,10 @@ async function handleArtifactHttp(input: ArtifactHttpInput): Promise<boolean> {
 async function handleArtifactUpload(input: ArtifactHttpInput, teamId: string): Promise<void> {
   const upload = await readArtifactUpload(input);
   const token = readToken(input.url, input.request, upload.fields);
-  const session = token ? await input.app.whoami({ token }) : makeFailure('UNAUTHENTICATED', 'Missing session token');
-  if (!session.ok) {
-    writeAckFailure(input.response, session);
-    return;
-  }
   const filename = sanitizeFilename(upload.filename);
   const artifactId = randomUUID();
   const relativeStoragePath = join('artifacts', teamId, artifactId, filename);
-  const result = await input.app.uploadArtifact({
-    userId: session.user.id,
+  const uploadInput = {
     teamId,
     channelId: upload.channelId,
     filename,
@@ -392,7 +386,10 @@ async function handleArtifactUpload(input: ArtifactHttpInput, teamId: string): P
     storagePath: relativeStoragePath,
     relativePath: filename,
     sha256: createHash('sha256').update(upload.content).digest('hex'),
-  });
+  };
+  const result = isDeviceToken(token)
+    ? await input.app.uploadArtifactForDevice({ ...uploadInput, token })
+    : await uploadArtifactForSession(input, token, uploadInput);
   if (!result.ok) {
     writeAckFailure(input.response, result);
     return;
@@ -411,16 +408,9 @@ async function handleArtifactRead(
   options: { teamId: string; artifactId: string; disposition: 'inline' | 'attachment' },
 ): Promise<void> {
   const token = readToken(input.url, input.request);
-  const session = token ? await input.app.whoami({ token }) : makeFailure('UNAUTHENTICATED', 'Missing session token');
-  if (!session.ok) {
-    writeAckFailure(input.response, session);
-    return;
-  }
-  const result = await input.app.getArtifactFile({
-    userId: session.user.id,
-    teamId: options.teamId,
-    artifactId: options.artifactId,
-  });
+  const result = isDeviceToken(token)
+    ? await input.app.getArtifactFileForDevice({ token, teamId: options.teamId, artifactId: options.artifactId })
+    : await getArtifactFileForSession(input, token, options);
   if (!result.ok) {
     writeAckFailure(input.response, result);
     return;
@@ -449,6 +439,46 @@ async function handleArtifactRead(
     'content-disposition': buildContentDisposition(disposition, result.artifact.filename),
   });
   input.response.end(body);
+}
+
+async function uploadArtifactForSession(
+  input: ArtifactHttpInput,
+  token: string | undefined,
+  upload: {
+    teamId: string;
+    channelId: string;
+    filename: string;
+    mimeType: string;
+    sizeBytes: number;
+    storagePath: string;
+    relativePath: string;
+    sha256: string;
+  },
+): ReturnType<ArtifactHttpInput['app']['uploadArtifact']> {
+  const session = token ? await input.app.whoami({ token }) : makeFailure('UNAUTHENTICATED', 'Missing session token');
+  if (!session.ok) {
+    return session;
+  }
+  return input.app.uploadArtifact({
+    userId: session.user.id,
+    ...upload,
+  });
+}
+
+async function getArtifactFileForSession(
+  input: ArtifactHttpInput,
+  token: string | undefined,
+  options: { teamId: string; artifactId: string },
+): ReturnType<ArtifactHttpInput['app']['getArtifactFile']> {
+  const session = token ? await input.app.whoami({ token }) : makeFailure('UNAUTHENTICATED', 'Missing session token');
+  if (!session.ok) {
+    return session;
+  }
+  return input.app.getArtifactFile({
+    userId: session.user.id,
+    teamId: options.teamId,
+    artifactId: options.artifactId,
+  });
 }
 
 function withArtifactUrls(artifact: ArtifactDto): ArtifactDto {
@@ -641,6 +671,10 @@ function readToken(url: URL, request: ArtifactHttpInput['request'], body: Record
 function readBearerToken(request: ArtifactHttpInput['request']): string | undefined {
   const auth = request.headers.authorization;
   return typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : undefined;
+}
+
+function isDeviceToken(token: string | undefined): token is string {
+  return typeof token === 'string' && token.startsWith('abn_device.');
 }
 
 function readOptionalQueryString(url: URL, field: string): string | undefined {

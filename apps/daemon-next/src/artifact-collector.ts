@@ -7,6 +7,7 @@ const IGNORED_OUTPUT_DIRS = new Set([
   '.git', '.hg', '.svn', '.cache', '.next', '.nuxt', '.turbo', 'node_modules', 'vendor', '.agentbean',
 ]);
 const MAX_OUTPUT_FILES_PER_ROOT = 2000;
+const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 
 export interface CollectedArtifact {
   absolutePath: string;
@@ -23,6 +24,8 @@ export interface CollectArtifactsInput {
   cwd: string;
   /** command start timestamp (ms); used as mtime threshold for the cwd fallback. */
   startedAt: number;
+  /** Maximum artifact bytes to hash/read; defaults to server upload cap. */
+  maxBytes?: number;
 }
 
 /**
@@ -32,6 +35,7 @@ export interface CollectArtifactsInput {
  */
 export async function collectArtifacts(input: CollectArtifactsInput): Promise<CollectedArtifact[]> {
   const bySha = new Map<string, CollectedArtifact>();
+  const maxBytes = input.maxBytes ?? DEFAULT_MAX_BYTES;
 
   const ingest = (rootAbs: string, rootForRelative: string, timeFilter: boolean): void => {
     let visited = 0;
@@ -63,6 +67,9 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
             continue;
           }
           if (timeFilter && stat.mtimeMs <= input.startedAt) {
+            continue;
+          }
+          if (stat.size > maxBytes) {
             continue;
           }
           let content;

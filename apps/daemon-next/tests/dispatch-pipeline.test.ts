@@ -90,10 +90,10 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
 
     const resultEmit = harness.emits.find((e) => e.event === AGENT_EVENTS.dispatch.result);
     expect(resultEmit).toBeTruthy();
-    const payload = resultEmit!.payload as { artifacts: Array<{ id: string; filename?: string }> };
+    const payload = resultEmit!.payload as { artifactIds: string[]; artifacts: Array<{ id: string; filename?: string }> };
     const ids = payload.artifacts.map((a) => a.id);
-    expect(ids).toContain('workspace-log-x');
-    expect(ids).toContain('srv-art-1');
+    expect(ids).toEqual(['workspace-log-x']);
+    expect(payload.artifactIds).toEqual(['srv-art-1']);
 
     const inputsDir = join(cwd, '.agentbean', 'runs', 'disp-1', 'inputs');
     expect(readdirSync(inputsDir)).toEqual(['att-1-in.txt']);

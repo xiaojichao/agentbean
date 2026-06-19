@@ -800,6 +800,7 @@ describe('server-next SQLite repositories', () => {
             'channel-1',
             'device-1',
             'agent-1',
+            'artifact-1',
             'message-1',
             'dispatch-1',
             'request-1',
@@ -814,6 +815,15 @@ describe('server-next SQLite repositories', () => {
         teamId: 'team-1',
         deviceId: 'device-1',
         agents: [{ name: 'Codex', adapterKind: 'codex', category: 'executor-hosted' }],
+      });
+      await app.uploadArtifact({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        filename: 'artifact.md',
+        mimeType: 'text/markdown',
+        sizeBytes: 12,
+        storagePath: 'artifacts/team-1/artifact-1/artifact.md',
       });
       await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex hello' });
 

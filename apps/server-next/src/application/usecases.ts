@@ -94,8 +94,10 @@ export interface ServerNextUseCases {
   deleteTask(input: DeleteTaskInput): Promise<Ack<{ task: TaskDto }>>;
   reorderTask(input: ReorderTaskInput): Promise<Ack<{ task: TaskDto }>>;
   uploadArtifact(input: UploadArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
+  uploadArtifactForDevice(input: DeviceUploadArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
   getArtifact(input: GetArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
   getArtifactFile(input: GetArtifactInput): Promise<Ack<{ artifact: ArtifactDto; storagePath?: string }>>;
+  getArtifactFileForDevice(input: DeviceGetArtifactInput): Promise<Ack<{ artifact: ArtifactDto; storagePath?: string }>>;
   getWorkspaceRun(input: GetWorkspaceRunInput): Promise<Ack<{ workspaceRun: WorkspaceRunDto }>>;
   getWorkspaceRunDetail(input: GetWorkspaceRunInput): Promise<Ack<{ workspaceRun: WorkspaceRunDto; artifacts: ArtifactDto[] }>>;
   listTeamWorkspaceRuns(input: ListTeamWorkspaceRunsInput): Promise<Ack<{ runs: TeamWorkspaceRunListItemDto[]; nextCursor?: string }>>;
@@ -417,6 +419,16 @@ export interface UploadArtifactInput {
   storagePath: string;
   relativePath?: string;
   sha256?: string;
+}
+
+export interface DeviceUploadArtifactInput extends Omit<UploadArtifactInput, 'userId'> {
+  token: string;
+}
+
+export interface DeviceGetArtifactInput {
+  token: string;
+  teamId: string;
+  artifactId: string;
 }
 
 export interface GetWorkspaceRunInput {
@@ -2250,6 +2262,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeSuccess({ artifact: toArtifactDto(artifact) });
     },
 
+    async uploadArtifactForDevice(artifactInput) {
+      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, artifactInput);
+      if (!actor.ok) {
+        return actor;
+      }
+      return this.uploadArtifact({
+        ...artifactInput,
+        userId: actor.userId,
+      });
+    },
+
     async getArtifact(artifactInput) {
       const result = await getAuthorizedArtifact(repositories, artifactInput);
       if (!result.ok) return result;
@@ -2262,6 +2285,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeSuccess({
         artifact: toArtifactDto(result.artifact),
         storagePath: result.artifact.storagePath,
+      });
+    },
+
+    async getArtifactFileForDevice(artifactInput) {
+      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, artifactInput);
+      if (!actor.ok) {
+        return actor;
+      }
+      return this.getArtifactFile({
+        userId: actor.userId,
+        teamId: artifactInput.teamId,
+        artifactId: artifactInput.artifactId,
       });
     },
 
@@ -2473,6 +2508,26 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           })
         : null;
       const artifacts: ArtifactDto[] = [];
+      for (const artifactId of uniqueIds(resultInput.artifactIds ?? [])) {
+        const uploadedArtifact = await repositories.artifacts.getForTeam({
+          teamId: completed.dispatch.teamId,
+          artifactId,
+        });
+        if (!uploadedArtifact) {
+          return makeFailure('NOT_FOUND', 'Artifact not found');
+        }
+        if (uploadedArtifact.channelId !== completed.dispatch.channelId) {
+          return makeFailure('FORBIDDEN', 'Artifact cannot be attached to this dispatch');
+        }
+        const linkedArtifact = await repositories.artifacts.create({
+          ...uploadedArtifact,
+          messageId: message.id,
+          dispatchId: completed.dispatch.id,
+          workspaceRunId: workspaceRun?.id,
+          pathKind: 'generated',
+        });
+        artifacts.push(toArtifactDto(linkedArtifact));
+      }
       for (const artifactInput of resultInput.artifacts ?? []) {
         const contentResult = await resolveDispatchArtifactContent(artifactContentStore, {
           teamId: completed.dispatch.teamId,
@@ -2850,6 +2905,27 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeSuccess({ fallbackTeam });
     },
   };
+}
+
+async function resolveDeviceTokenActor(
+  repositories: ServerNextRepositories,
+  sessionSecret: string,
+  input: { token: string; teamId: string },
+): Promise<{ ok: true; userId: string } | Ack<Record<string, never>>> {
+  const credentials = verifyDeviceToken(input.token, sessionSecret);
+  if (!credentials || credentials.teamId !== input.teamId) {
+    return makeFailure('UNAUTHENTICATED', 'Invalid device credentials');
+  }
+  const device = credentials.deviceId
+    ? await repositories.devices.getById(credentials.deviceId)
+    : await findDeviceByCredentials(repositories, input.teamId, credentials);
+  if (!device || device.teamId !== input.teamId) {
+    return makeFailure('UNAUTHENTICATED', 'Unknown device for team');
+  }
+  if (!(await repositories.teams.isMember(input.teamId, credentials.ownerId))) {
+    return makeFailure('FORBIDDEN', 'Device owner is not a team member');
+  }
+  return { ok: true, userId: credentials.ownerId };
 }
 
 async function getAuthorizedArtifact(

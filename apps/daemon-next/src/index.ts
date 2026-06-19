@@ -47,6 +47,7 @@ export interface DaemonDispatchArtifactResult {
 
 export interface DaemonDispatchResult {
   body: string;
+  artifactIds?: string[];
   artifacts?: DaemonDispatchArtifactResult[];
   workspaceRun?: DaemonWorkspaceRunResult;
 }
@@ -191,8 +192,11 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           if (workspace && request.customAgent) {
             request.customAgent = {
               ...request.customAgent,
-              env: { ...workspaceRunEnv(workspace), ...(request.customAgent.env ?? {}) },
+              env: { ...(request.customAgent.env ?? {}), ...workspaceRunEnv(workspace) },
             };
+          }
+          if (cancelledDispatchIds.delete(request.id)) {
+            return;
           }
           const result = normalizeDispatchResult(await executor(request));
           if (cancelledDispatchIds.delete(request.id)) {
@@ -200,7 +204,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           }
 
           // Scan outputs + cwd fallback, upload, then merge with the executor's log artifact.
-          let productArtifacts: DaemonDispatchArtifactResult[] = [];
+          let productArtifactIds: string[] = [];
           if (workspace && result.workspaceRun?.startedAt !== undefined) {
             const collected = await collectArtifacts({
               outputDir: workspace.outputDir,
@@ -212,12 +216,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 { serverUrl, token: device.token, teamId: device.teamId, channelId: request.channelId, fetch: fetchFn },
                 collected,
               );
-              productArtifacts = uploaded.map((u) => ({
-                id: u.id,
-                filename: u.filename,
-                relativePath: u.relativePath,
-                pathKind: 'generated',
-              }));
+              productArtifactIds = uploaded.map((u) => u.id);
             }
             try {
               persistWorkspaceRunResponse(workspace, result.body);
@@ -239,11 +238,13 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             }
           }
 
-          const artifacts = [...(result.artifacts ?? []), ...productArtifacts];
+          const artifacts = result.artifacts ?? [];
+          const artifactIds = [...(result.artifactIds ?? []), ...productArtifactIds];
           await socket.emitWithAck(AGENT_EVENTS.dispatch.result, {
             dispatchId: request.id,
             agentId: request.agentId,
             body: result.body,
+            ...(artifactIds.length > 0 ? { artifactIds } : {}),
             ...(artifacts.length > 0 ? { artifacts } : {}),
             ...(result.workspaceRun ? { workspaceRun: result.workspaceRun } : {}),
           });

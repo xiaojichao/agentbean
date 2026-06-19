@@ -7,6 +7,7 @@ const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 export interface UploadedArtifact {
   id: string;
   filename: string;
+  mimeType: string;
   relativePath?: string;
   pathKind: 'generated';
   sha256: string;
@@ -46,6 +47,7 @@ export async function uploadArtifacts(
       results.push({
         id,
         filename: artifact.filename,
+        mimeType: mimeTypeForFilename(artifact.filename),
         relativePath: artifact.relativePath,
         pathKind: 'generated',
         sha256: artifact.sha256,
@@ -66,7 +68,7 @@ async function uploadOne(
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     try {
       const bytes = readFileSync(artifact.absolutePath);
-      const blob = new Blob([bytes]);
+      const blob = new Blob([bytes], { type: mimeTypeForFilename(artifact.filename) });
       const form = new FormData();
       form.append('channelId', input.channelId);
       form.append('file', blob, artifact.filename);
@@ -91,4 +93,22 @@ async function uploadOne(
     }
   }
   return undefined;
+}
+
+function mimeTypeForFilename(filename: string): string {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.svg')) return 'image/svg+xml';
+  if (lower.endsWith('.pdf')) return 'application/pdf';
+  if (lower.endsWith('.csv')) return 'text/csv';
+  if (lower.endsWith('.json')) return 'application/json';
+  if (lower.endsWith('.md')) return 'text/markdown';
+  if (lower.endsWith('.txt')) return 'text/plain';
+  if (lower.endsWith('.mp4')) return 'video/mp4';
+  if (lower.endsWith('.mov')) return 'video/quicktime';
+  if (lower.endsWith('.zip')) return 'application/zip';
+  return 'application/octet-stream';
 }

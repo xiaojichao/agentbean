@@ -86,4 +86,15 @@ describe('artifact-collector', () => {
     expect(collected.sizeBytes).toBe(5);
     expect(collected.sha256).toMatch(/^[a-f0-9]{64}$/);
   });
+
+  test('skips files larger than maxBytes before hashing', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-')));
+    const outputDir = join(cwd, 'outputs');
+    mkdirSync(outputDir, { recursive: true });
+    writeFileSync(join(outputDir, 'big.zip'), 'x'.repeat(50));
+    writeFileSync(join(outputDir, 'small.txt'), 'ok');
+
+    const collected = await collectArtifacts({ outputDir, cwd, startedAt: 0, maxBytes: 10 });
+    expect(collected.map((c) => c.filename)).toEqual(['small.txt']);
+  });
 });
