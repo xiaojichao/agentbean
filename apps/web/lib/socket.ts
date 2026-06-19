@@ -175,7 +175,7 @@ export interface AgentEvents {
 // 超时不再 reject（避免调用方未 catch 时变 Uncaught (in promise)），
 // 改为 resolve { ok:false, error:'timeout' } + console.warn 保留可观测性。
 // 所有调用方均以 `if (res.ok)` 守卫，超时自然降级（列表留空 / 表单报错）。
-function emitWithTimeout(socket: Socket, event: string, payload: any, timeoutMs = 10000): Promise<any> {
+export function emitWithTimeout(socket: Socket, event: string, payload: any, timeoutMs = 10000): Promise<any> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       if (typeof console !== 'undefined') {

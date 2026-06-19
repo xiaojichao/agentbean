@@ -1,6 +1,7 @@
-import type { ChatMessage, Artifact } from '@/lib/schema';
+import { AlertCircle, Loader2, X } from 'lucide-react';
+import type { ChatMessage, Artifact, DispatchStatus } from '@/lib/schema';
 import { useAgentBeanStore } from '@/lib/store';
-import { getResolvedServerUrl, getStoredAuthToken } from '@/lib/socket';
+import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, emitWithTimeout } from '@/lib/socket';
 import { messageSpeakerName } from '@/lib/display-names';
 
 const KIND_LABEL: Record<ChatMessage['senderKind'], string> = {
@@ -77,6 +78,50 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
   const tone = msg.senderKind === 'human'
     ? 'bg-sky-50 text-sky-900 border-sky-100'
     : 'bg-white border-neutral-200';
+
+  const dispatch: DispatchStatus | undefined = msg.senderKind === 'human' ? msg.dispatchStatus : undefined;
+
+  function cancelDispatch() {
+    if (!msg.dispatchId) return;
+    emitWithTimeout(getWebSocket(), 'dispatch:cancel', { dispatchId: msg.dispatchId })
+      .then((res: { ok?: boolean }) => {
+        if (res?.ok) {
+          useAgentBeanStore.getState().applyDispatchStatus(msg.channelId, msg.id, 'cancelled');
+        }
+      })
+      .catch(() => { /* swallow */ });
+  }
+
+  function renderDispatch() {
+    if (!dispatch) return null;
+    if (dispatch === 'succeeded') return null;
+    if (dispatch === 'running' || dispatch === 'queued' || dispatch === 'sent' || dispatch === 'accepted') {
+      return (
+        <div className="mt-2 flex items-center gap-2 text-xs text-neutral-500">
+          <Loader2 size={12} className="animate-spin text-blue-500" />
+          <span>agent 正在处理…</span>
+          <button
+            type="button"
+            onClick={cancelDispatch}
+            className="ml-1 inline-flex items-center gap-1 rounded border border-neutral-200 px-2 py-0.5 text-neutral-600 hover:bg-neutral-50"
+          >
+            <X size={10} /> 取消
+          </button>
+        </div>
+      );
+    }
+    if (dispatch === 'cancelled') return <div className="mt-2 text-xs text-neutral-400">已取消</div>;
+    if (dispatch === 'failed') {
+      return (
+        <div className="mt-2 flex items-center gap-1 text-xs text-red-500">
+          <AlertCircle size={12} /> 处理失败
+        </div>
+      );
+    }
+    if (dispatch === 'timed_out') return <div className="mt-2 text-xs text-amber-600">处理超时</div>;
+    return null;
+  }
+
   return (
     <div className={`rounded border ${tone} px-3 py-2`}>
       <div className="flex items-center justify-between text-xs text-neutral-500 mb-1">
@@ -84,6 +129,7 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
         <span>{time}</span>
       </div>
       <div className="whitespace-pre-wrap text-sm">{msg.body}</div>
+      {renderDispatch()}
       {msg.artifacts && msg.artifacts.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
           {msg.artifacts.map((a) => (
