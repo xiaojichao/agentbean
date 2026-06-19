@@ -247,6 +247,18 @@ export const useAgentBeanStore = create<State>((set) => ({
   appendMessage(msg) {
     set((s) => {
       const list = s.messagesByChannel[msg.channelId] ?? [];
+      const existingIndex = list.findIndex((item) => item.id === msg.id);
+      if (existingIndex >= 0) {
+        const next = list.map((item, index) => index === existingIndex
+          ? {
+              ...item,
+              ...msg,
+              dispatchStatus: msg.dispatchStatus ?? item.dispatchStatus,
+              dispatchId: msg.dispatchId ?? item.dispatchId,
+            }
+          : item);
+        return { messagesByChannel: { ...s.messagesByChannel, [msg.channelId]: next } };
+      }
       return { messagesByChannel: { ...s.messagesByChannel, [msg.channelId]: [...list, msg] } };
     });
   },

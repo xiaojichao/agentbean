@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useAgentBeanStore } from '../lib/store';
 import type { ChatMessage } from '../lib/schema';
 
@@ -48,6 +48,19 @@ describe('applyDispatchStatus', () => {
     const msgs = useAgentBeanStore.getState().messagesByChannel.c1;
     expect(msgs[0].dispatchStatus).toBeUndefined();
   });
+
+  it('dedupes echoed messages without clearing dispatch state', () => {
+    useAgentBeanStore.getState().appendMessage(makeMsg({ id: 'm1', dispatchStatus: 'queued', dispatchId: 'd1' }));
+    useAgentBeanStore.getState().appendMessage(makeMsg({ id: 'm1', body: 'server echo' }));
+    const msgs = useAgentBeanStore.getState().messagesByChannel.c1;
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0]).toMatchObject({
+      id: 'm1',
+      body: 'server echo',
+      dispatchStatus: 'queued',
+      dispatchId: 'd1',
+    });
+  });
 });
 
 // --- ConversationPage dispatch-status listener ---
@@ -55,7 +68,7 @@ describe('applyDispatchStatus', () => {
 const handlers: Record<string, ((payload: unknown) => void)[]> = {};
 const emitMock = vi.fn();
 const mockSocket = {
-  connected: false,
+  connected: true,
   on: vi.fn((event: string, handler: (payload: unknown) => void) => {
     (handlers[event] ??= []).push(handler);
   }),
@@ -73,6 +86,7 @@ vi.mock('@/lib/socket', () => ({
 }));
 
 import { ConversationPage } from '../components/conversation-page';
+import { ChannelInput } from '../components/channel-input';
 
 afterEach(() => {
   cleanup();
@@ -104,5 +118,35 @@ describe('ConversationPage dispatch-status listener', () => {
       h({ id: 'd2', messageId: 'm9', channelId: 'other', status: 'running' });
     }
     expect(useAgentBeanStore.getState().messagesByChannel.c1).toHaveLength(1);
+  });
+});
+
+describe('ChannelInput dispatch ack handling', () => {
+  it('stores the sent message with dispatch status from the message:send ack', async () => {
+    useAgentBeanStore.setState({
+      messagesByChannel: {},
+      outbox: {},
+    });
+    emitMock.mockImplementation((event: string, _payload: unknown, ack?: (payload: unknown) => void) => {
+      if (event === 'message:send') {
+        ack?.({
+          ok: true,
+          message: makeMsg({ id: 'm9', body: 'run please' }),
+          dispatches: [{ id: 'd9', messageId: 'm9', status: 'queued' }],
+        });
+      }
+    });
+
+    render(<ChannelInput channelId="c1" />);
+    fireEvent.change(screen.getByPlaceholderText(/输入消息/), { target: { value: 'run please' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    await waitFor(() => {
+      expect(useAgentBeanStore.getState().messagesByChannel.c1?.[0]).toMatchObject({
+        id: 'm9',
+        dispatchStatus: 'queued',
+        dispatchId: 'd9',
+      });
+    });
   });
 });
