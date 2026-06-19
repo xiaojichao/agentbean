@@ -13,6 +13,7 @@ import {
   type SqliteDatabase,
 } from './infra/sqlite/repositories.js';
 import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
+import { startDaemonVersionRefresh } from './daemon-version.js';
 import { makeFailure, type ArtifactDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { ServerNextUseCases } from './application/usecases.js';
 
@@ -150,6 +151,7 @@ export async function startServerNextDevServer(
   await new Promise<void>((resolve) => {
     httpServer.listen(config.port, config.host, () => resolve());
   });
+  const stopVersionRefresh = startDaemonVersionRefresh();
   const address = httpServer.address();
   const port = typeof address === 'object' && address ? address.port : config.port;
   return {
@@ -162,6 +164,7 @@ export async function startServerNextDevServer(
       if (dispatchTimeoutInterval) {
         clearInterval(dispatchTimeoutInterval);
       }
+      stopVersionRefresh();
       await new Promise<void>((resolve) => ioServer.close(() => resolve()));
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
       await appWithCleanup.close();
