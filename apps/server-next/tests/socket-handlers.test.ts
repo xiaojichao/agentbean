@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import { AGENT_EVENTS, WEB_EVENTS, makeSuccess } from '../../../packages/contracts/src/index';
+import { AGENT_EVENTS, WEB_EVENTS, makeFailure, makeSuccess } from '../../../packages/contracts/src/index';
 import {
   registerAgentSocketHandlers,
   registerWebSocketHandlers,
@@ -620,6 +620,42 @@ describe('server-next socket handlers', () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  test('device select-directory checks device access before forwarding to daemon', async () => {
+    const socket = new FakeSocket();
+    const deviceSelectDirectory = vi.fn(async () => makeSuccess({ path: '/tmp/project' }));
+    const app = {
+      getDevice: vi.fn(async () => makeFailure('FORBIDDEN', 'User is not a team member')),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, { deviceSelectDirectory });
+
+    await expect(socket.trigger(WEB_EVENTS.device.selectDirectory, {
+      userId: 'user-1',
+      deviceId: 'device-2',
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    expect(app.getDevice).toHaveBeenCalledWith({ userId: 'user-1', deviceId: 'device-2' });
+    expect(deviceSelectDirectory).not.toHaveBeenCalled();
+  });
+
+  test('device select-directory forwards only after device access succeeds', async () => {
+    const socket = new FakeSocket();
+    const deviceSelectDirectory = vi.fn(async () => makeSuccess({ path: '/tmp/project' }));
+    const app = {
+      getDevice: vi.fn(async () => makeSuccess({ device: { id: 'device-1' } })),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, { deviceSelectDirectory });
+
+    await expect(socket.trigger(WEB_EVENTS.device.selectDirectory, {
+      userId: 'user-1',
+      deviceId: 'device-1',
+    })).resolves.toMatchObject({ ok: true, path: '/tmp/project' });
+
+    expect(app.getDevice).toHaveBeenCalledWith({ userId: 'user-1', deviceId: 'device-1' });
+    expect(deviceSelectDirectory).toHaveBeenCalledWith({ deviceId: 'device-1' });
   });
 
   test('registers first-slice agent events and forwards payloads to use cases', async () => {

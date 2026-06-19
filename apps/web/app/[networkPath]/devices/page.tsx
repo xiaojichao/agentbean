@@ -187,10 +187,13 @@ export default function DevicesPage() {
   const devices = useAgentBeanStore((s) => s.devices);
   const applyDevicesSnapshot = useAgentBeanStore((s) => s.applyDevicesSnapshot);
   const applyDeviceStatus = useAgentBeanStore((s) => s.applyDeviceStatus);
+  const upsertDevice = useAgentBeanStore((s) => s.upsertDevice);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const routeDeviceId = typeof params.id === 'string' ? params.id : null;
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [routeDeviceLoading, setRouteDeviceLoading] = useState(false);
+  const [routeDeviceError, setRouteDeviceError] = useState('');
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [editName, setEditName] = useState(false);
   const [deviceName, setDeviceName] = useState('');
@@ -227,6 +230,30 @@ export default function DevicesPage() {
   }, [routeDeviceId]);
 
   const selectedDevice = deviceList.find((d) => d.id === selectedId) ?? null;
+
+  useEffect(() => {
+    if (!routeDeviceId || selectedDevice || conn !== 'open' || !currentTeamId) return;
+    let cancelled = false;
+    setRouteDeviceLoading(true);
+    setRouteDeviceError('');
+    deviceEvents().get({ id: routeDeviceId }).then((res) => {
+      if (cancelled) return;
+      if (res.ok && res.device) {
+        if (!res.device.networkId || res.device.networkId === currentTeamId) {
+          upsertDevice(res.device);
+          return;
+        }
+        setRouteDeviceError('该设备不属于当前团队');
+        return;
+      }
+      setRouteDeviceError(res.error ?? '设备加载失败');
+    }).catch((error) => {
+      if (!cancelled) setRouteDeviceError(error instanceof Error ? error.message : '设备加载失败');
+    }).finally(() => {
+      if (!cancelled) setRouteDeviceLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [routeDeviceId, selectedDevice, conn, currentTeamId, upsertDevice]);
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -278,7 +305,7 @@ export default function DevicesPage() {
       <div className="flex flex-1 flex-col">
         <div className="flex h-14 items-center border-b border-neutral-200 px-4 text-sm font-semibold">{selectedDevice ? (selectedDevice.hostname ?? '未命名设备') : '设备详情'}</div>
         <div className="flex-1 overflow-y-auto">
-        {!selectedDevice && <EmptyState />}
+        {!selectedDevice && <EmptyState loading={routeDeviceLoading} error={routeDeviceError} />}
         {selectedDevice && (
           <DeviceDetail
             device={selectedDevice}
@@ -300,11 +327,11 @@ export default function DevicesPage() {
   );
 }
 
-function EmptyState() {
+function EmptyState({ loading = false, error = '' }: { loading?: boolean; error?: string }) {
   return (
     <div className="flex h-full flex-col items-center justify-center text-neutral-400">
       <Monitor size={48} strokeWidth={1} />
-      <div className="mt-3 text-sm">选择左侧设备查看详情</div>
+      <div className="mt-3 text-sm">{loading ? '正在加载设备详情...' : error || '选择左侧设备查看详情'}</div>
     </div>
   );
 }

@@ -101,6 +101,16 @@ export function registerWebSocketHandlers(
         ack?.(makeFailure('VALIDATION_ERROR', 'deviceId is required'));
         return;
       }
+      const userId = (input as { userId?: string } | null)?.userId;
+      if (!userId) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'userId is required'));
+        return;
+      }
+      const deviceAccess = await app.getDevice({ userId, deviceId });
+      if (!isSuccessResult(deviceAccess)) {
+        ack?.(deviceAccess);
+        return;
+      }
       if (!options.deviceSelectDirectory) {
         ack?.(makeFailure('INTERNAL_ERROR', 'deviceSelectDirectory not configured'));
         return;
