@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, test } from 'vitest';
 import { AGENT_EVENTS, WEB_EVENTS } from '../../../packages/contracts/src/index';
+import { resetDaemonVersionCacheForTests } from '../src/daemon-version';
 import { createInMemoryServerNext } from '../src/index';
 import { attachServerNextNamespaces } from '../src/transport/socket-server';
 
@@ -333,6 +334,66 @@ describe('device rename and delete (end-to-end)', () => {
           nodeVersion: 'v22.0.0',
           daemonVersion: '0.2.1',
         },
+      },
+    });
+  });
+
+  test('device getDevice surfaces daemonVersionInfo with update-available', async () => {
+    process.env.AGENT_BEAN_DAEMON_LATEST_VERSION = '0.3.0';
+    resetDaemonVersionCacheForTests();
+
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      agent.disconnect();
+    });
+    const registerAck = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    const web = await connectClient(`${baseUrl}/web`, {
+      auth: { token: (registerAck as { token: string }).token },
+    });
+    cleanups.push(async () => {
+      web.disconnect();
+      delete process.env.AGENT_BEAN_DAEMON_LATEST_VERSION;
+      resetDaemonVersionCacheForTests();
+    });
+
+    await agent.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+      hostname: 'mac',
+      daemonVersion: '0.2.1',
+      systemInfo: {
+        hostname: 'mac',
+        platform: 'darwin',
+        arch: 'arm64',
+        daemonVersion: '0.2.1',
+      },
+    });
+
+    const got = await web.emitWithAck(WEB_EVENTS.device.get, { deviceId: 'device-1' });
+    expect(got).toMatchObject({
+      ok: true,
+      device: {
+        daemonVersionInfo: { current: '0.2.1', latest: '0.3.0', updateAvailable: true, status: 'update-available' },
+        latestDaemonVersion: '0.3.0',
+        daemonUpdateAvailable: true,
       },
     });
   });
