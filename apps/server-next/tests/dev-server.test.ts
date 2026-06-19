@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { WEB_EVENTS, makeSuccess, type DispatchDto } from '../../../packages/contracts/src/index';
+import { AGENT_EVENTS, WEB_EVENTS, makeSuccess, type DispatchDto } from '../../../packages/contracts/src/index';
 import { createInMemoryServerNext } from '../src/index';
 import type { ServerNextUseCases } from '../src/application/usecases';
 import { parseServerNextDevConfig, startServerNextDevServer } from '../src/dev-server';
@@ -193,6 +193,69 @@ describe('server-next dev server entry', () => {
       ok: true,
       user: { username: 'shaw' },
       currentTeam: { name: 'AgentBean' },
+    });
+  });
+
+  test('reconciles persisted online devices to offline on SQLite startup', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-stale-device-'));
+    const first = await startServerNextDevServer({
+      Server,
+      Database,
+      config: { host: '127.0.0.1', port: 0, storage: 'sqlite', dataDir, sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => first.close());
+
+    const firstWeb = await connectClient(`${first.baseUrl}/web`);
+    const daemon = await connectClient(`${first.baseUrl}/agent`);
+    cleanups.push(async () => {
+      daemon.disconnect();
+      firstWeb.disconnect();
+    });
+    const registered = await firstWeb.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    }) as { ok: true; token: string; currentTeam: { id: string }; user: { id: string } };
+    const hello = await daemon.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: registered.currentTeam.id,
+      ownerId: registered.user.id,
+      machineId: 'machine-1',
+      profileId: 'default',
+    }) as { ok: true; device: { id: string } };
+
+    daemon.disconnect();
+    firstWeb.disconnect();
+    await first.close();
+    cleanups.pop();
+    cleanups.pop();
+
+    const staleDb = new Database(join(dataDir, 'global.sqlite'));
+    try {
+      staleDb.prepare("UPDATE devices SET status = 'online' WHERE id = ?").run(hello.device.id);
+    } finally {
+      staleDb.close();
+    }
+
+    const second = await startServerNextDevServer({
+      Server,
+      Database,
+      config: { host: '127.0.0.1', port: 0, storage: 'sqlite', dataDir, sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => second.close());
+    const secondWeb = await connectClient(`${second.baseUrl}/web`);
+    cleanups.push(async () => {
+      secondWeb.disconnect();
+    });
+    const login = await secondWeb.emitWithAck(WEB_EVENTS.auth.login, {
+      username: 'shaw',
+      password: 'secret',
+    }) as { ok: true; currentTeam: { id: string }; user: { id: string } };
+
+    await expect(
+      secondWeb.emitWithAck(WEB_EVENTS.device.list, { userId: login.user.id, teamId: login.currentTeam.id }),
+    ).resolves.toMatchObject({
+      ok: true,
+      devices: [{ id: hello.device.id, status: 'offline' }],
     });
   });
 

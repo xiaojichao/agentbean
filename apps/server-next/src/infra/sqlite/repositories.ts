@@ -629,6 +629,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             return device;
           });
       },
+      async listConnected() {
+        return globalDb
+          .prepare("SELECT * FROM devices WHERE status != 'offline' ORDER BY updated_at, id")
+          .all()
+          .map((row) => {
+            const device = mapDevice(row);
+            if (!device) {
+              throw new Error('SQLite device row could not be mapped');
+            }
+            return device;
+          });
+      },
       async markOffline(input) {
         const row = globalDb
           .prepare('SELECT * FROM devices WHERE id = ?')
