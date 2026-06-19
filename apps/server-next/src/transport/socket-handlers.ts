@@ -15,6 +15,7 @@ export interface AuthenticatedUserProvider {
 export interface SocketLike {
   on(event: string, handler: SocketHandler): void;
   emit?(event: string, payload: unknown): void;
+  emitWithAck?(event: string, payload: unknown): Promise<unknown>;
 }
 
 export type SocketAck = (result: unknown) => void;
@@ -32,6 +33,7 @@ export interface WebSocketHandlerOptions {
   dispatchCancel?(request: DispatchRequestDto & { id: string }): void;
   dispatchStatus?(dispatch: unknown): void;
   deviceScan?(request: { requestId: string; deviceId: string }): void;
+  deviceSelectDirectory?(request: { deviceId: string }): Promise<{ ok: boolean; path?: string; error?: string }>;
   afterMessageSend?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceInviteComplete?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceMutation?(payload: unknown, result: unknown): Promise<void> | void;

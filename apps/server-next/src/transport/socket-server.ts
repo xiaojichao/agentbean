@@ -163,6 +163,18 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
       deviceScan(request) {
         agentSocketsByDeviceId.get(request.deviceId)?.emit?.(AGENT_EVENTS.device.scanRequested, request);
       },
+      async deviceSelectDirectory(request) {
+        const socket = agentSocketsByDeviceId.get(request.deviceId);
+        if (!socket?.emitWithAck) {
+          return { ok: false, error: 'DEVICE_OFFLINE' };
+        }
+        try {
+          const result = await socket.emitWithAck(AGENT_EVENTS.device.selectDirectoryRequested, request);
+          return result as { ok: boolean; path?: string; error?: string };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : 'select-directory failed' };
+        }
+      },
       async afterMessageSend(_payload, result) {
         if (!isSuccessAck(result)) {
           return;
