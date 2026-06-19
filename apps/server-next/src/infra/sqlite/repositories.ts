@@ -19,6 +19,7 @@ import type {
   UserRecord,
   WorkspaceRunRecord,
 } from '../../application/repositories.js';
+import { rankMessageSearch, splitSearchTerms } from '../../../../../packages/domain/src/index.js';
 
 export interface SqliteStatement {
   run(...params: unknown[]): unknown;
@@ -40,6 +41,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0001_first_slice.sql');
   applyMigration(db, 'global/0002_device_invites.sql');
   applyMigration(db, 'global/0003_agent_deleted_at.sql');
+  applyMigration(db, 'global/0004_join_links.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
@@ -627,6 +629,51 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             return device;
           });
       },
+      async markOffline(input) {
+        const row = globalDb
+          .prepare('SELECT * FROM devices WHERE id = ?')
+          .get(input.deviceId);
+        const device = mapDevice(row);
+        if (!device) {
+          return null;
+        }
+        globalDb
+          .prepare(
+            `UPDATE devices
+             SET status = 'offline', last_seen_at = ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(device.lastSeenAt ?? input.timestamp, input.timestamp, input.deviceId);
+        return {
+          ...device,
+          status: 'offline',
+          lastSeenAt: device.lastSeenAt ?? input.timestamp,
+          updatedAt: input.timestamp,
+        };
+      },
+      async updateName(input) {
+        const result = globalDb
+          .prepare('UPDATE devices SET hostname = ?, updated_at = ? WHERE id = ?')
+          .run(input.hostname, input.updatedAt, input.deviceId);
+        if (sqliteChanges(result) === 0) {
+          return null;
+        }
+        return mapDevice(globalDb.prepare('SELECT * FROM devices WHERE id = ?').get(input.deviceId));
+      },
+      async delete(input) {
+        globalDb.prepare('DELETE FROM device_runtimes WHERE device_id = ?').run(input.deviceId);
+        globalDb
+          .prepare('DELETE FROM agent_publications WHERE agent_id IN (SELECT id FROM agents WHERE device_id = ? AND deleted_at IS NULL)')
+          .run(input.deviceId);
+        globalDb
+          .prepare(
+            `UPDATE agents
+             SET status = 'offline', env_json = NULL, deleted_at = ?, updated_at = ?, last_seen_at = ?
+             WHERE device_id = ? AND deleted_at IS NULL`,
+          )
+          .run(input.timestamp, input.timestamp, input.timestamp, input.deviceId);
+        globalDb.prepare('DELETE FROM devices WHERE id = ?').run(input.deviceId);
+      },
     },
     runtimes: {
       async replaceForDevice(input) {
@@ -884,6 +931,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             return agent;
           });
       },
+      async listByDevice(deviceId) {
+        return globalDb
+          .prepare('SELECT * FROM agents WHERE device_id = ? AND deleted_at IS NULL ORDER BY created_at, id')
+          .all(deviceId)
+          .map((row) => {
+            const agent = mapAgent(globalDb, row);
+            if (!agent) {
+              throw new Error('SQLite agent row could not be mapped');
+            }
+            return agent;
+          });
+      },
     },
     messages: {
       async append(message) {
@@ -928,24 +987,22 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         if (input.channelIds.length === 0) {
           return [];
         }
+        const terms = splitSearchTerms(input.query);
+        if (terms.length === 0) {
+          return [];
+        }
         const placeholders = input.channelIds.map(() => '?').join(', ');
-        return teamDb
+        const likeClauses = terms.map(() => `lower(body) LIKE ? ESCAPE '\\'`).join(' AND ');
+        const pool = teamDb
           .prepare(
             `SELECT * FROM messages
              WHERE channel_id IN (${placeholders})
-             AND lower(body) LIKE ? ESCAPE '\\'
-             ORDER BY created_at DESC
-             LIMIT ?`,
+             AND ${likeClauses}`,
           )
-          .all(...input.channelIds, `%${escapeSqlLike(input.query.toLowerCase())}%`, input.limit)
-          .map((row) => {
-            const message = mapMessage(row);
-            if (!message) {
-              throw new Error('SQLite search message row could not be mapped');
-            }
-            return message;
-          })
-          .reverse();
+          .all(...input.channelIds, ...terms.map((term) => `%${escapeSqlLike(term)}%`))
+          .map((row) => mapMessage(row))
+          .filter((message): message is NonNullable<typeof message> => message !== null);
+        return rankMessageSearch(pool, input.query, input.limit);
       },
       async listThreadBefore(input) {
         const before = mapMessage(teamDb.prepare('SELECT * FROM messages WHERE id = ?').get(input.beforeMessageId));

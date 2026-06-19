@@ -1,0 +1,293 @@
+import { createServer, type Server as HttpServer } from 'node:http';
+import { createRequire } from 'node:module';
+import { AddressInfo } from 'node:net';
+import { afterEach, describe, expect, test } from 'vitest';
+import { AGENT_EVENTS, WEB_EVENTS } from '../../../packages/contracts/src/index';
+import { createInMemoryServerNext } from '../src/index';
+import { attachServerNextNamespaces } from '../src/transport/socket-server';
+
+type SocketIoServerConstructor = new (server: HttpServer, options?: Record<string, unknown>) => {
+  of(namespace: string): unknown;
+  close(callback?: () => void): void;
+};
+type ClientSocket = {
+  connected: boolean;
+  connect(): void;
+  disconnect(): void;
+  emit(event: string, payload: unknown): void;
+  emitWithAck(event: string, payload: unknown): Promise<unknown>;
+  on(event: string, handler: (...args: unknown[]) => void): void;
+};
+
+const requireFromServer = createRequire(new URL('../../server/package.json', import.meta.url));
+const { Server } = requireFromServer('socket.io') as { Server: SocketIoServerConstructor };
+const { io: createClient } = requireFromServer('socket.io-client') as {
+  io(url: string, options?: Record<string, unknown>): ClientSocket;
+};
+
+const cleanups: Array<() => Promise<void>> = [];
+
+afterEach(async () => {
+  while (cleanups.length > 0) {
+    await cleanups.pop()?.();
+  }
+});
+
+describe('device rename and delete (end-to-end)', () => {
+  test('team member can rename and delete a device', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'device-1',
+        'runtime-1',
+        'agent-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+        'reply-1',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    // 注册用户（建立 authenticated web session）
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      agent.disconnect();
+    });
+    const registerAck = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    expect(registerAck).toMatchObject({ ok: true, user: { id: 'user-1', primaryTeamId: 'team-1' } });
+
+    // 用 token 建立第二个 authenticated socket（后续 rename/delete/get 的 userId 由 session 注入）
+    const web = await connectClient(`${baseUrl}/web`, {
+      auth: { token: (registerAck as { token: string }).token },
+    });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+
+    // 设备上线（device-1 是 createIds 第 4 个 id）
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'device-1', status: 'online' } });
+
+    // 改名
+    const renamed = await web.emitWithAck(WEB_EVENTS.device.rename, {
+      deviceId: 'device-1',
+      hostname: 'new-mac',
+    });
+    expect(renamed).toMatchObject({ ok: true, device: { id: 'device-1', name: 'new-mac' } });
+
+    // 改名后 getDevice 反映新名
+    const got = await web.emitWithAck(WEB_EVENTS.device.get, { deviceId: 'device-1' });
+    expect(got).toMatchObject({ ok: true, device: { id: 'device-1', name: 'new-mac' } });
+
+    // 删除
+    const deleted = await web.emitWithAck(WEB_EVENTS.device.delete, { deviceId: 'device-1' });
+    expect(deleted).toMatchObject({ ok: true, device: { id: 'device-1' } });
+
+    // 删除后 getDevice → NOT_FOUND
+    const after = await web.emitWithAck(WEB_EVENTS.device.get, { deviceId: 'device-1' });
+    expect(after).toMatchObject({ ok: false, error: 'NOT_FOUND' });
+  });
+
+  test('rejects rename when caller is not a team member', async () => {
+    // 同 team 的 owner 注册并创建 device；另一 team 的 user 试图改名该 device。
+    // 跨 team 隔离：usecase 通过 teams.isMember 拒绝。
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'owner-1',
+        'team-1',
+        'channel-1',
+        'device-1',
+        'other-1',
+        'team-2',
+        'channel-2',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const ownerBootstrap = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      ownerBootstrap.disconnect();
+      agent.disconnect();
+    });
+    const ownerRegister = await ownerBootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'owner',
+      password: 'secret',
+      teamName: 'OwnerTeam',
+    });
+    expect(ownerRegister).toMatchObject({ ok: true, user: { id: 'owner-1' } });
+    const owner = await connectClient(`${baseUrl}/web`, {
+      auth: { token: (ownerRegister as { token: string }).token },
+    });
+    cleanups.push(async () => {
+      owner.disconnect();
+    });
+
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-1',
+        ownerId: 'owner-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'device-1', status: 'online' } });
+
+    // 另一个 team 的用户（team-2 与 team-1 无交集）
+    const otherBootstrap = await connectClient(`${baseUrl}/web`);
+    const otherRegister = await otherBootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'other',
+      password: 'secret',
+      teamName: 'OtherTeam',
+    });
+    expect(otherRegister).toMatchObject({ ok: true, user: { id: 'other-1' } });
+    const other = await connectClient(`${baseUrl}/web`, {
+      auth: { token: (otherRegister as { token: string }).token },
+    });
+    cleanups.push(async () => {
+      otherBootstrap.disconnect();
+      other.disconnect();
+    });
+
+    // other-1 不在 team-1 → FORBIDDEN
+    await expect(
+      other.emitWithAck(WEB_EVENTS.device.rename, { deviceId: 'device-1', hostname: 'hacked' }),
+    ).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+  });
+
+  test('soft-deletes agents hosted on a device when the device is deleted', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'device-1',
+        'runtime-1',
+        'agent-1',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      agent.disconnect();
+    });
+    const registerAck = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    const web = await connectClient(`${baseUrl}/web`, {
+      auth: { token: (registerAck as { token: string }).token },
+    });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+
+    // device 上线并注册一个 hosted agent
+    await agent.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+    });
+    const batchAck = await agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+    });
+    expect(batchAck).toMatchObject({ ok: true, agents: [{ status: 'online', deviceId: 'device-1' }] });
+    const agentId = (batchAck as { agents: Array<{ id: string }> }).agents[0]!.id;
+
+    // 删除前：该 agent 可被该 device 查询到
+    const before = (await web.emitWithAck(WEB_EVENTS.device.agentsList, {
+      teamId: 'team-1',
+      deviceId: 'device-1',
+    })) as { ok: boolean; agents?: Array<{ id: string }> };
+    expect(before).toMatchObject({ ok: true });
+    expect(before.agents!.map((a) => a.id)).toContain(agentId);
+
+    // 删除 device 后，device 已不存在 → listDeviceAgents NOT_FOUND
+    // （级联软删除：repo delete 顺带软删除 device 下 hosted agents）
+    await expect(
+      web.emitWithAck(WEB_EVENTS.device.delete, { deviceId: 'device-1' }),
+    ).resolves.toMatchObject({ ok: true });
+
+    const after = await web.emitWithAck(WEB_EVENTS.device.agentsList, {
+      teamId: 'team-1',
+      deviceId: 'device-1',
+    });
+    expect(after).toMatchObject({ ok: false, error: 'NOT_FOUND' });
+  });
+});
+
+async function startSocketServer(app: ReturnType<typeof createInMemoryServerNext>) {
+  const httpServer = createServer();
+  const ioServer = new Server(httpServer, { cors: { origin: '*' } });
+  attachServerNextNamespaces(ioServer, app);
+  await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', () => resolve()));
+  const address = httpServer.address() as AddressInfo;
+  return {
+    httpServer,
+    ioServer,
+    baseUrl: `http://127.0.0.1:${address.port}`,
+  };
+}
+
+async function connectClient(url: string, options: Record<string, unknown> = {}): Promise<ClientSocket> {
+  const socket = createClient(url, {
+    transports: ['websocket'],
+    forceNew: true,
+    reconnection: false,
+    ...options,
+  });
+  await new Promise<void>((resolve, reject) => {
+    socket.on('connect', () => resolve());
+    socket.on('connect_error', (error) => reject(error));
+    socket.connect();
+  });
+  return socket;
+}
+
+function createIds(ids: string[]) {
+  let index = 0;
+  return () => {
+    const id = ids[index];
+    index += 1;
+    if (!id) {
+      throw new Error('Test id sequence exhausted');
+    }
+    return id;
+  };
+}

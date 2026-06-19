@@ -163,6 +163,9 @@ export interface DeviceRepository {
   getById(id: ID): Promise<DeviceRecord | null>;
   findByMachineProfile(machineId: string, profileId: string): Promise<DeviceRecord | null>;
   listByTeam(teamId: ID): Promise<DeviceRecord[]>;
+  markOffline(input: { deviceId: ID; timestamp: UnixMs }): Promise<DeviceRecord | null>;
+  updateName(input: { deviceId: ID; hostname: string; updatedAt: UnixMs }): Promise<DeviceRecord | null>;
+  delete(input: { deviceId: ID; timestamp: UnixMs }): Promise<void>;
 }
 
 export interface RuntimeRepository {
@@ -184,6 +187,7 @@ export interface AgentRepository {
   markMissingScannedOffline(input: { teamId: ID; deviceId: ID; seenIdentityKeys: string[]; timestamp: UnixMs }): Promise<ID[]>;
   updateStatus(input: { agentId: ID; status: AgentRecord['status']; lastSeenAt: UnixMs; lastError?: string }): Promise<void>;
   listVisibleInTeam(teamId: ID): Promise<AgentRecord[]>;
+  listByDevice(deviceId: ID): Promise<AgentRecord[]>;
 }
 
 export interface MessageRepository {

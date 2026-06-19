@@ -29,6 +29,7 @@ interface FakeEvent {
 interface PreviewHarness {
   emitted: Array<[string, unknown]>;
   fetches: Array<{ url: string; init?: RequestInit }>;
+  confirms: string[];
   historyReplacements: string[];
   localStorage: FakeLocalStorage;
   socket: {
@@ -73,6 +74,8 @@ describe('web-next preview page interactions', () => {
     expect(html).toContain('.composer-thread-indicator:not([hidden])');
     expect(html).toContain('id="join-link-panel"');
     expect(html).toContain('邀请链接');
+    expect(html).toContain('id="team-settings-form"');
+    expect(html).toContain('重命名团队');
   });
 
   test('restores saved session through auth:whoami and resubscribes snapshots on connect', async () => {
@@ -918,13 +921,638 @@ describe('web-next preview page interactions', () => {
     expect(html).toContain('thread-reply');
     expect(html).toContain('讨论串');
   });
+
+  test('renames the current team through the settings form', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'team:update': (payload) => ({
+        ok: true,
+        team: { id: 'team-1', name: (payload as { name?: string }).name || 'AgentBean', path: 'agentbean' },
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    expect(harness.element('team-display-name').textContent).toBe('AgentBean');
+
+    harness.element('team-settings-form').fields.name = 'Ops Team';
+    await harness.submit('team-settings-form');
+
+    expect(harness.emitted).toContainEqual([
+      'team:update',
+      { userId: 'user-1', teamId: 'team-1', name: 'Ops Team' },
+    ]);
+    expect(harness.element('team-display-name').textContent).toBe('Ops Team');
+  });
+
+  test('archives and deletes a channel through accessible channel controls', async () => {
+    const html = readFileSync(new URL('../preview/index.html', import.meta.url), 'utf8');
+    expect(html).toContain('.channel-row:focus-within .channel-actions');
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const createdChannel = { id: 'channel-2', name: 'ops', title: 'Ops', visibility: 'private' };
+    const harness = createPreviewHarness(
+      {
+        'auth:register': () => ({
+          ok: true,
+          token: 'token-1',
+          user: { id: 'user-1', username: 'shaw' },
+          currentTeam: { id: 'team-1', name: 'AgentBean' },
+          defaultChannel,
+        }),
+        'device:list': () => ({ ok: true, devices: [] }),
+        'agents:subscribe': () => ({ ok: true, agents: [] }),
+        'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+        'task:list': () => ({ ok: true, tasks: [] }),
+        'join:list': () => ({ ok: true, links: [] }),
+        'channel:create': () => ({ ok: true, channel: createdChannel }),
+        'channel:archive': () => ({ ok: true, channel: createdChannel }),
+        'channel:delete': () => ({ ok: true, channel: createdChannel }),
+      },
+      { confirmResponses: [false, true] },
+    );
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.submit('channel-create-form');
+    expect(harness.element('channels').innerHTML).toContain('Ops');
+
+    await harness.click('channels', 'button[data-channel-archive]', { channelArchive: 'channel-2' });
+    expect(harness.emitted).toContainEqual(['channel:archive', { userId: 'user-1', teamId: 'team-1', channelId: 'channel-2' }]);
+    expect(harness.element('channels').innerHTML).not.toContain('Ops');
+
+    await harness.submit('channel-create-form');
+    expect(harness.element('channels').innerHTML).toContain('Ops');
+
+    await harness.click('channels', 'button[data-channel-delete]', { channelDelete: 'channel-2' });
+    expect(harness.confirms[0]).toContain('永久移除');
+    expect(harness.emitted).not.toContainEqual(['channel:delete', { userId: 'user-1', teamId: 'team-1', channelId: 'channel-2' }]);
+    expect(harness.element('channels').innerHTML).toContain('Ops');
+
+    await harness.click('channels', 'button[data-channel-delete]', { channelDelete: 'channel-2' });
+    expect(harness.emitted).toContainEqual(['channel:delete', { userId: 'user-1', teamId: 'team-1', channelId: 'channel-2' }]);
+    expect(harness.element('channels').innerHTML).not.toContain('Ops');
+  });
+
+  test('reacts to and saves a message through the message actions', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'message:react': () => ({ ok: true, messageId: 'message-1' }),
+      'message:save': () => ({ ok: true, messageId: 'message-1' }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+    await harness.socket.trigger('channel:message', {
+      id: 'message-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'message-1',
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: 'react to me',
+      createdAt: 1000,
+    });
+
+    await harness.click('messages', 'button[data-message-react]', { messageReact: 'message-1' });
+    expect(harness.emitted).toContainEqual([
+      'message:react',
+      { userId: 'user-1', teamId: 'team-1', messageId: 'message-1', emoji: '👍', on: true },
+    ]);
+    expect(harness.element('messages').innerHTML).toContain('👍 1');
+
+    await harness.click('messages', 'button[data-message-react]', { messageReact: 'message-1' });
+    expect(harness.emitted).toContainEqual([
+      'message:react',
+      { userId: 'user-1', teamId: 'team-1', messageId: 'message-1', emoji: '👍', on: false },
+    ]);
+    expect(harness.element('messages').innerHTML).toContain('👍 0');
+
+    await harness.click('messages', 'button[data-message-save]', { messageSave: 'message-1' });
+    expect(harness.emitted).toContainEqual([
+      'message:save',
+      { userId: 'user-1', teamId: 'team-1', messageId: 'message-1', on: true },
+    ]);
+    expect(harness.element('messages').innerHTML).toContain('已收藏');
+
+    await harness.click('messages', 'button[data-message-save]', { messageSave: 'message-1' });
+    expect(harness.emitted).toContainEqual([
+      'message:save',
+      { userId: 'user-1', teamId: 'team-1', messageId: 'message-1', on: false },
+    ]);
+    expect(harness.element('messages').innerHTML).toContain('☆ 收藏');
+  });
+
+  test('deletes a task through the preview task controls', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'task:create': () => ({
+        ok: true,
+        task: {
+          id: 'task-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          title: 'Ship task',
+          status: 'todo',
+          creatorId: 'user-1',
+          tags: [],
+          sortOrder: 1,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      }),
+      'task:delete': () => ({ ok: true, task: { id: 'task-1', teamId: 'team-1', title: 'Ship task', status: 'todo' } }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    harness.element('task-create-form').fields.title = 'Ship task';
+    await harness.submit('task-create-form');
+    expect(harness.element('task-results').innerHTML).toContain('Ship task');
+
+    await harness.click('task-results', 'button[data-task-delete]', { taskDelete: 'task-1' });
+
+    expect(harness.emitted).toContainEqual(['task:delete', { userId: 'user-1', teamId: 'team-1', taskId: 'task-1' }]);
+    expect(harness.element('task-results').innerHTML).not.toContain('Ship task');
+  });
+
+  test('loads device detail with system info when a device is auto-selected', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'online', name: 'Mac' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'device:get': () => ({
+        ok: true,
+        device: {
+          ...device,
+          systemInfo: { hostname: 'mbp', platform: 'darwin', arch: 'arm64' },
+          runtimes: [],
+          agents: [{ id: 'agent-1', name: 'Codex' }],
+        },
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.socket.trigger('devices:snapshot', [device]);
+
+    expect(harness.emitted).toContainEqual(['device:get', { userId: 'user-1', deviceId: 'device-1' }]);
+    const detailHtml = harness.element('device-detail').innerHTML;
+    expect(detailHtml).toContain('设备详情');
+    expect(detailHtml).toContain('mbp');
+    expect(detailHtml).toContain('Codex');
+  });
+
+  test('renders a terminal device detail error when device:get fails', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'offline', name: 'Mac' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'device:get': () => ({ ok: false, error: 'NOT_FOUND' }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('devices:snapshot', [device]);
+
+    const detailHtml = harness.element('device-detail').innerHTML;
+    expect(detailHtml).toContain('设备详情加载失败');
+    expect(detailHtml).toContain('NOT_FOUND');
+    expect(detailHtml).not.toContain('加载设备详情…');
+  });
+
+  test('refreshes device detail bound agents from the latest agent snapshot', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'online', name: 'Mac' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'device:get': () => ({
+        ok: true,
+        device: {
+          ...device,
+          systemInfo: { hostname: 'mbp', platform: 'darwin', arch: 'arm64' },
+          runtimes: [],
+          agents: [{ id: 'agent-old', name: 'Old Agent', deviceId: 'device-1' }],
+        },
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('devices:snapshot', [device]);
+    expect(harness.element('device-detail').innerHTML).toContain('Old Agent');
+
+    await harness.socket.trigger('agents:snapshot', [
+      { id: 'agent-new', name: 'New Agent', deviceId: 'device-1', status: 'online' },
+    ]);
+
+    const detailHtml = harness.element('device-detail').innerHTML;
+    expect(detailHtml).toContain('New Agent');
+    expect(detailHtml).not.toContain('Old Agent');
+  });
+
+  test('reorders tasks through the up/down controls', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const task1 = { id: 'task-1', teamId: 'team-1', channelId: 'channel-1', title: 'First', status: 'todo', creatorId: 'user-1', tags: [], sortOrder: 1, createdAt: 1, updatedAt: 1 };
+    const task2 = { id: 'task-2', teamId: 'team-1', channelId: 'channel-1', title: 'Second', status: 'todo', creatorId: 'user-1', tags: [], sortOrder: 2, createdAt: 2, updatedAt: 2 };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [task1, task2] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'task:reorder': (payload) => ({ ok: true, task: { ...task2, sortOrder: (payload as { sortOrder?: number }).sortOrder ?? 0 } }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    const initialHtml = harness.element('task-results').innerHTML;
+    expect(initialHtml.indexOf('First')).toBeLessThan(initialHtml.indexOf('Second'));
+
+    await harness.click('task-results', 'button[data-task-move]', { taskMove: 'task-2', direction: 'up' });
+    expect(harness.emitted).toContainEqual([
+      'task:reorder',
+      expect.objectContaining({ userId: 'user-1', teamId: 'team-1', taskId: 'task-2' }),
+    ]);
+
+    const reorderedHtml = harness.element('task-results').innerHTML;
+    expect(reorderedHtml.indexOf('Second')).toBeLessThan(reorderedHtml.indexOf('First'));
+  });
+
+  test('keeps newly-created tasks in persisted task order', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const task1 = { id: 'task-1', teamId: 'team-1', channelId: 'channel-1', title: 'First', status: 'todo', creatorId: 'user-1', tags: [], sortOrder: 100, createdAt: 1, updatedAt: 1 };
+    const task2 = { id: 'task-2', teamId: 'team-1', channelId: 'channel-1', title: 'Second', status: 'todo', creatorId: 'user-1', tags: [], sortOrder: 200, createdAt: 2, updatedAt: 2 };
+    const task3 = { id: 'task-3', teamId: 'team-1', channelId: 'channel-1', title: 'Created', status: 'todo', creatorId: 'user-1', tags: [], sortOrder: 300, createdAt: 3, updatedAt: 3 };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [task1, task2] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'task:create': () => ({ ok: true, task: task3 }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+    harness.element('task-create-form').fields.title = 'Created';
+    await harness.submit('task-create-form');
+
+    const html = harness.element('task-results').innerHTML;
+    expect(html.indexOf('First')).toBeLessThan(html.indexOf('Second'));
+    expect(html.indexOf('Second')).toBeLessThan(html.indexOf('Created'));
+  });
+
+  test('renumbers tasks when adjacent sort orders have no gap', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const task1 = { id: 'task-1', teamId: 'team-1', channelId: 'channel-1', title: 'First', status: 'todo', creatorId: 'user-1', tags: [], sortOrder: 0, createdAt: 3, updatedAt: 3 };
+    const task2 = { id: 'task-2', teamId: 'team-1', channelId: 'channel-1', title: 'Second', status: 'todo', creatorId: 'user-1', tags: [], sortOrder: 0, createdAt: 2, updatedAt: 2 };
+    const task3 = { id: 'task-3', teamId: 'team-1', channelId: 'channel-1', title: 'Third', status: 'todo', creatorId: 'user-1', tags: [], sortOrder: 0, createdAt: 1, updatedAt: 1 };
+    const tasksById = new Map([task1, task2, task3].map((task) => [task.id, task]));
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [task1, task2, task3] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'task:reorder': (payload) => {
+        const update = payload as { taskId: string; sortOrder: number };
+        const task = tasksById.get(update.taskId);
+        return task ? { ok: true, task: { ...task, sortOrder: update.sortOrder } } : { ok: false, error: 'NOT_FOUND' };
+      },
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+    await harness.click('task-results', 'button[data-task-move]', { taskMove: 'task-3', direction: 'up' });
+
+    expect(harness.emitted).toContainEqual(['task:reorder', { userId: 'user-1', teamId: 'team-1', taskId: 'task-1', sortOrder: 1000 }]);
+    expect(harness.emitted).toContainEqual(['task:reorder', { userId: 'user-1', teamId: 'team-1', taskId: 'task-3', sortOrder: 2000 }]);
+    expect(harness.emitted).toContainEqual(['task:reorder', { userId: 'user-1', teamId: 'team-1', taskId: 'task-2', sortOrder: 3000 }]);
+
+    const html = harness.element('task-results').innerHTML;
+    expect(html.indexOf('First')).toBeLessThan(html.indexOf('Third'));
+    expect(html.indexOf('Third')).toBeLessThan(html.indexOf('Second'));
+  });
+
+  test('lists saved messages through the saved-messages panel', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'message:list-saved': () => ({
+        ok: true,
+        messages: [{
+          id: 'message-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          threadId: 'message-1',
+          senderKind: 'human',
+          senderId: 'user-1',
+          body: 'saved note',
+          createdAt: 1000,
+          saved: true,
+        }],
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.click('saved-messages-refresh', 'button', {});
+    expect(harness.emitted).toContainEqual(['message:list-saved', { userId: 'user-1', teamId: 'team-1' }]);
+    expect(harness.element('saved-messages-results').innerHTML).toContain('saved note');
+  });
+
+  test('manages member roles through the members panel', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'members:list': () => ({
+        ok: true,
+        humans: [
+          { id: 'member-1', teamId: 'team-1', userId: 'user-1', username: 'shaw', role: 'owner', joinedAt: 1 },
+          { id: 'member-2', teamId: 'team-1', userId: 'user-2', username: 'lin', role: 'member', joinedAt: 2 },
+          ...Array.from({ length: 11 }, (_, index) => ({
+            id: `member-${index + 3}`,
+            teamId: 'team-1',
+            userId: `user-${index + 3}`,
+            username: `member-${index + 3}`,
+            role: 'member',
+            joinedAt: index + 3,
+          })),
+        ],
+      }),
+      'member:update-role': (payload) => ({
+        ok: true,
+        member: { id: 'member-2', teamId: 'team-1', userId: 'user-2', username: 'lin', role: (payload as { role?: string }).role || 'admin' },
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.click('members-refresh', 'button', {});
+    expect(harness.emitted).toContainEqual(['members:list', { userId: 'user-1', teamId: 'team-1' }]);
+    expect(harness.element('members-results').innerHTML).toContain('lin');
+    expect(harness.element('members-results').innerHTML).toContain('member-13');
+
+    await harness.click('members-results', 'button[data-member-role]', { memberRole: 'user-2', role: 'admin' });
+    expect(harness.emitted).toContainEqual([
+      'member:update-role',
+      { userId: 'user-1', teamId: 'team-1', targetUserId: 'user-2', role: 'admin' },
+    ]);
+    expect(harness.element('members-results').innerHTML).toContain('管理员');
+  });
+
+  test('confirms ownership transfers before emitting', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'members:list': () => ({
+        ok: true,
+        humans: [
+          { id: 'member-1', teamId: 'team-1', userId: 'user-1', username: 'shaw', role: 'owner', joinedAt: 1 },
+          { id: 'member-2', teamId: 'team-1', userId: 'user-2', username: 'lin', role: 'admin', joinedAt: 2 },
+        ],
+      }),
+      'member:transfer-owner': () => ({ ok: true }),
+    }, { confirmResponses: [false, true] });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+    await harness.click('members-refresh', 'button', {});
+
+    await harness.click('members-results', 'button[data-member-transfer]', { memberTransfer: 'user-2' });
+    expect(harness.confirms[0]).toContain('lin');
+    expect(harness.emitted.some(([event]) => event === 'member:transfer-owner')).toBe(false);
+
+    await harness.click('members-results', 'button[data-member-transfer]', { memberTransfer: 'user-2' });
+    expect(harness.emitted).toContainEqual([
+      'member:transfer-owner',
+      { userId: 'user-1', teamId: 'team-1', targetUserId: 'user-2' },
+    ]);
+  });
+
+  test('lists team workspace runs through the team-runs panel', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.click('team-runs-refresh', 'button', {});
+    expect(harness.fetches.some((entry) => entry.url.includes('/workspace-runs?token='))).toBe(true);
+    expect(harness.element('team-runs-results').innerHTML).toContain('npm test');
+    expect(harness.element('team-runs-results').innerHTML).toContain('查看详情');
+  });
+
+  test('paginates team workspace runs with a load-more control', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.click('team-runs-refresh', 'button', {});
+    expect(harness.element('team-runs-results').innerHTML).toContain('npm test');
+    expect(harness.element('team-runs-results').innerHTML).toContain('加载更多');
+
+    await harness.click('team-runs-results', 'button[data-team-runs-more]', {});
+    expect(harness.element('team-runs-results').innerHTML).toContain('npm run build');
+    expect(harness.element('team-runs-results').innerHTML).not.toContain('加载更多');
+    expect(harness.fetches.some((entry) => entry.url.includes('cursor=cursor-1'))).toBe(true);
+  });
+
+  test('ignores concurrent team workspace run load-more clicks', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('channels:snapshot', [defaultChannel]);
+
+    await harness.click('team-runs-refresh', 'button', {});
+    await Promise.all([
+      harness.click('team-runs-results', 'button[data-team-runs-more]', {}),
+      harness.click('team-runs-results', 'button[data-team-runs-more]', {}),
+    ]);
+
+    const cursorFetches = harness.fetches.filter((entry) => entry.url.includes('cursor=cursor-1'));
+    expect(cursorFetches).toHaveLength(1);
+    expect(harness.element('team-runs-results').innerHTML.match(/npm run build/g)).toHaveLength(1);
+  });
 });
 
 function createPreviewHarness(
   acks: Record<string, AckFactory>,
-  options: { href?: string } = {},
+  options: { confirmResponses?: boolean[]; href?: string } = {},
 ): PreviewHarness {
   const elements = new Map<string, FakeElement>();
+  const confirmResponses = [...(options.confirmResponses ?? [true])];
+  const confirms: string[] = [];
   const fetches: Array<{ url: string; init?: RequestInit }> = [];
   const historyReplacements: string[] = [];
   const localStorage = new FakeLocalStorage();
@@ -938,6 +1566,7 @@ function createPreviewHarness(
     'message-form': { channelId: '', body: '@Codex hello' },
     'task-create-form': { title: 'Ship task' },
     'message-search-form': { query: 'roadmap' },
+    'team-settings-form': { name: '' },
   };
   for (const [id, fields] of Object.entries(formFields)) {
     elements.set(id, createElement(id, fields));
@@ -968,6 +1597,16 @@ function createPreviewHarness(
     'message-artifact-files',
     'message-reply-indicator',
     'message-reply-cancel',
+    'device-detail',
+    'saved-messages-panel',
+    'saved-messages-refresh',
+    'saved-messages-results',
+    'members-panel',
+    'members-refresh',
+    'members-results',
+    'team-runs-panel',
+    'team-runs-refresh',
+    'team-runs-results',
   ]) {
     elements.set(id, createElement(id));
   }
@@ -975,6 +1614,10 @@ function createPreviewHarness(
   const windowLocation = new URL(options.href ?? 'http://agentbean-next.local/preview');
   const window = {
     location: windowLocation,
+    confirm(message: string): boolean {
+      confirms.push(message);
+      return confirmResponses.length > 0 ? Boolean(confirmResponses.shift()) : true;
+    },
     history: {
       replaceState(_state: unknown, _title: string, url: string): void {
         historyReplacements.push(url);
@@ -1005,6 +1648,60 @@ function createPreviewHarness(
     FormData: FakeFormData,
     fetch: async (url: string, init?: RequestInit) => {
       fetches.push({ url, init });
+      if (url.includes('/workspace-runs') && !url.includes('/workspace-runs/')) {
+        const hasCursor = url.includes('cursor=');
+        return {
+          async json() {
+            return {
+              ok: true,
+              runs: hasCursor
+                ? [
+                    {
+                      workspaceRun: {
+                        id: 'run-list-2',
+                        teamId: 'team-1',
+                        channelId: 'channel-1',
+                        dispatchId: 'dispatch-2',
+                        agentId: 'agent-1',
+                        deviceId: 'device-1',
+                        command: 'npm run build',
+                        cwd: '/repo',
+                        exitCode: 1,
+                        status: 'failed',
+                        artifactIds: [],
+                        createdAt: 2,
+                        updatedAt: 2,
+                      },
+                      artifacts: [],
+                    },
+                  ]
+                : [
+                    {
+                      workspaceRun: {
+                        id: 'run-list-1',
+                        teamId: 'team-1',
+                        channelId: 'channel-1',
+                        dispatchId: 'dispatch-1',
+                        agentId: 'agent-1',
+                        deviceId: 'device-1',
+                        command: 'npm test',
+                        cwd: '/repo',
+                        exitCode: 0,
+                        status: 'succeeded',
+                        artifactIds: ['artifact-list-1'],
+                        createdAt: 1,
+                        updatedAt: 1,
+                      },
+                      artifacts: [
+                        { id: 'artifact-list-1', teamId: 'team-1', channelId: 'channel-1', workspaceRunId: 'run-list-1', filename: 'out.txt', mimeType: 'text/plain', sizeBytes: 5, relativePath: 'out.txt', pathKind: 'workspace' },
+                      ],
+                    },
+                  ],
+              nextCursor: hasCursor ? null : 'cursor-1',
+            };
+          },
+        };
+      }
       if (url.includes('/workspace-runs/')) {
         return {
           async json() {
@@ -1082,6 +1779,7 @@ function createPreviewHarness(
   vm.runInContext(readPreviewScript(), context);
 
   return {
+    confirms,
     emitted,
     fetches,
     historyReplacements,

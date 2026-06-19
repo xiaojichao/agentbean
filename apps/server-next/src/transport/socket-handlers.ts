@@ -24,6 +24,7 @@ type UseCaseName = keyof ServerNextUseCases;
 type BindOptions = Pick<WebSocketHandlerOptions, 'authenticatedUser'> & {
   currentTeamFromSession?: boolean;
 };
+const INTERNAL_SOCKET_ERROR_MESSAGE = 'Internal server error';
 
 export interface WebSocketHandlerOptions {
   authenticatedUser?: AuthenticatedUserProvider;
@@ -33,6 +34,7 @@ export interface WebSocketHandlerOptions {
   deviceScan?(request: { requestId: string; deviceId: string }): void;
   afterMessageSend?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceInviteComplete?(payload: unknown, result: unknown): Promise<void> | void;
+  afterDeviceMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterChannelMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterTeamMutation?(payload: unknown, result: unknown): Promise<void> | void;
@@ -77,6 +79,7 @@ export function registerWebSocketHandlers(
     options.afterDeviceInviteComplete?.(payload, result), { authenticatedUser: options.authenticatedUser },
   );
   bind(socket, WEB_EVENTS.device.list, app, 'listDevices', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.device.agentsList, app, 'listDeviceAgents', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.device.get, app, 'getDevice', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.device.scan, app, 'requestDeviceScan', (_payload, result) => {
     if (!options.deviceScan || !isDeviceScanAck(result)) {
@@ -84,6 +87,10 @@ export function registerWebSocketHandlers(
     }
     options.deviceScan(result.request);
   }, { authenticatedUser: options.authenticatedUser });
+  const afterDeviceMutation = (payload: unknown, result: unknown) =>
+    options.afterDeviceMutation?.(payload, result);
+  bind(socket, WEB_EVENTS.device.rename, app, 'renameDevice', afterDeviceMutation, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.device.delete, app, 'deleteDevice', afterDeviceMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.channel.create, app, 'createChannel', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.channel.update, app, 'updateChannel', undefined, { authenticatedUser: options.authenticatedUser });
   const afterChannelMutation = (payload: unknown, result: unknown) =>
@@ -125,11 +132,7 @@ export function registerWebSocketHandlers(
       socket.emit?.(WEB_EVENTS.channel.history, { channelId: input.channelId, messages: dmResult.messages });
       ack?.({ ok: true, channel: dmResult.dm.channel, messages: dmResult.messages });
     } catch (error) {
-      if (error instanceof UnauthenticatedSocketError) {
-        ack?.(makeFailure('UNAUTHENTICATED', 'Invalid session token'));
-        return;
-      }
-      ack?.(makeFailure('INTERNAL_ERROR', error instanceof Error ? error.message : 'Unhandled socket handler error'));
+      ack?.(socketErrorAck(error, WEB_EVENTS.channel.join));
     }
   });
   bind(socket, WEB_EVENTS.agent.create, app, 'createCustomAgent', (payload, result) =>
@@ -226,7 +229,7 @@ export function registerAgentSocketHandlers(
       ack?.(result);
       await afterDeviceMutation(payload, result);
     } catch (error) {
-      ack?.(makeFailure('INTERNAL_ERROR', error instanceof Error ? error.message : 'Unhandled socket handler error'));
+      ack?.(socketErrorAck(error, AGENT_EVENTS.device.hello));
     }
   });
   bind(socket, AGENT_EVENTS.device.runtimes, app, 'reportDeviceRuntimes', afterDeviceMutation);
@@ -253,11 +256,7 @@ function bind(
       ack?.(result);
       await afterResult?.(input, result);
     } catch (error) {
-      if (error instanceof UnauthenticatedSocketError) {
-        ack?.(makeFailure('UNAUTHENTICATED', 'Invalid session token'));
-        return;
-      }
-      ack?.(makeFailure('INTERNAL_ERROR', error instanceof Error ? error.message : 'Unhandled socket handler error'));
+      ack?.(socketErrorAck(error, event));
     }
   });
 }
@@ -304,11 +303,17 @@ function payloadString(payload: unknown, key: string): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-function socketErrorAck(error: unknown) {
+function socketErrorAck(error: unknown, event?: string) {
   if (error instanceof UnauthenticatedSocketError) {
     return makeFailure('UNAUTHENTICATED', 'Invalid session token');
   }
-  return makeFailure('INTERNAL_ERROR', error instanceof Error ? error.message : 'Unhandled socket handler error');
+  // 记录完整异常堆栈，避免 INTERNAL_ERROR 的真实原因被吞掉
+  // （曾因 join_links 表缺失仅回 INTERNAL_ERROR、无任何日志，导致问题难以定位）
+  console.error(
+    `[server-next] socket handler${event ? ` "${event}"` : ''} threw:`,
+    error instanceof Error ? error.stack ?? error.message : error,
+  );
+  return makeFailure('INTERNAL_ERROR', INTERNAL_SOCKET_ERROR_MESSAGE);
 }
 
 function updateAuthenticatedCurrentTeam(

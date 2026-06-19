@@ -9,6 +9,7 @@ import {
   normalizeAdapterKind,
   normalizePathForComparison,
   projectPublishedAgent,
+  rankMessageSearch,
   routeMessage,
   shouldMergeAgents,
   type AgentIdentityRecord,
@@ -19,6 +20,32 @@ const onlineAgent = (id: string, name: string): RouteAgent => ({
   id,
   name,
   status: 'online',
+});
+
+describe('Message search ranking', () => {
+  test('requires every term and ranks phrase matches above scattered matches', () => {
+    const results = rankMessageSearch(
+      [
+        { id: 'partial', body: 'roadmap only', createdAt: 400 },
+        { id: 'scattered', body: 'roadmap needs more shipping', createdAt: 500 },
+        { id: 'phrase', body: 'the roadmap shipping plan', createdAt: 300 },
+      ],
+      'roadmap shipping',
+      10,
+    );
+
+    expect(results.map((message) => message.id)).toEqual(['phrase', 'scattered']);
+  });
+
+  test('breaks equal scores by recency and ignores blank queries', () => {
+    const messages = [
+      { id: 'older', body: 'sqlite search', createdAt: 100 },
+      { id: 'newer', body: 'sqlite search', createdAt: 200 },
+    ];
+
+    expect(rankMessageSearch(messages, 'sqlite', 10).map((message) => message.id)).toEqual(['newer', 'older']);
+    expect(rankMessageSearch(messages, '   ', 10)).toEqual([]);
+  });
 });
 
 describe('Phase 1 message routing rules', () => {

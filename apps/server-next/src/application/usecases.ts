@@ -1,7 +1,8 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TaskDto, type TaskStatus, type TeamDto, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
-import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
+import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
+import { buildDeviceInviteCommand } from './device-invite-command.js';
 
 export interface ServerNextClock {
   now(): number;
@@ -50,11 +51,15 @@ export interface ServerNextUseCases {
   createDeviceInvite(input: CreateDeviceInviteInput): Promise<Ack<DeviceInviteAckDto>>;
   waitForDeviceInvite(input: WaitForDeviceInviteInput): Promise<Ack<DeviceInviteAckDto>>;
   completeDeviceInvite(input: CompleteDeviceInviteInput): Promise<Ack<DeviceInviteAckDto & { credentials: DeviceInviteCredentialsDto }>>;
-  deviceHelloFromCredentials(input: DeviceHelloFromCredentialsInput): Promise<Ack<{ device: DeviceDto }>>;
+  deviceHelloFromCredentials(input: DeviceHelloFromCredentialsInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto }>>;
   listDevices(input: { teamId: string; userId: string }): Promise<Ack<{ devices: DeviceDto[] }>>;
+  listDeviceAgents(input: { teamId: string; userId: string; deviceId: string }): Promise<Ack<{ agents: DeviceAgentListDto[]; runtimes: RuntimeDto[] }>>;
   getDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDetailDto }>>;
+  renameDevice(input: { userId: string; deviceId: string; hostname: string }): Promise<Ack<{ device: DeviceDto }>>;
+  deleteDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[]; channelTeamIds: string[] }>>;
   requestDeviceScan(input: RequestDeviceScanInput): Promise<Ack<RequestDeviceScanResult>>;
-  deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto }>>;
+  deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto }>>;
+  markDeviceOffline(input: { deviceId: string; timestamp: UnixMs }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[] }>>;
   reportDeviceRuntimes(input: ReportDeviceRuntimesInput): Promise<Ack<{ runtimes: RuntimeDto[] }>>;
   registerDiscoveredAgents(input: RegisterDiscoveredAgentsInput): Promise<Ack<RegisterDiscoveredAgentsResult>>;
   listVisibleAgents(input: { teamId: string }): Promise<Ack<{ agents: AgentDto[] }>>;
@@ -105,6 +110,7 @@ export interface ServerNextUseCases {
   removeMember(input: RemoveMemberInput): Promise<Ack<{ userId: string }>>;
   transferOwner(input: TransferOwnerInput): Promise<Ack<{ team: { id: string; name: string }; member: { id: string; teamId: string; userId: string; username: string; role: string } }>>;
   listMembers(input: ListMembersInput): Promise<Ack<{ humans: Array<{ id: string; teamId: string; userId: string; username: string; role: string; displayName?: string; joinedAt: number }>; agents: any[] }>>;
+  getAgentEnvForDevice(input: { token: string; teamId: string; agentId: string }): Promise<Ack<{ env: Record<string, string> }>>;
   updateMemberHuman(input: UpdateMemberHumanInput): Promise<Ack<{ human: { id: string; teamId: string; userId: string; username: string; role: string; displayName?: string; joinedAt: number } }>>;
   updateTeam(input: UpdateTeamInput): Promise<Ack<{ team: { id: string; name: string; path: string } }>>;
   deleteTeam(input: DeleteTeamInput): Promise<Ack<{ fallbackTeam: { id: string; name: string; path: string } | null }>>;
@@ -124,6 +130,12 @@ export interface RegisterUserResult {
   defaultChannel: ChannelDto;
   joinedTeam?: TeamDto;
 }
+
+type DeviceAgentListDto = AgentDto & {
+  networkId: string;
+  publishedNetworkIds: string[];
+  unpublishedNetworkIds: string[];
+};
 
 export interface LoginUserInput {
   username: string;
@@ -936,7 +948,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
 
       return makeSuccess({
-        invite: toDeviceInviteDto(invite),
+        invite: toDeviceInviteDto(invite, buildDeviceInviteCommand(invite.code, invite.profileId ?? team.path)),
         team: toTeamDto(team, role),
       });
     },
@@ -1025,6 +1037,31 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
     },
 
+    async getAgentEnvForDevice(envInput) {
+      const credentials = verifyDeviceToken(envInput.token, sessionSecret);
+      if (!credentials || credentials.teamId !== envInput.teamId) {
+        return makeFailure('UNAUTHENTICATED', 'Invalid device credentials');
+      }
+      const device = credentials.deviceId
+        ? await repositories.devices.getById(credentials.deviceId)
+        : await findDeviceByCredentials(repositories, envInput.teamId, credentials);
+      if (!device || device.teamId !== envInput.teamId) {
+        return makeFailure('UNAUTHENTICATED', 'Unknown device for team');
+      }
+      const agent = await repositories.agents.getById(envInput.agentId);
+      if (!agent || agent.primaryTeamId !== envInput.teamId || agent.deletedAt) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
+      if (agent.deviceId !== device.id) {
+        return makeFailure('FORBIDDEN', 'Device is not bound to this agent');
+      }
+      if (agent.source !== 'custom') {
+        return makeFailure('FORBIDDEN', 'Agent is not custom');
+      }
+      const config = await repositories.agents.getExecutionConfig(envInput.agentId);
+      return makeSuccess({ env: config?.env ?? {} });
+    },
+
     async deviceHello(deviceInput) {
       if (!(await repositories.teams.isMember(deviceInput.teamId, deviceInput.ownerId))) {
         return makeFailure('FORBIDDEN', 'Device owner is not a team member');
@@ -1050,7 +1087,25 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         updatedAt: now,
       });
 
-      return makeSuccess({ device: toDeviceDto(device) });
+      return makeSuccess({
+        device: toDeviceDto(device),
+        credentials: {
+          token: issueDeviceToken({
+            teamId: device.teamId,
+            ownerId: device.ownerId,
+            deviceId: device.id,
+            machineId: device.machineId,
+            profileId: device.profileId,
+            hostname: device.name,
+          }, sessionSecret),
+          teamId: device.teamId,
+          ownerId: device.ownerId,
+          deviceId: device.id,
+          machineId: device.machineId,
+          profileId: device.profileId,
+          hostname: device.name,
+        },
+      });
     },
 
     async listDevices(deviceListInput) {
@@ -1059,6 +1114,58 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       return makeSuccess({
         devices: (await repositories.devices.listByTeam(deviceListInput.teamId)).map(toDeviceDto),
+      });
+    },
+
+    async markDeviceOffline(offlineInput) {
+      const device = await repositories.devices.getById(offlineInput.deviceId);
+      if (!device) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      const hostedAgents = await repositories.agents.listByDevice(device.id);
+      const updated = await repositories.devices.markOffline({
+        deviceId: offlineInput.deviceId,
+        timestamp: offlineInput.timestamp,
+      });
+      if (!updated) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      for (const agent of hostedAgents) {
+        if (agent.status === 'offline') {
+          continue;
+        }
+        await repositories.agents.updateStatus({
+          agentId: agent.id,
+          status: 'offline',
+          lastSeenAt: offlineInput.timestamp,
+          lastError: agent.lastError,
+        });
+      }
+      return makeSuccess({
+        device: toDeviceDto(updated),
+        affectedTeamIds: uniqueIds([device.teamId, ...hostedAgents.flatMap((agent) => agent.visibleTeamIds)]),
+      });
+    },
+
+    async listDeviceAgents(deviceAgentsInput) {
+      const device = await repositories.devices.getById(deviceAgentsInput.deviceId);
+      if (!device) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      // 校验 device 属于该 team 且调用者是 team 成员（与 getDevice 一致）
+      if (device.teamId !== deviceAgentsInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      if (!(await repositories.teams.isMember(device.teamId, deviceAgentsInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const [agents, runtimes] = await Promise.all([
+        repositories.agents.listByDevice(device.id),
+        repositories.runtimes.listByDevice(device.id),
+      ]);
+      return makeSuccess({
+        agents: agents.map(toDeviceAgentListDto),
+        runtimes: runtimes.map(toRuntimeDto),
       });
     },
 
@@ -1078,6 +1185,56 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           agents: visibleAgents.filter((agent) => agent.deviceId === device.id),
         },
       });
+    },
+
+    async renameDevice(renameInput) {
+      const device = await repositories.devices.getById(renameInput.deviceId);
+      if (!device) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      if (!(await repositories.teams.isMember(device.teamId, renameInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const updated = await repositories.devices.updateName({
+        deviceId: device.id,
+        hostname: renameInput.hostname,
+        updatedAt: clock.now(),
+      });
+      if (!updated) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      return makeSuccess({ device: toDeviceDto(updated) });
+    },
+
+    async deleteDevice(deleteInput) {
+      const device = await repositories.devices.getById(deleteInput.deviceId);
+      if (!device) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      const actorRole = await repositories.teams.getMemberRole(device.teamId, deleteInput.userId);
+      if (!actorRole) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      if (device.ownerId !== deleteInput.userId && actorRole !== 'owner' && actorRole !== 'admin') {
+        return makeFailure('FORBIDDEN', 'User cannot manage device');
+      }
+      const now = clock.now();
+      const hostedAgents = await repositories.agents.listByDevice(device.id);
+      const affectedTeamIds = uniqueIds([
+        device.teamId,
+        ...hostedAgents.flatMap((agent) => agent.visibleTeamIds),
+      ]);
+      for (const agent of hostedAgents) {
+        for (const teamId of agent.visibleTeamIds) {
+          await repositories.channels.removeAgentFromTeamChannels({
+            teamId,
+            agentId: agent.id,
+            timestamp: now,
+          });
+        }
+      }
+      await repositories.devices.delete({ deviceId: device.id, timestamp: now });
+      return makeSuccess({ device: toDeviceDto(device), affectedTeamIds, channelTeamIds: affectedTeamIds });
     },
 
     async requestDeviceScan(scanInput) {
@@ -1836,7 +1993,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                   command: executionConfig.command,
                   args: executionConfig.args,
                   cwd: executionConfig.cwd,
-                  env: executionConfig.env,
+                  envRef: { agentId: agent.id, teamId: agent.primaryTeamId },
                 },
               }
             : {}),
@@ -2810,7 +2967,7 @@ function toJoinLinkDto(link: JoinLinkRecord): JoinLinkDto {
   };
 }
 
-function toDeviceInviteDto(invite: DeviceInviteRecord): DeviceInviteDto {
+function toDeviceInviteDto(invite: DeviceInviteRecord, command?: string): DeviceInviteDto {
   return {
     id: invite.id,
     code: invite.code,
@@ -2820,6 +2977,7 @@ function toDeviceInviteDto(invite: DeviceInviteRecord): DeviceInviteDto {
     expiresAt: invite.expiresAt,
     completedAt: invite.completedAt,
     profileId: invite.profileId,
+    command,
   };
 }
 
@@ -3189,6 +3347,20 @@ async function getUsableDeviceInvite(
   return { ok: true, invite };
 }
 
+async function findDeviceByCredentials(
+  repositories: ServerNextRepositories,
+  teamId: string,
+  credentials: Pick<DeviceInviteCredentialsDto, 'machineId' | 'profileId'>,
+): Promise<DeviceRecord | null> {
+  if (!credentials.machineId || !credentials.profileId) {
+    return null;
+  }
+  const teamDevices = await repositories.devices.listByTeam(teamId);
+  return teamDevices.find(
+    (candidate) => candidate.machineId === credentials.machineId && candidate.profileId === credentials.profileId,
+  ) ?? null;
+}
+
 async function consumeJoinCodeForUser(
   repositories: ServerNextRepositories,
   clock: ServerNextClock,
@@ -3261,7 +3433,7 @@ function verifySessionToken(token: string, secret: string): string | null {
 }
 
 function issueDeviceToken(
-  credentials: Pick<DeviceInviteCredentialsDto, 'teamId' | 'ownerId' | 'machineId' | 'profileId' | 'hostname'>,
+  credentials: Pick<DeviceInviteCredentialsDto, 'teamId' | 'ownerId' | 'deviceId' | 'machineId' | 'profileId' | 'hostname'>,
   secret: string,
 ): string {
   const payload = Buffer.from(JSON.stringify(credentials), 'utf8').toString('base64url');
@@ -3271,7 +3443,7 @@ function issueDeviceToken(
 function verifyDeviceToken(
   token: string,
   secret: string,
-): Pick<DeviceInviteCredentialsDto, 'teamId' | 'ownerId' | 'machineId' | 'profileId' | 'hostname'> | null {
+): Pick<DeviceInviteCredentialsDto, 'teamId' | 'ownerId' | 'deviceId' | 'machineId' | 'profileId' | 'hostname'> | null {
   const parts = token.split('.');
   if (parts.length !== 3 || parts[0] !== 'abn_device') {
     return null;
@@ -3289,6 +3461,7 @@ function verifyDeviceToken(
     const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
       teamId?: unknown;
       ownerId?: unknown;
+      deviceId?: unknown;
       machineId?: unknown;
       profileId?: unknown;
       hostname?: unknown;
@@ -3302,6 +3475,7 @@ function verifyDeviceToken(
     return {
       teamId: decoded.teamId,
       ownerId: decoded.ownerId,
+      deviceId: typeof decoded.deviceId === 'string' ? decoded.deviceId : undefined,
       machineId: typeof decoded.machineId === 'string' ? decoded.machineId : undefined,
       profileId: typeof decoded.profileId === 'string' ? decoded.profileId : undefined,
       hostname: typeof decoded.hostname === 'string' ? decoded.hostname : undefined,
@@ -3469,6 +3643,15 @@ function hasOwn(value: object, key: PropertyKey): boolean {
 function toPublicAgent(agent: AgentRecord): AgentDto {
   const { deletedAt: _deletedAt, ...publicAgent } = agent;
   return publicAgent;
+}
+
+function toDeviceAgentListDto(agent: AgentRecord): DeviceAgentListDto {
+  return {
+    ...toPublicAgent(agent),
+    networkId: agent.primaryTeamId,
+    publishedNetworkIds: uniqueIds(agent.visibleTeamIds),
+    unpublishedNetworkIds: [],
+  };
 }
 
 function agentIdentityKey(input: {

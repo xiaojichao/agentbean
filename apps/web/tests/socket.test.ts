@@ -9,6 +9,7 @@ import {
   memberEvents,
   taskEvents,
   uploadArtifact,
+  authEvents,
 } from '../lib/socket';
 
 afterEach(() => {
@@ -116,6 +117,23 @@ describe('socket event payload adapters', () => {
     });
   });
 
+  it('maps device invite creation to server-next device invite payloads', async () => {
+    const { socket, calls } = createAckSocket();
+    const auth = authEvents(socket);
+
+    await auth.inviteCreate({ networkId: 'team-1', purpose: 'device' });
+    expect(calls.at(-1)).toEqual({
+      event: 'device-invite:create',
+      payload: { purpose: 'device', teamId: 'team-1' },
+    });
+
+    await auth.inviteCreate({ networkId: 'default', purpose: 'device' });
+    expect(calls.at(-1)).toEqual({
+      event: 'device-invite:create',
+      payload: { purpose: 'device' },
+    });
+  });
+
   it('maps device and channel member ids to server payload names', async () => {
     const { socket, calls } = createAckSocket();
 
@@ -123,6 +141,12 @@ describe('socket event payload adapters', () => {
     expect(calls.at(-1)).toEqual({
       event: 'device:get',
       payload: { deviceId: 'device-1' },
+    });
+
+    await deviceEvents(socket).agentsList('device-1', 'team-1');
+    expect(calls.at(-1)).toEqual({
+      event: 'device:agents:list',
+      payload: { deviceId: 'device-1', teamId: 'team-1' },
     });
 
     await channelEvents(socket).addMember('channel-1', 'user-1');
@@ -180,6 +204,22 @@ describe('socket event payload adapters', () => {
     expect(calls.at(-1)).toEqual({
       event: 'device:list',
       payload: { teamId: 'team-1' },
+    });
+  });
+
+  it('sends device id payloads compatible with server-next and the legacy server', async () => {
+    const { socket, calls } = createAckSocket();
+
+    await deviceEvents(socket).rename('device-1', 'new-name');
+    expect(calls.at(-1)).toEqual({
+      event: 'device:rename',
+      payload: { id: 'device-1', deviceId: 'device-1', hostname: 'new-name' },
+    });
+
+    await deviceEvents(socket).delete('device-1');
+    expect(calls.at(-1)).toEqual({
+      event: 'device:delete',
+      payload: { id: 'device-1', deviceId: 'device-1' },
     });
   });
 });

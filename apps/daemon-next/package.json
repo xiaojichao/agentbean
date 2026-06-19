@@ -1,6 +1,6 @@
 {
   "name": "@agentbean/daemon-next",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": false,
   "type": "module",
   "main": "./dist/apps/daemon-next/src/index.js",
@@ -24,7 +24,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@agentbean/contracts": "0.2.0",
+    "@agentbean/contracts": "0.2.1",
     "socket.io-client": "^4.8.3"
   }
 }

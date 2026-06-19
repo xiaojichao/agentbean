@@ -331,7 +331,9 @@ export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
       return emitWithTimeout(socket, WEB_EVENTS.auth.whoami, { token: getStoredAuthToken() });
     },
     inviteCreate(payload = {}) {
-      return emitWithTimeout(socket, 'invite:create', payload);
+      const { networkId, ...rest } = payload;
+      const teamId = networkId && networkId !== 'default' ? networkId : undefined;
+      return emitWithTimeout(socket, WEB_EVENTS.deviceInvite.create, { ...rest, ...(teamId ? { teamId } : {}) });
     },
     deviceLogin(payload) {
       return emitWithTimeout(socket, 'auth:device-login', payload, 20000);
@@ -343,19 +345,39 @@ export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
 }
 
 export interface JoinEvents {
-  create(payload: { maxUses?: number; expiresAt?: number }): Promise<{ ok: boolean; link?: import('./schema').JoinLinkInfo; error?: string }>;
-  list(): Promise<{ ok: boolean; links?: import('./schema').JoinLinkInfo[]; error?: string }>;
-  revoke(payload: { code: string }): Promise<{ ok: boolean; error?: string }>;
-  validate(payload: { code: string }): Promise<{ ok: boolean; networkName?: string; expiresAt?: number | null; error?: string }>;
+  create(payload: { maxUses?: number; expiresAt?: number }): Promise<{ ok: boolean; link?: import('./schema').JoinLinkInfo; error?: string; message?: string }>;
+  list(): Promise<{ ok: boolean; links?: import('./schema').JoinLinkInfo[]; error?: string; message?: string }>;
+  revoke(payload: { code: string }): Promise<{ ok: boolean; error?: string; message?: string }>;
+  validate(payload: { code: string }): Promise<{ ok: boolean; networkName?: string; expiresAt?: number | null; error?: string; message?: string }>;
+}
+
+// server 的 JoinLinkDto 只返回 code，不含 url；前端按 /join/[code] 路由构造完整邀请链接
+function joinLinkUrl(code: string): string {
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  return `${origin}/join/${code}`;
 }
 
 export function joinEvents(socket: Socket = getWebSocket()): JoinEvents {
   return {
     create(payload) {
-      return emitWithTimeout(socket, WEB_EVENTS.join.create, payload);
+      return emitWithTimeout(socket, WEB_EVENTS.join.create, payload).then((res) => {
+        if (res?.ok && res.link && !res.link.url) {
+          res.link.url = joinLinkUrl(res.link.code);
+        }
+        return res;
+      });
     },
     list() {
-      return emitWithTimeout(socket, WEB_EVENTS.join.list, {});
+      return emitWithTimeout(socket, WEB_EVENTS.join.list, {}).then((res) => {
+        if (res?.ok && Array.isArray(res.links)) {
+          for (const link of res.links) {
+            if (link && !link.url) {
+              link.url = joinLinkUrl(link.code);
+            }
+          }
+        }
+        return res;
+      });
     },
     revoke(payload) {
       return emitWithTimeout(socket, WEB_EVENTS.join.revoke, payload);
@@ -392,7 +414,7 @@ export interface DeviceRuntime {
 export interface DeviceEvents {
   list(teamId?: string): Promise<{ ok: boolean; devices?: DeviceInfo[]; error?: string }>;
   get(payload: { id: string }): Promise<{ ok: boolean; device?: any; error?: string }>;
-  agentsList(deviceId: string): Promise<{ ok: boolean; agents?: DeviceAgent[]; runtimes?: DeviceRuntime[]; error?: string }>;
+  agentsList(deviceId: string, networkId?: string | null): Promise<{ ok: boolean; agents?: DeviceAgent[]; runtimes?: DeviceRuntime[]; error?: string }>;
   scan(deviceId: string): Promise<{ ok: boolean; error?: string }>;
   selectDirectory(deviceId: string): Promise<{ ok: boolean; path?: string; error?: string }>;
   delete(id: string): Promise<{ ok: boolean; error?: string }>;
@@ -410,8 +432,8 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
     get({ id }) {
       return emitWithTimeout(socket, WEB_EVENTS.device.get, { deviceId: id });
     },
-    agentsList(deviceId) {
-      return emitWithTimeout(socket, 'device:agents:list', { deviceId });
+    agentsList(deviceId, networkId) {
+      return emitWithTimeout(socket, WEB_EVENTS.device.agentsList, networkId ? { deviceId, teamId: networkId } : { deviceId });
     },
     scan(deviceId) {
       return emitWithTimeout(socket, WEB_EVENTS.device.scan, { deviceId });
@@ -420,10 +442,10 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
       return emitWithTimeout(socket, 'device:select-directory', { deviceId }, 35000);
     },
     delete(id) {
-      return emitWithTimeout(socket, 'device:delete', { id });
+      return emitWithTimeout(socket, WEB_EVENTS.device.delete, { id, deviceId: id });
     },
     rename(id, hostname) {
-      return emitWithTimeout(socket, 'device:rename', { id, hostname });
+      return emitWithTimeout(socket, WEB_EVENTS.device.rename, { id, deviceId: id, hostname });
     },
     onSnapshot(handler) {
       socket.on(WEB_EVENTS.device.snapshot, handler);

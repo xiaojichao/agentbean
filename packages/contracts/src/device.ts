@@ -41,6 +41,8 @@ export interface DeviceInviteDto {
   expiresAt?: UnixMs;
   completedAt?: UnixMs;
   profileId?: string;
+  /** 可直接运行的 daemon 连接命令，仅 createDeviceInvite 返回；daemon 侧等待/完成流程不返回。 */
+  command?: string;
 }
 
 export interface CreateDeviceInviteCommandDto {
@@ -67,6 +69,7 @@ export interface DeviceInviteCredentialsDto {
   token: string;
   teamId: ID;
   ownerId: ID;
+  deviceId?: ID;
   serverUrl?: string;
   machineId?: string;
   profileId?: string;

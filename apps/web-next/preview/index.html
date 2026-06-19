@@ -259,6 +259,32 @@
       .nav-row:hover {
         background: #f0f0ee;
       }
+      .channel-row {
+        align-items: center;
+        display: flex;
+        gap: 4px;
+      }
+      .channel-row .nav-row {
+        flex: 1;
+        min-width: 0;
+      }
+      .channel-actions {
+        display: none;
+        gap: 4px;
+      }
+      .channel-row:hover .channel-actions,
+      .channel-row:focus-within .channel-actions {
+        display: inline-flex;
+      }
+      .channel-action {
+        background: transparent;
+        border: 1px solid #d7d7d3;
+        border-radius: 4px;
+        color: #68747b;
+        font-size: 11px;
+        min-height: 0;
+        padding: 2px 6px;
+      }
       .section-title {
         color: #737373;
         font-size: 11px;
@@ -402,6 +428,24 @@
         font-size: 12px;
         justify-self: start;
         padding: 2px 8px;
+      }
+      .message-actions {
+        display: inline-flex;
+        gap: 6px;
+      }
+      .message-action {
+        background: transparent;
+        border: 1px solid #e5e5e5;
+        border-radius: 999px;
+        color: #68747b;
+        font-size: 11px;
+        min-height: 0;
+        padding: 2px 8px;
+      }
+      .message-action.active {
+        background: #eff6ff;
+        border-color: #dbeafe;
+        color: #1e3a8a;
       }
       .composer-thread-indicator {
         align-items: center;
@@ -1894,9 +1938,21 @@
           <button class="rail-tab" type="button">设备</button>
           <button class="rail-tab" type="button">Agent</button>
         </div>
+        <form class="panel compact-form" id="team-settings-form">
+          <div class="rail-heading"><h2>团队设置</h2><span class="meta">rename</span></div>
+          <label>名称 <input name="name" placeholder="团队名称" /></label>
+          <button type="submit">重命名团队</button>
+        </form>
         <div class="panel workspace-run-detail" id="workspace-run-detail">
           <div class="rail-heading"><h2>Workspace Run</h2><span class="meta">输出详情</span></div>
           <div class="rail-muted">选择消息里的 workspace run 查看详情。</div>
+        </div>
+        <div class="panel" id="team-runs-panel">
+          <div class="rail-heading"><h2>团队运行</h2><span class="meta">workspace runs</span></div>
+          <div class="task-actions">
+            <button type="button" id="team-runs-refresh">刷新</button>
+          </div>
+          <ul class="search-results" id="team-runs-results"></ul>
         </div>
         <form class="panel compact-form" id="task-create-form">
           <div class="rail-heading"><h2>任务</h2><span class="meta">first slice</span></div>
@@ -1918,14 +1974,29 @@
           </div>
           <ul class="search-results" id="join-link-results"></ul>
         </div>
+        <div class="panel" id="saved-messages-panel">
+          <div class="rail-heading"><h2>收藏消息</h2><span class="meta">saved</span></div>
+          <div class="task-actions">
+            <button type="button" id="saved-messages-refresh">刷新</button>
+          </div>
+          <ul class="search-results" id="saved-messages-results"></ul>
+        </div>
         <div class="panel">
           <div class="rail-heading"><h2>成员</h2><span class="meta">human / agent</span></div>
           <ul class="list" id="agents"></ul>
+        </div>
+        <div class="panel" id="members-panel">
+          <div class="rail-heading"><h2>成员管理</h2><span class="meta">roles</span></div>
+          <div class="task-actions">
+            <button type="button" id="members-refresh">刷新</button>
+          </div>
+          <ul class="search-results" id="members-results"></ul>
         </div>
         <div class="panel">
           <div class="rail-heading"><h2>设备</h2><span class="meta">daemon</span></div>
           <ul class="list" id="devices"></ul>
         </div>
+        <div class="panel" id="device-detail"></div>
         <div class="panel">
           <div class="rail-heading"><h2>运行时</h2><span class="meta">Codex / Claude / Gemini</span></div>
           <ul class="list" id="runtimes"></ul>
@@ -1969,7 +2040,11 @@
         devices: [],
         runtimesByDevice: {},
         selectedDeviceId: null,
+        deviceDetail: null,
+        deviceDetailId: null,
+        deviceDetailError: null,
         agents: [],
+        agentsLoaded: false,
         messages: [],
         tasks: [],
         taskError: null,
@@ -1978,15 +2053,28 @@
         searchError: null,
         searchLoading: false,
         replyThreadId: null,
+        reactedMessageIds: new Set(),
         replyChannelId: null,
         joinLinks: [],
         joinError: null,
         joinLoading: false,
+        savedMessages: [],
+        savedError: null,
+        savedLoading: false,
+        teamRuns: [],
+        teamRunsLoading: false,
+        teamRunsError: null,
+        teamRunsCursor: null,
+        members: [],
+        membersError: null,
+        membersLoading: false,
         activeWorkspaceRunId: readWorkspaceRunIdFromUrl(),
         workspaceRunDetails: {},
         workspaceRunDetailLoadingId: null,
         workspaceRunDetailError: null,
       };
+      const TASK_REORDER_STEP = 1000;
+      const TASK_REORDER_MIN_GAP = 1e-6;
       const el = (id) => document.getElementById(id);
 
       socket.on("connect", async () => {
@@ -2002,25 +2090,27 @@
         }
       });
       socket.on("disconnect", () => setStatus("已断开"));
-      socket.on("devices:snapshot", (devices) => {
+      socket.on("devices:snapshot", async (devices) => {
         state.devices = devices || [];
         const visibleDevices = getVisibleDevices();
-        if (!state.selectedDeviceId || !visibleDevices.some((device) => device.id === state.selectedDeviceId)) {
-          state.selectedDeviceId = visibleDevices[0]?.id || null;
-        }
-        render();
+        const nextDeviceId = !state.selectedDeviceId || !visibleDevices.some((device) => device.id === state.selectedDeviceId)
+          ? visibleDevices[0]?.id || null
+          : state.selectedDeviceId;
+        await selectDevice(nextDeviceId);
       });
-      socket.on("device:runtimes", (payload) => {
+      socket.on("device:runtimes", async (payload) => {
         if (payload?.deviceId) {
           state.runtimesByDevice[payload.deviceId] = payload.runtimes || [];
           if (!state.selectedDeviceId || getSelectedDeviceRuntimes().length === 0) {
-            state.selectedDeviceId = payload.deviceId;
+            await selectDevice(payload.deviceId);
+            return;
           }
         }
         render();
       });
       socket.on("agents:snapshot", (agents) => {
         state.agents = agents;
+        state.agentsLoaded = true;
         render();
       });
       socket.on("channels:snapshot", (channels) => {
@@ -2096,11 +2186,20 @@
           env,
         });
       });
-      document.querySelector('#agent-create-form [name="deviceId"]').addEventListener("change", (event) => {
-        state.selectedDeviceId = event.currentTarget.value || null;
-        render();
+      document.querySelector('#agent-create-form [name="deviceId"]').addEventListener("change", async (event) => {
+        await selectDevice(event.currentTarget.value || null);
       });
-      el("channels").addEventListener("click", (event) => {
+      el("channels").addEventListener("click", async (event) => {
+        const archiveBtn = event.target.closest("button[data-channel-archive]");
+        if (archiveBtn) {
+          await archiveChannel(archiveBtn.dataset.channelArchive);
+          return;
+        }
+        const deleteBtn = event.target.closest("button[data-channel-delete]");
+        if (deleteBtn) {
+          await deleteChannel(deleteBtn.dataset.channelDelete);
+          return;
+        }
         const row = event.target.closest("[data-channel-id]");
         if (!row) return;
         const channel = state.channels.find((item) => item.id === row.dataset.channelId);
@@ -2113,13 +2212,22 @@
         saveSession();
         render();
       });
-      el("devices").addEventListener("click", (event) => {
+      el("devices").addEventListener("click", async (event) => {
         const row = event.target.closest("[data-device-id]");
         if (!row) return;
-        state.selectedDeviceId = row.dataset.deviceId || null;
-        render();
+        await selectDevice(row.dataset.deviceId || null);
       });
-      el("messages").addEventListener("click", (event) => {
+      el("messages").addEventListener("click", async (event) => {
+        const reactBtn = event.target.closest("button[data-message-react]");
+        if (reactBtn) {
+          await reactMessage(reactBtn.dataset.messageReact);
+          return;
+        }
+        const saveBtn = event.target.closest("button[data-message-save]");
+        if (saveBtn) {
+          await saveMessage(saveBtn.dataset.messageSave);
+          return;
+        }
         const wsRun = event.target.closest("[data-workspace-run-id]");
         if (wsRun) {
           void openWorkspaceRunDetail(wsRun.dataset.workspaceRunId || null);
@@ -2159,7 +2267,34 @@
         await createTask();
       });
 
+      el("team-settings-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        await renameTeam();
+      });
+
+      async function renameTeam() {
+        if (!state.user || !state.team) return;
+        const data = Object.fromEntries(new FormData(el("team-settings-form")));
+        const name = String(data.name || "").trim();
+        if (!name) return;
+        const ack = await emit("team:update", { userId: state.user.id, teamId: state.team.id, name });
+        if (ack.ok && ack.team) {
+          state.team = { ...state.team, name: ack.team.name };
+          render();
+        }
+      }
+
       el("task-results").addEventListener("click", async (event) => {
+        const moveButton = event.target.closest("button[data-task-move]");
+        if (moveButton) {
+          await reorderTask(moveButton.dataset.taskMove, moveButton.dataset.direction);
+          return;
+        }
+        const deleteButton = event.target.closest("button[data-task-delete]");
+        if (deleteButton) {
+          await deleteTask(deleteButton.dataset.taskDelete);
+          return;
+        }
         const button = event.target.closest("button[data-task-id]");
         if (!button) return;
         await updateTaskStatus(button.dataset.taskId, button.dataset.status);
@@ -2177,6 +2312,47 @@
 
       el("join-link-refresh").addEventListener("click", async () => {
         await listJoinLinks();
+      });
+
+      el("saved-messages-refresh").addEventListener("click", async () => {
+        await listSavedMessages();
+      });
+
+      el("team-runs-refresh").addEventListener("click", async () => {
+        await listTeamRuns();
+      });
+
+      el("team-runs-results").addEventListener("click", async (event) => {
+        const moreButton = event.target.closest("button[data-team-runs-more]");
+        if (moreButton) {
+          await loadMoreTeamRuns();
+          return;
+        }
+        const button = event.target.closest("button[data-workspace-run-id]");
+        if (!button) return;
+        void openWorkspaceRunDetail(button.dataset.workspaceRunId || null);
+      });
+
+      el("members-refresh").addEventListener("click", async () => {
+        await listMembers();
+      });
+
+      el("members-results").addEventListener("click", async (event) => {
+        const roleBtn = event.target.closest("button[data-member-role]");
+        if (roleBtn) {
+          await updateMemberRole(roleBtn.dataset.memberRole, roleBtn.dataset.role);
+          return;
+        }
+        const removeBtn = event.target.closest("button[data-member-remove]");
+        if (removeBtn) {
+          await removeMember(removeBtn.dataset.memberRemove);
+          return;
+        }
+        const transferBtn = event.target.closest("button[data-member-transfer]");
+        if (transferBtn) {
+          await transferOwner(transferBtn.dataset.memberTransfer);
+          return;
+        }
       });
 
       el("message-form").addEventListener("submit", async (event) => {
@@ -2237,7 +2413,7 @@
           clearSession();
         }
         if (tasks.ok) {
-          state.tasks = Array.isArray(tasks.tasks) ? tasks.tasks : [];
+          state.tasks = normalizeTasks(Array.isArray(tasks.tasks) ? tasks.tasks : []);
           state.taskError = null;
           renderTasks();
         } else {
@@ -2259,11 +2435,15 @@
         renderChannels();
         renderDevices(visibleDevices);
         renderRuntimes(selectedRuntimes);
+        renderDeviceDetail();
         renderAgents();
         renderMessages();
         renderTasks();
         renderSearchResults();
         renderJoinLinks();
+        renderSavedMessages();
+        renderTeamRuns();
+        renderMembers();
         renderWorkspaceRunPanel();
         renderActiveChannel();
         renderAuthState();
@@ -2282,10 +2462,40 @@
         el("channels").innerHTML = state.channels.map((channel) => {
           const active = channel.id === activeId ? " active" : "";
           const icon = channel.visibility === "private" ? "▣" : "#";
-          return `<li><button class="nav-row${active}" type="button" data-channel-id="${escapeHtml(channel.id)}">
+          return `<li class="channel-row"><button class="nav-row${active}" type="button" data-channel-id="${escapeHtml(channel.id)}">
             <span>${icon}</span><span class="primary">${escapeHtml(channel.title || channel.name)}</span>
-          </button></li>`;
+          </button><span class="channel-actions">
+            <button type="button" class="channel-action" data-channel-archive="${escapeHtml(channel.id)}">归档</button>
+            <button type="button" class="channel-action" data-channel-delete="${escapeHtml(channel.id)}">删除</button>
+          </span></li>`;
         }).join("");
+      }
+
+      async function archiveChannel(channelId) {
+        if (!state.user || !state.team || !channelId) return;
+        const ack = await emit("channel:archive", { userId: state.user.id, teamId: state.team.id, channelId });
+        if (ack.ok && ack.channel) {
+          removeChannelLocally(ack.channel.id);
+        }
+      }
+
+      async function deleteChannel(channelId) {
+        if (!state.user || !state.team || !channelId) return;
+        const channel = state.channels.find((item) => item.id === channelId);
+        const label = channel?.title || channel?.name || "该频道";
+        if (!window.confirm(`删除「${label}」会永久移除该频道及其内容，确定继续吗？`)) return;
+        const ack = await emit("channel:delete", { userId: state.user.id, teamId: state.team.id, channelId });
+        if (ack.ok && ack.channel) {
+          removeChannelLocally(ack.channel.id);
+        }
+      }
+
+      function removeChannelLocally(channelId) {
+        state.channels = state.channels.filter((channel) => channel.id !== channelId);
+        if (state.channel?.id === channelId) {
+          state.channel = state.channels[0] || null;
+        }
+        render();
       }
 
       function renderDevices(devices) {
@@ -2305,6 +2515,77 @@
 
       function renderRuntimes(runtimes) {
         renderList("runtimes", runtimes, (runtime) => renderItem(runtime.name, runtime.command || "未安装"));
+      }
+
+      async function selectDevice(deviceId) {
+        const nextDeviceId = deviceId || null;
+        const changed = state.selectedDeviceId !== nextDeviceId;
+        state.selectedDeviceId = nextDeviceId;
+        if (!nextDeviceId) {
+          state.deviceDetail = null;
+          state.deviceDetailId = null;
+          state.deviceDetailError = null;
+          render();
+          return;
+        }
+        render();
+        if (changed || state.deviceDetailId !== nextDeviceId || (!state.deviceDetail && !state.deviceDetailError)) {
+          await loadDeviceDetail(nextDeviceId);
+          return;
+        }
+      }
+
+      async function loadDeviceDetail(deviceId) {
+        if (!state.user || !deviceId) {
+          state.deviceDetail = null;
+          state.deviceDetailId = null;
+          state.deviceDetailError = null;
+          renderDeviceDetail();
+          return;
+        }
+        state.deviceDetail = null;
+        state.deviceDetailId = deviceId;
+        state.deviceDetailError = null;
+        renderDeviceDetail();
+        const ack = await emit("device:get", { userId: state.user.id, deviceId });
+        if (state.deviceDetailId !== deviceId) return;
+        if (ack.ok && ack.device) {
+          state.deviceDetail = ack.device;
+          state.deviceDetailError = null;
+        } else {
+          state.deviceDetail = null;
+          state.deviceDetailError = ack.error || "设备详情不可用";
+        }
+        renderDeviceDetail();
+      }
+
+      function renderDeviceDetail() {
+        const panel = el("device-detail");
+        if (!state.selectedDeviceId) {
+          panel.innerHTML = `<div class="rail-muted">选择设备查看详情。</div>`;
+          return;
+        }
+        if (state.deviceDetailError && state.deviceDetailId === state.selectedDeviceId) {
+          panel.innerHTML = `<div class="rail-muted">设备详情加载失败：${escapeHtml(state.deviceDetailError)}</div>`;
+          return;
+        }
+        if (state.deviceDetailId !== state.selectedDeviceId) {
+          panel.innerHTML = `<div class="rail-muted">加载设备详情…</div>`;
+          return;
+        }
+        if (!state.deviceDetail) {
+          panel.innerHTML = `<div class="rail-muted">加载设备详情…</div>`;
+          return;
+        }
+        const device = state.deviceDetail;
+        const sys = device.systemInfo || {};
+        const sysLine = [sys.hostname, sys.platform, sys.arch].filter(Boolean).map(escapeHtml).join(" · ") || "—";
+        const snapshotAgents = state.agents.filter((agent) => agent.deviceId === state.selectedDeviceId);
+        const boundAgents = state.agentsLoaded ? snapshotAgents : device.agents || [];
+        const agentNames = boundAgents.map((agent) => escapeHtml(agent.name || agent.id)).join("、") || "无";
+        panel.innerHTML = `<div class="rail-heading"><h2>设备详情</h2><span class="meta">${escapeHtml(device.name || device.id)}</span></div>
+          <div class="meta">系统：${sysLine}</div>
+          <div class="meta">Agent：${agentNames}</div>`;
       }
 
       function renderAgents() {
@@ -2375,6 +2656,13 @@
         const replyButton = !threaded
           ? `<button class="message-reply-btn" type="button" data-thread-id="${escapeHtml(message.threadId || message.id)}">回复讨论串</button>`
           : ``;
+        const reactCount = (message.reactionCounts && message.reactionCounts["👍"]) || 0;
+        const reacted = state.reactedMessageIds.has(message.id);
+        const saved = Boolean(message.saved);
+        const messageActions = `<span class="message-actions">
+          <button type="button" class="message-action${reacted ? " active" : ""}" data-message-react="${escapeHtml(message.id)}">👍 ${reactCount}</button>
+          <button type="button" class="message-action${saved ? " active" : ""}" data-message-save="${escapeHtml(message.id)}">${saved ? "★ 已收藏" : "☆ 收藏"}</button>
+        </span>`;
         const repliesHtml = replies && replies.length > 0
           ? `<div class="thread-replies">${replies
               .slice()
@@ -2387,7 +2675,49 @@
           <div class="message-body">${escapeHtml(message.body)}</div>
           ${artifacts}
           ${replyButton}
+          ${messageActions}
         </article>${repliesHtml}`;
+      }
+
+      function findMessage(messageId) {
+        return state.messages.find((message) => message.id === messageId);
+      }
+
+      async function reactMessage(messageId) {
+        if (!state.user || !state.team || !messageId) return;
+        const on = !state.reactedMessageIds.has(messageId);
+        const ack = await emit("message:react", {
+          userId: state.user.id,
+          teamId: state.team.id,
+          messageId,
+          emoji: "👍",
+          on,
+        });
+        if (!ack.ok) return;
+        if (on) state.reactedMessageIds.add(messageId); else state.reactedMessageIds.delete(messageId);
+        const message = findMessage(messageId);
+        if (message) {
+          const counts = { ...(message.reactionCounts || {}) };
+          counts["👍"] = Math.max(0, (counts["👍"] || 0) + (on ? 1 : -1));
+          message.reactionCounts = counts;
+        }
+        render();
+      }
+
+      async function saveMessage(messageId) {
+        if (!state.user || !state.team || !messageId) return;
+        const message = findMessage(messageId);
+        const on = message ? !message.saved : true;
+        const ack = await emit("message:save", {
+          userId: state.user.id,
+          teamId: state.team.id,
+          messageId,
+          on,
+        });
+        if (ack.ok && message) {
+          message.saved = on;
+          render();
+        }
       }
 
       async function searchMessages() {
@@ -2440,7 +2770,7 @@
         });
         state.taskLoading = false;
         if (ack.ok && ack.task) {
-          state.tasks = [ack.task, ...state.tasks.filter((task) => task.id !== ack.task.id)];
+          state.tasks = normalizeTasks([ack.task, ...state.tasks.filter((task) => task.id !== ack.task.id)]);
           const titleInput = el("task-create-form").querySelector?.("input[name='title']");
           if (titleInput) titleInput.value = "";
           state.taskError = null;
@@ -2459,11 +2789,108 @@
           status,
         });
         if (ack.ok && ack.task) {
-          state.tasks = state.tasks.map((task) => task.id === ack.task.id ? ack.task : task);
+          state.tasks = normalizeTasks(state.tasks.map((task) => task.id === ack.task.id ? ack.task : task));
           state.taskError = null;
         } else {
           state.taskError = ack.message || ack.error || "更新任务失败。";
         }
+        renderTasks();
+      }
+
+      async function deleteTask(taskId) {
+        if (!state.user || !state.team || !taskId) return;
+        const ack = await emit("task:delete", {
+          userId: state.user.id,
+          teamId: state.team.id,
+          taskId,
+        });
+        if (ack.ok && ack.task) {
+          state.tasks = normalizeTasks(state.tasks.filter((task) => task.id !== ack.task.id));
+          state.taskError = null;
+        } else {
+          state.taskError = ack.message || ack.error || "删除任务失败。";
+        }
+        renderTasks();
+      }
+
+      function compareTasksByPersistedOrder(left, right) {
+        const leftOrder = left.sortOrder ?? 0;
+        const rightOrder = right.sortOrder ?? 0;
+        if (Math.abs(leftOrder - rightOrder) > TASK_REORDER_MIN_GAP) {
+          return leftOrder - rightOrder;
+        }
+        return (right.createdAt ?? 0) - (left.createdAt ?? 0);
+      }
+
+      function normalizeTasks(tasks) {
+        return tasks.slice().sort(compareTasksByPersistedOrder);
+      }
+
+      function planReorder(taskId, direction) {
+        if (direction !== "up" && direction !== "down") return null;
+        const orderedTasks = normalizeTasks(state.tasks);
+        const index = orderedTasks.findIndex((task) => task.id === taskId);
+        if (index < 0) return null;
+        const target = direction === "up" ? index - 1 : index + 1;
+        if (target < 0 || target >= orderedTasks.length) return null;
+        const reorderedTasks = orderedTasks.slice();
+        const [moved] = reorderedTasks.splice(index, 1);
+        reorderedTasks.splice(target, 0, moved);
+
+        const previous = reorderedTasks[target - 1];
+        const next = reorderedTasks[target + 1];
+        if (!previous && !next) return null;
+        if (!previous) {
+          return {
+            tasks: reorderedTasks,
+            updates: [{ taskId, sortOrder: (next.sortOrder ?? 0) - TASK_REORDER_STEP }],
+          };
+        }
+        if (!next) {
+          return {
+            tasks: reorderedTasks,
+            updates: [{ taskId, sortOrder: (previous.sortOrder ?? 0) + TASK_REORDER_STEP }],
+          };
+        }
+
+        const previousOrder = previous.sortOrder ?? 0;
+        const nextOrder = next.sortOrder ?? 0;
+        if (nextOrder - previousOrder > TASK_REORDER_MIN_GAP) {
+          return {
+            tasks: reorderedTasks,
+            updates: [{ taskId, sortOrder: (previousOrder + nextOrder) / 2 }],
+          };
+        }
+        return {
+          tasks: reorderedTasks,
+          updates: reorderedTasks.map((task, taskIndex) => ({
+            taskId: task.id,
+            sortOrder: (taskIndex + 1) * TASK_REORDER_STEP,
+          })),
+        };
+      }
+
+      async function reorderTask(taskId, direction) {
+        if (!state.user || !state.team || !taskId) return;
+        const plan = planReorder(taskId, direction);
+        if (!plan) return;
+        const updatedTasks = new Map();
+        for (const update of plan.updates) {
+          const ack = await emit("task:reorder", {
+            userId: state.user.id,
+            teamId: state.team.id,
+            taskId: update.taskId,
+            sortOrder: update.sortOrder,
+          });
+          if (!ack.ok || !ack.task) {
+            state.taskError = ack.message || ack.error || "排序任务失败。";
+            renderTasks();
+            return;
+          }
+          updatedTasks.set(ack.task.id, ack.task);
+        }
+        state.tasks = normalizeTasks(plan.tasks.map((task) => updatedTasks.get(task.id) || task));
+        state.taskError = null;
         renderTasks();
       }
 
@@ -2488,7 +2915,7 @@
           return `<li class="search-result">
             <div class="meta">${escapeHtml(channelName)} · ${escapeHtml(task.status || "todo")}</div>
             <div class="message-body">${escapeHtml(task.title)}</div>
-            <div class="task-actions"><button type="button" data-task-id="${escapeHtml(task.id)}" data-status="${escapeHtml(nextStatus)}">${escapeHtml(action)}</button></div>
+            <div class="task-actions"><button type="button" data-task-id="${escapeHtml(task.id)}" data-status="${escapeHtml(nextStatus)}">${escapeHtml(action)}</button><button type="button" data-task-move="${escapeHtml(task.id)}" data-direction="up">↑</button><button type="button" data-task-move="${escapeHtml(task.id)}" data-direction="down">↓</button><button type="button" data-task-delete="${escapeHtml(task.id)}">删除</button></div>
           </li>`;
         }).join("");
       }
@@ -2507,6 +2934,200 @@
           state.joinError = ack.message || ack.error || "加载邀请失败。";
         }
         renderJoinLinks();
+      }
+
+      async function listMembers() {
+        if (!state.user || !state.team) return;
+        state.membersLoading = true;
+        state.membersError = null;
+        renderMembers();
+        const ack = await emit("members:list", { userId: state.user.id, teamId: state.team.id });
+        state.membersLoading = false;
+        if (ack.ok && Array.isArray(ack.humans)) {
+          state.members = ack.humans;
+          state.membersError = null;
+        } else {
+          state.membersError = ack.message || ack.error || "加载成员失败。";
+        }
+        renderMembers();
+      }
+
+      function renderMembers() {
+        if (state.membersLoading) {
+          el("members-results").innerHTML = `<li class="rail-muted">成员加载中。</li>`;
+          return;
+        }
+        if (state.membersError) {
+          el("members-results").innerHTML = `<li class="rail-muted">${escapeHtml(state.membersError)}</li>`;
+          return;
+        }
+        if (state.members.length === 0) {
+          el("members-results").innerHTML = `<li class="rail-muted">暂无成员。点击刷新加载。</li>`;
+          return;
+        }
+        el("members-results").innerHTML = state.members.map((member) => {
+          const role = member.role || "member";
+          const roleLabel = role === "owner" ? "拥有者" : role === "admin" ? "管理员" : "成员";
+          const roleToggle = role === "member"
+            ? `<button type="button" data-member-role="${escapeHtml(member.userId)}" data-role="admin">设为管理员</button>`
+            : role === "admin"
+            ? `<button type="button" data-member-role="${escapeHtml(member.userId)}" data-role="member">设为成员</button>`
+            : ``;
+          const transfer = role !== "owner"
+            ? `<button type="button" data-member-transfer="${escapeHtml(member.userId)}">转让拥有者</button>`
+            : ``;
+          const remove = role !== "owner"
+            ? `<button type="button" data-member-remove="${escapeHtml(member.userId)}">移除</button>`
+            : ``;
+          return `<li class="search-result">
+            <div class="meta">${escapeHtml(member.username || member.userId)} · ${roleLabel}</div>
+            <div class="task-actions">${roleToggle}${transfer}${remove}</div>
+          </li>`;
+        }).join("");
+      }
+
+      async function updateMemberRole(targetUserId, role) {
+        if (!state.user || !state.team || !targetUserId || !role) return;
+        const ack = await emit("member:update-role", { userId: state.user.id, teamId: state.team.id, targetUserId, role });
+        if (ack.ok && ack.member) {
+          state.members = state.members.map((member) => member.userId === ack.member.userId ? { ...member, role: ack.member.role } : member);
+          state.membersError = null;
+        } else {
+          state.membersError = ack.message || ack.error || "更新角色失败。";
+        }
+        renderMembers();
+      }
+
+      async function removeMember(targetUserId) {
+        if (!state.user || !state.team || !targetUserId) return;
+        const ack = await emit("member:remove", { userId: state.user.id, teamId: state.team.id, targetUserId });
+        if (ack.ok) {
+          state.members = state.members.filter((member) => member.userId !== targetUserId);
+          state.membersError = null;
+        } else {
+          state.membersError = ack.message || ack.error || "移除成员失败。";
+        }
+        renderMembers();
+      }
+
+      async function transferOwner(targetUserId) {
+        if (!state.user || !state.team || !targetUserId) return;
+        const target = state.members.find((member) => member.userId === targetUserId);
+        const label = target?.username || targetUserId;
+        if (!window.confirm(`转让拥有者给「${label}」会变更团队最高权限，确定继续吗？`)) return;
+        const ack = await emit("member:transfer-owner", { userId: state.user.id, teamId: state.team.id, targetUserId });
+        if (ack.ok) {
+          state.membersError = null;
+          await listMembers();
+        } else {
+          state.membersError = ack.message || ack.error || "转让拥有者失败。";
+          renderMembers();
+        }
+      }
+
+      async function listTeamRuns() {
+        if (!state.team?.id || !state.token) return;
+        state.teamRunsLoading = true;
+        state.teamRunsError = null;
+        state.teamRuns = [];
+        state.teamRunsCursor = null;
+        renderTeamRuns();
+        await fetchTeamRunsPage(null);
+        state.teamRunsLoading = false;
+        renderTeamRuns();
+      }
+
+      async function loadMoreTeamRuns() {
+        if (!state.teamRunsCursor || state.teamRunsLoading) return;
+        state.teamRunsLoading = true;
+        renderTeamRuns();
+        await fetchTeamRunsPage(state.teamRunsCursor);
+        state.teamRunsLoading = false;
+        renderTeamRuns();
+      }
+
+      async function fetchTeamRunsPage(cursor) {
+        if (!state.team?.id || !state.token) return;
+        const cursorParam = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+        try {
+          const response = await fetch(`/api/teams/${encodeURIComponent(state.team.id)}/workspace-runs?token=${encodeURIComponent(state.token)}${cursorParam}`);
+          const ack = await response.json();
+          addEvent("workspace-run:list", ack);
+          if (ack.ok && Array.isArray(ack.runs)) {
+            state.teamRuns = cursor ? [...state.teamRuns, ...ack.runs] : ack.runs;
+            state.teamRunsCursor = typeof ack.nextCursor === "string" && ack.nextCursor ? ack.nextCursor : null;
+            state.teamRunsError = null;
+          } else {
+            state.teamRunsError = ack.message || ack.error || "加载运行列表失败。";
+          }
+        } catch (error) {
+          state.teamRunsError = error instanceof Error ? error.message : "加载运行列表失败。";
+        }
+      }
+
+      function renderTeamRuns() {
+        if (state.teamRunsLoading) {
+          el("team-runs-results").innerHTML = `<li class="rail-muted">运行列表加载中。</li>`;
+          return;
+        }
+        if (state.teamRunsError) {
+          el("team-runs-results").innerHTML = `<li class="rail-muted">${escapeHtml(state.teamRunsError)}</li>`;
+          return;
+        }
+        if (state.teamRuns.length === 0) {
+          el("team-runs-results").innerHTML = `<li class="rail-muted">暂无 workspace 运行。</li>`;
+          return;
+        }
+        const rows = state.teamRuns.map((entry) => {
+          const run = entry.workspaceRun || {};
+          const artifacts = Array.isArray(entry.artifacts) ? entry.artifacts : [];
+          const status = run.status || "unknown";
+          const exit = typeof run.exitCode === "number" ? ` · exit ${run.exitCode}` : "";
+          const command = run.command || run.cwd || run.id;
+          return `<li class="search-result">
+            <div class="meta">${escapeHtml(status)}${escapeHtml(exit)} · ${artifacts.length} 文件</div>
+            <div class="message-body">${escapeHtml(command)}</div>
+            <div class="task-actions"><button type="button" data-workspace-run-id="${escapeHtml(run.id)}">查看详情</button></div>
+          </li>`;
+        });
+        if (state.teamRunsCursor) {
+          rows.push(`<li class="rail-muted"><button type="button" data-team-runs-more="1">加载更多</button></li>`);
+        }
+        el("team-runs-results").innerHTML = rows.join("");
+      }
+
+      async function listSavedMessages() {
+        if (!state.user || !state.team) return;
+        state.savedLoading = true;
+        state.savedError = null;
+        renderSavedMessages();
+        const ack = await emit("message:list-saved", { userId: state.user.id, teamId: state.team.id });
+        state.savedLoading = false;
+        if (ack.ok && Array.isArray(ack.messages)) {
+          state.savedMessages = ack.messages;
+          state.savedError = null;
+        } else {
+          state.savedError = ack.message || ack.error || "加载收藏失败。";
+        }
+        renderSavedMessages();
+      }
+
+      function renderSavedMessages() {
+        if (state.savedLoading) {
+          el("saved-messages-results").innerHTML = `<li class="rail-muted">收藏加载中。</li>`;
+          return;
+        }
+        if (state.savedError) {
+          el("saved-messages-results").innerHTML = `<li class="rail-muted">${escapeHtml(state.savedError)}</li>`;
+          return;
+        }
+        if (state.savedMessages.length === 0) {
+          el("saved-messages-results").innerHTML = `<li class="rail-muted">暂无收藏消息。点击消息上的 ☆ 收藏。</li>`;
+          return;
+        }
+        el("saved-messages-results").innerHTML = state.savedMessages.slice(0, 8).map((message) => {
+          return `<li class="search-result"><div class="message-body">${escapeHtml(message.body || "")}</div></li>`;
+        }).join("");
       }
 
       async function createJoinLink() {
@@ -2958,6 +3579,7 @@
         state.runtimesByDevice = {};
         state.selectedDeviceId = null;
         state.agents = [];
+        state.agentsLoaded = false;
         state.messages = [];
         state.tasks = [];
         state.taskError = null;
@@ -2968,6 +3590,16 @@
         state.joinLinks = [];
         state.joinError = null;
         state.joinLoading = false;
+        state.savedMessages = [];
+        state.savedError = null;
+        state.savedLoading = false;
+        state.teamRuns = [];
+        state.teamRunsLoading = false;
+        state.teamRunsError = null;
+        state.teamRunsCursor = null;
+        state.members = [];
+        state.membersError = null;
+        state.membersLoading = false;
         state.workspaceRunDetails = {};
         state.workspaceRunDetailLoadingId = null;
         state.workspaceRunDetailError = null;

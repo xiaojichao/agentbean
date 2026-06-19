@@ -133,6 +133,9 @@ export async function startServerNextDevServer(
     if (await handleArtifactHttp({ app, config, request, response, url })) {
       return;
     }
+    if (await handleAgentEnvHttp({ app, config, request, response, url })) {
+      return;
+    }
     response.writeHead(404, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ ok: false, error: 'NOT_FOUND' }));
   });
@@ -228,6 +231,31 @@ async function handleAgentWorkspaceHttp(input: ArtifactHttpInput): Promise<boole
       files: run.files.map(withArtifactUrls),
     })),
   });
+  return true;
+}
+
+async function handleAgentEnvHttp(input: ArtifactHttpInput): Promise<boolean> {
+  const match = input.url.pathname.match(/^\/api\/teams\/([^/]+)\/agents\/([^/]+)\/env$/);
+  if (!match) {
+    return false;
+  }
+  if (input.request.method !== 'GET') {
+    writeJson(input.response, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
+    return true;
+  }
+  const teamId = decodeURIComponent(match[1] ?? '');
+  const agentId = decodeURIComponent(match[2] ?? '');
+  const token = readBearerToken(input.request);
+  if (!token) {
+    writeJson(input.response, 401, { ok: false, error: 'UNAUTHENTICATED' });
+    return true;
+  }
+  const result = await input.app.getAgentEnvForDevice({ token, teamId, agentId });
+  if (!result.ok) {
+    writeAckFailure(input.response, result);
+    return true;
+  }
+  writeJson(input.response, 200, { ok: true, env: result.env });
   return true;
 }
 
@@ -605,11 +633,14 @@ function trimTrailingLineBreak(value: Buffer): Buffer {
 }
 
 function readToken(url: URL, request: ArtifactHttpInput['request'], body: Record<string, unknown> = {}): string | undefined {
-  const auth = request.headers.authorization;
-  const bearer = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : undefined;
   const queryToken = url.searchParams.get('token') ?? undefined;
   const bodyToken = typeof body.token === 'string' ? body.token : undefined;
-  return bearer ?? queryToken ?? bodyToken;
+  return readBearerToken(request) ?? queryToken ?? bodyToken;
+}
+
+function readBearerToken(request: ArtifactHttpInput['request']): string | undefined {
+  const auth = request.headers.authorization;
+  return typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : undefined;
 }
 
 function readOptionalQueryString(url: URL, field: string): string | undefined {

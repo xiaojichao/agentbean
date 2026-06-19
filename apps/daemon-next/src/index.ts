@@ -17,6 +17,7 @@ export { collectArtifacts } from './artifact-collector.js';
 export type { CollectedArtifact } from './artifact-collector.js';
 export { uploadArtifacts } from './artifact-uploader.js';
 export type { UploadedArtifact } from './artifact-uploader.js';
+export { createHttpEnvResolver } from './env-fetcher.js';
 
 export interface DaemonProtocolSocket {
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
@@ -84,6 +85,8 @@ export interface DaemonScanSnapshot {
 
 export type DaemonScanProvider = () => Promise<DaemonScanSnapshot>;
 
+export type DaemonCustomAgent = DispatchCustomAgentDto & { env?: Record<string, string> };
+
 export interface DispatchRequestPayload {
   id: string;
   teamId: string;
@@ -96,8 +99,10 @@ export interface DispatchRequestPayload {
   prompt: string;
   history?: DispatchHistoryMessageDto[];
   attachments?: DispatchAttachment[];
-  customAgent?: DispatchCustomAgentDto | null;
+  customAgent?: DaemonCustomAgent | null;
 }
+
+export type AgentEnvResolver = (envRef: { agentId: string; teamId: string }) => Promise<Record<string, string>>;
 
 export interface CreateDaemonProtocolClientInput {
   socket: DaemonProtocolSocket;
@@ -109,6 +114,7 @@ export interface CreateDaemonProtocolClientInput {
   serverUrl: string;
   /** Injectable fetch for tests; defaults to global fetch. */
   fetch?: typeof fetch;
+  envResolver?: AgentEnvResolver;
 }
 
 export interface DaemonProtocolClient {
@@ -116,14 +122,22 @@ export interface DaemonProtocolClient {
 }
 
 export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInput): DaemonProtocolClient {
-  const { socket, executor, device, runtimes, agents, scan, serverUrl, fetch: fetchFn } = input;
+  const { socket, executor, device, runtimes, agents, scan, serverUrl, fetch: fetchFn, envResolver } = input;
 
   return {
     async start() {
-      let currentDeviceId = await announceDeviceSnapshot(socket, device, runtimes, agents);
+      const initialAnnouncement = await announceDeviceSnapshot(socket, device, runtimes, agents);
+      let currentDeviceId = initialAnnouncement.deviceId;
+      if (initialAnnouncement.token) {
+        device.token = initialAnnouncement.token;
+      }
       const cancelledDispatchIds = new Set<string>();
       socket.onReconnect?.(async () => {
-        currentDeviceId = await announceDeviceSnapshot(socket, device, runtimes, agents);
+        const announcement = await announceDeviceSnapshot(socket, device, runtimes, agents);
+        currentDeviceId = announcement.deviceId;
+        if (announcement.token) {
+          device.token = announcement.token;
+        }
       });
 
       socket.on(AGENT_EVENTS.device.scanRequested, async (payload) => {
@@ -141,10 +155,21 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
 
       socket.on(AGENT_EVENTS.dispatch.request, async (payload) => {
         const request = payload as DispatchRequestPayload;
-        if (cancelledDispatchIds.has(request.id)) {
+        if (cancelledDispatchIds.delete(request.id)) {
           return;
         }
         try {
+          if (request.customAgent?.envRef && !request.customAgent.env) {
+            if (!envResolver) {
+              throw new Error('Custom agent env resolver is not configured');
+            }
+            const env = await envResolver(request.customAgent.envRef);
+            request.customAgent = { ...request.customAgent, env };
+            if (cancelledDispatchIds.delete(request.id)) {
+              return;
+            }
+          }
+
           // Per-run workspace + input attachments (only when customAgent.cwd is set).
           const workspace = request.customAgent?.cwd
             ? prepareWorkspaceRun(request.customAgent.cwd, request.id)
@@ -167,7 +192,6 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               env: { ...workspaceRunEnv(workspace), ...(request.customAgent.env ?? {}) },
             };
           }
-
           const result = normalizeDispatchResult(await executor(request));
           if (cancelledDispatchIds.delete(request.id)) {
             return;
@@ -248,12 +272,13 @@ async function announceDeviceSnapshot(
   device: DaemonDeviceConfig,
   runtimes: DaemonRuntimeReport[],
   agents: DaemonAgentReport[],
-): Promise<string> {
+): Promise<{ deviceId: string; token?: string }> {
   const helloAck = await socket.emitWithAck(AGENT_EVENTS.device.hello, device);
   const deviceId = readAckDeviceId(helloAck);
+  const token = readAckDeviceToken(helloAck);
 
   await reportDeviceSnapshot(socket, device.teamId, deviceId, runtimes, agents);
-  return deviceId;
+  return { deviceId, ...(token ? { token } : {}) };
 }
 
 async function reportDeviceSnapshot(
@@ -295,6 +320,18 @@ function readAckDeviceId(ack: unknown): string {
     throw new Error('device:hello ack missing device id');
   }
   return device.id;
+}
+
+function readAckDeviceToken(ack: unknown): string | undefined {
+  if (!ack || typeof ack !== 'object') {
+    return undefined;
+  }
+  const credentials = (ack as { credentials?: unknown }).credentials;
+  if (!credentials || typeof credentials !== 'object') {
+    return undefined;
+  }
+  const token = (credentials as { token?: unknown }).token;
+  return typeof token === 'string' && token.length > 0 ? token : undefined;
 }
 
 function readErrorMessage(error: unknown): string {

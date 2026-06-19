@@ -19,6 +19,11 @@ export interface DispatchAttachmentDto {
   sizeBytes?: number;
 }
 
+export interface AgentEnvRefDto {
+  agentId: ID;
+  teamId: ID;
+}
+
 export interface DispatchCustomAgentDto {
   id?: ID;
   name?: string;
@@ -26,7 +31,7 @@ export interface DispatchCustomAgentDto {
   args?: string[];
   command?: string;
   cwd?: string;
-  env?: Record<string, string>;
+  envRef?: AgentEnvRefDto;
 }
 
 export interface DispatchRequestDto {

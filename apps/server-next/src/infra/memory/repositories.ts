@@ -15,6 +15,7 @@ import type {
   UserRecord,
   WorkspaceRunRecord,
 } from '../../application/repositories.js';
+import { rankMessageSearch } from '../../../../../packages/domain/src/index.js';
 
 export function createInMemoryRepositories(): ServerNextRepositories {
   const users = new Map<string, UserRecord>();
@@ -341,6 +342,51 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       async listByTeam(teamId) {
         return Array.from(devices.values()).filter((device) => device.teamId === teamId);
       },
+      async markOffline(input) {
+        const device = devices.get(input.deviceId);
+        if (!device) {
+          return null;
+        }
+        const updated: DeviceRecord = {
+          ...device,
+          status: 'offline',
+          lastSeenAt: device.lastSeenAt ?? input.timestamp,
+          updatedAt: input.timestamp,
+        };
+        devices.set(device.id, updated);
+        return updated;
+      },
+      async updateName(input) {
+        const device = devices.get(input.deviceId);
+        if (!device) {
+          return null;
+        }
+        const updated: DeviceRecord = {
+          ...device,
+          name: input.hostname,
+          updatedAt: input.updatedAt,
+        };
+        devices.set(device.id, updated);
+        return updated;
+      },
+      async delete(input) {
+        for (const runtime of Array.from(runtimes.values())) {
+          if (runtime.deviceId === input.deviceId) runtimes.delete(runtime.id);
+        }
+        for (const agent of Array.from(agents.values())) {
+          if (agent.deviceId === input.deviceId && agent.deletedAt === undefined) {
+            agents.set(agent.id, {
+              ...agent,
+              visibleTeamIds: [],
+              status: 'offline',
+              deletedAt: input.timestamp,
+              lastSeenAt: input.timestamp,
+            });
+            agentEnv.delete(agent.id);
+          }
+        }
+        devices.delete(input.deviceId);
+      },
     },
     runtimes: {
       async replaceForDevice(input) {
@@ -483,6 +529,11 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           (agent) => agent.deletedAt === undefined && agent.visibleTeamIds.includes(teamId),
         );
       },
+      async listByDevice(deviceId) {
+        return Array.from(agents.values()).filter(
+          (agent) => agent.deviceId === deviceId && agent.deletedAt === undefined,
+        );
+      },
     },
     messages: {
       async append(input) {
@@ -500,12 +551,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async search(input) {
         const channelIds = new Set(input.channelIds);
-        const query = input.query.toLowerCase();
-        return Array.from(messages.values())
-          .filter((message) => channelIds.has(message.channelId) && message.body.toLowerCase().includes(query))
-          .sort((left, right) => right.createdAt - left.createdAt)
-          .slice(0, input.limit)
-          .reverse();
+        const pool = Array.from(messages.values()).filter((message) => channelIds.has(message.channelId));
+        return rankMessageSearch(pool, input.query, input.limit);
       },
       async listThreadBefore(input) {
         const before = messages.get(input.beforeMessageId);

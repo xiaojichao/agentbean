@@ -32,6 +32,9 @@ export const WEB_EVENTS = {
     snapshot: 'devices:snapshot',
     status: 'device:status',
     runtimes: 'device:runtimes',
+    agentsList: 'device:agents:list',
+    rename: 'device:rename',
+    delete: 'device:delete',
   },
   deviceInvite: {
     create: 'device-invite:create',

@@ -95,6 +95,41 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('recreates join_links on a drifted database missing the table (regression for INTERNAL_ERROR)', () => {
+    const { globalDb, close } = openMigratedDatabases();
+    try {
+      // 模拟生产 schema 漂移：0001_first_slice.sql 在 join_links 加入前已应用，
+      // 导致 schema_migrations 记录 0001 完成但 join_links 表缺失。
+      globalDb.exec('DROP TABLE join_links');
+      // 生产此前从未应用过 0004（本修复新增），回退到该状态
+      globalDb
+        .prepare('DELETE FROM schema_migrations WHERE id = ?')
+        .run('global/0004_join_links.sql');
+      expect(tableNames(globalDb)).not.toContain('join_links');
+
+      // 模拟生产重启：重新应用 migrations
+      applyGlobalMigrations(globalDb);
+
+      // 修复后：新 migration 必须补建 join_links（CREATE TABLE IF NOT EXISTS）
+      expect(tableNames(globalDb)).toContain('join_links');
+      expect(columnNames(globalDb, 'join_links')).toEqual(
+        expect.arrayContaining([
+          'id',
+          'code',
+          'team_id',
+          'created_by',
+          'created_at',
+          'expires_at',
+          'max_uses',
+          'uses_count',
+          'revoked_at',
+        ]),
+      );
+    } finally {
+      close();
+    }
+  });
+
   test('persists user join links and consumes them with SQLite', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
@@ -332,12 +367,42 @@ describe('server-next SQLite repositories', () => {
         body: 'secret sqlite search',
         createdAt: 502,
       });
-      await expect(app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'sqlite' })).resolves.toMatchObject({
-        ok: true,
-        messages: [
+      const sqliteSearch = await app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'sqlite' });
+      expect(sqliteSearch).toMatchObject({ ok: true });
+      expect(sqliteSearch.messages).toHaveLength(2);
+      expect(sqliteSearch.messages.map((message) => ({ id: message.id, body: message.body }))).toEqual(
+        expect.arrayContaining([
           { id: 'message-search-public', body: 'public sqlite search' },
           { id: 'message-search-private', body: 'secret sqlite search' },
-        ],
+        ]),
+      );
+      await repositories.messages.append({
+        id: 'message-search-old-phrase',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        threadId: 'message-search-old-phrase',
+        senderKind: 'human',
+        senderId: 'user-1',
+        body: 'alpha beta exact phrase',
+        createdAt: 600,
+      });
+      for (let index = 0; index < 250; index += 1) {
+        await repositories.messages.append({
+          id: `message-search-new-scattered-${index}`,
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          threadId: `message-search-new-scattered-${index}`,
+          senderKind: 'human',
+          senderId: 'user-1',
+          body: `alpha scattered filler ${index} beta`,
+          createdAt: 700 + index,
+        });
+      }
+      const sqliteRanking = await app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'alpha beta' });
+      expect(sqliteRanking).toMatchObject({ ok: true });
+      expect(sqliteRanking.messages[0]).toMatchObject({
+        id: 'message-search-old-phrase',
+        body: 'alpha beta exact phrase',
       });
       await expect(app.searchMessages({ userId: 'user-2', teamId: 'team-1', query: 'sqlite' })).resolves.toMatchObject({
         ok: true,
@@ -1518,7 +1583,9 @@ describe('server-next SQLite repositories', () => {
       if (request.ok) {
         expect(request.request.customAgent?.command).toBeUndefined();
         expect(request.request.customAgent?.cwd).toBeUndefined();
-        expect(request.request.customAgent?.env).toEqual({ OPENAI_API_KEY: 'new-secret' });
+        expect(request.request.customAgent?.envRef).toEqual({ agentId: 'agent-1', teamId: 'team-1' });
+        expect(request.request.customAgent?.env).toBeUndefined();
+        expect(JSON.stringify(request)).not.toContain('new-secret');
       }
       await app.deleteAgent({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' });
 
