@@ -65,7 +65,12 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
           if (timeFilter && stat.mtimeMs <= input.startedAt) {
             continue;
           }
-          const content = readFileSync(abs);
+          let content;
+          try {
+            content = readFileSync(abs);
+          } catch {
+            continue;
+          }
           const sha256 = createHash('sha256').update(content).digest('hex');
           const candidate: CollectedArtifact = {
             absolutePath: abs,
