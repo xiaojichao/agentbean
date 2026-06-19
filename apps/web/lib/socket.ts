@@ -439,7 +439,7 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
       return emitWithTimeout(socket, WEB_EVENTS.device.scan, { deviceId });
     },
     selectDirectory(deviceId) {
-      return emitWithTimeout(socket, 'device:select-directory', { deviceId }, 35000);
+      return emitWithTimeout(socket, WEB_EVENTS.device.selectDirectory, { deviceId }, 35000);
     },
     delete(id) {
       return emitWithTimeout(socket, WEB_EVENTS.device.delete, { id, deviceId: id });
