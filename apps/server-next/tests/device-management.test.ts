@@ -338,6 +338,91 @@ describe('device rename and delete (end-to-end)', () => {
     });
   });
 
+  test('device connectCommand surfaces after invite-based onboarding', async () => {
+    // 完整接入流程：web create invite → daemon wait（agent，自动触发 owner approve complete）→
+    // daemon hello（agent，反查 completed invite 生成 connectCommand）→ web getDevice 断言命令。
+    // 说明：device-invite:wait 的后置钩子会以 invite.createdBy（owner）自动 complete，
+    // 因此本流程不手动 emit device-invite:complete（手动 complete 会返回 INVITE_ALREADY_USED）。
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'invite-1', 'device-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    // 注册用户（建立 authenticated web session）
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      agent.disconnect();
+    });
+    const registerAck = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    expect(registerAck).toMatchObject({ ok: true, user: { id: 'user-1', primaryTeamId: 'team-1' } });
+    const web = await connectClient(`${baseUrl}/web`, {
+      auth: { token: (registerAck as { token: string }).token },
+    });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+
+    // web 建 device invite（teamId/profileId 来自 authenticated session）
+    const inviteAck = await web.emitWithAck(WEB_EVENTS.deviceInvite.create, {
+      teamId: 'team-1',
+      profileId: 'default',
+    });
+    expect(inviteAck).toMatchObject({ ok: true });
+    const invite = (inviteAck as { invite?: { code?: string; command?: string } }).invite;
+    expect(invite?.code).toBeTruthy();
+    const code = invite!.code!;
+
+    // 先挂 credentials 监听（wait ack 在 owner approve 自动 complete 之前返回，避免竞态漏接推送）
+    const credentialsPromise = new Promise<unknown>((resolve) => {
+      agent.on(AGENT_EVENTS.deviceInvite.credentials, (payload) => resolve(payload));
+    });
+
+    // daemon wait（agent，会自动触发 owner approve complete；ack 返回 updated invite）
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.deviceInvite.wait, {
+        code,
+        machineId: 'mac-1',
+        profileId: 'default',
+        hostname: 'mac',
+      }),
+    ).resolves.toMatchObject({ ok: true, invite: { createdBy: 'user-1' } });
+
+    // 等待 owner approve 自动 complete（异步后置钩子）——用 device-invite:credentials 推送做同步信号
+    const credentials = await credentialsPromise;
+    expect(credentials).toMatchObject({ token: expect.any(String), ownerId: 'user-1' });
+
+    // daemon hello（agent）：machineId/profileId 匹配 invite → 反查 completed invite 生成 connectCommand
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'mac-1',
+        profileId: 'default',
+        hostname: 'mac',
+        daemonVersion: '0.2.1',
+        systemInfo: { hostname: 'mac', platform: 'darwin', arch: 'arm64', daemonVersion: '0.2.1' },
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'device-1', status: 'online' } });
+
+    // getDevice 断言 connectCommand：含 npx @agentbean/daemon + invite code
+    const got = await web.emitWithAck(WEB_EVENTS.device.get, { deviceId: 'device-1' });
+    expect(got).toMatchObject({ ok: true });
+    const connectCommand = (got as { device?: { connectCommand?: string } }).device?.connectCommand;
+    expect(connectCommand).toEqual(expect.stringContaining('npx @agentbean/daemon'));
+    expect(connectCommand).toContain(code);
+  });
+
   test('device getDevice surfaces daemonVersionInfo with update-available', async () => {
     process.env.AGENT_BEAN_DAEMON_LATEST_VERSION = '0.3.0';
     resetDaemonVersionCacheForTests();
