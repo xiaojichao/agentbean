@@ -3,6 +3,7 @@ import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, ty
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand } from './device-invite-command.js';
+import { buildDaemonVersionInfo } from '../daemon-version.js';
 
 export interface ServerNextClock {
   now(): number;
@@ -2982,6 +2983,7 @@ function toDeviceInviteDto(invite: DeviceInviteRecord, command?: string): Device
 }
 
 function toDeviceDto(device: DeviceDto): DeviceDto {
+  const daemonVersionInfo = buildDaemonVersionInfo(device.systemInfo as Record<string, unknown> | null | undefined);
   return {
     id: device.id,
     teamId: device.teamId,
@@ -2991,6 +2993,9 @@ function toDeviceDto(device: DeviceDto): DeviceDto {
     systemInfo: device.systemInfo,
     capabilities: device.capabilities,
     daemonVersion: device.daemonVersion,
+    daemonVersionInfo,
+    latestDaemonVersion: daemonVersionInfo.latest,
+    daemonUpdateAvailable: daemonVersionInfo.updateAvailable,
     lastSeenAt: device.lastSeenAt,
   };
 }
