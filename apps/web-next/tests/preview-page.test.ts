@@ -1329,6 +1329,7 @@ describe('web-next preview page interactions', () => {
     const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'online', name: 'MacBook Pro' };
     const oldAgent = { id: 'agent-1', name: 'Codex Agent', category: 'custom', status: 'online', deviceId: 'device-1', lastSeenAt: 1 };
     const refreshedAgent = { ...oldAgent, lastSeenAt: 2 };
+    const discoveredAgent = { id: 'agent-2', name: 'Discovered Agent', category: 'custom', status: 'online', deviceId: 'device-1', lastSeenAt: 3 };
     let agentListCalls = 0;
     const harness = createPreviewHarness({
       'auth:register': () => ({
@@ -1359,6 +1360,10 @@ describe('web-next preview page interactions', () => {
     await harness.runTimers();
     expect(harness.emitted.filter(([event]) => event === 'device:agents:list')).toHaveLength(2);
     expect(harness.element('device-detail').innerHTML).toContain('Codex Agent');
+
+    await harness.socket.trigger('agents:snapshot', [discoveredAgent]);
+    expect(harness.element('device-detail').innerHTML).not.toContain('Codex Agent');
+    expect(harness.element('device-detail').innerHTML).toContain('Discovered Agent');
 
     await harness.runTimers();
     expect(harness.emitted.filter(([event]) => event === 'device:agents:list')).toHaveLength(2);
@@ -1412,6 +1417,7 @@ describe('web-next preview page interactions', () => {
     const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'online', name: 'MacBook Pro' };
     const oldAgent = { id: 'old-agent', name: 'Old Agent', category: 'custom', status: 'offline', deviceId: 'device-1' };
     const newAgent = { id: 'new-agent', name: 'New Agent', category: 'custom', status: 'online', deviceId: 'device-1' };
+    const oldRuntime = { id: 'runtime-old', name: 'Old Runtime', adapterKind: 'custom', command: 'old', installed: true };
     const harness = createPreviewHarness({
       'auth:register': () => ({
         ok: true,
@@ -1425,8 +1431,8 @@ describe('web-next preview page interactions', () => {
       'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
       'task:list': () => ({ ok: true, tasks: [] }),
       'join:list': () => ({ ok: true, links: [] }),
-      'device:get': () => ({ ok: true, device: { ...device, agents: [oldAgent] } }),
-      'device:agents:list': () => ({ ok: true, agents: [oldAgent], runtimes: [] }),
+      'device:get': () => ({ ok: true, device: { ...device, agents: [oldAgent], runtimes: [oldRuntime] } }),
+      'device:agents:list': () => ({ ok: true, agents: [oldAgent], runtimes: [oldRuntime] }),
       'device:scan': () => ({ ok: true }),
     });
 
@@ -1439,6 +1445,7 @@ describe('web-next preview page interactions', () => {
     }
 
     expect(harness.emitted.filter(([event]) => event === 'device:agents:list')).toHaveLength(9);
+    expect(harness.element('agent-create-form:runtimeId').innerHTML).toContain('Old Runtime');
 
     await harness.socket.trigger('agents:snapshot', [newAgent]);
     expect(harness.element('device-detail').innerHTML).not.toContain('Old Agent');
