@@ -324,6 +324,113 @@ describe('AgentBean Next browser smoke script', () => {
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('in_progress'))).toBe(true);
   });
 
+  test('exercises WebUI workspace run detail with full log artifact and source message link', async () => {
+    const { exerciseWebUiRunsBusinessSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
+    const calls: Array<[string, unknown]> = [];
+    const webSocketCalls: Array<[string, unknown]> = [];
+    const daemonCalls: Array<[string, unknown]> = [];
+    const page = {
+      async navigate(url: string) {
+        calls.push(['navigate', url]);
+      },
+      async waitForFunction(expression: string, description: string) {
+        calls.push(['waitForFunction', { expression, description }]);
+      },
+      async evaluateJson(expression: string) {
+        calls.push(['evaluateJson', expression]);
+        return true;
+      },
+      async click(selector: string) {
+        calls.push(['click', selector]);
+      },
+      async setInputValue(selector: string, value: string) {
+        calls.push(['setInputValue', { selector, value }]);
+      },
+      async reload() {
+        calls.push(['reload', undefined]);
+      },
+    };
+    const webSocket = {
+      async emitWithAck(event: string, payload: unknown) {
+        webSocketCalls.push([event, payload]);
+        if (event === 'agent:create') return { ok: true, agent: { id: 'agent-1' } };
+        if (event === 'message:send') return { ok: true, dispatches: [{ id: 'dispatch-1' }] };
+        return { ok: true };
+      },
+    };
+    const ioFactory = () => {
+      let onConnect: (() => void) | undefined;
+      return {
+        on(event: string, handler: () => void) {
+          if (event === 'connect') onConnect = handler;
+        },
+        off() {},
+        connect() {
+          onConnect?.();
+        },
+        disconnect() {
+          daemonCalls.push(['disconnect', undefined]);
+        },
+        async emitWithAck(event: string, payload: unknown) {
+          daemonCalls.push([event, payload]);
+          if (event === 'device:hello') return { ok: true, device: { id: 'device-1' } };
+          if (event === 'device:runtimes') return { ok: true, runtimes: [{ id: 'runtime-1' }] };
+          return { ok: true };
+        },
+      };
+    };
+
+    const result = await exerciseWebUiRunsBusinessSmoke({
+      page,
+      baseUrl: 'http://127.0.0.1:4100/',
+      webSocket,
+      session: {
+        token: 'token-1',
+        user: { id: 'user-1', username: 'alice' },
+        team: { id: 'team-1', name: 'Team One', path: 'team-one' },
+        channel: { id: 'channel-1', name: 'general' },
+      },
+      ioFactory,
+      suffix: 'runs-smoke',
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      id: 'webui-run-runs-smoke',
+      command: 'agentbean-webui-smoke workspace runs-smoke',
+      dispatchId: 'dispatch-1',
+      logArtifactId: 'webui-log-runs-smoke',
+      summaryArtifactId: 'webui-summary-runs-smoke',
+    });
+    expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/runs']);
+    expect(calls).toContainEqual(['reload', undefined]);
+    expect(calls.filter((call) => call[0] === 'click' && call[1] === '[data-smoke="workspace-run-full-log-load"]')).toHaveLength(2);
+    expect(calls).toContainEqual([
+      'setInputValue',
+      { selector: '[data-smoke="workspace-run-full-log-search"]', value: 'finished' },
+    ]);
+    expect(calls).toContainEqual(['click', '[data-smoke="workspace-run-full-log-search-submit"]']);
+    expect(calls).toContainEqual(['click', '[data-smoke="workspace-run-source-message-link"]']);
+    expect(webSocketCalls).toContainEqual(['message:send', expect.objectContaining({ teamId: 'team-1', channelId: 'channel-1' })]);
+    expect(daemonCalls).toContainEqual(['device:hello', expect.objectContaining({ teamId: 'team-1', ownerId: 'user-1' })]);
+    const waitForFunctionCalls = calls.filter(
+      (call): call is ['waitForFunction', { expression: string; description: string }] => call[0] === 'waitForFunction',
+    );
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('workspace-run-card'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('workspace-run-detail'))).toBe(true);
+    expect(waitForFunctionCalls.filter((call) => call[1].expression.includes('workspace-run-full-log'))).toHaveLength(5);
+    expect(waitForFunctionCalls.filter((call) => call[1].expression.includes('workspace-run-source-message-link'))).toHaveLength(2);
+    expect(waitForFunctionCalls.filter((call) => call[1].expression.includes('workspace-run-artifact-tree'))).toHaveLength(2);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('logs/workspace-run.log'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('outputs/summary.md'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('workspace-run-full-log-viewer'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('workspace-run-full-log-search'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('chat-message'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('data-message-selected'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('finished WebUI workspace run smoke'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('token='))).toBe(true);
+  });
+
   test('exercises WebUI settings team rename plus join link create and revoke', async () => {
     const { exerciseWebUiSettingsBusinessSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];

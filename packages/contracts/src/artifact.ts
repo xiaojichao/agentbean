@@ -26,6 +26,7 @@ export interface WorkspaceRunDto {
   teamId: ID;
   channelId: ID;
   messageId?: ID;
+  sourceMessageId?: ID;
   dispatchId: ID;
   agentId: ID;
   deviceId?: ID;

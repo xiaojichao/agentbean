@@ -242,6 +242,9 @@ export default function TeamWorkspaceRunsPage() {
     const agentLabel = agent?.name ?? shortId(workspaceRun.agentId);
     const deviceLabel = device?.hostname ?? (workspaceRun.deviceId ? shortId(workspaceRun.deviceId) : '未绑定设备');
     const sourceLabel = dm?.name ?? channel?.name ?? shortId(workspaceRun.channelId);
+    const hasFullLogArtifact = artifacts.some((artifact) =>
+      artifact.relativePath === 'logs/workspace-run.log' || artifact.filename === 'workspace-run.log'
+    );
     return (
       <article
         key={workspaceRun.id}
@@ -250,6 +253,7 @@ export default function TeamWorkspaceRunsPage() {
         data-run-id={workspaceRun.id}
         data-run-command={workspaceRun.command ?? ''}
         data-run-status={workspaceRun.status}
+        data-run-has-full-log={hasFullLogArtifact ? 'true' : 'false'}
       >
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
@@ -297,7 +301,12 @@ export default function TeamWorkspaceRunsPage() {
             <p className="mb-1 text-neutral-400">输出</p>
             <p className="flex items-center gap-1.5 font-medium text-neutral-700">
               <FileText className="h-3.5 w-3.5" />
-              {artifacts.length} 个文件
+              <span>{artifacts.length} 个文件</span>
+              {hasFullLogArtifact && (
+                <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">
+                  完整日志
+                </span>
+              )}
             </p>
           </div>
           <div className="min-w-0 rounded-md bg-neutral-50 px-3 py-2">

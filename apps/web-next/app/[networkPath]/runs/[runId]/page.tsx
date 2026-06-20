@@ -21,7 +21,7 @@ import {
   FileDown,
   WrapText,
 } from 'lucide-react';
-import { fetchWorkspaceRunDetail, authedApiUrl } from '@/lib/socket';
+import { fetchWorkspaceRunDetail, fetchWorkspaceRunLog, authedApiUrl } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { formatRelative } from '@/lib/format-time';
 import type { WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunStatus } from '@/lib/schema';
@@ -63,6 +63,62 @@ function artifactPreviewUrl(teamId: string, artifactId: string): string {
   return `/api/teams/${encodeURIComponent(teamId)}/artifacts/${encodeURIComponent(artifactId)}/preview`;
 }
 
+function artifactPathLabel(artifact: WorkspaceArtifact): string {
+  return artifact.relativePath || artifact.filename;
+}
+
+function isWorkspaceRunLogArtifact(artifact: WorkspaceArtifact): boolean {
+  return artifact.relativePath === 'logs/workspace-run.log' || artifact.filename === 'workspace-run.log';
+}
+
+interface ArtifactTreeEntry {
+  type: 'dir' | 'file';
+  path: string;
+  name: string;
+  depth: number;
+  artifact?: WorkspaceArtifact;
+  fileCount?: number;
+}
+
+function buildArtifactTreeEntries(artifacts: WorkspaceArtifact[]): ArtifactTreeEntry[] {
+  const dirs = new Set<string>();
+  for (const artifact of artifacts) {
+    const parts = artifactPathLabel(artifact).split('/').filter(Boolean);
+    for (let index = 1; index < parts.length; index += 1) {
+      dirs.add(parts.slice(0, index).join('/'));
+    }
+  }
+
+  const dirEntries: ArtifactTreeEntry[] = Array.from(dirs).map((path) => {
+    const parts = path.split('/');
+    return {
+      type: 'dir',
+      path,
+      name: parts.at(-1) ?? path,
+      depth: Math.max(0, parts.length - 1),
+      fileCount: artifacts.filter((artifact) => artifactPathLabel(artifact).startsWith(`${path}/`)).length,
+    };
+  });
+  const fileEntries: ArtifactTreeEntry[] = artifacts.map((artifact) => {
+    const path = artifactPathLabel(artifact);
+    const parts = path.split('/').filter(Boolean);
+    return {
+      type: 'file',
+      path,
+      name: parts.at(-1) ?? artifact.filename,
+      depth: Math.max(0, parts.length - 1),
+      artifact,
+    };
+  });
+
+  return [...dirEntries, ...fileEntries].sort((a, b) => {
+    const pathOrder = a.path.localeCompare(b.path);
+    if (pathOrder !== 0) return pathOrder;
+    if (a.type === b.type) return 0;
+    return a.type === 'dir' ? -1 : 1;
+  });
+}
+
 export default function RunDetailPage() {
   const params = useParams<{ networkPath: string; runId: string }>();
   const np = useCurrentNetworkPath();
@@ -77,6 +133,18 @@ export default function RunDetailPage() {
   const [copiedLog, setCopiedLog] = useState(false);
   const [wrapLog, setWrapLog] = useState(true);
   const [logOpen, setLogOpen] = useState(false);
+  const [fullLogText, setFullLogText] = useState<string | null>(null);
+  const [fullLogLoading, setFullLogLoading] = useState(false);
+  const [fullLogError, setFullLogError] = useState<string | null>(null);
+  const [fullLogQuery, setFullLogQuery] = useState('');
+  const [fullLogMeta, setFullLogMeta] = useState<{
+    mode: 'tail' | 'search';
+    totalLines: number;
+    returnedLines: number;
+    matchedLines?: number;
+    truncated: boolean;
+    query?: string;
+  } | null>(null);
 
   const routeNetworkPath = typeof params.networkPath === 'string' ? params.networkPath : np;
   const routeTeamId = teams.find((team) => team.path === routeNetworkPath || team.id === routeNetworkPath)?.id;
@@ -88,6 +156,11 @@ export default function RunDetailPage() {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setFullLogText(null);
+    setFullLogLoading(false);
+    setFullLogError(null);
+    setFullLogQuery('');
+    setFullLogMeta(null);
     fetchWorkspaceRunDetail(workspaceTeamId, runId)
       .then((res) => {
         if (!cancelled) {
@@ -151,16 +224,17 @@ export default function RunDetailPage() {
   const agentName = agents[run.agentId]?.name ?? run.agentId;
   const duration = formatDuration(run.startedAt, run.completedAt);
   const sourceRouteKind = dms.some((dm) => dm.id === run.channelId) ? 'dm' : 'channel';
-  const sourceMessageHref = run.messageId
-    ? `/${np}/${sourceRouteKind}/${encodeURIComponent(run.channelId)}?message=${encodeURIComponent(`${run.channelId}:${run.messageId}`)}`
+  const sourceMessageId = run.sourceMessageId ?? run.messageId;
+  const sourceMessageHref = sourceMessageId
+    ? `/${np}/${sourceRouteKind}/${encodeURIComponent(run.channelId)}?message=${encodeURIComponent(`${run.channelId}:${sourceMessageId}`)}`
     : null;
   const logLines = run.logExcerpt?.split(/\r\n|\r|\n/) ?? [];
   const logCharCount = run.logExcerpt?.length ?? 0;
   const logLooksTruncated = logCharCount >= LOG_EXCERPT_MAX_CHARS;
-  const fullLogArtifact = artifacts.find((artifact) =>
-    artifact.relativePath === 'logs/workspace-run.log' ||
-    artifact.filename === 'workspace-run.log'
-  );
+  const fullLogArtifact = artifacts.find(isWorkspaceRunLogArtifact);
+  const fullLogMatchCount = fullLogMeta?.matchedLines ?? fullLogMeta?.returnedLines ?? 0;
+  const artifactTreeEntries = buildArtifactTreeEntries(artifacts);
+  const artifactTreeDirCount = artifactTreeEntries.filter((entry) => entry.type === 'dir').length;
 
   const copyLogExcerpt = () => {
     if (!run.logExcerpt) return;
@@ -180,6 +254,30 @@ export default function RunDetailPage() {
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(url);
+  };
+
+  const loadFullLogInline = async (query = '') => {
+    if (!fullLogArtifact || fullLogLoading) return;
+    setFullLogLoading(true);
+    setFullLogError(null);
+    const result = await fetchWorkspaceRunLog(workspaceTeamId, run.id, {
+      query: query.trim() || undefined,
+      tailLines: 200,
+    });
+    if (result.ok && typeof result.text === 'string') {
+      setFullLogText(result.text);
+      setFullLogMeta({
+        mode: result.mode ?? (query.trim() ? 'search' : 'tail'),
+        totalLines: result.totalLines ?? 0,
+        returnedLines: result.returnedLines ?? 0,
+        ...(result.matchedLines !== undefined ? { matchedLines: result.matchedLines } : {}),
+        truncated: Boolean(result.truncated),
+        ...(result.query ? { query: result.query } : {}),
+      });
+    } else {
+      setFullLogError(result.error ?? '完整日志加载失败');
+    }
+    setFullLogLoading(false);
   };
 
   // Group artifacts by directory
@@ -214,6 +312,7 @@ export default function RunDetailPage() {
           <Link
             href={sourceMessageHref}
             className="inline-flex items-center gap-1 rounded-md border border-neutral-200 px-2.5 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900"
+            data-smoke="workspace-run-source-message-link"
           >
             <MessageSquare className="w-3.5 h-3.5" />
             返回消息
@@ -326,9 +425,9 @@ export default function RunDetailPage() {
               <div className="flex flex-wrap items-center justify-between gap-2 border-t border-neutral-200 bg-white px-3 py-2">
                 <p className="text-xs text-neutral-500">
                   {logLooksTruncated
-                    ? '摘要用于快速排障：当前只展示最近 16,000 字符，完整日志可在文件列表下载。'
+                    ? '摘要用于快速排障：当前只展示最近 16,000 字符，完整日志可在下方打开。'
                     : fullLogArtifact
-                      ? '摘要用于快速排障，完整日志可在文件列表下载。'
+                      ? '摘要用于快速排障，完整日志可在下方打开。'
                       : '当前展示 daemon 上报并经 server 兜底脱敏后的日志摘要。'}
                 </p>
                 <div className="flex items-center gap-1">
@@ -368,6 +467,101 @@ export default function RunDetailPage() {
           </div>
         )}
 
+        {fullLogArtifact && (
+          <div className="col-span-2 sm:col-span-3">
+            <div
+              className="rounded-md border border-blue-100 bg-blue-50"
+              data-smoke="workspace-run-full-log"
+              data-artifact-id={fullLogArtifact.id}
+              data-artifact-path={artifactPathLabel(fullLogArtifact)}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-blue-800">完整日志</p>
+                  <p className="mt-0.5 truncate text-xs text-blue-700">
+                    {artifactPathLabel(fullLogArtifact)} · {formatBytes(fullLogArtifact.sizeBytes)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => loadFullLogInline()}
+                    disabled={fullLogLoading}
+                    className="inline-flex h-8 items-center gap-1 rounded-md border border-blue-200 bg-white px-2 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    data-smoke="workspace-run-full-log-load"
+                  >
+                    {fullLogLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    {fullLogText ? '重新载入' : '页面内查看'}
+                  </button>
+                  <a
+                    href={authedApiUrl(artifactPreviewUrl(run.teamId, fullLogArtifact.id))}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex h-8 items-center gap-1 rounded-md border border-blue-200 bg-white px-2 text-xs font-medium text-blue-700 hover:bg-blue-50"
+                    data-smoke="workspace-run-full-log-preview"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    预览
+                  </a>
+                  <a
+                    href={authedApiUrl(artifactDownloadUrl(run.teamId, fullLogArtifact.id))}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex h-8 items-center gap-1 rounded-md border border-blue-200 bg-white px-2 text-xs font-medium text-blue-700 hover:bg-blue-50"
+                    data-smoke="workspace-run-full-log-download"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    下载
+                  </a>
+                </div>
+              </div>
+              {fullLogError && (
+                <p className="border-t border-blue-100 bg-white px-3 py-2 text-xs text-red-600">
+                  {fullLogError}
+                </p>
+              )}
+              {fullLogText !== null && (
+                <div className="border-t border-blue-100 bg-white p-3" data-smoke="workspace-run-full-log-inline">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <input
+                      type="search"
+                      value={fullLogQuery}
+                      onChange={(event) => setFullLogQuery(event.target.value)}
+                      placeholder="搜索完整日志"
+                      className="h-8 min-w-0 flex-1 rounded-md border border-neutral-200 px-2 text-xs text-neutral-700 outline-none focus:border-blue-300"
+                      data-smoke="workspace-run-full-log-search"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => loadFullLogInline(fullLogQuery)}
+                      disabled={fullLogLoading}
+                      className="inline-flex h-8 items-center gap-1 rounded-md border border-neutral-200 px-2 text-xs font-medium text-neutral-600 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      data-smoke="workspace-run-full-log-search-submit"
+                    >
+                      搜索
+                    </button>
+                    <span
+                      className="text-xs text-neutral-500"
+                      data-smoke="workspace-run-full-log-match-count"
+                    >
+                      {fullLogMeta?.mode === 'search'
+                        ? `${fullLogMeta.matchedLines ?? 0} / ${fullLogMeta.totalLines} 行匹配`
+                        : `${fullLogMeta?.returnedLines ?? 0} 行${fullLogMeta?.truncated ? ' · tail' : ''}`}
+                    </span>
+                  </div>
+                  <pre
+                    className="max-h-96 overflow-auto rounded-md bg-neutral-950 px-3 py-2 text-xs leading-relaxed text-neutral-100 whitespace-pre-wrap break-words"
+                    data-smoke="workspace-run-full-log-viewer"
+                    data-match-count={String(fullLogMatchCount)}
+                  >
+                    {fullLogText || (fullLogMeta?.mode === 'search' ? '无匹配日志行' : '')}
+                  </pre>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Dispatch */}
         <div>
           <p className="text-xs text-neutral-500 mb-1">Dispatch</p>
@@ -387,9 +581,61 @@ export default function RunDetailPage() {
           <div className="space-y-4">
             {fullLogArtifact && (
               <p className="rounded-md bg-blue-50 px-3 py-2 text-xs text-blue-700">
-                完整日志已作为文件保存，可在 logs/workspace-run.log 中预览或下载。
+                完整日志已作为文件保存，可从上方日志区直接预览或下载。
               </p>
             )}
+            <div
+              className="rounded-md border border-neutral-200 bg-white"
+              data-smoke="workspace-run-artifact-tree"
+              data-artifact-count={artifacts.length}
+              data-dir-count={artifactTreeDirCount}
+            >
+              <div className="flex items-center justify-between border-b border-neutral-100 px-3 py-2">
+                <p className="text-xs font-semibold text-neutral-700">Workspace 文件树</p>
+                <span className="text-xs text-neutral-400">
+                  {artifactTreeDirCount} 个目录 · {artifacts.length} 个文件
+                </span>
+              </div>
+              <div className="divide-y divide-neutral-100">
+                {artifactTreeEntries.map((entry) => {
+                  const paddingLeft = 12 + entry.depth * 18;
+                  if (entry.type === 'dir') {
+                    return (
+                      <div
+                        key={`dir:${entry.path}`}
+                        className="flex min-h-9 items-center gap-2 px-3 py-1.5 text-xs text-neutral-600"
+                        style={{ paddingLeft }}
+                        data-smoke="workspace-run-artifact-tree-dir"
+                        data-artifact-path={entry.path}
+                      >
+                        <FolderOpen className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                        <span className="truncate font-medium">{entry.name}</span>
+                        <span className="ml-auto shrink-0 text-neutral-400">{entry.fileCount} 个文件</span>
+                      </div>
+                    );
+                  }
+                  const artifact = entry.artifact!;
+                  return (
+                    <a
+                      key={`file:${artifact.id}`}
+                      href={authedApiUrl(artifactDownloadUrl(run.teamId, artifact.id))}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex min-h-9 items-center gap-2 px-3 py-1.5 text-xs text-neutral-600 hover:bg-blue-50 hover:text-blue-700"
+                      style={{ paddingLeft }}
+                      data-smoke="workspace-run-artifact-tree-file"
+                      data-artifact-id={artifact.id}
+                      data-artifact-path={entry.path}
+                    >
+                      <Paperclip className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
+                      <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                      <span className="shrink-0 text-neutral-400">{formatBytes(artifact.sizeBytes)}</span>
+                      <Download className="h-3.5 w-3.5 shrink-0 text-neutral-300" />
+                    </a>
+                  );
+                })}
+              </div>
+            </div>
             {Array.from(artifactsByDir.entries()).map(([dir, files]) => (
               <div key={dir || '__root__'}>
                 {dir && (
@@ -406,6 +652,9 @@ export default function RunDetailPage() {
                       target="_blank"
                       rel="noreferrer"
                       className="block border border-neutral-200 rounded-lg p-3 hover:border-blue-300 hover:bg-blue-50/50 transition-colors group"
+                      data-smoke="workspace-run-artifact"
+                      data-artifact-id={artifact.id}
+                      data-artifact-path={artifactPathLabel(artifact)}
                     >
                       <div className="flex items-start gap-2">
                         {isImageMime(artifact.mimeType) ? (
