@@ -745,14 +745,13 @@ describe('server-next SQLite repositories', () => {
       });
       expect(globalDb.prepare('SELECT COUNT(*) AS count FROM devices').get()).toEqual({ count: 1 });
 
-      globalDb
-        .prepare(
-          `INSERT INTO devices (
+      const insertDevice = globalDb.prepare(
+        `INSERT INTO devices (
             id, team_id, owner_id, machine_id, profile_id, hostname, status,
             last_seen_at, created_at, updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run('legacy-device', 'team-1', 'user-1', null, null, 'Renamed Host', 'online', 650, 650, 650);
+      );
+      insertDevice.run('legacy-device', 'team-1', 'user-1', null, null, 'Renamed Host', 'online', 650, 650, 650);
       await app.markDeviceOffline({ deviceId: 'device-1', timestamp: 800 });
       await expect(app.listDevices({ teamId: 'team-1', userId: 'user-1' })).resolves.toMatchObject({
         ok: true,
@@ -760,6 +759,12 @@ describe('server-next SQLite repositories', () => {
       });
       const listed = await app.listDevices({ teamId: 'team-1', userId: 'user-1' });
       expect(listed.ok ? listed.devices.map((device) => device.id) : []).toEqual(['device-1']);
+
+      insertDevice.run('newer-legacy-device', 'team-1', 'user-1', null, null, 'Renamed Host', 'online', 900, 900, 900);
+      await expect(app.listDevices({ teamId: 'team-1', userId: 'user-1' })).resolves.toMatchObject({
+        ok: true,
+        devices: [{ id: 'device-1', name: 'Renamed Host', status: 'offline' }],
+      });
 
       await expect(
         app.reportDeviceRuntimes({
