@@ -1,7 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
-import { authFile } from './profile-paths.js';
+import { agentBeanHome, authFile } from './profile-paths.js';
 
 export interface AuthData {
   token: string;
@@ -55,7 +54,7 @@ export function clearAuth(options: { profileId?: string; baseDir?: string } = {}
 
 export function listAuthProfiles(options: { baseDir?: string } = {}): AuthProfile[] {
   try {
-    const teamsDir = join(options.baseDir ?? join(homedir(), '.agentbean'), 'teams');
+    const teamsDir = join(agentBeanHome(options.baseDir), 'teams');
     if (!existsSync(teamsDir)) return [];
     const profiles: AuthProfile[] = [];
     for (const entry of readdirSync(teamsDir, { withFileTypes: true })) {

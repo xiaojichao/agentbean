@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS } from '../../../packages/contracts/src/index';
-import { createSocketIoDaemonSocket, parseDaemonNextCliConfig, waitForDeviceInviteCredentials } from '../src/cli';
+import { createSocketIoDaemonSocket, parseDaemonNextCliConfig, resolveDaemonServerUrl, waitForDeviceInviteCredentials } from '../src/cli';
+import type { AuthData } from '../src/auth-store';
 
 function writeYamlFixture(content: string): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'cli-cfg-')));
@@ -79,6 +80,7 @@ describe('daemon-next CLI wiring', () => {
       profileId: 'agentbean-next',
       hostname: 'host.local',
       fallbackPrefix: 'daemon-next:',
+      serverUrlExplicit: true,
     });
   });
 
@@ -111,6 +113,7 @@ describe('daemon-next CLI wiring', () => {
       profileId: 'agentbean-next',
       hostname: 'host.local',
       fallbackPrefix: 'daemon-next:',
+      serverUrlExplicit: true,
     });
   });
 
@@ -306,6 +309,32 @@ describe('daemon-next CLI wiring', () => {
       env: {},
     });
     expect(config.profileId).toBe('laptop');
+  });
+
+  test('parseDaemonNextCliConfig normalizes profileId before it reaches storage or hello', () => {
+    const config = parseDaemonNextCliConfig({
+      argv: ['--team-id', 't1', '--owner-id', 'o1', '--profile-id', 'Team A'],
+      env: {},
+    });
+    expect(config.profileId).toBe('team-a');
+  });
+
+  test('resolveDaemonServerUrl uses saved serverUrl unless the user provided one explicitly', () => {
+    const saved: AuthData = {
+      token: 'tok',
+      serverUrl: 'https://saved.example/',
+      teamId: 'team-1',
+      ownerId: 'owner-1',
+    };
+    const implicitDefault = parseDaemonNextCliConfig({ argv: ['--profile-id', 'default'], env: {}, hostname: 'host.local' });
+    expect(resolveDaemonServerUrl(implicitDefault, saved)).toBe('https://saved.example');
+
+    const explicit = parseDaemonNextCliConfig({
+      argv: ['--profile-id', 'default', '--server-url', 'https://explicit.example'],
+      env: {},
+      hostname: 'host.local',
+    });
+    expect(resolveDaemonServerUrl(explicit, saved)).toBe('https://explicit.example');
   });
 
   test('bridges Socket.IO client events to daemon protocol without treating first connect as reconnect', async () => {

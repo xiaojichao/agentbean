@@ -44,6 +44,12 @@ describe('expandAllProfiles (pure orchestration)', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  test('clears inviteCode so saved profiles do not re-enter invite mode', () => {
+    const config = baseConfig({ allProfiles: true, inviteCode: 'STALE-INVITE' });
+    const [sub] = expandAllProfiles(config, [makeProfile('team-a')]);
+    expect(sub.inviteCode).toBeUndefined();
+  });
+
   test('preserves all other config fields, only overrides profileId + allProfiles', () => {
     const config = baseConfig({
       allProfiles: true,

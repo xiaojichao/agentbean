@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { authFile, profileRoot, sanitizeProfileId } from '../src/profile-paths';
+import { agentBeanHome, authFile, profileRoot, sanitizeProfileId } from '../src/profile-paths';
 
 describe('profile-paths', () => {
   it('sanitizes profileId (lowercase, non-alnum → -)', () => {
@@ -13,5 +13,19 @@ describe('profile-paths', () => {
   });
   it('profileRoot defaults to ~/.agentbean when no baseDir', () => {
     expect(profileRoot('default').endsWith('.agentbean/teams/default')).toBe(true);
+  });
+  it('uses AGENTBEAN_HOME as the default state root when present', () => {
+    const original = process.env.AGENTBEAN_HOME;
+    process.env.AGENTBEAN_HOME = '/tmp/agentbean-home';
+    try {
+      expect(agentBeanHome()).toBe('/tmp/agentbean-home');
+      expect(authFile('Team A')).toBe('/tmp/agentbean-home/teams/team-a/auth.json');
+    } finally {
+      if (original === undefined) {
+        delete process.env.AGENTBEAN_HOME;
+      } else {
+        process.env.AGENTBEAN_HOME = original;
+      }
+    }
   });
 });

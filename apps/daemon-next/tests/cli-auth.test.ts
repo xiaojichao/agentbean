@@ -110,9 +110,7 @@ describe('resolveDeviceCredentials (pure decision)', () => {
     });
     expect(resolved.ok).toBe(false);
     if (resolved.ok) return;
-    expect(resolved.error).toBe(
-      'Daemon requires --invite-code, or (--team-id and --owner-id), or a previously saved auth profile (initialize with --invite-code first).',
-    );
+    expect(resolved.error).toBe('AGENTBEAN_NEXT_TEAM_ID or --team-id is required');
   });
 
   test('non-invite + no saved + only teamId (not ownerId): signals the clear startup error', () => {
@@ -123,6 +121,8 @@ describe('resolveDeviceCredentials (pure decision)', () => {
       serverUrl: 'http://127.0.0.1:4000',
     });
     expect(resolved.ok).toBe(false);
+    if (resolved.ok) return;
+    expect(resolved.error).toBe('AGENTBEAN_NEXT_OWNER_ID or --owner-id is required');
   });
 
   test('Decision 1 invariant: invite path does NOT slugify(teamId) — stores under profileId', () => {

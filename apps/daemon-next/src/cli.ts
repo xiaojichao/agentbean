@@ -10,6 +10,7 @@ import { createCommandExecutor } from './executor.js';
 import { createDaemonProtocolClient, createHttpEnvResolver, type DaemonDeviceConfig, type DaemonProtocolSocket } from './index.js';
 import { loadYamlConfig } from './config.js';
 import { listAuthProfiles, loadAuth, saveAuth, type AuthData, type AuthProfile } from './auth-store.js';
+import { sanitizeProfileId } from './profile-paths.js';
 
 interface SocketIoClientLike {
   connected: boolean;
@@ -30,6 +31,7 @@ export interface DaemonNextCliConfig {
   hostname: string;
   fallbackPrefix: string;
   configPath?: string;
+  serverUrlExplicit?: boolean;
   /**
    * When true, runDaemonNextCli enumerates every saved auth profile via
    * listAuthProfiles() and starts one daemon instance per profile
@@ -69,25 +71,31 @@ export function parseDaemonNextCliConfig(input: ParseDaemonNextCliConfigInput = 
   const teamId = args['team-id'] ?? env.AGENTBEAN_NEXT_TEAM_ID ?? yamlString('teamId');
   const ownerId = args['owner-id'] ?? env.AGENTBEAN_NEXT_OWNER_ID ?? yamlString('ownerId');
   const inviteCode = args['invite-code'] ?? env.AGENTBEAN_NEXT_INVITE_CODE ?? yamlString('inviteCode');
+  const serverUrl = args['server-url'] ?? env.AGENTBEAN_NEXT_SERVER_URL ?? yamlString('serverUrl');
   // NOTE: credential sufficiency is validated at run time inside runDaemonNextCli
   // (see resolveDeviceCredentials) so that "start with only saved auth" works:
   // neither --invite-code nor --team-id/--owner-id is required when a profile
   // has been persisted previously.
   return {
     serverUrl: trimTrailingSlash(
-      args['server-url'] ?? env.AGENTBEAN_NEXT_SERVER_URL ?? yamlString('serverUrl') ?? 'http://127.0.0.1:4000',
+      serverUrl ?? 'http://127.0.0.1:4000',
     ),
     ...(teamId ? { teamId } : {}),
     ...(ownerId ? { ownerId } : {}),
     ...(inviteCode ? { inviteCode } : {}),
     machineId: args['machine-id'] ?? env.AGENTBEAN_NEXT_MACHINE_ID ?? yamlString('machineId'),
-    profileId: args['profile-id'] ?? env.AGENTBEAN_NEXT_PROFILE_ID ?? yamlString('profileId') ?? 'default',
+    profileId: sanitizeProfileId(args['profile-id'] ?? env.AGENTBEAN_NEXT_PROFILE_ID ?? yamlString('profileId') ?? 'default'),
     hostname: args.hostname ?? env.AGENTBEAN_NEXT_HOSTNAME ?? yamlString('hostname') ?? input.hostname ?? readHostname(),
     fallbackPrefix:
       args['fallback-prefix'] ?? env.AGENTBEAN_NEXT_FALLBACK_PREFIX ?? yamlString('fallbackPrefix') ?? 'daemon-next:',
     ...(configPath ? { configPath } : {}),
+    ...(serverUrl ? { serverUrlExplicit: true } : {}),
     ...(booleanFlags['all-profiles'] ? { allProfiles: true } : {}),
   };
+}
+
+export function resolveDaemonServerUrl(config: DaemonNextCliConfig, saved: AuthData | null): string {
+  return saved && !config.serverUrlExplicit ? trimTrailingSlash(saved.serverUrl) : config.serverUrl;
 }
 
 /**
@@ -104,8 +112,9 @@ export function parseDaemonNextCliConfig(input: ParseDaemonNextCliConfigInput = 
  * socket-seam NOTE in cli.test.ts), but this helper covers the core decision.
  */
 export function expandAllProfiles(config: DaemonNextCliConfig, profiles: AuthProfile[]): DaemonNextCliConfig[] {
+  const { inviteCode: _inviteCode, ...configWithoutInvite } = config;
   return profiles.map((profile) => ({
-    ...config,
+    ...configWithoutInvite,
     profileId: profile.profileId,
     // Each saved profile carries its own serverUrl (the server that invited
     // it). Override the parent config.serverUrl so every recursive daemon
@@ -116,6 +125,7 @@ export function expandAllProfiles(config: DaemonNextCliConfig, profiles: AuthPro
     // always returns one). trimTrailingSlash mirrors the parse path so a
     // trailing slash in the saved file does not produce a double-slash URL.
     serverUrl: profile.serverUrl ? trimTrailingSlash(profile.serverUrl) : config.serverUrl,
+    serverUrlExplicit: Boolean(profile.serverUrl) || config.serverUrlExplicit,
     allProfiles: false,
   }));
 }
@@ -251,6 +261,20 @@ export function resolveDeviceCredentials(
     return { ok: true, teamId: configTeamId, ownerId: configOwnerId };
   }
 
+  if (!configTeamId) {
+    return {
+      ok: false,
+      error: 'AGENTBEAN_NEXT_TEAM_ID or --team-id is required',
+    };
+  }
+
+  if (!configOwnerId) {
+    return {
+      ok: false,
+      error: 'AGENTBEAN_NEXT_OWNER_ID or --owner-id is required',
+    };
+  }
+
   return {
     ok: false,
     error:
@@ -298,7 +322,23 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
     return;
   }
 
-  const socket = await connectSocketIoClient(config.serverUrl);
+  const saved = config.inviteCode ? null : loadAuth({ profileId: config.profileId });
+  const serverUrl = resolveDaemonServerUrl(config, saved);
+  let resolved: ResolveDeviceCredentialsResult | undefined;
+  if (!config.inviteCode) {
+    resolved = resolveDeviceCredentials({
+      saved,
+      configTeamId: config.teamId,
+      configOwnerId: config.ownerId,
+      profileId: config.profileId,
+      serverUrl,
+    });
+    if (!resolved.ok) {
+      throw new Error(resolved.error);
+    }
+  }
+
+  const socket = await connectSocketIoClient(serverUrl);
   const protocolSocket = createSocketIoDaemonSocket(socket);
   const cached = loadScanCache(config.profileId);
   const snapshot = cached ?? await createBuiltinScanProvider()();
@@ -314,12 +354,11 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
       machineId: config.machineId,
       profileId: config.profileId,
       hostname: config.hostname,
-      serverUrl: config.serverUrl,
+      serverUrl,
     })
     : undefined;
-  const saved = config.inviteCode ? null : loadAuth({ profileId: config.profileId });
 
-  const resolved = resolveDeviceCredentials({
+  resolved ??= resolveDeviceCredentials({
     inviteCode: config.inviteCode,
     inviteCredentials: inviteCredentials
       ? {
@@ -332,7 +371,7 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
     configTeamId: config.teamId,
     configOwnerId: config.ownerId,
     profileId: config.profileId,
-    serverUrl: config.serverUrl,
+    serverUrl,
   });
   if (!resolved.ok) {
     throw new Error(resolved.error);
@@ -358,7 +397,7 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
     systemInfo: { ...collectSystemInfo(), daemonVersion: readDaemonVersion() },
   };
   await createDaemonProtocolClient({
-    serverUrl: config.serverUrl,
+    serverUrl,
     socket: protocolSocket,
     executor: createCommandExecutor({ fallbackPrefix: config.fallbackPrefix }),
     device,
@@ -370,7 +409,7 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
       if (!device.token) {
         throw new Error('Custom agent env resolver is not configured');
       }
-      return createHttpEnvResolver({ serverUrl: config.serverUrl, token: device.token })(envRef);
+      return createHttpEnvResolver({ serverUrl, token: device.token })(envRef);
     },
   }).start();
 }
