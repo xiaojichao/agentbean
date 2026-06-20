@@ -1232,6 +1232,44 @@ describe('web-next preview page interactions', () => {
     expect(detailHtml).toContain('删除设备');
   });
 
+  test('clears the selected preview device after deleting it', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'offline', name: 'MacBook Pro' };
+    const harness = createPreviewHarness(
+      {
+        'auth:register': () => ({
+          ok: true,
+          token: 'token-1',
+          user: { id: 'user-1', username: 'shaw' },
+          currentTeam: { id: 'team-1', name: 'AgentBean' },
+          defaultChannel,
+        }),
+        'device:list': () => ({ ok: true, devices: [] }),
+        'agents:subscribe': () => ({ ok: true, agents: [] }),
+        'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+        'task:list': () => ({ ok: true, tasks: [] }),
+        'join:list': () => ({ ok: true, links: [] }),
+        'device:get': () => ({ ok: true, device }),
+        'device:agents:list': () => ({ ok: true, agents: [], runtimes: [] }),
+        'device:delete': () => ({ ok: true }),
+      },
+      { href: 'http://agentbean-next.local/te-s-t/devices/device-1' },
+    );
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('devices:snapshot', [device]);
+    expect(harness.element('device-detail').innerHTML).toContain('MacBook Pro');
+
+    await harness.click('device-detail', 'button[data-device-delete]', { deviceDelete: 'device-1' });
+
+    expect(harness.confirms[0]).toContain('永久移除');
+    expect(harness.emitted).toContainEqual(['device:delete', { userId: 'user-1', id: 'device-1', deviceId: 'device-1' }]);
+    expect(harness.element('devices').innerHTML).toContain('暂无设备');
+    expect(harness.element('device-detail').innerHTML).toContain('选择设备查看详情');
+    expect(harness.element('device-detail').innerHTML).not.toContain('加载设备详情');
+    expect(harness.historyReplacements).toContain('/te-s-t/devices');
+  });
+
   test('renders a terminal device detail error when device:get fails', async () => {
     const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
     const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'offline', name: 'Mac' };
