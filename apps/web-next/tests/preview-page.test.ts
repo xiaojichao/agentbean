@@ -37,6 +37,7 @@ interface PreviewHarness {
   };
   element(id: string): FakeElement;
   click(elementId: string, selector: string, dataset: Record<string, string>): Promise<void>;
+  runTimers(): Promise<void>;
   submit(formId: string): Promise<void>;
 }
 
@@ -1230,6 +1231,86 @@ describe('web-next preview page interactions', () => {
     expect(detailHtml).toContain('Codex Local');
     expect(detailHtml).toContain('/Users/shaw/AgentBean');
     expect(detailHtml).toContain('删除设备');
+    expect(harness.element('agent-create-form:runtimeId').innerHTML).toContain('Codex CLI');
+  });
+
+  test('allows team admins to manage devices owned by another member', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-2', ownerName: 'Teammate', status: 'online', name: 'Shared Mac' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw', role: 'user' },
+        currentTeam: { id: 'team-1', name: 'AgentBean', currentUserRole: 'admin' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'device:get': () => ({ ok: true, device }),
+      'device:agents:list': () => ({ ok: true, agents: [], runtimes: [] }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('devices:snapshot', [device]);
+
+    const detailHtml = harness.element('device-detail').innerHTML;
+    expect(detailHtml).toContain('data-device-scan="device-1"');
+    expect(detailHtml).toContain('data-device-delete="device-1"');
+  });
+
+  test('delays device scan refresh instead of immediately re-caching stale agents', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'online', name: 'MacBook Pro' };
+    let agentListCalls = 0;
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'device:get': () => ({
+        ok: true,
+        device: { ...device, agents: [{ id: 'old-agent', name: 'Old Agent', category: 'custom', status: 'offline' }] },
+      }),
+      'device:agents:list': () => {
+        agentListCalls += 1;
+        return agentListCalls === 1
+          ? { ok: true, agents: [{ id: 'old-agent', name: 'Old Agent', category: 'custom', status: 'offline' }], runtimes: [] }
+          : {
+              ok: true,
+              agents: [{ id: 'new-agent', name: 'New Agent', category: 'custom', status: 'online' }],
+              runtimes: [{ id: 'runtime-codex', name: 'Codex CLI', adapterKind: 'codex', command: 'codex', installed: true }],
+            };
+      },
+      'device:scan': () => ({ ok: true }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('devices:snapshot', [device]);
+    expect(harness.element('device-detail').innerHTML).toContain('Old Agent');
+
+    await harness.click('device-detail', 'button[data-device-scan]', { deviceScan: 'device-1' });
+
+    expect(harness.emitted.filter(([event]) => event === 'device:agents:list')).toHaveLength(1);
+    expect(harness.element('device-detail').innerHTML).not.toContain('Old Agent');
+    expect(harness.element('device-detail').innerHTML).not.toContain('New Agent');
+
+    await harness.runTimers();
+
+    expect(harness.emitted.filter(([event]) => event === 'device:agents:list')).toHaveLength(2);
+    expect(harness.element('device-detail').innerHTML).toContain('New Agent');
+    expect(harness.element('agent-create-form:runtimeId').innerHTML).toContain('Codex CLI');
   });
 
   test('clears the selected preview device after deleting it', async () => {
@@ -1672,6 +1753,8 @@ function createPreviewHarness(
   const confirms: string[] = [];
   const fetches: Array<{ url: string; init?: RequestInit }> = [];
   const historyReplacements: string[] = [];
+  const timers = new Map<number, () => unknown>();
+  let nextTimerId = 1;
   const localStorage = new FakeLocalStorage();
   const socketHandlers = new Map<string, Array<(payload: unknown) => unknown>>();
   const emitted: Array<[string, unknown]> = [];
@@ -1763,6 +1846,9 @@ function createPreviewHarness(
 
   const context = vm.createContext({
     FormData: FakeFormData,
+    clearTimeout: (timerId: number) => {
+      timers.delete(timerId);
+    },
     fetch: async (url: string, init?: RequestInit) => {
       fetches.push({ url, init });
       if (url.includes('/workspace-runs') && !url.includes('/workspace-runs/')) {
@@ -1891,6 +1977,12 @@ function createPreviewHarness(
     },
     io: () => socket,
     localStorage,
+    setTimeout: (handler: () => unknown) => {
+      const timerId = nextTimerId;
+      nextTimerId += 1;
+      timers.set(timerId, handler);
+      return timerId;
+    },
     window,
   });
   vm.runInContext(readPreviewScript(), context);
@@ -1924,6 +2016,13 @@ function createPreviewHarness(
           // Click handlers in the preview only update local UI state.
         },
       });
+    },
+    async runTimers() {
+      const pending = [...timers.entries()];
+      timers.clear();
+      for (const [, timer] of pending) {
+        await timer();
+      }
     },
     async submit(formId) {
       const form = requiredElement(elements, formId);

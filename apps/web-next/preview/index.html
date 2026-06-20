@@ -2259,6 +2259,7 @@
         runtimesByDevice: {},
         deviceAgentsByDevice: {},
         deviceAgentErrorsByDevice: {},
+        deviceAgentRefreshTimers: {},
         selectedDeviceId: null,
         deviceDetail: null,
         deviceDetailId: null,
@@ -2792,15 +2793,15 @@
         if (ack.ok && ack.device) {
           state.deviceDetail = ack.device;
           state.deviceDetailError = null;
-          await loadDeviceAgents(deviceId);
+          await loadDeviceAgents(deviceId, { renderAfter: false });
         } else {
           state.deviceDetail = null;
           state.deviceDetailError = ack.error || "设备详情不可用";
         }
-        renderDeviceDetail();
+        render();
       }
 
-      async function loadDeviceAgents(deviceId) {
+      async function loadDeviceAgents(deviceId, options = {}) {
         if (!state.user || !state.team || !deviceId) return;
         const ack = await emit("device:agents:list", { userId: state.user.id, teamId: state.team.id, deviceId });
         if (state.deviceDetailId !== deviceId) return;
@@ -2808,18 +2809,41 @@
           delete state.deviceAgentErrorsByDevice[deviceId];
           if (Array.isArray(ack.agents)) state.deviceAgentsByDevice[deviceId] = ack.agents;
           if (Array.isArray(ack.runtimes)) state.runtimesByDevice[deviceId] = ack.runtimes;
+          if (options.renderAfter !== false) render();
           return;
         }
         state.deviceAgentErrorsByDevice[deviceId] = ack.error || "设备 Agent 列表不可用";
+        if (options.renderAfter !== false) render();
       }
 
       async function scanDevice(deviceId) {
         if (!state.user || !state.team || !deviceId) return;
         const ack = await emit("device:scan", { userId: state.user.id, teamId: state.team.id, deviceId });
         if (ack.ok) {
-          await loadDeviceAgents(deviceId);
+          delete state.deviceAgentsByDevice[deviceId];
+          delete state.deviceAgentErrorsByDevice[deviceId];
+          if (state.deviceDetail?.id === deviceId) {
+            state.deviceDetail = {
+              ...state.deviceDetail,
+              agents: [],
+              runtimes: [],
+            };
+          }
+          scheduleDeviceAgentsRefresh(deviceId);
           render();
         }
+      }
+
+      function scheduleDeviceAgentsRefresh(deviceId) {
+        if (state.deviceAgentRefreshTimers[deviceId]) {
+          clearTimeout(state.deviceAgentRefreshTimers[deviceId]);
+        }
+        state.deviceAgentRefreshTimers[deviceId] = setTimeout(async () => {
+          delete state.deviceAgentRefreshTimers[deviceId];
+          if (state.selectedDeviceId === deviceId) {
+            await loadDeviceAgents(deviceId);
+          }
+        }, 1500);
       }
 
       async function deleteDevice(deviceId) {
@@ -2968,7 +2992,15 @@
       }
 
       function canManageDevice(device) {
-        return Boolean(device?.canManage || state.user?.role === "admin" || state.user?.role === "owner" || isOwnedByCurrentUser(device));
+        const teamRole = state.team?.currentUserRole;
+        return Boolean(
+          device?.canManage ||
+          teamRole === "owner" ||
+          teamRole === "admin" ||
+          state.user?.role === "admin" ||
+          state.user?.role === "owner" ||
+          isOwnedByCurrentUser(device),
+        );
       }
 
       function formatDateTime(value) {
@@ -4097,6 +4129,10 @@
         state.runtimesByDevice = {};
         state.deviceAgentsByDevice = {};
         state.deviceAgentErrorsByDevice = {};
+        for (const timer of Object.values(state.deviceAgentRefreshTimers)) {
+          clearTimeout(timer);
+        }
+        state.deviceAgentRefreshTimers = {};
         state.selectedDeviceId = null;
         state.deviceDetail = null;
         state.deviceDetailId = null;
