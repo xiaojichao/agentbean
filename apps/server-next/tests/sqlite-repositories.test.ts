@@ -745,6 +745,22 @@ describe('server-next SQLite repositories', () => {
       });
       expect(globalDb.prepare('SELECT COUNT(*) AS count FROM devices').get()).toEqual({ count: 1 });
 
+      globalDb
+        .prepare(
+          `INSERT INTO devices (
+            id, team_id, owner_id, machine_id, profile_id, hostname, status,
+            last_seen_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run('legacy-device', 'team-1', 'user-1', null, null, 'Renamed Host', 'online', 650, 650, 650);
+      await app.markDeviceOffline({ deviceId: 'device-1', timestamp: 800 });
+      await expect(app.listDevices({ teamId: 'team-1', userId: 'user-1' })).resolves.toMatchObject({
+        ok: true,
+        devices: [{ id: 'device-1', name: 'Renamed Host', status: 'offline' }],
+      });
+      const listed = await app.listDevices({ teamId: 'team-1', userId: 'user-1' });
+      expect(listed.ok ? listed.devices.map((device) => device.id) : []).toEqual(['device-1']);
+
       await expect(
         app.reportDeviceRuntimes({
           teamId: 'team-1',
@@ -826,6 +842,35 @@ describe('server-next SQLite repositories', () => {
         ok: true,
         agents: [{ id: 'agent-1', status: 'offline' }],
       });
+    } finally {
+      close();
+    }
+  });
+
+  test('keeps same-name devices separate when both have machine identity', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 900 },
+        ids: {
+          nextId: createIds(['user-1', 'team-1', 'channel-1']),
+        },
+      });
+
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+      const insertDevice = globalDb.prepare(
+        `INSERT INTO devices (
+          id, team_id, owner_id, machine_id, profile_id, hostname, status,
+          last_seen_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      insertDevice.run('device-a', 'team-1', 'user-1', 'machine-a', 'default', 'MacBook Pro', 'online', 100, 100, 100);
+      insertDevice.run('device-b', 'team-1', 'user-1', 'machine-b', 'default', 'MacBook Pro', 'offline', 200, 200, 200);
+
+      const listed = await app.listDevices({ teamId: 'team-1', userId: 'user-1' });
+      expect(listed.ok ? listed.devices.map((device) => device.id) : []).toEqual(['device-a', 'device-b']);
     } finally {
       close();
     }

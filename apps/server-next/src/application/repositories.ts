@@ -165,7 +165,11 @@ export interface ChannelRepository {
 export interface DeviceRepository {
   upsertHello(input: DeviceRecord): Promise<DeviceRecord>;
   getById(id: ID): Promise<DeviceRecord | null>;
-  findByMachineProfile(machineId: string, profileId: string): Promise<DeviceRecord | null>;
+  findByMachineProfile(input: {
+    teamId: ID;
+    machineId: string;
+    profileId: string;
+  }): Promise<DeviceRecord | null>;
   listByTeam(teamId: ID): Promise<DeviceRecord[]>;
   listConnected(): Promise<DeviceRecord[]>;
   markOffline(input: { deviceId: ID; timestamp: UnixMs }): Promise<DeviceRecord | null>;

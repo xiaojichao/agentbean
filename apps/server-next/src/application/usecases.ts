@@ -1087,7 +1087,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const now = clock.now();
       const existing =
         deviceInput.machineId && deviceInput.profileId
-          ? await repositories.devices.findByMachineProfile(deviceInput.machineId, deviceInput.profileId)
+          ? await repositories.devices.findByMachineProfile({
+            teamId: deviceInput.teamId,
+            machineId: deviceInput.machineId,
+            profileId: deviceInput.profileId,
+          })
           : null;
 
       let connectCommand = existing?.connectCommand;
@@ -1144,8 +1148,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!(await repositories.teams.isMember(deviceListInput.teamId, deviceListInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
+      const devices = await repositories.devices.listByTeam(deviceListInput.teamId);
       return makeSuccess({
-        devices: (await repositories.devices.listByTeam(deviceListInput.teamId)).map(toDeviceDto),
+        devices: dedupeDeviceRecords(devices).map(toDeviceDto),
       });
     },
 
@@ -3069,6 +3074,79 @@ function toJoinLinkDto(link: JoinLinkRecord): JoinLinkDto {
     usesCount: link.usesCount,
     revokedAt: link.revokedAt,
   };
+}
+
+function dedupeDeviceRecords(devices: DeviceRecord[]): DeviceRecord[] {
+  const result: DeviceRecord[] = [];
+  const indexByMachineKey = new Map<string, number>();
+  const indexByDisplayKey = new Map<string, number>();
+  for (const device of devices) {
+    const machineKey = deviceMachineKey(device);
+    const displayKey = deviceDisplayKey(device);
+    const machineMatch = machineKey ? indexByMachineKey.get(machineKey) : undefined;
+    const displayMatch = displayKey ? indexByDisplayKey.get(displayKey) : undefined;
+    const existingIndex = machineMatch ?? (
+      displayMatch !== undefined && (!machineKey || !deviceMachineKey(result[displayMatch]!))
+        ? displayMatch
+        : undefined
+    );
+    if (existingIndex === undefined) {
+      indexDeviceRecord(result.length, device, indexByMachineKey, indexByDisplayKey);
+      result.push(device);
+      continue;
+    }
+    result[existingIndex] = preferDeviceRecord(device, result[existingIndex]!);
+    indexDeviceRecord(existingIndex, result[existingIndex]!, indexByMachineKey, indexByDisplayKey);
+    indexDeviceRecord(existingIndex, device, indexByMachineKey, indexByDisplayKey);
+  }
+  return result;
+}
+
+function indexDeviceRecord(
+  index: number,
+  device: DeviceRecord,
+  indexByMachineKey: Map<string, number>,
+  indexByDisplayKey: Map<string, number>,
+): void {
+  const machineKey = deviceMachineKey(device);
+  if (machineKey) indexByMachineKey.set(machineKey, index);
+  const displayKey = deviceDisplayKey(device);
+  if (displayKey) indexByDisplayKey.set(displayKey, index);
+}
+
+function deviceMachineKey(device: DeviceRecord): string | null {
+  if (!device.machineId || !device.profileId) return null;
+  return [
+    'machine-profile',
+    device.teamId,
+    device.ownerId,
+    normalizeDeviceKey(device.machineId),
+    normalizeDeviceKey(device.profileId),
+  ].join('\u0000');
+}
+
+function deviceDisplayKey(device: DeviceRecord): string | null {
+  const displayName = normalizeDeviceKey(device.name ?? device.systemInfo?.hostname);
+  if (!displayName) return null;
+  return ['display-name', device.teamId, device.ownerId, displayName].join('\u0000');
+}
+
+function normalizeDeviceKey(value?: string | null): string {
+  return (value ?? '').trim().toLowerCase();
+}
+
+function preferDeviceRecord(candidate: DeviceRecord, current: DeviceRecord): DeviceRecord {
+  const updatedDelta = (candidate.updatedAt ?? 0) - (current.updatedAt ?? 0);
+  if (updatedDelta !== 0) return updatedDelta > 0 ? candidate : current;
+  const lastSeenDelta = (candidate.lastSeenAt ?? 0) - (current.lastSeenAt ?? 0);
+  if (lastSeenDelta !== 0) return lastSeenDelta > 0 ? candidate : current;
+  return deviceStatusRank(candidate.status) > deviceStatusRank(current.status) ? candidate : current;
+}
+
+function deviceStatusRank(status: DeviceRecord['status']): number {
+  if (status === 'online') return 3;
+  if (status === 'unknown') return 2;
+  return 1;
 }
 
 function toDeviceInviteDto(invite: DeviceInviteRecord, command?: string): DeviceInviteDto {

@@ -76,6 +76,24 @@ describe('devices repository', () => {
     expect(tombstoned?.deletedAt).toBe(5000);
     expect(tombstoned?.status).toBe('offline');
   });
+
+  test('findByMachineProfile is scoped to a team', async () => {
+    const repos = createInMemoryRepositories();
+    await repos.devices.upsertHello({
+      id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'offline', name: 'team-one-mac',
+      machineId: 'm-1', profileId: 'default',
+      lastSeenAt: 1000, createdAt: 1000, updatedAt: 1000,
+    });
+    await repos.devices.upsertHello({
+      id: 'device-2', teamId: 'team-2', ownerId: 'user-2', status: 'online', name: 'team-two-mac',
+      machineId: 'm-1', profileId: 'default',
+      lastSeenAt: 2000, createdAt: 2000, updatedAt: 2000,
+    });
+
+    await expect(
+      repos.devices.findByMachineProfile({ teamId: 'team-1', machineId: 'm-1', profileId: 'default' }),
+    ).resolves.toMatchObject({ id: 'device-1', teamId: 'team-1' });
+  });
 });
 
 describe('deviceInvites repository', () => {
