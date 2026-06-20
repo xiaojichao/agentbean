@@ -181,7 +181,7 @@ function DirectoryBrowseButton({
 
 export default function DevicesPage() {
   const params = useParams();
-  const router = useRouter();
+  const { push } = useRouter();
   const np = useCurrentNetworkPath();
   const conn = useAgentBeanStore((s) => s.conn);
   const devices = useAgentBeanStore((s) => s.devices);
@@ -241,6 +241,12 @@ export default function DevicesPage() {
       if (res.ok && res.device) {
         if (!res.device.networkId || res.device.networkId === currentTeamId) {
           upsertDevice(res.device);
+          if (res.device.id && res.device.id !== routeDeviceId) {
+            setSelectedId(res.device.id);
+            setEditName(false);
+            setShowDeleteConfirm(false);
+            push(`/${np}/devices/${res.device.id}`);
+          }
           return;
         }
         setRouteDeviceError('该设备不属于当前团队');
@@ -253,7 +259,7 @@ export default function DevicesPage() {
       if (!cancelled) setRouteDeviceLoading(false);
     });
     return () => { cancelled = true; };
-  }, [routeDeviceId, selectedDevice, conn, currentTeamId, upsertDevice]);
+  }, [routeDeviceId, selectedDevice, conn, currentTeamId, np, push, upsertDevice]);
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -276,7 +282,7 @@ export default function DevicesPage() {
                 <span>{group.devices.length}</span>
               </div>
               {group.devices.map((device) => (
-                <button key={device.id} onClick={() => { setSelectedId(device.id); setEditName(false); setShowDeleteConfirm(false); router.push(`/${np}/devices/${device.id}`); }} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left ${selectedId === device.id ? 'bg-white shadow-sm ring-1 ring-neutral-200' : 'hover:bg-white/60'}`}>
+                <button key={device.id} onClick={() => { setSelectedId(device.id); setEditName(false); setShowDeleteConfirm(false); push(`/${np}/devices/${device.id}`); }} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left ${selectedId === device.id ? 'bg-white shadow-sm ring-1 ring-neutral-200' : 'hover:bg-white/60'}`}>
                   <div className="relative shrink-0">
                     <Monitor size={16} className="text-neutral-500" />
                     <Circle size={6} className={`absolute -right-0.5 -top-0.5 fill-current ${STATUS_COLORS[device.status] ?? 'text-neutral-300'}`} />

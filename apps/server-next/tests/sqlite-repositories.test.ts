@@ -765,6 +765,10 @@ describe('server-next SQLite repositories', () => {
         ok: true,
         devices: [{ id: 'device-1', name: 'Renamed Host', status: 'offline' }],
       });
+      await expect(app.getDevice({ userId: 'user-1', deviceId: 'newer-legacy-device' })).resolves.toMatchObject({
+        ok: true,
+        device: { id: 'device-1', name: 'Renamed Host', status: 'offline' },
+      });
 
       await expect(
         app.reportDeviceRuntimes({
@@ -910,6 +914,10 @@ describe('server-next SQLite repositories', () => {
 
       const listed = await app.listDevices({ teamId: 'team-1', userId: 'user-1' });
       expect(listed.ok ? listed.devices.map((device) => device.id) : []).toEqual(['device-a', 'device-b']);
+      await expect(app.getDevice({ userId: 'user-1', deviceId: 'device-b' })).resolves.toMatchObject({
+        ok: true,
+        device: { id: 'device-b', name: 'MacBook Pro', status: 'offline' },
+      });
     } finally {
       close();
     }

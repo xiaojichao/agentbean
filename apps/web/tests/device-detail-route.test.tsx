@@ -5,15 +5,16 @@ import '@testing-library/jest-dom/vitest';
 import type { DeviceInfo } from '@/lib/schema';
 import { useAgentBeanStore } from '@/lib/store';
 
-const { deviceGetMock, agentsListMock, listCustomMock, routerPushMock } = vi.hoisted(() => ({
+const { deviceGetMock, agentsListMock, listCustomMock, routerPushMock, routeDeviceIdMock } = vi.hoisted(() => ({
   deviceGetMock: vi.fn(),
   agentsListMock: vi.fn(),
   listCustomMock: vi.fn(),
   routerPushMock: vi.fn(),
+  routeDeviceIdMock: vi.fn(() => 'device-1'),
 }));
 
 vi.mock('next/navigation', () => ({
-  useParams: () => ({ networkPath: 'acme', id: 'device-1' }),
+  useParams: () => ({ networkPath: 'acme', id: routeDeviceIdMock() }),
   useRouter: () => ({ push: routerPushMock }),
 }));
 
@@ -82,6 +83,7 @@ beforeEach(() => {
   deviceGetMock.mockResolvedValue({ ok: true, device: makeDevice() });
   agentsListMock.mockResolvedValue({ ok: true, agents: [], runtimes: [] });
   listCustomMock.mockResolvedValue({ ok: true, agents: [] });
+  routeDeviceIdMock.mockReturnValue('device-1');
 });
 
 afterEach(() => {
@@ -98,5 +100,23 @@ describe('device detail route', () => {
 
     expect(screen.getByText('设备信息')).toBeInTheDocument();
     expect(useAgentBeanStore.getState().devices['device-1']?.hostname).toBe('My Laptop');
+  });
+
+  it('switches from a stale routed device id to the canonical device returned by the server', async () => {
+    routeDeviceIdMock.mockReturnValue('legacy-device');
+    deviceGetMock.mockResolvedValue({
+      ok: true,
+      device: makeDevice({ id: 'device-1', hostname: 'Canonical Laptop', status: 'offline' }),
+    });
+
+    render(<DevicesPage />);
+
+    await waitFor(() => expect(deviceGetMock).toHaveBeenCalledWith({ id: 'legacy-device' }));
+    await waitFor(() => expect(routerPushMock).toHaveBeenCalledWith('/acme/devices/device-1'));
+    await waitFor(() => expect(screen.getAllByText('Canonical Laptop').length).toBeGreaterThan(0));
+
+    const devices = useAgentBeanStore.getState().devices;
+    expect(devices['device-1']?.status).toBe('offline');
+    expect(devices['legacy-device']).toBeUndefined();
   });
 });
