@@ -32,6 +32,38 @@ describe('AgentBean Next entry smoke', () => {
     });
   });
 
+  test('passes when the public entry serves the production Next App Router shell', async () => {
+    const checks = await collectAgentBeanNextEntrySmoke({
+      baseUrl: 'https://agentbean.example',
+      fetcher: createFakeFetcher({
+        '/healthz': json({ ok: true, service: 'agentbean-next-server' }),
+        '/': html(`
+          <!DOCTYPE html>
+          <html lang="zh-CN">
+            <head>
+              <title>AgentBean</title>
+              <meta name="description" content="Your AI Agent Platform — manage, chat, and collaborate with AI agents" />
+              <script src="/_next/static/chunks/app/page-4e09954e9a714a5f.js" async=""></script>
+              <script src="/_next/static/chunks/app/layout-ebd91e8a9bd52b5d.js" async=""></script>
+            </head>
+            <body>
+              <script>
+                self.__next_f.push([1,"5:I[3266,[],\\"default\\",1]\\n6:I[5331,[],\\"SocketProvider\\"]\\n7:I[7624,[],\\"AppShell\\"]\\n"]);
+              </script>
+            </body>
+          </html>
+        `),
+        '/socket.io/socket.io.js': text('/* socket.io */ var io = {};'),
+      }),
+    });
+
+    expect(summarizeEntrySmoke(checks)).toMatchObject({
+      ok: true,
+      failed: 0,
+      total: 4,
+    });
+  });
+
   test('fails when the root page is still the harness or old entry', async () => {
     const checks = await collectAgentBeanNextEntrySmoke({
       baseUrl: 'https://agentbean.example',

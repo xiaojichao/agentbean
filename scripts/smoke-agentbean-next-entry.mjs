@@ -32,18 +32,9 @@ export async function collectAgentBeanNextEntrySmoke({
     ),
     check(
       'entry-root-html-agentbean',
-      html.ok &&
-        html.value.includes('<title>AgentBean</title>') &&
-        html.value.includes('class="landing"') &&
-        html.value.includes('让人类、本机 Agent 和远程设备上的 Agent 无缝协作') &&
-        html.value.includes('id="app-workspace"') &&
-        html.value.includes('私有 Agent 团队') &&
-        html.value.includes('team-switcher') &&
-        html.value.includes('添加自定义 Agent') &&
-        !html.value.includes('AgentBean Next Preview') &&
-        !html.value.includes('Next local'),
+      html.ok && isAgentBeanNextProductEntryHtml(html.value),
       html.ok
-        ? 'AgentBean Next entry root page must serve the landing-first product entry and preview workspace, not the old or harness entry'
+        ? 'AgentBean Next entry root page must serve the landing-first product entry or the production Next App Router shell, not the old or harness entry'
         : `AgentBean Next entry root page could not be read: ${html.error}`,
     ),
     check(
@@ -56,6 +47,36 @@ export async function collectAgentBeanNextEntrySmoke({
         : `AgentBean Next Socket.IO client could not be read: ${socketClient.error}`,
     ),
   ];
+}
+
+function isAgentBeanNextProductEntryHtml(value) {
+  if (value.includes('AgentBean Next Preview') || value.includes('Next local')) {
+    return false;
+  }
+  return isStaticPreviewProductEntry(value) || isNextAppRouterProductEntryShell(value);
+}
+
+function isStaticPreviewProductEntry(value) {
+  return (
+    value.includes('<title>AgentBean</title>') &&
+    value.includes('class="landing"') &&
+    value.includes('让人类、本机 Agent 和远程设备上的 Agent 无缝协作') &&
+    value.includes('id="app-workspace"') &&
+    value.includes('私有 Agent 团队') &&
+    value.includes('team-switcher') &&
+    value.includes('添加自定义 Agent')
+  );
+}
+
+function isNextAppRouterProductEntryShell(value) {
+  return (
+    value.includes('<title>AgentBean</title>') &&
+    value.includes('Your AI Agent Platform') &&
+    value.includes('/_next/static/chunks/app/page-') &&
+    value.includes('/_next/static/chunks/app/layout-') &&
+    value.includes('SocketProvider') &&
+    value.includes('AppShell')
+  );
 }
 
 export function summarizeEntrySmoke(checks) {
