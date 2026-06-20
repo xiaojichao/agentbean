@@ -2260,6 +2260,7 @@
         deviceAgentsByDevice: {},
         deviceAgentErrorsByDevice: {},
         deviceAgentRefreshTimers: {},
+        deviceScanRefreshPendingByDevice: {},
         selectedDeviceId: null,
         deviceDetail: null,
         deviceDetailId: null,
@@ -2332,8 +2333,13 @@
         render();
       });
       socket.on("agents:snapshot", (agents) => {
-        state.agents = agents;
+        state.agents = agents || [];
         state.agentsLoaded = true;
+        for (const deviceId of Object.keys(state.deviceAgentsByDevice)) {
+          if (!state.deviceScanRefreshPendingByDevice[deviceId]) {
+            state.deviceAgentsByDevice[deviceId] = state.agents.filter((agent) => agent.deviceId === deviceId);
+          }
+        }
         render();
       });
       socket.on("channels:snapshot", (channels) => {
@@ -2864,8 +2870,10 @@
           getDeviceAgentsForPreview(deviceId),
           getDeviceRuntimesForPreview(deviceId),
         );
+        const previousRuntimes = getDeviceRuntimesForPreview(deviceId);
         const ack = await emit("device:scan", { userId: state.user.id, teamId: state.team.id, deviceId });
         if (ack.ok) {
+          state.deviceScanRefreshPendingByDevice[deviceId] = true;
           state.deviceAgentsByDevice[deviceId] = [];
           state.runtimesByDevice[deviceId] = [];
           delete state.deviceAgentErrorsByDevice[deviceId];
@@ -2876,7 +2884,7 @@
               runtimes: [],
             };
           }
-          scheduleDeviceAgentsRefresh(deviceId, { attempt: 1, previousSignature });
+          scheduleDeviceAgentsRefresh(deviceId, { attempt: 1, previousSignature, previousRuntimes });
           render();
         }
       }
@@ -2887,6 +2895,7 @@
         }
         const attempt = options.attempt || 1;
         const previousSignature = options.previousSignature || null;
+        const previousRuntimes = Array.isArray(options.previousRuntimes) ? options.previousRuntimes : [];
         state.deviceAgentRefreshTimers[deviceId] = setTimeout(async () => {
           delete state.deviceAgentRefreshTimers[deviceId];
           if (state.selectedDeviceId === deviceId) {
@@ -2897,17 +2906,21 @@
               },
             });
             if (ack?.skipped && attempt < DEVICE_SCAN_REFRESH_MAX_ATTEMPTS && state.selectedDeviceId === deviceId) {
-              scheduleDeviceAgentsRefresh(deviceId, { attempt: attempt + 1, previousSignature });
+              scheduleDeviceAgentsRefresh(deviceId, { attempt: attempt + 1, previousSignature, previousRuntimes });
             } else if (ack?.skipped) {
+              delete state.deviceScanRefreshPendingByDevice[deviceId];
               delete state.deviceAgentsByDevice[deviceId];
-              delete state.runtimesByDevice[deviceId];
+              state.runtimesByDevice[deviceId] = previousRuntimes;
               render();
             } else if (ack && !ack.ok && attempt < DEVICE_SCAN_REFRESH_MAX_ATTEMPTS && state.selectedDeviceId === deviceId) {
-              scheduleDeviceAgentsRefresh(deviceId, { attempt: attempt + 1, previousSignature });
+              scheduleDeviceAgentsRefresh(deviceId, { attempt: attempt + 1, previousSignature, previousRuntimes });
             } else if (ack && !ack.ok) {
+              delete state.deviceScanRefreshPendingByDevice[deviceId];
               delete state.deviceAgentsByDevice[deviceId];
-              delete state.runtimesByDevice[deviceId];
+              state.runtimesByDevice[deviceId] = previousRuntimes;
               render();
+            } else if (ack) {
+              delete state.deviceScanRefreshPendingByDevice[deviceId];
             }
           }
         }, DEVICE_SCAN_REFRESH_DELAY_MS);
@@ -4196,6 +4209,7 @@
         state.runtimesByDevice = {};
         state.deviceAgentsByDevice = {};
         state.deviceAgentErrorsByDevice = {};
+        state.deviceScanRefreshPendingByDevice = {};
         for (const timer of Object.values(state.deviceAgentRefreshTimers)) {
           clearTimeout(timer);
         }
