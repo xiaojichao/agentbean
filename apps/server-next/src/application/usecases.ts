@@ -3136,11 +3136,17 @@ function normalizeDeviceKey(value?: string | null): string {
 }
 
 function preferDeviceRecord(candidate: DeviceRecord, current: DeviceRecord): DeviceRecord {
+  const identityDelta = deviceIdentityRank(candidate) - deviceIdentityRank(current);
+  if (identityDelta !== 0) return identityDelta > 0 ? candidate : current;
   const updatedDelta = (candidate.updatedAt ?? 0) - (current.updatedAt ?? 0);
   if (updatedDelta !== 0) return updatedDelta > 0 ? candidate : current;
   const lastSeenDelta = (candidate.lastSeenAt ?? 0) - (current.lastSeenAt ?? 0);
   if (lastSeenDelta !== 0) return lastSeenDelta > 0 ? candidate : current;
   return deviceStatusRank(candidate.status) > deviceStatusRank(current.status) ? candidate : current;
+}
+
+function deviceIdentityRank(device: DeviceRecord): number {
+  return deviceMachineKey(device) ? 2 : 1;
 }
 
 function deviceStatusRank(status: DeviceRecord['status']): number {
