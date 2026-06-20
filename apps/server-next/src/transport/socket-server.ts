@@ -44,6 +44,10 @@ interface DiscoveredAgentReport {
   name: string;
   adapterKind: string;
   category: string;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  discoverySource?: 'runtime' | 'gateway' | 'filesystem';
   gatewayInstanceKey?: string;
 }
 
@@ -718,9 +722,10 @@ async function emitDiscoveredAgents(
           name: agent.name,
           adapterKind,
           category: agent.category,
-          source: agent.gatewayInstanceKey ? 'gateway' : 'filesystem',
-          command: runtime?.command ?? '',
-          cwd: runtime?.cwd,
+          source: discoveredAgentSource(agent, runtime),
+          command: agent.command ?? runtime?.command ?? '',
+          args: agent.args,
+          cwd: agent.cwd ?? runtime?.cwd,
         };
       }),
     });
@@ -816,6 +821,10 @@ function payloadDiscoveredAgents(payload: unknown): DiscoveredAgentReport[] {
       name?: unknown;
       adapterKind?: unknown;
       category?: unknown;
+      command?: unknown;
+      args?: unknown;
+      cwd?: unknown;
+      discoverySource?: unknown;
       gatewayInstanceKey?: unknown;
     };
     if (
@@ -829,10 +838,34 @@ function payloadDiscoveredAgents(payload: unknown): DiscoveredAgentReport[] {
       name: candidate.name,
       adapterKind: candidate.adapterKind,
       category: candidate.category,
+      command: typeof candidate.command === 'string' ? candidate.command : undefined,
+      args: Array.isArray(candidate.args) ? candidate.args.map(String) : undefined,
+      cwd: typeof candidate.cwd === 'string' ? candidate.cwd : undefined,
+      discoverySource: readDiscoverySource(candidate.discoverySource),
       gatewayInstanceKey:
         typeof candidate.gatewayInstanceKey === 'string' ? candidate.gatewayInstanceKey : undefined,
     }];
   });
+}
+
+function readDiscoverySource(value: unknown): DiscoveredAgentReport['discoverySource'] {
+  return value === 'runtime' || value === 'gateway' || value === 'filesystem' ? value : undefined;
+}
+
+function discoveredAgentSource(
+  agent: DiscoveredAgentReport,
+  runtime?: { command?: string; cwd?: string },
+): 'runtime' | 'gateway' | 'filesystem' {
+  if (agent.discoverySource) {
+    return agent.discoverySource;
+  }
+  if (agent.gatewayInstanceKey) {
+    return 'gateway';
+  }
+  if (!agent.command && !agent.cwd && !agent.args && runtime) {
+    return 'runtime';
+  }
+  return 'filesystem';
 }
 
 function resultAgentVisibleTeamIds(result: unknown): string[] {

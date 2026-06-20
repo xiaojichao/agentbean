@@ -1507,6 +1507,60 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('dispatch request includes scanned agent execution config without env ref', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 410,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-1', 'agent-1', 'message-1', 'dispatch-1', 'request-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+    });
+    await app.registerDiscoveredAgents({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      agents: [{
+        name: 'Codex',
+        adapterKind: 'codex',
+        category: 'executor-hosted',
+        command: '/opt/homebrew/bin/codex',
+        args: ['exec'],
+        cwd: '/Users/shaw/AgentBean',
+      }],
+    });
+
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex hello',
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [{ id: 'dispatch-1', agentId: 'agent-1' }],
+    });
+
+    await expect(app.getDispatchRequest({ dispatchId: 'dispatch-1' })).resolves.toMatchObject({
+      ok: true,
+      request: {
+        id: 'dispatch-1',
+        deviceId: 'device-1',
+        customAgent: {
+          id: 'agent-1',
+          name: 'Codex',
+          adapterKind: 'codex',
+          command: '/opt/homebrew/bin/codex',
+          args: ['exec'],
+          cwd: '/Users/shaw/AgentBean',
+        },
+      },
+    });
+    const request = await app.getDispatchRequest({ dispatchId: 'dispatch-1' });
+    expect(request.ok && request.request.customAgent?.envRef).toBeUndefined();
+  });
+
   test('cancelDispatch marks a pending dispatch as cancelled for team members', async () => {
     let now = 430;
     const app = createInMemoryServerNext({

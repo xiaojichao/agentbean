@@ -770,6 +770,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               source = excluded.source,
               status = excluded.status,
               device_id = excluded.device_id,
+              command = excluded.command,
+              args_json = excluded.args_json,
+              cwd = excluded.cwd,
               last_seen_at = excluded.last_seen_at,
               updated_at = excluded.updated_at`,
           )
