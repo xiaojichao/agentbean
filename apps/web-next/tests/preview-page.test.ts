@@ -1148,9 +1148,88 @@ describe('web-next preview page interactions', () => {
 
     expect(harness.emitted).toContainEqual(['device:get', { userId: 'user-1', deviceId: 'device-1' }]);
     const detailHtml = harness.element('device-detail').innerHTML;
-    expect(detailHtml).toContain('设备详情');
+    expect(detailHtml).toContain('信息');
+    expect(detailHtml).toContain('硬件信息');
+    expect(detailHtml).toContain('运行时');
+    expect(detailHtml).toContain('AgentOS 托管型 Agent');
+    expect(detailHtml).toContain('自定义 Agent');
     expect(detailHtml).toContain('mbp');
     expect(detailHtml).toContain('Codex');
+  });
+
+  test('renders migrated device management details in the preview shell', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const device = {
+      id: 'device-1',
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      ownerName: 'Shaw',
+      status: 'offline',
+      name: 'MacBook Pro',
+      lastSeenAt: 1_718_888_000_000,
+      daemonVersionInfo: { current: '0.2.0', latest: '0.2.1', updateAvailable: true, status: 'update-available' },
+      connectCommand: 'npx @agentbean/daemon@latest --invite ABCD --server-url https://api.agentbean.dev',
+    };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'device:get': () => ({
+        ok: true,
+        device: {
+          ...device,
+          systemInfo: {
+            hostname: 'mbp.local',
+            osVersion: 'macOS 15.5',
+            arch: 'arm64',
+            cpuModel: 'Apple M3 Max',
+            totalMemoryGB: 36,
+            nodeVersion: 'v24.16.0',
+          },
+        },
+      }),
+      'device:agents:list': () => ({
+        ok: true,
+        runtimes: [
+          { id: 'runtime-codex', name: 'Codex CLI', adapterKind: 'codex', command: 'codex', installed: true },
+        ],
+        agents: [
+          { id: 'agentos-1', name: 'Hermes-Agent', category: 'agentos-hosted', status: 'online', adapterKind: 'hermes' },
+          { id: 'custom-1', name: 'Codex Local', category: 'custom', status: 'offline', adapterKind: 'codex', cwd: '/Users/shaw/AgentBean' },
+        ],
+      }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('devices:snapshot', [device]);
+
+    expect(harness.emitted).toContainEqual(['device:agents:list', { userId: 'user-1', teamId: 'team-1', deviceId: 'device-1' }]);
+    const listHtml = harness.element('devices').innerHTML;
+    expect(listHtml).toContain('Shaw');
+    expect(listHtml).toContain('MacBook Pro');
+    expect(listHtml).toContain('可升级');
+
+    const detailHtml = harness.element('device-detail').innerHTML;
+    expect(detailHtml).toContain('MacBook Pro');
+    expect(detailHtml).toContain('Shaw');
+    expect(detailHtml).toContain('macOS 15.5');
+    expect(detailHtml).toContain('Apple M3 Max');
+    expect(detailHtml).toContain('v0.2.0（有更新版本）');
+    expect(detailHtml).toContain('npx @agentbean/daemon@latest');
+    expect(detailHtml).toContain('Codex CLI');
+    expect(detailHtml).toContain('Hermes-Agent');
+    expect(detailHtml).toContain('Codex Local');
+    expect(detailHtml).toContain('/Users/shaw/AgentBean');
+    expect(detailHtml).toContain('删除设备');
   });
 
   test('renders a terminal device detail error when device:get fails', async () => {
