@@ -2834,10 +2834,11 @@
         delete state.deviceAgentsByDevice[deviceId];
         delete state.deviceAgentErrorsByDevice[deviceId];
         if (state.selectedDeviceId === deviceId) {
-          state.selectedDeviceId = getVisibleDevices()[0]?.id || null;
+          state.selectedDeviceId = null;
           state.deviceDetail = null;
           state.deviceDetailId = null;
           state.deviceDetailError = null;
+          updateDevicePath(null);
         }
         render();
       }
