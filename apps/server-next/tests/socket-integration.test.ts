@@ -1871,7 +1871,7 @@ describe('server-next Socket.IO namespaces', () => {
             name: 'Codex',
             adapterKind: 'codex',
             category: 'executor-hosted',
-            source: 'filesystem',
+            source: 'runtime',
             command: '/opt/homebrew/bin/codex',
             cwd: '/Users/shaw/AgentBean',
           },

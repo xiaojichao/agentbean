@@ -818,7 +818,35 @@ describe('server-next SQLite repositories', () => {
         }),
       ).resolves.toMatchObject({
         ok: true,
-        agents: [{ id: 'agent-1', adapterKind: 'codex', name: 'Codex', status: 'online' }],
+        agents: [{
+          id: 'agent-1',
+          adapterKind: 'codex',
+          name: 'Codex',
+          status: 'online',
+        }],
+        missingOfflineIds: [],
+      });
+      await expect(
+        app.registerDiscoveredAgents({
+          teamId: 'team-1',
+          deviceId: 'device-1',
+          agents: [{
+            name: 'Codex',
+            adapterKind: 'codex-cli',
+            category: 'executor-hosted',
+            command: '/Applications/Codex',
+            args: ['exec'],
+            cwd: '/Users/shaw/project',
+          }],
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        agents: [{
+          id: 'agent-1',
+          command: '/Applications/Codex',
+          args: ['exec'],
+          cwd: '/Users/shaw/project',
+        }],
         missingOfflineIds: [],
       });
       await expect(
@@ -829,7 +857,13 @@ describe('server-next SQLite repositories', () => {
         }),
       ).resolves.toMatchObject({
         ok: true,
-        agents: [{ id: 'agent-1', name: 'codex' }],
+        agents: [{
+          id: 'agent-1',
+          name: 'codex',
+          command: '/Applications/Codex',
+          args: ['exec'],
+          cwd: '/Users/shaw/project',
+        }],
       });
       expect(globalDb.prepare('SELECT COUNT(*) AS count FROM agents').get()).toEqual({ count: 1 });
       expect(globalDb.prepare('SELECT agent_id AS agentId FROM agent_identity_links').get()).toEqual({

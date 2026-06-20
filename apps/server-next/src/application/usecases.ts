@@ -272,6 +272,10 @@ export interface DiscoveredAgentInput {
   name: string;
   adapterKind: string;
   category: AgentCategory;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  discoverySource?: 'runtime' | 'gateway' | 'filesystem';
   gatewayInstanceKey?: string;
 }
 
@@ -1368,6 +1372,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           source: 'scanned',
           status: 'online',
           deviceId: discoveredInput.deviceId,
+          command: discovered.command ?? existing?.command,
+          args: discovered.args ?? existing?.args,
+          cwd: discovered.cwd ?? existing?.cwd,
           lastSeenAt: now,
         });
         await repositories.agents.linkIdentity({
@@ -2002,7 +2009,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!agent) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
-      const executionConfig = agent.source === 'custom'
+      const executionConfig = agent.source === 'custom' || (agent.source === 'scanned' && agent.command)
         ? await repositories.agents.getExecutionConfig(agent.id)
         : null;
       const originMessage = await repositories.messages.getById(dispatch.messageId);
@@ -2038,7 +2045,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                   command: executionConfig.command,
                   args: executionConfig.args,
                   cwd: executionConfig.cwd,
-                  envRef: { agentId: agent.id, teamId: agent.primaryTeamId },
+                  ...(agent.source === 'custom'
+                    ? { envRef: { agentId: agent.id, teamId: agent.primaryTeamId } }
+                    : {}),
                 },
               }
             : {}),

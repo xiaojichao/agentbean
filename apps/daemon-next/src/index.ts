@@ -80,6 +80,10 @@ export interface DaemonAgentReport {
   name: string;
   adapterKind: string;
   category: AgentCategory;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  discoverySource?: 'runtime' | 'gateway' | 'filesystem';
   gatewayInstanceKey?: string;
 }
 
