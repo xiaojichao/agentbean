@@ -140,7 +140,7 @@ describe('socket event payload adapters', () => {
     await deviceEvents(socket).get({ id: 'device-1' });
     expect(calls.at(-1)).toEqual({
       event: 'device:get',
-      payload: { deviceId: 'device-1' },
+      payload: { id: 'device-1', deviceId: 'device-1' },
     });
 
     await deviceEvents(socket).agentsList('device-1', 'team-1');

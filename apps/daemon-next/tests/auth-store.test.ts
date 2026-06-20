@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -49,5 +49,16 @@ describe('auth-store', () => {
     const file = authFile('perms-check', baseDir);
     const mode = statSync(file).mode & 0o777;
     expect(mode).toBe(0o600);
+  });
+  it('tightens permissions when overwriting an existing auth file', () => {
+    const baseDir = realpathSync(mkdtempSync(join(tmpdir(), 'auth-existing-perms-')));
+    saveAuth(data, { profileId: 'existing-perms', baseDir });
+    const file = authFile('existing-perms', baseDir);
+    chmodSync(file, 0o644);
+
+    saveAuth({ ...data, token: 'tok-updated' }, { profileId: 'existing-perms', baseDir });
+
+    expect(loadAuth({ profileId: 'existing-perms', baseDir })?.token).toBe('tok-updated');
+    expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 });

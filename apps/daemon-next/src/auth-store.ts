@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { authFile } from './profile-paths.js';
@@ -38,6 +38,7 @@ export function saveAuth(data: AuthData, options: { profileId?: string; baseDir?
     // most systems. Do NOT change umask globally (process-wide side effects).
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+    chmodSync(file, 0o600);
   } catch {
     // best-effort persistence; never throw
   }

@@ -23,12 +23,13 @@ export function deepInterpolate(node: unknown): unknown {
 }
 
 export function loadYamlConfig(path: string): Record<string, unknown> | null {
+  let raw: unknown;
   try {
     if (!existsSync(path)) return null;
-    const raw = parseYaml(readFileSync(path, 'utf8'));
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-    return deepInterpolate(raw) as Record<string, unknown>;
+    raw = parseYaml(readFileSync(path, 'utf8'));
   } catch {
     return null;
   }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  return deepInterpolate(raw) as Record<string, unknown>;
 }

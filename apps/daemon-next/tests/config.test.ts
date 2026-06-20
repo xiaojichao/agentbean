@@ -34,6 +34,12 @@ describe('loadYamlConfig', () => {
     writeFileSync(join(dir, 'c.yaml'), 'serverUrl: ${SRV}\n  bad-indent: oops\n- [unclosed\n');
     expect(loadYamlConfig(join(dir, 'c.yaml'))).toBeNull();
   });
+  it('throws when YAML references a missing env var', () => {
+    delete process.env.MISSING_CONFIG_VALUE;
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'cfg-')));
+    writeFileSync(join(dir, 'c.yaml'), 'serverUrl: ${MISSING_CONFIG_VALUE}\n');
+    expect(() => loadYamlConfig(join(dir, 'c.yaml'))).toThrow(/missing env var/);
+  });
   it('returns null when YAML parses to a scalar', () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'cfg-')));
     writeFileSync(join(dir, 'c.yaml'), 'just-a-string\n');

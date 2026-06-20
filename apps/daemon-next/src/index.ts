@@ -4,6 +4,7 @@ import { downloadAttachments } from './attachments.js';
 import { prepareWorkspaceRun, workspaceRunEnv, persistWorkspaceRunManifest, persistWorkspaceRunResponse } from './workspace-run.js';
 import { collectArtifacts } from './artifact-collector.js';
 import { uploadArtifacts } from './artifact-uploader.js';
+import { selectNativeDirectory } from './directory-picker.js';
 
 export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner.js';
 export type { BuiltinScannerOptions } from './scanner.js';
@@ -18,11 +19,12 @@ export type { CollectedArtifact } from './artifact-collector.js';
 export { uploadArtifacts } from './artifact-uploader.js';
 export type { UploadedArtifact } from './artifact-uploader.js';
 export { createHttpEnvResolver } from './env-fetcher.js';
+import { createRescanController, type RescanController } from './rescan.js';
 
 export interface DaemonProtocolSocket {
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
-  on(event: string, handler: (payload: unknown) => Promise<void>): void;
-  off?(event: string, handler: (payload: unknown) => Promise<void>): void;
+  on(event: string, handler: (payload: unknown, ack?: (result: unknown) => void) => Promise<void>): void;
+  off?(event: string, handler: (payload: unknown, ack?: (result: unknown) => void) => Promise<void>): void;
   onReconnect?(handler: () => Promise<void>): void;
 }
 
@@ -118,25 +120,32 @@ export interface CreateDaemonProtocolClientInput {
   /** Injectable fetch for tests; defaults to global fetch. */
   fetch?: typeof fetch;
   envResolver?: AgentEnvResolver;
+  rescanIntervalMs?: number;
+  onScanChanged?: (snapshot: DaemonScanSnapshot) => Promise<void> | void;
 }
 
 export interface DaemonProtocolClient {
   start(): Promise<void>;
+  rescanNow?(): Promise<void>;
+  stop?(): void;
 }
 
 export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInput): DaemonProtocolClient {
   const { socket, executor, device, runtimes, agents, scan, serverUrl, fetch: fetchFn, envResolver } = input;
+  let currentDeviceId: string;
+  let rescan: RescanController | undefined;
+  let latestSnapshot: DaemonScanSnapshot = { runtimes, agents };
 
   return {
     async start() {
-      const initialAnnouncement = await announceDeviceSnapshot(socket, device, runtimes, agents);
-      let currentDeviceId = initialAnnouncement.deviceId;
+      const initialAnnouncement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents);
+      currentDeviceId = initialAnnouncement.deviceId;
       if (initialAnnouncement.token) {
         device.token = initialAnnouncement.token;
       }
       const cancelledDispatchIds = new Set<string>();
       socket.onReconnect?.(async () => {
-        const announcement = await announceDeviceSnapshot(socket, device, runtimes, agents);
+        const announcement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents);
         currentDeviceId = announcement.deviceId;
         if (announcement.token) {
           device.token = announcement.token;
@@ -148,8 +157,23 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         if (request.deviceId !== currentDeviceId) {
           return;
         }
-        const snapshot = scan ? await scan() : { runtimes, agents };
+        const snapshot = scan ? await scan() : latestSnapshot;
+        latestSnapshot = snapshot;
         await reportDeviceSnapshot(socket, device.teamId, currentDeviceId, snapshot.runtimes, snapshot.agents);
+        await input.onScanChanged?.(snapshot);
+      });
+
+      socket.on(AGENT_EVENTS.device.selectDirectoryRequested, async (_payload: unknown, ack?: (result: unknown) => void) => {
+        try {
+          const selected = await selectNativeDirectory();
+          if (!selected) {
+            ack?.({ ok: false, error: 'CANCELLED' });
+            return;
+          }
+          ack?.({ ok: true, path: selected });
+        } catch (err) {
+          ack?.({ ok: false, error: err instanceof Error ? err.message : 'directory picker failed' });
+        }
       });
 
       socket.on(AGENT_EVENTS.dispatch.cancel, async (payload) => {
@@ -259,7 +283,23 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           });
         }
       });
+
+      if (scan) {
+        rescan = createRescanController({
+          scan,
+          initial: { runtimes, agents },
+          intervalMs: input.rescanIntervalMs,
+          report: async (snap) => {
+            await reportDeviceSnapshot(socket, device.teamId, currentDeviceId, snap.runtimes, snap.agents);
+            latestSnapshot = snap;
+            await input.onScanChanged?.(snap);
+          },
+        });
+        rescan.start();
+      }
     },
+    rescanNow: () => rescan?.tickNow() ?? Promise.resolve(),
+    stop: () => rescan?.stop(),
   };
 }
 

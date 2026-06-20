@@ -35,6 +35,7 @@ export const WEB_EVENTS = {
     agentsList: 'device:agents:list',
     rename: 'device:rename',
     delete: 'device:delete',
+    selectDirectory: 'device:select-directory',
   },
   deviceInvite: {
     create: 'device-invite:create',
@@ -104,6 +105,7 @@ export const AGENT_EVENTS = {
     hello: 'device:hello',
     runtimes: 'device:runtimes',
     scanRequested: 'device:scan-requested',
+    selectDirectoryRequested: 'device:select-directory-requested',
   },
   agent: {
     registerBatch: 'agent:register-batch',

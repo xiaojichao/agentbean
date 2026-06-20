@@ -300,17 +300,27 @@ describe('daemon-next CLI wiring', () => {
     }
   });
 
+  test('parseDaemonNextCliConfig exposes profileId for scan cache', () => {
+    const config = parseDaemonNextCliConfig({
+      argv: ['--team-id', 't1', '--owner-id', 'o1', '--profile-id', 'laptop'],
+      env: {},
+    });
+    expect(config.profileId).toBe('laptop');
+  });
+
   test('bridges Socket.IO client events to daemon protocol without treating first connect as reconnect', async () => {
     const runtimeSocket = new FakeRuntimeSocket();
     const socket = createSocketIoDaemonSocket(runtimeSocket);
     const reconnects: string[] = [];
     const scans: unknown[] = [];
+    const ack = vi.fn();
 
     socket.onReconnect(async () => {
       reconnects.push('reconnected');
     });
-    socket.on('device:scan-requested', async (payload) => {
+    socket.on('device:scan-requested', async (payload, reply) => {
       scans.push(payload);
+      reply?.({ ok: true });
     });
 
     await runtimeSocket.trigger('connect');
@@ -319,8 +329,9 @@ describe('daemon-next CLI wiring', () => {
     await runtimeSocket.trigger('connect');
     expect(reconnects).toEqual(['reconnected']);
 
-    await runtimeSocket.trigger('device:scan-requested', { deviceId: 'device-1' });
+    await runtimeSocket.trigger('device:scan-requested', { deviceId: 'device-1' }, ack);
     expect(scans).toEqual([{ deviceId: 'device-1' }]);
+    expect(ack).toHaveBeenCalledWith({ ok: true });
   });
 });
 
@@ -385,12 +396,12 @@ class FakeRuntimeSocket {
     this.handlers.set(event, handlers.filter((candidate) => candidate !== handler));
   }
 
-  async trigger(event: string, payload?: unknown): Promise<void> {
+  async trigger(event: string, payload?: unknown, ack?: (result: unknown) => void): Promise<void> {
     if (event === 'connect') {
       this.connected = true;
     }
     for (const handler of this.handlers.get(event) ?? []) {
-      await handler(payload);
+      await handler(payload, ack);
     }
   }
 }

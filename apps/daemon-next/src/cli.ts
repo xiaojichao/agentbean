@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { AGENT_EVENTS, type DeviceInviteCredentialsDto } from '../../../packages/contracts/src/index.js';
 import { createBuiltinScanProvider } from './scanner.js';
+import { loadScanCache, saveScanCache } from './scan-cache.js';
 import { collectSystemInfo, readDaemonVersion } from './system-info.js';
 import { createCommandExecutor } from './executor.js';
 import { createDaemonProtocolClient, createHttpEnvResolver, type DaemonDeviceConfig, type DaemonProtocolSocket } from './index.js';
@@ -120,14 +121,15 @@ export function expandAllProfiles(config: DaemonNextCliConfig, profiles: AuthPro
 }
 
 export function createSocketIoDaemonSocket(socket: SocketIoClientLike): DaemonProtocolSocket {
-  const handlerMap = new WeakMap<(payload: unknown) => Promise<void>, (...args: unknown[]) => void>();
+  const handlerMap = new WeakMap<(payload: unknown, ack?: (result: unknown) => void) => Promise<void>, (...args: unknown[]) => void>();
   return {
     emitWithAck(event, payload) {
       return socket.emitWithAck(event, payload);
     },
     on(event, handler) {
-      const runtimeHandler = (payload: unknown) => {
-        void handler(payload);
+      const runtimeHandler = (payload: unknown, ackLike?: unknown) => {
+        const ack = typeof ackLike === 'function' ? ackLike as (result: unknown) => void : undefined;
+        void handler(payload, ack);
       };
       handlerMap.set(handler, runtimeHandler);
       socket.on(event, runtimeHandler);
@@ -298,7 +300,11 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
 
   const socket = await connectSocketIoClient(config.serverUrl);
   const protocolSocket = createSocketIoDaemonSocket(socket);
-  const snapshot = await createBuiltinScanProvider()();
+  const cached = loadScanCache(config.profileId);
+  const snapshot = cached ?? await createBuiltinScanProvider()();
+  if (!cached) {
+    saveScanCache(snapshot, config.profileId);
+  }
 
   // Invite handshake runs first (network), then we hand off to the pure
   // resolveDeviceCredentials helper for the invite/saved/config decision.
@@ -359,6 +365,7 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
     runtimes: snapshot.runtimes,
     agents: snapshot.agents,
     scan: createBuiltinScanProvider(),
+    onScanChanged: (fresh) => saveScanCache(fresh, config.profileId),
     envResolver: async (envRef) => {
       if (!device.token) {
         throw new Error('Custom agent env resolver is not configured');

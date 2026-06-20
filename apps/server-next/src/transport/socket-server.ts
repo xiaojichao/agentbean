@@ -30,6 +30,7 @@ interface ChannelSubscription {
 
 type AgentSubscription = ChannelSubscription;
 const INTERNAL_SOCKET_ERROR_MESSAGE = 'Internal server error';
+const DEVICE_SELECT_DIRECTORY_TIMEOUT_MS = 125_000;
 
 interface WebSocketSubscription {
   socket: SocketLike;
@@ -162,6 +163,22 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
       },
       deviceScan(request) {
         agentSocketsByDeviceId.get(request.deviceId)?.emit?.(AGENT_EVENTS.device.scanRequested, request);
+      },
+      async deviceSelectDirectory(request) {
+        const socket = agentSocketsByDeviceId.get(request.deviceId);
+        if (!socket?.emitWithAck) {
+          return { ok: false, error: 'DEVICE_OFFLINE' };
+        }
+        try {
+          const ackSocket = socket.timeout?.(DEVICE_SELECT_DIRECTORY_TIMEOUT_MS) ?? socket;
+          if (!ackSocket.emitWithAck) {
+            return { ok: false, error: 'DEVICE_OFFLINE' };
+          }
+          const result = await ackSocket.emitWithAck(AGENT_EVENTS.device.selectDirectoryRequested, request);
+          return result as { ok: boolean; path?: string; error?: string };
+        } catch {
+          return { ok: false, error: 'DIRECTORY_PICKER_TIMEOUT' };
+        }
       },
       async afterMessageSend(_payload, result) {
         if (!isSuccessAck(result)) {

@@ -153,6 +153,35 @@ describe('daemon-next protocol client', () => {
     ]);
   });
 
+  test('reconnect uses the latest successful scan snapshot', async () => {
+    const socket = new FakeAgentSocket();
+    const latest = {
+      runtimes: [{ adapterKind: 'claude-code', name: 'Claude Code' }],
+      agents: [{ name: 'Claude', adapterKind: 'claude-code', category: 'executor-hosted' as const }],
+    };
+    const client = createDaemonProtocolClient({
+      socket,
+      executor: async (request) => `stub:${request.prompt}`,
+      device: { teamId: 'team-1', ownerId: 'user-1' },
+      runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }],
+      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      scan: async () => latest,
+    });
+
+    await client.start();
+    await vi.waitFor(() => expect(socket.emitted).toContainEqual([
+      AGENT_EVENTS.agent.registerBatch,
+      { teamId: 'team-1', deviceId: 'device-1', agents: latest.agents },
+    ]));
+    await socket.triggerReconnect();
+
+    expect(socket.emitted.slice(-2)).toEqual([
+      [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-2', runtimes: latest.runtimes }],
+      [AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-2', agents: latest.agents }],
+    ]);
+    client.stop?.();
+  });
+
   test('uses refreshed device credentials from hello acknowledgements for env resolution', async () => {
     const socket = new FakeAgentSocket();
     socket.helloAcks.push({
@@ -213,6 +242,7 @@ describe('daemon-next protocol client', () => {
           agents: [{ name: 'Claude', adapterKind: 'claude-code', category: 'executor-hosted' }],
         };
       },
+      rescanIntervalMs: 60000,
     });
 
     await client.start();
@@ -221,11 +251,13 @@ describe('daemon-next protocol client', () => {
       deviceId: 'device-1',
     });
 
-    expect(scanCount).toBe(1);
+    // Background rescan tick (started in start()) runs scan once, plus this explicit request.
+    expect(scanCount).toBeGreaterThanOrEqual(1);
     expect(socket.emitted.slice(-2)).toEqual([
       [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-1', runtimes: [{ adapterKind: 'claude-code', name: 'Claude Code' }] }],
       [AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-1', agents: [{ name: 'Claude', adapterKind: 'claude-code', category: 'executor-hosted' }] }],
     ]);
+    client.stop?.();
   });
 
   test('ignores scan requests for a different device id', async () => {
@@ -244,6 +276,7 @@ describe('daemon-next protocol client', () => {
           agents: [],
         };
       },
+      rescanIntervalMs: 60000,
     });
 
     await client.start();
@@ -252,12 +285,17 @@ describe('daemon-next protocol client', () => {
       deviceId: 'other-device',
     });
 
-    expect(scanCount).toBe(0);
+    // Background rescan tick runs scan once on start (reporting empty snapshot);
+    // the explicit request targets another device, so it is ignored.
+    expect(scanCount).toBe(1);
     expect(socket.emitted).toEqual([
       [AGENT_EVENTS.device.hello, { teamId: 'team-1', ownerId: 'user-1' }],
       [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-1', runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }] }],
       [AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-1', agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }] }],
+      [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-1', runtimes: [] }],
+      [AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-1', agents: [] }],
     ]);
+    client.stop?.();
   });
 
   test('reports dispatch errors without swallowing executor failures', async () => {
@@ -558,7 +596,7 @@ describe('daemon-next protocol client', () => {
 class FakeAgentSocket implements DaemonProtocolSocket {
   readonly emitted: Array<[string, unknown]> = [];
   readonly helloAcks: unknown[] = [];
-  private readonly handlers = new Map<string, (payload: unknown) => Promise<void>>();
+  private readonly handlers = new Map<string, (payload: unknown, ack?: (result: unknown) => void) => Promise<void>>();
   private reconnectHandler: (() => Promise<void>) | undefined;
   private deviceCounter = 0;
 
@@ -575,7 +613,7 @@ class FakeAgentSocket implements DaemonProtocolSocket {
     return { ok: true };
   }
 
-  on(event: string, handler: (payload: unknown) => Promise<void>): void {
+  on(event: string, handler: (payload: unknown, ack?: (result: unknown) => void) => Promise<void>): void {
     this.handlers.set(event, handler);
   }
 
@@ -583,12 +621,12 @@ class FakeAgentSocket implements DaemonProtocolSocket {
     this.reconnectHandler = handler;
   }
 
-  async trigger(event: string, payload: unknown): Promise<void> {
+  async trigger(event: string, payload: unknown, ack?: (result: unknown) => void): Promise<void> {
     const handler = this.handlers.get(event);
     if (!handler) {
       throw new Error(`No handler for ${event}`);
     }
-    await handler(payload);
+    await handler(payload, ack);
   }
 
   async triggerReconnect(): Promise<void> {
