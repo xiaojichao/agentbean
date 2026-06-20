@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2, Bell, Volume2, Keyboard, PanelRight, RotateCcw } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
-import { authEvents, getWebSocket, joinEvents, teamEvents } from '@/lib/socket';
+import { getWebSocket, joinEvents, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import type { JoinLinkInfo } from '@/lib/schema';
 import { useParams, useRouter } from 'next/navigation';
@@ -69,26 +69,6 @@ export default function SettingsPage() {
 function AccountPanel() {
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const router = useRouter();
-  const [currentPw, setCurrentPw] = useState('');
-  const [newPw, setNewPw] = useState('');
-  const [confirmPw, setConfirmPw] = useState('');
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [changing, setChanging] = useState(false);
-
-  const changePassword = async () => {
-    if (newPw !== confirmPw) { setMsg({ ok: false, text: '两次密码不一致' }); return; }
-    if (newPw.length < 6) { setMsg({ ok: false, text: '密码至少 6 位' }); return; }
-    setChanging(true);
-    setMsg(null);
-    const res = await authEvents().changePassword({ currentPassword: currentPw, newPassword: newPw });
-    setChanging(false);
-    if (res.ok) {
-      setMsg({ ok: true, text: '密码修改成功' });
-      setCurrentPw(''); setNewPw(''); setConfirmPw('');
-    } else {
-      setMsg({ ok: false, text: res.error ?? '修改失败' });
-    }
-  };
 
   const logout = () => {
     localStorage.removeItem('agentbean.token');
@@ -153,20 +133,6 @@ function AccountPanel() {
             </div>
             <button className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs hover:bg-neutral-50">关联</button>
           </div>
-        </div>
-      </section>
-
-      {/* Change password */}
-      <section className="rounded-lg border border-neutral-200 p-5">
-        <h3 className="mb-4 text-sm font-semibold text-neutral-700">修改密码</h3>
-        <div className="space-y-3">
-          <input type="password" placeholder="当前密码" value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-400" />
-          <input type="password" placeholder="新密码" value={newPw} onChange={(e) => setNewPw(e.target.value)} className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-400" />
-          <input type="password" placeholder="确认新密码" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-400" />
-          {msg && <div className={`text-sm ${msg.ok ? 'text-emerald-600' : 'text-red-600'}`}>{msg.text}</div>}
-          <button onClick={changePassword} disabled={changing || !currentPw || !newPw} className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-50">
-            {changing ? '修改中...' : '修改密码'}
-          </button>
         </div>
       </section>
 

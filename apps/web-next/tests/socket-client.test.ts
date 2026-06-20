@@ -3,6 +3,17 @@ import { WEB_EVENTS, type AgentDto, type ChannelDto, type DeviceDto, type Dispat
 import { createWebSocketClient, type WebSocketTransport } from '../src/index';
 
 describe('web-next socket client', () => {
+  test('keeps artifact upload fallback aligned with the App Router teams proxy', async () => {
+    const { artifactUploadFallbackUrls } = await import('../lib/artifact-upload');
+
+    const urls = artifactUploadFallbackUrls('http://localhost:4100', 'team 1', 'token 1');
+
+    expect(urls).toHaveLength(2);
+    expect(urls.every((url) => url.includes('/api/teams/team%201/artifacts/upload'))).toBe(true);
+    expect(urls.some((url) => url.startsWith('/api/teams/'))).toBe(true);
+    expect(urls.every((url) => !url.includes('/api/networks/'))).toBe(true);
+  });
+
   test('uses first-slice web events for auth, team, and message commands', async () => {
     const transport = new FakeWebTransport();
     const client = createWebSocketClient(transport);

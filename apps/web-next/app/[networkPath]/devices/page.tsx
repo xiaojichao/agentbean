@@ -391,14 +391,11 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
 
   const refreshDeviceAgents = () => {
     return deviceEvents().agentsList(device.id, currentTeamId).then((res) => {
-      if (res.ok && res.agents) setDeviceAgents(res.agents);
+      if (res.ok && res.agents) {
+        setDeviceAgents(res.agents);
+        setCustomAgents(res.agents.filter((agent: any) => agent.source === 'custom'));
+      }
       if (res.ok && res.runtimes) setDeviceRuntimes(res.runtimes);
-    });
-  };
-
-  const refreshCustomAgents = () => {
-    return agentEvents().listCustom({ deviceId: device.id }).then((res) => {
-      if (res.ok && res.agents) setCustomAgents(res.agents);
     });
   };
 
@@ -429,7 +426,6 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
     if (configAgent?.id === deleteAgent.id) setConfigAgent(null);
     setDeleteAgent(null);
     refreshDeviceAgents();
-    refreshCustomAgents();
   };
 
   useEffect(() => {
@@ -438,7 +434,6 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
     setWorkspaceScanned(false);
     setWorkspaceError('');
     refreshDeviceAgents();
-    refreshCustomAgents();
   }, [device?.id]);
 
   const handleScan = async () => {
@@ -729,7 +724,6 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           onClose={() => setConfigAgent(null)}
           onSaved={() => {
             refreshDeviceAgents();
-            refreshCustomAgents();
           }}
         />
       )}
@@ -755,9 +749,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           onClose={() => setShowAddCustom(false)}
           onCreated={() => {
             setShowAddCustom(false);
-            agentEvents().listCustom({ deviceId: device.id }).then((res) => {
-              if (res.ok && res.agents) setCustomAgents(res.agents);
-            });
+            refreshDeviceAgents();
           }}
         />
       )}

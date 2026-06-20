@@ -2,6 +2,11 @@
 import { WEB_EVENTS } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunStatus } from './schema.js';
+import {
+  artifactUploadFallbackUrls as buildArtifactUploadFallbackUrls,
+  artifactUploadProxyUrl as buildArtifactUploadProxyUrl,
+  artifactUploadUrl as buildArtifactUploadUrl,
+} from './artifact-upload';
 
 const configuredUrl = process.env.NEXT_PUBLIC_AGENT_BEAN_SERVER_URL;
 const TOKEN_STORAGE_KEY = 'agentbean.token';
@@ -55,16 +60,15 @@ export function authedApiUrl(path: string): string {
 }
 
 export function artifactUploadUrl(networkId: string): string {
-  return authedApiUrl(`/api/teams/${encodeURIComponent(networkId)}/artifacts/upload`);
+  return buildArtifactUploadUrl(getServerUrl(), networkId, getStoredAuthToken());
 }
 
 export function artifactUploadProxyUrl(networkId: string): string {
-  return `/api/teams/${encodeURIComponent(networkId)}/artifacts/upload?token=${encodeURIComponent(getStoredAuthToken())}`;
+  return buildArtifactUploadProxyUrl(networkId, getStoredAuthToken());
 }
 
 export function artifactUploadFallbackUrls(networkId: string): string[] {
-  const urls = [artifactUploadUrl(networkId), artifactUploadProxyUrl(networkId)];
-  return [...new Set(urls)];
+  return buildArtifactUploadFallbackUrls(getServerUrl(), networkId, getStoredAuthToken());
 }
 
 function cloneFormData(form: FormData): FormData {
@@ -83,7 +87,11 @@ export async function uploadArtifact(networkId: string, form: FormData): Promise
         method: 'POST',
         body: cloneFormData(form),
       });
-      if (res.ok) return await res.json() as Artifact;
+      if (res.ok) {
+        const payload = await res.json() as Artifact | { artifact?: Artifact };
+        if ('artifact' in payload && payload.artifact) return payload.artifact;
+        return payload as Artifact;
+      }
       const text = await res.text();
       lastError = new Error(text || `${res.status} ${res.statusText}`);
     } catch (err) {
@@ -180,7 +188,6 @@ export interface AgentEvents {
   delete(agentId: string, teamId?: string): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
   create(payload: { name: string; adapterKind: string; command: string; args?: string[]; category?: string; cwd?: string; env?: Record<string, string>; description?: string; deviceId?: string; networkId?: string }): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
   updateConfig(payload: { id: string; teamId?: string; name: string; adapterKind?: string; command?: string; cwd?: string | null; description?: string | null }): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
-  listCustom(payload?: { deviceId?: string }): Promise<{ ok: boolean; agents?: AgentSnapshot[]; error?: string }>;
   subscribe(teamId: string): void;
 }
 
@@ -222,10 +229,6 @@ export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
     create({ networkId, ...rest }) {
       return emitWithTimeout(socket, WEB_EVENTS.agent.create, { teamId: networkId, ...rest })
         .then((res) => res?.agent ? { ...res, agent: normalizeAgentSnapshot(res.agent) } : res);
-    },
-    listCustom(payload = {}) {
-      return emitWithTimeout(socket, 'agent:custom:list', payload)
-        .then((res) => Array.isArray(res?.agents) ? { ...res, agents: res.agents.map(normalizeAgentSnapshot) } : res);
     },
     updateConfig({ id, ...rest }) {
       return emitWithTimeout(socket, WEB_EVENTS.agent.updateConfig, { agentId: id, ...rest })
@@ -294,10 +297,8 @@ export interface ChannelEvents {
   addMember(channelId: string, userId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
   removeAgent(channelId: string, agentId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
   removeMember(channelId: string, userId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
-  leave(channelId: string, teamId?: string): Promise<{ ok: boolean; error?: string }>;
   archive(channelId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
   delete(channelId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
-  stopAgents(channelId: string, teamId?: string): Promise<{ ok: boolean; stopped?: number; error?: string }>;
   searchMessages(query: string, limit?: number): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
 }
 
@@ -312,10 +313,8 @@ export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
     addMember(channelId, userId, teamId) { return emitWithTimeout(socket, WEB_EVENTS.channel.addMember, { channelId, memberUserId: userId, ...(teamId ? { teamId } : {}) }); },
     removeAgent(channelId, agentId, teamId) { return emitWithTimeout(socket, WEB_EVENTS.channel.removeAgent, { channelId, agentId, ...(teamId ? { teamId } : {}) }); },
     removeMember(channelId, userId, teamId) { return emitWithTimeout(socket, WEB_EVENTS.channel.removeMember, { channelId, memberUserId: userId, ...(teamId ? { teamId } : {}) }); },
-    leave(channelId, teamId) { return emitWithTimeout(socket, 'channel:leave', { channelId, ...(teamId ? { teamId } : {}) }); },
     archive(channelId, teamId) { return emitWithTimeout(socket, WEB_EVENTS.channel.archive, { channelId, ...(teamId ? { teamId } : {}) }); },
     delete(channelId, teamId) { return emitWithTimeout(socket, WEB_EVENTS.channel.delete, { channelId, ...(teamId ? { teamId } : {}) }); },
-    stopAgents(channelId, teamId) { return emitWithTimeout(socket, 'channel:stop-agents', { channelId, ...(teamId ? { teamId } : {}) }); },
     searchMessages(query, limit) { return emitWithTimeout(socket, WEB_EVENTS.message.search, { query, limit }); },
   };
 }
@@ -335,12 +334,11 @@ export function messageReactionEvents(socket: Socket = getWebSocket()): MessageR
 }
 
 export interface AuthEvents {
-  register(payload: { username: string; password: string; email?: string; inviteToken?: string; sessionId?: string }): Promise<{ ok: boolean; token?: string; user?: UserInfo; currentTeam?: { id: string; name: string; path: string }; defaultChannel?: { id: string; name: string }; error?: string }>;
+  register(payload: { username: string; password: string; email?: string; joinCode?: string; sessionId?: string }): Promise<{ ok: boolean; token?: string; user?: UserInfo; currentTeam?: { id: string; name: string; path: string }; defaultChannel?: { id: string; name: string }; error?: string }>;
   login(payload: { username: string; password: string; joinCode?: string }): Promise<{ ok: boolean; token?: string; user?: UserInfo; currentTeam?: { id: string; name: string; path: string }; error?: string }>;
   whoami(): Promise<{ ok: boolean; user?: UserInfo; currentTeam?: TeamSummary; error?: string }>;
   inviteCreate(payload?: { networkId?: string; purpose?: 'user' | 'device' }): Promise<{ ok: boolean; invite?: InviteInfo; error?: string }>;
   deviceLogin(payload: { inviteCode: string; username: string; password: string }): Promise<{ ok: boolean; token?: string; networkId?: string; networkPath?: string; userId?: string; username?: string; role?: 'admin' | 'user'; deviceId?: string; error?: string }>;
-  changePassword(payload: { currentPassword: string; newPassword: string }): Promise<{ ok: boolean; error?: string }>;
 }
 
 export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
@@ -359,11 +357,27 @@ export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
       const teamId = networkId && networkId !== 'default' ? networkId : undefined;
       return emitWithTimeout(socket, WEB_EVENTS.deviceInvite.create, { ...rest, ...(teamId ? { teamId } : {}) });
     },
-    deviceLogin(payload) {
-      return emitWithTimeout(socket, 'auth:device-login', payload, 20000);
-    },
-    changePassword(payload) {
-      return emitWithTimeout(socket, 'auth:change-password', payload);
+    async deviceLogin({ inviteCode, username, password }) {
+      const login = await emitWithTimeout(socket, WEB_EVENTS.auth.login, { username, password }, 20000);
+      if (!login?.ok || !login.token || !login.user?.id) {
+        return { ok: false, error: login?.error ?? 'LOGIN_FAILED' };
+      }
+      const complete = await emitWithTimeout(socket, WEB_EVENTS.deviceInvite.complete, { code: inviteCode, userId: login.user.id }, 20000);
+      if (!complete?.ok) {
+        return { ok: false, error: complete?.error ?? 'INVITE_COMPLETE_FAILED' };
+      }
+      const team = complete.team ?? login.currentTeam;
+      const credentials = complete.credentials ?? {};
+      return {
+        ok: true,
+        token: login.token,
+        networkId: team?.id ?? credentials.teamId,
+        networkPath: team?.path ?? team?.id ?? credentials.teamId,
+        userId: login.user.id,
+        username: login.user.username,
+        role: login.user.role,
+        deviceId: complete.invite?.deviceId ?? credentials.deviceId,
+      };
     },
   };
 }

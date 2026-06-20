@@ -157,12 +157,8 @@ export default function ChatPage() {
   const [showNewChannel, setShowNewChannel] = useState(false);
   const [showEditChannel, setShowEditChannel] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
-  const [showStopAgents, setShowStopAgents] = useState(false);
-  const [showLeaveChannel, setShowLeaveChannel] = useState(false);
   const [channelMembers, setChannelMembers] = useState<ChannelMemberEntry[]>([]);
   const [humanProfiles, setHumanProfiles] = useState<HumanProfile[]>([]);
-  const [channelActionError, setChannelActionError] = useState<string | null>(null);
-  const [channelActionPending, setChannelActionPending] = useState(false);
   const [sidebarView, setSidebarView] = useState<'channels' | 'search' | 'inbox' | 'saved'>('channels');
   const [channelsExpanded, setChannelsExpanded] = useState(true);
   const [dmsExpanded, setDmsExpanded] = useState(true);
@@ -440,41 +436,6 @@ export default function ChatPage() {
     else params.set('chatTab', nextTab);
     const query = params.toString();
     router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
-  };
-
-  const handleStopAgents = async () => {
-    if (!activeChannel) return;
-    setChannelActionPending(true);
-    setChannelActionError(null);
-    const res = await channelEvents().stopAgents(activeChannel, currentTeamId);
-    setChannelActionPending(false);
-    if (!res.ok) {
-      setChannelActionError(res.error ?? '停止失败');
-      return;
-    }
-    setShowStopAgents(false);
-  };
-
-  const handleLeaveChannel = async () => {
-    if (!activeChannel) return;
-    setChannelActionPending(true);
-    setChannelActionError(null);
-    const leavingId = activeChannel;
-    const res = await channelEvents().leave(leavingId, currentTeamId);
-    setChannelActionPending(false);
-    if (!res.ok) {
-      setChannelActionError(res.error ?? '离开失败');
-      return;
-    }
-    setShowLeaveChannel(false);
-    const fallback = channels.find((channel) => channel.id !== leavingId);
-    if (fallback) {
-      setActiveChannel(fallback.id);
-      router.push(`/${np}/channel/${fallback.id}`);
-    } else {
-      setActiveChannel(null);
-      router.push(`/${np}/chat`);
-    }
   };
 
   const handleArchiveChannel = async (channelId: string) => {
@@ -1068,18 +1029,9 @@ export default function ChatPage() {
             </div>
             {!isDm && (
             <div className="flex shrink-0 items-center gap-2">
-              <button onClick={() => { setChannelActionError(null); setShowStopAgents(true); }} className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="停止所有 Agent">
-                <SquareDot size={14} />
-              </button>
               {canManageActiveChannel && (
                 <button onClick={() => setShowEditChannel(true)} className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="编辑频道" data-smoke="channel-edit-open">
                   <Pencil size={14} />
-                </button>
-              )}
-              {!isDefaultPublicChannel && (
-                <button onClick={() => { setChannelActionError(null); setShowLeaveChannel(true); }} className="flex h-7 items-center gap-1 rounded-md px-2 text-xs text-neutral-500 hover:bg-neutral-100" title="离开频道">
-                  <ExternalLink size={13} />
-                  <span>离开</span>
                 </button>
               )}
               <button onClick={() => { loadChannelMembers(activeChannel); setShowMembers(true); }} className="flex h-7 items-center gap-1 rounded-md px-2 text-xs text-neutral-500 hover:bg-neutral-100" title="查看参与者">
@@ -1310,30 +1262,6 @@ export default function ChatPage() {
           isDefaultChannel={isDefaultPublicChannel}
         />
       )}
-      {showStopAgents && activeChannelObj && (
-        <ConfirmChannelActionDialog
-          title="停止所有 Agent"
-          message={`这会立即停止 #${activeChannelObj.name} 中正在运行的 Agent。你之后仍然可以继续发送新的指令。`}
-          confirmLabel="停止所有 Agent"
-          confirmTone="danger"
-          pending={channelActionPending}
-          error={channelActionError}
-          onClose={() => { setShowStopAgents(false); setChannelActionError(null); }}
-          onConfirm={handleStopAgents}
-        />
-      )}
-      {showLeaveChannel && activeChannelObj && !isDefaultPublicChannel && (
-        <ConfirmChannelActionDialog
-          title="离开频道"
-          message={`确定要离开 #${activeChannelObj.name} 吗？离开后你不会再看到它，也不能继续发送消息，除非之后重新加入。`}
-          confirmLabel="离开频道"
-          confirmTone="warning"
-          pending={channelActionPending}
-          error={channelActionError}
-          onClose={() => { setShowLeaveChannel(false); setChannelActionError(null); }}
-          onConfirm={handleLeaveChannel}
-        />
-      )}
       {showMembers && activeChannelObj && (
         <ChannelMembersDialog
           channelName={activeChannelObj.name}
@@ -1463,48 +1391,6 @@ function ChannelEditDialog({
             </div>
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-function ConfirmChannelActionDialog({
-  title,
-  message,
-  confirmLabel,
-  confirmTone,
-  pending,
-  error,
-  onClose,
-  onConfirm,
-}: {
-  title: string;
-  message: string;
-  confirmLabel: string;
-  confirmTone: 'danger' | 'warning';
-  pending: boolean;
-  error: string | null;
-  onClose: () => void;
-  onConfirm: () => void;
-}) {
-  const confirmClass = confirmTone === 'danger'
-    ? 'bg-rose-600 hover:bg-rose-700'
-    : 'bg-orange-500 hover:bg-orange-600';
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35">
-      <div className="w-[400px] rounded-lg border border-neutral-200 bg-white p-5 shadow-xl">
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-sm font-semibold">{title}</h3>
-          <button onClick={onClose} className="text-neutral-400 hover:text-neutral-600"><X size={16} /></button>
-        </div>
-        <div className="rounded-md border border-orange-100 bg-orange-50 px-3 py-3 text-sm leading-6 text-neutral-700">{message}</div>
-        {error && <div className="mt-3 rounded-md bg-rose-50 px-3 py-2 text-xs text-rose-600">{error}</div>}
-        <div className="mt-5 flex justify-end gap-2">
-          <button onClick={onClose} disabled={pending} className="rounded-md border border-neutral-200 px-3 py-1.5 text-sm text-neutral-600 hover:bg-neutral-50 disabled:opacity-50">取消</button>
-          <button onClick={onConfirm} disabled={pending} className={`rounded-md px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50 ${confirmClass}`}>
-            {pending ? '处理中...' : confirmLabel}
-          </button>
-        </div>
       </div>
     </div>
   );
@@ -3648,12 +3534,23 @@ function ActivityView({ onJump, humanProfiles }: { onJump: (channelId: string) =
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const visibleIds = visibleConversationIds(channels, dms);
+  const visibleList = [...visibleIds];
+  const visibleKey = visibleList.join('\u001f');
 
   useEffect(() => {
-    channelEvents().searchMessages('', 100).then((res) => {
-      if (res.ok && res.messages) setRecent(res.messages);
+    if (!currentTeamId || visibleList.length === 0) {
+      setRecent([]);
+      return;
+    }
+    let cancelled = false;
+    Promise.all(visibleList.map((channelId) => channelEvents().join(currentTeamId, channelId, 20))).then((results) => {
+      if (cancelled) return;
+      setRecent(results.flatMap((res) => res.ok && res.messages ? res.messages : []));
     });
-  }, [currentTeamId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTeamId, visibleKey]);
 
   const allMessages = messagesForVisibleConversations(uniqueMessages([...recent, ...Object.values(messagesByChannel).flat()]), visibleIds)
     .filter((m) => m.senderKind !== 'system')
@@ -3737,7 +3634,7 @@ function SavedView({ savedIds, onUnsave, onJump, humanProfiles }: { savedIds: Se
   const visibleIds = visibleConversationIds(channels, dms);
 
   useEffect(() => {
-    channelEvents().searchMessages('', 200).then((res) => {
+    messageReactionEvents().listSaved().then((res) => {
       if (res.ok && res.messages) setRecent(res.messages);
     });
   }, [currentTeamId]);

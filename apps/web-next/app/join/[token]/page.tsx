@@ -72,7 +72,7 @@ export default function JoinPage() {
         socket.on('connect', () => resolve());
       });
 
-      const res = await authEvents(socket).register({ username, password, email: email || undefined, inviteToken: code });
+      const res = await authEvents(socket).register({ username, password, email: email || undefined, joinCode: code });
       socket.disconnect();
 
       const user = res.user;

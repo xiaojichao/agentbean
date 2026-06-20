@@ -43,7 +43,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         if (res.currentTeam?.id) {
           useAgentBeanStore.getState().setCurrentTeamId(res.currentTeam.id);
           localStorage.setItem('agentbean.networkPath', res.currentTeam.path ?? res.currentTeam.id);
-          useAgentBeanStore.getState().applyTeamsSnapshot([res.currentTeam]);
         }
         teamEvents().list().then((teamsRes) => {
           if (teamsRes.ok && teamsRes.teams) {
