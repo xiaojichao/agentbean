@@ -8,6 +8,7 @@ import { collectSystemInfo, readDaemonVersion } from './system-info.js';
 import { createCommandExecutor } from './executor.js';
 import { createDaemonProtocolClient, createHttpEnvResolver, type DaemonDeviceConfig, type DaemonProtocolSocket } from './index.js';
 import { loadYamlConfig } from './config.js';
+import { loadAuth, saveAuth, type AuthData } from './auth-store.js';
 
 interface SocketIoClientLike {
   connected: boolean;
@@ -53,12 +54,10 @@ export function parseDaemonNextCliConfig(input: ParseDaemonNextCliConfigInput = 
   const teamId = args['team-id'] ?? env.AGENTBEAN_NEXT_TEAM_ID ?? yamlString('teamId');
   const ownerId = args['owner-id'] ?? env.AGENTBEAN_NEXT_OWNER_ID ?? yamlString('ownerId');
   const inviteCode = args['invite-code'] ?? env.AGENTBEAN_NEXT_INVITE_CODE ?? yamlString('inviteCode');
-  if (!inviteCode && !teamId) {
-    throw new Error('AGENTBEAN_NEXT_TEAM_ID or --team-id is required');
-  }
-  if (!inviteCode && !ownerId) {
-    throw new Error('AGENTBEAN_NEXT_OWNER_ID or --owner-id is required');
-  }
+  // NOTE: credential sufficiency is validated at run time inside runDaemonNextCli
+  // (see resolveDeviceCredentials) so that "start with only saved auth" works:
+  // neither --invite-code nor --team-id/--owner-id is required when a profile
+  // has been persisted previously.
   return {
     serverUrl: trimTrailingSlash(
       args['server-url'] ?? env.AGENTBEAN_NEXT_SERVER_URL ?? yamlString('serverUrl') ?? 'http://127.0.0.1:4000',
@@ -108,11 +107,113 @@ export function createSocketIoDaemonSocket(socket: SocketIoClientLike): DaemonPr
   };
 }
 
+/**
+ * Pure credential-resolution decision for a single profile.
+ *
+ * Inputs are the merged CLI/env/YAML config, the credentials produced by the
+ * invite network call (only present on the invite path, once they've arrived),
+ * and whatever `loadAuth` returned for this profile (null when nothing is
+ * persisted). The function never reads the filesystem and never throws; it
+ * returns a descriptor telling the caller exactly what device identity to use
+ * and what (if anything) to persist, or signals that resolution failed so the
+ * caller can throw a clear error.
+ *
+ * Extracting this as a pure function keeps the invite/saved/config decision
+ * unit-testable without mocking the network or the auth store.
+ *
+ * profileId is used for BOTH save and load so a profile invited with no
+ * --profile-id (stored under 'default') is found on the next start with no
+ * --profile-id (loaded from 'default'). Do NOT slugify(teamId) — that would
+ * make save/load target different files and never match.
+ */
+/**
+ * Successful credential resolution. `persist` and `persistProfileId` are
+ * bundled via the intersection below: when `persist` is present,
+ * `persistProfileId` is guaranteed present too (TS-enforced). This lets the
+ * saveAuth call site in runDaemonNextCli use `resolved.persistProfileId`
+ * directly, with no `?? config.profileId` fallback.
+ */
+export type ResolvedCredentials = {
+  teamId: string;
+  ownerId: string;
+  token?: string;
+} & (
+  | { persist?: undefined; persistProfileId?: undefined }
+  | { persist: AuthData; persistProfileId: string }
+);
+
+export interface ResolveDeviceCredentialsFailure {
+  ok: false;
+  error: string;
+}
+
+export type ResolveDeviceCredentialsResult =
+  | ({ ok: true } & ResolvedCredentials)
+  | ResolveDeviceCredentialsFailure;
+
+export interface ResolveDeviceCredentialsInput {
+  inviteCode?: string;
+  /** Invite-path network credentials; only meaningful when inviteCode is set. */
+  inviteCredentials?: { teamId: string; ownerId: string; token: string };
+  /** Result of loadAuth for this profile, or null. */
+  saved: AuthData | null;
+  /** Fallback teamId/ownerId from config (CLI/env/YAML). */
+  configTeamId?: string;
+  configOwnerId?: string;
+  /** Always defined (parse defaults to 'default'). */
+  profileId: string;
+  serverUrl: string;
+}
+
+export function resolveDeviceCredentials(
+  input: ResolveDeviceCredentialsInput,
+): ResolveDeviceCredentialsResult {
+  const { inviteCode, inviteCredentials, saved, configTeamId, configOwnerId, profileId, serverUrl } = input;
+
+  if (inviteCode) {
+    if (!inviteCredentials) {
+      // The caller should only invoke us once the network handshake has produced
+      // credentials; if it didn't, surface a clear error rather than persisting
+      // an incomplete profile.
+      return {
+        ok: false,
+        error: 'Invite mode selected but no invite credentials were supplied to resolveDeviceCredentials.',
+      };
+    }
+    const { teamId, ownerId, token } = inviteCredentials;
+    return {
+      ok: true,
+      teamId,
+      ownerId,
+      token,
+      persist: { token, serverUrl, teamId, ownerId },
+      persistProfileId: profileId,
+    };
+  }
+
+  if (saved) {
+    return { ok: true, teamId: saved.teamId, ownerId: saved.ownerId, token: saved.token };
+  }
+
+  if (configTeamId && configOwnerId) {
+    return { ok: true, teamId: configTeamId, ownerId: configOwnerId };
+  }
+
+  return {
+    ok: false,
+    error:
+      'Daemon requires --invite-code, or (--team-id and --owner-id), or a previously saved auth profile (initialize with --invite-code first).',
+  };
+}
+
 export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemonNextCliConfig()): Promise<void> {
   const socket = await connectSocketIoClient(config.serverUrl);
   const protocolSocket = createSocketIoDaemonSocket(socket);
   const snapshot = await createBuiltinScanProvider()();
-  const credentials = config.inviteCode
+
+  // Invite handshake runs first (network), then we hand off to the pure
+  // resolveDeviceCredentials helper for the invite/saved/config decision.
+  const inviteCredentials = config.inviteCode
     ? await waitForDeviceInviteCredentials(protocolSocket, {
       code: config.inviteCode,
       machineId: config.machineId,
@@ -120,16 +221,41 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
       hostname: config.hostname,
       serverUrl: config.serverUrl,
     })
-    : null;
-  const teamId = credentials?.teamId ?? config.teamId;
-  const ownerId = credentials?.ownerId ?? config.ownerId;
-  if (!teamId || !ownerId) {
-    throw new Error('Device credentials did not include teamId and ownerId');
+    : undefined;
+  const saved = config.inviteCode ? null : loadAuth({ profileId: config.profileId });
+
+  const resolved = resolveDeviceCredentials({
+    inviteCode: config.inviteCode,
+    inviteCredentials: inviteCredentials
+      ? {
+        teamId: inviteCredentials.teamId,
+        ownerId: inviteCredentials.ownerId,
+        token: inviteCredentials.token,
+      }
+      : undefined,
+    saved,
+    configTeamId: config.teamId,
+    configOwnerId: config.ownerId,
+    profileId: config.profileId,
+    serverUrl: config.serverUrl,
+  });
+  if (!resolved.ok) {
+    throw new Error(resolved.error);
   }
+
+  // Persist best-effort on the invite path (saveAuth never throws). profileId
+  // is config.profileId for BOTH save and load (Decision 1), so the next start
+  // with the same (or absent) --profile-id finds this profile. persistProfileId
+  // is always set alongside persist (see resolveDeviceCredentials invariant).
+  if (resolved.persist) {
+    saveAuth(resolved.persist, { profileId: resolved.persistProfileId });
+  }
+
+  const { teamId, ownerId, token } = resolved;
   const device: DaemonDeviceConfig & { token?: string } = {
     teamId,
     ownerId,
-    ...(credentials?.token ? { token: credentials.token } : {}),
+    ...(token ? { token } : {}),
     machineId: config.machineId,
     profileId: config.profileId,
     hostname: config.hostname,
