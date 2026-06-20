@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { AuthData } from '../src/auth-store';
 import { loadAuth, saveAuth, clearAuth, listAuthProfiles } from '../src/auth-store';
+import { authFile } from '../src/profile-paths';
 
 const base = realpathSync(mkdtempSync(join(tmpdir(), 'auth-')));
 const data: AuthData = { token: 'tok-1', serverUrl: 'http://s', teamId: 'team-1', ownerId: 'owner-1' };
@@ -37,5 +38,16 @@ describe('auth-store', () => {
     const profiles = listAuthProfiles({ baseDir: base });
     expect(profiles.map((p) => p.profileId).sort()).toEqual(['team-1', 'team-2']);
     expect(profiles.find((p) => p.profileId === 'team-2')?.token).toBe('tok-2');
+  });
+  it('writes the auth file with restrictive 0o600 permissions (credential security)', () => {
+    // saveAuth now passes { mode: 0o600 } to writeFileSync. Node masks mode
+    // by umask, so on a normal umask (022) the file lands at 0o600; on a
+    // permissive umask (000) it still lands at 0o600 because the explicit
+    // mode arg is the cap. Assert the low 9 bits are owner-only rw.
+    const baseDir = realpathSync(mkdtempSync(join(tmpdir(), 'auth-perms-')));
+    saveAuth(data, { profileId: 'perms-check', baseDir });
+    const file = authFile('perms-check', baseDir);
+    const mode = statSync(file).mode & 0o777;
+    expect(mode).toBe(0o600);
   });
 });

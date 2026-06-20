@@ -106,6 +106,15 @@ export function expandAllProfiles(config: DaemonNextCliConfig, profiles: AuthPro
   return profiles.map((profile) => ({
     ...config,
     profileId: profile.profileId,
+    // Each saved profile carries its own serverUrl (the server that invited
+    // it). Override the parent config.serverUrl so every recursive daemon
+    // connects to the profile's own server — otherwise cross-server profiles
+    // (team A invited from server X, team B from server Y) would all try to
+    // reach the parent's serverUrl and fail. Fall back to config.serverUrl
+    // when the profile somehow has no serverUrl (defensive; listAuthProfiles
+    // always returns one). trimTrailingSlash mirrors the parse path so a
+    // trailing slash in the saved file does not produce a double-slash URL.
+    serverUrl: profile.serverUrl ? trimTrailingSlash(profile.serverUrl) : config.serverUrl,
     allProfiles: false,
   }));
 }
@@ -228,6 +237,11 @@ export function resolveDeviceCredentials(
   }
 
   if (saved) {
+    // Intentional auto-load semantics: a saved profile takes precedence over
+    // --team-id/--owner-id so a daemon restart auto-resumes the saved team
+    // rather than silently switching teams. Explicit --team-id/--owner-id are
+    // ignored here on purpose; to switch teams, clear the profile (or use a
+    // different --profile-id). See resolveDeviceCredentials docstring.
     return { ok: true, teamId: saved.teamId, ownerId: saved.ownerId, token: saved.token };
   }
 

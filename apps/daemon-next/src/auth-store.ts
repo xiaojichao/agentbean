@@ -31,8 +31,13 @@ export function loadAuth(options: { profileId?: string; baseDir?: string } = {})
 export function saveAuth(data: AuthData, options: { profileId?: string; baseDir?: string } = {}): void {
   try {
     const file = authFile(options.profileId, options.baseDir);
-    mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+    // Restrictive permissions: the file holds a device token (a credential).
+    // 0o700 for the directory, 0o600 for the file — owner-only read/write.
+    // mkdirSync/writeFileSync `mode` is masked by process umask, so this is
+    // best-effort, but the explicit mode documents intent and lands 0o600 on
+    // most systems. Do NOT change umask globally (process-wide side effects).
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
   } catch {
     // best-effort persistence; never throw
   }

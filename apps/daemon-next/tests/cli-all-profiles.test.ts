@@ -2,11 +2,11 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { expandAllProfiles, parseDaemonNextCliConfig, runDaemonNextCli, type DaemonNextCliConfig } from '../src/cli';
 import type { AuthProfile } from '../src/auth-store';
 
-function makeProfile(profileId: string): AuthProfile {
+function makeProfile(profileId: string, serverUrl = 'http://127.0.0.1:4000'): AuthProfile {
   return {
     profileId,
     token: `token-${profileId}`,
-    serverUrl: 'http://127.0.0.1:4000',
+    serverUrl,
     teamId: `team-${profileId}`,
     ownerId: `owner-${profileId}`,
   };
@@ -52,7 +52,9 @@ describe('expandAllProfiles (pure orchestration)', () => {
       hostname: 'special-host',
       fallbackPrefix: 'p:',
     });
-    const profiles = [makeProfile('team-x')];
+    // Profile with the SAME serverUrl as the parent config — so this test
+    // still asserts the non-serverUrl fields survive the spread.
+    const profiles = [makeProfile('team-x', 'http://127.0.0.1:4000')];
     const [sub] = expandAllProfiles(config, profiles);
 
     expect(sub).toMatchObject({
@@ -64,6 +66,35 @@ describe('expandAllProfiles (pure orchestration)', () => {
       profileId: 'team-x',
       allProfiles: false,
     });
+  });
+
+  test('each sub-config uses its profile serverUrl (multi-server correctness)', () => {
+    // Fix #1: --all-profiles must connect each profile to ITS OWN saved
+    // serverUrl, not the parent config's. Two profiles invited from two
+    // different servers must each get their own serverUrl in the sub-config.
+    const config = baseConfig({ allProfiles: true, serverUrl: 'http://parent:4000' });
+    const profiles = [
+      makeProfile('team-a', 'http://server-a:4000/'),  // trailing slash → must be trimmed
+      makeProfile('team-b', 'http://server-b:4000'),
+    ];
+    const subConfigs = expandAllProfiles(config, profiles);
+
+    const byId = new Map(subConfigs.map((c) => [c.profileId, c]));
+    expect(byId.get('team-a')?.serverUrl).toBe('http://server-a:4000'); // trimmed
+    expect(byId.get('team-b')?.serverUrl).toBe('http://server-b:4000');
+    // None of them inherited the parent's serverUrl.
+    for (const sub of subConfigs) {
+      expect(sub.serverUrl).not.toBe('http://parent:4000');
+    }
+  });
+
+  test('falls back to parent config.serverUrl when a profile has no serverUrl (defensive)', () => {
+    // listAuthProfiles always returns serverUrl (loadAuth validates it), but
+    // guard the shape so a malformed profile does not yield serverUrl=undefined.
+    const config = baseConfig({ allProfiles: true, serverUrl: 'http://parent:4000' });
+    const profile = { ...makeProfile('team-x'), serverUrl: '' };
+    const [sub] = expandAllProfiles(config, [profile]);
+    expect(sub.serverUrl).toBe('http://parent:4000');
   });
 
   test('empty profile list returns empty array (caller handles the error)', () => {
