@@ -1226,12 +1226,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!(await repositories.teams.isMember(device.teamId, deviceDetailInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
+      const canonicalDevice = resolveCanonicalDeviceRecord(
+        device,
+        await repositories.devices.listByTeam(device.teamId),
+      );
       const visibleAgents = await repositories.agents.listVisibleInTeam(device.teamId);
       return makeSuccess({
         device: {
-          ...toDeviceDto(device),
-          runtimes: (await repositories.runtimes.listByDevice(device.id)).map(toRuntimeDto),
-          agents: visibleAgents.filter((agent) => agent.deviceId === device.id),
+          ...toDeviceDto(canonicalDevice),
+          runtimes: (await repositories.runtimes.listByDevice(canonicalDevice.id)).map(toRuntimeDto),
+          agents: visibleAgents.filter((agent) => agent.deviceId === canonicalDevice.id),
         },
       });
     },
@@ -3109,6 +3113,20 @@ function dedupeDeviceRecords(devices: DeviceRecord[]): DeviceRecord[] {
     indexDeviceRecord(existingIndex, device, indexByMachineKey, indexByDisplayKey);
   }
   return result;
+}
+
+function resolveCanonicalDeviceRecord(device: DeviceRecord, teamDevices: DeviceRecord[]): DeviceRecord {
+  return dedupeDeviceRecords(teamDevices).find((candidate) => deviceRecordsCanAlias(candidate, device)) ?? device;
+}
+
+function deviceRecordsCanAlias(a: DeviceRecord, b: DeviceRecord): boolean {
+  if (a.id === b.id) return true;
+  const aMachineKey = deviceMachineKey(a);
+  const bMachineKey = deviceMachineKey(b);
+  if (aMachineKey && bMachineKey) return aMachineKey === bMachineKey;
+  const aDisplayKey = deviceDisplayKey(a);
+  const bDisplayKey = deviceDisplayKey(b);
+  return Boolean(aDisplayKey && bDisplayKey && aDisplayKey === bDisplayKey && (!aMachineKey || !bMachineKey));
 }
 
 function indexDeviceRecord(
