@@ -251,8 +251,9 @@ export function collectAgentBeanNextReadinessChecks({
     check(
       'daemon-next-runtime-dependencies',
       daemonNextPackageJson.dependencies?.['@agentbean/contracts'] === contractsPackageJson.version &&
+        Boolean(daemonNextPackageJson.dependencies?.['js-yaml']) &&
         Boolean(daemonNextPackageJson.dependencies?.['socket.io-client']),
-      '@agentbean/daemon-next must depend on published contracts and socket.io-client',
+      '@agentbean/daemon-next must depend on published contracts, js-yaml, and socket.io-client',
     ),
     check(
       'daemon-next-version-replaces-old-daemon',

@@ -244,6 +244,23 @@ custom agent dispatch 的输入附件下载与输出产物归档第一版已在 
 
 注：`.agentbean/` 目录建议在用户项目 `.gitignore` 中忽略（per-run 产物与本地运行历史不纳入版本控制）。
 
+### 多 profile + token 持久化 + YAML 配置（已落地）
+
+daemon-next 的多 profile、token 持久化与 YAML 配置第一版已落地：
+
+- token 持久化：`--invite-code` 完成 invite 后，token/teamId/ownerId 持久化到 `~/.agentbean/teams/{profileId}/auth.json`；下次启动自动加载（免重复 invite / 传 `--team-id`/`--owner-id`）。profileId 统一用 `config.profileId`（默认 `default`），save 与 load 用同一 key 保证一致；单 team 不传 `--profile-id` 即可自动加载，多 team 用显式 `--profile-id` 区分。
+- 多 profile：`--all-profiles` 枚举 `teams/*/` 下所有已存 profile，为每个并发启动独立 daemon 实例（`Promise.allSettled` + per-profile 失败隔离，单 profile 连接失败不拖垮其他；全部失败才非零退出）。每实例独立 socket/scan，对齐原版。
+- YAML 配置：`--config-path` / `AGENTBEAN_NEXT_CONFIG_PATH` / parse input 注入加载 YAML（`js-yaml`），支持 `${VAR}` env 插值（缺失抛错）；配置优先级 CLI args > env > YAML > 内置默认。
+- 错误语义：auth.json 损坏/缺失 → `loadAuth` 返回 null 回退 invite/team-id；YAML 缺失/损坏/非对象 → 静默忽略回退 env/默认；`--all-profiles` 无已存 profile → 报错退出；凭据不足（无 invite / team-id+owner-id / saved auth）→ 启动时报清晰错误。
+- 参考实现：`apps/daemon-next/src/{profile-paths,auth-store,config}.ts`、`apps/daemon-next/src/cli.ts`（`parseDaemonNextCliConfig` 合并 YAML、`runDaemonNextCli` token 持久化 + `--all-profiles`、`resolveDeviceCredentials` 纯凭据解析、`expandAllProfiles` 多实例展开）。server-next/contracts 零改动。
+
+剩余（后续切片）：
+
+- `runDaemonNextCli` 的 socket 接线测试受限：`connectSocketIoClient` 经 `createRequire` 动态加载 `socket.io-client`，`vi.mock` 无法拦截，相关 wiring 测试暂以 `test.skip` + NOTE 文档化（`tests/cli.test.ts`、`tests/cli-all-profiles.test.ts`）。后续给 `connectSocketIoClient` 加可注入 seam 即可激活约 4 个 wiring 测试。
+- `cli.ts` 已达 ~450 行，后续可将纯函数 `resolveDeviceCredentials` 及其类型提取到独立模块（如 `src/credentials.ts`）。
+- auth token 刷新/续期未实现（第一版用 invite 拿到的 token，过期重新 invite）。
+- profile 删除/重命名 CLI 未提供（第一版手动删 `~/.agentbean/teams/{profileId}/`）。
+
 ### Runtime Resolution
 
 当前 daemon 有有用的 runtime matching rules，但 source of truth 分散在 daemon、server 与 web 中。

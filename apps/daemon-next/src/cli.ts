@@ -8,6 +8,9 @@ import { loadScanCache, saveScanCache } from './scan-cache.js';
 import { collectSystemInfo, readDaemonVersion } from './system-info.js';
 import { createCommandExecutor } from './executor.js';
 import { createDaemonProtocolClient, createHttpEnvResolver, type DaemonDeviceConfig, type DaemonProtocolSocket } from './index.js';
+import { loadYamlConfig } from './config.js';
+import { listAuthProfiles, loadAuth, saveAuth, type AuthData, type AuthProfile } from './auth-store.js';
+import { sanitizeProfileId } from './profile-paths.js';
 
 interface SocketIoClientLike {
   connected: boolean;
@@ -27,37 +30,104 @@ export interface DaemonNextCliConfig {
   profileId: string;
   hostname: string;
   fallbackPrefix: string;
+  configPath?: string;
+  serverUrlExplicit?: boolean;
+  /**
+   * When true, runDaemonNextCli enumerates every saved auth profile via
+   * listAuthProfiles() and starts one daemon instance per profile
+   * concurrently (each with allProfiles cleared and profileId overridden).
+   * The all-profiles branch runs BEFORE connectSocketIoClient so it never
+   * opens a socket itself; each recursion opens its own.
+   */
+  allProfiles?: boolean;
 }
+
+/**
+ * Boolean (value-less) CLI flags. parseArgs treats every other `--flag` as
+ * `--flag value`, so these must be recognised and not consume the next arg.
+ */
+const BOOLEAN_FLAGS = new Set(['all-profiles']);
 
 export interface ParseDaemonNextCliConfigInput {
   argv?: string[];
   env?: NodeJS.ProcessEnv;
   hostname?: string;
+  configPath?: string;
 }
 
 export function parseDaemonNextCliConfig(input: ParseDaemonNextCliConfigInput = {}): DaemonNextCliConfig {
   const argv = input.argv ?? process.argv.slice(2);
   const env = input.env ?? process.env;
-  const args = parseArgs(argv);
-  const teamId = args['team-id'] ?? env.AGENTBEAN_NEXT_TEAM_ID;
-  const ownerId = args['owner-id'] ?? env.AGENTBEAN_NEXT_OWNER_ID;
-  const inviteCode = args['invite-code'] ?? env.AGENTBEAN_NEXT_INVITE_CODE;
-  if (!inviteCode && !teamId) {
-    throw new Error('AGENTBEAN_NEXT_TEAM_ID or --team-id is required');
-  }
-  if (!inviteCode && !ownerId) {
-    throw new Error('AGENTBEAN_NEXT_OWNER_ID or --owner-id is required');
-  }
+  const { args, booleanFlags } = parseArgs(argv);
+  // Resolve the YAML config path. A missing or corrupt file returns null from
+  // loadYamlConfig, in which case yaml is treated as "no config" and we fall
+  // through to env / built-in default — matching the config.ts contract.
+  const configPath = input.configPath ?? args['config-path'] ?? env.AGENTBEAN_NEXT_CONFIG_PATH;
+  const yaml = configPath ? loadYamlConfig(configPath) : null;
+  const yamlString = (key: string): string | undefined =>
+    typeof yaml?.[key] === 'string' ? (yaml[key] as string) : undefined;
+  // Merge sources per field with priority CLI > env > yaml > default. Validation
+  // runs against the merged values so a YAML-only teamId/ownerId is accepted.
+  const teamId = args['team-id'] ?? env.AGENTBEAN_NEXT_TEAM_ID ?? yamlString('teamId');
+  const ownerId = args['owner-id'] ?? env.AGENTBEAN_NEXT_OWNER_ID ?? yamlString('ownerId');
+  const inviteCode = args['invite-code'] ?? env.AGENTBEAN_NEXT_INVITE_CODE ?? yamlString('inviteCode');
+  const serverUrl = args['server-url'] ?? env.AGENTBEAN_NEXT_SERVER_URL ?? yamlString('serverUrl');
+  // NOTE: credential sufficiency is validated at run time inside runDaemonNextCli
+  // (see resolveDeviceCredentials) so that "start with only saved auth" works:
+  // neither --invite-code nor --team-id/--owner-id is required when a profile
+  // has been persisted previously.
   return {
-    serverUrl: trimTrailingSlash(args['server-url'] ?? env.AGENTBEAN_NEXT_SERVER_URL ?? 'http://127.0.0.1:4000'),
+    serverUrl: trimTrailingSlash(
+      serverUrl ?? 'http://127.0.0.1:4000',
+    ),
     ...(teamId ? { teamId } : {}),
     ...(ownerId ? { ownerId } : {}),
     ...(inviteCode ? { inviteCode } : {}),
-    machineId: args['machine-id'] ?? env.AGENTBEAN_NEXT_MACHINE_ID,
-    profileId: args['profile-id'] ?? env.AGENTBEAN_NEXT_PROFILE_ID ?? 'default',
-    hostname: args.hostname ?? env.AGENTBEAN_NEXT_HOSTNAME ?? input.hostname ?? readHostname(),
-    fallbackPrefix: args['fallback-prefix'] ?? env.AGENTBEAN_NEXT_FALLBACK_PREFIX ?? 'daemon-next:',
+    machineId: args['machine-id'] ?? env.AGENTBEAN_NEXT_MACHINE_ID ?? yamlString('machineId'),
+    profileId: sanitizeProfileId(args['profile-id'] ?? env.AGENTBEAN_NEXT_PROFILE_ID ?? yamlString('profileId') ?? 'default'),
+    hostname: args.hostname ?? env.AGENTBEAN_NEXT_HOSTNAME ?? yamlString('hostname') ?? input.hostname ?? readHostname(),
+    fallbackPrefix:
+      args['fallback-prefix'] ?? env.AGENTBEAN_NEXT_FALLBACK_PREFIX ?? yamlString('fallbackPrefix') ?? 'daemon-next:',
+    ...(configPath ? { configPath } : {}),
+    ...(serverUrl ? { serverUrlExplicit: true } : {}),
+    ...(booleanFlags['all-profiles'] ? { allProfiles: true } : {}),
   };
+}
+
+export function resolveDaemonServerUrl(config: DaemonNextCliConfig, saved: AuthData | null): string {
+  return saved && !config.serverUrlExplicit ? trimTrailingSlash(saved.serverUrl) : config.serverUrl;
+}
+
+/**
+ * Pure expansion of `--all-profiles` into one DaemonNextCliConfig per saved
+ * profile. Each sub-config inherits the parent config, overrides `profileId`
+ * with the profile's, and clears `allProfiles` so the recursion does not
+ * re-expand. The empty case is the caller's responsibility (runDaemonNextCli
+ * exits with a clear error before reaching here) — this function returns an
+ * empty array when given no profiles, which keeps it total and trivially
+ * unit-testable without mocking the auth store.
+ *
+ * Extracted so the orchestration logic is testable in isolation: the actual
+ * runDaemonNextCli wiring cannot be exercised end-to-end in Vitest (see the
+ * socket-seam NOTE in cli.test.ts), but this helper covers the core decision.
+ */
+export function expandAllProfiles(config: DaemonNextCliConfig, profiles: AuthProfile[]): DaemonNextCliConfig[] {
+  const { inviteCode: _inviteCode, ...configWithoutInvite } = config;
+  return profiles.map((profile) => ({
+    ...configWithoutInvite,
+    profileId: profile.profileId,
+    // Each saved profile carries its own serverUrl (the server that invited
+    // it). Override the parent config.serverUrl so every recursive daemon
+    // connects to the profile's own server — otherwise cross-server profiles
+    // (team A invited from server X, team B from server Y) would all try to
+    // reach the parent's serverUrl and fail. Fall back to config.serverUrl
+    // when the profile somehow has no serverUrl (defensive; listAuthProfiles
+    // always returns one). trimTrailingSlash mirrors the parse path so a
+    // trailing slash in the saved file does not produce a double-slash URL.
+    serverUrl: profile.serverUrl ? trimTrailingSlash(profile.serverUrl) : config.serverUrl,
+    serverUrlExplicit: Boolean(profile.serverUrl) || config.serverUrlExplicit,
+    allProfiles: false,
+  }));
 }
 
 export function createSocketIoDaemonSocket(socket: SocketIoClientLike): DaemonProtocolSocket {
@@ -94,32 +164,232 @@ export function createSocketIoDaemonSocket(socket: SocketIoClientLike): DaemonPr
   };
 }
 
+/**
+ * Pure credential-resolution decision for a single profile.
+ *
+ * Inputs are the merged CLI/env/YAML config, the credentials produced by the
+ * invite network call (only present on the invite path, once they've arrived),
+ * and whatever `loadAuth` returned for this profile (null when nothing is
+ * persisted). The function never reads the filesystem and never throws; it
+ * returns a descriptor telling the caller exactly what device identity to use
+ * and what (if anything) to persist, or signals that resolution failed so the
+ * caller can throw a clear error.
+ *
+ * Extracting this as a pure function keeps the invite/saved/config decision
+ * unit-testable without mocking the network or the auth store.
+ *
+ * profileId is used for BOTH save and load so a profile invited with no
+ * --profile-id (stored under 'default') is found on the next start with no
+ * --profile-id (loaded from 'default'). Do NOT slugify(teamId) — that would
+ * make save/load target different files and never match.
+ */
+/**
+ * Successful credential resolution. `persist` and `persistProfileId` are
+ * bundled via the intersection below: when `persist` is present,
+ * `persistProfileId` is guaranteed present too (TS-enforced). This lets the
+ * saveAuth call site in runDaemonNextCli use `resolved.persistProfileId`
+ * directly, with no `?? config.profileId` fallback.
+ */
+export type ResolvedCredentials = {
+  teamId: string;
+  ownerId: string;
+  token?: string;
+} & (
+  | { persist?: undefined; persistProfileId?: undefined }
+  | { persist: AuthData; persistProfileId: string }
+);
+
+export interface ResolveDeviceCredentialsFailure {
+  ok: false;
+  error: string;
+}
+
+export type ResolveDeviceCredentialsResult =
+  | ({ ok: true } & ResolvedCredentials)
+  | ResolveDeviceCredentialsFailure;
+
+export interface ResolveDeviceCredentialsInput {
+  inviteCode?: string;
+  /** Invite-path network credentials; only meaningful when inviteCode is set. */
+  inviteCredentials?: { teamId: string; ownerId: string; token: string };
+  /** Result of loadAuth for this profile, or null. */
+  saved: AuthData | null;
+  /** Fallback teamId/ownerId from config (CLI/env/YAML). */
+  configTeamId?: string;
+  configOwnerId?: string;
+  /** Always defined (parse defaults to 'default'). */
+  profileId: string;
+  serverUrl: string;
+}
+
+export function resolveDeviceCredentials(
+  input: ResolveDeviceCredentialsInput,
+): ResolveDeviceCredentialsResult {
+  const { inviteCode, inviteCredentials, saved, configTeamId, configOwnerId, profileId, serverUrl } = input;
+
+  if (inviteCode) {
+    if (!inviteCredentials) {
+      // The caller should only invoke us once the network handshake has produced
+      // credentials; if it didn't, surface a clear error rather than persisting
+      // an incomplete profile.
+      return {
+        ok: false,
+        error: 'Invite mode selected but no invite credentials were supplied to resolveDeviceCredentials.',
+      };
+    }
+    const { teamId, ownerId, token } = inviteCredentials;
+    return {
+      ok: true,
+      teamId,
+      ownerId,
+      token,
+      persist: { token, serverUrl, teamId, ownerId },
+      persistProfileId: profileId,
+    };
+  }
+
+  if (saved) {
+    // Intentional auto-load semantics: a saved profile takes precedence over
+    // --team-id/--owner-id so a daemon restart auto-resumes the saved team
+    // rather than silently switching teams. Explicit --team-id/--owner-id are
+    // ignored here on purpose; to switch teams, clear the profile (or use a
+    // different --profile-id). See resolveDeviceCredentials docstring.
+    return { ok: true, teamId: saved.teamId, ownerId: saved.ownerId, token: saved.token };
+  }
+
+  if (configTeamId && configOwnerId) {
+    return { ok: true, teamId: configTeamId, ownerId: configOwnerId };
+  }
+
+  if (!configTeamId) {
+    return {
+      ok: false,
+      error: 'AGENTBEAN_NEXT_TEAM_ID or --team-id is required',
+    };
+  }
+
+  if (!configOwnerId) {
+    return {
+      ok: false,
+      error: 'AGENTBEAN_NEXT_OWNER_ID or --owner-id is required',
+    };
+  }
+
+  return {
+    ok: false,
+    error:
+      'Daemon requires --invite-code, or (--team-id and --owner-id), or a previously saved auth profile (initialize with --invite-code first).',
+  };
+}
+
 export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemonNextCliConfig()): Promise<void> {
-  const socket = await connectSocketIoClient(config.serverUrl);
+  // --all-profiles branch runs BEFORE connectSocketIoClient: it never opens a
+  // socket itself, it just fans out one runDaemonNextCli recursion per saved
+  // profile. Each recursion clears allProfiles and overrides profileId, then
+  // takes the normal single-profile path (including its own loadAuth(profileId)
+  // for token injection — Decision 1 in the Task 5 plan). The repeated
+  // createBuiltinScanProvider() per recursion is accepted (Decision 2).
+  if (config.allProfiles) {
+    const profiles = listAuthProfiles();
+    if (profiles.length === 0) {
+      // Throw (don't process.exit) so bin.ts's top-level .catch handles this
+      // uniformly with every other failure path in runDaemonNextCli. The thrown
+      // error surfaces via that handler and makes the empty-list path testable
+      // without mocking process.exit.
+      throw new Error('No saved AgentBean team profiles found. Initialize one first with --invite-code.');
+    }
+    // allSettled + per-profile catch so one bad profile cannot tear down the
+    // fleet: a sibling connect failure is logged and recorded as 'rejected'
+    // without killing other in-flight daemons (spec error-handling table:
+    // "某 profile 连接失败 → 独立 catch，不拖垮其他").
+    const subConfigs = expandAllProfiles(config, profiles);
+    const results = await Promise.allSettled(
+      subConfigs.map((subConfig) =>
+        runDaemonNextCli(subConfig).catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`[all-profiles] profile ${subConfig.profileId} failed to start: ${message}`);
+          throw error; // re-throw so allSettled records it as 'rejected'
+        }),
+      ),
+    );
+    const failedCount = results.filter((r) => r.status === 'rejected').length;
+    if (failedCount === results.length) {
+      // Every profile failed — nothing is running. Exit non-zero so a
+      // supervisor (systemd/pm2) restarts.
+      process.exitCode = 1;
+    }
+    // Otherwise at least one profile's daemon is up; keep the process alive.
+    return;
+  }
+
+  const saved = config.inviteCode ? null : loadAuth({ profileId: config.profileId });
+  const serverUrl = resolveDaemonServerUrl(config, saved);
+  let resolved: ResolveDeviceCredentialsResult | undefined;
+  if (!config.inviteCode) {
+    resolved = resolveDeviceCredentials({
+      saved,
+      configTeamId: config.teamId,
+      configOwnerId: config.ownerId,
+      profileId: config.profileId,
+      serverUrl,
+    });
+    if (!resolved.ok) {
+      throw new Error(resolved.error);
+    }
+  }
+
+  const socket = await connectSocketIoClient(serverUrl);
   const protocolSocket = createSocketIoDaemonSocket(socket);
   const cached = loadScanCache(config.profileId);
   const snapshot = cached ?? await createBuiltinScanProvider()();
   if (!cached) {
     saveScanCache(snapshot, config.profileId);
   }
-  const credentials = config.inviteCode
+
+  // Invite handshake runs first (network), then we hand off to the pure
+  // resolveDeviceCredentials helper for the invite/saved/config decision.
+  const inviteCredentials = config.inviteCode
     ? await waitForDeviceInviteCredentials(protocolSocket, {
       code: config.inviteCode,
       machineId: config.machineId,
       profileId: config.profileId,
       hostname: config.hostname,
-      serverUrl: config.serverUrl,
+      serverUrl,
     })
-    : null;
-  const teamId = credentials?.teamId ?? config.teamId;
-  const ownerId = credentials?.ownerId ?? config.ownerId;
-  if (!teamId || !ownerId) {
-    throw new Error('Device credentials did not include teamId and ownerId');
+    : undefined;
+
+  resolved ??= resolveDeviceCredentials({
+    inviteCode: config.inviteCode,
+    inviteCredentials: inviteCredentials
+      ? {
+        teamId: inviteCredentials.teamId,
+        ownerId: inviteCredentials.ownerId,
+        token: inviteCredentials.token,
+      }
+      : undefined,
+    saved,
+    configTeamId: config.teamId,
+    configOwnerId: config.ownerId,
+    profileId: config.profileId,
+    serverUrl,
+  });
+  if (!resolved.ok) {
+    throw new Error(resolved.error);
   }
+
+  // Persist best-effort on the invite path (saveAuth never throws). profileId
+  // is config.profileId for BOTH save and load (Decision 1), so the next start
+  // with the same (or absent) --profile-id finds this profile. persistProfileId
+  // is always set alongside persist (see resolveDeviceCredentials invariant).
+  if (resolved.persist) {
+    saveAuth(resolved.persist, { profileId: resolved.persistProfileId });
+  }
+
+  const { teamId, ownerId, token } = resolved;
   const device: DaemonDeviceConfig & { token?: string } = {
     teamId,
     ownerId,
-    ...(credentials?.token ? { token: credentials.token } : {}),
+    ...(token ? { token } : {}),
     machineId: config.machineId,
     profileId: config.profileId,
     hostname: config.hostname,
@@ -127,7 +397,7 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
     systemInfo: { ...collectSystemInfo(), daemonVersion: readDaemonVersion() },
   };
   await createDaemonProtocolClient({
-    serverUrl: config.serverUrl,
+    serverUrl,
     socket: protocolSocket,
     executor: createCommandExecutor({ fallbackPrefix: config.fallbackPrefix }),
     device,
@@ -139,7 +409,7 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
       if (!device.token) {
         throw new Error('Custom agent env resolver is not configured');
       }
-      return createHttpEnvResolver({ serverUrl: config.serverUrl, token: device.token })(envRef);
+      return createHttpEnvResolver({ serverUrl, token: device.token })(envRef);
     },
   }).start();
 }
@@ -226,22 +496,27 @@ function loadSocketIoClient(): { io(url: string, options?: Record<string, unknow
   throw new Error('socket.io-client is not installed; run npm ci in apps/server or provide a workspace install');
 }
 
-function parseArgs(argv: string[]): Record<string, string> {
-  const parsed: Record<string, string> = {};
+function parseArgs(argv: string[]): { args: Record<string, string>; booleanFlags: Record<string, true> } {
+  const args: Record<string, string> = {};
+  const booleanFlags: Record<string, true> = {};
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (!arg?.startsWith('--')) {
       continue;
     }
     const key = arg.slice(2);
+    if (BOOLEAN_FLAGS.has(key)) {
+      booleanFlags[key] = true;
+      continue;
+    }
     const value = argv[index + 1];
     if (!value || value.startsWith('--')) {
       throw new Error(`Missing value for --${key}`);
     }
-    parsed[key] = value;
+    args[key] = value;
     index += 1;
   }
-  return parsed;
+  return { args, booleanFlags };
 }
 
 function trimTrailingSlash(value: string): string {

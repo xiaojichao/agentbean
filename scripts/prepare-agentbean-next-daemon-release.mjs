@@ -39,6 +39,7 @@ export function createAgentBeanNextDaemonReleasePackage({
     files: daemonNextPackage.files,
     dependencies: {
       '@agentbean/contracts': contractsPackage.version,
+      'js-yaml': daemonNextPackage.dependencies['js-yaml'],
       'socket.io-client': daemonNextPackage.dependencies['socket.io-client'],
     },
   };

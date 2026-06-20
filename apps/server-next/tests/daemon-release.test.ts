@@ -28,6 +28,7 @@ describe('AgentBean Next daemon release package', () => {
         files: ['dist/**/*'],
         dependencies: {
           '@agentbean/contracts': '0.2.0',
+          'js-yaml': '^4.1.0',
           'socket.io-client': '^4.8.3',
         },
       });
@@ -54,6 +55,7 @@ describe('AgentBean Next daemon release package', () => {
       });
       expect(packageJson.dependencies).toMatchObject({
         '@agentbean/contracts': '0.2.0',
+        'js-yaml': '^4.1.0',
         'socket.io-client': '^4.8.3',
       });
       expect(readFileSync(join(result.outDir, 'dist/apps/daemon-next/src/bin.js'), 'utf8')).toBe(
