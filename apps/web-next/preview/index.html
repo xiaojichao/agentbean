@@ -2801,26 +2801,71 @@
         render();
       }
 
+      const DEVICE_SCAN_REFRESH_DELAY_MS = 1500;
+      const DEVICE_SCAN_REFRESH_MAX_ATTEMPTS = 8;
+
+      function deviceInventorySignature(agents = [], runtimes = []) {
+        const normalize = (items) => (items || [])
+          .map((item) => [
+            item.id || "",
+            item.name || "",
+            item.status || "",
+            item.category || item.adapterKind || "",
+            item.updatedAt || "",
+          ].join(":"))
+          .sort()
+          .join("|");
+        return `${normalize(agents)}::${normalize(runtimes)}`;
+      }
+
+      function getDeviceAgentsForPreview(deviceId) {
+        if (Object.prototype.hasOwnProperty.call(state.deviceAgentsByDevice, deviceId)) {
+          return state.deviceAgentsByDevice[deviceId] || [];
+        }
+        if (state.agentsLoaded) {
+          return state.agents.filter((agent) => agent.deviceId === deviceId);
+        }
+        return state.deviceDetail?.id === deviceId ? state.deviceDetail.agents || [] : [];
+      }
+
+      function getDeviceRuntimesForPreview(deviceId) {
+        if (Object.prototype.hasOwnProperty.call(state.runtimesByDevice, deviceId)) {
+          return state.runtimesByDevice[deviceId] || [];
+        }
+        return state.deviceDetail?.id === deviceId ? state.deviceDetail.runtimes || [] : [];
+      }
+
       async function loadDeviceAgents(deviceId, options = {}) {
         if (!state.user || !state.team || !deviceId) return;
         const ack = await emit("device:agents:list", { userId: state.user.id, teamId: state.team.id, deviceId });
         if (state.deviceDetailId !== deviceId) return;
         if (ack.ok) {
+          const nextAgents = Array.isArray(ack.agents) ? ack.agents : [];
+          const nextRuntimes = Array.isArray(ack.runtimes) ? ack.runtimes : [];
+          if (typeof options.acceptResult === "function" && !options.acceptResult(nextAgents, nextRuntimes)) {
+            return { ok: false, skipped: true };
+          }
           delete state.deviceAgentErrorsByDevice[deviceId];
           if (Array.isArray(ack.agents)) state.deviceAgentsByDevice[deviceId] = ack.agents;
           if (Array.isArray(ack.runtimes)) state.runtimesByDevice[deviceId] = ack.runtimes;
           if (options.renderAfter !== false) render();
-          return;
+          return ack;
         }
         state.deviceAgentErrorsByDevice[deviceId] = ack.error || "设备 Agent 列表不可用";
         if (options.renderAfter !== false) render();
+        return ack;
       }
 
       async function scanDevice(deviceId) {
         if (!state.user || !state.team || !deviceId) return;
+        const previousSignature = deviceInventorySignature(
+          getDeviceAgentsForPreview(deviceId),
+          getDeviceRuntimesForPreview(deviceId),
+        );
         const ack = await emit("device:scan", { userId: state.user.id, teamId: state.team.id, deviceId });
         if (ack.ok) {
-          delete state.deviceAgentsByDevice[deviceId];
+          state.deviceAgentsByDevice[deviceId] = [];
+          state.runtimesByDevice[deviceId] = [];
           delete state.deviceAgentErrorsByDevice[deviceId];
           if (state.deviceDetail?.id === deviceId) {
             state.deviceDetail = {
@@ -2829,21 +2874,32 @@
               runtimes: [],
             };
           }
-          scheduleDeviceAgentsRefresh(deviceId);
+          scheduleDeviceAgentsRefresh(deviceId, { attempt: 1, previousSignature });
           render();
         }
       }
 
-      function scheduleDeviceAgentsRefresh(deviceId) {
+      function scheduleDeviceAgentsRefresh(deviceId, options = {}) {
         if (state.deviceAgentRefreshTimers[deviceId]) {
           clearTimeout(state.deviceAgentRefreshTimers[deviceId]);
         }
+        const attempt = options.attempt || 1;
+        const previousSignature = options.previousSignature || null;
         state.deviceAgentRefreshTimers[deviceId] = setTimeout(async () => {
           delete state.deviceAgentRefreshTimers[deviceId];
           if (state.selectedDeviceId === deviceId) {
-            await loadDeviceAgents(deviceId);
+            const ack = await loadDeviceAgents(deviceId, {
+              acceptResult(agents, runtimes) {
+                if (!previousSignature) return true;
+                return deviceInventorySignature(agents, runtimes) !== previousSignature
+                  || attempt >= DEVICE_SCAN_REFRESH_MAX_ATTEMPTS;
+              },
+            });
+            if (ack?.skipped && attempt < DEVICE_SCAN_REFRESH_MAX_ATTEMPTS && state.selectedDeviceId === deviceId) {
+              scheduleDeviceAgentsRefresh(deviceId, { attempt: attempt + 1, previousSignature });
+            }
           }
-        }, 1500);
+        }, DEVICE_SCAN_REFRESH_DELAY_MS);
       }
 
       async function deleteDevice(deviceId) {
