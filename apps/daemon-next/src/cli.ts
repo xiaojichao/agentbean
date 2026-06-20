@@ -7,6 +7,7 @@ import { createBuiltinScanProvider } from './scanner.js';
 import { collectSystemInfo, readDaemonVersion } from './system-info.js';
 import { createCommandExecutor } from './executor.js';
 import { createDaemonProtocolClient, createHttpEnvResolver, type DaemonDeviceConfig, type DaemonProtocolSocket } from './index.js';
+import { loadYamlConfig } from './config.js';
 
 interface SocketIoClientLike {
   connected: boolean;
@@ -26,21 +27,32 @@ export interface DaemonNextCliConfig {
   profileId: string;
   hostname: string;
   fallbackPrefix: string;
+  configPath?: string;
 }
 
 export interface ParseDaemonNextCliConfigInput {
   argv?: string[];
   env?: NodeJS.ProcessEnv;
   hostname?: string;
+  configPath?: string;
 }
 
 export function parseDaemonNextCliConfig(input: ParseDaemonNextCliConfigInput = {}): DaemonNextCliConfig {
   const argv = input.argv ?? process.argv.slice(2);
   const env = input.env ?? process.env;
   const args = parseArgs(argv);
-  const teamId = args['team-id'] ?? env.AGENTBEAN_NEXT_TEAM_ID;
-  const ownerId = args['owner-id'] ?? env.AGENTBEAN_NEXT_OWNER_ID;
-  const inviteCode = args['invite-code'] ?? env.AGENTBEAN_NEXT_INVITE_CODE;
+  // Resolve the YAML config path. A missing or corrupt file returns null from
+  // loadYamlConfig, in which case yaml is treated as "no config" and we fall
+  // through to env / built-in default — matching the config.ts contract.
+  const configPath = input.configPath ?? args['config-path'] ?? env.AGENTBEAN_NEXT_CONFIG_PATH;
+  const yaml = configPath ? loadYamlConfig(configPath) : null;
+  const yamlString = (key: string): string | undefined =>
+    typeof yaml?.[key] === 'string' ? (yaml[key] as string) : undefined;
+  // Merge sources per field with priority CLI > env > yaml > default. Validation
+  // runs against the merged values so a YAML-only teamId/ownerId is accepted.
+  const teamId = args['team-id'] ?? env.AGENTBEAN_NEXT_TEAM_ID ?? yamlString('teamId');
+  const ownerId = args['owner-id'] ?? env.AGENTBEAN_NEXT_OWNER_ID ?? yamlString('ownerId');
+  const inviteCode = args['invite-code'] ?? env.AGENTBEAN_NEXT_INVITE_CODE ?? yamlString('inviteCode');
   if (!inviteCode && !teamId) {
     throw new Error('AGENTBEAN_NEXT_TEAM_ID or --team-id is required');
   }
@@ -48,14 +60,18 @@ export function parseDaemonNextCliConfig(input: ParseDaemonNextCliConfigInput = 
     throw new Error('AGENTBEAN_NEXT_OWNER_ID or --owner-id is required');
   }
   return {
-    serverUrl: trimTrailingSlash(args['server-url'] ?? env.AGENTBEAN_NEXT_SERVER_URL ?? 'http://127.0.0.1:4000'),
+    serverUrl: trimTrailingSlash(
+      args['server-url'] ?? env.AGENTBEAN_NEXT_SERVER_URL ?? yamlString('serverUrl') ?? 'http://127.0.0.1:4000',
+    ),
     ...(teamId ? { teamId } : {}),
     ...(ownerId ? { ownerId } : {}),
     ...(inviteCode ? { inviteCode } : {}),
-    machineId: args['machine-id'] ?? env.AGENTBEAN_NEXT_MACHINE_ID,
-    profileId: args['profile-id'] ?? env.AGENTBEAN_NEXT_PROFILE_ID ?? 'default',
-    hostname: args.hostname ?? env.AGENTBEAN_NEXT_HOSTNAME ?? input.hostname ?? readHostname(),
-    fallbackPrefix: args['fallback-prefix'] ?? env.AGENTBEAN_NEXT_FALLBACK_PREFIX ?? 'daemon-next:',
+    machineId: args['machine-id'] ?? env.AGENTBEAN_NEXT_MACHINE_ID ?? yamlString('machineId'),
+    profileId: args['profile-id'] ?? env.AGENTBEAN_NEXT_PROFILE_ID ?? yamlString('profileId') ?? 'default',
+    hostname: args.hostname ?? env.AGENTBEAN_NEXT_HOSTNAME ?? yamlString('hostname') ?? input.hostname ?? readHostname(),
+    fallbackPrefix:
+      args['fallback-prefix'] ?? env.AGENTBEAN_NEXT_FALLBACK_PREFIX ?? yamlString('fallbackPrefix') ?? 'daemon-next:',
+    ...(configPath ? { configPath } : {}),
   };
 }
 

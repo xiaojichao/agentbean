@@ -1,6 +1,16 @@
+import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS } from '../../../packages/contracts/src/index';
 import { createSocketIoDaemonSocket, parseDaemonNextCliConfig, waitForDeviceInviteCredentials } from '../src/cli';
+
+function writeYamlFixture(content: string): string {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'cli-cfg-')));
+  const path = join(dir, 'c.yaml');
+  writeFileSync(path, content);
+  return path;
+}
 
 describe('daemon-next CLI wiring', () => {
   test('parses required device config from args and env', () => {
@@ -60,6 +70,116 @@ describe('daemon-next CLI wiring', () => {
       profileId: 'agentbean-next',
       hostname: 'host.local',
       fallbackPrefix: 'daemon-next:',
+    });
+  });
+
+  describe('parseDaemonNextCliConfig yaml merge (CLI > env > yaml > default)', () => {
+    test('CLI overrides yaml for server-url', () => {
+      const configPath = writeYamlFixture('serverUrl: http://yaml\n');
+      const config = parseDaemonNextCliConfig({
+        configPath,
+        argv: ['--team-id', 't1', '--owner-id', 'o1', '--server-url', 'http://cli'],
+      });
+      expect(config.serverUrl).toBe('http://cli');
+    });
+
+    test('env overrides yaml for server-url', () => {
+      const configPath = writeYamlFixture('serverUrl: http://yaml\n');
+      const config = parseDaemonNextCliConfig({
+        configPath,
+        env: { AGENTBEAN_NEXT_SERVER_URL: 'http://env' },
+        argv: ['--team-id', 't1', '--owner-id', 'o1'],
+      });
+      expect(config.serverUrl).toBe('http://env');
+    });
+
+    test('yaml overrides built-in default for server-url', () => {
+      const configPath = writeYamlFixture('serverUrl: http://yaml\n');
+      const config = parseDaemonNextCliConfig({
+        configPath,
+        argv: ['--team-id', 't1', '--owner-id', 'o1'],
+      });
+      expect(config.serverUrl).toBe('http://yaml');
+    });
+
+    test('yaml provides teamId and ownerId when no CLI/env invite/team/owner given', () => {
+      const configPath = writeYamlFixture('teamId: t1\nownerId: o1\nserverUrl: http://yaml\n');
+      const config = parseDaemonNextCliConfig({ configPath });
+      expect(config.teamId).toBe('t1');
+      expect(config.ownerId).toBe('o1');
+      expect(config.serverUrl).toBe('http://yaml');
+    });
+
+    test('falls back to built-in default when no CLI/env/yaml', () => {
+      const configPath = writeYamlFixture('teamId: t1\nownerId: o1\n');
+      const config = parseDaemonNextCliConfig({ configPath });
+      expect(config.serverUrl).toBe('http://127.0.0.1:4000');
+    });
+
+    test('corrupt/missing yaml is ignored gracefully (falls through to env/default)', () => {
+      const configPath = join(tmpdir(), 'does-not-exist.yaml');
+      const config = parseDaemonNextCliConfig({
+        configPath,
+        env: { AGENTBEAN_NEXT_TEAM_ID: 't1', AGENTBEAN_NEXT_OWNER_ID: 'o1' },
+      });
+      expect(config.serverUrl).toBe('http://127.0.0.1:4000');
+      expect(config.teamId).toBe('t1');
+      expect(config.ownerId).toBe('o1');
+    });
+
+    test('corrupt yaml file is ignored gracefully', () => {
+      const configPath = writeYamlFixture('serverUrl: ${SRV}\n  bad-indent: oops\n- [unclosed\n');
+      const config = parseDaemonNextCliConfig({
+        configPath,
+        env: { AGENTBEAN_NEXT_TEAM_ID: 't1', AGENTBEAN_NEXT_OWNER_ID: 'o1' },
+      });
+      expect(config.serverUrl).toBe('http://127.0.0.1:4000');
+    });
+
+    test('records the resolved configPath on the returned config', () => {
+      const configPath = writeYamlFixture('teamId: t1\nownerId: o1\n');
+      const config = parseDaemonNextCliConfig({ configPath });
+      expect(config.configPath).toBe(configPath);
+    });
+
+    test('resolves configPath from argv --config-path', () => {
+      const configPath = writeYamlFixture('serverUrl: http://from-yaml\n');
+      const config = parseDaemonNextCliConfig({
+        argv: ['--config-path', configPath, '--team-id', 't1', '--owner-id', 'o1'],
+        env: {},
+      });
+      expect(config.serverUrl).toBe('http://from-yaml');
+    });
+
+    test('resolves configPath from env AGENTBEAN_NEXT_CONFIG_PATH', () => {
+      const configPath = writeYamlFixture('serverUrl: http://from-yaml\n');
+      const config = parseDaemonNextCliConfig({
+        argv: [],
+        env: {
+          AGENTBEAN_NEXT_CONFIG_PATH: configPath,
+          AGENTBEAN_NEXT_TEAM_ID: 't1',
+          AGENTBEAN_NEXT_OWNER_ID: 'o1',
+        },
+      });
+      expect(config.serverUrl).toBe('http://from-yaml');
+    });
+
+    test('argv --config-path overrides env AGENTBEAN_NEXT_CONFIG_PATH', () => {
+      const configPathA = writeYamlFixture('serverUrl: http://a\n');
+      const configPathB = writeYamlFixture('serverUrl: http://b\n');
+      const config = parseDaemonNextCliConfig({
+        argv: ['--config-path', configPathA, '--team-id', 't1', '--owner-id', 'o1'],
+        env: {
+          AGENTBEAN_NEXT_CONFIG_PATH: configPathB,
+        },
+      });
+      expect(config.serverUrl).toBe('http://a');
+    });
+
+    test('drops non-string yaml values via the typeof guard (falls back to default)', () => {
+      const configPath = writeYamlFixture('serverUrl: 12345\nteamId: t1\nownerId: o1\n');
+      const config = parseDaemonNextCliConfig({ configPath });
+      expect(config.serverUrl).toBe('http://127.0.0.1:4000');
     });
   });
 
