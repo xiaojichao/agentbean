@@ -264,7 +264,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           userId: sqliteText(row, 'user_id'),
           username: sqliteText(row, 'username'),
           role: sqliteText(row, 'role') as 'owner' | 'admin' | 'member',
-          displayName: sqliteText(row, 'display_name') ?? undefined,
+          displayName: sqliteNullableText(row, 'display_name') ?? undefined,
           joinedAt: sqliteNumber(row, 'joined_at'),
         }));
       },
@@ -281,11 +281,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return mapTeam(globalDb.prepare('SELECT * FROM teams WHERE id = ?').get(input.teamId));
       },
       async delete(teamId) {
-        globalDb.prepare('DELETE FROM messages WHERE channel_id IN (SELECT id FROM channels WHERE team_id = ?)').run(teamId);
-        globalDb.prepare('DELETE FROM dispatches WHERE channel_id IN (SELECT id FROM channels WHERE team_id = ?)').run(teamId);
-        globalDb.prepare('DELETE FROM channel_members WHERE channel_id IN (SELECT id FROM channels WHERE team_id = ?)').run(teamId);
-        globalDb.prepare('DELETE FROM channels WHERE team_id = ?').run(teamId);
-        globalDb.prepare('DELETE FROM agents WHERE team_id = ?').run(teamId);
+        teamDb.prepare('DELETE FROM message_reactions WHERE message_id IN (SELECT id FROM messages WHERE team_id = ?)').run(teamId);
+        teamDb.prepare('DELETE FROM saved_messages WHERE message_id IN (SELECT id FROM messages WHERE team_id = ?)').run(teamId);
+        teamDb.prepare('DELETE FROM tasks WHERE team_id = ?').run(teamId);
+        teamDb.prepare('DELETE FROM artifacts WHERE team_id = ?').run(teamId);
+        teamDb.prepare('DELETE FROM workspace_runs WHERE team_id = ?').run(teamId);
+        teamDb.prepare('DELETE FROM dispatches WHERE channel_id IN (SELECT id FROM channels WHERE team_id = ?)').run(teamId);
+        teamDb.prepare('DELETE FROM messages WHERE team_id = ?').run(teamId);
+        teamDb.prepare('DELETE FROM channel_human_members WHERE channel_id IN (SELECT id FROM channels WHERE team_id = ?)').run(teamId);
+        teamDb.prepare('DELETE FROM channel_agent_members WHERE channel_id IN (SELECT id FROM channels WHERE team_id = ?)').run(teamId);
+        teamDb.prepare('DELETE FROM channels WHERE team_id = ?').run(teamId);
+        globalDb.prepare('DELETE FROM agent_publications WHERE team_id = ? OR agent_id IN (SELECT id FROM agents WHERE primary_team_id = ?)').run(teamId, teamId);
+        globalDb.prepare('DELETE FROM agents WHERE primary_team_id = ?').run(teamId);
         globalDb.prepare('DELETE FROM team_members WHERE team_id = ?').run(teamId);
         globalDb.prepare('DELETE FROM join_links WHERE team_id = ?').run(teamId);
         globalDb.prepare('DELETE FROM teams WHERE id = ?').run(teamId);

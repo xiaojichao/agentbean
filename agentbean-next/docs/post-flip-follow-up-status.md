@@ -94,9 +94,10 @@ P0 baseline 已经收敛，不应继续作为下一条产品切片 blocker。
 
 ### P2：后续产品 parity
 
+- 旧 `apps/web` App Router 页面树已在第七十一切片迁入 `apps/web-next/app`，并且 `npm run build:web-next` 可以同时构建 socket client package 与 Next app。`server-next` 生产式 `PORT` 启动默认 `webEntry=app`，`/preview` 保留为诊断入口；第一版 WebUI browser smoke 已覆盖 4 个公开页面与 7 个登录后业务页面，并在 `/runs` 抓到/修复旧 `/api/teams/default/workspace-runs` 403；后续加深的 business smoke 已覆盖 `chat` 发送/刷新恢复、`channels` 创建/归档/列表消失、`networks` 团队创建/切换/删除/恢复原团队、`tasks` 创建/状态更新/刷新恢复、canonical `dispatch:result.workspaceRun` 产出的 `runs` 列表/详情/刷新恢复、`members` 的 join/role update/刷新恢复、`devices` 的 rename/刷新恢复、`settings` 的 team rename、join link create/revoke 与刷新恢复，以及 `agents` 的 custom agent create、publish/unpublish 与 metrics。剩余风险从“页面文件未迁入/生产入口仍托管 preview shell”收窄为“更完整 admin/audit、workspace explorer、日志检索与长尾 UI parity”。
 - 更完整的 workspace run 专用页面布局、team-wide workspace explorer 与分段日志存储/检索。
 - Admin、metrics 与 audit requirements；`agent:metrics` request/ack 已有，但完整 admin/metrics/audit 产品面仍未冻结。
-- 团队改名（`team:update`）已在 preview 团队设置面板覆盖；更完整的 settings/device 页面（如 team delete、device rename 等）与 member management 的浏览器级 smoke 覆盖仍待后续切片。
+- 团队改名（`team:update`）已在 preview 团队设置面板覆盖；App Router `devices` 已覆盖 device rename/refresh restore；App Router `settings` 已覆盖 team update、join link create/revoke 与刷新恢复；App Router `networks` 已覆盖受控 team create/switch/delete/fallback restore，并补 SQLite delete cascade 回归。
 - Typed assignee、task 自动生成与更丰富的 task 产品流；delete/reorder 的协议与 usecase 第一版已收敛。
 - Join link management UI（web-next 客户端 list/revoke 绑定 + preview 邀请管理面板）；`join:list` / `join:revoke` 协议层已由 #267 落地。
 
@@ -106,4 +107,4 @@ canonical npm 包 `@agentbean/daemon` 的 `@latest` dist-tag 已推进到基于 
 
 ## 下一步判定
 
-当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。P0 生产观察 baseline 已完成，下一步应开新的 scoped issue/PR 继续产品能力或运维增强；若沿当前替换主线推进，优先在更完整的 workspace run 专用页面、复杂 team-wide workspace explorer、分段日志存储/检索、admin/audit 产品面、settings/device 后续页中选一个小切片。
+当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。P0 生产观察 baseline 已完成，下一步应开新的 scoped issue/PR 继续产品能力或运维增强；若沿当前替换主线推进，优先在更完整的 workspace run 专用页面、复杂 team-wide workspace explorer、分段日志存储/检索、admin/audit 产品面中选一个小切片。

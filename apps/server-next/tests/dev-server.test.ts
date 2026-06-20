@@ -51,6 +51,7 @@ describe('server-next dev server entry', () => {
       storage: 'sqlite',
       dataDir: '/tmp/arg-data',
       sessionSecret: 'secret-from-env',
+      webEntry: 'preview',
     });
   });
 
@@ -70,6 +71,7 @@ describe('server-next dev server entry', () => {
       storage: 'sqlite',
       dataDir: '/tmp/prod-agentbean-next',
       sessionSecret: 'prod-secret',
+      webEntry: 'app',
     });
     expect(() =>
       parseServerNextDevConfig({
@@ -100,7 +102,28 @@ describe('server-next dev server entry', () => {
       storage: 'memory',
       dataDir: join(process.cwd(), '.agentbean-next'),
       sessionSecret: 'prod-secret',
+      webEntry: 'app',
     });
+  });
+
+  test('allows explicitly choosing the web entry mode', () => {
+    expect(
+      parseServerNextDevConfig({
+        env: {
+          PORT: '4108',
+          AGENTBEAN_NEXT_DATA_DIR: '/tmp/prod-agentbean-next',
+          AGENTBEAN_NEXT_SESSION_SECRET: 'prod-secret',
+          AGENTBEAN_NEXT_WEB_ENTRY: 'preview',
+        },
+        argv: [],
+      }).webEntry,
+    ).toBe('preview');
+    expect(() =>
+      parseServerNextDevConfig({
+        env: { AGENTBEAN_NEXT_WEB_ENTRY: 'legacy' },
+        argv: [],
+      }),
+    ).toThrow('AGENTBEAN_NEXT_WEB_ENTRY');
   });
 
   test('starts a long-running Socket.IO server with healthz and web namespace', async () => {
@@ -148,6 +171,38 @@ describe('server-next dev server entry', () => {
       currentTeam: { id: 'team-1' },
       defaultChannel: { id: 'channel-1' },
     });
+  });
+
+  test('serves the web-next app as root web entry while keeping preview available', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1']),
+    });
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: {
+        host: '127.0.0.1',
+        port: 0,
+        storage: 'memory',
+        dataDir: '.agentbean-next-test',
+        sessionSecret: 'test-secret',
+        webEntry: 'app',
+      },
+      webApp: {
+        async handle(_request, response) {
+          response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+          response.end('<title>AgentBean</title><main data-web-next-app="true"></main>');
+        },
+        async close() {
+          return undefined;
+        },
+      },
+    });
+    cleanups.push(() => server.close());
+
+    await expect(fetch(server.baseUrl).then((response) => response.text())).resolves.toContain('data-web-next-app');
+    await expect(fetch(`${server.baseUrl}/preview`).then((response) => response.text())).resolves.toContain('id="agent-create-form"');
   });
 
   test('starts with SQLite file storage and preserves registered users across restarts', async () => {
