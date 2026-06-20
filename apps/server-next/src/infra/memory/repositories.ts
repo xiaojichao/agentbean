@@ -345,10 +345,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       async getById(id) {
         return devices.get(id) ?? null;
       },
-      async findByMachineProfile(machineId, profileId) {
+      async findByMachineProfile(input) {
         return (
           Array.from(devices.values()).find(
-            (device) => device.machineId === machineId && device.profileId === profileId,
+            (device) =>
+              device.teamId === input.teamId &&
+              device.machineId === input.machineId &&
+              device.profileId === input.profileId,
           ) ?? null
         );
       },

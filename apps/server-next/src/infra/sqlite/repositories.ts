@@ -631,11 +631,11 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       async getById(id) {
         return mapDevice(globalDb.prepare('SELECT * FROM devices WHERE id = ?').get(id));
       },
-      async findByMachineProfile(machineId, profileId) {
+      async findByMachineProfile(input) {
         return mapDevice(
           globalDb
-            .prepare('SELECT * FROM devices WHERE machine_id = ? AND profile_id = ? ORDER BY updated_at DESC LIMIT 1')
-            .get(machineId, profileId),
+            .prepare('SELECT * FROM devices WHERE team_id = ? AND machine_id = ? AND profile_id = ? ORDER BY updated_at DESC LIMIT 1')
+            .get(input.teamId, input.machineId, input.profileId),
         );
       },
       async listByTeam(teamId) {
