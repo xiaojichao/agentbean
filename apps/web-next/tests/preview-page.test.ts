@@ -1324,6 +1324,127 @@ describe('web-next preview page interactions', () => {
     expect(harness.element('agent-create-form:runtimeId').innerHTML).toContain('Codex CLI');
   });
 
+  test('accepts device scan refreshes when only lastSeenAt changes', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'online', name: 'MacBook Pro' };
+    const oldAgent = { id: 'agent-1', name: 'Codex Agent', category: 'custom', status: 'online', deviceId: 'device-1', lastSeenAt: 1 };
+    const refreshedAgent = { ...oldAgent, lastSeenAt: 2 };
+    let agentListCalls = 0;
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [oldAgent] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'device:get': () => ({ ok: true, device: { ...device, agents: [oldAgent] } }),
+      'device:agents:list': () => {
+        agentListCalls += 1;
+        return { ok: true, agents: agentListCalls === 1 ? [oldAgent] : [refreshedAgent], runtimes: [] };
+      },
+      'device:scan': () => ({ ok: true }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('devices:snapshot', [device]);
+    await harness.click('device-detail', 'button[data-device-scan]', { deviceScan: 'device-1' });
+    expect(harness.element('device-detail').innerHTML).not.toContain('Codex Agent');
+
+    await harness.runTimers();
+    expect(harness.emitted.filter(([event]) => event === 'device:agents:list')).toHaveLength(2);
+    expect(harness.element('device-detail').innerHTML).toContain('Codex Agent');
+
+    await harness.runTimers();
+    expect(harness.emitted.filter(([event]) => event === 'device:agents:list')).toHaveLength(2);
+  });
+
+  test('retries failed device scan refreshes before restoring inventory', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'online', name: 'MacBook Pro' };
+    const oldAgent = { id: 'old-agent', name: 'Old Agent', category: 'custom', status: 'offline', deviceId: 'device-1' };
+    const newAgent = { id: 'new-agent', name: 'New Agent', category: 'custom', status: 'online', deviceId: 'device-1' };
+    let agentListCalls = 0;
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [oldAgent] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'device:get': () => ({ ok: true, device: { ...device, agents: [oldAgent] } }),
+      'device:agents:list': () => {
+        agentListCalls += 1;
+        if (agentListCalls === 1) return { ok: true, agents: [oldAgent], runtimes: [] };
+        if (agentListCalls === 2) return { ok: false, error: 'timeout' };
+        return { ok: true, agents: [newAgent], runtimes: [] };
+      },
+      'device:scan': () => ({ ok: true }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('devices:snapshot', [device]);
+    await harness.click('device-detail', 'button[data-device-scan]', { deviceScan: 'device-1' });
+
+    await harness.runTimers();
+    expect(harness.emitted.filter(([event]) => event === 'device:agents:list')).toHaveLength(2);
+    expect(harness.element('device-detail').innerHTML).not.toContain('Old Agent');
+    expect(harness.element('device-detail').innerHTML).not.toContain('New Agent');
+
+    await harness.runTimers();
+    expect(harness.emitted.filter(([event]) => event === 'device:agents:list')).toHaveLength(3);
+    expect(harness.element('device-detail').innerHTML).toContain('New Agent');
+  });
+
+  test('does not pin stale scan inventory after refresh attempts are exhausted', async () => {
+    const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
+    const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'online', name: 'MacBook Pro' };
+    const oldAgent = { id: 'old-agent', name: 'Old Agent', category: 'custom', status: 'offline', deviceId: 'device-1' };
+    const newAgent = { id: 'new-agent', name: 'New Agent', category: 'custom', status: 'online', deviceId: 'device-1' };
+    const harness = createPreviewHarness({
+      'auth:register': () => ({
+        ok: true,
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        currentTeam: { id: 'team-1', name: 'AgentBean' },
+        defaultChannel,
+      }),
+      'device:list': () => ({ ok: true, devices: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [oldAgent] }),
+      'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
+      'task:list': () => ({ ok: true, tasks: [] }),
+      'join:list': () => ({ ok: true, links: [] }),
+      'device:get': () => ({ ok: true, device: { ...device, agents: [oldAgent] } }),
+      'device:agents:list': () => ({ ok: true, agents: [oldAgent], runtimes: [] }),
+      'device:scan': () => ({ ok: true }),
+    });
+
+    await harness.submit('auth-form');
+    await harness.socket.trigger('devices:snapshot', [device]);
+    await harness.click('device-detail', 'button[data-device-scan]', { deviceScan: 'device-1' });
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await harness.runTimers();
+    }
+
+    expect(harness.emitted.filter(([event]) => event === 'device:agents:list')).toHaveLength(9);
+
+    await harness.socket.trigger('agents:snapshot', [newAgent]);
+    expect(harness.element('device-detail').innerHTML).not.toContain('Old Agent');
+    expect(harness.element('device-detail').innerHTML).toContain('New Agent');
+  });
+
   test('clears the selected preview device after deleting it', async () => {
     const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
     const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'offline', name: 'MacBook Pro' };

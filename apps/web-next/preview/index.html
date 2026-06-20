@@ -2812,6 +2812,8 @@
             item.status || "",
             item.category || item.adapterKind || "",
             item.updatedAt || "",
+            item.lastSeenAt || "",
+            item.createdAt || "",
           ].join(":"))
           .sort()
           .join("|");
@@ -2891,12 +2893,21 @@
             const ack = await loadDeviceAgents(deviceId, {
               acceptResult(agents, runtimes) {
                 if (!previousSignature) return true;
-                return deviceInventorySignature(agents, runtimes) !== previousSignature
-                  || attempt >= DEVICE_SCAN_REFRESH_MAX_ATTEMPTS;
+                return deviceInventorySignature(agents, runtimes) !== previousSignature;
               },
             });
             if (ack?.skipped && attempt < DEVICE_SCAN_REFRESH_MAX_ATTEMPTS && state.selectedDeviceId === deviceId) {
               scheduleDeviceAgentsRefresh(deviceId, { attempt: attempt + 1, previousSignature });
+            } else if (ack?.skipped) {
+              delete state.deviceAgentsByDevice[deviceId];
+              delete state.runtimesByDevice[deviceId];
+              render();
+            } else if (ack && !ack.ok && attempt < DEVICE_SCAN_REFRESH_MAX_ATTEMPTS && state.selectedDeviceId === deviceId) {
+              scheduleDeviceAgentsRefresh(deviceId, { attempt: attempt + 1, previousSignature });
+            } else if (ack && !ack.ok) {
+              delete state.deviceAgentsByDevice[deviceId];
+              delete state.runtimesByDevice[deviceId];
+              render();
             }
           }
         }, DEVICE_SCAN_REFRESH_DELAY_MS);
