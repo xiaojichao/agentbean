@@ -12,10 +12,37 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run build:client && npm run build:app",
+    "build:app": "next build",
+    "build:client": "tsc -p tsconfig.lib.json",
+    "dev": "next dev -p 4101",
+    "start": "next start -p 4101",
     "test": "vitest run"
   },
   "dependencies": {
-    "@agentbean/contracts": "file:../../packages/contracts"
+    "@agentbean/contracts": "file:../../packages/contracts",
+    "@xyflow/react": "^12.10.2",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.445.0",
+    "next": "^14.2.13",
+    "node-pty": "^1.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "socket.io-client": "^4.7.5",
+    "tailwind-merge": "^2.5.2",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^14.2.13",
+    "jsdom": "^29.1.1",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.10"
   }
 }

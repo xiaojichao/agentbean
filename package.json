@@ -9,9 +9,9 @@
   "scripts": {
     "test:contracts": "cd packages/contracts && ../../node_modules/.bin/vitest run tests --config vitest.config.ts",
     "test:domain": "cd packages/domain && ../../node_modules/.bin/vitest run tests --config vitest.config.ts",
-    "test:server-next": "cd apps/server-next && ../../node_modules/.bin/vitest run tests --config vitest.config.ts",
+    "test:server-next": "cd apps/server-next && npm run test -- tests --config vitest.config.ts",
     "test:daemon-next": "cd apps/daemon-next && ../../node_modules/.bin/vitest run tests --config vitest.config.ts",
-    "test:web-next": "cd apps/web-next && ../../node_modules/.bin/vitest run tests --config vitest.config.ts",
+    "test:web-next": "cd apps/web-next && npm run test -- tests --config vitest.config.ts",
     "test:phase1": "vitest run packages/contracts/tests packages/domain/tests apps/server-next/tests apps/daemon-next/tests apps/web-next/tests --environment node --api.host 127.0.0.1",
     "check:agentbean-next-readiness": "node scripts/check-agentbean-next-readiness.mjs",
     "check:agentbean-next-railway-preflight": "node scripts/check-agentbean-next-railway-preflight.mjs",
@@ -21,6 +21,7 @@
     "smoke:agentbean-next-entry": "node scripts/smoke-agentbean-next-entry.mjs",
     "smoke:agentbean-next-business": "node scripts/smoke-agentbean-next-business.mjs",
     "smoke:agentbean-next-browser": "node scripts/smoke-agentbean-next-browser.mjs",
+    "smoke:agentbean-next-webui": "node scripts/smoke-agentbean-next-webui.mjs",
     "smoke:agentbean-next-persistence": "npm run build:server-next && node scripts/smoke-agentbean-next-persistence.mjs",
     "smoke:agentbean-old-entry": "node scripts/smoke-agentbean-old-entry.mjs",
     "preview:agentbean-next": "cd apps/server-next && ../../node_modules/.bin/vitest run tests/e2e-first-slice.test.ts --config vitest.config.ts --api.host 127.0.0.1 -t \"runtime capability -> custom agent -> message -> daemon reply\"",
@@ -35,7 +36,7 @@
     "build:domain": "tsc -p packages/domain/tsconfig.json",
     "build:server-next": "tsc -p apps/server-next/tsconfig.json",
     "build:daemon-next": "tsc -p apps/daemon-next/tsconfig.json",
-    "build:web-next": "tsc -p apps/web-next/tsconfig.json",
+    "build:web-next": "cd apps/web-next && npm run build",
     "build:packages": "npm run build:contracts && npm run build:domain && npm run build:server-next && npm run build:daemon-next && npm run build:web-next"
   },
   "devDependencies": {

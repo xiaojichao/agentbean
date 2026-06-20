@@ -14,6 +14,25 @@ const AGENT_EVENTS = {
 
 const WEB_EVENTS = {
   auth: { register: 'auth:register', login: 'auth:login' },
+  agent: {
+    subscribe: 'agents:subscribe',
+    create: 'agent:create',
+    publish: 'agent:publish',
+    unpublish: 'agent:unpublish',
+  },
+  channel: { subscribe: 'channels:subscribe' },
+  device: {
+    rename: 'device:rename',
+  },
+  join: { create: 'join:create' },
+  member: {
+    list: 'members:list',
+  },
+  message: { send: 'message:send' },
+  team: {
+    create: 'team:create',
+    switch: 'team:switch',
+  },
 };
 
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -102,13 +121,14 @@ export async function runAgentBeanNextBrowserSmoke({
     assertSession(session);
     checks.push(check('browser-session-readable', true, 'Browser session exposes user and current team for daemon smoke'));
 
-    agentSocket = await connectSmokeDaemon({
+    const daemon = await connectSmokeDaemon({
       baseUrl: target.baseUrl,
       ioFactory,
       session,
       suffix,
       timeoutMs,
     });
+    agentSocket = daemon.socket;
     cleanup.push(async () => {
       agentSocket?.disconnect?.();
     });
@@ -219,6 +239,268 @@ export async function runAgentBeanNextBrowserSmoke({
   }
 }
 
+export async function runAgentBeanNextWebUiBrowserSmoke({
+  baseUrl,
+  chromeBin,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  artifactsDir,
+  headed = false,
+  skipBuild = false,
+  ioFactory = loadSocketIoClient(),
+} = {}) {
+  const resolvedArtifactsDir = resolve(
+    artifactsDir ?? join(tmpdir(), `agentbean-next-webui-smoke-${Date.now()}`),
+  );
+  mkdirSync(resolvedArtifactsDir, { recursive: true });
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const checks = [];
+  const cleanup = [];
+  const browserEvents = [];
+  const artifacts = {
+    dir: resolvedArtifactsDir,
+    consoleLog: join(resolvedArtifactsDir, 'webui-browser-console.json'),
+    screenshot: join(resolvedArtifactsDir, 'webui-final-page.png'),
+    failureScreenshot: join(resolvedArtifactsDir, 'webui-failure-page.png'),
+  };
+  let page;
+  try {
+    const target = baseUrl
+      ? { baseUrl: normalizeBaseUrlOrThrow(baseUrl).toString(), close: async () => undefined }
+      : await startLocalServer({ suffix, skipBuild, timeoutMs, webEntry: 'app' });
+    cleanup.push(target.close);
+    checks.push(check('webui-target-ready', true, `WebUI smoke target is ${target.baseUrl}`));
+
+    const chrome = await launchChrome({
+      chromeBin: chromeBin ?? process.env.CHROME_BIN,
+      artifactsDir: resolvedArtifactsDir,
+      headed,
+      timeoutMs,
+    });
+    cleanup.push(chrome.close);
+    checks.push(check('webui-chrome-ready', true, `Chrome DevTools is listening on ${chrome.debugUrl}`));
+
+    page = await openPage(chrome.debugUrl, browserEvents);
+    cleanup.push(page.close);
+    await page.setViewport(DEFAULT_VIEWPORT);
+    const publicRoutes = await exerciseWebUiRouteSmoke({
+      page,
+      baseUrl: target.baseUrl,
+      timeoutMs,
+      routes: ['/', '/login', '/signup', '/register'],
+    });
+    checks.push(check('webui-public-routes-render', true, `Rendered ${publicRoutes.length} public App Router pages`));
+
+    const seededSession = await createSmokeBrowserSession({
+      baseUrl: target.baseUrl,
+      ioFactory,
+      suffix,
+      timeoutMs,
+    });
+    cleanup.push(async () => {
+      seededSession.socket.disconnect?.();
+    });
+    checks.push(check('webui-session-seeded', true, 'Created an isolated WebUI session for authenticated route smoke'));
+
+    await seedWebUiAuthStorage({ page, session: seededSession.session });
+    const authenticatedRoutes = await exerciseWebUiAuthenticatedRouteSmoke({
+      page,
+      baseUrl: target.baseUrl,
+      session: seededSession.session,
+      timeoutMs,
+    });
+    checks.push(
+      check(
+        'webui-authenticated-routes-render',
+        true,
+        `Rendered ${authenticatedRoutes.length} authenticated App Router pages`,
+      ),
+    );
+    checks.push(
+      check(
+        'webui-routes-render',
+        true,
+        `Rendered ${publicRoutes.length + authenticatedRoutes.length} App Router pages`,
+      ),
+    );
+
+    const chatResult = await exerciseWebUiChatBusinessSmoke({
+      page,
+      baseUrl: target.baseUrl,
+      session: seededSession.session,
+      suffix,
+      timeoutMs,
+    });
+    checks.push(
+      check(
+        'webui-chat-business-flow',
+        true,
+        `Sent chat message "${chatResult.body}" and restored it after refresh`,
+      ),
+    );
+
+    const channelResult = await exerciseWebUiChannelsBusinessSmoke({
+      page,
+      baseUrl: target.baseUrl,
+      session: seededSession.session,
+      suffix,
+      timeoutMs,
+    });
+    checks.push(
+      check(
+        'webui-channels-business-flow',
+        true,
+        `Created channel "${channelResult.channelName}", opened detail, archived it, and verified it disappeared from the list`,
+      ),
+    );
+
+    const teamResult = await exerciseWebUiNetworksBusinessSmoke({
+      page,
+      baseUrl: target.baseUrl,
+      session: seededSession.session,
+      suffix,
+      timeoutMs,
+    });
+    checks.push(
+      check(
+        'webui-networks-business-flow',
+        true,
+        `Created team "${teamResult.teamName}", switched to ${teamResult.teamPath}, deleted it, and restored ${teamResult.restoredTeamPath}`,
+      ),
+    );
+
+    const taskResult = await exerciseWebUiTaskBusinessSmoke({
+      page,
+      baseUrl: target.baseUrl,
+      session: seededSession.session,
+      suffix,
+      timeoutMs,
+    });
+    checks.push(
+      check(
+        'webui-task-business-flow',
+        true,
+        `Created task "${taskResult.title}", moved it to ${taskResult.status}, and restored it after refresh`,
+      ),
+    );
+
+    const runResult = await exerciseWebUiRunsBusinessSmoke({
+      page,
+      baseUrl: target.baseUrl,
+      webSocket: seededSession.socket,
+      session: seededSession.session,
+      ioFactory,
+      suffix,
+      timeoutMs,
+    });
+    checks.push(
+      check(
+        'webui-runs-business-flow',
+        true,
+        `Created workspace run "${runResult.command}" and verified runs list plus detail route`,
+      ),
+    );
+
+    const memberResult = await exerciseWebUiMembersBusinessSmoke({
+      page,
+      baseUrl: target.baseUrl,
+      session: seededSession.session,
+      ioFactory,
+      suffix,
+      timeoutMs,
+    });
+    checks.push(
+      check(
+        'webui-members-business-flow',
+        true,
+        `Joined member "${memberResult.username}", promoted to admin, demoted to member, and restored after refresh`,
+      ),
+    );
+
+    const deviceResult = await exerciseWebUiDevicesBusinessSmoke({
+      page,
+      baseUrl: target.baseUrl,
+      session: seededSession.session,
+      ioFactory,
+      suffix,
+      timeoutMs,
+    });
+    checks.push(
+      check(
+        'webui-devices-business-flow',
+        true,
+        `Renamed device ${deviceResult.deviceId} to "${deviceResult.name}" and restored it after refresh`,
+      ),
+    );
+
+    const settingsResult = await exerciseWebUiSettingsBusinessSmoke({
+      page,
+      baseUrl: target.baseUrl,
+      session: seededSession.session,
+      suffix,
+      timeoutMs,
+    });
+    checks.push(
+      check(
+        'webui-settings-business-flow',
+        true,
+        `Renamed team to "${settingsResult.teamName}", created join link ${settingsResult.joinCode}, revoked it, and restored settings after refresh`,
+      ),
+    );
+
+    const agentsResult = await exerciseWebUiAgentsBusinessSmoke({
+      page,
+      baseUrl: target.baseUrl,
+      webSocket: seededSession.socket,
+      session: seededSession.session,
+      ioFactory,
+      suffix,
+      timeoutMs,
+    });
+    checks.push(
+      check(
+        'webui-agents-business-flow',
+        true,
+        `Created agent "${agentsResult.agentName}", toggled publish to ${agentsResult.targetTeamName}, and verified metrics after dispatch`,
+      ),
+    );
+
+    await page.screenshot(artifacts.screenshot);
+    checks.push(check('webui-final-screenshot', true, `Saved final screenshot: ${artifacts.screenshot}`));
+
+    const pageErrors = browserEvents.filter((event) => event.level === 'error' || event.type === 'exception');
+    checks.push(
+      check(
+        'webui-console-clean',
+        pageErrors.length === 0,
+        pageErrors.length === 0
+          ? 'No WebUI console errors or uncaught exceptions were observed'
+          : `WebUI reported ${pageErrors.length} console errors or exceptions`,
+      ),
+    );
+    return summarizeBrowserSmoke(checks, artifacts);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    checks.push(check('webui-smoke-runtime-error', false, message));
+    if (page) {
+      try {
+        await page.screenshot(artifacts.failureScreenshot);
+      } catch {
+        // The page may already be closed; keep the original failure.
+      }
+    }
+    return summarizeBrowserSmoke(checks, artifacts);
+  } finally {
+    writeFileSync(artifacts.consoleLog, JSON.stringify(browserEvents, null, 2));
+    for (const close of cleanup.reverse()) {
+      try {
+        await close();
+      } catch {
+        // Cleanup errors should not hide the smoke result.
+      }
+    }
+  }
+}
+
 export function summarizeBrowserSmoke(checks, artifacts) {
   const failed = checks.filter((candidate) => !candidate.ok);
   return {
@@ -230,9 +512,9 @@ export function summarizeBrowserSmoke(checks, artifacts) {
   };
 }
 
-async function startLocalServer({ suffix, skipBuild, timeoutMs }) {
+async function startLocalServer({ suffix, skipBuild, timeoutMs, webEntry = 'preview' }) {
   if (!skipBuild) {
-    await runCommand('npm', ['run', 'build:server-next'], { timeoutMs: Math.max(timeoutMs, 60_000) });
+    await runCommand('npm', ['run', webEntry === 'app' ? 'build:packages' : 'build:server-next'], { timeoutMs: Math.max(timeoutMs, 60_000) });
   }
 
   const dataDir = mkdtempSync(join(tmpdir(), `agentbean-next-browser-smoke-data-${suffix}-`));
@@ -250,6 +532,8 @@ async function startLocalServer({ suffix, skipBuild, timeoutMs }) {
       dataDir,
       '--session-secret',
       `browser-smoke-secret-${suffix}`,
+      '--web-entry',
+      webEntry,
     ],
     {
       cwd: process.cwd(),
@@ -280,13 +564,1159 @@ async function startLocalServer({ suffix, skipBuild, timeoutMs }) {
   };
 }
 
-async function connectSmokeDaemon({ baseUrl, ioFactory, session, suffix, timeoutMs }) {
+export async function exerciseWebUiRouteSmoke({
+  page,
+  baseUrl,
+  timeoutMs,
+  routes = [
+    '/',
+    '/login',
+    '/signup',
+    '/register',
+    '/agentbean/dashboard',
+    '/agentbean/chat',
+    '/agentbean/tasks',
+    '/agentbean/runs',
+    '/agentbean/members',
+    '/agentbean/devices',
+    '/agentbean/settings',
+  ],
+}) {
+  const rendered = [];
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  for (const route of routes) {
+    const url = new URL(route, root);
+    await page.navigate(url.toString());
+    await page.waitForFunction(
+      `document.readyState === "complete" && document.body && document.body.textContent.trim().length > 0`,
+      `route ${route} renders non-empty content`,
+      timeoutMs,
+    );
+    await page.waitForFunction(
+      `!document.body.textContent.includes("Application error") && !document.body.textContent.includes("Unhandled Runtime Error")`,
+      `route ${route} has no visible Next.js runtime error`,
+      timeoutMs,
+    );
+    rendered.push(route);
+  }
+  return rendered;
+}
+
+export async function seedWebUiAuthStorage({ page, session }) {
+  assertSession(session);
+  const networkPath = session.team.path ?? session.team.id;
+  const script = `
+    localStorage.setItem("agentbean.token", ${JSON.stringify(session.token)});
+    localStorage.setItem("agentbean.networkPath", ${JSON.stringify(networkPath)});
+  `;
+  await page.addScriptOnNewDocument(script);
+  await page.evaluateJson(`
+    (() => {
+      ${script}
+      return true;
+    })()
+  `);
+  return { networkPath };
+}
+
+export async function exerciseWebUiAuthenticatedRouteSmoke({
+  page,
+  baseUrl,
+  session,
+  timeoutMs,
+  routes,
+}) {
+  assertSession(session);
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  const networkPath = session.team.path ?? session.team.id;
+  const expectedRoutes = routes ?? [
+    { path: `/${networkPath}/dashboard`, label: '仪表盘' },
+    { path: `/${networkPath}/chat`, label: '聊天' },
+    { path: `/${networkPath}/tasks`, label: '任务' },
+    { path: `/${networkPath}/runs`, label: '运行' },
+    { path: `/${networkPath}/members`, label: '成员' },
+    { path: `/${networkPath}/devices`, label: '设备' },
+    { path: `/${networkPath}/settings`, label: '设置' },
+  ];
+  const rendered = [];
+  for (const route of expectedRoutes) {
+    const descriptor = typeof route === 'string' ? { path: route, label: null } : route;
+    const url = new URL(descriptor.path, root);
+    await page.navigate(url.toString());
+    await page.waitForFunction(
+      `document.readyState === "complete" && document.body && document.body.textContent.trim().length > 0`,
+      `authenticated route ${descriptor.path} renders non-empty content`,
+      timeoutMs,
+    );
+    await page.waitForFunction(
+      `location.pathname === ${JSON.stringify(descriptor.path)} && localStorage.getItem("agentbean.token") === ${JSON.stringify(session.token)}`,
+      `authenticated route ${descriptor.path} keeps the seeded session`,
+      timeoutMs,
+    );
+    await page.waitForFunction(
+      `!document.body.textContent.includes("Application error") && !document.body.textContent.includes("Unhandled Runtime Error")`,
+      `authenticated route ${descriptor.path} has no visible Next.js runtime error`,
+      timeoutMs,
+    );
+    await page.waitForFunction(
+      `
+      (() => {
+        const links = Array.from(document.querySelectorAll("a"));
+        const hasSidebar = links.some((link) =>
+          link.getAttribute("href") === ${JSON.stringify(`/${networkPath}/chat`)}
+          && link.textContent.includes("聊天")
+        );
+        const hasRouteLabel = ${descriptor.label ? `document.body.textContent.includes(${JSON.stringify(descriptor.label)})` : 'true'};
+        return hasSidebar && hasRouteLabel;
+      })()
+      `,
+      `authenticated route ${descriptor.path} renders sidebar and route content`,
+      timeoutMs,
+    );
+    rendered.push(descriptor.path);
+  }
+  return rendered;
+}
+
+export async function exerciseWebUiChatBusinessSmoke({
+  page,
+  baseUrl,
+  session,
+  suffix,
+  timeoutMs,
+}) {
+  assertSession(session);
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  const networkPath = session.team.path ?? session.team.id;
+  const body = `WebUI smoke chat ${suffix}`;
+  await page.navigate(new URL(`/${networkPath}/chat`, root).toString());
+  await page.waitForFunction(
+    `document.querySelector('[data-smoke="chat-message-input"]') !== null && document.querySelector('[data-smoke="chat-message-send"]') !== null`,
+    'chat page exposes the message composer',
+    timeoutMs,
+  );
+  await page.setInputValue('[data-smoke="chat-message-input"]', body);
+  await page.click('[data-smoke="chat-message-send"]');
+  await waitForWebUiChatMessage({ page, body, timeoutMs });
+
+  await page.reload();
+  await waitForWebUiChatMessage({ page, body, timeoutMs });
+  return { body };
+}
+
+async function waitForWebUiChatMessage({ page, body, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const body = ${JSON.stringify(body)};
+      return Array.from(document.querySelectorAll('[data-smoke="chat-message"]'))
+        .some((candidate) => candidate.dataset.messageBody === body);
+    })()
+    `,
+    `chat message "${body}" to render`,
+    timeoutMs,
+  );
+}
+
+export async function exerciseWebUiChannelsBusinessSmoke({
+  page,
+  baseUrl,
+  session,
+  suffix,
+  timeoutMs,
+}) {
+  assertSession(session);
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  const networkPath = session.team.path ?? session.team.id;
+  const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-28);
+  const channelName = `webui-channel-${safeSuffix}`;
+  await page.navigate(new URL(`/${networkPath}/channels`, root).toString());
+  await page.waitForFunction(
+    `document.querySelector('[data-smoke="channel-create-open"]') !== null`,
+    'channels page exposes the create channel control',
+    timeoutMs,
+  );
+  await page.click('[data-smoke="channel-create-open"]');
+  await page.waitForFunction(
+    `document.querySelector('[data-smoke="channel-create-dialog"]') !== null`,
+    'channel create dialog opens',
+    timeoutMs,
+  );
+  await page.setInputValue('[data-smoke="channel-create-name"]', channelName);
+  await page.click('[data-smoke="channel-create-submit"]');
+  await waitForWebUiChannelDetail({ page, channelName, timeoutMs });
+  const channelId = await page.evaluateJson(`
+    (() => {
+      const match = window.location.pathname.match(/\\/channels?\\/([^/?#]+)/);
+      return match?.[1] ?? null;
+    })()
+  `);
+  if (typeof channelId !== 'string' || !channelId) {
+    throw new Error(`WebUI channels smoke could not resolve created channel id for "${channelName}"`);
+  }
+
+  await page.click('[data-smoke="channel-edit-open"]');
+  await page.waitForFunction(
+    `document.querySelector('[data-smoke="channel-edit-dialog"]')?.dataset.channelId === ${JSON.stringify(channelId)}`,
+    `channel "${channelId}" edit dialog opens`,
+    timeoutMs,
+  );
+  await page.click('[data-smoke="channel-archive-open"]');
+  await page.click('[data-smoke="channel-confirm-archive"]');
+  await waitForWebUiChannelListMissing({ page, channelId, channelName, timeoutMs });
+
+  await page.navigate(new URL(`/${networkPath}/channels`, root).toString());
+  await waitForWebUiChannelListMissing({ page, channelId, channelName, timeoutMs });
+  return { channelId, channelName };
+}
+
+async function waitForWebUiChannelDetail({ page, channelName, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const channelName = ${JSON.stringify(channelName)};
+      return window.location.pathname.includes('/channels/') &&
+        document.querySelector('[data-smoke="channel-edit-open"]') !== null &&
+        document.body.textContent.includes(channelName);
+    })()
+    `,
+    `channel "${channelName}" detail to render`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiChannelListMissing({ page, channelId, channelName, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const channelId = ${JSON.stringify(channelId)};
+      const channelName = ${JSON.stringify(channelName)};
+      return !Array.from(document.querySelectorAll('[data-smoke="channel-list-item"]'))
+        .some((candidate) =>
+          candidate.dataset.channelId === channelId ||
+          candidate.dataset.channelName === channelName ||
+          candidate.textContent.includes(channelName)
+        );
+    })()
+    `,
+    `channel "${channelName}" to disappear from the list`,
+    timeoutMs,
+  );
+}
+
+export async function exerciseWebUiNetworksBusinessSmoke({
+  page,
+  baseUrl,
+  session,
+  suffix,
+  timeoutMs,
+}) {
+  assertSession(session);
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  const networkPath = session.team.path ?? session.team.id;
+  const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-28);
+  const teamName = `WebUI Team ${safeSuffix}`;
+  const description = `Created by WebUI smoke ${safeSuffix}`;
+  await page.navigate(new URL(`/${networkPath}/networks`, root).toString());
+  await page.waitForFunction(
+    `document.querySelector('[data-smoke="team-create-form"]') !== null`,
+    'networks page exposes the create team form',
+    timeoutMs,
+  );
+  await page.setInputValue('[data-smoke="team-create-name"]', teamName);
+  await page.setInputValue('[data-smoke="team-create-description"]', description);
+  await page.click('[data-smoke="team-create-submit"]');
+  const created = await waitForWebUiTeamListItem({ page, teamName, timeoutMs });
+  if (!created?.id || !created?.path) {
+    throw new Error(`WebUI networks smoke could not resolve created team from list: ${formatAck(created)}`);
+  }
+
+  await page.evaluateJson(`
+    (() => {
+      const teamId = ${JSON.stringify(created.id)};
+      const button = document.querySelector(\`[data-smoke="team-switch"][data-team-id="\${teamId}"]\`);
+      if (!button) throw new Error("Missing team switch button");
+      button.click();
+      return true;
+    })()
+  `);
+  await waitForWebUiCurrentTeam({ page, teamId: created.id, teamName, teamPath: created.path, timeoutMs });
+  const restoredTeamPath = session.team.path ?? session.team.id;
+  await page.navigate(new URL(`/${created.path}/settings`, root).toString());
+  await page.click('[data-smoke="settings-tab-server"]');
+  await page.waitForFunction(
+    `
+    (() => {
+      const teamName = ${JSON.stringify(teamName)};
+      const button = document.querySelector('[data-smoke="settings-team-delete-open"]');
+      return Boolean(button)
+        && !button.disabled
+        && document.querySelector('[data-smoke="settings-team-name-input"]')?.value === teamName
+        && window.location.pathname.includes(${JSON.stringify(`/${created.path}/settings`)});
+    })()
+    `,
+    `temporary team "${teamName}" settings page exposes delete`,
+    timeoutMs,
+  );
+  await page.click('[data-smoke="settings-team-delete-open"]');
+  await page.waitForFunction(
+    `
+    (() => {
+      const teamId = ${JSON.stringify(created.id)};
+      const dialog = document.querySelector('[data-smoke="settings-team-delete-dialog"]');
+      return Boolean(dialog) && dialog.dataset.teamId === teamId;
+    })()
+    `,
+    `temporary team "${teamName}" delete confirmation opens`,
+    timeoutMs,
+  );
+  await page.click('[data-smoke="settings-team-delete-confirm"]');
+  await waitForWebUiDeletedTeamFallback({
+    page,
+    deletedTeamName: teamName,
+    deletedTeamPath: created.path,
+    timeoutMs,
+  });
+  await page.navigate(new URL(`/${restoredTeamPath}/networks`, root).toString());
+  await waitForWebUiTeamListMissing({ page, teamId: created.id, teamName, timeoutMs });
+  return { teamId: created.id, teamPath: created.path, teamName, restoredTeamPath, deleted: true };
+}
+
+async function waitForWebUiTeamListItem({ page, teamName, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const teamName = ${JSON.stringify(teamName)};
+      return Array.from(document.querySelectorAll('[data-smoke="team-list-item"]'))
+        .find((candidate) =>
+          candidate.dataset.teamName === teamName ||
+          candidate.textContent.includes(teamName)
+        ) !== undefined;
+    })()
+    `,
+    `team "${teamName}" to render in networks list`,
+    timeoutMs,
+  );
+  return page.evaluateJson(`
+    (() => {
+      const teamName = ${JSON.stringify(teamName)};
+      const item = Array.from(document.querySelectorAll('[data-smoke="team-list-item"]'))
+        .find((candidate) =>
+          candidate.dataset.teamName === teamName ||
+          candidate.textContent.includes(teamName)
+        );
+      if (!item) return null;
+      return {
+        id: item.dataset.teamId,
+        name: item.dataset.teamName,
+        path: item.dataset.teamPath,
+      };
+    })()
+  `);
+}
+
+async function waitForWebUiCurrentTeam({ page, teamId, teamName, teamPath, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const teamId = ${JSON.stringify(teamId)};
+      const teamName = ${JSON.stringify(teamName)};
+      const teamPath = ${JSON.stringify(teamPath)};
+      const item = Array.from(document.querySelectorAll('[data-smoke="team-list-item"]'))
+        .find((candidate) => candidate.dataset.teamId === teamId);
+      return Boolean(item)
+        && item.textContent.includes(teamName)
+        && item.querySelector('[data-smoke="team-current-badge"]')
+        && window.location.pathname.includes(\`/\${teamPath}/networks\`);
+    })()
+    `,
+    `team "${teamName}" to become current`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiDeletedTeamFallback({ page, deletedTeamName, deletedTeamPath, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const deletedTeamPath = ${JSON.stringify(deletedTeamPath)};
+      const text = document.body.textContent || '';
+      return !window.location.pathname.includes(\`/\${deletedTeamPath}/\`) &&
+        document.querySelector('[data-smoke="settings-team-delete-dialog"]') === null &&
+        !text.includes('删除失败') &&
+        !text.includes('INTERNAL_ERROR');
+    })()
+    `,
+    `delete flow to leave temporary team "${deletedTeamName}"`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiTeamListMissing({ page, teamId, teamName, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const teamId = ${JSON.stringify(teamId)};
+      const teamName = ${JSON.stringify(teamName)};
+      return !Array.from(document.querySelectorAll('[data-smoke="team-list-item"]'))
+        .some((candidate) =>
+          candidate.dataset.teamId === teamId ||
+          candidate.dataset.teamName === teamName ||
+          candidate.textContent.includes(teamName)
+        );
+    })()
+    `,
+    `deleted team "${teamName}" to disappear from networks list`,
+    timeoutMs,
+  );
+}
+
+export async function exerciseWebUiTaskBusinessSmoke({
+  page,
+  baseUrl,
+  session,
+  suffix,
+  timeoutMs,
+}) {
+  assertSession(session);
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  const networkPath = session.team.path ?? session.team.id;
+  const title = `WebUI smoke task ${suffix}`;
+  const description = `Created by WebUI smoke ${suffix}`;
+  const targetStatus = 'in_progress';
+  await page.navigate(new URL(`/${networkPath}/tasks`, root).toString());
+  await page.waitForFunction(
+    `document.querySelector('[data-smoke="tasks-create-open"]') !== null`,
+    'tasks page exposes the create task control',
+    timeoutMs,
+  );
+  await page.click('[data-smoke="tasks-create-open"]');
+  await page.waitForFunction(
+    `document.querySelector('[data-smoke="tasks-create-form"]') !== null`,
+    'tasks create form opens',
+    timeoutMs,
+  );
+  await page.setInputValue('[data-smoke="tasks-create-title"]', title);
+  await page.setInputValue('[data-smoke="tasks-create-description"]', description);
+  await page.setInputValue('[data-smoke="tasks-create-tags"]', 'smoke, webui');
+  await page.click('[data-smoke="tasks-create-submit"]');
+  await waitForWebUiTaskCard({ page, title, status: 'todo', timeoutMs });
+
+  const clickedStatusTrigger = await page.evaluateJson(`
+    (() => {
+      const title = ${JSON.stringify(title)};
+      const card = Array.from(document.querySelectorAll('[data-smoke="task-card"], [data-smoke="task-row"]'))
+        .find((candidate) => candidate.dataset.taskTitle === title);
+      const trigger = card?.querySelector('[data-smoke="task-status-trigger"]');
+      if (!trigger) return false;
+      trigger.click();
+      return true;
+    })()
+  `);
+  if (!clickedStatusTrigger) {
+    throw new Error(`Could not open the status menu for WebUI smoke task "${title}"`);
+  }
+  await page.click(`[data-smoke="task-status-option-${targetStatus}"]`);
+  await waitForWebUiTaskCard({ page, title, status: targetStatus, timeoutMs });
+
+  await page.reload();
+  await waitForWebUiTaskCard({ page, title, status: targetStatus, timeoutMs });
+  return { title, status: targetStatus };
+}
+
+async function waitForWebUiTaskCard({ page, title, status, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const title = ${JSON.stringify(title)};
+      const status = ${JSON.stringify(status)};
+      return Array.from(document.querySelectorAll('[data-smoke="task-card"], [data-smoke="task-row"]'))
+        .some((candidate) =>
+          candidate.dataset.taskTitle === title
+          && (!status || candidate.dataset.taskStatus === status)
+        );
+    })()
+    `,
+    `task "${title}" to render${status ? ` with status ${status}` : ''}`,
+    timeoutMs,
+  );
+}
+
+export async function exerciseWebUiRunsBusinessSmoke({
+  page,
+  baseUrl,
+  webSocket,
+  session,
+  ioFactory = loadSocketIoClient(),
+  suffix,
+  timeoutMs,
+}) {
+  assertSession(session);
+  if (!session.channel?.id) {
+    throw new Error('WebUI runs smoke needs a default channel in the seeded session');
+  }
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  const networkPath = session.team.path ?? session.team.id;
+  const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-32);
+  const workspaceRunId = `webui-run-${safeSuffix}`;
+  const logArtifactId = `webui-log-${safeSuffix}`;
+  const command = `agentbean-webui-smoke workspace ${safeSuffix}`;
+  const logExcerpt = [
+    'starting WebUI workspace run smoke',
+    `command: ${command}`,
+    'finished WebUI workspace run smoke',
+  ].join('\n');
+
+  const daemon = await connectSmokeDaemon({
+    baseUrl: root,
+    ioFactory,
+    session,
+    suffix,
+    timeoutMs,
+    dispatchResultFactory(request) {
+      const completedAt = Date.now();
+      return {
+        body: `browser-smoke:${request.prompt}`,
+        artifacts: [{
+          id: logArtifactId,
+          filename: 'workspace-run.log',
+          mimeType: 'text/plain',
+          relativePath: 'logs/workspace-run.log',
+          contentBase64: Buffer.from(logExcerpt).toString('base64'),
+        }],
+        workspaceRun: {
+          id: workspaceRunId,
+          cwd: '/tmp/agentbean-webui-smoke',
+          command,
+          logExcerpt,
+          exitCode: 0,
+          status: 'succeeded',
+          startedAt: completedAt - 750,
+          completedAt,
+        },
+      };
+    },
+  });
+
+  try {
+    await emitAck(webSocket, WEB_EVENTS.channel.subscribe, {
+      userId: session.user.id,
+      teamId: session.team.id,
+    }, timeoutMs);
+    await emitAck(webSocket, WEB_EVENTS.agent.subscribe, {
+      userId: session.user.id,
+      teamId: session.team.id,
+    }, timeoutMs);
+    const agentName = `WebUIRun${safeSuffix.replace(/[^a-zA-Z0-9]/g, '').slice(-8)}`;
+    const agentAck = await emitAck(webSocket, WEB_EVENTS.agent.create, {
+      userId: session.user.id,
+      teamId: session.team.id,
+      deviceId: daemon.deviceId,
+      runtimeId: daemon.runtimeId,
+      name: agentName,
+      env: { AGENTBEAN_WEBUI_RUN_SMOKE: '1' },
+    }, timeoutMs);
+    const agentId = readNestedString(agentAck, ['agent', 'id']);
+    if (!agentId) {
+      throw new Error(`WebUI runs smoke could not create a custom agent: ${formatAck(agentAck)}`);
+    }
+
+    const sendAck = await emitAck(webSocket, WEB_EVENTS.message.send, {
+      userId: session.user.id,
+      teamId: session.team.id,
+      channelId: session.channel.id,
+      body: `@${agentName} produce workspace run`,
+    }, timeoutMs);
+    const dispatchId = Array.isArray(sendAck?.dispatches) ? sendAck.dispatches[0]?.id : undefined;
+    if (typeof dispatchId !== 'string') {
+      throw new Error(`WebUI runs smoke message did not create a dispatch: ${formatAck(sendAck)}`);
+    }
+
+    await page.navigate(new URL(`/${networkPath}/runs`, root).toString());
+    await waitForWebUiWorkspaceRunCard({ page, command, timeoutMs });
+    const clickedDetail = await page.evaluateJson(`
+      (() => {
+        const command = ${JSON.stringify(command)};
+        const card = Array.from(document.querySelectorAll('[data-smoke="workspace-run-card"]'))
+          .find((candidate) => candidate.dataset.runCommand === command);
+        const link = card?.querySelector('[data-smoke="workspace-run-detail-link"]');
+        if (!link) return false;
+        link.click();
+        return true;
+      })()
+    `);
+    if (!clickedDetail) {
+      throw new Error(`Could not open the workspace run detail link for "${command}"`);
+    }
+    await waitForWebUiWorkspaceRunDetail({ page, command, timeoutMs });
+    await page.reload();
+    await waitForWebUiWorkspaceRunDetail({ page, command, timeoutMs });
+    return { id: workspaceRunId, command, dispatchId };
+  } finally {
+    daemon.socket.disconnect?.();
+  }
+}
+
+async function waitForWebUiWorkspaceRunCard({ page, command, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const command = ${JSON.stringify(command)};
+      return Array.from(document.querySelectorAll('[data-smoke="workspace-run-card"]'))
+        .some((candidate) => candidate.dataset.runCommand === command);
+    })()
+    `,
+    `workspace run "${command}" to render in the list`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiWorkspaceRunDetail({ page, command, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const command = ${JSON.stringify(command)};
+      const detail = document.querySelector('[data-smoke="workspace-run-detail"]');
+      const commandNode = document.querySelector('[data-smoke="workspace-run-command"]');
+      return Boolean(detail)
+        && detail.dataset.runCommand === command
+        && commandNode?.textContent?.includes(command);
+    })()
+    `,
+    `workspace run "${command}" detail to render`,
+    timeoutMs,
+  );
+}
+
+export async function exerciseWebUiMembersBusinessSmoke({
+  page,
+  baseUrl,
+  session,
+  ioFactory = loadSocketIoClient(),
+  suffix,
+  timeoutMs,
+}) {
+  assertSession(session);
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  const networkPath = session.team.path ?? session.team.id;
+  const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-32);
+  const username = `webui-member-${safeSuffix}`.toLowerCase();
+  const password = `secret-${safeSuffix}`;
+  const ownerSocket = await connectSocket(ioFactory, new URL('/web', root).toString(), timeoutMs, {
+    auth: { token: session.token },
+  });
+  const memberSocket = await connectSocket(ioFactory, new URL('/web', root).toString(), timeoutMs);
+  try {
+    const linkAck = await emitAck(ownerSocket, WEB_EVENTS.join.create, { maxUses: 1 }, timeoutMs);
+    const joinCode = readNestedString(linkAck, ['link', 'code']);
+    if (!joinCode) {
+      throw new Error(`WebUI members smoke could not create a join link: ${formatAck(linkAck)}`);
+    }
+
+    const registerAck = await emitAck(memberSocket, WEB_EVENTS.auth.register, {
+      username,
+      password,
+      teamName: `Unused WebUI Member ${safeSuffix}`,
+      joinCode,
+    }, timeoutMs);
+    const targetUserId = readNestedString(registerAck, ['user', 'id']);
+    if (registerAck?.ok !== true || !targetUserId) {
+      throw new Error(`WebUI members smoke could not register joined member: ${formatAck(registerAck)}`);
+    }
+    const serverMembersAck = await emitAck(ownerSocket, WEB_EVENTS.member.list, {
+      teamId: session.team.id,
+    }, timeoutMs);
+    const serverHumans = Array.isArray(serverMembersAck?.humans) ? serverMembersAck.humans : [];
+    if (!serverHumans.some((human) => human.userId === targetUserId)) {
+      throw new Error(
+        `WebUI members smoke joined member was not visible from members:list: ${formatAck(serverMembersAck)}`,
+      );
+    }
+
+    await page.navigate(new URL(`/${networkPath}/members`, root).toString());
+    await waitForWebUiHumanMemberItem({ page, userId: targetUserId, role: 'member', timeoutMs });
+    const clickedMember = await page.evaluateJson(`
+      (() => {
+        const userId = ${JSON.stringify(targetUserId)};
+        const item = Array.from(document.querySelectorAll('[data-smoke="human-member-item"]'))
+          .find((candidate) => candidate.dataset.userId === userId);
+        if (!item) return false;
+        item.click();
+        return true;
+      })()
+    `);
+    if (!clickedMember) {
+      throw new Error(`Could not select WebUI smoke member "${username}"`);
+    }
+    await waitForWebUiHumanMemberDetail({ page, userId: targetUserId, role: 'member', timeoutMs });
+
+    await waitForWebUiHumanMemberAction({ page, selector: '[data-smoke="member-role-promote-admin"]', timeoutMs });
+    await page.click('[data-smoke="member-role-promote-admin"]');
+    await waitForWebUiHumanMemberDetail({ page, userId: targetUserId, role: 'admin', timeoutMs });
+    await waitForWebUiHumanMemberItem({ page, userId: targetUserId, role: 'admin', timeoutMs });
+
+    await waitForWebUiHumanMemberAction({ page, selector: '[data-smoke="member-role-demote-member"]', timeoutMs });
+    await page.click('[data-smoke="member-role-demote-member"]');
+    await waitForWebUiHumanMemberDetail({ page, userId: targetUserId, role: 'member', timeoutMs });
+    await waitForWebUiHumanMemberItem({ page, userId: targetUserId, role: 'member', timeoutMs });
+
+    await page.reload();
+    await waitForWebUiHumanMemberDetail({ page, userId: targetUserId, role: 'member', timeoutMs });
+    return { userId: targetUserId, username };
+  } finally {
+    memberSocket.disconnect?.();
+    ownerSocket.disconnect?.();
+  }
+}
+
+async function waitForWebUiHumanMemberItem({ page, userId, role, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const userId = ${JSON.stringify(userId)};
+      const role = ${JSON.stringify(role)};
+      return Array.from(document.querySelectorAll('[data-smoke="human-member-item"]'))
+        .some((candidate) =>
+          candidate.dataset.userId === userId
+          && (!role || candidate.dataset.memberRole === role)
+        );
+    })()
+    `,
+    `human member "${userId}" to render${role ? ` with role ${role}` : ''}`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiHumanMemberDetail({ page, userId, role, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const userId = ${JSON.stringify(userId)};
+      const role = ${JSON.stringify(role)};
+      const detail = document.querySelector('[data-smoke="human-member-detail"]');
+      return Boolean(detail)
+        && detail.dataset.userId === userId
+        && (!role || detail.dataset.memberRole === role);
+    })()
+    `,
+    `human member "${userId}" detail to render${role ? ` with role ${role}` : ''}`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiHumanMemberAction({ page, selector, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const button = document.querySelector(${JSON.stringify(selector)});
+      return Boolean(button) && !button.disabled;
+    })()
+    `,
+    `human member action "${selector}" to become clickable`,
+    timeoutMs,
+  );
+}
+
+export async function exerciseWebUiDevicesBusinessSmoke({
+  page,
+  baseUrl,
+  session,
+  ioFactory = loadSocketIoClient(),
+  suffix,
+  timeoutMs,
+}) {
+  assertSession(session);
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  const networkPath = session.team.path ?? session.team.id;
+  const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-32);
+  const renamedDeviceName = `webui-device-${safeSuffix}`;
+  const daemon = await connectSmokeDaemon({
+    baseUrl: root,
+    ioFactory,
+    session,
+    suffix,
+    timeoutMs,
+  });
+
+  try {
+    await page.navigate(new URL(`/${networkPath}/devices`, root).toString());
+    await waitForWebUiDeviceListItem({ page, deviceId: daemon.deviceId, timeoutMs });
+    await page.navigate(new URL(`/${networkPath}/devices/${daemon.deviceId}`, root).toString());
+    await waitForWebUiDeviceDetail({ page, deviceId: daemon.deviceId, timeoutMs });
+
+    await page.click('[data-smoke="device-rename-open"]');
+    await page.waitForFunction(
+      `Boolean(document.querySelector('[data-smoke="device-rename-input"]'))`,
+      'device rename input to render',
+      timeoutMs,
+    );
+    await page.fillInputAsUser('[data-smoke="device-rename-input"]', renamedDeviceName);
+    await page.waitForFunction(
+      `document.querySelector('[data-smoke="device-rename-input"]')?.value === ${JSON.stringify(renamedDeviceName)}`,
+      'device rename input value to update',
+      timeoutMs,
+    );
+    await sleep(100);
+    await page.click('[data-smoke="device-rename-save"]');
+    await waitForWebUiDeviceDetail({ page, deviceId: daemon.deviceId, name: renamedDeviceName, timeoutMs });
+    await waitForWebUiDeviceListItem({ page, deviceId: daemon.deviceId, name: renamedDeviceName, timeoutMs });
+
+    await page.reload();
+    await waitForWebUiDeviceDetail({ page, deviceId: daemon.deviceId, name: renamedDeviceName, timeoutMs });
+    return { deviceId: daemon.deviceId, name: renamedDeviceName };
+  } finally {
+    daemon.socket.disconnect?.();
+  }
+}
+
+async function waitForWebUiDeviceListItem({ page, deviceId, name, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const deviceId = ${JSON.stringify(deviceId)};
+      const name = ${JSON.stringify(name ?? '')};
+      return Array.from(document.querySelectorAll('[data-smoke="device-list-item"]'))
+        .some((candidate) =>
+          candidate.dataset.deviceId === deviceId
+          && (!name || candidate.dataset.deviceName === name || candidate.textContent.includes(name))
+        );
+    })()
+    `,
+    `device "${deviceId}" to render${name ? ` as ${name}` : ''}`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiDeviceDetail({ page, deviceId, name, timeoutMs }) {
+  const expression = `
+    (() => {
+      const deviceId = ${JSON.stringify(deviceId)};
+      const name = ${JSON.stringify(name ?? '')};
+      const detail = document.querySelector('[data-smoke="device-detail"]');
+      const hasExpectedName = Boolean(name && detail?.textContent.includes(name));
+      return Boolean(detail)
+        && (detail.dataset.deviceId === deviceId || hasExpectedName)
+        && (!name || detail.dataset.deviceName === name || hasExpectedName);
+    })()
+  `;
+  const description = `device "${deviceId}" detail to render${name ? ` as ${name}` : ''}`;
+  try {
+    await page.waitForFunction(expression, description, timeoutMs);
+  } catch (error) {
+    const debug = await page.evaluateJson(`
+      (() => {
+        const name = ${JSON.stringify(name ?? '')};
+        const detail = document.querySelector('[data-smoke="device-detail"]');
+        return {
+          path: location.pathname,
+          found: Boolean(detail),
+          dataset: detail ? { ...detail.dataset } : null,
+          includesName: Boolean(name && detail?.textContent.includes(name)),
+          text: detail?.textContent?.replace(/\\s+/g, ' ').trim().slice(0, 500) ?? null,
+        };
+      })()
+    `).catch((debugError) => ({ debugError: debugError instanceof Error ? debugError.message : String(debugError) }));
+    throw new Error(`${error instanceof Error ? error.message : String(error)}; current detail ${JSON.stringify(debug)}`);
+  }
+}
+
+export async function exerciseWebUiSettingsBusinessSmoke({
+  page,
+  baseUrl,
+  session,
+  suffix,
+  timeoutMs,
+}) {
+  assertSession(session);
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  const networkPath = session.team.path ?? session.team.id;
+  const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-32);
+  const teamName = `WebUI Settings ${safeSuffix}`;
+  await page.navigate(new URL(`/${networkPath}/settings`, root).toString());
+  await page.click('[data-smoke="settings-tab-server"]');
+  await page.waitForFunction(
+    `Boolean(document.querySelector('[data-smoke="settings-team-name-input"]'))`,
+    'settings team name input to render',
+    timeoutMs,
+  );
+
+  await page.setInputValue('[data-smoke="settings-team-name-input"]', teamName);
+  await page.waitForFunction(
+    `
+    (() => {
+      const input = document.querySelector('[data-smoke="settings-team-name-input"]');
+      const button = document.querySelector('[data-smoke="settings-team-name-save"]');
+      return input?.value === ${JSON.stringify(teamName)} && button && !button.disabled;
+    })()
+    `,
+    'settings team name input value to update and enable save',
+    timeoutMs,
+  );
+  await page.click('[data-smoke="settings-team-name-save"]');
+  await page.waitForFunction(
+    `
+    (() => {
+      const input = document.querySelector('[data-smoke="settings-team-name-input"]');
+      const button = document.querySelector('[data-smoke="settings-team-name-save"]');
+      const message = document.querySelector('[data-smoke="settings-team-name-message"]');
+      return document.body.textContent.includes(${JSON.stringify(teamName)})
+        && input?.value === ${JSON.stringify(teamName)}
+        && (message?.textContent.includes('保存成功') || Boolean(button?.disabled));
+    })()
+    `,
+    `settings team name "${teamName}" to save`,
+    timeoutMs,
+  );
+
+  await page.setInputValue('[data-smoke="settings-join-max-uses"]', '2');
+  await page.click('[data-smoke="settings-join-create"]');
+  const joinCode = await waitForWebUiSettingsJoinLink({ page, timeoutMs });
+
+  const revoked = await page.evaluateJson(`
+    (() => {
+      const code = ${JSON.stringify(joinCode)};
+      const button = Array.from(document.querySelectorAll('[data-smoke="settings-join-revoke"]'))
+        .find((candidate) => candidate.dataset.joinCode === code);
+      if (!button) return false;
+      button.click();
+      return true;
+    })()
+  `);
+  if (!revoked) {
+    throw new Error(`Could not revoke WebUI settings join link "${joinCode}"`);
+  }
+  await page.waitForFunction(
+    `
+    (() => {
+      const code = ${JSON.stringify(joinCode)};
+      return !Array.from(document.querySelectorAll('[data-smoke="settings-join-link"]'))
+        .some((candidate) => candidate.dataset.joinCode === code);
+    })()
+    `,
+    `settings join link "${joinCode}" to disappear after revoke`,
+    timeoutMs,
+  );
+
+  await page.reload();
+  await page.click('[data-smoke="settings-tab-server"]');
+  await page.waitForFunction(
+    `
+    (() => {
+      const code = ${JSON.stringify(joinCode)};
+      return document.body.textContent.includes(${JSON.stringify(teamName)})
+        && !Array.from(document.querySelectorAll('[data-smoke="settings-join-link"]'))
+          .some((candidate) => candidate.dataset.joinCode === code);
+    })()
+    `,
+    `settings team name "${teamName}" and revoked join link state to restore after refresh`,
+    timeoutMs,
+  );
+  return { teamName, joinCode };
+}
+
+async function waitForWebUiSettingsJoinLink({ page, timeoutMs }) {
+  await page.waitForFunction(
+    `document.querySelector('[data-smoke="settings-join-link"]')?.dataset.joinCode`,
+    'settings join link to render',
+    timeoutMs,
+  );
+  const joinCode = await page.evaluateJson(`
+    document.querySelector('[data-smoke="settings-join-link"]')?.dataset.joinCode ?? null
+  `);
+  if (typeof joinCode !== 'string' || joinCode.length === 0) {
+    throw new Error(`Settings join link did not expose a code: ${String(joinCode)}`);
+  }
+  return joinCode;
+}
+
+export async function exerciseWebUiAgentsBusinessSmoke({
+  page,
+  baseUrl,
+  webSocket,
+  session,
+  ioFactory = loadSocketIoClient(),
+  suffix,
+  timeoutMs,
+}) {
+  assertSession(session);
+  if (!session.channel?.id) {
+    throw new Error('WebUI agents smoke needs a default channel in the seeded session');
+  }
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  const networkPath = session.team.path ?? session.team.id;
+  const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-32);
+  const agentName = `WebUIAgent${safeSuffix.replace(/[^a-zA-Z0-9]/g, '').slice(-10)}`;
+  const targetTeamName = `WebUI Agent Target ${safeSuffix}`;
+  const daemon = await connectSmokeDaemon({
+    baseUrl: root,
+    ioFactory,
+    session,
+    suffix,
+    timeoutMs,
+  });
+
+  try {
+    await emitAck(webSocket, WEB_EVENTS.agent.subscribe, {
+      userId: session.user.id,
+      teamId: session.team.id,
+    }, timeoutMs);
+    const agentAck = await emitAck(webSocket, WEB_EVENTS.agent.create, {
+      userId: session.user.id,
+      teamId: session.team.id,
+      deviceId: daemon.deviceId,
+      runtimeId: daemon.runtimeId,
+      name: agentName,
+      env: { AGENTBEAN_WEBUI_AGENT_SMOKE: '1' },
+    }, timeoutMs);
+    const agentId = readNestedString(agentAck, ['agent', 'id']);
+    if (!agentId) {
+      throw new Error(`WebUI agents smoke could not create a custom agent: ${formatAck(agentAck)}`);
+    }
+
+    const targetTeamAck = await emitAck(webSocket, WEB_EVENTS.team.create, {
+      userId: session.user.id,
+      name: targetTeamName,
+      visibility: 'private',
+    }, timeoutMs);
+    const targetTeamId = readNestedString(targetTeamAck, ['team', 'id']);
+    if (!targetTeamId) {
+      throw new Error(`WebUI agents smoke could not create target team: ${formatAck(targetTeamAck)}`);
+    }
+    await emitAck(webSocket, WEB_EVENTS.team.switch, {
+      userId: session.user.id,
+      teamId: session.team.id,
+    }, timeoutMs);
+
+    await page.navigate(new URL(`/${networkPath}/agents`, root).toString());
+    await waitForWebUiAgentListItem({ page, agentId, name: agentName, timeoutMs });
+    await page.navigate(new URL(`/${networkPath}/agents/${agentId}`, root).toString());
+    await waitForWebUiAgentDetail({ page, agentId, name: agentName, timeoutMs });
+
+    await waitForWebUiAgentPublishToggle({ page, targetTeamId, published: false, timeoutMs });
+    await page.evaluateJson(`
+      (() => {
+        const teamId = ${JSON.stringify(targetTeamId)};
+        const button = Array.from(document.querySelectorAll('[data-smoke="agent-publish-toggle"]'))
+          .find((candidate) => candidate.dataset.teamId === teamId);
+        if (!button) throw new Error("Missing publish toggle for target team");
+        button.click();
+        return true;
+      })()
+    `);
+    await waitForWebUiAgentPublishToggle({ page, targetTeamId, published: true, timeoutMs });
+    await page.evaluateJson(`
+      (() => {
+        const teamId = ${JSON.stringify(targetTeamId)};
+        const button = Array.from(document.querySelectorAll('[data-smoke="agent-publish-toggle"]'))
+          .find((candidate) => candidate.dataset.teamId === teamId);
+        if (!button) throw new Error("Missing publish toggle for target team");
+        button.click();
+        return true;
+      })()
+    `);
+    await waitForWebUiAgentPublishToggle({ page, targetTeamId, published: false, timeoutMs });
+
+    await emitAck(webSocket, WEB_EVENTS.channel.subscribe, {
+      userId: session.user.id,
+      teamId: session.team.id,
+    }, timeoutMs);
+    const sendAck = await emitAck(webSocket, WEB_EVENTS.message.send, {
+      userId: session.user.id,
+      teamId: session.team.id,
+      channelId: session.channel.id,
+      body: `@${agentName} metrics ping`,
+    }, timeoutMs);
+    const dispatchId = Array.isArray(sendAck?.dispatches) ? sendAck.dispatches[0]?.id : undefined;
+    if (typeof dispatchId !== 'string') {
+      throw new Error(`WebUI agents smoke message did not create a dispatch: ${formatAck(sendAck)}`);
+    }
+    await sleep(250);
+
+    await page.navigate(new URL(`/${networkPath}/agents/metrics`, root).toString());
+    await waitForWebUiAgentMetricsPanel({ page, agentId, timeoutMs });
+    return { agentId, agentName, targetTeamId, targetTeamName, dispatchId };
+  } finally {
+    daemon.socket.disconnect?.();
+  }
+}
+
+async function waitForWebUiAgentListItem({ page, agentId, name, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const agentId = ${JSON.stringify(agentId)};
+      const name = ${JSON.stringify(name)};
+      return Array.from(document.querySelectorAll('[data-smoke="agent-list-item"]'))
+        .some((candidate) =>
+          candidate.dataset.agentId === agentId
+          && (!name || candidate.dataset.agentName === name || candidate.textContent.includes(name))
+        );
+    })()
+    `,
+    `agent "${agentId}" to render in the list`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiAgentDetail({ page, agentId, name, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const agentId = ${JSON.stringify(agentId)};
+      const name = ${JSON.stringify(name)};
+      const detail = document.querySelector('[data-smoke="agent-detail"]');
+      return Boolean(detail)
+        && detail.dataset.agentId === agentId
+        && (!name || detail.dataset.agentName === name || detail.textContent.includes(name));
+    })()
+    `,
+    `agent "${agentId}" detail to render`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiAgentPublishToggle({ page, targetTeamId, published, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const targetTeamId = ${JSON.stringify(targetTeamId)};
+      const published = ${JSON.stringify(String(published))};
+      return Array.from(document.querySelectorAll('[data-smoke="agent-publish-toggle"]'))
+        .some((candidate) =>
+          candidate.dataset.teamId === targetTeamId
+          && candidate.dataset.published === published
+        );
+    })()
+    `,
+    `agent publish toggle for team "${targetTeamId}" to become ${published}`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiAgentMetricsPanel({ page, agentId, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const agentId = ${JSON.stringify(agentId)};
+      return Array.from(document.querySelectorAll('[data-smoke="agent-metrics-panel"]'))
+        .some((candidate) => candidate.dataset.agentId === agentId);
+    })()
+    `,
+    `agent metrics for "${agentId}" to render`,
+    timeoutMs,
+  );
+}
+
+async function connectSmokeDaemon({ baseUrl, ioFactory, session, suffix, timeoutMs, dispatchResultFactory }) {
   const socket = await connectSocket(ioFactory, new URL('/agent', baseUrl).toString(), timeoutMs);
   socket.on(AGENT_EVENTS.dispatch.request, (request) => {
+    const result = dispatchResultFactory?.(request) ?? {
+      body: `browser-smoke:${request.prompt}`,
+    };
     emitAck(socket, AGENT_EVENTS.dispatch.result, {
       dispatchId: request.id,
       agentId: request.agentId,
-      body: `browser-smoke:${request.prompt}`,
+      ...result,
     }, timeoutMs).catch(() => {});
   });
 
@@ -317,7 +1747,7 @@ async function connectSmokeDaemon({ baseUrl, ioFactory, session, suffix, timeout
     throw new Error(`Smoke daemon runtime report did not return a runtime id: ${formatAck(runtimesAck)}`);
   }
 
-  return socket;
+  return { socket, deviceId, runtimeId };
 }
 
 async function createSmokeBrowserSession({ baseUrl, ioFactory, suffix, timeoutMs }) {
@@ -686,7 +2116,11 @@ async function connectCdp(webSocketUrl, events) {
         returnByValue: true,
       });
       if (result.exceptionDetails) {
-        throw new Error(result.exceptionDetails.text ?? 'Runtime.evaluate failed');
+        const details = result.exceptionDetails.exception?.description
+          ?? result.exceptionDetails.exception?.value
+          ?? result.exceptionDetails.text
+          ?? 'Runtime.evaluate failed';
+        throw new Error(String(details));
       }
       return result.result?.value;
     },
@@ -730,8 +2164,19 @@ async function connectCdp(webSocketUrl, events) {
         (() => {
           const element = document.querySelector(${JSON.stringify(selector)});
           if (!element) throw new Error("Missing input: ${selector.replaceAll('"', '\\"')}");
-          element.value = ${JSON.stringify(value)};
-          element.dispatchEvent(new Event("input", { bubbles: true }));
+          const value = ${JSON.stringify(value)};
+          element.focus();
+          const prototype =
+            element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype :
+            element instanceof HTMLSelectElement ? HTMLSelectElement.prototype :
+            HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+          if (setter) setter.call(element, value);
+          else element.value = value;
+          const inputEvent = typeof InputEvent === "function"
+            ? new InputEvent("input", { bubbles: true, inputType: "insertText", data: value })
+            : new Event("input", { bubbles: true });
+          element.dispatchEvent(inputEvent);
           element.dispatchEvent(new Event("change", { bubbles: true }));
           return true;
         })()
@@ -763,6 +2208,32 @@ async function connectCdp(webSocketUrl, events) {
           element.dispatchEvent(new Event("input", { bubbles: true }));
           element.dispatchEvent(new Event("change", { bubbles: true }));
           return true;
+        })()
+      `);
+    },
+    async fillInputAsUser(selector, value) {
+      await this.evaluateJson(`
+        (() => {
+          const element = document.querySelector(${JSON.stringify(selector)});
+          if (!element) throw new Error("Missing input: ${selector.replaceAll('"', '\\"')}");
+          element.focus();
+          if (typeof element.select === "function") {
+            element.select();
+          }
+          return true;
+        })()
+      `);
+      await send('Input.insertText', { text: value });
+      await this.evaluateJson(`
+        (() => {
+          const element = document.querySelector(${JSON.stringify(selector)});
+          if (!element) throw new Error("Missing input: ${selector.replaceAll('"', '\\"')}");
+          const inputEvent = typeof InputEvent === "function"
+            ? new InputEvent("input", { bubbles: true, inputType: "insertText", data: ${JSON.stringify(value)} })
+            : new Event("input", { bubbles: true });
+          element.dispatchEvent(inputEvent);
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+          return element.value;
         })()
       `);
     },
@@ -850,12 +2321,13 @@ async function waitForChromeDebugEndpoint(debugUrl, process, timeoutMs, readStde
   throw new Error(`Timed out waiting for Chrome DevTools endpoint ${debugUrl}:\n${readStderr()}`);
 }
 
-async function connectSocket(ioFactory, url, timeoutMs) {
+async function connectSocket(ioFactory, url, timeoutMs, options = {}) {
   const socket = ioFactory(url, {
     transports: ['websocket'],
     forceNew: true,
     reconnection: false,
     autoConnect: false,
+    ...options,
   });
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -1052,7 +2524,7 @@ function parseArgs(argv) {
   return args;
 }
 
-function formatText(summary) {
+export function formatBrowserSmokeText(summary) {
   const lines = [
     summary.ok
       ? `AgentBean Next browser smoke passed (${summary.total}/${summary.total}).`
@@ -1075,6 +2547,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     headed: args.headed,
     skipBuild: args.skipBuild,
   });
-  console.log(args.json ? JSON.stringify(summary, null, 2) : formatText(summary));
+  console.log(args.json ? JSON.stringify(summary, null, 2) : formatBrowserSmokeText(summary));
   process.exitCode = summary.ok ? 0 : 1;
 }

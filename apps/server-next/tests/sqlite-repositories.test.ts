@@ -200,6 +200,36 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('deletes a non-primary team with SQLite and restores actor fallback team', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 905 },
+        ids: {
+          nextId: createIds(['user-1', 'team-1', 'channel-1', 'team-2', 'channel-2']),
+        },
+      });
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+      await expect(app.createTeam({ userId: 'user-1', name: 'Temporary Team' })).resolves.toMatchObject({
+        ok: true,
+        team: { id: 'team-2', path: 'temporary-team' },
+      });
+
+      await expect(app.deleteTeam({ userId: 'user-1', teamId: 'team-2' })).resolves.toMatchObject({
+        ok: true,
+        fallbackTeam: { id: 'team-1', path: 'agentbean' },
+      });
+      expect(globalDb.prepare('SELECT id FROM teams WHERE id = ?').get('team-2')).toBeUndefined();
+      expect(globalDb.prepare('SELECT current_team_id AS currentTeamId FROM users WHERE id = ?').get('user-1')).toEqual({
+        currentTeamId: 'team-1',
+      });
+    } finally {
+      close();
+    }
+  });
+
   test('persists device invites and completes daemon onboarding with SQLite', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {

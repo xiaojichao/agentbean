@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
 import { createRequire } from 'node:module';
 import { createHash, randomUUID } from 'node:crypto';
-import { basename, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createServerNextUseCases, type ArtifactContentStore } from './application/usecases.js';
 import { createInMemoryRepositories } from './infra/memory/repositories.js';
@@ -27,6 +27,7 @@ export interface ServerNextDevConfig {
   storage: 'memory' | 'sqlite';
   dataDir: string;
   sessionSecret: string;
+  webEntry?: 'preview' | 'app';
 }
 
 export interface ParseServerNextDevConfigInput {
@@ -40,6 +41,7 @@ export interface StartServerNextDevServerInput {
   Server?: SocketIoServerConstructor;
   Database?: BetterSqlite3Constructor;
   dispatchTimeout?: DispatchTimeoutSchedulerConfig;
+  webApp?: WebAppHandler;
 }
 
 export interface ServerNextDevServerHandle {
@@ -56,6 +58,22 @@ interface AppWithCleanup {
   reconcileDisconnectedDevicesOnStart: boolean;
   close(): Promise<void>;
 }
+
+interface WebAppHandler {
+  handle(request: IncomingMessage, response: ServerResponse): Promise<void>;
+  close(): Promise<void>;
+}
+
+type NextAppFactory = (options: {
+  dev: boolean;
+  dir: string;
+  hostname: string;
+  port: number;
+}) => {
+  prepare(): Promise<void>;
+  getRequestHandler(): (request: IncomingMessage, response: ServerResponse) => Promise<void>;
+  close(): Promise<void>;
+};
 
 type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { close(): void };
 
@@ -88,6 +106,7 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
   const host = args.host ?? env.AGENTBEAN_NEXT_HOST ?? (env.PORT ? '0.0.0.0' : '127.0.0.1');
   const port = Number(args.port ?? env.AGENTBEAN_NEXT_PORT ?? env.PORT ?? 4100);
   const storage = args.storage ?? env.AGENTBEAN_NEXT_STORAGE ?? (env.PORT ? 'sqlite' : 'memory');
+  const webEntry = args['web-entry'] ?? env.AGENTBEAN_NEXT_WEB_ENTRY ?? (env.PORT ? 'app' : 'preview');
   const configuredDataDir = args['data-dir'] ?? env.AGENTBEAN_NEXT_DATA_DIR;
   const hasExplicitDataDir = configuredDataDir !== undefined && configuredDataDir.length > 0;
   const dataDir = hasExplicitDataDir ? configuredDataDir : join(process.cwd(), '.agentbean-next');
@@ -98,13 +117,16 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
   if (storage !== 'memory' && storage !== 'sqlite') {
     throw new Error('AGENTBEAN_NEXT_STORAGE or --storage must be memory or sqlite');
   }
+  if (webEntry !== 'preview' && webEntry !== 'app') {
+    throw new Error('AGENTBEAN_NEXT_WEB_ENTRY or --web-entry must be preview or app');
+  }
   if (env.PORT && !sessionSecret) {
     throw new Error('AGENTBEAN_NEXT_SESSION_SECRET or --session-secret is required when PORT is set');
   }
   if (env.PORT && storage === 'sqlite' && !hasExplicitDataDir) {
     throw new Error('AGENTBEAN_NEXT_DATA_DIR or --data-dir is required when PORT uses sqlite storage');
   }
-  return { host, port, storage, dataDir, sessionSecret: sessionSecret || 'agentbean-next-dev-session-secret' };
+  return { host, port, storage, dataDir, sessionSecret: sessionSecret || 'agentbean-next-dev-session-secret', webEntry };
 }
 
 export async function startServerNextDevServer(
@@ -119,9 +141,11 @@ export async function startServerNextDevServer(
     await app.reconcileDisconnectedDevices({ timestamp: Date.now() });
   }
   const Server = input.Server ?? loadSocketIoServer();
+  const webEntry = config.webEntry ?? 'preview';
+  const webApp = webEntry === 'app' ? input.webApp ?? await createWebAppHandler(config) : null;
   const httpServer = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://agentbean-next.local');
-    if (url.pathname === '/' || url.pathname === '/preview') {
+    if (url.pathname === '/preview' || (url.pathname === '/' && !webApp)) {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       response.end(readPreviewHtml());
       return;
@@ -144,6 +168,10 @@ export async function startServerNextDevServer(
       return;
     }
     if (await handleAgentEnvHttp({ app, config, request, response, url })) {
+      return;
+    }
+    if (webApp) {
+      await webApp.handle(request, response);
       return;
     }
     response.writeHead(404, { 'content-type': 'application/json' });
@@ -174,6 +202,7 @@ export async function startServerNextDevServer(
         clearInterval(dispatchTimeoutInterval);
       }
       stopVersionRefresh();
+      await webApp?.close();
       await new Promise<void>((resolve) => ioServer.close(() => resolve()));
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
       await appWithCleanup.close();
@@ -764,22 +793,69 @@ class ArtifactHttpError extends Error {
 }
 
 function readPreviewHtml(): string {
+  const path = findPreviewHtmlPath();
+  if (path) {
+    return readFileSync(path, 'utf8');
+  }
+  throw new Error('web-next preview page not found');
+}
+
+async function createWebAppHandler(config: ServerNextDevConfig): Promise<WebAppHandler> {
+  const createNextApp = loadNextAppFactory();
+  const dir = findWebNextDir();
+  console.log(`AgentBean Next preparing web app from ${dir}`);
+  const nextApp = createNextApp({
+    dev: false,
+    dir,
+    hostname: config.host,
+    port: config.port,
+  });
+  await nextApp.prepare();
+  console.log('AgentBean Next web app prepared');
+  const handle = nextApp.getRequestHandler();
+  return {
+    async handle(request, response) {
+      await handle(request, response);
+    },
+    async close() {
+      await nextApp.close();
+    },
+  };
+}
+
+function loadNextAppFactory(): NextAppFactory {
+  const requireFromHere = createRequire(import.meta.url);
+  const loaded = requireFromHere('next') as NextAppFactory | { default?: NextAppFactory };
+  if (typeof loaded === 'function') {
+    return loaded;
+  }
+  if (typeof loaded.default === 'function') {
+    return loaded.default;
+  }
+  throw new Error('next module did not expose an app factory');
+}
+
+function findWebNextDir(): string {
+  const previewPath = findPreviewHtmlPath();
+  if (previewPath) {
+    return dirname(dirname(previewPath));
+  }
   const candidates = [
-    new URL('../../../../../web-next/preview/index.html', import.meta.url),
-    new URL('../../web-next/preview/index.html', import.meta.url),
-    pathToFileURL(join(process.cwd(), 'apps/web-next/preview/index.html')),
+    new URL('../../../../../web-next', import.meta.url),
+    new URL('../../web-next', import.meta.url),
+    pathToFileURL(join(process.cwd(), 'apps/web-next')),
   ];
   for (const candidate of candidates) {
     try {
       const path = candidate.pathname;
-      if (existsSync(path)) {
-        return readFileSync(path, 'utf8');
+      if (existsSync(join(path, 'package.json'))) {
+        return path;
       }
     } catch {
       // Try the next known repository layout.
     }
   }
-  throw new Error('web-next preview page not found');
+  throw new Error('web-next app directory not found');
 }
 
 function createDefaultApp(
@@ -825,6 +901,25 @@ function createDefaultApp(
       teamDb.close();
     },
   };
+}
+
+function findPreviewHtmlPath(): string | undefined {
+  const candidates = [
+    new URL('../../../../../web-next/preview/index.html', import.meta.url),
+    new URL('../../web-next/preview/index.html', import.meta.url),
+    pathToFileURL(join(process.cwd(), 'apps/web-next/preview/index.html')),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const path = candidate.pathname;
+      if (existsSync(path)) {
+        return path;
+      }
+    } catch {
+      // Try the next known repository layout.
+    }
+  }
+  return undefined;
 }
 
 function createFileArtifactContentStore(dataDir: string): ArtifactContentStore {
