@@ -756,6 +756,224 @@
         color: #737373;
         font-size: 12px;
       }
+      .device-list {
+        display: grid;
+        gap: 8px;
+      }
+      .device-owner-group {
+        display: grid;
+        gap: 4px;
+      }
+      .device-owner-label {
+        align-items: center;
+        color: #737373;
+        display: flex;
+        font-size: 11px;
+        font-weight: 650;
+        justify-content: space-between;
+        padding: 0 2px;
+      }
+      .device-row {
+        align-items: center;
+        background: #ffffff;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        color: #171717;
+        display: grid;
+        gap: 6px;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        justify-content: stretch;
+        min-height: 42px;
+        padding: 7px 8px;
+        text-align: left;
+        width: 100%;
+      }
+      .device-row.active {
+        background: #f7f7f6;
+        border-color: #d7d7d3;
+      }
+      .device-row-main {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+      }
+      .device-row-title {
+        font-size: 13px;
+        font-weight: 650;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .device-status-dot {
+        border-radius: 999px;
+        display: inline-block;
+        height: 8px;
+        width: 8px;
+      }
+      .device-status-dot.online {
+        background: #10b981;
+      }
+      .device-status-dot.busy,
+      .device-status-dot.connecting {
+        background: #f59e0b;
+      }
+      .device-status-dot.error {
+        background: #ef4444;
+      }
+      .device-status-dot.offline,
+      .device-status-dot.unknown {
+        background: #d4d4d4;
+      }
+      .device-panel {
+        display: grid;
+        gap: 10px;
+      }
+      .device-hero {
+        align-items: start;
+        display: flex;
+        gap: 10px;
+      }
+      .device-icon {
+        align-items: center;
+        background: #f5f5f4;
+        border: 1px solid #e7e5e4;
+        border-radius: 8px;
+        color: #525252;
+        display: inline-flex;
+        flex: 0 0 auto;
+        font-size: 18px;
+        height: 40px;
+        justify-content: center;
+        width: 40px;
+      }
+      .device-title-block {
+        display: grid;
+        gap: 4px;
+        min-width: 0;
+      }
+      .device-title-block h2 {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .status-pill {
+        align-items: center;
+        border-radius: 999px;
+        display: inline-flex;
+        font-size: 11px;
+        font-weight: 650;
+        gap: 5px;
+        min-height: 22px;
+        padding: 2px 8px;
+        width: fit-content;
+      }
+      .status-pill.online {
+        background: #ecfdf5;
+        color: #047857;
+      }
+      .status-pill.busy,
+      .status-pill.connecting {
+        background: #fffbeb;
+        color: #b45309;
+      }
+      .status-pill.error {
+        background: #fef2f2;
+        color: #b91c1c;
+      }
+      .status-pill.offline,
+      .status-pill.unknown {
+        background: #f5f5f4;
+        color: #737373;
+      }
+      .device-section {
+        border-top: 1px solid #eeeeec;
+        display: grid;
+        gap: 7px;
+        padding-top: 10px;
+      }
+      .device-section:first-child {
+        border-top: 0;
+        padding-top: 0;
+      }
+      .device-section h3 {
+        color: #525252;
+        text-transform: uppercase;
+      }
+      .device-detail-grid {
+        display: grid;
+        gap: 6px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .device-fact {
+        background: #f7f7f6;
+        border: 1px solid #e7e5e4;
+        border-radius: 6px;
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+        padding: 7px;
+      }
+      .device-fact dt {
+        color: #737373;
+        font-size: 11px;
+        font-weight: 650;
+        margin: 0;
+      }
+      .device-fact dd {
+        color: #171717;
+        font-size: 12px;
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      .device-command {
+        background: #171717;
+        border-radius: 6px;
+        color: #86efac;
+        display: block;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11px;
+        overflow-x: auto;
+        padding: 8px;
+        white-space: nowrap;
+      }
+      .device-agent-list {
+        display: grid;
+        gap: 6px;
+      }
+      .device-agent-row {
+        background: #f7f7f6;
+        border: 1px solid #e7e5e4;
+        border-radius: 6px;
+        display: grid;
+        gap: 3px;
+        padding: 7px;
+      }
+      .device-agent-head {
+        align-items: center;
+        display: flex;
+        gap: 6px;
+        justify-content: space-between;
+      }
+      .device-agent-head strong {
+        font-size: 12px;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .device-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .device-actions button {
+        min-height: 28px;
+        padding: 4px 8px;
+      }
+      .danger-button {
+        background: #dc2626;
+        color: #ffffff;
+      }
       .landing {
         background: linear-gradient(180deg, #0a0a0a 0%, #171717 100%);
         color: #f5f5f5;
@@ -2039,10 +2257,13 @@
         channels: [],
         devices: [],
         runtimesByDevice: {},
+        deviceAgentsByDevice: {},
+        deviceAgentErrorsByDevice: {},
         selectedDeviceId: null,
         deviceDetail: null,
         deviceDetailId: null,
         deviceDetailError: null,
+        generatedDeviceInviteCommand: null,
         agents: [],
         agentsLoaded: false,
         messages: [],
@@ -2073,6 +2294,7 @@
         workspaceRunDetailLoadingId: null,
         workspaceRunDetailError: null,
       };
+      state.selectedDeviceId = readDeviceIdFromUrl();
       const TASK_REORDER_STEP = 1000;
       const TASK_REORDER_MIN_GAP = 1e-6;
       const el = (id) => document.getElementById(id);
@@ -2216,6 +2438,22 @@
         const row = event.target.closest("[data-device-id]");
         if (!row) return;
         await selectDevice(row.dataset.deviceId || null);
+      });
+      el("device-detail").addEventListener("click", async (event) => {
+        const scanButton = event.target.closest("button[data-device-scan]");
+        if (scanButton) {
+          await scanDevice(scanButton.dataset.deviceScan);
+          return;
+        }
+        const deleteButton = event.target.closest("button[data-device-delete]");
+        if (deleteButton) {
+          await deleteDevice(deleteButton.dataset.deviceDelete);
+          return;
+        }
+        const inviteButton = event.target.closest("button[data-device-invite]");
+        if (inviteButton) {
+          await generateDeviceInvite();
+        }
       });
       el("messages").addEventListener("click", async (event) => {
         const reactBtn = event.target.closest("button[data-message-react]");
@@ -2504,13 +2742,13 @@
           return;
         }
         const selectedId = getSelectedDeviceId();
-        el("devices").innerHTML = devices.map((device) => {
-          const active = device.id === selectedId ? " active" : "";
-          const status = device.status === "online" ? "在线" : device.status || "未知";
-          return `<li><button class="nav-row${active}" type="button" data-device-id="${escapeHtml(device.id)}">
-            <span>▱</span><span class="primary">${escapeHtml(device.name || device.id)}</span><span class="meta">${escapeHtml(status)}</span>
-          </button></li>`;
-        }).join("");
+        const groups = groupDevicesByOwner(devices);
+        el("devices").innerHTML = `<li class="device-list">${groups.map((group) => `
+          <div class="device-owner-group">
+            <div class="device-owner-label"><span>${escapeHtml(group.ownerName)}</span><span>${group.devices.length}</span></div>
+            ${group.devices.map((device) => renderDeviceRow(device, selectedId)).join("")}
+          </div>
+        `).join("")}</li>`;
       }
 
       function renderRuntimes(runtimes) {
@@ -2521,6 +2759,8 @@
         const nextDeviceId = deviceId || null;
         const changed = state.selectedDeviceId !== nextDeviceId;
         state.selectedDeviceId = nextDeviceId;
+        if (changed) state.generatedDeviceInviteCommand = null;
+        updateDevicePath(nextDeviceId);
         if (!nextDeviceId) {
           state.deviceDetail = null;
           state.deviceDetailId = null;
@@ -2552,9 +2792,61 @@
         if (ack.ok && ack.device) {
           state.deviceDetail = ack.device;
           state.deviceDetailError = null;
+          await loadDeviceAgents(deviceId);
         } else {
           state.deviceDetail = null;
           state.deviceDetailError = ack.error || "设备详情不可用";
+        }
+        renderDeviceDetail();
+      }
+
+      async function loadDeviceAgents(deviceId) {
+        if (!state.user || !state.team || !deviceId) return;
+        const ack = await emit("device:agents:list", { userId: state.user.id, teamId: state.team.id, deviceId });
+        if (state.deviceDetailId !== deviceId) return;
+        if (ack.ok) {
+          delete state.deviceAgentErrorsByDevice[deviceId];
+          if (Array.isArray(ack.agents)) state.deviceAgentsByDevice[deviceId] = ack.agents;
+          if (Array.isArray(ack.runtimes)) state.runtimesByDevice[deviceId] = ack.runtimes;
+          return;
+        }
+        state.deviceAgentErrorsByDevice[deviceId] = ack.error || "设备 Agent 列表不可用";
+      }
+
+      async function scanDevice(deviceId) {
+        if (!state.user || !state.team || !deviceId) return;
+        const ack = await emit("device:scan", { userId: state.user.id, teamId: state.team.id, deviceId });
+        if (ack.ok) {
+          await loadDeviceAgents(deviceId);
+          render();
+        }
+      }
+
+      async function deleteDevice(deviceId) {
+        if (!state.user || !deviceId) return;
+        const device = state.devices.find((item) => item.id === deviceId) || state.deviceDetail;
+        const label = deviceDisplayName(device || { id: deviceId });
+        if (!window.confirm(`删除设备「${label}」会永久移除该设备及其 Agent，确定继续吗？`)) return;
+        const ack = await emit("device:delete", { userId: state.user.id, id: deviceId, deviceId });
+        if (!ack.ok) return;
+        state.devices = state.devices.filter((item) => item.id !== deviceId);
+        delete state.runtimesByDevice[deviceId];
+        delete state.deviceAgentsByDevice[deviceId];
+        delete state.deviceAgentErrorsByDevice[deviceId];
+        if (state.selectedDeviceId === deviceId) {
+          state.selectedDeviceId = getVisibleDevices()[0]?.id || null;
+          state.deviceDetail = null;
+          state.deviceDetailId = null;
+          state.deviceDetailError = null;
+        }
+        render();
+      }
+
+      async function generateDeviceInvite() {
+        if (!state.user || !state.team) return;
+        const ack = await emit("device-invite:create", { userId: state.user.id, teamId: state.team.id, purpose: "device" });
+        if (ack.ok && ack.invite?.command) {
+          state.generatedDeviceInviteCommand = ack.invite.command;
         }
         renderDeviceDetail();
       }
@@ -2579,13 +2871,212 @@
         }
         const device = state.deviceDetail;
         const sys = device.systemInfo || {};
-        const sysLine = [sys.hostname, sys.platform, sys.arch].filter(Boolean).map(escapeHtml).join(" · ") || "—";
         const snapshotAgents = state.agents.filter((agent) => agent.deviceId === state.selectedDeviceId);
-        const boundAgents = state.agentsLoaded ? snapshotAgents : device.agents || [];
-        const agentNames = boundAgents.map((agent) => escapeHtml(agent.name || agent.id)).join("、") || "无";
-        panel.innerHTML = `<div class="rail-heading"><h2>设备详情</h2><span class="meta">${escapeHtml(device.name || device.id)}</span></div>
-          <div class="meta">系统：${sysLine}</div>
-          <div class="meta">Agent：${agentNames}</div>`;
+        const hasLoadedDeviceAgents = Object.prototype.hasOwnProperty.call(state.deviceAgentsByDevice, device.id);
+        const boundAgents = hasLoadedDeviceAgents
+          ? state.deviceAgentsByDevice[device.id]
+          : state.agentsLoaded
+            ? snapshotAgents
+            : device.agents || [];
+        const runtimes = sortRuntimesForPreview(state.runtimesByDevice[device.id] || device.runtimes || []);
+        const agentosAgents = boundAgents.filter((agent) => agent.category === "agentos-hosted");
+        const customAgents = boundAgents.filter((agent) => agent.category !== "agentos-hosted");
+        const canManage = canManageDevice(device);
+        const isOwner = isOwnedByCurrentUser(device);
+        const daemon = daemonVersionDisplay(device);
+        const deviceName = deviceDisplayName(device);
+        panel.innerHTML = `<div class="device-panel">
+          <div class="device-hero">
+            <div class="device-icon">▱</div>
+            <div class="device-title-block">
+              <div class="rail-heading"><h2>${escapeHtml(deviceName)}</h2><span class="meta">${escapeHtml(device.id)}</span></div>
+              ${renderStatusPill(device.status)}
+              ${daemon.updateAvailable ? `<div class="meta">Daemon ${escapeHtml(daemon.currentLabel)} 可升级到 ${escapeHtml(daemon.latestLabel || "最新版本")}</div>` : ""}
+            </div>
+          </div>
+          <section class="device-section">
+            <h3>信息</h3>
+            <dl class="device-detail-grid">
+              ${renderDeviceFact("设备 ID", device.id)}
+              ${renderDeviceFact("所有者", deviceOwnerName(device))}
+              ${renderDeviceFact("最后在线", formatDateTime(device.lastSeenAt))}
+              ${renderDeviceFact("Daemon 版本", daemon.updateAvailable ? `${daemon.currentLabel}（有更新版本）` : daemon.currentLabel, daemon.updateAvailable ? "danger" : "")}
+            </dl>
+          </section>
+          ${renderSystemInfo(sys, daemon)}
+          ${renderConnectCommand(device, isOwner)}
+          <section class="device-section">
+            <div class="rail-heading"><h3>运行时</h3>${canManage ? `<button type="button" class="secondary" data-device-scan="${escapeHtml(device.id)}">扫描</button>` : ""}</div>
+            ${renderRuntimeList(runtimes)}
+          </section>
+          ${renderAgentSection("AgentOS 托管型 Agent", "由 OpenClaw、Hermes 等 AgentOS 网关托管", agentosAgents)}
+          ${renderAgentSection("自定义 Agent", "使用 Claude Code、Codex CLI、Gemini CLI 等运行时创建", customAgents)}
+          ${state.deviceAgentErrorsByDevice[device.id] ? `<div class="rail-muted">Agent 列表加载失败：${escapeHtml(state.deviceAgentErrorsByDevice[device.id])}</div>` : ""}
+          ${canManage ? `<section class="device-section">
+            <h3>操作</h3>
+            <div class="device-actions">
+              <button class="danger-button" type="button" data-device-delete="${escapeHtml(device.id)}">删除设备</button>
+            </div>
+          </section>` : ""}
+        </div>`;
+      }
+
+      function renderDeviceRow(device, selectedId) {
+        const active = device.id === selectedId ? " active" : "";
+        const statusKey = statusClass(device.status);
+        const daemon = daemonVersionDisplay(device);
+        return `<button class="device-row${active}" type="button" data-device-id="${escapeHtml(device.id)}">
+          <span class="device-status-dot ${statusKey}"></span>
+          <span class="device-row-main">
+            <span class="device-row-title">${escapeHtml(deviceDisplayName(device))}</span>
+            <span class="meta">daemon ${escapeHtml(daemon.currentLabel)}${daemon.updateAvailable ? " · 可升级" : ""}</span>
+          </span>
+          <span class="meta">${escapeHtml(statusLabel(device.status))}</span>
+        </button>`;
+      }
+
+      function groupDevicesByOwner(devices) {
+        const groups = new Map();
+        for (const device of devices) {
+          const ownerName = deviceOwnerName(device);
+          const list = groups.get(ownerName) || [];
+          list.push(device);
+          groups.set(ownerName, list);
+        }
+        return Array.from(groups.entries())
+          .map(([ownerName, list]) => ({ ownerName, devices: list.slice().sort(compareDevices) }))
+          .sort((left, right) => left.ownerName.localeCompare(right.ownerName, "zh-CN", { sensitivity: "base", numeric: true }));
+      }
+
+      function compareDevices(left, right) {
+        return deviceDisplayName(left).localeCompare(deviceDisplayName(right), "zh-CN", { sensitivity: "base", numeric: true }) ||
+          String(left.teamId || left.networkId || "").localeCompare(String(right.teamId || right.networkId || ""), "zh-CN", { sensitivity: "base", numeric: true }) ||
+          String(left.id).localeCompare(String(right.id));
+      }
+
+      function deviceDisplayName(device) {
+        return String(device?.hostname || device?.name || device?.systemInfo?.hostname || device?.id || "未命名设备").trim();
+      }
+
+      function deviceOwnerName(device) {
+        return String(device?.ownerName || device?.userName || device?.ownerId || device?.userId || "未知用户").trim();
+      }
+
+      function isOwnedByCurrentUser(device) {
+        return Boolean(state.user?.id && (device?.ownerId === state.user.id || device?.userId === state.user.id));
+      }
+
+      function canManageDevice(device) {
+        return Boolean(device?.canManage || state.user?.role === "admin" || state.user?.role === "owner" || isOwnedByCurrentUser(device));
+      }
+
+      function formatDateTime(value) {
+        if (!value) return "—";
+        try {
+          return new Date(value).toLocaleString("zh-CN", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
+        } catch {
+          return String(value);
+        }
+      }
+
+      function statusLabel(status) {
+        if (status === "online") return "在线";
+        if (status === "busy") return "忙碌";
+        if (status === "offline") return "离线";
+        if (status === "connecting") return "连接中";
+        if (status === "error") return "异常";
+        return status || "未知";
+      }
+
+      function statusClass(status) {
+        return ["online", "busy", "offline", "connecting", "error"].includes(status) ? status : "unknown";
+      }
+
+      function renderStatusPill(status) {
+        const key = statusClass(status);
+        return `<span class="status-pill ${key}"><span class="device-status-dot ${key}"></span>${escapeHtml(statusLabel(status))}</span>`;
+      }
+
+      function daemonVersionDisplay(device) {
+        const info = device?.daemonVersionInfo || {};
+        const current = info.current || device?.systemInfo?.daemonVersion || device?.daemonVersion || null;
+        const latest = info.latest || device?.latestDaemonVersion || null;
+        const updateAvailable = Boolean(info.updateAvailable || device?.daemonUpdateAvailable);
+        return {
+          currentLabel: current ? `v${String(current).replace(/^v/, "")}` : "unknown",
+          latestLabel: latest ? `v${String(latest).replace(/^v/, "")}` : "",
+          updateAvailable,
+        };
+      }
+
+      function renderDeviceFact(label, value, tone = "") {
+        const className = tone ? ` device-fact-${tone}` : "";
+        return `<div class="device-fact${className}"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value || "—")}</dd></div>`;
+      }
+
+      function renderSystemInfo(sys, daemon) {
+        const rows = [
+          sys.osVersion ? ["操作系统", sys.osVersion] : null,
+          sys.platform ? ["平台", sys.platform] : null,
+          sys.arch ? ["架构", sys.arch] : null,
+          sys.cpuModel ? ["CPU", sys.cpuModel] : null,
+          sys.cpuCores ? ["CPU 核心", `${sys.cpuCores} 核`] : null,
+          sys.totalMemoryGB ? ["总内存", `${sys.totalMemoryGB} GB`] : null,
+          sys.freeMemoryGB ? ["可用内存", `${sys.freeMemoryGB} GB`] : null,
+          sys.nodeVersion ? ["Node.js", sys.nodeVersion] : null,
+          sys.hostname ? ["主机名", sys.hostname] : null,
+          daemon.latestLabel ? ["Daemon latest", daemon.latestLabel] : null,
+        ].filter(Boolean);
+        if (rows.length === 0) return "";
+        return `<section class="device-section"><h3>硬件信息</h3><dl class="device-detail-grid">${rows.map(([label, value]) => renderDeviceFact(label, value)).join("")}</dl></section>`;
+      }
+
+      function renderConnectCommand(device, isOwner) {
+        if (!isOwner || device.status !== "offline") return "";
+        const command = device.connectCommand || state.generatedDeviceInviteCommand;
+        return `<section class="device-section">
+          <div class="rail-heading"><h3>连接命令</h3>${!command ? `<button type="button" class="secondary" data-device-invite="true">生成</button>` : ""}</div>
+          ${command ? `<p class="meta">使用以下命令重新启动此设备上的 Daemon：</p><code class="device-command">${escapeHtml(command)}</code>` : `<div class="rail-muted">该离线设备暂无持久化连接命令，可生成新的设备邀请命令。</div>`}
+        </section>`;
+      }
+
+      function renderRuntimeList(runtimes) {
+        if (!runtimes || runtimes.length === 0) {
+          return `<div class="rail-muted">暂无运行时。点击扫描后会读取该设备上的 Codex / Claude / Gemini CLI。</div>`;
+        }
+        return `<div class="device-agent-list">${runtimes.map((runtime) => `<div class="device-agent-row">
+          <div class="device-agent-head"><strong>${escapeHtml(runtime.name || runtime.adapterKind || runtime.id || "Runtime")}</strong><span class="meta">${runtime.installed === false ? "未安装" : "可用"}</span></div>
+          <div class="meta">${escapeHtml(runtime.command || runtime.adapterKind || "未记录命令")}</div>
+        </div>`).join("")}</div>`;
+      }
+
+      function renderAgentSection(title, subtitle, agents) {
+        return `<section class="device-section">
+          <div><h3>${escapeHtml(title)}</h3><div class="meta">${escapeHtml(subtitle)}</div></div>
+          ${renderDeviceAgents(agents)}
+        </section>`;
+      }
+
+      function renderDeviceAgents(agents) {
+        if (!agents || agents.length === 0) {
+          return `<div class="rail-muted">暂无 Agent。</div>`;
+        }
+        return `<div class="device-agent-list">${agents.map((agent) => {
+          const publishCount = Array.isArray(agent.publishedNetworkIds || agent.visibleTeamIds)
+            ? (agent.publishedNetworkIds || agent.visibleTeamIds).length
+            : 0;
+          const meta = [
+            statusLabel(agent.status),
+            agent.adapterKind || agent.source || agent.category,
+            agent.cwd,
+            publishCount > 0 ? `已发布到 ${publishCount} 个团队` : null,
+          ].filter(Boolean).join(" · ");
+          return `<div class="device-agent-row">
+            <div class="device-agent-head"><strong>${escapeHtml(agent.name || agent.id)}</strong>${renderStatusPill(agent.status)}</div>
+            <div class="meta">${escapeHtml(meta || agent.id)}</div>
+            ${agent.description ? `<div class="meta">${escapeHtml(agent.description)}</div>` : ""}
+          </div>`;
+        }).join("")}</div>`;
       }
 
       function renderAgents() {
@@ -3380,6 +3871,31 @@
         }
       }
 
+      function readDeviceIdFromUrl() {
+        try {
+          const url = new URL(window.location.href);
+          const match = url.pathname.match(/\/devices\/([^/]+)\/?$/);
+          return match?.[1] ? decodeURIComponent(match[1]) : null;
+        } catch {
+          return null;
+        }
+      }
+
+      function updateDevicePath(deviceId) {
+        try {
+          const url = new URL(window.location.href);
+          if (!url.pathname.includes("/devices")) return;
+          const nextPath = deviceId
+            ? url.pathname.replace(/\/devices(?:\/[^/]+)?\/?$/, `/devices/${encodeURIComponent(deviceId)}`)
+            : url.pathname.replace(/\/devices\/[^/]+\/?$/, "/devices");
+          if (nextPath !== url.pathname) {
+            window.history.replaceState(null, "", `${nextPath}${url.search}${url.hash}`);
+          }
+        } catch {
+          // Route mirroring is best-effort in the static preview harness.
+        }
+      }
+
       function getWorkspaceRunArtifacts(artifacts, workspaceRun) {
         if (!workspaceRun) return [];
         const runArtifactIds = new Set(Array.isArray(workspaceRun.artifactIds) ? workspaceRun.artifactIds : []);
@@ -3469,7 +3985,8 @@
       function getVisibleDevices() {
         const byStableKey = new Map();
         for (const device of state.devices) {
-          const key = device.machineId || (device.profileId && device.name ? `${device.profileId}:${device.name}` : device.name || device.id);
+          const name = device.hostname || device.name || device.systemInfo?.hostname;
+          const key = device.machineId || (device.profileId && name ? `${device.profileId}:${name}` : name || device.id);
           const previous = byStableKey.get(key);
           if (!previous || devicePreviewScore(device) > devicePreviewScore(previous)) {
             byStableKey.set(key, device);
@@ -3577,7 +4094,13 @@
         state.channels = [];
         state.devices = [];
         state.runtimesByDevice = {};
+        state.deviceAgentsByDevice = {};
+        state.deviceAgentErrorsByDevice = {};
         state.selectedDeviceId = null;
+        state.deviceDetail = null;
+        state.deviceDetailId = null;
+        state.deviceDetailError = null;
+        state.generatedDeviceInviteCommand = null;
         state.agents = [];
         state.agentsLoaded = false;
         state.messages = [];
