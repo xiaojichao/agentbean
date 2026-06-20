@@ -1,7 +1,7 @@
 'use client';
 
-import DevicesPage from '../page';
+import DevicesView from '../devices-view';
 
 export default function DeviceDetailPage() {
-  return <DevicesPage />;
+  return <DevicesView standalone />;
 }
