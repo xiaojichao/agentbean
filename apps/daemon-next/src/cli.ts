@@ -8,7 +8,7 @@ import { collectSystemInfo, readDaemonVersion } from './system-info.js';
 import { createCommandExecutor } from './executor.js';
 import { createDaemonProtocolClient, createHttpEnvResolver, type DaemonDeviceConfig, type DaemonProtocolSocket } from './index.js';
 import { loadYamlConfig } from './config.js';
-import { loadAuth, saveAuth, type AuthData } from './auth-store.js';
+import { listAuthProfiles, loadAuth, saveAuth, type AuthData, type AuthProfile } from './auth-store.js';
 
 interface SocketIoClientLike {
   connected: boolean;
@@ -29,7 +29,21 @@ export interface DaemonNextCliConfig {
   hostname: string;
   fallbackPrefix: string;
   configPath?: string;
+  /**
+   * When true, runDaemonNextCli enumerates every saved auth profile via
+   * listAuthProfiles() and starts one daemon instance per profile
+   * concurrently (each with allProfiles cleared and profileId overridden).
+   * The all-profiles branch runs BEFORE connectSocketIoClient so it never
+   * opens a socket itself; each recursion opens its own.
+   */
+  allProfiles?: boolean;
 }
+
+/**
+ * Boolean (value-less) CLI flags. parseArgs treats every other `--flag` as
+ * `--flag value`, so these must be recognised and not consume the next arg.
+ */
+const BOOLEAN_FLAGS = new Set(['all-profiles']);
 
 export interface ParseDaemonNextCliConfigInput {
   argv?: string[];
@@ -41,7 +55,7 @@ export interface ParseDaemonNextCliConfigInput {
 export function parseDaemonNextCliConfig(input: ParseDaemonNextCliConfigInput = {}): DaemonNextCliConfig {
   const argv = input.argv ?? process.argv.slice(2);
   const env = input.env ?? process.env;
-  const args = parseArgs(argv);
+  const { args, booleanFlags } = parseArgs(argv);
   // Resolve the YAML config path. A missing or corrupt file returns null from
   // loadYamlConfig, in which case yaml is treated as "no config" and we fall
   // through to env / built-in default — matching the config.ts contract.
@@ -71,7 +85,29 @@ export function parseDaemonNextCliConfig(input: ParseDaemonNextCliConfigInput = 
     fallbackPrefix:
       args['fallback-prefix'] ?? env.AGENTBEAN_NEXT_FALLBACK_PREFIX ?? yamlString('fallbackPrefix') ?? 'daemon-next:',
     ...(configPath ? { configPath } : {}),
+    ...(booleanFlags['all-profiles'] ? { allProfiles: true } : {}),
   };
+}
+
+/**
+ * Pure expansion of `--all-profiles` into one DaemonNextCliConfig per saved
+ * profile. Each sub-config inherits the parent config, overrides `profileId`
+ * with the profile's, and clears `allProfiles` so the recursion does not
+ * re-expand. The empty case is the caller's responsibility (runDaemonNextCli
+ * exits with a clear error before reaching here) — this function returns an
+ * empty array when given no profiles, which keeps it total and trivially
+ * unit-testable without mocking the auth store.
+ *
+ * Extracted so the orchestration logic is testable in isolation: the actual
+ * runDaemonNextCli wiring cannot be exercised end-to-end in Vitest (see the
+ * socket-seam NOTE in cli.test.ts), but this helper covers the core decision.
+ */
+export function expandAllProfiles(config: DaemonNextCliConfig, profiles: AuthProfile[]): DaemonNextCliConfig[] {
+  return profiles.map((profile) => ({
+    ...config,
+    profileId: profile.profileId,
+    allProfiles: false,
+  }));
 }
 
 export function createSocketIoDaemonSocket(socket: SocketIoClientLike): DaemonProtocolSocket {
@@ -207,6 +243,45 @@ export function resolveDeviceCredentials(
 }
 
 export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemonNextCliConfig()): Promise<void> {
+  // --all-profiles branch runs BEFORE connectSocketIoClient: it never opens a
+  // socket itself, it just fans out one runDaemonNextCli recursion per saved
+  // profile. Each recursion clears allProfiles and overrides profileId, then
+  // takes the normal single-profile path (including its own loadAuth(profileId)
+  // for token injection — Decision 1 in the Task 5 plan). The repeated
+  // createBuiltinScanProvider() per recursion is accepted (Decision 2).
+  if (config.allProfiles) {
+    const profiles = listAuthProfiles();
+    if (profiles.length === 0) {
+      // Throw (don't process.exit) so bin.ts's top-level .catch handles this
+      // uniformly with every other failure path in runDaemonNextCli. The thrown
+      // error surfaces via that handler and makes the empty-list path testable
+      // without mocking process.exit.
+      throw new Error('No saved AgentBean team profiles found. Initialize one first with --invite-code.');
+    }
+    // allSettled + per-profile catch so one bad profile cannot tear down the
+    // fleet: a sibling connect failure is logged and recorded as 'rejected'
+    // without killing other in-flight daemons (spec error-handling table:
+    // "某 profile 连接失败 → 独立 catch，不拖垮其他").
+    const subConfigs = expandAllProfiles(config, profiles);
+    const results = await Promise.allSettled(
+      subConfigs.map((subConfig) =>
+        runDaemonNextCli(subConfig).catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`[all-profiles] profile ${subConfig.profileId} failed to start: ${message}`);
+          throw error; // re-throw so allSettled records it as 'rejected'
+        }),
+      ),
+    );
+    const failedCount = results.filter((r) => r.status === 'rejected').length;
+    if (failedCount === results.length) {
+      // Every profile failed — nothing is running. Exit non-zero so a
+      // supervisor (systemd/pm2) restarts.
+      process.exitCode = 1;
+    }
+    // Otherwise at least one profile's daemon is up; keep the process alive.
+    return;
+  }
+
   const socket = await connectSocketIoClient(config.serverUrl);
   const protocolSocket = createSocketIoDaemonSocket(socket);
   const snapshot = await createBuiltinScanProvider()();
@@ -361,22 +436,27 @@ function loadSocketIoClient(): { io(url: string, options?: Record<string, unknow
   throw new Error('socket.io-client is not installed; run npm ci in apps/server or provide a workspace install');
 }
 
-function parseArgs(argv: string[]): Record<string, string> {
-  const parsed: Record<string, string> = {};
+function parseArgs(argv: string[]): { args: Record<string, string>; booleanFlags: Record<string, true> } {
+  const args: Record<string, string> = {};
+  const booleanFlags: Record<string, true> = {};
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (!arg?.startsWith('--')) {
       continue;
     }
     const key = arg.slice(2);
+    if (BOOLEAN_FLAGS.has(key)) {
+      booleanFlags[key] = true;
+      continue;
+    }
     const value = argv[index + 1];
     if (!value || value.startsWith('--')) {
       throw new Error(`Missing value for --${key}`);
     }
-    parsed[key] = value;
+    args[key] = value;
     index += 1;
   }
-  return parsed;
+  return { args, booleanFlags };
 }
 
 function trimTrailingSlash(value: string): string {
