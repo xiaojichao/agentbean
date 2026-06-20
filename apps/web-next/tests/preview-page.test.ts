@@ -1265,6 +1265,10 @@ describe('web-next preview page interactions', () => {
   test('delays device scan refresh instead of immediately re-caching stale agents', async () => {
     const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
     const device = { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'online', name: 'MacBook Pro' };
+    const oldAgent = { id: 'old-agent', name: 'Old Agent', category: 'custom', status: 'offline', deviceId: 'device-1' };
+    const oldRuntime = { id: 'runtime-old', name: 'Old Runtime', adapterKind: 'custom', command: 'old', installed: true };
+    const newAgent = { id: 'new-agent', name: 'New Agent', category: 'custom', status: 'online', deviceId: 'device-1' };
+    const newRuntime = { id: 'runtime-codex', name: 'Codex CLI', adapterKind: 'codex', command: 'codex', installed: true };
     let agentListCalls = 0;
     const harness = createPreviewHarness({
       'auth:register': () => ({
@@ -1275,23 +1279,19 @@ describe('web-next preview page interactions', () => {
         defaultChannel,
       }),
       'device:list': () => ({ ok: true, devices: [] }),
-      'agents:subscribe': () => ({ ok: true, agents: [] }),
+      'agents:subscribe': () => ({ ok: true, agents: [oldAgent] }),
       'channels:subscribe': () => ({ ok: true, channels: [defaultChannel] }),
       'task:list': () => ({ ok: true, tasks: [] }),
       'join:list': () => ({ ok: true, links: [] }),
       'device:get': () => ({
         ok: true,
-        device: { ...device, agents: [{ id: 'old-agent', name: 'Old Agent', category: 'custom', status: 'offline' }] },
+        device: { ...device, agents: [oldAgent], runtimes: [oldRuntime] },
       }),
       'device:agents:list': () => {
         agentListCalls += 1;
-        return agentListCalls === 1
-          ? { ok: true, agents: [{ id: 'old-agent', name: 'Old Agent', category: 'custom', status: 'offline' }], runtimes: [] }
-          : {
-              ok: true,
-              agents: [{ id: 'new-agent', name: 'New Agent', category: 'custom', status: 'online' }],
-              runtimes: [{ id: 'runtime-codex', name: 'Codex CLI', adapterKind: 'codex', command: 'codex', installed: true }],
-            };
+        return agentListCalls <= 2
+          ? { ok: true, agents: [oldAgent], runtimes: [oldRuntime] }
+          : { ok: true, agents: [newAgent], runtimes: [newRuntime] };
       },
       'device:scan': () => ({ ok: true }),
     });
@@ -1304,11 +1304,22 @@ describe('web-next preview page interactions', () => {
 
     expect(harness.emitted.filter(([event]) => event === 'device:agents:list')).toHaveLength(1);
     expect(harness.element('device-detail').innerHTML).not.toContain('Old Agent');
+    expect(harness.element('agent-create-form:runtimeId').innerHTML).not.toContain('Old Runtime');
     expect(harness.element('device-detail').innerHTML).not.toContain('New Agent');
+
+    await harness.socket.trigger('agents:snapshot', [oldAgent]);
+    expect(harness.element('device-detail').innerHTML).not.toContain('Old Agent');
 
     await harness.runTimers();
 
     expect(harness.emitted.filter(([event]) => event === 'device:agents:list')).toHaveLength(2);
+    expect(harness.element('device-detail').innerHTML).not.toContain('Old Agent');
+    expect(harness.element('agent-create-form:runtimeId').innerHTML).not.toContain('Old Runtime');
+    expect(harness.element('device-detail').innerHTML).not.toContain('New Agent');
+
+    await harness.runTimers();
+
+    expect(harness.emitted.filter(([event]) => event === 'device:agents:list')).toHaveLength(3);
     expect(harness.element('device-detail').innerHTML).toContain('New Agent');
     expect(harness.element('agent-create-form:runtimeId').innerHTML).toContain('Codex CLI');
   });
