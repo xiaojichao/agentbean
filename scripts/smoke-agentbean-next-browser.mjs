@@ -396,7 +396,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       check(
         'webui-runs-business-flow',
         true,
-        `Created workspace run "${runResult.command}" and verified runs list plus detail route`,
+        `Created workspace run "${runResult.command}" and verified list, detail route, full log artifact, artifact tree, inline log search, and source message jump`,
       ),
     );
 
@@ -1060,6 +1060,7 @@ export async function exerciseWebUiRunsBusinessSmoke({
   const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-32);
   const workspaceRunId = `webui-run-${safeSuffix}`;
   const logArtifactId = `webui-log-${safeSuffix}`;
+  const summaryArtifactId = `webui-summary-${safeSuffix}`;
   const command = `agentbean-webui-smoke workspace ${safeSuffix}`;
   const logExcerpt = [
     'starting WebUI workspace run smoke',
@@ -1077,13 +1078,22 @@ export async function exerciseWebUiRunsBusinessSmoke({
       const completedAt = Date.now();
       return {
         body: `browser-smoke:${request.prompt}`,
-        artifacts: [{
-          id: logArtifactId,
-          filename: 'workspace-run.log',
-          mimeType: 'text/plain',
-          relativePath: 'logs/workspace-run.log',
-          contentBase64: Buffer.from(logExcerpt).toString('base64'),
-        }],
+        artifacts: [
+          {
+            id: logArtifactId,
+            filename: 'workspace-run.log',
+            mimeType: 'text/plain',
+            relativePath: 'logs/workspace-run.log',
+            contentBase64: Buffer.from(logExcerpt).toString('base64'),
+          },
+          {
+            id: summaryArtifactId,
+            filename: 'summary.md',
+            mimeType: 'text/markdown',
+            relativePath: 'outputs/summary.md',
+            contentBase64: Buffer.from(`# Workspace smoke\n\n${command}\n`).toString('base64'),
+          },
+        ],
         workspaceRun: {
           id: workspaceRunId,
           cwd: '/tmp/agentbean-webui-smoke',
@@ -1121,11 +1131,12 @@ export async function exerciseWebUiRunsBusinessSmoke({
       throw new Error(`WebUI runs smoke could not create a custom agent: ${formatAck(agentAck)}`);
     }
 
+    const sourceMessageBody = `@${agentName} produce workspace run`;
     const sendAck = await emitAck(webSocket, WEB_EVENTS.message.send, {
       userId: session.user.id,
       teamId: session.team.id,
       channelId: session.channel.id,
-      body: `@${agentName} produce workspace run`,
+      body: sourceMessageBody,
     }, timeoutMs);
     const dispatchId = Array.isArray(sendAck?.dispatches) ? sendAck.dispatches[0]?.id : undefined;
     if (typeof dispatchId !== 'string') {
@@ -1149,9 +1160,24 @@ export async function exerciseWebUiRunsBusinessSmoke({
       throw new Error(`Could not open the workspace run detail link for "${command}"`);
     }
     await waitForWebUiWorkspaceRunDetail({ page, command, timeoutMs });
+    await waitForWebUiWorkspaceRunFullLog({ page, artifactId: logArtifactId, timeoutMs });
+    await waitForWebUiWorkspaceRunArtifactTree({ page, summaryArtifactId, timeoutMs });
+    await waitForWebUiWorkspaceRunSourceMessageLink({ page, timeoutMs });
+    await page.click('[data-smoke="workspace-run-full-log-load"]');
+    await waitForWebUiWorkspaceRunInlineLog({ page, expectedText: 'finished WebUI workspace run smoke', timeoutMs });
+    await page.setInputValue('[data-smoke="workspace-run-full-log-search"]', 'finished');
+    await page.click('[data-smoke="workspace-run-full-log-search-submit"]');
+    await waitForWebUiWorkspaceRunInlineLogSearch({ page, expectedText: 'finished WebUI workspace run smoke', timeoutMs });
     await page.reload();
     await waitForWebUiWorkspaceRunDetail({ page, command, timeoutMs });
-    return { id: workspaceRunId, command, dispatchId };
+    await waitForWebUiWorkspaceRunFullLog({ page, artifactId: logArtifactId, timeoutMs });
+    await waitForWebUiWorkspaceRunArtifactTree({ page, summaryArtifactId, timeoutMs });
+    await waitForWebUiWorkspaceRunSourceMessageLink({ page, timeoutMs });
+    await page.click('[data-smoke="workspace-run-full-log-load"]');
+    await waitForWebUiWorkspaceRunInlineLog({ page, expectedText: 'finished WebUI workspace run smoke', timeoutMs });
+    await page.click('[data-smoke="workspace-run-source-message-link"]');
+    await waitForWebUiWorkspaceRunSourceMessage({ page, expectedText: sourceMessageBody, timeoutMs });
+    return { id: workspaceRunId, command, dispatchId, logArtifactId, summaryArtifactId };
   } finally {
     daemon.socket.disconnect?.();
   }
@@ -1184,6 +1210,124 @@ async function waitForWebUiWorkspaceRunDetail({ page, command, timeoutMs }) {
     })()
     `,
     `workspace run "${command}" detail to render`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiWorkspaceRunFullLog({ page, artifactId, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const artifactId = ${JSON.stringify(artifactId)};
+      const panel = document.querySelector('[data-smoke="workspace-run-full-log"]');
+      const preview = document.querySelector('[data-smoke="workspace-run-full-log-preview"]');
+      const download = document.querySelector('[data-smoke="workspace-run-full-log-download"]');
+      return Boolean(panel)
+        && panel.dataset.artifactId === artifactId
+        && panel.dataset.artifactPath === 'logs/workspace-run.log'
+        && preview?.getAttribute('href')?.includes('/api/teams/')
+        && preview?.getAttribute('href')?.includes('/artifacts/')
+        && preview?.getAttribute('href')?.includes('/preview')
+        && preview?.getAttribute('href')?.includes('token=')
+        && download?.getAttribute('href')?.includes('/download')
+        && download?.getAttribute('href')?.includes('token=');
+    })()
+    `,
+    `workspace run full log artifact "${artifactId}" to render`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiWorkspaceRunArtifactTree({ page, summaryArtifactId, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const summaryArtifactId = ${JSON.stringify(summaryArtifactId)};
+      const tree = document.querySelector('[data-smoke="workspace-run-artifact-tree"]');
+      const dirs = new Set(Array.from(document.querySelectorAll('[data-smoke="workspace-run-artifact-tree-dir"]'))
+        .map((candidate) => candidate.dataset.artifactPath));
+      const files = Array.from(document.querySelectorAll('[data-smoke="workspace-run-artifact-tree-file"]'));
+      const filePaths = new Set(files.map((candidate) => candidate.dataset.artifactPath));
+      const summary = files.find((candidate) => candidate.dataset.artifactId === summaryArtifactId);
+      const summaryHref = summary?.getAttribute('href') ?? '';
+      return tree?.dataset.artifactCount === '2'
+        && tree?.dataset.dirCount === '2'
+        && dirs.has('logs')
+        && dirs.has('outputs')
+        && filePaths.has('logs/workspace-run.log')
+        && filePaths.has('outputs/summary.md')
+        && summaryHref.includes('/api/teams/')
+        && summaryHref.includes('/artifacts/')
+        && summaryHref.includes('/download')
+        && summaryHref.includes('token=');
+    })()
+    `,
+    `workspace run artifact tree to include logs and outputs artifacts`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiWorkspaceRunSourceMessageLink({ page, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const link = document.querySelector('[data-smoke="workspace-run-source-message-link"]');
+      const href = link?.getAttribute('href') ?? '';
+      return href.includes('/channel/') && href.includes('message=');
+    })()
+    `,
+    'workspace run source message link to render',
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiWorkspaceRunSourceMessage({ page, expectedText, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const expectedText = ${JSON.stringify(expectedText)};
+      const selected = document.querySelector('[data-smoke="chat-message"][data-message-selected="true"]');
+      return window.location.pathname.includes('/channel/')
+        && (
+          selected?.dataset.messageBody === expectedText
+          || Boolean(selected?.textContent?.includes(expectedText))
+        );
+    })()
+    `,
+    `workspace run source message "${expectedText}" to render selected`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiWorkspaceRunInlineLog({ page, expectedText, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const expectedText = ${JSON.stringify(expectedText)};
+      const viewer = document.querySelector('[data-smoke="workspace-run-full-log-viewer"]');
+      return Boolean(viewer) && viewer.textContent?.includes(expectedText);
+    })()
+    `,
+    `workspace run inline full log to include "${expectedText}"`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiWorkspaceRunInlineLogSearch({ page, expectedText, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const expectedText = ${JSON.stringify(expectedText)};
+      const viewer = document.querySelector('[data-smoke="workspace-run-full-log-viewer"]');
+      const input = document.querySelector('[data-smoke="workspace-run-full-log-search"]');
+      const count = document.querySelector('[data-smoke="workspace-run-full-log-match-count"]');
+      return input?.value === 'finished'
+        && viewer?.dataset.matchCount === '1'
+        && viewer?.textContent?.includes(expectedText)
+        && count?.textContent?.includes('1 /');
+    })()
+    `,
+    'workspace run inline full log search to filter matching lines',
     timeoutMs,
   );
 }

@@ -698,6 +698,7 @@ describe('server-next dev server entry', () => {
             teamId: 'team-1',
             channelId: 'channel-1',
             messageId: 'message-1',
+            sourceMessageId: 'source-message-1',
             dispatchId: 'dispatch-1',
             agentId: 'agent-1',
             deviceId: 'device-1',
@@ -741,10 +742,82 @@ describe('server-next dev server entry', () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
-      workspaceRun: { id: 'run-1', cwd: '/Users/shaw/AgentBean' },
+      workspaceRun: { id: 'run-1', cwd: '/Users/shaw/AgentBean', sourceMessageId: 'source-message-1' },
       artifacts: [{ id: 'artifact-1', relativePath: 'outputs/result.md' }],
     });
     expect(app.getWorkspaceRunDetail).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      runId: 'run-1',
+    });
+  });
+
+  test('serves bounded workspace run log tail and search over HTTP', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-workspace-log-'));
+    writeFileSync(join(dataDir, 'workspace-run.log'), [
+      'starting workspace run',
+      'install dependencies',
+      'finished workspace run',
+      'done',
+    ].join('\n'));
+    const app = {
+      whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),
+      getWorkspaceRunLogFile: vi.fn(async () =>
+        makeSuccess({
+          artifact: {
+            id: 'log-1',
+            teamId: 'team-1',
+            channelId: 'channel-1',
+            dispatchId: 'dispatch-1',
+            workspaceRunId: 'run-1',
+            filename: 'workspace-run.log',
+            mimeType: 'text/plain',
+            sizeBytes: 78,
+            relativePath: 'logs/workspace-run.log',
+            pathKind: 'workspace',
+            createdAt: 2,
+          },
+          storagePath: 'workspace-run.log',
+        }),
+      ),
+    } as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir, sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+
+    const tail = await fetch(`${server.baseUrl}/api/teams/team-1/workspace-runs/run-1/log?token=token-1&tailLines=2`);
+    expect(tail.status).toBe(200);
+    await expect(tail.json()).resolves.toMatchObject({
+      ok: true,
+      teamId: 'team-1',
+      runId: 'run-1',
+      mode: 'tail',
+      text: 'finished workspace run\ndone',
+      returnedLines: 2,
+      truncated: true,
+      artifact: {
+        id: 'log-1',
+        previewUrl: '/api/teams/team-1/artifacts/log-1/preview',
+        downloadUrl: '/api/teams/team-1/artifacts/log-1/download',
+      },
+    });
+
+    const search = await fetch(`${server.baseUrl}/api/teams/team-1/workspace-runs/run-1/log?token=token-1&query=finished`);
+    expect(search.status).toBe(200);
+    await expect(search.json()).resolves.toMatchObject({
+      ok: true,
+      mode: 'search',
+      text: 'finished workspace run',
+      totalLines: 4,
+      returnedLines: 1,
+      matchedLines: 1,
+      query: 'finished',
+      truncated: false,
+    });
+    expect(app.getWorkspaceRunLogFile).toHaveBeenCalledWith({
       userId: 'user-1',
       teamId: 'team-1',
       runId: 'run-1',

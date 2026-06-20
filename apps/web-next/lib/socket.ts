@@ -1,7 +1,7 @@
 'use client';
 import { WEB_EVENTS } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
-import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunStatus } from './schema.js';
+import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
   artifactUploadFallbackUrls as buildArtifactUploadFallbackUrls,
   artifactUploadProxyUrl as buildArtifactUploadProxyUrl,
@@ -148,6 +148,29 @@ export async function fetchWorkspaceRunDetail(teamId: string, runId: string): Pr
     return await res.json();
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'Failed to fetch workspace run' };
+  }
+}
+
+export async function fetchWorkspaceRunLog(
+  teamId: string,
+  runId: string,
+  options?: { query?: string; tailLines?: number; maxBytes?: number },
+): Promise<WorkspaceRunLogResponse> {
+  try {
+    const params = new URLSearchParams();
+    if (options?.query) params.set('query', options.query);
+    if (options?.tailLines) params.set('tailLines', String(options.tailLines));
+    if (options?.maxBytes) params.set('maxBytes', String(options.maxBytes));
+    const query = params.toString();
+    const path = `/api/teams/${encodeURIComponent(teamId)}/workspace-runs/${encodeURIComponent(runId)}/log${query ? `?${query}` : ''}`;
+    const res = await fetch(authedApiUrl(path));
+    const body = await res.json().catch(() => null) as WorkspaceRunLogResponse | null;
+    if (!res.ok) {
+      return { ok: false, error: body?.error ?? `${res.status} ${res.statusText}` };
+    }
+    return body ?? { ok: false, error: 'Invalid workspace run log response' };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to fetch workspace run log' };
   }
 }
 

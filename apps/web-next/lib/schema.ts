@@ -207,6 +207,7 @@ export interface WorkspaceRunDetail {
   teamId: string;
   channelId: string;
   messageId?: string;
+  sourceMessageId?: string;
   dispatchId: string;
   agentId: string;
   deviceId?: string;
@@ -236,4 +237,19 @@ export interface WorkspaceArtifact {
   pathKind?: string;
   sha256?: string;
   createdAt: number;
+}
+
+export interface WorkspaceRunLogResponse {
+  ok: boolean;
+  teamId?: string;
+  runId?: string;
+  artifact?: WorkspaceArtifact;
+  mode?: 'tail' | 'search';
+  text?: string;
+  totalLines?: number;
+  returnedLines?: number;
+  matchedLines?: number;
+  query?: string;
+  truncated?: boolean;
+  error?: string;
 }

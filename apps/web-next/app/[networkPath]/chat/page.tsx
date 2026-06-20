@@ -2488,6 +2488,7 @@ function ChatBubble({
       id={`message-${msg.id}`}
       data-smoke="chat-message"
       data-message-body={msg.body}
+      data-message-selected={selected ? 'true' : 'false'}
       className={`group relative flex gap-2 rounded-md border px-2 py-2 transition-colors ${
         selected
           ? 'border-amber-400 bg-amber-50/70 shadow-[inset_3px_0_0_#f59e0b]'

@@ -1707,6 +1707,18 @@ describe('server-next first-slice use cases', () => {
       ok: true,
       storagePath: 'artifacts/team-1/artifact-1/result.png',
     });
+    await expect(app.getWorkspaceRunDetail({
+      userId: 'user-1',
+      teamId: 'team-1',
+      runId: 'workspace-run-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      workspaceRun: {
+        id: 'workspace-run-1',
+        messageId: 'reply-1',
+        sourceMessageId: 'message-1',
+      },
+    });
   });
 
   test('receiveDispatchResult is idempotent against same-millisecond duplicate results', async () => {

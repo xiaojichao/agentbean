@@ -102,6 +102,7 @@ export interface ServerNextUseCases {
   getArtifactFileForDevice(input: DeviceGetArtifactInput): Promise<Ack<{ artifact: ArtifactDto; storagePath?: string }>>;
   getWorkspaceRun(input: GetWorkspaceRunInput): Promise<Ack<{ workspaceRun: WorkspaceRunDto }>>;
   getWorkspaceRunDetail(input: GetWorkspaceRunInput): Promise<Ack<{ workspaceRun: WorkspaceRunDto; artifacts: ArtifactDto[] }>>;
+  getWorkspaceRunLogFile(input: GetWorkspaceRunInput): Promise<Ack<{ artifact: ArtifactDto; storagePath?: string }>>;
   listTeamWorkspaceRuns(input: ListTeamWorkspaceRunsInput): Promise<Ack<{ runs: TeamWorkspaceRunListItemDto[]; nextCursor?: string }>>;
   listAgentWorkspaceRuns(input: ListAgentWorkspaceRunsInput): Promise<Ack<{ runs: AgentWorkspaceRunListItemDto[] }>>;
   failTimedOutDispatches(input: { olderThan: number }): Promise<Ack<{ dispatches: DispatchDto[] }>>;
@@ -2349,7 +2350,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async getWorkspaceRun(runInput) {
       const result = await getAuthorizedWorkspaceRun(repositories, runInput);
       if (!result.ok) return result;
-      return makeSuccess({ workspaceRun: result.workspaceRun });
+      return makeSuccess({ workspaceRun: await toWorkspaceRunDto(repositories, result.workspaceRun) });
     },
 
     async getWorkspaceRunDetail(runInput) {
@@ -2357,8 +2358,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!result.ok) return result;
       const artifacts = await repositories.artifacts.listByWorkspaceRun(result.workspaceRun.id);
       return makeSuccess({
-        workspaceRun: result.workspaceRun,
+        workspaceRun: await toWorkspaceRunDto(repositories, result.workspaceRun),
         artifacts: artifacts.map(toArtifactDto),
+      });
+    },
+
+    async getWorkspaceRunLogFile(runInput) {
+      const result = await getAuthorizedWorkspaceRun(repositories, runInput);
+      if (!result.ok) return result;
+      const artifacts = await repositories.artifacts.listByWorkspaceRun(result.workspaceRun.id);
+      const logArtifact = artifacts.find(isWorkspaceRunLogArtifact);
+      if (!logArtifact) {
+        return makeFailure('NOT_FOUND', 'Workspace run log artifact not found');
+      }
+      return makeSuccess({
+        artifact: toArtifactDto(logArtifact),
+        storagePath: logArtifact.storagePath,
       });
     },
 
@@ -3315,6 +3330,20 @@ function toDispatchDto(dispatch: DispatchDto): DispatchDto {
   };
 }
 
+async function toWorkspaceRunDto(
+  repositories: ServerNextRepositories,
+  run: WorkspaceRunRecord,
+): Promise<WorkspaceRunDto> {
+  const dispatch = await repositories.dispatches.getById(run.dispatchId);
+  if (!dispatch?.messageId || dispatch.messageId === run.messageId) {
+    return run;
+  }
+  return {
+    ...run,
+    sourceMessageId: dispatch.messageId,
+  };
+}
+
 function toArtifactDto(artifact: ArtifactRecord): ArtifactDto {
   return {
     id: artifact.id,
@@ -3331,6 +3360,11 @@ function toArtifactDto(artifact: ArtifactRecord): ArtifactDto {
     sha256: artifact.sha256,
     createdAt: artifact.createdAt,
   };
+}
+
+function isWorkspaceRunLogArtifact(artifact: ArtifactRecord): boolean {
+  return artifact.workspaceRunId !== undefined
+    && (artifact.relativePath === 'logs/workspace-run.log' || artifact.filename === 'workspace-run.log');
 }
 
 function toDispatchAttachmentDto(artifact: ArtifactRecord): DispatchAttachmentDto {

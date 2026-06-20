@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
 import { createRequire } from 'node:module';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { createServerNextUseCases, type ArtifactContentStore } from './application/usecases.js';
 import { createInMemoryRepositories } from './infra/memory/repositories.js';
@@ -78,6 +79,8 @@ type NextAppFactory = (options: {
 type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { close(): void };
 
 const MAX_ARTIFACT_UPLOAD_BODY_BYTES = 10 * 1024 * 1024;
+const DEFAULT_WORKSPACE_LOG_TAIL_LINES = 200;
+const MAX_WORKSPACE_LOG_RESPONSE_BYTES = 64 * 1024;
 const ACTIVE_PREVIEW_MIME_TYPES = new Set([
   'application/ecmascript',
   'application/javascript',
@@ -159,6 +162,9 @@ export async function startServerNextDevServer(
       return;
     }
     if (await handleTeamWorkspaceRunsHttp({ app, config, request, response, url })) {
+      return;
+    }
+    if (await handleWorkspaceRunLogHttp({ app, config, request, response, url })) {
       return;
     }
     if (await handleWorkspaceRunHttp({ app, config, request, response, url })) {
@@ -382,6 +388,53 @@ async function handleWorkspaceRunHttp(input: ArtifactHttpInput): Promise<boolean
   return true;
 }
 
+async function handleWorkspaceRunLogHttp(input: ArtifactHttpInput): Promise<boolean> {
+  const match = input.url.pathname.match(/^\/api\/teams\/([^/]+)\/workspace-runs\/([^/]+)\/log$/);
+  if (!match) {
+    return false;
+  }
+  if (input.request.method !== 'GET') {
+    writeJson(input.response, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
+    return true;
+  }
+  const teamId = decodeURIComponent(match[1] ?? '');
+  const runId = decodeURIComponent(match[2] ?? '');
+  const token = readToken(input.url, input.request);
+  const session = token ? await input.app.whoami({ token }) : makeFailure('UNAUTHENTICATED', 'Missing session token');
+  if (!session.ok) {
+    writeAckFailure(input.response, session);
+    return true;
+  }
+  const result = await input.app.getWorkspaceRunLogFile({
+    userId: session.user.id,
+    teamId,
+    runId,
+  });
+  if (!result.ok) {
+    writeAckFailure(input.response, result);
+    return true;
+  }
+  const storedPath = resolveStoredArtifactPath(input, result.storagePath);
+  if (!storedPath.ok) {
+    writeJson(input.response, storedPath.status, storedPath.payload);
+    return true;
+  }
+  const query = readOptionalQueryString(input.url, 'query');
+  const tailLines = clampIntegerQuery(input.url, 'tailLines', DEFAULT_WORKSPACE_LOG_TAIL_LINES, 1, 2000);
+  const maxBytes = clampIntegerQuery(input.url, 'maxBytes', MAX_WORKSPACE_LOG_RESPONSE_BYTES, 1024, MAX_WORKSPACE_LOG_RESPONSE_BYTES);
+  const log = query
+    ? await searchWorkspaceRunLogFile({ absolutePath: storedPath.absolutePath, query, maxBytes })
+    : readWorkspaceRunLogTail({ absolutePath: storedPath.absolutePath, tailLines, maxBytes });
+  writeJson(input.response, 200, {
+    ok: true,
+    teamId,
+    runId,
+    artifact: withArtifactUrls(result.artifact),
+    ...log,
+  });
+  return true;
+}
+
 async function handleArtifactHttp(input: ArtifactHttpInput): Promise<boolean> {
   const match = input.url.pathname.match(/^\/api\/teams\/([^/]+)\/artifacts(?:\/upload|\/([^/]+)\/(preview|download))$/);
   if (!match) {
@@ -456,30 +509,20 @@ async function handleArtifactRead(
     writeAckFailure(input.response, result);
     return;
   }
-  if (!result.storagePath) {
-    writeJson(input.response, 404, { ok: false, error: 'FILE_MISSING' });
+  const stored = readStoredArtifactBody(input, result.storagePath);
+  if (!stored.ok) {
+    writeJson(input.response, stored.status, stored.payload);
     return;
   }
-  const dataRoot = resolve(input.config.dataDir);
-  const absolutePath = resolve(dataRoot, result.storagePath);
-  if (!isPathInside(dataRoot, absolutePath)) {
-    writeJson(input.response, 404, { ok: false, error: 'FILE_MISSING' });
-    return;
-  }
-  if (!existsSync(absolutePath)) {
-    writeJson(input.response, 404, { ok: false, error: 'FILE_MISSING' });
-    return;
-  }
-  const body = readFileSync(absolutePath);
   const disposition = shouldForceArtifactDownload(result.artifact.mimeType)
     ? 'attachment'
     : options.disposition;
   input.response.writeHead(200, {
     'content-type': result.artifact.mimeType,
-    'content-length': String(body.length),
+    'content-length': String(stored.body.length),
     'content-disposition': buildContentDisposition(disposition, result.artifact.filename),
   });
-  input.response.end(body);
+  input.response.end(stored.body);
 }
 
 async function uploadArtifactForSession(
@@ -723,6 +766,14 @@ function readOptionalQueryString(url: URL, field: string): string | undefined {
   return value?.trim() || undefined;
 }
 
+function clampIntegerQuery(url: URL, field: string, fallback: number, min: number, max: number): number {
+  const raw = readOptionalQueryString(url, field);
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
 function parseWorkspaceRunStatus(value: string | null): WorkspaceRunStatus | 'invalid' | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
@@ -753,6 +804,111 @@ function buildContentDisposition(disposition: 'inline' | 'attachment', filename:
 
 function shouldForceArtifactDownload(mimeType: string): boolean {
   return ACTIVE_PREVIEW_MIME_TYPES.has(mimeType.toLowerCase().split(';', 1)[0]?.trim() ?? '');
+}
+
+function readStoredArtifactBody(
+  input: ArtifactHttpInput,
+  storagePath: string | undefined,
+): { ok: true; body: Buffer } | { ok: false; status: number; payload: unknown } {
+  const storedPath = resolveStoredArtifactPath(input, storagePath);
+  if (!storedPath.ok) return storedPath;
+  return { ok: true, body: readFileSync(storedPath.absolutePath) };
+}
+
+function resolveStoredArtifactPath(
+  input: ArtifactHttpInput,
+  storagePath: string | undefined,
+): { ok: true; absolutePath: string } | { ok: false; status: number; payload: unknown } {
+  if (!storagePath) {
+    return { ok: false, status: 404, payload: { ok: false, error: 'FILE_MISSING' } };
+  }
+  const dataRoot = resolve(input.config.dataDir);
+  const absolutePath = resolve(dataRoot, storagePath);
+  if (!isPathInside(dataRoot, absolutePath) || !existsSync(absolutePath)) {
+    return { ok: false, status: 404, payload: { ok: false, error: 'FILE_MISSING' } };
+  }
+  return { ok: true, absolutePath };
+}
+
+function readWorkspaceRunLogTail(input: {
+  absolutePath: string;
+  tailLines: number;
+  maxBytes: number;
+}): {
+  mode: 'tail';
+  text: string;
+  returnedLines: number;
+  truncated: boolean;
+} {
+  const size = statSync(input.absolutePath).size;
+  const readBytes = Math.min(size, input.maxBytes);
+  if (readBytes <= 0) {
+    return { mode: 'tail', text: '', returnedLines: 0, truncated: false };
+  }
+  const fd = openSync(input.absolutePath, 'r');
+  try {
+    const buffer = Buffer.alloc(readBytes);
+    readSync(fd, buffer, 0, readBytes, size - readBytes);
+    const lines = buffer.toString('utf8').split(/\r\n|\r|\n/);
+    const droppedPartialPrefix = size > readBytes && !buffer.toString('utf8').startsWith('\n');
+    const completeLines = droppedPartialPrefix ? lines.slice(1) : lines;
+    const selectedLines = completeLines.slice(-input.tailLines);
+    return {
+      mode: 'tail',
+      text: selectedLines.join('\n'),
+      returnedLines: selectedLines.length,
+      truncated: size > readBytes || completeLines.length > input.tailLines,
+    };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+async function searchWorkspaceRunLogFile(input: {
+  absolutePath: string;
+  query: string;
+  maxBytes: number;
+}): Promise<{
+  mode: 'search';
+  text: string;
+  totalLines: number;
+  returnedLines: number;
+  matchedLines: number;
+  query: string;
+  truncated: boolean;
+}> {
+  const query = input.query.trim();
+  const normalizedQuery = query.toLowerCase();
+  const stream = createReadStream(input.absolutePath, { encoding: 'utf8' });
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  const selectedLines: string[] = [];
+  let selectedBytes = 0;
+  let totalLines = 0;
+  let matchedLines = 0;
+  let truncated = false;
+  for await (const line of lines) {
+    totalLines += 1;
+    if (!line.toLowerCase().includes(normalizedQuery)) {
+      continue;
+    }
+    matchedLines += 1;
+    const nextBytes = Buffer.byteLength(line, 'utf8') + (selectedLines.length > 0 ? 1 : 0);
+    if (selectedBytes + nextBytes <= input.maxBytes) {
+      selectedLines.push(line);
+      selectedBytes += nextBytes;
+    } else {
+      truncated = true;
+    }
+  }
+  return {
+    mode: 'search',
+    text: selectedLines.join('\n'),
+    totalLines,
+    returnedLines: selectedLines.length,
+    matchedLines,
+    query,
+    truncated: truncated || matchedLines > selectedLines.length,
+  };
 }
 
 function encodeRfc5987Value(value: string): string {
