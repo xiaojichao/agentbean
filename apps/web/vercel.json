@@ -1,4 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "cd ../.. && npm ci --include=dev",
+  "buildCommand": "cd ../.. && npm run build:contracts && cd apps/web-next && npm run build",
   "ignoreCommand": "bash ../../scripts/vercel-ignore-build.sh"
 }

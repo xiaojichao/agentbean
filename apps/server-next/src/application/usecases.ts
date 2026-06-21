@@ -1129,7 +1129,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
 
       return makeSuccess({
-        device: toDeviceDto(device),
+        device: await toDeviceDtoWithOwnerName(repositories, device),
         credentials: {
           token: issueDeviceToken({
             teamId: device.teamId,
@@ -1155,7 +1155,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const devices = await repositories.devices.listByTeam(deviceListInput.teamId);
       return makeSuccess({
-        devices: dedupeDeviceRecords(devices).map(toDeviceDto),
+        devices: await toDeviceDtosWithOwnerNames(repositories, dedupeDeviceRecords(devices)),
       });
     },
 
@@ -1173,7 +1173,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('NOT_FOUND', 'Device not found');
       }
       return makeSuccess({
-        device: toDeviceDto(updated),
+        device: await toDeviceDtoWithOwnerName(repositories, updated),
         affectedTeamIds: uniqueIds([device.teamId, ...hostedAgents.flatMap((agent) => agent.visibleTeamIds)]),
       });
     },
@@ -1191,10 +1191,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (!updated) {
           continue;
         }
-        devices.push(toDeviceDto(updated));
+        devices.push(updated);
         affectedTeamIds.push(device.teamId, ...hostedAgents.flatMap((agent) => agent.visibleTeamIds));
       }
-      return makeSuccess({ devices, affectedTeamIds: uniqueIds(affectedTeamIds) });
+      return makeSuccess({ devices: await toDeviceDtosWithOwnerNames(repositories, devices), affectedTeamIds: uniqueIds(affectedTeamIds) });
     },
 
     async listDeviceAgents(deviceAgentsInput) {
@@ -1234,7 +1234,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const visibleAgents = await repositories.agents.listVisibleInTeam(device.teamId);
       return makeSuccess({
         device: {
-          ...toDeviceDto(canonicalDevice),
+          ...(await toDeviceDtoWithOwnerName(repositories, canonicalDevice)),
           runtimes: (await repositories.runtimes.listByDevice(canonicalDevice.id)).map(toRuntimeDto),
           agents: visibleAgents.filter((agent) => agent.deviceId === canonicalDevice.id),
         },
@@ -1257,7 +1257,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!updated) {
         return makeFailure('NOT_FOUND', 'Device not found');
       }
-      return makeSuccess({ device: toDeviceDto(updated) });
+      return makeSuccess({ device: await toDeviceDtoWithOwnerName(repositories, updated) });
     },
 
     async deleteDevice(deleteInput) {
@@ -1288,7 +1288,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         }
       }
       await repositories.devices.delete({ deviceId: device.id, timestamp: now });
-      return makeSuccess({ device: toDeviceDto(device), affectedTeamIds, channelTeamIds: affectedTeamIds });
+      return makeSuccess({ device: await toDeviceDtoWithOwnerName(repositories, device), affectedTeamIds, channelTeamIds: affectedTeamIds });
     },
 
     async requestDeviceScan(scanInput) {
@@ -3255,6 +3255,42 @@ function toDeviceDto(device: DeviceDto): DeviceDto {
     connectCommand: device.connectCommand,
     lastSeenAt: device.lastSeenAt,
   };
+}
+
+async function toDeviceDtoWithOwnerName(repositories: ServerNextRepositories, device: DeviceDto): Promise<DeviceDto> {
+  return (await toDeviceDtosWithOwnerNames(repositories, [device]))[0] ?? toDeviceDto(device);
+}
+
+async function toDeviceDtosWithOwnerNames(repositories: ServerNextRepositories, devices: DeviceDto[]): Promise<DeviceDto[]> {
+  const dtos = devices.map(toDeviceDto);
+  const ownerIdsByTeam = new Map<string, Set<string>>();
+  for (const device of dtos) {
+    if (!device.teamId || !device.ownerId) {
+      continue;
+    }
+    const ownerIds = ownerIdsByTeam.get(device.teamId) ?? new Set<string>();
+    ownerIds.add(device.ownerId);
+    ownerIdsByTeam.set(device.teamId, ownerIds);
+  }
+
+  const ownerNames = new Map<string, string>();
+  await Promise.all(
+    Array.from(ownerIdsByTeam.entries()).map(async ([teamId, ownerIds]) => {
+      const members = await repositories.teams.listMembersByIds(teamId, Array.from(ownerIds));
+      for (const member of members) {
+        ownerNames.set(deviceOwnerKey(member.teamId, member.userId), member.displayName ?? member.username);
+      }
+    }),
+  );
+
+  return dtos.map((device) => ({
+    ...device,
+    ownerName: ownerNames.get(deviceOwnerKey(device.teamId, device.ownerId)) ?? device.ownerName,
+  }));
+}
+
+function deviceOwnerKey(teamId: string, userId: string): string {
+  return `${teamId}:${userId}`;
 }
 
 function toRuntimeDto(runtime: RuntimeDto): RuntimeDto {

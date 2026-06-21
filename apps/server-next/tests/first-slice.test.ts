@@ -1802,11 +1802,23 @@ describe('server-next first-slice use cases', () => {
       lastSeenAt: 500,
     });
 
+    await expect(app.listDevices({ userId: 'user-1', teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      devices: [
+        {
+          id: 'device-1',
+          ownerId: 'user-1',
+          ownerName: 'shaw',
+        },
+      ],
+    });
     await expect(app.getDevice({ userId: 'user-1', deviceId: 'device-1' })).resolves.toMatchObject({
       ok: true,
       device: {
         id: 'device-1',
         teamId: 'team-1',
+        ownerId: 'user-1',
+        ownerName: 'shaw',
         name: 'shaw-mbp',
         runtimes: [{ id: 'runtime-1', name: 'Codex CLI' }],
         agents: [{ id: 'agent-1', name: 'Codex' }],
