@@ -17,6 +17,7 @@ import {
   type DaemonProtocolSocket,
   type DispatchRequestPayload,
 } from '../../daemon-next/src/index.js';
+import { collectSystemInfo, readDaemonVersion } from '../../daemon-next/src/system-info.js';
 import {
   parseServerNextDevConfig,
   startServerNextDevServer,
@@ -137,6 +138,8 @@ export async function startAgentBeanNextPreview(
         machineId: config.machineId,
         profileId: config.profileId,
         hostname: config.hostname,
+        daemonVersion: readDaemonVersion(),
+        systemInfo: { ...collectSystemInfo(), daemonVersion: readDaemonVersion() },
       },
       runtimes: snapshot.runtimes,
       agents: snapshot.agents,
