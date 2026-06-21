@@ -14,7 +14,7 @@ import { sanitizeProfileId } from './profile-paths.js';
 
 type CliStatusReporter = (message: string) => void;
 
-interface SocketIoClientLike {
+export interface SocketIoClientLike {
   connected: boolean;
   connect(): void;
   disconnect(): void;
@@ -42,6 +42,22 @@ export interface DaemonNextCliConfig {
    * opens a socket itself; each recursion opens its own.
    */
   allProfiles?: boolean;
+}
+
+export interface DaemonNextCliDeps {
+  connectSocket?: (serverUrl: string) => Promise<SocketIoClientLike>;
+  listAuthProfiles?: typeof listAuthProfiles;
+  loadAuth?: typeof loadAuth;
+  saveAuth?: typeof saveAuth;
+  loadScanCache?: typeof loadScanCache;
+  saveScanCache?: typeof saveScanCache;
+  createScanProvider?: typeof createBuiltinScanProvider;
+  createProtocolClient?: typeof createDaemonProtocolClient;
+  createExecutor?: typeof createCommandExecutor;
+  collectSystemInfo?: typeof collectSystemInfo;
+  readDaemonVersion?: typeof readDaemonVersion;
+  createEnvResolver?: typeof createHttpEnvResolver;
+  runDaemon?: (config: DaemonNextCliConfig, deps: DaemonNextCliDeps) => Promise<void>;
 }
 
 /**
@@ -284,7 +300,24 @@ export function resolveDeviceCredentials(
   };
 }
 
-export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemonNextCliConfig()): Promise<void> {
+export async function runDaemonNextCli(
+  config: DaemonNextCliConfig = parseDaemonNextCliConfig(),
+  deps: DaemonNextCliDeps = {},
+): Promise<void> {
+  const connectSocket = deps.connectSocket ?? connectSocketIoClient;
+  const listAuthProfilesFn = deps.listAuthProfiles ?? listAuthProfiles;
+  const loadAuthFn = deps.loadAuth ?? loadAuth;
+  const saveAuthFn = deps.saveAuth ?? saveAuth;
+  const loadScanCacheFn = deps.loadScanCache ?? loadScanCache;
+  const saveScanCacheFn = deps.saveScanCache ?? saveScanCache;
+  const createScanProviderFn = deps.createScanProvider ?? createBuiltinScanProvider;
+  const createProtocolClient = deps.createProtocolClient ?? createDaemonProtocolClient;
+  const createExecutor = deps.createExecutor ?? createCommandExecutor;
+  const collectSystemInfoFn = deps.collectSystemInfo ?? collectSystemInfo;
+  const readDaemonVersionFn = deps.readDaemonVersion ?? readDaemonVersion;
+  const createEnvResolver = deps.createEnvResolver ?? createHttpEnvResolver;
+  const runDaemon = deps.runDaemon ?? runDaemonNextCli;
+
   // --all-profiles branch runs BEFORE connectSocketIoClient: it never opens a
   // socket itself, it just fans out one runDaemonNextCli recursion per saved
   // profile. Each recursion clears allProfiles and overrides profileId, then
@@ -292,7 +325,7 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
   // for token injection — Decision 1 in the Task 5 plan). The repeated
   // createBuiltinScanProvider() per recursion is accepted (Decision 2).
   if (config.allProfiles) {
-    const profiles = listAuthProfiles();
+    const profiles = listAuthProfilesFn();
     if (profiles.length === 0) {
       // Throw (don't process.exit) so bin.ts's top-level .catch handles this
       // uniformly with every other failure path in runDaemonNextCli. The thrown
@@ -307,7 +340,7 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
     const subConfigs = expandAllProfiles(config, profiles);
     const results = await Promise.allSettled(
       subConfigs.map((subConfig) =>
-        runDaemonNextCli(subConfig).catch((error) => {
+        runDaemon(subConfig, deps).catch((error) => {
           const message = error instanceof Error ? error.message : String(error);
           console.error(`[all-profiles] profile ${subConfig.profileId} failed to start: ${message}`);
           throw error; // re-throw so allSettled records it as 'rejected'
@@ -324,7 +357,7 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
     return;
   }
 
-  const saved = config.inviteCode ? null : loadAuth({ profileId: config.profileId });
+  const saved = config.inviteCode ? null : loadAuthFn({ profileId: config.profileId });
   const serverUrl = resolveDaemonServerUrl(config, saved);
   const reportInviteStatus: CliStatusReporter | undefined = config.inviteCode
     ? (message) => console.log(message)
@@ -346,18 +379,18 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
     }
   }
 
-  const socket = await connectSocketIoClient(serverUrl);
+  const socket = await connectSocket(serverUrl);
   const protocolSocket = createSocketIoDaemonSocket(socket);
-  const cached = loadScanCache(config.profileId);
+  const cached = loadScanCacheFn(config.profileId);
   if (cached) {
     console.log(`Using cached AgentBean device scan for profile "${config.profileId}".`);
   } else {
     console.log('Scanning local AgentBean device capabilities...');
   }
-  const snapshot = cached ?? await createBuiltinScanProvider()();
+  const snapshot = cached ?? await createScanProviderFn()();
   reportScanSnapshot(snapshot, { cached: Boolean(cached) });
   if (!cached) {
-    saveScanCache(snapshot, config.profileId);
+    saveScanCacheFn(snapshot, config.profileId);
   }
 
   // Invite handshake runs first (network), then we hand off to the pure
@@ -399,10 +432,11 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
   // with the same (or absent) --profile-id finds this profile. persistProfileId
   // is always set alongside persist (see resolveDeviceCredentials invariant).
   if (resolved.persist) {
-    saveAuth(resolved.persist, { profileId: resolved.persistProfileId });
+    saveAuthFn(resolved.persist, { profileId: resolved.persistProfileId });
   }
 
   const { teamId, ownerId, token } = resolved;
+  const daemonVersion = readDaemonVersionFn();
   const device: DaemonDeviceConfig & { token?: string } = {
     teamId,
     ownerId,
@@ -410,26 +444,26 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
     machineId: config.machineId,
     profileId: config.profileId,
     hostname: config.hostname,
-    daemonVersion: readDaemonVersion(),
-    systemInfo: { ...collectSystemInfo(), daemonVersion: readDaemonVersion() },
+    daemonVersion,
+    systemInfo: { ...collectSystemInfoFn(), daemonVersion },
   };
-  await createDaemonProtocolClient({
+  await createProtocolClient({
     serverUrl,
     socket: protocolSocket,
-    executor: createCommandExecutor({ fallbackPrefix: config.fallbackPrefix }),
+    executor: createExecutor({ fallbackPrefix: config.fallbackPrefix }),
     device,
     runtimes: snapshot.runtimes,
     agents: snapshot.agents,
-    scan: createBuiltinScanProvider(),
+    scan: createScanProviderFn(),
     onScanChanged: (fresh) => {
       reportScanSnapshot(fresh, { updated: true });
-      saveScanCache(fresh, config.profileId);
+      saveScanCacheFn(fresh, config.profileId);
     },
     envResolver: async (envRef) => {
       if (!device.token) {
         throw new Error('Custom agent env resolver is not configured');
       }
-      return createHttpEnvResolver({ serverUrl, token: device.token })(envRef);
+      return createEnvResolver({ serverUrl, token: device.token })(envRef);
     },
   }).start();
   if (config.inviteCode) {
