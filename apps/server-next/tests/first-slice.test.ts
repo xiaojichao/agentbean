@@ -2467,6 +2467,69 @@ describe('server-next first-slice use cases', () => {
       agentId: 'agent-1',
     })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
   });
+
+  test('lets a device owner rename a scanned AgentOS agent while preserving its runtime config', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 730,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'join-1',
+        'user-2',
+        'team-2',
+        'channel-2',
+        'device-1',
+        'agent-1',
+      ]),
+      joinCodes: createIds(['code-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
+    await app.registerUser({ username: 'lin', password: 'secret', teamName: 'Lin Private', joinCode: 'code-1' });
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-2',
+      machineId: 'machine-1',
+      profileId: 'default',
+    });
+    await app.registerDiscoveredAgents({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      agents: [{
+        adapterKind: 'hermes',
+        name: 'Hermes-Agent',
+        category: 'agentos-hosted',
+        command: '/opt/homebrew/bin/hermes',
+        args: ['gateway', 'run'],
+        cwd: '/Users/shaw',
+        discoverySource: 'gateway',
+      }],
+    });
+
+    await expect(app.updateAgentConfig({
+      userId: 'user-2',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      name: 'Hermes-Renamed',
+      description: 'Local Hermes gateway',
+      command: '/tmp/should-not-replace-hermes',
+      cwd: '/tmp/should-not-replace-cwd',
+      env: { SHOULD_NOT: 'persist' },
+    })).resolves.toMatchObject({
+      ok: true,
+      agent: {
+        id: 'agent-1',
+        name: 'Hermes-Renamed',
+        description: 'Local Hermes gateway',
+        command: '/opt/homebrew/bin/hermes',
+        args: ['gateway', 'run'],
+        cwd: '/Users/shaw',
+        source: 'scanned',
+        category: 'agentos-hosted',
+      },
+    });
+  });
 });
 
 function createIds(ids: string[]) {

@@ -1506,12 +1506,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async updateAgentConfig(agentInput) {
-      const managed = await agentForManagement(repositories, agentInput);
+      const managed = await agentForConfigUpdate(repositories, agentInput);
       if (!managed.ok) {
         return managed;
       }
-      if (managed.agent.source !== 'custom') {
-        return makeFailure('VALIDATION_ERROR', 'Only custom agents can be configured');
+      const isCustom = managed.agent.source === 'custom';
+      const isAgentOS = managed.agent.source === 'scanned' && managed.agent.category === 'agentos-hosted';
+      if (!isCustom && !isAgentOS) {
+        return makeFailure('VALIDATION_ERROR', 'Only custom or AgentOS agents can be configured');
       }
 
       const now = clock.now();
@@ -1522,47 +1524,50 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (agentInput.description !== undefined) {
         changes.description = agentInput.description.trim();
       }
-      if (agentInput.args !== undefined) {
-        changes.args = agentInput.args;
-      }
-      if (agentInput.cwd !== undefined) {
-        changes.cwd = agentInput.cwd;
-      }
-      if (agentInput.command !== undefined) {
-        changes.command = agentInput.command;
-      }
-      if (agentInput.env !== undefined) {
-        changes.env = agentInput.env;
-        changes.envKeys = Object.keys(agentInput.env).sort();
-      }
 
-      const runtime = agentInput.runtimeId
-        ? await repositories.runtimes.getById(agentInput.runtimeId)
-        : null;
-      if (agentInput.runtimeId) {
-        if (!runtime || runtime.teamId !== managed.agent.primaryTeamId) {
-          return makeFailure('NOT_FOUND', 'Runtime not found');
+      if (isCustom) {
+        if (agentInput.args !== undefined) {
+          changes.args = agentInput.args;
         }
-        const device = await repositories.devices.getById(runtime.deviceId);
-        if (!device || device.teamId !== managed.agent.primaryTeamId) {
-          return makeFailure('NOT_FOUND', 'Device not found');
+        if (agentInput.cwd !== undefined) {
+          changes.cwd = agentInput.cwd;
         }
-        if (device.status !== 'online') {
-          return makeFailure('DEVICE_OFFLINE', 'Device is not online');
+        if (agentInput.command !== undefined) {
+          changes.command = agentInput.command;
         }
-        if (!runtime.installed) {
-          return makeFailure('VALIDATION_ERROR', 'Runtime is not installed');
+        if (agentInput.env !== undefined) {
+          changes.env = agentInput.env;
+          changes.envKeys = Object.keys(agentInput.env).sort();
         }
-        changes.deviceId = runtime.deviceId;
-        changes.adapterKind = runtime.adapterKind;
-        changes.command = runtime.command;
-        changes.cwd = runtime.cwd;
-      } else if (agentInput.adapterKind !== undefined) {
-        const adapterKind = normalizeAdapterKind(agentInput.adapterKind);
-        if (!adapterKind) {
-          return makeFailure('VALIDATION_ERROR', 'adapterKind is invalid');
+
+        const runtime = agentInput.runtimeId
+          ? await repositories.runtimes.getById(agentInput.runtimeId)
+          : null;
+        if (agentInput.runtimeId) {
+          if (!runtime || runtime.teamId !== managed.agent.primaryTeamId) {
+            return makeFailure('NOT_FOUND', 'Runtime not found');
+          }
+          const device = await repositories.devices.getById(runtime.deviceId);
+          if (!device || device.teamId !== managed.agent.primaryTeamId) {
+            return makeFailure('NOT_FOUND', 'Device not found');
+          }
+          if (device.status !== 'online') {
+            return makeFailure('DEVICE_OFFLINE', 'Device is not online');
+          }
+          if (!runtime.installed) {
+            return makeFailure('VALIDATION_ERROR', 'Runtime is not installed');
+          }
+          changes.deviceId = runtime.deviceId;
+          changes.adapterKind = runtime.adapterKind;
+          changes.command = runtime.command;
+          changes.cwd = runtime.cwd;
+        } else if (agentInput.adapterKind !== undefined) {
+          const adapterKind = normalizeAdapterKind(agentInput.adapterKind);
+          if (!adapterKind) {
+            return makeFailure('VALIDATION_ERROR', 'adapterKind is invalid');
+          }
+          changes.adapterKind = adapterKind as AdapterKind;
         }
-        changes.adapterKind = adapterKind as AdapterKind;
       }
 
       const agent = await repositories.agents.updateConfig({
@@ -3946,6 +3951,36 @@ async function agentForManagement(
   }
   if (agent.source === 'custom' && agent.ownerId === input.userId) {
     return makeSuccess({ agent });
+  }
+  return makeFailure('FORBIDDEN', 'User cannot manage agent');
+}
+
+async function agentForConfigUpdate(
+  repositories: ServerNextRepositories,
+  input: { userId: string; teamId: string; agentId: string },
+): Promise<Ack<{ agent: AgentRecord }>> {
+  const agent = await repositories.agents.getById(input.agentId);
+  if (!agent || agent.deletedAt !== undefined) {
+    return makeFailure('NOT_FOUND', 'Agent not found');
+  }
+  if (agent.primaryTeamId !== input.teamId) {
+    return makeFailure('FORBIDDEN', 'Agent is not managed by this team');
+  }
+  const role = await repositories.teams.getMemberRole(agent.primaryTeamId, input.userId);
+  if (!role) {
+    return makeFailure('FORBIDDEN', 'User is not a team member');
+  }
+  if (role === 'owner' || role === 'admin') {
+    return makeSuccess({ agent });
+  }
+  if (agent.source === 'custom' && agent.ownerId === input.userId) {
+    return makeSuccess({ agent });
+  }
+  if (agent.source === 'scanned' && agent.category === 'agentos-hosted' && agent.deviceId) {
+    const device = await repositories.devices.getById(agent.deviceId);
+    if (device?.teamId === agent.primaryTeamId && device.ownerId === input.userId) {
+      return makeSuccess({ agent });
+    }
   }
   return makeFailure('FORBIDDEN', 'User cannot manage agent');
 }
