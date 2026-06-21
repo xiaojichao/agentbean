@@ -12,6 +12,8 @@ import { loadYamlConfig } from './config.js';
 import { listAuthProfiles, loadAuth, saveAuth, type AuthData, type AuthProfile } from './auth-store.js';
 import { sanitizeProfileId } from './profile-paths.js';
 
+type CliStatusReporter = (message: string) => void;
+
 interface SocketIoClientLike {
   connected: boolean;
   connect(): void;
@@ -324,6 +326,12 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
 
   const saved = config.inviteCode ? null : loadAuth({ profileId: config.profileId });
   const serverUrl = resolveDaemonServerUrl(config, saved);
+  const reportInviteStatus: CliStatusReporter | undefined = config.inviteCode
+    ? (message) => console.log(message)
+    : undefined;
+  if (config.inviteCode) {
+    console.log(`Connecting to AgentBean at ${serverUrl}...`);
+  }
   let resolved: ResolveDeviceCredentialsResult | undefined;
   if (!config.inviteCode) {
     resolved = resolveDeviceCredentials({
@@ -355,8 +363,11 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
       profileId: config.profileId,
       hostname: config.hostname,
       serverUrl,
-    })
+    }, { ...(reportInviteStatus ? { onStatus: reportInviteStatus } : {}) })
     : undefined;
+  if (config.inviteCode) {
+    console.log('Registration complete! Starting daemon...');
+  }
 
   resolved ??= resolveDeviceCredentials({
     inviteCode: config.inviteCode,
@@ -412,12 +423,15 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
       return createHttpEnvResolver({ serverUrl, token: device.token })(envRef);
     },
   }).start();
+  if (config.inviteCode) {
+    console.log(`AgentBean daemon connected for profile "${config.profileId}".`);
+  }
 }
 
 export async function waitForDeviceInviteCredentials(
   socket: DaemonProtocolSocket,
   input: { code: string; machineId?: string; profileId?: string; hostname?: string; serverUrl?: string },
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; onStatus?: CliStatusReporter } = {},
 ): Promise<DeviceInviteCredentialsDto> {
   const timeoutMs = options.timeoutMs ?? 5 * 60 * 1000;
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -451,6 +465,7 @@ export async function waitForDeviceInviteCredentials(
     socket.on(AGENT_EVENTS.deviceInvite.credentials, onCredentials);
     socket.on('disconnect', onDisconnect);
   });
+  options.onStatus?.('Connected. Waiting for device invite approval...');
   const ack = await socket.emitWithAck(AGENT_EVENTS.deviceInvite.wait, input);
   if (isFailureAck(ack)) {
     cleanup();

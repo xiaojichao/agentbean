@@ -933,7 +933,7 @@ describe('server-next Socket.IO namespaces', () => {
     const app = createServerNextUseCases({
       repositories,
       clock: { now: () => 7000 },
-      ids: { nextId: createIds(['unused']) },
+      ids: { nextId: createIds(['device-admin']) },
     });
     await repositories.users.create({
       id: 'admin-user',
@@ -980,20 +980,17 @@ describe('server-next Socket.IO namespaces', () => {
     ]) {
       await repositories.teams.addMember({ teamId: 'team-admin', ...member });
     }
-    await repositories.devices.upsertHello({
-      id: 'device-admin',
+    const initialDeviceHello = await app.deviceHello({
       teamId: 'team-admin',
       ownerId: 'member-user',
-      status: 'online',
-      name: 'Mac Studio',
       machineId: 'machine-admin',
       profileId: 'default',
+      hostname: 'Mac Studio',
+      daemonVersion: '0.1.13',
       systemInfo: { hostname: 'mac-studio.local', daemonVersion: '0.1.13' },
-      connectCommand: 'npx @agentbean/daemon@latest --token stale',
-      lastSeenAt: 6500,
-      createdAt: 6000,
-      updatedAt: 6500,
     });
+    expect(initialDeviceHello.ok).toBe(true);
+    const staleDeviceToken = initialDeviceHello.ok ? initialDeviceHello.credentials?.token ?? '' : '';
     await repositories.runtimes.replaceForDevice({
       teamId: 'team-admin',
       deviceId: 'device-admin',
@@ -1037,15 +1034,6 @@ describe('server-next Socket.IO namespaces', () => {
       humanMemberIds: ['admin-user'],
       agentMemberIds: ['agent-admin'],
     });
-    const staleHello = await app.deviceHello({
-      teamId: 'team-admin',
-      ownerId: 'member-user',
-      machineId: 'machine-admin',
-      profileId: 'default',
-      hostname: 'Mac Studio',
-    });
-    expect(staleHello.ok).toBe(true);
-    const staleDeviceToken = staleHello.ok ? staleHello.credentials?.token : undefined;
     expect(staleDeviceToken).toBeTypeOf('string');
 
     const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
@@ -1154,7 +1142,7 @@ describe('server-next Socket.IO namespaces', () => {
 
     await expect(
       app.deviceHelloFromCredentials({
-        token: staleDeviceToken!,
+        token: staleDeviceToken,
         hostname: 'Mac Studio',
       }),
     ).resolves.toMatchObject({
@@ -1199,6 +1187,13 @@ describe('server-next Socket.IO namespaces', () => {
       agentMemberIds: [],
     });
     await expect(admin.emitWithAck(WEB_EVENTS.admin.listAgents, {})).resolves.toMatchObject({
+      ok: true,
+      agents: [],
+    });
+    await expect(admin.emitWithAck(WEB_EVENTS.channel.members, {
+      teamId: 'team-admin',
+      channelId: 'channel-admin',
+    })).resolves.toMatchObject({
       ok: true,
       agents: [],
     });
