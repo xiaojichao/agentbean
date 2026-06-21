@@ -57,6 +57,56 @@ describe('server-next device permissions', () => {
       device: { id: 'device-1' },
     });
   });
+
+  test('allows a system admin team member to delete another user device', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 100 },
+      ids: { nextId: createIds(['user-owner', 'team-1', 'channel-all']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'AgentBean' });
+    await repositories.users.create({
+      id: 'system-admin',
+      username: 'system-admin',
+      role: 'admin',
+      primaryTeamId: 'team-1',
+      currentTeamId: 'team-1',
+      passwordHash: 'hash',
+      createdAt: 100,
+      updatedAt: 100,
+    });
+    await repositories.teams.addMember({
+      teamId: 'team-1',
+      userId: 'system-admin',
+      username: 'system-admin',
+      role: 'member',
+      joinedAt: 100,
+    });
+    await repositories.devices.upsertHello({
+      id: 'device-1',
+      teamId: 'team-1',
+      ownerId: 'user-owner',
+      machineId: 'machine-1',
+      profileId: 'default',
+      name: 'Mac',
+      status: 'online',
+      lastSeenAt: 100,
+      createdAt: 100,
+      updatedAt: 100,
+    });
+
+    await expect(
+      app.deleteDevice({
+        userId: 'system-admin',
+        deviceId: 'device-1',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      device: { id: 'device-1' },
+    });
+    await expect(repositories.devices.getById('device-1')).resolves.toBeNull();
+  });
 });
 
 function createIds(ids: string[]) {
