@@ -664,8 +664,8 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           icon={<Terminal size={14} className="text-violet-600" />}
           iconBg="bg-violet-50"
           agents={customAgents}
-          showAddButton={isLocalDevice}
-          onAdd={isLocalDevice ? () => setShowAddCustom(true) : undefined}
+          showAddButton={canManageDevice}
+          onAdd={canManageDevice ? () => setShowAddCustom(true) : undefined}
           onSelectNetwork={setSelectNetworkAgent}
           onSelectAgent={setConfigAgent}
           onDeleteAgent={setDeleteAgent}

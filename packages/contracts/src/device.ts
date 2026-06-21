@@ -36,6 +36,7 @@ export interface DeviceDto {
   id: ID;
   teamId: ID;
   ownerId: ID;
+  ownerName?: string;
   status: DeviceStatus;
   name?: string;
   systemInfo?: DeviceSystemInfoDto;
