@@ -120,6 +120,7 @@ export interface TeamSummary {
   name: string;
   path: string;
   description: string | null;
+  currentUserRole?: 'owner' | 'admin' | 'member';
   visibility?: 'public' | 'private';
   type?: 'public' | 'local' | 'private';
   createdAt: number;

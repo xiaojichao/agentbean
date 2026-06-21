@@ -7,6 +7,7 @@ import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, Che
 import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl, fetchAgentWorkspace, authedApiUrl } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { daemonVersionDisplay } from '@/lib/daemon-version';
+import { canAddCustomAgentToDevice, canManageDeviceForUser } from '@/lib/device-permissions';
 import { formatRelative } from '@/lib/format-time';
 import type { AgentWorkspaceFile, AgentWorkspaceRun } from '@/lib/schema';
 import { updateAgentPublishState } from '@/lib/agent-publish-state';
@@ -379,15 +380,23 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const [deviceNameError, setDeviceNameError] = useState('');
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
+  const currentTeamRole = useAgentBeanStore((s) => s.teams.find((team) => team.id === currentTeamId)?.currentUserRole);
   const applyAgentStatus = useAgentBeanStore((s) => s.applyAgentStatus);
   const upsertDevice = useAgentBeanStore((s) => s.upsertDevice);
   const displayName = deviceDisplayName(device) === device.id ? '未命名设备' : deviceDisplayName(device);
   const ownerName = deviceOwnerName(device);
   const daemonVersion = daemonVersionDisplay(device);
   const deviceOwnerId = device.ownerId ?? device.userId;
-  const canManageDevice = device.canManage ?? (currentUser?.role === 'admin' || Boolean(currentUser?.id && currentUser.id === deviceOwnerId));
+  const canManageDevice = canManageDeviceForUser({
+    deviceCanManage: device.canManage,
+    deviceOwnerId,
+    currentUserId: currentUser?.id,
+    currentUserRole: currentUser?.role,
+    currentTeamRole,
+  });
   const isOwnedByCurrentUser = Boolean(currentUser?.id && currentUser.id === deviceOwnerId);
   const isLocalDevice = device.isLocal === true;
+  const canAddCustomAgent = canAddCustomAgentToDevice({ canManageDevice, isLocalDevice });
 
   const refreshDeviceAgents = () => {
     return deviceEvents().agentsList(device.id, currentTeamId).then((res) => {
@@ -664,8 +673,8 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           icon={<Terminal size={14} className="text-violet-600" />}
           iconBg="bg-violet-50"
           agents={customAgents}
-          showAddButton={canManageDevice}
-          onAdd={canManageDevice ? () => setShowAddCustom(true) : undefined}
+          showAddButton={canAddCustomAgent}
+          onAdd={canAddCustomAgent ? () => setShowAddCustom(true) : undefined}
           onSelectNetwork={setSelectNetworkAgent}
           onSelectAgent={setConfigAgent}
           onDeleteAgent={setDeleteAgent}
