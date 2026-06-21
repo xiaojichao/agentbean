@@ -34,8 +34,23 @@ else
   echo "(none)"
 fi
 
+if echo "$changed_files" | grep -E '^apps/web-next/' >/dev/null; then
+  echo "web-next changes detected. Continue Vercel build."
+  exit 1
+fi
+
+if echo "$changed_files" | grep -E '^packages/contracts/' >/dev/null; then
+  echo "contracts changes detected (web-next depends on it). Continue Vercel build."
+  exit 1
+fi
+
+if echo "$changed_files" | grep -E '^scripts/vercel-ignore-build\.sh$' >/dev/null; then
+  echo "Vercel ignore script changed. Continue Vercel build."
+  exit 1
+fi
+
 if echo "$changed_files" | grep -E '^apps/web/' | grep -Ev '^apps/web/(vercel\.json|\.nvmrc)$' >/dev/null; then
-  echo "Web-related changes detected. Continue Vercel build."
+  echo "Legacy web changes detected (transition). Continue Vercel build."
   exit 1
 fi
 
