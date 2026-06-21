@@ -59,7 +59,21 @@ describe('AgentBean Next full preview launcher', () => {
       profileId: 'preview-profile',
       hostname: 'host.local',
       fallbackPrefix: 'preview:',
+      webEntry: 'preview',
     });
+  });
+
+  test('forwards web entry override to enable App Router serving', () => {
+    expect(
+      parseAgentBeanNextPreviewConfig({
+        hostname: 'host.local',
+        env: {
+          AGENTBEAN_NEXT_DATA_DIR: '/tmp/agentbean-next',
+          AGENTBEAN_NEXT_WEB_ENTRY: 'app',
+        },
+        argv: ['--port', '0'],
+      }).webEntry,
+    ).toBe('app');
   });
 
   test('uses a stable preview machine id by default', () => {

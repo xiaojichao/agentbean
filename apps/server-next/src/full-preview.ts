@@ -34,6 +34,7 @@ export interface AgentBeanNextPreviewConfig {
   profileId: string;
   hostname: string;
   fallbackPrefix: string;
+  webEntry: 'preview' | 'app';
 }
 
 export interface ParseAgentBeanNextPreviewConfigInput {
@@ -96,6 +97,7 @@ export function parseAgentBeanNextPreviewConfig(
     profileId: env.AGENTBEAN_NEXT_PROFILE_ID ?? 'agentbean-next-preview',
     hostname,
     fallbackPrefix: env.AGENTBEAN_NEXT_FALLBACK_PREFIX ?? 'daemon-next:',
+    webEntry: serverConfig.webEntry ?? 'preview',
   };
 }
 
@@ -111,6 +113,7 @@ export async function startAgentBeanNextPreview(
       storage: 'sqlite',
       dataDir: config.dataDir,
       sessionSecret: config.sessionSecret,
+      webEntry: config.webEntry,
     },
   });
   const sockets: PreviewSocketLike[] = [];
