@@ -230,13 +230,15 @@ describe('daemon-next CLI wiring', () => {
   test('waits for device invite credentials over the daemon socket', async () => {
     const runtimeSocket = new FakeRuntimeSocket();
     const socket = createSocketIoDaemonSocket(runtimeSocket);
+    const onStatus = vi.fn();
     const waiting = waitForDeviceInviteCredentials(socket, {
       code: 'device-code-1',
       machineId: 'machine-1',
       profileId: 'agentbean-next',
       hostname: 'host.local',
-    });
+    }, { onStatus });
 
+    expect(onStatus).toHaveBeenCalledWith('Connected. Waiting for device invite approval...');
     expect(runtimeSocket.emitted).toEqual([
       [
         AGENT_EVENTS.deviceInvite.wait,
