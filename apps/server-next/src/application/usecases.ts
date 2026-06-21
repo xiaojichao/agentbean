@@ -1269,7 +1269,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!actorRole) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
-      if (device.ownerId !== deleteInput.userId && actorRole !== 'owner' && actorRole !== 'admin') {
+      const actor = await repositories.users.getById(deleteInput.userId);
+      const isSystemAdmin = actor?.role === 'admin';
+      if (!isSystemAdmin && device.ownerId !== deleteInput.userId && actorRole !== 'owner' && actorRole !== 'admin') {
         return makeFailure('FORBIDDEN', 'User cannot manage device');
       }
       const now = clock.now();
