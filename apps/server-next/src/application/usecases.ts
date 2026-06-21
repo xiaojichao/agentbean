@@ -951,6 +951,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!user) {
         return makeFailure('NOT_FOUND', 'User not found');
       }
+      const ownedTeam = (await repositories.teams.listAll()).find((team) => team.ownerId === user.id);
+      if (ownedTeam) {
+        return makeFailure('CONFLICT', 'Cannot delete a user who owns a team');
+      }
       await repositories.users.delete(user.id);
       return makeSuccess({});
     },
@@ -960,9 +964,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!admin.ok) {
         return admin;
       }
+      const agent = await repositories.agents.getById(adminInput.agentId);
+      if (!agent || agent.deletedAt !== undefined) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
+      const affectedTeamIds = agent.visibleTeamIds;
+      const now = clock.now();
+      for (const teamId of affectedTeamIds) {
+        await repositories.channels.removeAgentFromTeamChannels({
+          teamId,
+          agentId: agent.id,
+          timestamp: now,
+        });
+      }
       const deleted = await repositories.agents.softDelete({
         agentId: adminInput.agentId,
-        timestamp: clock.now(),
+        timestamp: now,
       });
       if (!deleted) {
         return makeFailure('NOT_FOUND', 'Agent not found');
@@ -1272,10 +1289,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async deviceHello(deviceInput) {
-      if (!(await repositories.teams.isMember(deviceInput.teamId, deviceInput.ownerId))) {
-        return makeFailure('FORBIDDEN', 'Device owner is not a team member');
-      }
-
       const now = clock.now();
       const existing =
         deviceInput.machineId && deviceInput.profileId
@@ -1285,6 +1298,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             profileId: deviceInput.profileId,
           })
           : null;
+      const ownerId = existing?.ownerId ?? deviceInput.ownerId;
+      if (!(await repositories.teams.isMember(deviceInput.teamId, ownerId))) {
+        return makeFailure('FORBIDDEN', 'Device owner is not a team member');
+      }
 
       let connectCommand = existing?.connectCommand;
       if (!existing && connectCommand === undefined && deviceInput.machineId && deviceInput.profileId) {
@@ -1302,7 +1319,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const device = await repositories.devices.upsertHello({
         id: existing?.id ?? ids.nextId(),
         teamId: deviceInput.teamId,
-        ownerId: deviceInput.ownerId,
+        ownerId,
         status: 'online',
         name: deviceInput.hostname,
         machineId: deviceInput.machineId,

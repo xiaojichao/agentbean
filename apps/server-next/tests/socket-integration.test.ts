@@ -986,6 +986,8 @@ describe('server-next Socket.IO namespaces', () => {
       ownerId: 'member-user',
       status: 'online',
       name: 'Mac Studio',
+      machineId: 'machine-admin',
+      profileId: 'default',
       systemInfo: { hostname: 'mac-studio.local', daemonVersion: '0.1.13' },
       connectCommand: 'npx @agentbean/daemon@latest --token stale',
       lastSeenAt: 6500,
@@ -1024,6 +1026,27 @@ describe('server-next Socket.IO namespaces', () => {
       description: '写作 Agent',
       lastSeenAt: 6500,
     });
+    await repositories.channels.create({
+      id: 'channel-admin',
+      teamId: 'team-admin',
+      kind: 'channel',
+      name: 'admin-room',
+      visibility: 'public',
+      createdBy: 'admin-user',
+      createdAt: 6500,
+      humanMemberIds: ['admin-user'],
+      agentMemberIds: ['agent-admin'],
+    });
+    const staleHello = await app.deviceHello({
+      teamId: 'team-admin',
+      ownerId: 'member-user',
+      machineId: 'machine-admin',
+      profileId: 'default',
+      hostname: 'Mac Studio',
+    });
+    expect(staleHello.ok).toBe(true);
+    const staleDeviceToken = staleHello.ok ? staleHello.credentials?.token : undefined;
+    expect(staleDeviceToken).toBeTypeOf('string');
 
     const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
     cleanups.push(async () => {
@@ -1127,6 +1150,57 @@ describe('server-next Socket.IO namespaces', () => {
         ownerId: 'new-owner',
         ownerName: 'new-owner',
       })],
+    });
+
+    await expect(
+      app.deviceHelloFromCredentials({
+        token: staleDeviceToken!,
+        hostname: 'Mac Studio',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      device: {
+        id: 'device-admin',
+        ownerId: 'new-owner',
+        ownerName: 'new-owner',
+      },
+    });
+    await expect(repositories.devices.getById('device-admin')).resolves.toMatchObject({
+      ownerId: 'new-owner',
+    });
+    await expect(repositories.agents.getById('agent-admin')).resolves.toMatchObject({
+      ownerId: 'new-owner',
+    });
+
+    await repositories.teams.create({
+      id: 'team-owned-by-new-owner',
+      name: 'Owned Team',
+      path: 'owned-team',
+      visibility: 'private',
+      ownerId: 'new-owner',
+      createdAt: 7100,
+    });
+    await repositories.teams.addMember({
+      teamId: 'team-owned-by-new-owner',
+      userId: 'new-owner',
+      username: 'new-owner',
+      role: 'owner',
+      joinedAt: 7100,
+    });
+    await expect(admin.emitWithAck(WEB_EVENTS.admin.deleteUser, { userId: 'new-owner' })).resolves.toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+    });
+
+    await expect(admin.emitWithAck(WEB_EVENTS.admin.deleteAgent, { agentId: 'agent-admin' })).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(repositories.channels.getById('channel-admin')).resolves.toMatchObject({
+      agentMemberIds: [],
+    });
+    await expect(admin.emitWithAck(WEB_EVENTS.admin.listAgents, {})).resolves.toMatchObject({
+      ok: true,
+      agents: [],
     });
   });
 
