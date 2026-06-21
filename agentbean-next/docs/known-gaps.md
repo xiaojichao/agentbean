@@ -256,7 +256,6 @@ daemon-next 的多 profile、token 持久化与 YAML 配置第一版已落地：
 
 剩余（后续切片）：
 
-- `runDaemonNextCli` 的 socket 接线测试受限：`connectSocketIoClient` 经 `createRequire` 动态加载 `socket.io-client`，`vi.mock` 无法拦截，相关 wiring 测试暂以 `test.skip` + NOTE 文档化（`tests/cli.test.ts`、`tests/cli-all-profiles.test.ts`）。后续给 `connectSocketIoClient` 加可注入 seam 即可激活约 4 个 wiring 测试。
 - `cli.ts` 已达 ~450 行，后续可将纯函数 `resolveDeviceCredentials` 及其类型提取到独立模块（如 `src/credentials.ts`）。
 - auth token 刷新/续期未实现（第一版用 invite 拿到的 token，过期重新 invite）。
 - profile 删除/重命名 CLI 未提供（第一版手动删 `~/.agentbean/teams/{profileId}/`）。

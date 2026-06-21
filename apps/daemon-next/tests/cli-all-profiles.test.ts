@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { expandAllProfiles, parseDaemonNextCliConfig, runDaemonNextCli, type DaemonNextCliConfig } from '../src/cli';
+import { expandAllProfiles, parseDaemonNextCliConfig, runDaemonNextCli, type DaemonNextCliConfig, type DaemonNextCliDeps } from '../src/cli';
 import type { AuthProfile } from '../src/auth-store';
 
 function makeProfile(profileId: string, serverUrl = 'http://127.0.0.1:4000'): AuthProfile {
@@ -156,57 +156,63 @@ describe('parseDaemonNextCliConfig --all-profiles boolean flag', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// NOTE on runDaemonNextCli all-profiles WIRING coverage
-// ---------------------------------------------------------------------------
-// The empty-list branch inside runDaemonNextCli is now covered below: Fix #2
-// changed the path from process.exit(1) to `throw new Error(...)`, which
-// fires BEFORE connectSocketIoClient runs, so it is testable WITHOUT the
-// socket seam (only listAuthProfiles needs mocking). The recursion case
-// (non-empty profile list) still calls connectSocketIoClient per sub-config
-// and remains BLOCKED on the same socket.io-client require that Vitest
-// cannot intercept (see cli.test.ts's top-of-file NOTE).
-//
-// Coverage that IS in place for Task 5:
-//   - expandAllProfiles: the pure orchestration decision (N profiles -> N
-//     distinct sub-configs, each with allProfiles=false and the right
-//     profileId, all other config preserved) is unit-tested exhaustively
-//     above.
-//   - parseDaemonNextCliConfig boolean-flag parsing (Decision 3): the flag
-//     parses as true, does not throw "Missing value", and does not eat the
-//     following --flag as its value — tested above.
-//   - runDaemonNextCli empty-list rejection (Fix #2): throws before any socket
-//     is opened — tested below.
-//
-// To unlock the recursion wiring test: make connectSocketIoClient injectable
-// (the same seam that would un-skip the Task 4 wiring suite). Tracked as a
-// Task 6 follow-up; intentionally out of scope here.
 describe('runDaemonNextCli --all-profiles empty list (Fix #2)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
   test('rejects with a clear error when listAuthProfiles returns []', async () => {
-    vi.mock('../src/auth-store.js', () => ({
+    const deps: DaemonNextCliDeps = {
       listAuthProfiles: vi.fn(() => []),
       loadAuth: vi.fn(() => null),
       saveAuth: vi.fn(),
-    }));
+    };
 
     await expect(
       runDaemonNextCli({
         ...baseConfig({ allProfiles: true }),
-      }),
+      }, deps),
     ).rejects.toThrowError(/No saved AgentBean team profiles found/);
+    expect(deps.listAuthProfiles).toHaveBeenCalledOnce();
+    expect(deps.loadAuth).not.toHaveBeenCalled();
   });
 });
 
-describe.skip('runDaemonNextCli all-profiles wiring (listAuthProfiles + recursion) — BLOCKED', () => {
+describe('runDaemonNextCli all-profiles wiring (listAuthProfiles + recursion)', () => {
   test('calls listAuthProfiles and recurses once per profile with overridden profileId + allProfiles=false', async () => {
-    // Assert: listAuthProfiles called once; runDaemonNextCli called N times,
-    // each with profileId from a profile and allProfiles === false.
-    // Still BLOCKED: the recursion calls connectSocketIoClient per sub-config,
-    // which loads socket.io-client via createRequire and Vitest cannot
-    // intercept it. Needs the same socket seam as the Task 4 wiring suite.
+    const profiles = [
+      makeProfile('team-a', 'http://server-a.example/'),
+      makeProfile('team-b', 'http://server-b.example'),
+    ];
+    const runDaemon = vi.fn(async () => undefined);
+    const deps: DaemonNextCliDeps = {
+      listAuthProfiles: vi.fn(() => profiles),
+      runDaemon,
+    };
+
+    await runDaemonNextCli(baseConfig({
+      allProfiles: true,
+      inviteCode: 'stale-invite',
+      serverUrl: 'http://parent.example',
+    }), deps);
+
+    expect(deps.listAuthProfiles).toHaveBeenCalledOnce();
+    expect(runDaemon).toHaveBeenCalledTimes(2);
+    const subConfigs = runDaemon.mock.calls.map(([subConfig]) => subConfig);
+    expect(subConfigs).toEqual([
+      expect.objectContaining({
+        profileId: 'team-a',
+        serverUrl: 'http://server-a.example',
+        serverUrlExplicit: true,
+        allProfiles: false,
+      }),
+      expect.objectContaining({
+        profileId: 'team-b',
+        serverUrl: 'http://server-b.example',
+        serverUrlExplicit: true,
+        allProfiles: false,
+      }),
+    ]);
+    expect(subConfigs.every((subConfig) => !('inviteCode' in subConfig))).toBe(true);
   });
 });

@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS } from '../../../packages/contracts/src/index';
-import { createSocketIoDaemonSocket, formatScanSnapshot, parseDaemonNextCliConfig, resolveDaemonServerUrl, waitForDeviceInviteCredentials } from '../src/cli';
+import { createSocketIoDaemonSocket, formatScanSnapshot, parseDaemonNextCliConfig, resolveDaemonServerUrl, runDaemonNextCli, waitForDeviceInviteCredentials, type DaemonNextCliConfig, type DaemonNextCliDeps } from '../src/cli';
 import type { AuthData } from '../src/auth-store';
+import type { CreateDaemonProtocolClientInput, DaemonScanSnapshot } from '../src/index';
 
 function writeYamlFixture(content: string): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'cli-cfg-')));
@@ -13,46 +14,53 @@ function writeYamlFixture(content: string): string {
   return path;
 }
 
-// ---------------------------------------------------------------------------
-// NOTE on runDaemonNextCli wiring coverage (Fix #2 follow-up)
-// ---------------------------------------------------------------------------
-// The credential WIRING inside runDaemonNextCli (loadAuth called with
-// { profileId: config.profileId }; saveAuth called with the resolved persist
-// payload + config.profileId on the invite path; saveAuth NOT called on the
-// saved/config path; device.token flowing into createDaemonProtocolClient) is
-// NOT covered by an end-to-end test here, despite several attempts.
-//
-// Reason: runDaemonNextCli's FIRST statement is connectSocketIoClient(), which
-// loads socket.io-client via createRequire(<url>)('socket.io-client'). None of
-// the following interception strategies work from a Vitest test file without
-// changing product code (cli.ts) or the test runner config:
-//   - vi.mock('socket.io-client', ...)            // bypassed by createRequire
-//   - vi.mock('<absolute-resolved-path>', ...)    // bypassed / breaks resolve
-//   - vi.mock('<cjs subpath>', ...)               // breaks module resolution
-//   - runtime Object.defineProperty on the module's `io` export
-//                                                  // cli.ts's transformed module
-//                                                  //   registry is isolated from
-//                                                  //   the test file's, so the
-//                                                  //   mutation is invisible
-//                                                  //   (verified empirically)
-//   - server.deps.inline: ['socket.io-client']    // does not route createRequire
-//                                                  //   through Vite's mock pipeline
-//
-// The real io() therefore opens a websocket and emits an unhandled
-// 'websocket error' that crashes any test invoking runDaemonNextCli.
-//
-// Coverage that IS in place:
-//   - The pure resolveDeviceCredentials decision (invite/saved/config/error),
-//     including the persist + persistProfileId co-occurrence invariant that
-//     Fix #3 relies on, is unit-tested exhaustively in cli-auth.test.ts.
-//   - waitForDeviceInviteCredentials (the network handshake) is tested against
-//     a FakeRuntimeSocket below, covering ack-success / ack-failure / disconnect
-//     / timeout.
-//
-// To unlock true runDaemonNextCli wiring tests, connectSocketIoClient should be
-// made injectable (e.g. accept a socket factory, or extract loadSocketIoClient
-// as a seam). That is a Task 5/6 cleanup candidate and intentionally out of
-// scope for this fix.
+const EMPTY_SCAN: DaemonScanSnapshot = { runtimes: [], agents: [] };
+
+function baseRunConfig(overrides: Partial<DaemonNextCliConfig> = {}): DaemonNextCliConfig {
+  return {
+    serverUrl: 'http://127.0.0.1:4000',
+    profileId: 'default',
+    hostname: 'host.local',
+    fallbackPrefix: 'daemon-next:',
+    ...overrides,
+  };
+}
+
+function createRunDaemonHarness(overrides: Partial<DaemonNextCliDeps> = {}) {
+  const runtimeSocket = new FakeRuntimeSocket();
+  const start = vi.fn(async () => undefined);
+  const protocolInputs: CreateDaemonProtocolClientInput[] = [];
+  const scanProvider = vi.fn(async () => EMPTY_SCAN);
+  const executor = vi.fn(async () => 'ok');
+  const deps: DaemonNextCliDeps = {
+    connectSocket: vi.fn(async () => runtimeSocket),
+    loadAuth: vi.fn(() => null),
+    saveAuth: vi.fn(),
+    loadScanCache: vi.fn(() => EMPTY_SCAN),
+    saveScanCache: vi.fn(),
+    createScanProvider: vi.fn(() => scanProvider),
+    createProtocolClient: vi.fn((input) => {
+      protocolInputs.push(input);
+      return { start };
+    }),
+    createExecutor: vi.fn(() => executor),
+    collectSystemInfo: vi.fn(() => ({ hostname: 'host.local' })),
+    readDaemonVersion: vi.fn(() => '0.2.2-test'),
+    createEnvResolver: vi.fn(() => vi.fn(async () => ({}))),
+    ...overrides,
+  };
+  return { deps, protocolInputs, runtimeSocket, start };
+}
+
+async function waitForCondition(condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (condition()) {
+      return;
+    }
+    await Promise.resolve();
+  }
+  throw new Error('Timed out waiting for test condition');
+}
 
 describe('daemon-next CLI wiring', () => {
   test('parses required device config from args and env', () => {
@@ -428,34 +436,122 @@ describe('daemon-next CLI wiring', () => {
   });
 });
 
-describe.skip('runDaemonNextCli wiring (loadAuth / saveAuth / device.token) — BLOCKED', () => {
-  // These tests document the INTENDED wiring assertions for Fix #2 but are
-  // skipped because runDaemonNextCli cannot be exercised end-to-end in this
-  // Vitest setup: its first statement, connectSocketIoClient(), loads
-  // socket.io-client via createRequire, which Vitest cannot intercept (see the
-  // NOTE at the top of this file for the strategies tried). The real io() opens
-  // a websocket and rejects before any of the wiring under test runs.
-  //
-  // To enable: make connectSocketIoClient (or loadSocketIoClient) injectable in
-  // cli.ts — a Task 5/6 cleanup. Then un-skip these tests; the bodies below are
-  // already written against a vi.mock('../src/auth-store.js') +
-  // vi.mock('../src/index.js') + fake-socket setup.
-
+describe('runDaemonNextCli wiring (loadAuth / saveAuth / device.token)', () => {
   test('invite path: saveAuth called with resolved persist payload + config.profileId; loadAuth NOT called', async () => {
-    // Assert: loadAuth NOT called; saveAuth called once with
-    //   { token, serverUrl, teamId, ownerId } from invite credentials
-    // and { profileId: config.profileId }; device passed to
-    // createDaemonProtocolClient has the invite token.
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const { deps, protocolInputs, runtimeSocket } = createRunDaemonHarness();
+      const running = runDaemonNextCli(
+        baseRunConfig({
+          inviteCode: 'device-code-1',
+          machineId: 'machine-1',
+          profileId: 'agentbean-next',
+          serverUrl: 'http://agentbean.example',
+          serverUrlExplicit: true,
+        }),
+        deps,
+      );
+
+      await waitForCondition(() => runtimeSocket.emitted.length === 1);
+      await runtimeSocket.trigger(AGENT_EVENTS.deviceInvite.credentials, {
+        token: 'device-token-1',
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'agentbean-next',
+        hostname: 'host.local',
+      });
+      await running;
+
+      expect(deps.connectSocket).toHaveBeenCalledWith('http://agentbean.example');
+      expect(deps.loadAuth).not.toHaveBeenCalled();
+      expect(deps.saveAuth).toHaveBeenCalledWith(
+        {
+          token: 'device-token-1',
+          serverUrl: 'http://agentbean.example',
+          teamId: 'team-1',
+          ownerId: 'user-1',
+        },
+        { profileId: 'agentbean-next' },
+      );
+      expect(protocolInputs).toHaveLength(1);
+      expect(protocolInputs[0]?.device).toMatchObject({
+        token: 'device-token-1',
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        profileId: 'agentbean-next',
+        machineId: 'machine-1',
+        daemonVersion: '0.2.2-test',
+      });
+    } finally {
+      log.mockRestore();
+    }
   });
 
   test('invite path: explicit --profile-id is the saveAuth profileId (not slugify(teamId))', async () => {
-    // Assert: saveAuth called with { profileId: <config profileId> }, never a
-    // slugify(teamId) derivation.
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const { deps, runtimeSocket } = createRunDaemonHarness();
+      const running = runDaemonNextCli(
+        baseRunConfig({
+          inviteCode: 'device-code-2',
+          profileId: 'my-laptop',
+          serverUrl: 'http://agentbean.example',
+          serverUrlExplicit: true,
+        }),
+        deps,
+      );
+
+      await waitForCondition(() => runtimeSocket.emitted.length === 1);
+      await runtimeSocket.trigger(AGENT_EVENTS.deviceInvite.credentials, {
+        token: 'device-token-2',
+        teamId: 'Team With Spaces',
+        ownerId: 'user-2',
+      });
+      await running;
+
+      expect(deps.saveAuth).toHaveBeenCalledWith(
+        expect.objectContaining({
+          token: 'device-token-2',
+          teamId: 'Team With Spaces',
+          ownerId: 'user-2',
+        }),
+        { profileId: 'my-laptop' },
+      );
+      expect(deps.saveAuth).not.toHaveBeenCalledWith(expect.anything(), { profileId: 'team-with-spaces' });
+    } finally {
+      log.mockRestore();
+    }
   });
 
   test('saved path: loadAuth called with { profileId: config.profileId }; device gets saved.token; saveAuth NOT called', async () => {
-    // Assert: loadAuth called with { profileId: config.profileId }; device gets
-    // saved token/teamId/ownerId; saveAuth NOT called.
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const saved: AuthData = {
+        token: 'saved-token-1',
+        serverUrl: 'http://saved.example/',
+        teamId: 'saved-team',
+        ownerId: 'saved-owner',
+      };
+      const { deps, protocolInputs } = createRunDaemonHarness({
+        loadAuth: vi.fn(() => saved),
+      });
+
+      await runDaemonNextCli(baseRunConfig({ profileId: 'saved-profile' }), deps);
+
+      expect(deps.loadAuth).toHaveBeenCalledWith({ profileId: 'saved-profile' });
+      expect(deps.connectSocket).toHaveBeenCalledWith('http://saved.example');
+      expect(deps.saveAuth).not.toHaveBeenCalled();
+      expect(protocolInputs).toHaveLength(1);
+      expect(protocolInputs[0]?.device).toMatchObject({
+        token: 'saved-token-1',
+        teamId: 'saved-team',
+        ownerId: 'saved-owner',
+        profileId: 'saved-profile',
+      });
+    } finally {
+      log.mockRestore();
+    }
   });
 });
 
