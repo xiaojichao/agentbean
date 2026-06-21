@@ -44,6 +44,11 @@ if echo "$changed_files" | grep -E '^packages/contracts/' >/dev/null; then
   exit 1
 fi
 
+if echo "$changed_files" | grep -E '^(package\.json|package-lock\.json|\.npmrc)$' >/dev/null; then
+  echo "root dependency files changed (web-next installs from the root workspace). Continue Vercel build."
+  exit 1
+fi
+
 if echo "$changed_files" | grep -E '^scripts/vercel-ignore-build\.sh$' >/dev/null; then
   echo "Vercel ignore script changed. Continue Vercel build."
   exit 1
