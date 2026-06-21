@@ -261,6 +261,15 @@ export default function DevicesPage() {
     return () => { cancelled = true; };
   }, [routeDeviceId, selectedDevice, conn, deviceTeamId, upsertDevice]);
 
+  const handleDeviceDeleted = (deviceId: string) => {
+    applyDevicesSnapshot(deviceList.filter((device) => device.id !== deviceId));
+    setSelectedId(null);
+    setEditName(false);
+    setShowDeleteConfirm(false);
+    setRouteDeviceError('');
+    router.replace(`/${np}/devices`);
+  };
+
   return (
     <div className="flex flex-1 overflow-hidden">
       {/* Left — device list */}
@@ -330,6 +339,7 @@ export default function DevicesPage() {
             showDeleteConfirm={showDeleteConfirm}
             setShowDeleteConfirm={setShowDeleteConfirm}
             currentTeamId={deviceTeamId || currentTeamId}
+            onDeleted={handleDeviceDeleted}
           />
         )}
         </div>
@@ -350,7 +360,7 @@ function EmptyState({ loading = false, error = '' }: { loading?: boolean; error?
   );
 }
 
-function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName, showDeleteConfirm, setShowDeleteConfirm, currentTeamId }: {
+function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName, showDeleteConfirm, setShowDeleteConfirm, currentTeamId, onDeleted }: {
   device: { id: string; ownerId?: string | null; userId?: string | null; ownerName?: string | null; userName?: string | null; canManage?: boolean; isLocal?: boolean; name?: string; hostname?: string; status: string; lastSeenAt: number; agentIds: string[]; runtimes?: any[]; connectCommand?: string | null; latestDaemonVersion?: string | null; daemonUpdateAvailable?: boolean; daemonVersionInfo?: { current: string | null; latest: string | null; updateAvailable: boolean; status: 'current' | 'update-available' | 'unknown' }; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string; daemonVersion?: string } | null };
   editName: boolean;
   setEditName: (v: boolean) => void;
@@ -359,6 +369,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   showDeleteConfirm: boolean;
   setShowDeleteConfirm: (v: boolean) => void;
   currentTeamId: string | null;
+  onDeleted: (deviceId: string) => void;
 }) {
   const [inviteCommand, setInviteCommand] = useState('');
   const [copied, setCopied] = useState(false);
@@ -378,6 +389,8 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [workspaceError, setWorkspaceError] = useState('');
   const [deviceNameError, setDeviceNameError] = useState('');
+  const [deviceDeleteSaving, setDeviceDeleteSaving] = useState(false);
+  const [deviceDeleteError, setDeviceDeleteError] = useState('');
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentTeamRole = useAgentBeanStore((s) => s.teams.find((team) => team.id === currentTeamId)?.currentUserRole);
@@ -417,6 +430,24 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
       applyAgentStatus(updated);
       return updated;
     });
+  };
+
+  const confirmDeleteDevice = async () => {
+    setDeviceDeleteSaving(true);
+    setDeviceDeleteError('');
+    try {
+      const res = await deviceEvents().delete(device.id);
+      if (!res.ok) {
+        setDeviceDeleteError(res.error ?? '设备删除失败');
+        setDeviceDeleteSaving(false);
+        return;
+      }
+      setDeviceDeleteSaving(false);
+      onDeleted(device.id);
+    } catch (error) {
+      setDeviceDeleteError(error instanceof Error ? error.message : '设备删除失败');
+      setDeviceDeleteSaving(false);
+    }
   };
 
   const confirmDeleteAgent = async () => {
@@ -706,9 +737,16 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           {showDeleteConfirm && (
             <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-4">
               <p className="mb-3 text-sm text-red-700">确定要删除设备 <strong>{displayName}</strong> 吗？此操作不可撤销。</p>
+              {deviceDeleteError && (
+                <div className="mb-3 rounded-md border border-red-200 bg-white px-3 py-2 text-xs text-red-700" data-smoke="device-delete-error">
+                  {deviceDeleteError}
+                </div>
+              )}
               <div className="flex gap-2">
-                <button onClick={() => setShowDeleteConfirm(false)} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50">取消</button>
-                <button onClick={async () => { await deviceEvents().delete(device.id); setShowDeleteConfirm(false); }} className="rounded-md bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700" data-smoke="device-delete-confirm">确认删除</button>
+                <button onClick={() => { setDeviceDeleteError(''); setShowDeleteConfirm(false); }} disabled={deviceDeleteSaving} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50">取消</button>
+                <button onClick={confirmDeleteDevice} disabled={deviceDeleteSaving} className="rounded-md bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50" data-smoke="device-delete-confirm">
+                  {deviceDeleteSaving ? '删除中...' : '确认删除'}
+                </button>
               </div>
             </div>
           )}
