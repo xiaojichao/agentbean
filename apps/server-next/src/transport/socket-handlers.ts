@@ -197,6 +197,65 @@ export function registerWebSocketHandlers(
     }
   });
   bind(socket, WEB_EVENTS.agent.metrics, app, 'summarizeAgentMetrics', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.admin.listTeams, app, 'listAdminTeams', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.admin.listNetworks, app, 'listAdminNetworks', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.admin.listUsers, app, 'listAdminUsers', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.admin.listDevices, app, 'listAdminDevices', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.admin.listAgents, app, 'listAdminAgents', undefined, { authenticatedUser: options.authenticatedUser });
+  socket.on(WEB_EVENTS.admin.deleteTeam, async (payload, ack) => {
+    try {
+      const userId = await requireAuthenticatedSocketUser(options.authenticatedUser);
+      const teamId = payloadString(payload, 'teamId');
+      if (!teamId) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'teamId is required'));
+        return;
+      }
+      ack?.(await app.deleteAdminTeam({ userId, teamId }));
+    } catch (error) {
+      ack?.(socketErrorAck(error, WEB_EVENTS.admin.deleteTeam));
+    }
+  });
+  socket.on(WEB_EVENTS.admin.deleteNetwork, async (payload, ack) => {
+    try {
+      const userId = await requireAuthenticatedSocketUser(options.authenticatedUser);
+      const teamId = payloadString(payload, 'networkId') ?? payloadString(payload, 'teamId');
+      if (!teamId) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'networkId is required'));
+        return;
+      }
+      ack?.(await app.deleteAdminTeam({ userId, teamId }));
+    } catch (error) {
+      ack?.(socketErrorAck(error, WEB_EVENTS.admin.deleteNetwork));
+    }
+  });
+  socket.on(WEB_EVENTS.admin.deleteUser, async (payload, ack) => {
+    try {
+      const adminUserId = await requireAuthenticatedSocketUser(options.authenticatedUser);
+      const targetUserId = payloadString(payload, 'userId') ?? payloadString(payload, 'targetUserId');
+      if (!targetUserId) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'userId is required'));
+        return;
+      }
+      ack?.(await app.deleteAdminUser({ adminUserId, targetUserId }));
+    } catch (error) {
+      ack?.(socketErrorAck(error, WEB_EVENTS.admin.deleteUser));
+    }
+  });
+  bind(socket, WEB_EVENTS.admin.deleteAgent, app, 'deleteAdminAgent', undefined, { authenticatedUser: options.authenticatedUser });
+  socket.on(WEB_EVENTS.admin.transferDeviceOwner, async (payload, ack) => {
+    try {
+      const adminUserId = await requireAuthenticatedSocketUser(options.authenticatedUser);
+      const deviceId = payloadString(payload, 'deviceId');
+      const targetUserId = payloadString(payload, 'userId') ?? payloadString(payload, 'targetUserId');
+      if (!deviceId || !targetUserId) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'deviceId and userId are required'));
+        return;
+      }
+      ack?.(await app.transferDeviceOwnerAsAdmin({ adminUserId, deviceId, targetUserId }));
+    } catch (error) {
+      ack?.(socketErrorAck(error, WEB_EVENTS.admin.transferDeviceOwner));
+    }
+  });
   bind(socket, WEB_EVENTS.message.send, app, 'sendMessage', async (_payload, result) => {
     await options.afterMessageSend?.(_payload, result);
     if (!options.dispatch || !isSendMessageAck(result)) {
@@ -345,6 +404,19 @@ function socketErrorAck(error: unknown, event?: string) {
     error instanceof Error ? error.stack ?? error.message : error,
   );
   return makeFailure('INTERNAL_ERROR', INTERNAL_SOCKET_ERROR_MESSAGE);
+}
+
+async function requireAuthenticatedSocketUser(
+  authenticatedUser: AuthenticatedUserProvider | undefined,
+): Promise<string> {
+  if (!authenticatedUser) {
+    throw new UnauthenticatedSocketError();
+  }
+  const auth = await authenticatedUser();
+  if (!auth.hasToken || !auth.userId) {
+    throw new UnauthenticatedSocketError();
+  }
+  return auth.userId;
 }
 
 function updateAuthenticatedCurrentTeam(

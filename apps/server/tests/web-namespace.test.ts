@@ -942,6 +942,49 @@ describe('/web namespace', () => {
     admin.close();
   });
 
+  it('disconnects an online daemon when its device is deleted', async () => {
+    const now = Date.now();
+    app.globalDb.users.create({
+      id: 'live-device-owner',
+      username: 'live-device-owner',
+      passwordHash: null,
+      createdAt: now,
+    });
+    app.globalDb.networkMembers.add('default', 'live-device-owner', 'member');
+
+    const daemon = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: generateToken('live-device-owner', 'default'),
+        deviceId: 'delete-live-device',
+        networkId: 'default',
+        agents: [],
+        systemInfo: { hostname: 'Live Delete Device' },
+      },
+      reconnection: false,
+      transports: ['websocket'],
+    });
+    await new Promise<void>((r) => daemon.on('connect', () => r()));
+    daemon.emit('register');
+    await waitFor(() => app.globalDb.devices.get('delete-live-device') !== null);
+
+    const owner = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: { token: generateToken('live-device-owner', 'default') },
+    });
+    await new Promise<void>((r) => owner.on('connect', () => r()));
+    const deleted = await new Promise<any>((resolve) => {
+      owner.emit('device:delete', { id: 'delete-live-device' }, resolve);
+    });
+
+    expect(deleted).toEqual({ ok: true });
+    expect(app.globalDb.devices.get('delete-live-device')).toBeNull();
+    expect(app.deviceRegistry.get('delete-live-device')).toBeUndefined();
+
+    daemon.close();
+    owner.close();
+  });
+
   it('prevents team members from removing agents that belong to another member device', async () => {
     const now = Date.now();
     app.globalDb.users.create({
@@ -1718,6 +1761,89 @@ describe('/web namespace', () => {
 
     daemon.close();
     owner.close();
+  });
+
+  it('shows daemon-next scanned and custom device agents in the members list', async () => {
+    const daemon = ioClient(`${baseUrl}/agent`, {
+      auth: {
+        token: 'default:default:tok',
+        deviceId: 'daemon-next-members-device',
+        networkId: 'default',
+        agents: [],
+        systemInfo: { hostname: 'Daemon Next Members' },
+      },
+      reconnection: false,
+      transports: ['websocket'],
+    });
+    await new Promise<void>((r) => daemon.on('connect', () => r()));
+    daemon.emit('register');
+
+    const scanned = await new Promise<any>((resolve) => {
+      daemon.emit('agent:register-batch', {
+        teamId: 'default',
+        deviceId: 'daemon-next-members-device',
+        agents: [
+          {
+            name: 'Hermes Gateway',
+            category: 'agentos-hosted',
+            adapterKind: 'hermes',
+            command: '/usr/local/bin/hermes',
+            args: ['gateway', 'run'],
+            cwd: '/Users/shaw/hermes',
+            source: 'scanned',
+          },
+        ],
+      }, resolve);
+    });
+    expect(scanned.ok).toBe(true);
+
+    const web = ioClient(`${baseUrl}/web`, {
+      reconnection: false,
+      transports: ['websocket'],
+      auth: {
+        token: generateToken('admin', 'default'),
+        currentDeviceId: 'daemon-next-members-device',
+      },
+    });
+    await new Promise<void>((r) => web.on('connect', () => r()));
+
+    const created = await new Promise<any>((resolve) => {
+      web.emit('agent:create', {
+        name: 'Local Codex',
+        adapterKind: 'codex',
+        category: 'executor-hosted',
+        deviceId: 'daemon-next-members-device',
+        command: '/usr/local/bin/codex',
+        args: ['--model', 'gpt-5.4'],
+        cwd: '/Users/shaw/project',
+        description: 'Local custom agent',
+      }, resolve);
+    });
+    expect(created.ok).toBe(true);
+
+    const members = await new Promise<any>((resolve) => {
+      web.emit('members:list', {}, resolve);
+    });
+    expect(members.ok).toBe(true);
+    expect(members.agents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'scan-daemon-next-members-device-hermes-gateway',
+        name: 'Hermes-Gateway',
+        category: 'agentos-hosted',
+        source: 'scanned',
+        deviceName: 'Daemon-Next-Members',
+      }),
+      expect.objectContaining({
+        id: created.agent.id,
+        name: 'Local-Codex',
+        category: 'executor-hosted',
+        source: 'custom',
+        deviceName: 'Daemon-Next-Members',
+      }),
+    ]));
+
+    daemon.close();
+    web.close();
   });
 
   it('binds newly created custom agents to the selected team device immediately', async () => {

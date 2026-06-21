@@ -931,6 +931,63 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('lists visible scanned and custom agents with team members', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 310,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-1', 'agent-1', 'agent-2']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+    });
+    await app.registerDiscoveredAgents({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      agents: [{
+        name: 'Hermes Gateway',
+        adapterKind: 'hermes',
+        category: 'agentos-hosted',
+        command: '/usr/local/bin/hermes',
+        args: ['gateway', 'run'],
+        cwd: '/Users/shaw/hermes',
+      }],
+    });
+    await app.createCustomAgent({
+      userId: 'user-1',
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      name: 'Local Codex',
+      adapterKind: 'codex',
+      command: '/usr/local/bin/codex',
+      args: ['--model', 'gpt-5.4'],
+      cwd: '/Users/shaw/project',
+    });
+
+    await expect(app.listMembers({ userId: 'user-1', teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      humans: [expect.objectContaining({ userId: 'user-1' })],
+      agents: expect.arrayContaining([
+        expect.objectContaining({
+          id: 'agent-1',
+          name: 'Hermes Gateway',
+          category: 'agentos-hosted',
+          source: 'scanned',
+          deviceId: 'device-1',
+        }),
+        expect.objectContaining({
+          id: 'agent-2',
+          name: 'Local Codex',
+          category: 'executor-hosted',
+          source: 'custom',
+          deviceId: 'device-1',
+        }),
+      ]),
+    });
+  });
+
   test('creates and validates a user join link for an existing team member', async () => {
     const app = createInMemoryServerNext({
       now: () => 250,

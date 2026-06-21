@@ -49,6 +49,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       async getByUsername(username) {
         return Array.from(users.values()).find((user) => user.username === username) ?? null;
       },
+      async listAll() {
+        return Array.from(users.values()).sort((left, right) => left.createdAt - right.createdAt);
+      },
       async setCurrentTeam(userId, teamId) {
         const user = users.get(userId);
         if (user) {
@@ -62,6 +65,14 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         users.set(input.userId, updated);
         return updated;
       },
+      async delete(userId) {
+        users.delete(userId);
+        for (const [key, member] of members.entries()) {
+          if (member.userId === userId) {
+            members.delete(key);
+          }
+        }
+      },
     },
     teams: {
       async create(input) {
@@ -70,6 +81,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async getById(id) {
         return teams.get(id) ?? null;
+      },
+      async listAll() {
+        return Array.from(teams.values()).sort((left, right) => left.createdAt - right.createdAt);
       },
       async listForUser(userId) {
         return Array.from(members.values())
@@ -358,6 +372,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       async listByTeam(teamId) {
         return Array.from(devices.values()).filter((device) => device.teamId === teamId);
       },
+      async listAll() {
+        return Array.from(devices.values()).sort((left, right) => left.createdAt - right.createdAt);
+      },
       async listConnected() {
         return Array.from(devices.values()).filter((device) => device.status !== 'offline');
       },
@@ -383,6 +400,19 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const updated: DeviceRecord = {
           ...device,
           name: input.hostname,
+          updatedAt: input.updatedAt,
+        };
+        devices.set(device.id, updated);
+        return updated;
+      },
+      async transferOwner(input) {
+        const device = devices.get(input.deviceId);
+        if (!device) {
+          return null;
+        }
+        const updated = {
+          ...device,
+          ownerId: input.ownerId,
           updatedAt: input.updatedAt,
         };
         devices.set(device.id, updated);
@@ -552,6 +582,25 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         return Array.from(agents.values()).filter(
           (agent) => agent.deviceId === deviceId && agent.deletedAt === undefined,
         );
+      },
+      async listAll() {
+        return Array.from(agents.values()).filter((agent) => agent.deletedAt === undefined);
+      },
+      async updateOwnerByDevice(input) {
+        const updated: AgentRecord[] = [];
+        for (const agent of agents.values()) {
+          if (agent.deviceId !== input.deviceId || agent.deletedAt !== undefined) {
+            continue;
+          }
+          const next = {
+            ...agent,
+            ownerId: input.ownerId,
+            lastSeenAt: agent.lastSeenAt ?? input.timestamp,
+          };
+          agents.set(agent.id, next);
+          updated.push(next);
+        }
+        return updated;
       },
     },
     messages: {

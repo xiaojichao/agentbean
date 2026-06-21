@@ -1,4 +1,5 @@
 import { createServer, type Server as HttpServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -924,6 +925,282 @@ describe('server-next Socket.IO namespaces', () => {
       successCount: 1,
       failCount: 1,
       lastError: 'boom',
+    });
+  });
+
+  test('serves admin dashboard lists and device owner transfer to global admins only', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 7000 },
+      ids: { nextId: createIds(['unused']) },
+    });
+    await repositories.users.create({
+      id: 'admin-user',
+      username: 'admin',
+      role: 'admin',
+      primaryTeamId: 'team-admin',
+      currentTeamId: 'team-admin',
+      passwordHash: sha256('secret'),
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+    await repositories.users.create({
+      id: 'member-user',
+      username: 'member',
+      role: 'user',
+      primaryTeamId: 'team-admin',
+      currentTeamId: 'team-admin',
+      passwordHash: sha256('secret'),
+      createdAt: 1001,
+      updatedAt: 1001,
+    });
+    await repositories.users.create({
+      id: 'new-owner',
+      username: 'new-owner',
+      role: 'user',
+      primaryTeamId: 'team-admin',
+      currentTeamId: 'team-admin',
+      passwordHash: sha256('secret'),
+      createdAt: 1002,
+      updatedAt: 1002,
+    });
+    await repositories.teams.create({
+      id: 'team-admin',
+      name: 'AgentBean',
+      path: 'agentbean',
+      visibility: 'private',
+      ownerId: 'admin-user',
+      createdAt: 1000,
+    });
+    for (const member of [
+      { userId: 'admin-user', username: 'admin', role: 'owner' as const, joinedAt: 1000 },
+      { userId: 'member-user', username: 'member', role: 'member' as const, joinedAt: 1001 },
+      { userId: 'new-owner', username: 'new-owner', role: 'member' as const, joinedAt: 1002 },
+    ]) {
+      await repositories.teams.addMember({ teamId: 'team-admin', ...member });
+    }
+    await repositories.devices.upsertHello({
+      id: 'device-admin',
+      teamId: 'team-admin',
+      ownerId: 'member-user',
+      status: 'online',
+      name: 'Mac Studio',
+      machineId: 'machine-admin',
+      profileId: 'default',
+      systemInfo: { hostname: 'mac-studio.local', daemonVersion: '0.1.13' },
+      connectCommand: 'npx @agentbean/daemon@latest --token stale',
+      lastSeenAt: 6500,
+      createdAt: 6000,
+      updatedAt: 6500,
+    });
+    await repositories.runtimes.replaceForDevice({
+      teamId: 'team-admin',
+      deviceId: 'device-admin',
+      runtimes: [{
+        id: 'runtime-admin',
+        teamId: 'team-admin',
+        deviceId: 'device-admin',
+        adapterKind: 'codex',
+        name: 'Codex CLI',
+        installed: true,
+        command: 'codex',
+        cwd: '/tmp/project',
+        lastSeenAt: 6500,
+      }],
+    });
+    await repositories.agents.upsert({
+      id: 'agent-admin',
+      primaryTeamId: 'team-admin',
+      visibleTeamIds: ['team-admin'],
+      name: 'Drama',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      ownerId: 'member-user',
+      deviceId: 'device-admin',
+      command: 'codex',
+      args: ['--model', 'gpt-5.4'],
+      cwd: '/tmp/project',
+      description: '写作 Agent',
+      lastSeenAt: 6500,
+    });
+    await repositories.channels.create({
+      id: 'channel-admin',
+      teamId: 'team-admin',
+      kind: 'channel',
+      name: 'admin-room',
+      visibility: 'public',
+      createdBy: 'admin-user',
+      createdAt: 6500,
+      humanMemberIds: ['admin-user'],
+      agentMemberIds: ['agent-admin'],
+    });
+    const staleHello = await app.deviceHello({
+      teamId: 'team-admin',
+      ownerId: 'member-user',
+      machineId: 'machine-admin',
+      profileId: 'default',
+      hostname: 'Mac Studio',
+    });
+    expect(staleHello.ok).toBe(true);
+    const staleDeviceToken = staleHello.ok ? staleHello.credentials?.token : undefined;
+    expect(staleDeviceToken).toBeTypeOf('string');
+
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const memberLogin = await app.loginUser({ username: 'member', password: 'secret' });
+    expect(memberLogin.ok).toBe(true);
+    const member = await connectClient(`${baseUrl}/web`, {
+      auth: { token: memberLogin.ok ? memberLogin.token : '' },
+    });
+    cleanups.push(async () => {
+      member.disconnect();
+    });
+    await expect(
+      member.emitWithAck(WEB_EVENTS.admin.transferDeviceOwner, {
+        deviceId: 'device-admin',
+        userId: 'new-owner',
+      }),
+    ).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    const adminLogin = await app.loginUser({ username: 'admin', password: 'secret' });
+    expect(adminLogin.ok).toBe(true);
+    const admin = await connectClient(`${baseUrl}/web`, {
+      auth: { token: adminLogin.ok ? adminLogin.token : '' },
+    });
+    cleanups.push(async () => {
+      admin.disconnect();
+    });
+
+    await expect(admin.emitWithAck(WEB_EVENTS.admin.listTeams, {})).resolves.toMatchObject({
+      ok: true,
+      teams: [{ id: 'team-admin', name: 'AgentBean', members: expect.arrayContaining([expect.objectContaining({ userId: 'member-user' })]) }],
+    });
+    await expect(admin.emitWithAck(WEB_EVENTS.admin.listNetworks, {})).resolves.toMatchObject({
+      ok: true,
+      networks: [{ id: 'team-admin', name: 'AgentBean' }],
+    });
+    await expect(admin.emitWithAck(WEB_EVENTS.admin.listUsers, {})).resolves.toMatchObject({
+      ok: true,
+      users: expect.arrayContaining([
+        expect.objectContaining({ id: 'admin-user', username: 'admin', role: 'admin' }),
+        expect.objectContaining({ id: 'member-user', username: 'member', role: 'user' }),
+      ]),
+    });
+    await expect(admin.emitWithAck(WEB_EVENTS.admin.listDevices, {})).resolves.toMatchObject({
+      ok: true,
+      devices: [expect.objectContaining({
+        id: 'device-admin',
+        name: 'Mac Studio',
+        userId: 'member-user',
+        userName: 'member',
+        networkId: 'team-admin',
+        networkName: 'AgentBean',
+        agentCount: 1,
+        publicAgents: [expect.objectContaining({
+          id: 'agent-admin',
+          name: 'Drama',
+          deviceName: 'Mac Studio',
+          deviceUserName: 'member',
+          ownerName: 'member',
+          networkName: 'AgentBean',
+        })],
+      })],
+    });
+    await expect(admin.emitWithAck(WEB_EVENTS.admin.listAgents, {})).resolves.toMatchObject({
+      ok: true,
+      agents: [expect.objectContaining({
+        id: 'agent-admin',
+        name: 'Drama',
+        ownerId: 'member-user',
+        ownerName: 'member',
+        userName: 'member',
+        deviceName: 'Mac Studio',
+        deviceUserName: 'member',
+        networkId: 'team-admin',
+        networkName: 'AgentBean',
+        publishedNetworkIds: ['team-admin'],
+      })],
+    });
+
+    await expect(
+      admin.emitWithAck(WEB_EVENTS.admin.transferDeviceOwner, {
+        deviceId: 'device-admin',
+        userId: 'new-owner',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      device: {
+        id: 'device-admin',
+        userId: 'new-owner',
+        ownerId: 'new-owner',
+        userName: 'new-owner',
+      },
+    });
+    await expect(admin.emitWithAck(WEB_EVENTS.admin.listAgents, {})).resolves.toMatchObject({
+      ok: true,
+      agents: [expect.objectContaining({
+        id: 'agent-admin',
+        ownerId: 'new-owner',
+        ownerName: 'new-owner',
+      })],
+    });
+
+    await expect(
+      app.deviceHelloFromCredentials({
+        token: staleDeviceToken!,
+        hostname: 'Mac Studio',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      device: {
+        id: 'device-admin',
+        ownerId: 'new-owner',
+        ownerName: 'new-owner',
+      },
+    });
+    await expect(repositories.devices.getById('device-admin')).resolves.toMatchObject({
+      ownerId: 'new-owner',
+    });
+    await expect(repositories.agents.getById('agent-admin')).resolves.toMatchObject({
+      ownerId: 'new-owner',
+    });
+
+    await repositories.teams.create({
+      id: 'team-owned-by-new-owner',
+      name: 'Owned Team',
+      path: 'owned-team',
+      visibility: 'private',
+      ownerId: 'new-owner',
+      createdAt: 7100,
+    });
+    await repositories.teams.addMember({
+      teamId: 'team-owned-by-new-owner',
+      userId: 'new-owner',
+      username: 'new-owner',
+      role: 'owner',
+      joinedAt: 7100,
+    });
+    await expect(admin.emitWithAck(WEB_EVENTS.admin.deleteUser, { userId: 'new-owner' })).resolves.toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+    });
+
+    await expect(admin.emitWithAck(WEB_EVENTS.admin.deleteAgent, { agentId: 'agent-admin' })).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(repositories.channels.getById('channel-admin')).resolves.toMatchObject({
+      agentMemberIds: [],
+    });
+    await expect(admin.emitWithAck(WEB_EVENTS.admin.listAgents, {})).resolves.toMatchObject({
+      ok: true,
+      agents: [],
     });
   });
 
@@ -2386,6 +2663,10 @@ function createIds(ids: string[]) {
     }
     return id;
   };
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
 }
 
 function channelIds(payload: unknown): string[] {

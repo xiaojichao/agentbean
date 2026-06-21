@@ -86,6 +86,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       async getByUsername(username) {
         return mapUser(globalDb.prepare('SELECT * FROM users WHERE username = ?').get(username));
       },
+      async listAll() {
+        return globalDb
+          .prepare('SELECT * FROM users ORDER BY created_at, id')
+          .all()
+          .map((row) => {
+            const user = mapUser(row);
+            if (!user) {
+              throw new Error('SQLite user row could not be mapped');
+            }
+            return user;
+          });
+      },
       async setCurrentTeam(userId, teamId) {
         globalDb.prepare('UPDATE users SET current_team_id = ?, updated_at = updated_at WHERE id = ?').run(teamId, userId);
       },
@@ -94,6 +106,10 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .prepare('UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?')
           .run(input.description, input.updatedAt, input.userId);
         return mapUser(globalDb.prepare('SELECT * FROM users WHERE id = ?').get(input.userId));
+      },
+      async delete(userId) {
+        globalDb.prepare('DELETE FROM team_members WHERE user_id = ?').run(userId);
+        globalDb.prepare('DELETE FROM users WHERE id = ?').run(userId);
       },
     },
     teams: {
@@ -117,6 +133,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       },
       async getById(id) {
         return mapTeam(globalDb.prepare('SELECT * FROM teams WHERE id = ?').get(id));
+      },
+      async listAll() {
+        return globalDb
+          .prepare('SELECT * FROM teams ORDER BY created_at, id')
+          .all()
+          .map((row) => {
+            const team = mapTeam(row);
+            if (!team) {
+              throw new Error('SQLite team row could not be mapped');
+            }
+            return team;
+          });
       },
       async listForUser(userId) {
         return globalDb
@@ -657,6 +685,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             return device;
           });
       },
+      async listAll() {
+        return globalDb
+          .prepare('SELECT * FROM devices ORDER BY updated_at, id')
+          .all()
+          .map((row) => {
+            const device = mapDevice(row);
+            if (!device) {
+              throw new Error('SQLite device row could not be mapped');
+            }
+            return device;
+          });
+      },
       async listConnected() {
         return globalDb
           .prepare("SELECT * FROM devices WHERE status != 'offline' ORDER BY updated_at, id")
@@ -695,6 +735,15 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         const result = globalDb
           .prepare('UPDATE devices SET hostname = ?, updated_at = ? WHERE id = ?')
           .run(input.hostname, input.updatedAt, input.deviceId);
+        if (sqliteChanges(result) === 0) {
+          return null;
+        }
+        return mapDevice(globalDb.prepare('SELECT * FROM devices WHERE id = ?').get(input.deviceId));
+      },
+      async transferOwner(input) {
+        const result = globalDb
+          .prepare('UPDATE devices SET owner_id = ?, updated_at = ? WHERE id = ?')
+          .run(input.ownerId, input.updatedAt, input.deviceId);
         if (sqliteChanges(result) === 0) {
           return null;
         }
@@ -978,6 +1027,33 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return globalDb
           .prepare('SELECT * FROM agents WHERE device_id = ? AND deleted_at IS NULL ORDER BY created_at, id')
           .all(deviceId)
+          .map((row) => {
+            const agent = mapAgent(globalDb, row);
+            if (!agent) {
+              throw new Error('SQLite agent row could not be mapped');
+            }
+            return agent;
+          });
+      },
+      async listAll() {
+        return globalDb
+          .prepare('SELECT * FROM agents WHERE deleted_at IS NULL ORDER BY created_at, id')
+          .all()
+          .map((row) => {
+            const agent = mapAgent(globalDb, row);
+            if (!agent) {
+              throw new Error('SQLite agent row could not be mapped');
+            }
+            return agent;
+          });
+      },
+      async updateOwnerByDevice(input) {
+        globalDb
+          .prepare('UPDATE agents SET owner_id = ?, updated_at = ?, last_seen_at = COALESCE(last_seen_at, ?) WHERE device_id = ? AND deleted_at IS NULL')
+          .run(input.ownerId, input.timestamp, input.timestamp, input.deviceId);
+        return globalDb
+          .prepare('SELECT * FROM agents WHERE device_id = ? AND deleted_at IS NULL ORDER BY created_at, id')
+          .all(input.deviceId)
           .map((row) => {
             const agent = mapAgent(globalDb, row);
             if (!agent) {

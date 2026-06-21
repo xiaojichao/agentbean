@@ -58,6 +58,8 @@ Phase 1 完成标准：
 | P2-08 | Missing scanned agent 变为 offline，且不删除 membership/history。 | UseCase | Missing scan behavior。 | `acceptance-tests.md`, `agent-identity-rules.md` |
 | P2-09 | `listVisibleAgents` 返回 primary-team 与 published agents，且没有 clones。 | UseCase | Visibility projection。 | `agent-identity-rules.md`, `feature-disposition.md` |
 | P2-09a | `agents:subscribe` 成功后发送 initial snapshot，daemon agent batch/status 变化后刷新 subscribed sockets。 | Socket | Agent subscription broadcast。 | `socket-protocol.md`, `known-gaps.md` |
+| P2-09b | `members:list` 返回 team human members 与当前 team 可见 agents，至少覆盖 scanned AgentOS agent 与 custom agent。 | UseCase/Socket | 成员页智能体成员不能退回 `agents: []`，也不能只依赖 `agents:subscribe` 或 `device:agents:list`。 | `socket-protocol.md`, `current-protocol-inventory.md`, `post-flip-follow-up-status.md` |
+| P2-09c | `members:list`、`device:agents:list`、`agents:subscribe` 与 `channel:members` 分别按成员页、设备管理页、全局 agent snapshot 与频道成员语义验收，不能用其中一个接口的通过替代另一个。 | UseCase/Socket | 防止已迁移产品入口只按模块/API 名称验收，遗漏页面语义聚合。 | `socket-protocol.md`, `current-protocol-inventory.md`, `post-flip-follow-up-status.md` |
 | P2-10 | Public channel list 对 team member 可见。 | UseCase | Channel visibility。 | `acceptance-tests.md` |
 | P2-10a | Private channel 创建时 creator 自动可见，非 member 不可见。 | UseCase | Channel creator visibility。 | `current-behavior.md`, `feature-disposition.md` |
 | P2-10b | 非默认频道 settings 只允许 creator 更新。 | UseCase | Channel creator controls。 | `current-behavior.md`, `feature-disposition.md` |
@@ -88,6 +90,7 @@ Phase 1 完成标准：
 | P2-19a | `agent:publish` / `agent:unpublish` / `agent:update-config` / `agent:delete` 遵守 owner/admin 权限、visible projection、envKeys-only snapshot 与 custom-agent tombstone 删除语义。 | UseCase/Socket/Web | Agent 管理面第一版；删除不重写既有 message/dispatch 历史。 | `contracts-dto.md`, `socket-protocol.md`, `feature-disposition.md` |
 | P2-20 | server-next 长驻 dev server 暴露 `/healthz`，并挂载真实 `/web` 与 `/agent` Socket.IO namespaces。 | Socket | 本地替换旧 server 的运行入口。 | `implementation-runbook.md`, `target-architecture.md` |
 | P2-21 | server-next dev server 在 SQLite 文件模式下重启后保留注册用户、current team、channel 与 message history。 | Repository/Socket | 本地替换旧 server 的持久化入口。 | `first-slice-schema-repositories.md`, `target-architecture.md`, `production-cutover-runbook.md` |
+| P2-21a | Web Next dashboard admin lists (`admin:list-teams`/users/devices/agents) 与 `admin:transfer-device-owner` 必须由 server-next 提供，并只允许全局 admin 调用；设备与 Agent 列表需包含团队名、用户名、设备名、公开/可见 Agent 归属字段。 | UseCase/Socket/Web | 已迁移 dashboard 不能只保留页面文件；旧版已有的 admin dashboard lists 与设备 owner 转移语义要有 server-next 回归测试和 readiness gate。 | `socket-protocol.md`, `post-flip-follow-up-status.md` |
 | P2-22 | server-next 在平台提供 `PORT` 时默认监听 `0.0.0.0:$PORT`，并默认使用 SQLite storage。 | Config/Socket | 生产平台替换旧 server 的启动入口。 | `target-architecture.md`, `implementation-runbook.md` |
 | P2-23 | register/login 返回 signed session token，`auth:whoami` 能用 token 恢复 user 与 current team，篡改 token 返回 `UNAUTHENTICATED`。 | UseCase/Socket | 正式 web 登录态恢复入口。 | `socket-protocol.md`, `target-architecture.md` |
 | P2-24 | 平台式启动存在 `PORT` 时，server-next 必须显式配置 `AGENTBEAN_NEXT_SESSION_SECRET` 或 `--session-secret`。 | Config | 避免 production 使用 dev fallback session secret。 | `target-architecture.md`, `socket-protocol.md` |
@@ -192,8 +195,9 @@ Phase 4 完成标准：
 | E2E-08 | `npm run smoke:agentbean-next-browser` 在真实 Chrome 中选择 composer 文件、上传 artifact-backed human message、等待 viewer 渲染，并 fetch preview/download 链接校验 bytes。 | Browser E2E/CI | Artifact upload/viewer 不能只由 DOM harness 证明，必须在真实 browser/file input/HTTP route 链路中覆盖。 | `sixty-first-slice-status.md`, `scripts/smoke-agentbean-next-browser.mjs` |
 | E2E-09 | `npm run smoke:agentbean-next-browser` 在真实 Chrome 中通过 preview task form 创建 task、更新状态，并在刷新后通过 `task:list` 恢复同一 task。 | Browser E2E/CI | Tasks 第一版不能只由 usecase/socket/DOM harness 证明，必须覆盖真实浏览器 UI 与 session restore 路径。 | `sixty-ninth-slice-status.md`, `scripts/smoke-agentbean-next-browser.mjs` |
 | E2E-10 | `npm run smoke:agentbean-next-browser` 在真实 Chrome 中点击 root message 的「回复讨论串」按钮、输入 thread reply、提交，并断言 reply 嵌套在 root 之下（`.thread-reply`）。 | Browser E2E/CI | Thread UI 不能只由 DOM harness 证明，必须覆盖真实浏览器点击/输入/提交/嵌套渲染链路。 | `seventieth-slice-status.md`, `scripts/smoke-agentbean-next-browser.mjs` |
+| E2E-11 | 已迁移产品入口不得只按模块完成验收；每个入口都要有页面语义、server query、subscription/broadcast 与协议兼容的最小闭环测试或明确的未覆盖记录。 | Parity E2E/CI | 已经迁移的 surface 要做 backfill audit：补测试、补 readiness gate、补文档状态；不能把“代码已迁入”当成“旧版行为已等价”。 | `post-flip-follow-up-status.md`, `current-protocol-inventory.md`, `socket-protocol.md` |
 
-当前 E2E-07、E2E-08、E2E-09 与 E2E-10 已进入 AgentBean Next CI gate。后续新增更完整 search、完整 task page、settings/member/device 等产品切片时，应在本节追加对应 browser-level gate，而不是把已有 browser smoke 误判为覆盖全部旧产品表面。
+当前 E2E-07、E2E-08、E2E-09 与 E2E-10 已进入 AgentBean Next CI gate。E2E-11 是所有已迁移入口的 backfill 规则：如果发现旧版已存在但 Next 入口缺少同等行为，要先补 regression test 与 readiness/static gate，再把状态写回本矩阵或 follow-up status。后续新增更完整 search、完整 task page、settings/member/device 等产品切片时，应在本节追加对应 browser-level gate，而不是把已有 browser smoke 误判为覆盖全部旧产品表面。
 
 只有对应 phase 的 E2E gates 通过后，该 phase 才可冻结。
 

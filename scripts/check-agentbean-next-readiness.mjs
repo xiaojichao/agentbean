@@ -17,6 +17,16 @@ export function collectAgentBeanNextReadinessChecks({
   const railwayJson = readJson(join(root, 'railway.json'));
   const workflow = readFileSync(join(root, '.github/workflows/ci-cd.yml'), 'utf8');
   const cutoverRunbook = readFileSync(join(root, 'agentbean-next/docs/production-cutover-runbook.md'), 'utf8');
+  const verificationMatrix = readFileSync(join(root, 'agentbean-next/docs/verification-matrix.md'), 'utf8');
+  const socketProtocol = readFileSync(join(root, 'agentbean-next/docs/socket-protocol.md'), 'utf8');
+  const contractsSocket = readFileSync(join(root, 'packages/contracts/src/socket.ts'), 'utf8');
+  const serverNextUseCases = readFileSync(join(root, 'apps/server-next/src/application/usecases.ts'), 'utf8');
+  const serverNextSocketHandlers = readFileSync(join(root, 'apps/server-next/src/transport/socket-handlers.ts'), 'utf8');
+  const serverNextFirstSliceTests = readFileSync(join(root, 'apps/server-next/tests/first-slice.test.ts'), 'utf8');
+  const serverNextSocketIntegrationTests = readFileSync(join(root, 'apps/server-next/tests/socket-integration.test.ts'), 'utf8');
+  const webNextDashboardPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/dashboard/page.tsx'), 'utf8');
+  const legacyAgentNamespace = readFileSync(join(root, 'apps/server/src/namespaces/agent.ts'), 'utf8');
+  const legacyWebNamespaceTests = readFileSync(join(root, 'apps/server/tests/web-namespace.test.ts'), 'utf8');
   const checks = [
     check(
       'root-build-script',
@@ -357,6 +367,47 @@ export function collectAgentBeanNextReadinessChecks({
         cutoverRunbook.includes('npm `@latest` dist-tag 已指向 daemon-next') &&
         readFileSync(join(root, 'scripts/audit-agentbean-next-cutover.mjs'), 'utf8').includes('npm-canonical-daemon-latest-dist-tag'),
       'Strict cutover audit must require npm @agentbean/daemon dist-tags.latest to point at the daemon-next canonical version before declaring final replacement readiness',
+    ),
+    check(
+      'members-list-agent-parity-regression',
+      socketProtocol.includes('Ack<{ humans: HumanMemberDto[]; agents: AgentDto[] }>') &&
+        serverNextUseCases.includes('repositories.agents.listVisibleInTeam(listInput.teamId)') &&
+        serverNextFirstSliceTests.includes('lists visible scanned and custom agents with team members') &&
+        serverNextFirstSliceTests.includes("category: 'agentos-hosted'") &&
+        serverNextFirstSliceTests.includes("source: 'custom'"),
+      'members:list must keep the old member-page contract: human members plus visible scanned AgentOS and custom agents',
+    ),
+    check(
+      'daemon-next-register-batch-legacy-compatibility',
+      legacyAgentNamespace.includes("socket.on('agent:register-batch', handleDeviceRegisterAgents)") &&
+        legacyAgentNamespace.includes("socket.on('device:register-agents', handleDeviceRegisterAgents)") &&
+        legacyWebNamespaceTests.includes('shows daemon-next scanned and custom device agents in the members list'),
+      'Old production server must continue accepting daemon-next agent:register-batch until the final migration has no old-server compatibility surface',
+    ),
+    check(
+      'product-surface-parity-contracts',
+      verificationMatrix.includes('P2-09b') &&
+        verificationMatrix.includes('`members:list` 返回 team human members 与当前 team 可见 agents') &&
+        verificationMatrix.includes('P2-09c') &&
+        verificationMatrix.includes('`members:list`、`device:agents:list`、`agents:subscribe` 与 `channel:members`') &&
+        verificationMatrix.includes('E2E-11') &&
+        verificationMatrix.includes('已迁移产品入口不得只按模块完成验收'),
+      'Verification matrix must keep product-surface parity contracts for already migrated AgentBean Next areas',
+    ),
+    check(
+      'admin-dashboard-parity-regression',
+      contractsSocket.includes("listTeams: 'admin:list-teams'") &&
+        contractsSocket.includes("transferDeviceOwner: 'admin:transfer-device-owner'") &&
+        serverNextSocketHandlers.includes('WEB_EVENTS.admin.listTeams') &&
+        serverNextSocketHandlers.includes('WEB_EVENTS.admin.transferDeviceOwner') &&
+        serverNextUseCases.includes('listAdminDevices') &&
+        serverNextUseCases.includes('transferDeviceOwnerAsAdmin') &&
+        serverNextSocketIntegrationTests.includes('serves admin dashboard lists and device owner transfer to global admins only') &&
+        webNextDashboardPage.includes('admin:list-users') &&
+        webNextDashboardPage.includes('admin:transfer-device-owner') &&
+        verificationMatrix.includes('P2-21a') &&
+        verificationMatrix.includes('admin dashboard lists'),
+      'Admin dashboard migration must keep socket contract, server-next handlers, regression tests, and verification-matrix coverage together',
     ),
   ];
 

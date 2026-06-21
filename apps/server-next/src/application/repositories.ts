@@ -104,13 +104,16 @@ export interface UserRepository {
   create(input: UserRecord): Promise<UserRecord>;
   getById(id: ID): Promise<UserRecord | null>;
   getByUsername(username: string): Promise<UserRecord | null>;
+  listAll(): Promise<UserRecord[]>;
   setCurrentTeam(userId: ID, teamId: ID): Promise<void>;
   updateDescription(input: { userId: ID; description: string | null; updatedAt: UnixMs }): Promise<UserRecord | null>;
+  delete(userId: ID): Promise<void>;
 }
 
 export interface TeamRepository {
   create(input: TeamRecord): Promise<TeamRecord>;
   getById(id: ID): Promise<TeamRecord | null>;
+  listAll(): Promise<TeamRecord[]>;
   listForUser(userId: ID): Promise<Array<TeamRecord & { currentUserRole: 'owner' | 'admin' | 'member' }>>;
   addMember(input: TeamMemberRecord): Promise<void>;
   isMember(teamId: ID, userId: ID): Promise<boolean>;
@@ -171,9 +174,11 @@ export interface DeviceRepository {
     profileId: string;
   }): Promise<DeviceRecord | null>;
   listByTeam(teamId: ID): Promise<DeviceRecord[]>;
+  listAll(): Promise<DeviceRecord[]>;
   listConnected(): Promise<DeviceRecord[]>;
   markOffline(input: { deviceId: ID; timestamp: UnixMs }): Promise<DeviceRecord | null>;
   updateName(input: { deviceId: ID; hostname: string; updatedAt: UnixMs }): Promise<DeviceRecord | null>;
+  transferOwner(input: { deviceId: ID; ownerId: ID; updatedAt: UnixMs }): Promise<DeviceRecord | null>;
   delete(input: { deviceId: ID; timestamp: UnixMs }): Promise<void>;
 }
 
@@ -197,6 +202,8 @@ export interface AgentRepository {
   updateStatus(input: { agentId: ID; status: AgentRecord['status']; lastSeenAt: UnixMs; lastError?: string }): Promise<void>;
   listVisibleInTeam(teamId: ID): Promise<AgentRecord[]>;
   listByDevice(deviceId: ID): Promise<AgentRecord[]>;
+  listAll(): Promise<AgentRecord[]>;
+  updateOwnerByDevice(input: { deviceId: ID; ownerId: ID; timestamp: UnixMs }): Promise<AgentRecord[]>;
 }
 
 export interface MessageRepository {
