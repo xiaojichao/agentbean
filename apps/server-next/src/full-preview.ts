@@ -34,7 +34,7 @@ export interface AgentBeanNextPreviewConfig {
   profileId: string;
   hostname: string;
   fallbackPrefix: string;
-  webEntry: 'preview' | 'app';
+  webEntry?: 'preview' | 'app';
 }
 
 export interface ParseAgentBeanNextPreviewConfigInput {
