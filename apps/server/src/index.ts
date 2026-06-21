@@ -4,6 +4,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import multer from 'multer';
 import { Server as IOServer } from 'socket.io';
+import type { Socket as IOSocket } from 'socket.io';
 import { logger } from './log.js';
 import { openDb, initGlobalDb, type Db, type GlobalDb, type InviteRow } from './db.js';
 import { AgentRegistry, normalizeAgentName, type AgentRuntime } from './registry.js';
@@ -31,6 +32,7 @@ export interface AppHandle {
   db: Db;
   globalDb: GlobalDb;
   registry: AgentRegistry;
+  deviceRegistry: DeviceRegistry;
   channels: ChannelService;
   dispatch: DispatchFn;
   close: () => Promise<void>;
@@ -1098,6 +1100,28 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
     db.raw.prepare('DELETE FROM agents WHERE id = ?').run(agentId);
   }
 
+  function clearDeletedDeviceRuntime(deviceId: string): IOSocket | null {
+    const liveDevice = deviceRegistry.get(deviceId);
+    const agentIds = new Set<string>();
+    for (const agent of globalDb.agents.listAll()) {
+      if (agent.deviceId === deviceId) agentIds.add(agent.id);
+    }
+    for (const agent of registry.all()) {
+      if (agent.deviceId === deviceId) agentIds.add(agent.id);
+    }
+    for (const agentId of liveDevice?.agents.keys() ?? []) {
+      agentIds.add(agentId);
+    }
+
+    deviceRegistry.remove(deviceId);
+
+    for (const agentId of agentIds) {
+      deletePersistedAgent(agentId);
+    }
+
+    return liveDevice?.socket ?? null;
+  }
+
   const stopDaemonVersionRefresh = startDaemonVersionRefresh(() => {
     const networkIds = new Set(globalDb.networks.list().map((network) => network.id));
     for (const networkId of networkIds) emitDevicesSnapshotForNetwork(networkId);
@@ -1453,9 +1477,12 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
         const dbDevice = globalDb.devices.get(payload.id);
         if (!dbDevice) return ack?.({ ok: false, error: 'NOT_FOUND' });
         if (!canManageDevice(dbDevice, userId)) return ack?.({ ok: false, error: 'FORBIDDEN' });
+        const liveSocket = clearDeletedDeviceRuntime(payload.id);
         globalDb.devices.delete(payload.id);
         ack?.({ ok: true });
         emitDevicesSnapshotForNetwork(dbDevice.networkId);
+        emitAgentsSnapshotForNetwork(dbDevice.networkId);
+        if (liveSocket) setImmediate(() => liveSocket.disconnect(true));
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }
@@ -3069,7 +3096,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<AppHandle> {
   }
 
   return {
-    http: server, io, db, globalDb, registry, channels, dispatch,
+    http: server, io, db, globalDb, registry, deviceRegistry, channels, dispatch,
     async close() {
       stopDaemonVersionRefresh();
       stopScanner();

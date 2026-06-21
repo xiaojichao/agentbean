@@ -167,6 +167,80 @@ Ack<{ currentTeam: TeamDto }>
 - `team:update`：保留给 settings。
 - `team:delete`：如果 product UX 需要 owner delete，则保留。
 
+### Admin Dashboard
+
+这些事件服务 Web Next dashboard 的已迁移 admin 页面，权限为全局 `UserDto.role === 'admin'`，不同于 team owner/admin 权限。
+
+#### `admin:list-teams`
+
+Ack：
+
+```ts
+Ack<{ teams: Array<TeamDto & { members: HumanMemberDto[] }> }>
+```
+
+#### `admin:list-networks`
+
+旧版 dashboard 兼容别名；返回字段名仍为 `networks`：
+
+```ts
+Ack<{ networks: Array<TeamDto & { members: HumanMemberDto[] }> }>
+```
+
+#### `admin:list-users`
+
+Ack：
+
+```ts
+Ack<{ users: Array<UserDto & { createdAt: UnixMs }> }>
+```
+
+#### `admin:list-devices`
+
+Ack：
+
+```ts
+Ack<{ devices: Array<DeviceDto & {
+  userId: string;
+  userName: string;
+  networkId: string;
+  networkName: string;
+  agentCount: number;
+  runtimes: RuntimeDto[];
+  publicAgents: AdminAgentDto[];
+}> }>
+```
+
+#### `admin:list-agents`
+
+Ack：
+
+```ts
+Ack<{ agents: AdminAgentDto[] }>
+```
+
+`AdminAgentDto` 是 dashboard projection：`AgentDto` 加上 `networkId`、`networkName`、`ownerName`、`userName`、`deviceName`、`deviceUserName`、`publishedNetworkIds` 与 `unpublishedNetworkIds`。
+
+#### `admin:transfer-device-owner`
+
+客户端：
+
+```ts
+{ deviceId: string; userId: string }
+```
+
+Ack：
+
+```ts
+Ack<{ device: AdminDeviceDto }>
+```
+
+行为：
+
+- Authenticated socket 的 session user 是当前管理员；payload 的 `userId` 是目标 owner，不能被 auth 注入覆盖。
+- 目标 user 必须仍是该 device 所属 team 的成员。
+- 成功后更新 device owner，并同步更新该 device 下 Agent 的 `ownerId`。
+
 ### Join Links
 
 #### `join:create`

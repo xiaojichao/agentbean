@@ -598,8 +598,10 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       deps.io.of('/web').emit('agents:discovered', payload);
     });
 
-    // Daemon registers scanned agents (runtimes, agentOS, standalone)
-    socket.on('device:register-agents', (payload: {
+    // Daemon registers scanned agents (runtimes, agentOS, standalone).
+    // daemon-next emits the contracts event name; the legacy daemon still uses
+    // device:register-agents, so keep both names on the same persistence path.
+    const handleDeviceRegisterAgents = (payload: {
       agents: { name: string; category: string; adapterKind: string; command: string; args: string[]; cwd?: string | null; source?: string }[]
     }, ack?: (r: any) => void) => {
       try {
@@ -790,7 +792,9 @@ export function attachAgentNamespace(deps: AgentNamespaceDeps): AgentNamespaceHa
       } catch (e: any) {
         ack?.({ ok: false, error: e.message ?? 'unknown' });
       }
-    });
+    };
+    socket.on('device:register-agents', handleDeviceRegisterAgents);
+    socket.on('agent:register-batch', handleDeviceRegisterAgents);
 
     socket.on('device:register-runtimes', (payload: {
       runtimes: { name: string; adapterKind: string; command: string; installed: boolean }[]

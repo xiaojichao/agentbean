@@ -96,7 +96,7 @@ P0 baseline 已经收敛，不应继续作为下一条产品切片 blocker。
 
 - 旧 `apps/web` App Router 页面树已在第七十一切片迁入 `apps/web-next/app`，并且 `npm run build:web-next` 可以同时构建 socket client package 与 Next app。`server-next` 生产式 `PORT` 启动默认 `webEntry=app`，`/preview` 保留为诊断入口；第一版 WebUI browser smoke 已覆盖 4 个公开页面与 7 个登录后业务页面，并在 `/runs` 抓到/修复旧 `/api/teams/default/workspace-runs` 403；后续加深的 business smoke 已覆盖 `chat` 发送/刷新恢复、`channels` 创建/归档/列表消失、`networks` 团队创建/切换/删除/恢复原团队、`tasks` 创建/状态更新/刷新恢复、canonical `dispatch:result.workspaceRun` 产出的 `runs` 列表/详情/刷新恢复、`members` 的 join/role update/刷新恢复、`devices` 的 rename/刷新恢复、`settings` 的 team rename、join link create/revoke 与刷新恢复，以及 `agents` 的 custom agent create、publish/unpublish 与 metrics。剩余风险从“页面文件未迁入/生产入口仍托管 preview shell”收窄为“更完整 admin/audit、workspace explorer、日志检索与长尾 UI parity”。
 - 更完整的 workspace run 专用页面布局、team-wide workspace explorer 与分段日志存储/检索。
-- Admin、metrics 与 audit requirements；`agent:metrics` request/ack 已有，但完整 admin/metrics/audit 产品面仍未冻结。
+- Admin、metrics 与 audit requirements；`admin:list-teams`/users/devices/agents 与 `admin:transfer-device-owner` 已回填 server-next socket/usecase 回归和 readiness gate，`agent:metrics` request/ack 已有；更完整 admin/metrics/audit 产品面仍未冻结。
 - 团队改名（`team:update`）已在 preview 团队设置面板覆盖；App Router `devices` 已覆盖 device rename/refresh restore；App Router `settings` 已覆盖 team update、join link create/revoke 与刷新恢复；App Router `networks` 已覆盖受控 team create/switch/delete/fallback restore，并补 SQLite delete cascade 回归。
 - Typed assignee、task 自动生成与更丰富的 task 产品流；delete/reorder 的协议与 usecase 第一版已收敛。
 - Join link management UI（web-next 客户端 list/revoke 绑定 + preview 邀请管理面板）；`join:list` / `join:revoke` 协议层已由 #267 落地。
@@ -108,3 +108,13 @@ canonical npm 包 `@agentbean/daemon` 的 `@latest` dist-tag 已推进到基于 
 ## 下一步判定
 
 当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。P0 生产观察 baseline 已完成，下一步应开新的 scoped issue/PR 继续产品能力或运维增强；若沿当前替换主线推进，优先在更完整的 workspace run 专用页面、复杂 team-wide workspace explorer、分段日志存储/检索、admin/audit 产品面中选一个小切片。
+
+## 已迁移入口的回头验规则
+
+已经迁移到 AgentBean Next 的功能不能只按“代码已搬到 `apps/web-next` / `apps/server-next`”判定完成。发现旧版已有、Next 缺失或退化的行为时，按以下顺序补账：
+
+1. 先补最小 regression test，直接覆盖旧版产品语义。例如成员页要测 `members:list` 是否返回 human members 与当前 team 可见 agents，而不是只测 `agents:subscribe` 或 `device:agents:list`。
+2. 再补 readiness/static gate，确保关键测试、协议合同或兼容 adapter 不会从主线移除。
+3. 最后更新 `verification-matrix.md` 或本文，把该入口归入“已收敛”或“仍需补齐的边界”。
+
+成员页、设备页、全局 agent snapshot 与频道成员是四个不同产品入口：`members:list`、`device:agents:list`、`agents:subscribe`、`channel:members` 不能互相替代验收。已迁移 surface 如果只证明了其中一个接口通过，其他入口仍视为未完成 parity backfill。

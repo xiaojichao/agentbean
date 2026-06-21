@@ -48,6 +48,10 @@ describe('AgentBean Next readiness checker', () => {
       'ci-promotes-canonical-daemon-latest-on-demand',
       'ci-legacy-daemon-does-not-reclaim-latest-when-next',
       'cutover-audit-requires-canonical-daemon-latest',
+      'members-list-agent-parity-regression',
+      'daemon-next-register-batch-legacy-compatibility',
+      'product-surface-parity-contracts',
+      'admin-dashboard-parity-regression',
     ]);
   });
 

@@ -53,6 +53,18 @@ export const WEB_EVENTS = {
     delete: 'agent:delete',
     metrics: 'agent:metrics',
   },
+  admin: {
+    listTeams: 'admin:list-teams',
+    listNetworks: 'admin:list-networks',
+    listUsers: 'admin:list-users',
+    listDevices: 'admin:list-devices',
+    listAgents: 'admin:list-agents',
+    deleteTeam: 'admin:delete-team',
+    deleteNetwork: 'admin:delete-network',
+    deleteUser: 'admin:delete-user',
+    deleteAgent: 'admin:delete-agent',
+    transferDeviceOwner: 'admin:transfer-device-owner',
+  },
   channel: {
     subscribe: 'channels:subscribe',
     create: 'channel:create',

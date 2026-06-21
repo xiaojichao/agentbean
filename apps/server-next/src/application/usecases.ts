@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand } from './device-invite-command.js';
@@ -43,6 +43,15 @@ export interface ServerNextUseCases {
   loginUser(input: LoginUserInput): Promise<Ack<LoginUserResult>>;
   whoami(input: WhoamiInput): Promise<Ack<WhoamiResult>>;
   listTeams(input: { userId: string }): Promise<Ack<ListTeamsResult>>;
+  listAdminTeams(input: { userId: string }): Promise<Ack<{ teams: AdminTeamDto[] }>>;
+  listAdminNetworks(input: { userId: string }): Promise<Ack<{ networks: AdminTeamDto[] }>>;
+  listAdminUsers(input: { userId: string }): Promise<Ack<{ users: AdminUserDto[] }>>;
+  listAdminDevices(input: { userId: string }): Promise<Ack<{ devices: AdminDeviceDto[] }>>;
+  listAdminAgents(input: { userId: string }): Promise<Ack<{ agents: AdminAgentDto[] }>>;
+  deleteAdminTeam(input: { userId: string; teamId: string }): Promise<Ack<{}>>;
+  deleteAdminUser(input: { adminUserId: string; targetUserId: string }): Promise<Ack<{}>>;
+  deleteAdminAgent(input: { userId: string; agentId: string }): Promise<Ack<{}>>;
+  transferDeviceOwnerAsAdmin(input: { adminUserId: string; deviceId: string; targetUserId: string }): Promise<Ack<{ device: AdminDeviceDto }>>;
   createTeam(input: CreateTeamInput): Promise<Ack<CreateTeamResult>>;
   switchTeam(input: SwitchTeamInput): Promise<Ack<SwitchTeamResult>>;
   createJoinLink(input: CreateJoinLinkInput): Promise<Ack<JoinLinkResult>>;
@@ -140,6 +149,38 @@ type DeviceAgentListDto = AgentDto & {
   networkId: string;
   publishedNetworkIds: string[];
   unpublishedNetworkIds: string[];
+};
+
+type AdminTeamDto = Omit<TeamDto, 'currentUserRole'> & {
+  currentUserRole?: TeamDto['currentUserRole'];
+  members: Array<HumanMemberDto & { joinedAt?: number }>;
+};
+
+type AdminUserDto = UserDto & {
+  createdAt: number;
+};
+
+type AdminAgentDto = AgentDto & {
+  role?: string;
+  networkId: string;
+  networkName: string;
+  ownerName?: string | null;
+  userName?: string | null;
+  deviceName?: string;
+  deviceUserId?: string | null;
+  deviceUserName?: string | null;
+  publishedNetworkIds: string[];
+  unpublishedNetworkIds: string[];
+};
+
+type AdminDeviceDto = DeviceDto & {
+  userId: string;
+  userName: string;
+  networkId: string;
+  networkName: string;
+  agentCount: number;
+  runtimes: RuntimeDto[];
+  publicAgents: AdminAgentDto[];
 };
 
 export interface LoginUserInput {
@@ -815,6 +856,152 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeSuccess({
         currentTeamId: currentTeam?.id,
         teams: teams.map((team) => toTeamDto(team, team.currentUserRole)),
+      });
+    },
+
+    async listAdminTeams(adminInput) {
+      const admin = await requireGlobalAdmin(repositories, adminInput.userId);
+      if (!admin.ok) {
+        return admin;
+      }
+      const teams = await repositories.teams.listAll();
+      const result: AdminTeamDto[] = [];
+      for (const team of teams) {
+        result.push({
+          ...team,
+          members: await repositories.teams.listAllMembers(team.id),
+        });
+      }
+      return makeSuccess({ teams: result });
+    },
+
+    async listAdminNetworks(adminInput) {
+      const admin = await requireGlobalAdmin(repositories, adminInput.userId);
+      if (!admin.ok) {
+        return admin;
+      }
+      const teams = await repositories.teams.listAll();
+      const result: AdminTeamDto[] = [];
+      for (const team of teams) {
+        result.push({
+          ...team,
+          members: await repositories.teams.listAllMembers(team.id),
+        });
+      }
+      return makeSuccess({ networks: result });
+    },
+
+    async listAdminUsers(adminInput) {
+      const admin = await requireGlobalAdmin(repositories, adminInput.userId);
+      if (!admin.ok) {
+        return admin;
+      }
+      const users = await repositories.users.listAll();
+      return makeSuccess({
+        users: users.map((user) => ({
+          ...toUserDto(user),
+          email: user.email ?? null,
+          createdAt: user.createdAt,
+        })),
+      });
+    },
+
+    async listAdminDevices(adminInput) {
+      const admin = await requireGlobalAdmin(repositories, adminInput.userId);
+      if (!admin.ok) {
+        return admin;
+      }
+      return makeSuccess({
+        devices: await listAdminDeviceDtos(repositories),
+      });
+    },
+
+    async listAdminAgents(adminInput) {
+      const admin = await requireGlobalAdmin(repositories, adminInput.userId);
+      if (!admin.ok) {
+        return admin;
+      }
+      return makeSuccess({
+        agents: await listAdminAgentDtos(repositories),
+      });
+    },
+
+    async deleteAdminTeam(adminInput) {
+      const admin = await requireGlobalAdmin(repositories, adminInput.userId);
+      if (!admin.ok) {
+        return admin;
+      }
+      const team = await repositories.teams.getById(adminInput.teamId);
+      if (!team) {
+        return makeFailure('NOT_FOUND', 'Team not found');
+      }
+      await repositories.teams.delete(team.id);
+      return makeSuccess({});
+    },
+
+    async deleteAdminUser(adminInput) {
+      const admin = await requireGlobalAdmin(repositories, adminInput.adminUserId);
+      if (!admin.ok) {
+        return admin;
+      }
+      if (adminInput.targetUserId === adminInput.adminUserId || adminInput.targetUserId === 'system') {
+        return makeFailure('VALIDATION_ERROR', 'Cannot delete protected user');
+      }
+      const user = await repositories.users.getById(adminInput.targetUserId);
+      if (!user) {
+        return makeFailure('NOT_FOUND', 'User not found');
+      }
+      await repositories.users.delete(user.id);
+      return makeSuccess({});
+    },
+
+    async deleteAdminAgent(adminInput) {
+      const admin = await requireGlobalAdmin(repositories, adminInput.userId);
+      if (!admin.ok) {
+        return admin;
+      }
+      const deleted = await repositories.agents.softDelete({
+        agentId: adminInput.agentId,
+        timestamp: clock.now(),
+      });
+      if (!deleted) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
+      return makeSuccess({});
+    },
+
+    async transferDeviceOwnerAsAdmin(adminInput) {
+      const admin = await requireGlobalAdmin(repositories, adminInput.adminUserId);
+      if (!admin.ok) {
+        return admin;
+      }
+      const device = await repositories.devices.getById(adminInput.deviceId);
+      if (!device) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      const target = await repositories.users.getById(adminInput.targetUserId);
+      if (!target) {
+        return makeFailure('NOT_FOUND', 'User not found');
+      }
+      if (!(await repositories.teams.isMember(device.teamId, target.id))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const now = clock.now();
+      const updated = await repositories.devices.transferOwner({
+        deviceId: device.id,
+        ownerId: target.id,
+        updatedAt: now,
+      });
+      if (!updated) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      await repositories.agents.updateOwnerByDevice({
+        deviceId: device.id,
+        ownerId: target.id,
+        timestamp: now,
+      });
+      return makeSuccess({
+        device: await toAdminDeviceDto(repositories, updated),
       });
     },
 
@@ -2879,7 +3066,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
       const humans = await repositories.teams.listAllMembers(listInput.teamId);
-      return makeSuccess({ humans, agents: [] });
+      const agents = await repositories.agents.listVisibleInTeam(listInput.teamId);
+      return makeSuccess({ humans, agents });
     },
 
     async updateMemberHuman(humanInput) {
@@ -3312,6 +3500,107 @@ function toRuntimeDto(runtime: RuntimeDto): RuntimeDto {
     version: runtime.version,
     lastSeenAt: runtime.lastSeenAt,
   };
+}
+
+async function requireGlobalAdmin(
+  repositories: ServerNextRepositories,
+  userId: string,
+): Promise<{ ok: true; user: UserRecord } | Ack<{}>> {
+  const user = await repositories.users.getById(userId);
+  if (!user) {
+    return makeFailure('UNAUTHENTICATED', 'User not found');
+  }
+  if (user.role !== 'admin') {
+    return makeFailure('FORBIDDEN', 'Admin access required');
+  }
+  return { ok: true, user };
+}
+
+async function listAdminDeviceDtos(repositories: ServerNextRepositories): Promise<AdminDeviceDto[]> {
+  const devices = await repositories.devices.listAll();
+  const result: AdminDeviceDto[] = [];
+  for (const device of devices) {
+    result.push(await toAdminDeviceDto(repositories, device));
+  }
+  return result;
+}
+
+async function listAdminAgentDtos(repositories: ServerNextRepositories): Promise<AdminAgentDto[]> {
+  const [agents, devices, users, teams] = await Promise.all([
+    repositories.agents.listAll(),
+    repositories.devices.listAll(),
+    repositories.users.listAll(),
+    repositories.teams.listAll(),
+  ]);
+  const devicesById = new Map(devices.map((device) => [device.id, device]));
+  const usersById = new Map(users.map((user) => [user.id, user]));
+  const teamsById = new Map(teams.map((team) => [team.id, team]));
+  return agents.map((agent) => toAdminAgentDto(agent, {
+    device: agent.deviceId ? devicesById.get(agent.deviceId) : undefined,
+    usersById,
+    teamsById,
+  }));
+}
+
+async function toAdminDeviceDto(
+  repositories: ServerNextRepositories,
+  device: DeviceRecord,
+): Promise<AdminDeviceDto> {
+  const [owner, team, agents, runtimes, allUsers, allTeams] = await Promise.all([
+    repositories.users.getById(device.ownerId),
+    repositories.teams.getById(device.teamId),
+    repositories.agents.listByDevice(device.id),
+    repositories.runtimes.listByDevice(device.id),
+    repositories.users.listAll(),
+    repositories.teams.listAll(),
+  ]);
+  const usersById = new Map(allUsers.map((user) => [user.id, user]));
+  const teamsById = new Map(allTeams.map((candidate) => [candidate.id, candidate]));
+  const publicAgents = agents
+    .filter((agent) => agent.visibleTeamIds.includes(device.teamId))
+    .map((agent) => toAdminAgentDto(agent, { device, usersById, teamsById }));
+  return {
+    ...toDeviceDto(device),
+    userId: device.ownerId,
+    userName: owner?.username ?? '未知用户',
+    networkId: device.teamId,
+    networkName: team?.name ?? '未知团队',
+    agentCount: agents.length,
+    runtimes: runtimes.map(toRuntimeDto),
+    publicAgents,
+  };
+}
+
+function toAdminAgentDto(
+  agent: AgentRecord,
+  context: {
+    device?: DeviceRecord;
+    usersById: Map<string, UserRecord>;
+    teamsById: Map<string, Omit<TeamDto, 'currentUserRole'>>;
+  },
+): AdminAgentDto {
+  const ownerId = agent.ownerId ?? context.device?.ownerId;
+  const owner = ownerId ? context.usersById.get(ownerId) : undefined;
+  const deviceOwner = context.device?.ownerId ? context.usersById.get(context.device.ownerId) : undefined;
+  const team = context.teamsById.get(agent.primaryTeamId);
+  return {
+    ...toPublicAgent(agent),
+    role: undefined,
+    networkId: agent.primaryTeamId,
+    networkName: team?.name ?? '未知团队',
+    ownerId,
+    ownerName: owner?.username ?? null,
+    userName: owner?.username ?? null,
+    deviceName: context.device ? deviceDisplayName(context.device) : '未分配设备',
+    deviceUserId: context.device?.ownerId ?? null,
+    deviceUserName: deviceOwner?.username ?? null,
+    publishedNetworkIds: uniqueIds(agent.visibleTeamIds),
+    unpublishedNetworkIds: [],
+  };
+}
+
+function deviceDisplayName(device: DeviceRecord): string {
+  return device.name ?? device.systemInfo?.hostname ?? '未命名设备';
 }
 
 function summarizeDispatchMetrics(dispatches: DispatchDto[]): AgentMetricsSummary[] {
