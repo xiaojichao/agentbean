@@ -7,7 +7,7 @@ import { createBuiltinScanProvider } from './scanner.js';
 import { loadScanCache, saveScanCache } from './scan-cache.js';
 import { collectSystemInfo, readDaemonVersion } from './system-info.js';
 import { createCommandExecutor } from './executor.js';
-import { createDaemonProtocolClient, createHttpEnvResolver, type DaemonDeviceConfig, type DaemonProtocolSocket } from './index.js';
+import { createDaemonProtocolClient, createHttpEnvResolver, type DaemonDeviceConfig, type DaemonProtocolSocket, type DaemonScanSnapshot } from './index.js';
 import { loadYamlConfig } from './config.js';
 import { listAuthProfiles, loadAuth, saveAuth, type AuthData, type AuthProfile } from './auth-store.js';
 import { sanitizeProfileId } from './profile-paths.js';
@@ -349,7 +349,13 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
   const socket = await connectSocketIoClient(serverUrl);
   const protocolSocket = createSocketIoDaemonSocket(socket);
   const cached = loadScanCache(config.profileId);
+  if (cached) {
+    console.log(`Using cached AgentBean device scan for profile "${config.profileId}".`);
+  } else {
+    console.log('Scanning local AgentBean device capabilities...');
+  }
   const snapshot = cached ?? await createBuiltinScanProvider()();
+  reportScanSnapshot(snapshot, { cached: Boolean(cached) });
   if (!cached) {
     saveScanCache(snapshot, config.profileId);
   }
@@ -415,7 +421,10 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
     runtimes: snapshot.runtimes,
     agents: snapshot.agents,
     scan: createBuiltinScanProvider(),
-    onScanChanged: (fresh) => saveScanCache(fresh, config.profileId),
+    onScanChanged: (fresh) => {
+      reportScanSnapshot(fresh, { updated: true });
+      saveScanCache(fresh, config.profileId);
+    },
     envResolver: async (envRef) => {
       if (!device.token) {
         throw new Error('Custom agent env resolver is not configured');
@@ -426,6 +435,63 @@ export async function runDaemonNextCli(config: DaemonNextCliConfig = parseDaemon
   if (config.inviteCode) {
     console.log(`AgentBean daemon connected for profile "${config.profileId}".`);
   }
+}
+
+export function formatScanSnapshot(
+  snapshot: DaemonScanSnapshot,
+  options: { cached?: boolean; updated?: boolean } = {},
+): string[] {
+  const installedRuntimeCount = snapshot.runtimes.filter((runtime) => runtime.installed).length;
+  const lines = [
+    `${options.updated ? 'Updated' : options.cached ? 'Cached' : 'Initial'} scan: ${installedRuntimeCount}/${snapshot.runtimes.length} coding runtimes available, ${snapshot.agents.length} agents discovered.`,
+    'Coding runtimes:',
+  ];
+
+  if (snapshot.runtimes.length === 0) {
+    lines.push('  - none');
+  } else {
+    for (const runtime of snapshot.runtimes) {
+      const status = runtime.installed ? 'installed' : 'missing';
+      lines.push(`  - ${runtime.name} [${status}] ${runtime.adapterKind}${runtime.command ? ` -> ${runtime.command}` : ''}`);
+    }
+  }
+
+  lines.push('Agents discovered:');
+  if (snapshot.agents.length === 0) {
+    lines.push('  - none');
+  } else {
+    for (const agent of snapshot.agents) {
+      const command = formatAgentCommand(agent.command, agent.args);
+      const cwd = agent.cwd ? ` cwd=${agent.cwd}` : '';
+      lines.push(`  - ${agent.name} [${describeAgentSource(agent)}] ${agent.adapterKind}${command ? ` -> ${command}` : ''}${cwd}`);
+    }
+  }
+
+  return lines;
+}
+
+function reportScanSnapshot(snapshot: DaemonScanSnapshot, options: { cached?: boolean; updated?: boolean } = {}): void {
+  console.log(formatScanSnapshot(snapshot, options).join('\n'));
+}
+
+function describeAgentSource(agent: DaemonScanSnapshot['agents'][number]): string {
+  if (agent.discoverySource === 'runtime') {
+    return 'coding runtime';
+  }
+  if (agent.discoverySource === 'gateway') {
+    return 'AgentOS gateway';
+  }
+  if (agent.discoverySource === 'filesystem') {
+    return 'local definition';
+  }
+  return agent.category;
+}
+
+function formatAgentCommand(command?: string, args?: string[]): string {
+  if (!command) {
+    return '';
+  }
+  return [command, ...(args ?? [])].join(' ');
 }
 
 export async function waitForDeviceInviteCredentials(
