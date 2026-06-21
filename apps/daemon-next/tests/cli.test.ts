@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS } from '../../../packages/contracts/src/index';
-import { createSocketIoDaemonSocket, parseDaemonNextCliConfig, resolveDaemonServerUrl, waitForDeviceInviteCredentials } from '../src/cli';
+import { createSocketIoDaemonSocket, formatScanSnapshot, parseDaemonNextCliConfig, resolveDaemonServerUrl, waitForDeviceInviteCredentials } from '../src/cli';
 import type { AuthData } from '../src/auth-store';
 
 function writeYamlFixture(content: string): string {
@@ -267,6 +267,62 @@ describe('daemon-next CLI wiring', () => {
       profileId: 'agentbean-next',
       hostname: 'host.local',
     });
+  });
+
+  test('formats device scan output with runtimes and discovered agents', () => {
+    expect(formatScanSnapshot({
+      runtimes: [
+        {
+          adapterKind: 'claude-code',
+          name: 'Claude Code',
+          command: '/Users/shaw/.local/share/claude-latest/current/claude',
+          cwd: '/Users/shaw/.local/share/claude-latest/current',
+          installed: true,
+        },
+        {
+          adapterKind: 'gemini',
+          name: 'Gemini CLI',
+          installed: false,
+        },
+      ],
+      agents: [
+        {
+          adapterKind: 'claude-code',
+          name: 'Claude Code',
+          category: 'executor-hosted',
+          command: '/Users/shaw/.local/share/claude-latest/current/claude',
+          cwd: '/Users/shaw/.local/share/claude-latest/current',
+          discoverySource: 'runtime',
+        },
+        {
+          adapterKind: 'openclaw',
+          name: 'OpenClaw-Agent',
+          category: 'agentos-hosted',
+          command: '/opt/homebrew/bin/openclaw',
+          args: ['agent', '--agent', 'main'],
+          cwd: '/opt/homebrew/bin',
+          discoverySource: 'gateway',
+        },
+        {
+          adapterKind: 'codex',
+          name: 'Local-Helper',
+          category: 'executor-hosted',
+          command: '/opt/homebrew/bin/codex',
+          args: ['exec'],
+          cwd: '/Users/shaw/project',
+          discoverySource: 'filesystem',
+        },
+      ],
+    })).toEqual([
+      'Initial scan: 1/2 coding runtimes available, 3 agents discovered.',
+      'Coding runtimes:',
+      '  - Claude Code [installed] claude-code -> /Users/shaw/.local/share/claude-latest/current/claude',
+      '  - Gemini CLI [missing] gemini',
+      'Agents discovered:',
+      '  - Claude Code [coding runtime] claude-code -> /Users/shaw/.local/share/claude-latest/current/claude cwd=/Users/shaw/.local/share/claude-latest/current',
+      '  - OpenClaw-Agent [AgentOS gateway] openclaw -> /opt/homebrew/bin/openclaw agent --agent main cwd=/opt/homebrew/bin',
+      '  - Local-Helper [local definition] codex -> /opt/homebrew/bin/codex exec cwd=/Users/shaw/project',
+    ]);
   });
 
   test('rejects device invite onboarding when the wait ack fails', async () => {
