@@ -441,7 +441,7 @@ export function formatScanSnapshot(
   snapshot: DaemonScanSnapshot,
   options: { cached?: boolean; updated?: boolean } = {},
 ): string[] {
-  const installedRuntimeCount = snapshot.runtimes.filter((runtime) => runtime.installed).length;
+  const installedRuntimeCount = snapshot.runtimes.filter(isRuntimeAvailable).length;
   const lines = [
     `${options.updated ? 'Updated' : options.cached ? 'Cached' : 'Initial'} scan: ${installedRuntimeCount}/${snapshot.runtimes.length} coding runtimes available, ${snapshot.agents.length} agents discovered.`,
     'Coding runtimes:',
@@ -451,7 +451,7 @@ export function formatScanSnapshot(
     lines.push('  - none');
   } else {
     for (const runtime of snapshot.runtimes) {
-      const status = runtime.installed ? 'installed' : 'missing';
+      const status = isRuntimeAvailable(runtime) ? 'installed' : 'missing';
       lines.push(`  - ${runtime.name} [${status}] ${runtime.adapterKind}${runtime.command ? ` -> ${runtime.command}` : ''}`);
     }
   }
@@ -472,6 +472,10 @@ export function formatScanSnapshot(
 
 function reportScanSnapshot(snapshot: DaemonScanSnapshot, options: { cached?: boolean; updated?: boolean } = {}): void {
   console.log(formatScanSnapshot(snapshot, options).join('\n'));
+}
+
+function isRuntimeAvailable(runtime: DaemonScanSnapshot['runtimes'][number]): boolean {
+  return runtime.installed ?? Boolean(runtime.command);
 }
 
 function describeAgentSource(agent: DaemonScanSnapshot['agents'][number]): string {

@@ -284,6 +284,11 @@ describe('daemon-next CLI wiring', () => {
           name: 'Gemini CLI',
           installed: false,
         },
+        {
+          adapterKind: 'codex',
+          name: 'Codex CLI',
+          command: '/opt/homebrew/bin/codex',
+        },
       ],
       agents: [
         {
@@ -314,10 +319,11 @@ describe('daemon-next CLI wiring', () => {
         },
       ],
     })).toEqual([
-      'Initial scan: 1/2 coding runtimes available, 3 agents discovered.',
+      'Initial scan: 2/3 coding runtimes available, 3 agents discovered.',
       'Coding runtimes:',
       '  - Claude Code [installed] claude-code -> /Users/shaw/.local/share/claude-latest/current/claude',
       '  - Gemini CLI [missing] gemini',
+      '  - Codex CLI [installed] codex -> /opt/homebrew/bin/codex',
       'Agents discovered:',
       '  - Claude Code [coding runtime] claude-code -> /Users/shaw/.local/share/claude-latest/current/claude cwd=/Users/shaw/.local/share/claude-latest/current',
       '  - OpenClaw-Agent [AgentOS gateway] openclaw -> /opt/homebrew/bin/openclaw agent --agent main cwd=/opt/homebrew/bin',
