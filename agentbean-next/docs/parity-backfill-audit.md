@@ -5,9 +5,9 @@
 ## 核对时间
 
 - 日期：2026-06-23
-- 基线：`origin/main` = `80dcd15`（PR #339 已合并）
+- 基线：`origin/main` = `dbf9291`（PR #340 已合并）
 - GitHub 状态：open PR 为空；open issue 为空。
-- 最新 main CI/CD：run `28013696807` 成功，包含 Validate web/server/daemon/AgentBean Next、Deploy production、Publish agent to npm 与 AgentBean Next production smoke。
+- 最新 main CI/CD：run `28015256812` 成功，包含 Validate web/server/daemon/AgentBean Next、Deploy production、Publish agent to npm 与 AgentBean Next production smoke。
 
 ## 状态定义
 
@@ -22,7 +22,7 @@
 | 入口 | 状态 | 已有证据 | 仍需补齐 |
 |---|---|---|---|
 | `members` | Green | `members:list` 已覆盖 human members、当前用户补回、scanned AgentOS agent、custom agent、canonical host device 与 stale/canonical device 去重；App Router browser smoke 覆盖 join、role update 与刷新恢复；readiness gate 保护 `members-list-agent-parity-regression` 与 product-surface parity contract。 | 后续只按新增需求补：human profile/description update、更完整 remove/transfer 浏览器路径。 |
-| `devices` | Yellow | `device:list`、`device:get`、scan routing、rename、delete redirect、owner/admin 权限、canonical device identity、runtime/agent 投影与 connect command 已有 server/web 回归；App Router browser smoke 覆盖 device rename 与刷新恢复。 | 还缺一张设备入口级闭环证据：list/detail/scan/delete/owner transfer/reconnect/cached scan/old daemon 与 daemon-next 兼容路径统一列入 audit 或 browser smoke。 |
+| `devices` | Green | `device:list`、`device:get`、`device:agents:list`、scan routing、rename、delete redirect、owner/admin 权限、canonical device identity、runtime/agent 投影、connect command、old daemon `device:register-agents` 与 daemon-next `agent:register-batch` 兼容均已有 server/web 回归；App Router `webui-devices-business-flow` 覆盖 list -> detail、runtime 投影、自定义 Agent 投影、targeted scan 后 AgentOS 托管 Agent 投影、rename/refresh restore 与 delete redirect/list disappearance；readiness gate 保护 `devices-parity-browser-smoke`。 | 后续只按新增需求补：更完整 owner transfer 浏览器路径、真实 reconnect/cached scan UX、设备 audit trail。 |
 | `agents` | Yellow | custom agent create、publish/unpublish、config envKeys、delete tombstone、metrics request/ack 与 browser smoke metrics 路径已存在；daemon-next 扫描与 runnable scanned-agent dispatch 已补。 | 还缺完整 agent 管理面 parity：delete/config 的 App Router browser-level 覆盖、跨团队 publication 投影、metrics 口径、admin/audit 需求边界。 |
 | `chat` | Green | message send、session restore、dispatch status/cancel、thread reply、artifact upload/viewer、workspace run source message 与 App Router chat send/refresh restore 均已有测试或 browser smoke。 | 更完整 saved/reactions/search UI 仍按各自入口继续补，不阻塞 chat 主入口。 |
 | `channels` / `channel members` | Green | channel create/archive/list disappearance、channel creator controls、private channel visibility、`channel:members` usecase 与 subscription broadcast 已有测试；App Router `webui-channel-members-business-flow` 覆盖 private channel 创建、频道成员弹窗、creator 添加 human member、添加 agent member、移除 human member、`channel:members` projection、private visibility 回收与 mention scope；readiness gate 保护该 browser smoke 与稳定 selectors。 | 后续只按新增需求补：更完整频道成员 profile/edit、批量成员管理、频道级 audit trail。 |
@@ -34,17 +34,17 @@
 
 ## 下一条 backfill slice
 
-优先做 `devices`。原因：
+优先做 `agents`。原因：
 
-1. 设备入口仍是 Yellow，而且和 daemon onboarding、scan truth、runtime/custom agent、connect command、owner/admin 权限共享边界。
-2. 已有 server/web 回归分散在 list/get/scan/rename/delete 等路径，下一步需要把 list/detail/scan/delete/owner transfer/reconnect/cached scan/old daemon 与 daemon-next 兼容路径收敛成入口级闭环证据。
-3. 设备页刚经历过多轮修复，风险高但可以继续按最小 PR 推进。
+1. `agents` 入口仍是 Yellow，而且和自定义 Agent 创建、发布/取消发布、配置、删除、metrics 与跨团队可见性共享边界。
+2. 已有 server/web 回归分散在 create/publish/config/delete/metrics 等路径，下一步需要把 agent list/detail/config/delete/publication/metrics 收敛成入口级闭环证据。
+3. 设备入口已经用 browser smoke 证明 runtime、AgentOS 托管 Agent 与 custom agent 投影，下一条应继续处理全局 Agent 管理面的 Yellow 风险。
 
 最小 slice：
 
-1. 盘点现有设备入口证据，把 device list/detail/scan/delete/rename/owner transfer/reconnect/runtime/custom agent 投影按入口级 checklist 汇总。
+1. 盘点现有 Agent 入口证据，把 list/detail/create/publish/unpublish/config/delete/metrics/跨团队 projection 按入口级 checklist 汇总。
 2. 先补一条缺口最小、用户风险最高的 regression/browser smoke；如果现有测试已覆盖，就把证据写进本 audit 与 `verification-matrix.md` 并加 readiness/static gate。
-3. 避免把 `device:agents:list`、`agents:subscribe` 或 daemon scanner 单测误当成设备页完整 parity。
+3. 避免把 `agent:create` 或 `agents:subscribe` 单测误当成完整 Agent 管理页 parity。
 
 ## 维护规则
 

@@ -27,6 +27,7 @@ export function collectAgentBeanNextReadinessChecks({
   const serverNextSocketIntegrationTests = readFileSync(join(root, 'apps/server-next/tests/socket-integration.test.ts'), 'utf8');
   const webNextDashboardPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/dashboard/page.tsx'), 'utf8');
   const webNextChatPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/chat/page.tsx'), 'utf8');
+  const webNextDevicesPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/devices/page.tsx'), 'utf8');
   const browserSmokeScript = readFileSync(join(root, 'scripts/smoke-agentbean-next-browser.mjs'), 'utf8');
   const legacyAgentNamespace = readFileSync(join(root, 'apps/server/src/namespaces/agent.ts'), 'utf8');
   const legacyWebNamespaceTests = readFileSync(join(root, 'apps/server/tests/web-namespace.test.ts'), 'utf8');
@@ -402,11 +403,28 @@ export function collectAgentBeanNextReadinessChecks({
       'parity-backfill-audit-status-table',
       parityBackfillAudit.includes('## 入口审计') &&
         parityBackfillAudit.includes('| `members` | Green |') &&
-        parityBackfillAudit.includes('| `devices` | Yellow |') &&
+        parityBackfillAudit.includes('| `devices` | Green |') &&
         parityBackfillAudit.includes('| `channels` / `channel members` | Green |') &&
         parityBackfillAudit.includes('## 下一条 backfill slice') &&
-        parityBackfillAudit.includes('优先做 `devices`'),
+        parityBackfillAudit.includes('优先做 `agents`'),
       'AgentBean Next parity backfill audit must keep a Red/Yellow/Green product-entry status table and the next recommended slice',
+    ),
+    check(
+      'devices-parity-browser-smoke',
+      browserSmokeScript.includes('webui-devices-business-flow') &&
+        browserSmokeScript.includes('device-runtime-scan') &&
+        browserSmokeScript.includes('device-runtime-item') &&
+        browserSmokeScript.includes('device-agent-item') &&
+        browserSmokeScript.includes('device:scan-requested') &&
+        browserSmokeScript.includes('agent:register-batch') &&
+        browserSmokeScript.includes('device-delete-confirm') &&
+        webNextDevicesPage.includes('data-smoke="device-runtime-scan"') &&
+        webNextDevicesPage.includes('data-smoke="device-runtime-item"') &&
+        webNextDevicesPage.includes('data-smoke="device-agent-item"') &&
+        webNextDevicesPage.includes('data-smoke="device-delete-confirm"') &&
+        verificationMatrix.includes('webui-devices-business-flow') &&
+        parityBackfillAudit.includes('| `devices` | Green |'),
+      'Device parity must stay covered by an App Router browser smoke for detail runtime/custom-agent projection, targeted scan AgentOS projection, rename refresh restore, and delete redirect',
     ),
     check(
       'channel-members-parity-browser-smoke',

@@ -687,6 +687,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           onScan={canManageDevice ? handleScan : undefined}
         />
         <AgentGroup
+          smokeKind="agentos"
           title="AgentOS 托管型 Agent"
           subtitle="由 OpenClaw、Hermes 等 AgentOS 网关托管"
           icon={<Globe size={14} className="text-blue-600" />}
@@ -699,6 +700,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           canManageAgents={canManageDevice}
         />
         <AgentGroup
+          smokeKind="custom"
           title="自定义 Agent"
           subtitle="使用 Claude Code、Codex CLI、Kimi CLI 等运行时创建"
           icon={<Terminal size={14} className="text-violet-600" />}
@@ -893,7 +895,8 @@ function AddDeviceDialog({ onClose, currentTeamId }: { onClose: () => void; curr
   );
 }
 
-function AgentGroup({ title, subtitle, icon, iconBg, agents, scanning, onScan, showAddButton, onAdd, onSelectNetwork, onSelectAgent, onDeleteAgent, canManageAgents = false }: {
+function AgentGroup({ smokeKind, title, subtitle, icon, iconBg, agents, scanning, onScan, showAddButton, onAdd, onSelectNetwork, onSelectAgent, onDeleteAgent, canManageAgents = false }: {
+  smokeKind: 'agentos' | 'custom';
   title: string;
   subtitle: string;
   icon: React.ReactNode;
@@ -909,7 +912,7 @@ function AgentGroup({ title, subtitle, icon, iconBg, agents, scanning, onScan, s
   canManageAgents?: boolean;
 }) {
   return (
-    <section className="rounded-lg border border-neutral-200 p-4">
+    <section className="rounded-lg border border-neutral-200 p-4" data-smoke={`device-agent-group-${smokeKind}`}>
       <div className="mb-3 flex items-center justify-between">
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">{title}</h3>
@@ -922,7 +925,7 @@ function AgentGroup({ title, subtitle, icon, iconBg, agents, scanning, onScan, s
             </button>
           )}
           {onScan && (
-            <button onClick={onScan} disabled={scanning} className="flex items-center gap-1 rounded-md border border-neutral-300 px-2.5 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50">
+            <button onClick={onScan} disabled={scanning} className="flex items-center gap-1 rounded-md border border-neutral-300 px-2.5 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50" data-smoke={`device-agent-scan-${smokeKind}`}>
               <RefreshCw size={12} className={scanning ? 'animate-spin' : ''} /> 扫描
             </button>
           )}
@@ -933,7 +936,7 @@ function AgentGroup({ title, subtitle, icon, iconBg, agents, scanning, onScan, s
       ) : (
         <div className="space-y-1.5">
           {agents.map((agent) => (
-            <AgentRow key={agent.id} agent={agent} icon={icon} iconBg={iconBg} onSelectNetwork={onSelectNetwork} onSelectAgent={onSelectAgent} onDeleteAgent={onDeleteAgent} canManage={canManageAgents} />
+            <AgentRow key={agent.id} agent={agent} smokeKind={smokeKind} icon={icon} iconBg={iconBg} onSelectNetwork={onSelectNetwork} onSelectAgent={onSelectAgent} onDeleteAgent={onDeleteAgent} canManage={canManageAgents} />
           ))}
         </div>
       )}
@@ -953,7 +956,7 @@ function RuntimeGroup({ runtimes, scanning, onScan }: {
           <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">检测到的编程智能体运行时</h3>
         </div>
         {onScan && (
-          <button onClick={onScan} disabled={scanning} className="flex items-center gap-1 rounded-md border border-neutral-300 px-2.5 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50">
+          <button onClick={onScan} disabled={scanning} className="flex items-center gap-1 rounded-md border border-neutral-300 px-2.5 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50" data-smoke="device-runtime-scan">
             <RefreshCw size={12} className={scanning ? 'animate-spin' : ''} /> 扫描
           </button>
         )}
@@ -966,6 +969,9 @@ function RuntimeGroup({ runtimes, scanning, onScan }: {
             <span
               key={`${runtime.adapterKind}-${runtime.command}`}
               title={runtime.command || runtime.adapterKind}
+              data-smoke="device-runtime-item"
+              data-runtime-adapter-kind={runtime.adapterKind}
+              data-runtime-command={runtime.command ?? ''}
               className={`inline-flex h-6 items-center border px-2 text-[11px] font-medium leading-none ${
                 runtime.installed
                   ? 'border-neutral-400 bg-white text-neutral-800'
@@ -1109,8 +1115,9 @@ function DeviceWorkspaceFileLink({ file }: { file: AgentWorkspaceFile }) {
   );
 }
 
-function AgentRow({ agent, icon, iconBg, onSelectNetwork, onSelectAgent, onDeleteAgent, canManage }: {
+function AgentRow({ agent, smokeKind, icon, iconBg, onSelectNetwork, onSelectAgent, onDeleteAgent, canManage }: {
   agent: any;
+  smokeKind: 'agentos' | 'custom';
   icon: React.ReactNode;
   iconBg: string;
   onSelectNetwork: (agent: any) => void;
@@ -1120,7 +1127,16 @@ function AgentRow({ agent, icon, iconBg, onSelectNetwork, onSelectAgent, onDelet
 }) {
   const publishedCount = agent.publishedNetworkIds?.length ?? 0;
   return (
-    <div onClick={() => onSelectAgent(agent)} className="flex w-full cursor-pointer items-center gap-3 rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2 text-left hover:bg-white">
+    <div
+      onClick={() => onSelectAgent(agent)}
+      className="flex w-full cursor-pointer items-center gap-3 rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2 text-left hover:bg-white"
+      data-smoke="device-agent-item"
+      data-agent-id={agent.id}
+      data-agent-name={agent.name}
+      data-agent-kind={smokeKind}
+      data-agent-source={agent.source ?? ''}
+      data-agent-category={agent.category ?? ''}
+    >
       <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${iconBg}`}>
         {icon}
       </div>
