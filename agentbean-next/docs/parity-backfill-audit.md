@@ -5,9 +5,9 @@
 ## 核对时间
 
 - 日期：2026-06-23
-- 基线：`origin/main` = `9dd7ba5`（PR #338 已合并）
+- 基线：`origin/main` = `80dcd15`（PR #339 已合并）
 - GitHub 状态：open PR 为空；open issue 为空。
-- 最新 main CI/CD：run `28012932531` 成功，包含 Validate web/server/daemon/AgentBean Next、Deploy production、Publish agent to npm 与 AgentBean Next production smoke。
+- 最新 main CI/CD：run `28013696807` 成功，包含 Validate web/server/daemon/AgentBean Next、Deploy production、Publish agent to npm 与 AgentBean Next production smoke。
 
 ## 状态定义
 
@@ -25,7 +25,7 @@
 | `devices` | Yellow | `device:list`、`device:get`、scan routing、rename、delete redirect、owner/admin 权限、canonical device identity、runtime/agent 投影与 connect command 已有 server/web 回归；App Router browser smoke 覆盖 device rename 与刷新恢复。 | 还缺一张设备入口级闭环证据：list/detail/scan/delete/owner transfer/reconnect/cached scan/old daemon 与 daemon-next 兼容路径统一列入 audit 或 browser smoke。 |
 | `agents` | Yellow | custom agent create、publish/unpublish、config envKeys、delete tombstone、metrics request/ack 与 browser smoke metrics 路径已存在；daemon-next 扫描与 runnable scanned-agent dispatch 已补。 | 还缺完整 agent 管理面 parity：delete/config 的 App Router browser-level 覆盖、跨团队 publication 投影、metrics 口径、admin/audit 需求边界。 |
 | `chat` | Green | message send、session restore、dispatch status/cancel、thread reply、artifact upload/viewer、workspace run source message 与 App Router chat send/refresh restore 均已有测试或 browser smoke。 | 更完整 saved/reactions/search UI 仍按各自入口继续补，不阻塞 chat 主入口。 |
-| `channels` / `channel members` | Yellow | channel create/archive/list disappearance、channel creator controls、private channel visibility、`channel:members` usecase 与 subscription broadcast 已有测试；App Router smoke 覆盖 create/archive。 | 频道成员弹窗仍需单独入口级 browser smoke：human/agent member add/remove、private channel visibility 回收、mention scope 与 `channel:members` projection 不能只靠 usecase 证明。 |
+| `channels` / `channel members` | Green | channel create/archive/list disappearance、channel creator controls、private channel visibility、`channel:members` usecase 与 subscription broadcast 已有测试；App Router `webui-channel-members-business-flow` 覆盖 private channel 创建、频道成员弹窗、creator 添加 human member、添加 agent member、移除 human member、`channel:members` projection、private visibility 回收与 mention scope；readiness gate 保护该 browser smoke 与稳定 selectors。 | 后续只按新增需求补：更完整频道成员 profile/edit、批量成员管理、频道级 audit trail。 |
 | `tasks` | Yellow | task create/status update/refresh restore 已进入 browser smoke；delete/reorder 协议与 usecase 第一版已收敛。 | typed assignee、task 自动生成、更完整 task page、delete/reorder 的 App Router browser path 仍需后续切片。 |
 | `runs` | Yellow | workspace run list/detail/refresh restore、source message jump、full log artifact、artifact tree 与 inline log search 已进入 App Router smoke。 | 复杂 team-wide workspace explorer、分段日志存储/检索、更完整运行专页布局仍未冻结。 |
 | `settings` / `networks` | Yellow | team rename、join link create/revoke、team create/switch/delete/fallback restore 已进入 App Router smoke；SQLite delete cascade 已有回归。 | account settings（change password/profile）、invite management 更完整 UX、rollback/old target drill 仍按后续产品或运维切片补。 |
@@ -34,17 +34,17 @@
 
 ## 下一条 backfill slice
 
-优先做 `channels / channel members`。原因：
+优先做 `devices`。原因：
 
-1. 它是独立产品入口，不能被 `members:list`、`agents:subscribe` 或 channel list smoke 替代。
-2. 旧版已有频道成员弹窗和 creator-only controls；当前 server/usecase 证据较强，但 App Router browser 证据还薄。
-3. 它和 mention scope、private channel visibility、agent membership 都共享边界，风险高但可切成小 PR。
+1. 设备入口仍是 Yellow，而且和 daemon onboarding、scan truth、runtime/custom agent、connect command、owner/admin 权限共享边界。
+2. 已有 server/web 回归分散在 list/get/scan/rename/delete 等路径，下一步需要把 list/detail/scan/delete/owner transfer/reconnect/cached scan/old daemon 与 daemon-next 兼容路径收敛成入口级闭环证据。
+3. 设备页刚经历过多轮修复，风险高但可以继续按最小 PR 推进。
 
 最小 slice：
 
-1. 补一个频道成员弹窗或页面级 regression/browser smoke，覆盖 creator 添加 human member、添加 agent member、移除 member 后 private channel visibility 回收。
-2. 如发现 server query 或 subscription 缺口，先补最小 usecase/socket regression，再修一条路径。
-3. 更新本 audit 与 `verification-matrix.md`，把该入口的对应行从 Yellow 推进到 Green 或记录剩余边界。
+1. 盘点现有设备入口证据，把 device list/detail/scan/delete/rename/owner transfer/reconnect/runtime/custom agent 投影按入口级 checklist 汇总。
+2. 先补一条缺口最小、用户风险最高的 regression/browser smoke；如果现有测试已覆盖，就把证据写进本 audit 与 `verification-matrix.md` 并加 readiness/static gate。
+3. 避免把 `device:agents:list`、`agents:subscribe` 或 daemon scanner 单测误当成设备页完整 parity。
 
 ## 维护规则
 

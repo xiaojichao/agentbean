@@ -1034,7 +1034,7 @@ export default function ChatPage() {
                   <Pencil size={14} />
                 </button>
               )}
-              <button onClick={() => { loadChannelMembers(activeChannel); setShowMembers(true); }} className="flex h-7 items-center gap-1 rounded-md px-2 text-xs text-neutral-500 hover:bg-neutral-100" title="查看参与者">
+              <button onClick={() => { loadChannelMembers(activeChannel); setShowMembers(true); }} className="flex h-7 items-center gap-1 rounded-md px-2 text-xs text-neutral-500 hover:bg-neutral-100" title="查看参与者" data-smoke="channel-members-open">
                 <Users size={14} />
                 <span>{channelMemberCount}</span>
               </button>
@@ -1112,7 +1112,15 @@ export default function ChatPage() {
                   {showMention && filteredMentionMembers.length > 0 && (
                     <div className="absolute bottom-full left-0 mb-1 max-h-48 w-64 overflow-y-auto rounded-lg border border-neutral-200 bg-white shadow-lg z-10">
                       {filteredMentionMembers.map((m, i) => (
-                        <button key={m.id} onClick={() => selectMention(m)} className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${i === mentionIndex ? 'bg-blue-50 text-blue-700' : 'hover:bg-neutral-50'}`}>
+                        <button
+                          key={m.id}
+                          onClick={() => selectMention(m)}
+                          className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${i === mentionIndex ? 'bg-blue-50 text-blue-700' : 'hover:bg-neutral-50'}`}
+                          data-smoke="mention-candidate"
+                          data-member-kind={m.kind}
+                          data-member-id={m.id}
+                          data-member-name={m.name}
+                        >
                           <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold ${m.kind === 'agent' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'}`}>{m.kind === 'agent' ? 'A' : 'H'}</span>
                           <span className="truncate">{m.name}</span>
                           <span className="ml-auto text-[10px] text-neutral-400">{m.kind === 'agent' ? 'Agent' : '人类'}</span>
@@ -1445,7 +1453,7 @@ function ChannelMembersDialog({
     if (!res.ok) setError(res.error ?? '移除失败');
   };
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35" data-smoke="channel-members-dialog" data-channel-name={channelName}>
       <div className="w-[380px] rounded-lg border border-neutral-200 bg-white p-5 shadow-xl">
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-sm font-semibold">成员（{members.length}）</h3>
@@ -1462,7 +1470,16 @@ function ChannelMembersDialog({
             {addable.length === 0 ? (
               <div className="py-4 text-center text-xs text-neutral-400">没有可添加的成员</div>
             ) : addable.map((member) => (
-              <button key={`${member.kind}:${member.id}`} onClick={() => add(member)} disabled={adding} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-50">
+              <button
+                key={`${member.kind}:${member.id}`}
+                onClick={() => add(member)}
+                disabled={adding}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-50"
+                data-smoke="channel-member-add-candidate"
+                data-member-kind={member.kind}
+                data-member-id={member.id}
+                data-member-name={member.name}
+              >
                 <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[10px] font-semibold ${member.kind === 'agent' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'}`}>{member.kind === 'agent' ? 'A' : '人'}</span>
                 <span className="truncate">{member.name}</span>
                 <span className="ml-auto text-[10px] text-neutral-400">{member.kind === 'agent' ? '智能体' : '人类'}</span>
@@ -1471,7 +1488,7 @@ function ChannelMembersDialog({
           </div>
         )}
         {canAddMembers && (
-          <button onClick={() => setShowAdd((v) => !v)} disabled={adding} className="mt-3 flex w-full items-center justify-center gap-2 rounded-md bg-pink-500 px-3 py-2 text-sm font-medium text-white hover:bg-pink-600 disabled:opacity-50">
+          <button onClick={() => setShowAdd((v) => !v)} disabled={adding} className="mt-3 flex w-full items-center justify-center gap-2 rounded-md bg-pink-500 px-3 py-2 text-sm font-medium text-white hover:bg-pink-600 disabled:opacity-50" data-smoke="channel-members-add-toggle">
             <Plus size={14} /> 添加成员
           </button>
         )}
@@ -1499,7 +1516,14 @@ function MemberGroup({
       <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">{title}</div>
       <div className="space-y-2">
         {members.map((member) => (
-          <div key={`${member.kind}:${member.id}`} className="flex items-center gap-2">
+          <div
+            key={`${member.kind}:${member.id}`}
+            className="flex items-center gap-2"
+            data-smoke="channel-member-item"
+            data-member-kind={member.kind}
+            data-member-id={member.id}
+            data-member-name={member.name}
+          >
             <button
               type="button"
               onClick={() => onOpen(member)}
@@ -1530,6 +1554,10 @@ function MemberGroup({
                 className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-neutral-300 hover:bg-red-50 hover:text-red-500 disabled:opacity-40"
                 title={`移除 ${member.name}`}
                 aria-label={`移除 ${member.name}`}
+                data-smoke="channel-member-remove"
+                data-member-kind={member.kind}
+                data-member-id={member.id}
+                data-member-name={member.name}
               >
                 <X size={12} />
               </button>

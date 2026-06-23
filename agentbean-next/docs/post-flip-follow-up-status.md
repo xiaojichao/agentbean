@@ -107,7 +107,7 @@ canonical npm 包 `@agentbean/daemon` 的 `@latest` dist-tag 已推进到基于 
 
 ## 下一步判定
 
-当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。P0 生产观察 baseline 已完成，页面入口也已经迁入 App Router；下一步进入 parity backfill 阶段，按 `parity-backfill-audit.md` 的 Red/Yellow/Green 逐入口推进。当前建议的第一条小切片是 `channels / channel members`：补频道成员弹窗或页面级 browser/regression 证据，覆盖 creator 添加/移除 human 与 agent member、private channel visibility 回收，以及 `channel:members` projection 不能被其他接口替代。
+当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。P0 生产观察 baseline 已完成，页面入口也已经迁入 App Router；下一步进入 parity backfill 阶段，按 `parity-backfill-audit.md` 的 Red/Yellow/Green 逐入口推进。`channels / channel members` 已补 App Router browser smoke 与 readiness gate，覆盖 creator 添加/移除 human 与 agent member、private channel visibility 回收、mention scope，以及 `channel:members` projection 不能被其他接口替代。当前建议的下一条小切片是 `devices`：把设备 list/detail/scan/delete/owner transfer/reconnect/cached scan/old daemon 与 daemon-next 兼容路径收敛成入口级闭环证据。
 
 ## 已迁移入口的回头验规则
 

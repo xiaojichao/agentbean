@@ -197,7 +197,7 @@ Phase 4 完成标准：
 | E2E-10 | `npm run smoke:agentbean-next-browser` 在真实 Chrome 中点击 root message 的「回复讨论串」按钮、输入 thread reply、提交，并断言 reply 嵌套在 root 之下（`.thread-reply`）。 | Browser E2E/CI | Thread UI 不能只由 DOM harness 证明，必须覆盖真实浏览器点击/输入/提交/嵌套渲染链路。 | `seventieth-slice-status.md`, `scripts/smoke-agentbean-next-browser.mjs` |
 | E2E-11 | 已迁移产品入口不得只按模块完成验收；每个入口都要有页面语义、server query、subscription/broadcast 与协议兼容的最小闭环测试或明确的未覆盖记录。 | Parity E2E/CI | 已经迁移的 surface 要做 backfill audit：补测试、补 readiness gate、补文档状态；不能把“代码已迁入”当成“旧版行为已等价”。 | `parity-backfill-audit.md`, `post-flip-follow-up-status.md`, `current-protocol-inventory.md`, `socket-protocol.md` |
 
-当前 E2E-07、E2E-08、E2E-09 与 E2E-10 已进入 AgentBean Next CI gate。E2E-11 是所有已迁移入口的 backfill 规则：如果发现旧版已存在但 Next 入口缺少同等行为，要先补 regression test 与 readiness/static gate，再把状态写回本矩阵与 `parity-backfill-audit.md`。后续新增更完整 search、完整 task page、settings/member/device 等产品切片时，应在本节追加对应 browser-level gate，而不是把已有 browser smoke 误判为覆盖全部旧产品表面。
+当前 E2E-07、E2E-08、E2E-09 与 E2E-10 已进入 AgentBean Next CI gate。E2E-11 是所有已迁移入口的 backfill 规则：如果发现旧版已存在但 Next 入口缺少同等行为，要先补 regression test 与 readiness/static gate，再把状态写回本矩阵与 `parity-backfill-audit.md`。`webui-channel-members-business-flow` 已覆盖频道成员入口的 App Router browser-level parity：private channel 创建、creator 添加 human member、添加 agent member、移除 human member、`channel:members` projection、private visibility 回收与 mention scope。后续新增更完整 search、完整 task page、settings/member/device 等产品切片时，应在本节追加对应 browser-level gate，而不是把已有 browser smoke 误判为覆盖全部旧产品表面。
 
 只有对应 phase 的 E2E gates 通过后，该 phase 才可冻结。
 
