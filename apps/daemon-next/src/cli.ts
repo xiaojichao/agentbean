@@ -11,6 +11,7 @@ import { createDaemonProtocolClient, createHttpEnvResolver, type DaemonDeviceCon
 import { loadYamlConfig } from './config.js';
 import { listAuthProfiles, loadAuth, saveAuth, type AuthData, type AuthProfile } from './auth-store.js';
 import { sanitizeProfileId } from './profile-paths.js';
+import { loadOrCreateMachineId } from './machine-id.js';
 
 type CliStatusReporter = (message: string) => void;
 
@@ -359,6 +360,7 @@ export async function runDaemonNextCli(
 
   const saved = config.inviteCode ? null : loadAuthFn({ profileId: config.profileId });
   const serverUrl = resolveDaemonServerUrl(config, saved);
+  const machineId = config.machineId ?? loadOrCreateMachineId();
   const reportInviteStatus: CliStatusReporter | undefined = config.inviteCode
     ? (message) => console.log(message)
     : undefined;
@@ -398,7 +400,7 @@ export async function runDaemonNextCli(
   const inviteCredentials = config.inviteCode
     ? await waitForDeviceInviteCredentials(protocolSocket, {
       code: config.inviteCode,
-      machineId: config.machineId,
+      machineId,
       profileId: config.profileId,
       hostname: config.hostname,
       serverUrl,
@@ -441,7 +443,7 @@ export async function runDaemonNextCli(
     teamId,
     ownerId,
     ...(token ? { token } : {}),
-    machineId: config.machineId,
+    machineId,
     profileId: config.profileId,
     hostname: config.hostname,
     daemonVersion,
