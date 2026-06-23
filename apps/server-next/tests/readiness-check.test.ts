@@ -52,6 +52,7 @@ describe('AgentBean Next readiness checker', () => {
       'daemon-next-register-batch-legacy-compatibility',
       'product-surface-parity-contracts',
       'parity-backfill-audit-status-table',
+      'devices-parity-browser-smoke',
       'channel-members-parity-browser-smoke',
       'admin-dashboard-parity-regression',
     ]);

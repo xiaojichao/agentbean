@@ -831,4 +831,110 @@ describe('AgentBean Next browser smoke script', () => {
       threadReplyBody: 'browser-smoke:thread-reply:thread-smoke',
     });
   });
+
+  test('exercises WebUI devices detail projection, scan, rename, and delete flow', async () => {
+    const { exerciseWebUiDevicesBusinessSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
+    const calls: Array<[string, unknown]> = [];
+    const webSocketCalls: Array<[string, unknown]> = [];
+    const daemonCalls: Array<[string, unknown]> = [];
+    const daemonHandlers = new Map<string, (payload?: unknown) => void | Promise<void>>();
+    const webSocket = {
+      async emitWithAck(event: string, payload: unknown) {
+        webSocketCalls.push([event, payload]);
+        if (event === 'agent:create') return { ok: true, agent: { id: 'custom-agent-1' } };
+        return { ok: true };
+      },
+    };
+    const page = {
+      async navigate(url: string) {
+        calls.push(['navigate', url]);
+      },
+      async waitForFunction(expression: string, description: string) {
+        calls.push(['waitForFunction', { expression, description }]);
+      },
+      async fillInputAsUser(selector: string, value: string) {
+        calls.push(['fillInputAsUser', { selector, value }]);
+      },
+      async click(selector: string) {
+        calls.push(['click', selector]);
+        if (selector === '[data-smoke="device-runtime-scan"]') {
+          await daemonHandlers.get('device:scan-requested')?.({ deviceId: 'device-1', requestId: 'scan-1' });
+        }
+      },
+      async reload() {
+        calls.push(['reload', undefined]);
+      },
+    };
+    const ioFactory = () => {
+      return {
+        on(event: string, handler: (payload?: unknown) => void | Promise<void>) {
+          daemonHandlers.set(event, handler);
+        },
+        off() {},
+        connect() {
+          daemonHandlers.get('connect')?.();
+        },
+        disconnect() {
+          daemonCalls.push(['disconnect', undefined]);
+        },
+        async emitWithAck(event: string, payload: unknown) {
+          daemonCalls.push([event, payload]);
+          if (event === 'device:hello') return { ok: true, device: { id: 'device-1' } };
+          if (event === 'device:runtimes') return { ok: true, runtimes: [{ id: 'runtime-1' }] };
+          if (event === 'agent:register-batch') return { ok: true, agents: [{ id: 'scanned-agent-1' }] };
+          return { ok: true };
+        },
+      };
+    };
+
+    const result = await exerciseWebUiDevicesBusinessSmoke({
+      page,
+      baseUrl: 'http://127.0.0.1:4100/',
+      webSocket,
+      session: {
+        token: 'token-1',
+        user: { id: 'user-1', username: 'alice' },
+        team: { id: 'team-1', name: 'Team One', path: 'team-one' },
+      },
+      ioFactory,
+      suffix: 'devices-smoke',
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      deviceId: 'device-1',
+      name: 'webui-device-devices-smoke',
+      customAgentId: 'custom-agent-1',
+      scannedAgentId: 'scanned-agent-1',
+    });
+    expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/devices']);
+    expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/devices/device-1']);
+    expect(calls).toContainEqual(['click', '[data-smoke="device-runtime-scan"]']);
+    expect(calls).toContainEqual(['click', '[data-smoke="device-rename-open"]']);
+    expect(calls).toContainEqual(['fillInputAsUser', { selector: '[data-smoke="device-rename-input"]', value: 'webui-device-devices-smoke' }]);
+    expect(calls).toContainEqual(['click', '[data-smoke="device-rename-save"]']);
+    expect(calls).toContainEqual(['reload', undefined]);
+    expect(calls).toContainEqual(['click', '[data-smoke="device-delete-open"]']);
+    expect(calls).toContainEqual(['click', '[data-smoke="device-delete-confirm"]']);
+    expect(webSocketCalls).toContainEqual([
+      'agent:create',
+      expect.objectContaining({ userId: 'user-1', teamId: 'team-1', deviceId: 'device-1', runtimeId: 'runtime-1' }),
+    ]);
+    expect(daemonCalls).toContainEqual(['device:hello', expect.objectContaining({ teamId: 'team-1', ownerId: 'user-1' })]);
+    expect(daemonCalls).toContainEqual(['device:runtimes', expect.objectContaining({ teamId: 'team-1', deviceId: 'device-1' })]);
+    expect(daemonCalls).toContainEqual([
+      'agent:register-batch',
+      expect.objectContaining({
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        agents: [expect.objectContaining({ name: 'webui-agentos-devices-smoke', category: 'agentos-hosted' })],
+      }),
+    ]);
+    const waitForFunctionCalls = calls.filter(
+      (call): call is ['waitForFunction', { expression: string; description: string }] => call[0] === 'waitForFunction',
+    );
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('device-runtime-item'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('device-agent-item'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('device-list-item'))).toBe(true);
+  });
 });

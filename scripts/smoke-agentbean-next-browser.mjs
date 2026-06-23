@@ -8,7 +8,8 @@ import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const AGENT_EVENTS = {
-  device: { hello: 'device:hello', runtimes: 'device:runtimes' },
+  device: { hello: 'device:hello', runtimes: 'device:runtimes', scanRequested: 'device:scan-requested' },
+  agent: { registerBatch: 'agent:register-batch' },
   dispatch: { request: 'dispatch:request', result: 'dispatch:result' },
 };
 
@@ -432,6 +433,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
     const deviceResult = await exerciseWebUiDevicesBusinessSmoke({
       page,
       baseUrl: target.baseUrl,
+      webSocket: seededSession.socket,
       session: seededSession.session,
       ioFactory,
       suffix,
@@ -441,7 +443,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       check(
         'webui-devices-business-flow',
         true,
-        `Renamed device ${deviceResult.deviceId} to "${deviceResult.name}" and restored it after refresh`,
+        `Verified device ${deviceResult.deviceId} detail runtimes, custom agent, scanned AgentOS agent, rename refresh restore, and delete redirect`,
       ),
     );
 
@@ -1730,6 +1732,7 @@ async function waitForWebUiHumanMemberAction({ page, selector, timeoutMs }) {
 export async function exerciseWebUiDevicesBusinessSmoke({
   page,
   baseUrl,
+  webSocket,
   session,
   ioFactory = loadSocketIoClient(),
   suffix,
@@ -1740,6 +1743,8 @@ export async function exerciseWebUiDevicesBusinessSmoke({
   const networkPath = session.team.path ?? session.team.id;
   const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-32);
   const renamedDeviceName = `webui-device-${safeSuffix}`;
+  const customAgentName = `webui-custom-${safeSuffix}`;
+  const scannedAgentName = `webui-agentos-${safeSuffix}`;
   const daemon = await connectSmokeDaemon({
     baseUrl: root,
     ioFactory,
@@ -1749,10 +1754,88 @@ export async function exerciseWebUiDevicesBusinessSmoke({
   });
 
   try {
+    if (!webSocket) {
+      throw new Error('WebUI devices smoke needs an authenticated web socket for seeded custom agent coverage');
+    }
+    const customAgentAck = await emitAck(webSocket, WEB_EVENTS.agent.create, {
+      userId: session.user.id,
+      teamId: session.team.id,
+      deviceId: daemon.deviceId,
+      runtimeId: daemon.runtimeId,
+      name: customAgentName,
+      env: { AGENTBEAN_WEBUI_DEVICE_SMOKE: '1' },
+    }, timeoutMs);
+    const customAgentId = readNestedString(customAgentAck, ['agent', 'id']);
+    if (!customAgentId) {
+      throw new Error(`WebUI devices smoke could not create a custom agent: ${formatAck(customAgentAck)}`);
+    }
+
+    const scanReported = new Promise((resolve, reject) => {
+      let settled = false;
+      const settle = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        callback(value);
+      };
+      daemon.socket.on(AGENT_EVENTS.device.scanRequested, async (request) => {
+        try {
+          if (request?.deviceId !== daemon.deviceId) {
+            return;
+          }
+          await emitAck(daemon.socket, AGENT_EVENTS.device.runtimes, {
+            teamId: session.team.id,
+            deviceId: daemon.deviceId,
+            runtimes: [{
+              adapterKind: 'codex',
+              name: 'Codex CLI',
+              command: 'agentbean-browser-smoke-scan',
+              installed: true,
+            }],
+          }, timeoutMs);
+          const scannedAck = await emitAck(daemon.socket, AGENT_EVENTS.agent.registerBatch, {
+            teamId: session.team.id,
+            deviceId: daemon.deviceId,
+            agents: [{
+              name: scannedAgentName,
+              adapterKind: 'codex',
+              category: 'agentos-hosted',
+              gatewayInstanceKey: `webui-device-smoke:${safeSuffix}`,
+              command: 'agentbean-browser-smoke-scan',
+              cwd: '/tmp/agentbean-webui-device-smoke',
+            }],
+          }, timeoutMs);
+          const scannedAgentId = readNestedString(scannedAck, ['agents', 0, 'id']);
+          if (!scannedAgentId) {
+            throw new Error(`WebUI devices smoke scan did not register an AgentOS agent: ${formatAck(scannedAck)}`);
+          }
+          settle(resolve, { requestId: request.requestId, scannedAgentId });
+        } catch (error) {
+          settle(reject, error);
+        }
+      });
+    });
+
     await page.navigate(new URL(`/${networkPath}/devices`, root).toString());
     await waitForWebUiDeviceListItem({ page, deviceId: daemon.deviceId, timeoutMs });
     await page.navigate(new URL(`/${networkPath}/devices/${daemon.deviceId}`, root).toString());
     await waitForWebUiDeviceDetail({ page, deviceId: daemon.deviceId, timeoutMs });
+    await waitForWebUiDeviceRuntime({ page, command: 'agentbean-browser-smoke', timeoutMs });
+    await waitForWebUiDeviceAgent({ page, kind: 'custom', agentId: customAgentId, name: customAgentName, timeoutMs });
+
+    await page.click('[data-smoke="device-runtime-scan"]');
+    const scanResult = await promiseWithTimeout(
+      scanReported,
+      timeoutMs,
+      `device "${daemon.deviceId}" scan request to reach the smoke daemon`,
+    );
+    await waitForWebUiDeviceRuntime({ page, command: 'agentbean-browser-smoke-scan', timeoutMs });
+    await waitForWebUiDeviceAgent({
+      page,
+      kind: 'agentos',
+      agentId: scanResult.scannedAgentId,
+      name: scannedAgentName,
+      timeoutMs,
+    });
 
     await page.click('[data-smoke="device-rename-open"]');
     await page.waitForFunction(
@@ -1773,7 +1856,20 @@ export async function exerciseWebUiDevicesBusinessSmoke({
 
     await page.reload();
     await waitForWebUiDeviceDetail({ page, deviceId: daemon.deviceId, name: renamedDeviceName, timeoutMs });
-    return { deviceId: daemon.deviceId, name: renamedDeviceName };
+    await page.click('[data-smoke="device-delete-open"]');
+    await page.waitForFunction(
+      `Boolean(document.querySelector('[data-smoke="device-delete-confirm"]'))`,
+      'device delete confirmation to render',
+      timeoutMs,
+    );
+    await page.click('[data-smoke="device-delete-confirm"]');
+    await waitForWebUiDeviceListItemAbsent({ page, deviceId: daemon.deviceId, timeoutMs });
+    return {
+      deviceId: daemon.deviceId,
+      name: renamedDeviceName,
+      customAgentId,
+      scannedAgentId: scanResult.scannedAgentId,
+    };
   } finally {
     daemon.socket.disconnect?.();
   }
@@ -1793,6 +1889,20 @@ async function waitForWebUiDeviceListItem({ page, deviceId, name, timeoutMs }) {
     })()
     `,
     `device "${deviceId}" to render${name ? ` as ${name}` : ''}`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiDeviceListItemAbsent({ page, deviceId, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const deviceId = ${JSON.stringify(deviceId)};
+      return !Array.from(document.querySelectorAll('[data-smoke="device-list-item"]'))
+        .some((candidate) => candidate.dataset.deviceId === deviceId);
+    })()
+    `,
+    `device "${deviceId}" to disappear from list`,
     timeoutMs,
   );
 }
@@ -1828,6 +1938,40 @@ async function waitForWebUiDeviceDetail({ page, deviceId, name, timeoutMs }) {
     `).catch((debugError) => ({ debugError: debugError instanceof Error ? debugError.message : String(debugError) }));
     throw new Error(`${error instanceof Error ? error.message : String(error)}; current detail ${JSON.stringify(debug)}`);
   }
+}
+
+async function waitForWebUiDeviceRuntime({ page, command, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const command = ${JSON.stringify(command)};
+      return Array.from(document.querySelectorAll('[data-smoke="device-runtime-item"]'))
+        .some((candidate) => candidate.dataset.runtimeCommand === command || candidate.textContent.includes(command));
+    })()
+    `,
+    `device runtime "${command}" to render`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiDeviceAgent({ page, kind, agentId, name, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const kind = ${JSON.stringify(kind)};
+      const agentId = ${JSON.stringify(agentId)};
+      const name = ${JSON.stringify(name)};
+      return Array.from(document.querySelectorAll('[data-smoke="device-agent-item"]'))
+        .some((candidate) =>
+          candidate.dataset.agentKind === kind
+          && (!agentId || candidate.dataset.agentId === agentId)
+          && (!name || candidate.dataset.agentName === name || candidate.textContent.includes(name))
+        );
+    })()
+    `,
+    `device ${kind} agent "${name || agentId}" to render`,
+    timeoutMs,
+  );
 }
 
 export async function exerciseWebUiSettingsBusinessSmoke({
@@ -2905,6 +3049,16 @@ function formatAck(ack) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function promiseWithTimeout(promise, timeoutMs, description) {
+  let timer;
+  const timeout = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`Timed out waiting for ${description}`));
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 function parseArgs(argv) {
