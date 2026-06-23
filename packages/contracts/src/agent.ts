@@ -40,6 +40,7 @@ export interface AgentDto {
   command?: string;
   args?: string[];
   cwd?: string;
+  gatewayInstanceKey?: string;
   envKeys?: string[];
   description?: string;
   lastSeenAt?: UnixMs;

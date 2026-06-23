@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { createInMemoryServerNext } from '../src/index';
+import { createInMemoryRepositories, createInMemoryServerNext, createServerNextUseCases } from '../src/index';
 
 const migrationPath = (...parts: string[]) =>
   join(fileURLToPath(new URL('../src/infra/sqlite/migrations', import.meta.url)), ...parts);
@@ -1044,6 +1044,166 @@ describe('server-next first-slice use cases', () => {
         }),
       ],
     });
+  });
+
+  test('collapses duplicated hosted agents onto the canonical device in members page', async () => {
+    let now = 100;
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => now },
+      ids: {
+        nextId: createIds(['user-1', 'team-1', 'channel-1']),
+      },
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await repositories.devices.upsertHello({
+      id: 'stale-device',
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      name: 'Hermes Mac',
+      status: 'online',
+      lastSeenAt: 100,
+      createdAt: 100,
+      updatedAt: 100,
+    });
+    await repositories.agents.upsert({
+      id: 'stale-agent',
+      name: 'Hermes Agent',
+      adapterKind: 'hermes',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      deviceId: 'stale-device',
+      command: '/usr/local/bin/hermes',
+      lastSeenAt: 100,
+    });
+    now = 200;
+    await repositories.devices.upsertHello({
+      id: 'canonical-device',
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      name: 'Hermes Mac',
+      status: 'online',
+      machineId: 'machine-1',
+      profileId: 'default',
+      lastSeenAt: 200,
+      createdAt: 200,
+      updatedAt: 200,
+    });
+    await repositories.agents.upsert({
+      id: 'canonical-agent',
+      name: 'Hermes Agent',
+      adapterKind: 'hermes',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'offline',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      deviceId: 'canonical-device',
+      command: '/usr/local/bin/hermes',
+      lastSeenAt: 200,
+    });
+
+    const members = await app.listMembers({ userId: 'user-1', teamId: 'team-1' });
+
+    expect(members).toMatchObject({ ok: true });
+    if (!members.ok) {
+      throw new Error('list members failed');
+    }
+    expect(members.agents).toEqual([
+      expect.objectContaining({
+        id: 'canonical-agent',
+        name: 'Hermes Agent',
+        category: 'agentos-hosted',
+        source: 'scanned',
+        deviceId: 'canonical-device',
+        deviceName: 'Hermes Mac',
+        status: 'offline',
+        lastSeenAt: 200,
+      }),
+    ]);
+  });
+
+  test('keeps custom agents with the same runtime separate in members page', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 300 },
+      ids: {
+        nextId: createIds(['user-1', 'team-1', 'channel-1']),
+      },
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await repositories.devices.upsertHello({
+      id: 'device-1',
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      name: 'Dev Mac',
+      status: 'online',
+      lastSeenAt: 300,
+      createdAt: 300,
+      updatedAt: 300,
+    });
+    for (const id of ['custom-agent-1', 'custom-agent-2']) {
+      await repositories.agents.upsert({
+        id,
+        name: id === 'custom-agent-1' ? 'Codex Reviewer' : 'Codex Builder',
+        adapterKind: 'codex',
+        category: 'executor-hosted',
+        source: 'custom',
+        status: 'online',
+        primaryTeamId: 'team-1',
+        visibleTeamIds: ['team-1'],
+        deviceId: 'device-1',
+        command: '/usr/local/bin/codex',
+        args: ['--model', 'gpt-5.4'],
+        cwd: '/Users/shaw/project',
+        lastSeenAt: 300,
+      });
+    }
+
+    const members = await app.listMembers({ userId: 'user-1', teamId: 'team-1' });
+
+    expect(members).toMatchObject({ ok: true });
+    if (!members.ok) {
+      throw new Error('list members failed');
+    }
+    expect(members.agents.map((agent) => agent.id).sort()).toEqual(['custom-agent-1', 'custom-agent-2']);
+  });
+
+  test('keeps gateway instances separate when their gateway identity differs', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 320,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-1', 'agent-1', 'agent-2']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'Gateway Host',
+    });
+    await app.registerDiscoveredAgents({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      agents: ['workspace-a', 'workspace-b'].map((gatewayInstanceKey) => ({
+        adapterKind: 'openclaw',
+        name: 'OpenClaw Agent',
+        category: 'agentos-hosted',
+        command: '/usr/local/bin/openclaw',
+        gatewayInstanceKey,
+      })),
+    });
+
+    const members = await app.listMembers({ userId: 'user-1', teamId: 'team-1' });
+
+    expect(members).toMatchObject({ ok: true });
+    if (!members.ok) {
+      throw new Error('list members failed');
+    }
+    expect(members.agents.map((agent) => agent.gatewayInstanceKey).sort()).toEqual(['workspace-a', 'workspace-b']);
   });
 
   test('lists canonical hosted agents when device detail is opened through a stale duplicate id', async () => {
