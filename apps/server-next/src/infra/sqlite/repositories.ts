@@ -43,6 +43,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0003_agent_deleted_at.sql');
   applyMigration(db, 'global/0004_join_links.sql');
   applyMigration(db, 'global/0005_device_connect_command.sql');
+  applyMigration(db, 'global/0006_agent_gateway_instance_key.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
@@ -814,9 +815,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .prepare(
             `INSERT INTO agents (
               id, primary_team_id, name, normalized_name, role, description, adapter_kind, category, source,
-              status, owner_id, device_id, command, args_json, cwd, env_json, last_seen_at, last_error, created_at, updated_at,
+              status, owner_id, device_id, command, args_json, cwd, gateway_instance_key, env_json, last_seen_at, last_error, created_at, updated_at,
               deleted_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               primary_team_id = excluded.primary_team_id,
               name = excluded.name,
@@ -829,6 +830,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               command = excluded.command,
               args_json = excluded.args_json,
               cwd = excluded.cwd,
+              gateway_instance_key = excluded.gateway_instance_key,
               last_seen_at = excluded.last_seen_at,
               updated_at = excluded.updated_at`,
           )
@@ -848,6 +850,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             agent.command ?? null,
             agent.args ? JSON.stringify(agent.args) : null,
             agent.cwd ?? null,
+            agent.gatewayInstanceKey ?? null,
             agent.env ? JSON.stringify(agent.env) : null,
             agent.lastSeenAt ?? 0,
             agent.lastError ?? null,
@@ -1803,6 +1806,7 @@ function mapAgent(db: SqliteDatabase, row: unknown): AgentRecord | null {
     command: sqliteNullableText(row, 'command'),
     args: parseJsonArray(sqliteNullableText(row, 'args_json')),
     cwd: sqliteNullableText(row, 'cwd'),
+    gatewayInstanceKey: sqliteNullableText(row, 'gateway_instance_key'),
     envKeys: rawEnv ? Object.keys(rawEnv).sort() : undefined,
     description: sqliteNullableText(row, 'description'),
     lastSeenAt: sqliteNumber(row, 'last_seen_at'),

@@ -156,6 +156,11 @@ type AgentMemberDto = AgentDto & {
   deviceName?: string;
 };
 
+type AgentMemberProjection = {
+  dto: AgentMemberDto;
+  rawDeviceId?: string;
+};
+
 type AdminTeamDto = Omit<TeamDto, 'currentUserRole'> & {
   currentUserRole?: TeamDto['currentUserRole'];
   members: Array<HumanMemberDto & { joinedAt?: number }>;
@@ -1595,6 +1600,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           command: discovered.command ?? existing?.command,
           args: discovered.args ?? existing?.args,
           cwd: discovered.cwd ?? existing?.cwd,
+          gatewayInstanceKey: discovered.gatewayInstanceKey ?? existing?.gatewayInstanceKey,
           lastSeenAt: now,
         });
         await repositories.agents.linkIdentity({
@@ -3095,7 +3101,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const humans = await repositories.teams.listAllMembers(listInput.teamId);
       const agents = await repositories.agents.listVisibleInTeam(listInput.teamId);
-      return makeSuccess({ humans, agents: await toAgentMemberDtos(repositories, agents) });
+      return makeSuccess({ humans, agents: await toAgentMemberDtos(repositories, listInput.teamId, agents) });
     },
 
     async updateMemberHuman(humanInput) {
@@ -4317,6 +4323,7 @@ function toPublicAgent(agent: AgentRecord): AgentDto {
 
 async function toAgentMemberDtos(
   repositories: ServerNextRepositories,
+  teamId: string,
   agents: AgentRecord[],
 ): Promise<AgentMemberDto[]> {
   const deviceIds = uniqueIds(agents.map((agent) => agent.deviceId ?? ''));
@@ -4327,13 +4334,121 @@ async function toAgentMemberDtos(
       devicesById.set(device.id, device);
     }
   }));
-  return agents.map((agent) => {
-    const device = agent.deviceId ? devicesById.get(agent.deviceId) : undefined;
-    return {
-      ...toPublicAgent(agent),
-      deviceName: device ? deviceDisplayName(device) : undefined,
-    };
-  });
+  const teamDevicesById = new Map<string, DeviceRecord[]>();
+  async function canonicalDeviceFor(device: DeviceRecord): Promise<DeviceRecord> {
+    let teamDevices = teamDevicesById.get(device.teamId);
+    if (!teamDevices) {
+      teamDevices = await repositories.devices.listByTeam(device.teamId);
+      teamDevicesById.set(device.teamId, teamDevices);
+    }
+    return resolveCanonicalDeviceRecord(device, teamDevices);
+  }
+
+  const projections = await Promise.all(agents.map(async (agent): Promise<AgentMemberProjection> => {
+    const rawDevice = agent.deviceId ? devicesById.get(agent.deviceId) : undefined;
+    const canonicalDevice = rawDevice ? await canonicalDeviceFor(rawDevice) : undefined;
+    const dto: AgentMemberDto = { ...toPublicAgent(agent) };
+    if (canonicalDevice) {
+      dto.deviceId = canonicalDevice.id;
+      dto.deviceName = deviceDisplayName(canonicalDevice);
+    } else if (rawDevice) {
+      dto.deviceName = deviceDisplayName(rawDevice);
+    }
+    return { dto, rawDeviceId: rawDevice?.id };
+  }));
+  return dedupeAgentMemberDtos(projections, teamId);
+}
+
+function dedupeAgentMemberDtos(projections: AgentMemberProjection[], teamId: string): AgentMemberDto[] {
+  const result: AgentMemberProjection[] = [];
+  const indexByKey = new Map<string, number>();
+  for (const projection of projections) {
+    const key = agentMemberLogicalKey(projection.dto, teamId);
+    const existingIndex = key ? indexByKey.get(key) : undefined;
+    if (key === null || existingIndex === undefined) {
+      if (key) indexByKey.set(key, result.length);
+      result.push(projection);
+      continue;
+    }
+    result[existingIndex] = preferAgentMemberProjection(projection, result[existingIndex]!);
+    const preferredKey = agentMemberLogicalKey(result[existingIndex]!.dto, teamId);
+    if (preferredKey) indexByKey.set(preferredKey, existingIndex);
+    indexByKey.set(key, existingIndex);
+  }
+  return result.map((projection) => projection.dto);
+}
+
+function agentMemberLogicalKey(agent: AgentMemberDto, teamId: string): string | null {
+  if (agent.source === 'custom' || agent.category !== 'agentos-hosted') {
+    return null;
+  }
+  const gatewayKey = agentMemberGatewayLogicalKey(agent, teamId);
+  return gatewayKey ?? agentMemberNameLogicalKey(agent, teamId);
+}
+
+function agentMemberNameLogicalKey(agent: AgentMemberDto, teamId: string): string | null {
+  if (!agent.deviceId) return null;
+  const adapterKind = normalizeAdapterKind(agent.adapterKind);
+  const name = normalizeAgentName(agent.name);
+  if (!adapterKind || !name) return null;
+  return [teamId, agent.deviceId, adapterKind, 'name', name].join('\u0000');
+}
+
+function agentMemberGatewayLogicalKey(agent: AgentMemberDto, teamId: string): string | null {
+  if (!agent.deviceId || !agent.gatewayInstanceKey) return null;
+  const adapterKind = normalizeAdapterKind(agent.adapterKind);
+  if (adapterKind !== 'hermes' && adapterKind !== 'openclaw') return null;
+  return [teamId, agent.deviceId, adapterKind, 'gateway', normalizeAgentName(agent.gatewayInstanceKey)].join('\u0000');
+}
+
+function preferAgentMemberProjection(candidate: AgentMemberProjection, current: AgentMemberProjection): AgentMemberProjection {
+  const display = preferAgentMemberDisplay(candidate, current);
+  const status = preferAgentMemberStatus(candidate, current);
+  return {
+    rawDeviceId: display.rawDeviceId,
+    dto: {
+      ...display.dto,
+      status: status.dto.status,
+      lastSeenAt: Math.max(display.dto.lastSeenAt ?? 0, status.dto.lastSeenAt ?? 0) || (display.dto.lastSeenAt ?? status.dto.lastSeenAt),
+      lastError: status.dto.lastError,
+      visibleTeamIds: uniqueIds([...display.dto.visibleTeamIds, ...status.dto.visibleTeamIds]),
+    },
+  };
+}
+
+function preferAgentMemberDisplay(candidate: AgentMemberProjection, current: AgentMemberProjection): AgentMemberProjection {
+  const canonicalDelta = agentMemberCanonicalRank(candidate) - agentMemberCanonicalRank(current);
+  if (canonicalDelta !== 0) return canonicalDelta > 0 ? candidate : current;
+  const sourceDelta = agentMemberSourceRank(candidate.dto.source) - agentMemberSourceRank(current.dto.source);
+  if (sourceDelta !== 0) return sourceDelta > 0 ? candidate : current;
+  return (candidate.dto.lastSeenAt ?? 0) > (current.dto.lastSeenAt ?? 0) ? candidate : current;
+}
+
+function preferAgentMemberStatus(candidate: AgentMemberProjection, current: AgentMemberProjection): AgentMemberProjection {
+  const timeDelta = (candidate.dto.lastSeenAt ?? 0) - (current.dto.lastSeenAt ?? 0);
+  if (timeDelta !== 0) return timeDelta > 0 ? candidate : current;
+  const statusDelta = agentMemberStatusRank(candidate.dto.status) - agentMemberStatusRank(current.dto.status);
+  if (statusDelta !== 0) return statusDelta > 0 ? candidate : current;
+  return candidate;
+}
+
+function agentMemberCanonicalRank(projection: AgentMemberProjection): number {
+  return projection.rawDeviceId && projection.rawDeviceId === projection.dto.deviceId ? 1 : 0;
+}
+
+function agentMemberSourceRank(source?: string | null): number {
+  if (source === 'custom') return 3;
+  if (source === 'self-register') return 2;
+  return 1;
+}
+
+function agentMemberStatusRank(status?: string | null): number {
+  if (status === 'busy') return 5;
+  if (status === 'online') return 4;
+  if (status === 'connecting') return 3;
+  if (status === 'error') return 2;
+  if (status === 'offline') return 1;
+  return 0;
 }
 
 function toDeviceAgentListDto(agent: AgentRecord, device?: DeviceRecord): DeviceAgentListDto {

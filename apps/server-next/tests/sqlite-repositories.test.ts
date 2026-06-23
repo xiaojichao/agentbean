@@ -82,6 +82,59 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('applies agent gateway instance migration', () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const agentColumns = columnNames(globalDb, 'agents');
+      expect(agentColumns).toContain('gateway_instance_key');
+      expect(globalDb.prepare("SELECT id FROM schema_migrations WHERE id = 'global/0006_agent_gateway_instance_key.sql'").get()).toEqual({
+        id: 'global/0006_agent_gateway_instance_key.sql',
+      });
+    } finally {
+      teamDb.exec('SELECT 1');
+      close();
+    }
+  });
+
+  test('persists agent gateway instance keys with SQLite', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 500 },
+        ids: {
+          nextId: createIds(['user-1', 'team-1', 'channel-1', 'device-1', 'agent-1']),
+        },
+      });
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+      await app.deviceHello({
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        hostname: 'Gateway Host',
+      });
+      await app.registerDiscoveredAgents({
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        agents: [{
+          name: 'OpenClaw Agent',
+          adapterKind: 'openclaw',
+          category: 'agentos-hosted',
+          command: '/usr/local/bin/openclaw',
+          gatewayInstanceKey: 'workspace-a',
+        }],
+      });
+
+      await expect(repositories.agents.getById('agent-1')).resolves.toMatchObject({
+        id: 'agent-1',
+        gatewayInstanceKey: 'workspace-a',
+      });
+    } finally {
+      teamDb.exec('SELECT 1');
+      close();
+    }
+  });
+
   test('applies device connect command migration', () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
