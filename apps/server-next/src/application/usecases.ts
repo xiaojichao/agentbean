@@ -146,9 +146,14 @@ export interface RegisterUserResult {
 }
 
 type DeviceAgentListDto = AgentDto & {
+  deviceName?: string;
   networkId: string;
   publishedNetworkIds: string[];
   unpublishedNetworkIds: string[];
+};
+
+type AgentMemberDto = AgentDto & {
+  deviceName?: string;
 };
 
 type AdminTeamDto = Omit<TeamDto, 'currentUserRole'> & {
@@ -1413,12 +1418,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!(await repositories.teams.isMember(device.teamId, deviceAgentsInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
+      const canonicalDevice = resolveCanonicalDeviceRecord(
+        device,
+        await repositories.devices.listByTeam(device.teamId),
+      );
       const [agents, runtimes] = await Promise.all([
-        repositories.agents.listByDevice(device.id),
-        repositories.runtimes.listByDevice(device.id),
+        repositories.agents.listByDevice(canonicalDevice.id),
+        repositories.runtimes.listByDevice(canonicalDevice.id),
       ]);
       return makeSuccess({
-        agents: agents.map(toDeviceAgentListDto),
+        agents: agents.map((agent) => toDeviceAgentListDto(agent, canonicalDevice)),
         runtimes: runtimes.map(toRuntimeDto),
       });
     },
@@ -1435,12 +1444,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         device,
         await repositories.devices.listByTeam(device.teamId),
       );
-      const visibleAgents = await repositories.agents.listVisibleInTeam(device.teamId);
+      const hostedAgents = await repositories.agents.listByDevice(canonicalDevice.id);
       return makeSuccess({
         device: {
           ...(await toDeviceDtoWithOwnerName(repositories, canonicalDevice)),
           runtimes: (await repositories.runtimes.listByDevice(canonicalDevice.id)).map(toRuntimeDto),
-          agents: visibleAgents.filter((agent) => agent.deviceId === canonicalDevice.id),
+          agents: hostedAgents.map((agent) => toDeviceAgentListDto(agent, canonicalDevice)),
         },
       });
     },
@@ -3086,7 +3095,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const humans = await repositories.teams.listAllMembers(listInput.teamId);
       const agents = await repositories.agents.listVisibleInTeam(listInput.teamId);
-      return makeSuccess({ humans, agents });
+      return makeSuccess({ humans, agents: await toAgentMemberDtos(repositories, agents) });
     },
 
     async updateMemberHuman(humanInput) {
@@ -4306,9 +4315,31 @@ function toPublicAgent(agent: AgentRecord): AgentDto {
   return publicAgent;
 }
 
-function toDeviceAgentListDto(agent: AgentRecord): DeviceAgentListDto {
+async function toAgentMemberDtos(
+  repositories: ServerNextRepositories,
+  agents: AgentRecord[],
+): Promise<AgentMemberDto[]> {
+  const deviceIds = uniqueIds(agents.map((agent) => agent.deviceId ?? ''));
+  const devicesById = new Map<string, DeviceRecord>();
+  await Promise.all(deviceIds.map(async (deviceId) => {
+    const device = await repositories.devices.getById(deviceId);
+    if (device) {
+      devicesById.set(device.id, device);
+    }
+  }));
+  return agents.map((agent) => {
+    const device = agent.deviceId ? devicesById.get(agent.deviceId) : undefined;
+    return {
+      ...toPublicAgent(agent),
+      deviceName: device ? deviceDisplayName(device) : undefined,
+    };
+  });
+}
+
+function toDeviceAgentListDto(agent: AgentRecord, device?: DeviceRecord): DeviceAgentListDto {
   return {
     ...toPublicAgent(agent),
+    deviceName: device ? deviceDisplayName(device) : undefined,
     networkId: agent.primaryTeamId,
     publishedNetworkIds: uniqueIds(agent.visibleTeamIds),
     unpublishedNetworkIds: [],
