@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentBeanHome, authFile, profileRoot, sanitizeProfileId } from '../src/profile-paths';
+import { agentBeanHome, authFile, machineIdFile, profileRoot, sanitizeProfileId } from '../src/profile-paths';
 
 describe('profile-paths', () => {
   it('sanitizes profileId (lowercase, non-alnum → -)', () => {
@@ -10,6 +10,9 @@ describe('profile-paths', () => {
   });
   it('authFile nests under teams/{profileId}/auth.json', () => {
     expect(authFile('team-1', '/root')).toBe('/root/teams/team-1/auth.json');
+  });
+  it('machineIdFile is rooted at the AgentBean home', () => {
+    expect(machineIdFile('/root')).toBe('/root/machine-id');
   });
   it('profileRoot defaults to ~/.agentbean when no baseDir', () => {
     expect(profileRoot('default').endsWith('.agentbean/teams/default')).toBe(true);
