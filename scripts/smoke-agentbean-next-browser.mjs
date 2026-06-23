@@ -20,7 +20,14 @@ const WEB_EVENTS = {
     publish: 'agent:publish',
     unpublish: 'agent:unpublish',
   },
-  channel: { subscribe: 'channels:subscribe' },
+  channel: {
+    subscribe: 'channels:subscribe',
+    addMember: 'channel:add-member',
+    removeMember: 'channel:remove-member',
+    addAgent: 'channel:add-agent',
+    removeAgent: 'channel:remove-agent',
+    members: 'channel:members',
+  },
   device: {
     rename: 'device:rename',
   },
@@ -342,6 +349,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       page,
       baseUrl: target.baseUrl,
       session: seededSession.session,
+      ioFactory,
       suffix,
       timeoutMs,
     });
@@ -350,6 +358,11 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
         'webui-channels-business-flow',
         true,
         `Created channel "${channelResult.channelName}", opened detail, archived it, and verified it disappeared from the list`,
+      ),
+      check(
+        'webui-channel-members-business-flow',
+        true,
+        `Managed human member ${channelResult.memberUserId} and agent member ${channelResult.agentId}, then verified private visibility and mention scope`,
       ),
     );
 
@@ -722,6 +735,7 @@ export async function exerciseWebUiChannelsBusinessSmoke({
   page,
   baseUrl,
   session,
+  ioFactory = loadSocketIoClient(),
   suffix,
   timeoutMs,
 }) {
@@ -730,44 +744,157 @@ export async function exerciseWebUiChannelsBusinessSmoke({
   const networkPath = session.team.path ?? session.team.id;
   const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-28);
   const channelName = `webui-channel-${safeSuffix}`;
-  await page.navigate(new URL(`/${networkPath}/channels`, root).toString());
-  await page.waitForFunction(
-    `document.querySelector('[data-smoke="channel-create-open"]') !== null`,
-    'channels page exposes the create channel control',
-    timeoutMs,
-  );
-  await page.click('[data-smoke="channel-create-open"]');
-  await page.waitForFunction(
-    `document.querySelector('[data-smoke="channel-create-dialog"]') !== null`,
-    'channel create dialog opens',
-    timeoutMs,
-  );
-  await page.setInputValue('[data-smoke="channel-create-name"]', channelName);
-  await page.click('[data-smoke="channel-create-submit"]');
-  await waitForWebUiChannelDetail({ page, channelName, timeoutMs });
-  const channelId = await page.evaluateJson(`
-    (() => {
-      const match = window.location.pathname.match(/\\/channels?\\/([^/?#]+)/);
-      return match?.[1] ?? null;
-    })()
-  `);
-  if (typeof channelId !== 'string' || !channelId) {
-    throw new Error(`WebUI channels smoke could not resolve created channel id for "${channelName}"`);
+  const memberUsername = `webui-channel-member-${safeSuffix}`.toLowerCase();
+  const agentName = `WebUIChannelAgent${safeSuffix.replace(/[^a-zA-Z0-9]/g, '').slice(-8)}`;
+  const ownerSocket = await connectSocket(ioFactory, new URL('/web', root).toString(), timeoutMs, {
+    auth: { token: session.token },
+  });
+  const joinSocket = await connectSocket(ioFactory, new URL('/web', root).toString(), timeoutMs);
+  let memberSocket;
+  let daemon;
+  try {
+    const linkAck = await emitAck(ownerSocket, WEB_EVENTS.join.create, { maxUses: 1 }, timeoutMs);
+    const joinCode = readNestedString(linkAck, ['link', 'code']);
+    if (!joinCode) {
+      throw new Error(`WebUI channels smoke could not create a join link: ${formatAck(linkAck)}`);
+    }
+    const registerAck = await emitAck(joinSocket, WEB_EVENTS.auth.register, {
+      username: memberUsername,
+      password: `secret-${safeSuffix}`,
+      teamName: `Unused Channel Member ${safeSuffix}`,
+      joinCode,
+    }, timeoutMs);
+    const targetUserId = readNestedString(registerAck, ['user', 'id']);
+    const targetToken = readNestedString(registerAck, ['token']);
+    if (registerAck?.ok !== true || !targetUserId || !targetToken) {
+      throw new Error(`WebUI channels smoke could not register a channel member: ${formatAck(registerAck)}`);
+    }
+    memberSocket = await connectSocket(ioFactory, new URL('/web', root).toString(), timeoutMs, {
+      auth: { token: targetToken },
+    });
+
+    daemon = await connectSmokeDaemon({
+      baseUrl: root,
+      ioFactory,
+      session,
+      suffix: `channel-${safeSuffix}`,
+      timeoutMs,
+    });
+    const agentAck = await emitAck(ownerSocket, WEB_EVENTS.agent.create, {
+      userId: session.user.id,
+      teamId: session.team.id,
+      deviceId: daemon.deviceId,
+      runtimeId: daemon.runtimeId,
+      name: agentName,
+      env: { AGENTBEAN_WEBUI_CHANNEL_MEMBER_SMOKE: '1' },
+    }, timeoutMs);
+    const agentId = readNestedString(agentAck, ['agent', 'id']);
+    if (!agentId) {
+      throw new Error(`WebUI channels smoke could not create a channel agent: ${formatAck(agentAck)}`);
+    }
+
+    await page.navigate(new URL(`/${networkPath}/channels`, root).toString());
+    await page.waitForFunction(
+      `document.querySelector('[data-smoke="channel-create-open"]') !== null`,
+      'channels page exposes the create channel control',
+      timeoutMs,
+    );
+    await page.click('[data-smoke="channel-create-open"]');
+    await page.waitForFunction(
+      `document.querySelector('[data-smoke="channel-create-dialog"]') !== null`,
+      'channel create dialog opens',
+      timeoutMs,
+    );
+    await page.setInputValue('[data-smoke="channel-create-name"]', channelName);
+    await page.click('[data-smoke="channel-create-visibility-private"]');
+    await page.click('[data-smoke="channel-create-submit"]');
+    await waitForWebUiChannelDetail({ page, channelName, timeoutMs });
+    const channelId = await page.evaluateJson(`
+      (() => {
+        const match = window.location.pathname.match(/\\/channels?\\/([^/?#]+)/);
+        return match?.[1] ?? null;
+      })()
+    `);
+    if (typeof channelId !== 'string' || !channelId) {
+      throw new Error(`WebUI channels smoke could not resolve created channel id for "${channelName}"`);
+    }
+
+    await page.click('[data-smoke="channel-members-open"]');
+    await waitForWebUiChannelMembersDialog({ page, channelName, timeoutMs });
+    await page.click('[data-smoke="channel-members-add-toggle"]');
+    await clickWebUiChannelMemberCandidate({ page, kind: 'human', id: targetUserId });
+    await waitForWebUiChannelMemberItem({ page, kind: 'human', id: targetUserId, timeoutMs });
+    await assertWebUiChannelMembersAck({
+      socket: ownerSocket,
+      teamId: session.team.id,
+      channelId,
+      timeoutMs,
+      expectedHumanId: targetUserId,
+    });
+    await assertWebUiChannelVisibleToMember({
+      socket: memberSocket,
+      teamId: session.team.id,
+      channelId,
+      timeoutMs,
+      expectedVisible: true,
+    });
+
+    await page.click('[data-smoke="channel-members-add-toggle"]');
+    await clickWebUiChannelMemberCandidate({ page, kind: 'agent', id: agentId });
+    await waitForWebUiChannelMemberItem({ page, kind: 'agent', id: agentId, timeoutMs });
+    await assertWebUiChannelMembersAck({
+      socket: ownerSocket,
+      teamId: session.team.id,
+      channelId,
+      timeoutMs,
+      expectedHumanId: targetUserId,
+      expectedAgentId: agentId,
+    });
+
+    await clickWebUiChannelMemberRemove({ page, kind: 'human', id: targetUserId });
+    await waitForWebUiChannelMemberMissing({ page, kind: 'human', id: targetUserId, timeoutMs });
+    await assertWebUiChannelMembersAck({
+      socket: ownerSocket,
+      teamId: session.team.id,
+      channelId,
+      timeoutMs,
+      absentHumanId: targetUserId,
+      expectedAgentId: agentId,
+    });
+    await assertWebUiChannelVisibleToMember({
+      socket: memberSocket,
+      teamId: session.team.id,
+      channelId,
+      timeoutMs,
+      expectedVisible: false,
+    });
+    await page.setInputValue('[data-smoke="chat-message-input"]', '@');
+    await waitForWebUiMentionScope({
+      page,
+      expectedAgentId: agentId,
+      absentHumanId: targetUserId,
+      timeoutMs,
+    });
+
+    await page.click('[data-smoke="channel-edit-open"]');
+    await page.waitForFunction(
+      `document.querySelector('[data-smoke="channel-edit-dialog"]')?.dataset.channelId === ${JSON.stringify(channelId)}`,
+      `channel "${channelId}" edit dialog opens`,
+      timeoutMs,
+    );
+    await page.click('[data-smoke="channel-archive-open"]');
+    await page.click('[data-smoke="channel-confirm-archive"]');
+    await waitForWebUiChannelListMissing({ page, channelId, channelName, timeoutMs });
+
+    await page.navigate(new URL(`/${networkPath}/channels`, root).toString());
+    await waitForWebUiChannelListMissing({ page, channelId, channelName, timeoutMs });
+    return { channelId, channelName, memberUserId: targetUserId, agentId };
+  } finally {
+    daemon?.socket?.disconnect?.();
+    memberSocket?.disconnect?.();
+    joinSocket.disconnect?.();
+    ownerSocket.disconnect?.();
   }
-
-  await page.click('[data-smoke="channel-edit-open"]');
-  await page.waitForFunction(
-    `document.querySelector('[data-smoke="channel-edit-dialog"]')?.dataset.channelId === ${JSON.stringify(channelId)}`,
-    `channel "${channelId}" edit dialog opens`,
-    timeoutMs,
-  );
-  await page.click('[data-smoke="channel-archive-open"]');
-  await page.click('[data-smoke="channel-confirm-archive"]');
-  await waitForWebUiChannelListMissing({ page, channelId, channelName, timeoutMs });
-
-  await page.navigate(new URL(`/${networkPath}/channels`, root).toString());
-  await waitForWebUiChannelListMissing({ page, channelId, channelName, timeoutMs });
-  return { channelId, channelName };
 }
 
 async function waitForWebUiChannelDetail({ page, channelName, timeoutMs }) {
@@ -800,6 +927,145 @@ async function waitForWebUiChannelListMissing({ page, channelId, channelName, ti
     })()
     `,
     `channel "${channelName}" to disappear from the list`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiChannelMembersDialog({ page, channelName, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const channelName = ${JSON.stringify(channelName)};
+      const dialog = document.querySelector('[data-smoke="channel-members-dialog"]');
+      return dialog?.dataset.channelName === channelName;
+    })()
+    `,
+    `channel "${channelName}" members dialog to render`,
+    timeoutMs,
+  );
+}
+
+async function clickWebUiChannelMemberCandidate({ page, kind, id }) {
+  const clicked = await page.evaluateJson(`
+    (() => {
+      const kind = ${JSON.stringify(kind)};
+      const id = ${JSON.stringify(id)};
+      const candidate = Array.from(document.querySelectorAll('[data-smoke="channel-member-add-candidate"]'))
+        .find((item) => item.dataset.memberKind === kind && item.dataset.memberId === id);
+      if (!candidate) return false;
+      candidate.click();
+      return true;
+    })()
+  `);
+  if (!clicked) {
+    throw new Error(`Could not find addable ${kind} channel member ${id}`);
+  }
+}
+
+async function clickWebUiChannelMemberRemove({ page, kind, id }) {
+  const clicked = await page.evaluateJson(`
+    (() => {
+      const kind = ${JSON.stringify(kind)};
+      const id = ${JSON.stringify(id)};
+      const button = Array.from(document.querySelectorAll('[data-smoke="channel-member-remove"]'))
+        .find((item) => item.dataset.memberKind === kind && item.dataset.memberId === id);
+      if (!button) return false;
+      button.click();
+      return true;
+    })()
+  `);
+  if (!clicked) {
+    throw new Error(`Could not find removable ${kind} channel member ${id}`);
+  }
+}
+
+async function waitForWebUiChannelMemberItem({ page, kind, id, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const kind = ${JSON.stringify(kind)};
+      const id = ${JSON.stringify(id)};
+      return Array.from(document.querySelectorAll('[data-smoke="channel-member-item"]'))
+        .some((item) => item.dataset.memberKind === kind && item.dataset.memberId === id);
+    })()
+    `,
+    `${kind} channel member ${id} to render`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiChannelMemberMissing({ page, kind, id, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const kind = ${JSON.stringify(kind)};
+      const id = ${JSON.stringify(id)};
+      return !Array.from(document.querySelectorAll('[data-smoke="channel-member-item"]'))
+        .some((item) => item.dataset.memberKind === kind && item.dataset.memberId === id);
+    })()
+    `,
+    `${kind} channel member ${id} to disappear`,
+    timeoutMs,
+  );
+}
+
+async function assertWebUiChannelMembersAck({
+  socket,
+  teamId,
+  channelId,
+  timeoutMs,
+  expectedHumanId,
+  absentHumanId,
+  expectedAgentId,
+}) {
+  const ack = await emitAck(socket, WEB_EVENTS.channel.members, { teamId, channelId }, timeoutMs);
+  if (ack?.ok !== true) {
+    throw new Error(`WebUI channels smoke could not list channel members: ${formatAck(ack)}`);
+  }
+  const humanIds = Array.isArray(ack.humanMemberIds) ? ack.humanMemberIds : [];
+  const agentIds = Array.isArray(ack.agentMemberIds) ? ack.agentMemberIds : [];
+  if (expectedHumanId && !humanIds.includes(expectedHumanId)) {
+    throw new Error(`WebUI channels smoke missing human member ${expectedHumanId}: ${formatAck(ack)}`);
+  }
+  if (absentHumanId && humanIds.includes(absentHumanId)) {
+    throw new Error(`WebUI channels smoke still exposes removed human member ${absentHumanId}: ${formatAck(ack)}`);
+  }
+  if (expectedAgentId && !agentIds.includes(expectedAgentId)) {
+    throw new Error(`WebUI channels smoke missing agent member ${expectedAgentId}: ${formatAck(ack)}`);
+  }
+}
+
+async function assertWebUiChannelVisibleToMember({ socket, teamId, channelId, timeoutMs, expectedVisible }) {
+  const ack = await emitAck(socket, WEB_EVENTS.channel.subscribe, { teamId }, timeoutMs);
+  if (ack?.ok !== true) {
+    throw new Error(`WebUI channels smoke could not list channels for joined member: ${formatAck(ack)}`);
+  }
+  const channels = Array.isArray(ack.channels) ? ack.channels : [];
+  const visible = channels.some((channel) => channel.id === channelId);
+  if (visible !== expectedVisible) {
+    throw new Error(
+      `WebUI channels smoke expected private channel ${channelId} visibility=${expectedVisible}, got ${visible}: ${formatAck(ack)}`,
+    );
+  }
+}
+
+async function waitForWebUiMentionScope({ page, expectedAgentId, absentHumanId, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const expectedAgentId = ${JSON.stringify(expectedAgentId)};
+      const absentHumanId = ${JSON.stringify(absentHumanId)};
+      const candidates = Array.from(document.querySelectorAll('[data-smoke="mention-candidate"]'));
+      const hasAgent = candidates.some((item) =>
+        item.dataset.memberKind === 'agent' && item.dataset.memberId === expectedAgentId
+      );
+      const hasRemovedHuman = candidates.some((item) =>
+        item.dataset.memberKind === 'human' && item.dataset.memberId === absentHumanId
+      );
+      return hasAgent && !hasRemovedHuman;
+    })()
+    `,
+    'mention candidates follow current channel membership after member removal',
     timeoutMs,
   );
 }

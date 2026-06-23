@@ -147,6 +147,10 @@ describe('AgentBean Next browser smoke script', () => {
   test('exercises WebUI channel create and archive flow', async () => {
     const { exerciseWebUiChannelsBusinessSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];
+    const socketCalls: Array<[string, unknown]> = [];
+    const daemonCalls: Array<[string, unknown]> = [];
+    let channelMembersCount = 0;
+    let memberChannelListCount = 0;
     const page = {
       async navigate(url: string) {
         calls.push(['navigate', url]);
@@ -162,8 +166,52 @@ describe('AgentBean Next browser smoke script', () => {
       },
       async evaluateJson(expression: string) {
         calls.push(['evaluateJson', expression]);
+        if (expression.includes('window.location.pathname.match')) {
+          return 'channel-1';
+        }
         return 'channel-1';
       },
+    };
+    const ioFactory = (url: string) => {
+      let onConnect: (() => void) | undefined;
+      const isAgent = url.endsWith('/agent');
+      return {
+        on(event: string, handler: () => void) {
+          if (event === 'connect') onConnect = handler;
+        },
+        off() {},
+        connect() {
+          onConnect?.();
+        },
+        disconnect() {
+          if (isAgent) daemonCalls.push(['disconnect', undefined]);
+        },
+        async emitWithAck(event: string, payload: unknown) {
+          if (isAgent) {
+            daemonCalls.push([event, payload]);
+            if (event === 'device:hello') return { ok: true, device: { id: 'device-1' } };
+            if (event === 'device:runtimes') return { ok: true, runtimes: [{ id: 'runtime-1' }] };
+            return { ok: true };
+          }
+          socketCalls.push([event, payload]);
+          if (event === 'join:create') return { ok: true, link: { code: 'join-1' } };
+          if (event === 'auth:register') return { ok: true, token: 'member-token-1', user: { id: 'user-2' } };
+          if (event === 'agent:create') return { ok: true, agent: { id: 'agent-1' } };
+          if (event === 'channel:members') {
+            channelMembersCount += 1;
+            return channelMembersCount >= 3
+              ? { ok: true, humanMemberIds: ['user-1'], agentMemberIds: ['agent-1'] }
+              : { ok: true, humanMemberIds: ['user-1', 'user-2'], agentMemberIds: channelMembersCount >= 2 ? ['agent-1'] : [] };
+          }
+          if (event === 'channels:subscribe') {
+            memberChannelListCount += 1;
+            return memberChannelListCount === 1
+              ? { ok: true, channels: [{ id: 'channel-1' }] }
+              : { ok: true, channels: [] };
+          }
+          return { ok: true };
+        },
+      };
     };
 
     const result = await exerciseWebUiChannelsBusinessSmoke({
@@ -174,6 +222,7 @@ describe('AgentBean Next browser smoke script', () => {
         user: { id: 'user-1', username: 'alice' },
         team: { id: 'team-1', name: 'Team One', path: 'team-one' },
       },
+      ioFactory,
       suffix: 'channels-smoke',
       timeoutMs: 1000,
     });
@@ -181,20 +230,38 @@ describe('AgentBean Next browser smoke script', () => {
     expect(result).toEqual({
       channelId: 'channel-1',
       channelName: 'webui-channel-channels-smoke',
+      memberUserId: 'user-2',
+      agentId: 'agent-1',
     });
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/channels']);
     expect(calls).toContainEqual(['click', '[data-smoke="channel-create-open"]']);
     expect(calls).toContainEqual(['setInputValue', { selector: '[data-smoke="channel-create-name"]', value: 'webui-channel-channels-smoke' }]);
+    expect(calls).toContainEqual(['click', '[data-smoke="channel-create-visibility-private"]']);
     expect(calls).toContainEqual(['click', '[data-smoke="channel-create-submit"]']);
+    expect(calls).toContainEqual(['click', '[data-smoke="channel-members-open"]']);
+    expect(calls).toContainEqual(['click', '[data-smoke="channel-members-add-toggle"]']);
+    expect(calls).toContainEqual(['setInputValue', { selector: '[data-smoke="chat-message-input"]', value: '@' }]);
     expect(calls).toContainEqual(['click', '[data-smoke="channel-edit-open"]']);
     expect(calls).toContainEqual(['click', '[data-smoke="channel-archive-open"]']);
     expect(calls).toContainEqual(['click', '[data-smoke="channel-confirm-archive"]']);
+    expect(socketCalls).toContainEqual(['join:create', { maxUses: 1 }]);
+    expect(socketCalls).toContainEqual(['auth:register', expect.objectContaining({ joinCode: 'join-1' })]);
+    expect(socketCalls).toContainEqual(['agent:create', expect.objectContaining({ teamId: 'team-1', deviceId: 'device-1', runtimeId: 'runtime-1' })]);
+    expect(socketCalls).toContainEqual(['channel:members', { teamId: 'team-1', channelId: 'channel-1' }]);
+    expect(socketCalls).toContainEqual(['channels:subscribe', { teamId: 'team-1' }]);
+    expect(daemonCalls).toContainEqual(['device:hello', expect.objectContaining({ teamId: 'team-1', ownerId: 'user-1' })]);
     const waitForFunctionCalls = calls.filter(
       (call): call is ['waitForFunction', { expression: string; description: string }] => call[0] === 'waitForFunction',
     );
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('channel-create-dialog'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('channel-members-dialog'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('channel-member-item'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('mention-candidate'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('channel-edit-dialog'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('channel-list-item'))).toBe(true);
+    const evaluateJsonCalls = calls.filter((call): call is ['evaluateJson', string] => call[0] === 'evaluateJson');
+    expect(evaluateJsonCalls.some((call) => call[1].includes('channel-member-add-candidate'))).toBe(true);
+    expect(evaluateJsonCalls.some((call) => call[1].includes('channel-member-remove'))).toBe(true);
   });
 
   test('exercises WebUI team create, switch, delete, and restore flow', async () => {

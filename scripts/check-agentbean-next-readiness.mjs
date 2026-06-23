@@ -26,6 +26,8 @@ export function collectAgentBeanNextReadinessChecks({
   const serverNextFirstSliceTests = readFileSync(join(root, 'apps/server-next/tests/first-slice.test.ts'), 'utf8');
   const serverNextSocketIntegrationTests = readFileSync(join(root, 'apps/server-next/tests/socket-integration.test.ts'), 'utf8');
   const webNextDashboardPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/dashboard/page.tsx'), 'utf8');
+  const webNextChatPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/chat/page.tsx'), 'utf8');
+  const browserSmokeScript = readFileSync(join(root, 'scripts/smoke-agentbean-next-browser.mjs'), 'utf8');
   const legacyAgentNamespace = readFileSync(join(root, 'apps/server/src/namespaces/agent.ts'), 'utf8');
   const legacyWebNamespaceTests = readFileSync(join(root, 'apps/server/tests/web-namespace.test.ts'), 'utf8');
   const checks = [
@@ -401,10 +403,24 @@ export function collectAgentBeanNextReadinessChecks({
       parityBackfillAudit.includes('## 入口审计') &&
         parityBackfillAudit.includes('| `members` | Green |') &&
         parityBackfillAudit.includes('| `devices` | Yellow |') &&
-        parityBackfillAudit.includes('| `channels` / `channel members` | Yellow |') &&
+        parityBackfillAudit.includes('| `channels` / `channel members` | Green |') &&
         parityBackfillAudit.includes('## 下一条 backfill slice') &&
-        parityBackfillAudit.includes('优先做 `channels / channel members`'),
+        parityBackfillAudit.includes('优先做 `devices`'),
       'AgentBean Next parity backfill audit must keep a Red/Yellow/Green product-entry status table and the next recommended slice',
+    ),
+    check(
+      'channel-members-parity-browser-smoke',
+      browserSmokeScript.includes('webui-channel-members-business-flow') &&
+        browserSmokeScript.includes('channel-member-add-candidate') &&
+        browserSmokeScript.includes('channel-member-remove') &&
+        browserSmokeScript.includes('mention-candidate') &&
+        browserSmokeScript.includes('assertWebUiChannelVisibleToMember') &&
+        webNextChatPage.includes('data-smoke="channel-members-open"') &&
+        webNextChatPage.includes('data-smoke="channel-member-item"') &&
+        webNextChatPage.includes('data-smoke="mention-candidate"') &&
+        verificationMatrix.includes('webui-channel-members-business-flow') &&
+        parityBackfillAudit.includes('| `channels` / `channel members` | Green |'),
+      'Channel member parity must stay covered by an App Router browser smoke for human/agent add-remove, private visibility reclaim, channel:members projection, and mention scope',
     ),
     check(
       'admin-dashboard-parity-regression',
