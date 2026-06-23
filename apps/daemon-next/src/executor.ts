@@ -160,7 +160,10 @@ async function runCustomAgentCommand(
       }
       const completedAt = options.clock.now();
       const exitCode = code ?? 1;
-      const command = formatCommand(customAgent.command as string, finalArgs);
+      const command = formatCommand(
+        customAgent.command as string,
+        isHermes ? redactHermesCommandArgs(finalArgs) : finalArgs,
+      );
       const logContent = buildLogArtifactContent(stdout, stderr);
       const body = isHermes
         ? extractHermesReply(stdout, code ?? null, stderr)
@@ -268,7 +271,63 @@ function buildHermesArgs(baseArgs: string[], prompt: string): string[] {
       ? [...args.slice(0, chatIdx + 1), '-Q', ...args.slice(chatIdx + 1)]
       : ['-Q', ...args];
   }
-  return hasQuery ? [...args, prompt] : [...args, '-q', prompt];
+  return hasQuery ? replaceHermesQueryArg(args, prompt) : [...args, '-q', prompt];
+}
+
+function replaceHermesQueryArg(args: string[], prompt: string): string[] {
+  const replaced: string[] = [];
+  let queryWritten = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === undefined) {
+      continue;
+    }
+    if (arg === '-q' || arg === '--query') {
+      if (!queryWritten) {
+        replaced.push(arg, prompt);
+        queryWritten = true;
+      }
+      const nextArg = args[index + 1];
+      if (nextArg !== undefined && !nextArg.startsWith('-')) {
+        index += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith('--query=')) {
+      if (!queryWritten) {
+        replaced.push('--query', prompt);
+        queryWritten = true;
+      }
+      continue;
+    }
+    replaced.push(arg);
+  }
+  return queryWritten ? replaced : [...replaced, '-q', prompt];
+}
+
+const HERMES_QUERY_PLACEHOLDER = '[query elided]';
+
+function redactHermesCommandArgs(args: string[]): string[] {
+  const redacted: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === undefined) {
+      continue;
+    }
+    if (arg === '-q' || arg === '--query') {
+      redacted.push(arg, HERMES_QUERY_PLACEHOLDER);
+      if (args[index + 1] !== undefined) {
+        index += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith('--query=')) {
+      redacted.push('--query', HERMES_QUERY_PLACEHOLDER);
+      continue;
+    }
+    redacted.push(arg);
+  }
+  return redacted;
 }
 
 function buildHermesPrompt(request: DispatchRequestPayload): string {

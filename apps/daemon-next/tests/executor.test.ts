@@ -306,7 +306,8 @@ describe('daemon-next command executor', () => {
         `import { writeFileSync } from 'node:fs';`,
         `// Simulate 'hermes chat -Q -q': quiet output, prompt arrives via the -q argv flag.`,
         `const qIdx = process.argv.indexOf('-q');`,
-        `const query = qIdx >= 0 ? process.argv[qIdx + 1] : '';`,
+        `const queryIdx = process.argv.indexOf('--query');`,
+        `const query = qIdx >= 0 ? process.argv[qIdx + 1] : queryIdx >= 0 ? process.argv[queryIdx + 1] : '';`,
         `process.stdout.write('\\nsession_id: fake-session-abc\\n');`,
         `process.stdout.write('REPLY:' + query + '\\n');`,
         `// Record whether anything arrived on stdin (must stay empty for hermes).`,
@@ -353,10 +354,79 @@ describe('daemon-next command executor', () => {
     expect(output.body).toContain('let me check.');
     // The command line uses hermes' non-interactive quiet query mode.
     expect(output.workspaceRun?.command).toContain('chat -Q -q');
+    expect(output.workspaceRun?.command).toContain('-q [query elided]');
+    expect(output.workspaceRun?.command).not.toContain('collect top 20 AI tweets');
+    expect(output.workspaceRun?.command).not.toContain('what is trending?');
+    expect(output.workspaceRun?.command).not.toContain('let me check.');
     // The prompt is NOT piped through stdin for hermes.
     expect(readFileSync(stdinLogPath, 'utf8')).toBe('(empty)');
     expect(output.workspaceRun?.status).toBe('succeeded');
     expect(output.workspaceRun?.exitCode).toBe(0);
+  });
+
+  test('rewrites hermes gateway and preconfigured query args without persisting prompt text', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
+    const scriptPath = join(cwd, 'fake-hermes.mjs');
+    writeFileSync(
+      scriptPath,
+      [
+        `const qIdx = process.argv.indexOf('-q');`,
+        `const queryIdx = process.argv.indexOf('--query');`,
+        `const query = qIdx >= 0 ? process.argv[qIdx + 1] : queryIdx >= 0 ? process.argv[queryIdx + 1] : '';`,
+        `process.stdout.write('QUERY:' + query + '\\n');`,
+      ].join('\n'),
+    );
+
+    const executor = createCommandExecutor({ clock: createClock([1000, 1010, 2000, 2010]) });
+    const gatewayOutput = await executor({
+      id: 'dispatch-gateway',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'gateway prompt',
+      customAgent: {
+        adapterKind: 'hermes',
+        command: process.execPath,
+        args: ['gateway', 'run', scriptPath],
+        cwd,
+      },
+    });
+    const queryOutput = await executor({
+      id: 'dispatch-query',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-2',
+      agentId: 'agent-1',
+      requestId: 'request-2',
+      prompt: 'replacement prompt',
+      customAgent: {
+        adapterKind: 'hermes',
+        command: process.execPath,
+        args: [scriptPath, 'chat', '--query', 'stale prompt'],
+        cwd,
+      },
+    });
+
+    expect(gatewayOutput).toMatchObject({
+      body: 'QUERY:gateway prompt',
+      workspaceRun: {
+        command: expect.stringContaining('chat -Q -q [query elided]'),
+      },
+    });
+    expect(queryOutput).toMatchObject({
+      body: 'QUERY:replacement prompt',
+      workspaceRun: {
+        command: expect.stringContaining('chat -Q --query [query elided]'),
+      },
+    });
+    if (typeof gatewayOutput !== 'object' || typeof queryOutput !== 'object') {
+      throw new Error('expected structured command results');
+    }
+    expect(gatewayOutput.workspaceRun?.command).not.toContain('gateway prompt');
+    expect(queryOutput.workspaceRun?.command).not.toContain('replacement prompt');
+    expect(queryOutput.workspaceRun?.command).not.toContain('stale prompt');
   });
 });
 
