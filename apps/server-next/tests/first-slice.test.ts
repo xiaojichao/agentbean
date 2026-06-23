@@ -942,6 +942,7 @@ describe('server-next first-slice use cases', () => {
       ownerId: 'user-1',
       machineId: 'machine-1',
       profileId: 'default',
+      hostname: 'MacBook Pro',
     });
     await app.registerDiscoveredAgents({
       teamId: 'team-1',
@@ -976,6 +977,7 @@ describe('server-next first-slice use cases', () => {
           category: 'agentos-hosted',
           source: 'scanned',
           deviceId: 'device-1',
+          deviceName: 'MacBook Pro',
         }),
         expect.objectContaining({
           id: 'agent-2',
@@ -983,8 +985,129 @@ describe('server-next first-slice use cases', () => {
           category: 'executor-hosted',
           source: 'custom',
           deviceId: 'device-1',
+          deviceName: 'MacBook Pro',
         }),
       ]),
+    });
+  });
+
+  test('includes host device names for agents published into another team members page', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 315,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'team-2',
+        'channel-2',
+        'device-1',
+        'agent-1',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'Host Team' });
+    await app.createTeam({ userId: 'user-1', name: 'testsns' });
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'Hermes Mac',
+    });
+    await app.registerDiscoveredAgents({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      agents: [{
+        name: 'Hermes Agent',
+        adapterKind: 'hermes',
+        category: 'agentos-hosted',
+        command: '/usr/local/bin/hermes',
+      }],
+    });
+    await app.publishAgent({
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      targetTeamId: 'team-2',
+    });
+
+    await expect(app.listDevices({ userId: 'user-1', teamId: 'team-2' })).resolves.toMatchObject({
+      ok: true,
+      devices: [],
+    });
+    await expect(app.listMembers({ userId: 'user-1', teamId: 'team-2' })).resolves.toMatchObject({
+      ok: true,
+      agents: [
+        expect.objectContaining({
+          id: 'agent-1',
+          name: 'Hermes Agent',
+          deviceId: 'device-1',
+          deviceName: 'Hermes Mac',
+          visibleTeamIds: ['team-1', 'team-2'],
+        }),
+      ],
+    });
+  });
+
+  test('lists canonical hosted agents when device detail is opened through a stale duplicate id', async () => {
+    let now = 100;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'stale-device',
+        'canonical-device',
+        'agent-1',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'Hermes Mac',
+    });
+    now = 200;
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'Hermes Mac',
+    });
+    await app.registerDiscoveredAgents({
+      teamId: 'team-1',
+      deviceId: 'canonical-device',
+      agents: [{
+        name: 'Hermes Agent',
+        adapterKind: 'hermes',
+        category: 'agentos-hosted',
+        command: '/usr/local/bin/hermes',
+      }],
+    });
+
+    await expect(app.getDevice({ userId: 'user-1', deviceId: 'stale-device' })).resolves.toMatchObject({
+      ok: true,
+      device: {
+        id: 'canonical-device',
+        agents: [
+          expect.objectContaining({
+            id: 'agent-1',
+            name: 'Hermes Agent',
+            deviceName: 'Hermes Mac',
+          }),
+        ],
+      },
+    });
+    await expect(app.listDeviceAgents({
+      userId: 'user-1',
+      teamId: 'team-1',
+      deviceId: 'stale-device',
+    })).resolves.toMatchObject({
+      ok: true,
+      agents: [
+        expect.objectContaining({
+          id: 'agent-1',
+          name: 'Hermes Agent',
+          deviceName: 'Hermes Mac',
+        }),
+      ],
     });
   });
 
