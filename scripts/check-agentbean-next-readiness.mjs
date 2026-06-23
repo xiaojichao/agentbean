@@ -18,6 +18,7 @@ export function collectAgentBeanNextReadinessChecks({
   const workflow = readFileSync(join(root, '.github/workflows/ci-cd.yml'), 'utf8');
   const cutoverRunbook = readFileSync(join(root, 'agentbean-next/docs/production-cutover-runbook.md'), 'utf8');
   const verificationMatrix = readFileSync(join(root, 'agentbean-next/docs/verification-matrix.md'), 'utf8');
+  const parityBackfillAudit = readFileSync(join(root, 'agentbean-next/docs/parity-backfill-audit.md'), 'utf8');
   const socketProtocol = readFileSync(join(root, 'agentbean-next/docs/socket-protocol.md'), 'utf8');
   const contractsSocket = readFileSync(join(root, 'packages/contracts/src/socket.ts'), 'utf8');
   const serverNextUseCases = readFileSync(join(root, 'apps/server-next/src/application/usecases.ts'), 'utf8');
@@ -391,8 +392,19 @@ export function collectAgentBeanNextReadinessChecks({
         verificationMatrix.includes('P2-09c') &&
         verificationMatrix.includes('`members:list`、`device:agents:list`、`agents:subscribe` 与 `channel:members`') &&
         verificationMatrix.includes('E2E-11') &&
-        verificationMatrix.includes('已迁移产品入口不得只按模块完成验收'),
+        verificationMatrix.includes('已迁移产品入口不得只按模块完成验收') &&
+        verificationMatrix.includes('`parity-backfill-audit.md`'),
       'Verification matrix must keep product-surface parity contracts for already migrated AgentBean Next areas',
+    ),
+    check(
+      'parity-backfill-audit-status-table',
+      parityBackfillAudit.includes('## 入口审计') &&
+        parityBackfillAudit.includes('| `members` | Green |') &&
+        parityBackfillAudit.includes('| `devices` | Yellow |') &&
+        parityBackfillAudit.includes('| `channels` / `channel members` | Yellow |') &&
+        parityBackfillAudit.includes('## 下一条 backfill slice') &&
+        parityBackfillAudit.includes('优先做 `channels / channel members`'),
+      'AgentBean Next parity backfill audit must keep a Red/Yellow/Green product-entry status table and the next recommended slice',
     ),
     check(
       'admin-dashboard-parity-regression',

@@ -4,11 +4,11 @@
 
 ## 核对时间
 
-- 日期：2026-06-15
-- 本地分支：`codex/post-flip-status-convergence` 基于 `origin/main`
-- GitHub 状态：#140 与 #141 均已 completed 关闭；#239 已合并并自动关闭 #238
-- 当前生产复核：`npm run audit:agentbean-next-cutover -- --json` 通过 `11/11`，`pendingFinalFlip: false`
-- 当前生产 smoke：`npm run smoke:agentbean-next-entry -- --url https://api.agentbean.dev` 通过 `4/4`；`npm run smoke:agentbean-next-business -- --url https://api.agentbean.dev` 通过 `8/8`
+- 日期：2026-06-23
+- 当前基线：`origin/main` = `9dd7ba5`（PR #338 已合并）
+- GitHub 状态：open PR 为空；open issue 为空。
+- 最新 main CI/CD：run `28012932531` 成功，包含 Validate web/server/daemon/AgentBean Next、Deploy production、Publish agent to npm 与 AgentBean Next production smoke。
+- 已新增逐入口 parity backfill 账本：`agentbean-next/docs/parity-backfill-audit.md`。
 
 这些状态会随 GitHub 与生产环境变化而漂移；执行外部操作前仍应重新核对。
 
@@ -107,7 +107,7 @@ canonical npm 包 `@agentbean/daemon` 的 `@latest` dist-tag 已推进到基于 
 
 ## 下一步判定
 
-当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。P0 生产观察 baseline 已完成，下一步应开新的 scoped issue/PR 继续产品能力或运维增强；若沿当前替换主线推进，优先在更完整的 workspace run 专用页面、复杂 team-wide workspace explorer、分段日志存储/检索、admin/audit 产品面中选一个小切片。
+当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。P0 生产观察 baseline 已完成，页面入口也已经迁入 App Router；下一步进入 parity backfill 阶段，按 `parity-backfill-audit.md` 的 Red/Yellow/Green 逐入口推进。当前建议的第一条小切片是 `channels / channel members`：补频道成员弹窗或页面级 browser/regression 证据，覆盖 creator 添加/移除 human 与 agent member、private channel visibility 回收，以及 `channel:members` projection 不能被其他接口替代。
 
 ## 已迁移入口的回头验规则
 
@@ -118,3 +118,5 @@ canonical npm 包 `@agentbean/daemon` 的 `@latest` dist-tag 已推进到基于 
 3. 最后更新 `verification-matrix.md` 或本文，把该入口归入“已收敛”或“仍需补齐的边界”。
 
 成员页、设备页、全局 agent snapshot 与频道成员是四个不同产品入口：`members:list`、`device:agents:list`、`agents:subscribe`、`channel:members` 不能互相替代验收。已迁移 surface 如果只证明了其中一个接口通过，其他入口仍视为未完成 parity backfill。
+
+逐入口状态以 `parity-backfill-audit.md` 为准。本文保留阶段性地图；具体 Green/Yellow/Red、证据与下一条 slice 不再分散写在旧 follow-up 清单里。
