@@ -68,9 +68,20 @@ async function runCustomAgentCommand(
     throw new Error('custom agent command is required');
   }
 
+  // Hermes is an interactive TUI by default. The generic path feeds the prompt via stdin and
+  // closes the pipe immediately, which makes Hermes echo the input then exit on EOF ("Goodbye!")
+  // without ever running the query. Hermes exposes a programmatic one-shot mode —
+  // `hermes chat -Q -q "<query>"` — where -Q suppresses the banner/spinner and -q carries the
+  // query on argv. So for Hermes we put the prompt (plus joined history) on argv and leave
+  // stdin ignored.
+  const isHermes = customAgent.adapterKind === 'hermes';
+  const finalArgs = isHermes
+    ? buildHermesArgs(customAgent.args ?? [], buildHermesPrompt(request))
+    : customAgent.args ?? [];
+
   return new Promise((resolve, reject) => {
     const startedAt = options.clock.now();
-    const child = spawn(customAgent.command as string, customAgent.args ?? [], {
+    const child = spawn(customAgent.command as string, finalArgs, {
       cwd: customAgent.cwd,
       env: buildChildEnv(process.env, customAgent.env ?? undefined),
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -149,10 +160,16 @@ async function runCustomAgentCommand(
       }
       const completedAt = options.clock.now();
       const exitCode = code ?? 1;
-      const command = formatCommand(customAgent.command as string, customAgent.args ?? []);
+      const command = formatCommand(
+        customAgent.command as string,
+        isHermes ? redactHermesCommandArgs(finalArgs) : finalArgs,
+      );
       const logContent = buildLogArtifactContent(stdout, stderr);
+      const body = isHermes
+        ? extractHermesReply(stdout, code ?? null, stderr)
+        : code === 0 ? stdout.trimEnd() : `custom agent command exited with code ${exitCode}`;
       resolve({
-        body: code === 0 ? stdout.trimEnd() : `custom agent command exited with code ${exitCode}`,
+        body,
         artifacts: [
           {
             id: `workspace-log-${request.id}`,
@@ -177,10 +194,14 @@ async function runCustomAgentCommand(
 
     // A missing/invalid prompt (e.g. an unvalidated cast at the caller) must surface as a clean
     // empty write rather than an opaque Node ERR_INVALID_ARG_TYPE via the stdin stream.
-    child.stdin.on('error', () => {
-      // swallow
-    });
-    child.stdin.end(typeof request.prompt === 'string' ? request.prompt : '');
+    if (child.stdin) {
+      child.stdin.on('error', () => {
+        // swallow
+      });
+      // Hermes receives its prompt via argv (see buildHermesArgs); close stdin empty so the
+      // process never blocks on a pipe it does not read.
+      child.stdin.end(isHermes ? '' : (typeof request.prompt === 'string' ? request.prompt : ''));
+    }
   });
 }
 
@@ -215,4 +236,134 @@ function buildLogArtifactContent(stdout: string, stderr: string): string {
 
 function formatCommand(command: string, args: string[]): string {
   return [command, ...args].join(' ');
+}
+
+// ── Hermes adapter helpers ────────────────────────────────────────────────────
+// daemon-next runs every agent through the same spawn+capture spine. Only Hermes needs a
+// non-stdin invocation contract, so its specifics live here rather than behind a full adapter
+// abstraction.
+
+function hermesRuntimeArgs(args: string[]): string[] {
+  // A `gateway run` preamble selects the gateway-managed runtime; strip it so the chat subcommand
+  // can be appended cleanly.
+  if (args[0] === 'gateway' && args[1] === 'run') {
+    return args.slice(2);
+  }
+  return args;
+}
+
+function buildHermesArgs(baseArgs: string[], prompt: string): string[] {
+  const runtime = hermesRuntimeArgs(baseArgs);
+  const hasChat = runtime.includes('chat');
+  const hasQuery = runtime.includes('-q') || runtime.includes('--query');
+  const hasQuiet = runtime.includes('-Q') || runtime.includes('--quiet');
+  // Default scanner-supplied config (empty args) → a clean one-shot quiet query.
+  if (!hasChat && !hasQuery) {
+    return [...runtime, 'chat', '-Q', '-q', prompt];
+  }
+  // Operator already parameterised the chat subcommand: honour it, force quiet mode, and append
+  // the prompt value (after a -q flag if none is present). -Q is inserted right after `chat` so
+  // it can never become a stray -q value.
+  let args = runtime;
+  if (!hasQuiet) {
+    const chatIdx = args.indexOf('chat');
+    args = chatIdx >= 0
+      ? [...args.slice(0, chatIdx + 1), '-Q', ...args.slice(chatIdx + 1)]
+      : ['-Q', ...args];
+  }
+  return hasQuery ? replaceHermesQueryArg(args, prompt) : [...args, '-q', prompt];
+}
+
+function replaceHermesQueryArg(args: string[], prompt: string): string[] {
+  const replaced: string[] = [];
+  let queryWritten = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === undefined) {
+      continue;
+    }
+    if (arg === '-q' || arg === '--query') {
+      if (!queryWritten) {
+        replaced.push(arg, prompt);
+        queryWritten = true;
+      }
+      const nextArg = args[index + 1];
+      if (nextArg !== undefined && !nextArg.startsWith('-')) {
+        index += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith('--query=')) {
+      if (!queryWritten) {
+        replaced.push('--query', prompt);
+        queryWritten = true;
+      }
+      continue;
+    }
+    replaced.push(arg);
+  }
+  return queryWritten ? replaced : [...replaced, '-q', prompt];
+}
+
+const HERMES_QUERY_PLACEHOLDER = '[query elided]';
+
+function redactHermesCommandArgs(args: string[]): string[] {
+  const redacted: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === undefined) {
+      continue;
+    }
+    if (arg === '-q' || arg === '--query') {
+      redacted.push(arg, HERMES_QUERY_PLACEHOLDER);
+      if (args[index + 1] !== undefined) {
+        index += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith('--query=')) {
+      redacted.push('--query', HERMES_QUERY_PLACEHOLDER);
+      continue;
+    }
+    redacted.push(arg);
+  }
+  return redacted;
+}
+
+function buildHermesPrompt(request: DispatchRequestPayload): string {
+  const history = request.history ?? [];
+  if (history.length === 0) {
+    return request.prompt;
+  }
+  const turns = history.slice(-10).map((message) => ({
+    role: message.senderKind === 'agent' ? 'Assistant' : 'User',
+    body: message.body,
+  }));
+  return [...turns.map((turn) => `${turn.role}: ${turn.body}`), `User: ${request.prompt}`].join('\n\n');
+}
+
+// Hermes' -Q quiet mode prints a few `key: value` session-metadata lines (session_id, etc.)
+// before the reply; strip those so only the model's response reaches the user.
+const HERMES_QUIET_META_LINE_RE = /^(session_id|session|duration|messages|model|provider|cost|tokens)[:：]/i;
+
+function extractHermesReply(stdout: string, code: number | null, stderr: string): string {
+  const reply = stdout
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .filter((line) => {
+      const trimmed = line.trim();
+      return trimmed !== '' && !HERMES_QUIET_META_LINE_RE.test(trimmed);
+    })
+    .join('\n')
+    .trim();
+  if (reply) {
+    return reply;
+  }
+  // Empty reply on a failed run: surface stderr / exit code so the user sees why (e.g. HTTP 429)
+  // instead of a bare empty body.
+  if (code !== 0) {
+    const detail = stderr.trim();
+    return detail ? detail.slice(0, 2000) : `custom agent command exited with code ${code ?? 1}`;
+  }
+  return stdout.trim();
 }
