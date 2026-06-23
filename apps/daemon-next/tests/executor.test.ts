@@ -295,6 +295,69 @@ describe('daemon-next command executor', () => {
       workspaceRun: { status: 'failed' },
     });
   });
+
+  test('runs a hermes agent via "chat -Q -q" with the prompt on argv (not stdin), joining history and stripping session metadata', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
+    const scriptPath = join(cwd, 'fake-hermes.mjs');
+    const stdinLogPath = join(cwd, 'stdin.log');
+    writeFileSync(
+      scriptPath,
+      [
+        `import { writeFileSync } from 'node:fs';`,
+        `// Simulate 'hermes chat -Q -q': quiet output, prompt arrives via the -q argv flag.`,
+        `const qIdx = process.argv.indexOf('-q');`,
+        `const query = qIdx >= 0 ? process.argv[qIdx + 1] : '';`,
+        `process.stdout.write('\\nsession_id: fake-session-abc\\n');`,
+        `process.stdout.write('REPLY:' + query + '\\n');`,
+        `// Record whether anything arrived on stdin (must stay empty for hermes).`,
+        `let stdinData = '';`,
+        `process.stdin.setEncoding('utf8');`,
+        `process.stdin.on('data', (c) => { stdinData += c; });`,
+        `process.stdin.on('end', () => {`,
+        `  writeFileSync(${JSON.stringify(stdinLogPath)}, stdinData.length ? stdinData : '(empty)');`,
+        `});`,
+      ].join('\n'),
+    );
+
+    const executor = createCommandExecutor({ clock: createClock([1000, 1010]) });
+    const output = await executor({
+      id: 'dispatch-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'collect top 20 AI tweets',
+      history: [
+        { messageId: 'm-prev-user', senderKind: 'human' as const, senderId: 'u1', body: 'what is trending?', createdAt: 1 },
+        { messageId: 'm-prev-agent', senderKind: 'agent' as const, senderId: 'a1', body: 'let me check.', createdAt: 2 },
+      ],
+      customAgent: {
+        adapterKind: 'hermes',
+        command: process.execPath,
+        args: [scriptPath],
+        cwd,
+      },
+    });
+
+    expect(typeof output).toBe('object');
+    if (typeof output !== 'object') {
+      throw new Error('expected structured command result');
+    }
+    // Hermes quiet output has its session metadata stripped from the reply body.
+    expect(output.body).not.toContain('session_id');
+    expect(output.body).not.toContain('fake-session-abc');
+    // The prompt reaches the agent via argv, and prior history is joined into it.
+    expect(output.body).toContain('collect top 20 AI tweets');
+    expect(output.body).toContain('what is trending?');
+    expect(output.body).toContain('let me check.');
+    // The command line uses hermes' non-interactive quiet query mode.
+    expect(output.workspaceRun?.command).toContain('chat -Q -q');
+    // The prompt is NOT piped through stdin for hermes.
+    expect(readFileSync(stdinLogPath, 'utf8')).toBe('(empty)');
+    expect(output.workspaceRun?.status).toBe('succeeded');
+    expect(output.workspaceRun?.exitCode).toBe(0);
+  });
 });
 
 function createClock(values: number[]) {
