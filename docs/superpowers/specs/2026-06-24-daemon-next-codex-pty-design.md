@@ -150,7 +150,8 @@ PTY 路径复用 `executor.ts` 导出的：`buildChildEnv`（secrets 边界，**
 - **CI 测试边界**：codex 端到端不在 CI（Linux 无 `.node`），只跑 mock。本地 darwin 补端到端。这是 lazy import 换来零 CI 改动的必然代价。
 - **secrets 边界**：PTY 路径必须复用 `buildChildEnv` + `buildRedactedLog`，否则 host 密钥经 PTY 输出泄漏到日志 artifact。
 - **node-pty 不可用退化**：显式失败（明确错误），不静默成功、不退 pipe。
-- **Linux 用户安装**：发布后 Linux 用户需编译工具链（node-gyp fallback），与 apps/daemon 同款，已被接受。
+- **Linux 用户安装**：发布后 Linux 用户需编译工具链（node-gyp fallback），与 apps/daemon 同款，已被接受。node-pty 声明为 daemon-next 的 `optionalDependencies`：Linux 编译失败不阻塞 daemon 安装，codex 退化为显式不可用而非整体安装失败。
+- **node-pty issue #850（spawn-helper execute bit）**：darwin prebuilds 的 `spawn-helper` 二进制在 npm tarball 缺 execute bit（644），`posix_spawnp failed`——所有 macOS 设备 `npm install` 后首次 spawn 失败（`require` 成功但 spawn 失败，mock 测试发现不了）。已实现运行时 workaround：`defaultPtySpawnLoader` 的 `ensureSpawnHelperExecutable` 在 spawn 前 chmod 755。e2e 验证（恢复 644 后仍 spawn 成功）。
 
 ## 7. 非目标（YAGNI）
 

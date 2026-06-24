@@ -33,7 +33,7 @@ describe('daemon-next command executor', () => {
       requestId: 'request-1',
       prompt: 'hello custom agent',
       customAgent: {
-        adapterKind: 'codex',
+        adapterKind: 'gemini',
         command: process.execPath,
         args: [scriptPath, '--model', 'gpt-5.4'],
         cwd,
@@ -100,7 +100,7 @@ describe('daemon-next command executor', () => {
       requestId: 'request-1',
       prompt: 'hello custom agent',
       customAgent: {
-        adapterKind: 'codex',
+        adapterKind: 'gemini',
         command: process.execPath,
         args: [scriptPath],
         cwd,
@@ -156,7 +156,7 @@ describe('daemon-next command executor', () => {
       requestId: 'request-1',
       prompt: 'hello custom agent',
       customAgent: {
-        adapterKind: 'codex',
+        adapterKind: 'gemini',
         command: process.execPath,
         args: [scriptPath],
         cwd,
@@ -245,7 +245,7 @@ describe('daemon-next command executor', () => {
       requestId: 'request-1',
       prompt: 'hello',
       customAgent: {
-        adapterKind: 'codex',
+        adapterKind: 'gemini',
         command: process.execPath,
         args: [scriptPath],
         cwd,
@@ -284,7 +284,7 @@ describe('daemon-next command executor', () => {
       requestId: 'request-1',
       prompt: 'hello',
       customAgent: {
-        adapterKind: 'codex',
+        adapterKind: 'gemini',
         command: process.execPath,
         args: [scriptPath],
         cwd,
