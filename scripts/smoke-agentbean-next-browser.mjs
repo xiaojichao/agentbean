@@ -475,7 +475,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       check(
         'webui-agents-business-flow',
         true,
-        `Created agent "${agentsResult.agentName}", toggled publish to ${agentsResult.targetTeamName}, and verified metrics after dispatch`,
+        `Created agent "${agentsResult.agentName}", updated config, toggled publish to ${agentsResult.targetTeamName}, verified metrics, and deleted it from the list`,
       ),
     );
 
@@ -2100,6 +2100,7 @@ export async function exerciseWebUiAgentsBusinessSmoke({
   const networkPath = session.team.path ?? session.team.id;
   const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-32);
   const agentName = `WebUIAgent${safeSuffix.replace(/[^a-zA-Z0-9]/g, '').slice(-10)}`;
+  const configuredAgentName = `${agentName}Cfg`;
   const targetTeamName = `WebUI Agent Target ${safeSuffix}`;
   const daemon = await connectSmokeDaemon({
     baseUrl: root,
@@ -2146,6 +2147,16 @@ export async function exerciseWebUiAgentsBusinessSmoke({
     await page.navigate(new URL(`/${networkPath}/agents/${agentId}`, root).toString());
     await waitForWebUiAgentDetail({ page, agentId, name: agentName, timeoutMs });
 
+    await waitForWebUiAgentAction({ page, selector: '[data-smoke="agent-config-open"]', timeoutMs });
+    await page.click('[data-smoke="agent-config-open"]');
+    await waitForWebUiAgentAction({ page, selector: '[data-smoke="agent-config-dialog"]', timeoutMs });
+    await page.setInputValue('[data-smoke="agent-config-name"]', configuredAgentName);
+    await page.setInputValue('[data-smoke="agent-config-description"]', 'Updated by AgentBean Next WebUI agents parity smoke');
+    await page.setInputValue('[data-smoke="agent-config-command"]', 'codex');
+    await page.setInputValue('[data-smoke="agent-config-cwd"]', '/tmp/agentbean-next-agents-smoke');
+    await page.click('[data-smoke="agent-config-save"]');
+    await waitForWebUiAgentDetail({ page, agentId, name: configuredAgentName, timeoutMs });
+
     await waitForWebUiAgentPublishToggle({ page, targetTeamId, published: false, timeoutMs });
     await page.evaluateJson(`
       (() => {
@@ -2178,7 +2189,7 @@ export async function exerciseWebUiAgentsBusinessSmoke({
       userId: session.user.id,
       teamId: session.team.id,
       channelId: session.channel.id,
-      body: `@${agentName} metrics ping`,
+      body: `@${configuredAgentName} metrics ping`,
     }, timeoutMs);
     const dispatchId = Array.isArray(sendAck?.dispatches) ? sendAck.dispatches[0]?.id : undefined;
     if (typeof dispatchId !== 'string') {
@@ -2188,7 +2199,14 @@ export async function exerciseWebUiAgentsBusinessSmoke({
 
     await page.navigate(new URL(`/${networkPath}/agents/metrics`, root).toString());
     await waitForWebUiAgentMetricsPanel({ page, agentId, timeoutMs });
-    return { agentId, agentName, targetTeamId, targetTeamName, dispatchId };
+    await page.navigate(new URL(`/${networkPath}/agents/${agentId}`, root).toString());
+    await waitForWebUiAgentDetail({ page, agentId, name: configuredAgentName, timeoutMs });
+    await waitForWebUiAgentAction({ page, selector: '[data-smoke="agent-delete-open"]', timeoutMs });
+    await page.click('[data-smoke="agent-delete-open"]');
+    await waitForWebUiAgentAction({ page, selector: '[data-smoke="agent-delete-dialog"]', timeoutMs });
+    await page.click('[data-smoke="agent-delete-confirm"]');
+    await waitForWebUiAgentListItemAbsent({ page, agentId, timeoutMs });
+    return { agentId, agentName: configuredAgentName, targetTeamId, targetTeamName, dispatchId, deleted: true };
   } finally {
     daemon.socket.disconnect?.();
   }
@@ -2212,6 +2230,22 @@ async function waitForWebUiAgentListItem({ page, agentId, name, timeoutMs }) {
   );
 }
 
+async function waitForWebUiAgentListItemAbsent({ page, agentId, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const agentId = ${JSON.stringify(agentId)};
+      const listPage = document.querySelector('[data-smoke="agent-list-page"]');
+      if (!listPage) return false;
+      return !Array.from(document.querySelectorAll('[data-smoke="agent-list-item"]'))
+        .some((candidate) => candidate.dataset.agentId === agentId);
+    })()
+    `,
+    `agent "${agentId}" to disappear from the list`,
+    timeoutMs,
+  );
+}
+
 async function waitForWebUiAgentDetail({ page, agentId, name, timeoutMs }) {
   await page.waitForFunction(
     `
@@ -2225,6 +2259,14 @@ async function waitForWebUiAgentDetail({ page, agentId, name, timeoutMs }) {
     })()
     `,
     `agent "${agentId}" detail to render`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiAgentAction({ page, selector, timeoutMs }) {
+  await page.waitForFunction(
+    `Boolean(document.querySelector(${JSON.stringify(selector)}))`,
+    `${selector} to render`,
     timeoutMs,
   );
 }

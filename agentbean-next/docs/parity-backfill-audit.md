@@ -4,10 +4,10 @@
 
 ## 核对时间
 
-- 日期：2026-06-23
-- 基线：`origin/main` = `dbf9291`（PR #340 已合并）
-- GitHub 状态：open PR 为空；open issue 为空。
-- 最新 main CI/CD：run `28015256812` 成功，包含 Validate web/server/daemon/AgentBean Next、Deploy production、Publish agent to npm 与 AgentBean Next production smoke。
+- 日期：2026-06-24
+- 基线：`origin/main` = `3af3107`（#341 之后的 main，含 daemon adapter 后续修复）
+- GitHub 状态：以当前 PR/Actions 为准；本表只记录 parity 证据状态。
+- 最新 main CI/CD：#341 合并后的 main run `28016639898` 已成功，包含 Validate web/server/daemon/AgentBean Next、Deploy production、Publish agent to npm 与 AgentBean Next production smoke；后续 main 提交需继续按 Actions truth 核对。
 
 ## 状态定义
 
@@ -23,7 +23,7 @@
 |---|---|---|---|
 | `members` | Green | `members:list` 已覆盖 human members、当前用户补回、scanned AgentOS agent、custom agent、canonical host device 与 stale/canonical device 去重；App Router browser smoke 覆盖 join、role update 与刷新恢复；readiness gate 保护 `members-list-agent-parity-regression` 与 product-surface parity contract。 | 后续只按新增需求补：human profile/description update、更完整 remove/transfer 浏览器路径。 |
 | `devices` | Green | `device:list`、`device:get`、`device:agents:list`、scan routing、rename、delete redirect、owner/admin 权限、canonical device identity、runtime/agent 投影、connect command、old daemon `device:register-agents` 与 daemon-next `agent:register-batch` 兼容均已有 server/web 回归；App Router `webui-devices-business-flow` 覆盖 list -> detail、runtime 投影、自定义 Agent 投影、targeted scan 后 AgentOS 托管 Agent 投影、rename/refresh restore 与 delete redirect/list disappearance；readiness gate 保护 `devices-parity-browser-smoke`。 | 后续只按新增需求补：更完整 owner transfer 浏览器路径、真实 reconnect/cached scan UX、设备 audit trail。 |
-| `agents` | Yellow | custom agent create、publish/unpublish、config envKeys、delete tombstone、metrics request/ack 与 browser smoke metrics 路径已存在；daemon-next 扫描与 runnable scanned-agent dispatch 已补。 | 还缺完整 agent 管理面 parity：delete/config 的 App Router browser-level 覆盖、跨团队 publication 投影、metrics 口径、admin/audit 需求边界。 |
+| `agents` | Green | custom agent create、list/detail、config update、publish/unpublish、metrics dispatch 与 delete/list disappearance 已进入 App Router `webui-agents-business-flow`；server/usecase 侧已有 config envKeys、delete tombstone、metrics request/ack 与 daemon-next scanned-agent dispatch 证据；readiness gate 保护 `agents-parity-browser-smoke` 与稳定 selector。 | 后续只按新增需求补：更完整 admin/audit 产品面、advanced metrics drilldown、批量 publication 管理。 |
 | `chat` | Green | message send、session restore、dispatch status/cancel、thread reply、artifact upload/viewer、workspace run source message 与 App Router chat send/refresh restore 均已有测试或 browser smoke。 | 更完整 saved/reactions/search UI 仍按各自入口继续补，不阻塞 chat 主入口。 |
 | `channels` / `channel members` | Green | channel create/archive/list disappearance、channel creator controls、private channel visibility、`channel:members` usecase 与 subscription broadcast 已有测试；App Router `webui-channel-members-business-flow` 覆盖 private channel 创建、频道成员弹窗、creator 添加 human member、添加 agent member、移除 human member、`channel:members` projection、private visibility 回收与 mention scope；readiness gate 保护该 browser smoke 与稳定 selectors。 | 后续只按新增需求补：更完整频道成员 profile/edit、批量成员管理、频道级 audit trail。 |
 | `tasks` | Yellow | task create/status update/refresh restore 已进入 browser smoke；delete/reorder 协议与 usecase 第一版已收敛。 | typed assignee、task 自动生成、更完整 task page、delete/reorder 的 App Router browser path 仍需后续切片。 |
@@ -34,17 +34,17 @@
 
 ## 下一条 backfill slice
 
-优先做 `agents`。原因：
+优先做 `tasks`。原因：
 
-1. `agents` 入口仍是 Yellow，而且和自定义 Agent 创建、发布/取消发布、配置、删除、metrics 与跨团队可见性共享边界。
-2. 已有 server/web 回归分散在 create/publish/config/delete/metrics 等路径，下一步需要把 agent list/detail/config/delete/publication/metrics 收敛成入口级闭环证据。
-3. 设备入口已经用 browser smoke 证明 runtime、AgentOS 托管 Agent 与 custom agent 投影，下一条应继续处理全局 Agent 管理面的 Yellow 风险。
+1. `tasks` 入口仍是 Yellow，目前 browser smoke 只覆盖 create、status update 与 refresh restore。
+2. delete/reorder 协议与 usecase 已有第一版，但还没有 App Router browser-level 闭环证据。
+3. agents 入口已经用 browser smoke 证明 list/detail/config/publish/metrics/delete，下一条应继续把任务页的旧版长尾行为从“代码存在”推进到“入口级证据存在”。
 
 最小 slice：
 
-1. 盘点现有 Agent 入口证据，把 list/detail/create/publish/unpublish/config/delete/metrics/跨团队 projection 按入口级 checklist 汇总。
-2. 先补一条缺口最小、用户风险最高的 regression/browser smoke；如果现有测试已覆盖，就把证据写进本 audit 与 `verification-matrix.md` 并加 readiness/static gate。
-3. 避免把 `agent:create` 或 `agents:subscribe` 单测误当成完整 Agent 管理页 parity。
+1. 盘点现有 tasks 入口证据，把 create/status/delete/reorder/assignee/refresh restore 按入口级 checklist 汇总。
+2. 先补 delete/reorder 的最小 regression 或 browser smoke；如果现有测试已覆盖，就把证据写进本 audit 与 `verification-matrix.md` 并加 readiness/static gate。
+3. 避免把 `task:create` 或 usecase 单测误当成完整任务页 parity。
 
 ## 维护规则
 
