@@ -1,6 +1,11 @@
 import { spawn } from 'node:child_process';
-import type { DaemonDispatchResult, DispatchRequestPayload, StubExecutor } from './index.js';
 import type { AdapterKind } from '../../../packages/contracts/src/index.js';
+import type { DaemonDispatchResult, DispatchRequestPayload, StubExecutor } from './index.js';
+import { buildChildEnv, buildLogArtifactContent, buildLogExcerpt, formatCommand } from './executor-helpers.js';
+import { PTY_ADAPTERS, defaultPtySpawnLoader, runPtyAgentCommand } from './executor-pty.js';
+import type { PtySpawnFn } from './executor-pty.js';
+
+export { buildChildEnv };
 
 export interface CommandExecutorOptions {
   fallbackPrefix?: string;
@@ -10,33 +15,19 @@ export interface CommandExecutorOptions {
   /** Max combined stdout+stderr bytes buffered in memory before the command is force-killed. */
   maxAccumulatedBytes?: number;
   clock?: { now(): number };
+  /**
+   * Loader for the PTY spawner used by PTY-backed agents (codex). Defaults to a lazy import of
+   * node-pty. Inject a fake in tests so they never touch the real native module.
+   */
+  ptySpawnLoader?: () => Promise<PtySpawnFn>;
 }
 
 // Trust model: the daemon executes whatever command the authenticated server-next dispatches
 // via customAgent.command. daemon trusts server-next — authorizing/validating the command is the
-// server's responsibility. buildChildEnv is the hard boundary on this side: the host environment
-// (e.g. secrets exported in ~/.zshrc) must NOT leak into the child, because the child's
-// stdout/stderr are captured and uploaded as downloadable log artifacts.
-
-const SAFE_ENV_KEYS = new Set([
-  'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LANGUAGE', 'TZ', 'TMPDIR', 'SHELL',
-]);
-
-export function buildChildEnv(
-  sourceEnv: NodeJS.ProcessEnv,
-  customEnv?: Record<string, string>,
-): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(sourceEnv)) {
-    if (value === undefined) {
-      continue;
-    }
-    if (SAFE_ENV_KEYS.has(key) || key.startsWith('LC_')) {
-      env[key] = value;
-    }
-  }
-  return { ...env, ...(customEnv ?? {}) };
-}
+// server's responsibility. buildChildEnv (in ./executor-helpers.js) is the hard boundary on this
+// side: the host environment (e.g. secrets exported in ~/.zshrc) must NOT leak into the child,
+// because the child's stdout/stderr (and PTY output) are captured and uploaded as downloadable log
+// artifacts.
 
 export function createCommandExecutor(options: CommandExecutorOptions = {}): StubExecutor {
   const fallbackPrefix = options.fallbackPrefix ?? 'daemon-next:';
@@ -44,12 +35,13 @@ export function createCommandExecutor(options: CommandExecutorOptions = {}): Stu
   const killGraceMs = options.killGraceMs ?? 5000;
   const maxAccumulatedBytes = options.maxAccumulatedBytes ?? 8 * 1024 * 1024;
   const clock = options.clock ?? { now: () => Date.now() };
+  const ptySpawnLoader = options.ptySpawnLoader ?? defaultPtySpawnLoader;
 
   return async (request) => {
     if (!request.customAgent?.command) {
       return `${fallbackPrefix}${request.prompt}`;
     }
-    return runCustomAgentCommand(request, { timeoutMs, killGraceMs, maxAccumulatedBytes, clock });
+    return runCustomAgentCommand(request, { timeoutMs, killGraceMs, maxAccumulatedBytes, clock, ptySpawnLoader });
   };
 }
 
@@ -58,6 +50,7 @@ interface RunOptions {
   killGraceMs: number;
   maxAccumulatedBytes: number;
   clock: { now(): number };
+  ptySpawnLoader: () => Promise<PtySpawnFn>;
 }
 
 async function runCustomAgentCommand(
@@ -67,6 +60,13 @@ async function runCustomAgentCommand(
   const customAgent = request.customAgent;
   if (!customAgent?.command) {
     throw new Error('custom agent command is required');
+  }
+
+  // PTY-backed agents (codex) cannot use the pipe spine — they need a real TTY. Delegate before
+  // touching stdin or consuming the clock so the PTY path manages its own lifecycle.
+  const ptySpec = customAgent.adapterKind ? PTY_ADAPTERS[customAgent.adapterKind as AdapterKind] : undefined;
+  if (ptySpec) {
+    return runPtyAgentCommand(request, ptySpec, options.ptySpawnLoader, options);
   }
 
   // Some agents are interactive TUIs/REPLs by default: feeding the prompt via stdin and closing
@@ -214,39 +214,6 @@ async function runCustomAgentCommand(
       child.stdin.end(stdinPayload);
     }
   });
-}
-
-const LOG_EXCERPT_MAX_CHARS = 16000;
-const LOG_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
-const SENSITIVE_LOG_ASSIGNMENT_RE = /\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)[A-Z0-9_]*)\s*=\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|`[^`\r\n]*`|[^\s"'`]+)/gi;
-
-function buildRedactedLog(stdout: string, stderr: string): string {
-  return [
-    stdout ? `stdout:\n${stdout.trimEnd()}` : '',
-    stderr ? `stderr:\n${stderr.trimEnd()}` : '',
-  ].filter(Boolean).join('\n\n').replace(SENSITIVE_LOG_ASSIGNMENT_RE, '$1=[redacted]');
-}
-
-function buildLogExcerpt(stdout: string, stderr: string): string {
-  const redacted = buildRedactedLog(stdout, stderr);
-  if (redacted.length <= LOG_EXCERPT_MAX_CHARS) {
-    return redacted;
-  }
-  return redacted.slice(redacted.length - LOG_EXCERPT_MAX_CHARS);
-}
-
-function buildLogArtifactContent(stdout: string, stderr: string): string {
-  const redacted = buildRedactedLog(stdout, stderr);
-  const content = Buffer.from(redacted, 'utf8');
-  if (content.length <= LOG_ARTIFACT_MAX_BYTES) {
-    return redacted;
-  }
-  const tail = content.subarray(content.length - LOG_ARTIFACT_MAX_BYTES).toString('utf8');
-  return `[workspace run log truncated to last ${LOG_ARTIFACT_MAX_BYTES} bytes]\n\n${tail}`;
-}
-
-function formatCommand(command: string, args: string[]): string {
-  return [command, ...args].join(' ');
 }
 
 // ── Argv-mode adapter helpers ─────────────────────────────────────────────────
