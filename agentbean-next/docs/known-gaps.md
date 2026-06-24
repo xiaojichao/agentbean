@@ -124,7 +124,7 @@ Dispatch lifecycle 的第一版已经落地到 `server-next` repository/usecase/
 - Web 上的 dispatch 状态展示与取消按钮已落地（`apps/web/components/{conversation-page,channel-message}.tsx`：监听 `message:dispatch-status` 更新 `ChatMessage.dispatchStatus`，running 时显示「正在处理…」+ 取消按钮发 `dispatch:cancel`）；更完整的 dispatch history/diagnostics UI 仍需后续产品切片覆盖。
 - 长时间运行 adapter 的真实进程级 cancel 语义仍需要按 adapter 逐个验证。
 
-### Workspace Runs 第一版已定义
+### 执行诊断第一版已定义
 
 Workspace run persistence 的第一版已经落地到 `server-next` repository/usecase 层。
 
@@ -133,15 +133,15 @@ Workspace run persistence 的第一版已经落地到 `server-next` repository/u
 - `workspace_runs` model 记录 `teamId`、`channelId`、`messageId`、`dispatchId`、`agentId`、`deviceId`、`command`、受限 `logExcerpt` 与 `artifactIds`。
 - daemon 可以在 `dispatch:result` 上报 workspace run metadata，server 会把 run 绑定到 agent reply message；daemon-next custom command executor 会把执行命令、cwd、exitCode 与脱敏日志摘要带入该 metadata。
 - server-next 提供授权 HTTP workspace run detail route，web-next preview 可以从消息摘要打开详情面板，并通过 `workspaceRunId` URL 恢复。
-- apps/web 的 workspace run 专页可从 agent/device 工作区列表进入，在 run 有 `messageId` 时回链到原 chat message，并在 daemon 上报时展示执行命令与可折叠日志摘要。
-- apps/web 的 workspace run 专页为受限日志摘要提供失败默认展开、复制、下载、换行切换、行数/字符数与尾部摘要提示，方便直接排障。
+- apps/web 的执行详情页可从 agent/device 工作区列表进入，在 run 有 `messageId` 时回链到原 chat message，并在 daemon 上报时展示执行命令与可折叠日志摘要。
+- apps/web 的执行详情页为受限日志摘要提供失败默认展开、复制、下载、换行切换、行数/字符数与尾部摘要提示，方便直接排障。
 - server-next 原生 agent workspace run 列表 route 已补齐，apps/web 的 agent/device 工作区入口可按 team membership 与 channel visibility 展示最新 runs、状态、命令上下文与关联 workspace artifacts。
-- server-next 提供团队级最新 workspace runs route，apps/web 侧栏新增“运行”入口，可按当前用户可见 channel 展示团队最近 runs、来源消息跳转、agent/device、退出码与文件数量。
+- server-next 提供团队级最新 workspace runs route，apps/web 侧栏把 `/runs` 降级为诊断区“执行记录”，可按当前用户可见 channel 展示团队最近执行记录、来源消息跳转、agent/device、退出码与文件数量。
 - daemon-next custom command executor 会把脱敏后的 stdout/stderr 作为 `logs/workspace-run.log` workspace artifact 上报；server-next 将 inline content 写入自身 artifact storage，apps/web run detail 可通过现有文件列表预览/下载完整日志 artifact。
 
 剩余：
 
-- 更完整的 workspace run 专用页面布局、复杂 team-wide workspace explorer 与分段日志存储/检索仍需后续产品切片覆盖；更强脱敏规则尚未冻结。
+- 不再把 `runs` 当旧版一等产品入口补齐；复杂 team-wide workspace explorer 暂停推进。后续只按排障、audit 或脱敏新需求补分段日志存储/检索与更强脱敏规则。
 
 ### Threads 第一版已定义
 
@@ -178,7 +178,7 @@ Artifact metadata、HTTP route 与 preview viewer 的第一版已经落地。
 
 剩余：
 
-- 更完整的 workspace run 专用页面布局、复杂 team-wide workspace explorer 与分段日志存储/检索仍需后续产品切片。
+- 不再把 `runs` 当旧版一等产品入口补齐；后续只按排障、audit 或脱敏新需求补分段日志存储/检索。
 
 ### Search Projection
 

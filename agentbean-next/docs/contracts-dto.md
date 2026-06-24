@@ -648,7 +648,7 @@ export interface DispatchCustomAgentDto {
 - Server 不得把 raw env values 广播到 web clients、snapshots、logs 或无关 daemons。
 - 后续切片应将 raw env transport 替换为 server-issued secret reference 或 daemon-local secret storage。
 
-## Artifacts 与 Workspace Runs 第一版
+## Artifacts 与执行诊断第一版
 
 AgentBean Next 第一版 artifacts 采用 daemon report 路径：旧 daemon 仍可只在 `dispatch:result` 里返回 `artifactIds`，新 daemon 可以同时返回 artifact metadata 与 workspace run metadata。Server 负责把 metadata 绑定到 agent reply message，并按 `teamId` 授权读取。
 
@@ -697,9 +697,9 @@ export interface WorkspaceRunDto {
 - `MessageDto.artifacts` 与 `MessageDto.workspaceRun` 是 server-side projection；message `meta.artifactIds`/`meta.workspaceRunId` 仍保留为轻量索引。
 - `downloadUrl` / `previewUrl` 是可选字段；server-next HTTP artifact route 会在 upload response 或 viewer projection 需要时生成这些链接。
 - `WorkspaceRunDto` 必须回链 `dispatchId`、`agentId`，并尽量保存 `deviceId`；这让 agent output、执行设备与原始 prompt 可追溯。
-- `command` 是 daemon 上报的 display command，用于 workspace run 详情页回看执行入口。
+- `command` 是 daemon 上报的 display command，用于执行详情页回看执行入口。
 - `logExcerpt` 是 daemon 上报的受限日志摘要；daemon-next custom command executor 会从 stdout/stderr 生成摘要并做基础脱敏，server-next 仍会再次保留尾部、限制长度并对常见 secret assignment 做基础脱敏。完整日志分段存储、检索与更强脱敏规则仍属于后续切片。
-- daemon-next custom command executor 会从本地执行时钟填充 `startedAt` / `completedAt`，用于 workspace run 详情页计算真实执行耗时。
+- daemon-next custom command executor 会从本地执行时钟填充 `startedAt` / `completedAt`，用于执行详情页计算真实执行耗时。
 
 ## 第一切片 Event DTO 用法
 

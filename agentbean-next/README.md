@@ -156,4 +156,4 @@ npm run smoke:agentbean-next-persistence
 
 `docs/post-flip-follow-up-status.md` 是 final flip 后选择下一条切片的当前入口。旧的 post-flip follow-up 清单中，authenticated socket session、team/join/device invite 第一版、dispatch cancel/timeout 调度、agent 管理面、DM/thread、artifacts/workspace runs metadata 与 browser smoke gate 已经收敛到主线。
 
-artifact HTTP upload/download/preview route、web artifact viewer、composer 上传控件、browser artifact smoke、workspace run detail UI、artifact multipart upload、message artifact grouping、message inline workspace artifact tree 与 tasks browser smoke 第一版已经落地。post-flip 生产观察 baseline 已通过 #140/#141 收敛；rollback 演练记录、独立 workspace run detail 页面、完整 task page、更完整 search/saved reactions/admin/metrics 等仍应作为独立后续项推进。
+artifact HTTP upload/download/preview route、web artifact viewer、composer 上传控件、browser artifact smoke、执行详情诊断面、artifact multipart upload、message artifact grouping、message inline workspace artifact tree 与 tasks browser smoke 第一版已经落地。post-flip 生产观察 baseline 已通过 #140/#141 收敛；rollback 演练记录、dashboard/admin、完整 task page、更完整 search/saved reactions/admin/metrics 等仍应作为独立后续项推进。

@@ -94,7 +94,7 @@ flowchart LR
 - Daemon 会为 Agent 任务创建运行工作区，并上报 workspace run metadata（command、cwd、exitCode、duration、脱敏日志摘要）。
 - Agent 生成的图片、文档等文件会通过 Daemon 上传到 Server Artifact API。
 - Server 保存 Artifact 元数据并提供 preview / download 路由，按 team membership 与 channel visibility 授权。
-- Web 在消息、workspace run 详情面板、运行列表中展示这些产物与执行上下文。
+- Web 在消息、执行详情和诊断区的执行记录中展示这些产物与执行上下文。
 - daemon-next custom command 的完整 stdout/stderr 会作为 `logs/workspace-run.log` artifact 上报，便于排障。
 
 ## 关键流程

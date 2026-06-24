@@ -27,16 +27,16 @@
 | `chat` | Green | message send、session restore、dispatch status/cancel、thread reply、artifact upload/viewer、workspace run source message 与 App Router chat send/refresh restore 均已有测试或 browser smoke。 | 更完整 saved/reactions/search UI 仍按各自入口继续补，不阻塞 chat 主入口。 |
 | `channels` / `channel members` | Green | channel create/archive/list disappearance、channel creator controls、private channel visibility、`channel:members` usecase 与 subscription broadcast 已有测试；App Router `webui-channel-members-business-flow` 覆盖 private channel 创建、频道成员弹窗、creator 添加 human member、添加 agent member、移除 human member、`channel:members` projection、private visibility 回收与 mention scope；readiness gate 保护该 browser smoke 与稳定 selectors。 | 后续只按新增需求补：更完整频道成员 profile/edit、批量成员管理、频道级 audit trail。 |
 | `tasks` | Green | task create、status update、reorder、delete/list disappearance 与 refresh restore 已进入 App Router `webui-task-business-flow`；server/usecase 侧已有 delete/reorder 的可见性、已删除任务、无效 sortOrder 与 wrong-team 边界；readiness gate 保护 `tasks-parity-browser-smoke` 与稳定 selector。 | 后续只按新增需求补：typed assignee 深化、task 自动生成、更丰富 task 产品流。 |
-| `runs` | Yellow | workspace run list/detail/refresh restore、source message jump、full log artifact、artifact tree 与 inline log search 已进入 App Router smoke。 | 复杂 team-wide workspace explorer、分段日志存储/检索、更完整运行专页布局仍未冻结。 |
+| `execution diagnostics` | Green | 底层 `workspaceRun` 保留为执行证据链；App Router 已通过执行记录/执行详情覆盖 list/detail/refresh restore、source message jump、full log artifact、artifact tree 与 inline log search。 | 不再把 `runs` 当旧版一等产品入口补齐；后续只按排障/audit 新需求补日志检索、脱敏或审计能力。 |
 | `settings` / `networks` | Green | account tab 当前用户身份与 logout 入口、browser preferences 持久化/刷新恢复/reset、team rename、join link create/revoke/refresh restore、team create/switch/delete/fallback restore 已进入 App Router smoke；readiness gate 保护 `settings-parity-browser-smoke` 与稳定 selector；SQLite delete cascade 已有回归。 | 后续只按新增需求补：change password/profile 编辑、更完整 invite management、rollback/old target drill。 |
 | `dashboard` / `admin` | Green | `admin:list-teams/users/devices/agents` 与 `admin:transfer-device-owner` 已回填 socket/usecase 回归；App Router `webui-admin-dashboard-business-flow` 覆盖 global admin 入口、teams/users/devices/agents tab、设备详情 runtime/public agent 投影、owner transfer 与 Agent owner projection；readiness gate 保护 `admin-dashboard-parity-regression` 与 `admin-dashboard-parity-browser-smoke`。 | 后续只按新增需求补：更完整 admin audit trail、批量删除/恢复、metrics drilldown。 |
 | `daemon onboarding` | Yellow | npm canonical daemon 已切到 daemon-next；device invite、CLI token persistence、多 profile/YAML、scan summary、scanner parity、CLI wiring tests 与 production smoke 已有证据。 | auth token refresh/renewal、profile delete/rename CLI、formal reconnect guarantees 仍未冻结。 |
 
 ## 下一条 backfill slice
 
-暂不推进 `runs`；在该入口冻结期间，优先做 `daemon onboarding`。原因：
+保留 `runs` 路由作为执行诊断能力，但不再把它当旧版 parity 入口继续扩张；下一条优先做 `daemon onboarding`。原因：
 
-1. `runs` 入口仍是 Yellow，但本轮明确先放一边；已有 list/detail/refresh restore、full log artifact、artifact tree、inline log search 与 source message jump 的 browser smoke 暂时不继续扩展。
+1. 旧版没有独立 runs 心智；现在的价值是 Agent 执行记录、日志和产物排障，因此保留 `/runs` 路由与底层 `workspaceRun`，但 UI 已降级到诊断区。
 2. `dashboard` / `admin` 已补浏览器级 admin tab、device detail、owner transfer 与 agent owner projection 证据，可以先标 Green。
 3. `daemon onboarding` 仍是 Yellow，虽然已有 npm canonical、invite、CLI token、profile/YAML、scan summary、scanner parity 与 production smoke 证据，但 auth token refresh/renewal、profile delete/rename CLI 与 formal reconnect guarantees 仍未冻结。
 

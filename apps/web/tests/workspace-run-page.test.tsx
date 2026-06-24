@@ -61,7 +61,7 @@ describe('workspace run detail page', () => {
     fetchMock.mockResolvedValue({ ok: false, error: 'not found' });
     render(<RunDetailPage />);
     await waitFor(() => expect(screen.getByText('加载失败')).toBeInTheDocument());
-    const backLink = screen.getByText('返回运行列表').closest('a');
+    const backLink = screen.getByText('返回执行记录').closest('a');
     expect(backLink?.getAttribute('href')).toBe('/acme/runs');
   });
 

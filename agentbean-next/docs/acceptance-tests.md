@@ -205,7 +205,7 @@
 当：另一个 team 尝试 fetch 它，
 结果：access 被拒绝。
 
-### Workspace Run 可回链到 Agent
+### 执行详情可回链到 Agent
 
 前提：daemon 在 agent run 期间创建 files，
 当：它上传 artifacts，

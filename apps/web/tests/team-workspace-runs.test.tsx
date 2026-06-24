@@ -112,7 +112,7 @@ describe('team workspace runs page', () => {
   it('shows the empty state when there are no runs', async () => {
     fetchMock.mockResolvedValue({ ok: true, runs: [] });
     render(<TeamWorkspaceRunsPage />);
-    await waitFor(() => expect(screen.getByText('暂无 workspace runs')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('暂无执行记录')).toBeInTheDocument());
   });
 
   it('shows the error state when the fetch fails', async () => {

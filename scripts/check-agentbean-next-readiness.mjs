@@ -410,11 +410,12 @@ export function collectAgentBeanNextReadinessChecks({
         parityBackfillAudit.includes('| `devices` | Green |') &&
         parityBackfillAudit.includes('| `agents` | Green |') &&
         parityBackfillAudit.includes('| `tasks` | Green |') &&
+        parityBackfillAudit.includes('| `execution diagnostics` | Green |') &&
         parityBackfillAudit.includes('| `settings` / `networks` | Green |') &&
         parityBackfillAudit.includes('| `dashboard` / `admin` | Green |') &&
         parityBackfillAudit.includes('| `channels` / `channel members` | Green |') &&
         parityBackfillAudit.includes('## 下一条 backfill slice') &&
-        parityBackfillAudit.includes('暂不推进 `runs`') &&
+        parityBackfillAudit.includes('不再把它当旧版 parity 入口继续扩张') &&
         parityBackfillAudit.includes('优先做 `daemon onboarding`'),
       'AgentBean Next parity backfill audit must keep a Red/Yellow/Green product-entry status table and the next recommended slice',
     ),

@@ -136,7 +136,7 @@ export default function RunDetailPage() {
           href={`/${np}/runs`}
           className="mt-4 inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
         >
-          <ArrowLeft className="w-4 h-4" /> 返回运行列表
+          <ArrowLeft className="w-4 h-4" /> 返回执行记录
         </Link>
       </div>
     );
@@ -196,7 +196,7 @@ export default function RunDetailPage() {
           <ArrowLeft className="w-5 h-5" />
         </Link>
         <div className="flex-1">
-          <h1 className="text-lg font-semibold text-neutral-900">Workspace Run</h1>
+          <h1 className="text-lg font-semibold text-neutral-900">执行详情</h1>
           <p className="text-sm text-neutral-500">
             {run.id.slice(0, 8)}... · {formatRelative(run.createdAt)}
           </p>
