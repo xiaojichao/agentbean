@@ -578,6 +578,60 @@ describe('daemon-next command executor', () => {
     expect(messageFileOutput.workspaceRun?.command).not.toContain('file prompt');
     expect(messageFileOutput.workspaceRun?.command).not.toContain('stale.md');
   });
+
+  test('runs a claude-code agent in print mode (-p) with the prompt on stdin (history joined), keeping it out of the run command', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
+    const scriptPath = join(cwd, 'fake-claude.mjs');
+    writeFileSync(
+      scriptPath,
+      [
+        `// Simulate 'claude -p': read prompt from stdin; only reply when -p/--print is set.`,
+        `let input = '';`,
+        `process.stdin.setEncoding('utf8');`,
+        `process.stdin.on('data', (c) => { input += c; });`,
+        `process.stdin.on('end', () => {`,
+        `  const hasP = process.argv.includes('-p') || process.argv.includes('--print');`,
+        `  process.stdout.write('REPLY:' + (hasP ? input : 'NO_PRINT_MODE') + '\\n');`,
+        `});`,
+      ].join('\n'),
+    );
+
+    const executor = createCommandExecutor({ clock: createClock([1000, 1010]) });
+    const output = await executor({
+      id: 'dispatch-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'explain closures',
+      history: [
+        { messageId: 'm-prev-user', senderKind: 'human' as const, senderId: 'u1', body: 'what is a callback?', createdAt: 1 },
+        { messageId: 'm-prev-agent', senderKind: 'agent' as const, senderId: 'a1', body: 'a function passed as an argument.', createdAt: 2 },
+      ],
+      customAgent: {
+        adapterKind: 'claude-code',
+        command: process.execPath,
+        args: [scriptPath],
+        cwd,
+      },
+    });
+
+    expect(typeof output).toBe('object');
+    if (typeof output !== 'object') {
+      throw new Error('expected structured command result');
+    }
+    // -p puts claude in print (non-interactive) mode; the prompt (with joined history) reaches it via stdin.
+    expect(output.body).toContain('explain closures');
+    expect(output.body).toContain('what is a callback?');
+    expect(output.body).toContain('a function passed as an argument.');
+    // The command line carries -p but never the prompt (it travels on stdin, not argv).
+    expect(output.workspaceRun?.command).toContain('-p');
+    expect(output.workspaceRun?.command).not.toContain('explain closures');
+    expect(output.workspaceRun?.command).not.toContain('what is a callback?');
+    expect(output.workspaceRun?.status).toBe('succeeded');
+    expect(output.workspaceRun?.exitCode).toBe(0);
+  });
 });
 
 function createClock(values: number[]) {
