@@ -25,6 +25,11 @@ export function collectAgentBeanNextReadinessChecks({
   const serverNextSocketHandlers = readFileSync(join(root, 'apps/server-next/src/transport/socket-handlers.ts'), 'utf8');
   const serverNextFirstSliceTests = readFileSync(join(root, 'apps/server-next/tests/first-slice.test.ts'), 'utf8');
   const serverNextSocketIntegrationTests = readFileSync(join(root, 'apps/server-next/tests/socket-integration.test.ts'), 'utf8');
+  const daemonNextCli = readFileSync(join(root, 'apps/daemon-next/src/cli.ts'), 'utf8');
+  const daemonNextAuthStore = readFileSync(join(root, 'apps/daemon-next/src/auth-store.ts'), 'utf8');
+  const daemonNextCliTests = readFileSync(join(root, 'apps/daemon-next/tests/cli.test.ts'), 'utf8');
+  const daemonNextAuthStoreTests = readFileSync(join(root, 'apps/daemon-next/tests/auth-store.test.ts'), 'utf8');
+  const daemonNextProtocolClientTests = readFileSync(join(root, 'apps/daemon-next/tests/protocol-client.test.ts'), 'utf8');
   const webNextDashboardPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/dashboard/page.tsx'), 'utf8');
   const webNextChatPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/chat/page.tsx'), 'utf8');
   const webNextDevicesPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/devices/page.tsx'), 'utf8');
@@ -391,6 +396,22 @@ export function collectAgentBeanNextReadinessChecks({
         legacyAgentNamespace.includes("socket.on('device:register-agents', handleDeviceRegisterAgents)") &&
         legacyWebNamespaceTests.includes('shows daemon-next scanned and custom device agents in the members list'),
       'Old production server must continue accepting daemon-next agent:register-batch until the final migration has no old-server compatibility surface',
+    ),
+    check(
+      'daemon-onboarding-profile-lifecycle',
+      daemonNextCli.includes('listProfiles') &&
+        daemonNextCli.includes('clearProfileId') &&
+        daemonNextCli.includes('renameProfileFrom') &&
+        daemonNextCli.includes('renameAuthProfileFn') &&
+        daemonNextAuthStore.includes('renameAuthProfile') &&
+        daemonNextCliTests.includes('list-profiles reports saved profiles without opening a socket') &&
+        daemonNextCliTests.includes('clear-profile removes the selected profile without opening a socket') &&
+        daemonNextCliTests.includes('rename-profile renames the selected profile without opening a socket') &&
+        daemonNextAuthStoreTests.includes('does not overwrite an existing target profile when renaming') &&
+        daemonNextProtocolClientTests.includes('reconnect uses the latest successful scan snapshot') &&
+        verificationMatrix.includes('P3-11b') &&
+        parityBackfillAudit.includes('profile list/clear/rename CLI'),
+      'Daemon onboarding must keep profile list/clear/rename CLI management and reconnect snapshot evidence under readiness protection',
     ),
     check(
       'product-surface-parity-contracts',

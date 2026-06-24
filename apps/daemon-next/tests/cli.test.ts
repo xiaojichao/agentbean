@@ -391,6 +391,23 @@ describe('daemon-next CLI wiring', () => {
     expect(config.profileId).toBe('team-a');
   });
 
+  test('parseDaemonNextCliConfig parses profile lifecycle management flags', () => {
+    expect(parseDaemonNextCliConfig({ argv: ['--list-profiles'], env: {}, hostname: 'host.local' })).toMatchObject({
+      listProfiles: true,
+    });
+    expect(parseDaemonNextCliConfig({ argv: ['--clear-profile', 'Team A'], env: {}, hostname: 'host.local' })).toMatchObject({
+      clearProfileId: 'team-a',
+    });
+    expect(parseDaemonNextCliConfig({
+      argv: ['--rename-profile', 'Old Team', '--to-profile', 'New Team'],
+      env: {},
+      hostname: 'host.local',
+    })).toMatchObject({
+      renameProfileFrom: 'old-team',
+      renameProfileTo: 'new-team',
+    });
+  });
+
   test('resolveDaemonServerUrl uses saved serverUrl unless the user provided one explicitly', () => {
     const saved: AuthData = {
       token: 'tok',
@@ -437,6 +454,78 @@ describe('daemon-next CLI wiring', () => {
 });
 
 describe('runDaemonNextCli wiring (loadAuth / saveAuth / device.token)', () => {
+  test('list-profiles reports saved profiles without opening a socket', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const { deps } = createRunDaemonHarness({
+        listAuthProfiles: vi.fn(() => [
+          {
+            profileId: 'team-a',
+            token: 'token-a',
+            serverUrl: 'http://server-a',
+            teamId: 'team-a',
+            ownerId: 'owner-a',
+          },
+        ]),
+      });
+
+      await runDaemonNextCli(baseRunConfig({ listProfiles: true }), deps);
+
+      expect(deps.listAuthProfiles).toHaveBeenCalledOnce();
+      expect(deps.connectSocket).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith('Saved AgentBean team profiles:');
+      expect(log).toHaveBeenCalledWith('- team-a team=team-a server=http://server-a');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('clear-profile removes the selected profile without opening a socket', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const { deps } = createRunDaemonHarness({
+        clearAuth: vi.fn(),
+      });
+
+      await runDaemonNextCli(baseRunConfig({ clearProfileId: 'team-a' }), deps);
+
+      expect(deps.clearAuth).toHaveBeenCalledWith({ profileId: 'team-a' });
+      expect(deps.connectSocket).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith('Cleared AgentBean profile "team-a".');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('rename-profile renames the selected profile without opening a socket', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const { deps } = createRunDaemonHarness({
+        renameAuthProfile: vi.fn(() => ({ ok: true, profileId: 'team-b' })),
+      });
+
+      await runDaemonNextCli(baseRunConfig({ renameProfileFrom: 'team-a', renameProfileTo: 'team-b' }), deps);
+
+      expect(deps.renameAuthProfile).toHaveBeenCalledWith({ fromProfileId: 'team-a', toProfileId: 'team-b' });
+      expect(deps.connectSocket).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith('Renamed AgentBean profile "team-a" to "team-b".');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('rename-profile requires both source and target profile ids', async () => {
+    const { deps } = createRunDaemonHarness({
+      renameAuthProfile: vi.fn(() => ({ ok: true, profileId: 'team-b' })),
+    });
+
+    await expect(runDaemonNextCli(baseRunConfig({ renameProfileFrom: 'team-a' }), deps)).rejects.toThrow(
+      'Both --rename-profile <from> and --to-profile <to> are required.',
+    );
+    expect(deps.renameAuthProfile).not.toHaveBeenCalled();
+    expect(deps.connectSocket).not.toHaveBeenCalled();
+  });
+
   test('invite path: saveAuth called with resolved persist payload + config.profileId; loadAuth NOT called', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     try {

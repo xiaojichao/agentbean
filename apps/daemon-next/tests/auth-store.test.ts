@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { AuthData } from '../src/auth-store';
-import { loadAuth, saveAuth, clearAuth, listAuthProfiles } from '../src/auth-store';
+import { loadAuth, saveAuth, clearAuth, listAuthProfiles, renameAuthProfile } from '../src/auth-store';
 import { authFile } from '../src/profile-paths';
 
 const base = realpathSync(mkdtempSync(join(tmpdir(), 'auth-')));
@@ -60,5 +60,36 @@ describe('auth-store', () => {
 
     expect(loadAuth({ profileId: 'existing-perms', baseDir })?.token).toBe('tok-updated');
     expect(statSync(file).mode & 0o777).toBe(0o600);
+  });
+  it('renames a saved profile without changing credentials', () => {
+    const baseDir = realpathSync(mkdtempSync(join(tmpdir(), 'auth-rename-')));
+    saveAuth(data, { profileId: 'old-team', baseDir });
+
+    expect(renameAuthProfile({ fromProfileId: 'Old Team', toProfileId: 'New Team', baseDir })).toEqual({
+      ok: true,
+      profileId: 'new-team',
+    });
+    expect(loadAuth({ profileId: 'old-team', baseDir })).toBeNull();
+    expect(loadAuth({ profileId: 'new-team', baseDir })).toEqual(data);
+  });
+  it('does not overwrite an existing target profile when renaming', () => {
+    const baseDir = realpathSync(mkdtempSync(join(tmpdir(), 'auth-rename-existing-')));
+    saveAuth(data, { profileId: 'source', baseDir });
+    saveAuth({ ...data, token: 'target-token' }, { profileId: 'target', baseDir });
+
+    expect(renameAuthProfile({ fromProfileId: 'source', toProfileId: 'target', baseDir })).toMatchObject({
+      ok: false,
+      error: 'Profile "target" already exists',
+    });
+    expect(loadAuth({ profileId: 'source', baseDir })).toEqual(data);
+    expect(loadAuth({ profileId: 'target', baseDir })?.token).toBe('target-token');
+  });
+  it('returns a clear error when renaming a missing profile', () => {
+    const baseDir = realpathSync(mkdtempSync(join(tmpdir(), 'auth-rename-missing-')));
+
+    expect(renameAuthProfile({ fromProfileId: 'missing', toProfileId: 'target', baseDir })).toEqual({
+      ok: false,
+      error: 'Profile "missing" was not found',
+    });
   });
 });
