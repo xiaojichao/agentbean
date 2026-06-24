@@ -2162,11 +2162,11 @@
           <button type="submit">重命名团队</button>
         </form>
         <div class="panel workspace-run-detail" id="workspace-run-detail">
-          <div class="rail-heading"><h2>Workspace Run</h2><span class="meta">输出详情</span></div>
-          <div class="rail-muted">选择消息里的 workspace run 查看详情。</div>
+          <div class="rail-heading"><h2>执行详情</h2><span class="meta">日志与文件</span></div>
+          <div class="rail-muted">选择消息里的执行记录查看详情。</div>
         </div>
         <div class="panel" id="team-runs-panel">
-          <div class="rail-heading"><h2>团队运行</h2><span class="meta">workspace runs</span></div>
+          <div class="rail-heading"><h2>执行记录</h2><span class="meta">诊断</span></div>
           <div class="task-actions">
             <button type="button" id="team-runs-refresh">刷新</button>
           </div>
@@ -3662,16 +3662,16 @@
             state.teamRunsCursor = typeof ack.nextCursor === "string" && ack.nextCursor ? ack.nextCursor : null;
             state.teamRunsError = null;
           } else {
-            state.teamRunsError = ack.message || ack.error || "加载运行列表失败。";
+            state.teamRunsError = ack.message || ack.error || "加载执行记录失败。";
           }
         } catch (error) {
-          state.teamRunsError = error instanceof Error ? error.message : "加载运行列表失败。";
+          state.teamRunsError = error instanceof Error ? error.message : "加载执行记录失败。";
         }
       }
 
       function renderTeamRuns() {
         if (state.teamRunsLoading) {
-          el("team-runs-results").innerHTML = `<li class="rail-muted">运行列表加载中。</li>`;
+          el("team-runs-results").innerHTML = `<li class="rail-muted">执行记录加载中。</li>`;
           return;
         }
         if (state.teamRunsError) {
@@ -3679,7 +3679,7 @@
           return;
         }
         if (state.teamRuns.length === 0) {
-          el("team-runs-results").innerHTML = `<li class="rail-muted">暂无 workspace 运行。</li>`;
+          el("team-runs-results").innerHTML = `<li class="rail-muted">暂无执行记录。</li>`;
           return;
         }
         const rows = state.teamRuns.map((entry) => {
@@ -3882,21 +3882,21 @@
         const detail = getWorkspaceRunDetail(state.activeWorkspaceRunId);
         if (!detail) {
           if (state.workspaceRunDetailLoadingId === state.activeWorkspaceRunId) {
-            el("workspace-run-detail").innerHTML = `<div class="rail-heading"><h2>Workspace Run</h2><span class="meta">输出详情</span></div>
-              <div class="rail-muted">正在加载 workspace run 详情。</div>`;
+            el("workspace-run-detail").innerHTML = `<div class="rail-heading"><h2>执行详情</h2><span class="meta">日志与文件</span></div>
+              <div class="rail-muted">正在加载执行详情。</div>`;
             return;
           }
           if (state.workspaceRunDetailError && state.activeWorkspaceRunId) {
-            el("workspace-run-detail").innerHTML = `<div class="rail-heading"><h2>Workspace Run</h2><span class="meta">输出详情</span></div>
+            el("workspace-run-detail").innerHTML = `<div class="rail-heading"><h2>执行详情</h2><span class="meta">日志与文件</span></div>
               <div class="rail-muted">${escapeHtml(state.workspaceRunDetailError)}</div>`;
             return;
           }
-          el("workspace-run-detail").innerHTML = `<div class="rail-heading"><h2>Workspace Run</h2><span class="meta">输出详情</span></div>
-            <div class="rail-muted">选择消息里的 workspace run 查看详情。</div>`;
+          el("workspace-run-detail").innerHTML = `<div class="rail-heading"><h2>执行详情</h2><span class="meta">日志与文件</span></div>
+            <div class="rail-muted">选择消息里的执行记录查看详情。</div>`;
           return;
         }
         const artifactCount = getWorkspaceRunArtifactCount(detail.workspaceRun, detail.artifacts);
-        el("workspace-run-detail").innerHTML = `<div class="rail-heading"><h2>Workspace Run</h2><span class="meta">输出详情</span></div>
+        el("workspace-run-detail").innerHTML = `<div class="rail-heading"><h2>执行详情</h2><span class="meta">日志与文件</span></div>
           <div class="workspace-run-detail-body">
             <div class="workspace-run-detail-status"><strong>${escapeHtml(detail.workspaceRun.id)}</strong><span class="meta">${escapeHtml(detail.workspaceRun.status || "unknown")}</span></div>
             ${renderWorkspaceRunDetails(detail.workspaceRun, artifactCount)}
@@ -3954,10 +3954,10 @@
               artifacts: Array.isArray(ack.artifacts) ? ack.artifacts : [],
             };
           } else {
-            state.workspaceRunDetailError = ack.message || ack.error || "无法加载 workspace run 详情。";
+            state.workspaceRunDetailError = ack.message || ack.error || "无法加载执行详情。";
           }
         } catch (error) {
-          state.workspaceRunDetailError = error instanceof Error ? error.message : "无法加载 workspace run 详情。";
+          state.workspaceRunDetailError = error instanceof Error ? error.message : "无法加载执行详情。";
         } finally {
           if (state.workspaceRunDetailLoadingId === runId) {
             state.workspaceRunDetailLoadingId = null;
@@ -4029,7 +4029,7 @@
           const suffix = artifactIds.length > 0 ? `：${artifactIds.map(escapeHtml).join("、")}` : "。";
           return `<div class="rail-muted">输出文件元数据尚未加载，仅保留 artifact id${artifactIds.length === 1 ? "" : "s"}${suffix}</div>`;
         }
-        return `<div class="rail-muted">这个 workspace run 暂无输出文件。</div>`;
+        return `<div class="rail-muted">这个执行记录暂无输出文件。</div>`;
       }
 
       function renderWorkspaceRunDetails(workspaceRun, artifactCount) {

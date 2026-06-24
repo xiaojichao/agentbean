@@ -131,7 +131,6 @@ export function Sidebar() {
       <nav className="flex-1 overflow-y-auto border-t border-neutral-200 px-2 py-3 space-y-0.5">
         <NavItem href={`/${np}/chat`} icon={<MessagesSquare size={16} />} label="聊天" active={isActive(`/${np}/chat`)} />
         <NavItem href={`/${np}/tasks`} icon={<ClipboardList size={16} />} label="任务" active={isActive(`/${np}/tasks`)} />
-        <NavItem href={`/${np}/runs`} icon={<Terminal size={16} />} label="运行" active={isActive(`/${np}/runs`)} />
         <NavItem href={`/${np}/members`} icon={<Users size={16} />} label="成员" active={isActive(`/${np}/members`)} />
         <NavItem href={`/${np}/devices`} icon={<Monitor size={16} />} label="设备" active={isActive(`/${np}/devices`)} />
         {isAdmin && (
@@ -140,7 +139,11 @@ export function Sidebar() {
       </nav>
 
       {/* Bottom: settings */}
-      <div className="border-t border-neutral-200 px-2 py-2">
+      <div className="space-y-2 border-t border-neutral-200 px-2 py-2">
+        <div>
+          <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">诊断</p>
+          <NavItem href={`/${np}/runs`} icon={<Terminal size={16} />} label="执行记录" active={isActive(`/${np}/runs`)} />
+        </div>
         <NavItem href={`/${np}/settings`} icon={<Settings size={16} />} label="设置" active={isActive(`/${np}/settings`)} />
       </div>
 

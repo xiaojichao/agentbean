@@ -358,8 +358,8 @@ export default function TeamWorkspaceRunsPage() {
     <div className="mx-auto max-w-5xl p-6">
       <div className="mb-5 flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-neutral-900">Workspace Runs</h1>
-          <p className="mt-1 text-sm text-neutral-500">团队最近可见的 workspace run</p>
+          <h1 className="text-lg font-semibold text-neutral-900">执行记录</h1>
+          <p className="mt-1 text-sm text-neutral-500">Agent 在设备上执行后的状态、日志和输出文件记录</p>
         </div>
         <span className="rounded-full bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-600">
           {orderedRuns.length} 条
@@ -438,8 +438,8 @@ export default function TeamWorkspaceRunsPage() {
       {orderedRuns.length === 0 ? (
         <div className="rounded-lg border border-dashed border-neutral-300 bg-white p-10 text-center">
           <Terminal className="mx-auto mb-3 h-8 w-8 text-neutral-300" />
-          <p className="text-sm font-medium text-neutral-700">暂无 workspace runs</p>
-          <p className="mt-1 text-sm text-neutral-400">有 agent 产出 workspace 文件后会出现在这里。</p>
+          <p className="text-sm font-medium text-neutral-700">暂无执行记录</p>
+          <p className="mt-1 text-sm text-neutral-400">Agent 在设备上完成执行并上报日志或文件后会出现在这里。</p>
         </div>
       ) : groupBy ? (
         <div className="space-y-5">

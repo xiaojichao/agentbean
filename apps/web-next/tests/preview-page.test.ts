@@ -409,7 +409,7 @@ describe('web-next preview page interactions', () => {
     const detailHtml = harness.element('workspace-run-detail').innerHTML;
     expect(detailHtml).toContain('run-artifact-ids-only');
     expect(detailHtml).toContain('2 artifacts');
-    expect(detailHtml).not.toContain('这个 workspace run 暂无输出文件。');
+    expect(detailHtml).not.toContain('这个执行记录暂无输出文件。');
     expect(detailHtml).toContain('输出文件元数据尚未加载');
   });
 

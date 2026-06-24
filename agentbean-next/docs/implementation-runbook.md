@@ -249,4 +249,4 @@ apps/
 - Search。
 - Admin / audit requirements。
 - Metrics UI；`agent:metrics` request/ack 已进入主线。
-- 更完整 workspace run 专页、settings/device 后续页、typed assignee 与 task 自动生成。
+- dashboard/admin、settings/device 后续页、typed assignee 与 task 自动生成；执行记录只保留为诊断面，不再作为旧版 parity 入口扩张。

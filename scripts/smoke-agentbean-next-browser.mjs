@@ -679,7 +679,7 @@ export async function exerciseWebUiAuthenticatedRouteSmoke({
     { path: `/${networkPath}/dashboard`, label: '仪表盘' },
     { path: `/${networkPath}/chat`, label: '聊天' },
     { path: `/${networkPath}/tasks`, label: '任务' },
-    { path: `/${networkPath}/runs`, label: '运行' },
+    { path: `/${networkPath}/runs`, label: '执行记录' },
     { path: `/${networkPath}/members`, label: '成员' },
     { path: `/${networkPath}/devices`, label: '设备' },
     { path: `/${networkPath}/settings`, label: '设置' },
