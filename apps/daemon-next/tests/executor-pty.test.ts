@@ -118,6 +118,7 @@ describe('daemon-next codex PTY executor', () => {
       // The error is surfaced explicitly — never a silent banner-as-success.
       expect(output.body).toContain('node-pty');
       expect(output.workspaceRun?.status).toBe('failed');
+      expect(output.workspaceRun?.cwd).toBe(cwd);
     });
 
     test('reports a codex non-zero exit as a failed run surfacing the output detail', async () => {
@@ -164,6 +165,7 @@ describe('daemon-next codex PTY executor', () => {
         if (typeof output !== 'object') throw new Error('expected structured result');
         expect(output.body).toContain('超时');
         expect(output.workspaceRun?.status).toBe('failed');
+        expect(output.workspaceRun?.cwd).toBe(cwd);
       } finally {
         if (prev === undefined) delete process.env.AGENTBEAN_CODEX_TIMEOUT_MS;
         else process.env.AGENTBEAN_CODEX_TIMEOUT_MS = prev;
