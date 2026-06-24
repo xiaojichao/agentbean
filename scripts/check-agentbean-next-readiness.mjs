@@ -411,10 +411,11 @@ export function collectAgentBeanNextReadinessChecks({
         parityBackfillAudit.includes('| `agents` | Green |') &&
         parityBackfillAudit.includes('| `tasks` | Green |') &&
         parityBackfillAudit.includes('| `settings` / `networks` | Green |') &&
+        parityBackfillAudit.includes('| `dashboard` / `admin` | Green |') &&
         parityBackfillAudit.includes('| `channels` / `channel members` | Green |') &&
         parityBackfillAudit.includes('## 下一条 backfill slice') &&
         parityBackfillAudit.includes('暂不推进 `runs`') &&
-        parityBackfillAudit.includes('优先做 `dashboard` / `admin`'),
+        parityBackfillAudit.includes('优先做 `daemon onboarding`'),
       'AgentBean Next parity backfill audit must keep a Red/Yellow/Green product-entry status table and the next recommended slice',
     ),
     check(
@@ -511,6 +512,25 @@ export function collectAgentBeanNextReadinessChecks({
         verificationMatrix.includes('P2-21a') &&
         verificationMatrix.includes('admin dashboard lists'),
       'Admin dashboard migration must keep socket contract, server-next handlers, regression tests, and verification-matrix coverage together',
+    ),
+    check(
+      'admin-dashboard-parity-browser-smoke',
+      browserSmokeScript.includes('webui-admin-dashboard-business-flow') &&
+        browserSmokeScript.includes('promoteSmokeUserToAdmin') &&
+        browserSmokeScript.includes('admin-device-owner-select') &&
+        browserSmokeScript.includes('admin-device-owner-save') &&
+        browserSmokeScript.includes('admin-agent-row') &&
+        webNextDashboardPage.includes('data-smoke="admin-dashboard-page"') &&
+        webNextDashboardPage.includes("key: 'users'") &&
+        webNextDashboardPage.includes("key: 'devices'") &&
+        webNextDashboardPage.includes("key: 'agents'") &&
+        webNextDashboardPage.includes('data-smoke={`admin-tab-${t.key}`}') &&
+        webNextDashboardPage.includes('data-smoke="admin-device-owner-select"') &&
+        webNextDashboardPage.includes('data-smoke="admin-device-owner-save"') &&
+        webNextDashboardPage.includes('data-smoke="admin-agent-row"') &&
+        verificationMatrix.includes('webui-admin-dashboard-business-flow') &&
+        parityBackfillAudit.includes('| `dashboard` / `admin` | Green |'),
+      'Admin dashboard parity must stay covered by an App Router browser smoke for admin tabs, list rows, device detail, owner transfer, and agent ownership projection',
     ),
   ];
 

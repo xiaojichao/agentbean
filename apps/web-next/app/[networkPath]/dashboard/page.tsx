@@ -57,6 +57,7 @@ interface AdminAgent {
   networkName?: string;
   deviceId?: string;
   deviceName?: string;
+  ownerId?: string | null;
   deviceUserName?: string | null;
   ownerName?: string | null;
   userName?: string | null;
@@ -151,7 +152,7 @@ export default function AdminDashboardPage() {
     return (
       <div className="flex flex-1 flex-col overflow-hidden">
         <div className="flex h-14 items-center border-b border-neutral-200 px-4 text-sm font-semibold">仪表盘</div>
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-6" data-smoke="admin-dashboard-forbidden">
           <ConnectionBanner />
           <div className="text-sm text-red-600">仅管理员可访问此页面。</div>
         </div>
@@ -160,14 +161,14 @@ export default function AdminDashboardPage() {
   }
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden">
+    <div className="flex flex-1 flex-col overflow-hidden" data-smoke="admin-dashboard-page" data-admin-tab={tab}>
       <div className="flex h-14 items-center border-b border-neutral-200 px-4 text-sm font-semibold">管理仪表盘</div>
       <div className="flex-1 overflow-y-auto p-6">
       <ConnectionBanner />
 
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-xl font-semibold">管理仪表盘</h1>
-        <button onClick={() => loadData(tab)} disabled={loading} className="inline-flex items-center gap-1.5 rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50">
+        <button onClick={() => loadData(tab)} disabled={loading} className="inline-flex items-center gap-1.5 rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50" data-smoke="admin-refresh">
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> 刷新
         </button>
       </div>
@@ -175,13 +176,13 @@ export default function AdminDashboardPage() {
       {/* Tabs */}
       <div className="mb-4 flex gap-1 rounded-lg border border-neutral-200 bg-neutral-50 p-1">
         {TABS.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)} className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors ${tab === t.key ? 'bg-white shadow-sm text-neutral-900' : 'text-neutral-500 hover:text-neutral-700'}`}>
+          <button key={t.key} onClick={() => setTab(t.key)} className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors ${tab === t.key ? 'bg-white shadow-sm text-neutral-900' : 'text-neutral-500 hover:text-neutral-700'}`} data-smoke={`admin-tab-${t.key}`} data-admin-tab={t.key} data-admin-selected={tab === t.key ? 'true' : 'false'}>
             {t.icon} {t.label}
           </button>
         ))}
       </div>
 
-      {error && <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+      {error && <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" data-smoke="admin-error">{error}</div>}
 
       {/* Content */}
       {loading && <div className="py-8 text-center text-sm text-neutral-400">加载中...</div>}
@@ -307,7 +308,7 @@ function NetworksTable({ teams, onDelete }: { teams: AdminNetwork[]; onDelete: (
   return (
     <div className="space-y-3">
       {teams.map((n) => (
-        <div key={n.id} className="rounded-lg border border-neutral-200 overflow-hidden">
+        <div key={n.id} className="rounded-lg border border-neutral-200 overflow-hidden" data-smoke="admin-team-item" data-team-id={n.id} data-team-name={n.name}>
           <div className="flex items-center justify-between bg-neutral-50 px-4 py-3">
             <div className="flex items-center gap-3">
               <Globe size={16} className="text-neutral-400" />
@@ -331,7 +332,7 @@ function NetworksTable({ teams, onDelete }: { teams: AdminNetwork[]; onDelete: (
               ) : (
                 <div className="divide-y divide-neutral-50">
                   {n.members.map((m) => (
-                    <div key={m.userId} className="flex items-center justify-between py-1.5">
+                    <div key={m.userId} className="flex items-center justify-between py-1.5" data-smoke="admin-team-member-item" data-user-id={m.userId} data-member-role={m.role}>
                       <span className="text-sm">{m.username}</span>
                       <span className={`text-[10px] rounded-full px-2 py-0.5 font-medium ${m.role === 'owner' ? 'bg-purple-50 text-purple-600' : 'bg-neutral-100 text-neutral-500'}`}>{m.role === 'owner' ? '所有者' : '成员'}</span>
                     </div>
@@ -351,7 +352,7 @@ function UsersTable({ users, onDelete }: { users: AdminUser[]; onDelete: (id: st
   return (
     <Table headers={['用户名', '邮箱', '角色', '创建时间', '']}>
       {users.map((u) => (
-        <tr key={u.id} className="hover:bg-neutral-50">
+        <tr key={u.id} className="hover:bg-neutral-50" data-smoke="admin-user-row" data-user-id={u.id} data-username={u.username} data-user-role={u.role}>
           <td className="px-4 py-2.5 font-medium">{u.username}</td>
           <td className="px-4 py-2.5 text-xs text-neutral-500">{u.email ?? '—'}</td>
           <td className="px-4 py-2.5"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${u.role === 'admin' ? 'bg-purple-50 text-purple-700' : 'bg-neutral-100 text-neutral-500'}`}>{u.role === 'admin' ? '管理员' : '用户'}</span></td>
@@ -368,9 +369,9 @@ function DevicesTable({ devices, teams, onSelect }: { devices: AdminDevice[]; te
   return (
     <Table headers={['设备名称', '所属用户', '状态', 'Agent 数', '团队', '最后心跳']}>
       {devices.map((d) => (
-        <tr key={d.id} className="hover:bg-neutral-50">
+        <tr key={d.id} className="hover:bg-neutral-50" data-smoke="admin-device-row" data-device-id={d.id} data-owner-id={d.userId} data-owner-name={d.userName} data-team-id={d.networkId}>
           <td className="px-4 py-2.5 text-sm">
-            <button onClick={() => onSelect(d)} className="font-medium text-blue-600 hover:text-blue-700 hover:underline">
+            <button onClick={() => onSelect(d)} className="font-medium text-blue-600 hover:text-blue-700 hover:underline" data-smoke="admin-device-open" data-device-id={d.id}>
               {d.name || d.hostname || '未命名设备'}
             </button>
           </td>
@@ -390,9 +391,9 @@ function AgentsTable({ agents, teams, onSelect, onDelete }: { agents: AdminAgent
   return (
     <Table headers={['名称', '所属设备', '所属用户', '适配器', '状态', '可见性', '团队', '']}>
       {agents.map((a) => (
-        <tr key={a.id} className="hover:bg-neutral-50">
+        <tr key={a.id} className="hover:bg-neutral-50" data-smoke="admin-agent-row" data-agent-id={a.id} data-owner-id={a.ownerId ?? ''} data-device-id={a.deviceId ?? ''} data-team-id={a.networkId ?? ''}>
           <td className="px-4 py-2.5">
-            <button onClick={() => onSelect(a)} className="font-medium text-blue-600 hover:text-blue-700 hover:underline">
+            <button onClick={() => onSelect(a)} className="font-medium text-blue-600 hover:text-blue-700 hover:underline" data-smoke="admin-agent-open" data-agent-id={a.id}>
               {a.name}
             </button>
           </td>
@@ -449,7 +450,7 @@ function DeviceDetailDialog({
 
   return (
     <DialogShell title={device.name || device.hostname || '未命名设备'} icon={<Monitor size={17} className="text-neutral-600" />} onClose={onClose}>
-      <div className="space-y-5">
+      <div className="space-y-5" data-smoke="admin-device-detail" data-device-id={device.id} data-owner-id={device.userId} data-owner-name={device.userName}>
         <div className="flex items-center justify-between rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
           <div>
             <div className="text-sm font-semibold text-neutral-900">{device.name || device.hostname || '未命名设备'}</div>
@@ -476,6 +477,7 @@ function DeviceDetailDialog({
                   value={ownerId}
                   onChange={(event) => setOwnerId(event.target.value)}
                   className="mt-1 h-9 w-full rounded-md border border-neutral-300 bg-white px-2 text-sm text-neutral-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                  data-smoke="admin-device-owner-select"
                 >
                   {ownerOptions.map((user) => (
                     <option key={user.id} value={user.id}>
@@ -488,12 +490,13 @@ function DeviceDetailDialog({
                 onClick={saveOwner}
                 disabled={savingOwner || !ownerId || ownerId === device.userId}
                 className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-neutral-300 px-3 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-45"
+                data-smoke="admin-device-owner-save"
               >
                 <Save size={14} />
                 保存
               </button>
             </div>
-            {ownerError && <div className="mt-2 text-xs text-red-600">{ownerError}</div>}
+            {ownerError && <div className="mt-2 text-xs text-red-600" data-smoke="admin-device-owner-error">{ownerError}</div>}
           </div>
         </section>
 
@@ -516,7 +519,7 @@ function DeviceDetailDialog({
           ) : (
             <div className="grid gap-2 sm:grid-cols-2">
               {runtimes.map((runtime) => (
-                <div key={`${runtime.adapterKind}-${runtime.command}`} className={`rounded-md border px-3 py-2 ${runtime.installed ? 'border-neutral-200 bg-white' : 'border-neutral-100 bg-neutral-50'}`}>
+                <div key={`${runtime.adapterKind}-${runtime.command}`} className={`rounded-md border px-3 py-2 ${runtime.installed ? 'border-neutral-200 bg-white' : 'border-neutral-100 bg-neutral-50'}`} data-smoke="admin-device-runtime" data-runtime-kind={runtime.adapterKind} data-runtime-installed={runtime.installed ? 'true' : 'false'}>
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate text-sm font-medium text-neutral-900">{runtime.name || runtime.adapterKind}</span>
                     <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${runtime.installed ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'}`}>
@@ -537,7 +540,7 @@ function DeviceDetailDialog({
           ) : (
             <div className="space-y-2">
               {publicAgents.map((agent) => (
-                <div key={agent.id} className="rounded-md border border-neutral-100 bg-white px-3 py-2">
+                <div key={agent.id} className="rounded-md border border-neutral-100 bg-white px-3 py-2" data-smoke="admin-device-public-agent" data-agent-id={agent.id}>
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="truncate text-sm font-medium text-neutral-900">{agent.name}</div>
@@ -564,7 +567,7 @@ function DeviceDetailDialog({
 function AgentDetailDialog({ agent, onClose }: { agent: AdminAgent; onClose: () => void }) {
   return (
     <DialogShell title={agent.name} icon={<Bot size={17} className="text-neutral-600" />} onClose={onClose}>
-      <div className="space-y-5">
+      <div className="space-y-5" data-smoke="admin-agent-detail" data-agent-id={agent.id} data-owner-id={agent.ownerId ?? ''} data-device-id={agent.deviceId ?? ''}>
         <div className="flex items-center justify-between rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
           <div>
             <div className="text-sm font-semibold text-neutral-900">{agent.name}</div>
