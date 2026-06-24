@@ -428,6 +428,72 @@ describe('daemon-next command executor', () => {
     expect(queryOutput.workspaceRun?.command).not.toContain('replacement prompt');
     expect(queryOutput.workspaceRun?.command).not.toContain('stale prompt');
   });
+
+  test('runs an openclaw agent via "agent --agent <id> --message" argv (not stdin), joining history and redacting the message from the run command', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
+    const scriptPath = join(cwd, 'fake-openclaw.mjs');
+    const stdinLogPath = join(cwd, 'stdin.log');
+    writeFileSync(
+      scriptPath,
+      [
+        `import { writeFileSync } from 'node:fs';`,
+        `// Simulate 'openclaw agent --agent <id> --message <prompt>': prompt via --message argv.`,
+        `const mIdx = process.argv.indexOf('--message');`,
+        `const dashM = process.argv.indexOf('-m');`,
+        `const idx = mIdx >= 0 ? mIdx : dashM;`,
+        `const message = idx >= 0 ? process.argv[idx + 1] : '';`,
+        `process.stdout.write('REPLY:' + message + '\\n');`,
+        `let stdinData = '';`,
+        `process.stdin.setEncoding('utf8');`,
+        `process.stdin.on('data', (c) => { stdinData += c; });`,
+        `process.stdin.on('end', () => {`,
+        `  writeFileSync(${JSON.stringify(stdinLogPath)}, stdinData.length ? stdinData : '(empty)');`,
+        `});`,
+      ].join('\n'),
+    );
+
+    const executor = createCommandExecutor({ clock: createClock([1000, 1010]) });
+    const output = await executor({
+      id: 'dispatch-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'summarize the openclaw docs',
+      history: [
+        { messageId: 'm-prev-user', senderKind: 'human' as const, senderId: 'u1', body: 'what is openclaw?', createdAt: 1 },
+        { messageId: 'm-prev-agent', senderKind: 'agent' as const, senderId: 'a1', body: 'an agent runtime.', createdAt: 2 },
+      ],
+      customAgent: {
+        adapterKind: 'openclaw',
+        command: process.execPath,
+        // scanner supplies ['agent', '--agent', <id>]; scriptPath fronts it so node runs the fake.
+        args: [scriptPath, 'agent', '--agent', 'main'],
+        cwd,
+      },
+    });
+
+    expect(typeof output).toBe('object');
+    if (typeof output !== 'object') {
+      throw new Error('expected structured command result');
+    }
+    // The prompt reaches the agent via the --message argv, and prior history is joined into it.
+    expect(output.body).toContain('summarize the openclaw docs');
+    expect(output.body).toContain('what is openclaw?');
+    expect(output.body).toContain('an agent runtime.');
+    // The command line uses openclaw's one-shot agent form, with the message redacted.
+    expect(output.workspaceRun?.command).toContain('agent');
+    expect(output.workspaceRun?.command).toContain('--agent');
+    expect(output.workspaceRun?.command).toContain('--message');
+    expect(output.workspaceRun?.command).toContain('[message elided]');
+    expect(output.workspaceRun?.command).not.toContain('summarize the openclaw docs');
+    expect(output.workspaceRun?.command).not.toContain('what is openclaw?');
+    // The prompt is NOT piped through stdin for openclaw.
+    expect(readFileSync(stdinLogPath, 'utf8')).toBe('(empty)');
+    expect(output.workspaceRun?.status).toBe('succeeded');
+    expect(output.workspaceRun?.exitCode).toBe(0);
+  });
 });
 
 function createClock(values: number[]) {

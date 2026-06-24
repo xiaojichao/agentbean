@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { DaemonDispatchResult, DispatchRequestPayload, StubExecutor } from './index.js';
+import type { AdapterKind } from '../../../packages/contracts/src/index.js';
 
 export interface CommandExecutorOptions {
   fallbackPrefix?: string;
@@ -68,15 +69,17 @@ async function runCustomAgentCommand(
     throw new Error('custom agent command is required');
   }
 
-  // Hermes is an interactive TUI by default. The generic path feeds the prompt via stdin and
-  // closes the pipe immediately, which makes Hermes echo the input then exit on EOF ("Goodbye!")
-  // without ever running the query. Hermes exposes a programmatic one-shot mode —
-  // `hermes chat -Q -q "<query>"` — where -Q suppresses the banner/spinner and -q carries the
-  // query on argv. So for Hermes we put the prompt (plus joined history) on argv and leave
-  // stdin ignored.
-  const isHermes = customAgent.adapterKind === 'hermes';
-  const finalArgs = isHermes
-    ? buildHermesArgs(customAgent.args ?? [], buildHermesPrompt(request))
+  // Some agents are interactive TUIs/REPLs by default: feeding the prompt via stdin and closing
+  // the pipe makes them echo the input then exit on EOF (Hermes prints "Goodbye!") without ever
+  // running the query. Such agents expose a one-shot mode that carries the prompt on argv
+  // instead (Hermes: `chat -Q -q`, OpenClaw: `agent --agent <id> --message`). ARGV_MODE_ADAPTERS
+  // registers each agent's invocation contract; registered agents put the prompt (plus joined
+  // history) on argv and leave stdin empty. Unregistered agents (codex, claude-code, …) keep
+  // the generic stdin contract.
+  const adapter = customAgent.adapterKind ? ARGV_MODE_ADAPTERS[customAgent.adapterKind] : undefined;
+  const argvMode = adapter !== undefined;
+  const finalArgs = argvMode
+    ? adapter.buildArgs(customAgent.args ?? [], buildAdapterPrompt(request))
     : customAgent.args ?? [];
 
   return new Promise((resolve, reject) => {
@@ -162,11 +165,11 @@ async function runCustomAgentCommand(
       const exitCode = code ?? 1;
       const command = formatCommand(
         customAgent.command as string,
-        isHermes ? redactHermesCommandArgs(finalArgs) : finalArgs,
+        argvMode && adapter.redactCommandArgs ? adapter.redactCommandArgs(finalArgs) : finalArgs,
       );
       const logContent = buildLogArtifactContent(stdout, stderr);
-      const body = isHermes
-        ? extractHermesReply(stdout, code ?? null, stderr)
+      const body = argvMode && adapter.extractReply
+        ? adapter.extractReply(stdout, code ?? null, stderr)
         : code === 0 ? stdout.trimEnd() : `custom agent command exited with code ${exitCode}`;
       resolve({
         body,
@@ -198,9 +201,9 @@ async function runCustomAgentCommand(
       child.stdin.on('error', () => {
         // swallow
       });
-      // Hermes receives its prompt via argv (see buildHermesArgs); close stdin empty so the
-      // process never blocks on a pipe it does not read.
-      child.stdin.end(isHermes ? '' : (typeof request.prompt === 'string' ? request.prompt : ''));
+      // Argv-mode agents receive their prompt via argv (see ARGV_MODE_ADAPTERS); close stdin
+      // empty so the process never blocks on a pipe it does not read.
+      child.stdin.end(argvMode ? '' : (typeof request.prompt === 'string' ? request.prompt : ''));
     }
   });
 }
@@ -238,10 +241,10 @@ function formatCommand(command: string, args: string[]): string {
   return [command, ...args].join(' ');
 }
 
-// ── Hermes adapter helpers ────────────────────────────────────────────────────
-// daemon-next runs every agent through the same spawn+capture spine. Only Hermes needs a
-// non-stdin invocation contract, so its specifics live here rather than behind a full adapter
-// abstraction.
+// ── Argv-mode adapter helpers ─────────────────────────────────────────────────
+// daemon-next runs every agent through the same spawn+capture spine. Agents that cannot take
+// their prompt via stdin (interactive TUIs/REPLs) register a one-shot argv contract in
+// ARGV_MODE_ADAPTERS; the helpers below implement each contract (Hermes, OpenClaw, …).
 
 function hermesRuntimeArgs(args: string[]): string[] {
   // A `gateway run` preamble selects the gateway-managed runtime; strip it so the chat subcommand
@@ -330,7 +333,9 @@ function redactHermesCommandArgs(args: string[]): string[] {
   return redacted;
 }
 
-function buildHermesPrompt(request: DispatchRequestPayload): string {
+// Shared by all argv-mode adapters: join recent history (User/Assistant turns) ahead of the
+// current prompt so single-shot invocations still carry conversational context.
+function buildAdapterPrompt(request: DispatchRequestPayload): string {
   const history = request.history ?? [];
   if (history.length === 0) {
     return request.prompt;
@@ -367,3 +372,117 @@ function extractHermesReply(stdout: string, code: number | null, stderr: string)
   }
   return stdout.trim();
 }
+
+function openclawRuntimeArgs(args: string[]): string[] {
+  if (args[0] === 'gateway' && args[1] === 'run') {
+    return args.slice(2);
+  }
+  return args;
+}
+
+function hasOpenClawTargetSelector(args: string[]): boolean {
+  return args.includes('--agent')
+    || args.includes('--session-id')
+    || args.includes('--session-key')
+    || args.includes('--to')
+    || args.includes('-t');
+}
+
+function buildOpenClawArgs(baseArgs: string[], prompt: string): string[] {
+  const runtime = openclawRuntimeArgs(baseArgs);
+  const hasAgent = runtime.includes('agent');
+  const hasMessage = runtime.includes('--message') || runtime.includes('-m');
+  const hasTarget = hasOpenClawTargetSelector(runtime);
+  // OpenClaw one-shot agent turns need an `agent` subcommand plus a session selector. The
+  // scanner supplies ['agent', '--agent', <id>]; honour operator config and only fill gaps.
+  let args = runtime;
+  if (!hasAgent) {
+    args = hasTarget ? [...args, 'agent'] : [...args, 'agent', '--agent', 'main'];
+  } else if (!hasTarget) {
+    const messageIdx = args.findIndex((arg) => arg === '--message' || arg === '-m');
+    args = messageIdx >= 0
+      ? [...args.slice(0, messageIdx), '--agent', 'main', ...args.slice(messageIdx)]
+      : [...args, '--agent', 'main'];
+  }
+  return hasMessage ? replaceOpenClawMessageArg(args, prompt) : [...args, '--message', prompt];
+}
+
+function replaceOpenClawMessageArg(args: string[], prompt: string): string[] {
+  const replaced: string[] = [];
+  let written = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === undefined) {
+      continue;
+    }
+    if (arg === '--message' || arg === '-m') {
+      if (!written) {
+        replaced.push(arg, prompt);
+        written = true;
+      }
+      const nextArg = args[index + 1];
+      if (nextArg !== undefined && !nextArg.startsWith('-')) {
+        index += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith('--message=')) {
+      if (!written) {
+        replaced.push('--message', prompt);
+        written = true;
+      }
+      continue;
+    }
+    replaced.push(arg);
+  }
+  return written ? replaced : [...replaced, '--message', prompt];
+}
+
+const OPENCLAW_MESSAGE_PLACEHOLDER = '[message elided]';
+
+function redactOpenClawCommandArgs(args: string[]): string[] {
+  const redacted: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === undefined) {
+      continue;
+    }
+    if (arg === '--message' || arg === '-m') {
+      redacted.push(arg, OPENCLAW_MESSAGE_PLACEHOLDER);
+      if (args[index + 1] !== undefined) {
+        index += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith('--message=')) {
+      redacted.push('--message', OPENCLAW_MESSAGE_PLACEHOLDER);
+      continue;
+    }
+    redacted.push(arg);
+  }
+  return redacted;
+}
+
+interface AgentAdapterSpec {
+  // Build the one-shot argv from base args + prompt (prompt already includes joined history).
+  buildArgs: (baseArgs: string[], prompt: string) => string[];
+  // Redact the prompt-bearing args used for the persisted workspace-run command. Optional.
+  redactCommandArgs?: (args: string[]) => string[];
+  // Extract the reply from captured stdout. Optional; defaults to the generic stdout/exit rule.
+  extractReply?: (stdout: string, code: number | null, stderr: string) => string;
+}
+
+// Argv-mode agents: interactive TUIs/REPLs that cannot take the prompt via stdin. Each entry
+// encodes the agent's one-shot invocation contract (prompt on argv). Unregistered adapterKinds
+// (codex, claude-code, gemini, kimi-cli) keep the generic stdin contract — audit pending.
+const ARGV_MODE_ADAPTERS: Partial<Record<AdapterKind, AgentAdapterSpec>> = {
+  hermes: {
+    buildArgs: buildHermesArgs,
+    redactCommandArgs: redactHermesCommandArgs,
+    extractReply: extractHermesReply,
+  },
+  openclaw: {
+    buildArgs: buildOpenClawArgs,
+    redactCommandArgs: redactOpenClawCommandArgs,
+  },
+};
