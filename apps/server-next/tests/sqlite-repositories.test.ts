@@ -374,6 +374,33 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('channels.getDefaultChannel resolves the team default #all channel via SQLite', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 500 },
+        ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'channel-ops']) },
+      });
+
+      await app.registerUser({ username: 'Shaw', password: 'secret', teamName: 'AgentBean' });
+      await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'ops', visibility: 'private' });
+
+      // The default public #all channel is returned, not the private ops channel.
+      await expect(repositories.channels.getDefaultChannel('team-1')).resolves.toMatchObject({
+        id: 'channel-1',
+        teamId: 'team-1',
+        name: 'all',
+        visibility: 'public',
+      });
+      // A team without a default channel resolves to null instead of throwing.
+      await expect(repositories.channels.getDefaultChannel('missing-team')).resolves.toBeNull();
+    } finally {
+      close();
+    }
+  });
+
   test('persists register, login, message, and dispatch use cases with SQLite', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {

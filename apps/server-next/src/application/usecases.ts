@@ -1609,6 +1609,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           kind: discovered.gatewayInstanceKey ? 'agentos-gateway' : 'agentos-concrete',
           timestamp: now,
         });
+        await ensureDefaultChannelMembership(repositories, clock, {
+          teamId: discoveredInput.teamId,
+          agentId: agent.id,
+        });
         agents.push(agent);
       }
 
@@ -1673,6 +1677,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         env: agentInput.env,
         lastSeenAt: now,
       });
+      await ensureDefaultChannelMembership(repositories, clock, { teamId: agentInput.teamId, agentId: agent.id });
 
       return makeSuccess({ agent: toPublicAgent(agent) });
     },
@@ -1700,6 +1705,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!agent) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
+      await ensureDefaultChannelMembership(repositories, clock, {
+        teamId: agentInput.targetTeamId,
+        agentId: agent.id,
+      });
       return makeSuccess({ agent: toPublicAgent(agent) });
     },
 
@@ -2147,6 +2156,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     async registerAgent(agentInput) {
       const agent = await repositories.agents.upsert(agentInput);
+      for (const teamId of agent.visibleTeamIds) {
+        await ensureDefaultChannelMembership(repositories, clock, { teamId, agentId: agent.id });
+      }
       return makeSuccess({ agent });
     },
 
@@ -4020,6 +4032,36 @@ async function consumeJoinCodeForUser(
   return joinTeamFromLink(repositories, clock, usable.link, user);
 }
 
+// Every team has a default public channel `#all`. Team membership and channel
+// membership live in separate tables, so any entry point that brings a human or
+// agent into a team must mirror that membership into `#all`. This helper is the
+// single place that knows how to enroll a member into the default channel,
+// keeping the two membership tables in sync. It is a no-op when the member is
+// already enrolled or when the team has no default channel.
+async function ensureDefaultChannelMembership(
+  repositories: ServerNextRepositories,
+  clock: ServerNextClock,
+  input: { teamId: string; humanId?: string; agentId?: string },
+): Promise<void> {
+  const defaultChannel = await repositories.channels.getDefaultChannel(input.teamId);
+  if (!defaultChannel) {
+    return;
+  }
+  const changes: { humanMemberIds?: string[]; agentMemberIds?: string[]; updatedAt: UnixMs } = {
+    updatedAt: clock.now(),
+  };
+  if (input.humanId && !defaultChannel.humanMemberIds.includes(input.humanId)) {
+    changes.humanMemberIds = uniqueIds([...defaultChannel.humanMemberIds, input.humanId]);
+  }
+  if (input.agentId && !defaultChannel.agentMemberIds.includes(input.agentId)) {
+    changes.agentMemberIds = uniqueIds([...defaultChannel.agentMemberIds, input.agentId]);
+  }
+  if (!changes.humanMemberIds && !changes.agentMemberIds) {
+    return;
+  }
+  await repositories.channels.update({ channelId: defaultChannel.id, changes });
+}
+
 async function joinTeamFromLink(
   repositories: ServerNextRepositories,
   clock: ServerNextClock,
@@ -4039,6 +4081,7 @@ async function joinTeamFromLink(
       role: 'member',
       joinedAt: clock.now(),
     });
+    await ensureDefaultChannelMembership(repositories, clock, { teamId: link.teamId, humanId: user.id });
     const consumed = await repositories.joinLinks.incrementUses(link.code);
     if (!consumed) {
       return makeFailure('INVITE_INVALID', 'Join link is invalid');

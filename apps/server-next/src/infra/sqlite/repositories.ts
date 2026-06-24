@@ -19,7 +19,7 @@ import type {
   UserRecord,
   WorkspaceRunRecord,
 } from '../../application/repositories.js';
-import { rankMessageSearch, splitSearchTerms } from '../../../../../packages/domain/src/index.js';
+import { DEFAULT_CHANNEL_NAME, rankMessageSearch, splitSearchTerms } from '../../../../../packages/domain/src/index.js';
 
 export interface SqliteStatement {
   run(...params: unknown[]): unknown;
@@ -496,6 +496,21 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       },
       async getById(channelId) {
         return mapChannel(teamDb, teamDb.prepare('SELECT * FROM channels WHERE id = ?').get(channelId));
+      },
+      async getDefaultChannel(teamId) {
+        return mapChannel(
+          teamDb,
+          teamDb
+            .prepare(
+              `SELECT * FROM channels
+               WHERE team_id = ?
+               AND kind = 'channel'
+               AND name = ?
+               AND archived_at IS NULL
+               LIMIT 1`,
+            )
+            .get(teamId, DEFAULT_CHANNEL_NAME),
+        );
       },
       async getDirectByAgent(input) {
         return mapChannel(

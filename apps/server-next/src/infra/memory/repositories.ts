@@ -15,7 +15,7 @@ import type {
   UserRecord,
   WorkspaceRunRecord,
 } from '../../application/repositories.js';
-import { rankMessageSearch } from '../../../../../packages/domain/src/index.js';
+import { DEFAULT_CHANNEL_NAME, rankMessageSearch } from '../../../../../packages/domain/src/index.js';
 
 export function createInMemoryRepositories(): ServerNextRepositories {
   const users = new Map<string, UserRecord>();
@@ -282,6 +282,17 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async getById(channelId) {
         return channels.get(channelId) ?? null;
+      },
+      async getDefaultChannel(teamId) {
+        return (
+          Array.from(channels.values()).find(
+            (channel) =>
+              channel.teamId === teamId &&
+              channel.kind === 'channel' &&
+              channel.name === DEFAULT_CHANNEL_NAME &&
+              !channel.archivedAt,
+          ) ?? null
+        );
       },
       async getDirectByAgent(input) {
         return Array.from(channels.values()).find((channel) =>

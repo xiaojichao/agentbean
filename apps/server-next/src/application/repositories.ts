@@ -153,6 +153,7 @@ export interface DeviceInviteRepository {
 export interface ChannelRepository {
   create(input: ChannelRecord): Promise<ChannelRecord>;
   getById(channelId: ID): Promise<ChannelRecord | null>;
+  getDefaultChannel(teamId: ID): Promise<ChannelRecord | null>;
   getDirectByAgent(input: { teamId: ID; userId: ID; agentId: ID }): Promise<ChannelRecord | null>;
   listForUser(teamId: ID, userId: ID): Promise<ChannelRecord[]>;
   listDirectForUser(teamId: ID, userId: ID): Promise<ChannelRecord[]>;
