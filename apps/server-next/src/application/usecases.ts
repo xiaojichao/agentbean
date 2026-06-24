@@ -3059,6 +3059,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         teamId: removeInput.teamId,
         userId: removeInput.targetUserId,
       });
+      await repositories.channels.removeHumanFromTeamChannels({
+        teamId: removeInput.teamId,
+        userId: removeInput.targetUserId,
+        timestamp: clock.now(),
+      });
       return makeSuccess({ userId: removeInput.targetUserId });
     },
 
@@ -4034,32 +4039,20 @@ async function consumeJoinCodeForUser(
 
 // Every team has a default public channel `#all`. Team membership and channel
 // membership live in separate tables, so any entry point that brings a human or
-// agent into a team must mirror that membership into `#all`. This helper is the
-// single place that knows how to enroll a member into the default channel,
-// keeping the two membership tables in sync. It is a no-op when the member is
-// already enrolled or when the team has no default channel.
+// agent into a team must mirror that membership into `#all`. The repository
+// performs append-style writes (SQLite: INSERT OR IGNORE) to avoid replacing
+// another concurrent join's membership set.
 async function ensureDefaultChannelMembership(
   repositories: ServerNextRepositories,
   clock: ServerNextClock,
   input: { teamId: string; humanId?: string; agentId?: string },
 ): Promise<void> {
-  const defaultChannel = await repositories.channels.getDefaultChannel(input.teamId);
-  if (!defaultChannel) {
-    return;
-  }
-  const changes: { humanMemberIds?: string[]; agentMemberIds?: string[]; updatedAt: UnixMs } = {
-    updatedAt: clock.now(),
-  };
-  if (input.humanId && !defaultChannel.humanMemberIds.includes(input.humanId)) {
-    changes.humanMemberIds = uniqueIds([...defaultChannel.humanMemberIds, input.humanId]);
-  }
-  if (input.agentId && !defaultChannel.agentMemberIds.includes(input.agentId)) {
-    changes.agentMemberIds = uniqueIds([...defaultChannel.agentMemberIds, input.agentId]);
-  }
-  if (!changes.humanMemberIds && !changes.agentMemberIds) {
-    return;
-  }
-  await repositories.channels.update({ channelId: defaultChannel.id, changes });
+  await repositories.channels.addDefaultChannelMembers({
+    teamId: input.teamId,
+    humanMemberIds: input.humanId ? [input.humanId] : undefined,
+    agentMemberIds: input.agentId ? [input.agentId] : undefined,
+    timestamp: clock.now(),
+  });
 }
 
 async function joinTeamFromLink(

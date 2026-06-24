@@ -763,11 +763,32 @@ describe('server-next socket handlers', () => {
       listVisibleAgents: vi.fn(async () => makeSuccess({
         agents: [{ id: 'agent-1', visibleTeamIds: ['team-1', 'team-2'] }],
       })),
+      publishAgent: vi.fn(async () => makeSuccess({ agent: { id: 'agent-1', visibleTeamIds: ['team-1', 'team-2'] } })),
       unpublishAgent: vi.fn(async () => makeSuccess({ agent: { id: 'agent-1', visibleTeamIds: ['team-1'] } })),
       deleteAgent: vi.fn(async () => makeSuccess({ agent: { id: 'agent-1', visibleTeamIds: [] } })),
     } as unknown as ServerNextUseCases;
 
     registerWebSocketHandlers(socket, app, { afterAgentMutation });
+
+    await expect(socket.trigger(WEB_EVENTS.agent.publish, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      targetTeamId: 'team-2',
+    })).resolves.toEqual({
+      ok: true,
+      agent: { id: 'agent-1', visibleTeamIds: ['team-1', 'team-2'] },
+    });
+    expect(afterAgentMutation).toHaveBeenNthCalledWith(1, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      agentId: 'agent-1',
+      targetTeamId: 'team-2',
+      channelTeamIds: ['team-2'],
+    }, {
+      ok: true,
+      agent: { id: 'agent-1', visibleTeamIds: ['team-1', 'team-2'] },
+    });
 
     await expect(socket.trigger(WEB_EVENTS.agent.unpublish, {
       userId: 'user-1',
@@ -778,7 +799,7 @@ describe('server-next socket handlers', () => {
       ok: true,
       agent: { id: 'agent-1', visibleTeamIds: ['team-1'] },
     });
-    expect(afterAgentMutation).toHaveBeenNthCalledWith(1, {
+    expect(afterAgentMutation).toHaveBeenNthCalledWith(2, {
       userId: 'user-1',
       teamId: 'team-1',
       agentId: 'agent-1',
@@ -797,7 +818,7 @@ describe('server-next socket handlers', () => {
       ok: true,
       agent: { id: 'agent-1', visibleTeamIds: [] },
     });
-    expect(afterAgentMutation).toHaveBeenNthCalledWith(2, {
+    expect(afterAgentMutation).toHaveBeenNthCalledWith(3, {
       userId: 'user-1',
       teamId: 'team-1',
       agentId: 'agent-1',

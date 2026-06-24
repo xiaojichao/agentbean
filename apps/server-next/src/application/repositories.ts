@@ -157,11 +157,13 @@ export interface ChannelRepository {
   getDirectByAgent(input: { teamId: ID; userId: ID; agentId: ID }): Promise<ChannelRecord | null>;
   listForUser(teamId: ID, userId: ID): Promise<ChannelRecord[]>;
   listDirectForUser(teamId: ID, userId: ID): Promise<ChannelRecord[]>;
+  addDefaultChannelMembers(input: { teamId: ID; humanMemberIds?: ID[]; agentMemberIds?: ID[]; timestamp: UnixMs }): Promise<ChannelRecord | null>;
   update(input: {
     channelId: ID;
     changes: Partial<Pick<ChannelRecord, 'name' | 'title' | 'visibility' | 'humanMemberIds' | 'agentMemberIds' | 'updatedAt' | 'archivedAt'>>;
   }): Promise<ChannelRecord | null>;
   removeAgentFromTeamChannels(input: { teamId: ID; agentId: ID; timestamp: UnixMs }): Promise<void>;
+  removeHumanFromTeamChannels(input: { teamId: ID; userId: ID; timestamp: UnixMs }): Promise<void>;
   archive(input: { channelId: ID; timestamp: UnixMs }): Promise<ChannelRecord | null>;
   delete(input: { channelId: ID }): Promise<ChannelRecord | null>;
 }

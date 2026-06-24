@@ -323,6 +323,28 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           channel.humanMemberIds.includes(userId)
         );
       },
+      async addDefaultChannelMembers(input) {
+        const channel = await this.getDefaultChannel(input.teamId);
+        if (!channel) {
+          return null;
+        }
+        const humanMemberIds = uniqueStrings([
+          ...channel.humanMemberIds,
+          ...(input.humanMemberIds ?? []),
+        ]);
+        const agentMemberIds = uniqueStrings([
+          ...channel.agentMemberIds,
+          ...(input.agentMemberIds ?? []),
+        ]);
+        const updated = {
+          ...channel,
+          humanMemberIds,
+          agentMemberIds,
+          updatedAt: input.timestamp,
+        };
+        channels.set(channel.id, updated);
+        return updated;
+      },
       async update(input) {
         const channel = channels.get(input.channelId);
         if (!channel) {
@@ -340,6 +362,18 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           channels.set(channel.id, {
             ...channel,
             agentMemberIds: channel.agentMemberIds.filter((agentId) => agentId !== input.agentId),
+            updatedAt: input.timestamp,
+          });
+        }
+      },
+      async removeHumanFromTeamChannels(input) {
+        for (const channel of channels.values()) {
+          if (channel.teamId !== input.teamId || !channel.humanMemberIds.includes(input.userId)) {
+            continue;
+          }
+          channels.set(channel.id, {
+            ...channel,
+            humanMemberIds: channel.humanMemberIds.filter((userId) => userId !== input.userId),
             updatedAt: input.timestamp,
           });
         }
@@ -899,6 +933,10 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
     },
   };
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
 }
 
 function isPendingDispatchStatus(status: DispatchRecord['status']): boolean {

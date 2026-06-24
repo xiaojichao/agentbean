@@ -47,6 +47,36 @@ describe('default #all channel membership', () => {
     });
   });
 
+  test('removing a human from a team also removes them from #all', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 100,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'join-link-1',
+        'user-2',
+        'team-2',
+        'channel-2',
+      ]),
+      joinCodes: createIds(['code-1']),
+    });
+
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
+    await app.registerUser({ username: 'lin', password: 'secret', teamName: 'Lin Team', joinCode: 'code-1' });
+
+    await expect(app.removeMember({ userId: 'user-1', teamId: 'team-1', targetUserId: 'user-2' })).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(
+      app.listChannelMembers({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1' }),
+    ).resolves.toMatchObject({
+      ok: true,
+      humanMemberIds: ['user-1'],
+    });
+  });
+
   test('an agent registered into a team is enrolled in #all', async () => {
     const app = createInMemoryServerNext({
       now: () => 100,

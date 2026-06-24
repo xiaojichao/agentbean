@@ -457,6 +457,21 @@ describe('server-next SQLite repositories', () => {
         role: 'member',
         joinedAt: 500,
       });
+      await repositories.users.create({
+        id: 'user-3',
+        username: 'second-teammate',
+        role: 'user',
+        passwordHash: 'unused',
+        createdAt: 500,
+        updatedAt: 500,
+      });
+      await repositories.teams.addMember({
+        teamId: 'team-1',
+        userId: 'user-3',
+        username: 'second-teammate',
+        role: 'member',
+        joinedAt: 500,
+      });
 
       await expect(app.loginUser({ username: 'shaw', password: 'secret' })).resolves.toMatchObject({
         ok: true,
@@ -647,6 +662,41 @@ describe('server-next SQLite repositories', () => {
         ],
         agents: [{ id: 'agent-1', name: 'Codex', status: 'online' }],
       });
+      await repositories.channels.addDefaultChannelMembers({
+        teamId: 'team-1',
+        humanMemberIds: ['user-2'],
+        timestamp: 600,
+      });
+      await repositories.channels.addDefaultChannelMembers({
+        teamId: 'team-1',
+        humanMemberIds: ['user-3'],
+        agentMemberIds: ['agent-1'],
+        timestamp: 601,
+      });
+      expect(
+        teamDb
+          .prepare('SELECT user_id AS userId FROM channel_human_members WHERE channel_id = ? ORDER BY user_id')
+          .all('channel-1'),
+      ).toEqual([
+        { userId: 'user-1' },
+        { userId: 'user-2' },
+        { userId: 'user-3' },
+      ]);
+      expect(
+        teamDb
+          .prepare('SELECT agent_id AS agentId FROM channel_agent_members WHERE channel_id = ? ORDER BY agent_id')
+          .all('channel-1'),
+      ).toEqual([{ agentId: 'agent-1' }]);
+      await repositories.channels.removeHumanFromTeamChannels({
+        teamId: 'team-1',
+        userId: 'user-2',
+        timestamp: 602,
+      });
+      expect(
+        teamDb
+          .prepare('SELECT user_id AS userId FROM channel_human_members WHERE user_id = ? ORDER BY channel_id')
+          .all('user-2'),
+      ).toEqual([]);
       await app.removeChannelHumanMember({
         userId: 'user-1',
         teamId: 'team-1',
