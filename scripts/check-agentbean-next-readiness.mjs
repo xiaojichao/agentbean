@@ -31,6 +31,7 @@ export function collectAgentBeanNextReadinessChecks({
   const webNextAgentsPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/agents/page.tsx'), 'utf8');
   const webNextAgentDetailPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/agents/[agentId]/page.tsx'), 'utf8');
   const webNextTasksPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/tasks/page.tsx'), 'utf8');
+  const webNextSettingsPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/settings/page.tsx'), 'utf8');
   const browserSmokeScript = readFileSync(join(root, 'scripts/smoke-agentbean-next-browser.mjs'), 'utf8');
   const legacyAgentNamespace = readFileSync(join(root, 'apps/server/src/namespaces/agent.ts'), 'utf8');
   const legacyWebNamespaceTests = readFileSync(join(root, 'apps/server/tests/web-namespace.test.ts'), 'utf8');
@@ -409,9 +410,11 @@ export function collectAgentBeanNextReadinessChecks({
         parityBackfillAudit.includes('| `devices` | Green |') &&
         parityBackfillAudit.includes('| `agents` | Green |') &&
         parityBackfillAudit.includes('| `tasks` | Green |') &&
+        parityBackfillAudit.includes('| `settings` / `networks` | Green |') &&
         parityBackfillAudit.includes('| `channels` / `channel members` | Green |') &&
         parityBackfillAudit.includes('## 下一条 backfill slice') &&
-        parityBackfillAudit.includes('优先做 `runs`'),
+        parityBackfillAudit.includes('暂不推进 `runs`') &&
+        parityBackfillAudit.includes('优先做 `dashboard` / `admin`'),
       'AgentBean Next parity backfill audit must keep a Red/Yellow/Green product-entry status table and the next recommended slice',
     ),
     check(
@@ -460,6 +463,25 @@ export function collectAgentBeanNextReadinessChecks({
         verificationMatrix.includes('webui-task-business-flow') &&
         parityBackfillAudit.includes('| `tasks` | Green |'),
       'Task parity must stay covered by an App Router browser smoke for create, status update, reorder, delete/list disappearance, and refresh restore',
+    ),
+    check(
+      'settings-parity-browser-smoke',
+      browserSmokeScript.includes('webui-settings-business-flow') &&
+        browserSmokeScript.includes('settings-account-panel') &&
+        browserSmokeScript.includes('settings-browser-panel') &&
+        browserSmokeScript.includes('agentbean.browserSettings.v1') &&
+        browserSmokeScript.includes('settings-team-name-input') &&
+        browserSmokeScript.includes('settings-join-revoke') &&
+        webNextSettingsPage.includes('data-smoke="settings-account-panel"') &&
+        webNextSettingsPage.includes('data-smoke="settings-account-logout"') &&
+        webNextSettingsPage.includes('data-smoke="settings-browser-panel"') &&
+        webNextSettingsPage.includes('data-smoke="settings-browser-reset"') &&
+        webNextSettingsPage.includes('data-smoke="settings-browser-attachment-open-mode"') &&
+        webNextSettingsPage.includes('data-smoke="settings-team-name-input"') &&
+        webNextSettingsPage.includes('data-smoke="settings-join-revoke"') &&
+        verificationMatrix.includes('webui-settings-business-flow') &&
+        parityBackfillAudit.includes('| `settings` / `networks` | Green |'),
+      'Settings parity must stay covered by an App Router browser smoke for account identity, browser preference persistence/reset, team rename, join link revoke, and refresh restore',
     ),
     check(
       'channel-members-parity-browser-smoke',

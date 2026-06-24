@@ -458,7 +458,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       check(
         'webui-settings-business-flow',
         true,
-        `Renamed team to "${settingsResult.teamName}", created join link ${settingsResult.joinCode}, revoked it, and restored settings after refresh`,
+        `Verified account "${settingsResult.username}", persisted/reset browser preferences, renamed team to "${settingsResult.teamName}", created join link ${settingsResult.joinCode}, revoked it, and restored settings after refresh`,
       ),
     );
 
@@ -2054,6 +2054,77 @@ export async function exerciseWebUiSettingsBusinessSmoke({
   const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-32);
   const teamName = `WebUI Settings ${safeSuffix}`;
   await page.navigate(new URL(`/${networkPath}/settings`, root).toString());
+  await page.waitForFunction(
+    `
+    (() => {
+      const panel = document.querySelector('[data-smoke="settings-account-panel"]');
+      return panel?.dataset.settingsUsername === ${JSON.stringify(session.user.username)}
+        && document.querySelector('[data-smoke="settings-account-logout"]');
+    })()
+    `,
+    `settings account tab to expose current user "${session.user.username}" and logout`,
+    timeoutMs,
+  );
+
+  await page.click('[data-smoke="settings-tab-browser"]');
+  await page.waitForFunction(
+    `Boolean(document.querySelector('[data-smoke="settings-browser-panel"]'))`,
+    'settings browser panel to render',
+    timeoutMs,
+  );
+  await page.click('[data-smoke="settings-browser-sound"]');
+  await page.click('[data-smoke="settings-browser-compact-mode"]');
+  await page.click('[data-smoke="settings-browser-send-enter"]');
+  await page.setInputValue('[data-smoke="settings-browser-attachment-open-mode"]', 'new-tab');
+  await page.waitForFunction(
+    `
+    (() => {
+      const raw = window.localStorage.getItem('agentbean.browserSettings.v1');
+      if (!raw) return false;
+      const settings = JSON.parse(raw);
+      return settings.sound === false
+        && settings.compactMode === true
+        && settings.messageSendMode === 'enter'
+        && settings.attachmentOpenMode === 'new-tab'
+        && document.querySelector('[data-smoke="settings-browser-sound"]')?.dataset.settingsChecked === 'false'
+        && document.querySelector('[data-smoke="settings-browser-compact-mode"]')?.dataset.settingsChecked === 'true'
+        && document.querySelector('[data-smoke="settings-browser-send-enter"]')?.dataset.settingsSelected === 'true'
+        && document.querySelector('[data-smoke="settings-browser-attachment-open-mode"]')?.value === 'new-tab';
+    })()
+    `,
+    'settings browser preferences to save into localStorage',
+    timeoutMs,
+  );
+
+  await page.reload();
+  await page.click('[data-smoke="settings-tab-browser"]');
+  await page.waitForFunction(
+    `
+    (() => {
+      return document.querySelector('[data-smoke="settings-browser-sound"]')?.dataset.settingsChecked === 'false'
+        && document.querySelector('[data-smoke="settings-browser-compact-mode"]')?.dataset.settingsChecked === 'true'
+        && document.querySelector('[data-smoke="settings-browser-send-enter"]')?.dataset.settingsSelected === 'true'
+        && document.querySelector('[data-smoke="settings-browser-attachment-open-mode"]')?.value === 'new-tab';
+    })()
+    `,
+    'settings browser preferences to restore after refresh',
+    timeoutMs,
+  );
+  await page.click('[data-smoke="settings-browser-reset"]');
+  await page.waitForFunction(
+    `
+    (() => {
+      return window.localStorage.getItem('agentbean.browserSettings.v1') === null
+        && document.querySelector('[data-smoke="settings-browser-sound"]')?.dataset.settingsChecked === 'true'
+        && document.querySelector('[data-smoke="settings-browser-compact-mode"]')?.dataset.settingsChecked === 'false'
+        && document.querySelector('[data-smoke="settings-browser-send-mod-enter"]')?.dataset.settingsSelected === 'true'
+        && document.querySelector('[data-smoke="settings-browser-attachment-open-mode"]')?.value === 'inline';
+    })()
+    `,
+    'settings browser preferences to reset to defaults',
+    timeoutMs,
+  );
+
   await page.click('[data-smoke="settings-tab-server"]');
   await page.waitForFunction(
     `Boolean(document.querySelector('[data-smoke="settings-team-name-input"]'))`,
@@ -2132,7 +2203,7 @@ export async function exerciseWebUiSettingsBusinessSmoke({
     `settings team name "${teamName}" and revoked join link state to restore after refresh`,
     timeoutMs,
   );
-  return { teamName, joinCode };
+  return { teamName, joinCode, username: session.user.username, browserPreferencesReset: true };
 }
 
 async function waitForWebUiSettingsJoinLink({ page, timeoutMs }) {

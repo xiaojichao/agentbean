@@ -55,6 +55,7 @@ describe('AgentBean Next readiness checker', () => {
       'devices-parity-browser-smoke',
       'agents-parity-browser-smoke',
       'tasks-parity-browser-smoke',
+      'settings-parity-browser-smoke',
       'channel-members-parity-browser-smoke',
       'admin-dashboard-parity-regression',
     ]);
