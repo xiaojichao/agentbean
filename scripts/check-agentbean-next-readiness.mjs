@@ -30,6 +30,7 @@ export function collectAgentBeanNextReadinessChecks({
   const webNextDevicesPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/devices/page.tsx'), 'utf8');
   const webNextAgentsPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/agents/page.tsx'), 'utf8');
   const webNextAgentDetailPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/agents/[agentId]/page.tsx'), 'utf8');
+  const webNextTasksPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/tasks/page.tsx'), 'utf8');
   const browserSmokeScript = readFileSync(join(root, 'scripts/smoke-agentbean-next-browser.mjs'), 'utf8');
   const legacyAgentNamespace = readFileSync(join(root, 'apps/server/src/namespaces/agent.ts'), 'utf8');
   const legacyWebNamespaceTests = readFileSync(join(root, 'apps/server/tests/web-namespace.test.ts'), 'utf8');
@@ -407,9 +408,10 @@ export function collectAgentBeanNextReadinessChecks({
         parityBackfillAudit.includes('| `members` | Green |') &&
         parityBackfillAudit.includes('| `devices` | Green |') &&
         parityBackfillAudit.includes('| `agents` | Green |') &&
+        parityBackfillAudit.includes('| `tasks` | Green |') &&
         parityBackfillAudit.includes('| `channels` / `channel members` | Green |') &&
         parityBackfillAudit.includes('## 下一条 backfill slice') &&
-        parityBackfillAudit.includes('优先做 `tasks`'),
+        parityBackfillAudit.includes('优先做 `runs`'),
       'AgentBean Next parity backfill audit must keep a Red/Yellow/Green product-entry status table and the next recommended slice',
     ),
     check(
@@ -445,6 +447,19 @@ export function collectAgentBeanNextReadinessChecks({
         verificationMatrix.includes('webui-agents-business-flow') &&
         parityBackfillAudit.includes('| `agents` | Green |'),
       'Agent parity must stay covered by an App Router browser smoke for list/detail, config update, publish/unpublish, metrics, and delete/list disappearance',
+    ),
+    check(
+      'tasks-parity-browser-smoke',
+      browserSmokeScript.includes('webui-task-business-flow') &&
+        browserSmokeScript.includes('task-reorder-top') &&
+        browserSmokeScript.includes('task-delete') &&
+        browserSmokeScript.includes('taskSortOrder') &&
+        webNextTasksPage.includes('data-smoke="task-reorder-top"') &&
+        webNextTasksPage.includes('data-smoke="task-delete"') &&
+        webNextTasksPage.includes('data-task-sort-order') &&
+        verificationMatrix.includes('webui-task-business-flow') &&
+        parityBackfillAudit.includes('| `tasks` | Green |'),
+      'Task parity must stay covered by an App Router browser smoke for create, status update, reorder, delete/list disappearance, and refresh restore',
     ),
     check(
       'channel-members-parity-browser-smoke',
