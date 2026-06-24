@@ -509,7 +509,7 @@ describe('AgentBean Next browser smoke script', () => {
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('token='))).toBe(true);
   });
 
-  test('exercises WebUI settings team rename plus join link create and revoke', async () => {
+  test('exercises WebUI settings account, browser preferences, team rename, and join link create/revoke', async () => {
     const { exerciseWebUiSettingsBusinessSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];
     const evaluateJsonResponses = ['join-code-1', true];
@@ -553,8 +553,19 @@ describe('AgentBean Next browser smoke script', () => {
     expect(result).toEqual({
       teamName: 'WebUI Settings settings-smoke',
       joinCode: 'join-code-1',
+      username: 'alice',
+      browserPreferencesReset: true,
     });
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/settings']);
+    expect(calls).toContainEqual(['click', '[data-smoke="settings-tab-browser"]']);
+    expect(calls).toContainEqual(['click', '[data-smoke="settings-browser-sound"]']);
+    expect(calls).toContainEqual(['click', '[data-smoke="settings-browser-compact-mode"]']);
+    expect(calls).toContainEqual(['click', '[data-smoke="settings-browser-send-enter"]']);
+    expect(calls).toContainEqual([
+      'setInputValue',
+      { selector: '[data-smoke="settings-browser-attachment-open-mode"]', value: 'new-tab' },
+    ]);
+    expect(calls).toContainEqual(['click', '[data-smoke="settings-browser-reset"]']);
     expect(calls).toContainEqual(['click', '[data-smoke="settings-tab-server"]']);
     expect(calls).toContainEqual([
       'setInputValue',
@@ -567,6 +578,10 @@ describe('AgentBean Next browser smoke script', () => {
     const waitForFunctionCalls = calls.filter(
       (call): call is ['waitForFunction', { expression: string; description: string }] => call[0] === 'waitForFunction',
     );
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('settings-account-panel'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('settings-browser-panel'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agentbean.browserSettings.v1'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('settings-browser-send-mod-enter'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('settings-team-name-input'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('settings-join-link'))).toBe(true);
     const evaluateJsonCalls = calls.filter((call): call is ['evaluateJson', string] => call[0] === 'evaluateJson');

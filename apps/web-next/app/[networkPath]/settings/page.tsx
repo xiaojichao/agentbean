@@ -79,18 +79,23 @@ function AccountPanel() {
   };
 
   return (
-    <div className="mx-auto max-w-xl space-y-8">
+    <div
+      className="mx-auto max-w-xl space-y-8"
+      data-smoke="settings-account-panel"
+      data-settings-username={currentUser?.username ?? ''}
+      data-settings-email={currentUser?.email ?? ''}
+    >
       <h2 className="text-xl font-semibold">账号</h2>
 
       {/* User info card */}
-      <section className="rounded-lg border border-neutral-200 p-5">
+      <section className="rounded-lg border border-neutral-200 p-5" data-smoke="settings-account-profile">
         <div className="flex items-center gap-4">
           <div className="flex h-14 w-14 items-center justify-center rounded-full bg-purple-100 text-lg font-semibold text-purple-700">
             {(currentUser?.username ?? '?')[0].toUpperCase()}
           </div>
           <div>
-            <div className="text-lg font-semibold">{currentUser?.username ?? '—'}</div>
-            <div className="text-sm text-neutral-500">{currentUser?.email ?? '未设置邮箱'}</div>
+            <div className="text-lg font-semibold" data-smoke="settings-account-username">{currentUser?.username ?? '—'}</div>
+            <div className="text-sm text-neutral-500" data-smoke="settings-account-email">{currentUser?.email ?? '未设置邮箱'}</div>
           </div>
         </div>
 
@@ -137,7 +142,7 @@ function AccountPanel() {
       </section>
 
       <section>
-        <button onClick={logout} className="inline-flex items-center gap-2 rounded-md border border-red-200 px-4 py-2 text-sm text-red-600 hover:bg-red-50">
+        <button onClick={logout} className="inline-flex items-center gap-2 rounded-md border border-red-200 px-4 py-2 text-sm text-red-600 hover:bg-red-50" data-smoke="settings-account-logout">
           <LogOut size={16} /> 退出登录
         </button>
       </section>
@@ -167,13 +172,13 @@ function BrowserPanel() {
   };
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="mx-auto max-w-2xl space-y-6" data-smoke="settings-browser-panel">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-xl font-semibold">浏览器</h2>
           <p className="mt-1 text-sm text-neutral-500">这些偏好保存在当前浏览器中。</p>
         </div>
-        <button onClick={resetSettings} className="inline-flex items-center gap-2 rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50">
+        <button onClick={resetSettings} className="inline-flex items-center gap-2 rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50" data-smoke="settings-browser-reset">
           <RotateCcw size={13} />
           恢复默认
         </button>
@@ -186,6 +191,7 @@ function BrowserPanel() {
           description="新消息到达时显示系统通知。"
           checked={settings.desktopNotifications}
           disabled={!loaded}
+          smokeId="settings-browser-desktop-notifications"
           onChange={(checked) => updateSettings({ desktopNotifications: checked })}
         />
         <BrowserSettingSwitch
@@ -194,6 +200,7 @@ function BrowserPanel() {
           description="频道、私聊和任务更新时播放轻提示音。"
           checked={settings.sound}
           disabled={!loaded}
+          smokeId="settings-browser-sound"
           onChange={(checked) => updateSettings({ sound: checked })}
         />
         <BrowserSettingSwitch
@@ -202,6 +209,7 @@ function BrowserPanel() {
           description="缩小列表行高，让聊天和任务页面显示更多内容。"
           checked={settings.compactMode}
           disabled={!loaded}
+          smokeId="settings-browser-compact-mode"
           onChange={(checked) => updateSettings({ compactMode: checked })}
         />
       </section>
@@ -220,6 +228,7 @@ function BrowserPanel() {
                 title="⌘ / Ctrl + Enter"
                 description="Enter 保留换行。"
                 disabled={!loaded}
+                smokeId="settings-browser-send-mod-enter"
                 onClick={() => updateSettings({ messageSendMode: 'mod-enter' })}
               />
               <ChoiceButton
@@ -227,6 +236,7 @@ function BrowserPanel() {
                 title="Enter"
                 description="Shift + Enter 换行。"
                 disabled={!loaded}
+                smokeId="settings-browser-send-enter"
                 onClick={() => updateSettings({ messageSendMode: 'enter' })}
               />
             </div>
@@ -239,6 +249,7 @@ function BrowserPanel() {
               onChange={(event) => updateSettings({ attachmentOpenMode: event.target.value as AttachmentOpenMode })}
               disabled={!loaded}
               className="h-9 w-full rounded-md border border-neutral-200 bg-white px-3 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50"
+              data-smoke="settings-browser-attachment-open-mode"
             >
               <option value="inline">在 AgentBean 内预览</option>
               <option value="new-tab">在新标签页打开</option>
@@ -257,6 +268,7 @@ function BrowserSettingSwitch({
   description,
   checked,
   disabled,
+  smokeId,
   onChange,
 }: {
   icon: React.ReactNode;
@@ -264,10 +276,11 @@ function BrowserSettingSwitch({
   description: string;
   checked: boolean;
   disabled?: boolean;
+  smokeId: string;
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex items-center gap-4 border-b border-neutral-100 px-5 py-4 last:border-b-0">
+    <label className="flex items-center gap-4 border-b border-neutral-100 px-5 py-4 last:border-b-0" data-smoke={smokeId} data-settings-checked={checked ? 'true' : 'false'}>
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-neutral-100 text-neutral-600">{icon}</span>
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-medium text-neutral-900">{title}</span>
@@ -292,12 +305,14 @@ function ChoiceButton({
   title,
   description,
   disabled,
+  smokeId,
   onClick,
 }: {
   selected: boolean;
   title: string;
   description: string;
   disabled?: boolean;
+  smokeId: string;
   onClick: () => void;
 }) {
   return (
@@ -305,6 +320,8 @@ function ChoiceButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
+      data-smoke={smokeId}
+      data-settings-selected={selected ? 'true' : 'false'}
       className={`min-h-16 rounded-md border px-3 py-2 text-left transition disabled:opacity-50 ${
         selected
           ? 'border-neutral-900 bg-neutral-900 text-white'
