@@ -8,6 +8,7 @@
 // CI installs with --ignore-scripts on Linux), so it never breaks CI.
 
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -17,8 +18,9 @@ import { createCommandExecutor } from '../src/executor';
 const requireNative = createRequire(import.meta.url);
 // require succeeding is not enough: on the daemon-next CI (Linux, --ignore-scripts) node-pty's
 // package unpacks but has no usable spawn-helper (no linux prebuild, compilation skipped), so an
-// actual spawn would fail. Gate on a spawn-helper actually being present.
-const hasNodePty = (() => {
+// actual spawn would fail. Some local Node/native combinations can also resolve node-pty but never
+// deliver PTY data/exit events, so gate this local-only e2e on a short isolated smoke process.
+function hasNodePtyBinary(): boolean {
   try {
     const ptyRoot = dirname(requireNative.resolve('node-pty/package.json'));
     const prebuilt = join(ptyRoot, 'prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper');
@@ -27,8 +29,28 @@ const hasNodePty = (() => {
   } catch {
     return false;
   }
-})();
-const testWithPty = hasNodePty ? test : test.skip;
+}
+
+function hasUsableNodePty(): boolean {
+  if (!hasNodePtyBinary()) return false;
+  const probe = [
+    "const pty = require('node-pty');",
+    "const child = pty.spawn('/bin/echo', ['agentbean-pty-smoke'], { name: 'xterm-color', cols: 80, rows: 30, cwd: process.cwd(), env: process.env });",
+    "let output = '';",
+    "child.onData((chunk) => { output += chunk; });",
+    "child.onExit((event) => { process.exit(event.exitCode === 0 && output.includes('agentbean-pty-smoke') ? 0 : 2); });",
+    "setTimeout(() => { try { child.kill('SIGKILL'); } catch {} process.exit(3); }, 1000).unref();",
+  ].join('\n');
+  const result = spawnSync(process.execPath, ['-e', probe], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    timeout: 2000,
+    stdio: 'ignore',
+  });
+  return result.status === 0;
+}
+
+const testWithPty = hasUsableNodePty() ? test : test.skip;
 
 describe('daemon-next codex PTY executor (real node-pty end-to-end)', () => {
   testWithPty('loads node-pty via the default loader and parses the reply from real PTY output', async () => {

@@ -257,7 +257,7 @@ export async function runPtyAgentCommand(
     // host does not leak a /tmp/agentbean-codex-* dir on every codex dispatch.
     try { rmSync(dirname(outputPath), { recursive: true, force: true }); } catch { /* ignore */ }
     const detail = err instanceof Error ? err.message : String(err);
-    return ptyFailure(request, persistedCommand, startedAt, options.clock.now(),
+    return ptyFailure(request, cwd, persistedCommand, startedAt, options.clock.now(),
       `Codex 需要 PTY 运行时(node-pty)，当前环境不可用：${detail}`, '');
   }
 
@@ -278,7 +278,7 @@ export async function runPtyAgentCommand(
     } catch (err) {
       try { rmSync(dirname(outputPath), { recursive: true, force: true }); } catch { /* ignore */ }
       const detail = err instanceof Error ? err.message : String(err);
-      resolve(ptyFailure(request, persistedCommand, startedAt, options.clock.now(),
+      resolve(ptyFailure(request, cwd, persistedCommand, startedAt, options.clock.now(),
         `codex PTY 启动失败：${detail}`, output));
       return;
     }
@@ -296,7 +296,7 @@ export async function runPtyAgentCommand(
       // Clean up the temp output dir on timeout — onExit short-circuits on `finished` and would
       // otherwise skip its own rmSync, leaking /tmp/agentbean-codex-* on every timeout.
       try { rmSync(dirname(outputPath), { recursive: true, force: true }); } catch { /* ignore */ }
-      resolve(ptyFailure(request, persistedCommand, startedAt, options.clock.now(),
+      resolve(ptyFailure(request, cwd, persistedCommand, startedAt, options.clock.now(),
         `codex 超时（${timeoutMs}ms）`, output));
     }, timeoutMs);
     if (typeof timer.unref === 'function') timer.unref();
@@ -354,6 +354,7 @@ function logArtifact(requestId: string, output: string): DaemonDispatchResult['a
 
 function ptyFailure(
   request: DispatchRequestPayload,
+  cwd: string | undefined,
   command: string,
   startedAt: number,
   completedAt: number,
@@ -365,6 +366,7 @@ function ptyFailure(
     artifacts: output ? [logArtifact(request.id, output)] : [],
     workspaceRun: {
       status: 'failed',
+      cwd,
       command,
       exitCode: 1,
       startedAt,
