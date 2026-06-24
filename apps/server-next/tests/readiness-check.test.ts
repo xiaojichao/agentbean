@@ -50,6 +50,7 @@ describe('AgentBean Next readiness checker', () => {
       'cutover-audit-requires-canonical-daemon-latest',
       'members-list-agent-parity-regression',
       'daemon-next-register-batch-legacy-compatibility',
+      'daemon-onboarding-profile-lifecycle',
       'product-surface-parity-contracts',
       'parity-backfill-audit-status-table',
       'devices-parity-browser-smoke',

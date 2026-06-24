@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { agentBeanHome, authFile } from './profile-paths.js';
+import { agentBeanHome, authFile, profileRoot, sanitizeProfileId } from './profile-paths.js';
 
 export interface AuthData {
   token: string;
@@ -12,6 +12,10 @@ export interface AuthData {
 export interface AuthProfile extends AuthData {
   profileId: string;
 }
+
+export type RenameAuthProfileResult =
+  | { ok: true; profileId: string }
+  | { ok: false; error: string };
 
 export function loadAuth(options: { profileId?: string; baseDir?: string } = {}): AuthData | null {
   try {
@@ -50,6 +54,32 @@ export function clearAuth(options: { profileId?: string; baseDir?: string } = {}
   } catch {
     // ignore
   }
+}
+
+export function renameAuthProfile(options: {
+  fromProfileId: string;
+  toProfileId: string;
+  baseDir?: string;
+}): RenameAuthProfileResult {
+  const fromProfileId = sanitizeProfileId(options.fromProfileId);
+  const toProfileId = sanitizeProfileId(options.toProfileId);
+  if (fromProfileId === toProfileId) {
+    return { ok: false, error: `Profile "${fromProfileId}" is already named "${toProfileId}"` };
+  }
+  const source = loadAuth({ profileId: fromProfileId, baseDir: options.baseDir });
+  if (!source) {
+    return { ok: false, error: `Profile "${fromProfileId}" was not found` };
+  }
+  if (existsSync(profileRoot(toProfileId, options.baseDir))) {
+    return { ok: false, error: `Profile "${toProfileId}" already exists` };
+  }
+  saveAuth(source, { profileId: toProfileId, baseDir: options.baseDir });
+  const saved = loadAuth({ profileId: toProfileId, baseDir: options.baseDir });
+  if (!saved) {
+    return { ok: false, error: `Profile "${toProfileId}" could not be written` };
+  }
+  clearAuth({ profileId: fromProfileId, baseDir: options.baseDir });
+  return { ok: true, profileId: toProfileId };
 }
 
 export function listAuthProfiles(options: { baseDir?: string } = {}): AuthProfile[] {

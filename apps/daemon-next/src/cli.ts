@@ -9,7 +9,7 @@ import { collectSystemInfo, readDaemonVersion } from './system-info.js';
 import { createCommandExecutor } from './executor.js';
 import { createDaemonProtocolClient, createHttpEnvResolver, type DaemonDeviceConfig, type DaemonProtocolSocket, type DaemonScanSnapshot } from './index.js';
 import { loadYamlConfig } from './config.js';
-import { listAuthProfiles, loadAuth, saveAuth, type AuthData, type AuthProfile } from './auth-store.js';
+import { clearAuth, listAuthProfiles, loadAuth, renameAuthProfile, saveAuth, type AuthData, type AuthProfile } from './auth-store.js';
 import { sanitizeProfileId } from './profile-paths.js';
 import { loadOrCreateMachineId } from './machine-id.js';
 
@@ -43,6 +43,10 @@ export interface DaemonNextCliConfig {
    * opens a socket itself; each recursion opens its own.
    */
   allProfiles?: boolean;
+  listProfiles?: boolean;
+  clearProfileId?: string;
+  renameProfileFrom?: string;
+  renameProfileTo?: string;
 }
 
 export interface DaemonNextCliDeps {
@@ -50,6 +54,8 @@ export interface DaemonNextCliDeps {
   listAuthProfiles?: typeof listAuthProfiles;
   loadAuth?: typeof loadAuth;
   saveAuth?: typeof saveAuth;
+  clearAuth?: typeof clearAuth;
+  renameAuthProfile?: typeof renameAuthProfile;
   loadScanCache?: typeof loadScanCache;
   saveScanCache?: typeof saveScanCache;
   createScanProvider?: typeof createBuiltinScanProvider;
@@ -65,7 +71,7 @@ export interface DaemonNextCliDeps {
  * Boolean (value-less) CLI flags. parseArgs treats every other `--flag` as
  * `--flag value`, so these must be recognised and not consume the next arg.
  */
-const BOOLEAN_FLAGS = new Set(['all-profiles']);
+const BOOLEAN_FLAGS = new Set(['all-profiles', 'list-profiles']);
 
 export interface ParseDaemonNextCliConfigInput {
   argv?: string[];
@@ -91,6 +97,9 @@ export function parseDaemonNextCliConfig(input: ParseDaemonNextCliConfigInput = 
   const ownerId = args['owner-id'] ?? env.AGENTBEAN_NEXT_OWNER_ID ?? yamlString('ownerId');
   const inviteCode = args['invite-code'] ?? env.AGENTBEAN_NEXT_INVITE_CODE ?? yamlString('inviteCode');
   const serverUrl = args['server-url'] ?? env.AGENTBEAN_NEXT_SERVER_URL ?? yamlString('serverUrl');
+  const clearProfileId = args['clear-profile'] ? sanitizeProfileId(args['clear-profile']) : undefined;
+  const renameProfileFrom = args['rename-profile'] ? sanitizeProfileId(args['rename-profile']) : undefined;
+  const renameProfileTo = args['to-profile'] ? sanitizeProfileId(args['to-profile']) : undefined;
   // NOTE: credential sufficiency is validated at run time inside runDaemonNextCli
   // (see resolveDeviceCredentials) so that "start with only saved auth" works:
   // neither --invite-code nor --team-id/--owner-id is required when a profile
@@ -110,6 +119,10 @@ export function parseDaemonNextCliConfig(input: ParseDaemonNextCliConfigInput = 
     ...(configPath ? { configPath } : {}),
     ...(serverUrl ? { serverUrlExplicit: true } : {}),
     ...(booleanFlags['all-profiles'] ? { allProfiles: true } : {}),
+    ...(booleanFlags['list-profiles'] ? { listProfiles: true } : {}),
+    ...(clearProfileId ? { clearProfileId } : {}),
+    ...(renameProfileFrom ? { renameProfileFrom } : {}),
+    ...(renameProfileTo ? { renameProfileTo } : {}),
   };
 }
 
@@ -309,6 +322,8 @@ export async function runDaemonNextCli(
   const listAuthProfilesFn = deps.listAuthProfiles ?? listAuthProfiles;
   const loadAuthFn = deps.loadAuth ?? loadAuth;
   const saveAuthFn = deps.saveAuth ?? saveAuth;
+  const clearAuthFn = deps.clearAuth ?? clearAuth;
+  const renameAuthProfileFn = deps.renameAuthProfile ?? renameAuthProfile;
   const loadScanCacheFn = deps.loadScanCache ?? loadScanCache;
   const saveScanCacheFn = deps.saveScanCache ?? saveScanCache;
   const createScanProviderFn = deps.createScanProvider ?? createBuiltinScanProvider;
@@ -318,6 +333,40 @@ export async function runDaemonNextCli(
   const readDaemonVersionFn = deps.readDaemonVersion ?? readDaemonVersion;
   const createEnvResolver = deps.createEnvResolver ?? createHttpEnvResolver;
   const runDaemon = deps.runDaemon ?? runDaemonNextCli;
+
+  if (config.listProfiles) {
+    const profiles = listAuthProfilesFn();
+    if (profiles.length === 0) {
+      console.log('No saved AgentBean team profiles.');
+      return;
+    }
+    console.log('Saved AgentBean team profiles:');
+    for (const profile of profiles) {
+      console.log(`- ${profile.profileId} team=${profile.teamId} server=${profile.serverUrl}`);
+    }
+    return;
+  }
+
+  if (config.clearProfileId) {
+    clearAuthFn({ profileId: config.clearProfileId });
+    console.log(`Cleared AgentBean profile "${config.clearProfileId}".`);
+    return;
+  }
+
+  if (config.renameProfileFrom || config.renameProfileTo) {
+    if (!config.renameProfileFrom || !config.renameProfileTo) {
+      throw new Error('Both --rename-profile <from> and --to-profile <to> are required.');
+    }
+    const result = renameAuthProfileFn({
+      fromProfileId: config.renameProfileFrom,
+      toProfileId: config.renameProfileTo,
+    });
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    console.log(`Renamed AgentBean profile "${config.renameProfileFrom}" to "${result.profileId}".`);
+    return;
+  }
 
   // --all-profiles branch runs BEFORE connectSocketIoClient: it never opens a
   // socket itself, it just fans out one runDaemonNextCli recursion per saved
