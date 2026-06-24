@@ -380,31 +380,69 @@ function openclawRuntimeArgs(args: string[]): string[] {
   return args;
 }
 
+function splitOpenClawRuntimeArgs(args: string[]): { prefix: string[]; runtime: string[] } {
+  const first = args[0];
+  if (first !== undefined && first !== 'agent' && !first.startsWith('-')) {
+    return { prefix: [first], runtime: args.slice(1) };
+  }
+  return { prefix: [], runtime: args };
+}
+
+function isOpenClawTargetSelectorArg(arg: string): boolean {
+  return arg === '--agent'
+    || arg.startsWith('--agent=')
+    || arg === '--session-id'
+    || arg.startsWith('--session-id=')
+    || arg === '--session-key'
+    || arg.startsWith('--session-key=')
+    || arg === '--to'
+    || arg.startsWith('--to=')
+    || arg === '-t';
+}
+
 function hasOpenClawTargetSelector(args: string[]): boolean {
-  return args.includes('--agent')
-    || args.includes('--session-id')
-    || args.includes('--session-key')
-    || args.includes('--to')
-    || args.includes('-t');
+  return args.some(isOpenClawTargetSelectorArg);
+}
+
+function isOpenClawMessageArg(arg: string): boolean {
+  return arg === '--message'
+    || arg === '-m'
+    || arg.startsWith('--message=')
+    || arg === '--message-file'
+    || arg.startsWith('--message-file=');
+}
+
+function findOpenClawMessageArgIndex(args: string[]): number {
+  return args.findIndex(isOpenClawMessageArg);
+}
+
+function insertDefaultOpenClawTarget(args: string[]): string[] {
+  const agentIdx = args.indexOf('agent');
+  const messageIdx = findOpenClawMessageArgIndex(args);
+  const insertIdx = messageIdx >= 0 ? messageIdx : agentIdx + 1;
+  return [
+    ...args.slice(0, insertIdx),
+    '--agent',
+    'main',
+    ...args.slice(insertIdx),
+  ];
 }
 
 function buildOpenClawArgs(baseArgs: string[], prompt: string): string[] {
-  const runtime = openclawRuntimeArgs(baseArgs);
+  const { prefix, runtime } = splitOpenClawRuntimeArgs(openclawRuntimeArgs(baseArgs));
   const hasAgent = runtime.includes('agent');
-  const hasMessage = runtime.includes('--message') || runtime.includes('-m');
+  const hasMessage = runtime.some(isOpenClawMessageArg);
   const hasTarget = hasOpenClawTargetSelector(runtime);
   // OpenClaw one-shot agent turns need an `agent` subcommand plus a session selector. The
   // scanner supplies ['agent', '--agent', <id>]; honour operator config and only fill gaps.
   let args = runtime;
   if (!hasAgent) {
-    args = hasTarget ? [...args, 'agent'] : [...args, 'agent', '--agent', 'main'];
+    args = hasTarget ? ['agent', ...args] : ['agent', '--agent', 'main', ...args];
   } else if (!hasTarget) {
-    const messageIdx = args.findIndex((arg) => arg === '--message' || arg === '-m');
-    args = messageIdx >= 0
-      ? [...args.slice(0, messageIdx), '--agent', 'main', ...args.slice(messageIdx)]
-      : [...args, '--agent', 'main'];
+    args = insertDefaultOpenClawTarget(args);
   }
-  return hasMessage ? replaceOpenClawMessageArg(args, prompt) : [...args, '--message', prompt];
+  const messageArgs = hasMessage ? replaceOpenClawMessageArg(args, prompt) : [...args, '--message', prompt];
+  return [...prefix, ...messageArgs];
 }
 
 function replaceOpenClawMessageArg(args: string[], prompt: string): string[] {
@@ -415,9 +453,9 @@ function replaceOpenClawMessageArg(args: string[], prompt: string): string[] {
     if (arg === undefined) {
       continue;
     }
-    if (arg === '--message' || arg === '-m') {
+    if (arg === '--message' || arg === '-m' || arg === '--message-file') {
       if (!written) {
-        replaced.push(arg, prompt);
+        replaced.push('--message', prompt);
         written = true;
       }
       const nextArg = args[index + 1];
@@ -426,7 +464,7 @@ function replaceOpenClawMessageArg(args: string[], prompt: string): string[] {
       }
       continue;
     }
-    if (arg.startsWith('--message=')) {
+    if (arg.startsWith('--message=') || arg.startsWith('--message-file=')) {
       if (!written) {
         replaced.push('--message', prompt);
         written = true;

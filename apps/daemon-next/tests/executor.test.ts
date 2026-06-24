@@ -494,6 +494,90 @@ describe('daemon-next command executor', () => {
     expect(output.workspaceRun?.status).toBe('succeeded');
     expect(output.workspaceRun?.exitCode).toBe(0);
   });
+
+  test('normalizes openclaw custom args so agent options stay under the agent subcommand', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
+    const scriptPath = join(cwd, 'fake-openclaw.mjs');
+    writeFileSync(
+      scriptPath,
+      [
+        `const args = process.argv.slice(2);`,
+        `const mIdx = args.indexOf('--message');`,
+        `process.stdout.write(JSON.stringify({ args, message: mIdx >= 0 ? args[mIdx + 1] : null }));`,
+      ].join('\n'),
+    );
+
+    const executor = createCommandExecutor({ clock: createClock([1000, 1010, 2000, 2010, 3000, 3010]) });
+    const localOutput = await executor({
+      id: 'dispatch-local',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'local prompt',
+      customAgent: {
+        adapterKind: 'openclaw',
+        command: process.execPath,
+        args: [scriptPath, '--local'],
+        cwd,
+      },
+    });
+    const equalsOutput = await executor({
+      id: 'dispatch-equals',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-2',
+      agentId: 'agent-1',
+      requestId: 'request-2',
+      prompt: 'equals prompt',
+      customAgent: {
+        adapterKind: 'openclaw',
+        command: process.execPath,
+        args: [scriptPath, '--agent=ops', '--message=stale prompt'],
+        cwd,
+      },
+    });
+    const messageFileOutput = await executor({
+      id: 'dispatch-message-file',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-3',
+      agentId: 'agent-1',
+      requestId: 'request-3',
+      prompt: 'file prompt',
+      customAgent: {
+        adapterKind: 'openclaw',
+        command: process.execPath,
+        args: [scriptPath, '--session-key=agent:ops:incident-42', '--message-file', join(cwd, 'stale.md'), '--local'],
+        cwd,
+      },
+    });
+
+    if (typeof localOutput !== 'object' || typeof equalsOutput !== 'object' || typeof messageFileOutput !== 'object') {
+      throw new Error('expected structured command results');
+    }
+    const localRun = JSON.parse(localOutput.body) as { args: string[]; message: string };
+    const equalsRun = JSON.parse(equalsOutput.body) as { args: string[]; message: string };
+    const messageFileRun = JSON.parse(messageFileOutput.body) as { args: string[]; message: string };
+
+    expect(localRun.args).toEqual(['agent', '--agent', 'main', '--local', '--message', 'local prompt']);
+    expect(localRun.message).toBe('local prompt');
+    expect(equalsRun.args).toEqual(['agent', '--agent=ops', '--message', 'equals prompt']);
+    expect(equalsRun.args).not.toContain('--agent');
+    expect(equalsRun.args).not.toContain('main');
+    expect(equalsRun.message).toBe('equals prompt');
+    expect(messageFileRun.args).toEqual(['agent', '--session-key=agent:ops:incident-42', '--message', 'file prompt', '--local']);
+    expect(messageFileRun.args).not.toContain('--message-file');
+    expect(messageFileRun.message).toBe('file prompt');
+    expect(localOutput.workspaceRun?.command).toContain('fake-openclaw.mjs agent --agent main --local --message [message elided]');
+    expect(equalsOutput.workspaceRun?.command).toContain('fake-openclaw.mjs agent --agent=ops --message [message elided]');
+    expect(messageFileOutput.workspaceRun?.command).toContain('fake-openclaw.mjs agent --session-key=agent:ops:incident-42 --message [message elided] --local');
+    expect(equalsOutput.workspaceRun?.command).not.toContain('equals prompt');
+    expect(equalsOutput.workspaceRun?.command).not.toContain('stale prompt');
+    expect(messageFileOutput.workspaceRun?.command).not.toContain('file prompt');
+    expect(messageFileOutput.workspaceRun?.command).not.toContain('stale.md');
+  });
 });
 
 function createClock(values: number[]) {
