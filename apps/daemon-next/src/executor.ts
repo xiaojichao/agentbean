@@ -78,8 +78,12 @@ async function runCustomAgentCommand(
   // the generic stdin contract.
   const adapter = customAgent.adapterKind ? ARGV_MODE_ADAPTERS[customAgent.adapterKind] : undefined;
   const argvMode = adapter !== undefined;
+  // Adapters that read their prompt from stdin (e.g. claude-code -p) still want joined history,
+  // so the payload is shared; whether it lands on argv or stdin is decided by promptOnStdin.
+  const promptPayload = argvMode ? buildAdapterPrompt(request) : request.prompt;
+  const promptOnStdin = argvMode && adapter.promptOnStdin === true;
   const finalArgs = argvMode
-    ? adapter.buildArgs(customAgent.args ?? [], buildAdapterPrompt(request))
+    ? adapter.buildArgs(customAgent.args ?? [], promptPayload)
     : customAgent.args ?? [];
 
   return new Promise((resolve, reject) => {
@@ -201,9 +205,13 @@ async function runCustomAgentCommand(
       child.stdin.on('error', () => {
         // swallow
       });
-      // Argv-mode agents receive their prompt via argv (see ARGV_MODE_ADAPTERS); close stdin
-      // empty so the process never blocks on a pipe it does not read.
-      child.stdin.end(argvMode ? '' : (typeof request.prompt === 'string' ? request.prompt : ''));
+      // Argv-mode agents carry the prompt on argv, so stdin stays empty — unless the adapter
+      // opts into promptOnStdin (e.g. claude-code -p), in which case the joined-history payload
+      // is written to stdin and argv only carries flags. Generic agents write the raw prompt.
+      const stdinPayload = argvMode && !promptOnStdin
+        ? ''
+        : (typeof promptPayload === 'string' ? promptPayload : '');
+      child.stdin.end(stdinPayload);
     }
   });
 }
@@ -463,18 +471,40 @@ function redactOpenClawCommandArgs(args: string[]): string[] {
   return redacted;
 }
 
+function claudeCodeRuntimeArgs(args: string[]): string[] {
+  if (args[0] === 'gateway' && args[1] === 'run') {
+    return args.slice(2);
+  }
+  return args;
+}
+
+function buildClaudeCodeArgs(baseArgs: string[], _prompt: string): string[] {
+  const runtime = claudeCodeRuntimeArgs(baseArgs);
+  const hasPrint = runtime.includes('-p') || runtime.includes('--print');
+  // claude-code defaults to an interactive TUI; -p puts it in print (non-interactive) mode so it
+  // reads the prompt from stdin and exits after replying. The prompt itself travels on stdin
+  // (see promptOnStdin), so buildArgs only ensures the flag is present.
+  return hasPrint ? runtime : [...runtime, '-p'];
+}
+
 interface AgentAdapterSpec {
   // Build the one-shot argv from base args + prompt (prompt already includes joined history).
+  // For argv-mode adapters the prompt is placed on argv here; for promptOnStdin adapters the
+  // prompt travels on stdin and buildArgs only contributes flags/subcommand.
   buildArgs: (baseArgs: string[], prompt: string) => string[];
+  // When true, the joined-history prompt is written to stdin instead of argv. Optional; default
+  // false (argv-mode). claude-code uses this with `-p` (print mode reads stdin, exits on reply).
+  promptOnStdin?: boolean;
   // Redact the prompt-bearing args used for the persisted workspace-run command. Optional.
   redactCommandArgs?: (args: string[]) => string[];
   // Extract the reply from captured stdout. Optional; defaults to the generic stdout/exit rule.
   extractReply?: (stdout: string, code: number | null, stderr: string) => string;
 }
 
-// Argv-mode agents: interactive TUIs/REPLs that cannot take the prompt via stdin. Each entry
-// encodes the agent's one-shot invocation contract (prompt on argv). Unregistered adapterKinds
-// (codex, claude-code, gemini, kimi-cli) keep the generic stdin contract — audit pending.
+// Custom invocation contracts for agents that cannot use the generic stdin path. Argv-mode
+// adapters (hermes, openclaw) put the prompt on argv; stdin-mode adapters (claude-code) keep it
+// on stdin but inject a non-interactive flag. Unregistered adapterKinds (codex, gemini, kimi-cli)
+// keep the generic stdin contract — audit pending.
 const ARGV_MODE_ADAPTERS: Partial<Record<AdapterKind, AgentAdapterSpec>> = {
   hermes: {
     buildArgs: buildHermesArgs,
@@ -484,5 +514,9 @@ const ARGV_MODE_ADAPTERS: Partial<Record<AdapterKind, AgentAdapterSpec>> = {
   openclaw: {
     buildArgs: buildOpenClawArgs,
     redactCommandArgs: redactOpenClawCommandArgs,
+  },
+  'claude-code': {
+    buildArgs: buildClaudeCodeArgs,
+    promptOnStdin: true,
   },
 };
