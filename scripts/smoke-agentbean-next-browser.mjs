@@ -87,6 +87,10 @@ export async function runAgentBeanNextBrowserSmoke({
       suffix,
       timeoutMs,
     });
+    if (target.dataDir) {
+      promoteSmokeUserToAdmin({ dataDir: target.dataDir, userId: seededSession.session.user.id });
+      seededSession.session.user = { ...seededSession.session.user, role: 'admin' };
+    }
     cleanup.push(async () => {
       seededSession.socket.disconnect?.();
     });
@@ -101,7 +105,7 @@ export async function runAgentBeanNextBrowserSmoke({
     cleanup.push(chrome.close);
     checks.push(check('browser-chrome-ready', true, `Chrome DevTools is listening on ${chrome.debugUrl}`));
 
-    page = await openPage(chrome.debugUrl, browserEvents);
+    page = await openPage(chrome.debugUrl, browserEvents, timeoutMs);
     cleanup.push(page.close);
     await page.setViewport(DEFAULT_VIEWPORT);
     await page.addScriptOnNewDocument(`
@@ -479,6 +483,32 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       ),
     );
 
+    if (target.dataDir) {
+      const adminResult = await exerciseWebUiAdminDashboardBusinessSmoke({
+        page,
+        baseUrl: target.baseUrl,
+        dataDir: target.dataDir,
+        ioFactory,
+        suffix,
+        timeoutMs,
+      });
+      checks.push(
+        check(
+          'webui-admin-dashboard-business-flow',
+          true,
+          `Verified admin dashboard teams/users/devices/agents tabs and transferred device ${adminResult.deviceId} from ${adminResult.initialOwnerUsername} to ${adminResult.targetOwnerUsername}`,
+        ),
+      );
+    } else {
+      checks.push(
+        check(
+          'webui-admin-dashboard-business-flow',
+          true,
+          'Skipped admin dashboard browser flow for external target without local smoke database access',
+        ),
+      );
+    }
+
     await page.screenshot(artifacts.screenshot);
     checks.push(check('webui-final-screenshot', true, `Saved final screenshot: ${artifacts.screenshot}`));
 
@@ -573,6 +603,7 @@ async function startLocalServer({ suffix, skipBuild, timeoutMs, webEntry = 'prev
   });
   return {
     baseUrl,
+    dataDir,
     async close() {
       await stopProcess(server);
     },
@@ -2441,6 +2472,450 @@ async function waitForWebUiAgentMetricsPanel({ page, agentId, timeoutMs }) {
   );
 }
 
+export async function exerciseWebUiAdminDashboardBusinessSmoke({
+  page,
+  baseUrl,
+  dataDir,
+  ioFactory = loadSocketIoClient(),
+  suffix,
+  timeoutMs,
+}) {
+  if (!dataDir) {
+    throw new Error('WebUI admin dashboard smoke needs local dataDir access to seed a global admin');
+  }
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-32).toLowerCase();
+  const admin = await registerStandaloneWebUiAdmin({
+    baseUrl: root,
+    dataDir,
+    ioFactory,
+    username: `admin-dashboard-${safeSuffix}`,
+    teamName: `Admin Dashboard ${safeSuffix}`,
+    timeoutMs,
+  });
+  const adminSocket = admin.socket;
+  const adminSession = admin.session;
+  const networkPath = adminSession.team.path ?? adminSession.team.id;
+  let initialOwner;
+  let targetOwner;
+  let memberSocket;
+  let daemon;
+  try {
+    initialOwner = await registerJoinedWebUiMember({
+      baseUrl: root,
+      ownerSocket: adminSocket,
+      ioFactory,
+      username: `admin-owner-${safeSuffix}`,
+      teamName: `Unused Admin Owner ${safeSuffix}`,
+      timeoutMs,
+    });
+    targetOwner = await registerJoinedWebUiMember({
+      baseUrl: root,
+      ownerSocket: adminSocket,
+      ioFactory,
+      username: `admin-target-${safeSuffix}`,
+      teamName: `Unused Admin Target ${safeSuffix}`,
+      timeoutMs,
+    });
+    memberSocket = await connectSocket(ioFactory, new URL('/web', root).toString(), timeoutMs, {
+      auth: { token: initialOwner.session.token },
+    });
+    daemon = await connectSmokeDaemon({
+      baseUrl: root,
+      ioFactory,
+      session: initialOwner.session,
+      suffix: `admin-${safeSuffix}`,
+      timeoutMs,
+    });
+    const agentName = `admin-agent-${safeSuffix}`;
+    const agentAck = await emitAck(memberSocket, WEB_EVENTS.agent.create, {
+      userId: initialOwner.session.user.id,
+      teamId: adminSession.team.id,
+      deviceId: daemon.deviceId,
+      runtimeId: daemon.runtimeId,
+      name: agentName,
+      env: { AGENTBEAN_WEBUI_ADMIN_SMOKE: '1' },
+    }, timeoutMs);
+    const agentId = readNestedString(agentAck, ['agent', 'id']);
+    if (!agentId) {
+      throw new Error(`WebUI admin dashboard smoke could not create device agent: ${formatAck(agentAck)}`);
+    }
+
+    await seedWebUiAuthStorage({ page, session: adminSession });
+    await page.navigate(new URL(`/${networkPath}/dashboard`, root).toString());
+    await waitForWebUiAdminDashboard({ page, timeoutMs });
+    await waitForWebUiAdminTeam({ page, teamId: adminSession.team.id, timeoutMs });
+    await page.click('[data-smoke="admin-tab-users"]');
+    await waitForWebUiAdminUser({ page, userId: adminSession.user.id, username: adminSession.user.username, timeoutMs });
+    await waitForWebUiAdminUser({ page, userId: initialOwner.session.user.id, username: initialOwner.username, timeoutMs });
+    await waitForWebUiAdminUser({ page, userId: targetOwner.session.user.id, username: targetOwner.username, timeoutMs });
+
+    await page.click('[data-smoke="admin-tab-devices"]');
+    await waitForWebUiAdminDevice({
+      page,
+      deviceId: daemon.deviceId,
+      ownerId: initialOwner.session.user.id,
+      timeoutMs,
+    });
+    await clickWebUiAdminDevice({ page, deviceId: daemon.deviceId, timeoutMs });
+    await waitForWebUiAdminDeviceDetail({
+      page,
+      deviceId: daemon.deviceId,
+      ownerId: initialOwner.session.user.id,
+      timeoutMs,
+    });
+    await waitForWebUiAdminDeviceRuntime({ page, timeoutMs });
+    await waitForWebUiAdminDevicePublicAgent({ page, agentId, timeoutMs });
+    await page.setInputValue('[data-smoke="admin-device-owner-select"]', targetOwner.session.user.id);
+    await page.waitForFunction(
+      `
+      (() => {
+        const save = document.querySelector('[data-smoke="admin-device-owner-save"]');
+        const select = document.querySelector('[data-smoke="admin-device-owner-select"]');
+        return select?.value === ${JSON.stringify(targetOwner.session.user.id)}
+          && save
+          && !save.disabled;
+      })()
+      `,
+      'admin device owner transfer button to enable',
+      timeoutMs,
+    );
+    await page.click('[data-smoke="admin-device-owner-save"]');
+    await waitForWebUiAdminDeviceDetail({
+      page,
+      deviceId: daemon.deviceId,
+      ownerId: targetOwner.session.user.id,
+      timeoutMs,
+    });
+
+    await page.click('[data-smoke="admin-tab-devices"]');
+    await waitForWebUiAdminDevice({
+      page,
+      deviceId: daemon.deviceId,
+      ownerId: targetOwner.session.user.id,
+      timeoutMs,
+    });
+    await page.click('[data-smoke="admin-tab-agents"]');
+    await waitForWebUiAdminAgent({
+      page,
+      agentId,
+      ownerId: targetOwner.session.user.id,
+      deviceId: daemon.deviceId,
+      timeoutMs,
+    });
+    await clickWebUiAdminAgent({ page, agentId, timeoutMs });
+    await waitForWebUiAdminAgentDetail({
+      page,
+      agentId,
+      ownerId: targetOwner.session.user.id,
+      deviceId: daemon.deviceId,
+      timeoutMs,
+    });
+
+    return {
+      deviceId: daemon.deviceId,
+      agentId,
+      initialOwnerUsername: initialOwner.username,
+      targetOwnerUsername: targetOwner.username,
+    };
+  } finally {
+    daemon?.socket.disconnect?.();
+    memberSocket?.disconnect?.();
+    initialOwner?.socket.disconnect?.();
+    targetOwner?.socket.disconnect?.();
+    adminSocket.disconnect?.();
+  }
+}
+
+function promoteSmokeUserToAdmin({ dataDir, userId }) {
+  const Sqlite = loadBetterSqlite3();
+  const db = new Sqlite(join(dataDir, 'global.sqlite'));
+  try {
+    const result = db.prepare('UPDATE users SET role = ? WHERE id = ?').run('admin', userId);
+    if (result.changes !== 1) {
+      throw new Error(`Could not promote smoke user "${userId}" to admin`);
+    }
+  } finally {
+    db.close();
+  }
+}
+
+async function registerStandaloneWebUiAdmin({ baseUrl, dataDir, ioFactory, username, teamName, timeoutMs }) {
+  const bootstrapSocket = await connectSocket(ioFactory, new URL('/web', baseUrl).toString(), timeoutMs);
+  try {
+    const password = `secret-${username}`;
+    const registerAck = await emitAck(bootstrapSocket, WEB_EVENTS.auth.register, {
+      username,
+      password,
+      teamName,
+    }, timeoutMs);
+    if (
+      registerAck?.ok !== true ||
+      typeof registerAck.token !== 'string' ||
+      typeof registerAck.user?.id !== 'string' ||
+      typeof registerAck.currentTeam?.id !== 'string'
+    ) {
+      throw new Error(`WebUI admin dashboard smoke could not register standalone admin: ${formatAck(registerAck)}`);
+    }
+    promoteSmokeUserToAdmin({ dataDir, userId: registerAck.user.id });
+    bootstrapSocket.disconnect?.();
+    const loginSocket = await connectSocket(ioFactory, new URL('/web', baseUrl).toString(), timeoutMs);
+    const loginAck = await emitAck(loginSocket, WEB_EVENTS.auth.login, { username, password }, timeoutMs);
+    loginSocket.disconnect?.();
+    if (
+      loginAck?.ok !== true ||
+      typeof loginAck.token !== 'string' ||
+      typeof loginAck.user?.id !== 'string' ||
+      typeof loginAck.currentTeam?.id !== 'string'
+    ) {
+      throw new Error(`WebUI admin dashboard smoke could not login standalone admin: ${formatAck(loginAck)}`);
+    }
+    const adminSocket = await connectSocket(ioFactory, new URL('/web', baseUrl).toString(), timeoutMs, {
+      auth: { token: loginAck.token },
+    });
+    return {
+      socket: adminSocket,
+      username,
+      session: {
+        token: loginAck.token,
+        user: { ...loginAck.user, role: 'admin' },
+        team: loginAck.currentTeam,
+        channel: registerAck.defaultChannel ?? null,
+      },
+    };
+  } catch (error) {
+    bootstrapSocket.disconnect?.();
+    throw error;
+  }
+}
+
+function loadBetterSqlite3() {
+  const requireFromServerNext = createRequire(new URL('../apps/server-next/package.json', import.meta.url));
+  return requireFromServerNext('better-sqlite3');
+}
+
+async function registerJoinedWebUiMember({ baseUrl, ownerSocket, ioFactory, username, teamName, timeoutMs }) {
+  const joinSocket = await connectSocket(ioFactory, new URL('/web', baseUrl).toString(), timeoutMs);
+  try {
+    const linkAck = await emitAck(ownerSocket, WEB_EVENTS.join.create, { maxUses: 1 }, timeoutMs);
+    const joinCode = readNestedString(linkAck, ['link', 'code']);
+    if (!joinCode) {
+      throw new Error(`WebUI admin dashboard smoke could not create a join link: ${formatAck(linkAck)}`);
+    }
+    const password = `secret-${username}`;
+    const registerAck = await emitAck(joinSocket, WEB_EVENTS.auth.register, {
+      username,
+      password,
+      teamName,
+      joinCode,
+    }, timeoutMs);
+    if (
+      registerAck?.ok !== true ||
+      typeof registerAck.token !== 'string' ||
+      typeof registerAck.user?.id !== 'string' ||
+      typeof registerAck.currentTeam?.id !== 'string'
+    ) {
+      throw new Error(`WebUI admin dashboard smoke could not register joined member: ${formatAck(registerAck)}`);
+    }
+    return {
+      socket: joinSocket,
+      username,
+      session: {
+        token: registerAck.token,
+        user: registerAck.user,
+        team: registerAck.currentTeam,
+        channel: registerAck.defaultChannel ?? null,
+      },
+    };
+  } catch (error) {
+    joinSocket.disconnect?.();
+    throw error;
+  }
+}
+
+async function waitForWebUiAdminDashboard({ page, timeoutMs }) {
+  await page.waitForFunction(
+    `Boolean(document.querySelector('[data-smoke="admin-dashboard-page"]')) && !document.querySelector('[data-smoke="admin-dashboard-forbidden"]')`,
+    'admin dashboard page to render for global admin',
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiAdminTeam({ page, teamId, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const teamId = ${JSON.stringify(teamId)};
+      return Array.from(document.querySelectorAll('[data-smoke="admin-team-item"]'))
+        .some((candidate) => candidate.dataset.teamId === teamId);
+    })()
+    `,
+    `admin team "${teamId}" to render`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiAdminUser({ page, userId, username, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const userId = ${JSON.stringify(userId)};
+      const username = ${JSON.stringify(username)};
+      return Array.from(document.querySelectorAll('[data-smoke="admin-user-row"]'))
+        .some((candidate) =>
+          candidate.dataset.userId === userId
+          && (!username || candidate.dataset.username === username || candidate.textContent.includes(username))
+        );
+    })()
+    `,
+    `admin user "${username || userId}" to render`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiAdminDevice({ page, deviceId, ownerId, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const deviceId = ${JSON.stringify(deviceId)};
+      const ownerId = ${JSON.stringify(ownerId)};
+      return Array.from(document.querySelectorAll('[data-smoke="admin-device-row"]'))
+        .some((candidate) =>
+          candidate.dataset.deviceId === deviceId
+          && (!ownerId || candidate.dataset.ownerId === ownerId)
+        );
+    })()
+    `,
+    `admin device "${deviceId}" to render${ownerId ? ` with owner ${ownerId}` : ''}`,
+    timeoutMs,
+  );
+}
+
+async function clickWebUiAdminDevice({ page, deviceId, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const deviceId = ${JSON.stringify(deviceId)};
+      return Array.from(document.querySelectorAll('[data-smoke="admin-device-open"]'))
+        .some((candidate) => candidate.dataset.deviceId === deviceId);
+    })()
+    `,
+    `admin device "${deviceId}" open button to render`,
+    timeoutMs,
+  );
+  const clicked = await page.evaluateJson(`
+    (() => {
+      const deviceId = ${JSON.stringify(deviceId)};
+      const button = Array.from(document.querySelectorAll('[data-smoke="admin-device-open"]'))
+        .find((candidate) => candidate.dataset.deviceId === deviceId);
+      if (!button) return false;
+      button.click();
+      return true;
+    })()
+  `);
+  if (!clicked) {
+    throw new Error(`Could not open admin device "${deviceId}"`);
+  }
+}
+
+async function waitForWebUiAdminDeviceDetail({ page, deviceId, ownerId, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const detail = document.querySelector('[data-smoke="admin-device-detail"]');
+      return detail?.dataset.deviceId === ${JSON.stringify(deviceId)}
+        && (!${JSON.stringify(ownerId)} || detail.dataset.ownerId === ${JSON.stringify(ownerId)});
+    })()
+    `,
+    `admin device "${deviceId}" detail to render${ownerId ? ` with owner ${ownerId}` : ''}`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiAdminDeviceRuntime({ page, timeoutMs }) {
+  await page.waitForFunction(
+    `Array.from(document.querySelectorAll('[data-smoke="admin-device-runtime"]')).some((candidate) => candidate.dataset.runtimeInstalled === 'true')`,
+    'admin device detail to show an installed runtime',
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiAdminDevicePublicAgent({ page, agentId, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const agentId = ${JSON.stringify(agentId)};
+      return Array.from(document.querySelectorAll('[data-smoke="admin-device-public-agent"]'))
+        .some((candidate) => candidate.dataset.agentId === agentId);
+    })()
+    `,
+    `admin device detail public agent "${agentId}" to render`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiAdminAgent({ page, agentId, ownerId, deviceId, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const agentId = ${JSON.stringify(agentId)};
+      const ownerId = ${JSON.stringify(ownerId)};
+      const deviceId = ${JSON.stringify(deviceId)};
+      return Array.from(document.querySelectorAll('[data-smoke="admin-agent-row"]'))
+        .some((candidate) =>
+          candidate.dataset.agentId === agentId
+          && (!ownerId || candidate.dataset.ownerId === ownerId)
+          && (!deviceId || candidate.dataset.deviceId === deviceId)
+        );
+    })()
+    `,
+    `admin agent "${agentId}" to render`,
+    timeoutMs,
+  );
+}
+
+async function clickWebUiAdminAgent({ page, agentId, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const agentId = ${JSON.stringify(agentId)};
+      return Array.from(document.querySelectorAll('[data-smoke="admin-agent-open"]'))
+        .some((candidate) => candidate.dataset.agentId === agentId);
+    })()
+    `,
+    `admin agent "${agentId}" open button to render`,
+    timeoutMs,
+  );
+  const clicked = await page.evaluateJson(`
+    (() => {
+      const agentId = ${JSON.stringify(agentId)};
+      const button = Array.from(document.querySelectorAll('[data-smoke="admin-agent-open"]'))
+        .find((candidate) => candidate.dataset.agentId === agentId);
+      if (!button) return false;
+      button.click();
+      return true;
+    })()
+  `);
+  if (!clicked) {
+    throw new Error(`Could not open admin agent "${agentId}"`);
+  }
+}
+
+async function waitForWebUiAdminAgentDetail({ page, agentId, ownerId, deviceId, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const detail = document.querySelector('[data-smoke="admin-agent-detail"]');
+      return detail?.dataset.agentId === ${JSON.stringify(agentId)}
+        && (!${JSON.stringify(ownerId)} || detail.dataset.ownerId === ${JSON.stringify(ownerId)})
+        && (!${JSON.stringify(deviceId)} || detail.dataset.deviceId === ${JSON.stringify(deviceId)});
+    })()
+    `,
+    `admin agent "${agentId}" detail to render`,
+    timeoutMs,
+  );
+}
+
 async function connectSmokeDaemon({ baseUrl, ioFactory, session, suffix, timeoutMs, dispatchResultFactory }) {
   const socket = await connectSocket(ioFactory, new URL('/agent', baseUrl).toString(), timeoutMs);
   socket.on(AGENT_EVENTS.dispatch.request, (request) => {
@@ -2694,19 +3169,19 @@ async function launchChrome({ chromeBin, artifactsDir, headed, timeoutMs }) {
   };
 }
 
-async function openPage(debugUrl, events) {
+async function openPage(debugUrl, events, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const target = await fetchJson(`${debugUrl}/json/new?about:blank`, { method: 'PUT' });
   if (!target.webSocketDebuggerUrl) {
     throw new Error(`Chrome did not create a debuggable page: ${JSON.stringify(target)}`);
   }
-  const cdp = await connectCdp(target.webSocketDebuggerUrl, events);
+  const cdp = await connectCdp(target.webSocketDebuggerUrl, events, timeoutMs);
   await cdp.send('Page.enable');
   await cdp.send('Runtime.enable');
   await cdp.send('Log.enable');
   return cdp;
 }
 
-async function connectCdp(webSocketUrl, events) {
+async function connectCdp(webSocketUrl, events, defaultTimeoutMs = DEFAULT_TIMEOUT_MS) {
   const WebSocketCtor = globalThis.WebSocket;
   if (!WebSocketCtor) {
     throw new Error('This Node.js runtime does not provide global WebSocket; use Node 22+');
@@ -2767,7 +3242,7 @@ async function connectCdp(webSocketUrl, events) {
     rejectPending(new Error('Chrome DevTools WebSocket errored'));
   });
 
-  const send = (method, params = {}, timeoutMs = DEFAULT_TIMEOUT_MS) => new Promise((resolve, reject) => {
+  const send = (method, params = {}, timeoutMs = defaultTimeoutMs) => new Promise((resolve, reject) => {
     if (closedError) {
       reject(closedError);
       return;
@@ -2821,13 +3296,13 @@ async function connectCdp(webSocketUrl, events) {
 
   return {
     async navigate(url) {
-      const navigation = this.waitForEvent('Page.frameNavigated', (params) => !params.frame.parentId, DEFAULT_TIMEOUT_MS);
+      const navigation = this.waitForEvent('Page.frameNavigated', (params) => !params.frame.parentId, 1_000).catch(() => undefined);
       await send('Page.navigate', { url });
       await navigation;
       await this.waitForFunction('document.readyState === "complete"', 'page load', DEFAULT_TIMEOUT_MS);
     },
     async reload() {
-      const navigation = this.waitForEvent('Page.frameNavigated', (params) => !params.frame.parentId, DEFAULT_TIMEOUT_MS);
+      const navigation = this.waitForEvent('Page.frameNavigated', (params) => !params.frame.parentId, 1_000).catch(() => undefined);
       await send('Page.reload', { ignoreCache: true });
       await navigation;
       await this.waitForFunction('document.readyState === "complete"', 'page reload', DEFAULT_TIMEOUT_MS);
@@ -2860,14 +3335,20 @@ async function connectCdp(webSocketUrl, events) {
     },
     async waitForFunction(expression, description, timeoutMs) {
       const startedAt = Date.now();
+      let lastError;
       while (Date.now() - startedAt < timeoutMs) {
-        const passed = await this.evaluateJson(`Boolean(${expression})`);
-        if (passed) {
-          return;
+        try {
+          const passed = await this.evaluateJson(`Boolean(${expression})`);
+          if (passed) {
+            return;
+          }
+        } catch (error) {
+          lastError = error;
         }
         await sleep(100);
       }
-      throw new Error(`Timed out waiting for ${description}`);
+      const suffix = lastError instanceof Error ? ` after ${lastError.message}` : '';
+      throw new Error(`Timed out waiting for ${description}${suffix}`);
     },
     async waitForText(selector, text, timeoutMs) {
       await this.waitForFunction(

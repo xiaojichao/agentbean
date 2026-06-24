@@ -5,9 +5,9 @@
 ## 核对时间
 
 - 日期：2026-06-24
-- 基线：`origin/main` = `ff042b4`（PR #349 已合并）
+- 基线：`origin/main` = `068be68`（PR #351 已合并）
 - GitHub 状态：以当前 PR/Actions 为准；本表只记录 parity 证据状态。
-- 最新 main CI/CD：PR #349 合并后的 main run `28103084241` 已成功，包含 Validate web/server/daemon/AgentBean Next、Deploy production、Publish agent to npm 与 AgentBean Next production smoke；后续 main 提交需继续按 Actions truth 核对。
+- 最新 main CI/CD：PR #351 合并后的 main run `28106924652` 已成功，包含 Validate web/server/daemon/AgentBean Next、Deploy production、Publish agent to npm 与 AgentBean Next production smoke；后续 main 提交需继续按 Actions truth 核对。
 
 ## 状态定义
 
@@ -29,22 +29,22 @@
 | `tasks` | Green | task create、status update、reorder、delete/list disappearance 与 refresh restore 已进入 App Router `webui-task-business-flow`；server/usecase 侧已有 delete/reorder 的可见性、已删除任务、无效 sortOrder 与 wrong-team 边界；readiness gate 保护 `tasks-parity-browser-smoke` 与稳定 selector。 | 后续只按新增需求补：typed assignee 深化、task 自动生成、更丰富 task 产品流。 |
 | `runs` | Yellow | workspace run list/detail/refresh restore、source message jump、full log artifact、artifact tree 与 inline log search 已进入 App Router smoke。 | 复杂 team-wide workspace explorer、分段日志存储/检索、更完整运行专页布局仍未冻结。 |
 | `settings` / `networks` | Green | account tab 当前用户身份与 logout 入口、browser preferences 持久化/刷新恢复/reset、team rename、join link create/revoke/refresh restore、team create/switch/delete/fallback restore 已进入 App Router smoke；readiness gate 保护 `settings-parity-browser-smoke` 与稳定 selector；SQLite delete cascade 已有回归。 | 后续只按新增需求补：change password/profile 编辑、更完整 invite management、rollback/old target drill。 |
-| `dashboard` / `admin` | Yellow | `admin:list-teams/users/devices/agents` 与 `admin:transfer-device-owner` 已回填 socket/usecase 回归和 readiness gate；dashboard 页面已迁入。 | 更完整 admin/metrics/audit 产品面未冻结，仍缺浏览器级 admin 操作证据与 audit requirements。 |
+| `dashboard` / `admin` | Green | `admin:list-teams/users/devices/agents` 与 `admin:transfer-device-owner` 已回填 socket/usecase 回归；App Router `webui-admin-dashboard-business-flow` 覆盖 global admin 入口、teams/users/devices/agents tab、设备详情 runtime/public agent 投影、owner transfer 与 Agent owner projection；readiness gate 保护 `admin-dashboard-parity-regression` 与 `admin-dashboard-parity-browser-smoke`。 | 后续只按新增需求补：更完整 admin audit trail、批量删除/恢复、metrics drilldown。 |
 | `daemon onboarding` | Yellow | npm canonical daemon 已切到 daemon-next；device invite、CLI token persistence、多 profile/YAML、scan summary、scanner parity、CLI wiring tests 与 production smoke 已有证据。 | auth token refresh/renewal、profile delete/rename CLI、formal reconnect guarantees 仍未冻结。 |
 
 ## 下一条 backfill slice
 
-暂不推进 `runs`；在该入口冻结期间，优先做 `dashboard` / `admin`。原因：
+暂不推进 `runs`；在该入口冻结期间，优先做 `daemon onboarding`。原因：
 
 1. `runs` 入口仍是 Yellow，但本轮明确先放一边；已有 list/detail/refresh restore、full log artifact、artifact tree、inline log search 与 source message jump 的 browser smoke 暂时不继续扩展。
-2. `settings` / `networks` 已补 account、browser preferences、team rename、join link 与 team lifecycle 的入口级证据，可以先标 Green。
-3. `dashboard` / `admin` 仍是 Yellow，虽然已有 socket/usecase/readiness 证据，但缺少浏览器级 admin 操作证据与 audit requirements，是绕开 runs 后风险最高的下一块。
+2. `dashboard` / `admin` 已补浏览器级 admin tab、device detail、owner transfer 与 agent owner projection 证据，可以先标 Green。
+3. `daemon onboarding` 仍是 Yellow，虽然已有 npm canonical、invite、CLI token、profile/YAML、scan summary、scanner parity 与 production smoke 证据，但 auth token refresh/renewal、profile delete/rename CLI 与 formal reconnect guarantees 仍未冻结。
 
 最小 slice：
 
-1. 盘点 dashboard/admin 入口现有证据，把 list teams/users/devices/agents、transfer owner、delete admin resources 与 audit requirements 按入口级 checklist 汇总。
+1. 盘点 daemon onboarding 入口现有证据，把 invite wait/complete、profile persistence、CLI token refresh、scan summary、reconnect 与 npm latest truth 按入口级 checklist 汇总。
 2. 先补缺口最小、用户风险最高的 regression 或 browser smoke；如果现有测试已覆盖，就把证据写进本 audit 与 `verification-matrix.md` 并加 readiness/static gate。
-3. 避免把 admin socket/usecase 单测误当成完整 dashboard/admin 产品面 parity。
+3. 避免把 daemon scanner 单测或 npm publish 成功误当成完整 onboarding/reconnect parity。
 
 ## 维护规则
 
