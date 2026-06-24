@@ -169,9 +169,16 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.agent.create, app, 'createCustomAgent', (payload, result) =>
     options.afterAgentMutation?.(payload, result), { authenticatedUser: options.authenticatedUser },
   );
-  bind(socket, WEB_EVENTS.agent.publish, app, 'publishAgent', (payload, result) =>
-    options.afterAgentMutation?.(payload, result), { authenticatedUser: options.authenticatedUser },
-  );
+  socket.on(WEB_EVENTS.agent.publish, async (payload, ack) => {
+    try {
+      const input = await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser });
+      const result = await app.publishAgent(input as Parameters<ServerNextUseCases['publishAgent']>[0]);
+      ack?.(result);
+      await options.afterAgentMutation?.(withChannelTeamIds(input, [payloadString(input, 'targetTeamId')]), result);
+    } catch (error) {
+      ack?.(socketErrorAck(error, WEB_EVENTS.agent.publish));
+    }
+  });
   socket.on(WEB_EVENTS.agent.unpublish, async (payload, ack) => {
     try {
       const input = await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser });

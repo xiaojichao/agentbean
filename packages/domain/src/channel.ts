@@ -64,8 +64,10 @@ export function canApplyChannelUpdate(
   return changedFields.length > 0 && changedFields.every((field) => field === 'title');
 }
 
+export const DEFAULT_CHANNEL_NAME = 'all';
+
 export function isDefaultChannel(channel: Pick<ChannelControlInput, 'name'>): boolean {
-  return channel.name === 'all';
+  return channel.name === DEFAULT_CHANNEL_NAME;
 }
 
 function uniqueMembers(memberIds: string[]): string[] {

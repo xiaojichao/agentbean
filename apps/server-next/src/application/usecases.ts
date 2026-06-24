@@ -1609,6 +1609,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           kind: discovered.gatewayInstanceKey ? 'agentos-gateway' : 'agentos-concrete',
           timestamp: now,
         });
+        await ensureDefaultChannelMembership(repositories, clock, {
+          teamId: discoveredInput.teamId,
+          agentId: agent.id,
+        });
         agents.push(agent);
       }
 
@@ -1673,6 +1677,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         env: agentInput.env,
         lastSeenAt: now,
       });
+      await ensureDefaultChannelMembership(repositories, clock, { teamId: agentInput.teamId, agentId: agent.id });
 
       return makeSuccess({ agent: toPublicAgent(agent) });
     },
@@ -1700,6 +1705,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!agent) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
+      await ensureDefaultChannelMembership(repositories, clock, {
+        teamId: agentInput.targetTeamId,
+        agentId: agent.id,
+      });
       return makeSuccess({ agent: toPublicAgent(agent) });
     },
 
@@ -2147,6 +2156,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     async registerAgent(agentInput) {
       const agent = await repositories.agents.upsert(agentInput);
+      for (const teamId of agent.visibleTeamIds) {
+        await ensureDefaultChannelMembership(repositories, clock, { teamId, agentId: agent.id });
+      }
       return makeSuccess({ agent });
     },
 
@@ -3046,6 +3058,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       await repositories.teams.removeMember({
         teamId: removeInput.teamId,
         userId: removeInput.targetUserId,
+      });
+      await repositories.channels.removeHumanFromTeamChannels({
+        teamId: removeInput.teamId,
+        userId: removeInput.targetUserId,
+        timestamp: clock.now(),
       });
       return makeSuccess({ userId: removeInput.targetUserId });
     },
@@ -4020,6 +4037,24 @@ async function consumeJoinCodeForUser(
   return joinTeamFromLink(repositories, clock, usable.link, user);
 }
 
+// Every team has a default public channel `#all`. Team membership and channel
+// membership live in separate tables, so any entry point that brings a human or
+// agent into a team must mirror that membership into `#all`. The repository
+// performs append-style writes (SQLite: INSERT OR IGNORE) to avoid replacing
+// another concurrent join's membership set.
+async function ensureDefaultChannelMembership(
+  repositories: ServerNextRepositories,
+  clock: ServerNextClock,
+  input: { teamId: string; humanId?: string; agentId?: string },
+): Promise<void> {
+  await repositories.channels.addDefaultChannelMembers({
+    teamId: input.teamId,
+    humanMemberIds: input.humanId ? [input.humanId] : undefined,
+    agentMemberIds: input.agentId ? [input.agentId] : undefined,
+    timestamp: clock.now(),
+  });
+}
+
 async function joinTeamFromLink(
   repositories: ServerNextRepositories,
   clock: ServerNextClock,
@@ -4039,6 +4074,7 @@ async function joinTeamFromLink(
       role: 'member',
       joinedAt: clock.now(),
     });
+    await ensureDefaultChannelMembership(repositories, clock, { teamId: link.teamId, humanId: user.id });
     const consumed = await repositories.joinLinks.incrementUses(link.code);
     if (!consumed) {
       return makeFailure('INVITE_INVALID', 'Join link is invalid');

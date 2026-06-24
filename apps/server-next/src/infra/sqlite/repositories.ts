@@ -19,7 +19,7 @@ import type {
   UserRecord,
   WorkspaceRunRecord,
 } from '../../application/repositories.js';
-import { rankMessageSearch, splitSearchTerms } from '../../../../../packages/domain/src/index.js';
+import { DEFAULT_CHANNEL_NAME, rankMessageSearch, splitSearchTerms } from '../../../../../packages/domain/src/index.js';
 
 export interface SqliteStatement {
   run(...params: unknown[]): unknown;
@@ -497,6 +497,21 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       async getById(channelId) {
         return mapChannel(teamDb, teamDb.prepare('SELECT * FROM channels WHERE id = ?').get(channelId));
       },
+      async getDefaultChannel(teamId) {
+        return mapChannel(
+          teamDb,
+          teamDb
+            .prepare(
+              `SELECT * FROM channels
+               WHERE team_id = ?
+               AND kind = 'channel'
+               AND name = ?
+               AND archived_at IS NULL
+               LIMIT 1`,
+            )
+            .get(teamId, DEFAULT_CHANNEL_NAME),
+        );
+      },
       async getDirectByAgent(input) {
         return mapChannel(
           teamDb,
@@ -558,6 +573,29 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             return channel;
           });
       },
+      async addDefaultChannelMembers(input) {
+        const defaultChannel = await this.getDefaultChannel(input.teamId);
+        if (!defaultChannel) {
+          return null;
+        }
+        for (const userId of input.humanMemberIds ?? []) {
+          teamDb
+            .prepare(
+              `INSERT OR IGNORE INTO channel_human_members (channel_id, user_id, role, joined_at)
+               VALUES (?, ?, ?, ?)`,
+            )
+            .run(defaultChannel.id, userId, 'member', input.timestamp);
+        }
+        for (const agentId of input.agentMemberIds ?? []) {
+          teamDb
+            .prepare(
+              `INSERT OR IGNORE INTO channel_agent_members (channel_id, agent_id, joined_at)
+               VALUES (?, ?, ?)`,
+            )
+            .run(defaultChannel.id, agentId, input.timestamp);
+        }
+        return mapChannel(teamDb, teamDb.prepare('SELECT * FROM channels WHERE id = ?').get(defaultChannel.id));
+      },
       async update(input) {
         const existing = mapChannel(teamDb, teamDb.prepare('SELECT * FROM channels WHERE id = ?').get(input.channelId));
         if (!existing) {
@@ -606,6 +644,15 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
              AND channel_id IN (SELECT id FROM channels WHERE team_id = ?)`,
           )
           .run(input.agentId, input.teamId);
+      },
+      async removeHumanFromTeamChannels(input) {
+        teamDb
+          .prepare(
+            `DELETE FROM channel_human_members
+             WHERE user_id = ?
+             AND channel_id IN (SELECT id FROM channels WHERE team_id = ?)`,
+          )
+          .run(input.userId, input.teamId);
       },
       async archive(input) {
         const existing = mapChannel(teamDb, teamDb.prepare('SELECT * FROM channels WHERE id = ?').get(input.channelId));

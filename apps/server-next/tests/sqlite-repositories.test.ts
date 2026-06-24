@@ -374,6 +374,33 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('channels.getDefaultChannel resolves the team default #all channel via SQLite', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 500 },
+        ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'channel-ops']) },
+      });
+
+      await app.registerUser({ username: 'Shaw', password: 'secret', teamName: 'AgentBean' });
+      await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'ops', visibility: 'private' });
+
+      // The default public #all channel is returned, not the private ops channel.
+      await expect(repositories.channels.getDefaultChannel('team-1')).resolves.toMatchObject({
+        id: 'channel-1',
+        teamId: 'team-1',
+        name: 'all',
+        visibility: 'public',
+      });
+      // A team without a default channel resolves to null instead of throwing.
+      await expect(repositories.channels.getDefaultChannel('missing-team')).resolves.toBeNull();
+    } finally {
+      close();
+    }
+  });
+
   test('persists register, login, message, and dispatch use cases with SQLite', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
@@ -427,6 +454,21 @@ describe('server-next SQLite repositories', () => {
         teamId: 'team-1',
         userId: 'user-2',
         username: 'teammate',
+        role: 'member',
+        joinedAt: 500,
+      });
+      await repositories.users.create({
+        id: 'user-3',
+        username: 'second-teammate',
+        role: 'user',
+        passwordHash: 'unused',
+        createdAt: 500,
+        updatedAt: 500,
+      });
+      await repositories.teams.addMember({
+        teamId: 'team-1',
+        userId: 'user-3',
+        username: 'second-teammate',
         role: 'member',
         joinedAt: 500,
       });
@@ -620,6 +662,41 @@ describe('server-next SQLite repositories', () => {
         ],
         agents: [{ id: 'agent-1', name: 'Codex', status: 'online' }],
       });
+      await repositories.channels.addDefaultChannelMembers({
+        teamId: 'team-1',
+        humanMemberIds: ['user-2'],
+        timestamp: 600,
+      });
+      await repositories.channels.addDefaultChannelMembers({
+        teamId: 'team-1',
+        humanMemberIds: ['user-3'],
+        agentMemberIds: ['agent-1'],
+        timestamp: 601,
+      });
+      expect(
+        teamDb
+          .prepare('SELECT user_id AS userId FROM channel_human_members WHERE channel_id = ? ORDER BY user_id')
+          .all('channel-1'),
+      ).toEqual([
+        { userId: 'user-1' },
+        { userId: 'user-2' },
+        { userId: 'user-3' },
+      ]);
+      expect(
+        teamDb
+          .prepare('SELECT agent_id AS agentId FROM channel_agent_members WHERE channel_id = ? ORDER BY agent_id')
+          .all('channel-1'),
+      ).toEqual([{ agentId: 'agent-1' }]);
+      await repositories.channels.removeHumanFromTeamChannels({
+        teamId: 'team-1',
+        userId: 'user-2',
+        timestamp: 602,
+      });
+      expect(
+        teamDb
+          .prepare('SELECT user_id AS userId FROM channel_human_members WHERE user_id = ? ORDER BY channel_id')
+          .all('user-2'),
+      ).toEqual([]);
       await app.removeChannelHumanMember({
         userId: 'user-1',
         teamId: 'team-1',
