@@ -103,14 +103,14 @@ describe('AgentBean Next browser smoke script', () => {
       async navigate(url: string) {
         calls.push(['navigate', url]);
       },
-      async waitForFunction(expression: string, description: string) {
-        calls.push(['waitForFunction', { expression, description }]);
-      },
       async setInputValue(selector: string, value: string) {
         calls.push(['setInputValue', { selector, value }]);
       },
       async click(selector: string) {
         calls.push(['click', selector]);
+      },
+      async waitForFunction(expression: string, description: string) {
+        calls.push(['waitForFunction', { expression, description }]);
       },
       async reload() {
         calls.push(['reload', undefined]);
@@ -583,6 +583,12 @@ describe('AgentBean Next browser smoke script', () => {
       async navigate(url: string) {
         calls.push(['navigate', url]);
       },
+      async setInputValue(selector: string, value: string) {
+        calls.push(['setInputValue', { selector, value }]);
+      },
+      async click(selector: string) {
+        calls.push(['click', selector]);
+      },
       async waitForFunction(expression: string, description: string) {
         calls.push(['waitForFunction', { expression, description }]);
       },
@@ -630,14 +636,26 @@ describe('AgentBean Next browser smoke script', () => {
 
     expect(result).toEqual({
       agentId: 'agent-1',
-      agentName: 'WebUIAgentgentssmoke',
+      agentName: 'WebUIAgentgentssmokeCfg',
       targetTeamId: 'team-2',
       targetTeamName: 'WebUI Agent Target agents-smoke',
       dispatchId: 'dispatch-1',
+      deleted: true,
     });
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/agents']);
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/agents/agent-1']);
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/agents/metrics']);
+    expect(calls).toContainEqual(['click', '[data-smoke="agent-config-open"]']);
+    expect(calls).toContainEqual(['setInputValue', { selector: '[data-smoke="agent-config-name"]', value: 'WebUIAgentgentssmokeCfg' }]);
+    expect(calls).toContainEqual([
+      'setInputValue',
+      { selector: '[data-smoke="agent-config-description"]', value: 'Updated by AgentBean Next WebUI agents parity smoke' },
+    ]);
+    expect(calls).toContainEqual(['setInputValue', { selector: '[data-smoke="agent-config-command"]', value: 'codex' }]);
+    expect(calls).toContainEqual(['setInputValue', { selector: '[data-smoke="agent-config-cwd"]', value: '/tmp/agentbean-next-agents-smoke' }]);
+    expect(calls).toContainEqual(['click', '[data-smoke="agent-config-save"]']);
+    expect(calls).toContainEqual(['click', '[data-smoke="agent-delete-open"]']);
+    expect(calls).toContainEqual(['click', '[data-smoke="agent-delete-confirm"]']);
     expect(webSocketCalls).toContainEqual(['agents:subscribe', { userId: 'user-1', teamId: 'team-1' }]);
     expect(webSocketCalls).toContainEqual([
       'agent:create',
@@ -651,8 +669,11 @@ describe('AgentBean Next browser smoke script', () => {
     );
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-list-item'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-detail'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-config-dialog'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-publish-toggle'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-metrics-panel'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-delete-dialog'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-list-page'))).toBe(true);
     const evaluateJsonCalls = calls.filter((call): call is ['evaluateJson', string] => call[0] === 'evaluateJson');
     expect(evaluateJsonCalls).toHaveLength(2);
     expect(evaluateJsonCalls.every((call) => call[1].includes('agent-publish-toggle'))).toBe(true);

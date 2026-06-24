@@ -28,6 +28,8 @@ export function collectAgentBeanNextReadinessChecks({
   const webNextDashboardPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/dashboard/page.tsx'), 'utf8');
   const webNextChatPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/chat/page.tsx'), 'utf8');
   const webNextDevicesPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/devices/page.tsx'), 'utf8');
+  const webNextAgentsPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/agents/page.tsx'), 'utf8');
+  const webNextAgentDetailPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/agents/[agentId]/page.tsx'), 'utf8');
   const browserSmokeScript = readFileSync(join(root, 'scripts/smoke-agentbean-next-browser.mjs'), 'utf8');
   const legacyAgentNamespace = readFileSync(join(root, 'apps/server/src/namespaces/agent.ts'), 'utf8');
   const legacyWebNamespaceTests = readFileSync(join(root, 'apps/server/tests/web-namespace.test.ts'), 'utf8');
@@ -404,9 +406,10 @@ export function collectAgentBeanNextReadinessChecks({
       parityBackfillAudit.includes('## 入口审计') &&
         parityBackfillAudit.includes('| `members` | Green |') &&
         parityBackfillAudit.includes('| `devices` | Green |') &&
+        parityBackfillAudit.includes('| `agents` | Green |') &&
         parityBackfillAudit.includes('| `channels` / `channel members` | Green |') &&
         parityBackfillAudit.includes('## 下一条 backfill slice') &&
-        parityBackfillAudit.includes('优先做 `agents`'),
+        parityBackfillAudit.includes('优先做 `tasks`'),
       'AgentBean Next parity backfill audit must keep a Red/Yellow/Green product-entry status table and the next recommended slice',
     ),
     check(
@@ -425,6 +428,23 @@ export function collectAgentBeanNextReadinessChecks({
         verificationMatrix.includes('webui-devices-business-flow') &&
         parityBackfillAudit.includes('| `devices` | Green |'),
       'Device parity must stay covered by an App Router browser smoke for detail runtime/custom-agent projection, targeted scan AgentOS projection, rename refresh restore, and delete redirect',
+    ),
+    check(
+      'agents-parity-browser-smoke',
+      browserSmokeScript.includes('webui-agents-business-flow') &&
+        browserSmokeScript.includes('agent-config-open') &&
+        browserSmokeScript.includes('agent-config-save') &&
+        browserSmokeScript.includes('agent-delete-confirm') &&
+        browserSmokeScript.includes('agent-list-page') &&
+        browserSmokeScript.includes('agent-publish-toggle') &&
+        browserSmokeScript.includes('agent-metrics-panel') &&
+        webNextAgentsPage.includes('data-smoke="agent-list-page"') &&
+        webNextAgentDetailPage.includes('data-smoke="agent-config-open"') &&
+        webNextAgentDetailPage.includes('data-smoke="agent-config-save"') &&
+        webNextAgentDetailPage.includes('data-smoke="agent-delete-confirm"') &&
+        verificationMatrix.includes('webui-agents-business-flow') &&
+        parityBackfillAudit.includes('| `agents` | Green |'),
+      'Agent parity must stay covered by an App Router browser smoke for list/detail, config update, publish/unpublish, metrics, and delete/list disappearance',
     ),
     check(
       'channel-members-parity-browser-smoke',

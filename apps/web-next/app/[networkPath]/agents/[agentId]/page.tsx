@@ -1,24 +1,36 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, AlertTriangle, Copy, Check, Globe, Lock, Monitor, Terminal, User } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, Copy, Check, Globe, Lock, Monitor, Settings, Terminal, Trash2, User, X } from 'lucide-react';
 import { agentEvents, fetchAgentWorkspace } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { AgentStatusBadge } from '@/components/agent-status-badge';
 import { formatRelative } from '@/lib/format-time';
-import type { AgentWorkspaceRun } from '@/lib/schema';
+import type { AgentSnapshot, AgentWorkspaceRun } from '@/lib/schema';
 import { AgentWorkspaceSection } from '@/components/agent-workspace-section';
 
 export default function AgentDetailPage() {
   const params = useParams<{ networkPath: string; agentId: string }>();
+  const router = useRouter();
   const agent = useAgentBeanStore((s) => s.agents[params.agentId] ?? null);
+  const agentMap = useAgentBeanStore((s) => s.agents);
   const setAgents = useAgentBeanStore((s) => s.applyAgentsSnapshot);
   const upsert = useAgentBeanStore((s) => s.applyAgentStatus);
   const np = useCurrentNetworkPath();
   const [publishing, setPublishing] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configError, setConfigError] = useState('');
+  const [configName, setConfigName] = useState('');
+  const [configDescription, setConfigDescription] = useState('');
+  const [configCommand, setConfigCommand] = useState('');
+  const [configCwd, setConfigCwd] = useState('');
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteSaving, setDeleteSaving] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
   const teams = useAgentBeanStore((s) => s.teams);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const routeNetworkPath = typeof params.networkPath === 'string' ? params.networkPath : np;
@@ -72,6 +84,73 @@ export default function AgentDetailPage() {
     }
   };
 
+  const openConfig = () => {
+    if (!agent) return;
+    setConfigName(agent.name ?? '');
+    setConfigDescription(agent.description ?? '');
+    setConfigCommand(agent.command ?? '');
+    setConfigCwd(agent.cwd ?? '');
+    setConfigError('');
+    setConfigOpen(true);
+  };
+
+  const handleSaveConfig = async () => {
+    if (!agent || configSaving) return;
+    const name = configName.trim();
+    if (!name) {
+      setConfigError('名称为必填项');
+      return;
+    }
+    if (/\s/.test(name)) {
+      setConfigError('名称不能包含空格，请使用连字符（-）');
+      return;
+    }
+    const isCustom = agent.source === 'custom';
+    setConfigSaving(true);
+    setConfigError('');
+    const res = await agentEvents().updateConfig({
+      id: agent.id,
+      teamId: agentTeamId,
+      name,
+      adapterKind: agent.adapterKind,
+      description: configDescription.trim() || null,
+      ...(isCustom ? {
+        command: configCommand.trim() || agent.command || 'codex',
+        cwd: configCwd.trim() || null,
+      } : {}),
+    });
+    setConfigSaving(false);
+    if (res.ok) {
+      upsert(res.agent ?? {
+        ...agent,
+        name,
+        description: configDescription.trim() || undefined,
+        ...(isCustom ? {
+          command: configCommand.trim() || agent.command,
+          cwd: configCwd.trim() || undefined,
+        } : {}),
+      });
+      setConfigOpen(false);
+      return;
+    }
+    setConfigError(res.error === 'NAME_HAS_SPACE' ? '名称不能包含空格，请使用连字符（-）' : res.error ?? '保存失败');
+  };
+
+  const handleDeleteAgent = async () => {
+    if (!agent || deleteSaving || agent.source !== 'custom') return;
+    setDeleteSaving(true);
+    setDeleteError('');
+    const res = await agentEvents().delete(agent.id, agentTeamId);
+    setDeleteSaving(false);
+    if (res.ok) {
+      setAgents(Object.values(agentMap).filter((candidate) => candidate.id !== agent.id));
+      setDeleteOpen(false);
+      router.replace(`/${routeNetworkPath || np}/agents`);
+      return;
+    }
+    setDeleteError(res.error ?? '删除失败');
+  };
+
   const handleCopyCommand = () => {
     if (!agent?.connectCommand) return;
     navigator.clipboard.writeText(agent.connectCommand);
@@ -97,6 +176,8 @@ export default function AgentDetailPage() {
     'agentos-hosted': 'AgentOS 托管',
     'executor-hosted': '自定义 Agent',
   };
+  const canConfigureAgent = agent.source === 'custom' || agent.category === 'agentos-hosted';
+  const canDeleteAgent = agent.source === 'custom';
 
   return (
     <div className="space-y-4 p-6" data-smoke="agent-detail" data-agent-id={agent.id} data-agent-name={agent.name}>
@@ -104,7 +185,7 @@ export default function AgentDetailPage() {
         <ArrowLeft className="mr-1 h-4 w-4" />返回 Agent 列表
       </Link>
 
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
             <div className="text-xl font-semibold">{agent.name}</div>
@@ -116,7 +197,31 @@ export default function AgentDetailPage() {
           </div>
           <div className="text-sm text-neutral-500">{agent.role || '未填写角色'}</div>
         </div>
-        <AgentStatusBadge status={agent.status} />
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+          {canConfigureAgent && (
+            <button
+              type="button"
+              onClick={openConfig}
+              data-smoke="agent-config-open"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 px-2.5 text-sm text-neutral-700 hover:bg-neutral-50"
+            >
+              <Settings size={14} />
+              编辑配置
+            </button>
+          )}
+          {canDeleteAgent && (
+            <button
+              type="button"
+              onClick={() => { setDeleteError(''); setDeleteOpen(true); }}
+              data-smoke="agent-delete-open"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-rose-200 px-2.5 text-sm text-rose-700 hover:bg-rose-50"
+            >
+              <Trash2 size={14} />
+              删除
+            </button>
+          )}
+          <AgentStatusBadge status={agent.status} />
+        </div>
       </div>
 
       {/* 团队发布 */}
@@ -291,6 +396,169 @@ export default function AgentDetailPage() {
           复制该命令到本机终端，即可启动这个 Agent 的本地客户端。
         </div>
       </section>
+
+      {configOpen && (
+        <AgentConfigDialog
+          agent={agent}
+          name={configName}
+          description={configDescription}
+          command={configCommand}
+          cwd={configCwd}
+          saving={configSaving}
+          error={configError}
+          onNameChange={setConfigName}
+          onDescriptionChange={setConfigDescription}
+          onCommandChange={setConfigCommand}
+          onCwdChange={setConfigCwd}
+          onCancel={() => setConfigOpen(false)}
+          onSave={handleSaveConfig}
+        />
+      )}
+
+      {deleteOpen && (
+        <DeleteAgentDialog
+          agent={agent}
+          saving={deleteSaving}
+          error={deleteError}
+          onCancel={() => setDeleteOpen(false)}
+          onConfirm={handleDeleteAgent}
+        />
+      )}
+    </div>
+  );
+}
+
+function AgentConfigDialog({
+  agent,
+  name,
+  description,
+  command,
+  cwd,
+  saving,
+  error,
+  onNameChange,
+  onDescriptionChange,
+  onCommandChange,
+  onCwdChange,
+  onCancel,
+  onSave,
+}: {
+  agent: AgentSnapshot;
+  name: string;
+  description: string;
+  command: string;
+  cwd: string;
+  saving: boolean;
+  error: string;
+  onNameChange(value: string): void;
+  onDescriptionChange(value: string): void;
+  onCommandChange(value: string): void;
+  onCwdChange(value: string): void;
+  onCancel(): void;
+  onSave(): void;
+}) {
+  const isCustom = agent.source === 'custom';
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onCancel}>
+      <div className="mx-4 w-full max-w-lg rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()} data-smoke="agent-config-dialog">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">{isCustom ? '自定义 Agent 配置' : 'AgentOS Agent 配置'}</h2>
+          <button type="button" onClick={onCancel} className="rounded-md p-1 hover:bg-neutral-100" aria-label="关闭配置">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="mt-4 space-y-3">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600" htmlFor="agent-config-name">名称</label>
+            <input
+              id="agent-config-name"
+              value={name}
+              onChange={(event) => onNameChange(event.target.value)}
+              data-smoke="agent-config-name"
+              className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400"
+            />
+            <p className="mt-1 text-[11px] text-neutral-400">名称不能包含空格，可使用连字符（-）。</p>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600" htmlFor="agent-config-description">功能介绍</label>
+            <textarea
+              id="agent-config-description"
+              value={description}
+              onChange={(event) => onDescriptionChange(event.target.value)}
+              data-smoke="agent-config-description"
+              rows={3}
+              className="w-full resize-none rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400"
+              placeholder="描述这个 Agent 的用途和能力"
+            />
+          </div>
+          {isCustom && (
+            <>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-neutral-600" htmlFor="agent-config-command">命令</label>
+                <input
+                  id="agent-config-command"
+                  value={command}
+                  onChange={(event) => onCommandChange(event.target.value)}
+                  data-smoke="agent-config-command"
+                  className="w-full rounded-md border border-neutral-200 px-3 py-1.5 font-mono text-sm outline-none focus:border-neutral-400"
+                  placeholder="codex"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-neutral-600" htmlFor="agent-config-cwd">项目目录</label>
+                <input
+                  id="agent-config-cwd"
+                  value={cwd}
+                  onChange={(event) => onCwdChange(event.target.value)}
+                  data-smoke="agent-config-cwd"
+                  className="w-full rounded-md border border-neutral-200 px-3 py-1.5 font-mono text-sm outline-none focus:border-neutral-400"
+                  placeholder="/path/to/project（可选）"
+                />
+              </div>
+            </>
+          )}
+        </div>
+        {error && <p className="mt-3 text-sm text-red-600" data-smoke="agent-config-error">{error}</p>}
+        <div className="mt-6 flex justify-end gap-2">
+          <button type="button" onClick={onCancel} disabled={saving} className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-50 disabled:opacity-50">取消</button>
+          <button type="button" onClick={onSave} disabled={saving} data-smoke="agent-config-save" className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white hover:bg-neutral-800 disabled:opacity-50">
+            {saving ? '保存中...' : '保存'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeleteAgentDialog({ agent, saving, error, onCancel, onConfirm }: {
+  agent: AgentSnapshot;
+  saving: boolean;
+  error: string;
+  onCancel(): void;
+  onConfirm(): void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onCancel}>
+      <div className="mx-4 w-full max-w-md rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()} data-smoke="agent-delete-dialog">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-rose-50 text-rose-600">
+            <Trash2 size={18} />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold text-neutral-950">删除 {agent.name}</h2>
+            <p className="mt-2 text-sm leading-6 text-neutral-600">
+              这会删除自定义 Agent 配置，并从已发布团队和频道成员中移除；不会删除设备本身。
+            </p>
+          </div>
+        </div>
+        {error && <div className="mt-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700" data-smoke="agent-delete-error">{error}</div>}
+        <div className="mt-6 flex justify-end gap-2">
+          <button type="button" onClick={onCancel} disabled={saving} className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-50 disabled:opacity-50">取消</button>
+          <button type="button" onClick={onConfirm} disabled={saving} data-smoke="agent-delete-confirm" className="rounded-md bg-rose-600 px-4 py-2 text-sm text-white hover:bg-rose-700 disabled:opacity-50">
+            {saving ? '删除中...' : '确认删除'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
