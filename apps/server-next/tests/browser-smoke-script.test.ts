@@ -333,7 +333,7 @@ describe('AgentBean Next browser smoke script', () => {
     expect(evaluateJsonCalls.filter((call) => call[1].includes('team-switch'))).toHaveLength(1);
   });
 
-  test('exercises WebUI task create, status update, and refresh restore', async () => {
+  test('exercises WebUI task create, reorder, delete, status update, and refresh restore', async () => {
     const { exerciseWebUiTaskBusinessSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];
     const page = {
@@ -373,12 +373,18 @@ describe('AgentBean Next browser smoke script', () => {
     expect(result).toEqual({
       title: 'WebUI smoke task task-smoke',
       status: 'in_progress',
+      reordered: true,
+      deletedTitle: 'WebUI smoke task secondary task-smoke',
     });
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/tasks']);
     expect(calls).toContainEqual(['click', '[data-smoke="tasks-create-open"]']);
     expect(calls).toContainEqual([
       'setInputValue',
       { selector: '[data-smoke="tasks-create-title"]', value: 'WebUI smoke task task-smoke' },
+    ]);
+    expect(calls).toContainEqual([
+      'setInputValue',
+      { selector: '[data-smoke="tasks-create-title"]', value: 'WebUI smoke task secondary task-smoke' },
     ]);
     expect(calls).toContainEqual(['click', '[data-smoke="tasks-create-submit"]']);
     expect(calls).toContainEqual(['click', '[data-smoke="task-status-option-in_progress"]']);
@@ -388,7 +394,12 @@ describe('AgentBean Next browser smoke script', () => {
     );
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('tasks-create-form'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('WebUI smoke task task-smoke'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('WebUI smoke task secondary task-smoke'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('taskSortOrder'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('in_progress'))).toBe(true);
+    const evaluateJsonCalls = calls.filter((call): call is ['evaluateJson', string] => call[0] === 'evaluateJson');
+    expect(evaluateJsonCalls.some((call) => call[1].includes('task-reorder-top'))).toBe(true);
+    expect(evaluateJsonCalls.some((call) => call[1].includes('task-delete'))).toBe(true);
   });
 
   test('exercises WebUI workspace run detail with full log artifact and source message link', async () => {

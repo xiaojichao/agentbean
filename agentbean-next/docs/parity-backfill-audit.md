@@ -5,9 +5,9 @@
 ## 核对时间
 
 - 日期：2026-06-24
-- 基线：`origin/main` = `3af3107`（#341 之后的 main，含 daemon adapter 后续修复）
+- 基线：`origin/main` = `ff90352`（PR #348 已合并）
 - GitHub 状态：以当前 PR/Actions 为准；本表只记录 parity 证据状态。
-- 最新 main CI/CD：#341 合并后的 main run `28016639898` 已成功，包含 Validate web/server/daemon/AgentBean Next、Deploy production、Publish agent to npm 与 AgentBean Next production smoke；后续 main 提交需继续按 Actions truth 核对。
+- 最新 main CI/CD：PR #348 合并后的 main run `28078762078` 已成功，包含 Validate web/server/daemon/AgentBean Next、Deploy production、Publish agent to npm 与 AgentBean Next production smoke；后续 main 提交需继续按 Actions truth 核对。
 
 ## 状态定义
 
@@ -26,7 +26,7 @@
 | `agents` | Green | custom agent create、list/detail、config update、publish/unpublish、metrics dispatch 与 delete/list disappearance 已进入 App Router `webui-agents-business-flow`；server/usecase 侧已有 config envKeys、delete tombstone、metrics request/ack 与 daemon-next scanned-agent dispatch 证据；readiness gate 保护 `agents-parity-browser-smoke` 与稳定 selector。 | 后续只按新增需求补：更完整 admin/audit 产品面、advanced metrics drilldown、批量 publication 管理。 |
 | `chat` | Green | message send、session restore、dispatch status/cancel、thread reply、artifact upload/viewer、workspace run source message 与 App Router chat send/refresh restore 均已有测试或 browser smoke。 | 更完整 saved/reactions/search UI 仍按各自入口继续补，不阻塞 chat 主入口。 |
 | `channels` / `channel members` | Green | channel create/archive/list disappearance、channel creator controls、private channel visibility、`channel:members` usecase 与 subscription broadcast 已有测试；App Router `webui-channel-members-business-flow` 覆盖 private channel 创建、频道成员弹窗、creator 添加 human member、添加 agent member、移除 human member、`channel:members` projection、private visibility 回收与 mention scope；readiness gate 保护该 browser smoke 与稳定 selectors。 | 后续只按新增需求补：更完整频道成员 profile/edit、批量成员管理、频道级 audit trail。 |
-| `tasks` | Yellow | task create/status update/refresh restore 已进入 browser smoke；delete/reorder 协议与 usecase 第一版已收敛。 | typed assignee、task 自动生成、更完整 task page、delete/reorder 的 App Router browser path 仍需后续切片。 |
+| `tasks` | Green | task create、status update、reorder、delete/list disappearance 与 refresh restore 已进入 App Router `webui-task-business-flow`；server/usecase 侧已有 delete/reorder 的可见性、已删除任务、无效 sortOrder 与 wrong-team 边界；readiness gate 保护 `tasks-parity-browser-smoke` 与稳定 selector。 | 后续只按新增需求补：typed assignee 深化、task 自动生成、更丰富 task 产品流。 |
 | `runs` | Yellow | workspace run list/detail/refresh restore、source message jump、full log artifact、artifact tree 与 inline log search 已进入 App Router smoke。 | 复杂 team-wide workspace explorer、分段日志存储/检索、更完整运行专页布局仍未冻结。 |
 | `settings` / `networks` | Yellow | team rename、join link create/revoke、team create/switch/delete/fallback restore 已进入 App Router smoke；SQLite delete cascade 已有回归。 | account settings（change password/profile）、invite management 更完整 UX、rollback/old target drill 仍按后续产品或运维切片补。 |
 | `dashboard` / `admin` | Yellow | `admin:list-teams/users/devices/agents` 与 `admin:transfer-device-owner` 已回填 socket/usecase 回归和 readiness gate；dashboard 页面已迁入。 | 更完整 admin/metrics/audit 产品面未冻结，仍缺浏览器级 admin 操作证据与 audit requirements。 |
@@ -34,17 +34,17 @@
 
 ## 下一条 backfill slice
 
-优先做 `tasks`。原因：
+优先做 `runs`。原因：
 
-1. `tasks` 入口仍是 Yellow，目前 browser smoke 只覆盖 create、status update 与 refresh restore。
-2. delete/reorder 协议与 usecase 已有第一版，但还没有 App Router browser-level 闭环证据。
-3. agents 入口已经用 browser smoke 证明 list/detail/config/publish/metrics/delete，下一条应继续把任务页的旧版长尾行为从“代码存在”推进到“入口级证据存在”。
+1. `runs` 入口仍是 Yellow，已有 list/detail/refresh restore、full log artifact、artifact tree、inline log search 与 source message jump 的 browser smoke。
+2. team-wide workspace explorer、分段日志存储/检索与更完整运行专页布局仍未冻结。
+3. tasks 入口已经用 browser smoke 证明 create/status/reorder/delete/refresh restore，下一条应继续把运行记录入口的长尾行为从“局部证据”推进到“入口级证据清单”。
 
 最小 slice：
 
-1. 盘点现有 tasks 入口证据，把 create/status/delete/reorder/assignee/refresh restore 按入口级 checklist 汇总。
-2. 先补 delete/reorder 的最小 regression 或 browser smoke；如果现有测试已覆盖，就把证据写进本 audit 与 `verification-matrix.md` 并加 readiness/static gate。
-3. 避免把 `task:create` 或 usecase 单测误当成完整任务页 parity。
+1. 盘点现有 runs 入口证据，把 list/detail/source-message/full-log/artifact-tree/search/team-wide explorer 按入口级 checklist 汇总。
+2. 先补缺口最小、用户风险最高的 regression 或 browser smoke；如果现有测试已覆盖，就把证据写进本 audit 与 `verification-matrix.md` 并加 readiness/static gate。
+3. 避免把 workspace run API 或 artifact 单测误当成完整运行记录页 parity。
 
 ## 维护规则
 

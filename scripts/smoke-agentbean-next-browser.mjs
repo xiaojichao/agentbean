@@ -393,7 +393,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       check(
         'webui-task-business-flow',
         true,
-        `Created task "${taskResult.title}", moved it to ${taskResult.status}, and restored it after refresh`,
+        `Created task "${taskResult.title}", reordered it, moved it to ${taskResult.status}, deleted "${taskResult.deletedTitle}", and restored after refresh`,
       ),
     );
 
@@ -1250,6 +1250,7 @@ export async function exerciseWebUiTaskBusinessSmoke({
   const root = normalizeBaseUrlOrThrow(baseUrl);
   const networkPath = session.team.path ?? session.team.id;
   const title = `WebUI smoke task ${suffix}`;
+  const secondaryTitle = `WebUI smoke task secondary ${suffix}`;
   const description = `Created by WebUI smoke ${suffix}`;
   const targetStatus = 'in_progress';
   await page.navigate(new URL(`/${networkPath}/tasks`, root).toString());
@@ -1258,17 +1259,13 @@ export async function exerciseWebUiTaskBusinessSmoke({
     'tasks page exposes the create task control',
     timeoutMs,
   );
-  await page.click('[data-smoke="tasks-create-open"]');
-  await page.waitForFunction(
-    `document.querySelector('[data-smoke="tasks-create-form"]') !== null`,
-    'tasks create form opens',
-    timeoutMs,
-  );
-  await page.setInputValue('[data-smoke="tasks-create-title"]', title);
-  await page.setInputValue('[data-smoke="tasks-create-description"]', description);
-  await page.setInputValue('[data-smoke="tasks-create-tags"]', 'smoke, webui');
-  await page.click('[data-smoke="tasks-create-submit"]');
+  await createWebUiTask({ page, title, description, timeoutMs });
   await waitForWebUiTaskCard({ page, title, status: 'todo', timeoutMs });
+  await createWebUiTask({ page, title: secondaryTitle, description: `${description} secondary`, timeoutMs });
+  await waitForWebUiTaskCard({ page, title: secondaryTitle, status: 'todo', timeoutMs });
+
+  await clickWebUiTaskAction({ page, title, selector: '[data-smoke="task-reorder-top"]', description: 'move task to top' });
+  await waitForWebUiTaskOrder({ page, firstTitle: title, secondTitle: secondaryTitle, timeoutMs });
 
   const clickedStatusTrigger = await page.evaluateJson(`
     (() => {
@@ -1287,9 +1284,26 @@ export async function exerciseWebUiTaskBusinessSmoke({
   await page.click(`[data-smoke="task-status-option-${targetStatus}"]`);
   await waitForWebUiTaskCard({ page, title, status: targetStatus, timeoutMs });
 
+  await clickWebUiTaskAction({ page, title: secondaryTitle, selector: '[data-smoke="task-delete"]', description: 'delete secondary task' });
+  await waitForWebUiTaskAbsent({ page, title: secondaryTitle, timeoutMs });
+
   await page.reload();
   await waitForWebUiTaskCard({ page, title, status: targetStatus, timeoutMs });
-  return { title, status: targetStatus };
+  await waitForWebUiTaskAbsent({ page, title: secondaryTitle, timeoutMs });
+  return { title, status: targetStatus, reordered: true, deletedTitle: secondaryTitle };
+}
+
+async function createWebUiTask({ page, title, description, timeoutMs }) {
+  await page.click('[data-smoke="tasks-create-open"]');
+  await page.waitForFunction(
+    `document.querySelector('[data-smoke="tasks-create-form"]') !== null`,
+    'tasks create form opens',
+    timeoutMs,
+  );
+  await page.setInputValue('[data-smoke="tasks-create-title"]', title);
+  await page.setInputValue('[data-smoke="tasks-create-description"]', description);
+  await page.setInputValue('[data-smoke="tasks-create-tags"]', 'smoke, webui');
+  await page.click('[data-smoke="tasks-create-submit"]');
 }
 
 async function waitForWebUiTaskCard({ page, title, status, timeoutMs }) {
@@ -1308,6 +1322,59 @@ async function waitForWebUiTaskCard({ page, title, status, timeoutMs }) {
     `task "${title}" to render${status ? ` with status ${status}` : ''}`,
     timeoutMs,
   );
+}
+
+async function waitForWebUiTaskAbsent({ page, title, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const title = ${JSON.stringify(title)};
+      return !Array.from(document.querySelectorAll('[data-smoke="task-card"], [data-smoke="task-row"]'))
+        .some((candidate) => candidate.dataset.taskTitle === title);
+    })()
+    `,
+    `task "${title}" to disappear`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiTaskOrder({ page, firstTitle, secondTitle, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const firstTitle = ${JSON.stringify(firstTitle)};
+      const secondTitle = ${JSON.stringify(secondTitle)};
+      const items = Array.from(document.querySelectorAll('[data-smoke="task-card"], [data-smoke="task-row"]'))
+        .filter((candidate) => candidate.dataset.taskStatus === 'todo');
+      const firstIndex = items.findIndex((candidate) => candidate.dataset.taskTitle === firstTitle);
+      const secondIndex = items.findIndex((candidate) => candidate.dataset.taskTitle === secondTitle);
+      if (firstIndex < 0 || secondIndex < 0) return false;
+      const firstSort = Number(items[firstIndex].dataset.taskSortOrder);
+      const secondSort = Number(items[secondIndex].dataset.taskSortOrder);
+      return firstIndex < secondIndex && Number.isFinite(firstSort) && Number.isFinite(secondSort) && firstSort < secondSort;
+    })()
+    `,
+    `task "${firstTitle}" to render above "${secondTitle}" after reorder`,
+    timeoutMs,
+  );
+}
+
+async function clickWebUiTaskAction({ page, title, selector, description }) {
+  const clicked = await page.evaluateJson(`
+    (() => {
+      const title = ${JSON.stringify(title)};
+      const selector = ${JSON.stringify(selector)};
+      const item = Array.from(document.querySelectorAll('[data-smoke="task-card"], [data-smoke="task-row"]'))
+        .find((candidate) => candidate.dataset.taskTitle === title);
+      const action = item?.querySelector(selector);
+      if (!action) return false;
+      action.click();
+      return true;
+    })()
+  `);
+  if (!clicked) {
+    throw new Error(`Could not ${description} for WebUI smoke task "${title}"`);
+  }
 }
 
 export async function exerciseWebUiRunsBusinessSmoke({

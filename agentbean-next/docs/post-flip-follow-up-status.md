@@ -26,7 +26,7 @@
 - Message search 第一版。
   - `message:search` 使用 server-side simple DB search，只返回当前用户可见普通 channels 的结果；preview 右侧工作区已有轻量搜索表单。
 - Tasks 第一版。
-  - `task:list`、`task:create` 与 `task:update` 使用 server-side task model；assignee 第一版支持 team human member 或当前 team 可见 agent；preview 右侧工作区已有轻量任务入口；browser smoke 已覆盖 task create/status update/refresh restore。
+  - `task:list`、`task:create` 与 `task:update` 使用 server-side task model；assignee 第一版支持 team human member 或当前 team 可见 agent；preview 右侧工作区已有轻量任务入口；browser smoke 已覆盖 task create/status update/reorder/delete/refresh restore。
 - Team/join/device invite 第一版。
   - `team:create`、`team:switch`、`join:create`、`join:validate`、`device-invite:create`、`device-invite:wait`、`device-invite:complete` 已有 contracts、use cases 与 tests。
   - `join:list` 与 `join:revoke` 的协议层（contracts 常量 + server-next handler + usecase + memory/sqlite repository）已由 #267 进入主线；web-next 客户端绑定与 invite management UI 仍在后续 P2。
@@ -44,11 +44,11 @@
 - Saved messages 与 reactions 第一版。
   - `message:react`、`message:save` 与 `message:list-saved` 已由 server-side repository 持久化；apps/web 的 chat/tasks surface 已接入 socket-backed optimistic update，保留 local cache 只作为界面恢复兜底。
 - Task delete/reorder 第一版。
-  - `task:delete` 与 `task:reorder` 已进入 contracts、server-next use cases/repositories 与 apps/web payload adapter；server 侧覆盖可见性、已删除任务与无效 sortOrder 边界。
+  - `task:delete` 与 `task:reorder` 已进入 contracts、server-next use cases/repositories 与 apps/web payload adapter；server 侧覆盖可见性、已删除任务与无效 sortOrder 边界；App Router 任务入口已通过 browser smoke 覆盖排序与删除后列表消失。
 - Member role management 第一版。
   - `member:update-role`、`member:remove` 与 `member:transfer-owner` 已进入 socket/usecase/web detail surface；owner/admin 边界、admin 不能管理其他 admin、自我管理保护与 owner transfer 均有回归测试。
 - 真正浏览器级 E2E 第一版。
-  - `npm run smoke:agentbean-next-browser` 已覆盖真实 Chrome 登录/session restore、刷新重订阅、custom agent 创建、message dispatch、agent reply、artifact upload/viewer 与 task create/status update/refresh restore，并在 CI 上传截图/console artifacts。
+  - `npm run smoke:agentbean-next-browser` 已覆盖真实 Chrome 登录/session restore、刷新重订阅、custom agent 创建、message dispatch、agent reply、artifact upload/viewer 与 task create/status update/reorder/delete/refresh restore，并在 CI 上传截图/console artifacts。
 
 ## 仍需补齐的边界
 
@@ -94,11 +94,11 @@ P0 baseline 已经收敛，不应继续作为下一条产品切片 blocker。
 
 ### P2：后续产品 parity
 
-- 旧 `apps/web` App Router 页面树已在第七十一切片迁入 `apps/web-next/app`，并且 `npm run build:web-next` 可以同时构建 socket client package 与 Next app。`server-next` 生产式 `PORT` 启动默认 `webEntry=app`，`/preview` 保留为诊断入口；第一版 WebUI browser smoke 已覆盖 4 个公开页面与 7 个登录后业务页面，并在 `/runs` 抓到/修复旧 `/api/teams/default/workspace-runs` 403；后续加深的 business smoke 已覆盖 `chat` 发送/刷新恢复、`channels` 创建/归档/列表消失、`networks` 团队创建/切换/删除/恢复原团队、`tasks` 创建/状态更新/刷新恢复、canonical `dispatch:result.workspaceRun` 产出的 `runs` 列表/详情/刷新恢复、`members` 的 join/role update/刷新恢复、`devices` 的 list/detail、runtime 投影、自定义 Agent 投影、targeted scan 后 AgentOS 托管 Agent 投影、rename/refresh restore 与 delete redirect/list disappearance、`settings` 的 team rename、join link create/revoke 与刷新恢复，以及 `agents` 的 custom agent create、list/detail、config update、publish/unpublish、metrics 与 delete/list disappearance。剩余风险从“页面文件未迁入/生产入口仍托管 preview shell”收窄为“更完整 admin/audit、workspace explorer、日志检索与长尾 UI parity”。
+- 旧 `apps/web` App Router 页面树已在第七十一切片迁入 `apps/web-next/app`，并且 `npm run build:web-next` 可以同时构建 socket client package 与 Next app。`server-next` 生产式 `PORT` 启动默认 `webEntry=app`，`/preview` 保留为诊断入口；第一版 WebUI browser smoke 已覆盖 4 个公开页面与 7 个登录后业务页面，并在 `/runs` 抓到/修复旧 `/api/teams/default/workspace-runs` 403；后续加深的 business smoke 已覆盖 `chat` 发送/刷新恢复、`channels` 创建/归档/列表消失、`networks` 团队创建/切换/删除/恢复原团队、`tasks` 创建/状态更新/排序/删除/刷新恢复、canonical `dispatch:result.workspaceRun` 产出的 `runs` 列表/详情/刷新恢复、`members` 的 join/role update/刷新恢复、`devices` 的 list/detail、runtime 投影、自定义 Agent 投影、targeted scan 后 AgentOS 托管 Agent 投影、rename/refresh restore 与 delete redirect/list disappearance、`settings` 的 team rename、join link create/revoke 与刷新恢复，以及 `agents` 的 custom agent create、list/detail、config update、publish/unpublish、metrics 与 delete/list disappearance。剩余风险从“页面文件未迁入/生产入口仍托管 preview shell”收窄为“更完整 admin/audit、workspace explorer、日志检索与长尾 UI parity”。
 - 更完整的 workspace run 专用页面布局、team-wide workspace explorer 与分段日志存储/检索。
 - Admin、metrics 与 audit requirements；`admin:list-teams`/users/devices/agents 与 `admin:transfer-device-owner` 已回填 server-next socket/usecase 回归和 readiness gate，`agent:metrics` request/ack 已有；更完整 admin/metrics/audit 产品面仍未冻结。
 - 团队改名（`team:update`）已在 preview 团队设置面板覆盖；App Router `devices` 已覆盖 device rename/refresh restore；App Router `settings` 已覆盖 team update、join link create/revoke 与刷新恢复；App Router `networks` 已覆盖受控 team create/switch/delete/fallback restore，并补 SQLite delete cascade 回归。
-- Typed assignee、task 自动生成与更丰富的 task 产品流；delete/reorder 的协议与 usecase 第一版已收敛。
+- Typed assignee、task 自动生成与更丰富的 task 产品流；task create/status/reorder/delete/refresh restore 已有入口级 browser smoke。
 - Join link management UI（web-next 客户端 list/revoke 绑定 + preview 邀请管理面板）；`join:list` / `join:revoke` 协议层已由 #267 落地。
 
 ### npm canonical 入口 dist-tag（已收敛）
@@ -107,7 +107,7 @@ canonical npm 包 `@agentbean/daemon` 的 `@latest` dist-tag 已推进到基于 
 
 ## 下一步判定
 
-当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。P0 生产观察 baseline 已完成，页面入口也已经迁入 App Router；下一步进入 parity backfill 阶段，按 `parity-backfill-audit.md` 的 Red/Yellow/Green 逐入口推进。`channels / channel members` 已补 App Router browser smoke 与 readiness gate，覆盖 creator 添加/移除 human 与 agent member、private channel visibility 回收、mention scope，以及 `channel:members` projection 不能被其他接口替代。`devices` 已补 App Router browser smoke 与 readiness gate，覆盖设备 list/detail、runtime 投影、自定义 Agent 投影、targeted scan 后 AgentOS 托管 Agent 投影、rename/refresh restore 与 delete redirect/list disappearance。`agents` 已补 App Router browser smoke 与 readiness gate，覆盖 custom agent create、list/detail、config update、publish/unpublish、metrics 与 delete/list disappearance。当前建议的下一条小切片是 `tasks`：把 task delete/reorder 与更完整 task page 从协议/usecase 证据推进到入口级闭环证据。
+当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。P0 生产观察 baseline 已完成，页面入口也已经迁入 App Router；下一步进入 parity backfill 阶段，按 `parity-backfill-audit.md` 的 Red/Yellow/Green 逐入口推进。`channels / channel members` 已补 App Router browser smoke 与 readiness gate，覆盖 creator 添加/移除 human 与 agent member、private channel visibility 回收、mention scope，以及 `channel:members` projection 不能被其他接口替代。`devices` 已补 App Router browser smoke 与 readiness gate，覆盖设备 list/detail、runtime 投影、自定义 Agent 投影、targeted scan 后 AgentOS 托管 Agent 投影、rename/refresh restore 与 delete redirect/list disappearance。`agents` 已补 App Router browser smoke 与 readiness gate，覆盖 custom agent create、list/detail、config update、publish/unpublish、metrics 与 delete/list disappearance。`tasks` 已补 App Router browser smoke 与 readiness gate，覆盖 task create/status/reorder/delete/refresh restore。当前建议的下一条小切片是 `runs`：把运行记录入口的 team-wide explorer、日志检索与运行详情长尾行为继续按入口级证据推进。
 
 ## 已迁移入口的回头验规则
 

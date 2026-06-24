@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Bookmark,
   BookmarkCheck,
+  ArrowUp,
   Check,
   ChevronDown,
   Copy,
@@ -315,9 +316,27 @@ export default function TasksPage() {
     }
   };
 
+  const moveTaskToTop = async (task: Task) => {
+    const sameStatus = tasks.filter((item) => item.status === task.status && item.id !== task.id);
+    const nextSortOrder = sameStatus.length > 0
+      ? Math.min(...sameStatus.map((item) => item.sortOrder)) - 1
+      : task.sortOrder;
+    const previousTasks = tasks;
+    const optimistic = { ...task, sortOrder: nextSortOrder, updatedAt: Date.now() };
+    setTasks(sortTasksForDisplay(previousTasks.map((item) => item.id === task.id ? optimistic : item)));
+    const res = await taskEvents().reorder(task.id, nextSortOrder);
+    if (res.ok) return;
+    setTasks(previousTasks);
+  };
+
   const deleteTask = async (taskId: string) => {
+    const previousTasks = tasks;
     setTasks((prev) => prev.filter((task) => task.id !== taskId));
-    await taskEvents().delete(taskId);
+    const res = await taskEvents().delete(taskId);
+    if (!res.ok) {
+      setTasks(previousTasks);
+      return;
+    }
     if (selectedTask?.id === taskId) closeThread();
   };
 
@@ -507,6 +526,7 @@ export default function TasksPage() {
             onDragEnd={() => setDragId(null)}
             onToggleColumn={(status) => setCollapsedColumns((prev) => toggleSet(prev, status))}
             onMove={updateTaskStatus}
+            onReorderTop={moveTaskToTop}
             onDelete={deleteTask}
             onStatusMenu={setStatusMenuFor}
           />
@@ -523,6 +543,7 @@ export default function TasksPage() {
             onOpen={openTaskThread}
             onToggleColumn={(status) => setCollapsedColumns((prev) => toggleSet(prev, status))}
             onMove={updateTaskStatus}
+            onReorderTop={moveTaskToTop}
             onDelete={deleteTask}
             onStatusMenu={setStatusMenuFor}
           />
@@ -587,6 +608,7 @@ function TaskBoard({
   onDragEnd,
   onToggleColumn,
   onMove,
+  onReorderTop,
   onDelete,
   onStatusMenu,
 }: {
@@ -605,6 +627,7 @@ function TaskBoard({
   onDragEnd: () => void;
   onToggleColumn: (status: TaskStatus) => void;
   onMove: (task: Task, status: TaskStatus) => void;
+  onReorderTop: (task: Task) => void;
   onDelete: (id: string) => void;
   onStatusMenu: (id: string | null) => void;
 }) {
@@ -643,6 +666,7 @@ function TaskBoard({
                     onDragStart={() => onDragStart(task.id)}
                     onDragEnd={onDragEnd}
                     onMove={(status) => onMove(task, status)}
+                    onReorderTop={() => onReorderTop(task)}
                     onDelete={() => onDelete(task.id)}
                     onStatusMenu={(open) => onStatusMenu(open ? task.id : null)}
                   />
@@ -673,6 +697,7 @@ function TaskList({
   onOpen,
   onToggleColumn,
   onMove,
+  onReorderTop,
   onDelete,
   onStatusMenu,
 }: {
@@ -687,6 +712,7 @@ function TaskList({
   onOpen: (task: Task) => void;
   onToggleColumn: (status: TaskStatus) => void;
   onMove: (task: Task, status: TaskStatus) => void;
+  onReorderTop: (task: Task) => void;
   onDelete: (id: string) => void;
   onStatusMenu: (id: string | null) => void;
 }) {
@@ -716,6 +742,7 @@ function TaskList({
                       statusMenuOpen={statusMenuFor === task.id}
                       onOpen={() => onOpen(task)}
                       onMove={(status) => onMove(task, status)}
+                      onReorderTop={() => onReorderTop(task)}
                       onDelete={() => onDelete(task.id)}
                       onStatusMenu={(open) => onStatusMenu(open ? task.id : null)}
                     />
@@ -746,20 +773,19 @@ function TaskCard(props: {
   onDragStart: () => void;
   onDragEnd: () => void;
   onMove: (status: TaskStatus) => void;
+  onReorderTop: () => void;
   onDelete: () => void;
   onStatusMenu: (open: boolean) => void;
 }) {
   const channelName = channelLabel(props.task.channelId, props.channels);
   return (
-    <article data-smoke="task-card" data-task-title={props.task.title} data-task-status={props.task.status} draggable onClick={props.onOpen} onDragStart={props.onDragStart} onDragEnd={props.onDragEnd} className="group cursor-pointer rounded-md border border-neutral-200 bg-white p-3 shadow-sm transition-colors hover:border-neutral-300 hover:bg-neutral-50 active:cursor-grabbing">
+    <article data-smoke="task-card" data-task-id={props.task.id} data-task-title={props.task.title} data-task-status={props.task.status} data-task-sort-order={props.task.sortOrder} draggable onClick={props.onOpen} onDragStart={props.onDragStart} onDragEnd={props.onDragEnd} className="group cursor-pointer rounded-md border border-neutral-200 bg-white p-3 shadow-sm transition-colors hover:border-neutral-300 hover:bg-neutral-50 active:cursor-grabbing">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="truncate text-[11px] font-medium text-neutral-400">{channelName} #{props.number}</div>
           <div className="mt-1 whitespace-pre-wrap text-sm font-semibold leading-5 text-neutral-900">{props.task.title}</div>
         </div>
-        <button onClick={(event) => { event.stopPropagation(); props.onDelete(); }} className="flex h-6 w-6 shrink-0 items-center justify-center text-neutral-300 opacity-0 hover:bg-red-50 hover:text-red-500 group-hover:opacity-100" title="删除任务">
-          <Trash2 size={13} />
-        </button>
+        <TaskActionButtons onReorderTop={props.onReorderTop} onDelete={props.onDelete} />
       </div>
       {props.task.description && <div className="mt-2 line-clamp-3 text-xs leading-5 text-neutral-500">{props.task.description}</div>}
       <TaskMeta task={props.task} participants={props.participants} currentUserId={props.currentUserId} />
@@ -777,11 +803,12 @@ function TaskRow(props: {
   statusMenuOpen: boolean;
   onOpen: () => void;
   onMove: (status: TaskStatus) => void;
+  onReorderTop: () => void;
   onDelete: () => void;
   onStatusMenu: (open: boolean) => void;
 }) {
   return (
-    <article data-smoke="task-row" data-task-title={props.task.title} data-task-status={props.task.status} onClick={props.onOpen} className="group grid cursor-pointer grid-cols-[minmax(220px,1fr)_180px_140px_120px_32px] items-center gap-3 bg-white px-3 py-2 transition-colors hover:bg-neutral-50">
+    <article data-smoke="task-row" data-task-id={props.task.id} data-task-title={props.task.title} data-task-status={props.task.status} data-task-sort-order={props.task.sortOrder} onClick={props.onOpen} className="group grid cursor-pointer grid-cols-[minmax(220px,1fr)_180px_140px_120px_64px] items-center gap-3 bg-white px-3 py-2 transition-colors hover:bg-neutral-50">
       <div className="min-w-0">
         <div className="truncate text-[11px] font-medium text-neutral-400">{channelLabel(props.task.channelId, props.channels)} #{props.number}</div>
         <div className="truncate text-sm font-semibold text-neutral-900">{props.task.title}</div>
@@ -790,10 +817,36 @@ function TaskRow(props: {
       <div className="truncate text-xs text-neutral-600">{participantName(props.task.creatorId, props.participants, props.currentUserId)}</div>
       <div className="truncate text-xs text-neutral-600">{props.task.assigneeId ? participantName(props.task.assigneeId, props.participants, props.currentUserId) : '未分配'}</div>
       <StatusButton task={props.task} open={props.statusMenuOpen} onOpen={props.onStatusMenu} onMove={props.onMove} compact />
-      <button onClick={(event) => { event.stopPropagation(); props.onDelete(); }} className="flex h-7 w-7 items-center justify-center text-neutral-300 opacity-0 hover:bg-red-50 hover:text-red-500 group-hover:opacity-100" title="删除任务">
-        <Trash2 size={14} />
-      </button>
+      <TaskActionButtons onReorderTop={props.onReorderTop} onDelete={props.onDelete} compact />
     </article>
+  );
+}
+
+function TaskActionButtons({ onReorderTop, onDelete, compact }: {
+  onReorderTop: () => void;
+  onDelete: () => void;
+  compact?: boolean;
+}) {
+  const size = compact ? 'h-7 w-7' : 'h-6 w-6';
+  return (
+    <div className="flex shrink-0 items-center gap-1 opacity-0 group-hover:opacity-100">
+      <button
+        data-smoke="task-reorder-top"
+        onClick={(event) => { event.stopPropagation(); onReorderTop(); }}
+        className={`flex ${size} items-center justify-center text-neutral-300 hover:bg-blue-50 hover:text-blue-600`}
+        title="移到顶部"
+      >
+        <ArrowUp size={compact ? 14 : 13} />
+      </button>
+      <button
+        data-smoke="task-delete"
+        onClick={(event) => { event.stopPropagation(); onDelete(); }}
+        className={`flex ${size} items-center justify-center text-neutral-300 hover:bg-red-50 hover:text-red-500`}
+        title="删除任务"
+      >
+        <Trash2 size={compact ? 14 : 13} />
+      </button>
+    </div>
   );
 }
 
@@ -1289,6 +1342,16 @@ function toggleSet<T>(source: Set<T>, value: T): Set<T> {
   if (next.has(value)) next.delete(value);
   else next.add(value);
   return next;
+}
+
+function sortTasksForDisplay(list: Task[]): Task[] {
+  return [...list].sort((a, b) => {
+    const statusDelta = STATUS_COLUMNS.findIndex((column) => column.id === a.status) - STATUS_COLUMNS.findIndex((column) => column.id === b.status);
+    if (statusDelta !== 0) return statusDelta;
+    const sortDelta = a.sortOrder - b.sortOrder;
+    if (sortDelta !== 0) return sortDelta;
+    return b.createdAt - a.createdAt;
+  });
 }
 
 function channelLabel(channelId: string | null, channels: ChannelSummary[]): string {
