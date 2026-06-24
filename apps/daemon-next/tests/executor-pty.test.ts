@@ -141,6 +141,34 @@ describe('daemon-next codex PTY executor', () => {
       expect(output.workspaceRun?.status).toBe('failed');
       expect(output.workspaceRun?.exitCode).toBe(2);
     });
+
+    test('reports a codex timeout as a failed run (AGENTBEAN_CODEX_TIMEOUT_MS overrides the 15min default)', async () => {
+      const prev = process.env.AGENTBEAN_CODEX_TIMEOUT_MS;
+      process.env.AGENTBEAN_CODEX_TIMEOUT_MS = '30';
+      try {
+        const fakeSpawn = () => ({
+          onData: () => {},
+          onExit: () => {}, // never fires — simulates a hung codex
+          kill: () => {},
+        });
+        const executor = createCommandExecutor({
+          ptySpawnLoader: async () => fakeSpawn,
+          killGraceMs: 10,
+          clock: createClock([1000, 1010]),
+        });
+        const output = await executor({
+          id: 'dispatch-4', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
+          agentId: 'agent-1', requestId: 'request-1', prompt: 'do something',
+          customAgent: { adapterKind: 'codex', command: 'codex', args: [], cwd },
+        });
+        if (typeof output !== 'object') throw new Error('expected structured result');
+        expect(output.body).toContain('超时');
+        expect(output.workspaceRun?.status).toBe('failed');
+      } finally {
+        if (prev === undefined) delete process.env.AGENTBEAN_CODEX_TIMEOUT_MS;
+        else process.env.AGENTBEAN_CODEX_TIMEOUT_MS = prev;
+      }
+    });
   });
 });
 

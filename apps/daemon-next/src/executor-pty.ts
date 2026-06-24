@@ -283,13 +283,19 @@ export async function runPtyAgentCommand(
       return;
     }
 
-    const timeoutMs = spec.timeoutMs ?? options.timeoutMs;
+    // codex timeout is overridable via env (matches the legacy adapter) and also lets tests use a
+    // short timeout instead of waiting the 15min default.
+    const envTimeout = Number.parseInt(process.env.AGENTBEAN_CODEX_TIMEOUT_MS ?? '', 10);
+    const timeoutMs = Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : (spec.timeoutMs ?? options.timeoutMs);
     const timer = setTimeout(() => {
       if (finished) return;
       finished = true;
       try { pty.kill('SIGTERM'); } catch { /* already exited */ }
       killTimer = setTimeout(() => { try { pty.kill('SIGKILL'); } catch { /* ignore */ } }, options.killGraceMs);
       if (typeof killTimer.unref === 'function') killTimer.unref();
+      // Clean up the temp output dir on timeout — onExit short-circuits on `finished` and would
+      // otherwise skip its own rmSync, leaking /tmp/agentbean-codex-* on every timeout.
+      try { rmSync(dirname(outputPath), { recursive: true, force: true }); } catch { /* ignore */ }
       resolve(ptyFailure(request, persistedCommand, startedAt, options.clock.now(),
         `codex 超时（${timeoutMs}ms）`, output));
     }, timeoutMs);
