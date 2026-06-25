@@ -65,6 +65,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         users.set(input.userId, updated);
         return updated;
       },
+      async updatePassword(input) {
+        const user = users.get(input.userId);
+        if (!user) return null;
+        const updated = { ...user, passwordHash: input.passwordHash, updatedAt: input.updatedAt };
+        users.set(input.userId, updated);
+        return updated;
+      },
       async delete(userId) {
         users.delete(userId);
         for (const [key, member] of members.entries()) {

@@ -3,6 +3,7 @@ export const WEB_EVENTS = {
     login: 'auth:login',
     register: 'auth:register',
     whoami: 'auth:whoami',
+    changePassword: 'auth:change-password',
   },
   team: {
     list: 'team:list',

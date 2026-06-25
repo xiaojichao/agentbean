@@ -58,6 +58,7 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.auth.register, app, 'registerUser');
   bind(socket, WEB_EVENTS.auth.login, app, 'loginUser');
   bind(socket, WEB_EVENTS.auth.whoami, app, 'whoami');
+  bind(socket, WEB_EVENTS.auth.changePassword, app, 'changePassword', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.team.list, app, 'listTeams', undefined, { authenticatedUser: options.authenticatedUser });
   const afterTeamMutation = (payload: unknown, result: unknown) =>
     options.afterTeamMutation?.(payload, result);

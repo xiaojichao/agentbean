@@ -108,6 +108,12 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .run(input.description, input.updatedAt, input.userId);
         return mapUser(globalDb.prepare('SELECT * FROM users WHERE id = ?').get(input.userId));
       },
+      async updatePassword(input) {
+        globalDb
+          .prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?')
+          .run(input.passwordHash, input.updatedAt, input.userId);
+        return mapUser(globalDb.prepare('SELECT * FROM users WHERE id = ?').get(input.userId));
+      },
       async delete(userId) {
         globalDb.prepare('DELETE FROM team_members WHERE user_id = ?').run(userId);
         globalDb.prepare('DELETE FROM users WHERE id = ?').run(userId);
