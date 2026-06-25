@@ -124,7 +124,7 @@ Dispatch lifecycle 的第一版已经落地到 `server-next` repository/usecase/
 - Web 上的 dispatch 状态展示与取消按钮已落地（`apps/web/components/{conversation-page,channel-message}.tsx`：监听 `message:dispatch-status` 更新 `ChatMessage.dispatchStatus`，running 时显示「正在处理…」+ 取消按钮发 `dispatch:cancel`）；更完整的 dispatch history/diagnostics UI 仍需后续产品切片覆盖。
 - 长时间运行 adapter 的真实进程级 cancel 语义仍需要按 adapter 逐个验证。
 
-### 执行诊断第一版已定义
+### 运行记录第一版已定义
 
 Workspace run persistence 的第一版已经落地到 `server-next` repository/usecase 层。
 
@@ -136,12 +136,13 @@ Workspace run persistence 的第一版已经落地到 `server-next` repository/u
 - apps/web 的执行详情页可从 agent/device 工作区列表进入，在 run 有 `messageId` 时回链到原 chat message，并在 daemon 上报时展示执行命令与可折叠日志摘要。
 - apps/web 的执行详情页为受限日志摘要提供失败默认展开、复制、下载、换行切换、行数/字符数与尾部摘要提示，方便直接排障。
 - server-next 原生 agent workspace run 列表 route 已补齐，apps/web 的 agent/device 工作区入口可按 team membership 与 channel visibility 展示最新 runs、状态、命令上下文与关联 workspace artifacts。
-- server-next 提供团队级最新 workspace runs route，apps/web 侧栏把 `/runs` 降级为诊断区“执行记录”，可按当前用户可见 channel 展示团队最近执行记录、来源消息跳转、agent/device、退出码与文件数量。
+- server-next 提供团队级最新 workspace runs route，apps/web 侧栏提供 `/runs` 运行记录入口，可按当前用户可见 channel 展示团队最近执行记录、来源消息跳转、agent/device、退出码与文件数量。
+- App Router 运行记录入口已补入口级 browser smoke：执行列表、状态/Agent/设备筛选、状态分组、详情路由、刷新恢复、完整日志 artifact、文件树、inline 日志搜索、返回列表与返回触发消息都进入 `webui-runs-business-flow`。
 - daemon-next custom command executor 会把脱敏后的 stdout/stderr 作为 `logs/workspace-run.log` workspace artifact 上报；server-next 将 inline content 写入自身 artifact storage，apps/web run detail 可通过现有文件列表预览/下载完整日志 artifact。
 
 剩余：
 
-- 不再把 `runs` 当旧版一等产品入口补齐；复杂 team-wide workspace explorer 暂停推进。后续只按排障、audit 或脱敏新需求补分段日志存储/检索与更强脱敏规则。
+- 后续只按新增需求补复杂 team-wide explorer、跨运行全文检索、audit trail、分段日志存储/检索与更强脱敏规则。
 
 ### Threads 第一版已定义
 
@@ -178,7 +179,7 @@ Artifact metadata、HTTP route 与 preview viewer 的第一版已经落地。
 
 剩余：
 
-- 不再把 `runs` 当旧版一等产品入口补齐；后续只按排障、audit 或脱敏新需求补分段日志存储/检索。
+- `runs` / 运行记录已作为产品入口进入 parity gate；后续只按新增需求补分段日志存储/检索、跨运行全文检索、audit trail 或更强脱敏规则。
 
 ### Search Projection
 

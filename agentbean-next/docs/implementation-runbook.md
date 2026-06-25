@@ -249,4 +249,4 @@ apps/
 - Search。
 - Admin / audit requirements。
 - Metrics UI；`agent:metrics` request/ack 已进入主线。
-- dashboard/admin、settings/device 后续页、typed assignee 与 task 自动生成；执行记录只保留为诊断面，不再作为旧版 parity 入口扩张。
+- dashboard/admin、settings/device 后续页、typed assignee 与 task 自动生成；运行记录主入口已进入 Green，后续只按新增需求补跨运行全文检索、audit trail 或更强日志脱敏。

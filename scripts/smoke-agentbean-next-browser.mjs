@@ -1511,6 +1511,14 @@ export async function exerciseWebUiRunsBusinessSmoke({
 
     await page.navigate(new URL(`/${networkPath}/runs`, root).toString());
     await waitForWebUiWorkspaceRunCard({ page, command, timeoutMs });
+    await page.setInputValue('[data-smoke="workspace-runs-filter-status"]', 'succeeded');
+    await waitForWebUiWorkspaceRunCard({ page, command, timeoutMs });
+    await page.setInputValue('[data-smoke="workspace-runs-filter-agent"]', agentId);
+    await waitForWebUiWorkspaceRunCard({ page, command, timeoutMs });
+    await page.setInputValue('[data-smoke="workspace-runs-filter-device"]', daemon.deviceId);
+    await waitForWebUiWorkspaceRunCard({ page, command, timeoutMs });
+    await page.setInputValue('[data-smoke="workspace-runs-filter-group"]', 'status');
+    await waitForWebUiWorkspaceRunGroup({ page, key: 'succeeded', label: '成功', timeoutMs });
     const clickedDetail = await page.evaluateJson(`
       (() => {
         const command = ${JSON.stringify(command)};
@@ -1541,6 +1549,7 @@ export async function exerciseWebUiRunsBusinessSmoke({
     await waitForWebUiWorkspaceRunSourceMessageLink({ page, timeoutMs });
     await page.click('[data-smoke="workspace-run-full-log-load"]');
     await waitForWebUiWorkspaceRunInlineLog({ page, expectedText: 'finished WebUI workspace run smoke', timeoutMs });
+    await waitForWebUiWorkspaceRunBackToList({ page, networkPath, timeoutMs });
     await page.click('[data-smoke="workspace-run-source-message-link"]');
     await waitForWebUiWorkspaceRunSourceMessage({ page, expectedText: sourceMessageBody, timeoutMs });
     return { id: workspaceRunId, command, dispatchId, logArtifactId, summaryArtifactId };
@@ -1563,6 +1572,23 @@ async function waitForWebUiWorkspaceRunCard({ page, command, timeoutMs }) {
   );
 }
 
+async function waitForWebUiWorkspaceRunGroup({ page, key, label, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const key = ${JSON.stringify(key)};
+      const label = ${JSON.stringify(label)};
+      const group = document.querySelector('[data-smoke="workspace-runs-group"]');
+      return group?.dataset.groupKey === key
+        && group?.dataset.groupLabel === label
+        && group.textContent?.includes(label);
+    })()
+    `,
+    `workspace runs group "${label}" to render`,
+    timeoutMs,
+  );
+}
+
 async function waitForWebUiWorkspaceRunDetail({ page, command, timeoutMs }) {
   await page.waitForFunction(
     `
@@ -1576,6 +1602,20 @@ async function waitForWebUiWorkspaceRunDetail({ page, command, timeoutMs }) {
     })()
     `,
     `workspace run "${command}" detail to render`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiWorkspaceRunBackToList({ page, networkPath, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const networkPath = ${JSON.stringify(networkPath)};
+      const link = document.querySelector('[data-smoke="workspace-run-back-to-list"]');
+      return link?.getAttribute('href') === '/' + networkPath + '/runs';
+    })()
+    `,
+    'workspace run detail back link to return to the runs list',
     timeoutMs,
   );
 }
