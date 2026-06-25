@@ -262,6 +262,82 @@ describe('daemon-next protocol client', () => {
     expect(device.token).toBe('fresh-token-2');
   });
 
+  test('keeps refreshed credentials and latest scan snapshot across the reconnect lifecycle', async () => {
+    const socket = new FakeAgentSocket();
+    socket.helloAcks.push(
+      {
+        ok: true,
+        device: { id: 'device-stable' },
+        credentials: { token: 'fresh-token-1', teamId: 'team-1', ownerId: 'user-1' },
+      },
+      {
+        ok: true,
+        device: { id: 'device-stable' },
+        credentials: { token: 'fresh-token-2', teamId: 'team-1', ownerId: 'user-1' },
+      },
+    );
+    const latest = {
+      runtimes: [{ adapterKind: 'agentos-gateway', name: 'AgentOS Gateway' }],
+      agents: [{
+        name: 'AgentOS Hosted',
+        adapterKind: 'agentos-gateway',
+        category: 'agentos-hosted' as const,
+        discoverySource: 'gateway' as const,
+        gatewayInstanceKey: 'agentos://stable',
+      }],
+    };
+    const device: DaemonDeviceConfig = {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+      token: 'stale-invite-token',
+    };
+    const onCredentialsChanged = vi.fn();
+    const client = createDaemonProtocolClient({
+      socket,
+      executor: async () => 'ok',
+      device,
+      runtimes: [{ adapterKind: 'codex-cli', name: 'Bootstrap Codex' }],
+      agents: [{ name: 'Bootstrap Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      scan: async () => latest,
+      onCredentialsChanged,
+      rescanIntervalMs: 60000,
+    });
+
+    await client.start();
+    await vi.waitFor(() => expect(socket.emitted).toContainEqual([
+      AGENT_EVENTS.agent.registerBatch,
+      { teamId: 'team-1', deviceId: 'device-stable', agents: latest.agents },
+    ]));
+
+    await socket.triggerReconnect();
+
+    expect(socket.helloPayloads).toEqual([
+      {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+        token: 'stale-invite-token',
+      },
+      {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+        token: 'fresh-token-1',
+      },
+    ]);
+    expect(socket.emitted.slice(-2)).toEqual([
+      [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-stable', runtimes: latest.runtimes }],
+      [AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-stable', agents: latest.agents }],
+    ]);
+    expect(onCredentialsChanged).toHaveBeenCalledTimes(2);
+    expect(device.token).toBe('fresh-token-2');
+    client.stop?.();
+  });
+
   test('handles targeted scan requests by reporting fresh runtimes and agents', async () => {
     const socket = new FakeAgentSocket();
     let scanCount = 0;
@@ -636,6 +712,7 @@ describe('daemon-next protocol client', () => {
 
 class FakeAgentSocket implements DaemonProtocolSocket {
   readonly emitted: Array<[string, unknown]> = [];
+  readonly helloPayloads: unknown[] = [];
   readonly helloAcks: unknown[] = [];
   private readonly handlers = new Map<string, (payload: unknown, ack?: (result: unknown) => void) => Promise<void>>();
   private reconnectHandler: (() => Promise<void>) | undefined;
@@ -644,6 +721,7 @@ class FakeAgentSocket implements DaemonProtocolSocket {
   async emitWithAck(event: string, payload: unknown): Promise<unknown> {
     this.emitted.push([event, payload]);
     if (event === AGENT_EVENTS.device.hello) {
+      this.helloPayloads.push(JSON.parse(JSON.stringify(payload)));
       const ack = this.helloAcks.shift();
       if (ack) {
         return ack;

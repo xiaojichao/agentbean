@@ -19,6 +19,7 @@ export function collectAgentBeanNextReadinessChecks({
   const cutoverRunbook = readFileSync(join(root, 'agentbean-next/docs/production-cutover-runbook.md'), 'utf8');
   const verificationMatrix = readFileSync(join(root, 'agentbean-next/docs/verification-matrix.md'), 'utf8');
   const parityBackfillAudit = readFileSync(join(root, 'agentbean-next/docs/parity-backfill-audit.md'), 'utf8');
+  const knownGaps = readFileSync(join(root, 'agentbean-next/docs/known-gaps.md'), 'utf8');
   const socketProtocol = readFileSync(join(root, 'agentbean-next/docs/socket-protocol.md'), 'utf8');
   const contractsSocket = readFileSync(join(root, 'packages/contracts/src/socket.ts'), 'utf8');
   const serverNextUseCases = readFileSync(join(root, 'apps/server-next/src/application/usecases.ts'), 'utf8');
@@ -428,6 +429,25 @@ export function collectAgentBeanNextReadinessChecks({
       'Daemon onboarding must persist refreshed device credentials from initial hello and reconnect acknowledgements so restarts do not reuse stale invite tokens',
     ),
     check(
+      'daemon-onboarding-lifecycle-green',
+      daemonNextProtocolClientTests.includes('keeps refreshed credentials and latest scan snapshot across the reconnect lifecycle') &&
+        daemonNextProtocolClientTests.includes('re-announces device, runtimes, and agents after reconnect') &&
+        daemonNextProtocolClientTests.includes('handles targeted scan requests by reporting fresh runtimes and agents') &&
+        daemonNextCliTests.includes('saved path: refreshed hello credentials are persisted back to the same profile') &&
+        daemonNextCliTests.includes('list-profiles reports saved profiles without opening a socket') &&
+        serverNextFirstSliceTests.includes('device invite issues credentials to a waiting daemon and registers it without manual team config') &&
+        serverNextFirstSliceTests.includes('returns custom agent env only to the bound device token') &&
+        packageJson.scripts?.['smoke:agentbean-next-daemon-install'] ===
+          'node scripts/smoke-agentbean-next-daemon-install.mjs' &&
+        verificationMatrix.includes('P3-11d') &&
+        verificationMatrix.includes('E2E-11f') &&
+        parityBackfillAudit.includes('| `daemon onboarding` | Green |') &&
+        parityBackfillAudit.includes('所有核心产品入口已经进入 Green') &&
+        !knownGaps.includes('auth token 刷新/续期未实现') &&
+        !knownGaps.includes('profile 删除/重命名 CLI 未提供'),
+      'Daemon onboarding must have one product-entry lifecycle gate tying invite, saved profile, token refresh, reconnect, latest scan snapshot, targeted scan, npm install smoke, and Green parity docs together',
+    ),
+    check(
       'product-surface-parity-contracts',
       verificationMatrix.includes('P2-09b') &&
         verificationMatrix.includes('`members:list` 返回 team human members 与当前 team 可见 agents') &&
@@ -448,10 +468,12 @@ export function collectAgentBeanNextReadinessChecks({
         parityBackfillAudit.includes('| `execution diagnostics` | Green |') &&
         parityBackfillAudit.includes('| `settings` / `networks` | Green |') &&
         parityBackfillAudit.includes('| `dashboard` / `admin` | Green |') &&
+        parityBackfillAudit.includes('| `daemon onboarding` | Green |') &&
         parityBackfillAudit.includes('| `channels` / `channel members` | Green |') &&
         parityBackfillAudit.includes('## 下一条 backfill slice') &&
-        parityBackfillAudit.includes('不再把它当旧版 parity 入口继续扩张') &&
-        parityBackfillAudit.includes('优先做 `daemon onboarding`'),
+        parityBackfillAudit.includes('旧版没有独立 runs 心智') &&
+        parityBackfillAudit.includes('UI 已降级到诊断区') &&
+        parityBackfillAudit.includes('所有核心产品入口已经进入 Green'),
       'AgentBean Next parity backfill audit must keep a Red/Yellow/Green product-entry status table and the next recommended slice',
     ),
     check(
