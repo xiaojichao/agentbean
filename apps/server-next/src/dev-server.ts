@@ -98,6 +98,7 @@ const WORKSPACE_RUN_STATUSES = new Set<WorkspaceRunStatus>([
   'cancelled',
 ]);
 const DEFAULT_PRODUCTION_WEB_ORIGINS = ['https://agentbean.dev', 'https://www.agentbean.dev'];
+const DEFAULT_LOCAL_WEB_ORIGINS = ['http://localhost:3100', 'http://localhost:4101'];
 
 export interface DispatchTimeoutSchedulerConfig {
   timeoutMs: number;
@@ -234,6 +235,7 @@ function withCanonicalHostVariants(origins: string[]): string[] {
   for (const origin of origins) {
     try {
       const url = new URL(origin);
+      expanded.add(url.origin);
       if (url.hostname.startsWith('www.')) {
         url.hostname = url.hostname.slice(4);
         expanded.add(url.origin);
@@ -261,7 +263,7 @@ function resolveRestCorsOrigin(env: NodeJS.ProcessEnv = process.env): CorsOrigin
   if (webOrigins.length > 0) return corsOriginFromList(webOrigins);
 
   if (env.PORT) return DEFAULT_PRODUCTION_WEB_ORIGINS;
-  return 'http://localhost:3100';
+  return DEFAULT_LOCAL_WEB_ORIGINS;
 }
 
 function resolveRequestCorsOrigin(origin: CorsOrigin, requestOrigin?: string): string | undefined {
