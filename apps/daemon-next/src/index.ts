@@ -113,6 +113,12 @@ export interface DispatchRequestPayload {
 
 export type AgentEnvResolver = (envRef: { agentId: string; teamId: string }) => Promise<Record<string, string>>;
 
+export interface DaemonDeviceCredentialsUpdate {
+  token: string;
+  teamId?: string;
+  ownerId?: string;
+}
+
 export interface CreateDaemonProtocolClientInput {
   socket: DaemonProtocolSocket;
   executor: StubExecutor;
@@ -126,6 +132,7 @@ export interface CreateDaemonProtocolClientInput {
   envResolver?: AgentEnvResolver;
   rescanIntervalMs?: number;
   onScanChanged?: (snapshot: DaemonScanSnapshot) => Promise<void> | void;
+  onCredentialsChanged?: (credentials: DaemonDeviceCredentialsUpdate) => Promise<void> | void;
 }
 
 export interface DaemonProtocolClient {
@@ -144,16 +151,12 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
     async start() {
       const initialAnnouncement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents);
       currentDeviceId = initialAnnouncement.deviceId;
-      if (initialAnnouncement.token) {
-        device.token = initialAnnouncement.token;
-      }
+      await applyCredentialsUpdate(initialAnnouncement.credentials);
       const cancelledDispatchIds = new Set<string>();
       socket.onReconnect?.(async () => {
         const announcement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents);
         currentDeviceId = announcement.deviceId;
-        if (announcement.token) {
-          device.token = announcement.token;
-        }
+        await applyCredentialsUpdate(announcement.credentials);
       });
 
       socket.on(AGENT_EVENTS.device.scanRequested, async (payload) => {
@@ -305,6 +308,14 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
     rescanNow: () => rescan?.tickNow() ?? Promise.resolve(),
     stop: () => rescan?.stop(),
   };
+
+  async function applyCredentialsUpdate(credentials: DaemonDeviceCredentialsUpdate | undefined): Promise<void> {
+    if (!credentials?.token) {
+      return;
+    }
+    device.token = credentials.token;
+    await input.onCredentialsChanged?.(credentials);
+  }
 }
 
 function normalizeDispatchResult(result: string | DaemonDispatchResult): DaemonDispatchResult {
@@ -319,13 +330,13 @@ async function announceDeviceSnapshot(
   device: DaemonDeviceConfig,
   runtimes: DaemonRuntimeReport[],
   agents: DaemonAgentReport[],
-): Promise<{ deviceId: string; token?: string }> {
+): Promise<{ deviceId: string; credentials?: DaemonDeviceCredentialsUpdate }> {
   const helloAck = await socket.emitWithAck(AGENT_EVENTS.device.hello, device);
   const deviceId = readAckDeviceId(helloAck);
-  const token = readAckDeviceToken(helloAck);
+  const credentials = readAckDeviceCredentials(helloAck);
 
   await reportDeviceSnapshot(socket, device.teamId, deviceId, runtimes, agents);
-  return { deviceId, ...(token ? { token } : {}) };
+  return { deviceId, ...(credentials ? { credentials } : {}) };
 }
 
 async function reportDeviceSnapshot(
@@ -369,7 +380,7 @@ function readAckDeviceId(ack: unknown): string {
   return device.id;
 }
 
-function readAckDeviceToken(ack: unknown): string | undefined {
+function readAckDeviceCredentials(ack: unknown): DaemonDeviceCredentialsUpdate | undefined {
   if (!ack || typeof ack !== 'object') {
     return undefined;
   }
@@ -377,8 +388,15 @@ function readAckDeviceToken(ack: unknown): string | undefined {
   if (!credentials || typeof credentials !== 'object') {
     return undefined;
   }
-  const token = (credentials as { token?: unknown }).token;
-  return typeof token === 'string' && token.length > 0 ? token : undefined;
+  const fields = credentials as { token?: unknown; teamId?: unknown; ownerId?: unknown };
+  if (typeof fields.token !== 'string' || fields.token.length === 0) {
+    return undefined;
+  }
+  return {
+    token: fields.token,
+    ...(typeof fields.teamId === 'string' ? { teamId: fields.teamId } : {}),
+    ...(typeof fields.ownerId === 'string' ? { ownerId: fields.ownerId } : {}),
+  };
 }
 
 function readErrorMessage(error: unknown): string {

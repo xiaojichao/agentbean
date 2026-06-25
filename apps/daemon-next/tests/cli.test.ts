@@ -642,6 +642,43 @@ describe('runDaemonNextCli wiring (loadAuth / saveAuth / device.token)', () => {
       log.mockRestore();
     }
   });
+
+  test('saved path: refreshed hello credentials are persisted back to the same profile', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const saved: AuthData = {
+        token: 'stale-token',
+        serverUrl: 'http://saved.example/',
+        teamId: 'saved-team',
+        ownerId: 'old-owner',
+      };
+      const { deps, protocolInputs } = createRunDaemonHarness({
+        loadAuth: vi.fn(() => saved),
+      });
+
+      await runDaemonNextCli(baseRunConfig({ profileId: 'saved-profile' }), deps);
+      expect(deps.saveAuth).not.toHaveBeenCalled();
+      expect(protocolInputs[0]?.onCredentialsChanged).toBeTypeOf('function');
+
+      await protocolInputs[0]?.onCredentialsChanged?.({
+        token: 'fresh-token',
+        teamId: 'saved-team',
+        ownerId: 'new-owner',
+      });
+
+      expect(deps.saveAuth).toHaveBeenCalledWith(
+        {
+          token: 'fresh-token',
+          serverUrl: 'http://saved.example',
+          teamId: 'saved-team',
+          ownerId: 'new-owner',
+        },
+        { profileId: 'saved-profile' },
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
 });
 
 class FakeRuntimeSocket {
