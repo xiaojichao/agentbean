@@ -77,6 +77,7 @@ type NextAppFactory = (options: {
 };
 
 type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { close(): void };
+type CorsOrigin = string | string[] | false;
 
 const MAX_ARTIFACT_UPLOAD_BODY_BYTES = 10 * 1024 * 1024;
 const DEFAULT_WORKSPACE_LOG_TAIL_LINES = 200;
@@ -96,6 +97,8 @@ const WORKSPACE_RUN_STATUSES = new Set<WorkspaceRunStatus>([
   'failed',
   'cancelled',
 ]);
+const DEFAULT_PRODUCTION_WEB_ORIGINS = ['https://agentbean.dev', 'https://www.agentbean.dev'];
+const DEFAULT_LOCAL_WEB_ORIGINS = ['http://localhost:3100', 'http://localhost:4101'];
 
 export interface DispatchTimeoutSchedulerConfig {
   timeoutMs: number;
@@ -146,7 +149,11 @@ export async function startServerNextDevServer(
   const Server = input.Server ?? loadSocketIoServer();
   const webEntry = config.webEntry ?? 'preview';
   const webApp = webEntry === 'app' ? input.webApp ?? await createWebAppHandler(config) : null;
+  const restCorsOrigin = resolveRestCorsOrigin();
   const httpServer = createServer(async (request, response) => {
+    if (handleRestCors(request, response, restCorsOrigin)) {
+      return;
+    }
     const url = new URL(request.url ?? '/', 'http://agentbean-next.local');
     if (url.pathname === '/preview' || (url.pathname === '/' && !webApp)) {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -214,6 +221,75 @@ export async function startServerNextDevServer(
       await appWithCleanup.close();
     },
   };
+}
+
+function parseOriginList(value?: string): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function withCanonicalHostVariants(origins: string[]): string[] {
+  const expanded = new Set(origins);
+  for (const origin of origins) {
+    try {
+      const url = new URL(origin);
+      expanded.add(url.origin);
+      if (url.hostname.startsWith('www.')) {
+        url.hostname = url.hostname.slice(4);
+        expanded.add(url.origin);
+      } else {
+        url.hostname = `www.${url.hostname}`;
+        expanded.add(url.origin);
+      }
+    } catch {
+      // Non-URL CORS values such as "*" are preserved as-is.
+    }
+  }
+  return [...expanded];
+}
+
+function corsOriginFromList(origins: string[]): CorsOrigin {
+  if (origins.length === 0) return false;
+  return origins.length === 1 ? origins[0]! : origins;
+}
+
+function resolveRestCorsOrigin(env: NodeJS.ProcessEnv = process.env): CorsOrigin {
+  const configured = withCanonicalHostVariants(parseOriginList(env.CORS_ORIGIN));
+  if (configured.length > 0) return corsOriginFromList(configured);
+
+  const webOrigins = withCanonicalHostVariants(parseOriginList(env.WEB_URL));
+  if (webOrigins.length > 0) return corsOriginFromList(webOrigins);
+
+  if (env.PORT) return DEFAULT_PRODUCTION_WEB_ORIGINS;
+  return DEFAULT_LOCAL_WEB_ORIGINS;
+}
+
+function resolveRequestCorsOrigin(origin: CorsOrigin, requestOrigin?: string): string | undefined {
+  if (!origin) return undefined;
+  if (origin === '*') return '*';
+  if (Array.isArray(origin)) {
+    if (origin.includes('*')) return '*';
+    return requestOrigin && origin.includes(requestOrigin) ? requestOrigin : undefined;
+  }
+  return origin;
+}
+
+function handleRestCors(request: IncomingMessage, response: ServerResponse, origin: CorsOrigin): boolean {
+  const allowedOrigin = resolveRequestCorsOrigin(origin, request.headers.origin);
+  if (allowedOrigin) {
+    response.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    response.setHeader('Vary', 'Origin');
+    response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  }
+  if (request.method === 'OPTIONS') {
+    response.writeHead(204);
+    response.end();
+    return true;
+  }
+  return false;
 }
 
 function startDispatchTimeoutScheduler(

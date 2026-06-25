@@ -126,6 +126,144 @@ describe('server-next dev server entry', () => {
     ).toThrow('AGENTBEAN_NEXT_WEB_ENTRY');
   });
 
+  test('adds REST CORS headers for browser API requests derived from WEB_URL', async () => {
+    const previousCorsOrigin = process.env.CORS_ORIGIN;
+    const previousWebUrl = process.env.WEB_URL;
+    const previousPort = process.env.PORT;
+    delete process.env.CORS_ORIGIN;
+    process.env.WEB_URL = 'https://agentbean.dev/app';
+    delete process.env.PORT;
+
+    const app = {} as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir: '.agentbean-next-test', sessionSecret: 'test-secret' },
+    });
+    cleanups.push(async () => {
+      await server.close();
+      if (previousCorsOrigin === undefined) delete process.env.CORS_ORIGIN;
+      else process.env.CORS_ORIGIN = previousCorsOrigin;
+      if (previousWebUrl === undefined) delete process.env.WEB_URL;
+      else process.env.WEB_URL = previousWebUrl;
+      if (previousPort === undefined) delete process.env.PORT;
+      else process.env.PORT = previousPort;
+    });
+
+    const response = await fetch(`${server.baseUrl}/api/teams/team-1/workspace-runs?token=`, {
+      headers: { Origin: 'https://agentbean.dev' },
+    });
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://agentbean.dev');
+    await expect(response.json()).resolves.toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
+  });
+
+  test('allows the www origin variant when REST CORS is derived from WEB_URL', async () => {
+    const previousCorsOrigin = process.env.CORS_ORIGIN;
+    const previousWebUrl = process.env.WEB_URL;
+    const previousPort = process.env.PORT;
+    delete process.env.CORS_ORIGIN;
+    process.env.WEB_URL = 'https://agentbean.dev/';
+    delete process.env.PORT;
+
+    const app = {} as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir: '.agentbean-next-test', sessionSecret: 'test-secret' },
+    });
+    cleanups.push(async () => {
+      await server.close();
+      if (previousCorsOrigin === undefined) delete process.env.CORS_ORIGIN;
+      else process.env.CORS_ORIGIN = previousCorsOrigin;
+      if (previousWebUrl === undefined) delete process.env.WEB_URL;
+      else process.env.WEB_URL = previousWebUrl;
+      if (previousPort === undefined) delete process.env.PORT;
+      else process.env.PORT = previousPort;
+    });
+
+    const response = await fetch(`${server.baseUrl}/api/teams/team-1/workspace-runs?token=`, {
+      headers: { Origin: 'https://www.agentbean.dev' },
+    });
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://www.agentbean.dev');
+  });
+
+  test('allows the default web-next dev origin for local REST CORS', async () => {
+    const previousCorsOrigin = process.env.CORS_ORIGIN;
+    const previousWebUrl = process.env.WEB_URL;
+    const previousPort = process.env.PORT;
+    delete process.env.CORS_ORIGIN;
+    delete process.env.WEB_URL;
+    delete process.env.PORT;
+
+    const app = {} as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir: '.agentbean-next-test', sessionSecret: 'test-secret' },
+    });
+    cleanups.push(async () => {
+      await server.close();
+      if (previousCorsOrigin === undefined) delete process.env.CORS_ORIGIN;
+      else process.env.CORS_ORIGIN = previousCorsOrigin;
+      if (previousWebUrl === undefined) delete process.env.WEB_URL;
+      else process.env.WEB_URL = previousWebUrl;
+      if (previousPort === undefined) delete process.env.PORT;
+      else process.env.PORT = previousPort;
+    });
+
+    const response = await fetch(`${server.baseUrl}/api/teams/team-1/workspace-runs`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'http://localhost:4101',
+        'Access-Control-Request-Method': 'GET',
+      },
+    });
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get('access-control-allow-origin')).toBe('http://localhost:4101');
+  });
+
+  test('answers production REST CORS preflight for the AgentBean web origin without explicit env', async () => {
+    const previousCorsOrigin = process.env.CORS_ORIGIN;
+    const previousWebUrl = process.env.WEB_URL;
+    const previousPort = process.env.PORT;
+    delete process.env.CORS_ORIGIN;
+    delete process.env.WEB_URL;
+    process.env.PORT = '4108';
+
+    const app = {} as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir: '.agentbean-next-test', sessionSecret: 'test-secret' },
+    });
+    cleanups.push(async () => {
+      await server.close();
+      if (previousCorsOrigin === undefined) delete process.env.CORS_ORIGIN;
+      else process.env.CORS_ORIGIN = previousCorsOrigin;
+      if (previousWebUrl === undefined) delete process.env.WEB_URL;
+      else process.env.WEB_URL = previousWebUrl;
+      if (previousPort === undefined) delete process.env.PORT;
+      else process.env.PORT = previousPort;
+    });
+
+    const response = await fetch(`${server.baseUrl}/api/teams/team-1/workspace-runs`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://www.agentbean.dev',
+        'Access-Control-Request-Method': 'GET',
+      },
+    });
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://www.agentbean.dev');
+    expect(response.headers.get('access-control-allow-methods')).toContain('GET');
+  });
+
   test('starts a long-running Socket.IO server with healthz and web namespace', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,
