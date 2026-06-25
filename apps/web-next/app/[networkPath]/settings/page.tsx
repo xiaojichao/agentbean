@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2, Bell, Volume2, Keyboard, PanelRight, RotateCcw } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
-import { getWebSocket, joinEvents, teamEvents } from '@/lib/socket';
+import { authEvents, getWebSocket, joinEvents, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import type { JoinLinkInfo } from '@/lib/schema';
 import { useParams, useRouter } from 'next/navigation';
@@ -69,6 +69,34 @@ export default function SettingsPage() {
 function AccountPanel() {
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const router = useRouter();
+  const [currentPw, setCurrentPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [confirmPw, setConfirmPw] = useState('');
+  const [pwMsg, setPwMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [changingPw, setChangingPw] = useState(false);
+
+  const changePassword = async () => {
+    if (newPw !== confirmPw) {
+      setPwMsg({ ok: false, text: '两次输入的新密码不一致' });
+      return;
+    }
+    if (newPw.length < 6) {
+      setPwMsg({ ok: false, text: '新密码至少 6 位' });
+      return;
+    }
+    setChangingPw(true);
+    setPwMsg(null);
+    const res = await authEvents().changePassword({ currentPassword: currentPw, newPassword: newPw });
+    setChangingPw(false);
+    if (res.ok) {
+      setPwMsg({ ok: true, text: '密码修改成功' });
+      setCurrentPw('');
+      setNewPw('');
+      setConfirmPw('');
+    } else {
+      setPwMsg({ ok: false, text: res.error ?? '修改失败' });
+    }
+  };
 
   const logout = () => {
     localStorage.removeItem('agentbean.token');
@@ -138,6 +166,20 @@ function AccountPanel() {
             </div>
             <button className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs hover:bg-neutral-50">关联</button>
           </div>
+        </div>
+      </section>
+
+      {/* Change password */}
+      <section className="rounded-lg border border-neutral-200 p-5" data-smoke="settings-password-section">
+        <h3 className="mb-4 text-sm font-semibold text-neutral-700">修改密码</h3>
+        <div className="space-y-3">
+          <input type="password" placeholder="当前密码" value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-400 placeholder:text-neutral-400" data-smoke="settings-password-current-input" />
+          <input type="password" placeholder="新密码（至少 6 位）" value={newPw} onChange={(e) => setNewPw(e.target.value)} className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-400 placeholder:text-neutral-400" data-smoke="settings-password-new-input" />
+          <input type="password" placeholder="确认新密码" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-400 placeholder:text-neutral-400" data-smoke="settings-password-confirm-input" />
+          {pwMsg && <div className={`text-sm ${pwMsg.ok ? 'text-emerald-600' : 'text-red-600'}`} data-smoke="settings-password-message">{pwMsg.text}</div>}
+          <button onClick={changePassword} disabled={changingPw || !currentPw || !newPw || !confirmPw} className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white hover:bg-neutral-800 disabled:opacity-50" data-smoke="settings-password-submit-btn">
+            {changingPw ? '修改中...' : '修改密码'}
+          </button>
         </div>
       </section>
 

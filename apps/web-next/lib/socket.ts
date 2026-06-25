@@ -362,6 +362,7 @@ export interface AuthEvents {
   whoami(): Promise<{ ok: boolean; user?: UserInfo; currentTeam?: TeamSummary; error?: string }>;
   inviteCreate(payload?: { networkId?: string; purpose?: 'user' | 'device' }): Promise<{ ok: boolean; invite?: InviteInfo; error?: string }>;
   deviceLogin(payload: { inviteCode: string; username: string; password: string }): Promise<{ ok: boolean; token?: string; networkId?: string; networkPath?: string; userId?: string; username?: string; role?: 'admin' | 'user'; deviceId?: string; error?: string }>;
+  changePassword(payload: { currentPassword: string; newPassword: string }): Promise<{ ok: boolean; error?: string }>;
 }
 
 export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
@@ -401,6 +402,9 @@ export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
         role: login.user.role,
         deviceId: complete.invite?.deviceId ?? credentials.deviceId,
       };
+    },
+    changePassword(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.auth.changePassword, payload);
     },
   };
 }

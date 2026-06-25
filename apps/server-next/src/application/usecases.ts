@@ -1,4 +1,5 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
 import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
@@ -42,6 +43,7 @@ export interface ServerNextUseCases {
   registerUser(input: RegisterUserInput): Promise<Ack<RegisterUserResult>>;
   loginUser(input: LoginUserInput): Promise<Ack<LoginUserResult>>;
   whoami(input: WhoamiInput): Promise<Ack<WhoamiResult>>;
+  changePassword(input: { userId: string; currentPassword: string; newPassword: string }): Promise<Ack<{}>>;
   listTeams(input: { userId: string }): Promise<Ack<ListTeamsResult>>;
   listAdminTeams(input: { userId: string }): Promise<Ack<{ teams: AdminTeamDto[] }>>;
   listAdminNetworks(input: { userId: string }): Promise<Ack<{ networks: AdminTeamDto[] }>>;
@@ -758,7 +760,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         role: 'user',
         primaryTeamId: teamId,
         currentTeamId: teamId,
-        passwordHash: hashPassword(registerInput.password),
+        passwordHash: await hashPassword(registerInput.password),
         createdAt: now,
         updatedAt: now,
       });
@@ -812,8 +814,21 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     async loginUser(loginInput) {
       const user = await repositories.users.getByUsername(normalizeUsername(loginInput.username));
-      if (!user || user.passwordHash !== hashPassword(loginInput.password)) {
+      if (!user) {
         return makeFailure('UNAUTHENTICATED', 'Invalid username or password');
+      }
+      // 支持 scrypt（新）与裸 SHA256（旧 server-next 遗留）两种哈希；旧哈希校验通过后顺带升级。
+      const okScrypt = await verifyPassword(loginInput.password, user.passwordHash);
+      const okLegacy = !okScrypt && isLegacyHash(user.passwordHash) && verifyLegacySha256(loginInput.password, user.passwordHash);
+      if (!okScrypt && !okLegacy) {
+        return makeFailure('UNAUTHENTICATED', 'Invalid username or password');
+      }
+      if (okLegacy) {
+        await repositories.users.updatePassword({
+          userId: user.id,
+          passwordHash: await hashPassword(loginInput.password),
+          updatedAt: clock.now(),
+        });
       }
 
       const joined = loginInput.joinCode
@@ -835,6 +850,27 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         currentTeam: toTeamDto(currentTeam, currentTeam.currentUserRole),
         ...(joined ? { joinedTeam: toTeamDto(joined.currentTeam, joined.currentTeam.currentUserRole) } : {}),
       });
+    },
+
+    async changePassword(input) {
+      const user = await repositories.users.getById(input.userId);
+      if (!user) {
+        return makeFailure('UNAUTHENTICATED', 'User not found');
+      }
+      const okScrypt = await verifyPassword(input.currentPassword, user.passwordHash);
+      const okLegacy = !okScrypt && isLegacyHash(user.passwordHash) && verifyLegacySha256(input.currentPassword, user.passwordHash);
+      if (!okScrypt && !okLegacy) {
+        return makeFailure('UNAUTHENTICATED', 'Current password is incorrect');
+      }
+      if (input.newPassword.length < 6) {
+        return makeFailure('VALIDATION_ERROR', 'Password must be at least 6 characters');
+      }
+      await repositories.users.updatePassword({
+        userId: user.id,
+        passwordHash: await hashPassword(input.newPassword),
+        updatedAt: clock.now(),
+      });
+      return makeSuccess({});
     },
 
     async whoami(whoamiInput) {
@@ -3945,10 +3981,6 @@ function normalizeUsername(username: string): string {
 
 function slugify(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'team';
-}
-
-function hashPassword(password: string): string {
-  return createHash('sha256').update(password).digest('hex');
 }
 
 function generateJoinCode(): string {

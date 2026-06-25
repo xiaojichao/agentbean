@@ -107,6 +107,7 @@ export interface UserRepository {
   listAll(): Promise<UserRecord[]>;
   setCurrentTeam(userId: ID, teamId: ID): Promise<void>;
   updateDescription(input: { userId: ID; description: string | null; updatedAt: UnixMs }): Promise<UserRecord | null>;
+  updatePassword(input: { userId: ID; passwordHash: string; updatedAt: UnixMs }): Promise<UserRecord | null>;
   delete(userId: ID): Promise<void>;
 }
 

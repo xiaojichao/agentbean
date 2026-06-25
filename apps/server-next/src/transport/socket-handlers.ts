@@ -25,6 +25,7 @@ export type SocketHandler = (payload: unknown, ack?: SocketAck) => Promise<void>
 type UseCaseName = keyof ServerNextUseCases;
 type BindOptions = Pick<WebSocketHandlerOptions, 'authenticatedUser'> & {
   currentTeamFromSession?: boolean;
+  requireAuthenticatedUser?: boolean;
 };
 const INTERNAL_SOCKET_ERROR_MESSAGE = 'Internal server error';
 
@@ -58,6 +59,10 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.auth.register, app, 'registerUser');
   bind(socket, WEB_EVENTS.auth.login, app, 'loginUser');
   bind(socket, WEB_EVENTS.auth.whoami, app, 'whoami');
+  bind(socket, WEB_EVENTS.auth.changePassword, app, 'changePassword', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
   bind(socket, WEB_EVENTS.team.list, app, 'listTeams', undefined, { authenticatedUser: options.authenticatedUser });
   const afterTeamMutation = (payload: unknown, result: unknown) =>
     options.afterTeamMutation?.(payload, result);
@@ -456,6 +461,22 @@ async function withAuthenticatedUserId(
   options: BindOptions = {},
 ): Promise<unknown> {
   const { authenticatedUser } = options;
+  if (options.requireAuthenticatedUser) {
+    if (!authenticatedUser) {
+      throw new UnauthenticatedSocketError();
+    }
+    const auth = await authenticatedUser();
+    if (!auth.hasToken || !auth.userId) {
+      throw new UnauthenticatedSocketError();
+    }
+    const enriched: Record<string, unknown> = payload && typeof payload === 'object'
+      ? { ...payload, userId: auth.userId }
+      : { userId: auth.userId };
+    if (auth.currentTeamId && (options.currentTeamFromSession || enriched.teamId === undefined)) {
+      enriched.teamId = auth.currentTeamId;
+    }
+    return enriched;
+  }
   if (!payload || typeof payload !== 'object' || !authenticatedUser) {
     return payload;
   }
