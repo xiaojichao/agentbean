@@ -63,14 +63,14 @@ export interface ServerNextUseCases {
   createDeviceInvite(input: CreateDeviceInviteInput): Promise<Ack<DeviceInviteAckDto>>;
   waitForDeviceInvite(input: WaitForDeviceInviteInput): Promise<Ack<DeviceInviteAckDto>>;
   completeDeviceInvite(input: CompleteDeviceInviteInput): Promise<Ack<DeviceInviteAckDto & { credentials: DeviceInviteCredentialsDto }>>;
-  deviceHelloFromCredentials(input: DeviceHelloFromCredentialsInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto }>>;
+  deviceHelloFromCredentials(input: DeviceHelloFromCredentialsInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto; affectedTeamIds: string[] }>>;
   listDevices(input: { teamId: string; userId: string }): Promise<Ack<{ devices: DeviceDto[] }>>;
   listDeviceAgents(input: { teamId: string; userId: string; deviceId: string }): Promise<Ack<{ agents: DeviceAgentListDto[]; runtimes: RuntimeDto[] }>>;
   getDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDetailDto }>>;
   renameDevice(input: { userId: string; deviceId: string; hostname: string }): Promise<Ack<{ device: DeviceDto }>>;
   deleteDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[]; channelTeamIds: string[] }>>;
   requestDeviceScan(input: RequestDeviceScanInput): Promise<Ack<RequestDeviceScanResult>>;
-  deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto }>>;
+  deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto; affectedTeamIds: string[] }>>;
   markDeviceOffline(input: { deviceId: string; timestamp: UnixMs }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[] }>>;
   reconcileDisconnectedDevices(input: { timestamp: UnixMs }): Promise<Ack<{ devices: DeviceDto[]; affectedTeamIds: string[] }>>;
   reportDeviceRuntimes(input: ReportDeviceRuntimesInput): Promise<Ack<{ runtimes: RuntimeDto[] }>>;
@@ -1378,8 +1378,27 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         updatedAt: now,
       });
 
+      // 设备重连：恢复其托管的 custom agent 为 online。custom agent 不由 daemon 扫描上报
+      //（registerDiscoveredAgents 只处理 source='scanned'），一旦因设备掉线被级联成 offline，
+      // 只能靠设备重连恢复——其在线语义等价于所绑定 device 在线。
+      const affectedTeamIds: string[] = [device.teamId];
+      const hostedAgents = await repositories.agents.listByDevice(device.id);
+      for (const agent of hostedAgents) {
+        if (agent.source !== 'custom' || agent.status === 'online') {
+          continue;
+        }
+        await repositories.agents.updateStatus({
+          agentId: agent.id,
+          status: 'online',
+          lastSeenAt: now,
+          lastError: agent.lastError,
+        });
+        affectedTeamIds.push(...agent.visibleTeamIds);
+      }
+
       return makeSuccess({
         device: await toDeviceDtoWithOwnerName(repositories, device),
+        affectedTeamIds: uniqueIds(affectedTeamIds),
         credentials: {
           token: issueDeviceToken({
             teamId: device.teamId,

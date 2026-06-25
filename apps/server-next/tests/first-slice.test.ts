@@ -2287,6 +2287,139 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('revives custom agents to online when their device reconnects via deviceHello', async () => {
+    let now = 700;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'device-1',
+        'runtime-1',
+        'agent-1',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+      hostname: 'shaw-mbp',
+    });
+    await app.reportDeviceRuntimes({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimes: [
+        {
+          adapterKind: 'codex',
+          name: 'Codex CLI',
+          command: '/opt/homebrew/bin/codex',
+          cwd: '/Users/shaw/AgentBean',
+          installed: true,
+        },
+      ],
+    });
+    await app.createCustomAgent({
+      userId: 'user-1',
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimeId: 'runtime-1',
+      name: 'mindmap-ppt',
+    });
+
+    // 设备掉线：级联把该设备托管的 custom agent 拉成 offline（markDeviceAndHostedAgentsOffline）
+    now = 800;
+    await app.markDeviceOffline({ deviceId: 'device-1', timestamp: now });
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', status: 'offline' }],
+    });
+
+    // 设备重连：deviceHello 让 device 重新 online，理应同时恢复其托管的 custom agent
+    now = 900;
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+      hostname: 'shaw-mbp',
+    });
+
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', status: 'online' }],
+    });
+  });
+
+  test('deviceHello revives custom agents but leaves scanned agents for registerDiscoveredAgents', async () => {
+    let now = 750;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-1', 'agent-1', 'agent-2']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+      hostname: 'MacBook Pro',
+    });
+    // scanned agent (agent-1) —— 由 daemon 扫描上报，其在线语义绑定到 registerDiscoveredAgents
+    await app.registerDiscoveredAgents({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      agents: [
+        {
+          name: 'Hermes Gateway',
+          adapterKind: 'hermes',
+          category: 'agentos-hosted',
+          command: '/usr/local/bin/hermes',
+        },
+      ],
+    });
+    // custom agent (agent-2) —— 用户声明，其在线语义绑定到所驻留 device
+    await app.createCustomAgent({
+      userId: 'user-1',
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      name: 'mindmap-ppt',
+      adapterKind: 'codex',
+      command: '/usr/local/bin/codex',
+    });
+
+    // 设备掉线：scanned 与 custom 都被级联成 offline
+    now = 800;
+    await app.markDeviceOffline({ deviceId: 'device-1', timestamp: now });
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: expect.arrayContaining([
+        expect.objectContaining({ id: 'agent-1', status: 'offline' }),
+        expect.objectContaining({ id: 'agent-2', status: 'offline' }),
+      ]),
+    });
+
+    // 设备重连：custom 恢复 online；scanned 必须保持 offline，等待 daemon 重新 registerDiscoveredAgents
+    now = 900;
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+      hostname: 'MacBook Pro',
+    });
+
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: expect.arrayContaining([
+        expect.objectContaining({ id: 'agent-1', status: 'offline' }),
+        expect.objectContaining({ id: 'agent-2', status: 'online' }),
+      ]),
+    });
+  });
+
   test('returns custom agent env only to the bound device token', async () => {
     const app = createInMemoryServerNext({
       now: () => 610,
