@@ -510,6 +510,14 @@ export async function runDaemonNextCli(
       reportScanSnapshot(fresh, { updated: true });
       saveScanCacheFn(fresh, config.profileId);
     },
+    onCredentialsChanged: (credentials) => {
+      saveAuthFn({
+        token: credentials.token,
+        serverUrl,
+        teamId: credentials.teamId ?? teamId,
+        ownerId: credentials.ownerId ?? ownerId,
+      }, { profileId: config.profileId });
+    },
     envResolver: async (envRef) => {
       if (!device.token) {
         throw new Error('Custom agent env resolver is not configured');

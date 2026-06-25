@@ -26,6 +26,7 @@ export function collectAgentBeanNextReadinessChecks({
   const serverNextFirstSliceTests = readFileSync(join(root, 'apps/server-next/tests/first-slice.test.ts'), 'utf8');
   const serverNextSocketIntegrationTests = readFileSync(join(root, 'apps/server-next/tests/socket-integration.test.ts'), 'utf8');
   const daemonNextCli = readFileSync(join(root, 'apps/daemon-next/src/cli.ts'), 'utf8');
+  const daemonNextProtocolClient = readFileSync(join(root, 'apps/daemon-next/src/index.ts'), 'utf8');
   const daemonNextAuthStore = readFileSync(join(root, 'apps/daemon-next/src/auth-store.ts'), 'utf8');
   const daemonNextCliTests = readFileSync(join(root, 'apps/daemon-next/tests/cli.test.ts'), 'utf8');
   const daemonNextAuthStoreTests = readFileSync(join(root, 'apps/daemon-next/tests/auth-store.test.ts'), 'utf8');
@@ -412,6 +413,19 @@ export function collectAgentBeanNextReadinessChecks({
         verificationMatrix.includes('P3-11b') &&
         parityBackfillAudit.includes('profile list/clear/rename CLI'),
       'Daemon onboarding must keep profile list/clear/rename CLI management and reconnect snapshot evidence under readiness protection',
+    ),
+    check(
+      'daemon-onboarding-token-refresh',
+      daemonNextProtocolClient.includes('onCredentialsChanged') &&
+        daemonNextProtocolClient.includes('readAckDeviceCredentials') &&
+        daemonNextCli.includes('onCredentialsChanged') &&
+        daemonNextCli.includes('saveAuthFn({') &&
+        daemonNextCliTests.includes('refreshed hello credentials are persisted back to the same profile') &&
+        daemonNextProtocolClientTests.includes('reports refreshed device credentials from initial hello and reconnect acknowledgements') &&
+        serverNextFirstSliceTests.includes('returns custom agent env only to the bound device token') &&
+        verificationMatrix.includes('P3-11c') &&
+        parityBackfillAudit.includes('token refresh persistence'),
+      'Daemon onboarding must persist refreshed device credentials from initial hello and reconnect acknowledgements so restarts do not reuse stale invite tokens',
     ),
     check(
       'product-surface-parity-contracts',

@@ -221,6 +221,47 @@ describe('daemon-next protocol client', () => {
     expect(resolvedTokens).toEqual(['fresh-device-token']);
   });
 
+  test('reports refreshed device credentials from initial hello and reconnect acknowledgements', async () => {
+    const socket = new FakeAgentSocket();
+    socket.helloAcks.push(
+      {
+        ok: true,
+        device: { id: 'device-1' },
+        credentials: { token: 'fresh-token-1', teamId: 'team-1', ownerId: 'user-1' },
+      },
+      {
+        ok: true,
+        device: { id: 'device-1' },
+        credentials: { token: 'fresh-token-2', teamId: 'team-1', ownerId: 'user-2' },
+      },
+    );
+    const onCredentialsChanged = vi.fn();
+    const device: DaemonDeviceConfig = { teamId: 'team-1', ownerId: 'user-1', token: 'stale-token' };
+    const client = createDaemonProtocolClient({
+      socket,
+      executor: async () => 'ok',
+      device,
+      runtimes: [],
+      agents: [],
+      onCredentialsChanged,
+    });
+
+    await client.start();
+    await socket.triggerReconnect();
+
+    expect(onCredentialsChanged).toHaveBeenNthCalledWith(1, {
+      token: 'fresh-token-1',
+      teamId: 'team-1',
+      ownerId: 'user-1',
+    });
+    expect(onCredentialsChanged).toHaveBeenNthCalledWith(2, {
+      token: 'fresh-token-2',
+      teamId: 'team-1',
+      ownerId: 'user-2',
+    });
+    expect(device.token).toBe('fresh-token-2');
+  });
+
   test('handles targeted scan requests by reporting fresh runtimes and agents', async () => {
     const socket = new FakeAgentSocket();
     let scanCount = 0;
