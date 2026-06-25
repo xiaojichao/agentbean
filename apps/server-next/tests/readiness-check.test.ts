@@ -52,6 +52,7 @@ describe('AgentBean Next readiness checker', () => {
       'daemon-next-register-batch-legacy-compatibility',
       'daemon-onboarding-profile-lifecycle',
       'daemon-onboarding-token-refresh',
+      'daemon-onboarding-lifecycle-green',
       'product-surface-parity-contracts',
       'parity-backfill-audit-status-table',
       'devices-parity-browser-smoke',
