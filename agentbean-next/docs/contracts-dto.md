@@ -648,7 +648,7 @@ export interface DispatchCustomAgentDto {
 - Server 不得把 raw env values 广播到 web clients、snapshots、logs 或无关 daemons。
 - 后续切片应将 raw env transport 替换为 server-issued secret reference 或 daemon-local secret storage。
 
-## Artifacts 与执行诊断第一版
+## Artifacts 与运行记录第一版
 
 AgentBean Next 第一版 artifacts 采用 daemon report 路径：旧 daemon 仍可只在 `dispatch:result` 里返回 `artifactIds`，新 daemon 可以同时返回 artifact metadata 与 workspace run metadata。Server 负责把 metadata 绑定到 agent reply message，并按 `teamId` 授权读取。
 

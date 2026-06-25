@@ -38,6 +38,8 @@ export function collectAgentBeanNextReadinessChecks({
   const webNextAgentsPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/agents/page.tsx'), 'utf8');
   const webNextAgentDetailPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/agents/[agentId]/page.tsx'), 'utf8');
   const webNextTasksPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/tasks/page.tsx'), 'utf8');
+  const webNextRunsPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/runs/page.tsx'), 'utf8');
+  const webNextRunDetailPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/runs/[runId]/page.tsx'), 'utf8');
   const webNextSettingsPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/settings/page.tsx'), 'utf8');
   const browserSmokeScript = readFileSync(join(root, 'scripts/smoke-agentbean-next-browser.mjs'), 'utf8');
   const legacyAgentNamespace = readFileSync(join(root, 'apps/server/src/namespaces/agent.ts'), 'utf8');
@@ -465,14 +467,12 @@ export function collectAgentBeanNextReadinessChecks({
         parityBackfillAudit.includes('| `devices` | Green |') &&
         parityBackfillAudit.includes('| `agents` | Green |') &&
         parityBackfillAudit.includes('| `tasks` | Green |') &&
-        parityBackfillAudit.includes('| `execution diagnostics` | Green |') &&
+        parityBackfillAudit.includes('| `runs` / `运行记录` | Green |') &&
         parityBackfillAudit.includes('| `settings` / `networks` | Green |') &&
         parityBackfillAudit.includes('| `dashboard` / `admin` | Green |') &&
         parityBackfillAudit.includes('| `daemon onboarding` | Green |') &&
         parityBackfillAudit.includes('| `channels` / `channel members` | Green |') &&
         parityBackfillAudit.includes('## 下一条 backfill slice') &&
-        parityBackfillAudit.includes('旧版没有独立 runs 心智') &&
-        parityBackfillAudit.includes('UI 已降级到诊断区') &&
         parityBackfillAudit.includes('所有核心产品入口已经进入 Green'),
       'AgentBean Next parity backfill audit must keep a Red/Yellow/Green product-entry status table and the next recommended slice',
     ),
@@ -522,6 +522,33 @@ export function collectAgentBeanNextReadinessChecks({
         verificationMatrix.includes('webui-task-business-flow') &&
         parityBackfillAudit.includes('| `tasks` | Green |'),
       'Task parity must stay covered by an App Router browser smoke for create, status update, reorder, delete/list disappearance, and refresh restore',
+    ),
+    check(
+      'runs-parity-browser-smoke',
+      browserSmokeScript.includes('webui-runs-business-flow') &&
+        browserSmokeScript.includes('workspace-runs-filter-status') &&
+        browserSmokeScript.includes('workspace-runs-filter-agent') &&
+        browserSmokeScript.includes('workspace-runs-filter-device') &&
+        browserSmokeScript.includes('workspace-runs-filter-group') &&
+        browserSmokeScript.includes('workspace-run-full-log-search') &&
+        browserSmokeScript.includes('workspace-run-source-message-link') &&
+        browserSmokeScript.includes('workspace-run-back-to-list') &&
+        webNextRunsPage.includes('data-smoke="workspace-runs-page"') &&
+        webNextRunsPage.includes('data-smoke="workspace-runs-filter-status"') &&
+        webNextRunsPage.includes('data-smoke="workspace-runs-filter-agent"') &&
+        webNextRunsPage.includes('data-smoke="workspace-runs-filter-device"') &&
+        webNextRunsPage.includes('data-smoke="workspace-runs-filter-group"') &&
+        webNextRunsPage.includes('data-smoke="workspace-runs-load-more"') &&
+        webNextRunsPage.includes('data-smoke="workspace-run-card"') &&
+        webNextRunDetailPage.includes('data-smoke="workspace-run-detail"') &&
+        webNextRunDetailPage.includes('data-smoke="workspace-run-back-to-list"') &&
+        webNextRunDetailPage.includes('data-smoke="workspace-run-command"') &&
+        webNextRunDetailPage.includes('data-smoke="workspace-run-full-log"') &&
+        webNextRunDetailPage.includes('data-smoke="workspace-run-artifact-tree"') &&
+        verificationMatrix.includes('webui-runs-business-flow') &&
+        verificationMatrix.includes('E2E-11g') &&
+        parityBackfillAudit.includes('| `runs` / `运行记录` | Green |'),
+      'Runs parity must stay covered by an App Router browser smoke for list filters, detail route, full log artifact, artifact tree, inline log search, source message jump, and refresh restore',
     ),
     check(
       'settings-parity-browser-smoke',

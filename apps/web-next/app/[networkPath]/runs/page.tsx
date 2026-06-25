@@ -355,13 +355,16 @@ export default function TeamWorkspaceRunsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl p-6">
+    <div className="mx-auto max-w-5xl p-6" data-smoke="workspace-runs-page">
       <div className="mb-5 flex items-center justify-between gap-4">
         <div>
           <h1 className="text-lg font-semibold text-neutral-900">执行记录</h1>
           <p className="mt-1 text-sm text-neutral-500">Agent 在设备上执行后的状态、日志和输出文件记录</p>
         </div>
-        <span className="rounded-full bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-600">
+        <span
+          className="rounded-full bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-600"
+          data-smoke="workspace-runs-count"
+        >
           {orderedRuns.length} 条
         </span>
       </div>
@@ -373,6 +376,7 @@ export default function TeamWorkspaceRunsPage() {
             value={statusFilter}
             onChange={(e) => updateFilter('status', e.target.value)}
             className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-sm"
+            data-smoke="workspace-runs-filter-status"
           >
             <option value="">全部</option>
             <option value="running">运行中</option>
@@ -387,6 +391,7 @@ export default function TeamWorkspaceRunsPage() {
             value={agentFilter}
             onChange={(e) => updateFilter('agentId', e.target.value)}
             className="max-w-[12rem] rounded-md border border-neutral-200 bg-white px-2 py-1 text-sm"
+            data-smoke="workspace-runs-filter-agent"
           >
             <option value="">全部</option>
             {Object.values(agents).map((agent) => (
@@ -402,6 +407,7 @@ export default function TeamWorkspaceRunsPage() {
             value={deviceFilter}
             onChange={(e) => updateFilter('deviceId', e.target.value)}
             className="max-w-[12rem] rounded-md border border-neutral-200 bg-white px-2 py-1 text-sm"
+            data-smoke="workspace-runs-filter-device"
           >
             <option value="">全部</option>
             {Object.values(devices).map((device) => (
@@ -417,6 +423,7 @@ export default function TeamWorkspaceRunsPage() {
             value={groupBy}
             onChange={(e) => updateFilter('groupBy', e.target.value)}
             className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-sm"
+            data-smoke="workspace-runs-filter-group"
           >
             <option value="">无</option>
             <option value="agent">Agent</option>
@@ -429,6 +436,7 @@ export default function TeamWorkspaceRunsPage() {
             type="button"
             onClick={() => router.replace(`/${np}/runs`, { scroll: false })}
             className="ml-auto rounded-md border border-neutral-200 px-2.5 py-1 text-xs font-medium text-neutral-600 hover:bg-neutral-50"
+            data-smoke="workspace-runs-filter-clear"
           >
             清除筛选
           </button>
@@ -444,7 +452,14 @@ export default function TeamWorkspaceRunsPage() {
       ) : groupBy ? (
         <div className="space-y-5">
           {groupedRuns.map((group) => (
-            <details key={group.key} open className="rounded-lg border border-neutral-200 bg-white">
+            <details
+              key={group.key}
+              open
+              className="rounded-lg border border-neutral-200 bg-white"
+              data-smoke="workspace-runs-group"
+              data-group-key={group.key}
+              data-group-label={group.label}
+            >
               <summary className="cursor-pointer px-4 py-2.5 text-sm font-semibold text-neutral-800">
                 {group.label}
                 <span className="ml-2 rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-normal text-neutral-500">
@@ -466,6 +481,7 @@ export default function TeamWorkspaceRunsPage() {
             onClick={loadMore}
             disabled={loadingMore}
             className="inline-flex items-center gap-2 rounded-md border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
+            data-smoke="workspace-runs-load-more"
           >
             {loadingMore && <Loader2 className="h-4 w-4 animate-spin" />}
             {loadingMore ? '加载中...' : '加载更多'}

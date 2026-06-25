@@ -108,4 +108,4 @@
 
 ## 当前结论
 
-AgentBean Next 已经能替代旧 AgentBean 的最小生产入口和核心 chat/daemon/custom-agent 业务闭环。#140/#141 的 post-flip 生产观察 baseline 已完成；下一步不应继续混合在 final flip 议题里，也不应再直接照旧 #141-#148 清单挑项。`runs` 已降级为执行诊断面并保留底层 `workspaceRun` 证据链，后续应按 `post-flip-follow-up-status.md` 的当前状态开新的 scoped issue/PR，优先推进 dashboard/admin、settings/device 后续页等产品切片。
+AgentBean Next 已经能替代旧 AgentBean 的最小生产入口和核心 chat/daemon/custom-agent 业务闭环。#140/#141 的 post-flip 生产观察 baseline 已完成；下一步不应继续混合在 final flip 议题里，也不应再直接照旧 #141-#148 清单挑项。`runs` / 运行记录已保留底层 `workspaceRun` 证据链，并补齐 App Router 入口级 Green 证据；后续应按 `post-flip-follow-up-status.md` 的当前状态开新的 scoped issue/PR，优先处理真实线上症状或新增产品需求。

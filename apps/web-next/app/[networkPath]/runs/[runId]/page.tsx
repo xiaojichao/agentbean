@@ -299,7 +299,11 @@ export default function RunDetailPage() {
     >
       {/* Header */}
       <div className="flex items-center gap-3">
-        <Link href={`/${np}/agents/${run.agentId}`} className="text-neutral-400 hover:text-neutral-600">
+        <Link
+          href={`/${np}/runs`}
+          className="text-neutral-400 hover:text-neutral-600"
+          data-smoke="workspace-run-back-to-list"
+        >
           <ArrowLeft className="w-5 h-5" />
         </Link>
         <div className="flex-1">
