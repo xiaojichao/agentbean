@@ -609,6 +609,65 @@ describe('server-next socket handlers', () => {
     });
   });
 
+  test('change-password requires an authenticated socket user', async () => {
+    const socket = new FakeSocket();
+    const app = {
+      changePassword: vi.fn(async (payload) => makeSuccess({ payload })),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, {
+      authenticatedUser: async () => ({
+        hasToken: false,
+        userId: null,
+        currentTeamId: null,
+      }),
+    });
+
+    await expect(socket.trigger(WEB_EVENTS.auth.changePassword, {
+      userId: 'user-client',
+      currentPassword: 'old-password',
+      newPassword: 'new-password',
+    })).resolves.toEqual({
+      ok: false,
+      error: 'UNAUTHENTICATED',
+      message: 'Invalid session token',
+    });
+    expect(app.changePassword).not.toHaveBeenCalled();
+  });
+
+  test('change-password uses the authenticated session user instead of payload userId', async () => {
+    const socket = new FakeSocket();
+    const app = {
+      changePassword: vi.fn(async (payload) => makeSuccess({ payload })),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, {
+      authenticatedUser: async () => ({
+        hasToken: true,
+        userId: 'user-session',
+        currentTeamId: null,
+      }),
+    });
+
+    await expect(socket.trigger(WEB_EVENTS.auth.changePassword, {
+      userId: 'user-client',
+      currentPassword: 'old-password',
+      newPassword: 'new-password',
+    })).resolves.toEqual({
+      ok: true,
+      payload: {
+        userId: 'user-session',
+        currentPassword: 'old-password',
+        newPassword: 'new-password',
+      },
+    });
+    expect(app.changePassword).toHaveBeenCalledWith({
+      userId: 'user-session',
+      currentPassword: 'old-password',
+      newPassword: 'new-password',
+    });
+  });
+
   test('does not expose internal socket exception messages in failure acks', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
