@@ -4,7 +4,8 @@ import { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, test } from 'vitest';
 import { AGENT_EVENTS, WEB_EVENTS } from '../../../packages/contracts/src/index';
 import { resetDaemonVersionCacheForTests } from '../src/daemon-version';
-import { createInMemoryServerNext } from '../src/index';
+import { createInMemoryRepositories, createInMemoryServerNext } from '../src/index';
+import { createServerNextUseCases } from '../src/application/usecases';
 import { attachServerNextNamespaces } from '../src/transport/socket-server';
 
 type SocketIoServerConstructor = new (server: HttpServer, options?: Record<string, unknown>) => {
@@ -107,6 +108,85 @@ describe('device rename and delete (end-to-end)', () => {
     // 删除后 getDevice → NOT_FOUND
     const after = await web.emitWithAck(WEB_EVENTS.device.get, { deviceId: 'device-1' });
     expect(after).toMatchObject({ ok: false, error: 'NOT_FOUND' });
+  });
+
+  test('renaming a device keeps alias records merged instead of splitting into duplicates', async () => {
+    // 复现：缺 machineId/profileId 的设备每次 hello 都新建记录（deviceHello 走 ids.nextId()）。
+    // 两台以相同 hostname 上线的「别名」记录，靠 deviceDisplayKey(=hostname) 在 listDevices 里合并成 1 条。
+    // 改名会改变被改名记录的 hostname → deviceDisplayKey 变化 → 别名分裂 → 列表出现重复。
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'device-1',
+        'device-2',
+        'runtime-1',
+        'agent-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+        'reply-1',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      agent.disconnect();
+    });
+    const registerAck = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    expect(registerAck).toMatchObject({ ok: true, user: { id: 'user-1', primaryTeamId: 'team-1' } });
+    const web = await connectClient(`${baseUrl}/web`, {
+      auth: { token: (registerAck as { token: string }).token },
+    });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+
+    // 两台缺 machineId 的设备，以相同 hostname 上线 → 两条别名记录（不同 id）
+    const helloA = await agent.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'MyMac',
+    });
+    const helloB = await agent.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'MyMac',
+    });
+    expect(helloA).toMatchObject({ ok: true });
+    expect(helloB).toMatchObject({ ok: true });
+    const deviceAId = (helloA as { device: { id: string } }).device.id;
+    expect((helloB as { device: { id: string } }).device.id).not.toBe(deviceAId);
+
+    // 改名前：别名靠相同 hostname 的 displayKey 合并，列表只 1 条
+    const listBefore = await web.emitWithAck(WEB_EVENTS.device.list, { teamId: 'team-1' });
+    expect(listBefore).toMatchObject({ ok: true });
+    expect((listBefore as { devices: unknown[] }).devices).toHaveLength(1);
+
+    // 改名其中一台
+    const renamed = await web.emitWithAck(WEB_EVENTS.device.rename, {
+      deviceId: deviceAId,
+      hostname: 'NewMac',
+    });
+    expect(renamed).toMatchObject({ ok: true });
+
+    // 改名后：别名不应分裂成两条重复记录
+    const listAfter = await web.emitWithAck(WEB_EVENTS.device.list, { teamId: 'team-1' });
+    expect(listAfter).toMatchObject({ ok: true });
+    expect((listAfter as { devices: unknown[] }).devices).toHaveLength(1);
   });
 
   test('rejects rename when caller is not a team member', async () => {
@@ -543,6 +623,119 @@ describe('device rename and delete (end-to-end)', () => {
     // web 发 select-directory，应通过 server 转发拿到 daemon 返回的 path
     const result = await web.emitWithAck(WEB_EVENTS.device.selectDirectory, { deviceId: 'device-1' });
     expect(result).toMatchObject({ ok: true, path: '/home/user/project' });
+  });
+
+  test('deviceHello with no machineId but same hostname links new record to existing canonical via canonicalDeviceId (repo layer)', async () => {
+    // canonicalDeviceId 是服务端内部字段，不出现在 DeviceDto，只能在 usecase+repo 层直接读取校验。
+    // 场景：缺 machineId/profileId 的同名设备重复 hello → 第二条记录的 canonicalDeviceId 应指向第一条。
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 1000 },
+      ids: { nextId: createIds(['device-1', 'device-2', 'device-3']) },
+    });
+
+    // deviceHello 校验 teams.isMember(teamId, ownerId)，先建 team 并把 owner 加为成员
+    await repositories.teams.create({
+      id: 'team-1',
+      name: 'AgentBean',
+      path: 'agentbean',
+      visibility: 'private',
+      ownerId: 'user-1',
+      currentUserRole: 'owner',
+      createdAt: 1000,
+    });
+    await repositories.teams.addMember({ teamId: 'team-1', userId: 'user-1', role: 'owner' });
+
+    // 第一台：无 machineId/profileId，有 hostname → 成为 canonical（canonicalDeviceId 保持 null）
+    const helloA = await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'MyMac',
+    });
+    expect(helloA).toMatchObject({ ok: true });
+    const idA = (helloA as { device: { id: string } }).device.id;
+
+    // 第二台：同样无 machineId/profileId、相同 hostname → 应建立别名关系
+    const helloB = await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'MyMac',
+    });
+    expect(helloB).toMatchObject({ ok: true });
+    const idB = (helloB as { device: { id: string } }).device.id;
+    expect(idB).not.toBe(idA);
+
+    const recordA = await repositories.devices.getById(idA);
+    const recordB = await repositories.devices.getById(idB);
+    expect(recordA?.canonicalDeviceId).toBeNull();
+    expect(recordB?.canonicalDeviceId).toBe(idA);
+
+    await app.renameDevice({ userId: 'user-1', deviceId: idA, hostname: 'Renamed Mac' });
+    const helloC = await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'MyMac',
+    });
+    expect(helloC).toMatchObject({ ok: true });
+    const idC = (helloC as { device: { id: string } }).device.id;
+    const recordC = await repositories.devices.getById(idC);
+    expect(recordC?.canonicalDeviceId).toBe(idA);
+  });
+
+  test('members resolve alias-hosted agents through canonicalDeviceId after canonical device rename', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'device-1',
+        'device-2',
+        'agent-1',
+      ]),
+    });
+
+    await expect(
+      app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' }),
+    ).resolves.toMatchObject({ ok: true, user: { id: 'user-1' } });
+
+    const helloA = await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'MyMac',
+    });
+    const helloB = await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'MyMac',
+    });
+    expect(helloA).toMatchObject({ ok: true });
+    expect(helloB).toMatchObject({ ok: true });
+    const canonicalDeviceId = (helloA as { device: { id: string } }).device.id;
+    const aliasDeviceId = (helloB as { device: { id: string } }).device.id;
+
+    await expect(
+      app.renameDevice({ userId: 'user-1', deviceId: canonicalDeviceId, hostname: 'Renamed Mac' }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      app.registerDiscoveredAgents({
+        teamId: 'team-1',
+        deviceId: aliasDeviceId,
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      }),
+    ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-1', deviceId: aliasDeviceId }] });
+
+    await expect(
+      app.listMembers({ teamId: 'team-1', userId: 'user-1' }),
+    ).resolves.toMatchObject({
+      ok: true,
+      agents: [{
+        id: 'agent-1',
+        deviceId: canonicalDeviceId,
+        deviceName: 'Renamed Mac',
+      }],
+    });
   });
 });
 

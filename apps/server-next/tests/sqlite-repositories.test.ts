@@ -1,4 +1,7 @@
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, test, vi } from 'vitest';
 import { createServerNextUseCases } from '../src/application/usecases';
 import type { WorkspaceRunRecord } from '../src/application/repositories';
@@ -13,6 +16,8 @@ type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { clo
 
 const requireFromWorkspace = createRequire(import.meta.url);
 const Database = loadBetterSqlite3();
+
+const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), '../src/infra/sqlite/migrations');
 
 describe('server-next SQLite repositories', () => {
   test('applies executable first-slice migrations to global and team databases', () => {
@@ -1962,6 +1967,183 @@ describe('server-next SQLite repositories', () => {
       });
     } finally {
       close();
+    }
+  });
+
+  test('device canonicalDeviceId round-trips through sqlite upsertHello', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const now = 1700_000_000_000;
+      // devices FKs reference users(id) and teams(id); seed them first.
+      globalDb
+        .prepare(
+          `INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run('user-1', 'shaw', 'hash', 'owner', now, now);
+      globalDb
+        .prepare(
+          `INSERT INTO teams (id, owner_id, name, path, visibility, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run('team-1', 'user-1', 'Team 1', 'team-1', 'private', now);
+      await repositories.devices.upsertHello({
+        id: 'dev-canonical',
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        status: 'online',
+        name: 'Mac',
+        machineId: null,
+        profileId: null,
+        canonicalDeviceId: null,
+        lastSeenAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await repositories.devices.upsertHello({
+        id: 'dev-alias',
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        status: 'online',
+        name: 'Mac',
+        machineId: null,
+        profileId: null,
+        canonicalDeviceId: 'dev-canonical',
+        lastSeenAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const alias = await repositories.devices.getById('dev-alias');
+      expect(alias?.canonicalDeviceId).toBe('dev-canonical');
+      const canonical = await repositories.devices.getById('dev-canonical');
+      expect(canonical?.canonicalDeviceId).toBeNull();
+    } finally {
+      close();
+    }
+  });
+
+  test('findCanonicalByDisplay matches same-name canonical record ignoring case/whitespace', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const now = 1700_000_000_000;
+      // devices FKs reference users(id) and teams(id); seed them first.
+      globalDb
+        .prepare(
+          `INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run('user-1', 'shaw', 'hash', 'owner', now, now);
+      globalDb
+        .prepare(
+          `INSERT INTO teams (id, owner_id, name, path, visibility, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run('team-1', 'user-1', 'Team 1', 'team-1', 'private', now);
+
+      const base = {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        status: 'online' as const,
+        machineId: null,
+        profileId: null,
+        canonicalDeviceId: null,
+        lastSeenAt: now,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await repositories.devices.upsertHello({ ...base, id: 'dev-1', name: '  MyMac  ' });
+
+      const found = await repositories.devices.findCanonicalByDisplay({
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        name: 'mymac',
+      });
+      expect(found?.id).toBe('dev-1');
+
+      // 别名记录（canonicalDeviceId 非空）不应被匹配为 canonical
+      await repositories.devices.upsertHello({
+        ...base,
+        id: 'dev-2',
+        name: 'mymac',
+        canonicalDeviceId: 'dev-1',
+      });
+      const found2 = await repositories.devices.findCanonicalByDisplay({
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        name: 'mymac',
+      });
+      expect(found2?.id).toBe('dev-1');
+
+      await repositories.devices.updateName({
+        deviceId: 'dev-1',
+        hostname: 'Renamed Mac',
+        updatedAt: now + 1,
+      });
+      const foundByAliasName = await repositories.devices.findCanonicalByDisplay({
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        name: 'mymac',
+      });
+      expect(foundByAliasName?.id).toBe('dev-1');
+      expect(foundByAliasName?.name).toBe('Renamed Mac');
+    } finally {
+      close();
+    }
+  });
+
+  test('migration 0008 backfills canonical_device_id for existing duplicate alias records', () => {
+    // 复刻升级前脏数据场景：0007 已加 canonical_device_id 列，但历史别名记录的 canonical 仍为 NULL。
+    // 0008 负责按 (team_id, owner_id, 归一化 hostname) 分组，把非代表记录指向 MIN(id)。
+    const globalDb = new Database(':memory:');
+    try {
+      globalDb.exec(`CREATE TABLE devices (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, owner_id TEXT NOT NULL, machine_id TEXT, profile_id TEXT, hostname TEXT, status TEXT NOT NULL DEFAULT 'offline', daemon_version TEXT, system_info TEXT, connect_command TEXT, canonical_device_id TEXT, last_seen_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
+      const now = Date.now();
+      const insert = globalDb.prepare('INSERT INTO devices (id, team_id, owner_id, machine_id, profile_id, hostname, status, last_seen_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      // 同 team/owner、hostname 归一化后相同（'MyMac' 与 '  mymac  ' → 'mymac'），均无 machineId/profileId → 别名集群。
+      insert.run('dev-older', 'team-1', 'user-1', null, null, 'MyMac', 'offline', now, now - 2000, now - 2000);
+      insert.run('dev-newer', 'team-1', 'user-1', null, null, '  mymac  ', 'online', now, now, now);
+      // 有 machineId/profileId 的真实设备，不属于别名集群，canonical 必须保持 NULL。
+      insert.run('dev-machine', 'team-1', 'user-1', 'm1', 'p1', 'MyMac', 'online', now, now, now);
+
+      globalDb.exec(readFileSync(join(MIGRATIONS_DIR, 'global/0008_device_canonical_backfill.sql'), 'utf8'));
+
+      const canonicalOf = (id: string) => (globalDb.prepare('SELECT canonical_device_id FROM devices WHERE id = ?').get(id) as { canonical_device_id: string | null }).canonical_device_id;
+      // 'MyMac' 与 '  mymac  ' 归一化相同 → 别名，统一指向 MIN(id)；字典序 'dev-newer' < 'dev-older'。
+      expect(canonicalOf('dev-older')).toBe('dev-newer');
+      // 代表记录的 canonical 保持 NULL（自身即为 canonical）。
+      expect(canonicalOf('dev-newer')).toBeNull();
+      // 有 machineId 的真实设备不受回填影响。
+      expect(canonicalOf('dev-machine')).toBeNull();
+    } finally {
+      globalDb.close();
+    }
+  });
+
+  test('migration 0008 backfill falls back to system_info.hostname when hostname column is empty', () => {
+    // deviceDisplayKey = normalizeDeviceKey(device.name ?? device.systemInfo?.hostname)；
+    // 当 hostname 列为 NULL 但 system_info.hostname (JSON) 存在时，0008 必须按 system_info.hostname 回退分组，
+    // 否则历史脏数据中此类别名记录无法被回填。
+    const globalDb = new Database(':memory:');
+    try {
+      globalDb.exec(`CREATE TABLE devices (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, owner_id TEXT NOT NULL, machine_id TEXT, profile_id TEXT, hostname TEXT, status TEXT NOT NULL DEFAULT 'offline', daemon_version TEXT, system_info TEXT, connect_command TEXT, canonical_device_id TEXT, last_seen_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
+      const now = Date.now();
+      const insert = globalDb.prepare('INSERT INTO devices (id, team_id, owner_id, machine_id, profile_id, hostname, system_info, status, last_seen_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      // hostname 列为 NULL，仅 system_info.hostname = 'Backup Mac' → displayKey 来源于 system_info。
+      insert.run('dev-sysinfo', 'team-1', 'user-1', null, null, null, JSON.stringify({ hostname: 'Backup Mac' }), 'offline', now, now - 1000, now - 1000);
+      // hostname 列为 'backup mac'，归一化后与上面 'Backup Mac' 相同 → 应被识别为同一别名集群。
+      insert.run('dev-column', 'team-1', 'user-1', null, null, 'backup mac', null, 'online', now, now, now);
+
+      globalDb.exec(readFileSync(join(MIGRATIONS_DIR, 'global/0008_device_canonical_backfill.sql'), 'utf8'));
+
+      const canonicalOf = (id: string) => (globalDb.prepare('SELECT canonical_device_id FROM devices WHERE id = ?').get(id) as { canonical_device_id: string | null }).canonical_device_id;
+      // 字典序 'dev-column' < 'dev-sysinfo'，故代表为 'dev-column'。
+      expect(canonicalOf('dev-sysinfo')).toBe('dev-column');
+      expect(canonicalOf('dev-column')).toBeNull();
+    } finally {
+      globalDb.close();
     }
   });
 });

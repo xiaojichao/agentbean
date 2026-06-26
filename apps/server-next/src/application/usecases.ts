@@ -1349,6 +1349,20 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('FORBIDDEN', 'Device owner is not a team member');
       }
 
+      // 解析持久化别名关系：缺 machineId/profileId 的新记录，若与现有同名 canonical 设备互为别名，
+      // 则 canonicalDeviceId 指向其 id；有 machineId 的设备走 findByMachineProfile（existing），关系保持 null。
+      let canonicalDeviceId: string | null = null;
+      if (existing) {
+        canonicalDeviceId = existing.canonicalDeviceId ?? null;
+      } else if ((!deviceInput.machineId || !deviceInput.profileId) && deviceInput.hostname) {
+        const alias = await repositories.devices.findCanonicalByDisplay({
+          teamId: deviceInput.teamId,
+          ownerId,
+          name: deviceInput.hostname,
+        });
+        if (alias) canonicalDeviceId = alias.id;
+      }
+
       let connectCommand = existing?.connectCommand;
       if (!existing && connectCommand === undefined && deviceInput.machineId && deviceInput.profileId) {
         const invite = await repositories.deviceInvites.findCompletedByMachineProfile({
@@ -1370,6 +1384,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         name: deviceInput.hostname,
         machineId: deviceInput.machineId,
         profileId: deviceInput.profileId,
+        canonicalDeviceId,
         daemonVersion: deviceInput.daemonVersion,
         systemInfo: deviceInput.systemInfo,
         connectCommand,
@@ -3403,7 +3418,37 @@ function toJoinLinkDto(link: JoinLinkRecord): JoinLinkDto {
   };
 }
 
+function collapseByCanonical(devices: DeviceRecord[]): DeviceRecord[] {
+  // 按 effectiveCanonical（canonicalDeviceId ?? id）折叠别名集群。
+  // 代表选取复用 preferDeviceRecord（与 dedupeByHeuristic 同一语义）：
+  // 选更新/更近活跃/host 状态更好的记录，与既有 canonical 代表语义保持一致。
+  const groups = new Map<string, DeviceRecord[]>();
+  for (const device of devices) {
+    const key = device.canonicalDeviceId ?? device.id;
+    const group = groups.get(key);
+    if (group) {
+      group.push(device);
+    } else {
+      groups.set(key, [device]);
+    }
+  }
+  const result: DeviceRecord[] = [];
+  for (const group of groups.values()) {
+    const representative = group.reduce(
+      (best, device) => (best === undefined ? device : preferDeviceRecord(device, best)),
+      group[0]!,
+    );
+    result.push(representative);
+  }
+  return result;
+}
+
 function dedupeDeviceRecords(devices: DeviceRecord[]): DeviceRecord[] {
+  // 先按持久化 canonical 关系折叠，再用原 heuristic（machineKey/displayKey）兜底处理未建立关系的记录。
+  return dedupeByHeuristic(collapseByCanonical(devices));
+}
+
+function dedupeByHeuristic(devices: DeviceRecord[]): DeviceRecord[] {
   const result: DeviceRecord[] = [];
   const indexByMachineKey = new Map<string, number>();
   const indexByDisplayKey = new Map<string, number>();
@@ -3435,12 +3480,17 @@ function resolveCanonicalDeviceRecord(device: DeviceRecord, teamDevices: DeviceR
 
 function deviceRecordsCanAlias(a: DeviceRecord, b: DeviceRecord): boolean {
   if (a.id === b.id) return true;
+  if (deviceCanonicalKey(a) === deviceCanonicalKey(b)) return true;
   const aMachineKey = deviceMachineKey(a);
   const bMachineKey = deviceMachineKey(b);
   if (aMachineKey && bMachineKey) return aMachineKey === bMachineKey;
   const aDisplayKey = deviceDisplayKey(a);
   const bDisplayKey = deviceDisplayKey(b);
   return Boolean(aDisplayKey && bDisplayKey && aDisplayKey === bDisplayKey && (!aMachineKey || !bMachineKey));
+}
+
+function deviceCanonicalKey(device: DeviceRecord): string {
+  return ['canonical-device', device.teamId, device.ownerId, device.canonicalDeviceId ?? device.id].join('\u0000');
 }
 
 function indexDeviceRecord(

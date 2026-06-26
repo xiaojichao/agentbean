@@ -421,6 +421,32 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           ) ?? null
         );
       },
+      async findCanonicalByDisplay(input) {
+        const norm = (value?: string | null) => (value ?? '').trim().toLowerCase();
+        return (
+          Array.from(devices.values())
+            .map((device) => {
+              if (
+                device.teamId !== input.teamId ||
+                device.ownerId !== input.ownerId ||
+                norm(device.name ?? device.systemInfo?.hostname) !== norm(input.name) ||
+                norm(device.name ?? device.systemInfo?.hostname) === ''
+              ) {
+                return null;
+              }
+              const canonical = device.canonicalDeviceId ? devices.get(device.canonicalDeviceId) : device;
+              return canonical?.teamId === device.teamId && canonical.ownerId === device.ownerId ? canonical : null;
+            })
+            .filter(
+              (device): device is NonNullable<typeof device> => device !== null,
+            )
+            .sort(
+              (a, b) =>
+                (b.updatedAt ?? 0) - (a.updatedAt ?? 0) ||
+                (a.id > b.id ? -1 : a.id < b.id ? 1 : 0),
+            )[0] ?? null
+        );
+      },
       async listByTeam(teamId) {
         return Array.from(devices.values()).filter((device) => device.teamId === teamId);
       },

@@ -86,6 +86,7 @@ export interface AgentConfigUpdate {
 export interface DeviceRecord extends DeviceDto {
   machineId?: string;
   profileId?: string;
+  canonicalDeviceId?: string | null;
   daemonVersion?: string;
   connectCommand?: string;
   createdAt: UnixMs;
@@ -177,6 +178,7 @@ export interface DeviceRepository {
     machineId: string;
     profileId: string;
   }): Promise<DeviceRecord | null>;
+  findCanonicalByDisplay(input: { teamId: ID; ownerId: ID; name: string }): Promise<DeviceRecord | null>;
   listByTeam(teamId: ID): Promise<DeviceRecord[]>;
   listAll(): Promise<DeviceRecord[]>;
   listConnected(): Promise<DeviceRecord[]>;
