@@ -1,7 +1,7 @@
-import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, test } from 'vitest';
+import { afterAll, describe, expect, test } from 'vitest';
 import { extractCodexReply, normalizeCodexExecArgs, renderCodexPayload } from '../src/executor-pty';
 import { createCommandExecutor } from '../src/executor';
 
@@ -60,6 +60,11 @@ describe('daemon-next codex PTY executor', () => {
 
   describe('codex dispatch via createCommandExecutor (PTY path)', () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-codex-pty-')));
+    // The cwd fixture is shared across the tests below; reclaim it once the whole block is done
+    // so a test run does not leak an agentbean-codex-pty-* dir under tmpdir every time.
+    afterAll(() => {
+      try { rmSync(cwd, { recursive: true, force: true }); } catch { /* already gone */ }
+    });
 
     test('runs codex under a PTY with normalized exec argv and reads the reply from --output-last-message', async () => {
       let capturedCommand: string | undefined;

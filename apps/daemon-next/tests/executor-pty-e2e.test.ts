@@ -9,10 +9,10 @@
 
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { describe, expect, test } from 'vitest';
+import { afterAll, describe, expect, test } from 'vitest';
 import { createCommandExecutor } from '../src/executor';
 
 const requireNative = createRequire(import.meta.url);
@@ -53,8 +53,15 @@ function hasUsableNodePty(): boolean {
 const testWithPty = hasUsableNodePty() ? test : test.skip;
 
 describe('daemon-next codex PTY executor (real node-pty end-to-end)', () => {
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-codex-e2e-')));
+  // Reclaim the fake-codex cwd once the block is done so a local run does not leak an
+  // agentbean-codex-e2e-* dir under tmpdir every time (the executor only cleans its own
+  // --output-last-message dir, not the cwd the test hands to it).
+  afterAll(() => {
+    try { rmSync(cwd, { recursive: true, force: true }); } catch { /* already gone */ }
+  });
+
   testWithPty('loads node-pty via the default loader and parses the reply from real PTY output', async () => {
-    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-codex-e2e-')));
     // A stand-in for the codex binary: prints a codex-labelled reply to the PTY and exits 0.
     const fakeCodex = join(cwd, 'fake-codex.mjs');
     writeFileSync(
