@@ -44,6 +44,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0004_join_links.sql');
   applyMigration(db, 'global/0005_device_connect_command.sql');
   applyMigration(db, 'global/0006_agent_gateway_instance_key.sql');
+  applyMigration(db, 'global/0007_device_canonical_alias.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
@@ -685,8 +686,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .prepare(
             `INSERT INTO devices (
               id, team_id, owner_id, machine_id, profile_id, hostname, status, daemon_version,
-              system_info, connect_command, last_seen_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              system_info, connect_command, canonical_device_id, last_seen_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               team_id = excluded.team_id,
               owner_id = excluded.owner_id,
@@ -697,6 +698,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               daemon_version = excluded.daemon_version,
               system_info = excluded.system_info,
               connect_command = excluded.connect_command,
+              canonical_device_id = excluded.canonical_device_id,
               last_seen_at = excluded.last_seen_at,
               updated_at = excluded.updated_at`,
           )
@@ -711,6 +713,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             device.daemonVersion ?? null,
             device.systemInfo ? JSON.stringify(device.systemInfo) : null,
             device.connectCommand ?? null,
+            device.canonicalDeviceId ?? null,
             device.lastSeenAt ?? device.updatedAt,
             device.createdAt,
             device.updatedAt,
@@ -1803,6 +1806,7 @@ function mapDevice(row: unknown): DeviceRecord | null {
     name: sqliteNullableText(row, 'hostname'),
     machineId: sqliteNullableText(row, 'machine_id'),
     profileId: sqliteNullableText(row, 'profile_id'),
+    canonicalDeviceId: sqliteNullableText(row, 'canonical_device_id') ?? null,
     daemonVersion: sqliteNullableText(row, 'daemon_version'),
     connectCommand: sqliteNullableText(row, 'connect_command'),
     systemInfo: systemInfoJson ? JSON.parse(systemInfoJson) as DeviceRecord['systemInfo'] : undefined,

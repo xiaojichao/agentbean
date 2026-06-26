@@ -1964,6 +1964,60 @@ describe('server-next SQLite repositories', () => {
       close();
     }
   });
+
+  test('device canonicalDeviceId round-trips through sqlite upsertHello', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const now = 1700_000_000_000;
+      // devices FKs reference users(id) and teams(id); seed them first.
+      globalDb
+        .prepare(
+          `INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run('user-1', 'shaw', 'hash', 'owner', now, now);
+      globalDb
+        .prepare(
+          `INSERT INTO teams (id, owner_id, name, path, visibility, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run('team-1', 'user-1', 'Team 1', 'team-1', 'private', now);
+      await repositories.devices.upsertHello({
+        id: 'dev-canonical',
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        status: 'online',
+        name: 'Mac',
+        machineId: null,
+        profileId: null,
+        canonicalDeviceId: null,
+        lastSeenAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await repositories.devices.upsertHello({
+        id: 'dev-alias',
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        status: 'online',
+        name: 'Mac',
+        machineId: null,
+        profileId: null,
+        canonicalDeviceId: 'dev-canonical',
+        lastSeenAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const alias = await repositories.devices.getById('dev-alias');
+      expect(alias?.canonicalDeviceId).toBe('dev-canonical');
+      const canonical = await repositories.devices.getById('dev-canonical');
+      expect(canonical?.canonicalDeviceId).toBeNull();
+    } finally {
+      close();
+    }
+  });
 });
 
 function openMigratedDatabases() {

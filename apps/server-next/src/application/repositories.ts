@@ -86,6 +86,7 @@ export interface AgentConfigUpdate {
 export interface DeviceRecord extends DeviceDto {
   machineId?: string;
   profileId?: string;
+  canonicalDeviceId?: string | null;
   daemonVersion?: string;
   connectCommand?: string;
   createdAt: UnixMs;
