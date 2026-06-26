@@ -45,6 +45,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0005_device_connect_command.sql');
   applyMigration(db, 'global/0006_agent_gateway_instance_key.sql');
   applyMigration(db, 'global/0007_device_canonical_alias.sql');
+  applyMigration(db, 'global/0008_device_canonical_backfill.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {

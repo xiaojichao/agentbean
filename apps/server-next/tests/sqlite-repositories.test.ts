@@ -1,4 +1,6 @@
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import { createServerNextUseCases } from '../src/application/usecases';
 import type { WorkspaceRunRecord } from '../src/application/repositories';
@@ -13,6 +15,9 @@ type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { clo
 
 const requireFromWorkspace = createRequire(import.meta.url);
 const Database = loadBetterSqlite3();
+
+// 与 src/infra/sqlite/repositories.ts 的 resolveMigrationPath 等价：测试从 apps/server-next 运行。
+const MIGRATIONS_DIR = join(process.cwd(), 'src/infra/sqlite/migrations');
 
 describe('server-next SQLite repositories', () => {
   test('applies executable first-slice migrations to global and team databases', () => {
@@ -2073,6 +2078,34 @@ describe('server-next SQLite repositories', () => {
       expect(found2?.id).toBe('dev-1');
     } finally {
       close();
+    }
+  });
+
+  test('migration 0008 backfills canonical_device_id for existing duplicate alias records', () => {
+    // 复刻升级前脏数据场景：0007 已加 canonical_device_id 列，但历史别名记录的 canonical 仍为 NULL。
+    // 0008 负责按 (team_id, owner_id, 归一化 hostname) 分组，把非代表记录指向 MIN(id)。
+    const globalDb = new Database(':memory:');
+    try {
+      globalDb.exec(`CREATE TABLE devices (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, owner_id TEXT NOT NULL, machine_id TEXT, profile_id TEXT, hostname TEXT, status TEXT NOT NULL DEFAULT 'offline', daemon_version TEXT, system_info TEXT, connect_command TEXT, canonical_device_id TEXT, last_seen_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
+      const now = Date.now();
+      const insert = globalDb.prepare('INSERT INTO devices (id, team_id, owner_id, machine_id, profile_id, hostname, status, last_seen_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      // 同 team/owner、hostname 归一化后相同（'MyMac' 与 '  mymac  ' → 'mymac'），均无 machineId/profileId → 别名集群。
+      insert.run('dev-older', 'team-1', 'user-1', null, null, 'MyMac', 'offline', now, now - 2000, now - 2000);
+      insert.run('dev-newer', 'team-1', 'user-1', null, null, '  mymac  ', 'online', now, now, now);
+      // 有 machineId/profileId 的真实设备，不属于别名集群，canonical 必须保持 NULL。
+      insert.run('dev-machine', 'team-1', 'user-1', 'm1', 'p1', 'MyMac', 'online', now, now, now);
+
+      globalDb.exec(readFileSync(join(MIGRATIONS_DIR, 'global/0008_device_canonical_backfill.sql'), 'utf8'));
+
+      const canonicalOf = (id: string) => (globalDb.prepare('SELECT canonical_device_id FROM devices WHERE id = ?').get(id) as { canonical_device_id: string | null }).canonical_device_id;
+      // 'MyMac' 与 '  mymac  ' 归一化相同 → 别名，统一指向 MIN(id)；字典序 'dev-newer' < 'dev-older'。
+      expect(canonicalOf('dev-older')).toBe('dev-newer');
+      // 代表记录的 canonical 保持 NULL（自身即为 canonical）。
+      expect(canonicalOf('dev-newer')).toBeNull();
+      // 有 machineId 的真实设备不受回填影响。
+      expect(canonicalOf('dev-machine')).toBeNull();
+    } finally {
+      globalDb.close();
     }
   });
 });
