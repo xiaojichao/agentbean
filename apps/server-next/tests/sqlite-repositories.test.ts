@@ -2018,6 +2018,63 @@ describe('server-next SQLite repositories', () => {
       close();
     }
   });
+
+  test('findCanonicalByDisplay matches same-name canonical record ignoring case/whitespace', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const now = 1700_000_000_000;
+      // devices FKs reference users(id) and teams(id); seed them first.
+      globalDb
+        .prepare(
+          `INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run('user-1', 'shaw', 'hash', 'owner', now, now);
+      globalDb
+        .prepare(
+          `INSERT INTO teams (id, owner_id, name, path, visibility, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run('team-1', 'user-1', 'Team 1', 'team-1', 'private', now);
+
+      const base = {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        status: 'online' as const,
+        machineId: null,
+        profileId: null,
+        canonicalDeviceId: null,
+        lastSeenAt: now,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await repositories.devices.upsertHello({ ...base, id: 'dev-1', name: '  MyMac  ' });
+
+      const found = await repositories.devices.findCanonicalByDisplay({
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        name: 'mymac',
+      });
+      expect(found?.id).toBe('dev-1');
+
+      // 别名记录（canonicalDeviceId 非空）不应被匹配为 canonical
+      await repositories.devices.upsertHello({
+        ...base,
+        id: 'dev-2',
+        name: 'mymac',
+        canonicalDeviceId: 'dev-1',
+      });
+      const found2 = await repositories.devices.findCanonicalByDisplay({
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        name: 'mymac',
+      });
+      expect(found2?.id).toBe('dev-1');
+    } finally {
+      close();
+    }
+  });
 });
 
 function openMigratedDatabases() {

@@ -178,6 +178,7 @@ export interface DeviceRepository {
     machineId: string;
     profileId: string;
   }): Promise<DeviceRecord | null>;
+  findCanonicalByDisplay(input: { teamId: ID; ownerId: ID; name: string }): Promise<DeviceRecord | null>;
   listByTeam(teamId: ID): Promise<DeviceRecord[]>;
   listAll(): Promise<DeviceRecord[]>;
   listConnected(): Promise<DeviceRecord[]>;

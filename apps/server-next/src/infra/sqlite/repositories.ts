@@ -730,6 +730,19 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             .get(input.teamId, input.machineId, input.profileId),
         );
       },
+      async findCanonicalByDisplay(input) {
+        return mapDevice(
+          globalDb
+            .prepare(
+              `SELECT * FROM devices
+               WHERE team_id = ? AND owner_id = ?
+                 AND LOWER(TRIM(hostname)) = LOWER(TRIM(?))
+                 AND canonical_device_id IS NULL
+               ORDER BY updated_at DESC, id DESC LIMIT 1`,
+            )
+            .get(input.teamId, input.ownerId, input.name),
+        );
+      },
       async listByTeam(teamId) {
         return globalDb
           .prepare('SELECT * FROM devices WHERE team_id = ? ORDER BY updated_at, id')
