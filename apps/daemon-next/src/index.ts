@@ -20,8 +20,10 @@ export { uploadArtifacts } from './artifact-uploader.js';
 export type { UploadedArtifact } from './artifact-uploader.js';
 export { createHttpEnvResolver } from './env-fetcher.js';
 import { createRescanController, type RescanController } from './rescan.js';
+import { createDispatchOutbox, type DispatchOutbox } from './outbox.js';
 
 export interface DaemonProtocolSocket {
+  readonly connected: boolean;
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
   on(event: string, handler: (payload: unknown, ack?: (result: unknown) => void) => Promise<void>): void;
   off?(event: string, handler: (payload: unknown, ack?: (result: unknown) => void) => Promise<void>): void;
@@ -153,10 +155,18 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       currentDeviceId = initialAnnouncement.deviceId;
       await applyCredentialsUpdate(initialAnnouncement.credentials);
       const cancelledDispatchIds = new Set<string>();
+      const outbox: DispatchOutbox = createDispatchOutbox(socket, {
+        onWarn: (message) => console.warn(message),
+      });
       socket.onReconnect?.(async () => {
-        const announcement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents);
-        currentDeviceId = announcement.deviceId;
-        await applyCredentialsUpdate(announcement.credentials);
+        try {
+          const announcement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents);
+          currentDeviceId = announcement.deviceId;
+          await applyCredentialsUpdate(announcement.credentials);
+        } catch (error) {
+          console.warn(`daemon reconnect announce failed (non-blocking): ${error instanceof Error ? error.message : String(error)}`);
+        }
+        await outbox.flush();
       });
 
       socket.on(AGENT_EVENTS.device.scanRequested, async (payload) => {
@@ -271,7 +281,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
 
           const artifacts = result.artifacts ?? [];
           const artifactIds = [...(result.artifactIds ?? []), ...productArtifactIds];
-          await socket.emitWithAck(AGENT_EVENTS.dispatch.result, {
+          outbox.sendOrEnqueue(AGENT_EVENTS.dispatch.result, {
             dispatchId: request.id,
             agentId: request.agentId,
             body: result.body,
@@ -283,7 +293,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           if (cancelledDispatchIds.delete(request.id)) {
             return;
           }
-          await socket.emitWithAck(AGENT_EVENTS.dispatch.error, {
+          outbox.sendOrEnqueue(AGENT_EVENTS.dispatch.error, {
             dispatchId: request.id,
             agentId: request.agentId,
             error: readErrorMessage(error),
@@ -335,7 +345,7 @@ async function announceDeviceSnapshot(
   const deviceId = readAckDeviceId(helloAck);
   const credentials = readAckDeviceCredentials(helloAck);
 
-  await reportDeviceSnapshot(socket, device.teamId, deviceId, runtimes, agents);
+      await reportDeviceSnapshot(socket, device.teamId, deviceId, runtimes, agents, { required: true });
   return { deviceId, ...(credentials ? { credentials } : {}) };
 }
 
@@ -345,17 +355,25 @@ async function reportDeviceSnapshot(
   deviceId: string,
   runtimes: DaemonRuntimeReport[],
   agents: DaemonAgentReport[],
+  options: { required?: boolean } = {},
 ): Promise<void> {
-  await socket.emitWithAck(AGENT_EVENTS.device.runtimes, {
-    teamId,
-    deviceId,
-    runtimes,
-  });
-  await socket.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
-    teamId,
-    deviceId,
-    agents,
-  });
+  const failureMode = options.required ? 'required' : 'non-blocking';
+  try {
+    await socket.emitWithAck(AGENT_EVENTS.device.runtimes, { teamId, deviceId, runtimes });
+  } catch (error) {
+    console.warn(`daemon emit ${AGENT_EVENTS.device.runtimes} failed (${failureMode}): ${error instanceof Error ? error.message : String(error)}`);
+    if (options.required) {
+      throw error;
+    }
+  }
+  try {
+    await socket.emitWithAck(AGENT_EVENTS.agent.registerBatch, { teamId, deviceId, agents });
+  } catch (error) {
+    console.warn(`daemon emit ${AGENT_EVENTS.agent.registerBatch} failed (${failureMode}): ${error instanceof Error ? error.message : String(error)}`);
+    if (options.required) {
+      throw error;
+    }
+  }
 }
 
 function readScanRequest(payload: unknown): { requestId: string; deviceId: string } {

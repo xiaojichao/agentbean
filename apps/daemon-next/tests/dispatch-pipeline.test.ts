@@ -1,7 +1,7 @@
 import { mkdtempSync, realpathSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS } from '../../../packages/contracts/src/index.js';
 import { createDaemonProtocolClient } from '../src/index';
 import type { DaemonProtocolSocket } from '../src/index';
@@ -10,14 +10,23 @@ interface FakeHarness {
   socket: DaemonProtocolSocket;
   emits: Array<{ event: string; payload: unknown }>;
   deliver: (event: string, payload: unknown) => Promise<void>;
+  setConnected: (connected: boolean) => void;
+  reconnect: () => Promise<void>;
+  setEmitError: (event: string, error: Error) => void;
 }
 
 function createFakeSocket(): FakeHarness {
   const emits: Array<{ event: string; payload: unknown }> = [];
   const handlers = new Map<string, Array<(payload: unknown) => Promise<void>>>();
+  const reconnectHandlers: Array<() => Promise<void>> = [];
+  const emitErrors = new Map<string, Error>();
+  const state = { connected: true };
   const socket: DaemonProtocolSocket = {
+    get connected() { return state.connected; },
     async emitWithAck(event, payload) {
       emits.push({ event, payload });
+      const error = emitErrors.get(event);
+      if (error) throw error;
       if (event === AGENT_EVENTS.device.hello) {
         return { device: { id: 'dev-1' } };
       }
@@ -34,6 +43,9 @@ function createFakeSocket(): FakeHarness {
         handlers.set(event, list.filter((h) => h !== handler));
       }
     },
+    onReconnect(handler) {
+      reconnectHandlers.push(handler);
+    },
   };
   return {
     socket,
@@ -43,6 +55,11 @@ function createFakeSocket(): FakeHarness {
         await h(payload);
       }
     },
+    setConnected: (c) => { state.connected = c; },
+    reconnect: async () => {
+      for (const h of reconnectHandlers) await h();
+    },
+    setEmitError: (event, error) => { emitErrors.set(event, error); },
   };
 }
 
@@ -118,5 +135,73 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     const resultEmit = harness.emits.find((e) => e.event === AGENT_EVENTS.dispatch.result);
     expect(resultEmit).toBeTruthy();
     expect((resultEmit!.payload as { body: string }).body).toBe('stub');
+  });
+
+  test('dispatch 结果在 socket 断开时入队，重连后补发，且不抛', async () => {
+    const harness = createFakeSocket();
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1' },
+      runtimes: [],
+      agents: [],
+      serverUrl: 'http://server.test',
+      fetch: async () => new Response('{}', { status: 200 }),
+      executor: async () => ({ body: 'done' }),
+    });
+    await client.start();
+
+    // 断开 socket 后投递 dispatch 请求
+    harness.setConnected(false);
+    const resultBefore = harness.emits.filter((e) => e.event === AGENT_EVENTS.dispatch.result).length;
+    await harness.deliver(AGENT_EVENTS.dispatch.request, { id: 'disp-1', agentId: 'a1', prompt: 'hi' });
+    await vi.waitFor(() => {
+      expect(harness.emits.filter((e) => e.event === AGENT_EVENTS.dispatch.result).length).toBe(resultBefore);
+    });
+
+    // 重连，flush 补发 result
+    harness.setConnected(true);
+    await harness.reconnect();
+    await vi.waitFor(() => {
+      expect(
+        harness.emits.some(
+          (e) => e.event === AGENT_EVENTS.dispatch.result && (e.payload as { dispatchId?: string }).dispatchId === 'disp-1',
+        ),
+      ).toBe(true);
+    });
+  });
+
+  test('scanRequested 在 snapshot 上报 emit 失败时不抛', async () => {
+    const harness = createFakeSocket();
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1' },
+      runtimes: [],
+      agents: [],
+      serverUrl: 'http://server.test',
+      fetch: async () => new Response('{}', { status: 200 }),
+      executor: async () => ({ body: 'x' }),
+      scan: async () => ({ runtimes: [{ adapterKind: 'codex', name: 'C', command: '/x' }], agents: [] }),
+    });
+    await client.start();
+    harness.setEmitError(AGENT_EVENTS.device.runtimes, new Error('socket has been disconnected'));
+    // deliver 会 await handler；若 reportDeviceSnapshot 未容错，runtimes reject 会让 deliver 抛
+    await harness.deliver(AGENT_EVENTS.device.scanRequested, { requestId: 'r1', deviceId: 'dev-1' });
+    expect(harness.emits.some((e) => e.event === AGENT_EVENTS.device.runtimes)).toBe(true);
+  });
+
+  test('初始 snapshot 上报 emit 失败时 start 不伪装成功', async () => {
+    const harness = createFakeSocket();
+    harness.setEmitError(AGENT_EVENTS.agent.registerBatch, new Error('socket has been disconnected'));
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1' },
+      runtimes: [],
+      agents: [],
+      serverUrl: 'http://server.test',
+      fetch: async () => new Response('{}', { status: 200 }),
+      executor: async () => ({ body: 'x' }),
+    });
+
+    await expect(client.start()).rejects.toThrow('socket has been disconnected');
   });
 });

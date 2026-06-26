@@ -47,10 +47,12 @@ describe('daemon-next protocol client', () => {
       prompt: 'hello',
     });
 
-    expect(socket.emitted.at(-1)).toEqual([
-      AGENT_EVENTS.dispatch.result,
-      { dispatchId: 'dispatch-1', agentId: 'agent-1', body: 'stub:hello' },
-    ]);
+    await vi.waitFor(() => {
+      expect(socket.emitted.at(-1)).toEqual([
+        AGENT_EVENTS.dispatch.result,
+        { dispatchId: 'dispatch-1', agentId: 'agent-1', body: 'stub:hello' },
+      ]);
+    });
   });
 
   test('forwards structured executor workspace run metadata with dispatch results', async () => {
@@ -96,33 +98,35 @@ describe('daemon-next protocol client', () => {
       prompt: 'hello',
     });
 
-    expect(socket.emitted.at(-1)).toEqual([
-      AGENT_EVENTS.dispatch.result,
-      {
-        dispatchId: 'dispatch-1',
-        agentId: 'agent-1',
-        body: 'stub:hello',
-        artifacts: [
-          {
-            id: 'workspace-log-dispatch-1',
-            filename: 'workspace-run.log',
-            mimeType: 'text/plain',
-            relativePath: 'logs/workspace-run.log',
-            pathKind: 'workspace',
-            contentBase64: Buffer.from('stdout:\nhello').toString('base64'),
+    await vi.waitFor(() => {
+      expect(socket.emitted.at(-1)).toEqual([
+        AGENT_EVENTS.dispatch.result,
+        {
+          dispatchId: 'dispatch-1',
+          agentId: 'agent-1',
+          body: 'stub:hello',
+          artifacts: [
+            {
+              id: 'workspace-log-dispatch-1',
+              filename: 'workspace-run.log',
+              mimeType: 'text/plain',
+              relativePath: 'logs/workspace-run.log',
+              pathKind: 'workspace',
+              contentBase64: Buffer.from('stdout:\nhello').toString('base64'),
+            },
+          ],
+          workspaceRun: {
+            status: 'succeeded',
+            cwd: '/workspace',
+            command: 'codex --model gpt-5.4',
+            logExcerpt: 'OPENAI_API_KEY=[redacted]\nfinished',
+            exitCode: 0,
+            startedAt: 1000,
+            completedAt: 1010,
           },
-        ],
-        workspaceRun: {
-          status: 'succeeded',
-          cwd: '/workspace',
-          command: 'codex --model gpt-5.4',
-          logExcerpt: 'OPENAI_API_KEY=[redacted]\nfinished',
-          exitCode: 0,
-          startedAt: 1000,
-          completedAt: 1010,
         },
-      },
-    ]);
+      ]);
+    });
   });
 
   test('re-announces device, runtimes, and agents after reconnect', async () => {
@@ -438,10 +442,12 @@ describe('daemon-next protocol client', () => {
       prompt: 'hello',
     });
 
-    expect(socket.emitted.at(-1)).toEqual([
-      AGENT_EVENTS.dispatch.error,
-      { dispatchId: 'dispatch-1', agentId: 'agent-1', error: 'executor failed' },
-    ]);
+    await vi.waitFor(() => {
+      expect(socket.emitted.at(-1)).toEqual([
+        AGENT_EVENTS.dispatch.error,
+        { dispatchId: 'dispatch-1', agentId: 'agent-1', error: 'executor failed' },
+      ]);
+    });
   });
 
   test('resolves custom agent env references before executing a dispatch', async () => {
@@ -484,10 +490,12 @@ describe('daemon-next protocol client', () => {
       env: { SECRET_TOKEN: 'secret-value' },
       envRef: { agentId: 'agent-1', teamId: 'team-1' },
     });
-    expect(socket.emitted.at(-1)).toEqual([
-      AGENT_EVENTS.dispatch.result,
-      { dispatchId: 'dispatch-1', agentId: 'agent-1', body: 'ok' },
-    ]);
+    await vi.waitFor(() => {
+      expect(socket.emitted.at(-1)).toEqual([
+        AGENT_EVENTS.dispatch.result,
+        { dispatchId: 'dispatch-1', agentId: 'agent-1', body: 'ok' },
+      ]);
+    });
   });
 
   test('merges resolved custom agent env with workspace env before executing', async () => {
@@ -559,14 +567,16 @@ describe('daemon-next protocol client', () => {
     });
 
     expect(executor).not.toHaveBeenCalled();
-    expect(socket.emitted.at(-1)).toEqual([
-      AGENT_EVENTS.dispatch.error,
-      {
-        dispatchId: 'dispatch-1',
-        agentId: 'agent-1',
-        error: 'Custom agent env resolver is not configured',
-      },
-    ]);
+    await vi.waitFor(() => {
+      expect(socket.emitted.at(-1)).toEqual([
+        AGENT_EVENTS.dispatch.error,
+        {
+          dispatchId: 'dispatch-1',
+          agentId: 'agent-1',
+          error: 'Custom agent env resolver is not configured',
+        },
+      ]);
+    });
   });
 
   test('does not execute a dispatch cancelled while env resolution is pending', async () => {
@@ -703,10 +713,12 @@ describe('daemon-next protocol client', () => {
       AGENTBEAN_OUTPUT_DIR: `${cwd}/.agentbean/runs/dispatch-1/outputs`,
       SECRET_TOKEN: 'secret-value',
     });
-    expect(socket.emitted.at(-1)).toEqual([
-      AGENT_EVENTS.dispatch.result,
-      { dispatchId: 'dispatch-1', agentId: 'agent-1', body: 'ok' },
-    ]);
+    await vi.waitFor(() => {
+      expect(socket.emitted.at(-1)).toEqual([
+        AGENT_EVENTS.dispatch.result,
+        { dispatchId: 'dispatch-1', agentId: 'agent-1', body: 'ok' },
+      ]);
+    });
   });
 });
 
@@ -717,6 +729,8 @@ class FakeAgentSocket implements DaemonProtocolSocket {
   private readonly handlers = new Map<string, (payload: unknown, ack?: (result: unknown) => void) => Promise<void>>();
   private reconnectHandler: (() => Promise<void>) | undefined;
   private deviceCounter = 0;
+
+  get connected(): boolean { return true; }
 
   async emitWithAck(event: string, payload: unknown): Promise<unknown> {
     this.emitted.push([event, payload]);

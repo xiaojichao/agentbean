@@ -13,6 +13,29 @@ import { clearAuth, listAuthProfiles, loadAuth, renameAuthProfile, saveAuth, typ
 import { sanitizeProfileId } from './profile-paths.js';
 import { loadOrCreateMachineId } from './machine-id.js';
 
+let globalErrorGuardsInstalled = false;
+function installGlobalErrorGuards(): void {
+  if (globalErrorGuardsInstalled) return;
+  globalErrorGuardsInstalled = true;
+  process.on('unhandledRejection', (reason) => {
+    if (isSocketDisconnectError(reason)) {
+      console.warn(`daemon unhandledRejection (suppressed): ${reason instanceof Error ? reason.message : String(reason)}`);
+      return;
+    }
+    throw reason instanceof Error ? reason : new Error(String(reason));
+  });
+  process.on('uncaughtException', (error) => {
+    console.error(`daemon uncaughtException: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+    process.exit(1);
+  });
+}
+
+function isSocketDisconnectError(reason: unknown): boolean {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  return message.includes('socket has been disconnected') || message.includes('Socket disconnected');
+}
+
 type CliStatusReporter = (message: string) => void;
 
 export interface SocketIoClientLike {
@@ -165,6 +188,7 @@ export function expandAllProfiles(config: DaemonNextCliConfig, profiles: AuthPro
 export function createSocketIoDaemonSocket(socket: SocketIoClientLike): DaemonProtocolSocket {
   const handlerMap = new WeakMap<(payload: unknown, ack?: (result: unknown) => void) => Promise<void>, (...args: unknown[]) => void>();
   return {
+    get connected() { return socket.connected; },
     emitWithAck(event, payload) {
       return socket.emitWithAck(event, payload);
     },
@@ -318,6 +342,7 @@ export async function runDaemonNextCli(
   config: DaemonNextCliConfig = parseDaemonNextCliConfig(),
   deps: DaemonNextCliDeps = {},
 ): Promise<void> {
+  installGlobalErrorGuards();
   const connectSocket = deps.connectSocket ?? connectSocketIoClient;
   const listAuthProfilesFn = deps.listAuthProfiles ?? listAuthProfiles;
   const loadAuthFn = deps.loadAuth ?? loadAuth;
