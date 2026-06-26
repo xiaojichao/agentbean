@@ -487,6 +487,40 @@ describe('web-next preview page interactions', () => {
     expect(detailHtml).toContain('api-result.md');
   });
 
+  test('loads workspace run detail when the URL run id matches an object prototype key', async () => {
+    const harness = createPreviewHarness(
+      {
+        'auth:whoami': () => ({
+          ok: true,
+          user: { id: 'user-1', username: 'shaw' },
+          currentTeam: { id: 'team-1', name: 'AgentBean' },
+        }),
+        'device:list': () => ({ ok: true, devices: [] }),
+        'agents:subscribe': () => ({ ok: true, agents: [] }),
+        'channels:subscribe': () => ({ ok: true, channels: [] }),
+      },
+      { href: 'http://agentbean-next.local/preview?workspaceRunId=toString' },
+    );
+    harness.localStorage.setItem(
+      'agentbean-next-preview-session',
+      JSON.stringify({
+        token: 'token-1',
+        user: { id: 'user-1', username: 'shaw' },
+        team: { id: 'team-1', name: 'AgentBean' },
+        channel: { id: 'channel-1', name: 'all' },
+      }),
+    );
+
+    await harness.socket.trigger('connect');
+
+    expect(harness.fetches.map((request) => request.url)).toContain(
+      '/api/teams/team-1/workspace-runs/toString?token=token-1',
+    );
+    const detailHtml = harness.element('workspace-run-detail').innerHTML;
+    expect(detailHtml).toContain('run-api-1');
+    expect(detailHtml).toContain('api-result.md');
+  });
+
   test('uploads selected composer files before sending artifact-backed messages', async () => {
     const defaultChannel = { id: 'channel-1', name: 'all', title: 'All', visibility: 'public' };
     const harness = createPreviewHarness({

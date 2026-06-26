@@ -2664,7 +2664,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async getWorkspaceRunDetail(runInput) {
       const result = await getAuthorizedWorkspaceRun(repositories, runInput);
       if (!result.ok) return result;
-      const artifacts = await repositories.artifacts.listByWorkspaceRun(result.workspaceRun.id);
+      const artifacts = await repositories.artifacts.listByWorkspaceRunForChannel({
+        teamId: result.workspaceRun.teamId,
+        channelId: result.workspaceRun.channelId,
+        runId: result.workspaceRun.id,
+      });
       return makeSuccess({
         workspaceRun: await toWorkspaceRunDto(repositories, result.workspaceRun),
         artifacts: artifacts.map(toArtifactDto),
@@ -2674,7 +2678,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async getWorkspaceRunLogFile(runInput) {
       const result = await getAuthorizedWorkspaceRun(repositories, runInput);
       if (!result.ok) return result;
-      const artifacts = await repositories.artifacts.listByWorkspaceRun(result.workspaceRun.id);
+      const artifacts = await repositories.artifacts.listByWorkspaceRunForChannel({
+        teamId: result.workspaceRun.teamId,
+        channelId: result.workspaceRun.channelId,
+        runId: result.workspaceRun.id,
+      });
       const logArtifact = artifacts.find(isWorkspaceRunLogArtifact);
       if (!logArtifact) {
         return makeFailure('NOT_FOUND', 'Workspace run log artifact not found');
@@ -2719,7 +2727,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (!channelAccess.ok) {
           continue;
         }
-        const artifacts = await repositories.artifacts.listByWorkspaceRun(run.id);
+        const artifacts = await repositories.artifacts.listByWorkspaceRunForChannel({
+          teamId: run.teamId,
+          channelId: run.channelId,
+          runId: run.id,
+        });
         visibleRuns.push({
           workspaceRun: run,
           artifacts: artifacts.map(toArtifactDto),
@@ -2757,7 +2769,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (!channelAccess.ok) {
           continue;
         }
-        const artifacts = await repositories.artifacts.listByWorkspaceRun(run.id);
+        const artifacts = await repositories.artifacts.listByWorkspaceRunForChannel({
+          teamId: run.teamId,
+          channelId: run.channelId,
+          runId: run.id,
+        });
         visibleRuns.push(toAgentWorkspaceRunListItem(run, artifacts));
         if (visibleRuns.length >= 50) {
           break;

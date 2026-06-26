@@ -167,6 +167,19 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('applies workspace artifact boundary index migration', () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      globalDb.exec('SELECT 1');
+      expect(indexNames(teamDb, 'artifacts')).toContain('idx_artifacts_workspace_run_boundary');
+      expect(teamDb.prepare("SELECT id FROM schema_migrations WHERE id = 'team/0008_artifact_workspace_boundary_index.sql'").get()).toEqual({
+        id: 'team/0008_artifact_workspace_boundary_index.sql',
+      });
+    } finally {
+      close();
+    }
+  });
+
   test('recreates join_links on a drifted database missing the table (regression for INTERNAL_ERROR)', () => {
     const { globalDb, close } = openMigratedDatabases();
     try {
@@ -1805,6 +1818,93 @@ describe('server-next SQLite repositories', () => {
         teamId: 'team-1',
         channelId: 'channel-1',
         filename: 'first.md',
+      });
+    } finally {
+      close();
+    }
+  });
+
+  test('workspace run detail only returns artifacts from the authorized run after id upsert collision', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => 2000 },
+        ids: {
+          nextId: createIds(['user-1', 'team-1', 'channel-1', 'user-2', 'team-2', 'channel-2']),
+        },
+      });
+
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+      await app.registerUser({ username: 'lin', password: 'secret', teamName: 'Lin Team' });
+      await repositories.workspaceRuns.create({
+        id: 'colliding-run',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        dispatchId: 'dispatch-1',
+        agentId: 'agent-1',
+        status: 'succeeded',
+        createdAt: 1000,
+        updatedAt: 1000,
+        artifactIds: ['artifact-team-1'],
+      });
+      await repositories.artifacts.create({
+        id: 'artifact-team-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        dispatchId: 'dispatch-1',
+        workspaceRunId: 'colliding-run',
+        uploaderId: 'agent-1',
+        filename: 'team-1.md',
+        mimeType: 'text/markdown',
+        sizeBytes: 11,
+        storagePath: 'artifacts/team-1/artifact-team-1/team-1.md',
+        relativePath: 'team-1.md',
+        pathKind: 'workspace',
+        createdAt: 1000,
+      });
+      await repositories.workspaceRuns.create({
+        id: 'colliding-run',
+        teamId: 'team-2',
+        channelId: 'channel-2',
+        dispatchId: 'dispatch-2',
+        agentId: 'agent-2',
+        status: 'succeeded',
+        createdAt: 1100,
+        updatedAt: 1100,
+        artifactIds: ['artifact-team-2'],
+      });
+      await repositories.artifacts.create({
+        id: 'artifact-team-2',
+        teamId: 'team-2',
+        channelId: 'channel-2',
+        dispatchId: 'dispatch-2',
+        workspaceRunId: 'colliding-run',
+        uploaderId: 'agent-2',
+        filename: 'team-2.md',
+        mimeType: 'text/markdown',
+        sizeBytes: 11,
+        storagePath: 'artifacts/team-2/artifact-team-2/team-2.md',
+        relativePath: 'team-2.md',
+        pathKind: 'workspace',
+        createdAt: 1100,
+      });
+
+      await expect(app.getWorkspaceRunDetail({
+        userId: 'user-2',
+        teamId: 'team-2',
+        runId: 'colliding-run',
+      })).resolves.toMatchObject({
+        ok: true,
+        workspaceRun: { teamId: 'team-2', channelId: 'channel-2' },
+        artifacts: [
+          {
+            id: 'artifact-team-2',
+            teamId: 'team-2',
+            channelId: 'channel-2',
+          },
+        ],
       });
     } finally {
       close();

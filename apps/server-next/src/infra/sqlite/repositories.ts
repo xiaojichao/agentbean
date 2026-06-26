@@ -56,6 +56,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0005_workspace_run_command.sql');
   applyMigration(db, 'team/0006_workspace_run_log_excerpt.sql');
   applyMigration(db, 'team/0007_workspace_run_pagination_index.sql');
+  applyMigration(db, 'team/0008_artifact_workspace_boundary_index.sql');
 }
 
 export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): ServerNextRepositories {
@@ -1410,10 +1411,10 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             return artifact;
           });
       },
-      async listByWorkspaceRun(runId) {
+      async listByWorkspaceRunForChannel(input) {
         return teamDb
-          .prepare('SELECT * FROM artifacts WHERE workspace_run_id = ? ORDER BY created_at')
-          .all(runId)
+          .prepare('SELECT * FROM artifacts WHERE team_id = ? AND channel_id = ? AND workspace_run_id = ? ORDER BY created_at')
+          .all(input.teamId, input.channelId, input.runId)
           .map((row) => {
             const artifact = mapArtifact(row);
             if (!artifact) {

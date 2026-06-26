@@ -890,6 +890,66 @@ describe('server-next dev server entry', () => {
     });
   });
 
+  test('translates unexpected workspace run detail errors into redacted JSON 500 responses', async () => {
+    const app = {
+      whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),
+      getWorkspaceRunDetail: vi.fn(async () => {
+        throw new Error('SQLite workspace artifact row could not be mapped');
+      }),
+    } as unknown as ServerNextUseCases;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir: '.agentbean-next-test', sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+
+    const response = await fetch(`${server.baseUrl}/api/teams/team-1/workspace-runs/run-1?token=token-1`);
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: 'INTERNAL_ERROR',
+      message: 'Internal server error',
+    });
+    expect(consoleError).toHaveBeenCalledWith(
+      '[server-next] HTTP request threw:',
+      expect.stringContaining('SQLite workspace artifact row could not be mapped'),
+    );
+    consoleError.mockRestore();
+  });
+
+  test('translates unexpected workspace run log errors into redacted JSON 500 responses', async () => {
+    const app = {
+      whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),
+      getWorkspaceRunLogFile: vi.fn(async () => {
+        throw new Error('log storage path leaked');
+      }),
+    } as unknown as ServerNextUseCases;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir: '.agentbean-next-test', sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+
+    const response = await fetch(`${server.baseUrl}/api/teams/team-1/workspace-runs/run-1/log?token=token-1`);
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: 'INTERNAL_ERROR',
+      message: 'Internal server error',
+    });
+    expect(consoleError).toHaveBeenCalledWith(
+      '[server-next] HTTP request threw:',
+      expect.stringContaining('log storage path leaked'),
+    );
+    consoleError.mockRestore();
+  });
+
   test('serves bounded workspace run log tail and search over HTTP', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-workspace-log-'));
     writeFileSync(join(dataDir, 'workspace-run.log'), [

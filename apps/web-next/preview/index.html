@@ -2292,7 +2292,7 @@
         membersError: null,
         membersLoading: false,
         activeWorkspaceRunId: readWorkspaceRunIdFromUrl(),
-        workspaceRunDetails: {},
+        workspaceRunDetails: Object.create(null),
         workspaceRunDetailLoadingId: null,
         workspaceRunDetailError: null,
       };
@@ -3909,7 +3909,7 @@
 
       function getWorkspaceRunDetail(runId) {
         if (!runId) return null;
-        if (state.workspaceRunDetails[runId]) {
+        if (Object.prototype.hasOwnProperty.call(state.workspaceRunDetails, runId)) {
           return state.workspaceRunDetails[runId];
         }
         for (const message of state.messages) {
@@ -3938,7 +3938,7 @@
 
       async function loadActiveWorkspaceRunDetail() {
         const runId = state.activeWorkspaceRunId;
-        if (!runId || !state.team?.id || !state.token || state.workspaceRunDetails[runId] || state.workspaceRunDetailLoadingId === runId) {
+        if (!runId || !state.team?.id || !state.token || Object.prototype.hasOwnProperty.call(state.workspaceRunDetails, runId) || state.workspaceRunDetailLoadingId === runId) {
           return;
         }
         state.workspaceRunDetailLoadingId = runId;
@@ -4241,7 +4241,7 @@
         state.members = [];
         state.membersError = null;
         state.membersLoading = false;
-        state.workspaceRunDetails = {};
+        state.workspaceRunDetails = Object.create(null);
         state.workspaceRunDetailLoadingId = null;
         state.workspaceRunDetailError = null;
         render();

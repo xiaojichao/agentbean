@@ -834,8 +834,11 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       async listByMessage(messageId) {
         return Array.from(artifacts.values()).filter((artifact) => artifact.messageId === messageId);
       },
-      async listByWorkspaceRun(runId) {
-        return Array.from(artifacts.values()).filter((artifact) => artifact.workspaceRunId === runId);
+      async listByWorkspaceRunForChannel(input) {
+        return Array.from(artifacts.values()).filter((artifact) =>
+          artifact.workspaceRunId === input.runId
+          && artifact.teamId === input.teamId
+          && artifact.channelId === input.channelId);
       },
       async deleteByChannel(channelId) {
         for (const [id, artifact] of artifacts) {
