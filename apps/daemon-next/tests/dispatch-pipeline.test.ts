@@ -169,4 +169,23 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
       ).toBe(true);
     });
   });
+
+  test('scanRequested 在 snapshot 上报 emit 失败时不抛', async () => {
+    const harness = createFakeSocket();
+    harness.setEmitError(AGENT_EVENTS.device.runtimes, new Error('socket has been disconnected'));
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1' },
+      runtimes: [],
+      agents: [],
+      serverUrl: 'http://server.test',
+      fetch: async () => new Response('{}', { status: 200 }),
+      executor: async () => ({ body: 'x' }),
+      scan: async () => ({ runtimes: [{ adapterKind: 'codex', name: 'C', command: '/x' }], agents: [] }),
+    });
+    await client.start();
+    // deliver 会 await handler；若 reportDeviceSnapshot 未容错，runtimes reject 会让 deliver 抛
+    await harness.deliver(AGENT_EVENTS.device.scanRequested, { requestId: 'r1', deviceId: 'dev-1' });
+    expect(harness.emits.some((e) => e.event === AGENT_EVENTS.device.runtimes)).toBe(true);
+  });
 });

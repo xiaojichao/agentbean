@@ -159,9 +159,13 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         onWarn: (message) => console.warn(message),
       });
       socket.onReconnect?.(async () => {
-        const announcement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents);
-        currentDeviceId = announcement.deviceId;
-        await applyCredentialsUpdate(announcement.credentials);
+        try {
+          const announcement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents);
+          currentDeviceId = announcement.deviceId;
+          await applyCredentialsUpdate(announcement.credentials);
+        } catch (error) {
+          console.warn(`daemon reconnect announce failed (non-blocking): ${error instanceof Error ? error.message : String(error)}`);
+        }
         await outbox.flush();
       });
 
@@ -352,16 +356,16 @@ async function reportDeviceSnapshot(
   runtimes: DaemonRuntimeReport[],
   agents: DaemonAgentReport[],
 ): Promise<void> {
-  await socket.emitWithAck(AGENT_EVENTS.device.runtimes, {
-    teamId,
-    deviceId,
-    runtimes,
-  });
-  await socket.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
-    teamId,
-    deviceId,
-    agents,
-  });
+  try {
+    await socket.emitWithAck(AGENT_EVENTS.device.runtimes, { teamId, deviceId, runtimes });
+  } catch (error) {
+    console.warn(`daemon emit ${AGENT_EVENTS.device.runtimes} failed (non-blocking): ${error instanceof Error ? error.message : String(error)}`);
+  }
+  try {
+    await socket.emitWithAck(AGENT_EVENTS.agent.registerBatch, { teamId, deviceId, agents });
+  } catch (error) {
+    console.warn(`daemon emit ${AGENT_EVENTS.agent.registerBatch} failed (non-blocking): ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function readScanRequest(payload: unknown): { requestId: string; deviceId: string } {
