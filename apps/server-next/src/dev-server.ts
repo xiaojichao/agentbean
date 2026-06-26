@@ -79,6 +79,7 @@ type NextAppFactory = (options: {
 type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { close(): void };
 type CorsOrigin = string | string[] | false;
 
+const INTERNAL_HTTP_ERROR_MESSAGE = 'Internal server error';
 const MAX_ARTIFACT_UPLOAD_BODY_BYTES = 10 * 1024 * 1024;
 const DEFAULT_WORKSPACE_LOG_TAIL_LINES = 200;
 const MAX_WORKSPACE_LOG_RESPONSE_BYTES = 64 * 1024;
@@ -151,44 +152,48 @@ export async function startServerNextDevServer(
   const webApp = webEntry === 'app' ? input.webApp ?? await createWebAppHandler(config) : null;
   const restCorsOrigin = resolveRestCorsOrigin();
   const httpServer = createServer(async (request, response) => {
-    if (handleRestCors(request, response, restCorsOrigin)) {
-      return;
+    try {
+      if (handleRestCors(request, response, restCorsOrigin)) {
+        return;
+      }
+      const url = new URL(request.url ?? '/', 'http://agentbean-next.local');
+      if (url.pathname === '/preview' || (url.pathname === '/' && !webApp)) {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end(readPreviewHtml());
+        return;
+      }
+      if (url.pathname === '/healthz') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ ok: true, service: 'agentbean-next-server' }));
+        return;
+      }
+      if (await handleAgentWorkspaceHttp({ app, config, request, response, url })) {
+        return;
+      }
+      if (await handleTeamWorkspaceRunsHttp({ app, config, request, response, url })) {
+        return;
+      }
+      if (await handleWorkspaceRunLogHttp({ app, config, request, response, url })) {
+        return;
+      }
+      if (await handleWorkspaceRunHttp({ app, config, request, response, url })) {
+        return;
+      }
+      if (await handleArtifactHttp({ app, config, request, response, url })) {
+        return;
+      }
+      if (await handleAgentEnvHttp({ app, config, request, response, url })) {
+        return;
+      }
+      if (webApp) {
+        await webApp.handle(request, response);
+        return;
+      }
+      response.writeHead(404, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: false, error: 'NOT_FOUND' }));
+    } catch (error) {
+      writeInternalHttpError(response, error);
     }
-    const url = new URL(request.url ?? '/', 'http://agentbean-next.local');
-    if (url.pathname === '/preview' || (url.pathname === '/' && !webApp)) {
-      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      response.end(readPreviewHtml());
-      return;
-    }
-    if (url.pathname === '/healthz') {
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ ok: true, service: 'agentbean-next-server' }));
-      return;
-    }
-    if (await handleAgentWorkspaceHttp({ app, config, request, response, url })) {
-      return;
-    }
-    if (await handleTeamWorkspaceRunsHttp({ app, config, request, response, url })) {
-      return;
-    }
-    if (await handleWorkspaceRunLogHttp({ app, config, request, response, url })) {
-      return;
-    }
-    if (await handleWorkspaceRunHttp({ app, config, request, response, url })) {
-      return;
-    }
-    if (await handleArtifactHttp({ app, config, request, response, url })) {
-      return;
-    }
-    if (await handleAgentEnvHttp({ app, config, request, response, url })) {
-      return;
-    }
-    if (webApp) {
-      await webApp.handle(request, response);
-      return;
-    }
-    response.writeHead(404, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ ok: false, error: 'NOT_FOUND' }));
   });
   const ioServer = new Server(httpServer, { cors: { origin: '*' } });
   const realtime = attachServerNextNamespaces(ioServer, app);
@@ -1008,6 +1013,18 @@ function writeAckFailure(response: ArtifactHttpInput['response'], ack: { error?:
           ? 409
           : 400;
   writeJson(response, status, { ok: false, error: ack.error ?? 'ERROR', message: ack.message });
+}
+
+function writeInternalHttpError(response: ArtifactHttpInput['response'], error: unknown): void {
+  console.error(
+    '[server-next] HTTP request threw:',
+    error instanceof Error ? error.stack ?? error.message : error,
+  );
+  if (!response.headersSent) {
+    writeJson(response, 500, { ok: false, error: 'INTERNAL_ERROR', message: INTERNAL_HTTP_ERROR_MESSAGE });
+    return;
+  }
+  response.end();
 }
 
 function writeJson(response: ArtifactHttpInput['response'], status: number, payload: unknown): void {
