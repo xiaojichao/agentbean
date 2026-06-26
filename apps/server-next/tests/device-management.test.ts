@@ -632,7 +632,7 @@ describe('device rename and delete (end-to-end)', () => {
     const app = createServerNextUseCases({
       repositories,
       clock: { now: () => 1000 },
-      ids: { nextId: createIds(['device-1', 'device-2']) },
+      ids: { nextId: createIds(['device-1', 'device-2', 'device-3']) },
     });
 
     // deviceHello 校验 teams.isMember(teamId, ownerId)，先建 team 并把 owner 加为成员
@@ -670,6 +670,17 @@ describe('device rename and delete (end-to-end)', () => {
     const recordB = await repositories.devices.getById(idB);
     expect(recordA?.canonicalDeviceId).toBeNull();
     expect(recordB?.canonicalDeviceId).toBe(idA);
+
+    await app.renameDevice({ userId: 'user-1', deviceId: idA, hostname: 'Renamed Mac' });
+    const helloC = await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'MyMac',
+    });
+    expect(helloC).toMatchObject({ ok: true });
+    const idC = (helloC as { device: { id: string } }).device.id;
+    const recordC = await repositories.devices.getById(idC);
+    expect(recordC?.canonicalDeviceId).toBe(idA);
   });
 
   test('members resolve alias-hosted agents through canonicalDeviceId after canonical device rename', async () => {

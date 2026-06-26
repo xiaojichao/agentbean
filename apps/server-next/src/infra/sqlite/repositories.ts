@@ -735,11 +735,14 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return mapDevice(
           globalDb
             .prepare(
-              `SELECT * FROM devices
-               WHERE team_id = ? AND owner_id = ?
-                 AND LOWER(TRIM(hostname)) = LOWER(TRIM(?))
-                 AND canonical_device_id IS NULL
-               ORDER BY updated_at DESC, id DESC LIMIT 1`,
+              `SELECT canonical.* FROM devices AS matched
+               JOIN devices AS canonical
+                 ON canonical.id = COALESCE(matched.canonical_device_id, matched.id)
+                AND canonical.team_id = matched.team_id
+                AND canonical.owner_id = matched.owner_id
+               WHERE matched.team_id = ? AND matched.owner_id = ?
+                 AND LOWER(TRIM(COALESCE(NULLIF(matched.hostname, ''), json_extract(matched.system_info, '$.hostname')))) = LOWER(TRIM(?))
+               ORDER BY canonical.updated_at DESC, canonical.id DESC LIMIT 1`,
             )
             .get(input.teamId, input.ownerId, input.name),
         );

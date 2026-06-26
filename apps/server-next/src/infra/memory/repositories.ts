@@ -425,13 +425,20 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const norm = (value?: string | null) => (value ?? '').trim().toLowerCase();
         return (
           Array.from(devices.values())
+            .map((device) => {
+              if (
+                device.teamId !== input.teamId ||
+                device.ownerId !== input.ownerId ||
+                norm(device.name ?? device.systemInfo?.hostname) !== norm(input.name) ||
+                norm(device.name ?? device.systemInfo?.hostname) === ''
+              ) {
+                return null;
+              }
+              const canonical = device.canonicalDeviceId ? devices.get(device.canonicalDeviceId) : device;
+              return canonical?.teamId === device.teamId && canonical.ownerId === device.ownerId ? canonical : null;
+            })
             .filter(
-              (device) =>
-                device.teamId === input.teamId &&
-                device.ownerId === input.ownerId &&
-                device.canonicalDeviceId == null &&
-                norm(device.name) === norm(input.name) &&
-                norm(device.name) !== '',
+              (device): device is NonNullable<typeof device> => device !== null,
             )
             .sort(
               (a, b) =>

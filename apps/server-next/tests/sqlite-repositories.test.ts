@@ -2076,6 +2076,19 @@ describe('server-next SQLite repositories', () => {
         name: 'mymac',
       });
       expect(found2?.id).toBe('dev-1');
+
+      await repositories.devices.updateName({
+        deviceId: 'dev-1',
+        hostname: 'Renamed Mac',
+        updatedAt: now + 1,
+      });
+      const foundByAliasName = await repositories.devices.findCanonicalByDisplay({
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        name: 'mymac',
+      });
+      expect(foundByAliasName?.id).toBe('dev-1');
+      expect(foundByAliasName?.name).toBe('Renamed Mac');
     } finally {
       close();
     }
