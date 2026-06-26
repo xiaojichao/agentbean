@@ -2108,6 +2108,31 @@ describe('server-next SQLite repositories', () => {
       globalDb.close();
     }
   });
+
+  test('migration 0008 backfill falls back to system_info.hostname when hostname column is empty', () => {
+    // deviceDisplayKey = normalizeDeviceKey(device.name ?? device.systemInfo?.hostname)；
+    // 当 hostname 列为 NULL 但 system_info.hostname (JSON) 存在时，0008 必须按 system_info.hostname 回退分组，
+    // 否则历史脏数据中此类别名记录无法被回填。
+    const globalDb = new Database(':memory:');
+    try {
+      globalDb.exec(`CREATE TABLE devices (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, owner_id TEXT NOT NULL, machine_id TEXT, profile_id TEXT, hostname TEXT, status TEXT NOT NULL DEFAULT 'offline', daemon_version TEXT, system_info TEXT, connect_command TEXT, canonical_device_id TEXT, last_seen_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
+      const now = Date.now();
+      const insert = globalDb.prepare('INSERT INTO devices (id, team_id, owner_id, machine_id, profile_id, hostname, system_info, status, last_seen_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      // hostname 列为 NULL，仅 system_info.hostname = 'Backup Mac' → displayKey 来源于 system_info。
+      insert.run('dev-sysinfo', 'team-1', 'user-1', null, null, null, JSON.stringify({ hostname: 'Backup Mac' }), 'offline', now, now - 1000, now - 1000);
+      // hostname 列为 'backup mac'，归一化后与上面 'Backup Mac' 相同 → 应被识别为同一别名集群。
+      insert.run('dev-column', 'team-1', 'user-1', null, null, 'backup mac', null, 'online', now, now, now);
+
+      globalDb.exec(readFileSync(join(MIGRATIONS_DIR, 'global/0008_device_canonical_backfill.sql'), 'utf8'));
+
+      const canonicalOf = (id: string) => (globalDb.prepare('SELECT canonical_device_id FROM devices WHERE id = ?').get(id) as { canonical_device_id: string | null }).canonical_device_id;
+      // 字典序 'dev-column' < 'dev-sysinfo'，故代表为 'dev-column'。
+      expect(canonicalOf('dev-sysinfo')).toBe('dev-column');
+      expect(canonicalOf('dev-column')).toBeNull();
+    } finally {
+      globalDb.close();
+    }
+  });
 });
 
 function openMigratedDatabases() {

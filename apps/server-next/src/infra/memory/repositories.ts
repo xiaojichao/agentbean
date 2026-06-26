@@ -433,7 +433,11 @@ export function createInMemoryRepositories(): ServerNextRepositories {
                 norm(device.name) === norm(input.name) &&
                 norm(device.name) !== '',
             )
-            .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0] ?? null
+            .sort(
+              (a, b) =>
+                (b.updatedAt ?? 0) - (a.updatedAt ?? 0) ||
+                (a.id > b.id ? -1 : a.id < b.id ? 1 : 0),
+            )[0] ?? null
         );
       },
       async listByTeam(teamId) {
