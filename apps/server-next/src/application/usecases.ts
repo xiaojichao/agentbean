@@ -1349,6 +1349,20 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('FORBIDDEN', 'Device owner is not a team member');
       }
 
+      // 解析持久化别名关系：缺 machineId/profileId 的新记录，若与现有同名 canonical 设备互为别名，
+      // 则 canonicalDeviceId 指向其 id；有 machineId 的设备走 findByMachineProfile（existing），关系保持 null。
+      let canonicalDeviceId: string | null = null;
+      if (existing) {
+        canonicalDeviceId = existing.canonicalDeviceId ?? null;
+      } else if ((!deviceInput.machineId || !deviceInput.profileId) && deviceInput.hostname) {
+        const alias = await repositories.devices.findCanonicalByDisplay({
+          teamId: deviceInput.teamId,
+          ownerId,
+          name: deviceInput.hostname,
+        });
+        if (alias) canonicalDeviceId = alias.id;
+      }
+
       let connectCommand = existing?.connectCommand;
       if (!existing && connectCommand === undefined && deviceInput.machineId && deviceInput.profileId) {
         const invite = await repositories.deviceInvites.findCompletedByMachineProfile({
@@ -1370,6 +1384,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         name: deviceInput.hostname,
         machineId: deviceInput.machineId,
         profileId: deviceInput.profileId,
+        canonicalDeviceId,
         daemonVersion: deviceInput.daemonVersion,
         systemInfo: deviceInput.systemInfo,
         connectCommand,

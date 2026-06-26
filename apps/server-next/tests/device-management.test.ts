@@ -4,7 +4,8 @@ import { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, test } from 'vitest';
 import { AGENT_EVENTS, WEB_EVENTS } from '../../../packages/contracts/src/index';
 import { resetDaemonVersionCacheForTests } from '../src/daemon-version';
-import { createInMemoryServerNext } from '../src/index';
+import { createInMemoryRepositories, createInMemoryServerNext } from '../src/index';
+import { createServerNextUseCases } from '../src/application/usecases';
 import { attachServerNextNamespaces } from '../src/transport/socket-server';
 
 type SocketIoServerConstructor = new (server: HttpServer, options?: Record<string, unknown>) => {
@@ -622,6 +623,53 @@ describe('device rename and delete (end-to-end)', () => {
     // web 发 select-directory，应通过 server 转发拿到 daemon 返回的 path
     const result = await web.emitWithAck(WEB_EVENTS.device.selectDirectory, { deviceId: 'device-1' });
     expect(result).toMatchObject({ ok: true, path: '/home/user/project' });
+  });
+
+  test('deviceHello with no machineId but same hostname links new record to existing canonical via canonicalDeviceId (repo layer)', async () => {
+    // canonicalDeviceId 是服务端内部字段，不出现在 DeviceDto，只能在 usecase+repo 层直接读取校验。
+    // 场景：缺 machineId/profileId 的同名设备重复 hello → 第二条记录的 canonicalDeviceId 应指向第一条。
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 1000 },
+      ids: { nextId: createIds(['device-1', 'device-2']) },
+    });
+
+    // deviceHello 校验 teams.isMember(teamId, ownerId)，先建 team 并把 owner 加为成员
+    await repositories.teams.create({
+      id: 'team-1',
+      name: 'AgentBean',
+      path: 'agentbean',
+      visibility: 'private',
+      ownerId: 'user-1',
+      currentUserRole: 'owner',
+      createdAt: 1000,
+    });
+    await repositories.teams.addMember({ teamId: 'team-1', userId: 'user-1', role: 'owner' });
+
+    // 第一台：无 machineId/profileId，有 hostname → 成为 canonical（canonicalDeviceId 保持 null）
+    const helloA = await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'MyMac',
+    });
+    expect(helloA).toMatchObject({ ok: true });
+    const idA = (helloA as { device: { id: string } }).device.id;
+
+    // 第二台：同样无 machineId/profileId、相同 hostname → 应建立别名关系
+    const helloB = await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'MyMac',
+    });
+    expect(helloB).toMatchObject({ ok: true });
+    const idB = (helloB as { device: { id: string } }).device.id;
+    expect(idB).not.toBe(idA);
+
+    const recordA = await repositories.devices.getById(idA);
+    const recordB = await repositories.devices.getById(idB);
+    expect(recordA?.canonicalDeviceId).toBeNull();
+    expect(recordB?.canonicalDeviceId).toBe(idA);
   });
 });
 
