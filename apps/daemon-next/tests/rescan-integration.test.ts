@@ -6,6 +6,7 @@ import type { DaemonProtocolSocket } from '../src/index';
 function fakeSocket(): DaemonProtocolSocket & { emits: Array<{ event: string; payload: unknown }> } {
   const emits: Array<{ event: string; payload: unknown }> = [];
   const socket: DaemonProtocolSocket = {
+    get connected() { return true; },
     async emitWithAck(event, payload) {
       emits.push({ event, payload });
       if (event === AGENT_EVENTS.device.hello) return { device: { id: 'dev-1' } };

@@ -20,8 +20,10 @@ export { uploadArtifacts } from './artifact-uploader.js';
 export type { UploadedArtifact } from './artifact-uploader.js';
 export { createHttpEnvResolver } from './env-fetcher.js';
 import { createRescanController, type RescanController } from './rescan.js';
+import { createDispatchOutbox, type DispatchOutbox } from './outbox.js';
 
 export interface DaemonProtocolSocket {
+  readonly connected: boolean;
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
   on(event: string, handler: (payload: unknown, ack?: (result: unknown) => void) => Promise<void>): void;
   off?(event: string, handler: (payload: unknown, ack?: (result: unknown) => void) => Promise<void>): void;
@@ -153,10 +155,14 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       currentDeviceId = initialAnnouncement.deviceId;
       await applyCredentialsUpdate(initialAnnouncement.credentials);
       const cancelledDispatchIds = new Set<string>();
+      const outbox: DispatchOutbox = createDispatchOutbox(socket, {
+        onWarn: (message) => console.warn(message),
+      });
       socket.onReconnect?.(async () => {
         const announcement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents);
         currentDeviceId = announcement.deviceId;
         await applyCredentialsUpdate(announcement.credentials);
+        await outbox.flush();
       });
 
       socket.on(AGENT_EVENTS.device.scanRequested, async (payload) => {
@@ -271,7 +277,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
 
           const artifacts = result.artifacts ?? [];
           const artifactIds = [...(result.artifactIds ?? []), ...productArtifactIds];
-          await socket.emitWithAck(AGENT_EVENTS.dispatch.result, {
+          outbox.sendOrEnqueue(AGENT_EVENTS.dispatch.result, {
             dispatchId: request.id,
             agentId: request.agentId,
             body: result.body,
@@ -283,7 +289,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           if (cancelledDispatchIds.delete(request.id)) {
             return;
           }
-          await socket.emitWithAck(AGENT_EVENTS.dispatch.error, {
+          outbox.sendOrEnqueue(AGENT_EVENTS.dispatch.error, {
             dispatchId: request.id,
             agentId: request.agentId,
             error: readErrorMessage(error),

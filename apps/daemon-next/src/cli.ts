@@ -165,6 +165,7 @@ export function expandAllProfiles(config: DaemonNextCliConfig, profiles: AuthPro
 export function createSocketIoDaemonSocket(socket: SocketIoClientLike): DaemonProtocolSocket {
   const handlerMap = new WeakMap<(payload: unknown, ack?: (result: unknown) => void) => Promise<void>, (...args: unknown[]) => void>();
   return {
+    get connected() { return socket.connected; },
     emitWithAck(event, payload) {
       return socket.emitWithAck(event, payload);
     },
