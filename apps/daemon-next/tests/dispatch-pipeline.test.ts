@@ -172,7 +172,6 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
 
   test('scanRequested 在 snapshot 上报 emit 失败时不抛', async () => {
     const harness = createFakeSocket();
-    harness.setEmitError(AGENT_EVENTS.device.runtimes, new Error('socket has been disconnected'));
     const client = createDaemonProtocolClient({
       socket: harness.socket,
       device: { teamId: 'team-1', ownerId: 'owner-1' },
@@ -184,8 +183,25 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
       scan: async () => ({ runtimes: [{ adapterKind: 'codex', name: 'C', command: '/x' }], agents: [] }),
     });
     await client.start();
+    harness.setEmitError(AGENT_EVENTS.device.runtimes, new Error('socket has been disconnected'));
     // deliver 会 await handler；若 reportDeviceSnapshot 未容错，runtimes reject 会让 deliver 抛
     await harness.deliver(AGENT_EVENTS.device.scanRequested, { requestId: 'r1', deviceId: 'dev-1' });
     expect(harness.emits.some((e) => e.event === AGENT_EVENTS.device.runtimes)).toBe(true);
+  });
+
+  test('初始 snapshot 上报 emit 失败时 start 不伪装成功', async () => {
+    const harness = createFakeSocket();
+    harness.setEmitError(AGENT_EVENTS.agent.registerBatch, new Error('socket has been disconnected'));
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1' },
+      runtimes: [],
+      agents: [],
+      serverUrl: 'http://server.test',
+      fetch: async () => new Response('{}', { status: 200 }),
+      executor: async () => ({ body: 'x' }),
+    });
+
+    await expect(client.start()).rejects.toThrow('socket has been disconnected');
   });
 });

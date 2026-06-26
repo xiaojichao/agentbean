@@ -18,11 +18,22 @@ function installGlobalErrorGuards(): void {
   if (globalErrorGuardsInstalled) return;
   globalErrorGuardsInstalled = true;
   process.on('unhandledRejection', (reason) => {
-    console.warn(`daemon unhandledRejection (suppressed): ${reason instanceof Error ? reason.message : String(reason)}`);
+    if (isSocketDisconnectError(reason)) {
+      console.warn(`daemon unhandledRejection (suppressed): ${reason instanceof Error ? reason.message : String(reason)}`);
+      return;
+    }
+    throw reason instanceof Error ? reason : new Error(String(reason));
   });
   process.on('uncaughtException', (error) => {
-    console.warn(`daemon uncaughtException (suppressed): ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`daemon uncaughtException: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+    process.exit(1);
   });
+}
+
+function isSocketDisconnectError(reason: unknown): boolean {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  return message.includes('socket has been disconnected') || message.includes('Socket disconnected');
 }
 
 type CliStatusReporter = (message: string) => void;

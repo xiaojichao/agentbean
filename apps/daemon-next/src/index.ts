@@ -345,7 +345,7 @@ async function announceDeviceSnapshot(
   const deviceId = readAckDeviceId(helloAck);
   const credentials = readAckDeviceCredentials(helloAck);
 
-  await reportDeviceSnapshot(socket, device.teamId, deviceId, runtimes, agents);
+      await reportDeviceSnapshot(socket, device.teamId, deviceId, runtimes, agents, { required: true });
   return { deviceId, ...(credentials ? { credentials } : {}) };
 }
 
@@ -355,16 +355,24 @@ async function reportDeviceSnapshot(
   deviceId: string,
   runtimes: DaemonRuntimeReport[],
   agents: DaemonAgentReport[],
+  options: { required?: boolean } = {},
 ): Promise<void> {
+  const failureMode = options.required ? 'required' : 'non-blocking';
   try {
     await socket.emitWithAck(AGENT_EVENTS.device.runtimes, { teamId, deviceId, runtimes });
   } catch (error) {
-    console.warn(`daemon emit ${AGENT_EVENTS.device.runtimes} failed (non-blocking): ${error instanceof Error ? error.message : String(error)}`);
+    console.warn(`daemon emit ${AGENT_EVENTS.device.runtimes} failed (${failureMode}): ${error instanceof Error ? error.message : String(error)}`);
+    if (options.required) {
+      throw error;
+    }
   }
   try {
     await socket.emitWithAck(AGENT_EVENTS.agent.registerBatch, { teamId, deviceId, agents });
   } catch (error) {
-    console.warn(`daemon emit ${AGENT_EVENTS.agent.registerBatch} failed (non-blocking): ${error instanceof Error ? error.message : String(error)}`);
+    console.warn(`daemon emit ${AGENT_EVENTS.agent.registerBatch} failed (${failureMode}): ${error instanceof Error ? error.message : String(error)}`);
+    if (options.required) {
+      throw error;
+    }
   }
 }
 
