@@ -3480,12 +3480,17 @@ function resolveCanonicalDeviceRecord(device: DeviceRecord, teamDevices: DeviceR
 
 function deviceRecordsCanAlias(a: DeviceRecord, b: DeviceRecord): boolean {
   if (a.id === b.id) return true;
+  if (deviceCanonicalKey(a) === deviceCanonicalKey(b)) return true;
   const aMachineKey = deviceMachineKey(a);
   const bMachineKey = deviceMachineKey(b);
   if (aMachineKey && bMachineKey) return aMachineKey === bMachineKey;
   const aDisplayKey = deviceDisplayKey(a);
   const bDisplayKey = deviceDisplayKey(b);
   return Boolean(aDisplayKey && bDisplayKey && aDisplayKey === bDisplayKey && (!aMachineKey || !bMachineKey));
+}
+
+function deviceCanonicalKey(device: DeviceRecord): string {
+  return ['canonical-device', device.teamId, device.ownerId, device.canonicalDeviceId ?? device.id].join('\u0000');
 }
 
 function indexDeviceRecord(

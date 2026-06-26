@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, test, vi } from 'vitest';
 import { createServerNextUseCases } from '../src/application/usecases';
 import type { WorkspaceRunRecord } from '../src/application/repositories';
@@ -16,8 +17,7 @@ type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { clo
 const requireFromWorkspace = createRequire(import.meta.url);
 const Database = loadBetterSqlite3();
 
-// 与 src/infra/sqlite/repositories.ts 的 resolveMigrationPath 等价：测试从 apps/server-next 运行。
-const MIGRATIONS_DIR = join(process.cwd(), 'src/infra/sqlite/migrations');
+const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), '../src/infra/sqlite/migrations');
 
 describe('server-next SQLite repositories', () => {
   test('applies executable first-slice migrations to global and team databases', () => {

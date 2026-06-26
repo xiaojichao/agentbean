@@ -671,6 +671,61 @@ describe('device rename and delete (end-to-end)', () => {
     expect(recordA?.canonicalDeviceId).toBeNull();
     expect(recordB?.canonicalDeviceId).toBe(idA);
   });
+
+  test('members resolve alias-hosted agents through canonicalDeviceId after canonical device rename', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'device-1',
+        'device-2',
+        'agent-1',
+      ]),
+    });
+
+    await expect(
+      app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' }),
+    ).resolves.toMatchObject({ ok: true, user: { id: 'user-1' } });
+
+    const helloA = await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'MyMac',
+    });
+    const helloB = await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'MyMac',
+    });
+    expect(helloA).toMatchObject({ ok: true });
+    expect(helloB).toMatchObject({ ok: true });
+    const canonicalDeviceId = (helloA as { device: { id: string } }).device.id;
+    const aliasDeviceId = (helloB as { device: { id: string } }).device.id;
+
+    await expect(
+      app.renameDevice({ userId: 'user-1', deviceId: canonicalDeviceId, hostname: 'Renamed Mac' }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      app.registerDiscoveredAgents({
+        teamId: 'team-1',
+        deviceId: aliasDeviceId,
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      }),
+    ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-1', deviceId: aliasDeviceId }] });
+
+    await expect(
+      app.listMembers({ teamId: 'team-1', userId: 'user-1' }),
+    ).resolves.toMatchObject({
+      ok: true,
+      agents: [{
+        id: 'agent-1',
+        deviceId: canonicalDeviceId,
+        deviceName: 'Renamed Mac',
+      }],
+    });
+  });
 });
 
 async function startSocketServer(app: ReturnType<typeof createInMemoryServerNext>) {
