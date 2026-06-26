@@ -81,6 +81,34 @@ describe('DispatchOutbox', () => {
     expect(emitWithAck).toHaveBeenCalledWith('dispatch.error', { dispatchId: 'd1', error: 'second' });
   });
 
+  test('flush 不会删除发送期间重新入队的同 dispatchId 新项', async () => {
+    let resolveFirstSend: (() => void) | undefined;
+    let calls = 0;
+    const emitWithAck = vi.fn().mockImplementation(() => {
+      calls += 1;
+      if (calls === 1) {
+        return new Promise((resolve) => {
+          resolveFirstSend = () => resolve({ ok: true });
+        });
+      }
+      return Promise.reject(new Error('socket has been disconnected'));
+    });
+    const { socket, setConnected } = createMockSocket({ connected: false, emitWithAck });
+    const outbox = createDispatchOutbox(socket);
+
+    outbox.sendOrEnqueue('dispatch.result', { dispatchId: 'd1', body: 'old' });
+    setConnected(true);
+    const flushing = outbox.flush();
+    await vi.waitFor(() => expect(emitWithAck).toHaveBeenCalledTimes(1));
+
+    outbox.sendOrEnqueue('dispatch.error', { dispatchId: 'd1', error: 'new' });
+    await vi.waitFor(() => expect(outbox.size()).toBe(1));
+    resolveFirstSend?.();
+    await flushing;
+
+    expect(outbox.size()).toBe(1);
+  });
+
   test('payload 缺 dispatchId 时直接发送、永不入队', async () => {
     const emitWithAck = vi.fn().mockResolvedValue({ ok: true });
     const { socket } = createMockSocket({ connected: true, emitWithAck });

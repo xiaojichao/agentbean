@@ -208,6 +208,9 @@ export async function authenticatePreviewWebSession(
 
 function createDaemonSocket(socket: PreviewSocketLike): DaemonProtocolSocket {
   return {
+    get connected() {
+      return socket.connected;
+    },
     emitWithAck(event, payload) {
       return socket.emitWithAck(event, payload);
     },

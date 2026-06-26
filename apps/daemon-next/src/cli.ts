@@ -24,7 +24,6 @@ function installGlobalErrorGuards(): void {
     console.warn(`daemon uncaughtException (suppressed): ${error instanceof Error ? error.message : String(error)}`);
   });
 }
-installGlobalErrorGuards();
 
 type CliStatusReporter = (message: string) => void;
 
@@ -332,6 +331,7 @@ export async function runDaemonNextCli(
   config: DaemonNextCliConfig = parseDaemonNextCliConfig(),
   deps: DaemonNextCliDeps = {},
 ): Promise<void> {
+  installGlobalErrorGuards();
   const connectSocket = deps.connectSocket ?? connectSocketIoClient;
   const listAuthProfilesFn = deps.listAuthProfiles ?? listAuthProfiles;
   const loadAuthFn = deps.loadAuth ?? loadAuth;

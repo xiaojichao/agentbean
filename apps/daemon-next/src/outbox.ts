@@ -84,7 +84,9 @@ export function createDispatchOutbox(
         for (const [dispatchId, item] of Array.from(queue.entries())) {
           const ok = await trySend(item);
           if (ok) {
-            queue.delete(dispatchId);
+            if (queue.get(dispatchId) === item) {
+              queue.delete(dispatchId);
+            }
           }
         }
       } finally {
