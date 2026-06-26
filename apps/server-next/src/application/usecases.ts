@@ -3418,7 +3418,32 @@ function toJoinLinkDto(link: JoinLinkRecord): JoinLinkDto {
   };
 }
 
+function collapseByCanonical(devices: DeviceRecord[]): DeviceRecord[] {
+  // 按 effectiveCanonical（canonicalDeviceId ?? id）折叠别名集群；同组取 canonical 自身为代表。
+  const groups = new Map<string, DeviceRecord[]>();
+  for (const device of devices) {
+    const key = device.canonicalDeviceId ?? device.id;
+    const group = groups.get(key);
+    if (group) {
+      group.push(device);
+    } else {
+      groups.set(key, [device]);
+    }
+  }
+  const result: DeviceRecord[] = [];
+  for (const group of groups.values()) {
+    const selfCanonical = group.find((d) => d.canonicalDeviceId == null);
+    result.push(selfCanonical ?? group[0]!);
+  }
+  return result;
+}
+
 function dedupeDeviceRecords(devices: DeviceRecord[]): DeviceRecord[] {
+  // 先按持久化 canonical 关系折叠，再用原 heuristic（machineKey/displayKey）兜底处理未建立关系的记录。
+  return dedupeByHeuristic(collapseByCanonical(devices));
+}
+
+function dedupeByHeuristic(devices: DeviceRecord[]): DeviceRecord[] {
   const result: DeviceRecord[] = [];
   const indexByMachineKey = new Map<string, number>();
   const indexByDisplayKey = new Map<string, number>();
