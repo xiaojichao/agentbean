@@ -9,7 +9,7 @@
 
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -33,21 +33,30 @@ function hasNodePtyBinary(): boolean {
 
 function hasUsableNodePty(): boolean {
   if (!hasNodePtyBinary()) return false;
-  const probe = [
-    "const pty = require('node-pty');",
-    "const child = pty.spawn('/bin/echo', ['agentbean-pty-smoke'], { name: 'xterm-color', cols: 80, rows: 30, cwd: process.cwd(), env: process.env });",
-    "let output = '';",
-    "child.onData((chunk) => { output += chunk; });",
-    "child.onExit((event) => { process.exit(event.exitCode === 0 && output.includes('agentbean-pty-smoke') ? 0 : 2); });",
-    "setTimeout(() => { try { child.kill('SIGKILL'); } catch {} process.exit(3); }, 1000).unref();",
-  ].join('\n');
-  const result = spawnSync(process.execPath, ['-e', probe], {
-    cwd: process.cwd(),
-    encoding: 'utf8',
-    timeout: 2000,
-    stdio: 'ignore',
+  return [0, 1, 2].every(() => {
+    const probeCwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-pty-probe-')));
+    const fakeCodex = join(probeCwd, 'fake-codex.mjs');
+    try {
+      writeFileSync(fakeCodex, "process.stdout.write('agentbean-pty-smoke\\n'); process.exit(0);\n");
+      const probe = [
+        "const pty = require('node-pty');",
+        `const child = pty.spawn(process.execPath, [${JSON.stringify(fakeCodex)}, '# user\\nhi'], { name: 'xterm-color', cols: 80, rows: 30, cwd: ${JSON.stringify(probeCwd)}, env: process.env });`,
+        "let output = '';",
+        "child.onData((chunk) => { output += chunk; });",
+        "child.onExit((event) => { process.exit(event.exitCode === 0 && output.includes('agentbean-pty-smoke') ? 0 : 2); });",
+        "setTimeout(() => { try { child.kill('SIGKILL'); } catch {} process.exit(3); }, 1000).unref();",
+      ].join('\n');
+      const result = spawnSync(process.execPath, ['-e', probe], {
+        cwd: probeCwd,
+        encoding: 'utf8',
+        timeout: 2000,
+        stdio: 'ignore',
+      });
+      return result.status === 0;
+    } finally {
+      try { rmSync(probeCwd, { recursive: true, force: true }); } catch { /* already gone */ }
+    }
   });
-  return result.status === 0;
 }
 
 const testWithPty = hasUsableNodePty() ? test : test.skip;
@@ -57,22 +66,26 @@ describe('daemon-next codex PTY executor (real node-pty end-to-end)', () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-codex-e2e-')));
     // A stand-in for the codex binary: prints a codex-labelled reply to the PTY and exits 0.
     const fakeCodex = join(cwd, 'fake-codex.mjs');
-    writeFileSync(
-      fakeCodex,
-      `process.stdout.write('codex\\nreal pty reply\\nhook: done');\n`,
-    );
+    try {
+      writeFileSync(
+        fakeCodex,
+        `process.stdout.write('codex\\nreal pty reply\\nhook: done');\n`,
+      );
 
-    const executor = createCommandExecutor({ clock: { now: () => Date.now() } });
-    const output = await executor({
-      id: 'e2e-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
-      agentId: 'agent-1', requestId: 'request-1', prompt: 'hi',
-      customAgent: { adapterKind: 'codex', command: process.execPath, args: [fakeCodex], cwd },
-    });
+      const executor = createCommandExecutor({ clock: { now: () => Date.now() } });
+      const output = await executor({
+        id: 'e2e-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
+        agentId: 'agent-1', requestId: 'request-1', prompt: 'hi',
+        customAgent: { adapterKind: 'codex', command: process.execPath, args: [fakeCodex], cwd },
+      });
 
-    if (typeof output !== 'object') throw new Error('expected structured result');
-    // The real lazy-imported node-pty spawned the fake under a PTY; extractReply parsed its output.
-    expect(output.body).toBe('real pty reply');
-    expect(output.workspaceRun?.status).toBe('succeeded');
-    expect(output.workspaceRun?.exitCode).toBe(0);
+      if (typeof output !== 'object') throw new Error('expected structured result');
+      // The real lazy-imported node-pty spawned the fake under a PTY; extractReply parsed its output.
+      expect(output.body).toBe('real pty reply');
+      expect(output.workspaceRun?.status).toBe('succeeded');
+      expect(output.workspaceRun?.exitCode).toBe(0);
+    } finally {
+      try { rmSync(cwd, { recursive: true, force: true }); } catch { /* already gone */ }
+    }
   });
 });
