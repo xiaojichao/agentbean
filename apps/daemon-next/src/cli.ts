@@ -13,6 +13,19 @@ import { clearAuth, listAuthProfiles, loadAuth, renameAuthProfile, saveAuth, typ
 import { sanitizeProfileId } from './profile-paths.js';
 import { loadOrCreateMachineId } from './machine-id.js';
 
+let globalErrorGuardsInstalled = false;
+function installGlobalErrorGuards(): void {
+  if (globalErrorGuardsInstalled) return;
+  globalErrorGuardsInstalled = true;
+  process.on('unhandledRejection', (reason) => {
+    console.warn(`daemon unhandledRejection (suppressed): ${reason instanceof Error ? reason.message : String(reason)}`);
+  });
+  process.on('uncaughtException', (error) => {
+    console.warn(`daemon uncaughtException (suppressed): ${error instanceof Error ? error.message : String(error)}`);
+  });
+}
+installGlobalErrorGuards();
+
 type CliStatusReporter = (message: string) => void;
 
 export interface SocketIoClientLike {
