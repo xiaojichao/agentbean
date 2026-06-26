@@ -3419,7 +3419,9 @@ function toJoinLinkDto(link: JoinLinkRecord): JoinLinkDto {
 }
 
 function collapseByCanonical(devices: DeviceRecord[]): DeviceRecord[] {
-  // 按 effectiveCanonical（canonicalDeviceId ?? id）折叠别名集群；同组取 canonical 自身为代表。
+  // 按 effectiveCanonical（canonicalDeviceId ?? id）折叠别名集群。
+  // 代表选取复用 preferDeviceRecord（与 dedupeByHeuristic 同一语义）：
+  // 选更新/更近活跃/host 状态更好的记录，与既有 canonical 代表语义保持一致。
   const groups = new Map<string, DeviceRecord[]>();
   for (const device of devices) {
     const key = device.canonicalDeviceId ?? device.id;
@@ -3432,8 +3434,11 @@ function collapseByCanonical(devices: DeviceRecord[]): DeviceRecord[] {
   }
   const result: DeviceRecord[] = [];
   for (const group of groups.values()) {
-    const selfCanonical = group.find((d) => d.canonicalDeviceId == null);
-    result.push(selfCanonical ?? group[0]!);
+    const representative = group.reduce(
+      (best, device) => (best === undefined ? device : preferDeviceRecord(device, best)),
+      group[0]!,
+    );
+    result.push(representative);
   }
   return result;
 }
