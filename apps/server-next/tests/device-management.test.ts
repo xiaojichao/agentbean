@@ -109,6 +109,85 @@ describe('device rename and delete (end-to-end)', () => {
     expect(after).toMatchObject({ ok: false, error: 'NOT_FOUND' });
   });
 
+  test('renaming a device keeps alias records merged instead of splitting into duplicates', async () => {
+    // 复现：缺 machineId/profileId 的设备每次 hello 都新建记录（deviceHello 走 ids.nextId()）。
+    // 两台以相同 hostname 上线的「别名」记录，靠 deviceDisplayKey(=hostname) 在 listDevices 里合并成 1 条。
+    // 改名会改变被改名记录的 hostname → deviceDisplayKey 变化 → 别名分裂 → 列表出现重复。
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'device-1',
+        'device-2',
+        'runtime-1',
+        'agent-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+        'reply-1',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      agent.disconnect();
+    });
+    const registerAck = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    expect(registerAck).toMatchObject({ ok: true, user: { id: 'user-1', primaryTeamId: 'team-1' } });
+    const web = await connectClient(`${baseUrl}/web`, {
+      auth: { token: (registerAck as { token: string }).token },
+    });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+
+    // 两台缺 machineId 的设备，以相同 hostname 上线 → 两条别名记录（不同 id）
+    const helloA = await agent.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'MyMac',
+    });
+    const helloB = await agent.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'MyMac',
+    });
+    expect(helloA).toMatchObject({ ok: true });
+    expect(helloB).toMatchObject({ ok: true });
+    const deviceAId = (helloA as { device: { id: string } }).device.id;
+    expect((helloB as { device: { id: string } }).device.id).not.toBe(deviceAId);
+
+    // 改名前：别名靠相同 hostname 的 displayKey 合并，列表只 1 条
+    const listBefore = await web.emitWithAck(WEB_EVENTS.device.list, { teamId: 'team-1' });
+    expect(listBefore).toMatchObject({ ok: true });
+    expect((listBefore as { devices: unknown[] }).devices).toHaveLength(1);
+
+    // 改名其中一台
+    const renamed = await web.emitWithAck(WEB_EVENTS.device.rename, {
+      deviceId: deviceAId,
+      hostname: 'NewMac',
+    });
+    expect(renamed).toMatchObject({ ok: true });
+
+    // 改名后：别名不应分裂成两条重复记录
+    const listAfter = await web.emitWithAck(WEB_EVENTS.device.list, { teamId: 'team-1' });
+    expect(listAfter).toMatchObject({ ok: true });
+    expect((listAfter as { devices: unknown[] }).devices).toHaveLength(1);
+  });
+
   test('rejects rename when caller is not a team member', async () => {
     // 同 team 的 owner 注册并创建 device；另一 team 的 user 试图改名该 device。
     // 跨 team 隔离：usecase 通过 teams.isMember 拒绝。
