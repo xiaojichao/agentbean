@@ -1271,6 +1271,41 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('listMembers always includes the current authenticated user as a human member', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories: {
+        ...repositories,
+        teams: {
+          ...repositories.teams,
+          async listAllMembers(teamId) {
+            const humans = await repositories.teams.listAllMembers(teamId);
+            return humans.filter((human) => human.userId !== 'user-1');
+          },
+        },
+      },
+      clock: { now: () => 250 },
+      ids: {
+        nextId: createIds(['user-1', 'team-1', 'channel-1']),
+      },
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+
+    await expect(app.listMembers({ userId: 'user-1', teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      humans: expect.arrayContaining([
+        expect.objectContaining({
+          id: 'team-1:user-1',
+          teamId: 'team-1',
+          userId: 'user-1',
+          username: 'shaw',
+          role: 'owner',
+          joinedAt: 250,
+        }),
+      ]),
+    });
+  });
+
   test('creates and validates a user join link for an existing team member', async () => {
     const app = createInMemoryServerNext({
       now: () => 250,
