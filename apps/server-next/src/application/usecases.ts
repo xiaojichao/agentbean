@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand } from './device-invite-command.js';
@@ -86,6 +86,7 @@ export interface ServerNextUseCases {
   updateChannel(input: UpdateChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
   addChannelHumanMember(input: ChannelHumanMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
   removeChannelHumanMember(input: ChannelHumanMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
+  leaveChannel(input: { teamId: ID; userId: ID; channelId: ID }): Promise<Ack<{ channel: ChannelDto }>>;
   addChannelAgentMember(input: ChannelAgentMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
   removeChannelAgentMember(input: ChannelAgentMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
   listChannelMembers(input: ListChannelMembersInput): Promise<Ack<ChannelMembersDto>>;
@@ -2030,6 +2031,34 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             visibility: channel.channel.visibility,
             createdBy: channel.channel.createdBy ?? memberInput.userId,
             humanMemberIds: nextHumanMemberIds,
+          }),
+          updatedAt: clock.now(),
+        },
+      });
+      if (!updated) {
+        return makeFailure('NOT_FOUND', 'Channel not found');
+      }
+      return makeSuccess({ channel: updated });
+    },
+
+    async leaveChannel(leaveInput) {
+      if (!(await repositories.teams.isMember(leaveInput.teamId, leaveInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const channel = await repositories.channels.getById(leaveInput.channelId);
+      if (!channel || channel.teamId !== leaveInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Channel not found');
+      }
+      if (!channel.humanMemberIds.includes(leaveInput.userId)) {
+        return makeFailure('FORBIDDEN', 'User is not a channel member');
+      }
+      const updated = await repositories.channels.update({
+        channelId: channel.id,
+        changes: {
+          humanMemberIds: channelHumanMembersForCreate({
+            visibility: channel.visibility,
+            createdBy: channel.createdBy ?? leaveInput.userId,
+            humanMemberIds: channel.humanMemberIds.filter((memberId) => memberId !== leaveInput.userId),
           }),
           updatedAt: clock.now(),
         },
