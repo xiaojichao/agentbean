@@ -31,6 +31,7 @@ describe('server-next socket handlers', () => {
       updateChannel: vi.fn(async (payload) => makeSuccess({ payload })),
       addChannelHumanMember: vi.fn(async (payload) => makeSuccess({ payload })),
       removeChannelHumanMember: vi.fn(async (payload) => makeSuccess({ payload })),
+      leaveChannel: vi.fn(async (payload) => makeSuccess({ payload })),
       addChannelAgentMember: vi.fn(async (payload) => makeSuccess({ payload })),
       removeChannelAgentMember: vi.fn(async (payload) => makeSuccess({ payload })),
       listChannelMembers: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -112,6 +113,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.channel.update,
       WEB_EVENTS.channel.addMember,
       WEB_EVENTS.channel.removeMember,
+      WEB_EVENTS.channel.leave,
       WEB_EVENTS.channel.addAgent,
       WEB_EVENTS.channel.removeAgent,
       WEB_EVENTS.channel.members,
@@ -232,6 +234,11 @@ describe('server-next socket handlers', () => {
       teamId: 'team-1',
       channelId: 'channel-2',
       memberUserId: 'user-2',
+    });
+    await socket.trigger(WEB_EVENTS.channel.leave, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
     });
     await socket.trigger(WEB_EVENTS.channel.addAgent, {
       userId: 'user-1',

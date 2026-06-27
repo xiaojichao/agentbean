@@ -70,6 +70,7 @@ export const WEB_EVENTS = {
     subscribe: 'channels:subscribe',
     create: 'channel:create',
     join: 'channel:join',
+    leave: 'channel:leave',
     history: 'channel:history',
     snapshot: 'channels:snapshot',
     message: 'channel:message',

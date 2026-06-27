@@ -170,6 +170,43 @@ describe('server-next second-slice channel controls', () => {
     });
   });
 
+  test('lets a non-creator member leave a channel on their own', async () => {
+    const { app, repositories } = createApp(['user-1', 'team-1', 'channel-all', 'channel-ops']);
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await repositories.teams.addMember({
+      teamId: 'team-1',
+      userId: 'user-2',
+      username: 'teammate',
+      role: 'member',
+      joinedAt: 100,
+    });
+    await app.createChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      name: 'ops',
+      visibility: 'private',
+    });
+    await app.addChannelHumanMember({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-ops',
+      memberUserId: 'user-2',
+    });
+
+    // user-2 是普通成员（非创建者）：removeChannelHumanMember 移除自己会被 creator 权限拒绝，
+    // 但 leaveChannel 允许任何成员自行退出。
+    await expect(
+      app.leaveChannel({ userId: 'user-2', teamId: 'team-1', channelId: 'channel-ops' }),
+    ).resolves.toMatchObject({
+      ok: true,
+      channel: { id: 'channel-ops', humanMemberIds: ['user-1'] },
+    });
+    await expect(app.listChannels({ teamId: 'team-1', userId: 'user-2' })).resolves.toMatchObject({
+      ok: true,
+      channels: [{ id: 'channel-all' }],
+    });
+  });
+
   test('lets a channel creator manage agent members and list channel membership', async () => {
     const { app, repositories } = createApp(['user-1', 'team-1', 'channel-all', 'channel-ops']);
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
