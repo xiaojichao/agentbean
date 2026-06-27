@@ -3198,11 +3198,29 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async listMembers(listInput) {
-      const isMember = await repositories.teams.isMember(listInput.teamId, listInput.userId);
-      if (!isMember) {
+      const currentUserRole = await repositories.teams.getMemberRole(listInput.teamId, listInput.userId);
+      if (!currentUserRole) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
       const humans = await repositories.teams.listAllMembers(listInput.teamId);
+      // 兜底：当成员仓储漏掉当前用户时（数据不一致），仍保证他能看到自己在列表里。
+      if (!humans.some((human) => human.userId === listInput.userId)) {
+        const [currentUser, currentMember] = await Promise.all([
+          repositories.users.getById(listInput.userId),
+          repositories.teams.getMember({ teamId: listInput.teamId, userId: listInput.userId }),
+        ]);
+        const currentHuman: HumanMemberDto & { joinedAt: UnixMs } = {
+          id: `${listInput.teamId}:${listInput.userId}`,
+          teamId: listInput.teamId,
+          userId: listInput.userId,
+          username: currentUser?.username ?? currentMember?.username ?? listInput.userId,
+          role: currentUserRole,
+          ...(currentUser?.displayName ? { displayName: currentUser.displayName } : {}),
+          ...(currentUser?.avatarUrl ? { avatarUrl: currentUser.avatarUrl } : {}),
+          joinedAt: currentMember?.joinedAt ?? currentUser?.createdAt ?? 0,
+        };
+        humans.push(currentHuman);
+      }
       const agents = await repositories.agents.listVisibleInTeam(listInput.teamId);
       return makeSuccess({ humans, agents: await toAgentMemberDtos(repositories, listInput.teamId, agents) });
     },
