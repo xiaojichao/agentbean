@@ -3,14 +3,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, Check, FolderOpen, Paperclip, Image as ImageIcon, Trash2, ExternalLink } from 'lucide-react';
+import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, FolderOpen, Paperclip, Image as ImageIcon, Trash2, ExternalLink } from 'lucide-react';
 import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl, fetchAgentWorkspace, authedApiUrl } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { daemonVersionDisplay } from '@/lib/daemon-version';
 import { canAddCustomAgentToDevice, canManageDeviceForUser } from '@/lib/device-permissions';
 import { formatRelative } from '@/lib/format-time';
 import type { AgentWorkspaceFile, AgentWorkspaceRun } from '@/lib/schema';
-import { updateAgentPublishState } from '@/lib/agent-publish-state';
 
 const STATUS_COLORS: Record<string, string> = {
   online: 'text-emerald-500',
@@ -379,7 +378,6 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const [customAgents, setCustomAgents] = useState<any[]>([]);
   const [scanning, setScanning] = useState(false);
   const [showAddCustom, setShowAddCustom] = useState(false);
-  const [selectNetworkAgent, setSelectNetworkAgent] = useState<any | null>(null);
   const [configAgent, setConfigAgent] = useState<any | null>(null);
   const [deleteAgent, setDeleteAgent] = useState<any | null>(null);
   const [deleteAgentSaving, setDeleteAgentSaving] = useState(false);
@@ -394,7 +392,6 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentTeamRole = useAgentBeanStore((s) => s.teams.find((team) => team.id === currentTeamId)?.currentUserRole);
-  const applyAgentStatus = useAgentBeanStore((s) => s.applyAgentStatus);
   const upsertDevice = useAgentBeanStore((s) => s.upsertDevice);
   const displayName = deviceDisplayName(device) === device.id ? '未命名设备' : deviceDisplayName(device);
   const ownerName = deviceOwnerName(device);
@@ -418,17 +415,6 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
         setCustomAgents(res.agents.filter((agent: any) => agent.source === 'custom'));
       }
       if (res.ok && res.runtimes) setDeviceRuntimes(res.runtimes);
-    });
-  };
-
-  const updateSelectedAgentPublishState = (agentId: string, networkId: string, published: boolean) => {
-    setDeviceAgents((agents) => updateAgentPublishState(agents, agentId, networkId, published));
-    setCustomAgents((agents) => updateAgentPublishState(agents, agentId, networkId, published));
-    setSelectNetworkAgent((agent: any | null) => {
-      if (!agent || agent.id !== agentId) return agent;
-      const updated = updateAgentPublishState([agent], agentId, networkId, published)[0] ?? agent;
-      applyAgentStatus(updated);
-      return updated;
     });
   };
 
@@ -462,9 +448,19 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
     }
     setDeviceAgents((agents) => agents.filter((agent) => agent.id !== deleteAgent.id));
     setCustomAgents((agents) => agents.filter((agent) => agent.id !== deleteAgent.id));
-    if (selectNetworkAgent?.id === deleteAgent.id) setSelectNetworkAgent(null);
     if (configAgent?.id === deleteAgent.id) setConfigAgent(null);
     setDeleteAgent(null);
+    refreshDeviceAgents();
+  };
+
+  // 切换 Agent 对当前团队的可见性：调 setVisibility 后用返回的 agent.visibleTeamIds 乐观更新本地列表
+  const handleToggleVisibility = async (agent: any, visible: boolean) => {
+    if (!currentTeamId) return;
+    const res = await agentEvents().setVisibility(agent.id, currentTeamId, visible);
+    if (res.ok && res.agent) {
+      setDeviceAgents((list) => list.map((a) => (a.id === agent.id ? { ...a, visibleTeamIds: res.agent!.visibleTeamIds } : a)));
+      setCustomAgents((list) => list.map((a) => (a.id === agent.id ? { ...a, visibleTeamIds: res.agent!.visibleTeamIds } : a)));
+    }
     refreshDeviceAgents();
   };
 
@@ -695,7 +691,8 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           agents={agentosAgents}
           scanning={scanning}
           onScan={canManageDevice ? handleScan : undefined}
-          onSelectNetwork={setSelectNetworkAgent}
+          currentTeamId={currentTeamId ?? ''}
+          onToggleVisibility={handleToggleVisibility}
           onSelectAgent={setConfigAgent}
           canManageAgents={canManageDevice}
         />
@@ -708,7 +705,8 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           agents={customAgents}
           showAddButton={canAddCustomAgent}
           onAdd={canAddCustomAgent ? () => setShowAddCustom(true) : undefined}
-          onSelectNetwork={setSelectNetworkAgent}
+          currentTeamId={currentTeamId ?? ''}
+          onToggleVisibility={handleToggleVisibility}
           onSelectAgent={setConfigAgent}
           onDeleteAgent={setDeleteAgent}
           canManageAgents={canManageDevice}
@@ -756,13 +754,6 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
         )}
       </div>
 
-      {selectNetworkAgent && (
-        <SelectNetworkDialog
-          agent={selectNetworkAgent}
-          onClose={() => setSelectNetworkAgent(null)}
-          onPublishedChange={updateSelectedAgentPublishState}
-        />
-      )}
       {configAgent && (
         <AgentConfigDialog
           agent={configAgent}
@@ -895,7 +886,7 @@ function AddDeviceDialog({ onClose, currentTeamId }: { onClose: () => void; curr
   );
 }
 
-function AgentGroup({ smokeKind, title, subtitle, icon, iconBg, agents, scanning, onScan, showAddButton, onAdd, onSelectNetwork, onSelectAgent, onDeleteAgent, canManageAgents = false }: {
+function AgentGroup({ smokeKind, title, subtitle, icon, iconBg, agents, scanning, onScan, showAddButton, onAdd, currentTeamId, onToggleVisibility, onSelectAgent, onDeleteAgent, canManageAgents = false }: {
   smokeKind: 'agentos' | 'custom';
   title: string;
   subtitle: string;
@@ -906,7 +897,8 @@ function AgentGroup({ smokeKind, title, subtitle, icon, iconBg, agents, scanning
   onScan?: () => void;
   showAddButton?: boolean;
   onAdd?: () => void;
-  onSelectNetwork: (agent: any) => void;
+  currentTeamId: string;
+  onToggleVisibility: (agent: any, visible: boolean) => void;
   onSelectAgent: (agent: any) => void;
   onDeleteAgent?: (agent: any) => void;
   canManageAgents?: boolean;
@@ -936,7 +928,7 @@ function AgentGroup({ smokeKind, title, subtitle, icon, iconBg, agents, scanning
       ) : (
         <div className="space-y-1.5">
           {agents.map((agent) => (
-            <AgentRow key={agent.id} agent={agent} smokeKind={smokeKind} icon={icon} iconBg={iconBg} onSelectNetwork={onSelectNetwork} onSelectAgent={onSelectAgent} onDeleteAgent={onDeleteAgent} canManage={canManageAgents} />
+            <AgentRow key={agent.id} agent={agent} smokeKind={smokeKind} icon={icon} iconBg={iconBg} currentTeamId={currentTeamId} onToggleVisibility={onToggleVisibility} onSelectAgent={onSelectAgent} onDeleteAgent={onDeleteAgent} canManage={canManageAgents} />
           ))}
         </div>
       )}
@@ -1115,17 +1107,19 @@ function DeviceWorkspaceFileLink({ file }: { file: AgentWorkspaceFile }) {
   );
 }
 
-function AgentRow({ agent, smokeKind, icon, iconBg, onSelectNetwork, onSelectAgent, onDeleteAgent, canManage }: {
+function AgentRow({ agent, smokeKind, icon, iconBg, onSelectAgent, onDeleteAgent, canManage, currentTeamId, onToggleVisibility }: {
   agent: any;
   smokeKind: 'agentos' | 'custom';
   icon: React.ReactNode;
   iconBg: string;
-  onSelectNetwork: (agent: any) => void;
   onSelectAgent: (agent: any) => void;
   onDeleteAgent?: (agent: any) => void;
   canManage: boolean;
+  currentTeamId: string;
+  onToggleVisibility: (agent: any, visible: boolean) => void;
 }) {
-  const publishedCount = agent.publishedNetworkIds?.length ?? 0;
+  // 对当前团队是否可见：后端以 visibleTeamIds 维护，复选框即代表该集合是否含 currentTeamId
+  const visibleInTeam = (agent.visibleTeamIds ?? []).includes(currentTeamId);
   return (
     <div
       onClick={() => onSelectAgent(agent)}
@@ -1136,6 +1130,7 @@ function AgentRow({ agent, smokeKind, icon, iconBg, onSelectNetwork, onSelectAge
       data-agent-kind={smokeKind}
       data-agent-source={agent.source ?? ''}
       data-agent-category={agent.category ?? ''}
+      data-agent-visible={visibleInTeam ? '1' : '0'}
     >
       <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${iconBg}`}>
         {icon}
@@ -1144,17 +1139,21 @@ function AgentRow({ agent, smokeKind, icon, iconBg, onSelectNetwork, onSelectAge
         <div className="text-sm font-medium truncate">{agent.name}</div>
         <div className="text-xs text-neutral-400">{agent.adapterKind}</div>
       </div>
-      {publishedCount > 0 && (
-        <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
-          已发布到 {publishedCount} 个团队
-        </span>
-      )}
       <Circle size={6} className={`shrink-0 fill-current ${agent.status === 'online' ? 'text-emerald-500' : 'text-neutral-300'}`} />
-      {canManage && (
-        <button onClick={(e) => { e.stopPropagation(); onSelectNetwork(agent); }} className="shrink-0 rounded-md border border-neutral-300 px-2 py-1 text-[11px] hover:bg-neutral-50">
-          选择团队
-        </button>
-      )}
+      {/* 对当前团队可见复选框：点击事件 stopPropagation，避免触发行选中；canManage 才可改 */}
+      <label
+        onClick={(e) => e.stopPropagation()}
+        className="flex shrink-0 cursor-pointer items-center gap-1 text-[11px] text-neutral-600"
+        title="对当前团队可见"
+      >
+        <input
+          type="checkbox"
+          checked={visibleInTeam}
+          disabled={!canManage}
+          onChange={(e) => { e.stopPropagation(); onToggleVisibility(agent, e.target.checked); }}
+        />
+        可见
+      </label>
       {canManage && onDeleteAgent && agent.source === 'custom' && (
         <button
           onClick={(e) => { e.stopPropagation(); onDeleteAgent(agent); }}
@@ -1165,78 +1164,6 @@ function AgentRow({ agent, smokeKind, icon, iconBg, onSelectNetwork, onSelectAge
           <Trash2 size={13} />
         </button>
       )}
-    </div>
-  );
-}
-
-function SelectNetworkDialog({ agent, onClose, onPublishedChange }: { agent: any; onClose: () => void; onPublishedChange: (agentId: string, networkId: string, published: boolean) => void }) {
-  const teams = useAgentBeanStore((s) => s.teams);
-  const currentUser = useAgentBeanStore((s) => s.currentUser);
-  const [publishedIds, setPublishedIds] = useState<Set<string>>(new Set(agent.publishedNetworkIds ?? []));
-  const [loadingId, setLoadingId] = useState<string | null>(null);
-
-  const isCustom = agent.source === 'custom' || agent.category === 'executor-hosted';
-  const visibleNetworks = isCustom
-    ? teams.filter((n) => n.visibility === 'private' || n.ownerId === currentUser?.id)
-    : teams;
-
-  const toggle = async (networkId: string) => {
-    setLoadingId(networkId);
-    const isPublished = publishedIds.has(networkId);
-    if (isPublished) {
-      const res = await agentEvents().unpublish(agent.id, networkId);
-      if (res.ok) {
-        setPublishedIds((prev) => { const next = new Set(prev); next.delete(networkId); return next; });
-        onPublishedChange(agent.id, networkId, false);
-      }
-    } else {
-      const res = await agentEvents().publish(agent.id, networkId);
-      if (res.ok) {
-        setPublishedIds((prev) => new Set(prev).add(networkId));
-        onPublishedChange(agent.id, networkId, true);
-      }
-    }
-    setLoadingId(null);
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="mx-4 w-full max-w-md rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">选择团队 — {agent.name}</h2>
-          <button onClick={onClose} className="rounded-md p-1 hover:bg-neutral-100"><X size={16} /></button>
-        </div>
-        {isCustom && (
-          <p className="mt-2 text-xs text-neutral-500">自定义 Agent 使用本机 Coding Agent 运行时，仅可发布到私有团队或您拥有的团队。</p>
-        )}
-        <div className="mt-4 max-h-64 space-y-1 overflow-y-auto">
-          {visibleNetworks.map((net) => {
-            const checked = publishedIds.has(net.id);
-            return (
-              <label key={net.id} className="flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 hover:bg-neutral-50">
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  disabled={loadingId === net.id}
-                  onChange={() => toggle(net.id)}
-                  className="h-4 w-4 rounded border-neutral-300"
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium truncate">{net.name}</div>
-                  <div className="text-[11px] text-neutral-400">{net.visibility === 'private' ? '私有' : '公开'}</div>
-                </div>
-                {checked && <Check size={14} className="text-emerald-600" />}
-              </label>
-            );
-          })}
-          {visibleNetworks.length === 0 && (
-            <div className="py-4 text-center text-xs text-neutral-400">暂无可选团队</div>
-          )}
-        </div>
-        <div className="mt-6 flex justify-end">
-          <button onClick={onClose} className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white hover:bg-neutral-800">完成</button>
-        </div>
-      </div>
     </div>
   );
 }
