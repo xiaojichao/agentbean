@@ -123,6 +123,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.agent.create,
       WEB_EVENTS.agent.publish,
       WEB_EVENTS.agent.unpublish,
+      WEB_EVENTS.agent.setVisibility,
       WEB_EVENTS.agent.updateConfig,
       WEB_EVENTS.agent.delete,
       WEB_EVENTS.agent.metrics,
@@ -895,6 +896,32 @@ describe('server-next socket handlers', () => {
       ok: true,
       agent: { id: 'agent-1', visibleTeamIds: [] },
     });
+  });
+
+  test('agent:set-visibility forwards to setAgentTeamVisibility use case', async () => {
+    const socket = new FakeSocket();
+    const app = {
+      setAgentTeamVisibility: vi.fn(async () => makeSuccess({ agent: { id: 'agent-1' } })),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, {
+      authenticatedUser: async () => ({
+        hasToken: true,
+        userId: 'user-1',
+        currentTeamId: null,
+      }),
+    });
+
+    // 触发 handler 并校验：payload 经 withAuthenticatedUserId 注入 userId 后转发到 usecase，ack 回成功
+    const ack = await socket.trigger(WEB_EVENTS.agent.setVisibility, {
+      agentId: 'agent-1',
+      teamId: 'team-1',
+      visible: false,
+    });
+    expect(app.setAgentTeamVisibility).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: 'agent-1', teamId: 'team-1', visible: false, userId: 'user-1' }),
+    );
+    expect(ack).toEqual(expect.objectContaining({ ok: true }));
   });
 
   test('refreshes device subscribers after web rename and delete mutations', async () => {

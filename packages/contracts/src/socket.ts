@@ -47,6 +47,8 @@ export const WEB_EVENTS = {
     create: 'agent:create',
     publish: 'agent:publish',
     unpublish: 'agent:unpublish',
+    // 切换 Agent 在 primary team 上的可见性（隐藏 = 移出当前团队成员页）
+    setVisibility: 'agent:set-visibility',
     snapshot: 'agents:snapshot',
     status: 'agent:status',
     discovered: 'agents:discovered',
