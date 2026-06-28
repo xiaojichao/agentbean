@@ -134,4 +134,36 @@ describe('agent team visibility', () => {
     expect(agent?.visibleTeamIds).toEqual([]);
     expect(agent?.deletedAt).toBe(500);
   });
+
+  test('hidden agentos agent stays hidden after daemon re-report (upsert 不重置可见性)', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-1', 'agent-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    const hello = await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', hostname: 'mac' });
+    const deviceId = hello.ok ? hello.device.id : 'device-1';
+
+    await app.registerDiscoveredAgents({
+      teamId: 'team-1',
+      deviceId,
+      agents: [{ name: 'Hermes', adapterKind: 'hermes', category: 'agentos-hosted' }],
+    });
+    // 设为不可见
+    await app.setAgentTeamVisibility({
+      userId: 'user-1', teamId: 'team-1', agentId: 'agent-1', visible: false,
+    });
+
+    // daemon 周期重新上报（agent 仍在设备上跑，daemon 不感知 hidden）。
+    // 此前 memory upsert 会用 visibleTeamIds:[team] 覆盖，使 hidden 失效。
+    await app.registerDiscoveredAgents({
+      teamId: 'team-1',
+      deviceId,
+      agents: [{ name: 'Hermes', adapterKind: 'hermes', category: 'agentos-hosted' }],
+    });
+
+    // hidden 必须保持：成员页不应再包含该 agent。
+    const listed = await app.listVisibleAgents({ teamId: 'team-1' });
+    expect(listed.ok && listed.agents.map((a) => a.id)).not.toContain('agent-1');
+  });
 });
