@@ -537,6 +537,14 @@ export function createInMemoryRepositories(): ServerNextRepositories {
     agents: {
       async upsert(input) {
         const { env, ...agent } = input;
+        const existing = agents.get(input.id);
+        if (existing) {
+          // 可见性是独立状态（由 setPrimaryTeamVisibility 控制），upsert（daemon 上报、
+          // 配置更新）不应重置它。对齐 sqlite：sqlite 用 hidden_from_primary_team 列
+          // 独立于 upsert 控制，memory 这里保留 existing.visibleTeamIds，避免 daemon
+          // 周期上报把已 hidden agent 的可见性重置回 [primary]（导致成员页重现）。
+          agent.visibleTeamIds = existing.visibleTeamIds;
+        }
         agents.set(input.id, agent);
         if (env) {
           agentEnv.set(input.id, env);

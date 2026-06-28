@@ -393,6 +393,8 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentTeamRole = useAgentBeanStore((s) => s.teams.find((team) => team.id === currentTeamId)?.currentUserRole);
   const upsertDevice = useAgentBeanStore((s) => s.upsertDevice);
+  // 切换可见性后同步全局 members store：visible=false 时让共享 store 立即移除该 agent。
+  const applyAgentStatus = useAgentBeanStore((s) => s.applyAgentStatus);
   const displayName = deviceDisplayName(device) === device.id ? '未命名设备' : deviceDisplayName(device);
   const ownerName = deviceOwnerName(device);
   const daemonVersion = daemonVersionDisplay(device);
@@ -460,6 +462,10 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
     if (res.ok && res.agent) {
       setDeviceAgents((list) => list.map((a) => (a.id === agent.id ? { ...a, visibleTeamIds: res.agent!.visibleTeamIds } : a)));
       setCustomAgents((list) => list.map((a) => (a.id === agent.id ? { ...a, visibleTeamIds: res.agent!.visibleTeamIds } : a)));
+      // 同步全局 members store：visible=false 时 applyAgentStatus 经 agentVisibleInNetwork
+      // 判定不可见，从共享 store 移除该 agent——成员页等读取全局 store 的页面立即消失，
+      // 而非因残留旧快照显示为「没消失变不在线」。
+      applyAgentStatus(res.agent);
     }
     refreshDeviceAgents();
   };
