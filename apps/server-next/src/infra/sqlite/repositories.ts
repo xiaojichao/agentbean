@@ -46,6 +46,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0006_agent_gateway_instance_key.sql');
   applyMigration(db, 'global/0007_device_canonical_alias.sql');
   applyMigration(db, 'global/0008_device_canonical_backfill.sql');
+  applyMigration(db, 'global/0009_agent_visibility.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
@@ -57,6 +58,65 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0006_workspace_run_log_excerpt.sql');
   applyMigration(db, 'team/0007_workspace_run_pagination_index.sql');
   applyMigration(db, 'team/0008_artifact_workspace_boundary_index.sql');
+}
+
+// 清理 channel_agent_members 中指向已删 agent 的孤儿行（PRD §6）。
+//
+// 背景：global migration 0009 删除了所有 category='executor-hosted' 且 source IN
+// ('scanned','self-register') 的 agent，但 channel_agent_members 位于 team db，
+// 两者无外键、无跨库级联，被删 agent 会在频道成员表里留下幽灵行——这些 agent_id 会
+// 出现在 listChannelMembers 的结果里（repositories.ts:1808-1810），导致频道成员列表
+// 含指向已删 agent 的无效 ID。
+//
+// 实现：team db 是单一共享库（非每团队一库），channel_agent_members.agent_id 是裸
+// TEXT、无 FK；team db 内部也没有 agents/category/source 信息无法自我判断孤儿。因此
+// 在两个 db 都打开的协调点（createInfrastructure）里，用 ATTACH 把 global db 挂到
+// team db，按 "agent_id 不在 global.agents 中" 删除孤儿行——这恰好覆盖 0009 删除的
+// 集合，且对未来任何 agent 删除都安全。
+//
+// 路径：better-sqlite3 的 ATTACH 相对路径按进程 cwd 解析（非主库目录），而 dataDir
+// 可被 --data-dir 自定义，故必须用 globalDbPath 绝对路径；调用方在 createInfrastructure
+// 已持有该路径，传入即可。
+//
+// 幂等：通过 team db 的 schema_migrations 表用稳定 key 跟踪，仅执行一次。
+// 失败安全：DELETE 包在事务里，任意一步失败则整体回滚；ATTACH/DETACH 用 try 包裹，
+// 失败时不掩盖原始错误。
+export function cleanupOrphanedChannelMembers(
+  globalDbPath: string,
+  teamDb: SqliteDatabase,
+): void {
+  const CLEANUP_KEY = 'post-migration:cleanup-orphaned-channel-members';
+  teamDb.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+      id TEXT PRIMARY KEY,
+      applied_at INTEGER NOT NULL
+    );`);
+  if (teamDb.prepare('SELECT id FROM schema_migrations WHERE id = ?').get(CLEANUP_KEY)) {
+    return;
+  }
+  const escaped = `'${globalDbPath.replace(/'/g, "''")}'`;
+  teamDb.exec(`ATTACH DATABASE ${escaped} AS __global_agents;`);
+  try {
+    teamDb.exec('BEGIN;');
+    teamDb.exec(
+      `DELETE FROM channel_agent_members
+       WHERE agent_id NOT IN (SELECT id FROM __global_agents.agents);`,
+    );
+    teamDb.exec('COMMIT;');
+    teamDb.prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)').run(CLEANUP_KEY, Date.now());
+  } catch (err) {
+    try {
+      teamDb.exec('ROLLBACK;');
+    } catch {
+      // 事务可能已回滚或不存在，忽略二次错误，抛出原始错误。
+    }
+    throw err;
+  } finally {
+    try {
+      teamDb.exec('DETACH DATABASE __global_agents;');
+    } catch {
+      // ATTACH 未成功或已分离时忽略，不掩盖原始错误。
+    }
+  }
 }
 
 export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): ServerNextRepositories {
@@ -966,19 +1026,23 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .get(agentId);
         return mapAgentExecutionConfig(row);
       },
-      async publish(input) {
+      async setPrimaryTeamVisibility(input) {
+        // 与 updateConfig/softDelete 一致：先取 agent，软删或不存在则直接返回 null，
+        // 避免末尾 SELECT 把未更新的软删 agent 当作成功结果返回。
+        const existing = mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId));
+        if (!existing || existing.deletedAt !== undefined) {
+          return null;
+        }
+        // hidden_from_primary_team=1 时，mapAgent 会把 primaryTeamId 从 visibleTeamIds 移除。
         globalDb
           .prepare(
-            `INSERT OR IGNORE INTO agent_publications (agent_id, team_id, published_by, published_at)
-             SELECT id, ?, ?, ? FROM agents WHERE id = ? AND deleted_at IS NULL`,
+            'UPDATE agents SET hidden_from_primary_team = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
           )
-          .run(input.teamId, input.publishedBy, input.timestamp, input.agentId);
-        return mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId));
-      },
-      async unpublish(input) {
-        globalDb
-          .prepare('DELETE FROM agent_publications WHERE agent_id = ? AND team_id = ?')
-          .run(input.agentId, input.teamId);
+          .run(input.visible ? 0 : 1, input.timestamp, input.agentId);
+        if (!input.visible) {
+          // 隐藏时同步清空额外发布，保证 agent 只剩 primary team 归属（且 primary 不可见）。
+          globalDb.prepare('DELETE FROM agent_publications WHERE agent_id = ?').run(input.agentId);
+        }
         return mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId));
       },
       async updateConfig(input) {
@@ -1082,14 +1146,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       async listVisibleInTeam(teamId) {
         return globalDb
           .prepare(
-            `SELECT agents.* FROM agents
-             WHERE agents.primary_team_id = ?
-             AND agents.deleted_at IS NULL
-             UNION
-             SELECT agents.* FROM agent_publications
-             JOIN agents ON agents.id = agent_publications.agent_id
-             WHERE agent_publications.team_id = ?
-             AND agents.deleted_at IS NULL`,
+            `SELECT * FROM (
+               SELECT agents.* FROM agents
+               WHERE agents.primary_team_id = ?
+                 AND agents.deleted_at IS NULL
+                 AND agents.hidden_from_primary_team = 0
+               UNION
+               SELECT agents.* FROM agent_publications
+               JOIN agents ON agents.id = agent_publications.agent_id
+               WHERE agent_publications.team_id = ?
+                 AND agents.deleted_at IS NULL
+             ) AS visible
+             WHERE NOT (visible.category = 'executor-hosted' AND visible.source != 'custom')`,
           )
           .all(teamId, teamId)
           .map((row) => {
@@ -1861,16 +1929,21 @@ function mapAgent(db: SqliteDatabase, row: unknown): AgentRecord | null {
   }
   const id = sqliteText(row, 'id');
   const primaryTeamId = sqliteText(row, 'primary_team_id');
+  const hiddenFromPrimary = sqliteNumber(row, 'hidden_from_primary_team') === 1;
   const publishedTeamIds = db
     .prepare('SELECT team_id FROM agent_publications WHERE agent_id = ? ORDER BY published_at')
     .all(id)
     .map((publication) => sqliteText(publication, 'team_id'));
   const rawEnv = parseJsonObject(sqliteNullableText(row, 'env_json'));
   const deletedAt = sqliteNullableNumber(row, 'deleted_at');
+  // visibleTeamIds 派生：未删除时 = primary + 已发布团队；hidden_from_primary_team=1 时把 primary 移除。
+  // 注意：0009 迁移已清空 agent_publications，这里仍保留 publishedTeamIds 逻辑以兼容旧数据。
+  const fullVisible = deletedAt === undefined ? Array.from(new Set([primaryTeamId, ...publishedTeamIds])) : [];
+  const visibleTeamIds = hiddenFromPrimary ? fullVisible.filter((t) => t !== primaryTeamId) : fullVisible;
   return {
     id,
     primaryTeamId,
-    visibleTeamIds: deletedAt === undefined ? Array.from(new Set([primaryTeamId, ...publishedTeamIds])) : [],
+    visibleTeamIds,
     name: sqliteText(row, 'name'),
     adapterKind: sqliteText(row, 'adapter_kind') as AgentRecord['adapterKind'],
     category: sqliteText(row, 'category') as AgentRecord['category'],

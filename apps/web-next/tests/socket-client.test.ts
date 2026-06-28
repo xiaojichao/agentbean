@@ -84,18 +84,6 @@ describe('web-next socket client', () => {
       runtimeId: 'runtime-1',
       name: 'Custom Codex',
     });
-    await client.publishAgent({
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-1',
-      targetTeamId: 'team-2',
-    });
-    await client.unpublishAgent({
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-1',
-      targetTeamId: 'team-2',
-    });
     await client.updateAgentConfig({
       userId: 'user-1',
       teamId: 'team-1',
@@ -142,8 +130,6 @@ describe('web-next socket client', () => {
       [WEB_EVENTS.channel.removeAgent, { userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', agentId: 'agent-1' }],
       [WEB_EVENTS.channel.members, { userId: 'user-1', teamId: 'team-1', channelId: 'channel-2' }],
       [WEB_EVENTS.agent.create, { userId: 'user-1', teamId: 'team-1', deviceId: 'device-1', runtimeId: 'runtime-1', name: 'Custom Codex' }],
-      [WEB_EVENTS.agent.publish, { userId: 'user-1', teamId: 'team-1', agentId: 'agent-1', targetTeamId: 'team-2' }],
-      [WEB_EVENTS.agent.unpublish, { userId: 'user-1', teamId: 'team-1', agentId: 'agent-1', targetTeamId: 'team-2' }],
       [WEB_EVENTS.agent.updateConfig, { userId: 'user-1', teamId: 'team-1', agentId: 'agent-1', name: 'Renamed Codex' }],
       [WEB_EVENTS.agent.delete, { userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' }],
       [WEB_EVENTS.message.send, { userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'hello' }],
@@ -411,6 +397,17 @@ describe('web-next socket client', () => {
     ]);
     expect(snapshots).toEqual([[agent]]);
   });
+
+  test('agentEvents.setVisibility emits agent:set-visibility with teamId and visible', async () => {
+    // 用最小 fake socket（socket.io 风格 emit(event, payload, ack)）测试 lib/socket.ts 中的 agentEvents
+    const fakeSocket = new FakeAgentEventsSocket();
+    const { agentEvents } = await import('../lib/socket.js');
+    const res = await agentEvents(fakeSocket as any).setVisibility('agent-1', 'team-1', false);
+    expect(res.ok).toBe(true);
+    expect(fakeSocket.emitted).toEqual([
+      [WEB_EVENTS.agent.setVisibility, { agentId: 'agent-1', teamId: 'team-1', visible: false }],
+    ]);
+  });
 });
 
 class FakeWebTransport implements WebSocketTransport {
@@ -441,4 +438,20 @@ class FakeWebTransport implements WebSocketTransport {
   handlerCount(event: string): number {
     return this.handlers.get(event)?.length ?? 0;
   }
+}
+
+// 最小 fake socket：模拟 socket.io 的 emit(event, payload, ack)
+// 仅满足 lib/socket.ts 中 agentEvents().setVisibility 走 emitWithTimeout 的路径。
+// ack 回调同步以 { ok: true } 调用，[event, payload] 记入 emitted 供断言。
+class FakeAgentEventsSocket {
+  readonly emitted: Array<[string, unknown]> = [];
+
+  emit(event: string, payload: unknown, ack: (res: unknown) => void): this {
+    this.emitted.push([event, payload]);
+    ack({ ok: true });
+    return this;
+  }
+
+  on(): this { return this; }
+  off(): this { return this; }
 }

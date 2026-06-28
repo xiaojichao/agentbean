@@ -563,28 +563,18 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           env: agentEnv.get(agentId),
         };
       },
-      async publish(input) {
+      async setPrimaryTeamVisibility(input) {
         const agent = agents.get(input.agentId);
+        // 与同级方法（updateConfig/softDelete/getExecutionConfig）一致：软删 agent 不再可改可见性，
+        // 否则会把已软删的 agent "复活" 进 visibleTeamIds。
         if (!agent || agent.deletedAt !== undefined) {
           return null;
         }
-        const updated = {
-          ...agent,
-          visibleTeamIds: Array.from(new Set([...agent.visibleTeamIds, input.teamId])),
-        };
-        agents.set(agent.id, updated);
-        return updated;
-      },
-      async unpublish(input) {
-        const agent = agents.get(input.agentId);
-        if (!agent || agent.deletedAt !== undefined) {
-          return null;
-        }
-        const updated = {
-          ...agent,
-          visibleTeamIds: agent.visibleTeamIds.filter((teamId) => teamId !== input.teamId || teamId === agent.primaryTeamId),
-        };
-        agents.set(agent.id, updated);
+        // visible=true：确保 primary 在 visibleTeamIds 中；visible=false：把 primary 移出。
+        const updated = input.visible
+          ? { ...agent, visibleTeamIds: Array.from(new Set([agent.primaryTeamId, ...agent.visibleTeamIds])) }
+          : { ...agent, visibleTeamIds: agent.visibleTeamIds.filter((t) => t !== agent.primaryTeamId) };
+        agents.set(input.agentId, updated);
         return updated;
       },
       async updateConfig(input) {
@@ -653,7 +643,11 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async listVisibleInTeam(teamId) {
         return Array.from(agents.values()).filter(
-          (agent) => agent.deletedAt === undefined && agent.visibleTeamIds.includes(teamId),
+          (agent) =>
+            agent.deletedAt === undefined &&
+            agent.visibleTeamIds.includes(teamId) &&
+            // 兜底过滤：执行器类 runtime agent（非 custom）不作为团队成员呈现
+            !(agent.category === 'executor-hosted' && agent.source !== 'custom'),
         );
       },
       async listByDevice(deviceId) {

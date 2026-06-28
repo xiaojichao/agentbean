@@ -206,8 +206,8 @@ export interface AgentEvents {
   onStatus(handler: (snap: AgentSnapshot) => void): () => void;
   onDiscovered(handler: (payload: { runtimes: RuntimeInfo[]; agents: DiscoveredAgent[] }) => void): () => void;
   metrics(teamId: string): Promise<{ ok: boolean; summaries?: AgentMetricsSummary[]; error?: string }>;
-  publish(agentId: string, networkId: string, teamId?: string): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
-  unpublish(agentId: string, networkId: string, teamId?: string): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
+  // 设置 Agent 对指定团队的可见性（替代旧的 publish/unpublish，由后端统一收敛到 visibleTeamIds）
+  setVisibility(agentId: string, teamId: string, visible: boolean): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
   delete(agentId: string, teamId?: string): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
   create(payload: { name: string; adapterKind: string; command: string; args?: string[]; category?: string; cwd?: string; env?: Record<string, string>; description?: string; deviceId?: string; networkId?: string }): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
   updateConfig(payload: { id: string; teamId?: string; name: string; adapterKind?: string; command?: string; cwd?: string | null; description?: string | null }): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
@@ -257,13 +257,9 @@ export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
       return emitWithTimeout(socket, WEB_EVENTS.agent.updateConfig, { agentId: id, ...rest })
         .then((res) => res?.agent ? { ...res, agent: normalizeAgentSnapshot(res.agent) } : res);
     },
-    publish(agentId, networkId, teamId) {
-      return emitWithTimeout(socket, WEB_EVENTS.agent.publish, { agentId, targetTeamId: networkId, ...(teamId ? { teamId } : {}) })
-        .then((res) => res?.agent ? { ...res, agent: normalizeAgentSnapshot(res.agent) } : res);
-    },
-    unpublish(agentId, networkId, teamId) {
-      return emitWithTimeout(socket, WEB_EVENTS.agent.unpublish, { agentId, targetTeamId: networkId, ...(teamId ? { teamId } : {}) })
-        .then((res) => res?.agent ? { ...res, agent: normalizeAgentSnapshot(res.agent) } : res);
+    setVisibility(agentId, teamId, visible) {
+      return emitWithTimeout(socket, WEB_EVENTS.agent.setVisibility, { agentId, teamId, visible })
+        .then((res) => (res?.agent ? { ...res, agent: normalizeAgentSnapshot(res.agent) } : res));
     },
     delete(agentId, teamId) {
       return emitWithTimeout(socket, WEB_EVENTS.agent.delete, { agentId, ...(teamId ? { teamId } : {}) })

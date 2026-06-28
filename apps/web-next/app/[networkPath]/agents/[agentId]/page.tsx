@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, AlertTriangle, Copy, Check, Globe, Lock, Monitor, Settings, Terminal, Trash2, User, X } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, Copy, Check, Monitor, Settings, Terminal, Trash2, User, X } from 'lucide-react';
 import { agentEvents, fetchAgentWorkspace } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { AgentStatusBadge } from '@/components/agent-status-badge';
@@ -19,7 +19,6 @@ export default function AgentDetailPage() {
   const setAgents = useAgentBeanStore((s) => s.applyAgentsSnapshot);
   const upsert = useAgentBeanStore((s) => s.applyAgentStatus);
   const np = useCurrentNetworkPath();
-  const [publishing, setPublishing] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [configSaving, setConfigSaving] = useState(false);
@@ -64,25 +63,6 @@ export default function AgentDetailPage() {
       });
     return () => { cancelled = true; };
   }, [agent?.id, agentTeamId]);
-
-  const handleTogglePublish = async (networkId: string) => {
-    if (!agent || publishing) return;
-    const isPublished = (agent.publishedNetworkIds ?? []).includes(networkId);
-    setPublishing(networkId);
-    const ev = agentEvents();
-    const res = isPublished
-      ? await ev.unpublish(agent.id, networkId, agentTeamId)
-      : await ev.publish(agent.id, networkId, agentTeamId);
-    setPublishing(null);
-    if (res.ok) {
-      upsert(res.agent ?? {
-        ...agent,
-        publishedNetworkIds: isPublished
-          ? (agent.publishedNetworkIds ?? []).filter((id) => id !== networkId)
-          : [...(agent.publishedNetworkIds ?? []), networkId],
-      });
-    }
-  };
 
   const openConfig = () => {
     if (!agent) return;
@@ -223,52 +203,6 @@ export default function AgentDetailPage() {
           <AgentStatusBadge status={agent.status} />
         </div>
       </div>
-
-      {/* 团队发布 */}
-      <section className="rounded-lg border border-neutral-200 p-4">
-        <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">团队发布</h3>
-        <div className="space-y-2">
-          {teams.map((net) => {
-            const isHome = net.id === agent.networkId;
-            const isPublished = (agent.publishedNetworkIds ?? []).includes(net.id);
-            const isBusy = publishing === net.id;
-            return (
-              <div key={net.id} className="flex items-center justify-between rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  {net.visibility === 'public' ? (
-                    <Globe size={14} className="text-blue-500 shrink-0" />
-                  ) : (
-                    <Lock size={14} className="text-neutral-400 shrink-0" />
-                  )}
-                  <span className="text-sm font-medium truncate">{net.name}</span>
-                  {isHome && (
-                    <span className="shrink-0 rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600">主团队</span>
-                  )}
-                </div>
-                {isHome ? (
-                  <span className="text-[10px] text-neutral-400">默认可见</span>
-                ) : (
-                  <button
-                    onClick={() => handleTogglePublish(net.id)}
-                    disabled={isBusy}
-                    data-smoke="agent-publish-toggle"
-                    data-team-id={net.id}
-                    data-published={String(isPublished)}
-                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
-                      isPublished ? 'bg-emerald-500' : 'bg-neutral-300'
-                    } ${isBusy ? 'opacity-50' : ''}`}
-                  >
-                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${isPublished ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                  </button>
-                )}
-              </div>
-            );
-          })}
-          {teams.length <= 1 && (
-            <div className="text-xs text-neutral-400 py-2">仅有一个团队，无需发布管理。</div>
-          )}
-        </div>
-      </section>
 
       <dl className="grid grid-cols-1 gap-y-2 sm:grid-cols-2 sm:gap-x-6 text-sm">
         <div>

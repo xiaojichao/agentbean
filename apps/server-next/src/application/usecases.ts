@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type SetAgentTeamVisibilityInput, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand } from './device-invite-command.js';
@@ -77,8 +77,7 @@ export interface ServerNextUseCases {
   registerDiscoveredAgents(input: RegisterDiscoveredAgentsInput): Promise<Ack<RegisterDiscoveredAgentsResult>>;
   listVisibleAgents(input: { teamId: string }): Promise<Ack<{ agents: AgentDto[] }>>;
   createCustomAgent(input: CreateCustomAgentInput): Promise<Ack<{ agent: AgentDto }>>;
-  publishAgent(input: PublishAgentInput): Promise<Ack<{ agent: AgentDto }>>;
-  unpublishAgent(input: UnpublishAgentInput): Promise<Ack<{ agent: AgentDto }>>;
+  setAgentTeamVisibility(input: SetAgentTeamVisibilityInput): Promise<Ack<{ agent: AgentDto }>>;
   updateAgentConfig(input: UpdateAgentConfigInput): Promise<Ack<{ agent: AgentDto }>>;
   deleteAgent(input: DeleteAgentInput): Promise<Ack<{ agent: AgentDto }>>;
   listChannels(input: { teamId: string; userId: string }): Promise<Ack<{ channels: ChannelDto[] }>>;
@@ -357,20 +356,6 @@ export interface CreateCustomAgentInput {
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
-}
-
-export interface PublishAgentInput {
-  userId: string;
-  teamId: string;
-  agentId: string;
-  targetTeamId: string;
-}
-
-export interface UnpublishAgentInput {
-  userId: string;
-  teamId: string;
-  agentId: string;
-  targetTeamId: string;
 }
 
 export interface UpdateAgentConfigInput {
@@ -1646,6 +1631,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const seenIdentityKeys: string[] = [];
 
       for (const discovered of discoveredInput.agents) {
+        // 源头过滤：只入库 AgentOS 托管型 agent（agentos-hosted）。
+        // 编程执行器（executor-hosted）不作为 Agent 成员，仅以 RuntimeDto 形式
+        // 在设备详情页展示，故此处直接跳过，避免污染 agents 表与频道成员关系。
+        if (discovered.category !== 'agentos-hosted') {
+          continue;
+        }
         const adapterKind = normalizeAdapterKind(discovered.adapterKind) as AdapterKind;
         const identityKey = agentIdentityKey({
           teamId: discoveredInput.teamId,
@@ -1753,56 +1744,37 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeSuccess({ agent: toPublicAgent(agent) });
     },
 
-    async publishAgent(agentInput) {
+    async setAgentTeamVisibility(agentInput) {
       const managed = await agentForManagement(repositories, agentInput);
       if (!managed.ok) {
         return managed;
       }
-      if (!(await repositories.teams.getById(agentInput.targetTeamId))) {
-        return makeFailure('NOT_FOUND', 'Target team not found');
+      // 仅允许在 primary team 上切换可见性 —— 多团队发布已被 0009 迁移废弃。
+      if (agentInput.teamId !== managed.agent.primaryTeamId) {
+        return makeFailure('VALIDATION_ERROR', '只能在 primary team 上切换可见性');
       }
-      if (!(await repositories.teams.isMember(agentInput.targetTeamId, agentInput.userId))) {
-        return makeFailure('FORBIDDEN', 'User is not a target team member');
-      }
-      if (agentInput.targetTeamId === managed.agent.primaryTeamId) {
-        return makeFailure('VALIDATION_ERROR', 'Cannot publish agent to its primary team');
-      }
-      const agent = await repositories.agents.publish({
+      const agent = await repositories.agents.setPrimaryTeamVisibility({
         agentId: managed.agent.id,
-        teamId: agentInput.targetTeamId,
-        publishedBy: agentInput.userId,
+        visible: agentInput.visible,
         timestamp: clock.now(),
       });
       if (!agent) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
-      await ensureDefaultChannelMembership(repositories, clock, {
-        teamId: agentInput.targetTeamId,
-        agentId: agent.id,
-      });
-      return makeSuccess({ agent: toPublicAgent(agent) });
-    },
-
-    async unpublishAgent(agentInput) {
-      const managed = await agentForManagement(repositories, agentInput);
-      if (!managed.ok) {
-        return managed;
+      if (agentInput.visible) {
+        // 恢复可见：重新加入默认频道 #all。
+        await ensureDefaultChannelMembership(repositories, clock, {
+          teamId: agentInput.teamId,
+          agentId: agent.id,
+        });
+      } else {
+        // 隐藏：从该团队所有频道移除（含默认 #all）。
+        await repositories.channels.removeAgentFromTeamChannels({
+          teamId: agentInput.teamId,
+          agentId: agent.id,
+          timestamp: clock.now(),
+        });
       }
-      if (agentInput.targetTeamId === managed.agent.primaryTeamId) {
-        return makeFailure('VALIDATION_ERROR', 'Cannot unpublish agent from its primary team');
-      }
-      const agent = await repositories.agents.unpublish({
-        agentId: managed.agent.id,
-        teamId: agentInput.targetTeamId,
-      });
-      if (!agent) {
-        return makeFailure('NOT_FOUND', 'Agent not found');
-      }
-      await repositories.channels.removeAgentFromTeamChannels({
-        teamId: agentInput.targetTeamId,
-        agentId: managed.agent.id,
-        timestamp: clock.now(),
-      });
       return makeSuccess({ agent: toPublicAgent(agent) });
     },
 

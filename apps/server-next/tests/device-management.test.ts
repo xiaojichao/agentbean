@@ -306,7 +306,7 @@ describe('device rename and delete (end-to-end)', () => {
     const batchAck = await agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
       teamId: 'team-1',
       deviceId: 'device-1',
-      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
     });
     expect(batchAck).toMatchObject({ ok: true, agents: [{ status: 'online', deviceId: 'device-1' }] });
     const agentId = (batchAck as { agents: Array<{ id: string }> }).agents[0]!.id;
@@ -722,7 +722,7 @@ describe('device rename and delete (end-to-end)', () => {
       app.registerDiscoveredAgents({
         teamId: 'team-1',
         deviceId: aliasDeviceId,
-        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
       }),
     ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-1', deviceId: aliasDeviceId }] });
 

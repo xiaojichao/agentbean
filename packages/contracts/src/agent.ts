@@ -77,20 +77,6 @@ export interface CreateAgentCommandDto {
   env?: Record<string, string>;
 }
 
-export interface PublishAgentCommandDto {
-  userId: ID;
-  teamId: ID;
-  agentId: ID;
-  targetTeamId: ID;
-}
-
-export interface UnpublishAgentCommandDto {
-  userId: ID;
-  teamId: ID;
-  agentId: ID;
-  targetTeamId: ID;
-}
-
 export interface UpdateAgentConfigCommandDto {
   userId: ID;
   teamId: ID;
@@ -109,6 +95,15 @@ export interface DeleteAgentCommandDto {
   userId: ID;
   teamId: ID;
   agentId: ID;
+}
+
+// 切换 Agent 在其 primary team 上的可见性（隐藏 = 移出当前团队成员页）。
+// 仅允许在 primary team 上操作；Task 3/4 会通过 socket + 前端消费此 usecase。
+export interface SetAgentTeamVisibilityInput {
+  userId: ID;
+  teamId: ID;
+  agentId: ID;
+  visible: boolean;
 }
 
 export interface AgentMetricsSummary {
