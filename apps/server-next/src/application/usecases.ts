@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type SetAgentTeamVisibilityInput, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand } from './device-invite-command.js';
@@ -79,6 +79,7 @@ export interface ServerNextUseCases {
   createCustomAgent(input: CreateCustomAgentInput): Promise<Ack<{ agent: AgentDto }>>;
   publishAgent(input: PublishAgentInput): Promise<Ack<{ agent: AgentDto }>>;
   unpublishAgent(input: UnpublishAgentInput): Promise<Ack<{ agent: AgentDto }>>;
+  setAgentTeamVisibility(input: SetAgentTeamVisibilityInput): Promise<Ack<{ agent: AgentDto }>>;
   updateAgentConfig(input: UpdateAgentConfigInput): Promise<Ack<{ agent: AgentDto }>>;
   deleteAgent(input: DeleteAgentInput): Promise<Ack<{ agent: AgentDto }>>;
   listChannels(input: { teamId: string; userId: string }): Promise<Ack<{ channels: ChannelDto[] }>>;
@@ -1803,6 +1804,40 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         agentId: managed.agent.id,
         timestamp: clock.now(),
       });
+      return makeSuccess({ agent: toPublicAgent(agent) });
+    },
+
+    async setAgentTeamVisibility(agentInput) {
+      const managed = await agentForManagement(repositories, agentInput);
+      if (!managed.ok) {
+        return managed;
+      }
+      // 仅允许在 primary team 上切换可见性 —— 多团队发布已被 0009 迁移废弃。
+      if (agentInput.teamId !== managed.agent.primaryTeamId) {
+        return makeFailure('VALIDATION_ERROR', '只能在 primary team 上切换可见性');
+      }
+      const agent = await repositories.agents.setPrimaryTeamVisibility({
+        agentId: managed.agent.id,
+        visible: agentInput.visible,
+        timestamp: clock.now(),
+      });
+      if (!agent) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
+      if (agentInput.visible) {
+        // 恢复可见：重新加入默认频道 #all。
+        await ensureDefaultChannelMembership(repositories, clock, {
+          teamId: agentInput.teamId,
+          agentId: agent.id,
+        });
+      } else {
+        // 隐藏：从该团队所有频道移除（含默认 #all）。
+        await repositories.channels.removeAgentFromTeamChannels({
+          teamId: agentInput.teamId,
+          agentId: agent.id,
+          timestamp: clock.now(),
+        });
+      }
       return makeSuccess({ agent: toPublicAgent(agent) });
     },
 

@@ -46,6 +46,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0006_agent_gateway_instance_key.sql');
   applyMigration(db, 'global/0007_device_canonical_alias.sql');
   applyMigration(db, 'global/0008_device_canonical_backfill.sql');
+  applyMigration(db, 'global/0009_agent_visibility.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
@@ -981,6 +982,17 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .run(input.agentId, input.teamId);
         return mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId));
       },
+      async setPrimaryTeamVisibility(input) {
+        // hidden_from_primary_team=1 时，mapAgent 会把 primaryTeamId 从 visibleTeamIds 移除。
+        globalDb
+          .prepare('UPDATE agents SET hidden_from_primary_team = ? WHERE id = ?')
+          .run(input.visible ? 0 : 1, input.agentId);
+        if (!input.visible) {
+          // 隐藏时同步清空额外发布，保证 agent 只剩 primary team 归属（且 primary 不可见）。
+          globalDb.prepare('DELETE FROM agent_publications WHERE agent_id = ?').run(input.agentId);
+        }
+        return mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId));
+      },
       async updateConfig(input) {
         const existing = mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId));
         if (!existing || existing.deletedAt !== undefined) {
@@ -1082,14 +1094,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       async listVisibleInTeam(teamId) {
         return globalDb
           .prepare(
-            `SELECT agents.* FROM agents
-             WHERE agents.primary_team_id = ?
-             AND agents.deleted_at IS NULL
-             UNION
-             SELECT agents.* FROM agent_publications
-             JOIN agents ON agents.id = agent_publications.agent_id
-             WHERE agent_publications.team_id = ?
-             AND agents.deleted_at IS NULL`,
+            `SELECT * FROM (
+               SELECT agents.* FROM agents
+               WHERE agents.primary_team_id = ?
+                 AND agents.deleted_at IS NULL
+                 AND agents.hidden_from_primary_team = 0
+               UNION
+               SELECT agents.* FROM agent_publications
+               JOIN agents ON agents.id = agent_publications.agent_id
+               WHERE agent_publications.team_id = ?
+                 AND agents.deleted_at IS NULL
+             ) AS visible
+             WHERE NOT (visible.category = 'executor-hosted' AND visible.source != 'custom')`,
           )
           .all(teamId, teamId)
           .map((row) => {
@@ -1861,16 +1877,21 @@ function mapAgent(db: SqliteDatabase, row: unknown): AgentRecord | null {
   }
   const id = sqliteText(row, 'id');
   const primaryTeamId = sqliteText(row, 'primary_team_id');
+  const hiddenFromPrimary = sqliteNumber(row, 'hidden_from_primary_team') === 1;
   const publishedTeamIds = db
     .prepare('SELECT team_id FROM agent_publications WHERE agent_id = ? ORDER BY published_at')
     .all(id)
     .map((publication) => sqliteText(publication, 'team_id'));
   const rawEnv = parseJsonObject(sqliteNullableText(row, 'env_json'));
   const deletedAt = sqliteNullableNumber(row, 'deleted_at');
+  // visibleTeamIds 派生：未删除时 = primary + 已发布团队；hidden_from_primary_team=1 时把 primary 移除。
+  // 注意：0009 迁移已清空 agent_publications，这里仍保留 publishedTeamIds 逻辑以兼容旧数据。
+  const fullVisible = deletedAt === undefined ? Array.from(new Set([primaryTeamId, ...publishedTeamIds])) : [];
+  const visibleTeamIds = hiddenFromPrimary ? fullVisible.filter((t) => t !== primaryTeamId) : fullVisible;
   return {
     id,
     primaryTeamId,
-    visibleTeamIds: deletedAt === undefined ? Array.from(new Set([primaryTeamId, ...publishedTeamIds])) : [],
+    visibleTeamIds,
     name: sqliteText(row, 'name'),
     adapterKind: sqliteText(row, 'adapter_kind') as AgentRecord['adapterKind'],
     category: sqliteText(row, 'category') as AgentRecord['category'],

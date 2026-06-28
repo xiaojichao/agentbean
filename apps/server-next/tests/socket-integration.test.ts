@@ -98,7 +98,7 @@ describe('server-next Socket.IO namespaces', () => {
       agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
         teamId: 'team-1',
         deviceId: 'device-1',
-        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
       }),
     ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-1', status: 'online' }] });
 
@@ -206,7 +206,7 @@ describe('server-next Socket.IO namespaces', () => {
       daemon.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
         teamId: 'team-list-1',
         deviceId: 'device-list-1',
-        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
       }),
     ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-list-1', status: 'online' }] });
     await expect(
@@ -1273,7 +1273,7 @@ describe('server-next Socket.IO namespaces', () => {
     await agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
       teamId: 'team-1',
       deviceId: 'device-1',
-      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
     });
 
     const dmSnapshots: unknown[] = [];
@@ -1367,7 +1367,7 @@ describe('server-next Socket.IO namespaces', () => {
       agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
         teamId: 'team-1',
         deviceId: 'device-1',
-        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
       }),
     ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-1', status: 'online' }] });
     await eventually(async () => {
@@ -1427,7 +1427,7 @@ describe('server-next Socket.IO namespaces', () => {
       agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
         teamId: 'team-1',
         deviceId: 'device-1',
-        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
       }),
     ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-1', status: 'online' }] });
 
@@ -1493,7 +1493,7 @@ describe('server-next Socket.IO namespaces', () => {
       agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
         teamId: 'team-1',
         deviceId: 'device-1',
-        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
       }),
     ).resolves.toMatchObject({ ok: true });
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -2123,7 +2123,7 @@ describe('server-next Socket.IO namespaces', () => {
       agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
         teamId: 'team-1',
         deviceId: 'device-1',
-        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
       }),
     ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-1', status: 'online' }] });
 
@@ -2142,7 +2142,7 @@ describe('server-next Socket.IO namespaces', () => {
           {
             name: 'Codex',
             adapterKind: 'codex',
-            category: 'executor-hosted',
+            category: 'agentos-hosted',
             source: 'runtime',
             command: '/opt/homebrew/bin/codex',
             cwd: '/Users/shaw/AgentBean',
@@ -2191,7 +2191,7 @@ describe('server-next Socket.IO namespaces', () => {
     await agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
       teamId: 'team-1',
       deviceId: 'device-1',
-      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
     });
 
     await expect(
@@ -2307,7 +2307,7 @@ describe('server-next Socket.IO namespaces', () => {
     await agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
       teamId: 'team-1',
       deviceId: 'device-1',
-      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
     });
 
     // Owner starts DM and sends a message
@@ -2381,7 +2381,7 @@ describe('server-next Socket.IO namespaces', () => {
     await agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
       teamId: 'team-1',
       deviceId: 'device-1',
-      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
     });
 
     const channelMessages: unknown[] = [];
@@ -2489,7 +2489,7 @@ describe('server-next Socket.IO namespaces', () => {
       daemon.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
         teamId: 'team-1',
         deviceId: 'device-1',
-        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
       }),
     ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-1', status: 'online' }] });
     await eventually(async () => {

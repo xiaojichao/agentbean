@@ -455,7 +455,7 @@ describe('server-next SQLite repositories', () => {
         visibleTeamIds: ['team-1'],
         name: 'Codex',
         adapterKind: 'codex',
-        category: 'executor-hosted',
+        category: 'agentos-hosted',
         source: 'scanned',
         status: 'online',
         lastSeenAt: 500,
@@ -772,7 +772,7 @@ describe('server-next SQLite repositories', () => {
         visibleTeamIds: ['team-1'],
         name: 'Codex',
         adapterKind: 'codex',
-        category: 'executor-hosted',
+        category: 'agentos-hosted',
         source: 'scanned',
         status: 'online',
         lastSeenAt: 520,
@@ -857,7 +857,7 @@ describe('server-next SQLite repositories', () => {
         visibleTeamIds: ['team-1'],
         name: 'Codex',
         adapterKind: 'codex',
-        category: 'executor-hosted',
+        category: 'agentos-hosted',
         source: 'scanned',
         status: 'online',
         lastSeenAt: 1000,
@@ -996,7 +996,7 @@ describe('server-next SQLite repositories', () => {
         app.registerDiscoveredAgents({
           teamId: 'team-1',
           deviceId: 'device-1',
-          agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+          agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
         }),
       ).resolves.toMatchObject({
         ok: true,
@@ -1015,7 +1015,7 @@ describe('server-next SQLite repositories', () => {
           agents: [{
             name: 'Codex',
             adapterKind: 'codex-cli',
-            category: 'executor-hosted',
+            category: 'agentos-hosted',
             command: '/Applications/Codex',
             args: ['exec'],
             cwd: '/Users/shaw/project',
@@ -1035,7 +1035,7 @@ describe('server-next SQLite repositories', () => {
         app.registerDiscoveredAgents({
           teamId: 'team-1',
           deviceId: 'device-1',
-          agents: [{ name: 'codex', adapterKind: 'codex', category: 'executor-hosted' }],
+          agents: [{ name: 'codex', adapterKind: 'codex', category: 'agentos-hosted' }],
         }),
       ).resolves.toMatchObject({
         ok: true,
@@ -1130,7 +1130,7 @@ describe('server-next SQLite repositories', () => {
       await app.registerDiscoveredAgents({
         teamId: 'team-1',
         deviceId: 'device-1',
-        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
       });
 
       await expect(app.reconcileDisconnectedDevices({ timestamp: 1200 })).resolves.toMatchObject({
@@ -1179,7 +1179,7 @@ describe('server-next SQLite repositories', () => {
       await app.registerDiscoveredAgents({
         teamId: 'team-1',
         deviceId: 'device-1',
-        agents: [{ name: 'Codex', adapterKind: 'codex', category: 'executor-hosted' }],
+        agents: [{ name: 'Codex', adapterKind: 'codex', category: 'agentos-hosted' }],
       });
       await app.uploadArtifact({
         userId: 'user-1',
@@ -1250,7 +1250,7 @@ describe('server-next SQLite repositories', () => {
       await app.registerDiscoveredAgents({
         teamId: 'team-1',
         deviceId: 'device-1',
-        agents: [{ name: 'Codex', adapterKind: 'codex', category: 'executor-hosted' }],
+        agents: [{ name: 'Codex', adapterKind: 'codex', category: 'agentos-hosted' }],
       });
       await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex hello' });
       await repositories.agents.softDelete({ agentId: 'agent-1', timestamp: 905 });
@@ -1323,7 +1323,7 @@ describe('server-next SQLite repositories', () => {
       await app.registerDiscoveredAgents({
         teamId: 'team-1',
         deviceId: 'device-1',
-        agents: [{ name: 'Codex', adapterKind: 'codex', category: 'executor-hosted' }],
+        agents: [{ name: 'Codex', adapterKind: 'codex', category: 'agentos-hosted' }],
       });
       await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
       await app.registerUser({ username: 'lin', password: 'secret', teamName: 'Lin Team', joinCode: 'code-1' });
@@ -1937,7 +1937,7 @@ describe('server-next SQLite repositories', () => {
       await app.registerDiscoveredAgents({
         teamId: 'team-1',
         deviceId: 'device-1',
-        agents: [{ name: 'Codex', adapterKind: 'codex', category: 'executor-hosted' }],
+        agents: [{ name: 'Codex', adapterKind: 'codex', category: 'agentos-hosted' }],
       });
       await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex hello' });
 

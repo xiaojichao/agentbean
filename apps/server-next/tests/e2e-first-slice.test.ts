@@ -228,7 +228,7 @@ describe('AgentBean Next first-slice smoke', () => {
         profileId: 'default',
       },
       runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }],
-      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
     });
     await daemon.start();
 
@@ -320,7 +320,7 @@ describe('AgentBean Next first-slice smoke', () => {
         executor: async (request) => `reply:${request.prompt}`,
         device: { teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' },
         runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }],
-        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
       }).start();
     }
 

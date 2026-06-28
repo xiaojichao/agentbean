@@ -587,6 +587,18 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         agents.set(agent.id, updated);
         return updated;
       },
+      async setPrimaryTeamVisibility(input) {
+        const agent = agents.get(input.agentId);
+        if (!agent) {
+          return null;
+        }
+        // visible=true：确保 primary 在 visibleTeamIds 中；visible=false：把 primary 移出。
+        const updated = input.visible
+          ? { ...agent, visibleTeamIds: Array.from(new Set([agent.primaryTeamId, ...agent.visibleTeamIds])) }
+          : { ...agent, visibleTeamIds: agent.visibleTeamIds.filter((t) => t !== agent.primaryTeamId) };
+        agents.set(input.agentId, updated);
+        return updated;
+      },
       async updateConfig(input) {
         const agent = agents.get(input.agentId);
         if (!agent || agent.deletedAt !== undefined) {
@@ -653,7 +665,11 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async listVisibleInTeam(teamId) {
         return Array.from(agents.values()).filter(
-          (agent) => agent.deletedAt === undefined && agent.visibleTeamIds.includes(teamId),
+          (agent) =>
+            agent.deletedAt === undefined &&
+            agent.visibleTeamIds.includes(teamId) &&
+            // 兜底过滤：执行器类 runtime agent（非 custom）不作为团队成员呈现
+            !(agent.category === 'executor-hosted' && agent.source !== 'custom'),
         );
       },
       async listByDevice(deviceId) {
