@@ -105,10 +105,19 @@ describe('agent team visibility', () => {
     expect(listed2.ok && listed2.agents.map((a) => a.id)).toContain('agent-1');
   });
 
-  test('listVisibleInTeam excludes executor-hosted runtime agents (scanned/self-register)', async () => {
-    // setup 同上，registerDiscoveredAgents 传入 category: 'executor-hosted'
-    // Task 2 完成后此类不再创建；此测试验证 listVisibleInTeam 的兜底过滤
-    // 断言：executor-hosted+scanned 不出现在 listVisibleAgents 结果
+  test('listVisibleInTeam excludes executor-hosted runtime agents (兜底过滤)', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-1', 'agent-exec']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerDevice({ userId: 'user-1', teamId: 'team-1', hostname: 'mac' });
+    await app.registerDiscoveredAgents({
+      userId: 'user-1', teamId: 'team-1', deviceId: 'device-1',
+      agents: [{ name: 'codex', adapterKind: 'codex', category: 'executor-hosted', source: 'scanned' }],
+    });
+    const listed = await app.listVisibleAgents({ teamId: 'team-1' });
+    expect(listed.ok && listed.agents.map((a) => a.category)).not.toContain('executor-hosted');
   });
 });
 ```
