@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { createInMemoryRepositories } from '../src/infra/memory/repositories';
 import { createInMemoryServerNext } from '../src/index';
 
 function createIds(ids: string[]) {
@@ -101,5 +102,36 @@ describe('agent team visibility', () => {
       ],
     });
     expect(res.ok && res.agents.map((a) => a.category)).toEqual(['agentos-hosted']);
+  });
+
+  test('memory setPrimaryTeamVisibility refuses soft-deleted agents (I2 deep-defense)', async () => {
+    // I2: memory/repositories.ts 的 setPrimaryTeamVisibility 缺 deletedAt 守卫，软删 agent
+    // 被调用会"复活"进 visibleTeamIds。本测试直接打内存仓库，绕过 usecase 层守卫，
+    // 验证 repo 层防御与同级方法（updateConfig/softDelete）一致。
+    const repos = createInMemoryRepositories();
+    await repos.agents.upsert({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'executor-hosted',
+      source: 'scanned',
+      status: 'offline',
+      lastSeenAt: 100,
+    });
+    await repos.agents.softDelete({ agentId: 'agent-1', timestamp: 500 });
+
+    // 软删后调 setPrimaryTeamVisibility 应返回 null（与 updateConfig/softDelete 一致）。
+    const result = await repos.agents.setPrimaryTeamVisibility({
+      agentId: 'agent-1',
+      visible: true,
+      timestamp: 1000,
+    });
+    expect(result).toBeNull();
+    // 再取一次确认 agent 未被"复活"：visibleTeamIds 仍为软删后的空集。
+    const agent = await repos.agents.getById('agent-1');
+    expect(agent?.visibleTeamIds).toEqual([]);
+    expect(agent?.deletedAt).toBe(500);
   });
 });

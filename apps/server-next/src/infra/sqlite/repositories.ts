@@ -60,6 +60,65 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0008_artifact_workspace_boundary_index.sql');
 }
 
+// 清理 channel_agent_members 中指向已删 agent 的孤儿行（PRD §6）。
+//
+// 背景：global migration 0009 删除了所有 category='executor-hosted' 且 source IN
+// ('scanned','self-register') 的 agent，但 channel_agent_members 位于 team db，
+// 两者无外键、无跨库级联，被删 agent 会在频道成员表里留下幽灵行——这些 agent_id 会
+// 出现在 listChannelMembers 的结果里（repositories.ts:1808-1810），导致频道成员列表
+// 含指向已删 agent 的无效 ID。
+//
+// 实现：team db 是单一共享库（非每团队一库），channel_agent_members.agent_id 是裸
+// TEXT、无 FK；team db 内部也没有 agents/category/source 信息无法自我判断孤儿。因此
+// 在两个 db 都打开的协调点（createInfrastructure）里，用 ATTACH 把 global db 挂到
+// team db，按 "agent_id 不在 global.agents 中" 删除孤儿行——这恰好覆盖 0009 删除的
+// 集合，且对未来任何 agent 删除都安全。
+//
+// 路径：better-sqlite3 的 ATTACH 相对路径按进程 cwd 解析（非主库目录），而 dataDir
+// 可被 --data-dir 自定义，故必须用 globalDbPath 绝对路径；调用方在 createInfrastructure
+// 已持有该路径，传入即可。
+//
+// 幂等：通过 team db 的 schema_migrations 表用稳定 key 跟踪，仅执行一次。
+// 失败安全：DELETE 包在事务里，任意一步失败则整体回滚；ATTACH/DETACH 用 try 包裹，
+// 失败时不掩盖原始错误。
+export function cleanupOrphanedChannelMembers(
+  globalDbPath: string,
+  teamDb: SqliteDatabase,
+): void {
+  const CLEANUP_KEY = 'post-migration:cleanup-orphaned-channel-members';
+  teamDb.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+      id TEXT PRIMARY KEY,
+      applied_at INTEGER NOT NULL
+    );`);
+  if (teamDb.prepare('SELECT id FROM schema_migrations WHERE id = ?').get(CLEANUP_KEY)) {
+    return;
+  }
+  const escaped = `'${globalDbPath.replace(/'/g, "''")}'`;
+  teamDb.exec(`ATTACH DATABASE ${escaped} AS __global_agents;`);
+  try {
+    teamDb.exec('BEGIN;');
+    teamDb.exec(
+      `DELETE FROM channel_agent_members
+       WHERE agent_id NOT IN (SELECT id FROM __global_agents.agents);`,
+    );
+    teamDb.exec('COMMIT;');
+    teamDb.prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)').run(CLEANUP_KEY, Date.now());
+  } catch (err) {
+    try {
+      teamDb.exec('ROLLBACK;');
+    } catch {
+      // 事务可能已回滚或不存在，忽略二次错误，抛出原始错误。
+    }
+    throw err;
+  } finally {
+    try {
+      teamDb.exec('DETACH DATABASE __global_agents;');
+    } catch {
+      // ATTACH 未成功或已分离时忽略，不掩盖原始错误。
+    }
+  }
+}
+
 export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): ServerNextRepositories {
   const { globalDb, teamDb } = input;
 
@@ -968,10 +1027,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return mapAgentExecutionConfig(row);
       },
       async setPrimaryTeamVisibility(input) {
+        // 与 updateConfig/softDelete 一致：先取 agent，软删或不存在则直接返回 null，
+        // 避免末尾 SELECT 把未更新的软删 agent 当作成功结果返回。
+        const existing = mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId));
+        if (!existing || existing.deletedAt !== undefined) {
+          return null;
+        }
         // hidden_from_primary_team=1 时，mapAgent 会把 primaryTeamId 从 visibleTeamIds 移除。
         globalDb
-          .prepare('UPDATE agents SET hidden_from_primary_team = ? WHERE id = ?')
-          .run(input.visible ? 0 : 1, input.agentId);
+          .prepare(
+            'UPDATE agents SET hidden_from_primary_team = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
+          )
+          .run(input.visible ? 0 : 1, input.timestamp, input.agentId);
         if (!input.visible) {
           // 隐藏时同步清空额外发布，保证 agent 只剩 primary team 归属（且 primary 不可见）。
           globalDb.prepare('DELETE FROM agent_publications WHERE agent_id = ?').run(input.agentId);

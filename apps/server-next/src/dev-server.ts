@@ -10,6 +10,7 @@ import { createInMemoryRepositories } from './infra/memory/repositories.js';
 import {
   applyGlobalMigrations,
   applyTeamMigrations,
+  cleanupOrphanedChannelMembers,
   createSqliteRepositories,
   type SqliteDatabase,
 } from './infra/sqlite/repositories.js';
@@ -1134,6 +1135,9 @@ function createDefaultApp(
   const teamDb = new Sqlite(join(config.dataDir, 'team.sqlite'));
   applyGlobalMigrations(globalDb);
   applyTeamMigrations(teamDb);
+  // PRD §6：清理 channel_agent_members 中被 0009 删除的 executor-hosted agent 留下的孤儿行。
+  // 必须在两个迁移都跑完后、且 globalDbPath 已知时执行（详见函数注释）。
+  cleanupOrphanedChannelMembers(join(config.dataDir, 'global.sqlite'), teamDb);
   return {
     app: createServerNextUseCases({
       repositories: createSqliteRepositories({ globalDb, teamDb }),

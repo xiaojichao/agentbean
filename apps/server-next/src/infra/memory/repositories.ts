@@ -565,7 +565,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async setPrimaryTeamVisibility(input) {
         const agent = agents.get(input.agentId);
-        if (!agent) {
+        // 与同级方法（updateConfig/softDelete/getExecutionConfig）一致：软删 agent 不再可改可见性，
+        // 否则会把已软删的 agent "复活" 进 visibleTeamIds。
+        if (!agent || agent.deletedAt !== undefined) {
           return null;
         }
         // visible=true：确保 primary 在 visibleTeamIds 中；visible=false：把 primary 移出。

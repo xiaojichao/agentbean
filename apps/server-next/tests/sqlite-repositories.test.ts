@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test, vi } from 'vitest';
 import { createServerNextUseCases } from '../src/application/usecases';
@@ -8,6 +9,7 @@ import type { WorkspaceRunRecord } from '../src/application/repositories';
 import {
   applyGlobalMigrations,
   applyTeamMigrations,
+  cleanupOrphanedChannelMembers,
   createSqliteRepositories,
   type SqliteDatabase,
 } from '../src/infra/sqlite/repositories';
@@ -2243,6 +2245,143 @@ describe('server-next SQLite repositories', () => {
       expect(canonicalOf('dev-column')).toBeNull();
     } finally {
       globalDb.close();
+    }
+  });
+
+  // PRD §6：迁移 0009 删除 executor-hosted scanned/self-register agent 后，
+  // channel_agent_members（team db）里会残留指向这些 agent 的孤儿行。需要显式清理。
+  test('cleanupOrphanedChannelMembers removes channel_agent_members rows whose agent_id no longer exists in global agents', () => {
+    // 用真实的临时文件（不能用 :memory:，因为 ATTACH 需要磁盘上的 global 库文件路径）。
+    const dataDir = mkdtempSync(join(tmpdir(), 'orphan-cleanup-'));
+    const globalDbPath = join(dataDir, 'global.sqlite');
+    const teamDbPath = join(dataDir, 'team.sqlite');
+    try {
+      const g = new Database(globalDbPath);
+      const t = new Database(teamDbPath);
+      // 本测试只验证孤儿清理逻辑，不关心 FK 完整性，关闭外键检查以简化 seed。
+      g.pragma('foreign_keys = OFF');
+      applyGlobalMigrations(g);
+      applyTeamMigrations(t);
+      // 两个 agent 入库：agent-keep 存活，agent-gone 已被 0009 删除。
+      g.prepare(
+        `INSERT INTO agents (id, primary_team_id, name, normalized_name, adapter_kind, category, source, status, created_at, updated_at, last_seen_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run('agent-keep', 'team-1', 'Keep', 'keep', 'agentos-hosted', 'custom', 'offline', 100, 100, 100, 100);
+      g.prepare(
+        `INSERT INTO agents (id, primary_team_id, name, normalized_name, adapter_kind, category, source, status, created_at, updated_at, last_seen_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run('agent-gone', 'team-1', 'Gone', 'gone', 'executor-hosted', 'scanned', 'offline', 100, 100, 100, 100);
+      g.prepare('DELETE FROM agents WHERE id = ?').run('agent-gone');
+
+      // 两个频道成员行：一个指向存活 agent，一个指向已删 agent（孤儿）。
+      t.prepare('INSERT INTO channels (id, team_id, kind, name, visibility, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(
+        'channel-1',
+        'team-1',
+        'public',
+        '#all',
+        'public',
+        100,
+      );
+      t.prepare('INSERT INTO channel_agent_members (channel_id, agent_id, joined_at) VALUES (?, ?, ?)').run(
+        'channel-1',
+        'agent-keep',
+        100,
+      );
+      t.prepare('INSERT INTO channel_agent_members (channel_id, agent_id, joined_at) VALUES (?, ?, ?)').run(
+        'channel-1',
+        'agent-gone',
+        100,
+      );
+
+      cleanupOrphanedChannelMembers(globalDbPath, t);
+
+      const remaining = t
+        .prepare('SELECT agent_id FROM channel_agent_members ORDER BY agent_id')
+        .all()
+        .map((row) => (row as { agent_id: string }).agent_id);
+      // 孤儿 agent-gone 被删，存活 agent-keep 保留。
+      expect(remaining).toEqual(['agent-keep']);
+
+      // 幂等：再跑一次不应报错，且 schema_migrations 有记录。
+      cleanupOrphanedChannelMembers(globalDbPath, t);
+      const migrations = t
+        .prepare("SELECT id FROM schema_migrations WHERE id = 'post-migration:cleanup-orphaned-channel-members'")
+        .get();
+      expect(migrations).toEqual({ id: 'post-migration:cleanup-orphaned-channel-members' });
+      expect(
+        t
+          .prepare('SELECT agent_id FROM channel_agent_members')
+          .all()
+          .map((row) => (row as { agent_id: string }).agent_id),
+      ).toEqual(['agent-keep']);
+
+      g.close();
+      t.close();
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test('setPrimaryTeamVisibility bumps updated_at and refuses to update soft-deleted agents (I3)', async () => {
+    const { globalDb, close } = openMigratedDatabases();
+    try {
+      globalDb.pragma('foreign_keys = OFF');
+      globalDb.prepare(
+        `INSERT INTO agents (id, primary_team_id, name, normalized_name, adapter_kind, category, source, status, created_at, updated_at, last_seen_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run('agent-live', 'team-1', 'Live', 'live', 'agentos-hosted', 'custom', 'scanned', 'offline', 1000, 1000, 1000);
+      globalDb.prepare(
+        `INSERT INTO agents (id, primary_team_id, name, normalized_name, adapter_kind, category, source, status, created_at, updated_at, last_seen_at, deleted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        'agent-softdel',
+        'team-1',
+        'Softdel',
+        'softdel',
+        'agentos-hosted',
+        'custom',
+        'scanned',
+        'offline',
+        1000,
+        1000,
+        1000,
+        2000,
+      );
+
+      const repos = createSqliteRepositories({ globalDb, teamDb: new Database(':memory:') });
+      // 隐藏存活 agent：updated_at 应被刷新为传入的 timestamp。
+      const hidden = await repos.agents.setPrimaryTeamVisibility({
+        agentId: 'agent-live',
+        visible: false,
+        timestamp: 5000,
+      });
+      const liveRow = globalDb.prepare('SELECT hidden_from_primary_team, updated_at, deleted_at FROM agents WHERE id = ?').get('agent-live') as {
+        hidden_from_primary_team: number;
+        updated_at: number;
+        deleted_at: number | null;
+      };
+      // hidden_from_primary_team=1，且 mapAgent 派生的 visibleTeamIds 已移除 primary。
+      expect(liveRow.hidden_from_primary_team).toBe(1);
+      expect(hidden?.visibleTeamIds).toEqual([]);
+      expect(liveRow.updated_at).toBe(5000);
+      expect(liveRow.deleted_at).toBeNull();
+
+      // 软删 agent：UPDATE 不应匹配（AND deleted_at IS NULL），返回 null。
+      const result = await repos.agents.setPrimaryTeamVisibility({
+        agentId: 'agent-softdel',
+        visible: false,
+        timestamp: 9000,
+      });
+      expect(result).toBeNull();
+      const softdelRow = globalDb.prepare('SELECT hidden_from_primary_team, updated_at FROM agents WHERE id = ?').get('agent-softdel') as {
+        hidden_from_primary_team: number;
+        updated_at: number;
+      };
+      // 字段保持原值（updated_at 不变，hidden 不变）。
+      expect(softdelRow.hidden_from_primary_team).toBe(0);
+      expect(softdelRow.updated_at).toBe(1000);
+    } finally {
+      close();
     }
   });
 });
