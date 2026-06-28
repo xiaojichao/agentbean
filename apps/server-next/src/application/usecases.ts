@@ -77,8 +77,6 @@ export interface ServerNextUseCases {
   registerDiscoveredAgents(input: RegisterDiscoveredAgentsInput): Promise<Ack<RegisterDiscoveredAgentsResult>>;
   listVisibleAgents(input: { teamId: string }): Promise<Ack<{ agents: AgentDto[] }>>;
   createCustomAgent(input: CreateCustomAgentInput): Promise<Ack<{ agent: AgentDto }>>;
-  publishAgent(input: PublishAgentInput): Promise<Ack<{ agent: AgentDto }>>;
-  unpublishAgent(input: UnpublishAgentInput): Promise<Ack<{ agent: AgentDto }>>;
   setAgentTeamVisibility(input: SetAgentTeamVisibilityInput): Promise<Ack<{ agent: AgentDto }>>;
   updateAgentConfig(input: UpdateAgentConfigInput): Promise<Ack<{ agent: AgentDto }>>;
   deleteAgent(input: DeleteAgentInput): Promise<Ack<{ agent: AgentDto }>>;
@@ -358,20 +356,6 @@ export interface CreateCustomAgentInput {
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
-}
-
-export interface PublishAgentInput {
-  userId: string;
-  teamId: string;
-  agentId: string;
-  targetTeamId: string;
-}
-
-export interface UnpublishAgentInput {
-  userId: string;
-  teamId: string;
-  agentId: string;
-  targetTeamId: string;
 }
 
 export interface UpdateAgentConfigInput {
@@ -1757,59 +1741,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
       await ensureDefaultChannelMembership(repositories, clock, { teamId: agentInput.teamId, agentId: agent.id });
 
-      return makeSuccess({ agent: toPublicAgent(agent) });
-    },
-
-    async publishAgent(agentInput) {
-      const managed = await agentForManagement(repositories, agentInput);
-      if (!managed.ok) {
-        return managed;
-      }
-      if (!(await repositories.teams.getById(agentInput.targetTeamId))) {
-        return makeFailure('NOT_FOUND', 'Target team not found');
-      }
-      if (!(await repositories.teams.isMember(agentInput.targetTeamId, agentInput.userId))) {
-        return makeFailure('FORBIDDEN', 'User is not a target team member');
-      }
-      if (agentInput.targetTeamId === managed.agent.primaryTeamId) {
-        return makeFailure('VALIDATION_ERROR', 'Cannot publish agent to its primary team');
-      }
-      const agent = await repositories.agents.publish({
-        agentId: managed.agent.id,
-        teamId: agentInput.targetTeamId,
-        publishedBy: agentInput.userId,
-        timestamp: clock.now(),
-      });
-      if (!agent) {
-        return makeFailure('NOT_FOUND', 'Agent not found');
-      }
-      await ensureDefaultChannelMembership(repositories, clock, {
-        teamId: agentInput.targetTeamId,
-        agentId: agent.id,
-      });
-      return makeSuccess({ agent: toPublicAgent(agent) });
-    },
-
-    async unpublishAgent(agentInput) {
-      const managed = await agentForManagement(repositories, agentInput);
-      if (!managed.ok) {
-        return managed;
-      }
-      if (agentInput.targetTeamId === managed.agent.primaryTeamId) {
-        return makeFailure('VALIDATION_ERROR', 'Cannot unpublish agent from its primary team');
-      }
-      const agent = await repositories.agents.unpublish({
-        agentId: managed.agent.id,
-        teamId: agentInput.targetTeamId,
-      });
-      if (!agent) {
-        return makeFailure('NOT_FOUND', 'Agent not found');
-      }
-      await repositories.channels.removeAgentFromTeamChannels({
-        teamId: agentInput.targetTeamId,
-        agentId: managed.agent.id,
-        timestamp: clock.now(),
-      });
       return makeSuccess({ agent: toPublicAgent(agent) });
     },
 

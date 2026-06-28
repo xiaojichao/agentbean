@@ -34,7 +34,6 @@ import {
   type ListChannelMembersCommandDto,
   type ListDmsCommandDto,
   type MessageDto,
-  type PublishAgentCommandDto,
   type RuntimeDto,
   type SnapshotDmCommandDto,
   type StartDmCommandDto,
@@ -50,7 +49,6 @@ import {
   type SwitchTeamAckDto,
   type SwitchTeamCommandDto,
   type TeamDto,
-  type UnpublishAgentCommandDto,
   type UpdateAgentConfigCommandDto,
   type UpdateChannelCommandDto,
   type ValidateJoinLinkCommandDto,
@@ -425,8 +423,6 @@ describe('first-slice contract result shape', () => {
     expect(WEB_EVENTS.join.revoke).toBe('join:revoke');
     expect(WEB_EVENTS.deviceInvite.create).toBe('device-invite:create');
     expect(WEB_EVENTS.deviceInvite.complete).toBe('device-invite:complete');
-    expect(WEB_EVENTS.agent.publish).toBe('agent:publish');
-    expect(WEB_EVENTS.agent.unpublish).toBe('agent:unpublish');
     expect(WEB_EVENTS.agent.updateConfig).toBe('agent:update-config');
     expect(WEB_EVENTS.agent.delete).toBe('agent:delete');
     expect(WEB_EVENTS.dm.start).toBe('dm:start');
@@ -492,18 +488,6 @@ describe('first-slice contract result shape', () => {
       name: 'Custom Codex',
       env: { OPENAI_API_KEY: 'secret-value' },
     };
-    const publishAgent: PublishAgentCommandDto = {
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-custom-1',
-      targetTeamId: 'team-2',
-    };
-    const unpublishAgent: UnpublishAgentCommandDto = {
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-custom-1',
-      targetTeamId: 'team-2',
-    };
     const updateAgentConfig: UpdateAgentConfigCommandDto = {
       userId: 'user-1',
       teamId: 'team-1',
@@ -527,8 +511,6 @@ describe('first-slice contract result shape', () => {
     expect(discovered.source).toBe('self-register');
     expect(discovered.gatewayInstanceKey).toBe('gateway-1');
     expect(createAgent.runtimeId).toBe('runtime-1');
-    expect(publishAgent.targetTeamId).toBe('team-2');
-    expect(unpublishAgent.targetTeamId).toBe('team-2');
     expect(updateAgentConfig.name).toBe('Renamed Codex');
     expect(deleteAgent.agentId).toBe('agent-custom-1');
   });

@@ -2019,7 +2019,6 @@ describe('server-next SQLite repositories', () => {
         name: 'Custom Codex',
         env: { OPENAI_API_KEY: 'old-secret' },
       });
-      await app.publishAgent({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1', targetTeamId: 'team-2' });
       await app.reportDeviceRuntimes({
         teamId: 'team-1',
         deviceId: 'device-1',

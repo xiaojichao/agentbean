@@ -84,18 +84,6 @@ describe('web-next socket client', () => {
       runtimeId: 'runtime-1',
       name: 'Custom Codex',
     });
-    await client.publishAgent({
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-1',
-      targetTeamId: 'team-2',
-    });
-    await client.unpublishAgent({
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-1',
-      targetTeamId: 'team-2',
-    });
     await client.updateAgentConfig({
       userId: 'user-1',
       teamId: 'team-1',
@@ -142,8 +130,6 @@ describe('web-next socket client', () => {
       [WEB_EVENTS.channel.removeAgent, { userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', agentId: 'agent-1' }],
       [WEB_EVENTS.channel.members, { userId: 'user-1', teamId: 'team-1', channelId: 'channel-2' }],
       [WEB_EVENTS.agent.create, { userId: 'user-1', teamId: 'team-1', deviceId: 'device-1', runtimeId: 'runtime-1', name: 'Custom Codex' }],
-      [WEB_EVENTS.agent.publish, { userId: 'user-1', teamId: 'team-1', agentId: 'agent-1', targetTeamId: 'team-2' }],
-      [WEB_EVENTS.agent.unpublish, { userId: 'user-1', teamId: 'team-1', agentId: 'agent-1', targetTeamId: 'team-2' }],
       [WEB_EVENTS.agent.updateConfig, { userId: 'user-1', teamId: 'team-1', agentId: 'agent-1', name: 'Renamed Codex' }],
       [WEB_EVENTS.agent.delete, { userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' }],
       [WEB_EVENTS.message.send, { userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'hello' }],

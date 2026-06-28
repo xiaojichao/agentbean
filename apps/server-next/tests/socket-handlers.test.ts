@@ -50,8 +50,6 @@ describe('server-next socket handlers', () => {
         agents: [{ id: 'agent-1', visibleTeamIds: ['team-1'] }],
       })),
       createCustomAgent: vi.fn(async (payload) => makeSuccess({ payload })),
-      publishAgent: vi.fn(async (payload) => makeSuccess({ payload })),
-      unpublishAgent: vi.fn(async (payload) => makeSuccess({ payload })),
       updateAgentConfig: vi.fn(async (payload) => makeSuccess({ payload })),
       deleteAgent: vi.fn(async (payload) => makeSuccess({ payload })),
       summarizeAgentMetrics: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -121,8 +119,6 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.channel.delete,
       WEB_EVENTS.channel.join,
       WEB_EVENTS.agent.create,
-      WEB_EVENTS.agent.publish,
-      WEB_EVENTS.agent.unpublish,
       WEB_EVENTS.agent.setVisibility,
       WEB_EVENTS.agent.updateConfig,
       WEB_EVENTS.agent.delete,
@@ -284,18 +280,6 @@ describe('server-next socket handlers', () => {
       deviceId: 'device-1',
       runtimeId: 'runtime-1',
       name: 'Custom Codex',
-    });
-    await socket.trigger(WEB_EVENTS.agent.publish, {
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-1',
-      targetTeamId: 'team-2',
-    });
-    await socket.trigger(WEB_EVENTS.agent.unpublish, {
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-1',
-      targetTeamId: 'team-2',
     });
     await socket.trigger(WEB_EVENTS.agent.updateConfig, {
       userId: 'user-1',
@@ -478,18 +462,6 @@ describe('server-next socket handlers', () => {
       deviceId: 'device-1',
       runtimeId: 'runtime-1',
       name: 'Custom Codex',
-    });
-    expect(app.publishAgent).toHaveBeenCalledWith({
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-1',
-      targetTeamId: 'team-2',
-    });
-    expect(app.unpublishAgent).toHaveBeenCalledWith({
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-1',
-      targetTeamId: 'team-2',
     });
     expect(app.updateAgentConfig).toHaveBeenCalledWith({
       userId: 'user-1',
@@ -831,52 +803,10 @@ describe('server-next socket handlers', () => {
       listVisibleAgents: vi.fn(async () => makeSuccess({
         agents: [{ id: 'agent-1', visibleTeamIds: ['team-1', 'team-2'] }],
       })),
-      publishAgent: vi.fn(async () => makeSuccess({ agent: { id: 'agent-1', visibleTeamIds: ['team-1', 'team-2'] } })),
-      unpublishAgent: vi.fn(async () => makeSuccess({ agent: { id: 'agent-1', visibleTeamIds: ['team-1'] } })),
       deleteAgent: vi.fn(async () => makeSuccess({ agent: { id: 'agent-1', visibleTeamIds: [] } })),
     } as unknown as ServerNextUseCases;
 
     registerWebSocketHandlers(socket, app, { afterAgentMutation });
-
-    await expect(socket.trigger(WEB_EVENTS.agent.publish, {
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-1',
-      targetTeamId: 'team-2',
-    })).resolves.toEqual({
-      ok: true,
-      agent: { id: 'agent-1', visibleTeamIds: ['team-1', 'team-2'] },
-    });
-    expect(afterAgentMutation).toHaveBeenNthCalledWith(1, {
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-1',
-      targetTeamId: 'team-2',
-      channelTeamIds: ['team-2'],
-    }, {
-      ok: true,
-      agent: { id: 'agent-1', visibleTeamIds: ['team-1', 'team-2'] },
-    });
-
-    await expect(socket.trigger(WEB_EVENTS.agent.unpublish, {
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-1',
-      targetTeamId: 'team-2',
-    })).resolves.toEqual({
-      ok: true,
-      agent: { id: 'agent-1', visibleTeamIds: ['team-1'] },
-    });
-    expect(afterAgentMutation).toHaveBeenNthCalledWith(2, {
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-1',
-      targetTeamId: 'team-2',
-      channelTeamIds: ['team-2'],
-    }, {
-      ok: true,
-      agent: { id: 'agent-1', visibleTeamIds: ['team-1'] },
-    });
 
     await expect(socket.trigger(WEB_EVENTS.agent.delete, {
       userId: 'user-1',
@@ -886,7 +816,7 @@ describe('server-next socket handlers', () => {
       ok: true,
       agent: { id: 'agent-1', visibleTeamIds: [] },
     });
-    expect(afterAgentMutation).toHaveBeenNthCalledWith(3, {
+    expect(afterAgentMutation).toHaveBeenNthCalledWith(1, {
       userId: 'user-1',
       teamId: 'team-1',
       agentId: 'agent-1',

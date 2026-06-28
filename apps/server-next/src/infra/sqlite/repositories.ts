@@ -967,21 +967,6 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .get(agentId);
         return mapAgentExecutionConfig(row);
       },
-      async publish(input) {
-        globalDb
-          .prepare(
-            `INSERT OR IGNORE INTO agent_publications (agent_id, team_id, published_by, published_at)
-             SELECT id, ?, ?, ? FROM agents WHERE id = ? AND deleted_at IS NULL`,
-          )
-          .run(input.teamId, input.publishedBy, input.timestamp, input.agentId);
-        return mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId));
-      },
-      async unpublish(input) {
-        globalDb
-          .prepare('DELETE FROM agent_publications WHERE agent_id = ? AND team_id = ?')
-          .run(input.agentId, input.teamId);
-        return mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId));
-      },
       async setPrimaryTeamVisibility(input) {
         // hidden_from_primary_team=1 时，mapAgent 会把 primaryTeamId 从 visibleTeamIds 移除。
         globalDb

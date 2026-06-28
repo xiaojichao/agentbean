@@ -991,61 +991,6 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
-  test('includes host device names for agents published into another team members page', async () => {
-    const app = createInMemoryServerNext({
-      now: () => 315,
-      ids: createIds([
-        'user-1',
-        'team-1',
-        'channel-1',
-        'team-2',
-        'channel-2',
-        'device-1',
-        'agent-1',
-      ]),
-    });
-    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'Host Team' });
-    await app.createTeam({ userId: 'user-1', name: 'testsns' });
-    await app.deviceHello({
-      teamId: 'team-1',
-      ownerId: 'user-1',
-      hostname: 'Hermes Mac',
-    });
-    await app.registerDiscoveredAgents({
-      teamId: 'team-1',
-      deviceId: 'device-1',
-      agents: [{
-        name: 'Hermes Agent',
-        adapterKind: 'hermes',
-        category: 'agentos-hosted',
-        command: '/usr/local/bin/hermes',
-      }],
-    });
-    await app.publishAgent({
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-1',
-      targetTeamId: 'team-2',
-    });
-
-    await expect(app.listDevices({ userId: 'user-1', teamId: 'team-2' })).resolves.toMatchObject({
-      ok: true,
-      devices: [],
-    });
-    await expect(app.listMembers({ userId: 'user-1', teamId: 'team-2' })).resolves.toMatchObject({
-      ok: true,
-      agents: [
-        expect.objectContaining({
-          id: 'agent-1',
-          name: 'Hermes Agent',
-          deviceId: 'device-1',
-          deviceName: 'Hermes Mac',
-          visibleTeamIds: ['team-1', 'team-2'],
-        }),
-      ],
-    });
-  });
-
   test('collapses duplicated hosted agents onto the canonical device in members page', async () => {
     let now = 100;
     const repositories = createInMemoryRepositories();
@@ -2648,34 +2593,6 @@ describe('server-next first-slice use cases', () => {
       env: { OPENAI_API_KEY: 'old-secret' },
     });
 
-    await expect(
-      app.publishAgent({
-        userId: 'user-1',
-        teamId: 'team-1',
-        agentId: 'agent-1',
-        targetTeamId: 'team-1',
-      }),
-    ).resolves.toMatchObject({
-      ok: false,
-      error: 'VALIDATION_ERROR',
-    });
-
-    await expect(
-      app.publishAgent({
-        userId: 'user-1',
-        teamId: 'team-1',
-        agentId: 'agent-1',
-        targetTeamId: 'team-2',
-      }),
-    ).resolves.toMatchObject({
-      ok: true,
-      agent: { id: 'agent-1', visibleTeamIds: ['team-1', 'team-2'] },
-    });
-    await expect(app.listVisibleAgents({ teamId: 'team-2' })).resolves.toMatchObject({
-      ok: true,
-      agents: [{ id: 'agent-1', name: 'Custom Codex' }],
-    });
-
     const updateAck = await app.updateAgentConfig({
       userId: 'user-1',
       teamId: 'team-1',
@@ -2711,38 +2628,6 @@ describe('server-next first-slice use cases', () => {
           envRef: { agentId: 'agent-1', teamId: 'team-1' },
         },
       },
-    });
-    await app.sendMessage({
-      userId: 'user-1',
-      teamId: 'team-2',
-      channelId: 'channel-2',
-      body: '@Renamed Codex hello from published team',
-    });
-    await expect(app.getDispatchRequest({ dispatchId: 'dispatch-2' })).resolves.toMatchObject({
-      ok: true,
-      request: {
-        teamId: 'team-2',
-        customAgent: {
-          name: 'Renamed Codex',
-          envRef: { agentId: 'agent-1', teamId: 'team-1' },
-        },
-      },
-    });
-
-    await expect(
-      app.unpublishAgent({
-        userId: 'user-1',
-        teamId: 'team-1',
-        agentId: 'agent-1',
-        targetTeamId: 'team-2',
-      }),
-    ).resolves.toMatchObject({
-      ok: true,
-      agent: { id: 'agent-1', visibleTeamIds: ['team-1'] },
-    });
-    await expect(app.listVisibleAgents({ teamId: 'team-2' })).resolves.toMatchObject({
-      ok: true,
-      agents: [],
     });
 
     const deleteAck = await app.deleteAgent({
@@ -2947,12 +2832,6 @@ describe('server-next first-slice use cases', () => {
       userId: 'user-2',
       teamId: 'team-1',
       agentId: 'agent-1',
-    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
-    await expect(app.publishAgent({
-      userId: 'user-1',
-      teamId: 'team-1',
-      agentId: 'agent-1',
-      targetTeamId: 'team-2',
     })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
     await expect(app.deleteAgent({
       userId: 'user-1',

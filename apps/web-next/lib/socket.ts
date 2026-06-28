@@ -206,8 +206,6 @@ export interface AgentEvents {
   onStatus(handler: (snap: AgentSnapshot) => void): () => void;
   onDiscovered(handler: (payload: { runtimes: RuntimeInfo[]; agents: DiscoveredAgent[] }) => void): () => void;
   metrics(teamId: string): Promise<{ ok: boolean; summaries?: AgentMetricsSummary[]; error?: string }>;
-  publish(agentId: string, networkId: string, teamId?: string): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
-  unpublish(agentId: string, networkId: string, teamId?: string): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
   // 设置 Agent 对指定团队的可见性（替代旧的 publish/unpublish，由后端统一收敛到 visibleTeamIds）
   setVisibility(agentId: string, teamId: string, visible: boolean): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
   delete(agentId: string, teamId?: string): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
@@ -257,14 +255,6 @@ export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
     },
     updateConfig({ id, ...rest }) {
       return emitWithTimeout(socket, WEB_EVENTS.agent.updateConfig, { agentId: id, ...rest })
-        .then((res) => res?.agent ? { ...res, agent: normalizeAgentSnapshot(res.agent) } : res);
-    },
-    publish(agentId, networkId, teamId) {
-      return emitWithTimeout(socket, WEB_EVENTS.agent.publish, { agentId, targetTeamId: networkId, ...(teamId ? { teamId } : {}) })
-        .then((res) => res?.agent ? { ...res, agent: normalizeAgentSnapshot(res.agent) } : res);
-    },
-    unpublish(agentId, networkId, teamId) {
-      return emitWithTimeout(socket, WEB_EVENTS.agent.unpublish, { agentId, targetTeamId: networkId, ...(teamId ? { teamId } : {}) })
         .then((res) => res?.agent ? { ...res, agent: normalizeAgentSnapshot(res.agent) } : res);
     },
     setVisibility(agentId, teamId, visible) {

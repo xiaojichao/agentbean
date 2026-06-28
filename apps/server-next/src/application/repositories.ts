@@ -199,8 +199,6 @@ export interface AgentRepository {
   getByIdentityKey(identityKey: string): Promise<AgentRecord | null>;
   getById(agentId: ID): Promise<AgentRecord | null>;
   getExecutionConfig(agentId: ID): Promise<AgentExecutionConfig | null>;
-  publish(input: { agentId: ID; teamId: ID; publishedBy: ID; timestamp: UnixMs }): Promise<AgentRecord | null>;
-  unpublish(input: { agentId: ID; teamId: ID }): Promise<AgentRecord | null>;
   // 切换 agent 对 primary team 的可见性。memory 层直接改 visibleTeamIds；
   // sqlite 层改 hidden_from_primary_team 列，mapAgent 据此从 visibleTeamIds 移除 primary。
   setPrimaryTeamVisibility(input: { agentId: ID; visible: boolean; timestamp: UnixMs }): Promise<AgentRecord | null>;

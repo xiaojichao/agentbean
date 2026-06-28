@@ -563,30 +563,6 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           env: agentEnv.get(agentId),
         };
       },
-      async publish(input) {
-        const agent = agents.get(input.agentId);
-        if (!agent || agent.deletedAt !== undefined) {
-          return null;
-        }
-        const updated = {
-          ...agent,
-          visibleTeamIds: Array.from(new Set([...agent.visibleTeamIds, input.teamId])),
-        };
-        agents.set(agent.id, updated);
-        return updated;
-      },
-      async unpublish(input) {
-        const agent = agents.get(input.agentId);
-        if (!agent || agent.deletedAt !== undefined) {
-          return null;
-        }
-        const updated = {
-          ...agent,
-          visibleTeamIds: agent.visibleTeamIds.filter((teamId) => teamId !== input.teamId || teamId === agent.primaryTeamId),
-        };
-        agents.set(agent.id, updated);
-        return updated;
-      },
       async setPrimaryTeamVisibility(input) {
         const agent = agents.get(input.agentId);
         if (!agent) {

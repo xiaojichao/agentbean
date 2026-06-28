@@ -77,20 +77,6 @@ export interface CreateAgentCommandDto {
   env?: Record<string, string>;
 }
 
-export interface PublishAgentCommandDto {
-  userId: ID;
-  teamId: ID;
-  agentId: ID;
-  targetTeamId: ID;
-}
-
-export interface UnpublishAgentCommandDto {
-  userId: ID;
-  teamId: ID;
-  agentId: ID;
-  targetTeamId: ID;
-}
-
 export interface UpdateAgentConfigCommandDto {
   userId: ID;
   teamId: ID;

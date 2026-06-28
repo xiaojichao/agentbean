@@ -175,26 +175,6 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.agent.create, app, 'createCustomAgent', (payload, result) =>
     options.afterAgentMutation?.(payload, result), { authenticatedUser: options.authenticatedUser },
   );
-  socket.on(WEB_EVENTS.agent.publish, async (payload, ack) => {
-    try {
-      const input = await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser });
-      const result = await app.publishAgent(input as Parameters<ServerNextUseCases['publishAgent']>[0]);
-      ack?.(result);
-      await options.afterAgentMutation?.(withChannelTeamIds(input, [payloadString(input, 'targetTeamId')]), result);
-    } catch (error) {
-      ack?.(socketErrorAck(error, WEB_EVENTS.agent.publish));
-    }
-  });
-  socket.on(WEB_EVENTS.agent.unpublish, async (payload, ack) => {
-    try {
-      const input = await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser });
-      const result = await app.unpublishAgent(input as Parameters<ServerNextUseCases['unpublishAgent']>[0]);
-      ack?.(result);
-      await options.afterAgentMutation?.(withChannelTeamIds(input, [payloadString(input, 'targetTeamId')]), result);
-    } catch (error) {
-      ack?.(socketErrorAck(error));
-    }
-  });
   // 切换 Agent 在 primary team 上的可见性：payload 字段为 teamId（不是 publish 的 targetTeamId）
   socket.on(WEB_EVENTS.agent.setVisibility, async (payload, ack) => {
     try {
