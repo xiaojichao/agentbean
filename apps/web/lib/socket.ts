@@ -6,6 +6,8 @@ import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, AgentMet
 const configuredUrl = process.env.NEXT_PUBLIC_AGENT_BEAN_SERVER_URL ?? 'http://localhost:4000';
 const TOKEN_STORAGE_KEY = 'agentbean.token';
 const DEVICE_ID_STORAGE_KEY = 'agentbean.deviceId';
+const LEGACY_AGENT_PUBLISH_EVENT = 'agent:publish';
+const LEGACY_AGENT_UNPUBLISH_EVENT = 'agent:unpublish';
 
 let webSocket: Socket | null = null;
 const webToken = process.env.NEXT_PUBLIC_AGENT_BEAN_WEB_TOKEN ?? process.env.NEXT_PUBLIC_AGENT_BEAN_AGENT_TOKEN ?? '';
@@ -215,10 +217,10 @@ export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
       return emitWithTimeout(socket, WEB_EVENTS.agent.updateConfig, { agentId: id, ...rest });
     },
     publish(agentId, networkId) {
-      return emitWithTimeout(socket, WEB_EVENTS.agent.publish, { agentId, targetTeamId: networkId });
+      return emitWithTimeout(socket, LEGACY_AGENT_PUBLISH_EVENT, { agentId, targetTeamId: networkId });
     },
     unpublish(agentId, networkId) {
-      return emitWithTimeout(socket, WEB_EVENTS.agent.unpublish, { agentId, targetTeamId: networkId });
+      return emitWithTimeout(socket, LEGACY_AGENT_UNPUBLISH_EVENT, { agentId, targetTeamId: networkId });
     },
     delete(agentId) {
       return emitWithTimeout(socket, WEB_EVENTS.agent.delete, { agentId });
