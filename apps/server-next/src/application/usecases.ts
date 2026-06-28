@@ -1647,6 +1647,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const seenIdentityKeys: string[] = [];
 
       for (const discovered of discoveredInput.agents) {
+        // 源头过滤：只入库 AgentOS 托管型 agent（agentos-hosted）。
+        // 编程执行器（executor-hosted）不作为 Agent 成员，仅以 RuntimeDto 形式
+        // 在设备详情页展示，故此处直接跳过，避免污染 agents 表与频道成员关系。
+        if (discovered.category !== 'agentos-hosted') {
+          continue;
+        }
         const adapterKind = normalizeAdapterKind(discovered.adapterKind) as AdapterKind;
         const identityKey = agentIdentityKey({
           teamId: discoveredInput.teamId,

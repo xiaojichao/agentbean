@@ -2929,10 +2929,12 @@ describe('server-next first-slice use cases', () => {
       runtimeId: 'runtime-1',
       name: 'Custom Codex',
     });
+    // 该 agent 仅用于触发 deleteAgent 对「非 custom」source 的 VALIDATION_ERROR 校验，
+    // 故必须是 agentos-hosted（scanned 源）；executor-hosted 自 Task 2 起不入库 agents 表。
     await app.registerDiscoveredAgents({
       teamId: 'team-1',
       deviceId: 'device-1',
-      agents: [{ adapterKind: 'claude-code', name: 'Scanned Claude', category: 'executor-hosted' }],
+      agents: [{ adapterKind: 'claude-code', name: 'Scanned Claude', category: 'agentos-hosted' }],
     });
 
     await expect(app.updateAgentConfig({

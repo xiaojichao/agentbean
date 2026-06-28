@@ -80,4 +80,26 @@ describe('agent team visibility', () => {
     const listed = await app.listVisibleAgents({ teamId: 'team-1' });
     expect(listed.ok && listed.agents.map((a) => a.category)).not.toContain('executor-hosted');
   });
+
+  test('registerDiscoveredAgents only ingests agentos-hosted, skips executor-hosted', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-1', 'agent-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    const hello = await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', hostname: 'mac' });
+    const deviceId = hello.ok ? hello.device.id : 'device-1';
+
+    // 同时提交 agentos-hosted 与 executor-hosted：源头上只应入库前者，
+    // 后者仅作为 RuntimeDto 在设备详情页展示，不应进入 agents 表。
+    const res = await app.registerDiscoveredAgents({
+      teamId: 'team-1',
+      deviceId,
+      agents: [
+        { name: 'Hermes', adapterKind: 'hermes', category: 'agentos-hosted' },
+        { name: 'codex', adapterKind: 'codex', category: 'executor-hosted' },
+      ],
+    });
+    expect(res.ok && res.agents.map((a) => a.category)).toEqual(['agentos-hosted']);
+  });
 });
