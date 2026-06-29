@@ -29,7 +29,9 @@ function parseSkillFrontmatter(skillMdPath: string, scope: SkillDto['scope'], ad
     const raw = readFileSync(skillMdPath, 'utf8');
     const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     if (!match) return null;
-    const front = parseYaml(match[1]) as { name?: unknown; description?: unknown } | null;
+    const frontMatter = match[1];
+    if (!frontMatter) return null;
+    const front = parseYaml(frontMatter) as { name?: unknown; description?: unknown } | null;
     if (!front || typeof front !== 'object') return null;
     const name = typeof front.name === 'string' ? front.name.trim() : '';
     if (!name) return null;
