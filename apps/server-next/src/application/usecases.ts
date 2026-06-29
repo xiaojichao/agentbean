@@ -1689,7 +1689,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async listVisibleAgents(listInput) {
-      return makeSuccess({ agents: await repositories.agents.listVisibleInTeam(listInput.teamId) });
+      const agents = await repositories.agents.listVisibleInTeam(listInput.teamId);
+      return makeSuccess({ agents: await enrichAgentOwnerNames(repositories, agents) });
     },
 
     async createCustomAgent(agentInput) {
@@ -4529,6 +4530,59 @@ async function toAgentMemberDtos(
     return { dto, rawDeviceId: rawDevice?.id };
   }));
   return dedupeAgentMemberDtos(projections, teamId);
+}
+
+/**
+ * 为普通用户 snapshot 路径（listVisibleAgents → 成员页/Agent 详情页）富化 ownerName。
+ *
+ * 创建者语义 = agent.ownerId ?? 所在 canonical device 的 owner。扫描发现的 agentos-hosted
+ * agent 入库时不携带 ownerId，必须回退到设备所有者；hostname 别名场景下取 canonical
+ * device 的 owner（与 toAgentMemberDtos 同源的别名归并逻辑）。
+ *
+ * 注：admin 视图由 toAdminAgentDto 单独处理；本函数只补普通 snapshot 路径此前缺失的 join。
+ */
+async function enrichAgentOwnerNames(
+  repositories: ServerNextRepositories,
+  agents: AgentRecord[],
+): Promise<AgentDto[]> {
+  if (agents.length === 0) return [];
+
+  const devicesById = new Map<string, DeviceRecord>();
+  const teamDevicesCache = new Map<string, DeviceRecord[]>();
+  await Promise.all(uniqueIds(agents.map((agent) => agent.deviceId ?? '')).map(async (deviceId) => {
+    const device = await repositories.devices.getById(deviceId);
+    if (device) devicesById.set(device.id, device);
+  }));
+  async function canonicalDeviceFor(device: DeviceRecord): Promise<DeviceRecord> {
+    let teamDevices = teamDevicesCache.get(device.teamId);
+    if (!teamDevices) {
+      teamDevices = await repositories.devices.listByTeam(device.teamId);
+      teamDevicesCache.set(device.teamId, teamDevices);
+    }
+    return resolveCanonicalDeviceRecord(device, teamDevices);
+  }
+
+  const ownerIdByAgentId = new Map<string, string | undefined>();
+  const ownerIds = new Set<string>();
+  await Promise.all(agents.map(async (agent) => {
+    const rawDevice = agent.deviceId ? devicesById.get(agent.deviceId) : undefined;
+    const canonicalDevice = rawDevice ? await canonicalDeviceFor(rawDevice) : undefined;
+    const ownerId = agent.ownerId ?? canonicalDevice?.ownerId;
+    ownerIdByAgentId.set(agent.id, ownerId);
+    if (ownerId) ownerIds.add(ownerId);
+  }));
+
+  const usersById = new Map<string, UserRecord>();
+  await Promise.all([...ownerIds].map(async (userId) => {
+    const user = await repositories.users.getById(userId);
+    if (user) usersById.set(user.id, user);
+  }));
+
+  return agents.map((agent) => {
+    const ownerId = ownerIdByAgentId.get(agent.id);
+    const owner = ownerId ? usersById.get(ownerId) : undefined;
+    return { ...toPublicAgent(agent), ownerName: owner?.username ?? null };
+  });
 }
 
 function dedupeAgentMemberDtos(projections: AgentMemberProjection[], teamId: string): AgentMemberDto[] {

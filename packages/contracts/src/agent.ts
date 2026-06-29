@@ -36,6 +36,7 @@ export interface AgentDto {
   source: AgentSource;
   status: AgentStatus;
   ownerId?: ID;
+  ownerName?: string | null;
   deviceId?: ID;
   command?: string;
   args?: string[];

@@ -166,4 +166,52 @@ describe('agent team visibility', () => {
     const listed = await app.listVisibleAgents({ teamId: 'team-1' });
     expect(listed.ok && listed.agents.map((a) => a.id)).not.toContain('agent-1');
   });
+
+  test('listVisibleAgents 用设备所有者填充 ownerName（scanned agent 无 ownerId 时回退）', async () => {
+    // Agent 详情页"创建者"应为该 Agent 所在设备的所有者。扫描发现的 agentos-hosted
+    // agent 入库时不携带 ownerId，ownerName 必须回退为 device.ownerId 对应用户的 username，
+    // 否则前端 agent.ownerName ?? '未知' 永远显示"未知"。
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-1', 'agent-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    const hello = await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', hostname: 'mac' });
+    const deviceId = hello.ok ? hello.device.id : 'device-1';
+
+    await app.registerDiscoveredAgents({
+      teamId: 'team-1',
+      deviceId,
+      agents: [{ name: 'Hermes', adapterKind: 'hermes', category: 'agentos-hosted' }],
+    });
+
+    const listed = await app.listVisibleAgents({ teamId: 'team-1' });
+    // 创建者回退为设备所有者 'shaw'，而非 undefined / null / '未知'
+    expect(listed.ok && listed.agents[0]?.ownerName).toBe('shaw');
+  });
+
+  test('listVisibleAgents 用 agent.ownerId 填充 ownerName（custom agent 直接命中）', async () => {
+    // custom agent 创建时已写入 ownerId；enrich 应直接取该 owner 的 username。
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-1', 'agent-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    const hello = await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', hostname: 'mac' });
+    const deviceId = hello.ok ? hello.device.id : 'device-1';
+
+    const created = await app.createCustomAgent({
+      userId: 'user-1',
+      teamId: 'team-1',
+      deviceId,
+      name: 'my-codex',
+      adapterKind: 'codex',
+      command: 'codex',
+    });
+    expect(created.ok).toBe(true);
+
+    const listed = await app.listVisibleAgents({ teamId: 'team-1' });
+    const agent = listed.ok ? listed.agents.find((a) => a.name === 'my-codex') : undefined;
+    expect(agent?.ownerName).toBe('shaw');
+  });
 });
