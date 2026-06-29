@@ -1,4 +1,4 @@
-import type { AgentDto, ArtifactDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, RuntimeDto, TaskDto, TeamDto, UnixMs, UserDto, WorkspaceRunDto, WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import type { AgentDto, ArtifactDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, RuntimeDto, SkillDto, TaskDto, TeamDto, UnixMs, UserDto, WorkspaceRunDto, WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 
 export interface UserRecord extends UserDto {
   passwordHash: string;
@@ -207,6 +207,7 @@ export interface AgentRepository {
   linkIdentity(input: { identityKey: string; agentId: ID; kind: string; timestamp: UnixMs }): Promise<void>;
   markMissingScannedOffline(input: { teamId: ID; deviceId: ID; seenIdentityKeys: string[]; timestamp: UnixMs }): Promise<ID[]>;
   updateStatus(input: { agentId: ID; status: AgentRecord['status']; lastSeenAt: UnixMs; lastError?: string }): Promise<void>;
+  updateSkills(input: { agentId: ID; skills: SkillDto[]; timestamp: UnixMs }): Promise<AgentRecord | null>;
   listVisibleInTeam(teamId: ID): Promise<AgentRecord[]>;
   listByDevice(deviceId: ID): Promise<AgentRecord[]>;
   listAll(): Promise<AgentRecord[]>;
