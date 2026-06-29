@@ -1,3 +1,4 @@
+import { homedir } from 'node:os';
 import { AGENT_EVENTS, type AgentCategory, type ArtifactPathKind, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
@@ -5,6 +6,7 @@ import { prepareWorkspaceRun, workspaceRunEnv, persistWorkspaceRunManifest, pers
 import { collectArtifacts } from './artifact-collector.js';
 import { uploadArtifacts } from './artifact-uploader.js';
 import { selectNativeDirectory } from './directory-picker.js';
+import { scanCustomAgentSkills } from './skill-scanner.js';
 
 export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner.js';
 export type { BuiltinScannerOptions } from './scanner.js';
@@ -133,6 +135,11 @@ export interface CreateDaemonProtocolClientInput {
   fetch?: typeof fetch;
   envResolver?: AgentEnvResolver;
   rescanIntervalMs?: number;
+  /**
+   * Home directory used for scanning custom-agent skills (e.g. ~/.claude/skills).
+   * Defaults to os.homedir(); must match the value the runtime scanner uses.
+   */
+  homeDir?: string;
   onScanChanged?: (snapshot: DaemonScanSnapshot) => Promise<void> | void;
   onCredentialsChanged?: (credentials: DaemonDeviceCredentialsUpdate) => Promise<void> | void;
 }
@@ -145,6 +152,8 @@ export interface DaemonProtocolClient {
 
 export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInput): DaemonProtocolClient {
   const { socket, executor, device, runtimes, agents, scan, serverUrl, fetch: fetchFn, envResolver } = input;
+  // 复用 scanner 同款 home 解析；默认 homedir()。custom-agent skills 扫描必须用同一个 home。
+  const home = input.homeDir ?? homedir();
   let currentDeviceId: string;
   let rescan: RescanController | undefined;
   let latestSnapshot: DaemonScanSnapshot = { runtimes, agents };
@@ -177,6 +186,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         const snapshot = scan ? await scan() : latestSnapshot;
         latestSnapshot = snapshot;
         await reportDeviceSnapshot(socket, device.teamId, currentDeviceId, snapshot.runtimes, snapshot.agents);
+        // 收到 customAgents 列表后扫描 skills 并上报（best-effort，失败仅 warn）
+        if (request.customAgents && request.customAgents.length > 0) {
+          await reportCustomAgentSkills(socket, { teamId: device.teamId, deviceId: currentDeviceId, customAgents: request.customAgents }, home);
+        }
         await input.onScanChanged?.(snapshot);
       });
 
@@ -376,15 +389,54 @@ async function reportDeviceSnapshot(
   }
 }
 
-function readScanRequest(payload: unknown): { requestId: string; deviceId: string } {
+/** 扫描每个 custom agent 的 skills。单个 agent 抛错 → 该 agent skills=[]，不影响其它。 */
+export function customAgentItems(
+  input: { customAgents: { id: string; adapterKind: any; cwd?: string }[] },
+  home: string,
+): { agentId: string; skills: ReturnType<typeof scanCustomAgentSkills> }[] {
+  const items: { agentId: string; skills: ReturnType<typeof scanCustomAgentSkills> }[] = [];
+  for (const ca of input.customAgents) {
+    try {
+      items.push({ agentId: ca.id, skills: scanCustomAgentSkills(ca, home) });
+    } catch (error) {
+      console.warn(`scan skills for agent ${ca.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+      items.push({ agentId: ca.id, skills: [] });
+    }
+  }
+  return items;
+}
+
+/** 扫描 custom agent skills 并 emitWithAck 上报。上报失败仅 warn，不阻断（不抛错）。 */
+export async function reportCustomAgentSkills(
+  socket: DaemonProtocolSocket,
+  input: { teamId: string; deviceId: string; customAgents: { id: string; adapterKind: any; cwd?: string }[] },
+  home: string,
+): Promise<void> {
+  const items = customAgentItems(input, home);
+  try {
+    await socket.emitWithAck(AGENT_EVENTS.agent.reportCustomSkills, {
+      teamId: input.teamId,
+      deviceId: input.deviceId,
+      items,
+    });
+  } catch (error) {
+    console.warn(`daemon emit ${AGENT_EVENTS.agent.reportCustomSkills} failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function readScanRequest(payload: unknown): { requestId: string; deviceId: string; customAgents?: { id: string; adapterKind: any; cwd?: string }[] } {
   if (!payload || typeof payload !== 'object') {
     throw new Error('device:scan-requested payload missing request');
   }
-  const request = payload as { requestId?: unknown; deviceId?: unknown };
+  const request = payload as { requestId?: unknown; deviceId?: unknown; customAgents?: unknown };
   if (typeof request.requestId !== 'string' || typeof request.deviceId !== 'string') {
     throw new Error('device:scan-requested payload missing request id or device id');
   }
-  return { requestId: request.requestId, deviceId: request.deviceId };
+  const customAgents = Array.isArray(request.customAgents)
+    ? request.customAgents.filter((ca): ca is { id: string; adapterKind: any; cwd?: string } =>
+        ca != null && typeof ca === 'object' && typeof (ca as any).id === 'string')
+    : undefined;
+  return { requestId: request.requestId, deviceId: request.deviceId, ...(customAgents ? { customAgents } : {}) };
 }
 
 function readAckDeviceId(ack: unknown): string {
