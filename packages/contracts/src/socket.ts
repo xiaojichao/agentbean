@@ -123,6 +123,7 @@ export const AGENT_EVENTS = {
   },
   agent: {
     registerBatch: 'agent:register-batch',
+    reportCustomSkills: 'agent:report-custom-skills',
   },
   dispatch: {
     request: 'dispatch:request',
@@ -132,3 +133,16 @@ export const AGENT_EVENTS = {
     error: 'dispatch:error',
   },
 } as const;
+
+export interface ScanRequestCustomAgent {
+  id: string;
+  adapterKind: string;
+  cwd?: string;
+}
+
+export interface ScanRequest {
+  requestId: string;
+  deviceId: string;
+  customAgents?: ScanRequestCustomAgent[];
+}
+

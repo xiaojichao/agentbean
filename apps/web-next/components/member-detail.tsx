@@ -28,6 +28,7 @@ import type { AgentMetricsSummary, AgentSnapshot, AgentWorkspaceRun, DeviceInfo,
 import { agentDeviceDisplayName } from '@/lib/agent-device';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { AgentWorkspaceSection } from '@/components/agent-workspace-section';
+import { AgentSkillsSection } from '@/components/agent-skills-section';
 
 export interface HumanMember {
   userId: string;
@@ -317,6 +318,8 @@ function AgentProfile({ agent, device, applyAgentStatus }: { agent: AgentSnapsho
       <Section title="创建的智能体" icon={<Users size={15} />}>
         <div className="text-sm text-neutral-500">0 个由该 Agent 创建的子 Agent。</div>
       </Section>
+
+      <AgentSkillsSection agent={agent} />
 
       <Section title="操作" icon={<Zap size={15} />}>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">

@@ -2,6 +2,14 @@ export type AdapterKind = 'codex' | 'claude-code' | 'openclaw' | 'hermes' | 'sta
 export type AgentStatus = 'connecting' | 'online' | 'busy' | 'offline' | 'error';
 export type AgentCategory = 'executor-hosted' | 'agentos-hosted';
 
+export interface SkillDto {
+  name: string;
+  description: string;
+  scope: 'user' | 'project' | 'system';
+  sourcePath: string;
+  adapterKind: AdapterKind;
+}
+
 export interface AgentSnapshot {
   id: string;
   name: string;
@@ -28,6 +36,7 @@ export interface AgentSnapshot {
   publishedNetworkIds?: string[];
   unpublishedNetworkIds?: string[];
   source?: 'self-register' | 'scanned' | 'custom';
+  skills?: SkillDto[];
 }
 
 export interface DiscoveredAgent {

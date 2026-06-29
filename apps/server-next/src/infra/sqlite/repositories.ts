@@ -20,6 +20,7 @@ import type {
   WorkspaceRunRecord,
 } from '../../application/repositories.js';
 import { DEFAULT_CHANNEL_NAME, rankMessageSearch, splitSearchTerms } from '../../../../../packages/domain/src/index.js';
+import type { SkillDto } from '../../../../../packages/contracts/src/index.js';
 
 export interface SqliteStatement {
   run(...params: unknown[]): unknown;
@@ -47,6 +48,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0007_device_canonical_alias.sql');
   applyMigration(db, 'global/0008_device_canonical_backfill.sql');
   applyMigration(db, 'global/0009_agent_visibility.sql');
+  applyMigration(db, 'global/0010_agent_skills.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
@@ -950,8 +952,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             `INSERT INTO agents (
               id, primary_team_id, name, normalized_name, role, description, adapter_kind, category, source,
               status, owner_id, device_id, command, args_json, cwd, gateway_instance_key, env_json, last_seen_at, last_error, created_at, updated_at,
-              deleted_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              deleted_at, skills_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               primary_team_id = excluded.primary_team_id,
               name = excluded.name,
@@ -964,6 +966,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               command = excluded.command,
               args_json = excluded.args_json,
               cwd = excluded.cwd,
+              skills_json = excluded.skills_json,
               gateway_instance_key = excluded.gateway_instance_key,
               last_seen_at = excluded.last_seen_at,
               updated_at = excluded.updated_at`,
@@ -991,6 +994,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             agent.lastSeenAt ?? 0,
             agent.lastSeenAt ?? 0,
             agent.deletedAt ?? null,
+            agent.skills ? JSON.stringify(agent.skills) : null,
           );
         for (const teamId of agent.visibleTeamIds) {
           if (teamId === agent.primaryTeamId) {
@@ -1142,6 +1146,13 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         globalDb
           .prepare('UPDATE agents SET status = ?, last_seen_at = ?, last_error = ?, updated_at = ? WHERE id = ?')
           .run(input.status, input.lastSeenAt, input.lastError ?? null, input.lastSeenAt, input.agentId);
+      },
+      async updateSkills(input) {
+        globalDb
+          .prepare('UPDATE agents SET skills_json = ?, updated_at = ? WHERE id = ?')
+          .run(input.skills ? JSON.stringify(input.skills) : null, input.timestamp, input.agentId);
+        const row = globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId);
+        return mapAgent(globalDb, row);
       },
       async listVisibleInTeam(teamId) {
         return globalDb
@@ -1954,6 +1965,7 @@ function mapAgent(db: SqliteDatabase, row: unknown): AgentRecord | null {
     command: sqliteNullableText(row, 'command'),
     args: parseJsonArray(sqliteNullableText(row, 'args_json')),
     cwd: sqliteNullableText(row, 'cwd'),
+    skills: (parseJsonArraySafe(sqliteNullableText(row, 'skills_json')) as SkillDto[] | null) ?? undefined,
     gatewayInstanceKey: sqliteNullableText(row, 'gateway_instance_key'),
     envKeys: rawEnv ? Object.keys(rawEnv).sort() : undefined,
     description: sqliteNullableText(row, 'description'),
@@ -2138,6 +2150,19 @@ function parseJsonArray(value: string | undefined): string[] | undefined {
     return undefined;
   }
   return parsed.filter((item): item is string => typeof item === 'string');
+}
+
+// 容错解析：用于 skills_json 这类对象数组列。脏/非法 JSON → null，绝不抛错。
+function parseJsonArraySafe(raw: string | null | undefined): unknown[] | null {
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function parseJsonObject(value: string | undefined): Record<string, string> | undefined {
