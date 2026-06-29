@@ -11,13 +11,11 @@ export function canManageDeviceForUser({
   deviceOwnerId,
   currentUserId,
   currentUserRole,
-  currentTeamRole,
 }: DeviceManageInput): boolean {
+  // 仅系统管理员（user.role='admin'）或设备拥有者可管理设备。
+  // 团队角色（team owner/admin）不再放行 —— 与后端 canManageDeviceAsUser 对齐。
   return deviceCanManage ?? (
-    currentTeamRole === 'owner' ||
-    currentTeamRole === 'admin' ||
     currentUserRole === 'admin' ||
-    currentUserRole === 'owner' ||
     Boolean(currentUserId && currentUserId === deviceOwnerId)
   );
 }

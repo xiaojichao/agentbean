@@ -739,6 +739,168 @@ describe('device rename and delete (end-to-end)', () => {
   });
 });
 
+describe('device isLocal hint (currentDeviceId propagation)', () => {
+  test('listDevices marks the device matching currentDeviceId as isLocal=true', async () => {
+    const { web } = await bootDeviceIsLocalFixture('device-1');
+    const listed = await web.emitWithAck(WEB_EVENTS.device.list, {});
+    expect(listed).toMatchObject({ ok: true });
+    const target = (listed as { devices: Array<{ id: string; isLocal?: boolean }> }).devices.find((d) => d.id === 'device-1');
+    expect(target?.isLocal).toBe(true);
+  });
+
+  test('listDevices marks non-matching currentDeviceId as isLocal=false', async () => {
+    const { web } = await bootDeviceIsLocalFixture('some-other-device');
+    const listed = await web.emitWithAck(WEB_EVENTS.device.list, {});
+    const target = (listed as { devices: Array<{ id: string; isLocal?: boolean }> }).devices.find((d) => d.id === 'device-1');
+    expect(target?.isLocal).toBe(false);
+  });
+
+  test('listDevices returns isLocal=false when currentDeviceId absent (fail-closed)', async () => {
+    const { web } = await bootDeviceIsLocalFixture();
+    const listed = await web.emitWithAck(WEB_EVENTS.device.list, {});
+    const target = (listed as { devices: Array<{ id: string; isLocal?: boolean }> }).devices.find((d) => d.id === 'device-1');
+    expect(target?.isLocal).toBe(false);
+  });
+
+  test('getDevice reflects currentDeviceId in isLocal', async () => {
+    const { web } = await bootDeviceIsLocalFixture('device-1');
+    const got = await web.emitWithAck(WEB_EVENTS.device.get, { deviceId: 'device-1' });
+    expect(got).toMatchObject({ ok: true, device: { id: 'device-1', isLocal: true } });
+  });
+});
+
+describe('updateAgentConfig remote device runtime guard', () => {
+  test('remote device cannot create custom agent runtime settings -> FORBIDDEN_REMOTE_DEVICE_SETTINGS', async () => {
+    const { web } = await bootDeviceIsLocalFixture('some-other-device');
+    const res = await web.emitWithAck(WEB_EVENTS.agent.create, {
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      name: 'my-codex',
+      adapterKind: 'codex',
+      command: 'codex',
+    });
+    expect(res).toMatchObject({ ok: false, error: 'FORBIDDEN_REMOTE_DEVICE_SETTINGS' });
+  });
+
+  test('local device can create custom agent runtime settings', async () => {
+    const { web } = await bootDeviceIsLocalFixture('device-1');
+    const res = await web.emitWithAck(WEB_EVENTS.agent.create, {
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      name: 'my-codex',
+      adapterKind: 'codex',
+      command: 'codex',
+    });
+    expect(res).toMatchObject({ ok: true, agent: { deviceId: 'device-1', source: 'custom' } });
+  });
+
+  test('remote device cannot edit adapterKind -> FORBIDDEN_REMOTE_DEVICE_SETTINGS', async () => {
+    const { app, web } = await bootDeviceIsLocalFixture('some-other-device');
+    const created = await app.createCustomAgent({
+      userId: 'user-1', teamId: 'team-1', deviceId: 'device-1',
+      name: 'my-codex', adapterKind: 'codex', command: 'codex',
+    });
+    expect(created.ok).toBe(true);
+    const agentId = (created as { agent: { id: string } }).agent.id;
+    const res = await web.emitWithAck(WEB_EVENTS.agent.updateConfig, { agentId, adapterKind: 'claude-code' });
+    expect(res).toMatchObject({ ok: false, error: 'FORBIDDEN_REMOTE_DEVICE_SETTINGS' });
+  });
+
+  test('remote device cannot edit args/env -> FORBIDDEN_REMOTE_DEVICE_SETTINGS', async () => {
+    const { app, web } = await bootDeviceIsLocalFixture('some-other-device');
+    const created = await app.createCustomAgent({
+      userId: 'user-1', teamId: 'team-1', deviceId: 'device-1',
+      name: 'my-codex', adapterKind: 'codex', command: 'codex',
+    });
+    expect(created.ok).toBe(true);
+    const agentId = (created as { agent: { id: string } }).agent.id;
+    const argsRes = await web.emitWithAck(WEB_EVENTS.agent.updateConfig, { agentId, args: ['--model', 'gpt-5.4'] });
+    expect(argsRes).toMatchObject({ ok: false, error: 'FORBIDDEN_REMOTE_DEVICE_SETTINGS' });
+    const envRes = await web.emitWithAck(WEB_EVENTS.agent.updateConfig, { agentId, env: { OPENAI_API_KEY: 'secret' } });
+    expect(envRes).toMatchObject({ ok: false, error: 'FORBIDDEN_REMOTE_DEVICE_SETTINGS' });
+  });
+
+  test('local device cannot retarget runtimeId to a remote device', async () => {
+    const { app, web } = await bootDeviceIsLocalFixture('device-1');
+    const hello = await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-2',
+      profileId: 'default',
+      hostname: 'remote-mac',
+    });
+    expect(hello).toMatchObject({ ok: true });
+    const remoteDeviceId = (hello as { device: { id: string } }).device.id;
+    const runtimes = await app.reportDeviceRuntimes({
+      teamId: 'team-1',
+      deviceId: remoteDeviceId,
+      runtimes: [{ adapterKind: 'codex', name: 'Remote Codex', command: '/remote/codex', installed: true }],
+    });
+    expect(runtimes).toMatchObject({ ok: true });
+    const remoteRuntimeId = (runtimes as { runtimes: Array<{ id: string }> }).runtimes[0]?.id;
+    expect(remoteRuntimeId).toBeTruthy();
+    const created = await app.createCustomAgent({
+      userId: 'user-1', teamId: 'team-1', deviceId: 'device-1',
+      name: 'my-codex', adapterKind: 'codex', command: 'codex',
+    });
+    expect(created.ok).toBe(true);
+    const agentId = (created as { agent: { id: string } }).agent.id;
+    const res = await web.emitWithAck(WEB_EVENTS.agent.updateConfig, { agentId, runtimeId: remoteRuntimeId });
+    expect(res).toMatchObject({ ok: false, error: 'FORBIDDEN_REMOTE_DEVICE_SETTINGS' });
+  });
+
+  test('local device can edit adapterKind', async () => {
+    const { app, web } = await bootDeviceIsLocalFixture('device-1');
+    const created = await app.createCustomAgent({
+      userId: 'user-1', teamId: 'team-1', deviceId: 'device-1',
+      name: 'my-codex', adapterKind: 'codex', command: 'codex',
+    });
+    const agentId = (created as { agent: { id: string } }).agent.id;
+    const res = await web.emitWithAck(WEB_EVENTS.agent.updateConfig, { agentId, adapterKind: 'claude-code' });
+    expect(res).toMatchObject({ ok: true });
+  });
+
+  test('remote device can still edit non-runtime fields (name)', async () => {
+    const { app, web } = await bootDeviceIsLocalFixture('some-other-device');
+    const created = await app.createCustomAgent({
+      userId: 'user-1', teamId: 'team-1', deviceId: 'device-1',
+      name: 'my-codex', adapterKind: 'codex', command: 'codex',
+    });
+    const agentId = (created as { agent: { id: string } }).agent.id;
+    const res = await web.emitWithAck(WEB_EVENTS.agent.updateConfig, { agentId, name: 'renamed-codex' });
+    expect(res).toMatchObject({ ok: true });
+  });
+});
+
+// 共享 fixture：注册用户 + 设备上线（device-1）+ 带可选 currentDeviceId 的 authenticated web socket。
+// currentDeviceId 模拟 web 端 socket.ts:180 上报的本机设备 id，用于验证 isLocal 透传链路。
+async function bootDeviceIsLocalFixture(currentDeviceId?: string): Promise<{ app: ReturnType<typeof createInMemoryServerNext>; web: ClientSocket; agent: ClientSocket; deviceId: string }> {
+  const app = createInMemoryServerNext({
+    now: () => 1000,
+    ids: createIds(['user-1', 'team-1', 'channel-1', 'device-1', 'runtime-1', 'agent-1', 'message-1', 'dispatch-1', 'request-1', 'reply-1']),
+  });
+  const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+  cleanups.push(async () => {
+    await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+  });
+  const bootstrap = await connectClient(`${baseUrl}/web`);
+  const agent = await connectClient(`${baseUrl}/agent`);
+  cleanups.push(async () => { bootstrap.disconnect(); agent.disconnect(); });
+  const registerAck = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+    username: 'shaw', password: 'secret', teamName: 'AgentBean',
+  });
+  expect(registerAck).toMatchObject({ ok: true });
+  await agent.emitWithAck(AGENT_EVENTS.device.hello, {
+    teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default',
+  });
+  const auth: Record<string, unknown> = { token: (registerAck as { token: string }).token };
+  if (currentDeviceId) auth.currentDeviceId = currentDeviceId;
+  const web = await connectClient(`${baseUrl}/web`, { auth });
+  cleanups.push(async () => { web.disconnect(); });
+  return { app, web, agent, deviceId: 'device-1' };
+}
+
 async function startSocketServer(app: ReturnType<typeof createInMemoryServerNext>) {
   const httpServer = createServer();
   const ioServer = new Server(httpServer, { cors: { origin: '*' } });
