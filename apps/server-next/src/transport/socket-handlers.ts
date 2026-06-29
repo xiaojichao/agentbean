@@ -49,6 +49,9 @@ export interface AgentSocketHandlerOptions {
   afterDeviceInviteWait?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  // hello 成功后首推 scanRequested（带 customAgents）给该 device，触发 daemon 扫 custom skills。
+  // 复用 web 端 requestDeviceScan 的下发通道（按 deviceId emit 到对应 device socket）。
+  deviceScan?(request: { requestId: string; deviceId: string; customAgents?: Array<{ id: string; adapterKind: string; cwd?: string }> }): void;
 }
 
 export function registerWebSocketHandlers(
@@ -322,6 +325,27 @@ export function registerAgentSocketHandlers(
         : await app.deviceHello(payload as Parameters<ServerNextUseCases['deviceHello']>[0]);
       ack?.(result);
       await afterDeviceMutation(payload, result);
+
+      // hello 成功后首推一次 scanRequested（带 customAgents），触发 daemon 扫 custom skills。
+      // device 连接无 web userId，走 buildDeviceScanRequest（跳过 isMember 校验）。
+      // 仅当 device 有 custom agent 时才首推，避免无谓 scanRequested 风暴。
+      // 首推失败不影响 hello ack（已返回），仅记录日志。
+      if (isSuccessResult(result) && options.deviceScan) {
+        const deviceId = (result as { device?: { id?: string } }).device?.id;
+        if (deviceId) {
+          try {
+            const scan = await app.buildDeviceScanRequest({ deviceId });
+            if (isSuccessResult(scan) && !(scan as { skipped?: boolean }).skipped) {
+              const request = (scan as { request?: { requestId: string; deviceId: string; customAgents?: Array<{ id: string; adapterKind: string; cwd?: string }> } }).request;
+              if (request) {
+                options.deviceScan(request);
+              }
+            }
+          } catch (scanError) {
+            console.warn('[server-next] hello 首推 scanRequested 失败（non-blocking）:', scanError);
+          }
+        }
+      }
     } catch (error) {
       ack?.(socketErrorAck(error, AGENT_EVENTS.device.hello));
     }
@@ -330,6 +354,7 @@ export function registerAgentSocketHandlers(
   const afterAgentMutation = (payload: unknown, result: unknown) =>
     options.afterAgentMutation?.(payload, result);
   bind(socket, AGENT_EVENTS.agent.registerBatch, app, 'registerDiscoveredAgents', afterAgentMutation);
+  bind(socket, AGENT_EVENTS.agent.reportCustomSkills, app, 'reportCustomSkills', afterAgentMutation);
   bind(socket, AGENT_EVENTS.dispatch.result, app, 'receiveDispatchResult', afterAgentMutation);
   bind(socket, AGENT_EVENTS.dispatch.error, app, 'receiveDispatchError', afterAgentMutation);
 }

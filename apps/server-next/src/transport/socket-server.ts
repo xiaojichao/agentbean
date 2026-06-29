@@ -419,6 +419,10 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         }
         await emitDiscoveredAgents(webSubscribers, app, payload);
       },
+      // hello 首推 scanRequested：复用 web 端的下发通道（按 deviceId emit 给对应 device socket）
+      deviceScan(request) {
+        agentSocketsByDeviceId.get(request.deviceId)?.emit?.(AGENT_EVENTS.device.scanRequested, request);
+      },
     });
   });
   return {

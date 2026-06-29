@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type SetAgentTeamVisibilityInput, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand } from './device-invite-command.js';
@@ -74,6 +74,8 @@ export interface ServerNextUseCases {
   markDeviceOffline(input: { deviceId: string; timestamp: UnixMs }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[] }>>;
   reconcileDisconnectedDevices(input: { timestamp: UnixMs }): Promise<Ack<{ devices: DeviceDto[]; affectedTeamIds: string[] }>>;
   reportDeviceRuntimes(input: ReportDeviceRuntimesInput): Promise<Ack<{ runtimes: RuntimeDto[] }>>;
+  reportCustomSkills(input: ReportCustomSkillsInput): Promise<Ack<{ updated: number }>>;
+  buildDeviceScanRequest(input: { deviceId: string }): Promise<Ack<{ skipped: boolean; request?: RequestDeviceScanResult['request'] }>>;
   registerDiscoveredAgents(input: RegisterDiscoveredAgentsInput): Promise<Ack<RegisterDiscoveredAgentsResult>>;
   listVisibleAgents(input: { teamId: string }): Promise<Ack<{ agents: AgentDto[] }>>;
   createCustomAgent(input: CreateCustomAgentInput): Promise<Ack<{ agent: AgentDto }>>;
@@ -306,7 +308,14 @@ export interface RequestDeviceScanResult {
   request: {
     requestId: string;
     deviceId: string;
+    customAgents?: ScanRequestCustomAgent[];
   };
+}
+
+export interface ReportCustomSkillsInput {
+  teamId: string;
+  deviceId: string;
+  items: Array<{ agentId: string; skills: SkillDto[] }>;
 }
 
 export interface ReportDeviceRuntimesInput {
@@ -1579,12 +1588,62 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('DEVICE_OFFLINE', 'Device is not online');
       }
 
+      // 附带该 device 的 custom agent（executor-hosted + source=custom），供 daemon 扫 skills。
+      // 无 custom agent 时省略 customAgents（可选字段），保持与旧请求结构兼容。
+      const customAgents = await listCustomAgentsForDevice(repositories, device.id);
       return makeSuccess({
         request: {
           requestId: ids.nextId(),
           deviceId: device.id,
+          ...(customAgents.length > 0 ? { customAgents } : {}),
         },
       });
+    },
+
+    // hello 首推 / device 自身触发用：跳过 userId 校验（device 连接无 web userId），
+    // 仅按 deviceId 查 customAgents 构造 scan request。
+    // 当 device 无 custom agent 时返回 skipped:true，调用方据此跳过首推（避免无谓 scanRequested
+    // 风暴，并保证不消耗 ids.nextId()，从而不破坏固定 ID 序列的 e2e 流程测试）。
+    async buildDeviceScanRequest(buildInput) {
+      const device = await repositories.devices.getById(buildInput.deviceId);
+      if (!device) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      const customAgents = await listCustomAgentsForDevice(repositories, device.id);
+      if (customAgents.length === 0) {
+        return makeSuccess({ skipped: true as const, request: undefined });
+      }
+      return makeSuccess({
+        skipped: false as const,
+        request: {
+          requestId: ids.nextId(),
+          deviceId: device.id,
+          customAgents,
+        },
+      });
+    },
+
+    async reportCustomSkills(skillsInput) {
+      const device = await repositories.devices.getById(skillsInput.deviceId);
+      if (!device || device.teamId !== skillsInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      const now = clock.now();
+      let updated = 0;
+      for (const item of skillsInput.items) {
+        const existing = await repositories.agents.getById(item.agentId);
+        // 仅更新本设备的 custom agent；未知 agentId 或他设备的 agent 一律跳过
+        if (!existing || existing.deviceId !== device.id) {
+          continue;
+        }
+        await repositories.agents.updateSkills({
+          agentId: item.agentId,
+          skills: item.skills,
+          timestamp: now,
+        });
+        updated += 1;
+      }
+      return makeSuccess({ updated });
     },
 
     async reportDeviceRuntimes(runtimeInput) {
@@ -4734,4 +4793,20 @@ function agentIdentityKey(input: {
     adapterKind: input.adapterKind,
     name: normalizeAgentName(input.name),
   });
+}
+
+// 取该 device 上的 custom agent（编程执行器，自定义来源）作为 scanRequested 下发目标，
+// 供 daemon 扫描其 skills 并通过 reportCustomSkills 上报。
+async function listCustomAgentsForDevice(
+  repositories: ServerNextRepositories,
+  deviceId: string,
+): Promise<ScanRequestCustomAgent[]> {
+  const deviceAgents = await repositories.agents.listByDevice(deviceId);
+  return deviceAgents
+    .filter((agent) => agent.category === 'executor-hosted' && agent.source === 'custom')
+    .map((agent) => ({
+      id: agent.id,
+      adapterKind: agent.adapterKind,
+      cwd: agent.cwd,
+    }));
 }

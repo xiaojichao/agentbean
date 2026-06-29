@@ -736,6 +736,7 @@ describe('server-next socket handlers', () => {
       AGENT_EVENTS.device.hello,
       AGENT_EVENTS.device.runtimes,
       AGENT_EVENTS.agent.registerBatch,
+      AGENT_EVENTS.agent.reportCustomSkills,
       AGENT_EVENTS.dispatch.result,
       AGENT_EVENTS.dispatch.error,
     ]);
