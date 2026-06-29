@@ -187,7 +187,31 @@ describe('agent team visibility', () => {
 
     const listed = await app.listVisibleAgents({ teamId: 'team-1' });
     // 创建者回退为设备所有者 'shaw'，而非 undefined / null / '未知'
+    expect(listed.ok && listed.agents[0]?.ownerId).toBe('user-1');
     expect(listed.ok && listed.agents[0]?.ownerName).toBe('shaw');
+  });
+
+  test('listMembers 也返回 scanned agent 的设备所有者 ownerId/ownerName', async () => {
+    // 单数 Agent 详情页复用 MembersPage，数据来自 members:list 而不是 agents:snapshot；
+    // 这条路径也必须带上解析后的 ownerId/ownerName。
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-1', 'agent-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    const hello = await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', hostname: 'mac' });
+    const deviceId = hello.ok ? hello.device.id : 'device-1';
+
+    await app.registerDiscoveredAgents({
+      teamId: 'team-1',
+      deviceId,
+      agents: [{ name: 'Hermes', adapterKind: 'hermes', category: 'agentos-hosted' }],
+    });
+
+    const listed = await app.listMembers({ teamId: 'team-1', userId: 'user-1' });
+    const agent = listed.ok ? listed.agents.find((candidate) => candidate.id === 'agent-1') : undefined;
+    expect(agent?.ownerId).toBe('user-1');
+    expect(agent?.ownerName).toBe('shaw');
   });
 
   test('listVisibleAgents 用 agent.ownerId 填充 ownerName（custom agent 直接命中）', async () => {
@@ -212,6 +236,7 @@ describe('agent team visibility', () => {
 
     const listed = await app.listVisibleAgents({ teamId: 'team-1' });
     const agent = listed.ok ? listed.agents.find((a) => a.name === 'my-codex') : undefined;
+    expect(agent?.ownerId).toBe('user-1');
     expect(agent?.ownerName).toBe('shaw');
   });
 });

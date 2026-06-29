@@ -4499,6 +4499,7 @@ async function toAgentMemberDtos(
   teamId: string,
   agents: AgentRecord[],
 ): Promise<AgentMemberDto[]> {
+  const ownerInfos = await resolveAgentOwnerInfos(repositories, agents);
   const deviceIds = uniqueIds(agents.map((agent) => agent.deviceId ?? ''));
   const devicesById = new Map<string, DeviceRecord>();
   await Promise.all(deviceIds.map(async (deviceId) => {
@@ -4521,6 +4522,11 @@ async function toAgentMemberDtos(
     const rawDevice = agent.deviceId ? devicesById.get(agent.deviceId) : undefined;
     const canonicalDevice = rawDevice ? await canonicalDeviceFor(rawDevice) : undefined;
     const dto: AgentMemberDto = { ...toPublicAgent(agent) };
+    const ownerInfo = ownerInfos.get(agent.id);
+    if (ownerInfo?.ownerId) {
+      dto.ownerId = ownerInfo.ownerId;
+    }
+    dto.ownerName = ownerInfo?.ownerName ?? null;
     if (canonicalDevice) {
       dto.deviceId = canonicalDevice.id;
       dto.deviceName = deviceDisplayName(canonicalDevice);
@@ -4545,7 +4551,23 @@ async function enrichAgentOwnerNames(
   repositories: ServerNextRepositories,
   agents: AgentRecord[],
 ): Promise<AgentDto[]> {
-  if (agents.length === 0) return [];
+  const ownerInfos = await resolveAgentOwnerInfos(repositories, agents);
+  return agents.map((agent) => {
+    const ownerInfo = ownerInfos.get(agent.id);
+    const dto = toPublicAgent(agent);
+    if (ownerInfo?.ownerId) {
+      dto.ownerId = ownerInfo.ownerId;
+    }
+    return { ...dto, ownerName: ownerInfo?.ownerName ?? null };
+  });
+}
+
+async function resolveAgentOwnerInfos(
+  repositories: ServerNextRepositories,
+  agents: Array<Pick<AgentDto, 'id' | 'ownerId' | 'deviceId'>>,
+): Promise<Map<string, { ownerId?: string; ownerName: string | null }>> {
+  const result = new Map<string, { ownerId?: string; ownerName: string | null }>();
+  if (agents.length === 0) return result;
 
   const devicesById = new Map<string, DeviceRecord>();
   const teamDevicesCache = new Map<string, DeviceRecord[]>();
@@ -4578,11 +4600,12 @@ async function enrichAgentOwnerNames(
     if (user) usersById.set(user.id, user);
   }));
 
-  return agents.map((agent) => {
+  for (const agent of agents) {
     const ownerId = ownerIdByAgentId.get(agent.id);
     const owner = ownerId ? usersById.get(ownerId) : undefined;
-    return { ...toPublicAgent(agent), ownerName: owner?.username ?? null };
-  });
+    result.set(agent.id, ownerId ? { ownerId, ownerName: owner?.username ?? null } : { ownerName: null });
+  }
+  return result;
 }
 
 function dedupeAgentMemberDtos(projections: AgentMemberProjection[], teamId: string): AgentMemberDto[] {
