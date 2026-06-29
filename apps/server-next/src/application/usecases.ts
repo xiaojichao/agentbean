@@ -1634,8 +1634,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       let updated = 0;
       for (const item of skillsInput.items) {
         const existing = await repositories.agents.getById(item.agentId);
-        // 仅更新本设备的 custom agent；未知 agentId 或他设备的 agent 一律跳过
-        if (!existing || existing.deviceId !== device.id) {
+        // 仅更新本设备的 custom executor-hosted agent；未知 agentId、他设备 agent、
+        // 或 scanned/agentos-hosted agent 一律跳过。
+        if (!existing || existing.deviceId !== device.id || existing.category !== 'executor-hosted' || existing.source !== 'custom') {
           continue;
         }
         // 过滤掉畸形/恶意 SkillDto（name 非字符串等），避免 daemon 脏数据被静默持久化

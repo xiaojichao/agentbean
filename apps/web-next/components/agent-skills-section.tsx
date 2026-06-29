@@ -2,22 +2,7 @@ import { useState } from 'react';
 import { RefreshCw, Sparkles } from 'lucide-react';
 import type { AgentSnapshot, SkillDto } from '@/lib/schema';
 import { deviceEvents } from '@/lib/socket';
-
-export function groupSkills(skills: SkillDto[] | undefined) {
-  const base = { system: [] as SkillDto[], user: [] as SkillDto[], project: [] as SkillDto[] };
-  if (!skills) return base;
-  for (const s of skills) {
-    if (s.scope === 'system') base.system.push(s);
-    else if (s.scope === 'user') base.user.push(s);
-    else base.project.push(s);
-  }
-  return base;
-}
-
-export function countSkillsByScope(skills: SkillDto[] | undefined) {
-  const g = groupSkills(skills);
-  return { system: g.system.length, user: g.user.length, project: g.project.length };
-}
+import { groupSkills } from './agent-skills-utils';
 
 const PREVIEW = 5;
 const SCOPE_LABEL: Record<keyof ReturnType<typeof groupSkills>, string> = {

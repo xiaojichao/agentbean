@@ -78,6 +78,43 @@ describe('reportCustomSkills usecase', () => {
     }
   });
 
+  test('同设备非 custom agent 跳过，不写入 skills_json', async () => {
+    const { app, repositories, close } = await bootstrap();
+    try {
+      await repositories.agents.upsert({
+        id: 'agent-scanned',
+        primaryTeamId: 'team-1',
+        visibleTeamIds: ['team-1'],
+        name: 'scanned',
+        adapterKind: 'codex',
+        category: 'executor-hosted',
+        source: 'scanned',
+        status: 'online',
+        deviceId: 'device-1',
+        lastSeenAt: 1000,
+      } as any);
+
+      const result = await app.reportCustomSkills({
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        items: [
+          {
+            agentId: 'agent-scanned',
+            skills: [
+              { name: 'should-not-write', description: 'd', scope: 'user', sourcePath: '/p', adapterKind: 'codex' },
+            ],
+          },
+        ],
+      } as any);
+      expect((result as any).ok).toBe(true);
+      expect((result as any).updated).toBe(0);
+      const got = await repositories.agents.getById('agent-scanned');
+      expect(got?.skills).toBeUndefined();
+    } finally {
+      close();
+    }
+  });
+
   test('过滤 name 非字符串等畸形 skill，不持久化脏数据', async () => {
     const { app, repositories, close } = await bootstrap();
     try {

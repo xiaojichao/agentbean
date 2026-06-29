@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { groupSkills, countSkillsByScope } from '../components/agent-skills-section';
+import { groupSkills, countSkillsByScope } from '../components/agent-skills-utils';
 
 const skills = [
   { name: 'a', description: 'd', scope: 'user', sourcePath: '/p', adapterKind: 'claude-code' },
