@@ -1563,9 +1563,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('FORBIDDEN', 'User cannot manage device');
       }
       const now = clock.now();
-      const hostedAgents = await repositories.agents.listByDevice(device.id);
+      const teamDevices = await repositories.devices.listByTeam(device.teamId);
+      const devicesToDelete = resolveDeviceAliasGroup(device, teamDevices);
+      const hostedAgents = (
+        await Promise.all(devicesToDelete.map((target) => repositories.agents.listByDevice(target.id)))
+      ).flat();
       const affectedTeamIds = uniqueIds([
-        device.teamId,
+        ...devicesToDelete.map((target) => target.teamId),
         ...hostedAgents.flatMap((agent) => agent.visibleTeamIds),
       ]);
       for (const agent of hostedAgents) {
@@ -1577,7 +1581,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           });
         }
       }
-      await repositories.devices.delete({ deviceId: device.id, timestamp: now });
+      for (const target of devicesToDelete) {
+        await repositories.devices.delete({ deviceId: target.id, timestamp: now });
+      }
       return makeSuccess({ device: await toDeviceDtoWithOwnerName(repositories, device, deleteInput.currentDeviceId), affectedTeamIds, channelTeamIds: affectedTeamIds });
     },
 
@@ -3615,6 +3621,14 @@ function dedupeByHeuristic(devices: DeviceRecord[]): DeviceRecord[] {
 
 function resolveCanonicalDeviceRecord(device: DeviceRecord, teamDevices: DeviceRecord[]): DeviceRecord {
   return dedupeDeviceRecords(teamDevices).find((candidate) => deviceRecordsCanAlias(candidate, device)) ?? device;
+}
+
+function resolveDeviceAliasGroup(device: DeviceRecord, teamDevices: DeviceRecord[]): DeviceRecord[] {
+  const canonicalDevice = resolveCanonicalDeviceRecord(device, teamDevices);
+  const aliases = teamDevices.filter((candidate) =>
+    deviceRecordsCanAlias(candidate, canonicalDevice) || deviceRecordsCanAlias(candidate, device),
+  );
+  return aliases.length > 0 ? aliases : [device];
 }
 
 function deviceRecordsCanAlias(a: DeviceRecord, b: DeviceRecord): boolean {
