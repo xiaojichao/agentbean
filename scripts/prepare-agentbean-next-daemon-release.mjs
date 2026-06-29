@@ -23,6 +23,11 @@ export function createAgentBeanNextDaemonReleasePackage({
   mkdirSync(outputDir, { recursive: true });
   cpSync(distSource, distTarget, { recursive: true });
 
+  // dependencies / optionalDependencies 整体透传自 daemon-next，避免手工列举遗漏字段。
+  // 历史 bug：手工列举 dependencies 曾完全漏掉 optionalDependencies.node-pty，导致 canonical
+  // @agentbean/daemon 发布包不含 node-pty 声明，npx 安装的用户运行 codex（executor-pty.ts
+  // 懒加载 node-pty 的唯一 PTY agent）时报 Cannot find module 'node-pty'。
+  // @agentbean/contracts 版本对齐同时发布的 contracts 包（放在 spread 之后覆盖源字面量）。
   const releasePackage = {
     name: packageName,
     version: daemonNextPackage.version,
@@ -38,10 +43,12 @@ export function createAgentBeanNextDaemonReleasePackage({
     exports: daemonNextPackage.exports,
     files: daemonNextPackage.files,
     dependencies: {
+      ...daemonNextPackage.dependencies,
       '@agentbean/contracts': contractsPackage.version,
-      'js-yaml': daemonNextPackage.dependencies['js-yaml'],
-      'socket.io-client': daemonNextPackage.dependencies['socket.io-client'],
     },
+    ...(daemonNextPackage.optionalDependencies
+      ? { optionalDependencies: { ...daemonNextPackage.optionalDependencies } }
+      : {}),
   };
   writeFileSync(join(outputDir, 'package.json'), `${JSON.stringify(releasePackage, null, 2)}\n`);
   return { outDir: outputDir, packageJson: releasePackage };
