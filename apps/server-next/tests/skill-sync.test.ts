@@ -77,6 +77,39 @@ describe('reportCustomSkills usecase', () => {
       close();
     }
   });
+
+  test('过滤 name 非字符串等畸形 skill，不持久化脏数据', async () => {
+    const { app, repositories, close } = await bootstrap();
+    try {
+      const result = await app.reportCustomSkills({
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        items: [
+          {
+            agentId: 'agent-1',
+            skills: [
+              // 合法
+              { name: 'good', description: 'd', scope: 'user', sourcePath: '/p', adapterKind: 'claude-code' },
+              // name 非字符串 → 过滤
+              { name: 123 as unknown as string, description: 'd', scope: 'user', sourcePath: '/p', adapterKind: 'claude-code' },
+              // name 空串 → 过滤
+              { name: '   ', description: 'd', scope: 'user', sourcePath: '/p', adapterKind: 'claude-code' },
+              // scope 非法 → 过滤
+              { name: 'bad-scope', description: 'd', scope: 'global' as any, sourcePath: '/p', adapterKind: 'claude-code' },
+              // description 非字符串 → 过滤
+              { name: 'bad-desc', description: 42 as unknown as string, scope: 'project', sourcePath: '/p', adapterKind: 'claude-code' },
+            ],
+          },
+        ],
+      } as any);
+      expect((result as any).ok).toBe(true);
+      const got = await repositories.agents.getById('agent-1');
+      const names = (got?.skills ?? []).map((s: any) => s.name);
+      expect(names).toEqual(['good']);
+    } finally {
+      close();
+    }
+  });
 });
 
 describe('requestDeviceScan 下发 customAgents', () => {
@@ -105,12 +138,27 @@ describe('requestDeviceScan 下发 customAgents', () => {
     }
   });
 
-  test('buildDeviceScanRequest 未知 deviceId 返回 NOT_FOUND', async () => {
+  test('buildDeviceScanRequest 未知 deviceId 返回 skipped，不报错', async () => {
     const { app, close } = await bootstrap();
     try {
       const result = (await (app as any).buildDeviceScanRequest({ deviceId: 'nope' })) as any;
-      expect(result.ok).toBe(false);
-      expect(result.error).toBe('NOT_FOUND');
+      expect(result.ok).toBe(true);
+      expect(result.skipped).toBe(true);
+      expect(result.request).toBeUndefined();
+    } finally {
+      close();
+    }
+  });
+
+  test('buildDeviceScanRequest 对 offline device 返回 skipped，不消耗 requestId', async () => {
+    const { app, repositories, close } = await bootstrap();
+    try {
+      // deviceHello 默认 online；手工 markOffline 模拟断连中
+      await repositories.devices.markOffline({ deviceId: 'device-1', timestamp: 2000 });
+      const result = (await (app as any).buildDeviceScanRequest({ deviceId: 'device-1' })) as any;
+      expect(result.ok).toBe(true);
+      expect(result.skipped).toBe(true);
+      expect(result.request).toBeUndefined();
     } finally {
       close();
     }

@@ -29,12 +29,19 @@ type BindOptions = Pick<WebSocketHandlerOptions, 'authenticatedUser'> & {
 };
 const INTERNAL_SOCKET_ERROR_MESSAGE = 'Internal server error';
 
+// deviceScan 下发 request 的统一契约（hello 首推与 web-path 共用）。
+export interface DeviceScanEmitRequest {
+  requestId: string;
+  deviceId: string;
+  customAgents?: Array<{ id: string; adapterKind: string; cwd?: string }>;
+}
+
 export interface WebSocketHandlerOptions {
   authenticatedUser?: AuthenticatedUserProvider;
   dispatch?(request: DispatchRequestDto & { id: string }): void;
   dispatchCancel?(request: DispatchRequestDto & { id: string }): void;
   dispatchStatus?(dispatch: unknown): void;
-  deviceScan?(request: { requestId: string; deviceId: string }): void;
+  deviceScan?(request: DeviceScanEmitRequest): void;
   deviceSelectDirectory?(request: { deviceId: string }): Promise<{ ok: boolean; path?: string; error?: string }>;
   afterMessageSend?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceInviteComplete?(payload: unknown, result: unknown): Promise<void> | void;
@@ -51,7 +58,7 @@ export interface AgentSocketHandlerOptions {
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
   // hello 成功后首推 scanRequested（带 customAgents）给该 device，触发 daemon 扫 custom skills。
   // 复用 web 端 requestDeviceScan 的下发通道（按 deviceId emit 到对应 device socket）。
-  deviceScan?(request: { requestId: string; deviceId: string; customAgents?: Array<{ id: string; adapterKind: string; cwd?: string }> }): void;
+  deviceScan?(request: DeviceScanEmitRequest): void;
 }
 
 export function registerWebSocketHandlers(

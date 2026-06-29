@@ -1606,8 +1606,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     // 风暴，并保证不消耗 ids.nextId()，从而不破坏固定 ID 序列的 e2e 流程测试）。
     async buildDeviceScanRequest(buildInput) {
       const device = await repositories.devices.getById(buildInput.deviceId);
-      if (!device) {
-        return makeFailure('NOT_FOUND', 'Device not found');
+      // device 不存在或非 online（如 hello 中途连接异常）→ skipped，不消耗 nextId、不 emit。
+      // 与 requestDeviceScan 的 status 守卫一致，保证固定 ID 序列的 e2e 不被破坏。
+      if (!device || device.status !== 'online') {
+        return makeSuccess({ skipped: true as const, request: undefined });
       }
       const customAgents = await listCustomAgentsForDevice(repositories, device.id);
       if (customAgents.length === 0) {
@@ -1636,9 +1638,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (!existing || existing.deviceId !== device.id) {
           continue;
         }
+        // 过滤掉畸形/恶意 SkillDto（name 非字符串等），避免 daemon 脏数据被静默持久化
+        const validSkills = (item.skills ?? []).filter((s): s is SkillDto =>
+          typeof s?.name === 'string' && s.name.trim() !== '' &&
+          typeof s?.description === 'string' &&
+          (s.scope === 'user' || s.scope === 'project' || s.scope === 'system') &&
+          typeof s?.sourcePath === 'string' &&
+          typeof s?.adapterKind === 'string',
+        );
         await repositories.agents.updateSkills({
           agentId: item.agentId,
-          skills: item.skills,
+          skills: validSkills,
           timestamp: now,
         });
         updated += 1;
