@@ -561,6 +561,7 @@ describe('server-next socket handlers', () => {
         hasToken: true,
         userId: 'user-session',
         currentTeamId: 'team-session',
+        currentDeviceId: null,
       }),
     });
 
@@ -573,19 +574,23 @@ describe('server-next socket handlers', () => {
       userId: 'user-session',
       teamId: 'team-session',
       maxUses: 2,
+      currentDeviceId: null,
     });
     expect(app.listJoinLinks).toHaveBeenCalledWith({
       userId: 'user-session',
       teamId: 'team-session',
+      currentDeviceId: null,
     });
     expect(app.revokeJoinLink).toHaveBeenCalledWith({
       userId: 'user-session',
       teamId: 'team-session',
       code: 'code-1',
+      currentDeviceId: null,
     });
     expect(app.switchTeam).toHaveBeenCalledWith({
       userId: 'user-session',
       teamId: 'team-target',
+      currentDeviceId: null,
     });
   });
 
@@ -626,6 +631,7 @@ describe('server-next socket handlers', () => {
         hasToken: true,
         userId: 'user-session',
         currentTeamId: null,
+        currentDeviceId: null,
       }),
     });
 
@@ -639,12 +645,14 @@ describe('server-next socket handlers', () => {
         userId: 'user-session',
         currentPassword: 'old-password',
         newPassword: 'new-password',
+        currentDeviceId: null,
       },
     });
     expect(app.changePassword).toHaveBeenCalledWith({
       userId: 'user-session',
       currentPassword: 'old-password',
       newPassword: 'new-password',
+      currentDeviceId: null,
     });
   });
 
@@ -875,6 +883,7 @@ describe('server-next socket handlers', () => {
         hasToken: true,
         userId: 'user-session',
         currentTeamId: 'team-session',
+        currentDeviceId: null,
       }),
     });
 
@@ -887,6 +896,7 @@ describe('server-next socket handlers', () => {
       teamId: 'team-session',
       deviceId: 'device-1',
       hostname: 'new-name',
+      currentDeviceId: null,
     }, renamedAck);
 
     await expect(socket.trigger(WEB_EVENTS.device.delete, {
@@ -896,6 +906,7 @@ describe('server-next socket handlers', () => {
       userId: 'user-session',
       teamId: 'team-session',
       deviceId: 'device-1',
+      currentDeviceId: null,
     }, deletedAck);
   });
 

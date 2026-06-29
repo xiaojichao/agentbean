@@ -5,6 +5,8 @@ export interface AuthenticatedUserIdentity {
   hasToken: boolean;
   userId: string | null;
   currentTeamId: string | null;
+  /** web 连接上报的本机设备 id（socket.auth.currentDeviceId），用于 device DTO 的 isLocal 判定。 */
+  currentDeviceId: string | null;
 }
 
 export interface AuthenticatedUserProvider {
@@ -499,6 +501,7 @@ async function withAuthenticatedUserId(
     if (auth.currentTeamId && (options.currentTeamFromSession || enriched.teamId === undefined)) {
       enriched.teamId = auth.currentTeamId;
     }
+    enriched.currentDeviceId = auth.currentDeviceId ?? null;
     return enriched;
   }
   if (!payload || typeof payload !== 'object' || !authenticatedUser) {
@@ -515,6 +518,7 @@ async function withAuthenticatedUserId(
   if (auth.currentTeamId && (options.currentTeamFromSession || enriched.teamId === undefined)) {
     enriched.teamId = auth.currentTeamId;
   }
+  enriched.currentDeviceId = auth.currentDeviceId ?? null;
   return enriched;
 }
 
