@@ -12,6 +12,14 @@ export type AgentSource = (typeof AGENT_SOURCES)[number];
 export const AGENT_STATUSES = ['connecting', 'online', 'busy', 'offline', 'error'] as const;
 export type AgentStatus = (typeof AGENT_STATUSES)[number];
 
+export interface SkillDto {
+  name: string;
+  description: string;
+  scope: 'user' | 'project' | 'system';
+  sourcePath: string;
+  adapterKind: AdapterKind;
+}
+
 export interface RuntimeDto {
   id: ID;
   deviceId: ID;
@@ -44,6 +52,7 @@ export interface AgentDto {
   gatewayInstanceKey?: string;
   envKeys?: string[];
   description?: string;
+  skills?: SkillDto[];
   lastSeenAt?: UnixMs;
   lastError?: string;
 }
