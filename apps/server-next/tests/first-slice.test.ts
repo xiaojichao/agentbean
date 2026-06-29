@@ -2601,6 +2601,7 @@ describe('server-next first-slice use cases', () => {
       description: 'Updated custom agent',
       args: ['--model', 'gpt-5.4'],
       env: { OPENAI_API_KEY: 'new-secret' },
+      currentDeviceId: 'device-1',
     });
     expect(updateAck).toMatchObject({
       ok: true,

@@ -14,7 +14,7 @@ describe('device detail permissions', () => {
     expect(canAddCustomAgentToDevice({ canManageDevice, isLocalDevice: true })).toBe(true);
   });
 
-  test('lets team owner and admin roles manage remote devices before device.canManage is populated', () => {
+  test('denies team owner/admin roles managing remote devices (收紧：仅设备拥有者/系统管理员)', () => {
     for (const currentTeamRole of ['owner', 'admin'] as const) {
       expect(
         canManageDeviceForUser({
@@ -23,8 +23,28 @@ describe('device detail permissions', () => {
           currentUserRole: 'user',
           currentTeamRole,
         }),
-      ).toBe(true);
+      ).toBe(false);
     }
+  });
+
+  test('lets the device owner manage their own device', () => {
+    expect(
+      canManageDeviceForUser({
+        deviceOwnerId: 'owner-1',
+        currentUserId: 'owner-1',
+        currentUserRole: 'user',
+      }),
+    ).toBe(true);
+  });
+
+  test('lets a system admin (user.role=admin) manage any device', () => {
+    expect(
+      canManageDeviceForUser({
+        deviceOwnerId: 'owner-1',
+        currentUserId: 'member-1',
+        currentUserRole: 'admin',
+      }),
+    ).toBe(true);
   });
 
   test('honors an explicit server-side device.canManage value', () => {

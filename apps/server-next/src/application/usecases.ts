@@ -64,11 +64,11 @@ export interface ServerNextUseCases {
   waitForDeviceInvite(input: WaitForDeviceInviteInput): Promise<Ack<DeviceInviteAckDto>>;
   completeDeviceInvite(input: CompleteDeviceInviteInput): Promise<Ack<DeviceInviteAckDto & { credentials: DeviceInviteCredentialsDto }>>;
   deviceHelloFromCredentials(input: DeviceHelloFromCredentialsInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto; affectedTeamIds: string[] }>>;
-  listDevices(input: { teamId: string; userId: string }): Promise<Ack<{ devices: DeviceDto[] }>>;
+  listDevices(input: { teamId: string; userId: string; currentDeviceId?: string | null }): Promise<Ack<{ devices: DeviceDto[] }>>;
   listDeviceAgents(input: { teamId: string; userId: string; deviceId: string }): Promise<Ack<{ agents: DeviceAgentListDto[]; runtimes: RuntimeDto[] }>>;
-  getDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDetailDto }>>;
-  renameDevice(input: { userId: string; deviceId: string; hostname: string }): Promise<Ack<{ device: DeviceDto }>>;
-  deleteDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[]; channelTeamIds: string[] }>>;
+  getDevice(input: { userId: string; deviceId: string; currentDeviceId?: string | null }): Promise<Ack<{ device: DeviceDetailDto }>>;
+  renameDevice(input: { userId: string; deviceId: string; hostname: string; currentDeviceId?: string | null }): Promise<Ack<{ device: DeviceDto }>>;
+  deleteDevice(input: { userId: string; deviceId: string; currentDeviceId?: string | null }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[]; channelTeamIds: string[] }>>;
   requestDeviceScan(input: RequestDeviceScanInput): Promise<Ack<RequestDeviceScanResult>>;
   deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto; affectedTeamIds: string[] }>>;
   markDeviceOffline(input: { deviceId: string; timestamp: UnixMs }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[] }>>;
@@ -365,6 +365,8 @@ export interface CreateCustomAgentInput {
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
+  /** web 连接上报的本机设备 id，用于校验 custom agent runtime 只能在本地设备创建。 */
+  currentDeviceId?: string | null;
 }
 
 export interface UpdateAgentConfigInput {
@@ -379,6 +381,8 @@ export interface UpdateAgentConfigInput {
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
+  /** web 连接上报的本机设备 id，用于校验 runtime 设置只能在本地设备修改。 */
+  currentDeviceId?: string | null;
 }
 
 export interface DeleteAgentInput {
@@ -1434,7 +1438,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const devices = await repositories.devices.listByTeam(deviceListInput.teamId);
       return makeSuccess({
-        devices: await toDeviceDtosWithOwnerNames(repositories, dedupeDeviceRecords(devices)),
+        devices: await toDeviceDtosWithOwnerNames(repositories, dedupeDeviceRecords(devices), deviceListInput.currentDeviceId),
       });
     },
 
@@ -1517,7 +1521,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const hostedAgents = await repositories.agents.listByDevice(canonicalDevice.id);
       return makeSuccess({
         device: {
-          ...(await toDeviceDtoWithOwnerName(repositories, canonicalDevice)),
+          ...(await toDeviceDtoWithOwnerName(repositories, canonicalDevice, deviceDetailInput.currentDeviceId)),
           runtimes: (await repositories.runtimes.listByDevice(canonicalDevice.id)).map(toRuntimeDto),
           agents: hostedAgents.map((agent) => toDeviceAgentListDto(agent, canonicalDevice)),
         },
@@ -1532,6 +1536,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!(await repositories.teams.isMember(device.teamId, renameInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
+      if (!(await canManageDeviceAsUser(repositories, { userId: renameInput.userId, device }))) {
+        return makeFailure('FORBIDDEN', 'User cannot manage device');
+      }
       const updated = await repositories.devices.updateName({
         deviceId: device.id,
         hostname: renameInput.hostname,
@@ -1540,7 +1547,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!updated) {
         return makeFailure('NOT_FOUND', 'Device not found');
       }
-      return makeSuccess({ device: await toDeviceDtoWithOwnerName(repositories, updated) });
+      return makeSuccess({ device: await toDeviceDtoWithOwnerName(repositories, updated, renameInput.currentDeviceId) });
     },
 
     async deleteDevice(deleteInput) {
@@ -1552,9 +1559,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!actorRole) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
-      const actor = await repositories.users.getById(deleteInput.userId);
-      const isSystemAdmin = actor?.role === 'admin';
-      if (!isSystemAdmin && device.ownerId !== deleteInput.userId && actorRole !== 'owner' && actorRole !== 'admin') {
+      if (!(await canManageDeviceAsUser(repositories, { userId: deleteInput.userId, device }))) {
         return makeFailure('FORBIDDEN', 'User cannot manage device');
       }
       const now = clock.now();
@@ -1573,7 +1578,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         }
       }
       await repositories.devices.delete({ deviceId: device.id, timestamp: now });
-      return makeSuccess({ device: await toDeviceDtoWithOwnerName(repositories, device), affectedTeamIds, channelTeamIds: affectedTeamIds });
+      return makeSuccess({ device: await toDeviceDtoWithOwnerName(repositories, device, deleteInput.currentDeviceId), affectedTeamIds, channelTeamIds: affectedTeamIds });
     },
 
     async requestDeviceScan(scanInput) {
@@ -1583,6 +1588,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       if (!(await repositories.teams.isMember(device.teamId, scanInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      if (!(await canManageDeviceAsUser(repositories, { userId: scanInput.userId, device }))) {
+        return makeFailure('FORBIDDEN', 'User cannot manage device');
       }
       if (device.status !== 'online') {
         return makeFailure('DEVICE_OFFLINE', 'Device is not online');
@@ -1771,6 +1779,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!(await repositories.teams.isMember(agentInput.teamId, agentInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
+      if (!(await canManageDeviceAsUser(repositories, { userId: agentInput.userId, device }))) {
+        return makeFailure('FORBIDDEN', 'User cannot manage device');
+      }
+      if (hasOwn(agentInput, 'currentDeviceId') && !isDeviceLocalToHint(device, agentInput.currentDeviceId)) {
+        return makeFailure('FORBIDDEN_REMOTE_DEVICE_SETTINGS', 'Runtime settings can only be edited on the local device');
+      }
       if (device.status !== 'online') {
         return makeFailure('DEVICE_OFFLINE', 'Device is not online');
       }
@@ -1870,6 +1884,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
 
       if (isCustom) {
+        // runtime 执行设置（adapterKind/command/args/cwd/env/runtimeId）只能在本机设备修改——
+        // 前端 disable 只是 UX 提示，这里是真安全边界（对齐 legacy index.ts:2359）。
+        // runtimeId 是 server-next 独有路径（legacy 无），必须纳入，否则可绕过。
+        const includesRuntimeSettings =
+          agentInput.adapterKind !== undefined ||
+          agentInput.command !== undefined ||
+          agentInput.args !== undefined ||
+          agentInput.cwd !== undefined ||
+          agentInput.env !== undefined ||
+          agentInput.runtimeId !== undefined;
+        if (includesRuntimeSettings) {
+          const device = managed.agent.deviceId ? await repositories.devices.getById(managed.agent.deviceId) : null;
+          if (!isDeviceLocalToHint(device, agentInput.currentDeviceId)) {
+            return makeFailure('FORBIDDEN_REMOTE_DEVICE_SETTINGS', 'Runtime settings can only be edited on the local device');
+          }
+        }
         if (agentInput.args !== undefined) {
           changes.args = agentInput.args;
         }
@@ -1900,6 +1930,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           }
           if (!runtime.installed) {
             return makeFailure('VALIDATION_ERROR', 'Runtime is not installed');
+          }
+          if (!isDeviceLocalToHint(device, agentInput.currentDeviceId)) {
+            return makeFailure('FORBIDDEN_REMOTE_DEVICE_SETTINGS', 'Runtime settings can only be edited on the local device');
           }
           changes.deviceId = runtime.deviceId;
           changes.adapterKind = runtime.adapterKind;
@@ -3690,12 +3723,25 @@ async function markDeviceAndHostedAgentsOffline(
   return { updated, hostedAgents };
 }
 
-function toDeviceDto(device: DeviceDto): DeviceDto {
+// 是否为当前 web 连接所在的本地设备。currentDeviceId 来自 web socket auth（getStoredDeviceId）；
+// 与 device.id / canonicalDeviceId / machineId 任一命中即视为本地（兼容别名集群与历史 machineId 注册）。
+// currentDeviceId 为 undefined 时调用方应不下发 isLocal（daemon/admin 路径）；为 null 或不命中时 fail-closed 为 false。
+function isDeviceLocalToHint(
+  device: { id?: string | null; canonicalDeviceId?: string | null; machineId?: string | null } | null | undefined,
+  currentDeviceId?: string | null,
+): boolean {
+  if (!device?.id || !currentDeviceId) return false;
+  if (device.id === currentDeviceId) return true;
+  if (device.canonicalDeviceId && device.canonicalDeviceId === currentDeviceId) return true;
+  return Boolean(device.machineId && device.machineId === currentDeviceId);
+}
+
+function toDeviceDto(device: DeviceDto, currentDeviceId?: string | null): DeviceDto {
   const daemonVersionInfo = buildDaemonVersionInfo(
     device.systemInfo as Record<string, unknown> | null | undefined,
     device.daemonVersion,
   );
-  return {
+  const dto: DeviceDto = {
     id: device.id,
     teamId: device.teamId,
     ownerId: device.ownerId,
@@ -3710,14 +3756,18 @@ function toDeviceDto(device: DeviceDto): DeviceDto {
     connectCommand: device.connectCommand,
     lastSeenAt: device.lastSeenAt,
   };
+  if (currentDeviceId !== undefined) {
+    dto.isLocal = isDeviceLocalToHint(device, currentDeviceId);
+  }
+  return dto;
 }
 
-async function toDeviceDtoWithOwnerName(repositories: ServerNextRepositories, device: DeviceDto): Promise<DeviceDto> {
-  return (await toDeviceDtosWithOwnerNames(repositories, [device]))[0] ?? toDeviceDto(device);
+async function toDeviceDtoWithOwnerName(repositories: ServerNextRepositories, device: DeviceDto, currentDeviceId?: string | null): Promise<DeviceDto> {
+  return (await toDeviceDtosWithOwnerNames(repositories, [device], currentDeviceId))[0] ?? toDeviceDto(device, currentDeviceId);
 }
 
-async function toDeviceDtosWithOwnerNames(repositories: ServerNextRepositories, devices: DeviceDto[]): Promise<DeviceDto[]> {
-  const dtos = devices.map(toDeviceDto);
+async function toDeviceDtosWithOwnerNames(repositories: ServerNextRepositories, devices: DeviceDto[], currentDeviceId?: string | null): Promise<DeviceDto[]> {
+  const dtos = devices.map((device) => toDeviceDto(device, currentDeviceId));
   const ownerIdsByTeam = new Map<string, Set<string>>();
   for (const device of dtos) {
     if (!device.teamId || !device.ownerId) {
@@ -4497,6 +4547,39 @@ async function ensureUserCanViewChannel(
   return makeSuccess({ channel });
 }
 
+// 判断 web 用户能否管理某设备：设备拥有者 或 系统管理员（user.role='admin'）。
+// 团队角色（team owner/admin）不再放行 —— 业务规则：用户只能修改自己的设备。
+async function canManageDeviceAsUser(
+  repositories: ServerNextRepositories,
+  input: { userId: string; device: DeviceRecord },
+): Promise<boolean> {
+  if (input.device.ownerId === input.userId) {
+    return true;
+  }
+  const actor = await repositories.users.getById(input.userId);
+  return actor?.role === 'admin';
+}
+
+// agent 路径：agent.deviceId 可能指向别名记录，先解析 canonical 代表再判设备所有权，
+// 与 getDevice / 列表展示的 owner 来源一致（防 admin 转移 owner + 后续别名导致误拒合法 owner）。
+async function canManageAgentAsUser(
+  repositories: ServerNextRepositories,
+  input: { userId: string; agent: AgentRecord },
+): Promise<boolean> {
+  if (!input.agent.deviceId) {
+    return false; // fail-closed：无可定位设备的 agent 一律不可管理
+  }
+  const device = await repositories.devices.getById(input.agent.deviceId);
+  if (!device) {
+    return false;
+  }
+  const canonical = resolveCanonicalDeviceRecord(
+    device,
+    await repositories.devices.listByTeam(device.teamId),
+  );
+  return canManageDeviceAsUser(repositories, { userId: input.userId, device: canonical });
+}
+
 async function agentForManagement(
   repositories: ServerNextRepositories,
   input: { userId: string; teamId: string; agentId: string },
@@ -4512,13 +4595,11 @@ async function agentForManagement(
   if (!role) {
     return makeFailure('FORBIDDEN', 'User is not a team member');
   }
-  if (role === 'owner' || role === 'admin') {
-    return makeSuccess({ agent });
+  // 仅设备拥有者 / 系统管理员可管理（deleteAgent、setAgentTeamVisibility）
+  if (!(await canManageAgentAsUser(repositories, { userId: input.userId, agent }))) {
+    return makeFailure('FORBIDDEN', 'User cannot manage agent');
   }
-  if (agent.source === 'custom' && agent.ownerId === input.userId) {
-    return makeSuccess({ agent });
-  }
-  return makeFailure('FORBIDDEN', 'User cannot manage agent');
+  return makeSuccess({ agent });
 }
 
 async function agentForConfigUpdate(
@@ -4536,19 +4617,11 @@ async function agentForConfigUpdate(
   if (!role) {
     return makeFailure('FORBIDDEN', 'User is not a team member');
   }
-  if (role === 'owner' || role === 'admin') {
-    return makeSuccess({ agent });
+  // 仅设备拥有者 / 系统管理员可改配置（统一取代旧的 source 分支授权）
+  if (!(await canManageAgentAsUser(repositories, { userId: input.userId, agent }))) {
+    return makeFailure('FORBIDDEN', 'User cannot manage agent');
   }
-  if (agent.source === 'custom' && agent.ownerId === input.userId) {
-    return makeSuccess({ agent });
-  }
-  if (agent.source === 'scanned' && agent.category === 'agentos-hosted' && agent.deviceId) {
-    const device = await repositories.devices.getById(agent.deviceId);
-    if (device?.teamId === agent.primaryTeamId && device.ownerId === input.userId) {
-      return makeSuccess({ agent });
-    }
-  }
-  return makeFailure('FORBIDDEN', 'User cannot manage agent');
+  return makeSuccess({ agent });
 }
 
 function uniqueIds(ids: string[]): string[] {

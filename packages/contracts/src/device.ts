@@ -47,6 +47,8 @@ export interface DeviceDto {
   daemonUpdateAvailable?: boolean;
   connectCommand?: string;
   lastSeenAt?: UnixMs;
+  /** 是否为当前 web 连接所在的本地设备（相对值：序列化时按 currentDeviceId 计算，daemon/admin 路径不下发）。 */
+  isLocal?: boolean;
 }
 
 export interface DeviceDetailDto extends DeviceDto {

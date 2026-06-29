@@ -26,6 +26,8 @@ export interface ServerNextRealtime {
 interface ChannelSubscription {
   userId: string;
   teamId: string;
+  /** web 连接上报的本机设备 id（透传给 listDevices 等用于 isLocal 判定）。 */
+  currentDeviceId?: string | null;
 }
 
 type AgentSubscription = ChannelSubscription;
@@ -580,18 +582,23 @@ async function asChannelSubscription(
     return null;
   }
   const candidate = payload as { userId?: unknown; teamId?: unknown };
-  if (typeof candidate.teamId !== 'string') {
-    return null;
-  }
   const auth = await authenticatedUser?.();
   if (auth?.hasToken && !auth.userId) {
     throw new UnauthenticatedSocketError();
+  }
+  // teamId 缺省时回退到 session 当前团队（与 withAuthenticatedUserId 的 currentTeamFromSession 一致），
+  // 这样 web 端 device.list({}) 也能解析出订阅（用于 isLocal 透传等）。
+  const teamId = typeof candidate.teamId === 'string'
+    ? candidate.teamId
+    : auth?.currentTeamId ?? null;
+  if (!teamId) {
+    return null;
   }
   const userId = auth?.userId ?? (typeof candidate.userId === 'string' ? candidate.userId : null);
   if (!userId) {
     return null;
   }
-  return { userId, teamId: candidate.teamId };
+  return { userId, teamId, currentDeviceId: auth?.currentDeviceId ?? null };
 }
 
 async function readSubscriptionInput(
@@ -625,13 +632,14 @@ function createAuthenticatedUserResolver(
     if (cached) {
       return cached;
     }
+    const currentDeviceId = socketCurrentDeviceId(socket);
     const authToken = socketAuthToken(socket);
     if (!authToken.hasToken) {
-      cached = { hasToken: false, userId: null, currentTeamId: null };
+      cached = { hasToken: false, userId: null, currentTeamId: null, currentDeviceId };
       return cached;
     }
     if (!authToken.token) {
-      cached = { hasToken: true, userId: null, currentTeamId: null };
+      cached = { hasToken: true, userId: null, currentTeamId: null, currentDeviceId };
       return cached;
     }
     const result = await app.whoami({ token: authToken.token });
@@ -639,6 +647,7 @@ function createAuthenticatedUserResolver(
       hasToken: true,
       userId: result.ok ? result.user.id : null,
       currentTeamId: result.ok ? (result.currentTeam?.id ?? null) : null,
+      currentDeviceId,
     };
     return cached;
   }) as AuthenticatedUserProvider;
@@ -660,6 +669,13 @@ function socketAuthToken(socket: SocketLike): { hasToken: boolean; token: string
     hasToken: true,
     token: typeof auth.token === 'string' && auth.token.length > 0 ? auth.token : null,
   };
+}
+
+// web 端 socket.ts 在 auth 里上报本机设备 id（getStoredDeviceId）；这是 isLocal 判定的相对锚点。
+function socketCurrentDeviceId(socket: SocketLike): string | null {
+  const auth = (socket as { handshake?: { auth?: Record<string, unknown> } }).handshake?.auth;
+  const value = auth?.currentDeviceId;
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 async function refreshDeviceSubscribers(

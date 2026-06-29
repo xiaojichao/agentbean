@@ -44,6 +44,10 @@ export function setStoredDeviceId(deviceId: string): void {
   window.localStorage.setItem(DEVICE_ID_STORAGE_KEY, deviceId);
 }
 
+export function resolveDeviceLoginDeviceId(complete: { invite?: { deviceId?: string }; credentials?: { deviceId?: string; machineId?: string } }): string | undefined {
+  return complete.invite?.deviceId ?? complete.credentials?.deviceId ?? complete.credentials?.machineId;
+}
+
 function getServerUrl(): string {
   if (configuredUrl) return configuredUrl;
   if (typeof window !== 'undefined') return window.location.origin;
@@ -396,7 +400,7 @@ export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
         userId: login.user.id,
         username: login.user.username,
         role: login.user.role,
-        deviceId: complete.invite?.deviceId ?? credentials.deviceId,
+        deviceId: resolveDeviceLoginDeviceId(complete),
       };
     },
     changePassword(payload) {

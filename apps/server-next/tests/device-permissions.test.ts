@@ -3,7 +3,7 @@ import { createServerNextUseCases } from '../src/application/usecases';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories';
 
 describe('server-next device permissions', () => {
-  test('restricts device delete to the device owner or team admins', async () => {
+  test('restricts device delete to the device owner or system admins', async () => {
     const repositories = createInMemoryRepositories();
     const app = createServerNextUseCases({
       repositories,
@@ -47,9 +47,20 @@ describe('server-next device permissions', () => {
       ok: false,
       error: 'FORBIDDEN',
     });
+    // 收紧：团队 admin 也不能删除别人设备（仅设备拥有者 / 系统管理员）
     await expect(
       app.deleteDevice({
         userId: 'user-admin',
+        deviceId: 'device-1',
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+    // 设备拥有者仍可删除自己设备
+    await expect(
+      app.deleteDevice({
+        userId: 'user-owner',
         deviceId: 'device-1',
       }),
     ).resolves.toMatchObject({

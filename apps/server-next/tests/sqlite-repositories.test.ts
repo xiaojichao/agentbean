@@ -2039,6 +2039,7 @@ describe('server-next SQLite repositories', () => {
         runtimeId: 'runtime-2',
         name: 'Renamed Codex',
         env: { OPENAI_API_KEY: 'new-secret' },
+        currentDeviceId: 'device-1',
       });
       await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'hello from renamed config' });
       const request = await app.getDispatchRequest({ dispatchId: 'dispatch-1' });
