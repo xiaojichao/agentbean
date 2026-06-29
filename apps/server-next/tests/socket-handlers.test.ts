@@ -898,6 +898,57 @@ describe('server-next socket handlers', () => {
       deviceId: 'device-1',
     }, deletedAck);
   });
+
+  test('device.hello 首推 scanRequested：成功且有 custom agent 时触发 deviceScan', async () => {
+    const socket = new FakeSocket();
+    const deviceScan = vi.fn();
+    const scanRequest = {
+      requestId: 'r1',
+      deviceId: 'd1',
+      customAgents: [{ id: 'agent-custom-1', adapterKind: 'claude-code', cwd: '/tmp/proj' }],
+    };
+    const app = {
+      deviceHello: vi.fn(async () => makeSuccess({ device: { id: 'd1', name: 'dev-1' } })),
+      buildDeviceScanRequest: vi.fn(async () => makeSuccess({ skipped: false, request: scanRequest })),
+    } as unknown as ServerNextUseCases;
+
+    registerAgentSocketHandlers(socket, app, { deviceScan });
+
+    await socket.trigger(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+    });
+
+    expect(app.deviceHello).toHaveBeenCalledWith({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+    });
+    expect(app.buildDeviceScanRequest).toHaveBeenCalledWith({ deviceId: 'd1' });
+    expect(deviceScan).toHaveBeenCalledTimes(1);
+    expect(deviceScan).toHaveBeenCalledWith(scanRequest);
+  });
+
+  test('device.hello 首推 scanRequested：buildDeviceScanRequest skipped 时不触发 deviceScan', async () => {
+    const socket = new FakeSocket();
+    const deviceScan = vi.fn();
+    const app = {
+      deviceHello: vi.fn(async () => makeSuccess({ device: { id: 'd1', name: 'dev-1' } })),
+      buildDeviceScanRequest: vi.fn(async () => makeSuccess({ skipped: true })),
+    } as unknown as ServerNextUseCases;
+
+    registerAgentSocketHandlers(socket, app, { deviceScan });
+
+    await socket.trigger(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+    });
+
+    expect(app.buildDeviceScanRequest).toHaveBeenCalledWith({ deviceId: 'd1' });
+    expect(deviceScan).not.toHaveBeenCalled();
+  });
 });
 
 class FakeSocket implements SocketLike {
