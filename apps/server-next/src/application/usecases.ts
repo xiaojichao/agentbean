@@ -1249,11 +1249,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async completeDeviceInvite(inviteInput) {
-      const usable = await getUsableDeviceInvite(repositories, clock, inviteInput.code);
-      if (!usable.ok) {
-        return usable;
+      const invite = await repositories.deviceInvites.getByCode(inviteInput.code);
+      if (!invite) {
+        return makeFailure('INVITE_INVALID', 'Device invite is invalid');
       }
-      const team = await repositories.teams.getById(usable.invite.teamId);
+      if (invite.expiresAt !== undefined && invite.expiresAt <= clock.now()) {
+        return makeFailure('INVITE_EXPIRED', 'Device invite has expired');
+      }
+      const team = await repositories.teams.getById(invite.teamId);
       if (!team) {
         return makeFailure('INVITE_INVALID', 'Device invite team no longer exists');
       }
@@ -1261,13 +1264,21 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!role) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
-      const completed = await repositories.deviceInvites.complete({
-        code: usable.invite.code,
-        completedAt: clock.now(),
-        serverUrl: inviteInput.serverUrl,
-      });
-      if (!completed) {
-        return makeFailure('INVITE_ALREADY_USED', 'Device invite has already been used');
+      let completed = invite;
+      if (invite.completedAt !== undefined) {
+        if (invite.createdBy !== inviteInput.userId) {
+          return makeFailure('INVITE_ALREADY_USED', 'Device invite has already been used');
+        }
+      } else {
+        const completedInvite = await repositories.deviceInvites.complete({
+          code: invite.code,
+          completedAt: clock.now(),
+          serverUrl: inviteInput.serverUrl,
+        });
+        if (!completedInvite) {
+          return makeFailure('INVITE_ALREADY_USED', 'Device invite has already been used');
+        }
+        completed = completedInvite;
       }
       const credentials: DeviceInviteCredentialsDto = {
         token: issueDeviceToken({

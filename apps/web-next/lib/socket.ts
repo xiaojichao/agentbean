@@ -363,6 +363,8 @@ export interface AuthEvents {
   inviteCreate(payload?: { networkId?: string; purpose?: 'user' | 'device' }): Promise<{ ok: boolean; invite?: InviteInfo; error?: string }>;
   deviceLogin(payload: { inviteCode: string; username: string; password: string }): Promise<{ ok: boolean; token?: string; networkId?: string; networkPath?: string; userId?: string; username?: string; role?: 'admin' | 'user'; deviceId?: string; error?: string }>;
   changePassword(payload: { currentPassword: string; newPassword: string }): Promise<{ ok: boolean; error?: string }>;
+  // 已登录用户直接用现有 token 完成 device invite（不需再输密码），用于让 web 关联本机设备。
+  completeDeviceInvite(payload: { code: string }): Promise<{ ok: boolean; invite?: { deviceId?: string }; credentials?: { deviceId?: string; machineId?: string }; team?: { id: string; name: string; path: string }; error?: string }>;
 }
 
 export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
@@ -405,6 +407,9 @@ export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
     },
     changePassword(payload) {
       return emitWithTimeout(socket, WEB_EVENTS.auth.changePassword, payload);
+    },
+    completeDeviceInvite(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.deviceInvite.complete, payload, 20000);
     },
   };
 }
