@@ -720,13 +720,15 @@ describe('device rename and delete (end-to-end)', () => {
       }),
     ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-1', deviceId: 'alias-device' }] });
 
-    await expect(
-      app.deleteDevice({ userId: 'user-1', deviceId: 'alias-device' }),
-    ).resolves.toMatchObject({
+    const deleteResult = await app.deleteDevice({ userId: 'user-1', deviceId: 'alias-device' });
+    expect(deleteResult).toMatchObject({
       ok: true,
       affectedTeamIds: ['team-1'],
       channelTeamIds: ['team-1'],
+      // 整个别名组都被删除 → 传输层据此对组内每个在线 daemon 下发 device:removed
+      deletedDeviceIds: expect.arrayContaining(['canonical-device', 'alias-device']),
     });
+    expect((deleteResult as { deletedDeviceIds: unknown[] }).deletedDeviceIds).toHaveLength(2);
     await expect(app.getDevice({ userId: 'user-1', deviceId: 'canonical-device' })).resolves.toMatchObject({
       ok: false,
       error: 'NOT_FOUND',

@@ -88,6 +88,8 @@ export interface DaemonNextCliDeps {
   readDaemonVersion?: typeof readDaemonVersion;
   createEnvResolver?: typeof createHttpEnvResolver;
   runDaemon?: (config: DaemonNextCliConfig, deps: DaemonNextCliDeps) => Promise<void>;
+  /** 进程退出钩子（测试可注入）；默认 process.exit。用于 daemon 被告知设备删除后退出。 */
+  exit?: (code: number) => void;
 }
 
 /**
@@ -358,6 +360,7 @@ export async function runDaemonNextCli(
   const readDaemonVersionFn = deps.readDaemonVersion ?? readDaemonVersion;
   const createEnvResolver = deps.createEnvResolver ?? createHttpEnvResolver;
   const runDaemon = deps.runDaemon ?? runDaemonNextCli;
+  const exit = deps.exit ?? ((code: number) => process.exit(code));
 
   if (config.listProfiles) {
     const profiles = listAuthProfilesFn();
@@ -542,6 +545,12 @@ export async function runDaemonNextCli(
         teamId: credentials.teamId ?? teamId,
         ownerId: credentials.ownerId ?? ownerId,
       }, { profileId: config.profileId });
+    },
+    onDeviceRemoved: () => {
+      // 设备已被服务端删除：关闭重连并退出进程，避免持续重连把已删设备 upsert 复活。
+      console.log('Device removed by server; shutting down daemon.');
+      socket.disconnect();
+      exit(0);
     },
     envResolver: async (envRef) => {
       if (!device.token) {

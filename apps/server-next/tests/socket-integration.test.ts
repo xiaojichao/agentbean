@@ -2393,6 +2393,136 @@ describe('server-next Socket.IO namespaces', () => {
       device: { id: 'device-1', status: 'online' },
     });
   });
+
+  test('notifies the daemon with device:removed and disconnects it when its device is deleted from web', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-all', 'device-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const daemon = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      daemon.disconnect();
+    });
+    const register = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    const web = await connectClient(`${baseUrl}/web`, { auth: { token: (register as { token: string }).token } });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+
+    // daemon 上线注册
+    await expect(
+      daemon.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'device-1', status: 'online' } });
+
+    const removedEvents: unknown[] = [];
+    let daemonDisconnected = false;
+    daemon.on(AGENT_EVENTS.device.removed, (payload) => {
+      removedEvents.push(payload);
+    });
+    daemon.on('disconnect', () => {
+      daemonDisconnected = true;
+    });
+
+    // web 端删除该设备 → 服务端应向 daemon 下发 device:removed 并断开其 socket
+    await expect(
+      web.emitWithAck(WEB_EVENTS.device.delete, { userId: 'user-1', teamId: 'team-1', deviceId: 'device-1' }),
+    ).resolves.toMatchObject({ ok: true });
+
+    await eventually(async () => {
+      expect(removedEvents).toHaveLength(1);
+    });
+    await eventually(async () => {
+      expect(daemonDisconnected).toBe(true);
+    });
+  });
+
+  test('kicks every daemon in the deleted device alias group, not just the selected one', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'canonical-device', 'alias-device']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const canonicalDaemon = await connectClient(`${baseUrl}/agent`);
+    const aliasDaemon = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      canonicalDaemon.disconnect();
+      aliasDaemon.disconnect();
+    });
+    const register = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    const web = await connectClient(`${baseUrl}/web`, { auth: { token: (register as { token: string }).token } });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+
+    // 同一台物理机的两条别名记录（同 hostname、无 machineId）→ canonical + alias，各持一个在线 daemon
+    await expect(
+      canonicalDaemon.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        hostname: 'shaw-mac.local',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'canonical-device' } });
+    await expect(
+      aliasDaemon.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        hostname: 'shaw-mac.local',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'alias-device' } });
+
+    const canonicalRemoved: unknown[] = [];
+    let canonicalDisconnected = false;
+    canonicalDaemon.on(AGENT_EVENTS.device.removed, (payload) => canonicalRemoved.push(payload));
+    canonicalDaemon.on('disconnect', () => { canonicalDisconnected = true; });
+    const aliasRemoved: unknown[] = [];
+    let aliasDisconnected = false;
+    aliasDaemon.on(AGENT_EVENTS.device.removed, (payload) => aliasRemoved.push(payload));
+    aliasDaemon.on('disconnect', () => { aliasDisconnected = true; });
+
+    // 只删 alias 记录，但整组删除 → canonical 与 alias 两个 daemon 都应被踢
+    await expect(
+      web.emitWithAck(WEB_EVENTS.device.delete, { userId: 'user-1', teamId: 'team-1', deviceId: 'alias-device' }),
+    ).resolves.toMatchObject({ ok: true });
+
+    await eventually(async () => {
+      expect(canonicalRemoved).toHaveLength(1);
+    });
+    await eventually(async () => {
+      expect(aliasRemoved).toHaveLength(1);
+    });
+    await eventually(async () => {
+      expect(canonicalDisconnected).toBe(true);
+      expect(aliasDisconnected).toBe(true);
+    });
+  });
 });
 
 async function startSocketServer(app: ReturnType<typeof createInMemoryServerNext>) {

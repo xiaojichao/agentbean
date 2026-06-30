@@ -199,6 +199,26 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
       afterDeviceInviteComplete(_payload, result) {
         deliverDeviceInviteCredentials(result);
       },
+      async afterDeviceDelete(_payload, result) {
+        if (!isSuccessAck(result)) {
+          return;
+        }
+        // deleteDevice 一次删除整个别名组（resolveDeviceAliasGroup），需对组内每个在线 daemon
+        // 都下发 device:removed 并断开，否则未被点中的 alias daemon 会持续运行并在重连时复活。
+        const deviceIds = resultDeletedDeviceIds(result);
+        for (const deviceId of deviceIds) {
+          const agentSocket = agentSocketsByDeviceId.get(deviceId);
+          if (!agentSocket) {
+            continue;
+          }
+          // 先下发 device:removed（daemon 收到后关闭重连并退出进程），再从路由表移除并断开 socket。
+          // 不能只断开 socket：daemon 的 reconnection 会立刻重连，并通过 device.hello 的 upsertHello
+          // 用全新 id 把已删设备复活。device:removed 是让 daemon 真正退出的唯一可靠信号。
+          agentSocket.emit?.(AGENT_EVENTS.device.removed, { deviceId });
+          agentSocketsByDeviceId.delete(deviceId);
+          agentSocket.disconnect?.();
+        }
+      },
       async afterChannelMutation(payload, result) {
         if (!isSuccessAck(result)) {
           return;
@@ -992,6 +1012,22 @@ function resultDeviceId(result: unknown): string | null {
   }
   const device = (result as { device?: { id?: unknown } }).device;
   return typeof device?.id === 'string' ? device.id : null;
+}
+
+/**
+ * 取 deleteDevice 结果中被删除的全部设备 id（别名组删除会一次删多条记录）。
+ * 兼容仅有单个 device 字段的旧结果：回退为 [device.id]。
+ */
+function resultDeletedDeviceIds(result: unknown): string[] {
+  if (!result || typeof result !== 'object') {
+    return [];
+  }
+  const ids = (result as { deletedDeviceIds?: unknown }).deletedDeviceIds;
+  if (Array.isArray(ids)) {
+    return ids.filter((id): id is string => typeof id === 'string');
+  }
+  const single = resultDeviceId(result);
+  return single ? [single] : [];
 }
 
 function resultRuntimesPayload(result: unknown): { deviceId: string; runtimes: unknown[] } | null {

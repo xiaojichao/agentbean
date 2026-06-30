@@ -120,6 +120,8 @@ export const AGENT_EVENTS = {
     runtimes: 'device:runtimes',
     scanRequested: 'device:scan-requested',
     selectDirectoryRequested: 'device:select-directory-requested',
+    // 服务端→daemon 单向通知：该设备已被删除，daemon 应回收重连并退出进程。
+    removed: 'device:removed',
   },
   agent: {
     registerBatch: 'agent:register-batch',

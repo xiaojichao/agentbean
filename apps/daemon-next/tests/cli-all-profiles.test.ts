@@ -216,3 +216,46 @@ describe('runDaemonNextCli all-profiles wiring (listAuthProfiles + recursion)', 
     expect(subConfigs.every((subConfig) => !('inviteCode' in subConfig))).toBe(true);
   });
 });
+
+describe('runDaemonNextCli device-removed shutdown', () => {
+  test('onDeviceRemoved disconnects the socket and exits the process', async () => {
+    const disconnect = vi.fn();
+    const fakeSocket = {
+      connected: true,
+      connect: vi.fn(),
+      disconnect,
+      emitWithAck: vi.fn(async () => ({ ok: true })),
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+    const captured: { onDeviceRemoved?: () => void } = {};
+    const exit = vi.fn();
+    const deps: DaemonNextCliDeps = {
+      // saved auth → 走单 profile 路径，跳过 invite 握手
+      loadAuth: vi.fn(() => ({
+        profileId: 'default',
+        token: 'token-default',
+        serverUrl: 'http://127.0.0.1:4000',
+        teamId: 'team-1',
+        ownerId: 'user-1',
+      })),
+      // 命中缓存 → 跳过真实扫描
+      loadScanCache: vi.fn(() => ({ runtimes: [], agents: [] }) as never),
+      connectSocket: vi.fn(async () => fakeSocket),
+      createProtocolClient: vi.fn((input) => {
+        captured.onDeviceRemoved = input.onDeviceRemoved;
+        return { start: async () => {} };
+      }),
+      exit,
+    };
+
+    await runDaemonNextCli(baseConfig({ profileId: 'default', machineId: 'machine-1' }), deps);
+
+    expect(captured.onDeviceRemoved).toBeInstanceOf(Function);
+    // 模拟服务端下发 device:removed → daemon 应断开 socket 并退出进程
+    captured.onDeviceRemoved!();
+
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+});
