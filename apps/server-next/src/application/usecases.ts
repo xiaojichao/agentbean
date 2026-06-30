@@ -3062,9 +3062,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         });
         artifacts.push(toArtifactDto(artifact));
       }
+      // The real-time broadcast of this agent reply goes straight to the chat view, so the internal
+      // workspace-run.log must be stripped here too — matching enrichMessagesWithArtifacts. The log
+      // stays persisted (created above) and is served by the workspace-run detail endpoint.
+      const chatArtifacts = artifacts.filter((artifact) => !isWorkspaceRunLogArtifact(artifact));
       const messageWithArtifacts: MessageDto = {
         ...message,
-        ...(artifacts.length > 0 ? { artifacts } : {}),
+        ...(chatArtifacts.length > 0 ? { artifacts: chatArtifacts } : {}),
         ...(workspaceRun ? { workspaceRun } : {}),
       };
       await repositories.agents.updateStatus({
@@ -4029,7 +4033,12 @@ function toArtifactDto(artifact: ArtifactRecord): ArtifactDto {
   };
 }
 
-function isWorkspaceRunLogArtifact(artifact: ArtifactRecord): boolean {
+// Structural so it accepts both the persisted ArtifactRecord and the serialized ArtifactDto —
+// the log must be hidden from every chat-facing message read path (history, DM snapshot, search,
+// and the real-time dispatch-result broadcast), not just the workspace-run detail endpoint.
+function isWorkspaceRunLogArtifact(
+  artifact: Pick<ArtifactRecord, 'workspaceRunId' | 'relativePath' | 'filename'>,
+): boolean {
   return artifact.workspaceRunId !== undefined
     && (artifact.relativePath === 'logs/workspace-run.log' || artifact.filename === 'workspace-run.log');
 }
@@ -4069,7 +4078,10 @@ async function enrichMessagesWithArtifacts(
 ): Promise<MessageDto[]> {
   const enriched: MessageDto[] = [];
   for (const message of messages) {
-    const artifacts = await repositories.artifacts.listByMessage(message.id);
+    // The internal workspace-run.log is reachable via the workspace-run detail endpoint; it must
+    // not leak into chat-facing message attachments (channel history, DM snapshot, search results).
+    const artifacts = (await repositories.artifacts.listByMessage(message.id))
+      .filter((artifact) => !isWorkspaceRunLogArtifact(artifact));
     const workspaceRunId = typeof message.meta?.workspaceRunId === 'string' ? message.meta.workspaceRunId : undefined;
     const workspaceRun = workspaceRunId
       ? await repositories.workspaceRuns.getForTeam({ teamId: message.teamId, runId: workspaceRunId })

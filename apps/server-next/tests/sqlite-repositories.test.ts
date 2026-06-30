@@ -1404,17 +1404,23 @@ describe('server-next SQLite repositories', () => {
       }
       const replyId = resultAck.message.id;
       const workspaceRunId = resultAck.message.workspaceRun.id;
-      expect(resultAck.message.artifacts?.map((artifact) => artifact.id)).toEqual(['artifact-1', 'workspace-log-1']);
+      // The internal workspace-run.log is an execution log, not a chat-facing attachment.
+      // It must be hidden from the agent reply's message DTO and from channel history,
+      // while remaining persisted (writeContent below) and reachable via the run detail endpoint.
+      expect(resultAck.message.artifacts?.map((artifact) => artifact.id)).toEqual(['artifact-1']);
       expect(resultAck.message.artifacts?.[0]?.workspaceRunId).toBe(workspaceRunId);
-      expect(resultAck.message.artifacts?.[1]).toMatchObject({
-        id: 'workspace-log-1',
-        filename: 'workspace-run.log',
-        workspaceRunId,
-        relativePath: 'logs/workspace-run.log',
-        pathKind: 'workspace',
-        sizeBytes: Buffer.byteLength('stdout:\nhello\nOPENAI_API_KEY=[redacted]\nfinished'),
-        sha256: 'sha256-log',
-      });
+      expect(resultAck.message.artifacts?.some((artifact) => artifact.filename === 'workspace-run.log')).toBe(false);
+
+      // The chat history read path (listChannelMessages -> enrichMessagesWithArtifacts)
+      // must also hide the internal log from the agent reply.
+      const historyAck = await app.listChannelMessages({ channelId: privateChannelId, limit: 50 });
+      expect(historyAck.ok).toBe(true);
+      if (!historyAck.ok) {
+        throw new Error('channel history fetch failed');
+      }
+      const replyInHistory = historyAck.messages.find((message) => message.id === replyId);
+      expect(replyInHistory?.artifacts?.map((artifact) => artifact.id)).toEqual(['artifact-1']);
+      expect(replyInHistory?.artifacts?.some((artifact) => artifact.filename === 'workspace-run.log')).toBe(false);
       expect(artifactContentStore.writeContent).toHaveBeenCalledWith({
         teamId: 'team-1',
         artifactId: 'workspace-log-1',
