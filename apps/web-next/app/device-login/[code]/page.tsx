@@ -37,7 +37,7 @@ export default function DeviceLoginPage() {
         const deviceId = resolveDeviceLoginDeviceId(complete);
         if (deviceId) setStoredDeviceId(deviceId);
         resetWebSocket();
-        const np = localStorage.getItem('agentbean.networkPath') || 'default';
+        const np = complete.team?.path ?? complete.team?.id ?? localStorage.getItem('agentbean.networkPath') ?? 'default';
         router.push(`/${np}/devices`);
         return;
       }

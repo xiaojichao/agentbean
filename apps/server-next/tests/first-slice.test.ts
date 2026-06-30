@@ -2700,10 +2700,13 @@ describe('server-next first-slice use cases', () => {
   test('device invite issues credentials to a waiting daemon and registers it without manual team config', async () => {
     const app = createInMemoryServerNext({
       now: () => 720,
-      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-invite-1', 'device-1']),
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'join-1', 'user-2', 'team-2', 'channel-2', 'device-invite-1', 'device-1']),
+      joinCodes: createIds(['join-code-1']),
       deviceInviteCodes: createIds(['device-code-1']),
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
+    await app.registerUser({ username: 'lin', password: 'secret', teamName: 'Lin Private', joinCode: 'join-code-1' });
 
     await expect(
       app.createDeviceInvite({ userId: 'user-1', teamId: 'team-1', profileId: 'agentbean-next' }),
@@ -2770,9 +2773,19 @@ describe('server-next first-slice use cases', () => {
       },
     });
 
-    await expect(app.completeDeviceInvite({ userId: 'user-1', code: 'device-code-1' })).resolves.toMatchObject({
+    await expect(app.completeDeviceInvite({ userId: 'user-2', code: 'device-code-1' })).resolves.toMatchObject({
       ok: false,
       error: 'INVITE_ALREADY_USED',
+    });
+    await expect(app.completeDeviceInvite({ userId: 'user-1', code: 'device-code-1' })).resolves.toMatchObject({
+      ok: true,
+      credentials: {
+        token: expect.stringMatching(/^abn_device\./),
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'agentbean-next',
+      },
     });
   });
 
