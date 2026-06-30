@@ -202,7 +202,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           }
           ack?.({ ok: true, path: selected });
         } catch (err) {
-          ack?.({ ok: false, error: err instanceof Error ? err.message : 'directory picker failed' });
+          // 优先回传稳定错误码（如 DirectoryPickerError 的 DIRECTORY_PICKER_UNAVAILABLE），
+          // 前端据此渲染友好提示；只有非结构化错误才退回 message。
+          const code = (err as { code?: unknown })?.code;
+          ack?.({ ok: false, error: typeof code === 'string' ? code : err instanceof Error ? err.message : 'directory picker failed' });
         }
       });
 

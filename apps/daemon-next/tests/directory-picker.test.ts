@@ -54,4 +54,30 @@ describe('directory-picker', () => {
     ]);
     expect(path).toBe('/path');
   });
+
+  // 回归：macOS daemon 未在桌面会话运行时，osascript 连不上窗口服务器，
+  // 报 com.apple.view-bridge: Connection interrupted（且 AppleScript 仍返回 -128）。
+  // 这不是"用户取消"，必须分类为稳定错误码，供前端展示可操作提示。
+  it('classifies macOS view-bridge failure as DIRECTORY_PICKER_UNAVAILABLE', async () => {
+    const stderr = [
+      "2026-06-30 09:40:24.508 osascript[79992:206960038] +[NSXPCSharedListener endpointForReply:withListenerName:replyErrorCode:]: an error occurred while attempting to obtain endpoint for listener 'com.apple.view-bridge': Connection interrupted",
+      '15:88: execution error: 用户已取消。 (-128)',
+    ].join('\n');
+    (execFile as any).mockImplementation((_cmd, _args, _opts, cb) =>
+      cb({ code: 1, message: `Command failed: osascript -e ...\n${stderr}`, stderr }, '', ''),
+    );
+    await expect(selectNativeDirectory(nativeDirectoryPickerCommands('darwin'))).rejects.toMatchObject({
+      code: 'DIRECTORY_PICKER_UNAVAILABLE',
+    });
+  });
+
+  // 中文 locale 下用户真实点取消（无 view-bridge 文本）应识别为取消并返回 null，
+  // 而不是把原始错误抛给前端。
+  it('returns null on localized (zh) user cancel without view-bridge', async () => {
+    (execFile as any).mockImplementation((_cmd, _args, _opts, cb) =>
+      cb({ code: 1, message: 'execution error: 用户已取消。 (-128)', stderr: '15:88: execution error: 用户已取消。 (-128)' }, '', ''),
+    );
+    const path = await selectNativeDirectory([{ command: 'osascript', args: [] }]);
+    expect(path).toBeNull();
+  });
 });
