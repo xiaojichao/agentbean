@@ -142,6 +142,11 @@ export interface CreateDaemonProtocolClientInput {
   homeDir?: string;
   onScanChanged?: (snapshot: DaemonScanSnapshot) => Promise<void> | void;
   onCredentialsChanged?: (credentials: DaemonDeviceCredentialsUpdate) => Promise<void> | void;
+  /**
+   * 服务端通知该设备已被删除时触发。cli 层据此关闭重连并退出进程，
+   * 否则 daemon 会持续重连并通过 device.hello 把已删设备 upsert 复活。
+   */
+  onDeviceRemoved?: () => Promise<void> | void;
 }
 
 export interface DaemonProtocolClient {
@@ -204,6 +209,11 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         } catch (err) {
           ack?.({ ok: false, error: err instanceof Error ? err.message : 'directory picker failed' });
         }
+      });
+
+      // 服务端通知设备已被删除：上抛 onDeviceRemoved，由 cli 层关闭重连并退出进程。
+      socket.on(AGENT_EVENTS.device.removed, async () => {
+        await input.onDeviceRemoved?.();
       });
 
       socket.on(AGENT_EVENTS.dispatch.cancel, async (payload) => {

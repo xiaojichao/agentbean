@@ -720,6 +720,26 @@ describe('daemon-next protocol client', () => {
       ]);
     });
   });
+
+  test('invokes onDeviceRemoved when the server notifies the device was removed', async () => {
+    const socket = new FakeAgentSocket();
+    const onDeviceRemoved = vi.fn();
+    const client = createDaemonProtocolClient({
+      socket,
+      executor: async () => '',
+      device: { teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' },
+      runtimes: [],
+      agents: [],
+      onDeviceRemoved,
+    });
+
+    await client.start();
+
+    await socket.trigger(AGENT_EVENTS.device.removed, { deviceId: 'device-1' });
+
+    // 收到 device:removed → 上抛 onDeviceRemoved，由 cli 层负责关重连+退出进程。
+    expect(onDeviceRemoved).toHaveBeenCalledTimes(1);
+  });
 });
 
 class FakeAgentSocket implements DaemonProtocolSocket {
