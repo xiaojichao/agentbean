@@ -837,6 +837,7 @@ function InfoCard({ label, value, hint, tone }: { label: string; value: string; 
 
 function AddDeviceDialog({ onClose, currentTeamId }: { onClose: () => void; currentTeamId: string | null }) {
   const [inviteCommand, setInviteCommand] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -850,6 +851,7 @@ function AddDeviceDialog({ onClose, currentTeamId }: { onClose: () => void; curr
       const resolved = getResolvedServerUrl();
       const command = res.invite.command.replace(/--server-url\s+\S+/, `--server-url ${resolved}`);
       setInviteCommand(command);
+      setInviteCode(res.invite.code ?? '');
     } else {
       setError(res.error ?? '生成失败');
     }
@@ -879,6 +881,11 @@ function AddDeviceDialog({ onClose, currentTeamId }: { onClose: () => void; curr
             <button onClick={copy} className="flex w-full items-center justify-center gap-1.5 rounded-md border border-neutral-300 py-2 text-sm hover:bg-neutral-50">
               <Copy size={14} /> {copied ? '已复制到剪贴板' : '复制命令'}
             </button>
+            {inviteCode && (
+              <p className="text-xs text-neutral-500">
+                命令运行后，<a href={`/device-login/${inviteCode}`} className="text-blue-600 underline">点击此处完成本机设备关联</a>（否则该设备配置将只读）。
+              </p>
+            )}
           </div>
         )}
 

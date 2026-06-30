@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { createInviteSocket, authEvents, resetWebSocket, setStoredDeviceId } from '@/lib/socket';
+import { createInviteSocket, authEvents, resetWebSocket, setStoredDeviceId, resolveDeviceLoginDeviceId } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 
 export default function DeviceLoginPage() {
@@ -18,35 +18,54 @@ export default function DeviceLoginPage() {
     event.preventDefault();
     setSubmitting(true);
     setError(null);
-    const socket = createInviteSocket();
     try {
-      await new Promise<void>((resolve, reject) => {
-        socket.on('connect', () => resolve());
-        socket.on('connect_error', (err) => reject(err));
-      });
-      const res = await authEvents(socket).deviceLogin({ inviteCode, username, password });
-      if (!res.ok || !res.token) {
-        setError(res.error ?? 'LOGIN_FAILED');
+      const existingToken = localStorage.getItem('agentbean.token');
+      if (existingToken) {
+        // 已登录：直接用现有 token 完成 invite（不需再输密码），关联本机设备。
+        // 否则 web 不知道哪个是本机设备 → device.isLocal 恒 false → runtime/项目目录只读。
+        const complete = await authEvents().completeDeviceInvite({ code: inviteCode });
+        if (!complete.ok) {
+          setError(complete.error ?? 'COMPLETE_FAILED');
+          return;
+        }
+        const deviceId = resolveDeviceLoginDeviceId(complete);
+        if (deviceId) setStoredDeviceId(deviceId);
+        resetWebSocket();
+        const np = localStorage.getItem('agentbean.networkPath') || 'default';
+        router.push(`/${np}/devices`);
         return;
       }
-      localStorage.setItem('agentbean.token', res.token);
-      if (res.deviceId) setStoredDeviceId(res.deviceId);
-      useAgentBeanStore.getState().setAuthToken(res.token);
-      useAgentBeanStore.getState().setCurrentTeamId(res.networkId ?? 'default');
-      useAgentBeanStore.getState().setCurrentUser({
-        id: res.userId!,
-        username: res.username ?? username,
-        email: null,
-            role: res.role ?? 'user',
-      });
-      resetWebSocket();
-      const savedNp = localStorage.getItem('agentbean.networkPath');
-      const np = savedNp || res.networkPath || 'default';
-      router.push(`/${np}/devices`);
+      const socket = createInviteSocket();
+      try {
+        await new Promise<void>((resolve, reject) => {
+          socket.on('connect', () => resolve());
+          socket.on('connect_error', (err) => reject(err));
+        });
+        const res = await authEvents(socket).deviceLogin({ inviteCode, username, password });
+        if (!res.ok || !res.token) {
+          setError(res.error ?? 'LOGIN_FAILED');
+          return;
+        }
+        localStorage.setItem('agentbean.token', res.token);
+        if (res.deviceId) setStoredDeviceId(res.deviceId);
+        useAgentBeanStore.getState().setAuthToken(res.token);
+        useAgentBeanStore.getState().setCurrentTeamId(res.networkId ?? 'default');
+        useAgentBeanStore.getState().setCurrentUser({
+          id: res.userId!,
+          username: res.username ?? username,
+          email: null,
+              role: res.role ?? 'user',
+        });
+        resetWebSocket();
+        const savedNp = localStorage.getItem('agentbean.networkPath');
+        const np = savedNp || res.networkPath || 'default';
+        router.push(`/${np}/devices`);
+      } finally {
+        socket.close();
+      }
     } catch (err: any) {
       setError(err?.message ?? 'LOGIN_FAILED');
     } finally {
-      socket.close();
       setSubmitting(false);
     }
   };
