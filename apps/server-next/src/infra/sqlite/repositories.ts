@@ -49,6 +49,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0008_device_canonical_backfill.sql');
   applyMigration(db, 'global/0009_agent_visibility.sql');
   applyMigration(db, 'global/0010_agent_skills.sql');
+  applyMigration(db, 'global/0011_device_revocations.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
@@ -1762,6 +1763,31 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .prepare('SELECT 1 FROM saved_messages WHERE message_id = ? AND user_id = ?')
           .get(messageId, userId);
         return !!row;
+      },
+    },
+    revocations: {
+      async find({ teamId, machineId, profileId }) {
+        const row = globalDb
+          .prepare(
+            `SELECT teamId, machineId, profileId, deviceId, deletedAt FROM device_revocations
+             WHERE teamId = ? AND machineId = ? AND profileKey = ?`,
+          )
+          .get(teamId, machineId, profileId ?? '') as any;
+        return row ? { ...row, profileId: row.profileId ?? null } : null;
+      },
+      async upsertAll({ revocations }) {
+        const stmt = globalDb.prepare(
+          `INSERT OR REPLACE INTO device_revocations (teamId, machineId, profileId, profileKey, deviceId, deletedAt)
+           VALUES (@teamId, @machineId, @profileId, @profileKey, @deviceId, @deletedAt)`,
+        );
+        for (const r of revocations) {
+          stmt.run({ ...r, profileId: r.profileId ?? null, profileKey: r.profileId ?? '' });
+        }
+      },
+      async clear({ teamId, machineId }) {
+        globalDb
+          .prepare(`DELETE FROM device_revocations WHERE teamId = ? AND machineId = ?`)
+          .run(teamId, machineId);
       },
     },
   };
