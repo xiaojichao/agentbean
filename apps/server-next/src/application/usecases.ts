@@ -1901,7 +1901,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
       if (isCustom) {
         // runtime 执行设置（adapterKind/command/args/cwd/env/runtimeId）由设备拥有者授权
-        // （agentForManagement 已校验 canManageDeviceAsUser），不再强制本机。
+        // （agentForConfigUpdate 已校验 canManageDeviceAsUser），不再强制本机。
         // 旧「必须 isLocal」守卫会拒绝账号密码登录（无 deviceId）的拥有者，含物理本机场景。
         if (agentInput.args !== undefined) {
           changes.args = agentInput.args;
@@ -1927,6 +1927,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           const device = await repositories.devices.getById(runtime.deviceId);
           if (!device || device.teamId !== managed.agent.primaryTeamId) {
             return makeFailure('NOT_FOUND', 'Device not found');
+          }
+          if (!(await canManageDeviceAsUser(repositories, { userId: agentInput.userId, device }))) {
+            return makeFailure('FORBIDDEN', 'User cannot manage target runtime device');
           }
           if (device.status !== 'online') {
             return makeFailure('DEVICE_OFFLINE', 'Device is not online');
