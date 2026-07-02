@@ -26,14 +26,16 @@ async function boot() {
     app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' }),
   ).resolves.toMatchObject({ ok: true, user: { id: 'user-1', primaryTeamId: 'team-1' } });
 
-  await expect(
-    app.deviceHello({
-      teamId: 'team-1',
-      ownerId: 'user-1',
-      machineId: 'machine-1',
-      profileId: 'default',
-    }),
-  ).resolves.toMatchObject({ ok: true, device: { id: 'device-1' } });
+  const team1Hello = await app.deviceHello({
+    teamId: 'team-1',
+    ownerId: 'user-1',
+    machineId: 'machine-1',
+    profileId: 'default',
+  });
+  expect(team1Hello.ok).toBe(true);
+  // deviceHello 颁发的合法 device token（由 issueDeviceToken 用 sessionSecret 签发），
+  // 供 deviceHelloFromCredentials 的 invite 重新接入路径使用。
+  const team1Token = team1Hello.ok ? team1Hello.credentials?.token ?? '' : '';
 
   // team-2 + user-2 + 同 machineId='machine-1' 设备（跨团队用例：删 team-1 不影响 team-2）
   await expect(
@@ -49,7 +51,7 @@ async function boot() {
     }),
   ).resolves.toMatchObject({ ok: true, device: { id: 'device-2' } });
 
-  return { app, repos: repositories };
+  return { app, repos: repositories, team1Token };
 }
 
 describe('deleteDevice writes revocations', () => {
@@ -97,6 +99,29 @@ describe('deviceHello rejects revoked devices', () => {
       hostname: 'h',
     });
     expect(res.ok).toBe(true); // team-2 不受影响
+  });
+});
+
+describe('deviceHelloFromCredentials clears revocation (re-invite)', () => {
+  test('after delete, invite-path hello clears revocation and succeeds', async () => {
+    const { app, repos, team1Token } = await boot();
+    await app.deleteDevice({ userId: 'user-1', deviceId: 'device-1' });
+    // 重新 invite 接入：deviceHelloFromCredentials（带合法 token）
+    const res = await app.deviceHelloFromCredentials({
+      token: team1Token,
+      machineId: 'machine-1',
+      profileId: 'default',
+      hostname: 'h',
+    });
+    expect(res.ok).toBe(true);
+    // 吊销应被清除
+    expect(
+      await repos.revocations.find({
+        teamId: 'team-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+      }),
+    ).toBeNull();
   });
 });
 

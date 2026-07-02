@@ -1308,6 +1308,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!credentials) {
         return makeFailure('UNAUTHENTICATED', 'Invalid device credentials');
       }
+      // invite 合法接入路径：清除该机器在本团队的吊销，允许重新接入
+      const machineId = deviceInput.machineId ?? credentials.machineId;
+      if (machineId) {
+        await repositories.revocations.clear({ teamId: credentials.teamId, machineId });
+      }
       return this.deviceHello({
         teamId: credentials.teamId,
         ownerId: credentials.ownerId,
