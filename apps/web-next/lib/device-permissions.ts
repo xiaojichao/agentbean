@@ -27,5 +27,7 @@ export function canAddCustomAgentToDevice({
   canManageDevice: boolean;
   isLocalDevice: boolean;
 }): boolean {
-  return canManageDevice || isLocalDevice;
+  // 对齐后端 createCustomAgent 双重守卫：canManageDeviceAsUser(拥有者/admin, usecases.ts:1799) AND isDeviceLocal(本机, usecases.ts:1802)。
+  // 任一不满足都禁用，避免放行一个被后端拒绝的操作（FORBIDDEN / FORBIDDEN_REMOTE_DEVICE_SETTINGS），让用户填完表才撞错误码。
+  return canManageDevice && isLocalDevice;
 }
