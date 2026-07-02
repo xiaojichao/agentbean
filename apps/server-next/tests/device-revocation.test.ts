@@ -125,6 +125,21 @@ describe('deviceHelloFromCredentials clears revocation (re-invite)', () => {
   });
 });
 
+describe('online delete defense-in-depth (layer1 + layer2)', () => {
+  test('online delete still writes revocation even though layer1 kicks socket', async () => {
+    const { app, repos } = await boot();
+    await app.deleteDevice({ userId: 'user-1', deviceId: 'device-1' });
+    // 层2 兜底：即便 daemon 没收到 device:removed，吊销也已写入
+    expect(
+      await repos.revocations.find({
+        teamId: 'team-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+      }),
+    ).not.toBeNull();
+  });
+});
+
 function createIds(ids: string[]) {
   let index = 0;
   return () => {
