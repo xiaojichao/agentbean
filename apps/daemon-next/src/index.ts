@@ -165,7 +165,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
 
   return {
     async start() {
-      const initialAnnouncement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents);
+      const initialAnnouncement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents, { onDeviceRemoved: input.onDeviceRemoved });
       currentDeviceId = initialAnnouncement.deviceId;
       await applyCredentialsUpdate(initialAnnouncement.credentials);
       const cancelledDispatchIds = new Set<string>();
@@ -174,7 +174,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       });
       socket.onReconnect?.(async () => {
         try {
-          const announcement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents);
+          const announcement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents, { onDeviceRemoved: input.onDeviceRemoved });
           currentDeviceId = announcement.deviceId;
           await applyCredentialsUpdate(announcement.credentials);
         } catch (error) {
@@ -366,8 +366,15 @@ async function announceDeviceSnapshot(
   device: DaemonDeviceConfig,
   runtimes: DaemonRuntimeReport[],
   agents: DaemonAgentReport[],
+  options: { onDeviceRemoved?: () => Promise<void> | void } = {},
 ): Promise<{ deviceId: string; credentials?: DaemonDeviceCredentialsUpdate }> {
   const helloAck = await socket.emitWithAck(AGENT_EVENTS.device.hello, device);
+  // 层2：离线删除后重连被拒——复用 onDeviceRemoved 退出，不复活。
+  // 检查必须在 readAckDeviceId 之前，避免对 error ack 调 readAckDeviceId。
+  if (helloAck && typeof helloAck === 'object' && (helloAck as { ok?: unknown }).ok === false && (helloAck as { error?: unknown }).error === 'DEVICE_REVOKED') {
+    await options.onDeviceRemoved?.();
+    throw new Error('Device revoked by server; aborting announce');
+  }
   const deviceId = readAckDeviceId(helloAck);
   const credentials = readAckDeviceCredentials(helloAck);
 
