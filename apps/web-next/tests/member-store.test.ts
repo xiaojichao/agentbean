@@ -36,6 +36,15 @@ describe('human members store — flicker fix', () => {
     expect(useAgentBeanStore.getState().humans).toEqual([]);
   });
 
+  test('late snapshots from a previous team are ignored after switching teams', () => {
+    useAgentBeanStore.getState().setCurrentTeamId('team-a');
+    useAgentBeanStore.getState().setCurrentTeamId('team-b');
+
+    useAgentBeanStore.getState().applyHumansSnapshot(HUMANS, 'team-a');
+
+    expect(useAgentBeanStore.getState().humans).toEqual([]);
+  });
+
   test('removeHuman drops by userId; upsertHuman updates in place or inserts', () => {
     useAgentBeanStore.getState().applyHumansSnapshot(HUMANS);
 

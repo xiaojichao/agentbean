@@ -77,7 +77,7 @@ export default function MembersPage() {
     const unsubDeviceStatus = deviceEvents().onStatus((device) => applyDeviceStatus(device));
     const unsubStatus = agentEvents().onStatus((snap) => applyAgentStatus(snap));
     memberEvents().list({ teamId: memberTeamId }).then((res) => {
-      if (res.ok && res.humans) applyHumansSnapshot(res.humans);
+      if (res.ok && res.humans) applyHumansSnapshot(res.humans, memberTeamId);
       if (res.ok && res.agents) applyAgentsSnapshot(res.agents);
     });
     return () => { unsubDevices(); unsubDeviceStatus(); unsubStatus(); };

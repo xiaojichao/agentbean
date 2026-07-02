@@ -196,7 +196,7 @@ interface State {
   applyDevicesSnapshot(list: DeviceInfo[]): void;
   upsertDevice(device: DeviceInfo): void;
   applyDeviceStatus(device: DeviceInfo): void;
-  applyHumansSnapshot(list: HumanMember[]): void;
+  applyHumansSnapshot(list: HumanMember[], teamId?: string): void;
   upsertHuman(human: HumanMember): void;
   removeHuman(userId: string): void;
 }
@@ -343,7 +343,12 @@ export const useAgentBeanStore = create<State>((set) => ({
       return { devices: { ...s.devices, [device.id]: { ...s.devices[device.id], ...device } } };
     });
   },
-  applyHumansSnapshot(list) { set({ humans: list }); },
+  applyHumansSnapshot(list, teamId) {
+    set((s) => {
+      if (teamId && s.currentTeamId !== teamId) return s;
+      return { humans: list };
+    });
+  },
   upsertHuman(human) {
     set((s) => {
       const idx = s.humans.findIndex((h) => h.userId === human.userId);
