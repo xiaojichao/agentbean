@@ -1765,6 +1765,31 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return !!row;
       },
     },
+    revocations: {
+      async find({ teamId, machineId, profileId }) {
+        const row = globalDb
+          .prepare(
+            `SELECT teamId, machineId, profileId, deviceId, deletedAt FROM device_revocations
+             WHERE teamId = ? AND machineId = ? AND profileId IS ?`,
+          )
+          .get(teamId, machineId, profileId ?? null) as any;
+        return row ? { ...row, profileId: row.profileId ?? null } : null;
+      },
+      async upsertAll({ revocations }) {
+        const stmt = globalDb.prepare(
+          `INSERT OR REPLACE INTO device_revocations (teamId, machineId, profileId, deviceId, deletedAt)
+           VALUES (@teamId, @machineId, @profileId, @deviceId, @deletedAt)`,
+        );
+        for (const r of revocations) {
+          stmt.run({ ...r, profileId: r.profileId ?? null });
+        }
+      },
+      async clear({ teamId, machineId }) {
+        globalDb
+          .prepare(`DELETE FROM device_revocations WHERE teamId = ? AND machineId = ?`)
+          .run(teamId, machineId);
+      },
+    },
   };
 }
 

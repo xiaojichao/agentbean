@@ -50,3 +50,56 @@ describe('device revocations repository (memory)', () => {
     expect(await repos.revocations.find({ teamId: 't1', machineId: 'm1', profileId: 'p1' })).toBeNull();
   });
 });
+
+import Database from 'better-sqlite3';
+import {
+  applyGlobalMigrations,
+  applyTeamMigrations,
+  createSqliteRepositories,
+} from '../src/infra/sqlite/repositories';
+
+function openMigratedRepos() {
+  const globalDb = new Database(':memory:');
+  const teamDb = new Database(':memory:');
+  applyGlobalMigrations(globalDb);
+  applyTeamMigrations(teamDb);
+  return {
+    repos: createSqliteRepositories({ globalDb, teamDb }),
+    close() {
+      globalDb.close();
+      teamDb.close();
+    },
+  };
+}
+
+describe('device revocations repository (sqlite)', () => {
+  test('upsertAll/find/clear round-trip with profileId value', async () => {
+    const { repos, close } = openMigratedRepos();
+    try {
+      await repos.revocations.upsertAll({
+        revocations: [{ teamId: 't1', machineId: 'm1', profileId: 'p1', deviceId: 'd1', deletedAt: 1000 }],
+      });
+      expect((await repos.revocations.find({ teamId: 't1', machineId: 'm1', profileId: 'p1' }))?.deviceId).toBe('d1');
+      await repos.revocations.clear({ teamId: 't1', machineId: 'm1' });
+      expect(await repos.revocations.find({ teamId: 't1', machineId: 'm1', profileId: 'p1' })).toBeNull();
+    } finally {
+      close();
+    }
+  });
+
+  test('NULL profileId round-trips via IS NULL (not = NULL)', async () => {
+    const { repos, close } = openMigratedRepos();
+    try {
+      await repos.revocations.upsertAll({
+        revocations: [{ teamId: 't1', machineId: 'm1', profileId: null, deviceId: 'd1', deletedAt: 1000 }],
+      });
+      expect((await repos.revocations.find({ teamId: 't1', machineId: 'm1', profileId: null }))?.deviceId).toBe('d1');
+      // a non-null profileId must not match the null row
+      expect(await repos.revocations.find({ teamId: 't1', machineId: 'm1', profileId: 'p1' })).toBeNull();
+      await repos.revocations.clear({ teamId: 't1', machineId: 'm1' });
+      expect(await repos.revocations.find({ teamId: 't1', machineId: 'm1', profileId: null })).toBeNull();
+    } finally {
+      close();
+    }
+  });
+});
