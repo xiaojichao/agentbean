@@ -49,6 +49,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0008_device_canonical_backfill.sql');
   applyMigration(db, 'global/0009_agent_visibility.sql');
   applyMigration(db, 'global/0010_agent_skills.sql');
+  applyMigration(db, 'global/0011_device_revocations.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {

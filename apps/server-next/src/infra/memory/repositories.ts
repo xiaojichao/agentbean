@@ -4,6 +4,7 @@ import type {
   ChannelRecord,
   DeviceInviteRecord,
   DeviceRecord,
+  DeviceRevocationRecord,
   DispatchRecord,
   JoinLinkRecord,
   MessageRecord,
@@ -25,6 +26,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const deviceInvites = new Map<string, DeviceInviteRecord>();
   const channels = new Map<string, ChannelRecord>();
   const devices = new Map<string, DeviceRecord>();
+  const deviceRevocations = new Map<string, DeviceRevocationRecord>();
+  const revocationKey = (teamId: string, machineId: string, profileId?: string | null) =>
+    `${teamId}|${machineId}|${profileId ?? ''}`;
   const runtimes = new Map<string, RuntimeRecord>();
   const agents = new Map<string, AgentRecord>();
   const agentEnv = new Map<string, Record<string, string>>();
@@ -513,6 +517,24 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           }
         }
         devices.delete(input.deviceId);
+      },
+    },
+    revocations: {
+      async find({ teamId, machineId, profileId }) {
+        return deviceRevocations.get(revocationKey(teamId, machineId, profileId)) ?? null;
+      },
+      async upsertAll({ revocations }) {
+        for (const r of revocations) {
+          deviceRevocations.set(revocationKey(r.teamId, r.machineId, r.profileId ?? null), r);
+        }
+      },
+      async clear({ teamId, machineId }) {
+        for (const key of Array.from(deviceRevocations.keys())) {
+          const r = deviceRevocations.get(key)!;
+          if (r.teamId === teamId && r.machineId === machineId) {
+            deviceRevocations.delete(key);
+          }
+        }
       },
     },
     runtimes: {
