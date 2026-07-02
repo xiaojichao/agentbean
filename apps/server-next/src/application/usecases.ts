@@ -1308,6 +1308,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!credentials) {
         return makeFailure('UNAUTHENTICATED', 'Invalid device credentials');
       }
+      // invite 合法接入路径：清除该机器在本团队的吊销，允许重新接入
+      const machineId = deviceInput.machineId ?? credentials.machineId;
+      if (machineId) {
+        await repositories.revocations.clear({ teamId: credentials.teamId, machineId });
+      }
       return this.deviceHello({
         teamId: credentials.teamId,
         ownerId: credentials.ownerId,
@@ -1354,6 +1359,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             profileId: deviceInput.profileId,
           })
           : null;
+
+      // 吊销检查：离线删除后重连复活防护（层2）
+      if (deviceInput.machineId) {
+        const revoked = await repositories.revocations.find({
+          teamId: deviceInput.teamId,
+          machineId: deviceInput.machineId,
+          profileId: deviceInput.profileId ?? null,
+        });
+        if (revoked) {
+          return makeFailure('DEVICE_REVOKED', 'Device was removed from team');
+        }
+      }
+
       const ownerId = existing?.ownerId ?? deviceInput.ownerId;
       if (!(await repositories.teams.isMember(deviceInput.teamId, ownerId))) {
         return makeFailure('FORBIDDEN', 'Device owner is not a team member');
@@ -1576,6 +1594,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const now = clock.now();
       const teamDevices = await repositories.devices.listByTeam(device.teamId);
       const devicesToDelete = resolveDeviceAliasGroup(device, teamDevices);
+      // 写吊销：整组所有真实设备（有 machineId）的凭证，防 deviceHello 重连复活
+      await repositories.revocations.upsertAll({
+        revocations: devicesToDelete
+          .filter((target) => target.machineId)
+          .map((target) => ({
+            teamId: target.teamId,
+            machineId: target.machineId!,
+            profileId: target.profileId ?? null,
+            deviceId: target.id,
+            deletedAt: now,
+          })),
+      });
       const hostedAgents = (
         await Promise.all(devicesToDelete.map((target) => repositories.agents.listByDevice(target.id)))
       ).flat();

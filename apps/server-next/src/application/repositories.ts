@@ -170,6 +170,20 @@ export interface ChannelRepository {
   delete(input: { channelId: ID }): Promise<ChannelRecord | null>;
 }
 
+export interface DeviceRevocationRecord {
+  teamId: ID;
+  machineId: string;
+  profileId?: string | null;
+  deviceId?: ID;
+  deletedAt: UnixMs;
+}
+
+export interface DeviceRevocationRepository {
+  find(input: { teamId: ID; machineId: string; profileId?: string | null }): Promise<DeviceRevocationRecord | null>;
+  upsertAll(input: { revocations: DeviceRevocationRecord[] }): Promise<void>;
+  clear(input: { teamId: ID; machineId: string }): Promise<void>;
+}
+
 export interface DeviceRepository {
   upsertHello(input: DeviceRecord): Promise<DeviceRecord>;
   getById(id: ID): Promise<DeviceRecord | null>;
@@ -266,6 +280,7 @@ export interface ServerNextRepositories {
   deviceInvites: DeviceInviteRepository;
   channels: ChannelRepository;
   devices: DeviceRepository;
+  revocations: DeviceRevocationRepository;
   runtimes: RuntimeRepository;
   agents: AgentRepository;
   messages: MessageRepository;
