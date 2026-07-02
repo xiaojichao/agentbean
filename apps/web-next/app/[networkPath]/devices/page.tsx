@@ -401,7 +401,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   });
   const isOwnedByCurrentUser = Boolean(currentUser?.id && currentUser.id === deviceOwnerId);
   const isLocalDevice = device.isLocal === true;
-  const canAddCustomAgent = canAddCustomAgentToDevice({ canManageDevice, isLocalDevice });
+  const canAddCustomAgent = canAddCustomAgentToDevice({ canManageDevice });
 
   const refreshDeviceAgents = () => {
     return deviceEvents().agentsList(device.id, currentTeamId).then((res) => {
@@ -767,7 +767,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           device={device}
           runtimes={runtimeList}
           canEditMetadata={canManageDevice || isLocalDevice}
-          canEditDeviceSettings={isLocalDevice}
+          canEditDeviceSettings={canManageDevice}
           onClose={() => setConfigAgent(null)}
           onSaved={() => {
             refreshDeviceAgents();

@@ -2,31 +2,21 @@ import { describe, expect, test } from 'vitest';
 import { canAddCustomAgentToDevice, canManageDeviceForUser } from '../lib/device-permissions';
 
 describe('device detail permissions', () => {
-  // canAddCustomAgentToDevice 必须对齐后端 createCustomAgent 的双重守卫：
-  //   canManageDeviceAsUser(拥有者/admin, usecases.ts:1799) AND isDeviceLocal(本机, usecases.ts:1802)
-  // 任一不满足都应返回 false，否则会放行一个被后端拒绝的操作（FORBIDDEN / FORBIDDEN_REMOTE_DEVICE_SETTINGS），
-  // 让用户填完表单才撞错误码。
-  test('denies non-local device owners from adding custom agent (对齐后端 isLocal 守卫)', () => {
-    // 拥有者(canManage=true)但非本机(isLocal=false，如普通账号登录无 deviceId)：
-    // 后端 isDeviceLocalToHint 守卫会拒(FORBIDDEN_REMOTE_DEVICE_SETTINGS)。
-    expect(canAddCustomAgentToDevice({ canManageDevice: true, isLocalDevice: false })).toBe(false);
+  // canAddCustomAgentToDevice：runtime 配置由设备拥有者授权（canManageDeviceAsUser），
+  // 不再强制本机 —— 否则账号密码登录（无 deviceId）的拥有者（含物理本机）会被误判远程、按钮消失。
+  test('设备拥有者可添加 custom agent（不论本机/远程）', () => {
+    expect(canAddCustomAgentToDevice({ canManageDevice: true })).toBe(true);
   });
 
-  test('denies local non-owners from adding custom agent (对齐后端 canManageDeviceAsUser)', () => {
-    // 本机(isLocal=true)但非拥有者(canManage=false)：后端 canManageDeviceAsUser 会拒(FORBIDDEN)。
+  test('非设备拥有者不可添加 custom agent', () => {
     const canManageDevice = canManageDeviceForUser({
       deviceOwnerId: 'owner-1',
       currentUserId: 'member-1',
       currentUserRole: 'user',
       currentTeamRole: 'member',
     });
-
     expect(canManageDevice).toBe(false);
-    expect(canAddCustomAgentToDevice({ canManageDevice, isLocalDevice: true })).toBe(false);
-  });
-
-  test('lets local device owners add custom agent', () => {
-    expect(canAddCustomAgentToDevice({ canManageDevice: true, isLocalDevice: true })).toBe(true);
+    expect(canAddCustomAgentToDevice({ canManageDevice })).toBe(false);
   });
 
   test('denies team owner/admin roles managing remote devices (收紧：仅设备拥有者/系统管理员)', () => {
