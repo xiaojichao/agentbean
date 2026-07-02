@@ -1354,6 +1354,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             profileId: deviceInput.profileId,
           })
           : null;
+
+      // 吊销检查：离线删除后重连复活防护（层2）
+      if (deviceInput.machineId) {
+        const revoked = await repositories.revocations.find({
+          teamId: deviceInput.teamId,
+          machineId: deviceInput.machineId,
+          profileId: deviceInput.profileId ?? null,
+        });
+        if (revoked) {
+          return makeFailure('DEVICE_REVOKED', 'Device was removed from team');
+        }
+      }
+
       const ownerId = existing?.ownerId ?? deviceInput.ownerId;
       if (!(await repositories.teams.isMember(deviceInput.teamId, ownerId))) {
         return makeFailure('FORBIDDEN', 'Device owner is not a team member');
