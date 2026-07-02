@@ -1576,6 +1576,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const now = clock.now();
       const teamDevices = await repositories.devices.listByTeam(device.teamId);
       const devicesToDelete = resolveDeviceAliasGroup(device, teamDevices);
+      // 写吊销：整组所有真实设备（有 machineId）的凭证，防 deviceHello 重连复活
+      await repositories.revocations.upsertAll({
+        revocations: devicesToDelete
+          .filter((target) => target.machineId)
+          .map((target) => ({
+            teamId: target.teamId,
+            machineId: target.machineId!,
+            profileId: target.profileId ?? null,
+            deviceId: target.id,
+            deletedAt: now,
+          })),
+      });
       const hostedAgents = (
         await Promise.all(devicesToDelete.map((target) => repositories.agents.listByDevice(target.id)))
       ).flat();
