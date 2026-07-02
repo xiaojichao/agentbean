@@ -17,7 +17,7 @@ async function boot() {
         // team-2 + user-2 + 同 machineId 设备（createTeam 消耗 teamId+channelId，registerUser 消耗 userId+teamId+channelId）
         'user-2', 'team-2', 'channel-2', 'device-2',
         // deviceHello 复活时会申请新 deviceId（当前 bug）；实现后不会走到这里
-        'device-3',
+        'invite-1', 'device-3',
       ]),
     },
   });
@@ -103,12 +103,47 @@ describe('deviceHello rejects revoked devices', () => {
 });
 
 describe('deviceHelloFromCredentials clears revocation (re-invite)', () => {
-  test('after delete, invite-path hello clears revocation and succeeds', async () => {
+  test('after delete, old bound device token remains revoked and does not clear revocation', async () => {
     const { app, repos, team1Token } = await boot();
     await app.deleteDevice({ userId: 'user-1', deviceId: 'device-1' });
-    // 重新 invite 接入：deviceHelloFromCredentials（带合法 token）
+
     const res = await app.deviceHelloFromCredentials({
       token: team1Token,
+      machineId: 'machine-1',
+      profileId: 'default',
+      hostname: 'h',
+    });
+    expect(res).toMatchObject({ ok: false, error: 'DEVICE_REVOKED' });
+    expect(
+      await repos.revocations.find({
+        teamId: 'team-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+      }),
+    ).not.toBeNull();
+  });
+
+  test('after delete, invite-path hello clears revocation and succeeds', async () => {
+    const { app, repos } = await boot();
+    await app.deleteDevice({ userId: 'user-1', deviceId: 'device-1' });
+    const invite = await app.createDeviceInvite({ userId: 'user-1', teamId: 'team-1', profileId: 'default' });
+    expect(invite.ok).toBe(true);
+    if (!invite.ok) return;
+    await expect(
+      app.waitForDeviceInvite({
+        code: invite.invite.code,
+        machineId: 'machine-1',
+        profileId: 'default',
+        hostname: 'h',
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    const completed = await app.completeDeviceInvite({ userId: 'user-1', code: invite.invite.code });
+    expect(completed.ok).toBe(true);
+    if (!completed.ok) return;
+
+    // 重新 invite 接入：未绑定 deviceId 的 invite token 可以清除同机器吊销
+    const res = await app.deviceHelloFromCredentials({
+      token: completed.credentials.token,
       machineId: 'machine-1',
       profileId: 'default',
       hostname: 'h',
@@ -122,6 +157,40 @@ describe('deviceHelloFromCredentials clears revocation (re-invite)', () => {
         profileId: 'default',
       }),
     ).toBeNull();
+  });
+
+  test('invite token cannot clear revocation for a different machineId from payload', async () => {
+    const { app, repos } = await boot();
+    await app.deleteDevice({ userId: 'user-1', deviceId: 'device-1' });
+    await repos.revocations.upsertAll({
+      revocations: [
+        { teamId: 'team-1', machineId: 'machine-2', profileId: 'default', deviceId: 'device-x', deletedAt: 1000 },
+      ],
+    });
+    const invite = await app.createDeviceInvite({ userId: 'user-1', teamId: 'team-1', profileId: 'default' });
+    expect(invite.ok).toBe(true);
+    if (!invite.ok) return;
+    await expect(
+      app.waitForDeviceInvite({
+        code: invite.invite.code,
+        machineId: 'machine-1',
+        profileId: 'default',
+        hostname: 'h',
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    const completed = await app.completeDeviceInvite({ userId: 'user-1', code: invite.invite.code });
+    expect(completed.ok).toBe(true);
+    if (!completed.ok) return;
+
+    const res = await app.deviceHelloFromCredentials({
+      token: completed.credentials.token,
+      machineId: 'machine-2',
+      profileId: 'default',
+      hostname: 'h',
+    });
+    expect(res).toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    expect(await repos.revocations.find({ teamId: 'team-1', machineId: 'machine-2', profileId: 'default' })).not.toBeNull();
+    expect(await repos.revocations.find({ teamId: 'team-1', machineId: 'machine-1', profileId: 'default' })).not.toBeNull();
   });
 });
 

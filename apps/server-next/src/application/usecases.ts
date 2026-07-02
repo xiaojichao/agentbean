@@ -1308,9 +1308,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!credentials) {
         return makeFailure('UNAUTHENTICATED', 'Invalid device credentials');
       }
-      // invite 合法接入路径：清除该机器在本团队的吊销，允许重新接入
+      if (credentials.machineId && deviceInput.machineId && credentials.machineId !== deviceInput.machineId) {
+        return makeFailure('FORBIDDEN', 'Device credentials do not match machine');
+      }
+      if (credentials.profileId && deviceInput.profileId && credentials.profileId !== deviceInput.profileId) {
+        return makeFailure('FORBIDDEN', 'Device credentials do not match profile');
+      }
       const machineId = deviceInput.machineId ?? credentials.machineId;
-      if (machineId) {
+      // 只有未绑定 deviceId 的 invite token 表示“重新接入”，允许清除吊销。
+      // 已绑定设备 token 是 daemon 的常规重连凭证，必须继续接受 deviceHello 的吊销检查。
+      if (!credentials.deviceId && machineId) {
         await repositories.revocations.clear({ teamId: credentials.teamId, machineId });
       }
       return this.deviceHello({

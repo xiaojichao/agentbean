@@ -1770,18 +1770,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         const row = globalDb
           .prepare(
             `SELECT teamId, machineId, profileId, deviceId, deletedAt FROM device_revocations
-             WHERE teamId = ? AND machineId = ? AND profileId IS ?`,
+             WHERE teamId = ? AND machineId = ? AND profileKey = ?`,
           )
-          .get(teamId, machineId, profileId ?? null) as any;
+          .get(teamId, machineId, profileId ?? '') as any;
         return row ? { ...row, profileId: row.profileId ?? null } : null;
       },
       async upsertAll({ revocations }) {
         const stmt = globalDb.prepare(
-          `INSERT OR REPLACE INTO device_revocations (teamId, machineId, profileId, deviceId, deletedAt)
-           VALUES (@teamId, @machineId, @profileId, @deviceId, @deletedAt)`,
+          `INSERT OR REPLACE INTO device_revocations (teamId, machineId, profileId, profileKey, deviceId, deletedAt)
+           VALUES (@teamId, @machineId, @profileId, @profileKey, @deviceId, @deletedAt)`,
         );
         for (const r of revocations) {
-          stmt.run({ ...r, profileId: r.profileId ?? null });
+          stmt.run({ ...r, profileId: r.profileId ?? null, profileKey: r.profileId ?? '' });
         }
       },
       async clear({ teamId, machineId }) {

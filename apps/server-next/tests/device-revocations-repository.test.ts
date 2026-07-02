@@ -64,6 +64,7 @@ function openMigratedRepos() {
   applyGlobalMigrations(globalDb);
   applyTeamMigrations(teamDb);
   return {
+    globalDb,
     repos: createSqliteRepositories({ globalDb, teamDb }),
     close() {
       globalDb.close();
@@ -98,6 +99,27 @@ describe('device revocations repository (sqlite)', () => {
       expect(await repos.revocations.find({ teamId: 't1', machineId: 'm1', profileId: 'p1' })).toBeNull();
       await repos.revocations.clear({ teamId: 't1', machineId: 'm1' });
       expect(await repos.revocations.find({ teamId: 't1', machineId: 'm1', profileId: null })).toBeNull();
+    } finally {
+      close();
+    }
+  });
+
+  test('NULL profileId upsert replaces the existing revocation row', async () => {
+    const { globalDb, repos, close } = openMigratedRepos();
+    try {
+      await repos.revocations.upsertAll({
+        revocations: [{ teamId: 't1', machineId: 'm1', profileId: null, deviceId: 'd1', deletedAt: 1000 }],
+      });
+      await repos.revocations.upsertAll({
+        revocations: [{ teamId: 't1', machineId: 'm1', profileId: null, deviceId: 'd2', deletedAt: 2000 }],
+      });
+
+      const found = await repos.revocations.find({ teamId: 't1', machineId: 'm1', profileId: null });
+      expect(found).toMatchObject({ deviceId: 'd2', deletedAt: 2000 });
+      const rowCount = globalDb
+        .prepare('SELECT COUNT(*) AS count FROM device_revocations WHERE teamId = ? AND machineId = ?')
+        .get('t1', 'm1') as { count: number };
+      expect(rowCount.count).toBe(1);
     } finally {
       close();
     }
