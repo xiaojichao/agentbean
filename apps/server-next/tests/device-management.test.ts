@@ -683,6 +683,66 @@ describe('device rename and delete (end-to-end)', () => {
     expect(recordC?.canonicalDeviceId).toBe(idA);
   });
 
+  test('deleting a duplicate device removes the whole canonical alias group', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'canonical-device',
+        'alias-device',
+        'agent-1',
+      ]),
+    });
+    await expect(
+      app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' }),
+    ).resolves.toMatchObject({ ok: true, user: { id: 'user-1' } });
+    await expect(
+      app.deviceHello({
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        hostname: 'shaw-mac.local',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'canonical-device' } });
+    await expect(
+      app.deviceHello({
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        hostname: 'shaw-mac.local',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'alias-device' } });
+    await expect(
+      app.registerDiscoveredAgents({
+        teamId: 'team-1',
+        deviceId: 'alias-device',
+        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
+      }),
+    ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-1', deviceId: 'alias-device' }] });
+
+    const deleteResult = await app.deleteDevice({ userId: 'user-1', deviceId: 'alias-device' });
+    expect(deleteResult).toMatchObject({
+      ok: true,
+      affectedTeamIds: ['team-1'],
+      channelTeamIds: ['team-1'],
+      // 整个别名组都被删除 → 传输层据此对组内每个在线 daemon 下发 device:removed
+      deletedDeviceIds: expect.arrayContaining(['canonical-device', 'alias-device']),
+    });
+    expect((deleteResult as { deletedDeviceIds: unknown[] }).deletedDeviceIds).toHaveLength(2);
+    await expect(app.getDevice({ userId: 'user-1', deviceId: 'canonical-device' })).resolves.toMatchObject({
+      ok: false,
+      error: 'NOT_FOUND',
+    });
+    await expect(app.getDevice({ userId: 'user-1', deviceId: 'alias-device' })).resolves.toMatchObject({
+      ok: false,
+      error: 'NOT_FOUND',
+    });
+    await expect(app.listDevices({ teamId: 'team-1', userId: 'user-1' })).resolves.toMatchObject({
+      ok: true,
+      devices: [],
+    });
+  });
+
   test('members resolve alias-hosted agents through canonicalDeviceId after canonical device rename', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,

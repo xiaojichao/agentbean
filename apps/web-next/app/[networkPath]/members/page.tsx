@@ -5,7 +5,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Bot, Circle, ChevronRight, Monitor, User } from 'lucide-react';
 import { memberEvents, deviceEvents, agentEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
-import { AgentDetail, AgentTopBar, HumanDetail, type AgentMemberTab, type HumanMember } from '@/components/member-detail';
+import { AgentDetail, AgentTopBar, HumanDetail, type AgentMemberTab } from '@/components/member-detail';
 import type { AgentSnapshot } from '@/lib/schema';
 import { agentDeviceDisplayName } from '@/lib/agent-device';
 
@@ -55,11 +55,14 @@ export default function MembersPage() {
   const applyDeviceStatus = useAgentBeanStore((s) => s.applyDeviceStatus);
   const applyAgentsSnapshot = useAgentBeanStore((s) => s.applyAgentsSnapshot);
   const applyAgentStatus = useAgentBeanStore((s) => s.applyAgentStatus);
+  const humans = useAgentBeanStore((s) => s.humans);
+  const applyHumansSnapshot = useAgentBeanStore((s) => s.applyHumansSnapshot);
+  const upsertHuman = useAgentBeanStore((s) => s.upsertHuman);
+  const removeHuman = useAgentBeanStore((s) => s.removeHuman);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tab, setTab] = useState<AgentMemberTab>('profile');
   const [agentsExpanded, setAgentsExpanded] = useState(true);
   const [humansExpanded, setHumansExpanded] = useState(true);
-  const [humanMembers, setHumanMembers] = useState<HumanMember[]>([]);
   const routeAgentId = typeof params.agentId === 'string' ? params.agentId : null;
   const routeUserId = typeof params.userId === 'string' ? params.userId : null;
   const routeNetworkPath = typeof params.networkPath === 'string' ? params.networkPath : np;
@@ -74,11 +77,11 @@ export default function MembersPage() {
     const unsubDeviceStatus = deviceEvents().onStatus((device) => applyDeviceStatus(device));
     const unsubStatus = agentEvents().onStatus((snap) => applyAgentStatus(snap));
     memberEvents().list({ teamId: memberTeamId }).then((res) => {
-      if (res.ok && res.humans) setHumanMembers(res.humans);
+      if (res.ok && res.humans) applyHumansSnapshot(res.humans, memberTeamId);
       if (res.ok && res.agents) applyAgentsSnapshot(res.agents);
     });
     return () => { unsubDevices(); unsubDeviceStatus(); unsubStatus(); };
-  }, [conn, memberTeamId, applyDevicesSnapshot, applyDeviceStatus, applyAgentsSnapshot, applyAgentStatus]);
+  }, [conn, memberTeamId, applyDevicesSnapshot, applyDeviceStatus, applyAgentsSnapshot, applyAgentStatus, applyHumansSnapshot]);
 
   const agentList = useMemo(() => Object.values(agents), [agents]);
 
@@ -96,7 +99,7 @@ export default function MembersPage() {
 
   const selectedAgent = agentList.find((a) => a.id === selectedId);
   const selectedDevice = selectedAgent?.deviceId ? devices[selectedAgent.deviceId] : undefined;
-  const selectedHuman = selectedId?.startsWith('user:') ? humanMembers.find((h) => `user:${h.userId}` === selectedId) : undefined;
+  const selectedHuman = selectedId?.startsWith('user:') ? humans.find((h) => `user:${h.userId}` === selectedId) : undefined;
   const agentGroups = useMemo(() => {
     const groups = new Map<string, { key: string; label: string; agents: AgentSnapshot[] }>();
     for (const agent of [...agentList].sort((a, b) => {
@@ -167,11 +170,11 @@ export default function MembersPage() {
             <button onClick={() => setHumansExpanded((v) => !v)} className="flex w-full items-center gap-1.5 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-neutral-500 hover:text-neutral-700">
               <ChevronRight size={12} className={`shrink-0 transition-transform ${humansExpanded ? 'rotate-90' : ''}`} />
               人类成员
-              <span className="ml-auto rounded-full bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{humanMembers.length}</span>
+              <span className="ml-auto rounded-full bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{humans.length}</span>
             </button>
             {humansExpanded && (
               <div className="mt-0.5 space-y-0.5">
-                {humanMembers.map((h) => (
+                {humans.map((h) => (
                   <button
                     key={h.userId}
                     onClick={() => { setSelectedId(`user:${h.userId}`); router.push(`/${np}/human/${h.userId}`); }}
@@ -188,7 +191,7 @@ export default function MembersPage() {
                     </span>
                   </button>
                 ))}
-                {humanMembers.length === 0 && <div className="px-2 py-2 text-xs text-neutral-400">暂无用户</div>}
+                {humans.length === 0 && <div className="px-2 py-2 text-xs text-neutral-400">暂无用户</div>}
               </div>
             )}
           </div>
@@ -219,13 +222,13 @@ export default function MembersPage() {
               human={selectedHuman}
               teamId={memberTeamId}
               currentUser={currentUser}
-              currentMemberRole={humanMembers.find((h) => h.userId === currentUser?.id)?.role as 'owner' | 'admin' | 'member' | undefined}
+              currentMemberRole={humans.find((h) => h.userId === currentUser?.id)?.role as 'owner' | 'admin' | 'member' | undefined}
               onUpdated={(next) => {
                 if ((next as any)._removed) {
-                  setHumanMembers((members) => members.filter((m) => m.userId !== next.userId));
+                  removeHuman(next.userId);
                   setSelectedId(null);
                 } else {
-                  setHumanMembers((members) => members.map((member) => member.userId === next.userId ? { ...member, ...next } : member));
+                  upsertHuman(next);
                 }
               }}
             />

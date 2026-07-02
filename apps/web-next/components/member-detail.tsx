@@ -24,21 +24,11 @@ import {
 import { agentEvents, dmEvents, fetchAgentWorkspace, memberEvents } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { formatRelative } from '@/lib/format-time';
-import type { AgentMetricsSummary, AgentSnapshot, AgentWorkspaceRun, DeviceInfo, UserInfo } from '@/lib/schema';
+import type { AgentMetricsSummary, AgentSnapshot, AgentWorkspaceRun, DeviceInfo, HumanMember, UserInfo } from '@/lib/schema';
 import { agentDeviceDisplayName } from '@/lib/agent-device';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { AgentWorkspaceSection } from '@/components/agent-workspace-section';
 import { AgentSkillsSection } from '@/components/agent-skills-section';
-
-export interface HumanMember {
-  userId: string;
-  role: string;
-  username: string;
-  email?: string | null;
-  description?: string | null;
-  joinedAt?: number;
-  createdAt?: number;
-}
 
 export type AgentMemberTab = 'profile' | 'permissions' | 'dms' | 'reminders' | 'workspace' | 'activity';
 

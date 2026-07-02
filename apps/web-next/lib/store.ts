@@ -1,6 +1,6 @@
 'use client';
 import { create } from 'zustand';
-import type { AgentSnapshot, ChannelSummary, ChatMessage, ConnState, DispatchStatus, OutboundMessage, DiscoveredAgent, RuntimeInfo, TeamSummary, AgentMetricsSummary, UserInfo, DeviceInfo } from './schema.js';
+import type { AgentSnapshot, ChannelSummary, ChatMessage, ConnState, DispatchStatus, OutboundMessage, DiscoveredAgent, RuntimeInfo, TeamSummary, AgentMetricsSummary, UserInfo, DeviceInfo, HumanMember } from './schema.js';
 import type { DmChannel } from './socket.js';
 import { agentVisibleInNetwork } from './agent-scope';
 
@@ -171,6 +171,7 @@ interface State {
   authToken: string | null;
   agentMetrics: Record<string, AgentMetricsSummary>;
   devices: Record<string, DeviceInfo>;
+  humans: HumanMember[];
   setConn(c: ConnState): void;
   applyAgentsSnapshot(list: AgentSnapshot[]): void;
   applyAgentStatus(snap: AgentSnapshot): void;
@@ -195,6 +196,9 @@ interface State {
   applyDevicesSnapshot(list: DeviceInfo[]): void;
   upsertDevice(device: DeviceInfo): void;
   applyDeviceStatus(device: DeviceInfo): void;
+  applyHumansSnapshot(list: HumanMember[], teamId?: string): void;
+  upsertHuman(human: HumanMember): void;
+  removeHuman(userId: string): void;
 }
 
 export const useAgentBeanStore = create<State>((set) => ({
@@ -213,6 +217,7 @@ export const useAgentBeanStore = create<State>((set) => ({
   authToken: null,
   agentMetrics: {},
   devices: {},
+  humans: [],
   setConn(conn) { set({ conn }); },
   applyAgentsSnapshot(list) {
     set((s) => ({ agents: agentListToMap(list, s.currentTeamId) }));
@@ -305,6 +310,7 @@ export const useAgentBeanStore = create<State>((set) => ({
         outbox: {},
         agentMetrics: {},
         devices: {},
+        humans: [],
       };
     });
   },
@@ -336,6 +342,24 @@ export const useAgentBeanStore = create<State>((set) => ({
       }
       return { devices: { ...s.devices, [device.id]: { ...s.devices[device.id], ...device } } };
     });
+  },
+  applyHumansSnapshot(list, teamId) {
+    set((s) => {
+      if (teamId && s.currentTeamId !== teamId) return s;
+      return { humans: list };
+    });
+  },
+  upsertHuman(human) {
+    set((s) => {
+      const idx = s.humans.findIndex((h) => h.userId === human.userId);
+      if (idx === -1) return { humans: [...s.humans, human] };
+      const next = [...s.humans];
+      next[idx] = { ...next[idx], ...human };
+      return { humans: next };
+    });
+  },
+  removeHuman(userId) {
+    set((s) => ({ humans: s.humans.filter((h) => h.userId !== userId) }));
   },
 }));
 

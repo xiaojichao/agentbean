@@ -9,6 +9,7 @@ import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { daemonVersionDisplay } from '@/lib/daemon-version';
 import { canAddCustomAgentToDevice, canManageDeviceForUser } from '@/lib/device-permissions';
 import { formatRelative } from '@/lib/format-time';
+import { directoryPickerErrorMessage } from '@/lib/directory-picker-error';
 import type { AgentWorkspaceFile, AgentWorkspaceRun } from '@/lib/schema';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -83,15 +84,6 @@ function versionAtLeast(version: string | null | undefined, minimum: string): bo
 
 function directoryFallbackPath(name: string): string {
   return `~/projects/${name}`;
-}
-
-function directoryPickerErrorMessage(error?: string): string {
-  if (error === 'CANCELLED') return '';
-  if (error === 'DEVICE_OFFLINE') return '目标设备不在线，无法在该设备上选择项目目录';
-  if (error === 'DAEMON_UPGRADE_REQUIRED') return '该设备的 Daemon 版本过旧，请升级后再使用目录浏览';
-  if (error === 'DIRECTORY_PICKER_TIMEOUT') return '目录选择超时，请确认目标设备已登录桌面会话，并且 Daemon 是从该桌面用户会话启动的';
-  if (error === 'DEVICE_NOT_IN_TEAM') return '该设备不属于当前团队';
-  return error || '无法打开目录浏览窗口';
 }
 
 function DirectoryBrowseButton({
@@ -837,6 +829,7 @@ function InfoCard({ label, value, hint, tone }: { label: string; value: string; 
 
 function AddDeviceDialog({ onClose, currentTeamId }: { onClose: () => void; currentTeamId: string | null }) {
   const [inviteCommand, setInviteCommand] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -850,6 +843,7 @@ function AddDeviceDialog({ onClose, currentTeamId }: { onClose: () => void; curr
       const resolved = getResolvedServerUrl();
       const command = res.invite.command.replace(/--server-url\s+\S+/, `--server-url ${resolved}`);
       setInviteCommand(command);
+      setInviteCode(res.invite.code ?? '');
     } else {
       setError(res.error ?? '生成失败');
     }
@@ -879,6 +873,11 @@ function AddDeviceDialog({ onClose, currentTeamId }: { onClose: () => void; curr
             <button onClick={copy} className="flex w-full items-center justify-center gap-1.5 rounded-md border border-neutral-300 py-2 text-sm hover:bg-neutral-50">
               <Copy size={14} /> {copied ? '已复制到剪贴板' : '复制命令'}
             </button>
+            {inviteCode && (
+              <p className="text-xs text-neutral-500">
+                命令运行后，<a href={`/device-login/${inviteCode}`} className="text-blue-600 underline">点击此处完成本机设备关联</a>（否则该设备配置将只读）。
+              </p>
+            )}
           </div>
         )}
 

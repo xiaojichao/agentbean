@@ -19,6 +19,7 @@ export interface SocketLike {
   emit?(event: string, payload: unknown): void;
   emitWithAck?(event: string, payload: unknown): Promise<unknown>;
   timeout?(timeoutMs: number): { emitWithAck?(event: string, payload: unknown): Promise<unknown> };
+  disconnect?(): void;
 }
 
 export type SocketAck = (result: unknown) => void;
@@ -48,6 +49,8 @@ export interface WebSocketHandlerOptions {
   afterMessageSend?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceInviteComplete?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  /** 设备删除成功后触发：用于向在线 daemon 下发 device:removed 并断开其 socket。 */
+  afterDeviceDelete?(payload: unknown, result: unknown): Promise<void> | void;
   afterChannelMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterTeamMutation?(payload: unknown, result: unknown): Promise<void> | void;
@@ -110,7 +113,10 @@ export function registerWebSocketHandlers(
   const afterDeviceMutation = (payload: unknown, result: unknown) =>
     options.afterDeviceMutation?.(payload, result);
   bind(socket, WEB_EVENTS.device.rename, app, 'renameDevice', afterDeviceMutation, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.device.delete, app, 'deleteDevice', afterDeviceMutation, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.device.delete, app, 'deleteDevice', async (payload, result) => {
+    await afterDeviceMutation(payload, result);
+    await options.afterDeviceDelete?.(payload, result);
+  }, { authenticatedUser: options.authenticatedUser });
   socket.on(WEB_EVENTS.device.selectDirectory, async (payload, ack) => {
     try {
       const input = await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser });

@@ -68,7 +68,7 @@ export interface ServerNextUseCases {
   listDeviceAgents(input: { teamId: string; userId: string; deviceId: string }): Promise<Ack<{ agents: DeviceAgentListDto[]; runtimes: RuntimeDto[] }>>;
   getDevice(input: { userId: string; deviceId: string; currentDeviceId?: string | null }): Promise<Ack<{ device: DeviceDetailDto }>>;
   renameDevice(input: { userId: string; deviceId: string; hostname: string; currentDeviceId?: string | null }): Promise<Ack<{ device: DeviceDto }>>;
-  deleteDevice(input: { userId: string; deviceId: string; currentDeviceId?: string | null }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[]; channelTeamIds: string[] }>>;
+  deleteDevice(input: { userId: string; deviceId: string; currentDeviceId?: string | null }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[]; channelTeamIds: string[]; deletedDeviceIds: string[] }>>;
   requestDeviceScan(input: RequestDeviceScanInput): Promise<Ack<RequestDeviceScanResult>>;
   deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto; affectedTeamIds: string[] }>>;
   markDeviceOffline(input: { deviceId: string; timestamp: UnixMs }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[] }>>;
@@ -1249,11 +1249,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async completeDeviceInvite(inviteInput) {
-      const usable = await getUsableDeviceInvite(repositories, clock, inviteInput.code);
-      if (!usable.ok) {
-        return usable;
+      const invite = await repositories.deviceInvites.getByCode(inviteInput.code);
+      if (!invite) {
+        return makeFailure('INVITE_INVALID', 'Device invite is invalid');
       }
-      const team = await repositories.teams.getById(usable.invite.teamId);
+      if (invite.expiresAt !== undefined && invite.expiresAt <= clock.now()) {
+        return makeFailure('INVITE_EXPIRED', 'Device invite has expired');
+      }
+      const team = await repositories.teams.getById(invite.teamId);
       if (!team) {
         return makeFailure('INVITE_INVALID', 'Device invite team no longer exists');
       }
@@ -1261,13 +1264,21 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!role) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
-      const completed = await repositories.deviceInvites.complete({
-        code: usable.invite.code,
-        completedAt: clock.now(),
-        serverUrl: inviteInput.serverUrl,
-      });
-      if (!completed) {
-        return makeFailure('INVITE_ALREADY_USED', 'Device invite has already been used');
+      let completed = invite;
+      if (invite.completedAt !== undefined) {
+        if (invite.createdBy !== inviteInput.userId) {
+          return makeFailure('INVITE_ALREADY_USED', 'Device invite has already been used');
+        }
+      } else {
+        const completedInvite = await repositories.deviceInvites.complete({
+          code: invite.code,
+          completedAt: clock.now(),
+          serverUrl: inviteInput.serverUrl,
+        });
+        if (!completedInvite) {
+          return makeFailure('INVITE_ALREADY_USED', 'Device invite has already been used');
+        }
+        completed = completedInvite;
       }
       const credentials: DeviceInviteCredentialsDto = {
         token: issueDeviceToken({
@@ -1563,9 +1574,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('FORBIDDEN', 'User cannot manage device');
       }
       const now = clock.now();
-      const hostedAgents = await repositories.agents.listByDevice(device.id);
+      const teamDevices = await repositories.devices.listByTeam(device.teamId);
+      const devicesToDelete = resolveDeviceAliasGroup(device, teamDevices);
+      const hostedAgents = (
+        await Promise.all(devicesToDelete.map((target) => repositories.agents.listByDevice(target.id)))
+      ).flat();
       const affectedTeamIds = uniqueIds([
-        device.teamId,
+        ...devicesToDelete.map((target) => target.teamId),
         ...hostedAgents.flatMap((agent) => agent.visibleTeamIds),
       ]);
       for (const agent of hostedAgents) {
@@ -1577,8 +1592,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           });
         }
       }
-      await repositories.devices.delete({ deviceId: device.id, timestamp: now });
-      return makeSuccess({ device: await toDeviceDtoWithOwnerName(repositories, device, deleteInput.currentDeviceId), affectedTeamIds, channelTeamIds: affectedTeamIds });
+      for (const target of devicesToDelete) {
+        await repositories.devices.delete({ deviceId: target.id, timestamp: now });
+      }
+      return makeSuccess({ device: await toDeviceDtoWithOwnerName(repositories, device, deleteInput.currentDeviceId), affectedTeamIds, channelTeamIds: affectedTeamIds, deletedDeviceIds: devicesToDelete.map((target) => target.id) });
     },
 
     async requestDeviceScan(scanInput) {
@@ -3045,9 +3062,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         });
         artifacts.push(toArtifactDto(artifact));
       }
+      // The real-time broadcast of this agent reply goes straight to the chat view, so the internal
+      // workspace-run.log must be stripped here too — matching enrichMessagesWithArtifacts. The log
+      // stays persisted (created above) and is served by the workspace-run detail endpoint.
+      const chatArtifacts = artifacts.filter((artifact) => !isWorkspaceRunLogArtifact(artifact));
       const messageWithArtifacts: MessageDto = {
         ...message,
-        ...(artifacts.length > 0 ? { artifacts } : {}),
+        ...(chatArtifacts.length > 0 ? { artifacts: chatArtifacts } : {}),
         ...(workspaceRun ? { workspaceRun } : {}),
       };
       await repositories.agents.updateStatus({
@@ -3617,6 +3638,14 @@ function resolveCanonicalDeviceRecord(device: DeviceRecord, teamDevices: DeviceR
   return dedupeDeviceRecords(teamDevices).find((candidate) => deviceRecordsCanAlias(candidate, device)) ?? device;
 }
 
+function resolveDeviceAliasGroup(device: DeviceRecord, teamDevices: DeviceRecord[]): DeviceRecord[] {
+  const canonicalDevice = resolveCanonicalDeviceRecord(device, teamDevices);
+  const aliases = teamDevices.filter((candidate) =>
+    deviceRecordsCanAlias(candidate, canonicalDevice) || deviceRecordsCanAlias(candidate, device),
+  );
+  return aliases.length > 0 ? aliases : [device];
+}
+
 function deviceRecordsCanAlias(a: DeviceRecord, b: DeviceRecord): boolean {
   if (a.id === b.id) return true;
   if (deviceCanonicalKey(a) === deviceCanonicalKey(b)) return true;
@@ -4004,7 +4033,12 @@ function toArtifactDto(artifact: ArtifactRecord): ArtifactDto {
   };
 }
 
-function isWorkspaceRunLogArtifact(artifact: ArtifactRecord): boolean {
+// Structural so it accepts both the persisted ArtifactRecord and the serialized ArtifactDto —
+// the log must be hidden from every chat-facing message read path (history, DM snapshot, search,
+// and the real-time dispatch-result broadcast), not just the workspace-run detail endpoint.
+function isWorkspaceRunLogArtifact(
+  artifact: Pick<ArtifactRecord, 'workspaceRunId' | 'relativePath' | 'filename'>,
+): boolean {
   return artifact.workspaceRunId !== undefined
     && (artifact.relativePath === 'logs/workspace-run.log' || artifact.filename === 'workspace-run.log');
 }
@@ -4044,7 +4078,10 @@ async function enrichMessagesWithArtifacts(
 ): Promise<MessageDto[]> {
   const enriched: MessageDto[] = [];
   for (const message of messages) {
-    const artifacts = await repositories.artifacts.listByMessage(message.id);
+    // The internal workspace-run.log is reachable via the workspace-run detail endpoint; it must
+    // not leak into chat-facing message attachments (channel history, DM snapshot, search results).
+    const artifacts = (await repositories.artifacts.listByMessage(message.id))
+      .filter((artifact) => !isWorkspaceRunLogArtifact(artifact));
     const workspaceRunId = typeof message.meta?.workspaceRunId === 'string' ? message.meta.workspaceRunId : undefined;
     const workspaceRun = workspaceRunId
       ? await repositories.workspaceRuns.getForTeam({ teamId: message.teamId, runId: workspaceRunId })
