@@ -710,14 +710,6 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           onDeleteAgent={setDeleteAgent}
           canManageAgents={canManageDevice}
         />
-        {canManageDevice && !isLocalDevice && (
-          <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-            <p className="font-medium">自定义 Agent 运行时需在该设备本机配置</p>
-            <p className="mt-1 text-amber-700">
-              运行时（命令、项目目录、环境变量）在该设备本地执行，只能在设备本机操作。你当前浏览器未关联到本设备（账号密码登录无设备身份）。若你正在该设备本机，请在上方「生成设备邀请」并在本机完成设备登录以关联本机。
-            </p>
-          </div>
-        )}
         {isLocalDevice && (
           <DeviceWorkspacesSection
             agents={workspaceAgents}
