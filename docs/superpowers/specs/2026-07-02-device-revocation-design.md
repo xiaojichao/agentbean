@@ -40,7 +40,7 @@
 
 ### 4.1 数据模型
 
-migration `apps/server-next/src/infra/sqlite/migrations/global/0009_device_revocations.sql`：
+migration `apps/server-next/src/infra/sqlite/migrations/global/0010_device_revocations.sql`（注：0009 已被 `agent_visibility` 占用，故用 0010）：
 
 ```sql
 CREATE TABLE device_revocations (
@@ -108,7 +108,7 @@ upsertHello(...)
 
 ## 6. 范围
 
-- **server-next**：migration 0009 + repository（revocations CRUD）+ usecase（deleteDevice/deviceHello/deviceHelloFromCredentials）+ 契约 DEVICE_REVOKED
+- **server-next**：migration 0010 + repository（revocations CRUD）+ usecase（deleteDevice/deviceHello/deviceHelloFromCredentials）+ 契约 DEVICE_REVOKED
 - **daemon-next**：index.ts 收 DEVICE_REVOKED 调 `onDeviceRevoked` + cli.ts `onDeviceRevoked` 停重连退出
 - **不改 web**：删除 UX 不变（仍走 deleteDevice，返回不变）
 
