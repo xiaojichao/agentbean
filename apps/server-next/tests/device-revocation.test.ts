@@ -125,20 +125,9 @@ describe('deviceHelloFromCredentials clears revocation (re-invite)', () => {
   });
 });
 
-describe('online delete defense-in-depth (layer1 + layer2)', () => {
-  test('online delete still writes revocation even though layer1 kicks socket', async () => {
-    const { app, repos } = await boot();
-    await app.deleteDevice({ userId: 'user-1', deviceId: 'device-1' });
-    // 层2 兜底：即便 daemon 没收到 device:removed，吊销也已写入
-    expect(
-      await repos.revocations.find({
-        teamId: 'team-1',
-        machineId: 'machine-1',
-        profileId: 'default',
-      }),
-    ).not.toBeNull();
-  });
-});
+// 注：在线删除的 layer1（device:removed emit + 断开 socket）+ layer2（吊销写入）组合
+// 双保险由 socket-integration.test.ts 的端到端用例验证（真 socket + repos 断言），
+// 这里不再保留与之重复的纯 usecase 拷贝。
 
 function createIds(ids: string[]) {
   let index = 0;

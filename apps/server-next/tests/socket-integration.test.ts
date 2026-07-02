@@ -2394,10 +2394,15 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
-  test('notifies the daemon with device:removed and disconnects it when its device is deleted from web', async () => {
-    const app = createInMemoryServerNext({
-      now: () => 1000,
-      ids: createIds(['user-1', 'team-1', 'channel-all', 'device-1']),
+  test('online device delete is defense-in-depth: notifies daemon with device:removed (layer1) AND writes revocation (layer2)', async () => {
+    // 直接构造 repositories + usecases（而非 createInMemoryServerNext 工厂），以便
+    // 在端到端 socket 流程后断言 layer2 吊销写入。layer1（device:removed emit +
+    // 断开 socket）与 layer2（revocations 写入）组合验证才是真双保险。
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 1000 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-all', 'device-1']) },
     });
     const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
     cleanups.push(async () => {
@@ -2445,12 +2450,21 @@ describe('server-next Socket.IO namespaces', () => {
       web.emitWithAck(WEB_EVENTS.device.delete, { userId: 'user-1', teamId: 'team-1', deviceId: 'device-1' }),
     ).resolves.toMatchObject({ ok: true });
 
+    // 层1：device:removed emit + 断开 socket
     await eventually(async () => {
       expect(removedEvents).toHaveLength(1);
     });
     await eventually(async () => {
       expect(daemonDisconnected).toBe(true);
     });
+    // 层2：吊销已写入 DB（即便 daemon 没收到 device:removed，重连也会被 DEVICE_REVOKED 拦截）
+    await expect(
+      repositories.revocations.find({
+        teamId: 'team-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+      }),
+    ).resolves.not.toBeNull();
   });
 
   test('kicks every daemon in the deleted device alias group, not just the selected one', async () => {
