@@ -143,6 +143,18 @@ export interface UserInfo {
   primaryTeamId?: string;
 }
 
+// 团队内的人类成员（区别于 UserInfo：这里 role 是团队角色 owner/admin/member，
+// 并携带 joinedAt 等成员元数据）。与 memberEvents().list 返回的 humans 形状一致。
+export interface HumanMember {
+  userId: string;
+  role: string;
+  username: string;
+  email?: string | null;
+  description?: string | null;
+  joinedAt?: number;
+  createdAt?: number;
+}
+
 export interface InviteInfo {
   code: string;
   expiresAt: number;
