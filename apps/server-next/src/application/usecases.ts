@@ -1799,9 +1799,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!(await canManageDeviceAsUser(repositories, { userId: agentInput.userId, device }))) {
         return makeFailure('FORBIDDEN', 'User cannot manage device');
       }
-      if (hasOwn(agentInput, 'currentDeviceId') && !isDeviceLocalToHint(device, agentInput.currentDeviceId)) {
-        return makeFailure('FORBIDDEN_REMOTE_DEVICE_SETTINGS', 'Runtime settings can only be edited on the local device');
-      }
+      // runtime 配置由设备拥有者授权（canManageDeviceAsUser 已在上方校验），不强制本机。
+      // 旧「必须 isLocal」守卫会拒绝账号密码登录（无 deviceId）的拥有者，包括物理本机场景。
       if (device.status !== 'online') {
         return makeFailure('DEVICE_OFFLINE', 'Device is not online');
       }
@@ -1901,22 +1900,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
 
       if (isCustom) {
-        // runtime 执行设置（adapterKind/command/args/cwd/env/runtimeId）只能在本机设备修改——
-        // 前端 disable 只是 UX 提示，这里是真安全边界（对齐 legacy index.ts:2359）。
-        // runtimeId 是 server-next 独有路径（legacy 无），必须纳入，否则可绕过。
-        const includesRuntimeSettings =
-          agentInput.adapterKind !== undefined ||
-          agentInput.command !== undefined ||
-          agentInput.args !== undefined ||
-          agentInput.cwd !== undefined ||
-          agentInput.env !== undefined ||
-          agentInput.runtimeId !== undefined;
-        if (includesRuntimeSettings) {
-          const device = managed.agent.deviceId ? await repositories.devices.getById(managed.agent.deviceId) : null;
-          if (!isDeviceLocalToHint(device, agentInput.currentDeviceId)) {
-            return makeFailure('FORBIDDEN_REMOTE_DEVICE_SETTINGS', 'Runtime settings can only be edited on the local device');
-          }
-        }
+        // runtime 执行设置（adapterKind/command/args/cwd/env/runtimeId）由设备拥有者授权
+        // （agentForManagement 已校验 canManageDeviceAsUser），不再强制本机。
+        // 旧「必须 isLocal」守卫会拒绝账号密码登录（无 deviceId）的拥有者，含物理本机场景。
         if (agentInput.args !== undefined) {
           changes.args = agentInput.args;
         }
@@ -1947,9 +1933,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           }
           if (!runtime.installed) {
             return makeFailure('VALIDATION_ERROR', 'Runtime is not installed');
-          }
-          if (!isDeviceLocalToHint(device, agentInput.currentDeviceId)) {
-            return makeFailure('FORBIDDEN_REMOTE_DEVICE_SETTINGS', 'Runtime settings can only be edited on the local device');
           }
           changes.deviceId = runtime.deviceId;
           changes.adapterKind = runtime.adapterKind;

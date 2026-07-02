@@ -829,8 +829,8 @@ describe('device isLocal hint (currentDeviceId propagation)', () => {
   });
 });
 
-describe('updateAgentConfig remote device runtime guard', () => {
-  test('remote device cannot create custom agent runtime settings -> FORBIDDEN_REMOTE_DEVICE_SETTINGS', async () => {
+describe('custom agent runtime 配置由设备拥有者授权（不强制本机）', () => {
+  test('设备拥有者可在非本机创建 custom agent runtime', async () => {
     const { web } = await bootDeviceIsLocalFixture('some-other-device');
     const res = await web.emitWithAck(WEB_EVENTS.agent.create, {
       teamId: 'team-1',
@@ -839,7 +839,7 @@ describe('updateAgentConfig remote device runtime guard', () => {
       adapterKind: 'codex',
       command: 'codex',
     });
-    expect(res).toMatchObject({ ok: false, error: 'FORBIDDEN_REMOTE_DEVICE_SETTINGS' });
+    expect(res).toMatchObject({ ok: true, agent: { deviceId: 'device-1', source: 'custom' } });
   });
 
   test('local device can create custom agent runtime settings', async () => {
@@ -854,7 +854,7 @@ describe('updateAgentConfig remote device runtime guard', () => {
     expect(res).toMatchObject({ ok: true, agent: { deviceId: 'device-1', source: 'custom' } });
   });
 
-  test('remote device cannot edit adapterKind -> FORBIDDEN_REMOTE_DEVICE_SETTINGS', async () => {
+  test('设备拥有者可在非本机编辑 adapterKind', async () => {
     const { app, web } = await bootDeviceIsLocalFixture('some-other-device');
     const created = await app.createCustomAgent({
       userId: 'user-1', teamId: 'team-1', deviceId: 'device-1',
@@ -863,10 +863,10 @@ describe('updateAgentConfig remote device runtime guard', () => {
     expect(created.ok).toBe(true);
     const agentId = (created as { agent: { id: string } }).agent.id;
     const res = await web.emitWithAck(WEB_EVENTS.agent.updateConfig, { agentId, adapterKind: 'claude-code' });
-    expect(res).toMatchObject({ ok: false, error: 'FORBIDDEN_REMOTE_DEVICE_SETTINGS' });
+    expect(res).toMatchObject({ ok: true });
   });
 
-  test('remote device cannot edit args/env -> FORBIDDEN_REMOTE_DEVICE_SETTINGS', async () => {
+  test('设备拥有者可在非本机编辑 args/env', async () => {
     const { app, web } = await bootDeviceIsLocalFixture('some-other-device');
     const created = await app.createCustomAgent({
       userId: 'user-1', teamId: 'team-1', deviceId: 'device-1',
@@ -875,12 +875,12 @@ describe('updateAgentConfig remote device runtime guard', () => {
     expect(created.ok).toBe(true);
     const agentId = (created as { agent: { id: string } }).agent.id;
     const argsRes = await web.emitWithAck(WEB_EVENTS.agent.updateConfig, { agentId, args: ['--model', 'gpt-5.4'] });
-    expect(argsRes).toMatchObject({ ok: false, error: 'FORBIDDEN_REMOTE_DEVICE_SETTINGS' });
+    expect(argsRes).toMatchObject({ ok: true });
     const envRes = await web.emitWithAck(WEB_EVENTS.agent.updateConfig, { agentId, env: { OPENAI_API_KEY: 'secret' } });
-    expect(envRes).toMatchObject({ ok: false, error: 'FORBIDDEN_REMOTE_DEVICE_SETTINGS' });
+    expect(envRes).toMatchObject({ ok: true });
   });
 
-  test('local device cannot retarget runtimeId to a remote device', async () => {
+  test('设备拥有者可 retarget runtimeId 到另一台设备', async () => {
     const { app, web } = await bootDeviceIsLocalFixture('device-1');
     const hello = await app.deviceHello({
       teamId: 'team-1',
@@ -906,7 +906,7 @@ describe('updateAgentConfig remote device runtime guard', () => {
     expect(created.ok).toBe(true);
     const agentId = (created as { agent: { id: string } }).agent.id;
     const res = await web.emitWithAck(WEB_EVENTS.agent.updateConfig, { agentId, runtimeId: remoteRuntimeId });
-    expect(res).toMatchObject({ ok: false, error: 'FORBIDDEN_REMOTE_DEVICE_SETTINGS' });
+    expect(res).toMatchObject({ ok: true });
   });
 
   test('local device can edit adapterKind', async () => {

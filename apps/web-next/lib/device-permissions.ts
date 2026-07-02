@@ -22,10 +22,10 @@ export function canManageDeviceForUser({
 
 export function canAddCustomAgentToDevice({
   canManageDevice,
-  isLocalDevice,
 }: {
   canManageDevice: boolean;
-  isLocalDevice: boolean;
 }): boolean {
-  return canManageDevice || isLocalDevice;
+  // runtime 配置由设备拥有者授权（canManageDeviceAsUser），不再强制本机。
+  // 旧「必须 isLocal」会拒绝账号密码登录（无 deviceId）的拥有者，含物理本机场景。
+  return canManageDevice;
 }

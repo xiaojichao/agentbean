@@ -10,6 +10,7 @@ import { daemonVersionDisplay } from '@/lib/daemon-version';
 import { canAddCustomAgentToDevice, canManageDeviceForUser } from '@/lib/device-permissions';
 import { formatRelative } from '@/lib/format-time';
 import { directoryPickerErrorMessage } from '@/lib/directory-picker-error';
+import { formatCreateAgentError } from '@/lib/agent-create-error';
 import type { AgentWorkspaceFile, AgentWorkspaceRun } from '@/lib/schema';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -400,7 +401,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   });
   const isOwnedByCurrentUser = Boolean(currentUser?.id && currentUser.id === deviceOwnerId);
   const isLocalDevice = device.isLocal === true;
-  const canAddCustomAgent = canAddCustomAgentToDevice({ canManageDevice, isLocalDevice });
+  const canAddCustomAgent = canAddCustomAgentToDevice({ canManageDevice });
 
   const refreshDeviceAgents = () => {
     return deviceEvents().agentsList(device.id, currentTeamId).then((res) => {
@@ -1456,7 +1457,7 @@ function AddCustomAgentDialog({ deviceId, networkId, daemonVersion, runtimes, on
     if (res.ok) {
       onCreated();
     } else {
-      setError(res.error ?? '创建失败');
+      setError(formatCreateAgentError(res.error));
     }
   };
 
