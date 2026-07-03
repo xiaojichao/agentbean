@@ -16,7 +16,8 @@
     "build:app": "next build",
     "build:client": "tsc -p tsconfig.lib.json",
     "dev": "next dev -p 4101",
-    "prebuild": "tsc -p ../../packages/contracts/tsconfig.json",
+    "predev": "tsx scripts/gen-changelog.ts",
+    "prebuild": "tsx scripts/gen-changelog.ts && tsc -p ../../packages/contracts/tsconfig.json",
     "start": "next start -p 4101",
     "test": "vitest run"
   },
