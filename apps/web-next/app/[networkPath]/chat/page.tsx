@@ -11,7 +11,7 @@ import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
-import { messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
+import { messagesForVisibleConversations, mergeSavedMessages, visibleConversationIds } from '@/lib/chat-scope';
 import { loadReadIds, saveReadIds } from '@/lib/chat-read-state';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import {
@@ -168,6 +168,9 @@ export default function ChatPage() {
   const [dmSort, setDmSort] = useState<SidebarSortMode>('manual');
   const [openSortMenu, setOpenSortMenu] = useState<'channels' | 'dms' | null>(null);
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
+  // 收藏的单一真源：listSaved 返回的完整消息快照。badge 与收藏列表都基于它，
+  // 避免「savedIds 只存 id、列表依赖消息体在内存」导致的 badge 数 ≠ 列表条数。
+  const [savedMessages, setSavedMessages] = useState<ChatMessage[]>([]);
   const [loadedSavedKey, setLoadedSavedKey] = useState<string | null>(null);
   const [reactionIds, setReactionIds] = useState<Set<string>>(new Set());
   const [loadedReactionsKey, setLoadedReactionsKey] = useState<string | null>(null);
@@ -278,15 +281,19 @@ export default function ChatPage() {
   }, [messagesByChannel]);
 
   useEffect(() => {
+    let cancelled = false;
     try {
       const raw = window.localStorage.getItem(savedKey);
       setSavedIds(new Set(raw ? JSON.parse(raw) : []));
     } catch {
       setSavedIds(new Set());
     }
+    setSavedMessages([]);
     // Hydrate from server
     messageReactionEvents().listSaved().then((res) => {
+      if (cancelled) return;
       if (res.ok && res.messages) {
+        setSavedMessages(res.messages);
         setSavedIds((prev) => {
           const next = new Set(prev);
           for (const msg of res.messages!) next.add(msg.id);
@@ -295,6 +302,7 @@ export default function ChatPage() {
       }
     }).catch(() => {});
     setLoadedSavedKey(savedKey);
+    return () => { cancelled = true; };
   }, [savedKey]);
 
   useEffect(() => {
@@ -783,6 +791,8 @@ export default function ChatPage() {
       if (next.has(msgId)) next.delete(msgId); else next.add(msgId);
       return next;
     });
+    // 收藏快照同步：取消收藏时从快照移除；新增收藏无需手动加（消息在内存，merge 时兜底）
+    setSavedMessages((prev) => (isSaved ? prev.filter((m) => m.id !== msgId) : prev));
     // Persist to server
     messageReactionEvents().save(msgId, !isSaved).catch(() => {
       // Revert on failure
@@ -791,8 +801,17 @@ export default function ChatPage() {
         if (next.has(msgId)) next.delete(msgId); else next.add(msgId);
         return next;
       });
+      // savedMessages 不回滚：savedIds 回滚后，仍在内存的消息会经 merge 自动补回；
+      // 极少数不在内存的，下次 listSaved 刷新纠正（远好过原 bug 的静默漏显）。
     });
   };
+
+  // badge 与收藏列表的共同真源：服务端收藏快照 ∪ 内存中命中的收藏（内存版本优先）。
+  // 关键——不再套 visibleConversationIds 过滤，故「频道已不可见」的收藏也能显示。
+  const savedDisplayMessages = mergeSavedMessages(
+    savedMessages,
+    uniqueMessages(Object.values(messagesByChannel).flat()).filter((m) => savedIds.has(m.id)),
+  );
 
   const toggleReaction = (msgId: string) => {
     const isReacted = reactionIds.has(msgId);
@@ -900,7 +919,7 @@ export default function ChatPage() {
           <button onClick={() => setSidebarView(sidebarView === 'saved' ? 'channels' : 'saved')} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'saved' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
             <Bookmark size={14} className="text-neutral-400 shrink-0" />
             <span>收藏</span>
-            <span className="ml-auto rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{savedIds.size}</span>
+            <span className="ml-auto rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{savedDisplayMessages.length}</span>
           </button>
         </div>
 
@@ -994,7 +1013,7 @@ export default function ChatPage() {
             router.push(dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`);
           }} humanProfiles={humanProfiles} networkPath={routeNetworkPath} />
         ) : sidebarView === 'saved' ? (
-          <SavedView savedIds={savedIds} onUnsave={(msgId) => toggleSave(msgId)} onJump={(chId) => {
+          <SavedView savedMessages={savedDisplayMessages} onUnsave={(msgId) => toggleSave(msgId)} onJump={(chId) => {
             setActiveChannel(chId);
             setSidebarView('channels');
             const dm = dms.find((item) => item.id === chId);
@@ -3675,25 +3694,16 @@ function ActivityView({ onJump, humanProfiles, networkPath }: { onJump: (channel
   );
 }
 
-function SavedView({ savedIds, onUnsave, onJump, humanProfiles }: { savedIds: Set<string>; onUnsave: (msgId: string) => void; onJump: (channelId: string) => void; humanProfiles: HumanProfile[] }) {
+function SavedView({ savedMessages, onUnsave, onJump, humanProfiles }: { savedMessages: ChatMessage[]; onUnsave: (msgId: string) => void; onJump: (channelId: string) => void; humanProfiles: HumanProfile[] }) {
   const [query, setQuery] = useState('');
-  const [recent, setRecent] = useState<ChatMessage[]>([]);
-  const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
   const channels = useAgentBeanStore((s) => s.channels);
   const dms = useAgentBeanStore((s) => s.dms);
   const agents = useAgentBeanStore((s) => s.agents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
-  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
-  const visibleIds = visibleConversationIds(channels, dms);
 
-  useEffect(() => {
-    messageReactionEvents().listSaved().then((res) => {
-      if (res.ok && res.messages) setRecent(res.messages);
-    });
-  }, [currentTeamId]);
-
-  const savedMessages = messagesForVisibleConversations(uniqueMessages([...recent, ...Object.values(messagesByChannel).flat()]), visibleIds)
-    .filter((m) => savedIds.has(m.id))
+  // savedMessages 由主组件算好传入（服务端快照 ∪ 内存命中，已去 visibleIds 过滤），
+  // 这里只做搜索过滤 + 渲染。
+  const filtered = savedMessages
     .filter((m) => !query.trim() || m.body.toLowerCase().includes(query.trim().toLowerCase()) || conversationLabel(m.channelId, channels, dms, agents).toLowerCase().includes(query.trim().toLowerCase()))
     .sort((a, b) => b.createdAt - a.createdAt);
 
@@ -3701,7 +3711,7 @@ function SavedView({ savedIds, onUnsave, onJump, humanProfiles }: { savedIds: Se
     <div className="flex flex-1 flex-col">
       <div className="flex h-16 flex-col justify-center border-b border-neutral-200 px-6">
         <h2 className="text-lg font-semibold">收藏</h2>
-        <p className="text-xs text-neutral-400">{savedMessages.length} 条收藏</p>
+        <p className="text-xs text-neutral-400">{filtered.length} 条收藏</p>
       </div>
       <div className="border-b border-neutral-200 px-6 py-2">
         <div className="relative">
@@ -3710,14 +3720,14 @@ function SavedView({ savedIds, onUnsave, onJump, humanProfiles }: { savedIds: Se
         </div>
       </div>
       <div className="flex-1 overflow-y-auto">
-        {savedMessages.length === 0 && (
+        {filtered.length === 0 && (
           <div className="flex flex-col items-center justify-center py-16 text-neutral-400">
             <Bookmark size={32} strokeWidth={1.5} />
             <p className="mt-2 text-sm">{query.trim() ? '没有匹配的收藏' : '暂无收藏消息'}</p>
             <p className="text-xs">点击消息旁的书签图标收藏消息</p>
           </div>
         )}
-        {savedMessages.map((msg) => (
+        {filtered.map((msg) => (
           <button key={msg.id} onClick={() => onJump(msg.channelId)} className="group flex w-full items-start gap-3 border-b border-neutral-100 px-6 py-3 text-left hover:bg-neutral-50">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-amber-100 text-xs font-semibold text-amber-700">
               <Bookmark size={14} />
