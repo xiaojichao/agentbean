@@ -3,7 +3,7 @@ import type { AgentStatus } from '@/lib/schema';
 const LABEL: Record<AgentStatus, string> = {
   connecting: '连接中',
   online: '在线',
-  busy: '处理中',
+  busy: '忙碌',
   offline: '离线',
   error: '异常',
 };
@@ -11,7 +11,7 @@ const LABEL: Record<AgentStatus, string> = {
 const STYLE: Record<AgentStatus, string> = {
   connecting: 'bg-amber-100 text-amber-800',
   online: 'bg-emerald-100 text-emerald-800',
-  busy: 'bg-sky-100 text-sky-800',
+  busy: 'bg-amber-50 text-amber-700',
   offline: 'bg-neutral-200 text-neutral-700',
   error: 'bg-rose-100 text-rose-800',
 };

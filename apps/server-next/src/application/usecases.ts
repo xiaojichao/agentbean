@@ -1434,7 +1434,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const affectedTeamIds: string[] = [device.teamId];
       const hostedAgents = await repositories.agents.listByDevice(device.id);
       for (const agent of hostedAgents) {
-        if (agent.source !== 'custom' || agent.status === 'online') {
+        // busy 也属在线呈现（dispatching 中），恢复循环不得将其覆盖回 online；
+        // 仅 offline（被 markDeviceAndHostedAgentsOffline 级联）需要随设备重连恢复。
+        if (agent.source !== 'custom' || agent.status === 'online' || agent.status === 'busy') {
           continue;
         }
         await repositories.agents.updateStatus({
@@ -2447,6 +2449,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           updatedAt: now,
         });
         dispatches.push(toDispatchDto(dispatch));
+        await repositories.agents.updateStatus({
+          agentId: dispatch.agentId,
+          status: 'busy',
+          lastSeenAt: now,
+        });
       }
 
       return makeSuccess({
@@ -2943,6 +2950,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!cancelled) {
         return makeFailure('NOT_FOUND', 'Dispatch not found');
       }
+      const agent = await repositories.agents.getById(cancelled.dispatch.agentId);
+      if (agent && agent.status === 'busy') {
+        await repositories.agents.updateStatus({
+          agentId: cancelled.dispatch.agentId,
+          status: 'online',
+          lastSeenAt: clock.now(),
+        });
+      }
       return makeSuccess({ dispatch: toDispatchDto(cancelled.dispatch) });
     },
 
@@ -2960,6 +2975,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           completedAt: now,
         });
         if (timedOut?.changed) {
+          const agent = await repositories.agents.getById(dispatch.agentId);
+          if (agent && agent.status === 'busy') {
+            await repositories.agents.updateStatus({
+              agentId: dispatch.agentId,
+              status: 'online',
+              lastSeenAt: now,
+            });
+          }
           dispatches.push(toDispatchDto(timedOut.dispatch));
         }
       }

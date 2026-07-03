@@ -1704,6 +1704,38 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('sendMessage marks the dispatched agent as busy', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 400,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 400,
+    });
+
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex hello',
+    });
+
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', status: 'busy' }],
+    });
+  });
+
   test('starts and restores direct messages while thread dispatch history excludes the current prompt', async () => {
     let now = 410;
     const app = createInMemoryServerNext({
@@ -1940,6 +1972,156 @@ describe('server-next first-slice use cases', () => {
           body: '@Codex hello',
         },
       ],
+    });
+  });
+
+  test('cancelDispatch clears busy back to online', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 400,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 400,
+    });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex hello',
+    });
+
+    const ack = await app.cancelDispatch({ userId: 'user-1', dispatchId: 'dispatch-1' });
+
+    expect(ack).toMatchObject({ ok: true, dispatch: { id: 'dispatch-1', status: 'cancelled' } });
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', status: 'online' }],
+    });
+  });
+
+  test('cancelDispatch does not revive an offline agent', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 1000 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'message-1']) },
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'offline',
+      deviceId: 'device-1',
+      lastSeenAt: 400,
+    });
+    await repositories.dispatches.create({
+      id: 'dispatch-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      status: 'queued',
+      requestId: 'req-1',
+      createdAt: 500,
+      updatedAt: 500,
+      prompt: 'hello',
+    });
+
+    await app.cancelDispatch({ userId: 'user-1', dispatchId: 'dispatch-1' });
+
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', status: 'offline' }],
+    });
+  });
+
+  test('failTimedOutDispatches clears busy back to online on timeout', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 1000,
+    });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex hello',
+    });
+
+    const ack = await app.failTimedOutDispatches({ olderThan: 1001 });
+
+    expect(ack).toMatchObject({ ok: true, dispatches: [{ id: 'dispatch-1', status: 'timed_out' }] });
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', status: 'online' }],
+    });
+  });
+
+  test('failTimedOutDispatches does not revive an offline agent', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 2000 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'message-1']) },
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'offline',
+      deviceId: 'device-1',
+      lastSeenAt: 400,
+    });
+    await repositories.dispatches.create({
+      id: 'dispatch-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      status: 'queued',
+      requestId: 'req-1',
+      createdAt: 500,
+      updatedAt: 500,
+      prompt: 'hello',
+    });
+
+    await app.failTimedOutDispatches({ olderThan: 1000 });
+
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', status: 'offline' }],
     });
   });
 
@@ -2330,6 +2512,82 @@ describe('server-next first-slice use cases', () => {
     await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
       ok: true,
       agents: [{ id: 'agent-1', status: 'online' }],
+    });
+  });
+
+  test('deviceHello preserves a busy custom agent (does not clobber busy to online on reconnect)', async () => {
+    // Socket-flap race：device 未经历完整 offline→cascade，或 hello 在 cascade 跑完前重发。
+    // 此前 deviceHello 的 custom-agent 恢复循环只跳过 online，会把 busy 误恢复成 online。
+    let now = 950;
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => now },
+      ids: {
+        nextId: createIds([
+          'user-1',
+          'team-1',
+          'channel-1',
+          'device-1',
+          'runtime-1',
+          'agent-1',
+        ]),
+      },
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+      hostname: 'shaw-mbp',
+    });
+    await app.reportDeviceRuntimes({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimes: [
+        {
+          adapterKind: 'codex',
+          name: 'Codex CLI',
+          command: '/opt/homebrew/bin/codex',
+          cwd: '/Users/shaw/AgentBean',
+          installed: true,
+        },
+      ],
+    });
+    await app.createCustomAgent({
+      userId: 'user-1',
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimeId: 'runtime-1',
+      name: 'mindmap-ppt',
+    });
+
+    // 直接把 custom agent 置为 busy（模拟 dispatching 中或任何非掉线导致的 busy 态）
+    now = 1000;
+    await repositories.agents.updateStatus({
+      agentId: 'agent-1',
+      status: 'busy',
+      lastSeenAt: now,
+    });
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', status: 'busy' }],
+    });
+
+    // hello 重发：恢复循环必须跳过 busy（busy 在线，无需恢复）
+    now = 1100;
+    await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+      hostname: 'shaw-mbp',
+    });
+
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', status: 'busy' }],
     });
   });
 

@@ -21,6 +21,7 @@ export interface SocketServerLike {
 
 export interface ServerNextRealtime {
   emitDispatchStatus(dispatch: unknown): void;
+  refreshAgents(teamId: string): Promise<void>;
 }
 
 interface ChannelSubscription {
@@ -238,6 +239,7 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
           payloadTargetTeamId(payload),
           ...payloadTeamIds(payload, 'affectedTeamIds'),
           ...resultAgentVisibleTeamIds(result),
+          resultDispatchTeamId(result),
         ]);
         for (const teamId of agentTeamIds) {
           await refreshAgentSubscribers(webSubscribers, app, teamId);
@@ -450,6 +452,9 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
   return {
     emitDispatchStatus(dispatch) {
       emitDispatchStatus(webSubscribers, dispatch);
+    },
+    async refreshAgents(teamId) {
+      await refreshAgentSubscribers(webSubscribers, app, teamId);
     },
   };
 }
