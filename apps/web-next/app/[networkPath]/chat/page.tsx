@@ -7,6 +7,7 @@ import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket,
 import { WEB_EVENTS } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus } from '@/lib/schema';
+import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
@@ -2556,7 +2557,7 @@ function ChatBubble({
         {msg.artifacts && msg.artifacts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">
             {msg.artifacts.map((artifact) => (
-              <ChatArtifactPreview key={artifact.id} artifact={artifact} />
+              <ChatArtifactPreview key={artifact.id} artifact={artifact} teamId={msg.teamId} />
             ))}
           </div>
         )}
@@ -2990,6 +2991,14 @@ function artifactUrl(path: string | undefined): string | null {
   return `${getResolvedServerUrl()}${path}${sep}token=${encodeURIComponent(token)}`;
 }
 
+function messageArtifactUrl(artifact: Artifact, kind: 'preview' | 'download', teamId?: string): string | null {
+  return chatArtifactUrl(artifact, kind, {
+    serverUrl: getResolvedServerUrl(),
+    token: getStoredAuthToken(),
+    teamId,
+  });
+}
+
 function parseMeta(msg: ChatMessage): Record<string, any> {
   if (msg.meta && typeof msg.meta === 'object') return msg.meta;
   if (!msg.metaJson) return {};
@@ -3154,11 +3163,11 @@ function sortModeLabel(mode: SidebarSortMode): string {
   return '手动';
 }
 
-function ChatArtifactPreview({ artifact }: { artifact: Artifact }) {
+function ChatArtifactPreview({ artifact, teamId }: { artifact: Artifact; teamId?: string }) {
   const [viewerOpen, setViewerOpen] = useState(false);
   const sizeLabel = formatFileSize(artifact.sizeBytes);
-  const previewUrl = artifactUrl(artifact.previewUrl);
-  const downloadUrl = artifactUrl(artifact.downloadUrl);
+  const previewUrl = messageArtifactUrl(artifact, 'preview', teamId);
+  const downloadUrl = messageArtifactUrl(artifact, 'download', teamId);
   const canPreview = Boolean(previewUrl);
   const openViewer = () => {
     if (canPreview) setViewerOpen(true);
@@ -3191,7 +3200,7 @@ function ChatArtifactPreview({ artifact }: { artifact: Artifact }) {
           </div>
           <div className="mt-1 truncate text-xs text-neutral-500">{artifact.filename}</div>
         </div>
-        {viewerOpen && <ArtifactViewer artifact={artifact} onClose={() => setViewerOpen(false)} />}
+        {viewerOpen && <ArtifactViewer artifact={artifact} teamId={teamId} onClose={() => setViewerOpen(false)} />}
       </>
     );
   }
@@ -3218,16 +3227,16 @@ function ChatArtifactPreview({ artifact }: { artifact: Artifact }) {
           </a>}
         </div>
       </div>
-      {viewerOpen && <ArtifactViewer artifact={artifact} onClose={() => setViewerOpen(false)} />}
+      {viewerOpen && <ArtifactViewer artifact={artifact} teamId={teamId} onClose={() => setViewerOpen(false)} />}
     </>
   );
 }
 
-function ArtifactViewer({ artifact, onClose }: { artifact: Artifact; onClose: () => void }) {
+function ArtifactViewer({ artifact, teamId, onClose }: { artifact: Artifact; teamId?: string; onClose: () => void }) {
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const previewUrl = artifactUrl(artifact.previewUrl);
-  const downloadUrl = artifactUrl(artifact.downloadUrl);
+  const previewUrl = messageArtifactUrl(artifact, 'preview', teamId);
+  const downloadUrl = messageArtifactUrl(artifact, 'download', teamId);
   const fileKind = artifactKind(artifact);
   const inlineText = isInlineTextArtifact(artifact);
 
