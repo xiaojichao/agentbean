@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback, type MouseEvent, type ReactNode, type RefObject } from 'react';
+import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, emitWithTimeout } from '@/lib/socket';
@@ -11,8 +11,8 @@ import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
-import { messagesForVisibleConversations, mergeSavedMessages, visibleConversationIds } from '@/lib/chat-scope';
-import { loadReadIds, saveReadIds } from '@/lib/chat-read-state';
+import { inboxActivityMessages, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
+import { loadReadIds, readKey, saveReadIds } from '@/lib/chat-read-state';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import {
   TASK_STATUS_COLUMNS as TASK_COLUMNS,
@@ -174,6 +174,9 @@ export default function ChatPage() {
   const [loadedSavedKey, setLoadedSavedKey] = useState<string | null>(null);
   const [reactionIds, setReactionIds] = useState<Set<string>>(new Set());
   const [loadedReactionsKey, setLoadedReactionsKey] = useState<string | null>(null);
+  const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
+  const [loadedDoneKey, setLoadedDoneKey] = useState<string | null>(null);
+  const inboxUnread = inboxActivityMessages(Object.values(messagesByChannel).flat(), visibleConversationIds(channels, dms)).filter((m) => !doneIds.has(m.id)).length;
   const [profileAgentCache, setProfileAgentCache] = useState<Record<string, AgentSnapshot>>({});
   const [showMention, setShowMention] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -328,6 +331,18 @@ export default function ChatPage() {
       window.localStorage.setItem(reactionsKey, JSON.stringify([...reactionIds]));
     } catch {}
   }, [reactionIds, reactionsKey, loadedReactionsKey]);
+
+  useEffect(() => {
+    setDoneIds(loadReadIds(routeNetworkPath));
+    setLoadedDoneKey(readKey(routeNetworkPath));
+  }, [routeNetworkPath]);
+
+  useEffect(() => {
+    if (loadedDoneKey !== readKey(routeNetworkPath)) return;
+    try {
+      saveReadIds(routeNetworkPath, doneIds);
+    } catch {}
+  }, [doneIds, loadedDoneKey, routeNetworkPath]);
 
   // Fetch members for @mention
   useEffect(() => {
@@ -914,7 +929,9 @@ export default function ChatPage() {
           <button onClick={() => setSidebarView(sidebarView === 'inbox' ? 'channels' : 'inbox')} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'inbox' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
             <Activity size={14} className="text-neutral-400 shrink-0" />
             <span>活动</span>
-            <span className="ml-auto rounded bg-pink-100 px-1.5 py-0.5 text-[10px] font-medium text-pink-600">{Object.values(messagesByChannel).flat().filter((m) => m.senderKind !== 'system').length}</span>
+            {inboxUnread > 0 && (
+              <span className="ml-auto rounded bg-pink-100 px-1.5 py-0.5 text-[10px] font-medium text-pink-600">{inboxUnread}</span>
+            )}
           </button>
           <button onClick={() => setSidebarView(sidebarView === 'saved' ? 'channels' : 'saved')} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'saved' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
             <Bookmark size={14} className="text-neutral-400 shrink-0" />
@@ -1011,7 +1028,7 @@ export default function ChatPage() {
             setSidebarView('channels');
             const dm = dms.find((item) => item.id === chId);
             router.push(dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`);
-          }} humanProfiles={humanProfiles} networkPath={routeNetworkPath} />
+          }} humanProfiles={humanProfiles} doneIds={doneIds} setDoneIds={setDoneIds} />
         ) : sidebarView === 'saved' ? (
           <SavedView savedMessages={savedDisplayMessages} onUnsave={(msgId) => toggleSave(msgId)} onJump={(chId) => {
             setActiveChannel(chId);
@@ -3581,13 +3598,10 @@ function SearchView({ onClose, onJump, humanProfiles }: { onClose: () => void; o
   );
 }
 
-function ActivityView({ onJump, humanProfiles, networkPath }: { onJump: (channelId: string) => void; humanProfiles: HumanProfile[]; networkPath: string }) {
+function ActivityView({ onJump, humanProfiles, doneIds, setDoneIds }: { onJump: (channelId: string) => void; humanProfiles: HumanProfile[]; doneIds: Set<string>; setDoneIds: Dispatch<SetStateAction<Set<string>>> }) {
   const [filter, setFilter] = useState<'all' | 'unread' | 'mentions'>('all');
-  const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
-  const [loadedDoneKey, setLoadedDoneKey] = useState<string | null>(null);
-  const doneKey = `agentbean:chat:done:${networkPath}`;
-  const [recent, setRecent] = useState<ChatMessage[]>([]);
   const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
+  const upsertMessages = useAgentBeanStore((s) => s.upsertMessages);
   const channels = useAgentBeanStore((s) => s.channels);
   const dms = useAgentBeanStore((s) => s.dms);
   const agents = useAgentBeanStore((s) => s.agents);
@@ -3598,36 +3612,22 @@ function ActivityView({ onJump, humanProfiles, networkPath }: { onJump: (channel
   const visibleKey = visibleList.join('\u001f');
 
   useEffect(() => {
-    if (!currentTeamId || visibleList.length === 0) {
-      setRecent([]);
-      return;
-    }
+    if (!currentTeamId || visibleList.length === 0) return;
     let cancelled = false;
     Promise.all(visibleList.map((channelId) => channelEvents().join(currentTeamId, channelId, 20))).then((results) => {
       if (cancelled) return;
-      setRecent(results.flatMap((res) => res.ok && res.messages ? res.messages : []));
+      const joined: ChatMessage[] = [];
+      for (const res of results) {
+        if (res.ok && res.messages) joined.push(...res.messages);
+      }
+      upsertMessages(joined);
     });
     return () => {
       cancelled = true;
     };
-  }, [currentTeamId, visibleKey]);
+  }, [currentTeamId, visibleKey, upsertMessages]);
 
-  useEffect(() => {
-    setDoneIds(loadReadIds(networkPath));
-    setLoadedDoneKey(doneKey);
-  }, [doneKey, networkPath]);
-
-  useEffect(() => {
-    if (loadedDoneKey !== doneKey) return;
-    try {
-      saveReadIds(networkPath, doneIds);
-    } catch {}
-  }, [doneIds, doneKey, loadedDoneKey, networkPath]);
-
-  const allMessages = messagesForVisibleConversations(uniqueMessages([...recent, ...Object.values(messagesByChannel).flat()]), visibleIds)
-    .filter((m) => m.senderKind !== 'system')
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .slice(0, 80);
+  const allMessages = inboxActivityMessages(Object.values(messagesByChannel).flat(), visibleIds);
   const unreadCount = allMessages.filter((m) => !doneIds.has(m.id)).length;
   const visible = allMessages.filter((m) => {
     if (filter === 'unread') return !doneIds.has(m.id);
