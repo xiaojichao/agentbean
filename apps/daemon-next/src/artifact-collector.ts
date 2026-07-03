@@ -19,9 +19,9 @@ export interface CollectedArtifact {
 
 export interface CollectArtifactsInput {
   /** per-run outputs/ directory; all matching files are collected regardless of mtime. */
-  outputDir: string;
+  outputDir?: string;
   /** customAgent.cwd; fallback scan picks matching files with mtime > startedAt. */
-  cwd: string;
+  cwd?: string;
   /** Extra output roots such as Codex-native generated_images; mtime filtered. */
   extraOutputDirs?: string[];
   /** command start timestamp (ms); used as mtime threshold for the cwd fallback. */
@@ -51,9 +51,6 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
         continue;
       }
       for (const entry of entries) {
-        if (visited > MAX_OUTPUT_FILES_PER_ROOT) {
-          return;
-        }
         const abs = join(current, entry.name);
         if (entry.isDirectory()) {
           if (IGNORED_OUTPUT_DIRS.has(entry.name)) {
@@ -73,6 +70,10 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
           }
           if (stat.size > maxBytes) {
             continue;
+          }
+          visited += 1;
+          if (visited > MAX_OUTPUT_FILES_PER_ROOT) {
+            return;
           }
           let content;
           try {
@@ -97,11 +98,15 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
     }
   };
 
-  ingest(input.outputDir, input.outputDir, false);
+  if (input.outputDir) {
+    ingest(input.outputDir, input.outputDir, false);
+  }
   for (const dir of input.extraOutputDirs ?? []) {
     ingest(dir, dir, true);
   }
-  ingest(input.cwd, input.cwd, true);
+  if (input.cwd) {
+    ingest(input.cwd, input.cwd, true);
+  }
   return [...bySha.values()];
 }
 
