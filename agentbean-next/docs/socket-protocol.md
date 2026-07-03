@@ -885,7 +885,7 @@ Ack<{ messages: MessageDto[] }>
 说明：
 
 - 带 `auth.token` 的 web socket 会从 authenticated socket session 派生 `userId`；payload 中的 `userId` 只作为临时兼容路径保留。
-- 第一版搜索当前用户在该 team 内可见的普通 channels，不包含 direct messages。
+- 搜索当前用户在该 team 内可见的普通 channels 与 direct messages（遵守 agent 可见性规则）。第一版（#188）只覆盖普通 channels；后续（#272）补齐 DM 搜索，确保删除或隐藏的 agent DM 不会泄漏历史消息。
 - `query` 至少 2 个字符。
 - Server 使用 simple DB search；不引入 full-text indexing、ranking 或 saved filters。
 
