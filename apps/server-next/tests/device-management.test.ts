@@ -93,7 +93,7 @@ describe('device rename and delete (end-to-end)', () => {
     // 改名
     const renamed = await web.emitWithAck(WEB_EVENTS.device.rename, {
       deviceId: 'device-1',
-      hostname: 'new-mac',
+      name: 'new-mac',
     });
     expect(renamed).toMatchObject({ ok: true, device: { id: 'device-1', name: 'new-mac' } });
 
@@ -108,6 +108,86 @@ describe('device rename and delete (end-to-end)', () => {
     // 删除后 getDevice → NOT_FOUND
     const after = await web.emitWithAck(WEB_EVENTS.device.get, { deviceId: 'device-1' });
     expect(after).toMatchObject({ ok: false, error: 'NOT_FOUND' });
+  });
+
+  test('用户改的设备名在 daemon 重连后保留', async () => {
+    // 回归：daemon 重连会再次 device.hello（携带 os.hostname），不得覆盖用户已改的 name。
+    // 旧实现 upsertHello 总用 deviceInput.hostname 写 name → 重连把用户改名冲掉。
+    // 修后：existing 设备保留 existing.name / existing.nameSource，仅新建时初始化为 hostname。
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'device-1',
+        'runtime-1',
+        'agent-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+        'reply-1',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      agent.disconnect();
+    });
+    const registerAck = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    expect(registerAck).toMatchObject({ ok: true, user: { id: 'user-1', primaryTeamId: 'team-1' } });
+    const web = await connectClient(`${baseUrl}/web`, {
+      auth: { token: (registerAck as { token: string }).token },
+    });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+
+    // 1. daemon 首次 hello，hostname='mac-orig'（os.hostname）
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+        hostname: 'mac-orig',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'device-1', name: 'mac-orig' } });
+
+    // 2. web 改名为「我的Mac」（nameSource → 'user'）
+    const renamed = await web.emitWithAck(WEB_EVENTS.device.rename, {
+      deviceId: 'device-1',
+      name: '我的Mac',
+    });
+    expect(renamed).toMatchObject({ ok: true, device: { id: 'device-1', name: '我的Mac' } });
+
+    // 3. daemon 重连：再次 device.hello，仍带 os.hostname='mac-orig'
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.device.hello, {
+        teamId: 'team-1',
+        ownerId: 'user-1',
+        machineId: 'machine-1',
+        profileId: 'default',
+        hostname: 'mac-orig',
+      }),
+    ).resolves.toMatchObject({ ok: true, device: { id: 'device-1' } });
+
+    // 4. web list → 用户改的 name 必须保留，不得回退为 mac-orig
+    const listed = await web.emitWithAck(WEB_EVENTS.device.list, { teamId: 'team-1' });
+    expect(listed).toMatchObject({ ok: true });
+    const device = (listed as { devices: Array<{ id: string; name?: string }> }).devices.find((d) => d.id === 'device-1');
+    expect(device?.name).toBe('我的Mac');
   });
 
   test('renaming a device keeps alias records merged instead of splitting into duplicates', async () => {
@@ -179,7 +259,7 @@ describe('device rename and delete (end-to-end)', () => {
     // 改名其中一台
     const renamed = await web.emitWithAck(WEB_EVENTS.device.rename, {
       deviceId: deviceAId,
-      hostname: 'NewMac',
+      name: 'NewMac',
     });
     expect(renamed).toMatchObject({ ok: true });
 
@@ -256,7 +336,7 @@ describe('device rename and delete (end-to-end)', () => {
 
     // other-1 不在 team-1 → FORBIDDEN
     await expect(
-      other.emitWithAck(WEB_EVENTS.device.rename, { deviceId: 'device-1', hostname: 'hacked' }),
+      other.emitWithAck(WEB_EVENTS.device.rename, { deviceId: 'device-1', name: 'hacked' }),
     ).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
   });
 
@@ -671,7 +751,7 @@ describe('device rename and delete (end-to-end)', () => {
     expect(recordA?.canonicalDeviceId).toBeNull();
     expect(recordB?.canonicalDeviceId).toBe(idA);
 
-    await app.renameDevice({ userId: 'user-1', deviceId: idA, hostname: 'Renamed Mac' });
+    await app.renameDevice({ userId: 'user-1', deviceId: idA, name: 'Renamed Mac' });
     const helloC = await app.deviceHello({
       teamId: 'team-1',
       ownerId: 'user-1',
@@ -776,7 +856,7 @@ describe('device rename and delete (end-to-end)', () => {
     const aliasDeviceId = (helloB as { device: { id: string } }).device.id;
 
     await expect(
-      app.renameDevice({ userId: 'user-1', deviceId: canonicalDeviceId, hostname: 'Renamed Mac' }),
+      app.renameDevice({ userId: 'user-1', deviceId: canonicalDeviceId, name: 'Renamed Mac' }),
     ).resolves.toMatchObject({ ok: true });
     await expect(
       app.registerDiscoveredAgents({

@@ -238,7 +238,7 @@ export function RunsPanel() {
     const dm = dms.find((item) => item.id === workspaceRun.channelId);
     const messageHref = sourceMessageHref(np, workspaceRun.channelId, workspaceRun.messageId, dms);
     const agentLabel = agent?.name ?? shortId(workspaceRun.agentId);
-    const deviceLabel = device?.hostname ?? (workspaceRun.deviceId ? shortId(workspaceRun.deviceId) : '未绑定设备');
+    const deviceLabel = device?.name ?? (workspaceRun.deviceId ? shortId(workspaceRun.deviceId) : '未绑定设备');
     const sourceLabel = dm?.name ?? channel?.name ?? shortId(workspaceRun.channelId);
     const hasFullLogArtifact = artifacts.some((artifact) =>
       artifact.relativePath === 'logs/workspace-run.log' || artifact.filename === 'workspace-run.log'
@@ -410,7 +410,7 @@ export function RunsPanel() {
             <option value="">全部</option>
             {Object.values(devices).map((device) => (
               <option key={device.id} value={device.id}>
-                {device.hostname ?? device.id}
+                {device.name ?? device.id}
               </option>
             ))}
           </select>

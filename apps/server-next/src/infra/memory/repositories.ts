@@ -433,8 +433,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
               if (
                 device.teamId !== input.teamId ||
                 device.ownerId !== input.ownerId ||
-                norm(device.name ?? device.systemInfo?.hostname) !== norm(input.name) ||
-                norm(device.name ?? device.systemInfo?.hostname) === ''
+                norm(device.hostname ?? device.name ?? device.systemInfo?.hostname) !== norm(input.name) ||
+                norm(device.hostname ?? device.name ?? device.systemInfo?.hostname) === ''
               ) {
                 return null;
               }
@@ -481,7 +481,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         }
         const updated: DeviceRecord = {
           ...device,
-          name: input.hostname,
+          name: input.name,
+          nameSource: 'user',
           updatedAt: input.updatedAt,
         };
         devices.set(device.id, updated);

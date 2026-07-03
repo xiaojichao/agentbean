@@ -67,7 +67,7 @@ export interface ServerNextUseCases {
   listDevices(input: { teamId: string; userId: string; currentDeviceId?: string | null }): Promise<Ack<{ devices: DeviceDto[] }>>;
   listDeviceAgents(input: { teamId: string; userId: string; deviceId: string }): Promise<Ack<{ agents: DeviceAgentListDto[]; runtimes: RuntimeDto[] }>>;
   getDevice(input: { userId: string; deviceId: string; currentDeviceId?: string | null }): Promise<Ack<{ device: DeviceDetailDto }>>;
-  renameDevice(input: { userId: string; deviceId: string; hostname: string; currentDeviceId?: string | null }): Promise<Ack<{ device: DeviceDto }>>;
+  renameDevice(input: { userId: string; deviceId: string; name: string; currentDeviceId?: string | null }): Promise<Ack<{ device: DeviceDto }>>;
   deleteDevice(input: { userId: string; deviceId: string; currentDeviceId?: string | null }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[]; channelTeamIds: string[]; deletedDeviceIds: string[] }>>;
   requestDeviceScan(input: RequestDeviceScanInput): Promise<Ack<RequestDeviceScanResult>>;
   deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto; affectedTeamIds: string[] }>>;
@@ -1416,7 +1416,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         teamId: deviceInput.teamId,
         ownerId,
         status: 'online',
-        name: deviceInput.hostname,
+        // 重连不得覆盖用户改名：existing 保留其 name/nameSource；新建时初始化为机器名（hostname）。
+        name: existing ? existing.name : deviceInput.hostname,
+        nameSource: existing ? existing.nameSource : 'hostname',
+        hostname: deviceInput.hostname,
         machineId: deviceInput.machineId,
         profileId: deviceInput.profileId,
         canonicalDeviceId,
@@ -1458,14 +1461,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             deviceId: device.id,
             machineId: device.machineId,
             profileId: device.profileId,
-            hostname: device.name,
+            hostname: deviceInput.hostname ?? device.systemInfo?.hostname,
           }, sessionSecret),
           teamId: device.teamId,
           ownerId: device.ownerId,
           deviceId: device.id,
           machineId: device.machineId,
           profileId: device.profileId,
-          hostname: device.name,
+          hostname: deviceInput.hostname ?? device.systemInfo?.hostname,
         },
       });
     },
@@ -1579,7 +1582,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const updated = await repositories.devices.updateName({
         deviceId: device.id,
-        hostname: renameInput.hostname,
+        name: renameInput.name,
         updatedAt: clock.now(),
       });
       if (!updated) {
