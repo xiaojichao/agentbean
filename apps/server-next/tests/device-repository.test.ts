@@ -18,7 +18,7 @@ describe('devices repository', () => {
 
     const updated = await repos.devices.updateName({
       deviceId: 'device-1',
-      hostname: 'new-name',
+      name: 'new-name',
       updatedAt: 2000,
     });
 
@@ -31,10 +31,22 @@ describe('devices repository', () => {
     const repos = createInMemoryRepositories();
     const updated = await repos.devices.updateName({
       deviceId: 'missing',
-      hostname: 'x',
+      name: 'x',
       updatedAt: 1000,
     });
     expect(updated).toBeNull();
+  });
+
+  test('updateName sets nameSource=user', async () => {
+    const repos = createInMemoryRepositories();
+    await repos.devices.upsertHello({
+      id: 'd1', teamId: 't1', ownerId: 'u1', status: 'online',
+      name: 'host1', nameSource: 'hostname',
+      lastSeenAt: 1000, createdAt: 1000, updatedAt: 1000,
+    });
+    const updated = await repos.devices.updateName({ deviceId: 'd1', name: '我的设备', updatedAt: 2000 });
+    expect(updated?.name).toBe('我的设备');
+    expect(updated?.nameSource).toBe('user');
   });
 
   test('delete soft-deletes agents (tombstone) and hard-deletes runtimes/device', async () => {

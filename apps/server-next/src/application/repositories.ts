@@ -89,6 +89,7 @@ export interface DeviceRecord extends DeviceDto {
   canonicalDeviceId?: string | null;
   daemonVersion?: string;
   connectCommand?: string;
+  nameSource?: 'user' | 'hostname';
   createdAt: UnixMs;
   updatedAt: UnixMs;
 }
@@ -197,7 +198,7 @@ export interface DeviceRepository {
   listAll(): Promise<DeviceRecord[]>;
   listConnected(): Promise<DeviceRecord[]>;
   markOffline(input: { deviceId: ID; timestamp: UnixMs }): Promise<DeviceRecord | null>;
-  updateName(input: { deviceId: ID; hostname: string; updatedAt: UnixMs }): Promise<DeviceRecord | null>;
+  updateName(input: { deviceId: ID; name: string; updatedAt: UnixMs }): Promise<DeviceRecord | null>;
   transferOwner(input: { deviceId: ID; ownerId: ID; updatedAt: UnixMs }): Promise<DeviceRecord | null>;
   delete(input: { deviceId: ID; timestamp: UnixMs }): Promise<void>;
 }

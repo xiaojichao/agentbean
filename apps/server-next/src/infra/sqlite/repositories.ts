@@ -874,7 +874,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       async updateName(input) {
         const result = globalDb
           .prepare('UPDATE devices SET hostname = ?, updated_at = ? WHERE id = ?')
-          .run(input.hostname, input.updatedAt, input.deviceId);
+          .run(input.name, input.updatedAt, input.deviceId);
         if (sqliteChanges(result) === 0) {
           return null;
         }

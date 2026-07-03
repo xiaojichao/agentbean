@@ -481,7 +481,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         }
         const updated: DeviceRecord = {
           ...device,
-          name: input.hostname,
+          name: input.name,
+          nameSource: 'user',
           updatedAt: input.updatedAt,
         };
         devices.set(device.id, updated);
