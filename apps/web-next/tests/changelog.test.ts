@@ -80,4 +80,22 @@ describe('parseChangelog', () => {
   test('空字符串返回空数组', () => {
     expect(parseChangelog('')).toEqual([]);
   });
+
+  test('无日期的版本块被跳过，其条目不并入前一版本', () => {
+    const md = `## [1.0.0] - 2026-01-01
+### Added
+- real
+
+## [2.0.0]
+### Added
+- draft
+`;
+    const r = parseChangelog(md);
+    expect(r.map((x) => x.version)).toEqual(['1.0.0']);
+    const v1 = r.find((x) => x.version === '1.0.0')!;
+    expect(v1.sections).toHaveLength(1);
+    expect(v1.sections[0].type).toBe('Added');
+    expect(v1.sections[0].items).toEqual(['real']);
+    expect(v1.sections.flatMap((s) => s.items)).not.toContain('draft');
+  });
 });

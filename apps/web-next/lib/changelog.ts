@@ -16,6 +16,7 @@ export interface Release {
 }
 
 const VERSION_RE = /^##\s*\[([^\]]+)\]\s*-\s*(\d{4}-\d{2}-\d{2})\s*$/;
+const VERSION_HEADER_RE = /^##\s*\[([^\]]+)\]/;
 const SECTION_RE = /^###\s+(Added|Changed|Deprecated|Removed|Fixed|Security)\s*$/;
 const ITEM_RE = /^\s*[-*]\s+(.+?)\s*$/;
 const UNRELEASED_RE = /^##\s*\[Unreleased\]/i;
@@ -36,6 +37,11 @@ export function parseChangelog(md: string): Release[] {
 
   for (const line of lines) {
     if (UNRELEASED_RE.test(line)) {
+      current = null;
+      currentSection = null;
+      continue;
+    }
+    if (VERSION_HEADER_RE.test(line) && !VERSION_RE.test(line)) {
       current = null;
       currentSection = null;
       continue;
