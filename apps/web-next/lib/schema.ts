@@ -82,9 +82,17 @@ export interface ChatMessage {
 
 export interface Artifact {
   id: string;
+  teamId?: string;
+  channelId?: string;
+  messageId?: string;
+  dispatchId?: string;
+  workspaceRunId?: string;
   filename: string;
   mimeType: string;
   sizeBytes: number;
+  relativePath?: string;
+  pathKind?: string;
+  sha256?: string | null;
   createdAt: number;
   downloadUrl?: string;
   previewUrl?: string;
