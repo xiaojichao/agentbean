@@ -150,6 +150,26 @@ describe('Phase 1 message routing rules', () => {
       reason: 'no-online-agent',
     });
   });
+
+  test('does not dispatch to a busy agent even when explicitly mentioned', () => {
+    const result = routeMessage({
+      body: '@Busybot do thing',
+      teamId: 'team-1',
+      agents: [{ id: 'agent-1', name: 'Busybot', status: 'busy' }],
+      humanMembers: [],
+    });
+    expect(result).toEqual({ kind: 'no-dispatch', reason: 'unknown-mention' });
+  });
+
+  test('does not use a busy agent as fallback', () => {
+    const result = routeMessage({
+      body: 'hello',
+      teamId: 'team-1',
+      agents: [{ id: 'agent-1', name: 'Busybot', status: 'busy' }],
+      humanMembers: [],
+    });
+    expect(result).toEqual({ kind: 'no-dispatch', reason: 'no-online-agent' });
+  });
 });
 
 describe('Phase 1 agent identity and visibility rules', () => {
