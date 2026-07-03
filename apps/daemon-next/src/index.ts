@@ -24,6 +24,8 @@ export { createHttpEnvResolver } from './env-fetcher.js';
 import { createRescanController, type RescanController } from './rescan.js';
 import { createDispatchOutbox, type DispatchOutbox } from './outbox.js';
 
+const CODEX_GENERATED_IMAGES_DIR = `${homedir()}/.codex/generated_images`;
+
 export interface DaemonProtocolSocket {
   readonly connected: boolean;
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
@@ -276,6 +278,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             const collected = await collectArtifacts({
               outputDir: workspace.outputDir,
               cwd: workspace.cwd,
+              extraOutputDirs: [CODEX_GENERATED_IMAGES_DIR],
               startedAt: result.workspaceRun.startedAt,
             });
             if (collected.length > 0 && device.token) {

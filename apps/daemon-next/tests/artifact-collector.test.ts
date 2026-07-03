@@ -48,6 +48,27 @@ describe('artifact-collector', () => {
     expect(names).not.toContain('old.json');
   });
 
+  test('extra output dirs collect Codex-native generated images by mtime', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-')));
+    const outputDir = join(cwd, 'outputs');
+    const generatedImagesDir = join(cwd, 'codex-generated-images', 'run-1');
+    mkdirSync(outputDir, { recursive: true });
+    mkdirSync(generatedImagesDir, { recursive: true });
+    await touch(join(generatedImagesDir, 'old.png'), 1000);
+    await touch(join(generatedImagesDir, 'ig_abc123.png'), 5000);
+
+    const collected = await collectArtifacts({
+      outputDir,
+      cwd,
+      extraOutputDirs: [join(cwd, 'codex-generated-images')],
+      startedAt: 3000,
+    });
+
+    const names = collected.map((c) => c.filename);
+    expect(names).toContain('ig_abc123.png');
+    expect(names).not.toContain('old.png');
+  });
+
   test('cwd fallback skips ignored dirs like node_modules and .agentbean', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-')));
     const outputDir = join(cwd, 'outputs');
