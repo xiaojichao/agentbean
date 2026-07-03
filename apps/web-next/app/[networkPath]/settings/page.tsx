@@ -1,12 +1,12 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2, Bell, Volume2, Keyboard, PanelRight, RotateCcw } from 'lucide-react';
+import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2, Bell, Volume2, Keyboard, PanelRight, RotateCcw, Terminal } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { authEvents, getWebSocket, joinEvents, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import type { JoinLinkInfo } from '@/lib/schema';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
   DEFAULT_BROWSER_SETTINGS,
   readBrowserSettings,
@@ -17,16 +17,25 @@ import {
 } from '@/lib/browser-settings';
 import { releases } from '@/lib/releases.generated';
 import type { Release, ChangeType } from '@/lib/changelog';
+import { RunsPanel } from './RunsPanel';
 
-type Tab = 'account' | 'browser' | 'server' | 'releases';
+type Tab = 'account' | 'browser' | 'server' | 'runs' | 'releases';
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'account', label: '账号', icon: <User size={16} /> },
   { id: 'browser', label: '浏览器', icon: <Globe size={16} /> },
   { id: 'server', label: '团队', icon: <Server size={16} /> },
+  { id: 'runs', label: '执行记录诊断', icon: <Terminal size={16} /> },
   { id: 'releases', label: '更新日志', icon: <FileText size={16} /> },
 ];
 const JOIN_INTERNAL_ERROR_MESSAGE = '创建失败，请稍后重试';
+
+function normalizeSettingsTab(value: string | null): Tab | null {
+  if (value === 'account' || value === 'browser' || value === 'server' || value === 'runs' || value === 'releases') {
+    return value;
+  }
+  return null;
+}
 
 function joinFailureMessage(result: { error?: string; message?: string }): string {
   if (result.error === 'INTERNAL_ERROR') {
@@ -36,7 +45,13 @@ function joinFailureMessage(result: { error?: string; message?: string }): strin
 }
 
 export default function SettingsPage() {
+  const searchParams = useSearchParams();
   const [tab, setTab] = useState<Tab>('account');
+
+  useEffect(() => {
+    const requestedTab = normalizeSettingsTab(searchParams.get('tab'));
+    if (requestedTab) setTab(requestedTab);
+  }, [searchParams]);
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -61,6 +76,7 @@ export default function SettingsPage() {
         {tab === 'account' && <AccountPanel />}
         {tab === 'browser' && <BrowserPanel />}
         {tab === 'server' && <ServerPanel />}
+        {tab === 'runs' && <RunsPanel />}
         {tab === 'releases' && <ReleasesPanel />}
         </div>
       </div>
