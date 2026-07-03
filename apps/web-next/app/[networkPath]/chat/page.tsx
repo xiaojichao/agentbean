@@ -281,14 +281,17 @@ export default function ChatPage() {
   }, [messagesByChannel]);
 
   useEffect(() => {
+    let cancelled = false;
     try {
       const raw = window.localStorage.getItem(savedKey);
       setSavedIds(new Set(raw ? JSON.parse(raw) : []));
     } catch {
       setSavedIds(new Set());
     }
+    setSavedMessages([]);
     // Hydrate from server
     messageReactionEvents().listSaved().then((res) => {
+      if (cancelled) return;
       if (res.ok && res.messages) {
         setSavedMessages(res.messages);
         setSavedIds((prev) => {
@@ -299,6 +302,7 @@ export default function ChatPage() {
       }
     }).catch(() => {});
     setLoadedSavedKey(savedKey);
+    return () => { cancelled = true; };
   }, [savedKey]);
 
   useEffect(() => {

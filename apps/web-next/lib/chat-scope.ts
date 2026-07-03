@@ -35,8 +35,6 @@ export interface SaveableMessage {
  *  - 两份来源按 id union，去重；
  *  - 同 id 以 memoryMessages 版本优先（内存更新鲜）；
  *  - 结果按 createdAt 降序。
- *
- * TODO(contrib): 函数体待实现（见 tests/saved-messages-merge.test.ts 的契约）。
  */
 export function mergeSavedMessages<T extends SaveableMessage>(
   savedSnapshot: T[],
