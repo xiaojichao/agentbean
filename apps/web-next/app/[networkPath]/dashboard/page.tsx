@@ -14,7 +14,6 @@ interface AdminUser { id: string; username: string; email: string | null; role: 
 interface AdminDevice {
   id: string;
   name: string;
-  hostname?: string | null;
   status: string;
   agentCount: number;
   lastSeenAt: number;
@@ -372,7 +371,7 @@ function DevicesTable({ devices, teams, onSelect }: { devices: AdminDevice[]; te
         <tr key={d.id} className="hover:bg-neutral-50" data-smoke="admin-device-row" data-device-id={d.id} data-owner-id={d.userId} data-owner-name={d.userName} data-team-id={d.networkId}>
           <td className="px-4 py-2.5 text-sm">
             <button onClick={() => onSelect(d)} className="font-medium text-blue-600 hover:text-blue-700 hover:underline" data-smoke="admin-device-open" data-device-id={d.id}>
-              {d.name || d.hostname || '未命名设备'}
+              {d.name || '未命名设备'}
             </button>
           </td>
           <td className="px-4 py-2.5 text-xs text-neutral-600">{d.userName ?? '未知用户'}</td>
@@ -449,11 +448,11 @@ function DeviceDetailDialog({
   };
 
   return (
-    <DialogShell title={device.name || device.hostname || '未命名设备'} icon={<Monitor size={17} className="text-neutral-600" />} onClose={onClose}>
+    <DialogShell title={device.name || '未命名设备'} icon={<Monitor size={17} className="text-neutral-600" />} onClose={onClose}>
       <div className="space-y-5" data-smoke="admin-device-detail" data-device-id={device.id} data-owner-id={device.userId} data-owner-name={device.userName}>
         <div className="flex items-center justify-between rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
           <div>
-            <div className="text-sm font-semibold text-neutral-900">{device.name || device.hostname || '未命名设备'}</div>
+            <div className="text-sm font-semibold text-neutral-900">{device.name || '未命名设备'}</div>
             <div className="mt-0.5 text-xs text-neutral-500">{device.userName ?? '未知用户'} · {device.networkName ?? '未知团队'}</div>
           </div>
           <StatusPill status={device.status} />
@@ -462,7 +461,7 @@ function DeviceDetailDialog({
         <section>
           <h3 className="mb-2 text-xs font-semibold text-neutral-500">基本信息</h3>
           <DetailGrid>
-            <DetailItem label="设备名称" value={device.name || device.hostname || '未命名设备'} />
+            <DetailItem label="设备名称" value={device.name || '未命名设备'} />
             <DetailItem label="所属用户" value={device.userName ?? '未知用户'} />
             <DetailItem label="所属团队" value={device.networkName ?? '未知团队'} />
             <DetailItem label="最后心跳" value={formatDateTime(device.lastSeenAt)} />

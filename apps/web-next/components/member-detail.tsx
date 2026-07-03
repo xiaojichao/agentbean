@@ -464,7 +464,7 @@ function AgentWorkspaceTab({ agent, runs, loading }: { agent: AgentSnapshot; run
 function AgentActivity({ agent, device, metrics, runs }: { agent: AgentSnapshot; device?: DeviceInfo; metrics: AgentMetricsSummary | null; runs: AgentWorkspaceRun[] }) {
   const events = [
     { time: agent.lastSeenAt, status: agent.status, title: STATUS_LABEL[agent.status] ?? agent.status, detail: agent.lastError ?? 'Agent 状态已同步。' },
-    ...(device ? [{ time: device.lastSeenAt, status: device.status, title: `设备 ${STATUS_LABEL[device.status] ?? device.status}`, detail: device.hostname ?? '关联设备' }] : []),
+    ...(device ? [{ time: device.lastSeenAt, status: device.status, title: `设备 ${STATUS_LABEL[device.status] ?? device.status}`, detail: device.name ?? '关联设备' }] : []),
     ...runs.slice(0, 4).map((run) => ({ time: run.updatedAt, status: 'online', title: '工作区已同步', detail: `${run.files.length} 个文件` })),
     ...(metrics?.lastErrorAt ? [{ time: metrics.lastErrorAt, status: 'error', title: '最近错误', detail: metrics.lastError ?? '未知错误' }] : []),
   ].sort((a, b) => b.time - a.time);

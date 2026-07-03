@@ -192,7 +192,6 @@ export interface DeviceInfo {
   userName?: string | null;
   name?: string;
   networkId?: string;
-  hostname?: string;
   lastSeenAt: number;
   status: AgentStatus;
   agentIds: string[];

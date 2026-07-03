@@ -103,8 +103,8 @@ export default function MembersPage() {
   const agentGroups = useMemo(() => {
     const groups = new Map<string, { key: string; label: string; agents: AgentSnapshot[] }>();
     for (const agent of [...agentList].sort((a, b) => {
-      const aDevice = (a.deviceName ?? (a.deviceId ? devices[a.deviceId]?.hostname : '') ?? '').toLowerCase();
-      const bDevice = (b.deviceName ?? (b.deviceId ? devices[b.deviceId]?.hostname : '') ?? '').toLowerCase();
+      const aDevice = (a.deviceName ?? (a.deviceId ? devices[a.deviceId]?.name : '') ?? '').toLowerCase();
+      const bDevice = (b.deviceName ?? (b.deviceId ? devices[b.deviceId]?.name : '') ?? '').toLowerCase();
       return aDevice.localeCompare(bDevice) || a.name.localeCompare(b.name);
     })) {
       const label = agentDeviceDisplayName(agent, agent.deviceId ? devices[agent.deviceId] : undefined);

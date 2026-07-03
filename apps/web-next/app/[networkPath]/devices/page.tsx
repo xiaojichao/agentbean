@@ -40,15 +40,15 @@ function formatDaemonVersion(device: Parameters<typeof daemonVersionDisplay>[0])
   return daemonVersionDisplay(device).currentLabel;
 }
 
-function deviceDisplayName(device: { id: string; name?: string | null; hostname?: string | null; systemInfo?: { hostname?: string } | null }): string {
-  return (device.hostname ?? device.name ?? device.systemInfo?.hostname ?? '').trim() || device.id;
+function deviceDisplayName(device: { id: string; name?: string | null; systemInfo?: { hostname?: string } | null }): string {
+  return (device.name ?? device.systemInfo?.hostname ?? '').trim() || device.id;
 }
 
 function deviceOwnerName(device: { ownerId?: string | null; userId?: string | null; ownerName?: string | null; userName?: string | null }): string {
   return (device.ownerName ?? device.userName ?? device.ownerId ?? device.userId ?? '').trim() || '未知用户';
 }
 
-function compareDevices(a: { id: string; name?: string | null; hostname?: string | null; networkId?: string; teamId?: string; systemInfo?: { hostname?: string } | null }, b: { id: string; name?: string | null; hostname?: string | null; networkId?: string; teamId?: string; systemInfo?: { hostname?: string } | null }): number {
+function compareDevices(a: { id: string; name?: string | null; networkId?: string; teamId?: string; systemInfo?: { hostname?: string } | null }, b: { id: string; name?: string | null; networkId?: string; teamId?: string; systemInfo?: { hostname?: string } | null }): number {
   return deviceDisplayName(a).localeCompare(deviceDisplayName(b), 'zh-CN', { sensitivity: 'base', numeric: true }) ||
     (a.networkId ?? a.teamId ?? '').localeCompare(b.networkId ?? b.teamId ?? '', 'zh-CN', { sensitivity: 'base', numeric: true }) ||
     a.id.localeCompare(b.id);
@@ -353,7 +353,7 @@ function EmptyState({ loading = false, error = '' }: { loading?: boolean; error?
 }
 
 function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName, showDeleteConfirm, setShowDeleteConfirm, currentTeamId, onDeleted }: {
-  device: { id: string; ownerId?: string | null; userId?: string | null; ownerName?: string | null; userName?: string | null; canManage?: boolean; isLocal?: boolean; name?: string; hostname?: string; status: string; lastSeenAt: number; agentIds: string[]; runtimes?: any[]; connectCommand?: string | null; latestDaemonVersion?: string | null; daemonUpdateAvailable?: boolean; daemonVersionInfo?: { current: string | null; latest: string | null; updateAvailable: boolean; status: 'current' | 'update-available' | 'unknown' }; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string; daemonVersion?: string } | null };
+  device: { id: string; ownerId?: string | null; userId?: string | null; ownerName?: string | null; userName?: string | null; canManage?: boolean; isLocal?: boolean; name?: string; status: string; lastSeenAt: number; agentIds: string[]; runtimes?: any[]; connectCommand?: string | null; latestDaemonVersion?: string | null; daemonUpdateAvailable?: boolean; daemonVersionInfo?: { current: string | null; latest: string | null; updateAvailable: boolean; status: 'current' | 'update-available' | 'unknown' }; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string; daemonVersion?: string } | null };
   editName: boolean;
   setEditName: (v: boolean) => void;
   deviceName: string;
