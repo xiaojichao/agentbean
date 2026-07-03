@@ -911,13 +911,21 @@ describe('server-next SQLite repositories', () => {
         ok: true,
         device: { id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'online' },
       });
+      // 用户显式改名（不再靠重连 hello 覆盖机器名获得改名效果——Task 3 修复了该 bug）
+      await expect(
+        app.renameDevice({ userId: 'user-1', deviceId: 'device-1', name: 'Renamed Host' }),
+      ).resolves.toMatchObject({
+        ok: true,
+        device: { id: 'device-1', name: 'Renamed Host' },
+      });
+      // daemon 重连：os.hostname 不变（仍为 'First Host'），但用户改名必须保留
       await expect(
         app.deviceHello({
           teamId: 'team-1',
           ownerId: 'user-1',
           machineId: 'machine-1',
           profileId: 'default',
-          hostname: 'Renamed Host',
+          hostname: 'First Host',
         }),
       ).resolves.toMatchObject({
         ok: true,
@@ -2187,7 +2195,7 @@ describe('server-next SQLite repositories', () => {
 
       await repositories.devices.updateName({
         deviceId: 'dev-1',
-        hostname: 'Renamed Mac',
+        name: 'Renamed Mac',
         updatedAt: now + 1,
       });
       const foundByAliasName = await repositories.devices.findCanonicalByDisplay({

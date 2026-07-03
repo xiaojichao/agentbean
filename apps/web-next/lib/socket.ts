@@ -488,7 +488,7 @@ export interface DeviceEvents {
   scan(deviceId: string): Promise<{ ok: boolean; error?: string }>;
   selectDirectory(deviceId: string): Promise<{ ok: boolean; path?: string; error?: string }>;
   delete(id: string): Promise<{ ok: boolean; error?: string }>;
-  rename(id: string, hostname: string): Promise<{ ok: boolean; device?: DeviceInfo; error?: string }>;
+  rename(id: string, name: string): Promise<{ ok: boolean; device?: DeviceInfo; error?: string }>;
   onSnapshot(handler: (devices: DeviceInfo[]) => void): () => void;
   onStatus(handler: (device: DeviceInfo) => void): () => void;
   subscribe(teamId: string): void;
@@ -514,8 +514,8 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
     delete(id) {
       return emitWithTimeout(socket, WEB_EVENTS.device.delete, { id, deviceId: id });
     },
-    rename(id, hostname) {
-      return emitWithTimeout(socket, WEB_EVENTS.device.rename, { id, deviceId: id, hostname });
+    rename(id, name) {
+      return emitWithTimeout(socket, WEB_EVENTS.device.rename, { id, deviceId: id, name });
     },
     onSnapshot(handler) {
       socket.on(WEB_EVENTS.device.snapshot, handler);
