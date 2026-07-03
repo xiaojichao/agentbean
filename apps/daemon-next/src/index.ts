@@ -1,4 +1,5 @@
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { AGENT_EVENTS, type AgentCategory, type ArtifactPathKind, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
@@ -23,8 +24,6 @@ export type { UploadedArtifact } from './artifact-uploader.js';
 export { createHttpEnvResolver } from './env-fetcher.js';
 import { createRescanController, type RescanController } from './rescan.js';
 import { createDispatchOutbox, type DispatchOutbox } from './outbox.js';
-
-const CODEX_GENERATED_IMAGES_DIR = `${homedir()}/.codex/generated_images`;
 
 export interface DaemonProtocolSocket {
   readonly connected: boolean;
@@ -161,6 +160,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   const { socket, executor, device, runtimes, agents, scan, serverUrl, fetch: fetchFn, envResolver } = input;
   // 复用 scanner 同款 home 解析；默认 homedir()。custom-agent skills 扫描必须用同一个 home。
   const home = input.homeDir ?? homedir();
+  const codexGeneratedImagesDir = join(home, '.codex', 'generated_images');
   let currentDeviceId: string;
   let rescan: RescanController | undefined;
   let latestSnapshot: DaemonScanSnapshot = { runtimes, agents };
@@ -278,7 +278,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             const collected = await collectArtifacts({
               outputDir: workspace.outputDir,
               cwd: workspace.cwd,
-              extraOutputDirs: [CODEX_GENERATED_IMAGES_DIR],
+              extraOutputDirs: [codexGeneratedImagesDir],
               startedAt: result.workspaceRun.startedAt,
             });
             if (collected.length > 0 && device.token) {
