@@ -39,6 +39,7 @@ export function collectAgentBeanNextReadinessChecks({
   const webNextAgentDetailPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/agents/[agentId]/page.tsx'), 'utf8');
   const webNextTasksPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/tasks/page.tsx'), 'utf8');
   const webNextRunsPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/runs/page.tsx'), 'utf8');
+  const webNextRunsPanel = readFileSync(join(root, 'apps/web-next/app/[networkPath]/settings/RunsPanel.tsx'), 'utf8');
   const webNextRunDetailPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/runs/[runId]/page.tsx'), 'utf8');
   const webNextSettingsPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/settings/page.tsx'), 'utf8');
   const browserSmokeScript = readFileSync(join(root, 'scripts/smoke-agentbean-next-browser.mjs'), 'utf8');
@@ -533,13 +534,13 @@ export function collectAgentBeanNextReadinessChecks({
         browserSmokeScript.includes('workspace-run-full-log-search') &&
         browserSmokeScript.includes('workspace-run-source-message-link') &&
         browserSmokeScript.includes('workspace-run-back-to-list') &&
-        webNextRunsPage.includes('data-smoke="workspace-runs-page"') &&
-        webNextRunsPage.includes('data-smoke="workspace-runs-filter-status"') &&
-        webNextRunsPage.includes('data-smoke="workspace-runs-filter-agent"') &&
-        webNextRunsPage.includes('data-smoke="workspace-runs-filter-device"') &&
-        webNextRunsPage.includes('data-smoke="workspace-runs-filter-group"') &&
-        webNextRunsPage.includes('data-smoke="workspace-runs-load-more"') &&
-        webNextRunsPage.includes('data-smoke="workspace-run-card"') &&
+        webNextRunsPanel.includes('data-smoke="workspace-runs-page"') &&
+        webNextRunsPanel.includes('data-smoke="workspace-runs-filter-status"') &&
+        webNextRunsPanel.includes('data-smoke="workspace-runs-filter-agent"') &&
+        webNextRunsPanel.includes('data-smoke="workspace-runs-filter-device"') &&
+        webNextRunsPanel.includes('data-smoke="workspace-runs-filter-group"') &&
+        webNextRunsPanel.includes('data-smoke="workspace-runs-load-more"') &&
+        webNextRunsPanel.includes('data-smoke="workspace-run-card"') &&
         webNextRunDetailPage.includes('data-smoke="workspace-run-detail"') &&
         webNextRunDetailPage.includes('data-smoke="workspace-run-back-to-list"') &&
         webNextRunDetailPage.includes('data-smoke="workspace-run-command"') &&
