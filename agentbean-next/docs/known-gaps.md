@@ -183,18 +183,18 @@ Artifact metadata、HTTP route 与 preview viewer 的第一版已经落地。
 
 ### Search Projection
 
-Message search 第一版已经落地为 server-side simple DB search。
+Message search 已落地为 server-side simple DB search，覆盖当前用户可见的普通 channels 与 DM（遵守 agent 可见性规则）。
 
 已确认：
 
-- `message:search` 只搜索当前用户在 team 内可见的普通 channels。
+- `message:search` 第一版（#188）搜索当前用户在 team 内可见的普通 channels。
+- 后续（#272）补齐 DM 搜索，引入 `visibleDirectChannelsForUser` helper 确保删除或隐藏的 agent DM 不会泄漏历史消息。
 - private channel 搜索结果不会泄漏给非 channel member。
 - web-next preview 右侧工作区提供轻量消息搜索表单与结果列表。
+- 多词匹配 + 相关性排序已收敛：`message:search` 现在按词拆分、要求所有词命中（AND），并按相关性排序（短语连续命中 > 词边界 > 更早位置，平局按时间倒序），逻辑集中在 `packages/domain` 的 `rankMessageSearch`，sqlite 与 memory repository 共用。
 
 剩余：
 
-- Direct message search 已收敛：`message:search` 现在同时纳入用户可见的 direct channels（`listDirectForUser`），且不会泄漏给 DM 非参与者。
-- 多词匹配 + 相关性排序已收敛：`message:search` 现在按词拆分、要求所有词命中（AND），并按相关性排序（短语连续命中 > 词边界 > 更早位置，平局按时间倒序），逻辑集中在 `packages/domain` 的 `rankMessageSearch`，sqlite 与 memory repository 共用。
 - FTS5 全文索引、命中高亮与 saved filters 仍需后续产品切片。
 
 ## Web 缺口

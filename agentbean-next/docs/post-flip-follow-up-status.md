@@ -24,7 +24,7 @@
 - Authenticated socket session 与 current team 恢复。
   - web socket 可以通过 session token 恢复 user/current team；preview/browser smoke 覆盖刷新后的 session restore 与 resubscribe。
 - Message search 第一版。
-  - `message:search` 使用 server-side simple DB search，只返回当前用户可见普通 channels 的结果；preview 右侧工作区已有轻量搜索表单。
+  - `message:search` 使用 server-side simple DB search，覆盖当前用户可见的普通 channels 与 DM（遵守 agent 可见性规则）；preview 右侧工作区已有轻量搜索表单。
 - Tasks 第一版。
   - `task:list`、`task:create` 与 `task:update` 使用 server-side task model；assignee 第一版支持 team human member 或当前 team 可见 agent；preview 右侧工作区已有轻量任务入口；browser smoke 已覆盖 task create/status update/reorder/delete/refresh restore。
 - Team/join/device invite 第一版。

@@ -496,7 +496,7 @@ export interface MessageSearchResultDto {
 - Server 设置 `senderKind` 与 `senderId`；sender identity 不可信任 clients。
 - 第一版 thread 使用 root-message convention：新 root message 默认 `threadId = message.id`，thread reply 复用 root `threadId`。
 - `threadId` 不应导致当前 prompt 在 dispatch history 中出现两次。
-- `message:search` 第一版只搜索当前用户可见的普通 channels，不包含 DM；搜索使用 simple DB query，不引入 FTS/ranking。
+- `message:search` 搜索当前用户可见的普通 channels 与 direct messages（遵守 agent 可见性规则）；搜索使用 simple DB query，不引入 FTS/ranking。第一版（#188）只覆盖普通 channels，后续（#272）补齐 DM 搜索并确保删除/隐藏的 agent DM 不会泄漏。
 
 ## TaskDto
 
