@@ -182,6 +182,7 @@ interface State {
   applyChannelHistory(channelId: string, msgs: ChatMessage[]): void;
   appendMessage(msg: ChatMessage): void;
   applyDispatchStatus(channelId: string, messageId: string, dispatchStatus: DispatchStatus, dispatchId?: string): void;
+  upsertMessages(msgs: ChatMessage[]): void;
   addOutbound(msg: OutboundMessage): void;
   resolveOutbound(id: string, status: 'sent' | 'failed'): void;
   setDiscovered(list: DiscoveredAgent[]): void;
@@ -199,6 +200,22 @@ interface State {
   applyHumansSnapshot(list: HumanMember[], teamId?: string): void;
   upsertHuman(human: HumanMember): void;
   removeHuman(userId: string): void;
+}
+
+export function mergeMessagesByChannel(
+  existing: Record<string, ChatMessage[]>,
+  msgs: ChatMessage[],
+): Record<string, ChatMessage[]> {
+  if (msgs.length === 0) return existing;
+  const next: Record<string, ChatMessage[]> = { ...existing };
+  let changed = false;
+  for (const msg of msgs) {
+    const list = next[msg.channelId] ?? [];
+    if (list.some((m) => m.id === msg.id)) continue;
+    next[msg.channelId] = [...list, msg];
+    changed = true;
+  }
+  return changed ? next : existing;
 }
 
 export const useAgentBeanStore = create<State>((set) => ({
@@ -285,6 +302,9 @@ export const useAgentBeanStore = create<State>((set) => ({
       if (!changed) return s;
       return { messagesByChannel: { ...s.messagesByChannel, [channelId]: next } };
     });
+  },
+  upsertMessages(msgs) {
+    set((s) => ({ messagesByChannel: mergeMessagesByChannel(s.messagesByChannel, msgs) }));
   },
   addOutbound(msg) { set((s) => ({ outbox: { ...s.outbox, [msg.id]: msg } })); },
   resolveOutbound(id, status) {
