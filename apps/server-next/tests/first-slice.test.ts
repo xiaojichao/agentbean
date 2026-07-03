@@ -2050,6 +2050,81 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('failTimedOutDispatches clears busy back to online on timeout', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 1000,
+    });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex hello',
+    });
+
+    const ack = await app.failTimedOutDispatches({ olderThan: 1001 });
+
+    expect(ack).toMatchObject({ ok: true, dispatches: [{ id: 'dispatch-1', status: 'timed_out' }] });
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', status: 'online' }],
+    });
+  });
+
+  test('failTimedOutDispatches does not revive an offline agent', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 2000 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'message-1']) },
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'offline',
+      deviceId: 'device-1',
+      lastSeenAt: 400,
+    });
+    await repositories.dispatches.create({
+      id: 'dispatch-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      status: 'queued',
+      requestId: 'req-1',
+      createdAt: 500,
+      updatedAt: 500,
+      prompt: 'hello',
+    });
+
+    await app.failTimedOutDispatches({ olderThan: 1000 });
+
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', status: 'offline' }],
+    });
+  });
+
   test('receiveDispatchResult links uploaded artifact ids without clearing storage path', async () => {
     const app = createInMemoryServerNext({
       now: () => 465,

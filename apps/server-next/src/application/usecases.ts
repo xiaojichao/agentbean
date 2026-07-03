@@ -2973,6 +2973,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           completedAt: now,
         });
         if (timedOut?.changed) {
+          const agent = await repositories.agents.getById(dispatch.agentId);
+          if (agent && agent.status === 'busy') {
+            await repositories.agents.updateStatus({
+              agentId: dispatch.agentId,
+              status: 'online',
+              lastSeenAt: now,
+            });
+          }
           dispatches.push(toDispatchDto(timedOut.dispatch));
         }
       }
