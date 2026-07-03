@@ -1704,6 +1704,38 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('sendMessage marks the dispatched agent as busy', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 400,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 400,
+    });
+
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex hello',
+    });
+
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', status: 'busy' }],
+    });
+  });
+
   test('starts and restores direct messages while thread dispatch history excludes the current prompt', async () => {
     let now = 410;
     const app = createInMemoryServerNext({

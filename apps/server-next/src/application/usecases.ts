@@ -2447,6 +2447,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           updatedAt: now,
         });
         dispatches.push(toDispatchDto(dispatch));
+        await repositories.agents.updateStatus({
+          agentId: dispatch.agentId,
+          status: 'busy',
+          lastSeenAt: now,
+        });
       }
 
       return makeSuccess({
