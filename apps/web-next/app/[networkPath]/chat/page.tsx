@@ -12,6 +12,7 @@ import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
 import { messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
+import { loadReadIds, saveReadIds } from '@/lib/chat-read-state';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import {
   TASK_STATUS_COLUMNS as TASK_COLUMNS,
@@ -991,7 +992,7 @@ export default function ChatPage() {
             setSidebarView('channels');
             const dm = dms.find((item) => item.id === chId);
             router.push(dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`);
-          }} humanProfiles={humanProfiles} />
+          }} humanProfiles={humanProfiles} networkPath={routeNetworkPath} />
         ) : sidebarView === 'saved' ? (
           <SavedView savedIds={savedIds} onUnsave={(msgId) => toggleSave(msgId)} onJump={(chId) => {
             setActiveChannel(chId);
@@ -3561,9 +3562,11 @@ function SearchView({ onClose, onJump, humanProfiles }: { onClose: () => void; o
   );
 }
 
-function ActivityView({ onJump, humanProfiles }: { onJump: (channelId: string) => void; humanProfiles: HumanProfile[] }) {
+function ActivityView({ onJump, humanProfiles, networkPath }: { onJump: (channelId: string) => void; humanProfiles: HumanProfile[]; networkPath: string }) {
   const [filter, setFilter] = useState<'all' | 'unread' | 'mentions'>('all');
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
+  const [loadedDoneKey, setLoadedDoneKey] = useState<string | null>(null);
+  const doneKey = `agentbean:chat:done:${networkPath}`;
   const [recent, setRecent] = useState<ChatMessage[]>([]);
   const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
   const channels = useAgentBeanStore((s) => s.channels);
@@ -3589,6 +3592,18 @@ function ActivityView({ onJump, humanProfiles }: { onJump: (channelId: string) =
       cancelled = true;
     };
   }, [currentTeamId, visibleKey]);
+
+  useEffect(() => {
+    setDoneIds(loadReadIds(networkPath));
+    setLoadedDoneKey(doneKey);
+  }, [doneKey, networkPath]);
+
+  useEffect(() => {
+    if (loadedDoneKey !== doneKey) return;
+    try {
+      saveReadIds(networkPath, doneIds);
+    } catch {}
+  }, [doneIds, doneKey, loadedDoneKey, networkPath]);
 
   const allMessages = messagesForVisibleConversations(uniqueMessages([...recent, ...Object.values(messagesByChannel).flat()]), visibleIds)
     .filter((m) => m.senderKind !== 'system')
