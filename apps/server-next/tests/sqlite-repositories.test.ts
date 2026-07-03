@@ -680,7 +680,7 @@ describe('server-next SQLite repositories', () => {
           { userId: 'user-1', username: 'shaw', role: 'owner' },
           { userId: 'user-2', username: 'teammate', role: 'member' },
         ],
-        agents: [{ id: 'agent-1', name: 'Codex', status: 'online' }],
+        agents: [{ id: 'agent-1', name: 'Codex', status: 'busy' }],
       });
       await repositories.channels.addDefaultChannelMembers({
         teamId: 'team-1',
