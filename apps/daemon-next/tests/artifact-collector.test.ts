@@ -69,6 +69,27 @@ describe('artifact-collector', () => {
     expect(names).not.toContain('old.png');
   });
 
+  test('extra output dirs do not let many old files hide a new generated image', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-')));
+    const outputDir = join(cwd, 'outputs');
+    const generatedImagesDir = join(cwd, 'codex-generated-images');
+    mkdirSync(outputDir, { recursive: true });
+    mkdirSync(generatedImagesDir, { recursive: true });
+    for (let i = 0; i < 2005; i += 1) {
+      await touch(join(generatedImagesDir, `old-${i}.png`), 1000);
+    }
+    await touch(join(generatedImagesDir, 'ig_new.png'), 5000);
+
+    const collected = await collectArtifacts({
+      outputDir,
+      cwd,
+      extraOutputDirs: [generatedImagesDir],
+      startedAt: 3000,
+    });
+
+    expect(collected.map((c) => c.filename)).toContain('ig_new.png');
+  });
+
   test('cwd fallback skips ignored dirs like node_modules and .agentbean', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-')));
     const outputDir = join(cwd, 'outputs');

@@ -274,13 +274,18 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
 
           // Scan outputs + cwd fallback, upload, then merge with the executor's log artifact.
           let productArtifactIds: string[] = [];
-          if (workspace && result.workspaceRun?.startedAt !== undefined) {
+          const collectedProductArtifacts: Awaited<ReturnType<typeof collectArtifacts>> = [];
+          const startedAt = result.workspaceRun?.startedAt;
+          const isCodexCustomAgent = isCodexAdapterKind(request.customAgent?.adapterKind);
+          const generatedImageDirs = isCodexCustomAgent ? [codexGeneratedImagesDir] : [];
+          const shouldCollectProductArtifacts = startedAt !== undefined && (workspace || generatedImageDirs.length > 0);
+          if (shouldCollectProductArtifacts) {
             const collected = await collectArtifacts({
-              outputDir: workspace.outputDir,
-              cwd: workspace.cwd,
-              extraOutputDirs: [codexGeneratedImagesDir],
-              startedAt: result.workspaceRun.startedAt,
+              ...(workspace ? { outputDir: workspace.outputDir, cwd: workspace.cwd } : {}),
+              extraOutputDirs: generatedImageDirs,
+              startedAt,
             });
+            collectedProductArtifacts.push(...collected);
             if (collected.length > 0 && device.token) {
               const uploaded = await uploadArtifacts(
                 { serverUrl, token: device.token, teamId: device.teamId, channelId: request.channelId, fetch: fetchFn },
@@ -288,6 +293,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               );
               productArtifactIds = uploaded.map((u) => u.id);
             }
+          }
+          if (workspace && result.workspaceRun?.startedAt !== undefined) {
             try {
               persistWorkspaceRunResponse(workspace, result.body);
               persistWorkspaceRunManifest(workspace, {
@@ -296,7 +303,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 startedAt: result.workspaceRun.startedAt,
                 completedAt: result.workspaceRun.completedAt,
                 exitCode: result.workspaceRun.exitCode,
-                files: collected.map((c) => ({
+                files: collectedProductArtifacts.map((c) => ({
                   relativePath: c.relativePath,
                   sha256: c.sha256,
                   sizeBytes: c.sizeBytes,
@@ -355,6 +362,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
     device.token = credentials.token;
     await input.onCredentialsChanged?.(credentials);
   }
+}
+
+function isCodexAdapterKind(adapterKind: string | undefined): boolean {
+  return adapterKind === 'codex' || adapterKind === 'codex-cli';
 }
 
 function normalizeDispatchResult(result: string | DaemonDispatchResult): DaemonDispatchResult {
