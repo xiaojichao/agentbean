@@ -2391,6 +2391,39 @@ describe('server-next SQLite repositories', () => {
       close();
     }
   });
+
+  test('device migrations add name and name_source columns', () => {
+    const { globalDb, close } = openMigratedDatabases();
+    try {
+      const cols = globalDb.prepare('PRAGMA table_info(devices)').all() as Array<{ name: string }>;
+      const names = cols.map((c) => c.name);
+      expect(names).toContain('name');
+      expect(names).toContain('name_source');
+    } finally {
+      close();
+    }
+  });
+
+  test('device name backfill copies hostname into name with source=hostname', () => {
+    // 回填在迁移时对已有数据生效；此处验证回填 SQL 语义：先建旧式行再跑回填语句
+    const { globalDb, close } = openMigratedDatabases();
+    try {
+      // better-sqlite3 默认开启 foreign_keys，此处只验证回填 SQL 语义，构造的旧式行不
+      // 关联真实 team/user，临时关闭 FK（沿用现有测试 line 2269/2335 的写法）。
+      globalDb.pragma('foreign_keys = OFF');
+      globalDb.prepare(
+        "INSERT INTO devices (id, team_id, owner_id, hostname, status, last_seen_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run('d-backfill', 't', 'u', 'host-orig', 'offline', 1, 1, 1);
+      // 手动清空 name 模拟回填前状态，再重跑回填语句验证幂等语义
+      globalDb.prepare("UPDATE devices SET name = NULL WHERE id = 'd-backfill'").run();
+      globalDb.prepare(readFileSync(join(MIGRATIONS_DIR, 'global/0013_device_name_backfill.sql'), 'utf8')).run();
+      const row = globalDb.prepare('SELECT name, name_source FROM devices WHERE id = ?').get('d-backfill') as { name: string; name_source: string };
+      expect(row.name).toBe('host-orig');
+      expect(row.name_source).toBe('hostname');
+    } finally {
+      close();
+    }
+  });
 });
 
 function openMigratedDatabases() {
