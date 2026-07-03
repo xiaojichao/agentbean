@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { Bot, MessagesSquare, ClipboardList, Terminal, Users, ChevronDown, Settings, Monitor, LayoutDashboard, Plus, Check, Globe, Lock } from 'lucide-react';
+import { Bot, MessagesSquare, ClipboardList, Users, ChevronDown, Settings, Monitor, LayoutDashboard, Plus, Check, Globe, Lock } from 'lucide-react';
 import { agentEvents, channelEvents, deviceEvents, getWebSocket, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 
@@ -139,10 +139,6 @@ export function Sidebar() {
 
       {/* Bottom: settings */}
       <div className="space-y-2 border-t border-neutral-200 px-2 py-2">
-        <div>
-          <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">诊断</p>
-          <NavItem href={`/${np}/runs`} icon={<Terminal size={16} />} label="执行记录" active={isActive(`/${np}/runs`)} />
-        </div>
         <NavItem href={`/${np}/settings`} icon={<Settings size={16} />} label="设置" active={isActive(`/${np}/settings`)} />
       </div>
 
