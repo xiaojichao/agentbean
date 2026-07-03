@@ -1612,7 +1612,7 @@ async function waitForWebUiWorkspaceRunBackToList({ page, networkPath, timeoutMs
     (() => {
       const networkPath = ${JSON.stringify(networkPath)};
       const link = document.querySelector('[data-smoke="workspace-run-back-to-list"]');
-      return link?.getAttribute('href') === '/' + networkPath + '/runs';
+      return link?.getAttribute('href') === '/' + networkPath + '/settings?tab=runs';
     })()
     `,
     'workspace run detail back link to return to the runs list',

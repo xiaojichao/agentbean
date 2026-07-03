@@ -5,5 +5,5 @@ export default function Page({
 }: {
   params: { networkPath: string };
 }) {
-  redirect(`/${params.networkPath}/settings`);
+  redirect(`/${params.networkPath}/settings?tab=runs`);
 }

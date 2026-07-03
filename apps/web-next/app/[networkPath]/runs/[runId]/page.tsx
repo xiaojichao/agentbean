@@ -209,7 +209,7 @@ export default function RunDetailPage() {
           </div>
         </div>
         <Link
-          href={`/${np}/runs`}
+          href={`/${np}/settings?tab=runs`}
           className="mt-4 inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
         >
           <ArrowLeft className="w-4 h-4" /> 返回执行记录
@@ -300,7 +300,7 @@ export default function RunDetailPage() {
       {/* Header */}
       <div className="flex items-center gap-3">
         <Link
-          href={`/${np}/runs`}
+          href={`/${np}/settings?tab=runs`}
           className="text-neutral-400 hover:text-neutral-600"
           data-smoke="workspace-run-back-to-list"
         >

@@ -6,7 +6,7 @@ import { ConnectionBanner } from '@/components/connection-banner';
 import { authEvents, getWebSocket, joinEvents, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import type { JoinLinkInfo } from '@/lib/schema';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
   DEFAULT_BROWSER_SETTINGS,
   readBrowserSettings,
@@ -30,6 +30,13 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
 ];
 const JOIN_INTERNAL_ERROR_MESSAGE = '创建失败，请稍后重试';
 
+function normalizeSettingsTab(value: string | null): Tab | null {
+  if (value === 'account' || value === 'browser' || value === 'server' || value === 'runs' || value === 'releases') {
+    return value;
+  }
+  return null;
+}
+
 function joinFailureMessage(result: { error?: string; message?: string }): string {
   if (result.error === 'INTERNAL_ERROR') {
     return JOIN_INTERNAL_ERROR_MESSAGE;
@@ -38,7 +45,13 @@ function joinFailureMessage(result: { error?: string; message?: string }): strin
 }
 
 export default function SettingsPage() {
+  const searchParams = useSearchParams();
   const [tab, setTab] = useState<Tab>('account');
+
+  useEffect(() => {
+    const requestedTab = normalizeSettingsTab(searchParams.get('tab'));
+    if (requestedTab) setTab(requestedTab);
+  }, [searchParams]);
 
   return (
     <div className="flex flex-1 overflow-hidden">
