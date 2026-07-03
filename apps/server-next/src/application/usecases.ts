@@ -2948,6 +2948,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!cancelled) {
         return makeFailure('NOT_FOUND', 'Dispatch not found');
       }
+      const agent = await repositories.agents.getById(cancelled.dispatch.agentId);
+      if (agent && agent.status === 'busy') {
+        await repositories.agents.updateStatus({
+          agentId: cancelled.dispatch.agentId,
+          status: 'online',
+          lastSeenAt: clock.now(),
+        });
+      }
       return makeSuccess({ dispatch: toDispatchDto(cancelled.dispatch) });
     },
 
