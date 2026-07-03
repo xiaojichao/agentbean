@@ -84,6 +84,7 @@ export interface AgentConfigUpdate {
   lastSeenAt?: UnixMs;
 }
 export interface DeviceRecord extends DeviceDto {
+  hostname?: string | null;
   machineId?: string;
   profileId?: string;
   canonicalDeviceId?: string | null;

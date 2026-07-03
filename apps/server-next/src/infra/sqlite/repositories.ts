@@ -775,7 +775,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             device.ownerId,
             device.machineId ?? null,
             device.profileId ?? null,
-            device.systemInfo?.hostname ?? null,
+            device.hostname ?? device.systemInfo?.hostname ?? null,
             device.name ?? null,
             device.nameSource ?? null,
             device.status,
@@ -809,7 +809,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
                 AND canonical.team_id = matched.team_id
                 AND canonical.owner_id = matched.owner_id
                WHERE matched.team_id = ? AND matched.owner_id = ?
-                 AND LOWER(TRIM(COALESCE(NULLIF(matched.name, ''), json_extract(matched.system_info, '$.hostname')))) = LOWER(TRIM(?))
+                 AND LOWER(TRIM(COALESCE(NULLIF(matched.hostname, ''), NULLIF(matched.name, ''), json_extract(matched.system_info, '$.hostname')))) = LOWER(TRIM(?))
                ORDER BY canonical.updated_at DESC, canonical.id DESC LIMIT 1`,
             )
             .get(input.teamId, input.ownerId, input.name),
@@ -1930,6 +1930,7 @@ function mapDevice(row: unknown): DeviceRecord | null {
     teamId: sqliteText(row, 'team_id'),
     ownerId: sqliteText(row, 'owner_id'),
     status: sqliteText(row, 'status') as DeviceRecord['status'],
+    hostname: sqliteNullableText(row, 'hostname'),
     name: sqliteNullableText(row, 'name'),
     nameSource: sqliteNullableText(row, 'name_source') as DeviceRecord['nameSource'],
     machineId: sqliteNullableText(row, 'machine_id'),

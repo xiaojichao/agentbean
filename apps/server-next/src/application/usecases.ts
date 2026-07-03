@@ -1419,6 +1419,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         // 重连不得覆盖用户改名：existing 保留其 name/nameSource；新建时初始化为机器名（hostname）。
         name: existing ? existing.name : deviceInput.hostname,
         nameSource: existing ? existing.nameSource : 'hostname',
+        hostname: deviceInput.hostname,
         machineId: deviceInput.machineId,
         profileId: deviceInput.profileId,
         canonicalDeviceId,

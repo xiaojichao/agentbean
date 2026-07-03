@@ -433,8 +433,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
               if (
                 device.teamId !== input.teamId ||
                 device.ownerId !== input.ownerId ||
-                norm(device.name ?? device.systemInfo?.hostname) !== norm(input.name) ||
-                norm(device.name ?? device.systemInfo?.hostname) === ''
+                norm(device.hostname ?? device.name ?? device.systemInfo?.hostname) !== norm(input.name) ||
+                norm(device.hostname ?? device.name ?? device.systemInfo?.hostname) === ''
               ) {
                 return null;
               }
