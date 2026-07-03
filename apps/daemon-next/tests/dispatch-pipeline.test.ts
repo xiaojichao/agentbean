@@ -1,10 +1,16 @@
-import { mkdtempSync, realpathSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS } from '../../../packages/contracts/src/index.js';
 import { createDaemonProtocolClient } from '../src/index';
 import type { DaemonProtocolSocket } from '../src/index';
+
+async function touchFile(path: string, mtimeMs: number): Promise<void> {
+  writeFileSync(path, 'image-bytes');
+  const seconds = Math.floor(mtimeMs / 1000);
+  utimesSync(path, seconds, seconds);
+}
 
 interface FakeHarness {
   socket: DaemonProtocolSocket;
@@ -137,6 +143,87 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     const resultEmit = harness.emits.find((e) => e.event === AGENT_EVENTS.dispatch.result);
     expect(resultEmit).toBeTruthy();
     expect((resultEmit!.payload as { body: string }).body).toBe('stub');
+  });
+
+  test('does not scan Codex generated_images for non-Codex custom agents', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-')));
+    const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-home-')));
+    const generatedImagesDir = join(homeDir, '.codex', 'generated_images');
+    mkdirSync(generatedImagesDir, { recursive: true });
+    await touchFile(join(generatedImagesDir, 'ig_non_codex.png'), 5000);
+    const harness = createFakeSocket();
+    const uploadFetch = vi.fn<typeof fetch>(async (input) => {
+      if (String(input).includes('/artifacts/upload')) {
+        return new Response(JSON.stringify({ ok: true, artifact: { id: 'srv-art-1' } }), {
+          status: 201, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+      runtimes: [], agents: [],
+      serverUrl: 'http://server.test',
+      fetch: uploadFetch,
+      homeDir,
+      executor: async () => ({
+        body: 'done',
+        workspaceRun: { status: 'succeeded', cwd, exitCode: 0, startedAt: 1000, completedAt: 2000 },
+      }),
+    });
+    await client.start();
+
+    await harness.deliver(AGENT_EVENTS.dispatch.request, {
+      id: 'disp-non-codex', teamId: 'team-1', channelId: 'chan-1', messageId: 'msg-1',
+      agentId: 'agent-1', requestId: 'disp-non-codex', prompt: 'do work',
+      customAgent: { adapterKind: 'claude', command: 'echo', cwd },
+    });
+
+    const resultEmit = harness.emits.find((e) => e.event === AGENT_EVENTS.dispatch.result);
+    expect(resultEmit).toBeTruthy();
+    expect((resultEmit!.payload as { artifactIds?: string[] }).artifactIds).toBeUndefined();
+    expect(uploadFetch).not.toHaveBeenCalledWith(expect.stringContaining('/artifacts/upload'), expect.anything());
+  });
+
+  test('uploads Codex generated_images even when the request has no customAgent.cwd', async () => {
+    const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-home-')));
+    const generatedImagesDir = join(homeDir, '.codex', 'generated_images');
+    mkdirSync(generatedImagesDir, { recursive: true });
+    await touchFile(join(generatedImagesDir, 'ig_codex_native.png'), 5000);
+    const harness = createFakeSocket();
+
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+      runtimes: [], agents: [],
+      serverUrl: 'http://server.test',
+      fetch: async (input) => {
+        if (String(input).includes('/artifacts/upload')) {
+          return new Response(JSON.stringify({ ok: true, artifact: { id: 'srv-codex-image' } }), {
+            status: 201, headers: { 'content-type': 'application/json' },
+          });
+        }
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+      homeDir,
+      executor: async () => ({
+        body: 'done',
+        workspaceRun: { status: 'succeeded', exitCode: 0, startedAt: 1000, completedAt: 2000 },
+      }),
+    });
+    await client.start();
+
+    await harness.deliver(AGENT_EVENTS.dispatch.request, {
+      id: 'disp-codex-no-cwd', teamId: 'team-1', channelId: 'chan-1', messageId: 'msg-1',
+      agentId: 'agent-1', requestId: 'disp-codex-no-cwd', prompt: 'draw',
+      customAgent: { adapterKind: 'codex', command: 'codex' },
+    });
+
+    const resultEmit = harness.emits.find((e) => e.event === AGENT_EVENTS.dispatch.result);
+    expect(resultEmit).toBeTruthy();
+    expect((resultEmit!.payload as { artifactIds?: string[] }).artifactIds).toEqual(['srv-codex-image']);
   });
 
   test('dispatch 结果在 socket 断开时入队，重连后补发，且不抛', async () => {
