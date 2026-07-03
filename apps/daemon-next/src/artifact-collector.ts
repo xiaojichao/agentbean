@@ -22,6 +22,8 @@ export interface CollectArtifactsInput {
   outputDir: string;
   /** customAgent.cwd; fallback scan picks matching files with mtime > startedAt. */
   cwd: string;
+  /** Extra output roots such as Codex-native generated_images; mtime filtered. */
+  extraOutputDirs?: string[];
   /** command start timestamp (ms); used as mtime threshold for the cwd fallback. */
   startedAt: number;
   /** Maximum artifact bytes to hash/read; defaults to server upload cap. */
@@ -96,6 +98,9 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
   };
 
   ingest(input.outputDir, input.outputDir, false);
+  for (const dir of input.extraOutputDirs ?? []) {
+    ingest(dir, dir, true);
+  }
   ingest(input.cwd, input.cwd, true);
   return [...bySha.values()];
 }

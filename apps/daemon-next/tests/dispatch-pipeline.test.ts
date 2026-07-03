@@ -66,6 +66,7 @@ function createFakeSocket(): FakeHarness {
 describe('dispatch pipeline (attachments + product artifacts)', () => {
   test('downloads attachments, runs command, scans outputs, uploads, and reports artifact ids', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-')));
+    const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-home-')));
     const harness = createFakeSocket();
 
     const fakeFetch: typeof fetch = async (input) => {
@@ -88,6 +89,7 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
       agents: [],
       serverUrl: 'http://server.test',
       fetch: fakeFetch,
+      homeDir,
       executor: async () => ({
         body: 'done',
         artifacts: [{ id: 'workspace-log-x', filename: 'workspace-run.log', mimeType: 'text/plain', contentBase64: 'bG9n' }],
