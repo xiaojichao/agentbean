@@ -202,7 +202,7 @@ describe('server-next socket handlers', () => {
     await socket.trigger(WEB_EVENTS.device.rename, {
       userId: 'user-1',
       deviceId: 'device-1',
-      hostname: 'new-name',
+      name: 'new-name',
     });
     await socket.trigger(WEB_EVENTS.device.delete, {
       userId: 'user-1',
@@ -397,7 +397,7 @@ describe('server-next socket handlers', () => {
     expect(app.renameDevice).toHaveBeenCalledWith({
       userId: 'user-1',
       deviceId: 'device-1',
-      hostname: 'new-name',
+      name: 'new-name',
     });
     expect(app.deleteDevice).toHaveBeenCalledWith({
       userId: 'user-1',
@@ -889,13 +889,13 @@ describe('server-next socket handlers', () => {
 
     await expect(socket.trigger(WEB_EVENTS.device.rename, {
       deviceId: 'device-1',
-      hostname: 'new-name',
+      name: 'new-name',
     })).resolves.toEqual(renamedAck);
     expect(afterDeviceMutation).toHaveBeenNthCalledWith(1, {
       userId: 'user-session',
       teamId: 'team-session',
       deviceId: 'device-1',
-      hostname: 'new-name',
+      name: 'new-name',
       currentDeviceId: null,
     }, renamedAck);
 
@@ -908,6 +908,40 @@ describe('server-next socket handlers', () => {
       deviceId: 'device-1',
       currentDeviceId: null,
     }, deletedAck);
+  });
+
+  test('normalizes legacy device rename hostname payload to name', async () => {
+    const socket = new FakeSocket();
+    const afterDeviceMutation = vi.fn();
+    const renamedAck = makeSuccess({ device: { id: 'device-1', name: 'new-name' } });
+    const app = {
+      renameDevice: vi.fn(async () => renamedAck),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, {
+      afterDeviceMutation,
+      authenticatedUser: async () => ({
+        hasToken: true,
+        userId: 'user-session',
+        currentTeamId: 'team-session',
+        currentDeviceId: 'device-local',
+      }),
+    });
+
+    await expect(socket.trigger(WEB_EVENTS.device.rename, {
+      deviceId: 'device-1',
+      hostname: 'new-name',
+    })).resolves.toEqual(renamedAck);
+    const normalized = {
+      userId: 'user-session',
+      teamId: 'team-session',
+      deviceId: 'device-1',
+      hostname: 'new-name',
+      name: 'new-name',
+      currentDeviceId: 'device-local',
+    };
+    expect(app.renameDevice).toHaveBeenCalledWith(normalized);
+    expect(afterDeviceMutation).toHaveBeenCalledWith(normalized, renamedAck);
   });
 
   test('device.hello 首推 scanRequested：成功且有 custom agent 时触发 deviceScan', async () => {

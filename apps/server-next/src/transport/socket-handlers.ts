@@ -30,6 +30,14 @@ type BindOptions = Pick<WebSocketHandlerOptions, 'authenticatedUser'> & {
   currentTeamFromSession?: boolean;
   requireAuthenticatedUser?: boolean;
 };
+type DeviceRenameSocketInput = {
+  userId: string;
+  deviceId: string;
+  name: string;
+  teamId?: string;
+  currentDeviceId?: string | null;
+  hostname?: string;
+};
 const INTERNAL_SOCKET_ERROR_MESSAGE = 'Internal server error';
 
 // deviceScan 下发 request 的统一契约（hello 首推与 web-path 共用）。
@@ -112,7 +120,16 @@ export function registerWebSocketHandlers(
   }, { authenticatedUser: options.authenticatedUser });
   const afterDeviceMutation = (payload: unknown, result: unknown) =>
     options.afterDeviceMutation?.(payload, result);
-  bind(socket, WEB_EVENTS.device.rename, app, 'renameDevice', afterDeviceMutation, { authenticatedUser: options.authenticatedUser });
+  socket.on(WEB_EVENTS.device.rename, async (payload, ack) => {
+    try {
+      const input = normalizeDeviceRenameInput(await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser }));
+      const result = await app.renameDevice(input);
+      ack?.(result);
+      await afterDeviceMutation(input, result);
+    } catch (error) {
+      ack?.(socketErrorAck(error, WEB_EVENTS.device.rename));
+    }
+  });
   bind(socket, WEB_EVENTS.device.delete, app, 'deleteDevice', async (payload, result) => {
     await afterDeviceMutation(payload, result);
     await options.afterDeviceDelete?.(payload, result);
@@ -532,6 +549,18 @@ async function withAuthenticatedUserId(
   }
   enriched.currentDeviceId = auth.currentDeviceId ?? null;
   return enriched;
+}
+
+function normalizeDeviceRenameInput(payload: unknown): DeviceRenameSocketInput {
+  if (!payload || typeof payload !== 'object') {
+    return payload as never;
+  }
+  const record = payload as Record<string, unknown>;
+  const legacyHostname = typeof record.hostname === 'string' ? record.hostname : undefined;
+  if (typeof record.name === 'string' || legacyHostname === undefined) {
+    return record as DeviceRenameSocketInput;
+  }
+  return { ...record, name: legacyHostname } as DeviceRenameSocketInput;
 }
 
 export class UnauthenticatedSocketError extends Error {
