@@ -679,7 +679,6 @@ export async function exerciseWebUiAuthenticatedRouteSmoke({
     { path: `/${networkPath}/dashboard`, label: '仪表盘' },
     { path: `/${networkPath}/chat`, label: '聊天' },
     { path: `/${networkPath}/tasks`, label: '任务' },
-    { path: `/${networkPath}/runs`, label: '执行记录' },
     { path: `/${networkPath}/members`, label: '成员' },
     { path: `/${networkPath}/devices`, label: '设备' },
     { path: `/${networkPath}/settings`, label: '设置' },
@@ -1509,7 +1508,8 @@ export async function exerciseWebUiRunsBusinessSmoke({
       throw new Error(`WebUI runs smoke message did not create a dispatch: ${formatAck(sendAck)}`);
     }
 
-    await page.navigate(new URL(`/${networkPath}/runs`, root).toString());
+    await page.navigate(new URL(`/${networkPath}/settings`, root).toString());
+    await page.click('[data-smoke="settings-tab-runs"]');
     await waitForWebUiWorkspaceRunCard({ page, command, timeoutMs });
     await page.setInputValue('[data-smoke="workspace-runs-filter-status"]', 'succeeded');
     await waitForWebUiWorkspaceRunCard({ page, command, timeoutMs });

@@ -480,7 +480,8 @@ describe('AgentBean Next browser smoke script', () => {
       logArtifactId: 'webui-log-runs-smoke',
       summaryArtifactId: 'webui-summary-runs-smoke',
     });
-    expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/runs']);
+    expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/settings']);
+    expect(calls).toContainEqual(['click', '[data-smoke="settings-tab-runs"]']);
     expect(calls).toContainEqual(['reload', undefined]);
     expect(calls).toContainEqual([
       'setInputValue',
