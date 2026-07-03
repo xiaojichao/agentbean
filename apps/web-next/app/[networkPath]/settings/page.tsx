@@ -15,6 +15,8 @@ import {
   type AttachmentOpenMode,
   type BrowserSettings,
 } from '@/lib/browser-settings';
+import { releases } from '@/lib/releases.generated';
+import type { Release, ChangeType } from '@/lib/changelog';
 
 type Tab = 'account' | 'browser' | 'server' | 'releases';
 
@@ -640,25 +642,46 @@ function ReleasesPanel() {
       <h2 className="text-xl font-semibold">更新日志</h2>
       <section className="rounded-lg border border-neutral-200 p-5">
         <div className="space-y-4">
-          <ReleaseEntry version="v0.1.0" date="2026-05-05" notes={['初始版本，支持 Agent 管理、设备管理、聊天和任务看板。']} />
+          {releases.map((r) => (
+            <ReleaseEntry key={r.version} release={r} />
+          ))}
         </div>
       </section>
     </div>
   );
 }
 
-function ReleaseEntry({ version, date, notes }: { version: string; date: string; notes: string[] }) {
+const SECTION_STYLE: Record<ChangeType, { label: string; badge: string }> = {
+  Added:      { label: '新增', badge: 'bg-green-100 text-green-700' },
+  Changed:    { label: '变更', badge: 'bg-blue-100 text-blue-700' },
+  Deprecated: { label: '弃用', badge: 'bg-yellow-100 text-yellow-700' },
+  Removed:    { label: '移除', badge: 'bg-red-100 text-red-700' },
+  Fixed:      { label: '修复', badge: 'bg-orange-100 text-orange-700' },
+  Security:   { label: '安全', badge: 'bg-purple-100 text-purple-700' },
+};
+
+function ReleaseEntry({ release }: { release: Release }) {
+  const sections = release.sections.filter((s) => s.items.length > 0);
   return (
     <div>
       <div className="flex items-center gap-2">
-        <span className="text-sm font-semibold">{version}</span>
-        <span className="text-xs text-neutral-400">{date}</span>
+        <span className="text-sm font-semibold">v{release.version}</span>
+        <span className="text-xs text-neutral-400">{release.date}</span>
       </div>
-      <ul className="mt-1.5 space-y-1 pl-4">
-        {notes.map((n, i) => (
-          <li key={i} className="text-sm text-neutral-600 list-disc">{n}</li>
+      <div className="mt-1.5 space-y-2 pl-2">
+        {sections.map((s) => (
+          <div key={s.type}>
+            <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${SECTION_STYLE[s.type].badge}`}>
+              {SECTION_STYLE[s.type].label}
+            </span>
+            <ul className="mt-1 space-y-1 pl-4">
+              {s.items.map((n, i) => (
+                <li key={i} className="text-sm text-neutral-600 list-disc">{n}</li>
+              ))}
+            </ul>
+          </div>
         ))}
-      </ul>
+      </div>
     </div>
   );
 }
