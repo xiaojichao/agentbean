@@ -149,7 +149,7 @@ describe('server-next Socket.IO namespaces', () => {
       now: () => 1000,
       ids: createIds([
         'user-1', 'team-1', 'channel-1', 'device-1', 'runtime-1',
-        'agent-1', 'message-1', 'dispatch-1', 'request-1',
+        'agent-1', 'message-1', 'dispatch-1', 'request-1', 'message-2',
       ]),
     });
     const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
@@ -179,6 +179,22 @@ describe('server-next Socket.IO namespaces', () => {
     await eventually(async () => {
       expect(statuses.some((s) => s.id === 'agent-1' && s.status === 'online')).toBe(true);
     });
+
+    // 回归：无 dispatch 的消息不得触发 afterAgentMutation，否则每条聊天都会
+    // 全量扇出 refreshAgentSubscribers（性能回归）。
+    // 守门条件：isSendMessageAck(result) && result.dispatches.length > 0。
+    // 用 @UnknownAgent mention 强制 route=no-dispatch（reason=unknown-mention），
+    // 避开 routeMessage 的无 mention fallback（fallback 会派给第一个在线 agent）。
+    const statusCountBeforePlain = statuses.length;
+    await web.emitWithAck(WEB_EVENTS.message.send, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@UnknownAgent hi',
+    });
+    // 给潜在的 push 留时间到达；expect 不会有新事件。
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(statuses.length).toBe(statusCountBeforePlain);
   });
 
   test('realtime.refreshAgents emits current agent status to subscribers', async () => {

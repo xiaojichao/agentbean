@@ -280,7 +280,11 @@ export function registerWebSocketHandlers(
   });
   bind(socket, WEB_EVENTS.message.send, app, 'sendMessage', async (_payload, result) => {
     await options.afterMessageSend?.(_payload, result);
-    await options.afterAgentMutation?.(_payload, result);
+    // afterAgentMutation（全量 refreshAgentSubscribers 扇出）仅在确实产生 dispatch
+    //（即写入了 busy）时触发；普通聊天消息不得引发 agent 状态推送（性能回归）。
+    if (isSendMessageAck(result) && result.dispatches.length > 0) {
+      await options.afterAgentMutation?.(_payload, result);
+    }
     if (!options.dispatch || !isSendMessageAck(result)) {
       return;
     }

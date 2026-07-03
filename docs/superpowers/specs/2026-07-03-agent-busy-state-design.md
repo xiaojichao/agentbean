@@ -75,7 +75,7 @@
 | dispatch **取消** | `cancelDispatch` `usecases.ts:2939` | `online` | 🆕 补 | `if status === 'busy'` |
 | dispatch **超时** | `failTimedOutDispatches` `usecases.ts:2957` | `online` | 🆕 补 | `if status === 'busy'` |
 | **device 掉线** | `markDeviceAndHostedAgentsOffline` `usecases.ts:3768` | `offline` | ✅ 已有（无条件级联） | 自动清 busy |
-| **device 重连**（custom agent 恢复） | `usecases.ts:1440` | `online` | ✅ 已有 | 自动清 busy |
+| **device 重连**（custom agent 恢复） | `usecases.ts:1440` | 保留 `busy`（跳过） | 🆕 改 | deviceHello 跳过 busy（`status === 'busy'` 不恢复）；交由超时调度（≤ timeoutMs）回落 online |
 
 ### 4.4 并发保证
 路由 online-only → busy agent 不被派新任务 → 同一 agent 至多 1 条 active dispatch → 布尔语义足够。
@@ -121,7 +121,7 @@ if (agent && agent.status === 'busy') {
 next 现有 device 生命周期机制天然清理 busy，**无需新增扫表逻辑**：
 
 - **device 掉线**：`markDeviceAndHostedAgentsOffline`（`:3768`）无条件把非 offline 的 agent 置 offline → busy 自动清除。
-- **server 重启后 daemon 重连**：`device:hello` 触发 `upsertHello` + custom agent 恢复（`:1440`，「非 online 恢复成 online」→ busy 被清）；scanned agent 由 daemon `registerDiscoveredAgents` 重新上报置 online → busy 被清。
+- **server 重启后 daemon 重连**：`device:hello` 触发 `upsertHello` + custom agent 恢复（`:1440`），但恢复循环**跳过 `busy`**（`status === 'busy'` 不被覆盖回 online，避免误清还在 dispatching 的 agent）；busy 的回落交给超时调度器兜底（若 dispatch 实已死，≤ timeoutMs 内 `failTimedOutDispatches` 触发守卫回落）。scanned agent 由 daemon `registerDiscoveredAgents` 重新上报置 online → busy 被清。
 - **兜底**：若 daemon 既未重连也未触发掉线（极端），dispatch 超时调度器（默认 300s 超时 / 5s 轮询，`dev-server.ts:204`）会跑 `failTimedOutDispatches` → 触发守卫回落。
 
 对比 legacy（纯内存，重启全丢、靠 daemon 重新 register 重建），next 有持久化 + 重连恢复 + 超时三层兜底，busy 不会真卡死。
