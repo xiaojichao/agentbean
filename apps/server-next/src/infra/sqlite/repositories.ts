@@ -752,9 +752,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         globalDb
           .prepare(
             `INSERT INTO devices (
-              id, team_id, owner_id, machine_id, profile_id, hostname, status, daemon_version,
+              id, team_id, owner_id, machine_id, profile_id, hostname, name, name_source, status, daemon_version,
               system_info, connect_command, canonical_device_id, last_seen_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               team_id = excluded.team_id,
               owner_id = excluded.owner_id,
@@ -775,7 +775,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             device.ownerId,
             device.machineId ?? null,
             device.profileId ?? null,
+            device.systemInfo?.hostname ?? null,
             device.name ?? null,
+            device.nameSource ?? null,
             device.status,
             device.daemonVersion ?? null,
             device.systemInfo ? JSON.stringify(device.systemInfo) : null,
@@ -807,7 +809,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
                 AND canonical.team_id = matched.team_id
                 AND canonical.owner_id = matched.owner_id
                WHERE matched.team_id = ? AND matched.owner_id = ?
-                 AND LOWER(TRIM(COALESCE(NULLIF(matched.hostname, ''), json_extract(matched.system_info, '$.hostname')))) = LOWER(TRIM(?))
+                 AND LOWER(TRIM(COALESCE(NULLIF(matched.name, ''), json_extract(matched.system_info, '$.hostname')))) = LOWER(TRIM(?))
                ORDER BY canonical.updated_at DESC, canonical.id DESC LIMIT 1`,
             )
             .get(input.teamId, input.ownerId, input.name),
@@ -873,7 +875,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       },
       async updateName(input) {
         const result = globalDb
-          .prepare('UPDATE devices SET hostname = ?, updated_at = ? WHERE id = ?')
+          .prepare("UPDATE devices SET name = ?, name_source = 'user', updated_at = ? WHERE id = ?")
           .run(input.name, input.updatedAt, input.deviceId);
         if (sqliteChanges(result) === 0) {
           return null;
@@ -1928,7 +1930,8 @@ function mapDevice(row: unknown): DeviceRecord | null {
     teamId: sqliteText(row, 'team_id'),
     ownerId: sqliteText(row, 'owner_id'),
     status: sqliteText(row, 'status') as DeviceRecord['status'],
-    name: sqliteNullableText(row, 'hostname'),
+    name: sqliteNullableText(row, 'name'),
+    nameSource: sqliteNullableText(row, 'name_source') as DeviceRecord['nameSource'],
     machineId: sqliteNullableText(row, 'machine_id'),
     profileId: sqliteNullableText(row, 'profile_id'),
     canonicalDeviceId: sqliteNullableText(row, 'canonical_device_id') ?? null,

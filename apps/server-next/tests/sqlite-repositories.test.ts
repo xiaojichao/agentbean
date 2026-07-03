@@ -935,11 +935,11 @@ describe('server-next SQLite repositories', () => {
 
       const insertDevice = globalDb.prepare(
         `INSERT INTO devices (
-            id, team_id, owner_id, machine_id, profile_id, hostname, status,
+            id, team_id, owner_id, machine_id, profile_id, hostname, name, name_source, status,
             last_seen_at, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
-      insertDevice.run('legacy-device', 'team-1', 'user-1', null, null, 'Renamed Host', 'online', 650, 650, 650);
+      insertDevice.run('legacy-device', 'team-1', 'user-1', null, null, 'Renamed Host', 'Renamed Host', 'hostname', 'online', 650, 650, 650);
       await app.markDeviceOffline({ deviceId: 'device-1', timestamp: 800 });
       await expect(app.listDevices({ teamId: 'team-1', userId: 'user-1' })).resolves.toMatchObject({
         ok: true,
@@ -948,7 +948,7 @@ describe('server-next SQLite repositories', () => {
       const listed = await app.listDevices({ teamId: 'team-1', userId: 'user-1' });
       expect(listed.ok ? listed.devices.map((device) => device.id) : []).toEqual(['device-1']);
 
-      insertDevice.run('newer-legacy-device', 'team-1', 'user-1', null, null, 'Renamed Host', 'online', 900, 900, 900);
+      insertDevice.run('newer-legacy-device', 'team-1', 'user-1', null, null, 'Renamed Host', 'Renamed Host', 'hostname', 'online', 900, 900, 900);
       await expect(app.listDevices({ teamId: 'team-1', userId: 'user-1' })).resolves.toMatchObject({
         ok: true,
         devices: [{ id: 'device-1', name: 'Renamed Host', status: 'offline' }],
@@ -1093,12 +1093,12 @@ describe('server-next SQLite repositories', () => {
       await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
       const insertDevice = globalDb.prepare(
         `INSERT INTO devices (
-          id, team_id, owner_id, machine_id, profile_id, hostname, status,
+          id, team_id, owner_id, machine_id, profile_id, hostname, name, name_source, status,
           last_seen_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
-      insertDevice.run('device-a', 'team-1', 'user-1', 'machine-a', 'default', 'MacBook Pro', 'online', 100, 100, 100);
-      insertDevice.run('device-b', 'team-1', 'user-1', 'machine-b', 'default', 'MacBook Pro', 'offline', 200, 200, 200);
+      insertDevice.run('device-a', 'team-1', 'user-1', 'machine-a', 'default', 'MacBook Pro', 'MacBook Pro', 'hostname', 'online', 100, 100, 100);
+      insertDevice.run('device-b', 'team-1', 'user-1', 'machine-b', 'default', 'MacBook Pro', 'MacBook Pro', 'hostname', 'offline', 200, 200, 200);
 
       const listed = await app.listDevices({ teamId: 'team-1', userId: 'user-1' });
       expect(listed.ok ? listed.devices.map((device) => device.id) : []).toEqual(['device-a', 'device-b']);
@@ -2428,6 +2428,36 @@ describe('server-next SQLite repositories', () => {
       const row = globalDb.prepare('SELECT name, name_source FROM devices WHERE id = ?').get('d-backfill') as { name: string; name_source: string };
       expect(row.name).toBe('host-orig');
       expect(row.name_source).toBe('hostname');
+    } finally {
+      close();
+    }
+  });
+
+  test('sqlite upsertHello 不覆盖用户改名（ON CONFLICT 不写 name）', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    const repos = createSqliteRepositories({ globalDb, teamDb });
+    try {
+      // 直接构造 device 行不关联真实 team/user，沿用 line 2421 的写法临时关闭 FK。
+      globalDb.pragma('foreign_keys = OFF');
+      // 首次 hello：name 初始化为机器名
+      await repos.devices.upsertHello({
+        id: 'd1', teamId: 't1', ownerId: 'u1', status: 'online',
+        name: 'host1', nameSource: 'hostname',
+        systemInfo: { hostname: 'host1' },
+        lastSeenAt: 1000, createdAt: 1000, updatedAt: 1000,
+      });
+      // 用户改名
+      await repos.devices.updateName({ deviceId: 'd1', name: '我的设备', updatedAt: 2000 });
+      // 模拟重连：即使上层传了不同的 name（host2），ON CONFLICT 也不写入 name 列
+      await repos.devices.upsertHello({
+        id: 'd1', teamId: 't1', ownerId: 'u1', status: 'online',
+        name: 'host2', nameSource: 'hostname',
+        systemInfo: { hostname: 'host2' },
+        lastSeenAt: 3000, createdAt: 1000, updatedAt: 3000,
+      });
+      const got = await repos.devices.getById('d1');
+      expect(got?.name).toBe('我的设备');      // name 列未被 host2 覆盖
+      expect(got?.nameSource).toBe('user');    // name_source 未被覆盖
     } finally {
       close();
     }
