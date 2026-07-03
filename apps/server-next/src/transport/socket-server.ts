@@ -238,6 +238,7 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
           payloadTargetTeamId(payload),
           ...payloadTeamIds(payload, 'affectedTeamIds'),
           ...resultAgentVisibleTeamIds(result),
+          resultDispatchTeamId(result),
         ]);
         for (const teamId of agentTeamIds) {
           await refreshAgentSubscribers(webSubscribers, app, teamId);

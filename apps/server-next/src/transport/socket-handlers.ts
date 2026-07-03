@@ -280,6 +280,7 @@ export function registerWebSocketHandlers(
   });
   bind(socket, WEB_EVENTS.message.send, app, 'sendMessage', async (_payload, result) => {
     await options.afterMessageSend?.(_payload, result);
+    await options.afterAgentMutation?.(_payload, result);
     if (!options.dispatch || !isSendMessageAck(result)) {
       return;
     }
@@ -303,6 +304,7 @@ export function registerWebSocketHandlers(
     if (!isDispatchAck(result)) {
       return;
     }
+    await options.afterAgentMutation?.(_payload, result);
     options.dispatchStatus?.(result.dispatch);
     if (!options.dispatchCancel) {
       return;

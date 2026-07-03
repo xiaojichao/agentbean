@@ -144,6 +144,43 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('emits agent:status busy on dispatch and online on cancel', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1', 'team-1', 'channel-1', 'device-1', 'runtime-1',
+        'agent-1', 'message-1', 'dispatch-1', 'request-1',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const web = await connectClient(`${baseUrl}/web`);
+    const agentSock = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => { web.disconnect(); agentSock.disconnect(); });
+
+    await web.emitWithAck(WEB_EVENTS.auth.register, { username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await agentSock.emitWithAck(AGENT_EVENTS.device.hello, { teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' });
+    await agentSock.emitWithAck(AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-1', runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }] });
+    await agentSock.emitWithAck(AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-1', agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }] });
+
+    const statuses: Array<{ id?: string; status?: string }> = [];
+    web.on(WEB_EVENTS.agent.status, (s) => statuses.push(s as { id?: string; status?: string }));
+    await web.emitWithAck(WEB_EVENTS.agent.subscribe, { userId: 'user-1', teamId: 'team-1' });
+
+    await web.emitWithAck(WEB_EVENTS.message.send, { userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex hello' });
+    await eventually(async () => {
+      expect(statuses.some((s) => s.id === 'agent-1' && s.status === 'busy')).toBe(true);
+    });
+
+    await web.emitWithAck(WEB_EVENTS.dispatch.cancel, { userId: 'user-1', dispatchId: 'dispatch-1' });
+    await eventually(async () => {
+      expect(statuses.some((s) => s.id === 'agent-1' && s.status === 'online')).toBe(true);
+    });
+  });
+
   test('device:agents:list returns runtimes + agents reported by the daemon', async () => {
     // 协议漂移修复：web emit 'device:agents:list' 后 server 必须回 agents + runtimes。
     // 先 daemon report runtimes/agents，再让 web 查询该 device，校验拿到完整列表。
