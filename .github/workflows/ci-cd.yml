@@ -232,6 +232,11 @@ jobs:
           apps/server/node_modules/.bin/tsc -p apps/daemon-next/tsconfig.json --typeRoots apps/server/node_modules/@types
           apps/server/node_modules/.bin/tsc -p apps/web-next/tsconfig.json
 
+      - name: Verify changelog generated file is fresh
+        run: |
+          apps/server/node_modules/.bin/tsx apps/web-next/scripts/gen-changelog.ts
+          git diff --exit-code apps/web-next/lib/releases.generated.ts
+
       - name: Run AgentBean Next daemon install smoke
         if: steps.changes.outputs.should_validate == 'true'
         run: npm run smoke:agentbean-next-daemon-install -- --skip-build

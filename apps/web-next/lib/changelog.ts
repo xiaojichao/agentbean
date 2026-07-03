@@ -48,7 +48,7 @@ export function parseChangelog(md: string): Release[] {
     }
     const vm = VERSION_RE.exec(line);
     if (vm) {
-      current = { version: vm[1].trim(), date: vm[2].trim(), sections: [] };
+      current = { version: vm[1].trim().replace(/^v/, ''), date: vm[2].trim(), sections: [] };
       byVersion.set(current.version, current); // 重复版本号覆盖 → 保留最后
       currentSection = null;
       continue;

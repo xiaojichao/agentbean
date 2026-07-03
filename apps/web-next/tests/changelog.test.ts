@@ -81,6 +81,11 @@ describe('parseChangelog', () => {
     expect(parseChangelog('')).toEqual([]);
   });
 
+  test('版本号去除前导 v（防止 UI 显示 vv0.2.0）', () => {
+    const r = parseChangelog('## [v0.2.0] - 2026-06-01\n### Added\n- x\n');
+    expect(r[0].version).toBe('0.2.0');
+  });
+
   test('无日期的版本块被跳过，其条目不并入前一版本', () => {
     const md = `## [1.0.0] - 2026-01-01
 ### Added
