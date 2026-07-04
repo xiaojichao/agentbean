@@ -222,8 +222,8 @@ async function runCustomAgentCommand(
 // ARGV_MODE_ADAPTERS; the helpers below implement each contract (Hermes, OpenClaw, …).
 
 function hermesRuntimeArgs(args: string[]): string[] {
-  // A `gateway run` preamble selects the gateway-managed runtime; strip it so the chat subcommand
-  // can be appended cleanly.
+  // A `gateway run` preamble selects the gateway-managed runtime; strip it so the oneshot
+  // prompt flag can be appended cleanly.
   if (args[0] === 'gateway' && args[1] === 'run') {
     return args.slice(2);
   }
@@ -235,9 +235,12 @@ function buildHermesArgs(baseArgs: string[], prompt: string): string[] {
   const hasChat = runtime.includes('chat');
   const hasQuery = runtime.includes('-q') || runtime.includes('--query');
   const hasQuiet = runtime.includes('-Q') || runtime.includes('--quiet');
-  // Default scanner-supplied config (empty args) → a clean one-shot quiet query.
+  // Default scanner-supplied config (empty args) → oneshot mode (-z): non-interactive,
+  // auto-bypasses tool approvals so the agent can actually run tools in an async channel
+  // (there is no stdin/terminal here to answer interactive [o/s/d] prompts). `chat` mode
+  // would deny every flagged tool call and leak the approval preamble into the reply.
   if (!hasChat && !hasQuery) {
-    return [...runtime, 'chat', '-Q', '-q', prompt];
+    return [...runtime, '-z', prompt];
   }
   // Operator already parameterised the chat subcommand: honour it, force quiet mode, and append
   // the prompt value (after a -q flag if none is present). -Q is inserted right after `chat` so
@@ -292,7 +295,7 @@ function redactHermesCommandArgs(args: string[]): string[] {
     if (arg === undefined) {
       continue;
     }
-    if (arg === '-q' || arg === '--query') {
+    if (arg === '-z' || arg === '--oneshot' || arg === '-q' || arg === '--query') {
       redacted.push(arg, HERMES_QUERY_PLACEHOLDER);
       if (args[index + 1] !== undefined) {
         index += 1;
