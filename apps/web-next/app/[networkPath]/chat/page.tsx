@@ -133,11 +133,13 @@ export default function ChatPage() {
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
+  const activityMessages = useAgentBeanStore((s) => s.activityMessages);
   const applyChannelsSnapshot = useAgentBeanStore((s) => s.applyChannelsSnapshot);
   const dms = useAgentBeanStore((s) => s.dms);
   const applyDmsSnapshot = useAgentBeanStore((s) => s.applyDmsSnapshot);
   const applyChannelHistory = useAgentBeanStore((s) => s.applyChannelHistory);
   const appendMessage = useAgentBeanStore((s) => s.appendMessage);
+  const upsertActivityMessages = useAgentBeanStore((s) => s.upsertActivityMessages);
   const applyDispatchStatus = useAgentBeanStore((s) => s.applyDispatchStatus);
   const router = useRouter();
   const params = useParams();
@@ -176,7 +178,10 @@ export default function ChatPage() {
   const [loadedReactionsKey, setLoadedReactionsKey] = useState<string | null>(null);
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
   const [loadedDoneKey, setLoadedDoneKey] = useState<string | null>(null);
-  const inboxUnread = inboxActivityMessages(Object.values(messagesByChannel).flat(), visibleConversationIds(channels, dms)).filter((m) => !doneIds.has(m.id)).length;
+  const activityVisibleIds = visibleConversationIds(channels, dms);
+  const activityVisibleList = [...activityVisibleIds];
+  const activityVisibleKey = activityVisibleList.join('\u001f');
+  const inboxUnread = inboxActivityMessages(activityMessages, activityVisibleIds).filter((m) => !doneIds.has(m.id)).length;
   const [profileAgentCache, setProfileAgentCache] = useState<Record<string, AgentSnapshot>>({});
   const [showMention, setShowMention] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -214,6 +219,22 @@ export default function ChatPage() {
   useEffect(() => {
     dmsRef.current = dms;
   }, [dms]);
+
+  useEffect(() => {
+    if (conn !== 'open' || !currentTeamId || activityVisibleList.length === 0) return;
+    let cancelled = false;
+    Promise.all(activityVisibleList.map((channelId) => channelEvents().join(currentTeamId, channelId, 20))).then((results) => {
+      if (cancelled) return;
+      const joined: ChatMessage[] = [];
+      for (const res of results) {
+        if (res.ok && res.messages) joined.push(...res.messages);
+      }
+      upsertActivityMessages(joined);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [conn, currentTeamId, activityVisibleKey, upsertActivityMessages]);
 
   useEffect(() => {
     if (chatTabParam === 'chat' || chatTabParam === 'tasks' || chatTabParam === 'files') {
@@ -3600,34 +3621,14 @@ function SearchView({ onClose, onJump, humanProfiles }: { onClose: () => void; o
 
 function ActivityView({ onJump, humanProfiles, doneIds, setDoneIds }: { onJump: (channelId: string) => void; humanProfiles: HumanProfile[]; doneIds: Set<string>; setDoneIds: Dispatch<SetStateAction<Set<string>>> }) {
   const [filter, setFilter] = useState<'all' | 'unread' | 'mentions'>('all');
-  const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
-  const upsertMessages = useAgentBeanStore((s) => s.upsertMessages);
+  const activityMessages = useAgentBeanStore((s) => s.activityMessages);
   const channels = useAgentBeanStore((s) => s.channels);
   const dms = useAgentBeanStore((s) => s.dms);
   const agents = useAgentBeanStore((s) => s.agents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
-  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const visibleIds = visibleConversationIds(channels, dms);
-  const visibleList = [...visibleIds];
-  const visibleKey = visibleList.join('\u001f');
 
-  useEffect(() => {
-    if (!currentTeamId || visibleList.length === 0) return;
-    let cancelled = false;
-    Promise.all(visibleList.map((channelId) => channelEvents().join(currentTeamId, channelId, 20))).then((results) => {
-      if (cancelled) return;
-      const joined: ChatMessage[] = [];
-      for (const res of results) {
-        if (res.ok && res.messages) joined.push(...res.messages);
-      }
-      upsertMessages(joined);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [currentTeamId, visibleKey, upsertMessages]);
-
-  const allMessages = inboxActivityMessages(Object.values(messagesByChannel).flat(), visibleIds);
+  const allMessages = inboxActivityMessages(activityMessages, visibleIds);
   const unreadCount = allMessages.filter((m) => !doneIds.has(m.id)).length;
   const visible = allMessages.filter((m) => {
     if (filter === 'unread') return !doneIds.has(m.id);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { mergeMessagesByChannel } from '../lib/store';
+import { mergeActivityMessages, mergeMessagesByChannel } from '../lib/store';
 import type { ChatMessage } from '../lib/schema';
 
 function msg(id: string, channelId: string, senderKind: ChatMessage['senderKind'] = 'human'): ChatMessage {
@@ -35,5 +35,34 @@ describe('mergeMessagesByChannel', () => {
   test('空 msgs 返回原对象引用', () => {
     const existing = { c1: [msg('m1', 'c1')] };
     expect(mergeMessagesByChannel(existing, [])).toBe(existing);
+  });
+});
+
+describe('mergeActivityMessages', () => {
+  test('新消息追加', () => {
+    const result = mergeActivityMessages([msg('m1', 'c1')], [msg('m2', 'c1'), msg('m3', 'c2')]);
+    expect(result.map((m) => m.id).sort()).toEqual(['m1', 'm2', 'm3']);
+  });
+
+  test('已存在 id 合并更新字段', () => {
+    const result = mergeActivityMessages([{ ...msg('m1', 'c1'), body: 'old' }], [{ ...msg('m1', 'c1'), body: 'new' }]);
+    expect(result[0].body).toBe('new');
+  });
+
+  test('空 msgs 返回原对象引用', () => {
+    const existing = [msg('m1', 'c1')];
+    expect(mergeActivityMessages(existing, [])).toBe(existing);
+  });
+
+  test('同对象无变化返回原对象引用', () => {
+    const m = msg('m1', 'c1');
+    const existing = [m];
+    expect(mergeActivityMessages(existing, [m])).toBe(existing);
+  });
+
+  test('同批次内部按 id 归并', () => {
+    const result = mergeActivityMessages([], [msg('m1', 'c1'), { ...msg('m1', 'c1'), body: 'second' }]);
+    expect(result.map((m) => m.id)).toEqual(['m1']);
+    expect(result[0].body).toBe('second');
   });
 });
