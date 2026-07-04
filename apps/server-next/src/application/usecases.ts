@@ -3038,6 +3038,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         createdAt: now,
         meta: {
           dispatchId: completed.dispatch.id,
+          ...(originMessage?.threadId && originMessage.threadId !== originMessage.id
+            ? { parentMessageId: originMessage.threadId }
+            : {}),
           ...(reportedArtifactIds.length > 0 ? { artifactIds: reportedArtifactIds } : {}),
           ...(workspaceRunId ? { workspaceRunId } : {}),
         },
@@ -4135,10 +4138,15 @@ async function enrichMessagesWithArtifacts(
     const workspaceRun = workspaceRunId
       ? await repositories.workspaceRuns.getForTeam({ teamId: message.teamId, runId: workspaceRunId })
       : null;
+    // 投影 dispatch 状态：dispatchStatus/dispatchId 不在 MessageRecord，靠 dispatches.listByMessage 查。
+    // 进行中的优先（让前端切频道/刷新后能恢复「正在处理」）；否则取最新一条的终态。
+    const dispatches = await repositories.dispatches.listByMessage(message.id);
+    const chosenDispatch = dispatches.find((d) => isPendingDispatchStatus(d.status)) ?? dispatches[dispatches.length - 1];
     enriched.push({
       ...message,
       ...(artifacts.length > 0 ? { artifacts: artifacts.map(toArtifactDto) } : {}),
       ...(workspaceRun ? { workspaceRun } : {}),
+      ...(chosenDispatch ? { dispatchStatus: chosenDispatch.status, dispatchId: chosenDispatch.id } : {}),
     });
   }
   return enriched;

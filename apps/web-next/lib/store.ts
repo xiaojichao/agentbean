@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import type { AgentSnapshot, ChannelSummary, ChatMessage, ConnState, DispatchStatus, OutboundMessage, DiscoveredAgent, RuntimeInfo, TeamSummary, AgentMetricsSummary, UserInfo, DeviceInfo, HumanMember } from './schema.js';
 import type { DmChannel } from './socket.js';
 import { agentVisibleInNetwork } from './agent-scope';
+import { mergeChannelHistory } from './chat-scope';
 
 function normalizeKind(value?: string | null): string {
   const normalized = (value ?? '').trim().toLowerCase().replace(/_/g, '-');
@@ -284,7 +285,12 @@ export const useAgentBeanStore = create<State>((set) => ({
   applyChannelsSnapshot(list) { set({ channels: list }); },
   applyDmsSnapshot(list) { set({ dms: list }); },
   applyChannelHistory(channelId, msgs) {
-    set((s) => ({ messagesByChannel: { ...s.messagesByChannel, [channelId]: msgs } }));
+    set((s) => ({
+      messagesByChannel: {
+        ...s.messagesByChannel,
+        [channelId]: mergeChannelHistory(msgs, s.messagesByChannel[channelId] ?? []),
+      },
+    }));
   },
   appendMessage(msg) {
     set((s) => {

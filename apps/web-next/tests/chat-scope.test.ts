@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { inboxActivityMessages } from '../lib/chat-scope';
+import { inboxActivityMessages, isTopLevelAgentReply, mergeChannelHistory } from '../lib/chat-scope';
 
 const human = { senderKind: 'human', senderId: 'u', body: '' } as const;
 
@@ -56,5 +56,70 @@ describe('inboxActivityMessages', () => {
       id: `m${i}`, channelId: 'c1', createdAt: i, ...human,
     }));
     expect(inboxActivityMessages(msgs, new Set(['c1']))).toHaveLength(80);
+  });
+});
+
+describe('isTopLevelAgentReply', () => {
+  test('agent 回复且 origin 是顶层 root → true（应进主时间线）', () => {
+    expect(isTopLevelAgentReply(
+      { id: 'agent-1', threadId: 'root-1', senderKind: 'agent' },
+      { id: 'root-1', threadId: 'root-1', senderKind: 'human' },
+    )).toBe(true);
+  });
+
+  test('agent 回复但 origin 在显式讨论串 → false（仍嵌套）', () => {
+    expect(isTopLevelAgentReply(
+      { id: 'agent-2', threadId: 'thread-root', senderKind: 'agent' },
+      { id: 'reply-1', threadId: 'thread-root', senderKind: 'human' },
+    )).toBe(false);
+  });
+
+  test('非 agent 消息 → false', () => {
+    expect(isTopLevelAgentReply(
+      { id: 'human-2', threadId: 'root-1', senderKind: 'human' },
+      { id: 'root-1', threadId: 'root-1', senderKind: 'human' },
+    )).toBe(false);
+  });
+
+  test('找不到 origin → false（保守嵌套，保持默认行为）', () => {
+    expect(isTopLevelAgentReply(
+      { id: 'agent-1', threadId: 'root-1', senderKind: 'agent' },
+      undefined,
+    )).toBe(false);
+  });
+});
+
+describe('mergeChannelHistory', () => {
+  test('保留客户端 running dispatchStatus（服务端 history 未带该字段）', () => {
+    const merged = mergeChannelHistory(
+      [{ id: 'm1' }],
+      [{ id: 'm1', dispatchStatus: 'running', dispatchId: 'd1' }],
+    );
+    expect(merged).toEqual([{ id: 'm1', dispatchStatus: 'running', dispatchId: 'd1' }]);
+  });
+
+  test('服务端带 dispatchStatus 时以服务端为准', () => {
+    const merged = mergeChannelHistory(
+      [{ id: 'm1', dispatchStatus: 'succeeded' }],
+      [{ id: 'm1', dispatchStatus: 'running', dispatchId: 'd1' }],
+    );
+    expect(merged[0]).toEqual({ id: 'm1', dispatchStatus: 'succeeded', dispatchId: 'd1' });
+  });
+
+  test('服务端新增消息直接收入，既有消息保留客户端 dispatchState', () => {
+    const merged = mergeChannelHistory(
+      [{ id: 'm1' }, { id: 'm2' }],
+      [{ id: 'm1', dispatchStatus: 'running', dispatchId: 'd1' }],
+    );
+    expect(merged.map((m) => m.id)).toEqual(['m1', 'm2']);
+    expect(merged[0].dispatchStatus).toBe('running');
+  });
+
+  test('客户端有但服务端 history 没有的消息被丢弃（history 为权威集合）', () => {
+    const merged = mergeChannelHistory(
+      [{ id: 'm1' }],
+      [{ id: 'm1' }, { id: 'm-old', dispatchStatus: 'running' }],
+    );
+    expect(merged.map((m) => m.id)).toEqual(['m1']);
   });
 });

@@ -11,7 +11,7 @@ import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
-import { inboxActivityMessages, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
+import { inboxActivityMessages, isTopLevelAgentReply, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { loadReadIds, readKey, saveReadIds } from '@/lib/chat-read-state';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import {
@@ -785,9 +785,11 @@ export default function ChatPage() {
 
   const messages = activeChannel ? (messagesByChannel[activeChannel] ?? []) : [];
   const visibleMessages = messages.filter((msg) => !isTaskSystemMessage(msg));
+  const messagesById = new Map<string, ChatMessage>();
+  for (const msg of messages) messagesById.set(msg.id, msg);
   const threadRoot = threadRootId ? visibleMessages.find((msg) => msg.id === threadRootId) ?? null : null;
-  const rootMessages = visibleMessages.filter((msg) => !parentMessageId(msg));
-  const threadReplies = threadRootId ? visibleMessages.filter((msg) => parentMessageId(msg) === threadRootId) : [];
+  const rootMessages = visibleMessages.filter((msg) => !parentMessageId(msg, messagesById));
+  const threadReplies = threadRootId ? visibleMessages.filter((msg) => parentMessageId(msg, messagesById) === threadRootId) : [];
 
   useEffect(() => {
     if (!activeChannel) return;
@@ -1150,7 +1152,7 @@ export default function ChatPage() {
                         onToggleSave={() => toggleSave(msg.id)}
                         onTaskMenu={(open) => setChatTaskMenuTarget(open && task ? { surface: 'main', messageId: msg.id } : null)}
                         onTaskStatus={(status) => { if (task) updateTaskStatus(task, status); }}
-                        replyCount={messages.filter((item) => parentMessageId(item) === msg.id).length}
+                        replyCount={messages.filter((item) => parentMessageId(item, messagesById) === msg.id).length}
                       />
                     );
                   })}
@@ -3079,14 +3081,30 @@ function isTaskSystemMessage(msg: ChatMessage): boolean {
   return meta.kind === 'task-created' || meta.kind === 'task-status-updated';
 }
 
-function parentMessageId(msg: ChatMessage): string | null {
-  if (msg.threadId && msg.threadId !== msg.id) return msg.threadId;
+function parentMessageId(msg: ChatMessage, messagesById?: Map<string, ChatMessage>): string | null {
   const meta = parseMeta(msg);
-  return typeof meta.parentMessageId === 'string'
+  const explicitParentMessageId = typeof meta.parentMessageId === 'string'
     ? meta.parentMessageId
     : typeof meta.inReplyTo === 'string'
       ? meta.inReplyTo
       : null;
+
+  if (msg.senderKind === 'agent' && explicitParentMessageId) {
+    return explicitParentMessageId;
+  }
+
+  if (msg.threadId && msg.threadId !== msg.id) {
+    // 顶层 agent 回复：当 origin 是顶层 root（threadId===自身id）时，回复进主时间线，不嵌套进隐式 thread。
+    // 仅当用户显式在真 thread 里（origin.threadId !== origin.id）触发 dispatch 时，agent 回复才嵌套。
+    if (msg.senderKind === 'agent') {
+      const origin = messagesById?.get(msg.threadId);
+      if (isTopLevelAgentReply(msg, origin)) {
+        return null;
+      }
+    }
+    return msg.threadId;
+  }
+  return explicitParentMessageId;
 }
 
 function parseThreadMessageId(raw: string | null, channelId: string): string | null {
