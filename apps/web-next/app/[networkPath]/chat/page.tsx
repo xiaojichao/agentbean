@@ -133,6 +133,7 @@ export default function ChatPage() {
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
+  const activityMessages = useAgentBeanStore((s) => s.activityMessages);
   const applyChannelsSnapshot = useAgentBeanStore((s) => s.applyChannelsSnapshot);
   const dms = useAgentBeanStore((s) => s.dms);
   const applyDmsSnapshot = useAgentBeanStore((s) => s.applyDmsSnapshot);
@@ -176,7 +177,7 @@ export default function ChatPage() {
   const [loadedReactionsKey, setLoadedReactionsKey] = useState<string | null>(null);
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
   const [loadedDoneKey, setLoadedDoneKey] = useState<string | null>(null);
-  const inboxUnread = inboxActivityMessages(Object.values(messagesByChannel).flat(), visibleConversationIds(channels, dms)).filter((m) => !doneIds.has(m.id)).length;
+  const inboxUnread = inboxActivityMessages(activityMessages, visibleConversationIds(channels, dms)).filter((m) => !doneIds.has(m.id)).length;
   const [profileAgentCache, setProfileAgentCache] = useState<Record<string, AgentSnapshot>>({});
   const [showMention, setShowMention] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -3600,8 +3601,8 @@ function SearchView({ onClose, onJump, humanProfiles }: { onClose: () => void; o
 
 function ActivityView({ onJump, humanProfiles, doneIds, setDoneIds }: { onJump: (channelId: string) => void; humanProfiles: HumanProfile[]; doneIds: Set<string>; setDoneIds: Dispatch<SetStateAction<Set<string>>> }) {
   const [filter, setFilter] = useState<'all' | 'unread' | 'mentions'>('all');
-  const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
-  const upsertMessages = useAgentBeanStore((s) => s.upsertMessages);
+  const activityMessages = useAgentBeanStore((s) => s.activityMessages);
+  const upsertActivityMessages = useAgentBeanStore((s) => s.upsertActivityMessages);
   const channels = useAgentBeanStore((s) => s.channels);
   const dms = useAgentBeanStore((s) => s.dms);
   const agents = useAgentBeanStore((s) => s.agents);
@@ -3620,14 +3621,14 @@ function ActivityView({ onJump, humanProfiles, doneIds, setDoneIds }: { onJump: 
       for (const res of results) {
         if (res.ok && res.messages) joined.push(...res.messages);
       }
-      upsertMessages(joined);
+      upsertActivityMessages(joined);
     });
     return () => {
       cancelled = true;
     };
-  }, [currentTeamId, visibleKey, upsertMessages]);
+  }, [currentTeamId, visibleKey, upsertActivityMessages]);
 
-  const allMessages = inboxActivityMessages(Object.values(messagesByChannel).flat(), visibleIds);
+  const allMessages = inboxActivityMessages(activityMessages, visibleIds);
   const unreadCount = allMessages.filter((m) => !doneIds.has(m.id)).length;
   const visible = allMessages.filter((m) => {
     if (filter === 'unread') return !doneIds.has(m.id);

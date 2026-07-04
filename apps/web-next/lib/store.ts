@@ -161,6 +161,7 @@ interface State {
   channels: ChannelSummary[];
   dms: DmChannel[];
   messagesByChannel: Record<string, ChatMessage[]>;
+  activityMessages: ChatMessage[];
   outbox: Record<string, OutboundMessage>;
   discovered: DiscoveredAgent[];
   runtimes: RuntimeInfo[];
@@ -183,6 +184,7 @@ interface State {
   appendMessage(msg: ChatMessage): void;
   applyDispatchStatus(channelId: string, messageId: string, dispatchStatus: DispatchStatus, dispatchId?: string): void;
   upsertMessages(msgs: ChatMessage[]): void;
+  upsertActivityMessages(msgs: ChatMessage[]): void;
   addOutbound(msg: OutboundMessage): void;
   resolveOutbound(id: string, status: 'sent' | 'failed'): void;
   setDiscovered(list: DiscoveredAgent[]): void;
@@ -218,12 +220,29 @@ export function mergeMessagesByChannel(
   return changed ? next : existing;
 }
 
+export function mergeActivityMessages(
+  existing: ChatMessage[],
+  msgs: ChatMessage[],
+): ChatMessage[] {
+  if (msgs.length === 0) return existing;
+  const byId = new Map(existing.map((m) => [m.id, m]));
+  let changed = false;
+  for (const msg of msgs) {
+    const cur = byId.get(msg.id);
+    if (cur === msg) continue;
+    byId.set(msg.id, cur ? { ...cur, ...msg } : msg);
+    changed = true;
+  }
+  return changed ? [...byId.values()] : existing;
+}
+
 export const useAgentBeanStore = create<State>((set) => ({
   conn: 'connecting',
   agents: {},
   channels: [],
   dms: [],
   messagesByChannel: {},
+  activityMessages: [],
   outbox: {},
   discovered: [],
   runtimes: [],
@@ -270,6 +289,7 @@ export const useAgentBeanStore = create<State>((set) => ({
   appendMessage(msg) {
     set((s) => {
       const list = s.messagesByChannel[msg.channelId] ?? [];
+      const activityMessages = mergeActivityMessages(s.activityMessages, [msg]);
       const existingIndex = list.findIndex((item) => item.id === msg.id);
       if (existingIndex >= 0) {
         const next = list.map((item, index) => index === existingIndex
@@ -280,9 +300,9 @@ export const useAgentBeanStore = create<State>((set) => ({
               dispatchId: msg.dispatchId ?? item.dispatchId,
             }
           : item);
-        return { messagesByChannel: { ...s.messagesByChannel, [msg.channelId]: next } };
+        return { messagesByChannel: { ...s.messagesByChannel, [msg.channelId]: next }, activityMessages };
       }
-      return { messagesByChannel: { ...s.messagesByChannel, [msg.channelId]: [...list, msg] } };
+      return { messagesByChannel: { ...s.messagesByChannel, [msg.channelId]: [...list, msg] }, activityMessages };
     });
   },
   applyDispatchStatus(channelId, messageId, dispatchStatus, dispatchId) {
@@ -306,6 +326,9 @@ export const useAgentBeanStore = create<State>((set) => ({
   upsertMessages(msgs) {
     set((s) => ({ messagesByChannel: mergeMessagesByChannel(s.messagesByChannel, msgs) }));
   },
+  upsertActivityMessages(msgs) {
+    set((s) => ({ activityMessages: mergeActivityMessages(s.activityMessages, msgs) }));
+  },
   addOutbound(msg) { set((s) => ({ outbox: { ...s.outbox, [msg.id]: msg } })); },
   resolveOutbound(id, status) {
     set((s) => {
@@ -327,6 +350,7 @@ export const useAgentBeanStore = create<State>((set) => ({
         channels: [],
         dms: [],
         messagesByChannel: {},
+        activityMessages: [],
         outbox: {},
         agentMetrics: {},
         devices: {},
