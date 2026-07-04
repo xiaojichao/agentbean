@@ -81,11 +81,11 @@ describe('isTopLevelAgentReply', () => {
     )).toBe(false);
   });
 
-  test('找不到 origin → false（保守嵌套，保持默认行为）', () => {
+  test('找不到 origin → true（history 截断时仍显示频道顶层 agent 回复）', () => {
     expect(isTopLevelAgentReply(
       { id: 'agent-1', threadId: 'root-1', senderKind: 'agent' },
       undefined,
-    )).toBe(false);
+    )).toBe(true);
   });
 });
 
@@ -115,11 +115,22 @@ describe('mergeChannelHistory', () => {
     expect(merged[0].dispatchStatus).toBe('running');
   });
 
-  test('客户端有但服务端 history 没有的消息被丢弃（history 为权威集合）', () => {
+  test('客户端有但服务端 history 没有的终态消息被丢弃（history 为权威集合）', () => {
     const merged = mergeChannelHistory(
       [{ id: 'm1' }],
-      [{ id: 'm1' }, { id: 'm-old', dispatchStatus: 'running' }],
+      [{ id: 'm1' }, { id: 'm-old', dispatchStatus: 'succeeded' }],
     );
     expect(merged.map((m) => m.id)).toEqual(['m1']);
+  });
+
+  test('客户端有但服务端 history 没有的 pending dispatch 消息会保留', () => {
+    const merged = mergeChannelHistory(
+      [{ id: 'm2', createdAt: 200 }],
+      [{ id: 'm1', createdAt: 100, dispatchStatus: 'running', dispatchId: 'd1' }],
+    );
+    expect(merged).toEqual([
+      { id: 'm1', createdAt: 100, dispatchStatus: 'running', dispatchId: 'd1' },
+      { id: 'm2', createdAt: 200 },
+    ]);
   });
 });

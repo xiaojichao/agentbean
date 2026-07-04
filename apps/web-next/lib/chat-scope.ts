@@ -78,7 +78,8 @@ export function inboxActivityMessages<T extends ActivityMessage>(
  *  - 仅 agent 回复适用（人类消息的 threadId 仍按原语义）；
  *  - origin 是顶层 root（threadId === origin.id）→ 顶层对话 → 进主时间线（true）；
  *  - origin 在显式讨论串（threadId !== origin.id）→ agent 回复加入该讨论串（false，仍嵌套）；
- *  - 找不到 origin → 保守返回 false，维持原有嵌套行为，避免历史消息未加载时误判。
+ *  - 找不到 origin → 若没有显式 parentMessageId，则按顶层回复处理；否则切换回来时，
+ *    history 截断导致 origin 未加载，会把真实频道回复藏进不可见的讨论串。
  */
 export interface ThreadAnchorMessage {
   id: string;
@@ -91,8 +92,7 @@ export function isTopLevelAgentReply(
   origin: ThreadAnchorMessage | undefined,
 ): boolean {
   return reply.senderKind === 'agent'
-    && origin !== undefined
-    && origin.threadId === origin.id;
+    && (origin === undefined || origin.threadId === origin.id);
 }
 
 /**
@@ -106,12 +106,14 @@ export function isTopLevelAgentReply(
  * 契约：
  *  - 结果集合与顺序以 incoming 为准（history 权威，反映删除）；current 仅用于补 dispatchState；
  *  - 同 id 消息：incoming 内容优先，dispatchStatus/dispatchId 缺省时回落到 current；
- *  - current 有但 incoming 没有的消息（已删除/不在 history）→ 丢弃。
+ *  - current 有但 incoming 没有的 pending dispatch 消息 → 暂时保留，避免切走再回来时
+ *    limited history 把仍在处理的本地消息清掉；终态消息仍由 history 决定去留。
  */
 export interface DispatchStateMessage {
   id: string;
   dispatchStatus?: string;
   dispatchId?: string;
+  createdAt?: number;
 }
 
 export function mergeChannelHistory<T extends DispatchStateMessage>(
@@ -120,7 +122,8 @@ export function mergeChannelHistory<T extends DispatchStateMessage>(
 ): T[] {
   const currentById = new Map<string, T>();
   for (const m of current) currentById.set(m.id, m);
-  return incoming.map((message) => {
+  const incomingIds = new Set(incoming.map((message) => message.id));
+  const merged = incoming.map((message) => {
     const existing = currentById.get(message.id);
     if (!existing) return message;
     return {
@@ -129,4 +132,17 @@ export function mergeChannelHistory<T extends DispatchStateMessage>(
       dispatchId: message.dispatchId ?? existing.dispatchId,
     };
   });
+  const pendingOnlyInCurrent = current.filter((message) => (
+    !incomingIds.has(message.id) && isPendingDispatchStatus(message.dispatchStatus)
+  ));
+  if (pendingOnlyInCurrent.length === 0) return merged;
+  const next = [...merged, ...pendingOnlyInCurrent];
+  if (next.every((message) => typeof message.createdAt === 'number')) {
+    next.sort((a, b) => a.createdAt! - b.createdAt!);
+  }
+  return next;
+}
+
+function isPendingDispatchStatus(status: string | undefined): boolean {
+  return status === 'queued' || status === 'sent' || status === 'accepted' || status === 'running';
 }

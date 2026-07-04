@@ -103,6 +103,33 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('listByChannel returns the latest limited messages in chronological order with SQLite', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      for (let index = 1; index <= 5; index += 1) {
+        await repositories.messages.append({
+          id: `message-${index}`,
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          threadId: `message-${index}`,
+          senderKind: 'human',
+          senderId: 'user-1',
+          body: `message ${index}`,
+          createdAt: index * 100,
+        });
+      }
+
+      await expect(repositories.messages.listByChannel('channel-1', 3)).resolves.toMatchObject([
+        { id: 'message-3', createdAt: 300 },
+        { id: 'message-4', createdAt: 400 },
+        { id: 'message-5', createdAt: 500 },
+      ]);
+    } finally {
+      close();
+    }
+  });
+
   test('persists agent gateway instance keys with SQLite', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {

@@ -1253,7 +1253,15 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       },
       async listByChannel(channelId, limit) {
         return teamDb
-          .prepare('SELECT * FROM messages WHERE channel_id = ? ORDER BY created_at LIMIT ?')
+          .prepare(`
+            SELECT * FROM (
+              SELECT * FROM messages
+              WHERE channel_id = ?
+              ORDER BY created_at DESC, id DESC
+              LIMIT ?
+            )
+            ORDER BY created_at ASC, id ASC
+          `)
           .all(channelId, limit)
           .map((row) => {
             const message = mapMessage(row);
