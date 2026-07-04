@@ -3038,6 +3038,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         createdAt: now,
         meta: {
           dispatchId: completed.dispatch.id,
+          replyScope: originMessage?.threadId && originMessage.threadId !== originMessage.id
+            ? 'thread'
+            : 'channel',
           ...(originMessage?.threadId && originMessage.threadId !== originMessage.id
             ? { parentMessageId: originMessage.threadId }
             : {}),

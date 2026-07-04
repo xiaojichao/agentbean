@@ -1850,7 +1850,12 @@ describe('server-next first-slice use cases', () => {
       body: 'first reply',
     })).resolves.toMatchObject({
       ok: true,
-      message: { id: 'message-2', threadId: 'message-1', body: 'first reply' },
+      message: {
+        id: 'message-2',
+        threadId: 'message-1',
+        body: 'first reply',
+        meta: { replyScope: 'channel' },
+      },
     });
 
     now = 412;
@@ -1893,7 +1898,7 @@ describe('server-next first-slice use cases', () => {
       message: {
         id: 'message-4',
         threadId: 'message-1',
-        meta: { parentMessageId: 'message-1' },
+        meta: { parentMessageId: 'message-1', replyScope: 'thread' },
       },
     });
 

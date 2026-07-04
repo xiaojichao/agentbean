@@ -1255,12 +1255,12 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return teamDb
           .prepare(`
             SELECT * FROM (
-              SELECT * FROM messages
+              SELECT *, rowid AS _message_rowid FROM messages
               WHERE channel_id = ?
-              ORDER BY created_at DESC, id DESC
+              ORDER BY created_at DESC, _message_rowid DESC
               LIMIT ?
             )
-            ORDER BY created_at ASC, id ASC
+            ORDER BY created_at ASC, _message_rowid ASC
           `)
           .all(channelId, limit)
           .map((row) => {
