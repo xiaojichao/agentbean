@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { inboxActivityMessages } from '../lib/chat-scope';
+import { inboxActivityMessages, isTopLevelAgentReply } from '../lib/chat-scope';
 
 const human = { senderKind: 'human', senderId: 'u', body: '' } as const;
 
@@ -56,5 +56,35 @@ describe('inboxActivityMessages', () => {
       id: `m${i}`, channelId: 'c1', createdAt: i, ...human,
     }));
     expect(inboxActivityMessages(msgs, new Set(['c1']))).toHaveLength(80);
+  });
+});
+
+describe('isTopLevelAgentReply', () => {
+  test('agent 回复且 origin 是顶层 root → true（应进主时间线）', () => {
+    expect(isTopLevelAgentReply(
+      { id: 'agent-1', threadId: 'root-1', senderKind: 'agent' },
+      { id: 'root-1', threadId: 'root-1', senderKind: 'human' },
+    )).toBe(true);
+  });
+
+  test('agent 回复但 origin 在显式讨论串 → false（仍嵌套）', () => {
+    expect(isTopLevelAgentReply(
+      { id: 'agent-2', threadId: 'thread-root', senderKind: 'agent' },
+      { id: 'reply-1', threadId: 'thread-root', senderKind: 'human' },
+    )).toBe(false);
+  });
+
+  test('非 agent 消息 → false', () => {
+    expect(isTopLevelAgentReply(
+      { id: 'human-2', threadId: 'root-1', senderKind: 'human' },
+      { id: 'root-1', threadId: 'root-1', senderKind: 'human' },
+    )).toBe(false);
+  });
+
+  test('找不到 origin → false（保守嵌套，保持默认行为）', () => {
+    expect(isTopLevelAgentReply(
+      { id: 'agent-1', threadId: 'root-1', senderKind: 'agent' },
+      undefined,
+    )).toBe(false);
   });
 });

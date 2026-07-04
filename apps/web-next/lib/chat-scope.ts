@@ -65,3 +65,32 @@ export function inboxActivityMessages<T extends ActivityMessage>(
     .sort((a, b) => b.createdAt - a.createdAt)
     .slice(0, limit);
 }
+
+/**
+ * 判定一条 agent 回复是否属于「频道/DM 顶层对话」，应进主时间线，而非嵌套进隐式讨论串。
+ *
+ * 修复「agent 回复在主时间线不可见」：服务端给 agent 回复写 threadId = originMessage.id
+ * （见 server-next usecases receiveDispatchResult）。当 origin 是顶层 root（threadId === 自身 id）
+ * 时，这个 threadId 只是「对话归组」标记，不应让 agent 回复被前端 parentMessageId 判定为
+ * 「有父消息」而嵌套——否则用户在主时间线只看到自己的消息，agent 回复藏在「讨论串」按钮后。
+ *
+ * 决策点：
+ *  - 仅 agent 回复适用（人类消息的 threadId 仍按原语义）；
+ *  - origin 是顶层 root（threadId === origin.id）→ 顶层对话 → 进主时间线（true）；
+ *  - origin 在显式讨论串（threadId !== origin.id）→ agent 回复加入该讨论串（false，仍嵌套）；
+ *  - 找不到 origin → 保守返回 false，维持原有嵌套行为，避免历史消息未加载时误判。
+ */
+export interface ThreadAnchorMessage {
+  id: string;
+  threadId?: string;
+  senderKind: string;
+}
+
+export function isTopLevelAgentReply(
+  reply: ThreadAnchorMessage,
+  origin: ThreadAnchorMessage | undefined,
+): boolean {
+  return reply.senderKind === 'agent'
+    && origin !== undefined
+    && origin.threadId === origin.id;
+}
