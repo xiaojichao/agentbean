@@ -3082,6 +3082,17 @@ function isTaskSystemMessage(msg: ChatMessage): boolean {
 }
 
 function parentMessageId(msg: ChatMessage, messagesById?: Map<string, ChatMessage>): string | null {
+  const meta = parseMeta(msg);
+  const explicitParentMessageId = typeof meta.parentMessageId === 'string'
+    ? meta.parentMessageId
+    : typeof meta.inReplyTo === 'string'
+      ? meta.inReplyTo
+      : null;
+
+  if (msg.senderKind === 'agent' && explicitParentMessageId) {
+    return explicitParentMessageId;
+  }
+
   if (msg.threadId && msg.threadId !== msg.id) {
     // 顶层 agent 回复：当 origin 是顶层 root（threadId===自身id）时，回复进主时间线，不嵌套进隐式 thread。
     // 仅当用户显式在真 thread 里（origin.threadId !== origin.id）触发 dispatch 时，agent 回复才嵌套。
@@ -3093,12 +3104,7 @@ function parentMessageId(msg: ChatMessage, messagesById?: Map<string, ChatMessag
     }
     return msg.threadId;
   }
-  const meta = parseMeta(msg);
-  return typeof meta.parentMessageId === 'string'
-    ? meta.parentMessageId
-    : typeof meta.inReplyTo === 'string'
-      ? meta.inReplyTo
-      : null;
+  return explicitParentMessageId;
 }
 
 function parseThreadMessageId(raw: string | null, channelId: string): string | null {

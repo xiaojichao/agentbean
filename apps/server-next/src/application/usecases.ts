@@ -3038,6 +3038,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         createdAt: now,
         meta: {
           dispatchId: completed.dispatch.id,
+          ...(originMessage?.threadId && originMessage.threadId !== originMessage.id
+            ? { parentMessageId: originMessage.threadId }
+            : {}),
           ...(reportedArtifactIds.length > 0 ? { artifactIds: reportedArtifactIds } : {}),
           ...(workspaceRunId ? { workspaceRunId } : {}),
         },
