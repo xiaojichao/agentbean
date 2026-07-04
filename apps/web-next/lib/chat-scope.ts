@@ -94,3 +94,39 @@ export function isTopLevelAgentReply(
     && origin !== undefined
     && origin.threadId === origin.id;
 }
+
+/**
+ * 合并「服务端频道 history 快照」与「客户端当前消息」，作为频道消息的渲染真源。
+ *
+ * 修复「切频道/切页面后『正在处理…』消失」：dispatchStatus/dispatchId 是客户端实时累积的派生态
+ * （由 message:dispatch-status 事件维护），不在服务端 MessageDto 里。applyChannelHistory 此前整体替换，
+ * 会把客户端 running 态清成 undefined。此函数以服务端 history 为权威集合（决定消息去留与内容），
+ * 但按 id 保留客户端的 dispatchStatus/dispatchId（服务端未带时）。
+ *
+ * 契约：
+ *  - 结果集合与顺序以 incoming 为准（history 权威，反映删除）；current 仅用于补 dispatchState；
+ *  - 同 id 消息：incoming 内容优先，dispatchStatus/dispatchId 缺省时回落到 current；
+ *  - current 有但 incoming 没有的消息（已删除/不在 history）→ 丢弃。
+ */
+export interface DispatchStateMessage {
+  id: string;
+  dispatchStatus?: string;
+  dispatchId?: string;
+}
+
+export function mergeChannelHistory<T extends DispatchStateMessage>(
+  incoming: T[],
+  current: T[],
+): T[] {
+  const currentById = new Map<string, T>();
+  for (const m of current) currentById.set(m.id, m);
+  return incoming.map((message) => {
+    const existing = currentById.get(message.id);
+    if (!existing) return message;
+    return {
+      ...message,
+      dispatchStatus: message.dispatchStatus ?? existing.dispatchStatus,
+      dispatchId: message.dispatchId ?? existing.dispatchId,
+    };
+  });
+}

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { inboxActivityMessages, isTopLevelAgentReply } from '../lib/chat-scope';
+import { inboxActivityMessages, isTopLevelAgentReply, mergeChannelHistory } from '../lib/chat-scope';
 
 const human = { senderKind: 'human', senderId: 'u', body: '' } as const;
 
@@ -86,5 +86,40 @@ describe('isTopLevelAgentReply', () => {
       { id: 'agent-1', threadId: 'root-1', senderKind: 'agent' },
       undefined,
     )).toBe(false);
+  });
+});
+
+describe('mergeChannelHistory', () => {
+  test('保留客户端 running dispatchStatus（服务端 history 未带该字段）', () => {
+    const merged = mergeChannelHistory(
+      [{ id: 'm1' }],
+      [{ id: 'm1', dispatchStatus: 'running', dispatchId: 'd1' }],
+    );
+    expect(merged).toEqual([{ id: 'm1', dispatchStatus: 'running', dispatchId: 'd1' }]);
+  });
+
+  test('服务端带 dispatchStatus 时以服务端为准', () => {
+    const merged = mergeChannelHistory(
+      [{ id: 'm1', dispatchStatus: 'succeeded' }],
+      [{ id: 'm1', dispatchStatus: 'running', dispatchId: 'd1' }],
+    );
+    expect(merged[0]).toEqual({ id: 'm1', dispatchStatus: 'succeeded', dispatchId: 'd1' });
+  });
+
+  test('服务端新增消息直接收入，既有消息保留客户端 dispatchState', () => {
+    const merged = mergeChannelHistory(
+      [{ id: 'm1' }, { id: 'm2' }],
+      [{ id: 'm1', dispatchStatus: 'running', dispatchId: 'd1' }],
+    );
+    expect(merged.map((m) => m.id)).toEqual(['m1', 'm2']);
+    expect(merged[0].dispatchStatus).toBe('running');
+  });
+
+  test('客户端有但服务端 history 没有的消息被丢弃（history 为权威集合）', () => {
+    const merged = mergeChannelHistory(
+      [{ id: 'm1' }],
+      [{ id: 'm1' }, { id: 'm-old', dispatchStatus: 'running' }],
+    );
+    expect(merged.map((m) => m.id)).toEqual(['m1']);
   });
 });
