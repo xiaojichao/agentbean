@@ -3658,7 +3658,18 @@ function ActivityView({ onJump, humanProfiles, doneIds, setDoneIds }: { onJump: 
         {visible.map((msg) => {
           const done = doneIds.has(msg.id);
           return (
-            <button key={msg.id} onClick={() => onJump(msg.channelId)} className={`group flex w-full items-start gap-3 border-b border-neutral-100 px-6 py-3 text-left hover:bg-neutral-50 ${done ? 'opacity-60' : ''}`}>
+            <div
+              key={msg.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => onJump(msg.channelId)}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                onJump(msg.channelId);
+              }}
+              className={`group flex w-full cursor-pointer items-start gap-3 border-b border-neutral-100 px-6 py-3 text-left hover:bg-neutral-50 focus:outline-none focus:ring-2 focus:ring-neutral-300 ${done ? 'opacity-60' : ''}`}
+            >
               <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-purple-100 text-xs font-semibold text-purple-700">
                 {speakerName(msg, agents, { currentUser, humanProfiles })[0]?.toUpperCase() ?? 'A'}
               </div>
@@ -3686,7 +3697,7 @@ function ActivityView({ onJump, humanProfiles, doneIds, setDoneIds }: { onJump: 
               >
                 标记完成
               </button>
-            </button>
+            </div>
           );
         })}
       </div>
