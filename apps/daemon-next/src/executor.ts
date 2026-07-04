@@ -72,7 +72,7 @@ async function runCustomAgentCommand(
   // Some agents are interactive TUIs/REPLs by default: feeding the prompt via stdin and closing
   // the pipe makes them echo the input then exit on EOF (Hermes prints "Goodbye!") without ever
   // running the query. Such agents expose a one-shot mode that carries the prompt on argv
-  // instead (Hermes: `chat -Q -q`, OpenClaw: `agent --agent <id> --message`). ARGV_MODE_ADAPTERS
+  // instead (Hermes: `-z`, OpenClaw: `agent --agent <id> --message`). ARGV_MODE_ADAPTERS
   // registers each agent's invocation contract; registered agents either put the prompt (plus
   // joined history) on argv or keep it on stdin while adding non-interactive flags.
   // Unregistered agents (codex, gemini, kimi-cli, …) keep the generic stdin contract.
