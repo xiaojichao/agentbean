@@ -81,11 +81,25 @@ describe('isTopLevelAgentReply', () => {
     )).toBe(false);
   });
 
-  test('找不到 origin → false（保守嵌套，保持默认行为）', () => {
+  test('找不到 origin 且有顶层 replyScope → true（history 截断时仍显示频道顶层 agent 回复）', () => {
+    expect(isTopLevelAgentReply(
+      { id: 'agent-1', threadId: 'root-1', senderKind: 'agent', meta: { replyScope: 'channel' } },
+      undefined,
+    )).toBe(true);
+  });
+
+  test('找不到 origin 且没有顶层信号 → false（旧讨论串回复不误提到主时间线）', () => {
     expect(isTopLevelAgentReply(
       { id: 'agent-1', threadId: 'root-1', senderKind: 'agent' },
       undefined,
     )).toBe(false);
+  });
+
+  test('找不到 origin 时可从 metaJson 读取顶层 replyScope', () => {
+    expect(isTopLevelAgentReply(
+      { id: 'agent-1', threadId: 'root-1', senderKind: 'agent', metaJson: '{"replyScope":"channel"}' },
+      undefined,
+    )).toBe(true);
   });
 });
 
@@ -115,11 +129,30 @@ describe('mergeChannelHistory', () => {
     expect(merged[0].dispatchStatus).toBe('running');
   });
 
-  test('客户端有但服务端 history 没有的消息被丢弃（history 为权威集合）', () => {
+  test('客户端有但服务端 history 没有的终态消息被丢弃（history 为权威集合）', () => {
     const merged = mergeChannelHistory(
       [{ id: 'm1' }],
-      [{ id: 'm1' }, { id: 'm-old', dispatchStatus: 'running' }],
+      [{ id: 'm1' }, { id: 'm-old', dispatchStatus: 'succeeded' }],
     );
     expect(merged.map((m) => m.id)).toEqual(['m1']);
+  });
+
+  test('客户端有但服务端 history 没有的 pending dispatch 消息在窗口内会保留', () => {
+    const merged = mergeChannelHistory(
+      [{ id: 'm2', createdAt: 200 }],
+      [{ id: 'm1', createdAt: 300, dispatchStatus: 'running', dispatchId: 'd1' }],
+    );
+    expect(merged).toEqual([
+      { id: 'm2', createdAt: 200 },
+      { id: 'm1', createdAt: 300, dispatchStatus: 'running', dispatchId: 'd1' },
+    ]);
+  });
+
+  test('客户端有但服务端 history 没有的旧 pending dispatch 消息会被截断窗口清掉', () => {
+    const merged = mergeChannelHistory(
+      [{ id: 'm2', createdAt: 200 }],
+      [{ id: 'm1', createdAt: 100, dispatchStatus: 'running', dispatchId: 'd1' }],
+    );
+    expect(merged).toEqual([{ id: 'm2', createdAt: 200 }]);
   });
 });

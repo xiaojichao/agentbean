@@ -78,12 +78,15 @@ export function inboxActivityMessages<T extends ActivityMessage>(
  *  - 仅 agent 回复适用（人类消息的 threadId 仍按原语义）；
  *  - origin 是顶层 root（threadId === origin.id）→ 顶层对话 → 进主时间线（true）；
  *  - origin 在显式讨论串（threadId !== origin.id）→ agent 回复加入该讨论串（false，仍嵌套）；
- *  - 找不到 origin → 保守返回 false，维持原有嵌套行为，避免历史消息未加载时误判。
+ *  - 找不到 origin → 仅当新数据带有明确顶层 replyScope 时兜底为顶层；旧数据缺少信号时
+ *    维持嵌套，避免把历史讨论串回复误提到主时间线。
  */
 export interface ThreadAnchorMessage {
   id: string;
   threadId?: string;
   senderKind: string;
+  meta?: Record<string, unknown>;
+  metaJson?: string | null;
 }
 
 export function isTopLevelAgentReply(
@@ -91,8 +94,10 @@ export function isTopLevelAgentReply(
   origin: ThreadAnchorMessage | undefined,
 ): boolean {
   return reply.senderKind === 'agent'
-    && origin !== undefined
-    && origin.threadId === origin.id;
+    && (
+      (origin !== undefined && origin.threadId === origin.id)
+      || (origin === undefined && replyScope(reply) === 'channel')
+    );
 }
 
 /**
@@ -106,12 +111,14 @@ export function isTopLevelAgentReply(
  * 契约：
  *  - 结果集合与顺序以 incoming 为准（history 权威，反映删除）；current 仅用于补 dispatchState；
  *  - 同 id 消息：incoming 内容优先，dispatchStatus/dispatchId 缺省时回落到 current；
- *  - current 有但 incoming 没有的消息（已删除/不在 history）→ 丢弃。
+ *  - current 有但 incoming 没有的 pending dispatch 消息 → 暂时保留，避免切走再回来时
+ *    limited history 把仍在处理的本地消息清掉；终态消息仍由 history 决定去留。
  */
 export interface DispatchStateMessage {
   id: string;
   dispatchStatus?: string;
   dispatchId?: string;
+  createdAt?: number;
 }
 
 export function mergeChannelHistory<T extends DispatchStateMessage>(
@@ -120,7 +127,8 @@ export function mergeChannelHistory<T extends DispatchStateMessage>(
 ): T[] {
   const currentById = new Map<string, T>();
   for (const m of current) currentById.set(m.id, m);
-  return incoming.map((message) => {
+  const incomingIds = new Set(incoming.map((message) => message.id));
+  const merged = incoming.map((message) => {
     const existing = currentById.get(message.id);
     if (!existing) return message;
     return {
@@ -129,4 +137,40 @@ export function mergeChannelHistory<T extends DispatchStateMessage>(
       dispatchId: message.dispatchId ?? existing.dispatchId,
     };
   });
+  const oldestIncomingCreatedAt = incoming
+    .map((message) => message.createdAt)
+    .filter((createdAt): createdAt is number => typeof createdAt === 'number')
+    .at(0);
+  const pendingOnlyInCurrent = current.filter((message) => (
+    !incomingIds.has(message.id)
+    && isPendingDispatchStatus(message.dispatchStatus)
+    && isWithinHistoryWindow(message, oldestIncomingCreatedAt)
+  ));
+  if (pendingOnlyInCurrent.length === 0) return merged;
+  const next = [...merged, ...pendingOnlyInCurrent];
+  if (next.every((message) => typeof message.createdAt === 'number')) {
+    next.sort((a, b) => a.createdAt! - b.createdAt!);
+  }
+  return next;
+}
+
+function isPendingDispatchStatus(status: string | undefined): boolean {
+  return status === 'queued' || status === 'sent' || status === 'accepted' || status === 'running';
+}
+
+function isWithinHistoryWindow(message: DispatchStateMessage, oldestIncomingCreatedAt: number | undefined): boolean {
+  return oldestIncomingCreatedAt === undefined
+    || typeof message.createdAt !== 'number'
+    || message.createdAt >= oldestIncomingCreatedAt;
+}
+
+function replyScope(message: ThreadAnchorMessage): string | undefined {
+  if (typeof message.meta?.replyScope === 'string') return message.meta.replyScope;
+  if (!message.metaJson) return undefined;
+  try {
+    const meta = JSON.parse(message.metaJson) as { replyScope?: unknown };
+    return typeof meta.replyScope === 'string' ? meta.replyScope : undefined;
+  } catch {
+    return undefined;
+  }
 }

@@ -103,6 +103,61 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('listByChannel returns the latest limited messages in chronological order with SQLite', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      for (let index = 1; index <= 5; index += 1) {
+        await repositories.messages.append({
+          id: `message-${index}`,
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          threadId: `message-${index}`,
+          senderKind: 'human',
+          senderId: 'user-1',
+          body: `message ${index}`,
+          createdAt: index * 100,
+        });
+      }
+
+      await expect(repositories.messages.listByChannel('channel-1', 3)).resolves.toMatchObject([
+        { id: 'message-3', createdAt: 300 },
+        { id: 'message-4', createdAt: 400 },
+        { id: 'message-5', createdAt: 500 },
+      ]);
+    } finally {
+      close();
+    }
+  });
+
+  test('listByChannel uses insertion order for same-millisecond limit boundaries', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const ids = ['z-first', 'm-second', 'a-third', 'y-fourth', 'b-fifth'];
+      for (const id of ids) {
+        await repositories.messages.append({
+          id,
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          threadId: id,
+          senderKind: 'human',
+          senderId: 'user-1',
+          body: id,
+          createdAt: 100,
+        });
+      }
+
+      await expect(repositories.messages.listByChannel('channel-1', 3)).resolves.toMatchObject([
+        { id: 'a-third', createdAt: 100 },
+        { id: 'y-fourth', createdAt: 100 },
+        { id: 'b-fifth', createdAt: 100 },
+      ]);
+    } finally {
+      close();
+    }
+  });
+
   test('persists agent gateway instance keys with SQLite', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
@@ -1227,7 +1282,7 @@ describe('server-next SQLite repositories', () => {
         senderKind: 'agent',
         senderId: 'agent-1',
         body: 'done',
-        metaJson: JSON.stringify({ dispatchId: 'dispatch-1', artifactIds: ['artifact-1'] }),
+        metaJson: JSON.stringify({ dispatchId: 'dispatch-1', replyScope: 'channel', artifactIds: ['artifact-1'] }),
       });
     } finally {
       close();
