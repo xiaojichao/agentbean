@@ -3636,7 +3636,7 @@ function ActivityView({ onJump, humanProfiles, doneIds, setDoneIds }: { onJump: 
   });
 
   return (
-    <div className="flex flex-1 flex-col">
+    <div className="flex flex-1 min-h-0 flex-col">
       <div className="flex h-16 items-center justify-between border-b border-neutral-200 px-6">
         <div>
           <h2 className="text-lg font-semibold">活动</h2>
@@ -3651,7 +3651,7 @@ function ActivityView({ onJump, humanProfiles, doneIds, setDoneIds }: { onJump: 
           </button>
         ))}
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto">
         {visible.length === 0 && (
           <div className="py-12 text-center text-sm text-neutral-400">暂无活动</div>
         )}
@@ -3719,7 +3719,7 @@ function SavedView({ savedMessages, onUnsave, onJump, humanProfiles }: { savedMe
     .sort((a, b) => b.createdAt - a.createdAt);
 
   return (
-    <div className="flex flex-1 flex-col">
+    <div className="flex flex-1 min-h-0 flex-col">
       <div className="flex h-16 flex-col justify-center border-b border-neutral-200 px-6">
         <h2 className="text-lg font-semibold">收藏</h2>
         <p className="text-xs text-neutral-400">{filtered.length} 条收藏</p>
@@ -3730,7 +3730,7 @@ function SavedView({ savedMessages, onUnsave, onJump, humanProfiles }: { savedMe
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索收藏..." className="h-8 w-full rounded-md border border-neutral-200 bg-neutral-50 pl-8 pr-3 text-sm outline-none focus:border-neutral-400 placeholder:text-neutral-400" />
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto">
         {filtered.length === 0 && (
           <div className="flex flex-col items-center justify-center py-16 text-neutral-400">
             <Bookmark size={32} strokeWidth={1.5} />
