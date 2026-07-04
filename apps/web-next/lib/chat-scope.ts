@@ -33,7 +33,7 @@ export interface SaveableMessage {
  *
  * 契约：
  *  - 两份来源按 id union，去重；
- *  - 同 id 以 memoryMessages 版本优先（内存更新鲜）；
+ *  - 同 id 以 memoryMessages 版本优先（内存更新新鲜）；
  *  - 结果按 createdAt 降序。
  */
 export function mergeSavedMessages<T extends SaveableMessage>(
@@ -47,4 +47,21 @@ export function mergeSavedMessages<T extends SaveableMessage>(
   for (const m of savedSnapshot) byId.set(m.id, m);
   for (const m of memoryMessages) byId.set(m.id, m);
   return [...byId.values()].sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export interface ActivityMessage {
+  channelId: string;
+  senderKind: string;
+  createdAt: number;
+}
+
+export function inboxActivityMessages<T extends ActivityMessage>(
+  messages: T[],
+  visibleIds: Set<string>,
+  limit = 80,
+): T[] {
+  return messagesForVisibleConversations(messages, visibleIds)
+    .filter((m) => m.senderKind !== 'system')
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, limit);
 }
