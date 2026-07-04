@@ -296,7 +296,7 @@ describe('daemon-next command executor', () => {
     });
   });
 
-  test('runs a hermes agent via "chat -Q -q" with the prompt on argv (not stdin), joining history and stripping session metadata', async () => {
+  test('runs a hermes agent via oneshot "-z" with the prompt on argv (not stdin), joining history and stripping any metadata', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
     const scriptPath = join(cwd, 'fake-hermes.mjs');
     const stdinLogPath = join(cwd, 'stdin.log');
@@ -304,10 +304,11 @@ describe('daemon-next command executor', () => {
       scriptPath,
       [
         `import { writeFileSync } from 'node:fs';`,
-        `// Simulate 'hermes chat -Q -q': quiet output, prompt arrives via the -q argv flag.`,
-        `const qIdx = process.argv.indexOf('-q');`,
-        `const queryIdx = process.argv.indexOf('--query');`,
-        `const query = qIdx >= 0 ? process.argv[qIdx + 1] : queryIdx >= 0 ? process.argv[queryIdx + 1] : '';`,
+        `// Simulate 'hermes -z' oneshot: prompt arrives via the -z/--oneshot argv flag.`,
+        `const zIdx = process.argv.indexOf('-z');`,
+        `const oneshotIdx = process.argv.indexOf('--oneshot');`,
+        `const query = zIdx >= 0 ? process.argv[zIdx + 1] : oneshotIdx >= 0 ? process.argv[oneshotIdx + 1] : '';`,
+        `// Oneshot prints only the final reply; emit a stray metadata line too to prove it would still be stripped.`,
         `process.stdout.write('\\nsession_id: fake-session-abc\\n');`,
         `process.stdout.write('REPLY:' + query + '\\n');`,
         `// Record whether anything arrived on stdin (must stay empty for hermes).`,
@@ -345,16 +346,18 @@ describe('daemon-next command executor', () => {
     if (typeof output !== 'object') {
       throw new Error('expected structured command result');
     }
-    // Hermes quiet output has its session metadata stripped from the reply body.
+    // Oneshot output has any session metadata stripped from the reply body.
     expect(output.body).not.toContain('session_id');
     expect(output.body).not.toContain('fake-session-abc');
     // The prompt reaches the agent via argv, and prior history is joined into it.
     expect(output.body).toContain('collect top 20 AI tweets');
     expect(output.body).toContain('what is trending?');
     expect(output.body).toContain('let me check.');
-    // The command line uses hermes' non-interactive quiet query mode.
-    expect(output.workspaceRun?.command).toContain('chat -Q -q');
-    expect(output.workspaceRun?.command).toContain('-q [query elided]');
+    // The command line uses hermes' non-interactive oneshot mode (-z auto-bypasses tool
+    // approvals, so the agent can actually run tools in an async channel with no stdin).
+    expect(output.workspaceRun?.command).toContain('-z');
+    expect(output.workspaceRun?.command).not.toContain('chat -Q');
+    expect(output.workspaceRun?.command).toContain('-z [query elided]');
     expect(output.workspaceRun?.command).not.toContain('collect top 20 AI tweets');
     expect(output.workspaceRun?.command).not.toContain('what is trending?');
     expect(output.workspaceRun?.command).not.toContain('let me check.');
@@ -370,9 +373,11 @@ describe('daemon-next command executor', () => {
     writeFileSync(
       scriptPath,
       [
+        `const zIdx = process.argv.indexOf('-z');`,
+        `const oneshotIdx = process.argv.indexOf('--oneshot');`,
         `const qIdx = process.argv.indexOf('-q');`,
         `const queryIdx = process.argv.indexOf('--query');`,
-        `const query = qIdx >= 0 ? process.argv[qIdx + 1] : queryIdx >= 0 ? process.argv[queryIdx + 1] : '';`,
+        `const query = zIdx >= 0 ? process.argv[zIdx + 1] : oneshotIdx >= 0 ? process.argv[oneshotIdx + 1] : qIdx >= 0 ? process.argv[qIdx + 1] : queryIdx >= 0 ? process.argv[queryIdx + 1] : '';`,
         `process.stdout.write('QUERY:' + query + '\\n');`,
       ].join('\n'),
     );
@@ -412,7 +417,7 @@ describe('daemon-next command executor', () => {
     expect(gatewayOutput).toMatchObject({
       body: 'QUERY:gateway prompt',
       workspaceRun: {
-        command: expect.stringContaining('chat -Q -q [query elided]'),
+        command: expect.stringContaining('-z [query elided]'),
       },
     });
     expect(queryOutput).toMatchObject({
