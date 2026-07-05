@@ -1110,6 +1110,24 @@ export default function ChatPage() {
     });
   };
 
+  const editMessage = async (msg: ChatMessage, body: string) => {
+    const res = await messageReactionEvents().edit(msg.id, body);
+    if (res?.ok && res.message) {
+      appendMessage(res.message);
+      return true;
+    }
+    appendMessage({
+      id: `local-edit-error-${Date.now()}`,
+      channelId: msg.channelId,
+      senderKind: 'system',
+      senderId: null,
+      body: `编辑消息失败：${res?.error ?? 'unknown'}`,
+      createdAt: Date.now(),
+      metaJson: JSON.stringify({ kind: 'message-edit-fail' }),
+    });
+    return false;
+  };
+
   const unfollowThreadLocally = (msg: ChatMessage) => {
     if (threadRootId === msg.id) closeThread();
     if (selectedMessageId === msg.id) setSelectedMessageId(null);
@@ -1514,6 +1532,7 @@ export default function ChatPage() {
                         onCopyMarkdown={() => copyMessageMarkdown(msg)}
                         onToggleReadDone={() => toggleMessageReadState(msg)}
                         onSelectMessage={() => selectMessage(msg)}
+                        onEditMessage={(body) => editMessage(msg, body)}
                         onDeleteMessage={() => deleteMessage(msg)}
                         onConvertToTask={() => convertMessageToTask(msg)}
                         onReopenTask={() => { if (task) updateTaskStatus(task, 'todo'); }}
@@ -1690,6 +1709,7 @@ export default function ChatPage() {
           onCopyMarkdown={copyMessageMarkdown}
           onToggleReadDone={toggleMessageReadState}
           onSelectMessage={selectMessage}
+          onEditMessage={editMessage}
           onDeleteMessage={deleteMessage}
           onConvertToTask={convertMessageToTask}
           onUnfollowThread={unfollowThreadLocally}
@@ -2472,6 +2492,7 @@ function ThreadPanel({
   onCopyMarkdown,
   onToggleReadDone,
   onSelectMessage,
+  onEditMessage,
   onDeleteMessage,
   onConvertToTask,
   onUnfollowThread,
@@ -2516,6 +2537,7 @@ function ThreadPanel({
   onCopyMarkdown: (msg: ChatMessage) => void;
   onToggleReadDone: (msg: ChatMessage) => void;
   onSelectMessage: (msg: ChatMessage) => void;
+  onEditMessage: (msg: ChatMessage, body: string) => Promise<boolean>;
   onDeleteMessage: (msg: ChatMessage) => void;
   onConvertToTask: (msg: ChatMessage) => void;
   onUnfollowThread: (msg: ChatMessage) => void;
@@ -2562,6 +2584,7 @@ function ThreadPanel({
         onCopyMarkdown={() => onCopyMarkdown(msg)}
         onToggleReadDone={() => onToggleReadDone(msg)}
         onSelectMessage={() => onSelectMessage(msg)}
+        onEditMessage={(body) => onEditMessage(msg, body)}
         onDeleteMessage={() => onDeleteMessage(msg)}
         onConvertToTask={() => onConvertToTask(msg)}
         onReopenTask={() => { if (task) onTaskStatus(task, 'todo'); }}
@@ -2891,6 +2914,7 @@ function ChatBubble({
   onCopyMarkdown,
   onToggleReadDone,
   onSelectMessage,
+  onEditMessage,
   onDeleteMessage,
   onConvertToTask,
   onReopenTask,
@@ -2927,6 +2951,7 @@ function ChatBubble({
   onCopyMarkdown: () => void;
   onToggleReadDone: () => void;
   onSelectMessage: () => void;
+  onEditMessage: (body: string) => Promise<boolean>;
   onDeleteMessage: () => void;
   onConvertToTask: () => void;
   onReopenTask: () => void;
@@ -2944,6 +2969,9 @@ function ChatBubble({
   const meta = parseMeta(msg);
   const isDeleted = isDeletedMessage(msg);
   const [contextMenu, setContextMenu] = useState<MessageContextMenuPosition>(null);
+  const [editing, setEditing] = useState(false);
+  const [editBody, setEditBody] = useState(msg.body);
+  const [savingEdit, setSavingEdit] = useState(false);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -2984,19 +3012,20 @@ function ChatBubble({
   const time = formatTime(msg.createdAt);
   const isOwner = isHuman && currentUser?.id === msg.senderId;
   const taskId = typeof meta.taskId === 'string' ? meta.taskId : null;
-  const canDelete = isOwner && !taskId && !isDeleted;
+  const dispatch = isHuman ? msg.dispatchStatus : undefined;
+  const hasPendingDispatch = dispatch === 'queued' || dispatch === 'sent' || dispatch === 'accepted' || dispatch === 'running';
+  const canEdit = isOwner && !taskId && !isDeleted && !hasPendingDispatch;
+  const canDelete = isOwner && !taskId && !isDeleted && !hasPendingDispatch;
   const canOpenProfile = Boolean(msg.senderId && (msg.senderKind === 'human' || msg.senderKind === 'agent'));
   const messageMentionMembers = mergeMentionProfileMembers(channelMembers, mentionMembers);
   const profileTarget = msg.senderKind === 'agent'
     ? { kind: 'agent' as const, id: msg.senderId ?? '' }
     : { kind: 'human' as const, id: msg.senderId ?? '' };
-  const dispatch = isHuman ? msg.dispatchStatus : undefined;
-
   const openContextMenu = (event: MouseEvent<HTMLDivElement>) => {
-    if (isDeleted) return;
+    if (isDeleted || editing) return;
     event.preventDefault();
     const width = 220;
-    const height = taskId ? 392 : canDelete ? 386 : 354;
+    const height = taskId ? 392 : (canEdit || canDelete) ? 418 : 354;
     setContextMenu({
       x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)),
       y: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8)),
@@ -3006,6 +3035,20 @@ function ChatBubble({
   const runMenuAction = (action: () => void) => {
     setContextMenu(null);
     action();
+  };
+
+  const startEditing = () => {
+    setEditBody(msg.body);
+    setEditing(true);
+  };
+
+  const submitEdit = async () => {
+    const nextBody = editBody.trim();
+    if (!nextBody || savingEdit) return;
+    setSavingEdit(true);
+    const ok = await onEditMessage(nextBody);
+    setSavingEdit(false);
+    if (ok) setEditing(false);
   };
 
   const cancelDispatch = () => {
@@ -3070,7 +3113,7 @@ function ChatBubble({
           : 'border-transparent hover:border-neutral-900 hover:bg-white'
       }`}
     >
-      {!isDeleted && <div className="pointer-events-none absolute right-2 top-1 z-10 flex items-center gap-0.5 border border-neutral-300 bg-white opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+      {!isDeleted && !editing && <div className="pointer-events-none absolute right-2 top-1 z-10 flex items-center gap-0.5 border border-neutral-300 bg-white opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
         {showReplyAction && (
           <button onClick={onReply} className="flex h-6 w-6 items-center justify-center border-r border-neutral-200 text-neutral-500 hover:bg-amber-50 hover:text-neutral-900" title="回复讨论串">
             <MessageSquare size={13} />
@@ -3115,6 +3158,7 @@ function ChatBubble({
           <MessageContextMenuItem icon={<MessageSquare size={14} />} label="打开讨论串" onClick={() => runMenuAction(onOpenThread)} />
           <MessageContextMenuItem icon={saved ? <BookmarkCheck size={14} /> : <Bookmark size={14} />} label={saved ? '取消收藏' : '保存消息'} onClick={() => runMenuAction(onToggleSave)} />
           <MessageContextMenuItem icon={pinned ? <PinOff size={14} /> : <Pin size={14} />} label={pinned ? '取消固定' : '固定到频道'} onClick={() => runMenuAction(onTogglePin)} />
+          {canEdit && <MessageContextMenuItem icon={<Pencil size={14} />} label="编辑消息" onClick={() => runMenuAction(startEditing)} />}
           {canDelete && <MessageContextMenuItem icon={<Trash2 size={14} />} label="删除消息" onClick={() => runMenuAction(onDeleteMessage)} />}
           {taskId ? (
             <>
@@ -3144,21 +3188,52 @@ function ChatBubble({
           {isOwner && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700">你</span>}
           {!isHuman && agent?.role && <span className="text-xs text-neutral-400">{agent.role}</span>}
           <span className="text-[10px] text-neutral-400">{time}</span>
+          {!isDeleted && meta.editedAt && <span className="text-[10px] text-neutral-400">已编辑</span>}
         </div>
-        {isDeleted ? (
+        {editing ? (
+          <div className="mt-2 space-y-2">
+            <textarea
+              value={editBody}
+              onChange={(event) => setEditBody(event.target.value)}
+              className="min-h-[72px] w-full resize-y rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-800 outline-none focus:border-neutral-500"
+              autoFocus
+            />
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={submitEdit}
+                disabled={savingEdit || !editBody.trim()}
+                className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-800 disabled:opacity-40"
+              >
+                保存
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditBody(msg.body);
+                  setEditing(false);
+                }}
+                disabled={savingEdit}
+                className="rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50 disabled:opacity-40"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        ) : isDeleted ? (
           <div className="mt-1 text-sm italic text-neutral-400">消息已删除</div>
         ) : (
           <MarkdownMessage body={displayMessageBody(msg)} mentionMembers={messageMentionMembers} onOpenMention={onOpenProfile} />
         )}
-        {!isDeleted && renderDispatchStatus()}
-        {!isDeleted && msg.artifacts && msg.artifacts.length > 0 && (
+        {!isDeleted && !editing && renderDispatchStatus()}
+        {!isDeleted && !editing && msg.artifacts && msg.artifacts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">
             {msg.artifacts.map((artifact) => (
               <ChatArtifactPreview key={artifact.id} artifact={artifact} teamId={msg.teamId} />
             ))}
           </div>
         )}
-        {((!isDeleted && (taskId || reacted || saved || pinned)) || (showReplyCount && replyCount > 0)) && (
+        {!editing && (((!isDeleted && (taskId || reacted || saved || pinned)) || (showReplyCount && replyCount > 0))) && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             {!isDeleted && taskId && (
               <ChatTaskBadge

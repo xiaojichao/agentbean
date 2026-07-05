@@ -77,6 +77,7 @@ describe('server-next socket handlers', () => {
       listSavedMessages: vi.fn(async (payload) => makeSuccess({ payload })),
       pinMessage: vi.fn(async (payload) => makeSuccess({ payload, messageId: 'msg-1', channelId: 'channel-1' })),
       listPinnedMessages: vi.fn(async (payload) => makeSuccess({ payload })),
+      editMessage: vi.fn(async (payload) => makeSuccess({ payload })),
       deleteMessage: vi.fn(async (payload) => makeSuccess({ payload })),
       convertMessageToTask: vi.fn(async (payload) => makeSuccess({ payload })),
       updateMemberRole: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -148,6 +149,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.message.listSaved,
       WEB_EVENTS.message.pin,
       WEB_EVENTS.message.listPinned,
+      WEB_EVENTS.message.edit,
       WEB_EVENTS.message.delete,
       WEB_EVENTS.message.convertToTask,
       WEB_EVENTS.member.updateRole,
@@ -378,6 +380,12 @@ describe('server-next socket handlers', () => {
       teamId: 'team-1',
       channelId: 'channel-1',
     });
+    await socket.trigger(WEB_EVENTS.message.edit, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      body: 'edited',
+    });
     await socket.trigger(WEB_EVENTS.message.delete, {
       userId: 'user-1',
       teamId: 'team-1',
@@ -601,6 +609,12 @@ describe('server-next socket handlers', () => {
       userId: 'user-1',
       teamId: 'team-1',
       channelId: 'channel-1',
+    });
+    expect(app.editMessage).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      body: 'edited',
     });
     expect(app.deleteMessage).toHaveBeenCalledWith({
       userId: 'user-1',

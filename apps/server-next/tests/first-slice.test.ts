@@ -986,6 +986,47 @@ describe('server-next first-slice use cases', () => {
       messages: [],
     });
 
+    // Edit: only the original human author can edit an ordinary message
+    await expect(app.editMessage({
+      userId: 'user-2',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      body: 'Edited world',
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    await expect(app.editMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      body: '   ',
+    })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+
+    await expect(app.editMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      body: 'Edited world',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: {
+        id: 'msg-1',
+        body: 'Edited world',
+        meta: {
+          editedAt: 500,
+          editedBy: 'user-1',
+        },
+      },
+    });
+
+    await expect(app.searchMessages({
+      userId: 'user-1',
+      teamId: 'team-1',
+      query: 'Edited',
+    })).resolves.toMatchObject({
+      ok: true,
+      messages: [{ id: 'msg-1', body: 'Edited world' }],
+    });
+
     await expect(app.saveMessage({
       userId: 'user-1',
       teamId: 'team-1',
@@ -1844,6 +1885,12 @@ describe('server-next first-slice use cases', () => {
         meta: { taskId: 'task-1' },
       },
     });
+    await expect(app.editMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'message-1',
+      body: 'ordinary edit no longer applies',
+    })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
     await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
       ok: true,
       messages: [

@@ -351,6 +351,7 @@ export interface MessageReactionEvents {
   listSaved(): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
   pin(messageId: string, on: boolean): Promise<{ ok: boolean; messageId?: string; channelId?: string; error?: string }>;
   listPinned(channelId: string): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
+  edit(messageId: string, body: string): Promise<{ ok: boolean; message?: ChatMessage; error?: string }>;
   delete(messageId: string): Promise<{ ok: boolean; message?: ChatMessage; error?: string }>;
   convertToTask(messageId: string): Promise<{ ok: boolean; message?: ChatMessage; task?: { id: string; title: string; status: string; channelId?: string | null }; error?: string }>;
 }
@@ -363,6 +364,7 @@ export function messageReactionEvents(socket: Socket = getWebSocket()): MessageR
     listSaved() { return emitWithTimeout(socket, WEB_EVENTS.message.listSaved, {}); },
     pin(messageId, on) { return emitWithTimeout(socket, WEB_EVENTS.message.pin, { messageId, on }); },
     listPinned(channelId) { return emitWithTimeout(socket, WEB_EVENTS.message.listPinned, { channelId }); },
+    edit(messageId, body) { return emitWithTimeout(socket, WEB_EVENTS.message.edit, { messageId, body }); },
     delete(messageId) { return emitWithTimeout(socket, WEB_EVENTS.message.delete, { messageId }); },
     convertToTask(messageId) { return emitWithTimeout(socket, WEB_EVENTS.message.convertToTask, { messageId }); },
   };
