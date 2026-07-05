@@ -657,6 +657,7 @@ export interface ReceiveDispatchResultInput {
 export interface ReceiveDispatchResultResult {
   dispatch: DispatchDto;
   message: MessageDto;
+  task?: TaskDto;
 }
 
 export interface ReceiveDispatchErrorInput {
@@ -3170,7 +3171,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (dispatch.agentId !== resultInput.agentId) {
         return makeFailure('FORBIDDEN', 'Dispatch does not belong to agent');
       }
-      if (!isPendingDispatchStatus(dispatch.status)) {
+      if (!isCompletableDispatchStatus(dispatch.status)) {
         return makeFailure('CONFLICT', 'Dispatch is already completed');
       }
       const agent = await repositories.agents.getById(resultInput.agentId);
@@ -3296,13 +3297,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ...(chatArtifacts.length > 0 ? { artifacts: chatArtifacts } : {}),
         ...(workspaceRun ? { workspaceRun } : {}),
       };
+      const completedTask = await markLinkedTaskDone(repositories, originMessage, now);
       await repositories.agents.updateStatus({
         agentId: resultInput.agentId,
         status: 'online',
         lastSeenAt: now,
       });
 
-      return makeSuccess({ dispatch: toDispatchDto(completed.dispatch), message: messageWithArtifacts });
+      return makeSuccess({
+        dispatch: toDispatchDto(completed.dispatch),
+        message: messageWithArtifacts,
+        ...(completedTask ? { task: completedTask } : {}),
+      });
     },
 
     async receiveDispatchError(errorInput) {
@@ -4703,6 +4709,32 @@ function safeEqual(left: string, right: string): boolean {
 
 function isPendingDispatchStatus(status: DispatchDto['status']): boolean {
   return status === 'queued' || status === 'sent' || status === 'accepted' || status === 'running';
+}
+
+function isCompletableDispatchStatus(status: DispatchDto['status']): boolean {
+  return isPendingDispatchStatus(status) || status === 'timed_out';
+}
+
+async function markLinkedTaskDone(
+  repositories: ServerNextRepositories,
+  message: MessageRecord | null,
+  updatedAt: number,
+): Promise<TaskDto | null> {
+  const taskId = typeof message?.meta?.taskId === 'string' ? message.meta.taskId : null;
+  if (!taskId) {
+    return null;
+  }
+  const task = await repositories.tasks.getById(taskId);
+  if (!task || task.status === 'done' || task.status === 'closed') {
+    return null;
+  }
+  return await repositories.tasks.update({
+    taskId,
+    changes: {
+      status: 'done',
+      updatedAt,
+    },
+  });
 }
 
 async function allHumanMembersBelongToTeam(

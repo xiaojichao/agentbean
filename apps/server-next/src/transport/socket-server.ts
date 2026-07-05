@@ -437,6 +437,11 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         }
         emitDispatchStatus(webSubscribers, resultDispatch(result));
         await emitChannelMessageSubscribers(webSubscribers, app, teamId, result);
+        const task = (result as { task?: unknown }).task;
+        if (task) {
+          emitTaskUpdated(webSubscribers, task);
+          await refreshTaskSubscribers(webSubscribers, app, task);
+        }
         const refreshTeamIds = uniqueStrings([teamId, payloadTargetTeamId(payload), ...resultAgentVisibleTeamIds(result)]);
         for (const refreshTeamId of refreshTeamIds) {
           await refreshAgentSubscribers(webSubscribers, app, refreshTeamId);

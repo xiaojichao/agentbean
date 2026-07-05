@@ -1387,7 +1387,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             `UPDATE dispatches
              SET status = ?, updated_at = ?, completed_at = ?, error_code = NULL, error_message = NULL
              WHERE id = ?
-             AND status IN ('queued', 'sent', 'accepted', 'running')`,
+             AND status IN ('queued', 'sent', 'accepted', 'running', 'timed_out')`,
           )
           .run('succeeded', input.completedAt, input.completedAt, input.dispatchId);
         const dispatch = mapDispatch(teamDb.prepare('SELECT * FROM dispatches WHERE id = ?').get(input.dispatchId));
