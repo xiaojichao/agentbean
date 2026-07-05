@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeChannelHistory } from '../lib/chat-scope';
+import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeChannelHistory, setMessageDone } from '../lib/chat-scope';
 
 const human = { senderKind: 'human', senderId: 'u', body: '' } as const;
 
@@ -75,6 +75,18 @@ describe('markMessagesDone', () => {
   test('把当前活动消息合并进已有 doneIds，而不是替换旧状态', () => {
     const done = markMessagesDone(new Set(['muted-read']), [{ id: 'visible-1' }, { id: 'visible-2' }]);
     expect([...done].sort()).toEqual(['muted-read', 'visible-1', 'visible-2']);
+  });
+});
+
+describe('setMessageDone', () => {
+  test('可把单条消息标记为已读/完成', () => {
+    const done = setMessageDone(new Set(['old']), 'message-1', true);
+    expect([...done].sort()).toEqual(['message-1', 'old']);
+  });
+
+  test('可把单条消息重新标记为未读', () => {
+    const done = setMessageDone(new Set(['message-1', 'old']), 'message-1', false);
+    expect([...done]).toEqual(['old']);
   });
 });
 

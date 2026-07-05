@@ -11,7 +11,7 @@ import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
-import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
+import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, setMessageDone, visibleConversationIds } from '@/lib/chat-scope';
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
 import { displayMessageBody, plainTextForMessage } from '@/lib/chat-message-text';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
@@ -985,6 +985,10 @@ export default function ChatPage() {
     void copyTextToClipboard(plainTextForMessage(msg));
   };
 
+  const toggleMessageReadState = (msg: ChatMessage) => {
+    setDoneIds((prev) => setMessageDone(prev, msg.id, !prev.has(msg.id)));
+  };
+
   const convertMessageToTask = async (msg: ChatMessage) => {
     const res = await messageReactionEvents().convertToTask(msg.id);
     if (res?.ok && res.message && res.task) {
@@ -1360,6 +1364,7 @@ export default function ChatPage() {
                         taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'main' && chatTaskMenuTarget.messageId === msg.id : false}
                         selected={selectedMessageId === msg.id}
                         saved={savedIds.has(msg.id)}
+                        readDone={doneIds.has(msg.id)}
                         reacted={reactionEmojis.has(msg.id)}
                         reactionEmoji={reactionEmojis.get(msg.id)}
                         humanProfiles={humanProfiles}
@@ -1374,6 +1379,7 @@ export default function ChatPage() {
                         onCopyLink={() => copyMessageLink(msg)}
                         onCopyText={() => copyMessageText(msg)}
                         onCopyMarkdown={() => copyMessageMarkdown(msg)}
+                        onToggleReadDone={() => toggleMessageReadState(msg)}
                         onSelectMessage={() => selectMessage(msg)}
                         onConvertToTask={() => convertMessageToTask(msg)}
                         onReopenTask={() => { if (task) updateTaskStatus(task, 'todo'); }}
@@ -1521,6 +1527,7 @@ export default function ChatPage() {
           imageInputRef={threadImageInputRef}
           fileInputRef={threadFileInputRef}
           savedIds={savedIds}
+          doneIds={doneIds}
           reactionEmojis={reactionEmojis}
           tasks={tasks}
           taskNumbers={taskNumbers}
@@ -1544,6 +1551,7 @@ export default function ChatPage() {
           onCopyLink={copyMessageLink}
           onCopyText={copyMessageText}
           onCopyMarkdown={copyMessageMarkdown}
+          onToggleReadDone={toggleMessageReadState}
           onSelectMessage={selectMessage}
           onConvertToTask={convertMessageToTask}
           onUnfollowThread={unfollowThreadLocally}
@@ -2301,6 +2309,7 @@ function ThreadPanel({
   imageInputRef,
   fileInputRef,
   savedIds,
+  doneIds,
   reactionEmojis,
   tasks,
   taskNumbers,
@@ -2320,6 +2329,7 @@ function ThreadPanel({
   onCopyLink,
   onCopyText,
   onCopyMarkdown,
+  onToggleReadDone,
   onSelectMessage,
   onConvertToTask,
   onUnfollowThread,
@@ -2339,6 +2349,7 @@ function ThreadPanel({
   imageInputRef: RefObject<HTMLInputElement>;
   fileInputRef: RefObject<HTMLInputElement>;
   savedIds: Set<string>;
+  doneIds: Set<string>;
   reactionEmojis: ReactionEmojiMap;
   tasks: TaskItem[];
   taskNumbers: Map<string, number>;
@@ -2358,6 +2369,7 @@ function ThreadPanel({
   onCopyLink: (msg: ChatMessage) => void;
   onCopyText: (msg: ChatMessage) => void;
   onCopyMarkdown: (msg: ChatMessage) => void;
+  onToggleReadDone: (msg: ChatMessage) => void;
   onSelectMessage: (msg: ChatMessage) => void;
   onConvertToTask: (msg: ChatMessage) => void;
   onUnfollowThread: (msg: ChatMessage) => void;
@@ -2384,6 +2396,7 @@ function ThreadPanel({
         taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
         taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'thread' && chatTaskMenuTarget.messageId === msg.id : false}
         saved={savedIds.has(msg.id)}
+        readDone={doneIds.has(msg.id)}
         reacted={reactionEmojis.has(msg.id)}
         reactionEmoji={reactionEmojis.get(msg.id)}
         humanProfiles={humanProfiles}
@@ -2398,6 +2411,7 @@ function ThreadPanel({
         onCopyLink={() => onCopyLink(msg)}
         onCopyText={() => onCopyText(msg)}
         onCopyMarkdown={() => onCopyMarkdown(msg)}
+        onToggleReadDone={() => onToggleReadDone(msg)}
         onSelectMessage={() => onSelectMessage(msg)}
         onConvertToTask={() => onConvertToTask(msg)}
         onReopenTask={() => { if (task) onTaskStatus(task, 'todo'); }}
@@ -2708,6 +2722,7 @@ function ChatBubble({
   taskMenuOpen = false,
   selected = false,
   saved,
+  readDone,
   reacted,
   reactionEmoji,
   humanProfiles = [],
@@ -2722,6 +2737,7 @@ function ChatBubble({
   onCopyLink,
   onCopyText,
   onCopyMarkdown,
+  onToggleReadDone,
   onSelectMessage,
   onConvertToTask,
   onReopenTask,
@@ -2739,6 +2755,7 @@ function ChatBubble({
   taskMenuOpen?: boolean;
   selected?: boolean;
   saved: boolean;
+  readDone: boolean;
   reacted: boolean;
   reactionEmoji?: string;
   humanProfiles?: HumanProfile[];
@@ -2753,6 +2770,7 @@ function ChatBubble({
   onCopyLink: () => void;
   onCopyText: () => void;
   onCopyMarkdown: () => void;
+  onToggleReadDone: () => void;
   onSelectMessage: () => void;
   onConvertToTask: () => void;
   onReopenTask: () => void;
@@ -2819,7 +2837,7 @@ function ChatBubble({
   const openContextMenu = (event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
     const width = 220;
-    const height = taskId ? 330 : 292;
+    const height = taskId ? 362 : 324;
     setContextMenu({
       x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)),
       y: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8)),
@@ -2931,6 +2949,7 @@ function ChatBubble({
           <MessageContextMenuItem icon={<ClipboardCopy size={14} />} label="复制文本" onClick={() => runMenuAction(onCopyText)} />
           <MessageContextMenuItem icon={<ClipboardCopy size={14} />} label="复制 Markdown" onClick={() => runMenuAction(onCopyMarkdown)} />
           <MessageContextMenuItem icon={<MousePointer2 size={14} />} label="选中消息" onClick={() => runMenuAction(onSelectMessage)} />
+          <MessageContextMenuItem icon={readDone ? <Eye size={14} /> : <CheckCircle2 size={14} />} label={readDone ? '标记未读' : '标记已读'} onClick={() => runMenuAction(onToggleReadDone)} />
           <MessageContextMenuItem icon={<MessageSquare size={14} />} label="打开讨论串" onClick={() => runMenuAction(onOpenThread)} />
           <MessageContextMenuItem icon={saved ? <BookmarkCheck size={14} /> : <Bookmark size={14} />} label={saved ? '取消收藏' : '保存消息'} onClick={() => runMenuAction(onToggleSave)} />
           {taskId ? (
