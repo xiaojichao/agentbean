@@ -279,6 +279,10 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         const task = (result as { task?: unknown }).task;
         if (task) {
           emitTaskUpdated(webSubscribers, task);
+          const teamId = taskTeamId(task);
+          if (teamId) {
+            await emitChannelMessageSubscribers(webSubscribers, app, teamId, result);
+          }
           await refreshTaskSubscribers(webSubscribers, app, task);
         }
       },

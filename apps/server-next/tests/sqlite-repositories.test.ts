@@ -495,6 +495,7 @@ describe('server-next SQLite repositories', () => {
             'request-1',
             'task-public',
             'task-private',
+            'message-task-status',
           ]),
         },
       });
@@ -686,6 +687,30 @@ describe('server-next SQLite repositories', () => {
       })).resolves.toMatchObject({
         ok: true,
         task: { id: 'task-public', status: 'done', assigneeId: undefined },
+        message: {
+          id: 'message-task-status',
+          senderKind: 'system',
+          meta: {
+            kind: 'task-status-updated',
+            taskId: 'task-public',
+            previousStatus: 'todo',
+            status: 'done',
+          },
+        },
+      });
+      await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 300 })).resolves.toMatchObject({
+        ok: true,
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'message-task-status',
+            senderKind: 'system',
+            meta: expect.objectContaining({
+              kind: 'task-status-updated',
+              taskId: 'task-public',
+              status: 'done',
+            }),
+          }),
+        ]),
       });
 
       expect(globalDb.prepare('SELECT current_team_id AS currentTeamId FROM users WHERE id = ?').get('user-1')).toEqual({
