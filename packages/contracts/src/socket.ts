@@ -96,6 +96,8 @@ export const WEB_EVENTS = {
     react: 'message:react',
     save: 'message:save',
     listSaved: 'message:list-saved',
+    pin: 'message:pin',
+    listPinned: 'message:list-pinned',
     convertToTask: 'message:convert-to-task',
   },
   dispatch: {

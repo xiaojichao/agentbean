@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, RotateCcw, BellOff } from 'lucide-react';
+import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, RotateCcw, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, dispatchEvents, emitWithTimeout } from '@/lib/socket';
 import { WEB_EVENTS } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
@@ -214,7 +214,7 @@ export default function ChatPage() {
   const [showMembers, setShowMembers] = useState(false);
   const [channelMembers, setChannelMembers] = useState<ChannelMemberEntry[]>([]);
   const [humanProfiles, setHumanProfiles] = useState<HumanProfile[]>([]);
-  const [sidebarView, setSidebarView] = useState<'channels' | 'search' | 'inbox' | 'saved'>('channels');
+  const [sidebarView, setSidebarView] = useState<'channels' | 'search' | 'inbox' | 'saved' | 'pinned'>('channels');
   const [searchChannelScope, setSearchChannelScope] = useState<SearchChannelScope | null>(null);
   const [channelsExpanded, setChannelsExpanded] = useState(true);
   const [dmsExpanded, setDmsExpanded] = useState(true);
@@ -226,6 +226,9 @@ export default function ChatPage() {
   // 避免「savedIds 只存 id、列表依赖消息体在内存」导致的 badge 数 ≠ 列表条数。
   const [savedMessages, setSavedMessages] = useState<ChatMessage[]>([]);
   const [loadedSavedKey, setLoadedSavedKey] = useState<string | null>(null);
+  const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set());
+  const [pinnedMessages, setPinnedMessages] = useState<ChatMessage[]>([]);
+  const [loadedPinnedChannel, setLoadedPinnedChannel] = useState<string | null>(null);
   const [reactionEmojis, setReactionEmojis] = useState<ReactionEmojiMap>(new Map());
   const [loadedReactionsKey, setLoadedReactionsKey] = useState<string | null>(null);
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
@@ -394,6 +397,29 @@ export default function ChatPage() {
       window.localStorage.setItem(savedKey, JSON.stringify([...savedIds]));
     } catch {}
   }, [savedIds, savedKey, loadedSavedKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeChannel) {
+      setPinnedIds(new Set());
+      setPinnedMessages([]);
+      setLoadedPinnedChannel(null);
+      return () => { cancelled = true; };
+    }
+    setPinnedIds(new Set());
+    setPinnedMessages([]);
+    messageReactionEvents().listPinned(activeChannel).then((res) => {
+      if (cancelled) return;
+      if (res.ok && res.messages) {
+        setPinnedMessages(res.messages);
+        setPinnedIds(new Set(res.messages.map((msg) => msg.id)));
+      }
+      setLoadedPinnedChannel(activeChannel);
+    }).catch(() => {
+      if (!cancelled) setLoadedPinnedChannel(activeChannel);
+    });
+    return () => { cancelled = true; };
+  }, [activeChannel]);
 
   useEffect(() => {
     try {
@@ -917,11 +943,36 @@ export default function ChatPage() {
     });
   };
 
+  const togglePin = (msgId: string) => {
+    const isPinned = pinnedIds.has(msgId);
+    setPinnedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(msgId)) next.delete(msgId); else next.add(msgId);
+      return next;
+    });
+    setPinnedMessages((prev) => (isPinned ? prev.filter((m) => m.id !== msgId) : prev));
+    messageReactionEvents().pin(msgId, !isPinned).then((res) => {
+      if (!res.ok) {
+        throw new Error(res.error ?? 'Pin failed');
+      }
+    }).catch(() => {
+      setPinnedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(msgId)) next.delete(msgId); else next.add(msgId);
+        return next;
+      });
+    });
+  };
+
   // badge 与收藏列表的共同真源：服务端收藏快照 ∪ 内存中命中的收藏（内存版本优先）。
   // 关键——不再套 visibleConversationIds 过滤，故「频道已不可见」的收藏也能显示。
   const savedDisplayMessages = mergeSavedMessages(
     savedMessages,
     uniqueMessages(Object.values(messagesByChannel).flat()).filter((m) => savedIds.has(m.id)),
+  );
+  const pinnedDisplayMessages = mergeSavedMessages(
+    pinnedMessages,
+    activeChannel ? uniqueMessages(messagesByChannel[activeChannel] ?? []).filter((m) => pinnedIds.has(m.id)) : [],
   );
 
   const toggleReaction = (msgId: string, emoji = '❤️') => {
@@ -1164,6 +1215,11 @@ export default function ChatPage() {
             <span>收藏</span>
             <span className="ml-auto rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{savedDisplayMessages.length}</span>
           </button>
+          <button onClick={() => setSidebarView(sidebarView === 'pinned' ? 'channels' : 'pinned')} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'pinned' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
+            <Pin size={14} className="text-neutral-400 shrink-0" />
+            <span>固定</span>
+            <span className="ml-auto rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{loadedPinnedChannel === activeChannel ? pinnedDisplayMessages.length : 0}</span>
+          </button>
         </div>
 
         <div className="border-t border-neutral-300/40 mx-2" />
@@ -1278,6 +1334,14 @@ export default function ChatPage() {
             const dm = dms.find((item) => item.id === chId);
             router.push(dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`);
           }} humanProfiles={humanProfiles} />
+        ) : sidebarView === 'pinned' ? (
+          <PinnedView pinnedMessages={pinnedDisplayMessages} onUnpin={(msgId) => togglePin(msgId)} onJump={(msg) => {
+            setActiveChannel(msg.channelId);
+            setSidebarView('channels');
+            const dm = dms.find((item) => item.id === msg.channelId);
+            const path = dm ? `/${np}/dm/${msg.channelId}` : `/${np}/channel/${msg.channelId}`;
+            router.push(`${path}?message=${encodeURIComponent(`${msg.channelId}:${msg.id}`)}`);
+          }} humanProfiles={humanProfiles} />
         ) : (
         <>
         {/* Conversation header */}
@@ -1383,6 +1447,7 @@ export default function ChatPage() {
                         taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'main' && chatTaskMenuTarget.messageId === msg.id : false}
                         selected={selectedMessageId === msg.id}
                         saved={savedIds.has(msg.id)}
+                        pinned={pinnedIds.has(msg.id)}
                         readDone={doneIds.has(msg.id)}
                         reacted={reactionEmojis.has(msg.id)}
                         reactionEmoji={reactionEmojis.get(msg.id)}
@@ -1395,6 +1460,7 @@ export default function ChatPage() {
                         onToggleReaction={() => toggleReaction(msg.id)}
                         onReactWithEmoji={(emoji) => reactWithEmoji(msg.id, emoji)}
                         onToggleSave={() => toggleSave(msg.id)}
+                        onTogglePin={() => togglePin(msg.id)}
                         onCopyLink={() => copyMessageLink(msg)}
                         onCopyText={() => copyMessageText(msg)}
                         onCopyMarkdown={() => copyMessageMarkdown(msg)}
@@ -1546,6 +1612,7 @@ export default function ChatPage() {
           imageInputRef={threadImageInputRef}
           fileInputRef={threadFileInputRef}
           savedIds={savedIds}
+          pinnedIds={pinnedIds}
           doneIds={doneIds}
           reactionEmojis={reactionEmojis}
           tasks={tasks}
@@ -1566,6 +1633,7 @@ export default function ChatPage() {
           onReply={handleThreadReply}
           onOpenProfile={openProfile}
           onToggleSave={toggleSave}
+          onTogglePin={togglePin}
           onToggleReaction={toggleReaction}
           onReactWithEmoji={reactWithEmoji}
           onCopyLink={copyMessageLink}
@@ -2329,6 +2397,7 @@ function ThreadPanel({
   imageInputRef,
   fileInputRef,
   savedIds,
+  pinnedIds,
   doneIds,
   reactionEmojis,
   tasks,
@@ -2345,6 +2414,7 @@ function ThreadPanel({
   onReply,
   onOpenProfile,
   onToggleSave,
+  onTogglePin,
   onToggleReaction,
   onReactWithEmoji,
   onCopyLink,
@@ -2370,6 +2440,7 @@ function ThreadPanel({
   imageInputRef: RefObject<HTMLInputElement>;
   fileInputRef: RefObject<HTMLInputElement>;
   savedIds: Set<string>;
+  pinnedIds: Set<string>;
   doneIds: Set<string>;
   reactionEmojis: ReactionEmojiMap;
   tasks: TaskItem[];
@@ -2386,6 +2457,7 @@ function ThreadPanel({
   onReply: (msg: ChatMessage) => void;
   onOpenProfile: (target: ProfileTarget) => void;
   onToggleSave: (msgId: string) => void;
+  onTogglePin: (msgId: string) => void;
   onToggleReaction: (msgId: string) => void;
   onReactWithEmoji: (msgId: string, emoji: string) => void;
   onCopyLink: (msg: ChatMessage) => void;
@@ -2419,6 +2491,7 @@ function ThreadPanel({
         taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'thread' && chatTaskMenuTarget.messageId === msg.id : false}
         selected={selectedMessageId === msg.id}
         saved={savedIds.has(msg.id)}
+        pinned={pinnedIds.has(msg.id)}
         readDone={doneIds.has(msg.id)}
         reacted={reactionEmojis.has(msg.id)}
         reactionEmoji={reactionEmojis.get(msg.id)}
@@ -2431,6 +2504,7 @@ function ThreadPanel({
         onToggleReaction={() => onToggleReaction(msg.id)}
         onReactWithEmoji={(emoji) => onReactWithEmoji(msg.id, emoji)}
         onToggleSave={() => onToggleSave(msg.id)}
+        onTogglePin={() => onTogglePin(msg.id)}
         onCopyLink={() => onCopyLink(msg)}
         onCopyText={() => onCopyText(msg)}
         onCopyMarkdown={() => onCopyMarkdown(msg)}
@@ -2745,6 +2819,7 @@ function ChatBubble({
   taskMenuOpen = false,
   selected = false,
   saved,
+  pinned,
   readDone,
   reacted,
   reactionEmoji,
@@ -2757,6 +2832,7 @@ function ChatBubble({
   onToggleReaction,
   onReactWithEmoji,
   onToggleSave,
+  onTogglePin,
   onCopyLink,
   onCopyText,
   onCopyMarkdown,
@@ -2778,6 +2854,7 @@ function ChatBubble({
   taskMenuOpen?: boolean;
   selected?: boolean;
   saved: boolean;
+  pinned: boolean;
   readDone: boolean;
   reacted: boolean;
   reactionEmoji?: string;
@@ -2790,6 +2867,7 @@ function ChatBubble({
   onToggleReaction: () => void;
   onReactWithEmoji: (emoji: string) => void;
   onToggleSave: () => void;
+  onTogglePin: () => void;
   onCopyLink: () => void;
   onCopyText: () => void;
   onCopyMarkdown: () => void;
@@ -2860,7 +2938,7 @@ function ChatBubble({
   const openContextMenu = (event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
     const width = 220;
-    const height = taskId ? 362 : 324;
+    const height = taskId ? 392 : 354;
     setContextMenu({
       x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)),
       y: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8)),
@@ -2943,8 +3021,11 @@ function ChatBubble({
         <button onClick={onToggleReaction} className={`flex h-6 w-6 items-center justify-center ${showReplyAction ? 'border-r' : ''} border-neutral-200 hover:bg-amber-50 ${reacted ? 'text-pink-600' : 'text-neutral-500 hover:text-neutral-900'}`} title={reacted ? '取消表情' : '添加表情'}>
           <Smile size={13} />
         </button>
-        <button onClick={onToggleSave} className={`flex h-6 w-6 items-center justify-center hover:bg-amber-50 ${saved ? 'text-amber-500' : 'text-neutral-500 hover:text-neutral-900'}`} title={saved ? '取消收藏' : '收藏消息'}>
+        <button onClick={onToggleSave} className={`flex h-6 w-6 items-center justify-center border-r border-neutral-200 hover:bg-amber-50 ${saved ? 'text-amber-500' : 'text-neutral-500 hover:text-neutral-900'}`} title={saved ? '取消收藏' : '收藏消息'}>
           {saved ? <BookmarkCheck size={13} /> : <Bookmark size={13} />}
+        </button>
+        <button onClick={onTogglePin} className={`flex h-6 w-6 items-center justify-center hover:bg-amber-50 ${pinned ? 'text-sky-600' : 'text-neutral-500 hover:text-neutral-900'}`} title={pinned ? '取消固定' : '固定消息'}>
+          {pinned ? <PinOff size={13} /> : <Pin size={13} />}
         </button>
       </div>
       {contextMenu && (
@@ -2975,6 +3056,7 @@ function ChatBubble({
           <MessageContextMenuItem icon={readDone ? <Eye size={14} /> : <CheckCircle2 size={14} />} label={readDone ? '标记未读' : '标记已读'} onClick={() => runMenuAction(onToggleReadDone)} />
           <MessageContextMenuItem icon={<MessageSquare size={14} />} label="打开讨论串" onClick={() => runMenuAction(onOpenThread)} />
           <MessageContextMenuItem icon={saved ? <BookmarkCheck size={14} /> : <Bookmark size={14} />} label={saved ? '取消收藏' : '保存消息'} onClick={() => runMenuAction(onToggleSave)} />
+          <MessageContextMenuItem icon={pinned ? <PinOff size={14} /> : <Pin size={14} />} label={pinned ? '取消固定' : '固定到频道'} onClick={() => runMenuAction(onTogglePin)} />
           {taskId ? (
             <>
               <div className="my-1 border-t border-neutral-100" />
@@ -3013,7 +3095,7 @@ function ChatBubble({
             ))}
           </div>
         )}
-        {(taskId || (showReplyCount && replyCount > 0) || reacted || saved) && (
+        {(taskId || (showReplyCount && replyCount > 0) || reacted || saved || pinned) && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             {taskId && (
               <ChatTaskBadge
@@ -3041,6 +3123,12 @@ function ChatBubble({
               <span className="inline-flex h-5 items-center gap-1 border border-amber-200 bg-amber-50 px-1.5 text-[11px] font-medium text-amber-700">
                 <BookmarkCheck size={11} />
                 已收藏
+              </span>
+            )}
+            {pinned && (
+              <span className="inline-flex h-5 items-center gap-1 border border-sky-200 bg-sky-50 px-1.5 text-[11px] font-medium text-sky-700">
+                <Pin size={11} />
+                已固定
               </span>
             )}
           </div>
@@ -4213,6 +4301,66 @@ function SavedView({ savedMessages, onUnsave, onJump, humanProfiles }: { savedMe
               className="shrink-0 rounded-md border border-neutral-200 px-2 py-1 text-[10px] font-medium text-neutral-500 opacity-0 hover:bg-white group-hover:opacity-100"
             >
               取消收藏
+            </button>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PinnedView({ pinnedMessages, onUnpin, onJump, humanProfiles }: { pinnedMessages: ChatMessage[]; onUnpin: (msgId: string) => void; onJump: (msg: ChatMessage) => void; humanProfiles: HumanProfile[] }) {
+  const [query, setQuery] = useState('');
+  const channels = useAgentBeanStore((s) => s.channels);
+  const dms = useAgentBeanStore((s) => s.dms);
+  const agents = useAgentBeanStore((s) => s.agents);
+  const currentUser = useAgentBeanStore((s) => s.currentUser);
+
+  const filtered = pinnedMessages
+    .filter((m) => !query.trim() || m.body.toLowerCase().includes(query.trim().toLowerCase()))
+    .sort((a, b) => b.createdAt - a.createdAt);
+
+  return (
+    <div className="flex flex-1 min-h-0 flex-col">
+      <div className="flex h-16 flex-col justify-center border-b border-neutral-200 px-6">
+        <h2 className="text-lg font-semibold">固定</h2>
+        <p className="text-xs text-neutral-400">{filtered.length} 条固定消息</p>
+      </div>
+      <div className="border-b border-neutral-200 px-6 py-2">
+        <div className="relative">
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400" />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索固定消息..." className="h-8 w-full rounded-md border border-neutral-200 bg-neutral-50 pl-8 pr-3 text-sm outline-none focus:border-neutral-400 placeholder:text-neutral-400" />
+        </div>
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        {filtered.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-16 text-neutral-400">
+            <Pin size={32} strokeWidth={1.5} />
+            <p className="mt-2 text-sm">{query.trim() ? '没有匹配的固定消息' : '当前频道暂无固定消息'}</p>
+            <p className="text-xs">在消息右键菜单中固定重要消息</p>
+          </div>
+        )}
+        {filtered.map((msg) => (
+          <button key={msg.id} onClick={() => onJump(msg)} className="group flex w-full items-start gap-3 border-b border-neutral-100 px-6 py-3 text-left hover:bg-neutral-50">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-sky-100 text-xs font-semibold text-sky-700">
+              <Pin size={14} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 text-xs text-neutral-400">
+                <span className="font-medium text-neutral-700">{conversationLabel(msg.channelId, channels, dms, agents)}</span>
+                <span>{speakerName(msg, agents, { currentUser, humanProfiles })}</span>
+                <span>{formatTime(msg.createdAt)}</span>
+              </div>
+              <div className="mt-1 line-clamp-3 text-sm text-neutral-700">{displayMessageBody(msg)}</div>
+            </div>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onUnpin(msg.id);
+              }}
+              className="shrink-0 rounded-md border border-neutral-200 px-2 py-1 text-[10px] font-medium text-neutral-500 opacity-0 hover:bg-white group-hover:opacity-100"
+            >
+              取消固定
             </button>
           </button>
         ))}

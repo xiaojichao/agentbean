@@ -21,6 +21,7 @@ describe('server-next first-slice migrations', () => {
       readFileSync(migrationPath('team/0004_reactions_saved.sql'), 'utf8'),
       readFileSync(migrationPath('team/0005_workspace_run_command.sql'), 'utf8'),
       readFileSync(migrationPath('team/0006_workspace_run_log_excerpt.sql'), 'utf8'),
+      readFileSync(migrationPath('team/0009_pinned_messages.sql'), 'utf8'),
     ].join('\n');
 
     for (const tableName of [
@@ -46,6 +47,7 @@ describe('server-next first-slice migrations', () => {
       'tasks',
       'message_reactions',
       'saved_messages',
+      'pinned_messages',
     ]) {
       expect(teamSql).toContain(`CREATE TABLE ${tableName}`);
     }
@@ -852,7 +854,7 @@ describe('server-next first-slice use cases', () => {
         'join-1',
         'user-2', 'team-2', 'channel-2',
         'msg-1', 'dispatch-1',
-        'r1', 'r2', 'r3', 'r4', 's1', 's2',
+        'r1', 'r2', 'r3', 'r4', 's1', 's2', 'p1', 'p2',
       ]),
       joinCodes: createIds(['code-join']),
     });
@@ -937,6 +939,48 @@ describe('server-next first-slice use cases', () => {
     await expect(app.listSavedMessages({
       userId: 'user-1',
       teamId: 'team-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      messages: [],
+    });
+
+    // Pin: channel-visible pin is shared across members
+    await expect(app.pinMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: true, messageId: 'msg-1' });
+
+    await expect(app.listPinnedMessages({
+      userId: 'user-2',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      messages: [{ id: 'msg-1', body: 'Hello world' }],
+    });
+
+    // Pin: non-member cannot pin
+    await expect(app.pinMessage({
+      userId: 'user-1',
+      teamId: 'team-2',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    // Unpin
+    await expect(app.pinMessage({
+      userId: 'user-2',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: false,
+    })).resolves.toMatchObject({ ok: true });
+
+    await expect(app.listPinnedMessages({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
     })).resolves.toMatchObject({
       ok: true,
       messages: [],

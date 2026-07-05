@@ -320,6 +320,8 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.message.react, app, 'reactMessage', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.save, app, 'saveMessage', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.listSaved, app, 'listSavedMessages', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.message.pin, app, 'pinMessage', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.message.listPinned, app, 'listPinnedMessages', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.convertToTask, app, 'convertMessageToTask', async (payload, result) => {
     await options.afterTaskMutation?.(payload, result);
     await options.afterMessageSend?.(payload, result);

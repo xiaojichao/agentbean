@@ -63,6 +63,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0006_workspace_run_log_excerpt.sql');
   applyMigration(db, 'team/0007_workspace_run_pagination_index.sql');
   applyMigration(db, 'team/0008_artifact_workspace_boundary_index.sql');
+  applyMigration(db, 'team/0009_pinned_messages.sql');
 }
 
 // 清理 channel_agent_members 中指向已删 agent 的孤儿行（PRD §6）。
@@ -386,6 +387,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       async delete(teamId) {
         teamDb.prepare('DELETE FROM message_reactions WHERE message_id IN (SELECT id FROM messages WHERE team_id = ?)').run(teamId);
         teamDb.prepare('DELETE FROM saved_messages WHERE message_id IN (SELECT id FROM messages WHERE team_id = ?)').run(teamId);
+        teamDb.prepare('DELETE FROM pinned_messages WHERE message_id IN (SELECT id FROM messages WHERE team_id = ?)').run(teamId);
         teamDb.prepare('DELETE FROM tasks WHERE team_id = ?').run(teamId);
         teamDb.prepare('DELETE FROM artifacts WHERE team_id = ?').run(teamId);
         teamDb.prepare('DELETE FROM workspace_runs WHERE team_id = ?').run(teamId);
@@ -1802,6 +1804,38 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         const row = teamDb
           .prepare('SELECT 1 FROM saved_messages WHERE message_id = ? AND user_id = ?')
           .get(messageId, userId);
+        return !!row;
+      },
+    },
+    pinnedMessages: {
+      async toggle(input) {
+        if (input.on) {
+          teamDb
+            .prepare('INSERT OR IGNORE INTO pinned_messages (id, message_id, user_id, team_id, channel_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+            .run(input.id, input.messageId, input.userId, input.teamId, input.channelId, input.createdAt);
+        } else {
+          teamDb
+            .prepare('DELETE FROM pinned_messages WHERE message_id = ?')
+            .run(input.messageId);
+        }
+      },
+      async listByChannel(input) {
+        return teamDb
+          .prepare('SELECT * FROM pinned_messages WHERE team_id = ? AND channel_id = ? ORDER BY created_at DESC')
+          .all(input.teamId, input.channelId)
+          .map((row) => ({
+            id: sqliteText(row, 'id'),
+            messageId: sqliteText(row, 'message_id'),
+            userId: sqliteText(row, 'user_id'),
+            teamId: sqliteText(row, 'team_id'),
+            channelId: sqliteText(row, 'channel_id'),
+            createdAt: sqliteNumber(row, 'created_at'),
+          }));
+      },
+      async isPinned(messageId) {
+        const row = teamDb
+          .prepare('SELECT 1 FROM pinned_messages WHERE message_id = ?')
+          .get(messageId);
         return !!row;
       },
     },
