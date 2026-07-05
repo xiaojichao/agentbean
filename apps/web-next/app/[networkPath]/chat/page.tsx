@@ -10,6 +10,7 @@ import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus,
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { matchingWorkspaceRunDetail, workspaceRunHistoryItems, type WorkspaceRunDetailBundle } from '@/lib/task-workspace-run-detail';
 import { taskMessageSummary } from '@/lib/task-message-summary';
+import { shouldHideTaskSystemMessage } from '@/lib/task-system-messages';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
@@ -933,7 +934,7 @@ export default function ChatPage() {
   };
 
   const messages = activeChannel ? (messagesByChannel[activeChannel] ?? []) : [];
-  const visibleMessages = messages.filter((msg) => !isTaskSystemMessage(msg));
+  const visibleMessages = messages.filter((msg) => !shouldHideTaskSystemMessage(msg));
   const messagesById = new Map<string, ChatMessage>();
   for (const msg of messages) messagesById.set(msg.id, msg);
   const threadRoot = threadRootId ? visibleMessages.find((msg) => msg.id === threadRootId) ?? null : null;
@@ -4244,12 +4245,6 @@ function isDeletedMessage(msg: ChatMessage): boolean {
 function metaTaskId(msg: ChatMessage): string | null {
   const meta = parseMeta(msg);
   return typeof meta.taskId === 'string' ? meta.taskId : null;
-}
-
-function isTaskSystemMessage(msg: ChatMessage): boolean {
-  if (msg.senderKind !== 'system') return false;
-  const meta = parseMeta(msg);
-  return meta.kind === 'task-created' || meta.kind === 'task-status-updated';
 }
 
 function parentMessageId(msg: ChatMessage, messagesById?: Map<string, ChatMessage>): string | null {
