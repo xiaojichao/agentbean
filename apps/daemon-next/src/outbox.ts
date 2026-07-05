@@ -16,7 +16,7 @@ export interface OutboxSocket {
 }
 
 export interface DispatchOutbox {
-  sendOrEnqueue(event: string, payload: unknown): void;
+  sendOrEnqueue(event: string, payload: unknown, options?: DispatchOutboxSendOptions): void;
   flush(): Promise<void>;
   size(): number;
 }
@@ -25,7 +25,12 @@ export interface CreateDispatchOutboxOptions {
   onWarn?: (message: string) => void;
 }
 
-type OutboxItem = { event: string; payload: unknown };
+export interface DispatchOutboxSendOptions {
+  isDeliveredAck?: (ack: unknown) => boolean;
+  onDelivered?: () => void;
+}
+
+type OutboxItem = { event: string; payload: unknown; options?: DispatchOutboxSendOptions };
 
 export function createDispatchOutbox(
   socket: OutboxSocket,
@@ -47,9 +52,25 @@ export function createDispatchOutbox(
     return error instanceof Error ? error.message : String(error);
   }
 
+  function isDelivered(item: OutboxItem, ack: unknown): boolean {
+    return item.options?.isDeliveredAck ? item.options.isDeliveredAck(ack) : true;
+  }
+
+  function notifyDelivered(item: OutboxItem): void {
+    try {
+      item.options?.onDelivered?.();
+    } catch (error) {
+      onWarn(`dispatch outbox delivery callback failed for ${item.event}: ${describeError(error)}`);
+    }
+  }
+
   async function trySend(item: OutboxItem): Promise<boolean> {
     try {
-      await socket.emitWithAck(item.event, item.payload);
+      const ack = await socket.emitWithAck(item.event, item.payload);
+      if (!isDelivered(item, ack)) {
+        onWarn(`dispatch outbox emit was rejected for ${item.event}`);
+        return false;
+      }
       return true;
     } catch (error) {
       onWarn(`dispatch outbox emit failed for ${item.event}: ${describeError(error)}`);
@@ -58,12 +79,17 @@ export function createDispatchOutbox(
   }
 
   return {
-    sendOrEnqueue(event, payload) {
-      const item: OutboxItem = { event, payload };
+    sendOrEnqueue(event, payload, options) {
+      const item: OutboxItem = { event, payload, ...(options ? { options } : {}) };
       const dispatchId = readDispatchId(payload);
       if (!dispatchId) {
         // 无 dispatchId 无法去重，直接尝试发送；失败即放弃（不阻塞 dispatch 流程）。
-        void trySend(item);
+        void (async () => {
+          const ok = await trySend(item);
+          if (ok) {
+            notifyDelivered(item);
+          }
+        })();
         return;
       }
       if (!socket.connected) {
@@ -74,7 +100,9 @@ export function createDispatchOutbox(
         const ok = await trySend(item);
         if (!ok) {
           queue.set(dispatchId, item);
+          return;
         }
+        notifyDelivered(item);
       })();
     },
     async flush() {
@@ -86,6 +114,7 @@ export function createDispatchOutbox(
           if (ok) {
             if (queue.get(dispatchId) === item) {
               queue.delete(dispatchId);
+              notifyDelivered(item);
             }
           }
         }
