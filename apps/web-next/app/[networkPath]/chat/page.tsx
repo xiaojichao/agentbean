@@ -204,6 +204,7 @@ export default function ChatPage() {
   const threadParam = searchParams.get('thread');
   const messageParam = searchParams.get('message');
   const profileParam = searchParams.get('profile');
+  const taskParam = searchParams.get('task');
   const routeChannelId = typeof params.channelId === 'string' ? params.channelId : null;
   const routeDmId = typeof params.dmId === 'string' ? params.dmId : null;
   const [input, setInput] = useState('');
@@ -252,6 +253,7 @@ export default function ChatPage() {
   const [threadAttachments, setThreadAttachments] = useState<ComposerAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
+  const [taskDetailMessageId, setTaskDetailMessageId] = useState<string | null>(null);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [threadInput, setThreadInput] = useState('');
   const [showBackToBottom, setShowBackToBottom] = useState(false);
@@ -640,6 +642,7 @@ export default function ChatPage() {
     if (messageId && activeChannel) {
       params.set('thread', `${activeChannel}:${messageId}`);
       params.delete('message');
+      params.delete('task');
     } else {
       params.delete('thread');
     }
@@ -647,8 +650,23 @@ export default function ChatPage() {
     router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
   }, [activeChannel, router, searchParams]);
 
+  const setTaskDetailUrl = useCallback((messageId: string | null) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (messageId && activeChannel) {
+      params.set('task', `${activeChannel}:${messageId}`);
+      params.delete('thread');
+      params.delete('message');
+      params.delete('profile');
+    } else {
+      params.delete('task');
+    }
+    const query = params.toString();
+    router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
+  }, [activeChannel, router, searchParams]);
+
   const openThread = useCallback((messageId: string) => {
     setThreadRootId(messageId);
+    setTaskDetailMessageId(null);
     setChatTaskMenuTarget(null);
     setThreadUrl(messageId);
   }, [setThreadUrl]);
@@ -667,6 +685,7 @@ export default function ChatPage() {
   const openProfile = useCallback((target: ProfileTarget) => {
     const params = new URLSearchParams(searchParams.toString());
     params.set('profile', `${target.kind}:${target.id}`);
+    params.delete('task');
     const query = params.toString();
     router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
   }, [router, searchParams]);
@@ -719,10 +738,23 @@ export default function ChatPage() {
   }, [activeChannel, threadParam]);
 
   useEffect(() => {
+    if (!activeChannel) return;
+    const nextTaskMessageId = parseScopedMessageId(taskParam, activeChannel);
+    setTaskDetailMessageId(nextTaskMessageId);
+    if (nextTaskMessageId) {
+      setTab('chat');
+      setThreadRootId(null);
+      setSelectedMessageId(nextTaskMessageId);
+      setChatTaskMenuTarget(null);
+    }
+  }, [activeChannel, taskParam]);
+
+  useEffect(() => {
     setTaskCreatorFilter('all');
     setTaskAssigneeFilter('all');
     setShowCreateTask(false);
-  }, [activeChannel]);
+    if (!taskParam) setTaskDetailMessageId(null);
+  }, [activeChannel, taskParam]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
@@ -905,6 +937,19 @@ export default function ChatPage() {
   const threadRoot = threadRootId ? visibleMessages.find((msg) => msg.id === threadRootId) ?? null : null;
   const rootMessages = visibleMessages.filter((msg) => !parentMessageId(msg, messagesById));
   const threadReplies = threadRootId ? visibleMessages.filter((msg) => parentMessageId(msg, messagesById) === threadRootId) : [];
+  const taskDetailMessage = taskDetailMessageId
+    ? visibleMessages.find((msg) => msg.id === taskDetailMessageId && metaTaskId(msg)) ?? null
+    : null;
+  const taskDetailTaskId = taskDetailMessage ? metaTaskId(taskDetailMessage) : null;
+  const taskDetailTask = taskDetailTaskId ? tasks.find((task) => task.id === taskDetailTaskId) ?? null : null;
+  const taskDetailMessages = taskDetailMessage
+    ? visibleMessages
+        .filter((msg) =>
+          msg.id === taskDetailMessage.id ||
+          msg.threadId === taskDetailMessage.id ||
+          parentMessageId(msg, messagesById) === taskDetailMessage.id)
+        .sort((a, b) => a.createdAt - b.createdAt)
+    : [];
 
   useEffect(() => {
     if (!activeChannel) return;
@@ -1093,6 +1138,26 @@ export default function ChatPage() {
     });
   };
 
+  const openTaskDetail = useCallback((msg: ChatMessage) => {
+    if (!metaTaskId(msg)) return;
+    setTaskDetailMessageId(msg.id);
+    setThreadRootId(null);
+    setThreadInput('');
+    setThreadAttachments((prev) => {
+      prev.forEach(revokeComposerPreview);
+      return [];
+    });
+    setSelectedMessageId(msg.id);
+    setChatTaskMenuTarget(null);
+    setTaskDetailUrl(msg.id);
+  }, [setTaskDetailUrl]);
+
+  const closeTaskDetail = useCallback(() => {
+    setTaskDetailMessageId(null);
+    setChatTaskMenuTarget(null);
+    setTaskDetailUrl(null);
+  }, [setTaskDetailUrl]);
+
   const deleteMessage = async (msg: ChatMessage) => {
     const res = await messageReactionEvents().delete(msg.id);
     if (res?.ok && res.message) {
@@ -1174,6 +1239,7 @@ export default function ChatPage() {
     const params = new URLSearchParams(searchParams.toString());
     params.delete('chatTab');
     params.delete('thread');
+    params.delete('task');
     if (activeChannel) params.set('message', `${activeChannel}:${messageId}`);
     const query = params.toString();
     router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
@@ -1534,6 +1600,7 @@ export default function ChatPage() {
                         onSelectMessage={() => selectMessage(msg)}
                         onEditMessage={(body) => editMessage(msg, body)}
                         onDeleteMessage={() => deleteMessage(msg)}
+                        onOpenTaskDetail={() => openTaskDetail(msg)}
                         onConvertToTask={() => convertMessageToTask(msg)}
                         onReopenTask={() => { if (task) updateTaskStatus(task, 'todo'); }}
                         onUnfollowThread={() => unfollowThreadLocally(msg)}
@@ -1667,7 +1734,29 @@ export default function ChatPage() {
         />
       )}
 
-      {!profileTarget && threadRoot && activeChannel && (
+      {!profileTarget && taskDetailMessage && activeChannel && (
+        <TaskDetailPanel
+          message={taskDetailMessage}
+          relatedMessages={taskDetailMessages}
+          task={taskDetailTask}
+          taskNumber={taskDetailTask ? taskNumbers.get(taskDetailTask.id) : undefined}
+          agents={agents}
+          humanProfiles={humanProfiles}
+          channelMembers={channelMembers}
+          mentionMembers={mentionMembers}
+          currentTeamId={currentTeamId}
+          routeNetworkPath={routeNetworkPath}
+          onClose={closeTaskDetail}
+          onViewInChannel={() => jumpToMessage(taskDetailMessage.id)}
+          onOpenThread={() => {
+            openThread(taskDetailMessage.id);
+            setThreadInput('要求后续变更：');
+          }}
+          onTaskStatus={(status) => { if (taskDetailTask) updateTaskStatus(taskDetailTask, status); }}
+        />
+      )}
+
+      {!profileTarget && !taskDetailMessage && threadRoot && activeChannel && (
         <ThreadPanel
           root={threadRoot}
           replies={threadReplies}
@@ -1711,6 +1800,7 @@ export default function ChatPage() {
           onSelectMessage={selectMessage}
           onEditMessage={editMessage}
           onDeleteMessage={deleteMessage}
+          onOpenTaskDetail={openTaskDetail}
           onConvertToTask={convertMessageToTask}
           onUnfollowThread={unfollowThreadLocally}
           onTaskMenu={(messageId) => setChatTaskMenuTarget(messageId ? { surface: 'thread', messageId } : null)}
@@ -2455,6 +2545,204 @@ function ConversationFiles({
   );
 }
 
+function TaskDetailPanel({
+  message,
+  relatedMessages,
+  task,
+  taskNumber,
+  agents,
+  humanProfiles,
+  channelMembers,
+  mentionMembers,
+  currentTeamId,
+  routeNetworkPath,
+  onClose,
+  onViewInChannel,
+  onOpenThread,
+  onTaskStatus,
+}: {
+  message: ChatMessage;
+  relatedMessages: ChatMessage[];
+  task: TaskItem | null;
+  taskNumber?: number;
+  agents: Record<string, AgentSnapshot>;
+  humanProfiles: HumanProfile[];
+  channelMembers: ChannelMemberEntry[];
+  mentionMembers: MentionProfileMember[];
+  currentTeamId?: string | null;
+  routeNetworkPath: string;
+  onClose: () => void;
+  onViewInChannel: () => void;
+  onOpenThread: () => void;
+  onTaskStatus: (status: TaskStatus) => void;
+}) {
+  const sortedMessages = relatedMessages.length > 0
+    ? relatedMessages
+    : [message];
+  const agentResults = sortedMessages.filter((item) => item.id !== message.id && item.senderKind === 'agent');
+  const latestAgentResult = agentResults.length > 0 ? agentResults[agentResults.length - 1]! : null;
+  const artifacts = uniqueArtifacts(sortedMessages.flatMap((item) => item.artifacts ?? []));
+  const workspaceRuns = uniqueWorkspaceRuns(sortedMessages.map((item) => item.workspaceRun).filter(Boolean) as NonNullable<ChatMessage['workspaceRun']>[]);
+  const taskStatus = task?.status ?? 'todo';
+  const taskLabel = taskNumber ? `#${taskNumber}` : '#任务';
+  const assigneeName = task?.assigneeId
+    ? participantName(task.assigneeId, channelMembers, undefined)
+    : '未分配';
+  const creatorName = task?.creatorId
+    ? participantName(task.creatorId, channelMembers, undefined)
+    : resolveMessageSpeaker(message, agents, { humanProfiles, channelMembers, mentionMembers });
+  const statusColumn = TASK_COLUMNS.find((item) => item.id === taskStatus) ?? TASK_COLUMNS[0]!;
+
+  return (
+    <aside className="flex w-[420px] shrink-0 flex-col border-l border-neutral-200 bg-white" data-smoke="chat-task-detail">
+      <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className={`h-2 w-2 rounded-full ${taskStatusDotClass(taskStatus)}`} />
+            <div className="truncate text-sm font-semibold text-neutral-900">{task?.title ?? displayMessageBody(message)}</div>
+          </div>
+          <div className="truncate text-xs text-neutral-400">{taskLabel} · {taskStatusText(taskStatus)} · {formatTime(message.createdAt)}</div>
+        </div>
+        <button onClick={onClose} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="关闭任务详情">
+          <X size={16} />
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+        <section className="border-b border-neutral-100 pb-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`inline-flex h-6 items-center gap-1 rounded-full border px-2 text-xs font-semibold ${statusColumn.badge}`}>
+              {taskBadgeIcon(taskStatus)}
+              {taskStatusText(taskStatus)}
+            </span>
+            <span className="text-xs text-neutral-400">创建者 {creatorName}</span>
+            <span className="text-xs text-neutral-400">负责人 {assigneeName}</span>
+          </div>
+          {task?.description && (
+            <div className="mt-3 whitespace-pre-wrap rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2 text-sm leading-6 text-neutral-600">
+              {task.description}
+            </div>
+          )}
+          {task?.tags && task.tags.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1">
+              {task.tags.map((tag) => (
+                <span key={tag} className="inline-flex h-5 items-center gap-1 rounded border border-neutral-200 px-1.5 text-[11px] text-neutral-500">
+                  <Tag size={10} />
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="border-b border-neutral-100 py-4">
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">任务消息</h3>
+            <button onClick={onViewInChannel} className="inline-flex h-7 items-center gap-1 rounded-md border border-neutral-200 px-2 text-xs font-medium text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900">
+              <MousePointer2 size={12} />
+              定位
+            </button>
+          </div>
+          <div className="rounded-md border border-neutral-200 bg-white px-3 py-2">
+            <MarkdownMessage body={displayMessageBody(message)} mentionMembers={mentionMembers} />
+          </div>
+        </section>
+
+        <section className="border-b border-neutral-100 py-4">
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">最新结果</h3>
+            <span className="text-xs text-neutral-400">{agentResults.length} 条 agent 回复</span>
+          </div>
+          {latestAgentResult ? (
+            <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2">
+              <div className="mb-1 flex items-center gap-2 text-xs text-neutral-400">
+                <MessageSquare size={12} />
+                <span>{resolveMessageSpeaker(latestAgentResult, agents, { humanProfiles, channelMembers, mentionMembers })}</span>
+                <span>{formatTime(latestAgentResult.createdAt)}</span>
+              </div>
+              <MarkdownMessage body={displayMessageBody(latestAgentResult)} mentionMembers={mentionMembers} />
+            </div>
+          ) : (
+            <div className="rounded-md border border-dashed border-neutral-200 px-3 py-6 text-center text-sm text-neutral-400">
+              还没有 agent 结果，任务执行完成后会出现在这里。
+            </div>
+          )}
+        </section>
+
+        {(artifacts.length > 0 || workspaceRuns.length > 0) && (
+          <section className="border-b border-neutral-100 py-4">
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">附件与执行记录</h3>
+            {workspaceRuns.length > 0 && (
+              <div className="mb-3 space-y-2">
+                {workspaceRuns.map((run) => (
+                  <a
+                    key={run.id}
+                    href={`/${routeNetworkPath}/runs/${encodeURIComponent(run.id)}`}
+                    className="flex items-center justify-between rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs hover:bg-neutral-100"
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate font-mono text-neutral-700">{run.command ?? run.id}</span>
+                      <span className="mt-0.5 block text-neutral-400">{run.status} · {run.exitCode === undefined ? '未完成' : `exit ${run.exitCode}`}</span>
+                    </span>
+                    <ExternalLink size={13} className="shrink-0 text-neutral-400" />
+                  </a>
+                ))}
+              </div>
+            )}
+            {artifacts.length > 0 && (
+              <div className="space-y-2">
+                {artifacts.map((artifact) => (
+                  <div key={artifact.id} className="rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm">
+                    <div className="min-w-0">
+                      <div className="truncate font-medium text-neutral-800">{artifact.relativePath ?? artifact.filename}</div>
+                      <div className="text-xs text-neutral-400">{artifact.pathKind ?? 'artifact'} · {formatFileSize(artifact.sizeBytes)}</div>
+                    </div>
+                    <div className="mt-2 flex gap-2 text-xs">
+                      {messageArtifactUrl(artifact, 'preview', currentTeamId ?? message.teamId) && (
+                        <a className="font-medium text-blue-600 hover:underline" href={messageArtifactUrl(artifact, 'preview', currentTeamId ?? message.teamId) ?? '#'} target="_blank" rel="noreferrer">预览</a>
+                      )}
+                      {messageArtifactUrl(artifact, 'download', currentTeamId ?? message.teamId) && (
+                        <a className="font-medium text-neutral-600 hover:underline" href={messageArtifactUrl(artifact, 'download', currentTeamId ?? message.teamId) ?? '#'}>下载</a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        <section className="py-4">
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">任务状态</h3>
+          <div className="grid grid-cols-2 gap-2">
+            {TASK_COLUMNS.map((column) => (
+              <button
+                key={column.id}
+                onClick={() => onTaskStatus(column.id)}
+                disabled={!task || task.status === column.id}
+                className={`flex h-8 items-center gap-2 rounded-md border px-2 text-xs font-medium ${task?.status === column.id ? column.badge : 'border-neutral-200 text-neutral-600 hover:bg-neutral-50'} disabled:cursor-default`}
+              >
+                <span className={`h-2 w-2 rounded-full ${column.dot}`} />
+                {column.menuLabel}
+              </button>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <div className="border-t border-neutral-200 p-3">
+        <button
+          onClick={onOpenThread}
+          className="flex h-9 w-full items-center justify-center gap-2 rounded-md bg-neutral-900 text-sm font-medium text-white hover:bg-neutral-800"
+        >
+          <MessageSquare size={14} />
+          要求后续变更
+        </button>
+      </div>
+    </aside>
+  );
+}
+
 function ThreadPanel({
   root,
   replies,
@@ -2494,6 +2782,7 @@ function ThreadPanel({
   onSelectMessage,
   onEditMessage,
   onDeleteMessage,
+  onOpenTaskDetail,
   onConvertToTask,
   onUnfollowThread,
   onTaskMenu,
@@ -2539,6 +2828,7 @@ function ThreadPanel({
   onSelectMessage: (msg: ChatMessage) => void;
   onEditMessage: (msg: ChatMessage, body: string) => Promise<boolean>;
   onDeleteMessage: (msg: ChatMessage) => void;
+  onOpenTaskDetail: (msg: ChatMessage) => void;
   onConvertToTask: (msg: ChatMessage) => void;
   onUnfollowThread: (msg: ChatMessage) => void;
   onTaskMenu: (taskId: string | null) => void;
@@ -2586,6 +2876,7 @@ function ThreadPanel({
         onSelectMessage={() => onSelectMessage(msg)}
         onEditMessage={(body) => onEditMessage(msg, body)}
         onDeleteMessage={() => onDeleteMessage(msg)}
+        onOpenTaskDetail={() => onOpenTaskDetail(msg)}
         onConvertToTask={() => onConvertToTask(msg)}
         onReopenTask={() => { if (task) onTaskStatus(task, 'todo'); }}
         onUnfollowThread={() => onUnfollowThread(msg)}
@@ -2916,6 +3207,7 @@ function ChatBubble({
   onSelectMessage,
   onEditMessage,
   onDeleteMessage,
+  onOpenTaskDetail,
   onConvertToTask,
   onReopenTask,
   onUnfollowThread,
@@ -2953,6 +3245,7 @@ function ChatBubble({
   onSelectMessage: () => void;
   onEditMessage: (body: string) => Promise<boolean>;
   onDeleteMessage: () => void;
+  onOpenTaskDetail: () => void;
   onConvertToTask: () => void;
   onReopenTask: () => void;
   onUnfollowThread: () => void;
@@ -3163,6 +3456,7 @@ function ChatBubble({
           {taskId ? (
             <>
               <div className="my-1 border-t border-neutral-100" />
+              <MessageContextMenuItem icon={<ListTodo size={14} />} label="查看任务详情" onClick={() => runMenuAction(onOpenTaskDetail)} />
               <MessageContextMenuItem icon={<BellOff size={14} />} label="取消关注讨论串" onClick={() => runMenuAction(onUnfollowThread)} />
               <MessageContextMenuItem icon={<RotateCcw size={14} />} label="重新打开任务" onClick={() => runMenuAction(onReopenTask)} disabled={!task} />
             </>
@@ -3242,6 +3536,7 @@ function ChatBubble({
                 assigneeName={taskAssigneeName ?? (agent?.name ?? speaker)}
                 open={taskMenuOpen}
                 onOpen={onTaskMenu}
+                onOpenDetail={onOpenTaskDetail}
                 onStatus={onTaskStatus}
               />
             )}
@@ -3307,6 +3602,7 @@ function ChatTaskBadge({
   assigneeName,
   open,
   onOpen,
+  onOpenDetail,
   onStatus,
 }: {
   task?: TaskItem | null;
@@ -3314,25 +3610,41 @@ function ChatTaskBadge({
   assigneeName: string;
   open: boolean;
   onOpen?: (open: boolean) => void;
+  onOpenDetail?: () => void;
   onStatus?: (status: TaskStatus) => void;
 }) {
   const column = TASK_COLUMNS.find((item) => item.id === task?.status) ?? TASK_COLUMNS[0]!;
   const label = taskNumber ? `#${taskNumber}` : '#任务';
   const canChange = Boolean(task && onStatus);
+  const opensDetail = Boolean(onOpenDetail);
   return (
     <span className="relative inline-flex">
       <button
         onClick={(event) => {
           event.stopPropagation();
-          if (canChange) onOpen?.(!open);
+          if (opensDetail) onOpenDetail?.();
+          else if (canChange) onOpen?.(!open);
         }}
-        className={`inline-flex h-5 items-center gap-1 rounded-full border px-2 text-[11px] font-semibold leading-none transition-colors ${column.badge} ${canChange ? 'hover:brightness-105' : ''}`}
-        title={canChange ? `${column.label} · 更改任务状态` : `${column.label} · 查看任务`}
+        className={`inline-flex h-5 items-center gap-1 ${canChange ? 'rounded-l-full border border-r-0' : 'rounded-full border'} px-2 text-[11px] font-semibold leading-none transition-colors ${column.badge} hover:brightness-105`}
+        title={opensDetail ? `${column.label} · 查看任务详情` : canChange ? `${column.label} · 更改任务状态` : `${column.label} · 查看任务`}
       >
         {taskBadgeIcon(column.id)}
         <span>{label}</span>
         <span>@{assigneeName}</span>
       </button>
+      {canChange && (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpen?.(!open);
+          }}
+          className={`inline-flex h-5 w-5 items-center justify-center rounded-r-full border text-[11px] font-semibold leading-none transition-colors ${column.badge} hover:brightness-105`}
+          title="更改任务状态"
+        >
+          <ChevronDown size={10} strokeWidth={2.5} />
+        </button>
+      )}
       {open && canChange && (
         <div className={`absolute left-0 top-6 ${TASK_STATUS_MENU_PANEL_CLASS}`} style={TASK_STATUS_MENU_PANEL_STYLE}>
           {TASK_COLUMNS.map((status) => (
@@ -4100,6 +4412,18 @@ function statusDotClass(status?: AgentStatus): string {
 function uniqueMessages(messages: ChatMessage[]): ChatMessage[] {
   const map = new Map<string, ChatMessage>();
   for (const msg of messages) map.set(msg.id, msg);
+  return [...map.values()];
+}
+
+function uniqueArtifacts(artifacts: Artifact[]): Artifact[] {
+  const map = new Map<string, Artifact>();
+  for (const artifact of artifacts) map.set(artifact.id, artifact);
+  return [...map.values()];
+}
+
+function uniqueWorkspaceRuns(runs: NonNullable<ChatMessage['workspaceRun']>[]): NonNullable<ChatMessage['workspaceRun']>[] {
+  const map = new Map<string, NonNullable<ChatMessage['workspaceRun']>>();
+  for (const run of runs) map.set(run.id, run);
   return [...map.values()];
 }
 
