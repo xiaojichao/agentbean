@@ -11,8 +11,8 @@ import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
-import { inboxActivityMessages, isTopLevelAgentReply, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
-import { loadReadIds, readKey, saveReadIds } from '@/lib/chat-read-state';
+import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
+import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import {
   TASK_STATUS_COLUMNS as TASK_COLUMNS,
@@ -226,7 +226,12 @@ export default function ChatPage() {
   const [loadedReactionsKey, setLoadedReactionsKey] = useState<string | null>(null);
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
   const [loadedDoneKey, setLoadedDoneKey] = useState<string | null>(null);
-  const activityVisibleIds = visibleConversationIds(channels, dms);
+  const [mutedChannelIds, setMutedChannelIds] = useState<Set<string>>(new Set());
+  const [loadedMutedChannelKey, setLoadedMutedChannelKey] = useState<string | null>(null);
+  const conversationVisibleIds = visibleConversationIds(channels, dms);
+  const mutedChannelStorageKey = mutedChannelKey(routeNetworkPath);
+  const mutedChannelsReady = loadedMutedChannelKey === mutedChannelStorageKey;
+  const activityVisibleIds = activityConversationIds(conversationVisibleIds, mutedChannelIds, mutedChannelsReady);
   const activityVisibleList = [...activityVisibleIds];
   const activityVisibleKey = activityVisibleList.join('\u001f');
   const inboxUnread = inboxActivityMessages(activityMessages, activityVisibleIds).filter((m) => !doneIds.has(m.id)).length;
@@ -264,6 +269,7 @@ export default function ChatPage() {
   const dmsRef = useRef(dms);
   const savedKey = `agentbean:chat:saved:${routeNetworkPath}`;
   const reactionsKey = `agentbean:chat:reactions:${routeNetworkPath}`;
+  const activeChannelMuted = activeChannel ? mutedChannelIds.has(activeChannel) : false;
 
   useEffect(() => {
     dmsRef.current = dms;
@@ -413,6 +419,18 @@ export default function ChatPage() {
       saveReadIds(routeNetworkPath, doneIds);
     } catch {}
   }, [doneIds, loadedDoneKey, routeNetworkPath]);
+
+  useEffect(() => {
+    setMutedChannelIds(loadMutedChannelIds(routeNetworkPath));
+    setLoadedMutedChannelKey(mutedChannelKey(routeNetworkPath));
+  }, [routeNetworkPath]);
+
+  useEffect(() => {
+    if (loadedMutedChannelKey !== mutedChannelStorageKey) return;
+    try {
+      saveMutedChannelIds(routeNetworkPath, mutedChannelIds);
+    } catch {}
+  }, [mutedChannelIds, loadedMutedChannelKey, mutedChannelStorageKey, routeNetworkPath]);
 
   // Fetch members for @mention
   useEffect(() => {
@@ -1081,6 +1099,19 @@ export default function ChatPage() {
     setShowBackToBottom(el.scrollHeight - el.scrollTop - el.clientHeight > 160);
   };
 
+  const toggleActiveChannelMute = () => {
+    if (!activeChannel) return;
+    setMutedChannelIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(activeChannel)) {
+        next.delete(activeChannel);
+      } else {
+        next.add(activeChannel);
+      }
+      return next;
+    });
+  };
+
   return (
     <div className="flex flex-1 overflow-hidden">
       {/* Left sidebar — channel list */}
@@ -1197,7 +1228,7 @@ export default function ChatPage() {
             setSidebarView('channels');
             const dm = dms.find((item) => item.id === chId);
             router.push(dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`);
-          }} humanProfiles={humanProfiles} doneIds={doneIds} setDoneIds={setDoneIds} />
+          }} humanProfiles={humanProfiles} doneIds={doneIds} setDoneIds={setDoneIds} mutedChannelIds={mutedChannelIds} />
         ) : sidebarView === 'saved' ? (
           <SavedView savedMessages={savedDisplayMessages} onUnsave={(msgId) => toggleSave(msgId)} onJump={(chId) => {
             setActiveChannel(chId);
@@ -1244,6 +1275,15 @@ export default function ChatPage() {
                 data-smoke="channel-stop-agents"
               >
                 <X size={14} />
+              </button>
+              <button
+                onClick={toggleActiveChannelMute}
+                className={`flex h-7 w-7 items-center justify-center rounded-md ${activeChannelMuted ? 'bg-amber-50 text-amber-600 hover:bg-amber-100' : 'text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700'}`}
+                title={activeChannelMuted ? '恢复此频道活动提醒' : '静音此频道活动'}
+                data-smoke="channel-mute-toggle"
+                aria-pressed={activeChannelMuted}
+              >
+                <BellOff size={14} />
               </button>
               {canManageActiveChannel && (
                 <button onClick={() => setShowEditChannel(true)} className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="编辑频道" data-smoke="channel-edit-open">
@@ -3940,14 +3980,26 @@ function SearchView({ onClose, onJump, humanProfiles }: { onClose: () => void; o
   );
 }
 
-function ActivityView({ onJump, humanProfiles, doneIds, setDoneIds }: { onJump: (channelId: string) => void; humanProfiles: HumanProfile[]; doneIds: Set<string>; setDoneIds: Dispatch<SetStateAction<Set<string>>> }) {
+function ActivityView({
+  onJump,
+  humanProfiles,
+  doneIds,
+  setDoneIds,
+  mutedChannelIds,
+}: {
+  onJump: (channelId: string) => void;
+  humanProfiles: HumanProfile[];
+  doneIds: Set<string>;
+  setDoneIds: Dispatch<SetStateAction<Set<string>>>;
+  mutedChannelIds: Set<string>;
+}) {
   const [filter, setFilter] = useState<'all' | 'unread' | 'mentions'>('all');
   const activityMessages = useAgentBeanStore((s) => s.activityMessages);
   const channels = useAgentBeanStore((s) => s.channels);
   const dms = useAgentBeanStore((s) => s.dms);
   const agents = useAgentBeanStore((s) => s.agents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
-  const visibleIds = visibleConversationIds(channels, dms);
+  const visibleIds = activityConversationIds(visibleConversationIds(channels, dms), mutedChannelIds);
 
   const allMessages = inboxActivityMessages(activityMessages, visibleIds);
   const unreadCount = allMessages.filter((m) => !doneIds.has(m.id)).length;
@@ -3964,7 +4016,7 @@ function ActivityView({ onJump, humanProfiles, doneIds, setDoneIds }: { onJump: 
           <h2 className="text-lg font-semibold">活动</h2>
           <p className="text-xs text-neutral-400">{allMessages.length} 条活动 · {unreadCount} 条未读</p>
         </div>
-        <button onClick={() => setDoneIds(new Set(allMessages.map((m) => m.id)))} className="rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50">全部标记已读</button>
+        <button onClick={() => setDoneIds((prev) => markMessagesDone(prev, allMessages))} className="rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50">全部标记已读</button>
       </div>
       <div className="flex gap-2 border-b border-neutral-200 px-6 py-2">
         {(['all', 'unread', 'mentions'] as const).map((item) => (

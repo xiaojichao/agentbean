@@ -10,6 +10,16 @@ export function visibleConversationIds(channels: ConversationRef[], dms: Convers
   return new Set([...channels.map((item) => item.id), ...dms.map((item) => item.id)]);
 }
 
+export function activityConversationIds(
+  visibleIds: Set<string>,
+  mutedChannelIds: Set<string>,
+  mutedChannelsReady = true,
+): Set<string> {
+  if (!mutedChannelsReady) return new Set();
+  if (mutedChannelIds.size === 0) return new Set(visibleIds);
+  return new Set([...visibleIds].filter((id) => !mutedChannelIds.has(id)));
+}
+
 export function messagesForVisibleConversations<T extends ScopedMessage>(messages: T[], ids: Set<string>): T[] {
   if (ids.size === 0) return [];
   return messages.filter((message) => ids.has(message.channelId));
@@ -53,6 +63,16 @@ export interface ActivityMessage {
   channelId: string;
   senderKind: string;
   createdAt: number;
+}
+
+export interface MessageId {
+  id: string;
+}
+
+export function markMessagesDone<T extends MessageId>(doneIds: Set<string>, messages: T[]): Set<string> {
+  const next = new Set(doneIds);
+  for (const message of messages) next.add(message.id);
+  return next;
 }
 
 export function inboxActivityMessages<T extends ActivityMessage>(

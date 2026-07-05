@@ -1,8 +1,11 @@
 import { describe, expect, test } from 'vitest';
 import {
   deserializeReadIds,
+  loadMutedChannelIds,
   loadReadIds,
+  mutedChannelKey,
   readKey,
+  saveMutedChannelIds,
   saveReadIds,
   serializeReadIds,
   type ReadIdStorage,
@@ -65,6 +68,14 @@ describe('readKey', () => {
   });
 });
 
+describe('mutedChannelKey', () => {
+  test('带统一前缀并按网络隔离', () => {
+    expect(mutedChannelKey('public')).toBe('agentbean:chat:muted-channels:public');
+    expect(mutedChannelKey('private')).toBe('agentbean:chat:muted-channels:private');
+    expect(mutedChannelKey('public')).not.toBe(mutedChannelKey('private'));
+  });
+});
+
 describe('loadReadIds / saveReadIds', () => {
   test('save 后 load 能读回(同一存储、同一网络)', () => {
     const storage = makeFakeStorage();
@@ -83,5 +94,21 @@ describe('loadReadIds / saveReadIds', () => {
     saveReadIds('private', new Set(['priv-1', 'priv-2']), storage);
     expect([...loadReadIds('public', storage)].sort()).toEqual(['pub-1']);
     expect([...loadReadIds('private', storage)].sort()).toEqual(['priv-1', 'priv-2']);
+  });
+});
+
+describe('loadMutedChannelIds / saveMutedChannelIds', () => {
+  test('save 后 load 能读回静音频道', () => {
+    const storage = makeFakeStorage();
+    saveMutedChannelIds('public', new Set(['channel-1', 'channel-2']), storage);
+    expect([...loadMutedChannelIds('public', storage)].sort()).toEqual(['channel-1', 'channel-2']);
+  });
+
+  test('不同网络的静音频道互不干扰', () => {
+    const storage = makeFakeStorage();
+    saveMutedChannelIds('public', new Set(['channel-public']), storage);
+    saveMutedChannelIds('private', new Set(['channel-private']), storage);
+    expect([...loadMutedChannelIds('public', storage)]).toEqual(['channel-public']);
+    expect([...loadMutedChannelIds('private', storage)]).toEqual(['channel-private']);
   });
 });
