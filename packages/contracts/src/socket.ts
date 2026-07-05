@@ -95,6 +95,7 @@ export const WEB_EVENTS = {
     react: 'message:react',
     save: 'message:save',
     listSaved: 'message:list-saved',
+    convertToTask: 'message:convert-to-task',
   },
   dispatch: {
     cancel: 'dispatch:cancel',
@@ -147,4 +148,3 @@ export interface ScanRequest {
   deviceId: string;
   customAgents?: ScanRequestCustomAgent[];
 }
-

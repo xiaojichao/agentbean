@@ -1507,6 +1507,126 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('sendMessage with asTask persists a linked channel task', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 310,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'task-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+
+    const ack = await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: 'ship Raft parity',
+      asTask: true,
+    });
+
+    expect(ack).toMatchObject({
+      ok: true,
+      message: {
+        id: 'message-1',
+        meta: { taskId: 'task-1' },
+      },
+      task: {
+        id: 'task-1',
+        title: 'ship Raft parity',
+      },
+    });
+    await expect(app.listTasks({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1' })).resolves.toMatchObject({
+      ok: true,
+      tasks: [
+        {
+          id: 'task-1',
+          title: 'ship Raft parity',
+          status: 'todo',
+          channelId: 'channel-1',
+          creatorId: 'user-1',
+          assigneeId: undefined,
+        },
+      ],
+    });
+    await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
+      ok: true,
+      messages: [
+        {
+          id: 'message-1',
+          meta: { taskId: 'task-1' },
+        },
+      ],
+    });
+  });
+
+  test('convertMessageToTask links an existing channel message to a task', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 315,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'task-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: 'turn this into work',
+    });
+
+    const ack = await app.convertMessageToTask({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'message-1',
+    });
+
+    expect(ack).toMatchObject({
+      ok: true,
+      task: {
+        id: 'task-1',
+        title: 'turn this into work',
+        status: 'todo',
+        channelId: 'channel-1',
+        creatorId: 'user-1',
+      },
+      message: {
+        id: 'message-1',
+        meta: { taskId: 'task-1' },
+      },
+    });
+    await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
+      ok: true,
+      messages: [
+        {
+          id: 'message-1',
+          meta: { taskId: 'task-1' },
+        },
+      ],
+    });
+  });
+
+  test('message task claim keeps convert-to-task idempotent', async () => {
+    const repositories = createInMemoryRepositories();
+    await repositories.messages.append({
+      id: 'message-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'message-1',
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: 'turn this into one task',
+      createdAt: 320,
+      meta: {},
+    });
+
+    await expect(repositories.messages.setTaskIdIfAbsent({ messageId: 'message-1', taskId: 'task-1' })).resolves.toMatchObject({
+      taskId: 'task-1',
+      inserted: true,
+      message: { meta: { taskId: 'task-1' } },
+    });
+    await expect(repositories.messages.setTaskIdIfAbsent({ messageId: 'message-1', taskId: 'task-2' })).resolves.toMatchObject({
+      taskId: 'task-1',
+      inserted: false,
+      message: { meta: { taskId: 'task-1' } },
+    });
+  });
+
   test('sendMessage attaches same-channel uploaded artifacts to the human message', async () => {
     const app = createInMemoryServerNext({
       now: () => 320,

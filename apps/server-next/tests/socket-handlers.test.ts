@@ -73,6 +73,7 @@ describe('server-next socket handlers', () => {
       reactMessage: vi.fn(async (payload) => makeSuccess({ payload })),
       saveMessage: vi.fn(async (payload) => makeSuccess({ payload })),
       listSavedMessages: vi.fn(async (payload) => makeSuccess({ payload })),
+      convertMessageToTask: vi.fn(async (payload) => makeSuccess({ payload })),
       updateMemberRole: vi.fn(async (payload) => makeSuccess({ payload })),
       removeMember: vi.fn(async (payload) => makeSuccess({ payload })),
       transferOwner: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -138,6 +139,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.message.react,
       WEB_EVENTS.message.save,
       WEB_EVENTS.message.listSaved,
+      WEB_EVENTS.message.convertToTask,
       WEB_EVENTS.member.updateRole,
       WEB_EVENTS.member.remove,
       WEB_EVENTS.member.transferOwner,
@@ -327,6 +329,11 @@ describe('server-next socket handlers', () => {
       teamId: 'team-1',
       messageId: 'msg-1',
       on: true,
+    });
+    await socket.trigger(WEB_EVENTS.message.convertToTask, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
     });
     await socket.trigger(WEB_EVENTS.message.save, {
       userId: 'user-1',
@@ -525,6 +532,11 @@ describe('server-next socket handlers', () => {
       userId: 'user-1',
       teamId: 'team-1',
     });
+    expect(app.convertMessageToTask).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+    });
     expect(app.updateMemberRole).toHaveBeenCalledWith({
       userId: 'user-1',
       teamId: 'team-1',
@@ -541,6 +553,41 @@ describe('server-next socket handlers', () => {
       teamId: 'team-1',
       targetUserId: 'user-2',
     });
+  });
+
+  test('notifies task subscribers when message:send creates a task', async () => {
+    const socket = new FakeSocket();
+    const taskAck = makeSuccess({
+      message: { id: 'message-1', body: 'ship it' },
+      dispatches: [],
+      route: { kind: 'no-dispatch', reason: 'no-online-agent' },
+      task: { id: 'task-1', title: 'ship it' },
+    });
+    const app = {
+      sendMessage: vi.fn(async () => taskAck),
+    } as unknown as ServerNextUseCases;
+    const afterTaskMutation = vi.fn();
+
+    registerWebSocketHandlers(socket, app, { afterTaskMutation });
+
+    await socket.trigger(WEB_EVENTS.message.send, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: 'ship it',
+      asTask: true,
+    });
+
+    expect(afterTaskMutation).toHaveBeenCalledWith(
+      {
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        body: 'ship it',
+        asTask: true,
+      },
+      taskAck,
+    );
   });
 
   test('derives join management team from the authenticated session', async () => {
