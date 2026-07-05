@@ -422,6 +422,7 @@ export interface SearchMessagesInput {
   userId: string;
   teamId: string;
   query: string;
+  channelId?: string;
   limit?: number;
 }
 
@@ -2572,12 +2573,23 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (query.length < 2) {
         return makeFailure('VALIDATION_ERROR', 'Search query must be at least 2 characters');
       }
-      const channels = await repositories.channels.listForUser(searchInput.teamId, searchInput.userId);
-      const directChannels = await visibleDirectChannelsForUser(repositories, searchInput.teamId, searchInput.userId);
-      const channelIds = [
-        ...channels.map((channel) => channel.id),
-        ...directChannels.map(({ channel }) => channel.id),
-      ];
+      const scopedChannelId = normalizeOptionalId(searchInput.channelId);
+      const channelIds = scopedChannelId
+        ? [scopedChannelId]
+        : [
+            ...(await repositories.channels.listForUser(searchInput.teamId, searchInput.userId)).map((channel) => channel.id),
+            ...(await visibleDirectChannelsForUser(repositories, searchInput.teamId, searchInput.userId)).map(({ channel }) => channel.id),
+          ];
+      if (scopedChannelId) {
+        const channelAccess = await ensureUserCanViewChannel(repositories, {
+          userId: searchInput.userId,
+          teamId: searchInput.teamId,
+          channelId: scopedChannelId,
+        });
+        if (!channelAccess.ok) {
+          return channelAccess;
+        }
+      }
       const messages = await repositories.messages.search({
         channelIds,
         query,
