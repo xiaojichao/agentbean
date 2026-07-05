@@ -2109,6 +2109,17 @@ describe('server-next first-slice use cases', () => {
       status: 'online',
       lastSeenAt: now,
     });
+    await app.registerAgent({
+      id: 'agent-2',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Claude',
+      adapterKind: 'claude-code',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      lastSeenAt: now,
+    });
     await app.sendMessage({
       userId: 'user-1',
       teamId: 'team-1',
@@ -2150,6 +2161,71 @@ describe('server-next first-slice use cases', () => {
           body: '@Codex hello',
         },
       ],
+    });
+  });
+
+  test('cancelChannelDispatches cancels pending dispatches in a channel once', async () => {
+    let now = 460;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1', 'team-1', 'channel-1',
+        'message-1', 'dispatch-1', 'request-1',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      lastSeenAt: now,
+    });
+    const firstSend = await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex stop this channel',
+    });
+    expect(firstSend.ok ? firstSend.dispatches : []).toHaveLength(1);
+    const firstDispatchId = firstSend.ok ? firstSend.dispatches[0]!.id : '';
+
+    now = 480;
+    await expect(app.cancelChannelDispatches({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [
+        {
+          id: firstDispatchId,
+          channelId: 'channel-1',
+          messageId: 'message-1',
+          status: 'cancelled',
+          completedAt: 480,
+        },
+      ],
+    });
+    await expect(app.receiveDispatchResult({
+      dispatchId: firstDispatchId,
+      agentId: 'agent-1',
+      body: 'late cancelled reply',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+    });
+    await expect(app.cancelChannelDispatches({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [],
     });
   });
 

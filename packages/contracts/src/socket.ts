@@ -99,6 +99,7 @@ export const WEB_EVENTS = {
   },
   dispatch: {
     cancel: 'dispatch:cancel',
+    cancelChannel: 'dispatch:cancel-channel',
   },
   task: {
     list: 'task:list',

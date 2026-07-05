@@ -342,6 +342,22 @@ export function registerWebSocketHandlers(
       options.dispatchCancel(request.request);
     }
   }, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.dispatch.cancelChannel, app, 'cancelChannelDispatches', async (_payload, result) => {
+    if (!isDispatchListAck(result)) {
+      return;
+    }
+    await options.afterAgentMutation?.(_payload, result);
+    for (const dispatch of result.dispatches) {
+      options.dispatchStatus?.(dispatch);
+      if (!options.dispatchCancel) {
+        continue;
+      }
+      const request = await app.getDispatchRequest({ dispatchId: dispatch.id });
+      if (request.ok) {
+        options.dispatchCancel(request.request);
+      }
+    }
+  }, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.task.list, app, 'listTasks', undefined, { authenticatedUser: options.authenticatedUser });
   const afterTaskMutation = (payload: unknown, result: unknown) =>
     options.afterTaskMutation?.(payload, result);
@@ -647,4 +663,14 @@ function isDispatchAck(result: unknown): result is { ok: true; dispatch: { id: s
   }
   const candidate = result as { ok?: unknown; dispatch?: { id?: unknown } };
   return candidate.ok === true && typeof candidate.dispatch?.id === 'string';
+}
+
+function isDispatchListAck(result: unknown): result is { ok: true; dispatches: Array<{ id: string }> } {
+  if (!result || typeof result !== 'object') {
+    return false;
+  }
+  const candidate = result as { ok?: unknown; dispatches?: unknown };
+  return candidate.ok === true &&
+    Array.isArray(candidate.dispatches) &&
+    candidate.dispatches.every((dispatch) => Boolean(dispatch && typeof dispatch === 'object' && typeof (dispatch as { id?: unknown }).id === 'string'));
 }
