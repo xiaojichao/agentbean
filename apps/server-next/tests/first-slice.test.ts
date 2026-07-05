@@ -244,9 +244,89 @@ describe('server-next first-slice use cases', () => {
       ok: true,
       messages: [],
     });
+    await expect(app.searchMessages({ userId: 'user-2', teamId: 'team-1', query: 'roadmap', channelId: 'channel-private' })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
     await expect(app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'r' })).resolves.toMatchObject({
       ok: false,
       error: 'VALIDATION_ERROR',
+    });
+  });
+
+  test('searchMessages can be scoped to one channel', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 255,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'channel-2',
+        'message-all',
+        'message-focused',
+        'message-other-term',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.createChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      name: 'focused-search',
+      visibility: 'public',
+    });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'roadmap in all channel' });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', body: 'roadmap in focused channel' });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', body: 'shipping notes' });
+
+    const scoped = await app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'roadmap', channelId: 'channel-2' });
+    expect(scoped).toMatchObject({ ok: true });
+    expect(scoped.messages.map((message) => ({ id: message.id, channelId: message.channelId, body: message.body }))).toEqual([
+      { id: 'message-focused', channelId: 'channel-2', body: 'roadmap in focused channel' },
+    ]);
+
+    const global = await app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'roadmap' });
+    expect(global).toMatchObject({ ok: true });
+    expect(global.messages.map((message) => message.id)).toEqual(expect.arrayContaining(['message-all', 'message-focused']));
+  });
+
+  test('searchMessages rejects scoped archived channels', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 275,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'channel-archived',
+        'message-archived',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.createChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      name: 'archived-search',
+      visibility: 'public',
+    });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-archived',
+      body: 'archived roadmap note',
+    });
+    await app.archiveChannel({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-archived' });
+
+    await expect(app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'roadmap' })).resolves.toMatchObject({
+      ok: true,
+      messages: [],
+    });
+    await expect(app.searchMessages({
+      userId: 'user-1',
+      teamId: 'team-1',
+      query: 'roadmap',
+      channelId: 'channel-archived',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'NOT_FOUND',
     });
   });
 
@@ -386,6 +466,15 @@ describe('server-next first-slice use cases', () => {
     await expect(app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'roadmap' })).resolves.toMatchObject({
       ok: true,
       messages: [],
+    });
+    await expect(app.searchMessages({
+      userId: 'user-1',
+      teamId: 'team-1',
+      query: 'roadmap',
+      channelId: 'dm-1',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'NOT_FOUND',
     });
   });
 

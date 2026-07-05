@@ -322,7 +322,7 @@ export interface ChannelEvents {
   removeMember(channelId: string, userId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
   archive(channelId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
   delete(channelId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
-  searchMessages(query: string, limit?: number): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
+  searchMessages(query: string, limit?: number, channelId?: string): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
 }
 
 export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
@@ -338,7 +338,9 @@ export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
     removeMember(channelId, userId, teamId) { return emitWithTimeout(socket, WEB_EVENTS.channel.removeMember, { channelId, memberUserId: userId, ...(teamId ? { teamId } : {}) }); },
     archive(channelId, teamId) { return emitWithTimeout(socket, WEB_EVENTS.channel.archive, { channelId, ...(teamId ? { teamId } : {}) }); },
     delete(channelId, teamId) { return emitWithTimeout(socket, WEB_EVENTS.channel.delete, { channelId, ...(teamId ? { teamId } : {}) }); },
-    searchMessages(query, limit) { return emitWithTimeout(socket, WEB_EVENTS.message.search, { query, limit }); },
+    searchMessages(query, limit, channelId) {
+      return emitWithTimeout(socket, WEB_EVENTS.message.search, { query, limit, ...(channelId ? { channelId } : {}) });
+    },
   };
 }
 

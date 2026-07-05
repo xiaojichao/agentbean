@@ -194,6 +194,7 @@ describe('server-next socket handlers', () => {
       userId: 'user-1',
       teamId: 'team-1',
       query: 'hello',
+      channelId: 'channel-1',
     });
     await socket.trigger(WEB_EVENTS.device.get, {
       userId: 'user-1',
@@ -501,6 +502,7 @@ describe('server-next socket handlers', () => {
       userId: 'user-1',
       teamId: 'team-1',
       query: 'hello',
+      channelId: 'channel-1',
     });
     expect(app.listTasks).toHaveBeenCalledWith({
       userId: 'user-1',
