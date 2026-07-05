@@ -75,6 +75,16 @@ export function markMessagesDone<T extends MessageId>(doneIds: Set<string>, mess
   return next;
 }
 
+export function setMessageDone(doneIds: Set<string>, messageId: string, done: boolean): Set<string> {
+  const next = new Set(doneIds);
+  if (done) {
+    next.add(messageId);
+  } else {
+    next.delete(messageId);
+  }
+  return next;
+}
+
 export function inboxActivityMessages<T extends ActivityMessage>(
   messages: T[],
   visibleIds: Set<string>,
