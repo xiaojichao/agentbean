@@ -5,6 +5,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS } from '../../../packages/contracts/src/index.js';
 import { createDaemonProtocolClient } from '../src/index';
 import type { DaemonProtocolSocket } from '../src/index';
+import { persistWorkspaceRunManifest, persistWorkspaceRunResponse, prepareWorkspaceRun } from '../src/workspace-run';
 
 async function touchFile(path: string, mtimeMs: number): Promise<void> {
   writeFileSync(path, 'image-bytes');
@@ -257,6 +258,66 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
         ),
       ).toBe(true);
     });
+  });
+
+  test('start recovers a completed persisted workspace run that was not reported before daemon restart', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-')));
+    const harness = createFakeSocket();
+    const workspace = prepareWorkspaceRun(cwd, 'disp-recover');
+    persistWorkspaceRunResponse(workspace, 'recovered reply');
+    persistWorkspaceRunManifest(workspace, {
+      runId: 'disp-recover',
+      agentId: 'agent-1',
+      channelId: 'chan-1',
+      status: 'succeeded',
+      cwd,
+      exitCode: 0,
+      startedAt: 1000,
+      completedAt: 2000,
+      artifactIds: ['srv-art-1'],
+      files: [],
+    });
+
+    const executor = vi.fn(async () => ({ body: 'should not run' }));
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+      runtimes: [],
+      agents: [{
+        name: 'Codex',
+        adapterKind: 'codex',
+        category: 'agentos-hosted',
+        command: 'codex',
+        cwd,
+      }],
+      serverUrl: 'http://server.test',
+      fetch: async () => new Response('{}', { status: 200 }),
+      executor,
+    });
+
+    await client.start();
+
+    expect(executor).not.toHaveBeenCalled();
+    const resultEmit = harness.emits.find(
+      (e) => e.event === AGENT_EVENTS.dispatch.result
+        && (e.payload as { dispatchId?: string }).dispatchId === 'disp-recover',
+    );
+    expect(resultEmit).toBeTruthy();
+    expect(resultEmit!.payload).toMatchObject({
+      dispatchId: 'disp-recover',
+      agentId: 'agent-1',
+      body: 'recovered reply',
+      artifactIds: ['srv-art-1'],
+      workspaceRun: {
+        status: 'succeeded',
+        cwd,
+        exitCode: 0,
+        startedAt: 1000,
+        completedAt: 2000,
+      },
+    });
+    const reportedManifest = JSON.parse(readFileSync(workspace.manifestPath, 'utf8'));
+    expect(typeof reportedManifest.reportedAt).toBe('number');
   });
 
   test('scanRequested 在 snapshot 上报 emit 失败时不抛', async () => {

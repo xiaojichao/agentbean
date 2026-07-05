@@ -3,7 +3,14 @@ import { join } from 'node:path';
 import { AGENT_EVENTS, type AgentCategory, type ArtifactPathKind, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
-import { prepareWorkspaceRun, workspaceRunEnv, persistWorkspaceRunManifest, persistWorkspaceRunResponse } from './workspace-run.js';
+import {
+  discoverRecoverableWorkspaceRuns,
+  markWorkspaceRunReported,
+  prepareWorkspaceRun,
+  workspaceRunEnv,
+  persistWorkspaceRunManifest,
+  persistWorkspaceRunResponse,
+} from './workspace-run.js';
 import { collectArtifacts } from './artifact-collector.js';
 import { uploadArtifacts } from './artifact-uploader.js';
 import { selectNativeDirectory } from './directory-picker.js';
@@ -15,8 +22,15 @@ export { createCommandExecutor } from './executor.js';
 export type { CommandExecutorOptions } from './executor.js';
 export { downloadAttachments } from './attachments.js';
 export type { DispatchAttachment, DownloadedAttachment } from './attachments.js';
-export { prepareWorkspaceRun, workspaceRunEnv, persistWorkspaceRunManifest, persistWorkspaceRunResponse } from './workspace-run.js';
-export type { WorkspaceRunDir, WorkspaceRunManifest } from './workspace-run.js';
+export {
+  discoverRecoverableWorkspaceRuns,
+  markWorkspaceRunReported,
+  prepareWorkspaceRun,
+  workspaceRunEnv,
+  persistWorkspaceRunManifest,
+  persistWorkspaceRunResponse,
+} from './workspace-run.js';
+export type { RecoverableWorkspaceRun, WorkspaceRunDir, WorkspaceRunManifest } from './workspace-run.js';
 export { collectArtifacts } from './artifact-collector.js';
 export type { CollectedArtifact } from './artifact-collector.js';
 export { uploadArtifacts } from './artifact-uploader.js';
@@ -174,6 +188,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       const outbox: DispatchOutbox = createDispatchOutbox(socket, {
         onWarn: (message) => console.warn(message),
       });
+      await recoverPersistedWorkspaceRuns(socket, latestSnapshot.agents);
       socket.onReconnect?.(async () => {
         try {
           const announcement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents, { onDeviceRemoved: input.onDeviceRemoved });
@@ -294,15 +309,23 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               productArtifactIds = uploaded.map((u) => u.id);
             }
           }
+          const artifacts = result.artifacts ?? [];
+          const artifactIds = [...(result.artifactIds ?? []), ...productArtifactIds];
           if (workspace && result.workspaceRun?.startedAt !== undefined) {
             try {
               persistWorkspaceRunResponse(workspace, result.body);
               persistWorkspaceRunManifest(workspace, {
                 runId: workspace.runId,
+                agentId: request.agentId,
+                channelId: request.channelId,
                 status: result.workspaceRun.status,
+                cwd: result.workspaceRun.cwd,
+                command: result.workspaceRun.command,
+                logExcerpt: result.workspaceRun.logExcerpt,
                 startedAt: result.workspaceRun.startedAt,
                 completedAt: result.workspaceRun.completedAt,
                 exitCode: result.workspaceRun.exitCode,
+                artifactIds,
                 files: collectedProductArtifacts.map((c) => ({
                   relativePath: c.relativePath,
                   sha256: c.sha256,
@@ -315,8 +338,6 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             }
           }
 
-          const artifacts = result.artifacts ?? [];
-          const artifactIds = [...(result.artifactIds ?? []), ...productArtifactIds];
           outbox.sendOrEnqueue(AGENT_EVENTS.dispatch.result, {
             dispatchId: request.id,
             agentId: request.agentId,
@@ -354,6 +375,28 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
     rescanNow: () => rescan?.tickNow() ?? Promise.resolve(),
     stop: () => rescan?.stop(),
   };
+
+  async function recoverPersistedWorkspaceRuns(
+    targetSocket: DaemonProtocolSocket,
+    snapshotAgents: DaemonAgentReport[],
+  ): Promise<void> {
+    const runs = discoverRecoverableWorkspaceRuns(snapshotAgents.map((agent) => agent.cwd).filter((cwd): cwd is string => typeof cwd === 'string'));
+    for (const run of runs) {
+      try {
+        const payload = {
+          dispatchId: run.runId,
+          agentId: run.agentId,
+          body: run.body,
+          ...(run.artifactIds && run.artifactIds.length > 0 ? { artifactIds: run.artifactIds } : {}),
+          workspaceRun: run.workspaceRun,
+        };
+        await targetSocket.emitWithAck(AGENT_EVENTS.dispatch.result, payload);
+        markWorkspaceRunReported(run, Date.now());
+      } catch (error) {
+        console.warn(`daemon recover workspace run ${run.runId} failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
 
   async function applyCredentialsUpdate(credentials: DaemonDeviceCredentialsUpdate | undefined): Promise<void> {
     if (!credentials?.token) {
