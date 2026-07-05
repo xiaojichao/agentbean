@@ -3038,7 +3038,7 @@ function ChatBubble({
   };
 
   const startEditing = () => {
-    setEditBody(displayMessageBody(msg));
+    setEditBody(msg.body);
     setEditing(true);
   };
 
@@ -3210,7 +3210,7 @@ function ChatBubble({
               <button
                 type="button"
                 onClick={() => {
-                  setEditBody(displayMessageBody(msg));
+                  setEditBody(msg.body);
                   setEditing(false);
                 }}
                 disabled={savingEdit}
