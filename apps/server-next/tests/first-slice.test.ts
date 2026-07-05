@@ -289,6 +289,47 @@ describe('server-next first-slice use cases', () => {
     expect(global.messages.map((message) => message.id)).toEqual(expect.arrayContaining(['message-all', 'message-focused']));
   });
 
+  test('searchMessages rejects scoped archived channels', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 275,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'channel-archived',
+        'message-archived',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.createChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      name: 'archived-search',
+      visibility: 'public',
+    });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-archived',
+      body: 'archived roadmap note',
+    });
+    await app.archiveChannel({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-archived' });
+
+    await expect(app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'roadmap' })).resolves.toMatchObject({
+      ok: true,
+      messages: [],
+    });
+    await expect(app.searchMessages({
+      userId: 'user-1',
+      teamId: 'team-1',
+      query: 'roadmap',
+      channelId: 'channel-archived',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'NOT_FOUND',
+    });
+  });
+
   test('searchMessages requires all terms and ranks phrase matches above scattered matches', async () => {
     const app = createInMemoryServerNext({
       now: () => 300,
@@ -425,6 +466,15 @@ describe('server-next first-slice use cases', () => {
     await expect(app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'roadmap' })).resolves.toMatchObject({
       ok: true,
       messages: [],
+    });
+    await expect(app.searchMessages({
+      userId: 'user-1',
+      teamId: 'team-1',
+      query: 'roadmap',
+      channelId: 'dm-1',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'NOT_FOUND',
     });
   });
 

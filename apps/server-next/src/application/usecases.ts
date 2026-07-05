@@ -2574,12 +2574,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('VALIDATION_ERROR', 'Search query must be at least 2 characters');
       }
       const scopedChannelId = normalizeOptionalId(searchInput.channelId);
-      const channelIds = scopedChannelId
-        ? [scopedChannelId]
-        : [
-            ...(await repositories.channels.listForUser(searchInput.teamId, searchInput.userId)).map((channel) => channel.id),
-            ...(await visibleDirectChannelsForUser(repositories, searchInput.teamId, searchInput.userId)).map(({ channel }) => channel.id),
-          ];
+      let channelIds: string[];
       if (scopedChannelId) {
         const channelAccess = await ensureUserCanViewChannel(repositories, {
           userId: searchInput.userId,
@@ -2589,6 +2584,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (!channelAccess.ok) {
           return channelAccess;
         }
+        if (channelAccess.channel.archivedAt != null) {
+          return makeFailure('NOT_FOUND', 'Channel not found');
+        }
+        if (channelAccess.channel.kind === 'direct') {
+          const agentId = channelAccess.channel.dmTargetAgentId ?? channelAccess.channel.agentMemberIds[0];
+          const agent = agentId ? await repositories.agents.getById(agentId) : null;
+          if (!agent || !agent.visibleTeamIds.includes(searchInput.teamId)) {
+            return makeFailure('NOT_FOUND', 'DM not found');
+          }
+        }
+        channelIds = [scopedChannelId];
+      } else {
+        channelIds = [
+          ...(await repositories.channels.listForUser(searchInput.teamId, searchInput.userId)).map((channel) => channel.id),
+          ...(await visibleDirectChannelsForUser(repositories, searchInput.teamId, searchInput.userId)).map(({ channel }) => channel.id),
+        ];
       }
       const messages = await repositories.messages.search({
         channelIds,
