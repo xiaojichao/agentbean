@@ -1289,6 +1289,87 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('persists late dispatch result after timeout as succeeded reply and completed task', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    let now = 1000;
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => now },
+        ids: {
+          nextId: createIds([
+            'user-1',
+            'team-1',
+            'channel-1',
+            'device-1',
+            'agent-1',
+            'message-1',
+            'task-1',
+            'dispatch-1',
+            'request-1',
+            'workspace-run-1',
+            'reply-1',
+          ]),
+        },
+      });
+
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+      await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' });
+      await app.registerDiscoveredAgents({
+        teamId: 'team-1',
+        deviceId: 'device-1',
+        agents: [{ name: 'Codex', adapterKind: 'codex', category: 'agentos-hosted' }],
+      });
+      await app.sendMessage({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        body: '@Codex write a long article',
+        asTask: true,
+      });
+
+      now = 1301;
+      await app.failTimedOutDispatches({ olderThan: 1300 });
+
+      now = 1500;
+      await expect(app.receiveDispatchResult({
+        dispatchId: 'dispatch-1',
+        agentId: 'agent-1',
+        body: 'late but complete',
+        workspaceRun: {
+          cwd: '/Users/shaw/longvideo',
+          status: 'succeeded',
+          exitCode: 0,
+          startedAt: 1001,
+          completedAt: 1500,
+        },
+      })).resolves.toMatchObject({
+        ok: true,
+        dispatch: { id: 'dispatch-1', status: 'succeeded', completedAt: 1500 },
+        message: { id: 'reply-1', body: 'late but complete' },
+        task: { id: 'task-1', status: 'done', updatedAt: 1500 },
+      });
+
+      expect(teamDb.prepare('SELECT status, completed_at AS completedAt, error_message AS errorMessage FROM dispatches WHERE id = ?').get('dispatch-1')).toEqual({
+        status: 'succeeded',
+        completedAt: 1500,
+        errorMessage: null,
+      });
+      expect(teamDb.prepare('SELECT status, updated_at AS updatedAt FROM tasks WHERE id = ?').get('task-1')).toEqual({
+        status: 'done',
+        updatedAt: 1500,
+      });
+      expect(teamDb.prepare('SELECT message_id AS messageId, dispatch_id AS dispatchId, status FROM workspace_runs WHERE id = ?').get('workspace-run-1')).toEqual({
+        messageId: 'reply-1',
+        dispatchId: 'dispatch-1',
+        status: 'succeeded',
+      });
+    } finally {
+      close();
+    }
+  });
+
   test('rejects late dispatch completions for deleted agents', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {

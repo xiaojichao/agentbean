@@ -798,7 +798,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         if (!dispatch) {
           return null;
         }
-        if (!isPendingDispatchStatus(dispatch.status)) {
+        if (!isCompletableDispatchStatus(dispatch.status)) {
           return { dispatch, changed: false };
         }
         const updated = {
@@ -833,7 +833,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         if (!dispatch) {
           return null;
         }
-        if (!isPendingDispatchStatus(dispatch.status)) {
+        if (!isCompletableDispatchStatus(dispatch.status)) {
           return { dispatch, changed: false };
         }
         const updated = {
@@ -1039,4 +1039,8 @@ function uniqueStrings(values: string[]): string[] {
 
 function isPendingDispatchStatus(status: DispatchRecord['status']): boolean {
   return status === 'queued' || status === 'sent' || status === 'accepted' || status === 'running';
+}
+
+function isCompletableDispatchStatus(status: DispatchRecord['status']): boolean {
+  return isPendingDispatchStatus(status) || status === 'timed_out';
 }
