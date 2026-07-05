@@ -10,6 +10,7 @@ import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus,
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { matchingWorkspaceRunDetail, workspaceRunHistoryItems, type WorkspaceRunDetailBundle } from '@/lib/task-workspace-run-detail';
 import { taskMessageSummary } from '@/lib/task-message-summary';
+import { taskRootIdFromMessageMeta, taskStatusEventSummary } from '@/lib/task-status-event';
 import { shouldHideTaskSystemMessage } from '@/lib/task-system-messages';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
@@ -25,7 +26,6 @@ import {
   TASK_STATUS_MENU_LABEL_CLASS,
   TASK_STATUS_MENU_PANEL_CLASS,
   TASK_STATUS_MENU_PANEL_STYLE,
-  isTaskStatus,
   taskStatusDotClass,
   taskStatusText,
   type TaskStatus,
@@ -1155,6 +1155,11 @@ export default function ChatPage() {
     setTaskDetailUrl(msg.id);
   }, [setTaskDetailUrl]);
 
+  const openTaskDetailById = useCallback((taskId: string) => {
+    const taskMessage = visibleMessages.find((msg) => metaTaskId(msg) === taskId);
+    if (taskMessage) openTaskDetail(taskMessage);
+  }, [openTaskDetail, visibleMessages]);
+
   const closeTaskDetail = useCallback(() => {
     setTaskDetailMessageId(null);
     setChatTaskMenuTarget(null);
@@ -1604,6 +1609,7 @@ export default function ChatPage() {
                         onEditMessage={(body) => editMessage(msg, body)}
                         onDeleteMessage={() => deleteMessage(msg)}
                         onOpenTaskDetail={() => openTaskDetail(msg)}
+                        onOpenTaskDetailById={openTaskDetailById}
                         onConvertToTask={() => convertMessageToTask(msg)}
                         onReopenTask={() => { if (task) updateTaskStatus(task, 'todo'); }}
                         onUnfollowThread={() => unfollowThreadLocally(msg)}
@@ -1804,6 +1810,7 @@ export default function ChatPage() {
           onEditMessage={editMessage}
           onDeleteMessage={deleteMessage}
           onOpenTaskDetail={openTaskDetail}
+          onOpenTaskDetailById={openTaskDetailById}
           onConvertToTask={convertMessageToTask}
           onUnfollowThread={unfollowThreadLocally}
           onTaskMenu={(messageId) => setChatTaskMenuTarget(messageId ? { surface: 'thread', messageId } : null)}
@@ -2899,6 +2906,7 @@ function ThreadPanel({
   onEditMessage,
   onDeleteMessage,
   onOpenTaskDetail,
+  onOpenTaskDetailById,
   onConvertToTask,
   onUnfollowThread,
   onTaskMenu,
@@ -2945,6 +2953,7 @@ function ThreadPanel({
   onEditMessage: (msg: ChatMessage, body: string) => Promise<boolean>;
   onDeleteMessage: (msg: ChatMessage) => void;
   onOpenTaskDetail: (msg: ChatMessage) => void;
+  onOpenTaskDetailById: (taskId: string) => void;
   onConvertToTask: (msg: ChatMessage) => void;
   onUnfollowThread: (msg: ChatMessage) => void;
   onTaskMenu: (taskId: string | null) => void;
@@ -2993,6 +3002,7 @@ function ThreadPanel({
         onEditMessage={(body) => onEditMessage(msg, body)}
         onDeleteMessage={() => onDeleteMessage(msg)}
         onOpenTaskDetail={() => onOpenTaskDetail(msg)}
+        onOpenTaskDetailById={onOpenTaskDetailById}
         onConvertToTask={() => onConvertToTask(msg)}
         onReopenTask={() => { if (task) onTaskStatus(task, 'todo'); }}
         onUnfollowThread={() => onUnfollowThread(msg)}
@@ -3324,6 +3334,7 @@ function ChatBubble({
   onEditMessage,
   onDeleteMessage,
   onOpenTaskDetail,
+  onOpenTaskDetailById,
   onConvertToTask,
   onReopenTask,
   onUnfollowThread,
@@ -3362,6 +3373,7 @@ function ChatBubble({
   onEditMessage: (body: string) => Promise<boolean>;
   onDeleteMessage: () => void;
   onOpenTaskDetail: () => void;
+  onOpenTaskDetailById?: (taskId: string) => void;
   onConvertToTask: () => void;
   onReopenTask: () => void;
   onUnfollowThread: () => void;
@@ -3399,17 +3411,32 @@ function ChatBubble({
   }, [contextMenu]);
 
   if (msg.senderKind === 'system') {
-    if (meta.kind === 'task-status-updated') {
-      const status = isTaskStatus(meta.status) ? meta.status : 'todo';
-      const taskLabel = typeof meta.taskNumber === 'number'
-        ? `#${meta.taskNumber}`
-        : typeof meta.taskTitle === 'string' && meta.taskTitle.trim()
-          ? `「${meta.taskTitle.trim()}」`
-          : '#任务';
+    const taskStatusEvent = taskStatusEventSummary(meta);
+    if (taskStatusEvent) {
+      const canOpenTask = Boolean(taskStatusEvent.taskId && onOpenTaskDetailById);
+      const content = (
+        <>
+          <span className={`h-2 w-2 rounded-full ${taskStatusDotClass(taskStatusEvent.status)}`} />
+          <span>任务 {taskStatusEvent.label} 状态更新为 {taskStatusText(taskStatusEvent.status)}</span>
+          {canOpenTask && <ExternalLink size={12} className="text-neutral-400" />}
+        </>
+      );
+      const taskId = taskStatusEvent.taskId;
+      if (canOpenTask && taskId) {
+        return (
+          <button
+            type="button"
+            onClick={() => onOpenTaskDetailById?.(taskId)}
+            className="mx-auto my-2 flex max-w-fit items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-xs text-neutral-600 shadow-sm hover:border-amber-300 hover:bg-amber-50"
+            title="查看任务详情"
+          >
+            {content}
+          </button>
+        );
+      }
       return (
         <div className="mx-auto my-2 flex max-w-fit items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-xs text-neutral-600 shadow-sm">
-          <span className={`h-2 w-2 rounded-full ${taskStatusDotClass(status)}`} />
-          <span>任务 {taskLabel} 状态更新为 {taskStatusText(status)}</span>
+          {content}
         </div>
       );
     }
@@ -4247,8 +4274,7 @@ function isDeletedMessage(msg: ChatMessage): boolean {
 }
 
 function metaTaskId(msg: ChatMessage): string | null {
-  const meta = parseMeta(msg);
-  return typeof meta.taskId === 'string' ? meta.taskId : null;
+  return taskRootIdFromMessageMeta(parseMeta(msg));
 }
 
 function parentMessageId(msg: ChatMessage, messagesById?: Map<string, ChatMessage>): string | null {
