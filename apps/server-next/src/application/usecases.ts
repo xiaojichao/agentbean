@@ -409,6 +409,7 @@ export interface SendMessageResult {
   message: MessageDto;
   dispatches: DispatchDto[];
   route: RouteResult;
+  task?: TaskDto;
 }
 
 export interface ListChannelMessagesInput {
@@ -2490,6 +2491,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           : message,
         dispatches,
         route,
+        ...(task ? { task } : {}),
       });
     },
 
@@ -2617,8 +2619,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         teamId: convertInput.teamId,
         body: message.body,
       });
+      const taskId = ids.nextId();
       const task = await repositories.tasks.create({
-        id: ids.nextId(),
+        id: taskId,
         teamId: convertInput.teamId,
         title,
         description: undefined,
@@ -2631,18 +2634,25 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         createdAt: now,
         updatedAt: now,
       });
-      const updated = await repositories.messages.updateMeta({
+      const claim = await repositories.messages.setTaskIdIfAbsent({
         messageId: message.id,
-        meta: {
-          ...(message.meta ?? {}),
-          taskId: task.id,
-        },
+        taskId,
       });
-      if (!updated) {
+      if (!claim) {
+        await repositories.tasks.delete({ taskId });
         return makeFailure('NOT_FOUND', 'Message not found');
       }
-      const [enrichedMessage] = await enrichMessagesWithArtifacts(repositories, [updated]);
-      return makeSuccess({ message: enrichedMessage ?? updated, task });
+      if (!claim.inserted) {
+        await repositories.tasks.delete({ taskId });
+        const existingTask = await repositories.tasks.getById(claim.taskId);
+        if (existingTask && existingTask.teamId === convertInput.teamId) {
+          const [enrichedMessage] = await enrichMessagesWithArtifacts(repositories, [claim.message]);
+          return makeSuccess({ message: enrichedMessage ?? claim.message, task: existingTask });
+        }
+        return makeFailure('CONFLICT', 'Message is already linked to a missing task');
+      }
+      const [enrichedMessage] = await enrichMessagesWithArtifacts(repositories, [claim.message]);
+      return makeSuccess({ message: enrichedMessage ?? claim.message, task });
     },
 
     async listTasks(taskInput) {

@@ -1528,6 +1528,10 @@ describe('server-next first-slice use cases', () => {
         id: 'message-1',
         meta: { taskId: 'task-1' },
       },
+      task: {
+        id: 'task-1',
+        title: 'ship Raft parity',
+      },
     });
     await expect(app.listTasks({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1' })).resolves.toMatchObject({
       ok: true,
@@ -1594,6 +1598,32 @@ describe('server-next first-slice use cases', () => {
           meta: { taskId: 'task-1' },
         },
       ],
+    });
+  });
+
+  test('message task claim keeps convert-to-task idempotent', async () => {
+    const repositories = createInMemoryRepositories();
+    await repositories.messages.append({
+      id: 'message-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'message-1',
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: 'turn this into one task',
+      createdAt: 320,
+      meta: {},
+    });
+
+    await expect(repositories.messages.setTaskIdIfAbsent({ messageId: 'message-1', taskId: 'task-1' })).resolves.toMatchObject({
+      taskId: 'task-1',
+      inserted: true,
+      message: { meta: { taskId: 'task-1' } },
+    });
+    await expect(repositories.messages.setTaskIdIfAbsent({ messageId: 'message-1', taskId: 'task-2' })).resolves.toMatchObject({
+      taskId: 'task-1',
+      inserted: false,
+      message: { meta: { taskId: 'task-1' } },
     });
   });
 

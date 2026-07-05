@@ -732,6 +732,25 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         messages.set(input.messageId, updated);
         return updated;
       },
+      async setTaskIdIfAbsent(input) {
+        const message = messages.get(input.messageId);
+        if (!message) {
+          return null;
+        }
+        const existingTaskId = typeof message.meta?.taskId === 'string' ? message.meta.taskId : null;
+        if (existingTaskId) {
+          return { message, taskId: existingTaskId, inserted: false };
+        }
+        const updated = {
+          ...message,
+          meta: {
+            ...(message.meta ?? {}),
+            taskId: input.taskId,
+          },
+        };
+        messages.set(input.messageId, updated);
+        return { message: updated, taskId: input.taskId, inserted: true };
+      },
       async listByChannel(channelId, limit) {
         return Array.from(messages.values())
           .filter((message) => message.channelId === channelId)

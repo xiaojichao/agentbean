@@ -1261,6 +1261,24 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .run(input.meta ? JSON.stringify(input.meta) : null, input.messageId);
         return { ...existing, meta: input.meta };
       },
+      async setTaskIdIfAbsent(input) {
+        const existing = mapMessage(teamDb.prepare('SELECT * FROM messages WHERE id = ?').get(input.messageId));
+        if (!existing) {
+          return null;
+        }
+        const existingTaskId = typeof existing.meta?.taskId === 'string' ? existing.meta.taskId : null;
+        if (existingTaskId) {
+          return { message: existing, taskId: existingTaskId, inserted: false };
+        }
+        const meta = {
+          ...(existing.meta ?? {}),
+          taskId: input.taskId,
+        };
+        teamDb
+          .prepare('UPDATE messages SET meta_json = ? WHERE id = ?')
+          .run(JSON.stringify(meta), input.messageId);
+        return { message: { ...existing, meta }, taskId: input.taskId, inserted: true };
+      },
       async listByChannel(channelId, limit) {
         return teamDb
           .prepare(`

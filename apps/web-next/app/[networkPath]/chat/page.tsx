@@ -35,6 +35,7 @@ type MentionProfileMember = { id: string; name: string; kind: ProfileTarget['kin
 type ChatTaskMenuTarget = { surface: 'main' | 'thread'; messageId: string } | null;
 type ComposerAttachmentStatus = 'uploading' | 'ready' | 'failed';
 type MessageContextMenuPosition = { x: number; y: number } | null;
+type ReactionEmojiMap = Map<string, string>;
 
 const MESSAGE_REACTION_CHOICES = ['👍', '❤️', '🎉', '👀', '🔥', '😂', '✅'] as const;
 
@@ -146,12 +147,31 @@ async function copyTextToClipboard(text: string): Promise<void> {
   document.body.removeChild(textarea);
 }
 
-function markdownForMessage(msg: ChatMessage, speaker: string): string {
+function markdownForMessage(msg: ChatMessage, speaker: string, teamId?: string): string {
   const lines = [`**${speaker}**`, '', displayMessageBody(msg)];
   if (msg.artifacts && msg.artifacts.length > 0) {
-    lines.push('', ...msg.artifacts.map((artifact) => `- [${artifact.filename}](${artifactUrl(artifact.downloadUrl || artifact.previewUrl) || artifact.id})`));
+    lines.push('', ...msg.artifacts.map((artifact) => {
+      const url = messageArtifactUrl(artifact, 'download', teamId) ?? messageArtifactUrl(artifact, 'preview', teamId) ?? artifact.id;
+      return `- [${artifact.filename}](${url})`;
+    }));
   }
   return lines.join('\n');
+}
+
+function parseReactionEmojis(raw: string | null): ReactionEmojiMap {
+  if (!raw) return new Map();
+  const parsed = JSON.parse(raw);
+  if (Array.isArray(parsed)) {
+    return new Map(parsed.filter((id): id is string => typeof id === 'string').map((id) => [id, '❤️']));
+  }
+  if (parsed && typeof parsed === 'object') {
+    return new Map(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+  }
+  return new Map();
+}
+
+function serializeReactionEmojis(reactions: ReactionEmojiMap): string {
+  return JSON.stringify(Object.fromEntries(reactions));
 }
 
 export default function ChatPage() {
@@ -202,7 +222,7 @@ export default function ChatPage() {
   // 避免「savedIds 只存 id、列表依赖消息体在内存」导致的 badge 数 ≠ 列表条数。
   const [savedMessages, setSavedMessages] = useState<ChatMessage[]>([]);
   const [loadedSavedKey, setLoadedSavedKey] = useState<string | null>(null);
-  const [reactionIds, setReactionIds] = useState<Set<string>>(new Set());
+  const [reactionEmojis, setReactionEmojis] = useState<ReactionEmojiMap>(new Map());
   const [loadedReactionsKey, setLoadedReactionsKey] = useState<string | null>(null);
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
   const [loadedDoneKey, setLoadedDoneKey] = useState<string | null>(null);
@@ -367,9 +387,9 @@ export default function ChatPage() {
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(reactionsKey);
-      setReactionIds(new Set(raw ? JSON.parse(raw) : []));
+      setReactionEmojis(parseReactionEmojis(raw));
     } catch {
-      setReactionIds(new Set());
+      setReactionEmojis(new Map());
     }
     setLoadedReactionsKey(reactionsKey);
   }, [reactionsKey]);
@@ -377,9 +397,9 @@ export default function ChatPage() {
   useEffect(() => {
     if (loadedReactionsKey !== reactionsKey) return;
     try {
-      window.localStorage.setItem(reactionsKey, JSON.stringify([...reactionIds]));
+      window.localStorage.setItem(reactionsKey, serializeReactionEmojis(reactionEmojis));
     } catch {}
-  }, [reactionIds, reactionsKey, loadedReactionsKey]);
+  }, [reactionEmojis, reactionsKey, loadedReactionsKey]);
 
   useEffect(() => {
     setDoneIds(loadReadIds(routeNetworkPath));
@@ -880,34 +900,37 @@ export default function ChatPage() {
   );
 
   const toggleReaction = (msgId: string, emoji = '❤️') => {
-    const isReacted = reactionIds.has(msgId);
+    const existingEmoji = reactionEmojis.get(msgId);
+    const isReacted = Boolean(existingEmoji);
+    const targetEmoji = existingEmoji ?? emoji;
     // Optimistic update
-    setReactionIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(msgId)) next.delete(msgId); else next.add(msgId);
+    setReactionEmojis((prev) => {
+      const next = new Map(prev);
+      if (next.has(msgId)) next.delete(msgId); else next.set(msgId, targetEmoji);
       return next;
     });
     // Persist to server
-    messageReactionEvents().react(msgId, !isReacted, emoji).catch(() => {
+    messageReactionEvents().react(msgId, !isReacted, targetEmoji).catch(() => {
       // Revert on failure
-      setReactionIds((prev) => {
-        const next = new Set(prev);
-        if (next.has(msgId)) next.delete(msgId); else next.add(msgId);
+      setReactionEmojis((prev) => {
+        const next = new Map(prev);
+        if (isReacted) next.set(msgId, targetEmoji); else next.delete(msgId);
         return next;
       });
     });
   };
 
   const reactWithEmoji = (msgId: string, emoji: string) => {
-    setReactionIds((prev) => {
-      const next = new Set(prev);
-      next.add(msgId);
+    const previousEmoji = reactionEmojis.get(msgId);
+    setReactionEmojis((prev) => {
+      const next = new Map(prev);
+      next.set(msgId, emoji);
       return next;
     });
     messageReactionEvents().react(msgId, true, emoji).catch(() => {
-      setReactionIds((prev) => {
-        const next = new Set(prev);
-        next.delete(msgId);
+      setReactionEmojis((prev) => {
+        const next = new Map(prev);
+        if (previousEmoji) next.set(msgId, previousEmoji); else next.delete(msgId);
         return next;
       });
     });
@@ -924,7 +947,8 @@ export default function ChatPage() {
   const copyMessageLink = (msg: ChatMessage) => {
     if (typeof window === 'undefined') return;
     const url = new URL(window.location.href);
-    url.pathname = `/${routeNetworkPath}/channel/${msg.channelId}`;
+    const isDirectMessage = dms.some((dm) => dm.id === msg.channelId);
+    url.pathname = `/${routeNetworkPath}/${isDirectMessage ? 'dm' : 'channel'}/${msg.channelId}`;
     url.search = '';
     url.searchParams.set('message', `${msg.channelId}:${msg.id}`);
     void copyTextToClipboard(url.toString());
@@ -932,7 +956,7 @@ export default function ChatPage() {
 
   const copyMessageMarkdown = (msg: ChatMessage) => {
     const speaker = messageSpeakerName(msg, agents, { currentUser, humanProfiles, channelMembers });
-    void copyTextToClipboard(markdownForMessage(msg, speaker));
+    void copyTextToClipboard(markdownForMessage(msg, speaker, currentTeamId ?? msg.teamId));
   };
 
   const convertMessageToTask = async (msg: ChatMessage) => {
@@ -1235,7 +1259,8 @@ export default function ChatPage() {
                         taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'main' && chatTaskMenuTarget.messageId === msg.id : false}
                         selected={selectedMessageId === msg.id}
                         saved={savedIds.has(msg.id)}
-                        reacted={reactionIds.has(msg.id)}
+                        reacted={reactionEmojis.has(msg.id)}
+                        reactionEmoji={reactionEmojis.get(msg.id)}
                         humanProfiles={humanProfiles}
                         channelMembers={channelMembers}
                         mentionMembers={mentionMembers}
@@ -1394,7 +1419,7 @@ export default function ChatPage() {
           imageInputRef={threadImageInputRef}
           fileInputRef={threadFileInputRef}
           savedIds={savedIds}
-          reactionIds={reactionIds}
+          reactionEmojis={reactionEmojis}
           tasks={tasks}
           taskNumbers={taskNumbers}
           activeDmAgent={activeDmAgent}
@@ -2173,7 +2198,7 @@ function ThreadPanel({
   imageInputRef,
   fileInputRef,
   savedIds,
-  reactionIds,
+  reactionEmojis,
   tasks,
   taskNumbers,
   activeDmAgent,
@@ -2210,7 +2235,7 @@ function ThreadPanel({
   imageInputRef: RefObject<HTMLInputElement>;
   fileInputRef: RefObject<HTMLInputElement>;
   savedIds: Set<string>;
-  reactionIds: Set<string>;
+  reactionEmojis: ReactionEmojiMap;
   tasks: TaskItem[];
   taskNumbers: Map<string, number>;
   activeDmAgent?: AgentSnapshot;
@@ -2254,7 +2279,8 @@ function ThreadPanel({
         taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
         taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'thread' && chatTaskMenuTarget.messageId === msg.id : false}
         saved={savedIds.has(msg.id)}
-        reacted={reactionIds.has(msg.id)}
+        reacted={reactionEmojis.has(msg.id)}
+        reactionEmoji={reactionEmojis.get(msg.id)}
         humanProfiles={humanProfiles}
         channelMembers={channelMembers}
         mentionMembers={mentionMembers}
@@ -2577,6 +2603,7 @@ function ChatBubble({
   selected = false,
   saved,
   reacted,
+  reactionEmoji,
   humanProfiles = [],
   channelMembers = [],
   mentionMembers = [],
@@ -2606,6 +2633,7 @@ function ChatBubble({
   selected?: boolean;
   saved: boolean;
   reacted: boolean;
+  reactionEmoji?: string;
   humanProfiles?: HumanProfile[];
   channelMembers?: ChannelMemberEntry[];
   mentionMembers?: MentionProfileMember[];
@@ -2854,7 +2882,7 @@ function ChatBubble({
             )}
             {reacted && (
               <button onClick={onToggleReaction} className="inline-flex h-5 items-center gap-1 border border-pink-200 bg-pink-50 px-1.5 text-[11px] font-medium text-pink-700 hover:bg-pink-100" title="取消表情">
-                <span>❤️</span>
+                <span>{reactionEmoji ?? '❤️'}</span>
                 <span>1</span>
               </button>
             )}

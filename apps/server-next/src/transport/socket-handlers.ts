@@ -297,6 +297,9 @@ export function registerWebSocketHandlers(
   });
   bind(socket, WEB_EVENTS.message.send, app, 'sendMessage', async (_payload, result) => {
     await options.afterMessageSend?.(_payload, result);
+    if (isSendMessageAck(result) && result.task) {
+      await options.afterTaskMutation?.(_payload, result);
+    }
     // afterAgentMutation（全量 refreshAgentSubscribers 扇出）仅在确实产生 dispatch
     //（即写入了 busy）时触发；普通聊天消息不得引发 agent 状态推送（性能回归）。
     if (isSendMessageAck(result) && result.dispatches.length > 0) {
@@ -617,6 +620,7 @@ function isDeviceScanAck(result: unknown): result is {
 function isSendMessageAck(result: unknown): result is {
   ok: true;
   message: { body: string };
+  task?: unknown;
   dispatches: Array<{
     id: string;
     teamId: string;
