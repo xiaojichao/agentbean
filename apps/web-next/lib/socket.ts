@@ -358,6 +358,16 @@ export function messageReactionEvents(socket: Socket = getWebSocket()): MessageR
   };
 }
 
+export interface DispatchEvents {
+  cancelChannel(teamId: string, channelId: string): Promise<{ ok: boolean; dispatches?: Array<{ id: string; channelId: string; messageId: string; status?: import('./schema').DispatchStatus }>; error?: string }>;
+}
+
+export function dispatchEvents(socket: Socket = getWebSocket()): DispatchEvents {
+  return {
+    cancelChannel(teamId, channelId) { return emitWithTimeout(socket, WEB_EVENTS.dispatch.cancelChannel, { teamId, channelId }); },
+  };
+}
+
 export interface AuthEvents {
   register(payload: { username: string; password: string; email?: string; joinCode?: string; sessionId?: string }): Promise<{ ok: boolean; token?: string; user?: UserInfo; currentTeam?: { id: string; name: string; path: string }; defaultChannel?: { id: string; name: string }; error?: string }>;
   login(payload: { username: string; password: string; joinCode?: string }): Promise<{ ok: boolean; token?: string; user?: UserInfo; currentTeam?: { id: string; name: string; path: string }; error?: string }>;

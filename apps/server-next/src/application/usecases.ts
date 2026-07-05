@@ -100,6 +100,7 @@ export interface ServerNextUseCases {
   sendMessage(input: SendMessageInput): Promise<Ack<SendMessageResult>>;
   getDispatchRequest(input: { dispatchId: string }): Promise<Ack<{ request: DispatchRequestDto & { id: string } }>>;
   cancelDispatch(input: CancelDispatchInput): Promise<Ack<{ dispatch: DispatchDto }>>;
+  cancelChannelDispatches(input: CancelChannelDispatchesInput): Promise<Ack<{ dispatches: DispatchDto[] }>>;
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   searchMessages(input: SearchMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   convertMessageToTask(input: ConvertMessageToTaskInput): Promise<Ack<{ message: MessageDto; task: TaskDto }>>;
@@ -541,6 +542,12 @@ export interface AgentWorkspaceRunListItemDto {
 export interface CancelDispatchInput {
   userId: string;
   dispatchId: string;
+}
+
+export interface CancelChannelDispatchesInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
 }
 
 export interface CreateChannelInput {
@@ -3063,6 +3070,45 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         });
       }
       return makeSuccess({ dispatch: toDispatchDto(cancelled.dispatch) });
+    },
+
+    async cancelChannelDispatches(cancelInput) {
+      if (!(await repositories.teams.isMember(cancelInput.teamId, cancelInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const channelAccess = await ensureUserCanViewChannel(repositories, {
+        userId: cancelInput.userId,
+        teamId: cancelInput.teamId,
+        channelId: cancelInput.channelId,
+      });
+      if (!channelAccess.ok) {
+        return channelAccess;
+      }
+      const now = clock.now();
+      const dispatches = await repositories.dispatches.listByTeam(cancelInput.teamId);
+      const cancelled: DispatchDto[] = [];
+      for (const dispatch of dispatches) {
+        if (dispatch.channelId !== cancelInput.channelId || !isPendingDispatchStatus(dispatch.status)) {
+          continue;
+        }
+        const result = await repositories.dispatches.markCancelled({
+          dispatchId: dispatch.id,
+          completedAt: now,
+        });
+        if (!result?.changed) {
+          continue;
+        }
+        const agent = await repositories.agents.getById(result.dispatch.agentId);
+        if (agent && agent.status === 'busy') {
+          await repositories.agents.updateStatus({
+            agentId: result.dispatch.agentId,
+            status: 'online',
+            lastSeenAt: now,
+          });
+        }
+        cancelled.push(toDispatchDto(result.dispatch));
+      }
+      return makeSuccess({ dispatches: cancelled });
     },
 
     async failTimedOutDispatches(timeoutInput) {

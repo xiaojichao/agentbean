@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, RotateCcw, BellOff } from 'lucide-react';
-import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, emitWithTimeout } from '@/lib/socket';
+import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, dispatchEvents, emitWithTimeout } from '@/lib/socket';
 import { WEB_EVENTS } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus } from '@/lib/schema';
@@ -250,6 +250,7 @@ export default function ChatPage() {
   const [showCreatorFilter, setShowCreatorFilter] = useState(false);
   const [showAssigneeFilter, setShowAssigneeFilter] = useState(false);
   const [showCreateTask, setShowCreateTask] = useState(false);
+  const [stoppingChannelAgents, setStoppingChannelAgents] = useState(false);
   const [dragTaskId, setDragTaskId] = useState<string | null>(null);
   const [collapsedTaskColumns, setCollapsedTaskColumns] = useState<Set<TaskStatus>>(() => new Set(TASK_COLUMNS.filter((col) => col.collapsedByDefault).map((col) => col.id)));
   const [chatTaskMenuTarget, setChatTaskMenuTarget] = useState<ChatTaskMenuTarget>(null);
@@ -1047,6 +1048,33 @@ export default function ChatPage() {
     setShowBackToBottom(false);
   };
 
+  const stopChannelAgents = async () => {
+    if (!activeChannel || !currentTeamId || stoppingChannelAgents) return;
+    setStoppingChannelAgents(true);
+    try {
+      const res = await dispatchEvents().cancelChannel(currentTeamId, activeChannel);
+      if (res.ok) {
+        for (const dispatch of res.dispatches ?? []) {
+          if (dispatch.messageId && dispatch.status) {
+            applyDispatchStatus(activeChannel, dispatch.messageId, dispatch.status, dispatch.id);
+          }
+        }
+        return;
+      }
+      appendMessage({
+        id: `local-stop-agents-error-${Date.now()}`,
+        channelId: activeChannel,
+        senderKind: 'system',
+        senderId: null,
+        body: `停止频道内 Agent 失败：${res.error ?? 'unknown'}`,
+        createdAt: Date.now(),
+        metaJson: JSON.stringify({ kind: 'stop-agents-fail' }),
+      });
+    } finally {
+      setStoppingChannelAgents(false);
+    }
+  };
+
   const handleMessageListScroll = () => {
     const el = messageListRef.current;
     if (!el) return;
@@ -1208,6 +1236,15 @@ export default function ChatPage() {
             </div>
             {!isDm && (
             <div className="flex shrink-0 items-center gap-2">
+              <button
+                onClick={stopChannelAgents}
+                disabled={stoppingChannelAgents}
+                className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-wait disabled:opacity-50"
+                title="停止此频道内所有正在处理的 Agent"
+                data-smoke="channel-stop-agents"
+              >
+                <X size={14} />
+              </button>
               {canManageActiveChannel && (
                 <button onClick={() => setShowEditChannel(true)} className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="编辑频道" data-smoke="channel-edit-open">
                   <Pencil size={14} />

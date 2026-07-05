@@ -65,6 +65,7 @@ describe('server-next socket handlers', () => {
       sendMessage: vi.fn(async (payload) => makeSuccess({ payload })),
       searchMessages: vi.fn(async (payload) => makeSuccess({ payload })),
       cancelDispatch: vi.fn(async (payload) => makeSuccess({ payload })),
+      cancelChannelDispatches: vi.fn(async (payload) => makeSuccess({ dispatches: [], payload })),
       listTasks: vi.fn(async (payload) => makeSuccess({ payload })),
       createTask: vi.fn(async (payload) => makeSuccess({ payload })),
       updateTask: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -146,6 +147,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.member.list,
       WEB_EVENTS.member.updateHuman,
       WEB_EVENTS.dispatch.cancel,
+      WEB_EVENTS.dispatch.cancelChannel,
       WEB_EVENTS.task.list,
       WEB_EVENTS.task.create,
       WEB_EVENTS.task.update,
@@ -297,6 +299,11 @@ describe('server-next socket handlers', () => {
     await socket.trigger(WEB_EVENTS.dispatch.cancel, {
       userId: 'user-1',
       dispatchId: 'dispatch-1',
+    });
+    await socket.trigger(WEB_EVENTS.dispatch.cancelChannel, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
     });
     await socket.trigger(WEB_EVENTS.task.list, {
       userId: 'user-1',
@@ -484,6 +491,11 @@ describe('server-next socket handlers', () => {
     expect(app.cancelDispatch).toHaveBeenCalledWith({
       userId: 'user-1',
       dispatchId: 'dispatch-1',
+    });
+    expect(app.cancelChannelDispatches).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
     });
     expect(app.searchMessages).toHaveBeenCalledWith({
       userId: 'user-1',

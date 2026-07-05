@@ -431,6 +431,7 @@ describe('first-slice contract result shape', () => {
     expect(WEB_EVENTS.channel.history).toBe('channel:history');
     expect(WEB_EVENTS.message.send).toBe('message:send');
     expect(WEB_EVENTS.message.convertToTask).toBe('message:convert-to-task');
+    expect(WEB_EVENTS.dispatch.cancelChannel).toBe('dispatch:cancel-channel');
     expect(AGENT_EVENTS.device.hello).toBe('device:hello');
     expect(AGENT_EVENTS.deviceInvite.wait).toBe('device-invite:wait');
     expect(AGENT_EVENTS.deviceInvite.credentials).toBe('device-invite:credentials');
