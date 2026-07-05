@@ -19,6 +19,10 @@ describe('shouldHideTaskSystemMessage', () => {
     expect(shouldHideTaskSystemMessage(message({
       metaJson: JSON.stringify({ kind: 'task-created' }),
     }))).toBe(true);
+    expect(shouldHideTaskSystemMessage(message({
+      meta: { kind: 'task-created' },
+      metaJson: null,
+    }))).toBe(true);
   });
 
   test('keeps task-status-updated events visible in the channel flow', () => {
@@ -31,6 +35,7 @@ describe('shouldHideTaskSystemMessage', () => {
     expect(shouldHideTaskSystemMessage(message({
       metaJson: JSON.stringify({ kind: 'message-edit-fail' }),
     }))).toBe(false);
+    expect(shouldHideTaskSystemMessage(message({ metaJson: 'null' }))).toBe(false);
     expect(shouldHideTaskSystemMessage(message({ metaJson: '{' }))).toBe(false);
     expect(shouldHideTaskSystemMessage(message({ senderKind: 'human', senderId: 'user-1' }))).toBe(false);
   });

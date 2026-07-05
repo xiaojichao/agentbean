@@ -7,9 +7,11 @@ export function shouldHideTaskSystemMessage(msg: ChatMessage): boolean {
 }
 
 function parseMessageMeta(msg: ChatMessage): Record<string, unknown> {
+  if (msg.meta && typeof msg.meta === 'object') return msg.meta;
   if (!msg.metaJson) return {};
   try {
-    return JSON.parse(msg.metaJson) as Record<string, unknown>;
+    const parsed = JSON.parse(msg.metaJson);
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
   } catch {
     return {};
   }
