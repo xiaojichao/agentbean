@@ -13,6 +13,7 @@ import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfile
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
 import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
+import { displayMessageBody, plainTextForMessage } from '@/lib/chat-message-text';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import {
   TASK_STATUS_COLUMNS as TASK_COLUMNS,
@@ -980,6 +981,10 @@ export default function ChatPage() {
     void copyTextToClipboard(markdownForMessage(msg, speaker, currentTeamId ?? msg.teamId));
   };
 
+  const copyMessageText = (msg: ChatMessage) => {
+    void copyTextToClipboard(plainTextForMessage(msg));
+  };
+
   const convertMessageToTask = async (msg: ChatMessage) => {
     const res = await messageReactionEvents().convertToTask(msg.id);
     if (res?.ok && res.message && res.task) {
@@ -1367,6 +1372,7 @@ export default function ChatPage() {
                         onReactWithEmoji={(emoji) => reactWithEmoji(msg.id, emoji)}
                         onToggleSave={() => toggleSave(msg.id)}
                         onCopyLink={() => copyMessageLink(msg)}
+                        onCopyText={() => copyMessageText(msg)}
                         onCopyMarkdown={() => copyMessageMarkdown(msg)}
                         onSelectMessage={() => selectMessage(msg)}
                         onConvertToTask={() => convertMessageToTask(msg)}
@@ -1536,6 +1542,7 @@ export default function ChatPage() {
           onToggleReaction={toggleReaction}
           onReactWithEmoji={reactWithEmoji}
           onCopyLink={copyMessageLink}
+          onCopyText={copyMessageText}
           onCopyMarkdown={copyMessageMarkdown}
           onSelectMessage={selectMessage}
           onConvertToTask={convertMessageToTask}
@@ -2311,6 +2318,7 @@ function ThreadPanel({
   onToggleReaction,
   onReactWithEmoji,
   onCopyLink,
+  onCopyText,
   onCopyMarkdown,
   onSelectMessage,
   onConvertToTask,
@@ -2348,6 +2356,7 @@ function ThreadPanel({
   onToggleReaction: (msgId: string) => void;
   onReactWithEmoji: (msgId: string, emoji: string) => void;
   onCopyLink: (msg: ChatMessage) => void;
+  onCopyText: (msg: ChatMessage) => void;
   onCopyMarkdown: (msg: ChatMessage) => void;
   onSelectMessage: (msg: ChatMessage) => void;
   onConvertToTask: (msg: ChatMessage) => void;
@@ -2387,6 +2396,7 @@ function ThreadPanel({
         onReactWithEmoji={(emoji) => onReactWithEmoji(msg.id, emoji)}
         onToggleSave={() => onToggleSave(msg.id)}
         onCopyLink={() => onCopyLink(msg)}
+        onCopyText={() => onCopyText(msg)}
         onCopyMarkdown={() => onCopyMarkdown(msg)}
         onSelectMessage={() => onSelectMessage(msg)}
         onConvertToTask={() => onConvertToTask(msg)}
@@ -2710,6 +2720,7 @@ function ChatBubble({
   onReactWithEmoji,
   onToggleSave,
   onCopyLink,
+  onCopyText,
   onCopyMarkdown,
   onSelectMessage,
   onConvertToTask,
@@ -2740,6 +2751,7 @@ function ChatBubble({
   onReactWithEmoji: (emoji: string) => void;
   onToggleSave: () => void;
   onCopyLink: () => void;
+  onCopyText: () => void;
   onCopyMarkdown: () => void;
   onSelectMessage: () => void;
   onConvertToTask: () => void;
@@ -2916,6 +2928,7 @@ function ChatBubble({
             ))}
           </div>
           <MessageContextMenuItem icon={<Link2 size={14} />} label="复制链接" onClick={() => runMenuAction(onCopyLink)} />
+          <MessageContextMenuItem icon={<ClipboardCopy size={14} />} label="复制文本" onClick={() => runMenuAction(onCopyText)} />
           <MessageContextMenuItem icon={<ClipboardCopy size={14} />} label="复制 Markdown" onClick={() => runMenuAction(onCopyMarkdown)} />
           <MessageContextMenuItem icon={<MousePointer2 size={14} />} label="选中消息" onClick={() => runMenuAction(onSelectMessage)} />
           <MessageContextMenuItem icon={<MessageSquare size={14} />} label="打开讨论串" onClick={() => runMenuAction(onOpenThread)} />
@@ -3386,24 +3399,6 @@ function safeMarkdownHref(href: string): string | null {
   if (/^mailto:/i.test(trimmed)) return trimmed;
   if (trimmed.startsWith('/api/')) return artifactUrl(trimmed) ?? null;
   return null;
-}
-
-function stripEchoedDispatchHistory(body: string): string {
-  const normalized = body.replace(/\r\n/g, '\n');
-  const marker = normalized.search(/(?:^|\n)\s*#?\s*(?:user|assistant|system):\s+(?:[0-9A-Z]{10,}|system)\b/i);
-  if (marker > 0) return normalized.slice(0, marker).trim();
-  return normalized;
-}
-
-function displayMessageBody(msg: ChatMessage): string {
-  const body = stripEchoedDispatchHistory(msg.body);
-  if (!msg.artifacts || msg.artifacts.length === 0) return body;
-  const filenameByLower = new Map(msg.artifacts.map((artifact) => [artifact.filename.toLowerCase(), artifact.filename]));
-  const fileExt = '(?:png|jpe?g|gif|webp|svg|pdf|txt|csv|json|md|mp4|mov|zip)';
-  const localPathRe = new RegExp(`(?:file://)?(?:~|/Users/[^\\s)\\]}>,;:]+|/private/[^\\s)\\]}>,;:]+|/var/[^\\s)\\]}>,;:]+|/tmp/[^\\s)\\]}>,;:]+)[^\\s)\\]}>,;:]*?\\/([^/\\s)\\]}>,;:]+\\.${fileExt})`, 'gi');
-  return body.replace(localPathRe, (match, filename: string) => {
-    return filenameByLower.get(filename.toLowerCase()) ?? filename ?? match;
-  });
 }
 
 function artifactUrl(path: string | undefined): string | null {
