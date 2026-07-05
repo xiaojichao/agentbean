@@ -103,6 +103,7 @@ export interface ServerNextUseCases {
   cancelChannelDispatches(input: CancelChannelDispatchesInput): Promise<Ack<{ dispatches: DispatchDto[] }>>;
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   searchMessages(input: SearchMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
+  getMessageContext(input: GetMessageContextInput): Promise<Ack<{ targetMessageId: ID; messages: MessageDto[]; threadRootId?: ID }>>;
   convertMessageToTask(input: ConvertMessageToTaskInput): Promise<Ack<{ message: MessageDto; task: TaskDto }>>;
   listTasks(input: ListTasksInput): Promise<Ack<{ tasks: TaskDto[] }>>;
   summarizeAgentMetrics(input: { userId: string; teamId: string }): Promise<Ack<{ summaries: AgentMetricsSummary[] }>>;
@@ -424,6 +425,12 @@ export interface SearchMessagesInput {
   query: string;
   channelId?: string;
   limit?: number;
+}
+
+export interface GetMessageContextInput {
+  userId: string;
+  teamId: string;
+  messageId: string;
 }
 
 export interface ConvertMessageToTaskInput {
@@ -2611,6 +2618,43 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
     },
 
+    async getMessageContext(contextInput) {
+      if (!(await repositories.teams.isMember(contextInput.teamId, contextInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const message = await repositories.messages.getById(contextInput.messageId);
+      if (!message || message.teamId !== contextInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Message not found');
+      }
+      const channelAccess = await ensureUserCanViewChannel(repositories, {
+        userId: contextInput.userId,
+        teamId: contextInput.teamId,
+        channelId: message.channelId,
+      });
+      if (!channelAccess.ok) {
+        return channelAccess;
+      }
+
+      const threadRootId = await resolveExplicitThreadRootId(repositories, message);
+      const contextMessages = threadRootId
+        ? uniqueMessagesById([
+            ...(await repositories.messages.listThreadBefore({
+              channelId: message.channelId,
+              threadId: threadRootId,
+              beforeMessageId: message.id,
+              limit: 50,
+            })),
+            message,
+          ]).sort((a, b) => a.createdAt - b.createdAt)
+        : [message];
+
+      return makeSuccess({
+        targetMessageId: message.id,
+        ...(threadRootId ? { threadRootId } : {}),
+        messages: await enrichMessagesWithArtifacts(repositories, contextMessages),
+      });
+    },
+
     async convertMessageToTask(convertInput) {
       if (!(await repositories.teams.isMember(convertInput.teamId, convertInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
@@ -4323,6 +4367,30 @@ async function enrichMessagesWithArtifacts(
     });
   }
   return enriched;
+}
+
+async function resolveExplicitThreadRootId(
+  repositories: ServerNextRepositories,
+  message: MessageRecord,
+): Promise<ID | null> {
+  if (!message.threadId || message.threadId === message.id) {
+    return null;
+  }
+  const root = await repositories.messages.getById(message.threadId);
+  const isTopLevelAgentReply = message.senderKind === 'agent'
+    && (
+      (root !== null && root.threadId === root.id)
+      || (root === null && message.meta?.replyScope === 'channel')
+    );
+  return isTopLevelAgentReply ? null : message.threadId;
+}
+
+function uniqueMessagesById(messages: MessageRecord[]): MessageRecord[] {
+  const byId = new Map<ID, MessageRecord>();
+  for (const message of messages) {
+    byId.set(message.id, message);
+  }
+  return [...byId.values()];
 }
 
 function toDmChannelDto(channel: ChannelDto, agent: AgentDto): DmChannelDto {

@@ -64,6 +64,7 @@ describe('server-next socket handlers', () => {
       transferDeviceOwnerAsAdmin: vi.fn(async (payload) => makeSuccess({ payload })),
       sendMessage: vi.fn(async (payload) => makeSuccess({ payload })),
       searchMessages: vi.fn(async (payload) => makeSuccess({ payload })),
+      getMessageContext: vi.fn(async (payload) => makeSuccess({ payload })),
       cancelDispatch: vi.fn(async (payload) => makeSuccess({ payload })),
       cancelChannelDispatches: vi.fn(async (payload) => makeSuccess({ dispatches: [], payload })),
       listTasks: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -137,6 +138,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.admin.transferDeviceOwner,
       WEB_EVENTS.message.send,
       WEB_EVENTS.message.search,
+      WEB_EVENTS.message.context,
       WEB_EVENTS.message.react,
       WEB_EVENTS.message.save,
       WEB_EVENTS.message.listSaved,
@@ -195,6 +197,11 @@ describe('server-next socket handlers', () => {
       teamId: 'team-1',
       query: 'hello',
       channelId: 'channel-1',
+    });
+    await socket.trigger(WEB_EVENTS.message.context, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'message-1',
     });
     await socket.trigger(WEB_EVENTS.device.get, {
       userId: 'user-1',
@@ -503,6 +510,11 @@ describe('server-next socket handlers', () => {
       teamId: 'team-1',
       query: 'hello',
       channelId: 'channel-1',
+    });
+    expect(app.getMessageContext).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'message-1',
     });
     expect(app.listTasks).toHaveBeenCalledWith({
       userId: 'user-1',
