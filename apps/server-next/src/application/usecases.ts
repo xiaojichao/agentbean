@@ -127,6 +127,8 @@ export interface ServerNextUseCases {
   reactMessage(input: ReactMessageInput): Promise<Ack<{ messageId: string }>>;
   saveMessage(input: SaveMessageInput): Promise<Ack<{ messageId: string }>>;
   listSavedMessages(input: ListSavedMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
+  pinMessage(input: PinMessageInput): Promise<Ack<{ messageId: string; channelId: string }>>;
+  listPinnedMessages(input: ListPinnedMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   updateMemberRole(input: UpdateMemberRoleInput): Promise<Ack<{ member: { id: string; teamId: string; userId: string; username: string; role: string } }>>;
   removeMember(input: RemoveMemberInput): Promise<Ack<{ userId: string }>>;
   transferOwner(input: TransferOwnerInput): Promise<Ack<{ team: { id: string; name: string }; member: { id: string; teamId: string; userId: string; username: string; role: string } }>>;
@@ -696,6 +698,19 @@ export interface SaveMessageInput {
 export interface ListSavedMessagesInput {
   userId: string;
   teamId: string;
+}
+
+export interface PinMessageInput {
+  userId: string;
+  teamId: string;
+  messageId: string;
+  on: boolean;
+}
+
+export interface ListPinnedMessagesInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
 }
 
 export interface UpdateMemberRoleInput {
@@ -3479,6 +3494,60 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         messages.push(msg);
       }
       return makeSuccess({ messages });
+    },
+
+    async pinMessage(pinInput) {
+      if (!(await repositories.teams.isMember(pinInput.teamId, pinInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const message = await repositories.messages.getById(pinInput.messageId);
+      if (!message || message.teamId !== pinInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Message not found');
+      }
+      const channelAccess = await ensureUserCanViewChannel(repositories, {
+        userId: pinInput.userId,
+        teamId: pinInput.teamId,
+        channelId: message.channelId,
+      });
+      if (!channelAccess.ok) {
+        return channelAccess;
+      }
+      await repositories.pinnedMessages.toggle({
+        id: ids.nextId(),
+        messageId: message.id,
+        userId: pinInput.userId,
+        teamId: pinInput.teamId,
+        channelId: message.channelId,
+        createdAt: clock.now(),
+        on: pinInput.on,
+      });
+      return makeSuccess({ messageId: message.id, channelId: message.channelId });
+    },
+
+    async listPinnedMessages(listInput) {
+      if (!(await repositories.teams.isMember(listInput.teamId, listInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const channelAccess = await ensureUserCanViewChannel(repositories, {
+        userId: listInput.userId,
+        teamId: listInput.teamId,
+        channelId: listInput.channelId,
+      });
+      if (!channelAccess.ok) {
+        return channelAccess;
+      }
+      const pinned = await repositories.pinnedMessages.listByChannel({
+        teamId: listInput.teamId,
+        channelId: listInput.channelId,
+      });
+      const messages: MessageDto[] = [];
+      for (const pinnedMessage of pinned) {
+        const msg = await repositories.messages.getById(pinnedMessage.messageId);
+        if (msg && msg.teamId === listInput.teamId && msg.channelId === listInput.channelId) {
+          messages.push(msg);
+        }
+      }
+      return makeSuccess({ messages: await enrichMessagesWithArtifacts(repositories, messages) });
     },
 
     async updateMemberRole(roleInput) {

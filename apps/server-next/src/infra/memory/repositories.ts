@@ -40,6 +40,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const tasks = new Map<string, TaskRecord>();
   const reactions = new Map<string, { id: string; messageId: string; userId: string; emoji: string; createdAt: number }>();
   const savedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
+  const pinnedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
 
   return {
     users: {
@@ -1028,6 +1029,30 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async isSaved(messageId, userId) {
         return savedMessages.has(`${messageId}:${userId}`);
+      },
+    },
+    pinnedMessages: {
+      async toggle(input) {
+        if (input.on) {
+          pinnedMessages.set(input.messageId, {
+            id: input.id,
+            messageId: input.messageId,
+            userId: input.userId,
+            teamId: input.teamId,
+            channelId: input.channelId,
+            createdAt: input.createdAt,
+          });
+        } else {
+          pinnedMessages.delete(input.messageId);
+        }
+      },
+      async listByChannel(input) {
+        return Array.from(pinnedMessages.values())
+          .filter((s) => s.teamId === input.teamId && s.channelId === input.channelId)
+          .sort((a, b) => b.createdAt - a.createdAt);
+      },
+      async isPinned(messageId) {
+        return pinnedMessages.has(messageId);
       },
     },
   };

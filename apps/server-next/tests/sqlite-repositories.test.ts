@@ -50,6 +50,7 @@ describe('server-next SQLite repositories', () => {
           'workspace_runs',
           'message_reactions',
           'saved_messages',
+          'pinned_messages',
         ]),
       );
     } finally {
