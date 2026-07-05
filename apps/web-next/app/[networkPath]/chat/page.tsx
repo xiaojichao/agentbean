@@ -930,6 +930,7 @@ export default function ChatPage() {
     return () => window.clearTimeout(timer);
   }, [activeChannel, messageParam, threadParam, visibleMessages.length]);
   const conversationFiles = messages
+    .filter((msg) => !isDeletedMessage(msg))
     .flatMap((msg) => (msg.artifacts ?? []).map((artifact) => ({
       artifact,
       messageId: msg.id,
@@ -3157,9 +3158,9 @@ function ChatBubble({
             ))}
           </div>
         )}
-        {!isDeleted && (taskId || (showReplyCount && replyCount > 0) || reacted || saved || pinned) && (
+        {((!isDeleted && (taskId || reacted || saved || pinned)) || (showReplyCount && replyCount > 0)) && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {taskId && (
+            {!isDeleted && taskId && (
               <ChatTaskBadge
                 task={task}
                 taskNumber={taskNumber}
@@ -3175,19 +3176,19 @@ function ChatBubble({
                 <span>{replyCount} 条回复</span>
               </button>
             )}
-            {reacted && (
+            {!isDeleted && reacted && (
               <button onClick={onToggleReaction} className="inline-flex h-5 items-center gap-1 border border-pink-200 bg-pink-50 px-1.5 text-[11px] font-medium text-pink-700 hover:bg-pink-100" title="取消表情">
                 <span>{reactionEmoji ?? '❤️'}</span>
                 <span>1</span>
               </button>
             )}
-            {saved && (
+            {!isDeleted && saved && (
               <span className="inline-flex h-5 items-center gap-1 border border-amber-200 bg-amber-50 px-1.5 text-[11px] font-medium text-amber-700">
                 <BookmarkCheck size={11} />
                 已收藏
               </span>
             )}
-            {pinned && (
+            {!isDeleted && pinned && (
               <span className="inline-flex h-5 items-center gap-1 border border-sky-200 bg-sky-50 px-1.5 text-[11px] font-medium text-sky-700">
                 <Pin size={11} />
                 已固定

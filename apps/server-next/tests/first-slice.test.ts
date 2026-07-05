@@ -854,7 +854,7 @@ describe('server-next first-slice use cases', () => {
         'join-1',
         'user-2', 'team-2', 'channel-2',
         'msg-1', 'dispatch-1',
-        'r1', 'r2', 'r3', 'r4', 's1', 's2', 'p1', 'p2',
+        'r1', 'r2', 'r3', 'r4', 's1', 's2', 'p1', 'p2', 's3', 'p3',
       ]),
       joinCodes: createIds(['code-join']),
     });
@@ -986,6 +986,19 @@ describe('server-next first-slice use cases', () => {
       messages: [],
     });
 
+    await expect(app.saveMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: true });
+    await expect(app.pinMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: true });
+
     // Delete: only the original human author can soft-delete an ordinary message
     await expect(app.deleteMessage({
       userId: 'user-2',
@@ -1016,6 +1029,45 @@ describe('server-next first-slice use cases', () => {
     })).resolves.toMatchObject({
       ok: true,
       messages: [{ id: 'msg-1', body: '消息已删除' }],
+    });
+
+    await expect(app.reactMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+    await expect(app.saveMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+    await expect(app.pinMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+    await expect(app.convertMessageToTask({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+    })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+    await expect(app.listSavedMessages({
+      userId: 'user-1',
+      teamId: 'team-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      messages: [],
+    });
+    await expect(app.listPinnedMessages({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      messages: [],
     });
 
     await expect(app.searchMessages({
@@ -1878,6 +1930,31 @@ describe('server-next first-slice use cases', () => {
         },
       ],
     });
+
+    const deleteAck = await app.deleteMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'message-1',
+    });
+    expect(deleteAck).toMatchObject({
+      ok: true,
+      message: {
+        id: 'message-1',
+        body: '消息已删除',
+      },
+    });
+    if (deleteAck.ok) {
+      expect(deleteAck.message).not.toHaveProperty('artifacts');
+    }
+
+    const listAck = await app.listChannelMessages({ channelId: 'channel-1', limit: 10 });
+    expect(listAck).toMatchObject({
+      ok: true,
+      messages: [{ id: 'message-1', body: '消息已删除' }],
+    });
+    if (listAck.ok) {
+      expect(listAck.messages[0]).not.toHaveProperty('artifacts');
+    }
   });
 
   test('listChannelMessages 投影进行中 dispatch 状态到对应消息（修复切页面/刷新后"正在处理"消失）', async () => {
