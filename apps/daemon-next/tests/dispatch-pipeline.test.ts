@@ -20,6 +20,7 @@ interface FakeHarness {
   setConnected: (connected: boolean) => void;
   reconnect: () => Promise<void>;
   setEmitError: (event: string, error: Error) => void;
+  setEmitAck: (event: string, ack: unknown) => void;
 }
 
 function createFakeSocket(): FakeHarness {
@@ -27,6 +28,7 @@ function createFakeSocket(): FakeHarness {
   const handlers = new Map<string, Array<(payload: unknown) => Promise<void>>>();
   const reconnectHandlers: Array<() => Promise<void>> = [];
   const emitErrors = new Map<string, Error>();
+  const emitAcks = new Map<string, unknown>();
   const state = { connected: true };
   const socket: DaemonProtocolSocket = {
     get connected() { return state.connected; },
@@ -36,6 +38,9 @@ function createFakeSocket(): FakeHarness {
       if (error) throw error;
       if (event === AGENT_EVENTS.device.hello) {
         return { device: { id: 'dev-1' } };
+      }
+      if (emitAcks.has(event)) {
+        return emitAcks.get(event);
       }
       return { ok: true };
     },
@@ -67,6 +72,7 @@ function createFakeSocket(): FakeHarness {
       for (const h of reconnectHandlers) await h();
     },
     setEmitError: (event, error) => { emitErrors.set(event, error); },
+    setEmitAck: (event, ack) => { emitAcks.set(event, ack); },
   };
 }
 
@@ -123,8 +129,14 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
 
     const inputsDir = join(cwd, '.agentbean', 'runs', 'disp-1', 'inputs');
     expect(readdirSync(inputsDir)).toEqual(['att-1-in.txt']);
-    const manifest = JSON.parse(readFileSync(join(cwd, '.agentbean', 'runs', 'disp-1', 'manifest.json'), 'utf8'));
+    const manifestPath = join(cwd, '.agentbean', 'runs', 'disp-1', 'manifest.json');
+    await vi.waitFor(() => {
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+      expect(typeof manifest.reportedAt).toBe('number');
+    });
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     expect(manifest.files.some((f: { filename: string }) => f.filename === 'result.png')).toBe(true);
+    expect(manifest.artifacts.map((artifact: { id: string }) => artifact.id)).toEqual(['workspace-log-x']);
   });
 
   test('still reports dispatch result when no customAgent.cwd (no workspace, no scan)', async () => {
@@ -275,6 +287,7 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
       startedAt: 1000,
       completedAt: 2000,
       artifactIds: ['srv-art-1'],
+      artifacts: [{ id: 'workspace-log-x', filename: 'workspace-run.log', mimeType: 'text/plain', contentBase64: 'bG9n' }],
       files: [],
     });
 
@@ -298,6 +311,14 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     await client.start();
 
     expect(executor).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(
+        harness.emits.some(
+          (e) => e.event === AGENT_EVENTS.dispatch.result
+            && (e.payload as { dispatchId?: string }).dispatchId === 'disp-recover',
+        ),
+      ).toBe(true);
+    });
     const resultEmit = harness.emits.find(
       (e) => e.event === AGENT_EVENTS.dispatch.result
         && (e.payload as { dispatchId?: string }).dispatchId === 'disp-recover',
@@ -308,6 +329,7 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
       agentId: 'agent-1',
       body: 'recovered reply',
       artifactIds: ['srv-art-1'],
+      artifacts: [{ id: 'workspace-log-x', filename: 'workspace-run.log', mimeType: 'text/plain', contentBase64: 'bG9n' }],
       workspaceRun: {
         status: 'succeeded',
         cwd,
@@ -318,6 +340,108 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     });
     const reportedManifest = JSON.parse(readFileSync(workspace.manifestPath, 'utf8'));
     expect(typeof reportedManifest.reportedAt).toBe('number');
+  });
+
+  test('recovery keeps unaccepted ACK runs unreported and retries them on reconnect', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-')));
+    const harness = createFakeSocket();
+    harness.setEmitAck(AGENT_EVENTS.dispatch.result, { ok: false, error: 'NOT_FOUND' });
+    const workspace = prepareWorkspaceRun(cwd, 'disp-retry');
+    persistWorkspaceRunResponse(workspace, 'retry reply');
+    persistWorkspaceRunManifest(workspace, {
+      runId: 'disp-retry',
+      agentId: 'agent-1',
+      channelId: 'chan-1',
+      status: 'succeeded',
+      cwd,
+      startedAt: 1000,
+      completedAt: 2000,
+      files: [],
+    });
+
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+      runtimes: [],
+      agents: [{
+        name: 'Codex',
+        adapterKind: 'codex',
+        category: 'agentos-hosted',
+        command: 'codex',
+        cwd,
+      }],
+      serverUrl: 'http://server.test',
+      fetch: async () => new Response('{}', { status: 200 }),
+      executor: async () => ({ body: 'should not run' }),
+    });
+
+    await client.start();
+    await vi.waitFor(() => {
+      expect(
+        harness.emits.some(
+          (e) => e.event === AGENT_EVENTS.dispatch.result
+            && (e.payload as { dispatchId?: string }).dispatchId === 'disp-retry',
+        ),
+      ).toBe(true);
+    });
+    expect(JSON.parse(readFileSync(workspace.manifestPath, 'utf8')).reportedAt).toBeUndefined();
+
+    harness.setEmitAck(AGENT_EVENTS.dispatch.result, { ok: true });
+    await harness.reconnect();
+    await vi.waitFor(() => {
+      const reportedManifest = JSON.parse(readFileSync(workspace.manifestPath, 'utf8'));
+      expect(typeof reportedManifest.reportedAt).toBe('number');
+    });
+  });
+
+  test('scanRequested custom agent cwd makes persisted workspace runs recoverable', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-')));
+    const harness = createFakeSocket();
+    const workspace = prepareWorkspaceRun(cwd, 'disp-custom-cwd');
+    persistWorkspaceRunResponse(workspace, 'custom cwd reply');
+    persistWorkspaceRunManifest(workspace, {
+      runId: 'disp-custom-cwd',
+      agentId: 'custom-agent-1',
+      channelId: 'chan-1',
+      cwd,
+      startedAt: 1000,
+      completedAt: 2000,
+      files: [],
+    });
+
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+      runtimes: [],
+      agents: [],
+      serverUrl: 'http://server.test',
+      fetch: async () => new Response('{}', { status: 200 }),
+      executor: async () => ({ body: 'should not run' }),
+    });
+
+    await client.start();
+    expect(
+      harness.emits.some(
+        (e) => e.event === AGENT_EVENTS.dispatch.result
+          && (e.payload as { dispatchId?: string }).dispatchId === 'disp-custom-cwd',
+      ),
+    ).toBe(false);
+
+    await harness.deliver(AGENT_EVENTS.device.scanRequested, {
+      requestId: 'scan-1',
+      deviceId: 'dev-1',
+      customAgents: [{ id: 'custom-agent-1', adapterKind: 'codex', cwd }],
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        harness.emits.some(
+          (e) => e.event === AGENT_EVENTS.dispatch.result
+            && (e.payload as { dispatchId?: string }).dispatchId === 'disp-custom-cwd'
+            && (e.payload as { workspaceRun?: { status?: string } }).workspaceRun?.status === 'succeeded',
+        ),
+      ).toBe(true);
+    });
   });
 
   test('scanRequested 在 snapshot 上报 emit 失败时不抛', async () => {

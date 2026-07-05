@@ -38,6 +38,40 @@ describe('DispatchOutbox', () => {
     expect(onWarn).toHaveBeenCalled();
   });
 
+  test('sendOrEnqueue 已连接但业务 ACK 失败时入队', async () => {
+    const emitWithAck = vi.fn().mockResolvedValue({ ok: false, error: 'NOT_FOUND' });
+    const { socket } = createMockSocket({ connected: true, emitWithAck });
+    const outbox = createDispatchOutbox(socket);
+    outbox.sendOrEnqueue('dispatch.result', { dispatchId: 'd1' }, {
+      isDeliveredAck: (ack) => Boolean(ack && typeof ack === 'object' && (ack as { ok?: unknown }).ok === true),
+    });
+    await vi.waitFor(() => expect(outbox.size()).toBe(1));
+  });
+
+  test('sendOrEnqueue 成功 ACK 后调用 delivered 回调', async () => {
+    const emitWithAck = vi.fn().mockResolvedValue({ ok: true });
+    const { socket } = createMockSocket({ connected: true, emitWithAck });
+    const onDelivered = vi.fn();
+    const outbox = createDispatchOutbox(socket);
+    outbox.sendOrEnqueue('dispatch.result', { dispatchId: 'd1' }, {
+      isDeliveredAck: (ack) => Boolean(ack && typeof ack === 'object' && (ack as { ok?: unknown }).ok === true),
+      onDelivered,
+    });
+    await vi.waitFor(() => expect(onDelivered).toHaveBeenCalledTimes(1));
+    expect(outbox.size()).toBe(0);
+  });
+
+  test('flush 成功补发后调用 delivered 回调', async () => {
+    const emitWithAck = vi.fn().mockResolvedValue({ ok: true });
+    const { socket, setConnected } = createMockSocket({ connected: false, emitWithAck });
+    const onDelivered = vi.fn();
+    const outbox = createDispatchOutbox(socket);
+    outbox.sendOrEnqueue('dispatch.result', { dispatchId: 'd1' }, { onDelivered });
+    setConnected(true);
+    await outbox.flush();
+    expect(onDelivered).toHaveBeenCalledTimes(1);
+  });
+
   test('flush 顺序补发全部待发项，成功后清空', async () => {
     const emitWithAck = vi.fn().mockResolvedValue({ ok: true });
     const { socket, setConnected } = createMockSocket({ connected: false, emitWithAck });

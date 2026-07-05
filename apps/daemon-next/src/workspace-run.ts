@@ -19,6 +19,18 @@ export interface WorkspaceRunManifestFile {
   filename: string;
 }
 
+export interface WorkspaceRunManifestArtifact {
+  id: string;
+  filename: string;
+  mimeType?: string;
+  relativePath?: string;
+  pathKind?: string;
+  contentBase64?: string;
+  storagePath?: string;
+  sizeBytes?: number;
+  sha256?: string;
+}
+
 export interface WorkspaceRunManifest {
   runId: string;
   agentId?: string;
@@ -31,6 +43,7 @@ export interface WorkspaceRunManifest {
   completedAt?: number;
   exitCode?: number;
   artifactIds?: string[];
+  artifacts?: WorkspaceRunManifestArtifact[];
   reportedAt?: number;
   files: WorkspaceRunManifestFile[];
 }
@@ -52,6 +65,7 @@ export interface RecoverableWorkspaceRun {
     completedAt?: number;
   };
   artifactIds?: string[];
+  artifacts?: WorkspaceRunManifestArtifact[];
 }
 
 export function workspaceRunPath(cwd: string, runId: string): string {
@@ -114,7 +128,8 @@ export function discoverRecoverableWorkspaceRuns(cwds: string[]): RecoverableWor
       const manifestPath = join(runDir, 'manifest.json');
       const responsePath = join(runDir, 'response.md');
       const manifest = readWorkspaceRunManifest(manifestPath);
-      if (!manifest || !isRecoverableStatus(manifest.status) || manifest.reportedAt !== undefined) {
+      const status = normalizeRecoverableStatus(manifest?.status);
+      if (!manifest || !status || manifest.reportedAt !== undefined) {
         continue;
       }
       if (typeof manifest.agentId !== 'string' || typeof manifest.channelId !== 'string') {
@@ -130,6 +145,9 @@ export function discoverRecoverableWorkspaceRuns(cwds: string[]): RecoverableWor
       const artifactIds = Array.isArray(manifest.artifactIds)
         ? manifest.artifactIds.filter((id): id is string => typeof id === 'string')
         : [];
+      const artifacts = Array.isArray(manifest.artifacts)
+        ? manifest.artifacts.filter(isWorkspaceRunManifestArtifact)
+        : [];
       runs.push({
         runId: manifest.runId || entry.name,
         agentId: manifest.agentId,
@@ -138,7 +156,7 @@ export function discoverRecoverableWorkspaceRuns(cwds: string[]): RecoverableWor
         manifestPath,
         manifest,
         workspaceRun: {
-          status: manifest.status,
+          status,
           cwd: manifest.cwd ?? cwd,
           ...(manifest.command ? { command: manifest.command } : {}),
           ...(manifest.logExcerpt ? { logExcerpt: manifest.logExcerpt } : {}),
@@ -147,6 +165,7 @@ export function discoverRecoverableWorkspaceRuns(cwds: string[]): RecoverableWor
           ...(typeof manifest.completedAt === 'number' ? { completedAt: manifest.completedAt } : {}),
         },
         ...(artifactIds.length > 0 ? { artifactIds } : {}),
+        ...(artifacts.length > 0 ? { artifacts } : {}),
       });
     }
   }
@@ -154,7 +173,15 @@ export function discoverRecoverableWorkspaceRuns(cwds: string[]): RecoverableWor
 }
 
 export function markWorkspaceRunReported(run: RecoverableWorkspaceRun, reportedAt: number): void {
-  writeFileSync(run.manifestPath, `${JSON.stringify({ ...run.manifest, reportedAt }, null, 2)}\n`);
+  markWorkspaceRunManifestReported(run.manifestPath, reportedAt);
+}
+
+export function markWorkspaceRunManifestReported(manifestPath: string, reportedAt: number): void {
+  const manifest = readWorkspaceRunManifest(manifestPath);
+  if (!manifest) {
+    return;
+  }
+  writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, reportedAt }, null, 2)}\n`);
 }
 
 function readWorkspaceRunManifest(path: string): WorkspaceRunManifest | undefined {
@@ -181,6 +208,20 @@ function readTextFile(path: string): string | undefined {
   }
 }
 
-function isRecoverableStatus(status: unknown): status is string {
-  return status === 'succeeded' || status === 'failed';
+function normalizeRecoverableStatus(status: unknown): 'succeeded' | 'failed' | 'cancelled' | undefined {
+  if (status === undefined) {
+    return 'succeeded';
+  }
+  if (status === 'succeeded' || status === 'failed' || status === 'cancelled') {
+    return status;
+  }
+  return undefined;
+}
+
+function isWorkspaceRunManifestArtifact(artifact: unknown): artifact is WorkspaceRunManifestArtifact {
+  if (!artifact || typeof artifact !== 'object') {
+    return false;
+  }
+  const candidate = artifact as { id?: unknown; filename?: unknown };
+  return typeof candidate.id === 'string' && typeof candidate.filename === 'string';
 }
