@@ -2512,6 +2512,144 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('receiveDispatchResult keeps a failed late workspace run failed and leaves its task open', async () => {
+    let now = 2000;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'message-1',
+        'task-1',
+        'dispatch-1',
+        'request-1',
+        'workspace-run-1',
+        'reply-1',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex write a long article',
+      asTask: true,
+    });
+
+    now = 2301;
+    await expect(app.failTimedOutDispatches({ olderThan: 2300 })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [{ id: 'dispatch-1', status: 'timed_out' }],
+    });
+
+    now = 2500;
+    await expect(app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: 'late and failed',
+      workspaceRun: {
+        cwd: '/Users/shaw/longvideo',
+        status: 'failed',
+        exitCode: 1,
+        startedAt: 2001,
+        completedAt: 2500,
+      },
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatch: { id: 'dispatch-1', status: 'failed', error: 'WORKSPACE_RUN_FAILED', completedAt: 2500 },
+      message: {
+        id: 'reply-1',
+        body: 'late and failed',
+        workspaceRun: {
+          id: 'workspace-run-1',
+          status: 'failed',
+        },
+      },
+    });
+    await expect(app.listTasks({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1' })).resolves.toMatchObject({
+      ok: true,
+      tasks: [{ id: 'task-1', status: 'todo' }],
+    });
+  });
+
+  test('receiveDispatchResult does not clear busy for a newer pending dispatch', async () => {
+    let now = 3000;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+        'message-2',
+        'dispatch-2',
+        'request-2',
+        'reply-1',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex first long task',
+    });
+
+    now = 3301;
+    await app.failTimedOutDispatches({ olderThan: 3300 });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex second task',
+    });
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', status: 'busy' }],
+    });
+
+    now = 3500;
+    await expect(app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: 'first task eventually succeeded',
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatch: { id: 'dispatch-1', status: 'succeeded' },
+    });
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', status: 'busy' }],
+    });
+  });
+
   test('failTimedOutDispatches does not revive an offline agent', async () => {
     const repositories = createInMemoryRepositories();
     const app = createServerNextUseCases({

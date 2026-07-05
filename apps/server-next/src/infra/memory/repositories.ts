@@ -833,7 +833,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         if (!dispatch) {
           return null;
         }
-        if (!isPendingDispatchStatus(dispatch.status)) {
+        if (!isCompletableDispatchStatus(dispatch.status)) {
           return { dispatch, changed: false };
         }
         const updated = {

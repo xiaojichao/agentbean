@@ -3180,10 +3180,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
 
       const now = clock.now();
-      const completed = await repositories.dispatches.markSucceeded({
-        dispatchId: resultInput.dispatchId,
-        completedAt: now,
-      });
+      const resultSucceeded = isSuccessfulDispatchResult(resultInput.workspaceRun);
+      const completed = resultSucceeded
+        ? await repositories.dispatches.markSucceeded({
+            dispatchId: resultInput.dispatchId,
+            completedAt: now,
+          })
+        : await repositories.dispatches.markFailed({
+            dispatchId: resultInput.dispatchId,
+            error: workspaceRunFailureError(resultInput.workspaceRun),
+            completedAt: now,
+          });
       if (!completed) {
         return makeFailure('NOT_FOUND', 'Dispatch not found');
       }
@@ -3297,10 +3304,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ...(chatArtifacts.length > 0 ? { artifacts: chatArtifacts } : {}),
         ...(workspaceRun ? { workspaceRun } : {}),
       };
-      const completedTask = await markLinkedTaskDone(repositories, originMessage, now);
-      await repositories.agents.updateStatus({
+      const completedTask = resultSucceeded
+        ? await markLinkedTaskDone(repositories, originMessage, now)
+        : null;
+      await markAgentOnlineIfIdle(repositories, {
         agentId: resultInput.agentId,
-        status: 'online',
+        teamId: completed.dispatch.teamId,
         lastSeenAt: now,
       });
 
@@ -4713,6 +4722,32 @@ function isPendingDispatchStatus(status: DispatchDto['status']): boolean {
 
 function isCompletableDispatchStatus(status: DispatchDto['status']): boolean {
   return isPendingDispatchStatus(status) || status === 'timed_out';
+}
+
+function isSuccessfulDispatchResult(workspaceRun: ReceiveDispatchWorkspaceRunInput | undefined): boolean {
+  return workspaceRun?.status === undefined || workspaceRun.status === 'succeeded';
+}
+
+function workspaceRunFailureError(workspaceRun: ReceiveDispatchWorkspaceRunInput | undefined): string {
+  return workspaceRun?.status === 'cancelled' ? 'WORKSPACE_RUN_CANCELLED' : 'WORKSPACE_RUN_FAILED';
+}
+
+async function markAgentOnlineIfIdle(
+  repositories: ServerNextRepositories,
+  input: { agentId: ID; teamId: ID; lastSeenAt: UnixMs },
+): Promise<void> {
+  const teamDispatches = await repositories.dispatches.listByTeam(input.teamId);
+  const hasPendingDispatch = teamDispatches.some((dispatch) =>
+    dispatch.agentId === input.agentId && isPendingDispatchStatus(dispatch.status)
+  );
+  if (hasPendingDispatch) {
+    return;
+  }
+  await repositories.agents.updateStatus({
+    agentId: input.agentId,
+    status: 'online',
+    lastSeenAt: input.lastSeenAt,
+  });
 }
 
 async function markLinkedTaskDone(
