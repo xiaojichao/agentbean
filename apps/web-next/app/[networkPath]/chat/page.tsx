@@ -10,7 +10,7 @@ import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus,
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { matchingWorkspaceRunDetail, workspaceRunHistoryItems, type WorkspaceRunDetailBundle } from '@/lib/task-workspace-run-detail';
 import { taskMessageSummary } from '@/lib/task-message-summary';
-import { taskStatusEventSummary } from '@/lib/task-status-event';
+import { taskRootIdFromMessageMeta, taskStatusEventSummary } from '@/lib/task-status-event';
 import { shouldHideTaskSystemMessage } from '@/lib/task-system-messages';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
@@ -4274,8 +4274,7 @@ function isDeletedMessage(msg: ChatMessage): boolean {
 }
 
 function metaTaskId(msg: ChatMessage): string | null {
-  const meta = parseMeta(msg);
-  return typeof meta.taskId === 'string' ? meta.taskId : null;
+  return taskRootIdFromMessageMeta(parseMeta(msg));
 }
 
 function parentMessageId(msg: ChatMessage, messagesById?: Map<string, ChatMessage>): string | null {
