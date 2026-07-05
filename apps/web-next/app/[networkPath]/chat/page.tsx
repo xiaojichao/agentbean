@@ -1239,11 +1239,12 @@ export default function ChatPage() {
       {/* Right panel */}
       <div className="flex flex-1 flex-col min-w-0">
         {sidebarView === 'search' ? (
-          <SearchView onClose={() => setSidebarView('channels')} onJump={(chId) => {
+          <SearchView onClose={() => setSidebarView('channels')} onJump={(chId, messageId) => {
             setActiveChannel(chId);
             setSidebarView('channels');
             const dm = dms.find((item) => item.id === chId);
-            router.push(dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`);
+            const path = dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`;
+            router.push(messageId ? `${path}?message=${encodeURIComponent(`${chId}:${messageId}`)}` : path);
           }} humanProfiles={humanProfiles} channelScope={searchChannelScope} onClearChannelScope={() => setSearchChannelScope(null)} />
         ) : sidebarView === 'inbox' ? (
           <ActivityView onJump={(chId) => {
@@ -3889,7 +3890,7 @@ function SearchView({
   onClearChannelScope,
 }: {
   onClose: () => void;
-  onJump: (channelId: string) => void;
+  onJump: (channelId: string, messageId?: string) => void;
   humanProfiles: HumanProfile[];
   channelScope?: SearchChannelScope | null;
   onClearChannelScope?: () => void;
@@ -4021,7 +4022,7 @@ function SearchView({
           <div>
             <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">消息</div>
             {messageMatches.map((msg) => (
-              <button key={msg.id} onClick={() => onJump(msg.channelId)} className="mb-2 w-full rounded-lg border border-neutral-100 p-3 text-left hover:bg-neutral-50">
+              <button key={msg.id} onClick={() => onJump(msg.channelId, msg.id)} className="mb-2 w-full rounded-lg border border-neutral-100 p-3 text-left hover:bg-neutral-50">
                 <div className="flex items-center gap-2 text-xs text-neutral-400">
                   <span>{conversationLabel(msg.channelId, channels, dms, agents)}</span>
                   <span>· {speakerName(msg, agents, { currentUser, humanProfiles })}</span>
