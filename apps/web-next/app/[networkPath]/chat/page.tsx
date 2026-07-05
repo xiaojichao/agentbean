@@ -229,6 +229,7 @@ export default function ChatPage() {
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set());
   const [pinnedMessages, setPinnedMessages] = useState<ChatMessage[]>([]);
   const [loadedPinnedChannel, setLoadedPinnedChannel] = useState<string | null>(null);
+  const pinnedMutationRevisionRef = useRef(0);
   const [reactionEmojis, setReactionEmojis] = useState<ReactionEmojiMap>(new Map());
   const [loadedReactionsKey, setLoadedReactionsKey] = useState<string | null>(null);
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
@@ -352,15 +353,30 @@ export default function ChatPage() {
         applyDispatchStatus(activeChannel, dispatch.messageId, dispatch.status, dispatch.id);
       }
     };
+    const onPinnedUpdated = (payload: { teamId?: string; channelId?: string }) => {
+      if (payload.teamId && currentTeamId && payload.teamId !== currentTeamId) return;
+      if (payload.channelId !== activeChannel) return;
+      const requestRevision = pinnedMutationRevisionRef.current;
+      messageReactionEvents(socket).listPinned(activeChannel).then((res) => {
+        if (requestRevision !== pinnedMutationRevisionRef.current) return;
+        if (res.ok && res.messages) {
+          setPinnedMessages(res.messages);
+          setPinnedIds(new Set(res.messages.map((msg) => msg.id)));
+        }
+        setLoadedPinnedChannel(activeChannel);
+      }).catch(() => {});
+    };
     socket.on('channel:history', onHistory);
     socket.on('channel:message', handleMessage);
     socket.on('message:dispatch-status', onDispatchStatus);
+    socket.on(WEB_EVENTS.message.pinnedUpdated, onPinnedUpdated);
     return () => {
       socket.off('channel:history', onHistory);
       socket.off('channel:message', handleMessage);
       socket.off('message:dispatch-status', onDispatchStatus);
+      socket.off(WEB_EVENTS.message.pinnedUpdated, onPinnedUpdated);
     };
-  }, [activeChannel, conn, applyChannelHistory, applyDispatchStatus, handleMessage]);
+  }, [activeChannel, conn, currentTeamId, applyChannelHistory, applyDispatchStatus, handleMessage]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -406,17 +422,19 @@ export default function ChatPage() {
       setLoadedPinnedChannel(null);
       return () => { cancelled = true; };
     }
+    const channelId = activeChannel;
+    const requestRevision = pinnedMutationRevisionRef.current;
     setPinnedIds(new Set());
     setPinnedMessages([]);
-    messageReactionEvents().listPinned(activeChannel).then((res) => {
-      if (cancelled) return;
+    messageReactionEvents().listPinned(channelId).then((res) => {
+      if (cancelled || requestRevision !== pinnedMutationRevisionRef.current) return;
       if (res.ok && res.messages) {
         setPinnedMessages(res.messages);
         setPinnedIds(new Set(res.messages.map((msg) => msg.id)));
       }
-      setLoadedPinnedChannel(activeChannel);
+      setLoadedPinnedChannel(channelId);
     }).catch(() => {
-      if (!cancelled) setLoadedPinnedChannel(activeChannel);
+      if (!cancelled && requestRevision === pinnedMutationRevisionRef.current) setLoadedPinnedChannel(channelId);
     });
     return () => { cancelled = true; };
   }, [activeChannel]);
@@ -946,6 +964,7 @@ export default function ChatPage() {
   const togglePin = (message: ChatMessage) => {
     const msgId = message.id;
     const isPinned = pinnedIds.has(msgId);
+    pinnedMutationRevisionRef.current += 1;
     const applyPinnedState = (pinned: boolean) => {
       setPinnedIds((prev) => {
         const next = new Set(prev);
@@ -957,6 +976,7 @@ export default function ChatPage() {
         if (prev.some((m) => m.id === msgId)) return prev;
         return [message, ...prev];
       });
+      setLoadedPinnedChannel(message.channelId);
     };
 
     applyPinnedState(!isPinned);
@@ -1345,7 +1365,12 @@ export default function ChatPage() {
             setSidebarView('channels');
             const dm = dms.find((item) => item.id === msg.channelId);
             const path = dm ? `/${np}/dm/${msg.channelId}` : `/${np}/channel/${msg.channelId}`;
-            router.push(`${path}?message=${encodeURIComponent(`${msg.channelId}:${msg.id}`)}`);
+            const query = new URLSearchParams();
+            if (msg.threadId && msg.threadId !== msg.id) {
+              query.set('thread', `${msg.channelId}:${msg.threadId}`);
+            }
+            query.set('message', `${msg.channelId}:${msg.id}`);
+            router.push(`${path}?${query.toString()}`);
           }} humanProfiles={humanProfiles} />
         ) : (
         <>

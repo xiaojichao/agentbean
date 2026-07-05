@@ -75,7 +75,7 @@ describe('server-next socket handlers', () => {
       reactMessage: vi.fn(async (payload) => makeSuccess({ payload })),
       saveMessage: vi.fn(async (payload) => makeSuccess({ payload })),
       listSavedMessages: vi.fn(async (payload) => makeSuccess({ payload })),
-      pinMessage: vi.fn(async (payload) => makeSuccess({ payload })),
+      pinMessage: vi.fn(async (payload) => makeSuccess({ payload, messageId: 'msg-1', channelId: 'channel-1' })),
       listPinnedMessages: vi.fn(async (payload) => makeSuccess({ payload })),
       convertMessageToTask: vi.fn(async (payload) => makeSuccess({ payload })),
       updateMemberRole: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -87,7 +87,8 @@ describe('server-next socket handlers', () => {
       deleteTeam: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
 
-    registerWebSocketHandlers(socket, app);
+    const afterMessagePin = vi.fn();
+    registerWebSocketHandlers(socket, app, { afterMessagePin });
 
     expect(socket.eventNames()).toEqual([
       WEB_EVENTS.auth.register,
@@ -579,6 +580,16 @@ describe('server-next socket handlers', () => {
       messageId: 'msg-1',
       on: true,
     });
+    expect(afterMessagePin).toHaveBeenCalledWith({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    }, expect.objectContaining({
+      ok: true,
+      messageId: 'msg-1',
+      channelId: 'channel-1',
+    }));
     expect(app.listPinnedMessages).toHaveBeenCalledWith({
       userId: 'user-1',
       teamId: 'team-1',

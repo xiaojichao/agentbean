@@ -55,6 +55,7 @@ export interface WebSocketHandlerOptions {
   deviceScan?(request: DeviceScanEmitRequest): void;
   deviceSelectDirectory?(request: { deviceId: string }): Promise<{ ok: boolean; path?: string; error?: string }>;
   afterMessageSend?(payload: unknown, result: unknown): Promise<void> | void;
+  afterMessagePin?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceInviteComplete?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceMutation?(payload: unknown, result: unknown): Promise<void> | void;
   /** 设备删除成功后触发：用于向在线 daemon 下发 device:removed 并断开其 socket。 */
@@ -320,7 +321,7 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.message.react, app, 'reactMessage', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.save, app, 'saveMessage', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.listSaved, app, 'listSavedMessages', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.message.pin, app, 'pinMessage', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.message.pin, app, 'pinMessage', (payload, result) => options.afterMessagePin?.(payload, result), { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.listPinned, app, 'listPinnedMessages', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.convertToTask, app, 'convertMessageToTask', async (payload, result) => {
     await options.afterTaskMutation?.(payload, result);

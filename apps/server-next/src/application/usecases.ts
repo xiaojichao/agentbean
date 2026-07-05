@@ -127,7 +127,7 @@ export interface ServerNextUseCases {
   reactMessage(input: ReactMessageInput): Promise<Ack<{ messageId: string }>>;
   saveMessage(input: SaveMessageInput): Promise<Ack<{ messageId: string }>>;
   listSavedMessages(input: ListSavedMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
-  pinMessage(input: PinMessageInput): Promise<Ack<{ messageId: string }>>;
+  pinMessage(input: PinMessageInput): Promise<Ack<{ messageId: string; channelId: string }>>;
   listPinnedMessages(input: ListPinnedMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   updateMemberRole(input: UpdateMemberRoleInput): Promise<Ack<{ member: { id: string; teamId: string; userId: string; username: string; role: string } }>>;
   removeMember(input: RemoveMemberInput): Promise<Ack<{ userId: string }>>;
@@ -3506,7 +3506,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         createdAt: clock.now(),
         on: pinInput.on,
       });
-      return makeSuccess({ messageId: message.id });
+      return makeSuccess({ messageId: message.id, channelId: message.channelId });
     },
 
     async listPinnedMessages(listInput) {

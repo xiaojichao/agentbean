@@ -349,7 +349,7 @@ export interface MessageReactionEvents {
   react(messageId: string, on: boolean, emoji?: string): Promise<{ ok: boolean; messageId?: string; error?: string }>;
   save(messageId: string, on: boolean): Promise<{ ok: boolean; messageId?: string; error?: string }>;
   listSaved(): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
-  pin(messageId: string, on: boolean): Promise<{ ok: boolean; messageId?: string; error?: string }>;
+  pin(messageId: string, on: boolean): Promise<{ ok: boolean; messageId?: string; channelId?: string; error?: string }>;
   listPinned(channelId: string): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
   convertToTask(messageId: string): Promise<{ ok: boolean; message?: ChatMessage; task?: { id: string; title: string; status: string; channelId?: string | null }; error?: string }>;
 }
