@@ -22,6 +22,8 @@ export interface ServerNextDeviceInviteCodes {
   nextCode(): string;
 }
 
+const DELETED_MESSAGE_BODY = '消息已删除';
+
 export interface ArtifactContentStoreWriteInput {
   teamId: string;
   artifactId: string;
@@ -129,6 +131,7 @@ export interface ServerNextUseCases {
   listSavedMessages(input: ListSavedMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   pinMessage(input: PinMessageInput): Promise<Ack<{ messageId: string; channelId: string }>>;
   listPinnedMessages(input: ListPinnedMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
+  deleteMessage(input: DeleteMessageInput): Promise<Ack<{ message: MessageDto }>>;
   updateMemberRole(input: UpdateMemberRoleInput): Promise<Ack<{ member: { id: string; teamId: string; userId: string; username: string; role: string } }>>;
   removeMember(input: RemoveMemberInput): Promise<Ack<{ userId: string }>>;
   transferOwner(input: TransferOwnerInput): Promise<Ack<{ team: { id: string; name: string }; member: { id: string; teamId: string; userId: string; username: string; role: string } }>>;
@@ -711,6 +714,12 @@ export interface ListPinnedMessagesInput {
   userId: string;
   teamId: string;
   channelId: string;
+}
+
+export interface DeleteMessageInput {
+  userId: string;
+  teamId: string;
+  messageId: string;
 }
 
 export interface UpdateMemberRoleInput {
@@ -2682,6 +2691,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (message.senderKind === 'system') {
         return makeFailure('VALIDATION_ERROR', 'System messages cannot be converted to tasks');
       }
+      if (isDeletedMessage(message)) {
+        return makeFailure('CONFLICT', 'Deleted messages cannot be converted to tasks');
+      }
       const channelAccess = await ensureUserCanViewChannel(repositories, {
         userId: convertInput.userId,
         teamId: convertInput.teamId,
@@ -3433,6 +3445,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!channelAccess.ok) {
         return channelAccess;
       }
+      if (isDeletedMessage(message)) {
+        return makeFailure('CONFLICT', 'Deleted messages cannot be changed');
+      }
       const emoji = reactInput.emoji || '❤️';
       await repositories.reactions.toggle({
         id: ids.nextId(),
@@ -3461,6 +3476,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!channelAccess.ok) {
         return channelAccess;
       }
+      if (isDeletedMessage(message)) {
+        return makeFailure('CONFLICT', 'Deleted messages cannot be changed');
+      }
       await repositories.savedMessages.toggle({
         id: ids.nextId(),
         messageId: message.id,
@@ -3485,6 +3503,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       for (const s of saved) {
         const msg = await repositories.messages.getById(s.messageId);
         if (!msg) continue;
+        if (isDeletedMessage(msg)) continue;
         const channelAccess = await ensureUserCanViewChannel(repositories, {
           userId: listInput.userId,
           teamId: listInput.teamId,
@@ -3511,6 +3530,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
       if (!channelAccess.ok) {
         return channelAccess;
+      }
+      if (isDeletedMessage(message)) {
+        return makeFailure('CONFLICT', 'Deleted messages cannot be changed');
       }
       await repositories.pinnedMessages.toggle({
         id: ids.nextId(),
@@ -3543,11 +3565,63 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const messages: MessageDto[] = [];
       for (const pinnedMessage of pinned) {
         const msg = await repositories.messages.getById(pinnedMessage.messageId);
-        if (msg && msg.teamId === listInput.teamId && msg.channelId === listInput.channelId) {
+        if (
+          msg
+          && msg.teamId === listInput.teamId
+          && msg.channelId === listInput.channelId
+          && !isDeletedMessage(msg)
+        ) {
           messages.push(msg);
         }
       }
       return makeSuccess({ messages: await enrichMessagesWithArtifacts(repositories, messages) });
+    },
+
+    async deleteMessage(deleteInput) {
+      if (!(await repositories.teams.isMember(deleteInput.teamId, deleteInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const message = await repositories.messages.getById(deleteInput.messageId);
+      if (!message || message.teamId !== deleteInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Message not found');
+      }
+      const channelAccess = await ensureUserCanViewChannel(repositories, {
+        userId: deleteInput.userId,
+        teamId: deleteInput.teamId,
+        channelId: message.channelId,
+      });
+      if (!channelAccess.ok) {
+        return channelAccess;
+      }
+      if (message.senderKind !== 'human' || message.senderId !== deleteInput.userId) {
+        return makeFailure('FORBIDDEN', 'Only the message author can delete this message');
+      }
+      if (isDeletedMessage(message)) {
+        const [enrichedMessage] = await enrichMessagesWithArtifacts(repositories, [message]);
+        return makeSuccess({ message: enrichedMessage ?? message });
+      }
+      if (typeof message.meta?.taskId === 'string') {
+        return makeFailure('CONFLICT', 'Task messages cannot be deleted');
+      }
+      const dispatches = await repositories.dispatches.listByMessage(message.id);
+      if (dispatches.some((dispatch) => isPendingDispatchStatus(dispatch.status))) {
+        return makeFailure('CONFLICT', 'Message dispatch is still running');
+      }
+      const meta = {
+        ...(message.meta ?? {}),
+        deletedAt: clock.now(),
+        deletedBy: deleteInput.userId,
+      };
+      const deleted = await repositories.messages.softDelete({
+        messageId: message.id,
+        body: DELETED_MESSAGE_BODY,
+        meta,
+      });
+      if (!deleted) {
+        return makeFailure('NOT_FOUND', 'Message not found');
+      }
+      const [enrichedMessage] = await enrichMessagesWithArtifacts(repositories, [deleted]);
+      return makeSuccess({ message: enrichedMessage ?? deleted });
     },
 
     async updateMemberRole(roleInput) {
@@ -4431,17 +4505,20 @@ async function enrichMessagesWithArtifacts(
 ): Promise<MessageDto[]> {
   const enriched: MessageDto[] = [];
   for (const message of messages) {
+    const isDeleted = isDeletedMessage(message);
     // The internal workspace-run.log is reachable via the workspace-run detail endpoint; it must
     // not leak into chat-facing message attachments (channel history, DM snapshot, search results).
-    const artifacts = (await repositories.artifacts.listByMessage(message.id))
-      .filter((artifact) => !isWorkspaceRunLogArtifact(artifact));
-    const workspaceRunId = typeof message.meta?.workspaceRunId === 'string' ? message.meta.workspaceRunId : undefined;
+    const artifacts = isDeleted
+      ? []
+      : (await repositories.artifacts.listByMessage(message.id))
+          .filter((artifact) => !isWorkspaceRunLogArtifact(artifact));
+    const workspaceRunId = !isDeleted && typeof message.meta?.workspaceRunId === 'string' ? message.meta.workspaceRunId : undefined;
     const workspaceRun = workspaceRunId
       ? await repositories.workspaceRuns.getForTeam({ teamId: message.teamId, runId: workspaceRunId })
       : null;
     // 投影 dispatch 状态：dispatchStatus/dispatchId 不在 MessageRecord，靠 dispatches.listByMessage 查。
     // 进行中的优先（让前端切频道/刷新后能恢复「正在处理」）；否则取最新一条的终态。
-    const dispatches = await repositories.dispatches.listByMessage(message.id);
+    const dispatches = isDeleted ? [] : await repositories.dispatches.listByMessage(message.id);
     const chosenDispatch = dispatches.find((d) => isPendingDispatchStatus(d.status)) ?? dispatches[dispatches.length - 1];
     enriched.push({
       ...message,
@@ -4451,6 +4528,10 @@ async function enrichMessagesWithArtifacts(
     });
   }
   return enriched;
+}
+
+function isDeletedMessage(message: MessageRecord): boolean {
+  return Boolean(message.meta?.deletedAt);
 }
 
 async function resolveExplicitThreadRootId(
