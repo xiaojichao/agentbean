@@ -522,6 +522,7 @@ describe('server-next first-slice use cases', () => {
         'channel-private',
         'task-public',
         'task-private',
+        'message-task-status',
         'task-global',
       ]),
       joinCodes: createIds(['code-1']),
@@ -579,6 +580,51 @@ describe('server-next first-slice use cases', () => {
     })).resolves.toMatchObject({
       ok: true,
       task: { id: 'task-public', status: 'in_progress', assigneeId: undefined },
+      message: {
+        id: 'message-task-status',
+        senderKind: 'system',
+        senderId: 'system',
+        body: '任务「public task」状态更新为进行中',
+        meta: {
+          kind: 'task-status-updated',
+          taskId: 'task-public',
+          taskTitle: 'public task',
+          previousStatus: 'todo',
+          status: 'in_progress',
+        },
+      },
+    });
+    await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
+      ok: true,
+      messages: [
+        {
+          id: 'message-task-status',
+          senderKind: 'system',
+          meta: {
+            kind: 'task-status-updated',
+            taskId: 'task-public',
+            previousStatus: 'todo',
+            status: 'in_progress',
+          },
+        },
+      ],
+    });
+    await expect(app.updateTask({
+      userId: 'user-2',
+      teamId: 'team-1',
+      taskId: 'task-public',
+      status: 'in_progress',
+    })).resolves.toMatchObject({
+      ok: true,
+      task: { id: 'task-public', status: 'in_progress' },
+    });
+    await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
+      ok: true,
+      messages: [
+        {
+          id: 'message-task-status',
+        },
+      ],
     });
     await expect(app.updateTask({
       userId: 'user-2',

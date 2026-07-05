@@ -110,7 +110,7 @@ export interface ServerNextUseCases {
   listTasks(input: ListTasksInput): Promise<Ack<{ tasks: TaskDto[] }>>;
   summarizeAgentMetrics(input: { userId: string; teamId: string }): Promise<Ack<{ summaries: AgentMetricsSummary[] }>>;
   createTask(input: CreateTaskInput): Promise<Ack<{ task: TaskDto }>>;
-  updateTask(input: UpdateTaskInput): Promise<Ack<{ task: TaskDto }>>;
+  updateTask(input: UpdateTaskInput): Promise<Ack<{ task: TaskDto; message?: MessageDto }>>;
   deleteTask(input: DeleteTaskInput): Promise<Ack<{ task: TaskDto }>>;
   reorderTask(input: ReorderTaskInput): Promise<Ack<{ task: TaskDto }>>;
   uploadArtifact(input: UploadArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
@@ -2912,7 +2912,28 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!updated) {
         return makeFailure('NOT_FOUND', 'Task not found');
       }
-      return makeSuccess({ task: updated });
+      const statusMessage = taskInput.status !== undefined && taskInput.status !== task.status && updated.channelId
+        ? await repositories.messages.append({
+            id: ids.nextId(),
+            teamId: updated.teamId,
+            channelId: updated.channelId,
+            senderKind: 'system',
+            senderId: 'system',
+            body: `任务「${updated.title}」状态更新为${taskStatusLabel(updated.status)}`,
+            createdAt: updated.updatedAt,
+            meta: {
+              kind: 'task-status-updated',
+              taskId: updated.id,
+              taskTitle: updated.title,
+              previousStatus: task.status,
+              status: updated.status,
+            },
+          })
+        : null;
+      return makeSuccess({
+        task: updated,
+        ...(statusMessage ? { message: statusMessage } : {}),
+      });
     },
 
     async deleteTask(taskInput) {
@@ -5107,6 +5128,21 @@ async function isAssignableToTask(
 
 function isTaskStatus(status: string): status is TaskStatus {
   return status === 'todo' || status === 'in_progress' || status === 'in_review' || status === 'done' || status === 'closed';
+}
+
+function taskStatusLabel(status: TaskStatus): string {
+  switch (status) {
+    case 'todo':
+      return '待处理';
+    case 'in_progress':
+      return '进行中';
+    case 'in_review':
+      return '待确认';
+    case 'done':
+      return '已完成';
+    case 'closed':
+      return '已关闭';
+  }
 }
 
 function normalizeOptionalText(value: unknown): string | undefined {

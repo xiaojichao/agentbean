@@ -3401,7 +3401,11 @@ function ChatBubble({
   if (msg.senderKind === 'system') {
     if (meta.kind === 'task-status-updated') {
       const status = isTaskStatus(meta.status) ? meta.status : 'todo';
-      const taskLabel = typeof meta.taskNumber === 'number' ? `#${meta.taskNumber}` : '#任务';
+      const taskLabel = typeof meta.taskNumber === 'number'
+        ? `#${meta.taskNumber}`
+        : typeof meta.taskTitle === 'string' && meta.taskTitle.trim()
+          ? `「${meta.taskTitle.trim()}」`
+          : '#任务';
       return (
         <div className="mx-auto my-2 flex max-w-fit items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-xs text-neutral-600 shadow-sm">
           <span className={`h-2 w-2 rounded-full ${taskStatusDotClass(status)}`} />
