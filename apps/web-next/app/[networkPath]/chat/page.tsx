@@ -188,6 +188,7 @@ export default function ChatPage() {
   const dms = useAgentBeanStore((s) => s.dms);
   const applyDmsSnapshot = useAgentBeanStore((s) => s.applyDmsSnapshot);
   const applyChannelHistory = useAgentBeanStore((s) => s.applyChannelHistory);
+  const upsertMessages = useAgentBeanStore((s) => s.upsertMessages);
   const appendMessage = useAgentBeanStore((s) => s.appendMessage);
   const upsertActivityMessages = useAgentBeanStore((s) => s.upsertActivityMessages);
   const applyDispatchStatus = useAgentBeanStore((s) => s.applyDispatchStatus);
@@ -869,7 +870,9 @@ export default function ChatPage() {
       return;
     }
     setTab('chat');
-    setThreadRootId(null);
+    if (!parseThreadMessageId(threadParam, activeChannel)) {
+      setThreadRootId(null);
+    }
     setThreadInput('');
     setThreadAttachments((prev) => {
       prev.forEach(revokeComposerPreview);
@@ -881,7 +884,7 @@ export default function ChatPage() {
       document.getElementById(`message-${targetMessageId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [activeChannel, messageParam, visibleMessages.length]);
+  }, [activeChannel, messageParam, threadParam, visibleMessages.length]);
   const conversationFiles = messages
     .flatMap((msg) => (msg.artifacts ?? []).map((artifact) => ({
       artifact,
@@ -1239,12 +1242,27 @@ export default function ChatPage() {
       {/* Right panel */}
       <div className="flex flex-1 flex-col min-w-0">
         {sidebarView === 'search' ? (
-          <SearchView onClose={() => setSidebarView('channels')} onJump={(chId, messageId) => {
+          <SearchView onClose={() => setSidebarView('channels')} onJump={async (chId, message) => {
             setActiveChannel(chId);
             setSidebarView('channels');
             const dm = dms.find((item) => item.id === chId);
             const path = dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`;
-            router.push(messageId ? `${path}?message=${encodeURIComponent(`${chId}:${messageId}`)}` : path);
+            let targetMessageId = message?.id;
+            let threadRootId: string | null = null;
+            if (message) {
+              upsertMessages([message]);
+              const context = await messageReactionEvents().context(message.id).catch(() => null);
+              if (context?.ok) {
+                if (context.messages) upsertMessages(context.messages);
+                targetMessageId = context.targetMessageId ?? targetMessageId;
+                threadRootId = context.threadRootId ?? null;
+              }
+            }
+            const query = new URLSearchParams();
+            if (threadRootId) query.set('thread', `${chId}:${threadRootId}`);
+            if (targetMessageId) query.set('message', `${chId}:${targetMessageId}`);
+            const qs = query.toString();
+            router.push(`${path}${qs ? `?${qs}` : ''}`);
           }} humanProfiles={humanProfiles} channelScope={searchChannelScope} onClearChannelScope={() => setSearchChannelScope(null)} />
         ) : sidebarView === 'inbox' ? (
           <ActivityView onJump={(chId) => {
@@ -1536,6 +1554,7 @@ export default function ChatPage() {
           channelMembers={channelMembers}
           mentionMembers={mentionMembers}
           chatTaskMenuTarget={chatTaskMenuTarget}
+          selectedMessageId={selectedMessageId}
           onInput={setThreadInput}
           onSend={sendThreadMessage}
           onUpload={(files) => uploadFiles(files, 'thread')}
@@ -2318,6 +2337,7 @@ function ThreadPanel({
   channelMembers,
   mentionMembers,
   chatTaskMenuTarget,
+  selectedMessageId,
   onInput,
   onSend,
   onUpload,
@@ -2358,6 +2378,7 @@ function ThreadPanel({
   channelMembers: ChannelMemberEntry[];
   mentionMembers: MentionProfileMember[];
   chatTaskMenuTarget: ChatTaskMenuTarget;
+  selectedMessageId: string | null;
   onInput: (value: string) => void;
   onSend: () => void;
   onUpload: (files: FileList | File[]) => void;
@@ -2396,6 +2417,7 @@ function ThreadPanel({
         taskNumber={task ? taskNumbers.get(task.id) : undefined}
         taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
         taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'thread' && chatTaskMenuTarget.messageId === msg.id : false}
+        selected={selectedMessageId === msg.id}
         saved={savedIds.has(msg.id)}
         readDone={doneIds.has(msg.id)}
         reacted={reactionEmojis.has(msg.id)}
@@ -3890,7 +3912,7 @@ function SearchView({
   onClearChannelScope,
 }: {
   onClose: () => void;
-  onJump: (channelId: string, messageId?: string) => void;
+  onJump: (channelId: string, message?: ChatMessage) => void;
   humanProfiles: HumanProfile[];
   channelScope?: SearchChannelScope | null;
   onClearChannelScope?: () => void;
@@ -4022,7 +4044,7 @@ function SearchView({
           <div>
             <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">消息</div>
             {messageMatches.map((msg) => (
-              <button key={msg.id} onClick={() => onJump(msg.channelId, msg.id)} className="mb-2 w-full rounded-lg border border-neutral-100 p-3 text-left hover:bg-neutral-50">
+              <button key={msg.id} onClick={() => onJump(msg.channelId, msg)} className="mb-2 w-full rounded-lg border border-neutral-100 p-3 text-left hover:bg-neutral-50">
                 <div className="flex items-center gap-2 text-xs text-neutral-400">
                   <span>{conversationLabel(msg.channelId, channels, dms, agents)}</span>
                   <span>· {speakerName(msg, agents, { currentUser, humanProfiles })}</span>

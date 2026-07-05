@@ -289,6 +289,34 @@ describe('server-next first-slice use cases', () => {
     expect(global.messages.map((message) => message.id)).toEqual(expect.arrayContaining(['message-all', 'message-focused']));
   });
 
+  test('getMessageContext returns a thread root with the matched reply', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 260,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'message-root',
+        'message-reply',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'thread root' });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-root', body: 'thread reply roadmap' });
+
+    const context = await app.getMessageContext({ userId: 'user-1', teamId: 'team-1', messageId: 'message-reply' });
+
+    expect(context).toMatchObject({
+      ok: true,
+      targetMessageId: 'message-reply',
+      threadRootId: 'message-root',
+    });
+    expect(context.messages.map((message) => ({ id: message.id, body: message.body }))).toEqual([
+      { id: 'message-root', body: 'thread root' },
+      { id: 'message-reply', body: 'thread reply roadmap' },
+    ]);
+  });
+
   test('searchMessages rejects scoped archived channels', async () => {
     const app = createInMemoryServerNext({
       now: () => 275,

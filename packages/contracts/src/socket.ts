@@ -92,6 +92,7 @@ export const WEB_EVENTS = {
     send: 'message:send',
     dispatchStatus: 'message:dispatch-status',
     search: 'message:search',
+    context: 'message:context',
     react: 'message:react',
     save: 'message:save',
     listSaved: 'message:list-saved',
