@@ -131,6 +131,7 @@ export interface ServerNextUseCases {
   listSavedMessages(input: ListSavedMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   pinMessage(input: PinMessageInput): Promise<Ack<{ messageId: string; channelId: string }>>;
   listPinnedMessages(input: ListPinnedMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
+  editMessage(input: EditMessageInput): Promise<Ack<{ message: MessageDto }>>;
   deleteMessage(input: DeleteMessageInput): Promise<Ack<{ message: MessageDto }>>;
   updateMemberRole(input: UpdateMemberRoleInput): Promise<Ack<{ member: { id: string; teamId: string; userId: string; username: string; role: string } }>>;
   removeMember(input: RemoveMemberInput): Promise<Ack<{ userId: string }>>;
@@ -714,6 +715,13 @@ export interface ListPinnedMessagesInput {
   userId: string;
   teamId: string;
   channelId: string;
+}
+
+export interface EditMessageInput {
+  userId: string;
+  teamId: string;
+  messageId: string;
+  body: string;
 }
 
 export interface DeleteMessageInput {
@@ -3575,6 +3583,56 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         }
       }
       return makeSuccess({ messages: await enrichMessagesWithArtifacts(repositories, messages) });
+    },
+
+    async editMessage(editInput) {
+      if (!(await repositories.teams.isMember(editInput.teamId, editInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const nextBody = editInput.body.trim();
+      if (!nextBody) {
+        return makeFailure('VALIDATION_ERROR', 'Message body is required');
+      }
+      const message = await repositories.messages.getById(editInput.messageId);
+      if (!message || message.teamId !== editInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Message not found');
+      }
+      const channelAccess = await ensureUserCanViewChannel(repositories, {
+        userId: editInput.userId,
+        teamId: editInput.teamId,
+        channelId: message.channelId,
+      });
+      if (!channelAccess.ok) {
+        return channelAccess;
+      }
+      if (message.senderKind !== 'human' || message.senderId !== editInput.userId) {
+        return makeFailure('FORBIDDEN', 'Only the message author can edit this message');
+      }
+      if (isDeletedMessage(message)) {
+        return makeFailure('CONFLICT', 'Deleted messages cannot be changed');
+      }
+      if (typeof message.meta?.taskId === 'string') {
+        return makeFailure('CONFLICT', 'Task messages cannot be edited');
+      }
+      const dispatches = await repositories.dispatches.listByMessage(message.id);
+      if (dispatches.some((dispatch) => isPendingDispatchStatus(dispatch.status))) {
+        return makeFailure('CONFLICT', 'Message dispatch is still running');
+      }
+      const meta = {
+        ...(message.meta ?? {}),
+        editedAt: clock.now(),
+        editedBy: editInput.userId,
+      };
+      const edited = await repositories.messages.edit({
+        messageId: message.id,
+        body: nextBody,
+        meta,
+      });
+      if (!edited) {
+        return makeFailure('NOT_FOUND', 'Message not found');
+      }
+      const [enrichedMessage] = await enrichMessagesWithArtifacts(repositories, [edited]);
+      return makeSuccess({ message: enrichedMessage ?? edited });
     },
 
     async deleteMessage(deleteInput) {

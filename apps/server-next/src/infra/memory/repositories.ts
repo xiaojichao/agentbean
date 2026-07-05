@@ -733,6 +733,15 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         messages.set(input.messageId, updated);
         return updated;
       },
+      async edit(input) {
+        const message = messages.get(input.messageId);
+        if (!message) {
+          return null;
+        }
+        const updated = { ...message, body: input.body, meta: input.meta };
+        messages.set(input.messageId, updated);
+        return updated;
+      },
       async softDelete(input) {
         const message = messages.get(input.messageId);
         if (!message) {

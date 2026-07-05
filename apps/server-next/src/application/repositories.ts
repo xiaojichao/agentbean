@@ -234,6 +234,7 @@ export interface MessageRepository {
   append(input: MessageRecord): Promise<MessageRecord>;
   getById(messageId: ID): Promise<MessageRecord | null>;
   updateMeta(input: { messageId: ID; meta: MessageRecord['meta'] }): Promise<MessageRecord | null>;
+  edit(input: { messageId: ID; body: string; meta: MessageRecord['meta'] }): Promise<MessageRecord | null>;
   softDelete(input: { messageId: ID; body: string; meta: MessageRecord['meta'] }): Promise<MessageRecord | null>;
   setTaskIdIfAbsent(input: { messageId: ID; taskId: ID }): Promise<{ message: MessageRecord; taskId: ID; inserted: boolean } | null>;
   listByChannel(channelId: ID, limit: number): Promise<MessageRecord[]>;
