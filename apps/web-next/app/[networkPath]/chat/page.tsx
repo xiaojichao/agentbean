@@ -1092,6 +1092,23 @@ export default function ChatPage() {
     });
   };
 
+  const deleteMessage = async (msg: ChatMessage) => {
+    const res = await messageReactionEvents().delete(msg.id);
+    if (res?.ok && res.message) {
+      appendMessage(res.message);
+      return;
+    }
+    appendMessage({
+      id: `local-delete-error-${Date.now()}`,
+      channelId: msg.channelId,
+      senderKind: 'system',
+      senderId: null,
+      body: `删除消息失败：${res?.error ?? 'unknown'}`,
+      createdAt: Date.now(),
+      metaJson: JSON.stringify({ kind: 'message-delete-fail' }),
+    });
+  };
+
   const unfollowThreadLocally = (msg: ChatMessage) => {
     if (threadRootId === msg.id) closeThread();
     if (selectedMessageId === msg.id) setSelectedMessageId(null);
@@ -1496,6 +1513,7 @@ export default function ChatPage() {
                         onCopyMarkdown={() => copyMessageMarkdown(msg)}
                         onToggleReadDone={() => toggleMessageReadState(msg)}
                         onSelectMessage={() => selectMessage(msg)}
+                        onDeleteMessage={() => deleteMessage(msg)}
                         onConvertToTask={() => convertMessageToTask(msg)}
                         onReopenTask={() => { if (task) updateTaskStatus(task, 'todo'); }}
                         onUnfollowThread={() => unfollowThreadLocally(msg)}
@@ -1671,6 +1689,7 @@ export default function ChatPage() {
           onCopyMarkdown={copyMessageMarkdown}
           onToggleReadDone={toggleMessageReadState}
           onSelectMessage={selectMessage}
+          onDeleteMessage={deleteMessage}
           onConvertToTask={convertMessageToTask}
           onUnfollowThread={unfollowThreadLocally}
           onTaskMenu={(messageId) => setChatTaskMenuTarget(messageId ? { surface: 'thread', messageId } : null)}
@@ -2452,6 +2471,7 @@ function ThreadPanel({
   onCopyMarkdown,
   onToggleReadDone,
   onSelectMessage,
+  onDeleteMessage,
   onConvertToTask,
   onUnfollowThread,
   onTaskMenu,
@@ -2495,6 +2515,7 @@ function ThreadPanel({
   onCopyMarkdown: (msg: ChatMessage) => void;
   onToggleReadDone: (msg: ChatMessage) => void;
   onSelectMessage: (msg: ChatMessage) => void;
+  onDeleteMessage: (msg: ChatMessage) => void;
   onConvertToTask: (msg: ChatMessage) => void;
   onUnfollowThread: (msg: ChatMessage) => void;
   onTaskMenu: (taskId: string | null) => void;
@@ -2540,6 +2561,7 @@ function ThreadPanel({
         onCopyMarkdown={() => onCopyMarkdown(msg)}
         onToggleReadDone={() => onToggleReadDone(msg)}
         onSelectMessage={() => onSelectMessage(msg)}
+        onDeleteMessage={() => onDeleteMessage(msg)}
         onConvertToTask={() => onConvertToTask(msg)}
         onReopenTask={() => { if (task) onTaskStatus(task, 'todo'); }}
         onUnfollowThread={() => onUnfollowThread(msg)}
@@ -2868,6 +2890,7 @@ function ChatBubble({
   onCopyMarkdown,
   onToggleReadDone,
   onSelectMessage,
+  onDeleteMessage,
   onConvertToTask,
   onReopenTask,
   onUnfollowThread,
@@ -2903,6 +2926,7 @@ function ChatBubble({
   onCopyMarkdown: () => void;
   onToggleReadDone: () => void;
   onSelectMessage: () => void;
+  onDeleteMessage: () => void;
   onConvertToTask: () => void;
   onReopenTask: () => void;
   onUnfollowThread: () => void;
@@ -2917,6 +2941,7 @@ function ChatBubble({
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const applyDispatchStatus = useAgentBeanStore((s) => s.applyDispatchStatus);
   const meta = parseMeta(msg);
+  const isDeleted = isDeletedMessage(msg);
   const [contextMenu, setContextMenu] = useState<MessageContextMenuPosition>(null);
 
   useEffect(() => {
@@ -2958,6 +2983,7 @@ function ChatBubble({
   const time = formatTime(msg.createdAt);
   const isOwner = isHuman && currentUser?.id === msg.senderId;
   const taskId = typeof meta.taskId === 'string' ? meta.taskId : null;
+  const canDelete = isOwner && !taskId && !isDeleted;
   const canOpenProfile = Boolean(msg.senderId && (msg.senderKind === 'human' || msg.senderKind === 'agent'));
   const messageMentionMembers = mergeMentionProfileMembers(channelMembers, mentionMembers);
   const profileTarget = msg.senderKind === 'agent'
@@ -2966,9 +2992,10 @@ function ChatBubble({
   const dispatch = isHuman ? msg.dispatchStatus : undefined;
 
   const openContextMenu = (event: MouseEvent<HTMLDivElement>) => {
+    if (isDeleted) return;
     event.preventDefault();
     const width = 220;
-    const height = taskId ? 392 : 354;
+    const height = taskId ? 392 : canDelete ? 386 : 354;
     setContextMenu({
       x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)),
       y: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8)),
@@ -3042,7 +3069,7 @@ function ChatBubble({
           : 'border-transparent hover:border-neutral-900 hover:bg-white'
       }`}
     >
-      <div className="pointer-events-none absolute right-2 top-1 z-10 flex items-center gap-0.5 border border-neutral-300 bg-white opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+      {!isDeleted && <div className="pointer-events-none absolute right-2 top-1 z-10 flex items-center gap-0.5 border border-neutral-300 bg-white opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
         {showReplyAction && (
           <button onClick={onReply} className="flex h-6 w-6 items-center justify-center border-r border-neutral-200 text-neutral-500 hover:bg-amber-50 hover:text-neutral-900" title="回复讨论串">
             <MessageSquare size={13} />
@@ -3057,7 +3084,7 @@ function ChatBubble({
         <button onClick={onTogglePin} className={`flex h-6 w-6 items-center justify-center hover:bg-amber-50 ${pinned ? 'text-sky-600' : 'text-neutral-500 hover:text-neutral-900'}`} title={pinned ? '取消固定' : '固定消息'}>
           {pinned ? <PinOff size={13} /> : <Pin size={13} />}
         </button>
-      </div>
+      </div>}
       {contextMenu && (
         <div
           role="menu"
@@ -3087,6 +3114,7 @@ function ChatBubble({
           <MessageContextMenuItem icon={<MessageSquare size={14} />} label="打开讨论串" onClick={() => runMenuAction(onOpenThread)} />
           <MessageContextMenuItem icon={saved ? <BookmarkCheck size={14} /> : <Bookmark size={14} />} label={saved ? '取消收藏' : '保存消息'} onClick={() => runMenuAction(onToggleSave)} />
           <MessageContextMenuItem icon={pinned ? <PinOff size={14} /> : <Pin size={14} />} label={pinned ? '取消固定' : '固定到频道'} onClick={() => runMenuAction(onTogglePin)} />
+          {canDelete && <MessageContextMenuItem icon={<Trash2 size={14} />} label="删除消息" onClick={() => runMenuAction(onDeleteMessage)} />}
           {taskId ? (
             <>
               <div className="my-1 border-t border-neutral-100" />
@@ -3116,16 +3144,20 @@ function ChatBubble({
           {!isHuman && agent?.role && <span className="text-xs text-neutral-400">{agent.role}</span>}
           <span className="text-[10px] text-neutral-400">{time}</span>
         </div>
-        <MarkdownMessage body={displayMessageBody(msg)} mentionMembers={messageMentionMembers} onOpenMention={onOpenProfile} />
-        {renderDispatchStatus()}
-        {msg.artifacts && msg.artifacts.length > 0 && (
+        {isDeleted ? (
+          <div className="mt-1 text-sm italic text-neutral-400">消息已删除</div>
+        ) : (
+          <MarkdownMessage body={displayMessageBody(msg)} mentionMembers={messageMentionMembers} onOpenMention={onOpenProfile} />
+        )}
+        {!isDeleted && renderDispatchStatus()}
+        {!isDeleted && msg.artifacts && msg.artifacts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">
             {msg.artifacts.map((artifact) => (
               <ChatArtifactPreview key={artifact.id} artifact={artifact} teamId={msg.teamId} />
             ))}
           </div>
         )}
-        {(taskId || (showReplyCount && replyCount > 0) || reacted || saved || pinned) && (
+        {!isDeleted && (taskId || (showReplyCount && replyCount > 0) || reacted || saved || pinned) && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             {taskId && (
               <ChatTaskBadge
@@ -3585,6 +3617,10 @@ function parseMeta(msg: ChatMessage): Record<string, any> {
   } catch {
     return {};
   }
+}
+
+function isDeletedMessage(msg: ChatMessage): boolean {
+  return Boolean(parseMeta(msg).deletedAt);
 }
 
 function metaTaskId(msg: ChatMessage): string | null {

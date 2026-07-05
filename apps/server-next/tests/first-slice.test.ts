@@ -985,6 +985,47 @@ describe('server-next first-slice use cases', () => {
       ok: true,
       messages: [],
     });
+
+    // Delete: only the original human author can soft-delete an ordinary message
+    await expect(app.deleteMessage({
+      userId: 'user-2',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    await expect(app.deleteMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: {
+        id: 'msg-1',
+        body: '消息已删除',
+        meta: {
+          deletedAt: 500,
+          deletedBy: 'user-1',
+        },
+      },
+    });
+
+    await expect(app.listChannelMessages({
+      userId: 'user-2',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      messages: [{ id: 'msg-1', body: '消息已删除' }],
+    });
+
+    await expect(app.searchMessages({
+      userId: 'user-1',
+      teamId: 'team-1',
+      query: 'Hello',
+    })).resolves.toMatchObject({
+      ok: true,
+      messages: [],
+    });
   });
 
   test('manages member roles, removal, and owner transfer with role boundaries', async () => {

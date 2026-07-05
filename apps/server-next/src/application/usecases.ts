@@ -22,6 +22,8 @@ export interface ServerNextDeviceInviteCodes {
   nextCode(): string;
 }
 
+const DELETED_MESSAGE_BODY = '消息已删除';
+
 export interface ArtifactContentStoreWriteInput {
   teamId: string;
   artifactId: string;
@@ -129,6 +131,7 @@ export interface ServerNextUseCases {
   listSavedMessages(input: ListSavedMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   pinMessage(input: PinMessageInput): Promise<Ack<{ messageId: string; channelId: string }>>;
   listPinnedMessages(input: ListPinnedMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
+  deleteMessage(input: DeleteMessageInput): Promise<Ack<{ message: MessageDto }>>;
   updateMemberRole(input: UpdateMemberRoleInput): Promise<Ack<{ member: { id: string; teamId: string; userId: string; username: string; role: string } }>>;
   removeMember(input: RemoveMemberInput): Promise<Ack<{ userId: string }>>;
   transferOwner(input: TransferOwnerInput): Promise<Ack<{ team: { id: string; name: string }; member: { id: string; teamId: string; userId: string; username: string; role: string } }>>;
@@ -711,6 +714,12 @@ export interface ListPinnedMessagesInput {
   userId: string;
   teamId: string;
   channelId: string;
+}
+
+export interface DeleteMessageInput {
+  userId: string;
+  teamId: string;
+  messageId: string;
 }
 
 export interface UpdateMemberRoleInput {
@@ -3548,6 +3557,53 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         }
       }
       return makeSuccess({ messages: await enrichMessagesWithArtifacts(repositories, messages) });
+    },
+
+    async deleteMessage(deleteInput) {
+      if (!(await repositories.teams.isMember(deleteInput.teamId, deleteInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const message = await repositories.messages.getById(deleteInput.messageId);
+      if (!message || message.teamId !== deleteInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Message not found');
+      }
+      const channelAccess = await ensureUserCanViewChannel(repositories, {
+        userId: deleteInput.userId,
+        teamId: deleteInput.teamId,
+        channelId: message.channelId,
+      });
+      if (!channelAccess.ok) {
+        return channelAccess;
+      }
+      if (message.senderKind !== 'human' || message.senderId !== deleteInput.userId) {
+        return makeFailure('FORBIDDEN', 'Only the message author can delete this message');
+      }
+      if (message.meta?.deletedAt) {
+        const [enrichedMessage] = await enrichMessagesWithArtifacts(repositories, [message]);
+        return makeSuccess({ message: enrichedMessage ?? message });
+      }
+      if (typeof message.meta?.taskId === 'string') {
+        return makeFailure('CONFLICT', 'Task messages cannot be deleted');
+      }
+      const dispatches = await repositories.dispatches.listByMessage(message.id);
+      if (dispatches.some((dispatch) => isPendingDispatchStatus(dispatch.status))) {
+        return makeFailure('CONFLICT', 'Message dispatch is still running');
+      }
+      const meta = {
+        ...(message.meta ?? {}),
+        deletedAt: clock.now(),
+        deletedBy: deleteInput.userId,
+      };
+      const deleted = await repositories.messages.softDelete({
+        messageId: message.id,
+        body: DELETED_MESSAGE_BODY,
+        meta,
+      });
+      if (!deleted) {
+        return makeFailure('NOT_FOUND', 'Message not found');
+      }
+      const [enrichedMessage] = await enrichMessagesWithArtifacts(repositories, [deleted]);
+      return makeSuccess({ message: enrichedMessage ?? deleted });
     },
 
     async updateMemberRole(roleInput) {

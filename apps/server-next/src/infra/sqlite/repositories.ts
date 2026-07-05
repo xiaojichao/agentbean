@@ -1263,6 +1263,16 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .run(input.meta ? JSON.stringify(input.meta) : null, input.messageId);
         return { ...existing, meta: input.meta };
       },
+      async softDelete(input) {
+        const existing = mapMessage(teamDb.prepare('SELECT * FROM messages WHERE id = ?').get(input.messageId));
+        if (!existing) {
+          return null;
+        }
+        teamDb
+          .prepare('UPDATE messages SET body = ?, meta_json = ? WHERE id = ?')
+          .run(input.body, input.meta ? JSON.stringify(input.meta) : null, input.messageId);
+        return { ...existing, body: input.body, meta: input.meta };
+      },
       async setTaskIdIfAbsent(input) {
         const existing = mapMessage(teamDb.prepare('SELECT * FROM messages WHERE id = ?').get(input.messageId));
         if (!existing) {

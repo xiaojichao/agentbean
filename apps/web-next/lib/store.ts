@@ -214,8 +214,13 @@ export function mergeMessagesByChannel(
   let changed = false;
   for (const msg of msgs) {
     const list = next[msg.channelId] ?? [];
-    if (list.some((m) => m.id === msg.id)) continue;
-    const merged = [...list, msg];
+    const existingIndex = list.findIndex((m) => m.id === msg.id);
+    const existing = existingIndex >= 0 ? list[existingIndex] : undefined;
+    const updated = existing ? { ...existing, ...msg } : msg;
+    if (existing && sameChatMessage(existing, updated)) continue;
+    const merged = existingIndex >= 0
+      ? list.map((item, index) => index === existingIndex ? updated : item)
+      : [...list, updated];
     if (merged.every((message) => typeof message.createdAt === 'number')) {
       merged.sort((a, b) => a.createdAt - b.createdAt);
     }
@@ -223,6 +228,18 @@ export function mergeMessagesByChannel(
     changed = true;
   }
   return changed ? next : existing;
+}
+
+function sameChatMessage(left: ChatMessage, right: ChatMessage): boolean {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  const leftRecord = left as unknown as Record<string, unknown>;
+  const rightRecord = right as unknown as Record<string, unknown>;
+  for (const key of keys) {
+    if (!Object.is(leftRecord[key], rightRecord[key])) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function mergeActivityMessages(
