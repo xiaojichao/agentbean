@@ -1,4 +1,5 @@
 const READ_KEY_PREFIX = 'agentbean:chat:done:';
+const MUTED_CHANNEL_KEY_PREFIX = 'agentbean:chat:muted-channels:';
 
 export interface ReadIdStorage {
   getItem(key: string): string | null;
@@ -13,6 +14,10 @@ function resolveStorage(storage?: ReadIdStorage): ReadIdStorage | null {
 
 export function readKey(networkPath: string): string {
   return `${READ_KEY_PREFIX}${networkPath}`;
+}
+
+export function mutedChannelKey(networkPath: string): string {
+  return `${MUTED_CHANNEL_KEY_PREFIX}${networkPath}`;
 }
 
 export function deserializeReadIds(raw: string | null): Set<string> {
@@ -40,4 +45,16 @@ export function saveReadIds(networkPath: string, ids: Set<string>, storage?: Rea
   const store = resolveStorage(storage);
   if (!store) return;
   store.setItem(readKey(networkPath), serializeReadIds(ids));
+}
+
+export function loadMutedChannelIds(networkPath: string, storage?: ReadIdStorage): Set<string> {
+  const store = resolveStorage(storage);
+  if (!store) return new Set();
+  return deserializeReadIds(store.getItem(mutedChannelKey(networkPath)));
+}
+
+export function saveMutedChannelIds(networkPath: string, ids: Set<string>, storage?: ReadIdStorage): void {
+  const store = resolveStorage(storage);
+  if (!store) return;
+  store.setItem(mutedChannelKey(networkPath), serializeReadIds(ids));
 }
