@@ -6,8 +6,9 @@ import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareD
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
 import { WEB_EVENTS } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
-import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceArtifact, WorkspaceRunDetail } from '@/lib/schema';
+import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
+import { matchingWorkspaceRunDetail, type WorkspaceRunDetailBundle } from '@/lib/task-workspace-run-detail';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
@@ -2584,7 +2585,7 @@ function TaskDetailPanel({
   const artifacts = uniqueArtifacts(sortedMessages.flatMap((item) => item.artifacts ?? []));
   const workspaceRuns = uniqueWorkspaceRuns(sortedMessages.map((item) => item.workspaceRun).filter(Boolean) as NonNullable<ChatMessage['workspaceRun']>[]);
   const latestWorkspaceRun = workspaceRuns.length > 0 ? workspaceRuns[workspaceRuns.length - 1]! : null;
-  const [workspaceRunDetail, setWorkspaceRunDetail] = useState<{ workspaceRun: WorkspaceRunDetail; artifacts: WorkspaceArtifact[] } | null>(null);
+  const [workspaceRunDetail, setWorkspaceRunDetail] = useState<WorkspaceRunDetailBundle | null>(null);
   const [workspaceRunLoading, setWorkspaceRunLoading] = useState(false);
   const [workspaceRunError, setWorkspaceRunError] = useState<string | null>(null);
   const taskStatus = task?.status ?? 'todo';
@@ -2606,6 +2607,7 @@ function TaskDetailPanel({
       return;
     }
     let cancelled = false;
+    setWorkspaceRunDetail(null);
     setWorkspaceRunLoading(true);
     setWorkspaceRunError(null);
     fetchWorkspaceRunDetail(workspaceTeamId, latestWorkspaceRun.id)
@@ -2630,8 +2632,9 @@ function TaskDetailPanel({
       cancelled = true;
     };
   }, [latestWorkspaceRun?.id, latestWorkspaceRun?.updatedAt, workspaceTeamId]);
-  const environmentRun = workspaceRunDetail?.workspaceRun ?? latestWorkspaceRun;
-  const environmentArtifacts = workspaceRunDetail?.artifacts ?? [];
+  const currentWorkspaceRunDetail = matchingWorkspaceRunDetail(workspaceRunDetail, workspaceTeamId, latestWorkspaceRun?.id);
+  const environmentRun = currentWorkspaceRunDetail?.workspaceRun ?? latestWorkspaceRun;
+  const environmentArtifacts = currentWorkspaceRunDetail?.artifacts ?? [];
 
   return (
     <aside className="flex w-[420px] shrink-0 flex-col border-l border-neutral-200 bg-white" data-smoke="chat-task-detail">
