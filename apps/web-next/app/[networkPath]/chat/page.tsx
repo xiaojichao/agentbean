@@ -943,24 +943,29 @@ export default function ChatPage() {
     });
   };
 
-  const togglePin = (msgId: string) => {
+  const togglePin = (message: ChatMessage) => {
+    const msgId = message.id;
     const isPinned = pinnedIds.has(msgId);
-    setPinnedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(msgId)) next.delete(msgId); else next.add(msgId);
-      return next;
-    });
-    setPinnedMessages((prev) => (isPinned ? prev.filter((m) => m.id !== msgId) : prev));
+    const applyPinnedState = (pinned: boolean) => {
+      setPinnedIds((prev) => {
+        const next = new Set(prev);
+        if (pinned) next.add(msgId); else next.delete(msgId);
+        return next;
+      });
+      setPinnedMessages((prev) => {
+        if (!pinned) return prev.filter((m) => m.id !== msgId);
+        if (prev.some((m) => m.id === msgId)) return prev;
+        return [message, ...prev];
+      });
+    };
+
+    applyPinnedState(!isPinned);
     messageReactionEvents().pin(msgId, !isPinned).then((res) => {
       if (!res.ok) {
         throw new Error(res.error ?? 'Pin failed');
       }
     }).catch(() => {
-      setPinnedIds((prev) => {
-        const next = new Set(prev);
-        if (next.has(msgId)) next.delete(msgId); else next.add(msgId);
-        return next;
-      });
+      applyPinnedState(isPinned);
     });
   };
 
@@ -1335,7 +1340,7 @@ export default function ChatPage() {
             router.push(dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`);
           }} humanProfiles={humanProfiles} />
         ) : sidebarView === 'pinned' ? (
-          <PinnedView pinnedMessages={pinnedDisplayMessages} onUnpin={(msgId) => togglePin(msgId)} onJump={(msg) => {
+          <PinnedView pinnedMessages={pinnedDisplayMessages} onUnpin={(msg) => togglePin(msg)} onJump={(msg) => {
             setActiveChannel(msg.channelId);
             setSidebarView('channels');
             const dm = dms.find((item) => item.id === msg.channelId);
@@ -1460,7 +1465,7 @@ export default function ChatPage() {
                         onToggleReaction={() => toggleReaction(msg.id)}
                         onReactWithEmoji={(emoji) => reactWithEmoji(msg.id, emoji)}
                         onToggleSave={() => toggleSave(msg.id)}
-                        onTogglePin={() => togglePin(msg.id)}
+                        onTogglePin={() => togglePin(msg)}
                         onCopyLink={() => copyMessageLink(msg)}
                         onCopyText={() => copyMessageText(msg)}
                         onCopyMarkdown={() => copyMessageMarkdown(msg)}
@@ -2457,7 +2462,7 @@ function ThreadPanel({
   onReply: (msg: ChatMessage) => void;
   onOpenProfile: (target: ProfileTarget) => void;
   onToggleSave: (msgId: string) => void;
-  onTogglePin: (msgId: string) => void;
+  onTogglePin: (msg: ChatMessage) => void;
   onToggleReaction: (msgId: string) => void;
   onReactWithEmoji: (msgId: string, emoji: string) => void;
   onCopyLink: (msg: ChatMessage) => void;
@@ -2504,7 +2509,7 @@ function ThreadPanel({
         onToggleReaction={() => onToggleReaction(msg.id)}
         onReactWithEmoji={(emoji) => onReactWithEmoji(msg.id, emoji)}
         onToggleSave={() => onToggleSave(msg.id)}
-        onTogglePin={() => onTogglePin(msg.id)}
+        onTogglePin={() => onTogglePin(msg)}
         onCopyLink={() => onCopyLink(msg)}
         onCopyText={() => onCopyText(msg)}
         onCopyMarkdown={() => onCopyMarkdown(msg)}
@@ -4281,7 +4286,18 @@ function SavedView({ savedMessages, onUnsave, onJump, humanProfiles }: { savedMe
           </div>
         )}
         {filtered.map((msg) => (
-          <button key={msg.id} onClick={() => onJump(msg.channelId)} className="group flex w-full items-start gap-3 border-b border-neutral-100 px-6 py-3 text-left hover:bg-neutral-50">
+          <div
+            key={msg.id}
+            role="button"
+            tabIndex={0}
+            onClick={() => onJump(msg.channelId)}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return;
+              e.preventDefault();
+              onJump(msg.channelId);
+            }}
+            className="group flex w-full cursor-pointer items-start gap-3 border-b border-neutral-100 px-6 py-3 text-left hover:bg-neutral-50 focus:outline-none focus:ring-2 focus:ring-neutral-300"
+          >
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-amber-100 text-xs font-semibold text-amber-700">
               <Bookmark size={14} />
             </div>
@@ -4294,6 +4310,7 @@ function SavedView({ savedMessages, onUnsave, onJump, humanProfiles }: { savedMe
               <div className="mt-1 line-clamp-3 text-sm text-neutral-700">{displayMessageBody(msg)}</div>
             </div>
             <button
+              onKeyDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
                 onUnsave(msg.id);
@@ -4302,14 +4319,14 @@ function SavedView({ savedMessages, onUnsave, onJump, humanProfiles }: { savedMe
             >
               取消收藏
             </button>
-          </button>
+          </div>
         ))}
       </div>
     </div>
   );
 }
 
-function PinnedView({ pinnedMessages, onUnpin, onJump, humanProfiles }: { pinnedMessages: ChatMessage[]; onUnpin: (msgId: string) => void; onJump: (msg: ChatMessage) => void; humanProfiles: HumanProfile[] }) {
+function PinnedView({ pinnedMessages, onUnpin, onJump, humanProfiles }: { pinnedMessages: ChatMessage[]; onUnpin: (msg: ChatMessage) => void; onJump: (msg: ChatMessage) => void; humanProfiles: HumanProfile[] }) {
   const [query, setQuery] = useState('');
   const channels = useAgentBeanStore((s) => s.channels);
   const dms = useAgentBeanStore((s) => s.dms);
@@ -4341,7 +4358,18 @@ function PinnedView({ pinnedMessages, onUnpin, onJump, humanProfiles }: { pinned
           </div>
         )}
         {filtered.map((msg) => (
-          <button key={msg.id} onClick={() => onJump(msg)} className="group flex w-full items-start gap-3 border-b border-neutral-100 px-6 py-3 text-left hover:bg-neutral-50">
+          <div
+            key={msg.id}
+            role="button"
+            tabIndex={0}
+            onClick={() => onJump(msg)}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return;
+              e.preventDefault();
+              onJump(msg);
+            }}
+            className="group flex w-full cursor-pointer items-start gap-3 border-b border-neutral-100 px-6 py-3 text-left hover:bg-neutral-50 focus:outline-none focus:ring-2 focus:ring-neutral-300"
+          >
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-sky-100 text-xs font-semibold text-sky-700">
               <Pin size={14} />
             </div>
@@ -4354,15 +4382,16 @@ function PinnedView({ pinnedMessages, onUnpin, onJump, humanProfiles }: { pinned
               <div className="mt-1 line-clamp-3 text-sm text-neutral-700">{displayMessageBody(msg)}</div>
             </div>
             <button
+              onKeyDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                onUnpin(msg.id);
+                onUnpin(msg);
               }}
               className="shrink-0 rounded-md border border-neutral-200 px-2 py-1 text-[10px] font-medium text-neutral-500 opacity-0 hover:bg-white group-hover:opacity-100"
             >
               取消固定
             </button>
-          </button>
+          </div>
         ))}
       </div>
     </div>
