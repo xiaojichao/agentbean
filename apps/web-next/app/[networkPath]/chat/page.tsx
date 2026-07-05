@@ -11,7 +11,7 @@ import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
-import { inboxActivityMessages, isTopLevelAgentReply, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
+import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import {
@@ -229,7 +229,9 @@ export default function ChatPage() {
   const [mutedChannelIds, setMutedChannelIds] = useState<Set<string>>(new Set());
   const [loadedMutedChannelKey, setLoadedMutedChannelKey] = useState<string | null>(null);
   const conversationVisibleIds = visibleConversationIds(channels, dms);
-  const activityVisibleIds = new Set([...conversationVisibleIds].filter((id) => !mutedChannelIds.has(id)));
+  const mutedChannelStorageKey = mutedChannelKey(routeNetworkPath);
+  const mutedChannelsReady = loadedMutedChannelKey === mutedChannelStorageKey;
+  const activityVisibleIds = activityConversationIds(conversationVisibleIds, mutedChannelIds, mutedChannelsReady);
   const activityVisibleList = [...activityVisibleIds];
   const activityVisibleKey = activityVisibleList.join('\u001f');
   const inboxUnread = inboxActivityMessages(activityMessages, activityVisibleIds).filter((m) => !doneIds.has(m.id)).length;
@@ -424,11 +426,11 @@ export default function ChatPage() {
   }, [routeNetworkPath]);
 
   useEffect(() => {
-    if (loadedMutedChannelKey !== mutedChannelKey(routeNetworkPath)) return;
+    if (loadedMutedChannelKey !== mutedChannelStorageKey) return;
     try {
       saveMutedChannelIds(routeNetworkPath, mutedChannelIds);
     } catch {}
-  }, [mutedChannelIds, loadedMutedChannelKey, routeNetworkPath]);
+  }, [mutedChannelIds, loadedMutedChannelKey, mutedChannelStorageKey, routeNetworkPath]);
 
   // Fetch members for @mention
   useEffect(() => {
@@ -3997,7 +3999,7 @@ function ActivityView({
   const dms = useAgentBeanStore((s) => s.dms);
   const agents = useAgentBeanStore((s) => s.agents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
-  const visibleIds = new Set([...visibleConversationIds(channels, dms)].filter((id) => !mutedChannelIds.has(id)));
+  const visibleIds = activityConversationIds(visibleConversationIds(channels, dms), mutedChannelIds);
 
   const allMessages = inboxActivityMessages(activityMessages, visibleIds);
   const unreadCount = allMessages.filter((m) => !doneIds.has(m.id)).length;
@@ -4014,7 +4016,7 @@ function ActivityView({
           <h2 className="text-lg font-semibold">活动</h2>
           <p className="text-xs text-neutral-400">{allMessages.length} 条活动 · {unreadCount} 条未读</p>
         </div>
-        <button onClick={() => setDoneIds(new Set(allMessages.map((m) => m.id)))} className="rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50">全部标记已读</button>
+        <button onClick={() => setDoneIds((prev) => markMessagesDone(prev, allMessages))} className="rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50">全部标记已读</button>
       </div>
       <div className="flex gap-2 border-b border-neutral-200 px-6 py-2">
         {(['all', 'unread', 'mentions'] as const).map((item) => (

@@ -1,7 +1,19 @@
 import { describe, expect, test } from 'vitest';
-import { inboxActivityMessages, isTopLevelAgentReply, mergeChannelHistory } from '../lib/chat-scope';
+import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeChannelHistory } from '../lib/chat-scope';
 
 const human = { senderKind: 'human', senderId: 'u', body: '' } as const;
+
+describe('activityConversationIds', () => {
+  test('静音频道状态尚未加载时不暴露活动 scope', () => {
+    const ids = activityConversationIds(new Set(['c1', 'c2']), new Set(['c2']), false);
+    expect([...ids]).toEqual([]);
+  });
+
+  test('静音频道状态加载后排除 muted channel', () => {
+    const ids = activityConversationIds(new Set(['c1', 'c2', 'dm1']), new Set(['c2']));
+    expect([...ids].sort()).toEqual(['c1', 'dm1']);
+  });
+});
 
 describe('inboxActivityMessages', () => {
   test('只保留 visible channel 的消息', () => {
@@ -56,6 +68,13 @@ describe('inboxActivityMessages', () => {
       id: `m${i}`, channelId: 'c1', createdAt: i, ...human,
     }));
     expect(inboxActivityMessages(msgs, new Set(['c1']))).toHaveLength(80);
+  });
+});
+
+describe('markMessagesDone', () => {
+  test('把当前活动消息合并进已有 doneIds，而不是替换旧状态', () => {
+    const done = markMessagesDone(new Set(['muted-read']), [{ id: 'visible-1' }, { id: 'visible-2' }]);
+    expect([...done].sort()).toEqual(['muted-read', 'visible-1', 'visible-2']);
   });
 });
 
