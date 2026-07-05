@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { matchingWorkspaceRunDetail, type WorkspaceRunDetailBundle } from '../lib/task-workspace-run-detail';
+import { matchingWorkspaceRunDetail, workspaceRunHistoryItems, type WorkspaceRunDetailBundle } from '../lib/task-workspace-run-detail';
 
 function detailBundle(overrides: Partial<WorkspaceRunDetailBundle['workspaceRun']> = {}): WorkspaceRunDetailBundle {
   return {
@@ -36,5 +36,17 @@ describe('matchingWorkspaceRunDetail', () => {
     const detail = detailBundle({ teamId: 'team-old' });
 
     expect(matchingWorkspaceRunDetail(detail, 'team-new', 'run-1')).toBeNull();
+  });
+});
+
+describe('workspaceRunHistoryItems', () => {
+  test('keeps every workspace run and marks the latest one', () => {
+    const run1 = detailBundle({ id: 'run-1', command: 'npm test' }).workspaceRun;
+    const run2 = detailBundle({ id: 'run-2', command: 'npm build' }).workspaceRun;
+
+    expect(workspaceRunHistoryItems([run1, run2], 'run-2')).toEqual([
+      { workspaceRun: run1, isLatest: false },
+      { workspaceRun: run2, isLatest: true },
+    ]);
   });
 });

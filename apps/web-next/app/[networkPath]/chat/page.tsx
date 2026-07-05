@@ -8,7 +8,7 @@ import { WEB_EVENTS } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
-import { matchingWorkspaceRunDetail, type WorkspaceRunDetailBundle } from '@/lib/task-workspace-run-detail';
+import { matchingWorkspaceRunDetail, workspaceRunHistoryItems, type WorkspaceRunDetailBundle } from '@/lib/task-workspace-run-detail';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
@@ -2635,6 +2635,7 @@ function TaskDetailPanel({
   const currentWorkspaceRunDetail = matchingWorkspaceRunDetail(workspaceRunDetail, workspaceTeamId, latestWorkspaceRun?.id);
   const environmentRun = currentWorkspaceRunDetail?.workspaceRun ?? latestWorkspaceRun;
   const environmentArtifacts = currentWorkspaceRunDetail?.artifacts ?? [];
+  const workspaceRunHistory = workspaceRunHistoryItems(workspaceRuns, latestWorkspaceRun?.id);
 
   return (
     <aside className="flex w-[420px] shrink-0 flex-col border-l border-neutral-200 bg-white" data-smoke="chat-task-detail">
@@ -2768,6 +2769,27 @@ function TaskDetailPanel({
                 </pre>
               )}
             </div>
+            {workspaceRunHistory.length > 1 && (
+              <div className="mt-3 space-y-2">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400">执行记录</div>
+                {workspaceRunHistory.map(({ workspaceRun: run, isLatest }) => (
+                  <a
+                    key={run.id}
+                    href={`/${routeNetworkPath}/runs/${encodeURIComponent(run.id)}`}
+                    className="flex items-center justify-between rounded-md border border-neutral-200 bg-white px-3 py-2 text-xs hover:bg-neutral-50"
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate font-mono text-neutral-700">{run.command ?? run.id}</span>
+                      <span className="mt-0.5 block text-neutral-400">{workspaceRunStatusText(run.status)} · {run.exitCode === undefined ? '未完成' : `exit ${run.exitCode}`}</span>
+                    </span>
+                    <span className="ml-3 inline-flex shrink-0 items-center gap-1 text-neutral-400">
+                      {isLatest && <span>最新</span>}
+                      <ExternalLink size={13} />
+                    </span>
+                  </a>
+                ))}
+              </div>
+            )}
           </section>
         )}
 

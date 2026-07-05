@@ -5,6 +5,11 @@ export interface WorkspaceRunDetailBundle {
   artifacts: WorkspaceArtifact[];
 }
 
+export interface WorkspaceRunHistoryItem {
+  workspaceRun: WorkspaceRunDetail;
+  isLatest: boolean;
+}
+
 export function matchingWorkspaceRunDetail(
   detail: WorkspaceRunDetailBundle | null,
   expectedTeamId: string | null | undefined,
@@ -14,4 +19,14 @@ export function matchingWorkspaceRunDetail(
   if (detail.workspaceRun.teamId !== expectedTeamId) return null;
   if (detail.workspaceRun.id !== expectedRunId) return null;
   return detail;
+}
+
+export function workspaceRunHistoryItems(
+  runs: WorkspaceRunDetail[],
+  latestRunId: string | null | undefined,
+): WorkspaceRunHistoryItem[] {
+  return runs.map((workspaceRun) => ({
+    workspaceRun,
+    isLatest: Boolean(latestRunId && workspaceRun.id === latestRunId),
+  }));
 }
