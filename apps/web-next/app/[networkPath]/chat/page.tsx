@@ -13,6 +13,7 @@ import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfile
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
 import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
+import { displayMessageBody, plainTextForMessage } from '@/lib/chat-message-text';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import {
   TASK_STATUS_COLUMNS as TASK_COLUMNS,
@@ -981,7 +982,7 @@ export default function ChatPage() {
   };
 
   const copyMessageText = (msg: ChatMessage) => {
-    void copyTextToClipboard(displayMessageBody(msg));
+    void copyTextToClipboard(plainTextForMessage(msg));
   };
 
   const convertMessageToTask = async (msg: ChatMessage) => {
@@ -3398,24 +3399,6 @@ function safeMarkdownHref(href: string): string | null {
   if (/^mailto:/i.test(trimmed)) return trimmed;
   if (trimmed.startsWith('/api/')) return artifactUrl(trimmed) ?? null;
   return null;
-}
-
-function stripEchoedDispatchHistory(body: string): string {
-  const normalized = body.replace(/\r\n/g, '\n');
-  const marker = normalized.search(/(?:^|\n)\s*#?\s*(?:user|assistant|system):\s+(?:[0-9A-Z]{10,}|system)\b/i);
-  if (marker > 0) return normalized.slice(0, marker).trim();
-  return normalized;
-}
-
-function displayMessageBody(msg: ChatMessage): string {
-  const body = stripEchoedDispatchHistory(msg.body);
-  if (!msg.artifacts || msg.artifacts.length === 0) return body;
-  const filenameByLower = new Map(msg.artifacts.map((artifact) => [artifact.filename.toLowerCase(), artifact.filename]));
-  const fileExt = '(?:png|jpe?g|gif|webp|svg|pdf|txt|csv|json|md|mp4|mov|zip)';
-  const localPathRe = new RegExp(`(?:file://)?(?:~|/Users/[^\\s)\\]}>,;:]+|/private/[^\\s)\\]}>,;:]+|/var/[^\\s)\\]}>,;:]+|/tmp/[^\\s)\\]}>,;:]+)[^\\s)\\]}>,;:]*?\\/([^/\\s)\\]}>,;:]+\\.${fileExt})`, 'gi');
-  return body.replace(localPathRe, (match, filename: string) => {
-    return filenameByLower.get(filename.toLowerCase()) ?? filename ?? match;
-  });
 }
 
 function artifactUrl(path: string | undefined): string | null {
