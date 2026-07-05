@@ -980,6 +980,10 @@ export default function ChatPage() {
     void copyTextToClipboard(markdownForMessage(msg, speaker, currentTeamId ?? msg.teamId));
   };
 
+  const copyMessageText = (msg: ChatMessage) => {
+    void copyTextToClipboard(displayMessageBody(msg));
+  };
+
   const convertMessageToTask = async (msg: ChatMessage) => {
     const res = await messageReactionEvents().convertToTask(msg.id);
     if (res?.ok && res.message && res.task) {
@@ -1367,6 +1371,7 @@ export default function ChatPage() {
                         onReactWithEmoji={(emoji) => reactWithEmoji(msg.id, emoji)}
                         onToggleSave={() => toggleSave(msg.id)}
                         onCopyLink={() => copyMessageLink(msg)}
+                        onCopyText={() => copyMessageText(msg)}
                         onCopyMarkdown={() => copyMessageMarkdown(msg)}
                         onSelectMessage={() => selectMessage(msg)}
                         onConvertToTask={() => convertMessageToTask(msg)}
@@ -1536,6 +1541,7 @@ export default function ChatPage() {
           onToggleReaction={toggleReaction}
           onReactWithEmoji={reactWithEmoji}
           onCopyLink={copyMessageLink}
+          onCopyText={copyMessageText}
           onCopyMarkdown={copyMessageMarkdown}
           onSelectMessage={selectMessage}
           onConvertToTask={convertMessageToTask}
@@ -2311,6 +2317,7 @@ function ThreadPanel({
   onToggleReaction,
   onReactWithEmoji,
   onCopyLink,
+  onCopyText,
   onCopyMarkdown,
   onSelectMessage,
   onConvertToTask,
@@ -2348,6 +2355,7 @@ function ThreadPanel({
   onToggleReaction: (msgId: string) => void;
   onReactWithEmoji: (msgId: string, emoji: string) => void;
   onCopyLink: (msg: ChatMessage) => void;
+  onCopyText: (msg: ChatMessage) => void;
   onCopyMarkdown: (msg: ChatMessage) => void;
   onSelectMessage: (msg: ChatMessage) => void;
   onConvertToTask: (msg: ChatMessage) => void;
@@ -2387,6 +2395,7 @@ function ThreadPanel({
         onReactWithEmoji={(emoji) => onReactWithEmoji(msg.id, emoji)}
         onToggleSave={() => onToggleSave(msg.id)}
         onCopyLink={() => onCopyLink(msg)}
+        onCopyText={() => onCopyText(msg)}
         onCopyMarkdown={() => onCopyMarkdown(msg)}
         onSelectMessage={() => onSelectMessage(msg)}
         onConvertToTask={() => onConvertToTask(msg)}
@@ -2710,6 +2719,7 @@ function ChatBubble({
   onReactWithEmoji,
   onToggleSave,
   onCopyLink,
+  onCopyText,
   onCopyMarkdown,
   onSelectMessage,
   onConvertToTask,
@@ -2740,6 +2750,7 @@ function ChatBubble({
   onReactWithEmoji: (emoji: string) => void;
   onToggleSave: () => void;
   onCopyLink: () => void;
+  onCopyText: () => void;
   onCopyMarkdown: () => void;
   onSelectMessage: () => void;
   onConvertToTask: () => void;
@@ -2916,6 +2927,7 @@ function ChatBubble({
             ))}
           </div>
           <MessageContextMenuItem icon={<Link2 size={14} />} label="复制链接" onClick={() => runMenuAction(onCopyLink)} />
+          <MessageContextMenuItem icon={<ClipboardCopy size={14} />} label="复制文本" onClick={() => runMenuAction(onCopyText)} />
           <MessageContextMenuItem icon={<ClipboardCopy size={14} />} label="复制 Markdown" onClick={() => runMenuAction(onCopyMarkdown)} />
           <MessageContextMenuItem icon={<MousePointer2 size={14} />} label="选中消息" onClick={() => runMenuAction(onSelectMessage)} />
           <MessageContextMenuItem icon={<MessageSquare size={14} />} label="打开讨论串" onClick={() => runMenuAction(onOpenThread)} />
