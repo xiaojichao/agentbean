@@ -3,10 +3,10 @@
 import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, RotateCcw, BellOff, Pin, PinOff } from 'lucide-react';
-import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, dispatchEvents, emitWithTimeout } from '@/lib/socket';
+import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
 import { WEB_EVENTS } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
-import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus } from '@/lib/schema';
+import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceArtifact, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
@@ -2583,6 +2583,10 @@ function TaskDetailPanel({
   const latestAgentResult = agentResults.length > 0 ? agentResults[agentResults.length - 1]! : null;
   const artifacts = uniqueArtifacts(sortedMessages.flatMap((item) => item.artifacts ?? []));
   const workspaceRuns = uniqueWorkspaceRuns(sortedMessages.map((item) => item.workspaceRun).filter(Boolean) as NonNullable<ChatMessage['workspaceRun']>[]);
+  const latestWorkspaceRun = workspaceRuns.length > 0 ? workspaceRuns[workspaceRuns.length - 1]! : null;
+  const [workspaceRunDetail, setWorkspaceRunDetail] = useState<{ workspaceRun: WorkspaceRunDetail; artifacts: WorkspaceArtifact[] } | null>(null);
+  const [workspaceRunLoading, setWorkspaceRunLoading] = useState(false);
+  const [workspaceRunError, setWorkspaceRunError] = useState<string | null>(null);
   const taskStatus = task?.status ?? 'todo';
   const taskLabel = taskNumber ? `#${taskNumber}` : '#任务';
   const assigneeName = task?.assigneeId
@@ -2592,6 +2596,42 @@ function TaskDetailPanel({
     ? participantName(task.creatorId, channelMembers, undefined)
     : resolveMessageSpeaker(message, agents, { humanProfiles, channelMembers, mentionMembers });
   const statusColumn = TASK_COLUMNS.find((item) => item.id === taskStatus) ?? TASK_COLUMNS[0]!;
+  const workspaceTeamId = currentTeamId ?? message.teamId ?? null;
+
+  useEffect(() => {
+    if (!latestWorkspaceRun || !workspaceTeamId) {
+      setWorkspaceRunDetail(null);
+      setWorkspaceRunError(null);
+      setWorkspaceRunLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setWorkspaceRunLoading(true);
+    setWorkspaceRunError(null);
+    fetchWorkspaceRunDetail(workspaceTeamId, latestWorkspaceRun.id)
+      .then((res) => {
+        if (cancelled) return;
+        if (res.ok && res.workspaceRun && res.artifacts) {
+          setWorkspaceRunDetail({ workspaceRun: res.workspaceRun, artifacts: res.artifacts });
+        } else {
+          setWorkspaceRunDetail(null);
+          setWorkspaceRunError(res.error ?? '执行环境加载失败');
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setWorkspaceRunDetail(null);
+        setWorkspaceRunError(error instanceof Error ? error.message : '执行环境加载失败');
+      })
+      .finally(() => {
+        if (!cancelled) setWorkspaceRunLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [latestWorkspaceRun?.id, latestWorkspaceRun?.updatedAt, workspaceTeamId]);
+  const environmentRun = workspaceRunDetail?.workspaceRun ?? latestWorkspaceRun;
+  const environmentArtifacts = workspaceRunDetail?.artifacts ?? [];
 
   return (
     <aside className="flex w-[420px] shrink-0 flex-col border-l border-neutral-200 bg-white" data-smoke="chat-task-detail">
@@ -2669,46 +2709,86 @@ function TaskDetailPanel({
           )}
         </section>
 
-        {(artifacts.length > 0 || workspaceRuns.length > 0) && (
+        {environmentRun && (
           <section className="border-b border-neutral-100 py-4">
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">附件与执行记录</h3>
-            {workspaceRuns.length > 0 && (
-              <div className="mb-3 space-y-2">
-                {workspaceRuns.map((run) => (
-                  <a
-                    key={run.id}
-                    href={`/${routeNetworkPath}/runs/${encodeURIComponent(run.id)}`}
-                    className="flex items-center justify-between rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs hover:bg-neutral-100"
-                  >
-                    <span className="min-w-0">
-                      <span className="block truncate font-mono text-neutral-700">{run.command ?? run.id}</span>
-                      <span className="mt-0.5 block text-neutral-400">{run.status} · {run.exitCode === undefined ? '未完成' : `exit ${run.exitCode}`}</span>
-                    </span>
-                    <ExternalLink size={13} className="shrink-0 text-neutral-400" />
-                  </a>
-                ))}
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">环境信息</h3>
+              <a
+                href={`/${routeNetworkPath}/runs/${encodeURIComponent(environmentRun.id)}`}
+                className="inline-flex h-7 items-center gap-1 rounded-md border border-neutral-200 px-2 text-xs font-medium text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900"
+              >
+                详情
+                <ExternalLink size={12} />
+              </a>
+            </div>
+            <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className={`inline-flex h-6 items-center rounded-full px-2 text-xs font-semibold ${workspaceRunStatusClass(environmentRun.status)}`}>
+                  {workspaceRunStatusText(environmentRun.status)}
+                </span>
+                <span className="truncate font-mono text-xs text-neutral-400">{shortWorkspaceRunId(environmentRun.id)}</span>
               </div>
-            )}
-            {artifacts.length > 0 && (
-              <div className="space-y-2">
-                {artifacts.map((artifact) => (
-                  <div key={artifact.id} className="rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm">
-                    <div className="min-w-0">
-                      <div className="truncate font-medium text-neutral-800">{artifact.relativePath ?? artifact.filename}</div>
-                      <div className="text-xs text-neutral-400">{artifact.pathKind ?? 'artifact'} · {formatFileSize(artifact.sizeBytes)}</div>
-                    </div>
-                    <div className="mt-2 flex gap-2 text-xs">
-                      {messageArtifactUrl(artifact, 'preview', currentTeamId ?? message.teamId) && (
-                        <a className="font-medium text-blue-600 hover:underline" href={messageArtifactUrl(artifact, 'preview', currentTeamId ?? message.teamId) ?? '#'} target="_blank" rel="noreferrer">预览</a>
-                      )}
-                      {messageArtifactUrl(artifact, 'download', currentTeamId ?? message.teamId) && (
-                        <a className="font-medium text-neutral-600 hover:underline" href={messageArtifactUrl(artifact, 'download', currentTeamId ?? message.teamId) ?? '#'}>下载</a>
-                      )}
-                    </div>
+              <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2">
+                <TaskRunMeta label="Agent" value={agents[environmentRun.agentId]?.name ?? shortWorkspaceRunId(environmentRun.agentId)} />
+                <TaskRunMeta label="设备" value={environmentRun.deviceId ? shortWorkspaceRunId(environmentRun.deviceId) : '未绑定'} />
+                <TaskRunMeta label="耗时" value={formatWorkspaceRunDuration(environmentRun.startedAt, environmentRun.completedAt) ?? '进行中'} />
+                <TaskRunMeta label="退出码" value={environmentRun.exitCode === undefined ? '未完成' : String(environmentRun.exitCode)} />
+                <TaskRunMeta label="产物" value={`${environmentArtifacts.length || environmentRun.artifactIds.length} 个`} />
+                <TaskRunMeta label="更新时间" value={formatTime(environmentRun.updatedAt)} />
+              </dl>
+              {environmentRun.cwd && (
+                <div className="mt-3 rounded-md bg-white px-2 py-1.5">
+                  <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">cwd</div>
+                  <div className="truncate font-mono text-xs text-neutral-600">{environmentRun.cwd}</div>
+                </div>
+              )}
+              {environmentRun.command && (
+                <div className="mt-2 rounded-md bg-white px-2 py-1.5">
+                  <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">command</div>
+                  <div className="truncate font-mono text-xs text-neutral-600">{environmentRun.command}</div>
+                </div>
+              )}
+              {workspaceRunLoading && (
+                <div className="mt-3 flex items-center gap-2 text-xs text-neutral-400">
+                  <Loader2 size={12} className="animate-spin" />
+                  正在加载最新执行环境...
+                </div>
+              )}
+              {workspaceRunError && (
+                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-700">
+                  {workspaceRunError}
+                </div>
+              )}
+              {environmentRun.logExcerpt && (
+                <pre className="mt-3 max-h-40 overflow-auto rounded-md bg-neutral-900 px-3 py-2 font-mono text-[11px] leading-5 text-neutral-100">
+                  {trimWorkspaceRunLog(environmentRun.logExcerpt)}
+                </pre>
+              )}
+            </div>
+          </section>
+        )}
+
+        {artifacts.length > 0 && (
+          <section className="border-b border-neutral-100 py-4">
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">附件</h3>
+            <div className="space-y-2">
+              {artifacts.map((artifact) => (
+                <div key={artifact.id} className="rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm">
+                  <div className="min-w-0">
+                    <div className="truncate font-medium text-neutral-800">{artifact.relativePath ?? artifact.filename}</div>
+                    <div className="text-xs text-neutral-400">{artifact.pathKind ?? 'artifact'} · {formatFileSize(artifact.sizeBytes)}</div>
                   </div>
-                ))}
-              </div>
-            )}
+                  <div className="mt-2 flex gap-2 text-xs">
+                    {messageArtifactUrl(artifact, 'preview', currentTeamId ?? message.teamId) && (
+                      <a className="font-medium text-blue-600 hover:underline" href={messageArtifactUrl(artifact, 'preview', currentTeamId ?? message.teamId) ?? '#'} target="_blank" rel="noreferrer">预览</a>
+                    )}
+                    {messageArtifactUrl(artifact, 'download', currentTeamId ?? message.teamId) && (
+                      <a className="font-medium text-neutral-600 hover:underline" href={messageArtifactUrl(artifact, 'download', currentTeamId ?? message.teamId) ?? '#'}>下载</a>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
           </section>
         )}
 
@@ -2740,6 +2820,15 @@ function TaskDetailPanel({
         </button>
       </div>
     </aside>
+  );
+}
+
+function TaskRunMeta({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400">{label}</dt>
+      <dd className="mt-0.5 truncate text-xs font-medium text-neutral-700">{value}</dd>
+    </div>
   );
 }
 
@@ -4425,6 +4514,39 @@ function uniqueWorkspaceRuns(runs: NonNullable<ChatMessage['workspaceRun']>[]): 
   const map = new Map<string, NonNullable<ChatMessage['workspaceRun']>>();
   for (const run of runs) map.set(run.id, run);
   return [...map.values()];
+}
+
+function workspaceRunStatusText(status: WorkspaceRunDetail['status']): string {
+  if (status === 'running') return '运行中';
+  if (status === 'succeeded') return '成功';
+  if (status === 'failed') return '失败';
+  if (status === 'cancelled') return '已取消';
+  return status;
+}
+
+function workspaceRunStatusClass(status: WorkspaceRunDetail['status']): string {
+  if (status === 'running') return 'bg-blue-50 text-blue-700';
+  if (status === 'succeeded') return 'bg-emerald-50 text-emerald-700';
+  if (status === 'failed') return 'bg-red-50 text-red-700';
+  return 'bg-neutral-100 text-neutral-600';
+}
+
+function formatWorkspaceRunDuration(startedAt?: number, completedAt?: number): string | null {
+  if (!startedAt || !completedAt) return null;
+  const ms = Math.max(0, completedAt - startedAt);
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(ms / 60000);
+  const seconds = Math.floor((ms % 60000) / 1000);
+  return `${minutes}m ${seconds}s`;
+}
+
+function shortWorkspaceRunId(id: string): string {
+  return id.length <= 8 ? id : `${id.slice(0, 8)}...`;
+}
+
+function trimWorkspaceRunLog(text: string, maxChars = 1200): string {
+  return text.length <= maxChars ? text : `${text.slice(0, maxChars)}\n...`;
 }
 
 function conversationLabel(
