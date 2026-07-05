@@ -76,6 +76,7 @@ export interface ChatMessage {
   metaJson?: string | null;
   meta?: Record<string, unknown>;
   artifacts?: Artifact[];
+  workspaceRun?: WorkspaceRunDetail;
   dispatchStatus?: DispatchStatus;
   dispatchId?: string;
 }
