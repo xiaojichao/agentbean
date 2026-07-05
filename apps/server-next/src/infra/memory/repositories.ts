@@ -723,6 +723,15 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       async getById(messageId) {
         return messages.get(messageId) ?? null;
       },
+      async updateMeta(input) {
+        const message = messages.get(input.messageId);
+        if (!message) {
+          return null;
+        }
+        const updated = { ...message, meta: input.meta };
+        messages.set(input.messageId, updated);
+        return updated;
+      },
       async listByChannel(channelId, limit) {
         return Array.from(messages.values())
           .filter((message) => message.channelId === channelId)

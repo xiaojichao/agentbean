@@ -346,6 +346,7 @@ export interface MessageReactionEvents {
   react(messageId: string, on: boolean, emoji?: string): Promise<{ ok: boolean; messageId?: string; error?: string }>;
   save(messageId: string, on: boolean): Promise<{ ok: boolean; messageId?: string; error?: string }>;
   listSaved(): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
+  convertToTask(messageId: string): Promise<{ ok: boolean; message?: ChatMessage; task?: { id: string; title: string; status: string; channelId?: string | null }; error?: string }>;
 }
 
 export function messageReactionEvents(socket: Socket = getWebSocket()): MessageReactionEvents {
@@ -353,6 +354,7 @@ export function messageReactionEvents(socket: Socket = getWebSocket()): MessageR
     react(messageId, on, emoji) { return emitWithTimeout(socket, WEB_EVENTS.message.react, { messageId, on, emoji: emoji || '❤️' }); },
     save(messageId, on) { return emitWithTimeout(socket, WEB_EVENTS.message.save, { messageId, on }); },
     listSaved() { return emitWithTimeout(socket, WEB_EVENTS.message.listSaved, {}); },
+    convertToTask(messageId) { return emitWithTimeout(socket, WEB_EVENTS.message.convertToTask, { messageId }); },
   };
 }
 

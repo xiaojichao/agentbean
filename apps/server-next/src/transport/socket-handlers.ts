@@ -316,6 +316,10 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.message.react, app, 'reactMessage', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.save, app, 'saveMessage', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.listSaved, app, 'listSavedMessages', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.message.convertToTask, app, 'convertMessageToTask', async (payload, result) => {
+    await options.afterTaskMutation?.(payload, result);
+    await options.afterMessageSend?.(payload, result);
+  }, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.member.updateRole, app, 'updateMemberRole', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.member.remove, app, 'removeMember', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.member.transferOwner, app, 'transferOwner', undefined, { authenticatedUser: options.authenticatedUser });

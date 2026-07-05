@@ -102,6 +102,7 @@ export interface ServerNextUseCases {
   cancelDispatch(input: CancelDispatchInput): Promise<Ack<{ dispatch: DispatchDto }>>;
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   searchMessages(input: SearchMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
+  convertMessageToTask(input: ConvertMessageToTaskInput): Promise<Ack<{ message: MessageDto; task: TaskDto }>>;
   listTasks(input: ListTasksInput): Promise<Ack<{ tasks: TaskDto[] }>>;
   summarizeAgentMetrics(input: { userId: string; teamId: string }): Promise<Ack<{ summaries: AgentMetricsSummary[] }>>;
   createTask(input: CreateTaskInput): Promise<Ack<{ task: TaskDto }>>;
@@ -397,6 +398,7 @@ export interface SendMessageInput {
   channelId: string;
   threadId?: string;
   body: string;
+  asTask?: boolean;
   artifactIds?: string[];
   clientMessageId?: string;
   senderId?: string;
@@ -419,6 +421,12 @@ export interface SearchMessagesInput {
   teamId: string;
   query: string;
   limit?: number;
+}
+
+export interface ConvertMessageToTaskInput {
+  userId: string;
+  teamId: string;
+  messageId: string;
 }
 
 export interface ListTasksInput {
@@ -2414,6 +2422,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return attachmentResult;
       }
       const attachedArtifactIds = attachmentResult.artifacts.map((artifact) => artifact.id);
+      const task = messageInput.asTask
+        ? await repositories.tasks.create({
+            id: ids.nextId(),
+            teamId: messageInput.teamId,
+            title: messageInput.body.trim() || '附件',
+            description: undefined,
+            status: 'todo',
+            creatorId: messageInput.userId,
+            assigneeId: route.kind === 'dispatch' ? route.agentId : undefined,
+            channelId: messageInput.channelId,
+            tags: [],
+            sortOrder: now,
+            createdAt: now,
+            updatedAt: now,
+          })
+        : null;
       const message = await repositories.messages.append({
         id: messageId,
         teamId: messageInput.teamId,
@@ -2426,6 +2450,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         meta: {
           ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
           ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
+          ...(task ? { taskId: task.id } : {}),
           routeReason: toRouteReason(route),
         },
       });
@@ -2552,6 +2577,72 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeSuccess({
         messages: await enrichMessagesWithArtifacts(repositories, messages),
       });
+    },
+
+    async convertMessageToTask(convertInput) {
+      if (!(await repositories.teams.isMember(convertInput.teamId, convertInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const message = await repositories.messages.getById(convertInput.messageId);
+      if (!message || message.teamId !== convertInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Message not found');
+      }
+      if (message.senderKind === 'system') {
+        return makeFailure('VALIDATION_ERROR', 'System messages cannot be converted to tasks');
+      }
+      const channelAccess = await ensureUserCanViewChannel(repositories, {
+        userId: convertInput.userId,
+        teamId: convertInput.teamId,
+        channelId: message.channelId,
+      });
+      if (!channelAccess.ok) {
+        return channelAccess;
+      }
+
+      const existingTaskId = typeof message.meta?.taskId === 'string' ? message.meta.taskId : null;
+      if (existingTaskId) {
+        const existingTask = await repositories.tasks.getById(existingTaskId);
+        if (existingTask && existingTask.teamId === convertInput.teamId) {
+          const [enrichedMessage] = await enrichMessagesWithArtifacts(repositories, [message]);
+          return makeSuccess({ message: enrichedMessage ?? message, task: existingTask });
+        }
+      }
+
+      const now = clock.now();
+      const title = message.body.trim() || '附件';
+      const visibleAgents = await repositories.agents.listVisibleInTeam(convertInput.teamId);
+      const route = routeMessageForChannel({
+        channel: channelAccess.channel,
+        visibleAgents,
+        teamId: convertInput.teamId,
+        body: message.body,
+      });
+      const task = await repositories.tasks.create({
+        id: ids.nextId(),
+        teamId: convertInput.teamId,
+        title,
+        description: undefined,
+        status: 'todo',
+        creatorId: convertInput.userId,
+        assigneeId: route.kind === 'dispatch' ? route.agentId : undefined,
+        channelId: message.channelId,
+        tags: [],
+        sortOrder: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+      const updated = await repositories.messages.updateMeta({
+        messageId: message.id,
+        meta: {
+          ...(message.meta ?? {}),
+          taskId: task.id,
+        },
+      });
+      if (!updated) {
+        return makeFailure('NOT_FOUND', 'Message not found');
+      }
+      const [enrichedMessage] = await enrichMessagesWithArtifacts(repositories, [updated]);
+      return makeSuccess({ message: enrichedMessage ?? updated, task });
     },
 
     async listTasks(taskInput) {

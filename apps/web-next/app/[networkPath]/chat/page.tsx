@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
+import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, RotateCcw, BellOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, emitWithTimeout } from '@/lib/socket';
 import { WEB_EVENTS } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
@@ -34,6 +34,9 @@ type ProfileTarget = { kind: 'human' | 'agent'; id: string };
 type MentionProfileMember = { id: string; name: string; kind: ProfileTarget['kind'] };
 type ChatTaskMenuTarget = { surface: 'main' | 'thread'; messageId: string } | null;
 type ComposerAttachmentStatus = 'uploading' | 'ready' | 'failed';
+type MessageContextMenuPosition = { x: number; y: number } | null;
+
+const MESSAGE_REACTION_CHOICES = ['👍', '❤️', '🎉', '👀', '🔥', '😂', '✅'] as const;
 
 interface SendMessageAck {
   ok?: boolean;
@@ -124,6 +127,31 @@ function hasUploadingAttachments(attachments: ComposerAttachment[]): boolean {
 
 function hasFailedAttachments(attachments: ComposerAttachment[]): boolean {
   return attachments.some((attachment) => attachment.status === 'failed');
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  if (typeof document === 'undefined') return;
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textarea);
+}
+
+function markdownForMessage(msg: ChatMessage, speaker: string): string {
+  const lines = [`**${speaker}**`, '', displayMessageBody(msg)];
+  if (msg.artifacts && msg.artifacts.length > 0) {
+    lines.push('', ...msg.artifacts.map((artifact) => `- [${artifact.filename}](${artifactUrl(artifact.downloadUrl || artifact.previewUrl) || artifact.id})`));
+  }
+  return lines.join('\n');
 }
 
 export default function ChatPage() {
@@ -851,7 +879,7 @@ export default function ChatPage() {
     uniqueMessages(Object.values(messagesByChannel).flat()).filter((m) => savedIds.has(m.id)),
   );
 
-  const toggleReaction = (msgId: string) => {
+  const toggleReaction = (msgId: string, emoji = '❤️') => {
     const isReacted = reactionIds.has(msgId);
     // Optimistic update
     setReactionIds((prev) => {
@@ -860,7 +888,7 @@ export default function ChatPage() {
       return next;
     });
     // Persist to server
-    messageReactionEvents().react(msgId, !isReacted).catch(() => {
+    messageReactionEvents().react(msgId, !isReacted, emoji).catch(() => {
       // Revert on failure
       setReactionIds((prev) => {
         const next = new Set(prev);
@@ -868,6 +896,72 @@ export default function ChatPage() {
         return next;
       });
     });
+  };
+
+  const reactWithEmoji = (msgId: string, emoji: string) => {
+    setReactionIds((prev) => {
+      const next = new Set(prev);
+      next.add(msgId);
+      return next;
+    });
+    messageReactionEvents().react(msgId, true, emoji).catch(() => {
+      setReactionIds((prev) => {
+        const next = new Set(prev);
+        next.delete(msgId);
+        return next;
+      });
+    });
+  };
+
+  const selectMessage = (msg: ChatMessage) => {
+    setSelectedMessageId(msg.id);
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('message', `${msg.channelId}:${msg.id}`);
+    router.replace(`${url.pathname}${url.search}`);
+  };
+
+  const copyMessageLink = (msg: ChatMessage) => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    url.pathname = `/${routeNetworkPath}/channel/${msg.channelId}`;
+    url.search = '';
+    url.searchParams.set('message', `${msg.channelId}:${msg.id}`);
+    void copyTextToClipboard(url.toString());
+  };
+
+  const copyMessageMarkdown = (msg: ChatMessage) => {
+    const speaker = messageSpeakerName(msg, agents, { currentUser, humanProfiles, channelMembers });
+    void copyTextToClipboard(markdownForMessage(msg, speaker));
+  };
+
+  const convertMessageToTask = async (msg: ChatMessage) => {
+    const res = await messageReactionEvents().convertToTask(msg.id);
+    if (res?.ok && res.message && res.task) {
+      appendMessage(res.message);
+      setTasks((prev) => {
+        const task = res.task as TaskItem;
+        return prev.some((item) => item.id === task.id)
+          ? prev.map((item) => item.id === task.id ? { ...item, ...task } : item)
+          : [...prev, task];
+      });
+      setTimeout(() => loadTasks(), 150);
+      return;
+    }
+    appendMessage({
+      id: `local-convert-error-${Date.now()}`,
+      channelId: msg.channelId,
+      senderKind: 'system',
+      senderId: null,
+      body: `转换任务失败：${res?.error ?? 'unknown'}`,
+      createdAt: Date.now(),
+      metaJson: JSON.stringify({ kind: 'task-convert-fail' }),
+    });
+  };
+
+  const unfollowThreadLocally = (msg: ChatMessage) => {
+    if (threadRootId === msg.id) closeThread();
+    if (selectedMessageId === msg.id) setSelectedMessageId(null);
   };
 
   const updateTaskStatus = async (task: TaskItem, status: TaskStatus) => {
@@ -1149,7 +1243,14 @@ export default function ChatPage() {
                         onOpenThread={() => openThread(msg.id)}
                         onOpenProfile={openProfile}
                         onToggleReaction={() => toggleReaction(msg.id)}
+                        onReactWithEmoji={(emoji) => reactWithEmoji(msg.id, emoji)}
                         onToggleSave={() => toggleSave(msg.id)}
+                        onCopyLink={() => copyMessageLink(msg)}
+                        onCopyMarkdown={() => copyMessageMarkdown(msg)}
+                        onSelectMessage={() => selectMessage(msg)}
+                        onConvertToTask={() => convertMessageToTask(msg)}
+                        onReopenTask={() => { if (task) updateTaskStatus(task, 'todo'); }}
+                        onUnfollowThread={() => unfollowThreadLocally(msg)}
                         onTaskMenu={(open) => setChatTaskMenuTarget(open && task ? { surface: 'main', messageId: msg.id } : null)}
                         onTaskStatus={(status) => { if (task) updateTaskStatus(task, status); }}
                         replyCount={messages.filter((item) => parentMessageId(item, messagesById) === msg.id).length}
@@ -1312,6 +1413,12 @@ export default function ChatPage() {
           onOpenProfile={openProfile}
           onToggleSave={toggleSave}
           onToggleReaction={toggleReaction}
+          onReactWithEmoji={reactWithEmoji}
+          onCopyLink={copyMessageLink}
+          onCopyMarkdown={copyMessageMarkdown}
+          onSelectMessage={selectMessage}
+          onConvertToTask={convertMessageToTask}
+          onUnfollowThread={unfollowThreadLocally}
           onTaskMenu={(messageId) => setChatTaskMenuTarget(messageId ? { surface: 'thread', messageId } : null)}
           onTaskStatus={updateTaskStatus}
           onViewInChannel={viewThreadRootInChannel}
@@ -2081,6 +2188,12 @@ function ThreadPanel({
   onOpenProfile,
   onToggleSave,
   onToggleReaction,
+  onReactWithEmoji,
+  onCopyLink,
+  onCopyMarkdown,
+  onSelectMessage,
+  onConvertToTask,
+  onUnfollowThread,
   onTaskMenu,
   onTaskStatus,
   onViewInChannel,
@@ -2112,6 +2225,12 @@ function ThreadPanel({
   onOpenProfile: (target: ProfileTarget) => void;
   onToggleSave: (msgId: string) => void;
   onToggleReaction: (msgId: string) => void;
+  onReactWithEmoji: (msgId: string, emoji: string) => void;
+  onCopyLink: (msg: ChatMessage) => void;
+  onCopyMarkdown: (msg: ChatMessage) => void;
+  onSelectMessage: (msg: ChatMessage) => void;
+  onConvertToTask: (msg: ChatMessage) => void;
+  onUnfollowThread: (msg: ChatMessage) => void;
   onTaskMenu: (taskId: string | null) => void;
   onTaskStatus: (task: TaskItem, status: TaskStatus) => void;
   onViewInChannel: () => void;
@@ -2143,7 +2262,14 @@ function ThreadPanel({
         onOpenThread={() => {}}
         onOpenProfile={onOpenProfile}
         onToggleReaction={() => onToggleReaction(msg.id)}
+        onReactWithEmoji={(emoji) => onReactWithEmoji(msg.id, emoji)}
         onToggleSave={() => onToggleSave(msg.id)}
+        onCopyLink={() => onCopyLink(msg)}
+        onCopyMarkdown={() => onCopyMarkdown(msg)}
+        onSelectMessage={() => onSelectMessage(msg)}
+        onConvertToTask={() => onConvertToTask(msg)}
+        onReopenTask={() => { if (task) onTaskStatus(task, 'todo'); }}
+        onUnfollowThread={() => onUnfollowThread(msg)}
         onTaskMenu={(open) => onTaskMenu(open && task ? msg.id : null)}
         onTaskStatus={(status) => { if (task) onTaskStatus(task, status); }}
         replyCount={replyCount}
@@ -2458,7 +2584,14 @@ function ChatBubble({
   onOpenThread,
   onOpenProfile,
   onToggleReaction,
+  onReactWithEmoji,
   onToggleSave,
+  onCopyLink,
+  onCopyMarkdown,
+  onSelectMessage,
+  onConvertToTask,
+  onReopenTask,
+  onUnfollowThread,
   onTaskMenu,
   onTaskStatus,
   replyCount,
@@ -2480,7 +2613,14 @@ function ChatBubble({
   onOpenThread: () => void;
   onOpenProfile: (target: ProfileTarget) => void;
   onToggleReaction: () => void;
+  onReactWithEmoji: (emoji: string) => void;
   onToggleSave: () => void;
+  onCopyLink: () => void;
+  onCopyMarkdown: () => void;
+  onSelectMessage: () => void;
+  onConvertToTask: () => void;
+  onReopenTask: () => void;
+  onUnfollowThread: () => void;
   onTaskMenu?: (open: boolean) => void;
   onTaskStatus?: (status: TaskStatus) => void;
   replyCount: number;
@@ -2492,6 +2632,23 @@ function ChatBubble({
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const applyDispatchStatus = useAgentBeanStore((s) => s.applyDispatchStatus);
   const meta = parseMeta(msg);
+  const [contextMenu, setContextMenu] = useState<MessageContextMenuPosition>(null);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close();
+    };
+    window.addEventListener('click', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [contextMenu]);
 
   if (msg.senderKind === 'system') {
     if (meta.kind === 'task-status-updated') {
@@ -2522,6 +2679,21 @@ function ChatBubble({
     ? { kind: 'agent' as const, id: msg.senderId ?? '' }
     : { kind: 'human' as const, id: msg.senderId ?? '' };
   const dispatch = isHuman ? msg.dispatchStatus : undefined;
+
+  const openContextMenu = (event: MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const width = 220;
+    const height = taskId ? 330 : 292;
+    setContextMenu({
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8)),
+    });
+  };
+
+  const runMenuAction = (action: () => void) => {
+    setContextMenu(null);
+    action();
+  };
 
   const cancelDispatch = () => {
     if (!msg.dispatchId) return;
@@ -2578,6 +2750,7 @@ function ChatBubble({
       data-smoke="chat-message"
       data-message-body={msg.body}
       data-message-selected={selected ? 'true' : 'false'}
+      onContextMenu={openContextMenu}
       className={`group relative flex gap-2 rounded-md border px-2 py-2 transition-colors ${
         selected
           ? 'border-amber-400 bg-amber-50/70 shadow-[inset_3px_0_0_#f59e0b]'
@@ -2597,6 +2770,46 @@ function ChatBubble({
           {saved ? <BookmarkCheck size={13} /> : <Bookmark size={13} />}
         </button>
       </div>
+      {contextMenu && (
+        <div
+          role="menu"
+          aria-label="Message context menu"
+          onClick={(event) => event.stopPropagation()}
+          className="fixed z-50 w-[220px] border border-neutral-300 bg-white py-1 text-sm shadow-xl"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <div className="flex items-center gap-1 border-b border-neutral-100 px-2 pb-1">
+            {MESSAGE_REACTION_CHOICES.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                onClick={() => runMenuAction(() => onReactWithEmoji(emoji))}
+                className="flex h-7 w-7 items-center justify-center rounded hover:bg-amber-50"
+                title={`React with ${emoji}`}
+              >
+                <span>{emoji}</span>
+              </button>
+            ))}
+          </div>
+          <MessageContextMenuItem icon={<Link2 size={14} />} label="复制链接" onClick={() => runMenuAction(onCopyLink)} />
+          <MessageContextMenuItem icon={<ClipboardCopy size={14} />} label="复制 Markdown" onClick={() => runMenuAction(onCopyMarkdown)} />
+          <MessageContextMenuItem icon={<MousePointer2 size={14} />} label="选中消息" onClick={() => runMenuAction(onSelectMessage)} />
+          <MessageContextMenuItem icon={<MessageSquare size={14} />} label="打开讨论串" onClick={() => runMenuAction(onOpenThread)} />
+          <MessageContextMenuItem icon={saved ? <BookmarkCheck size={14} /> : <Bookmark size={14} />} label={saved ? '取消收藏' : '保存消息'} onClick={() => runMenuAction(onToggleSave)} />
+          {taskId ? (
+            <>
+              <div className="my-1 border-t border-neutral-100" />
+              <MessageContextMenuItem icon={<BellOff size={14} />} label="取消关注讨论串" onClick={() => runMenuAction(onUnfollowThread)} />
+              <MessageContextMenuItem icon={<RotateCcw size={14} />} label="重新打开任务" onClick={() => runMenuAction(onReopenTask)} disabled={!task} />
+            </>
+          ) : (
+            <>
+              <div className="my-1 border-t border-neutral-100" />
+              <MessageContextMenuItem icon={<ListTodo size={14} />} label="转换为任务" onClick={() => runMenuAction(onConvertToTask)} />
+            </>
+          )}
+        </div>
+      )}
       {/* Avatar */}
       <button
         onClick={() => { if (canOpenProfile) onOpenProfile(profileTarget); }}
@@ -2655,6 +2868,31 @@ function ChatBubble({
         )}
       </div>
     </div>
+  );
+}
+
+function MessageContextMenuItem({
+  icon,
+  label,
+  onClick,
+  disabled = false,
+}: {
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      disabled={disabled}
+      onClick={onClick}
+      className="flex h-8 w-full items-center gap-2 px-3 text-left text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:text-neutral-300"
+    >
+      <span className="flex h-4 w-4 items-center justify-center text-neutral-500">{icon}</span>
+      <span className="truncate">{label}</span>
+    </button>
   );
 }
 
