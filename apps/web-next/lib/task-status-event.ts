@@ -20,6 +20,12 @@ export function taskStatusEventSummary(meta: Record<string, unknown>): TaskStatu
   return { taskId, status, label };
 }
 
+export function taskStatusEventForTask(meta: Record<string, unknown>, taskId: string | null | undefined): TaskStatusEventSummary | null {
+  if (!taskId) return null;
+  const event = taskStatusEventSummary(meta);
+  return event?.taskId === taskId ? event : null;
+}
+
 export function taskRootIdFromMessageMeta(meta: Record<string, unknown>): string | null {
   if (meta.kind === TASK_STATUS_UPDATED_KIND) return null;
   return typeof meta.taskId === 'string' && meta.taskId.trim() ? meta.taskId : null;
