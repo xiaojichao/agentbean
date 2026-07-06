@@ -3411,6 +3411,16 @@ function ChatBubble({
   }, [contextMenu]);
 
   if (msg.senderKind === 'system') {
+    const systemMessageAnchorProps = {
+      id: `message-${msg.id}`,
+      'data-smoke': 'chat-message',
+      'data-message-selected': selected ? 'true' : 'false',
+    };
+    const statusEventClassName = `mx-auto my-2 flex max-w-fit items-center gap-2 rounded-full border px-3 py-1.5 text-xs text-neutral-600 shadow-sm ${
+      selected
+        ? 'border-amber-400 bg-amber-50/80 shadow-[inset_3px_0_0_#f59e0b]'
+        : 'border-neutral-200 bg-white'
+    }`;
     const taskStatusEvent = taskStatusEventSummary(meta);
     if (taskStatusEvent) {
       const canOpenTask = Boolean(taskStatusEvent.taskId && onOpenTaskDetailById);
@@ -3425,9 +3435,10 @@ function ChatBubble({
       if (canOpenTask && taskId) {
         return (
           <button
+            {...systemMessageAnchorProps}
             type="button"
             onClick={() => onOpenTaskDetailById?.(taskId)}
-            className="mx-auto my-2 flex max-w-fit items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-xs text-neutral-600 shadow-sm hover:border-amber-300 hover:bg-amber-50"
+            className={`${statusEventClassName} hover:border-amber-300 hover:bg-amber-50`}
             title="查看任务详情"
           >
             {content}
@@ -3435,13 +3446,20 @@ function ChatBubble({
         );
       }
       return (
-        <div className="mx-auto my-2 flex max-w-fit items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-xs text-neutral-600 shadow-sm">
+        <div {...systemMessageAnchorProps} className={statusEventClassName}>
           {content}
         </div>
       );
     }
     return (
-      <div className="mx-auto my-1 max-w-prose rounded border border-amber-200 bg-amber-50 px-3 py-1.5 text-center text-xs text-amber-700">
+      <div
+        {...systemMessageAnchorProps}
+        className={`mx-auto my-1 max-w-prose rounded border px-3 py-1.5 text-center text-xs text-amber-700 ${
+          selected
+            ? 'border-amber-400 bg-amber-50 shadow-[inset_3px_0_0_#f59e0b]'
+            : 'border-amber-200 bg-amber-50'
+        }`}
+      >
         {msg.body}
       </div>
     );
