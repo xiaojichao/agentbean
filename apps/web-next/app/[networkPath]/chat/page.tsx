@@ -10,7 +10,7 @@ import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus,
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { matchingWorkspaceRunDetail, workspaceRunHistoryItems, type WorkspaceRunDetailBundle } from '@/lib/task-workspace-run-detail';
 import { taskMessageSummary } from '@/lib/task-message-summary';
-import { taskRootIdFromMessageMeta, taskStatusEventSummary } from '@/lib/task-status-event';
+import { taskRootIdFromMessageMeta, taskStatusEventForTask, taskStatusEventSummary, type TaskStatusEventSummary } from '@/lib/task-status-event';
 import { shouldHideTaskSystemMessage } from '@/lib/task-system-messages';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
@@ -950,7 +950,8 @@ export default function ChatPage() {
         .filter((msg) =>
           msg.id === taskDetailMessage.id ||
           msg.threadId === taskDetailMessage.id ||
-          parentMessageId(msg, messagesById) === taskDetailMessage.id)
+          parentMessageId(msg, messagesById) === taskDetailMessage.id ||
+          Boolean(taskStatusEventForTask(parseMeta(msg), taskDetailTaskId)))
         .sort((a, b) => a.createdAt - b.createdAt)
     : [];
 
@@ -2594,6 +2595,12 @@ function TaskDetailPanel({
   const artifacts = uniqueArtifacts(sortedMessages.flatMap((item) => item.artifacts ?? []));
   const workspaceRuns = uniqueWorkspaceRuns(sortedMessages.map((item) => item.workspaceRun).filter(Boolean) as NonNullable<ChatMessage['workspaceRun']>[]);
   const latestWorkspaceRun = workspaceRuns.length > 0 ? workspaceRuns[workspaceRuns.length - 1]! : null;
+  const detailTaskId = task?.id ?? metaTaskId(message);
+  const taskStatusEvents = detailTaskId
+    ? sortedMessages
+        .map((item) => ({ message: item, event: taskStatusEventForTask(parseMeta(item), detailTaskId) }))
+        .filter((item): item is { message: ChatMessage; event: TaskStatusEventSummary } => Boolean(item.event))
+    : [];
   const [workspaceRunDetail, setWorkspaceRunDetail] = useState<WorkspaceRunDetailBundle | null>(null);
   const [workspaceRunLoading, setWorkspaceRunLoading] = useState(false);
   const [workspaceRunError, setWorkspaceRunError] = useState<string | null>(null);
@@ -2721,6 +2728,29 @@ function TaskDetailPanel({
             </div>
           )}
         </section>
+
+        {taskStatusEvents.length > 0 && (
+          <section className="border-b border-neutral-100 py-4">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">状态历史</h3>
+              <span className="text-xs text-neutral-400">{taskStatusEvents.length} 条状态事件</span>
+            </div>
+            <div className="space-y-2">
+              {taskStatusEvents.map(({ message: statusMessage, event }) => (
+                <div key={statusMessage.id} className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 bg-white px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 text-xs font-medium text-neutral-700">
+                      <span className={`h-2 w-2 rounded-full ${taskStatusDotClass(event.status)}`} />
+                      <span>状态更新为 {taskStatusText(event.status)}</span>
+                    </div>
+                    <div className="mt-0.5 truncate text-[11px] text-neutral-400">{event.label}</div>
+                  </div>
+                  <div className="shrink-0 text-xs text-neutral-400">{formatTime(statusMessage.createdAt)}</div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {environmentRun && (
           <section className="border-b border-neutral-100 py-4">

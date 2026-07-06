@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { taskRootIdFromMessageMeta, taskStatusEventSummary } from '../lib/task-status-event';
+import { taskRootIdFromMessageMeta, taskStatusEventForTask, taskStatusEventSummary } from '../lib/task-status-event';
 
 describe('taskStatusEventSummary', () => {
   test('extracts task id, title label and valid status from task status events', () => {
@@ -42,5 +42,21 @@ describe('taskStatusEventSummary', () => {
 
   test('keeps ordinary task-linked messages eligible as task roots', () => {
     expect(taskRootIdFromMessageMeta({ taskId: 'task-1' })).toBe('task-1');
+  });
+
+  test('matches task status events to their owning task', () => {
+    expect(taskStatusEventForTask({
+      kind: 'task-status-updated',
+      taskId: 'task-1',
+      status: 'in_progress',
+    }, 'task-1')).toMatchObject({
+      taskId: 'task-1',
+      status: 'in_progress',
+    });
+    expect(taskStatusEventForTask({
+      kind: 'task-status-updated',
+      taskId: 'task-1',
+      status: 'done',
+    }, 'task-2')).toBeNull();
   });
 });
