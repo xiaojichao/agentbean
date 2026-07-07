@@ -2471,7 +2471,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return attachmentResult;
       }
       const attachedArtifactIds = attachmentResult.artifacts.map((artifact) => artifact.id);
-      const task = messageInput.asTask
+      const shouldCreateTask = messageInput.asTask === true || shouldAutoCreateTaskThread({
+        body: messageInput.body,
+        channel,
+        route,
+        threadId: messageInput.threadId,
+      });
+      const task = shouldCreateTask
         ? await repositories.tasks.create({
             id: ids.nextId(),
             teamId: messageInput.teamId,
@@ -2667,19 +2673,29 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!channelAccess.ok) {
         return channelAccess;
       }
+      if (channelAccess.channel.kind === 'direct') {
+        const agentId = channelAccess.channel.dmTargetAgentId ?? channelAccess.channel.agentMemberIds[0];
+        const agent = agentId ? await repositories.agents.getById(agentId) : null;
+        if (!agent || !agent.visibleTeamIds.includes(contextInput.teamId)) {
+          return makeFailure('NOT_FOUND', 'DM not found');
+        }
+      }
 
       const threadRootId = await resolveExplicitThreadRootId(repositories, message);
-      const contextMessages = threadRootId
-        ? uniqueMessagesById([
-            ...(await repositories.messages.listThreadBefore({
-              channelId: message.channelId,
-              threadId: threadRootId,
-              beforeMessageId: message.id,
-              limit: 50,
-            })),
-            message,
-          ]).sort((a, b) => a.createdAt - b.createdAt)
-        : [message];
+      let contextMessages = [message];
+      if (threadRootId) {
+        const threadRoot = await repositories.messages.getById(threadRootId);
+        contextMessages = uniqueMessagesById([
+          ...(threadRoot && threadRoot.channelId === message.channelId ? [threadRoot] : []),
+          ...(await repositories.messages.listThreadBefore({
+            channelId: message.channelId,
+            threadId: threadRootId,
+            beforeMessageId: message.id,
+            limit: 50,
+          })),
+          message,
+        ]).sort((a, b) => a.createdAt - b.createdAt);
+      }
 
       return makeSuccess({
         targetMessageId: message.id,
@@ -3305,6 +3321,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const workspaceRunId = resultInput.workspaceRun
         ? resultInput.workspaceRun.id ?? ids.nextId()
         : undefined;
+      const nestReplyInThread = shouldNestDispatchReplyInThread(originMessage);
       const message = await repositories.messages.append({
         id: ids.nextId(),
         teamId: completed.dispatch.teamId,
@@ -3316,10 +3333,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         createdAt: now,
         meta: {
           dispatchId: completed.dispatch.id,
-          replyScope: originMessage?.threadId && originMessage.threadId !== originMessage.id
+          replyScope: nestReplyInThread
             ? 'thread'
             : 'channel',
-          ...(originMessage?.threadId && originMessage.threadId !== originMessage.id
+          ...(nestReplyInThread && originMessage?.threadId
             ? { parentMessageId: originMessage.threadId }
             : {}),
           ...(reportedArtifactIds.length > 0 ? { artifactIds: reportedArtifactIds } : {}),
@@ -4620,6 +4637,9 @@ async function resolveExplicitThreadRootId(
   if (!message.threadId || message.threadId === message.id) {
     return null;
   }
+  if (message.meta?.replyScope === 'thread') {
+    return message.threadId;
+  }
   const root = await repositories.messages.getById(message.threadId);
   const isTopLevelAgentReply = message.senderKind === 'agent'
     && (
@@ -4679,6 +4699,36 @@ function routeMessageForChannel(input: {
     teamId: input.teamId,
     channelId: input.channel.id,
   });
+}
+
+function shouldAutoCreateTaskThread(input: {
+  body: string;
+  channel: ChannelRecord;
+  route: RouteResult;
+  threadId?: string;
+}): boolean {
+  if (input.threadId || input.channel.kind === 'direct' || input.route.kind !== 'dispatch') {
+    return false;
+  }
+  const body = input.body.trim();
+  if (!body) {
+    return false;
+  }
+  const plain = body.replace(/^@\S+\s*/, '').trim().toLowerCase();
+  if (/^(hello|hi|hey|你好|在吗|你是谁|你能干嘛|你有哪些\s*skills?\??|有哪些\s*skills?\??|什么样的消息|哪些消息)/i.test(plain)) {
+    return false;
+  }
+  return /(?:总结|整理|改写|撰写|写(?:一|个|篇|份)?|生成|制作|调用|画|分析一下|调研|搜索|查找|实现|修复|测试|review|code\s*review|top\s*\d+|top\d+|新闻|报告|文章|封面|配图|图片|代码|上线|部署)/i.test(plain);
+}
+
+function shouldNestDispatchReplyInThread(originMessage: MessageRecord | null | undefined): boolean {
+  if (!originMessage?.threadId) {
+    return false;
+  }
+  if (originMessage.threadId !== originMessage.id) {
+    return true;
+  }
+  return typeof originMessage.meta?.taskId === 'string';
 }
 
 function toRouteReason(route: RouteResult): RouteReason | undefined {

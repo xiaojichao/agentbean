@@ -186,4 +186,15 @@ describe('mergeChannelHistory', () => {
     );
     expect(merged).toEqual([{ id: 'm2', createdAt: 200 }]);
   });
+
+  test('保留搜索跳转拉回的旧 thread context 消息', () => {
+    const merged = mergeChannelHistory(
+      [{ id: 'latest', createdAt: 1000 }],
+      [
+        { id: 'root', createdAt: 100, meta: { __contextLoaded: true } },
+        { id: 'reply', createdAt: 120, meta: { __contextLoaded: true } },
+      ],
+    );
+    expect(merged.map((m) => m.id)).toEqual(['root', 'reply', 'latest']);
+  });
 });

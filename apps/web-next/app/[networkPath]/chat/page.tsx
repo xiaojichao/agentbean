@@ -1445,7 +1445,7 @@ export default function ChatPage() {
               upsertMessages([message]);
               const context = await messageReactionEvents().context(message.id).catch(() => null);
               if (context?.ok) {
-                if (context.messages) upsertMessages(context.messages);
+                if (context.messages) upsertMessages(context.messages.map(markContextLoadedMessage));
                 targetMessageId = context.targetMessageId ?? targetMessageId;
                 threadRootId = context.threadRootId ?? null;
               }
@@ -3500,6 +3500,9 @@ function ChatBubble({
   const time = formatTime(msg.createdAt);
   const isOwner = isHuman && currentUser?.id === msg.senderId;
   const taskId = typeof meta.taskId === 'string' ? meta.taskId : null;
+  const hasThreadSurface = showReplyCount && (replyCount > 0 || Boolean(taskId));
+  const showInlineTaskBadge = Boolean(taskId) && !hasThreadSurface;
+  const showInlineReplyBadge = showReplyCount && replyCount > 0 && !hasThreadSurface;
   const dispatch = isHuman ? msg.dispatchStatus : undefined;
   const hasPendingDispatch = dispatch === 'queued' || dispatch === 'sent' || dispatch === 'accepted' || dispatch === 'running';
   const canEdit = isOwner && !taskId && !isDeleted && !hasPendingDispatch;
@@ -3599,7 +3602,9 @@ function ChatBubble({
       className={`group relative flex gap-2 rounded-md border px-2 py-2 transition-colors ${
         selected
           ? 'border-amber-400 bg-amber-50/70 shadow-[inset_3px_0_0_#f59e0b]'
-          : 'border-transparent hover:border-neutral-900 hover:bg-white'
+          : hasThreadSurface
+            ? 'border-neutral-200 bg-white shadow-sm hover:border-neutral-900'
+            : 'border-transparent hover:border-neutral-900 hover:bg-white'
       }`}
     >
       {!isDeleted && !editing && <div className="pointer-events-none absolute right-2 top-1 z-10 flex items-center gap-0.5 border border-neutral-300 bg-white opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
@@ -3736,9 +3741,9 @@ function ChatBubble({
             ))}
           </div>
         )}
-        {!editing && (((!isDeleted && (taskId || reacted || saved || pinned)) || (showReplyCount && replyCount > 0))) && (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {!isDeleted && taskId && !showTaskInlineCard && (
+        {hasThreadSurface && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 border border-sky-100 bg-sky-50/70 px-2 py-1.5">
+            {taskId && (
               <ChatTaskBadge
                 task={task}
                 taskNumber={taskNumber}
@@ -3750,7 +3755,27 @@ function ChatBubble({
               />
             )}
             {showReplyCount && replyCount > 0 && (
-              <button onClick={onOpenThread} className="inline-flex h-5 items-center gap-1 border border-sky-200 bg-sky-50 px-1.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100" title="打开讨论串">
+              <button onClick={onOpenThread} data-thread-id={msg.id} className="inline-flex h-5 items-center gap-1 border border-sky-200 bg-sky-50 px-1.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100" title="打开讨论串">
+                <MessageSquare size={11} />
+                <span>{replyCount} 条回复</span>
+              </button>
+            )}
+          </div>
+        )}
+        {(showInlineTaskBadge || showInlineReplyBadge || reacted || saved || pinned) && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {showInlineTaskBadge && (
+              <ChatTaskBadge
+                task={task}
+                taskNumber={taskNumber}
+                assigneeName={taskAssigneeName ?? (agent?.name ?? speaker)}
+                open={taskMenuOpen}
+                onOpen={onTaskMenu}
+                onStatus={onTaskStatus}
+              />
+            )}
+            {showInlineReplyBadge && (
+              <button onClick={onOpenThread} data-thread-id={msg.id} className="inline-flex h-5 items-center gap-1 border border-sky-200 bg-sky-50 px-1.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100" title="打开讨论串">
                 <MessageSquare size={11} />
                 <span>{replyCount} 条回复</span>
               </button>
@@ -4315,6 +4340,16 @@ function parseMeta(msg: ChatMessage): Record<string, any> {
   } catch {
     return {};
   }
+}
+
+function markContextLoadedMessage(msg: ChatMessage): ChatMessage {
+  return {
+    ...msg,
+    meta: {
+      ...parseMeta(msg),
+      __contextLoaded: true,
+    },
+  };
 }
 
 function isDeletedMessage(msg: ChatMessage): boolean {
