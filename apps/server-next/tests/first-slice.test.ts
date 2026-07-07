@@ -289,6 +289,34 @@ describe('server-next first-slice use cases', () => {
     expect(global.messages.map((message) => message.id)).toEqual(expect.arrayContaining(['message-all', 'message-focused']));
   });
 
+  test('getMessageContext returns a thread root with the matched reply', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 260,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'message-root',
+        'message-reply',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'thread root' });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-root', body: 'thread reply roadmap' });
+
+    const context = await app.getMessageContext({ userId: 'user-1', teamId: 'team-1', messageId: 'message-reply' });
+
+    expect(context).toMatchObject({
+      ok: true,
+      targetMessageId: 'message-reply',
+      threadRootId: 'message-root',
+    });
+    expect(context.messages.map((message) => ({ id: message.id, body: message.body }))).toEqual([
+      { id: 'message-root', body: 'thread root' },
+      { id: 'message-reply', body: 'thread reply roadmap' },
+    ]);
+  });
+
   test('searchMessages rejects scoped archived channels', async () => {
     const app = createInMemoryServerNext({
       now: () => 275,
@@ -1646,6 +1674,128 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('sendMessage auto-threadifies task-like agent requests and nests the agent result', async () => {
+    let now = 320;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'message-1',
+        'task-1',
+        'dispatch-1',
+        'request-1',
+        'message-2',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      channelIds: ['channel-1'],
+      name: 'Hermes-Agent',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+
+    const sendAck = await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Hermes-Agent 总结一下今天的国内新闻 Top20',
+    });
+
+    expect(sendAck).toMatchObject({
+      ok: true,
+      message: {
+        id: 'message-1',
+        threadId: 'message-1',
+        meta: { taskId: 'task-1', routeReason: 'MENTION' },
+      },
+      task: {
+        id: 'task-1',
+        title: '@Hermes-Agent 总结一下今天的国内新闻 Top20',
+        assigneeId: 'agent-1',
+      },
+      dispatches: [{ id: 'dispatch-1', messageId: 'message-1' }],
+    });
+
+    now = 321;
+    await expect(app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: '国内新闻 Top20 结果',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: {
+        id: 'message-2',
+        threadId: 'message-1',
+        body: '国内新闻 Top20 结果',
+        meta: { parentMessageId: 'message-1', replyScope: 'thread' },
+      },
+      task: { id: 'task-1', status: 'done' },
+    });
+
+    await expect(app.getMessageContext({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'message-2',
+    })).resolves.toMatchObject({
+      ok: true,
+      threadRootId: 'message-1',
+      messages: [
+        { id: 'message-1', body: '@Hermes-Agent 总结一下今天的国内新闻 Top20' },
+        { id: 'message-2', body: '国内新闻 Top20 结果' },
+      ],
+    });
+  });
+
+  test('sendMessage keeps lightweight capability questions as ordinary channel messages', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 325,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      channelIds: ['channel-1'],
+      name: 'Hermes-Agent',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 325,
+    });
+
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Hermes-Agent 你有哪些skills?',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: {
+        id: 'message-1',
+        threadId: 'message-1',
+        meta: { routeReason: 'MENTION' },
+      },
+      dispatches: [{ id: 'dispatch-1', messageId: 'message-1' }],
+    });
+    await expect(app.listTasks({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1' })).resolves.toMatchObject({
+      ok: true,
+      tasks: [],
+    });
+  });
+
   test('convertMessageToTask links an existing channel message to a task', async () => {
     const app = createInMemoryServerNext({
       now: () => 315,
@@ -2424,6 +2574,91 @@ describe('server-next first-slice use cases', () => {
     await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
       ok: true,
       agents: [{ id: 'agent-1', status: 'online' }],
+    });
+  });
+
+  test('receiveDispatchResult accepts a late result after dispatch timeout and completes its task', async () => {
+    let now = 1000;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'message-1',
+        'task-1',
+        'dispatch-1',
+        'request-1',
+        'workspace-run-1',
+        'reply-1',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex write a long article',
+      asTask: true,
+    });
+
+    now = 1301;
+    await expect(app.failTimedOutDispatches({ olderThan: 1300 })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [{ id: 'dispatch-1', status: 'timed_out' }],
+    });
+
+    now = 1500;
+    await expect(app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: 'late but complete',
+      workspaceRun: {
+        cwd: '/Users/shaw/longvideo',
+        status: 'succeeded',
+        exitCode: 0,
+        startedAt: 1001,
+        completedAt: 1500,
+      },
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatch: { id: 'dispatch-1', status: 'succeeded', completedAt: 1500 },
+      task: { id: 'task-1', status: 'done', updatedAt: 1500 },
+      message: {
+        id: 'reply-1',
+        body: 'late but complete',
+        workspaceRun: {
+          id: 'workspace-run-1',
+          status: 'succeeded',
+        },
+      },
+    });
+    await expect(app.getWorkspaceRunDetail({
+      userId: 'user-1',
+      teamId: 'team-1',
+      runId: 'workspace-run-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      workspaceRun: {
+        id: 'workspace-run-1',
+        sourceMessageId: 'message-1',
+      },
+    });
+    await expect(app.listTasks({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1' })).resolves.toMatchObject({
+      ok: true,
+      tasks: [{ id: 'task-1', status: 'done' }],
     });
   });
 

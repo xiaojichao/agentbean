@@ -215,7 +215,11 @@ export function mergeMessagesByChannel(
   for (const msg of msgs) {
     const list = next[msg.channelId] ?? [];
     if (list.some((m) => m.id === msg.id)) continue;
-    next[msg.channelId] = [...list, msg];
+    const merged = [...list, msg];
+    if (merged.every((message) => typeof message.createdAt === 'number')) {
+      merged.sort((a, b) => a.createdAt - b.createdAt);
+    }
+    next[msg.channelId] = merged;
     changed = true;
   }
   return changed ? next : existing;

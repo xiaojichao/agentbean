@@ -103,6 +103,7 @@ export interface ServerNextUseCases {
   cancelChannelDispatches(input: CancelChannelDispatchesInput): Promise<Ack<{ dispatches: DispatchDto[] }>>;
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   searchMessages(input: SearchMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
+  getMessageContext(input: GetMessageContextInput): Promise<Ack<{ targetMessageId: ID; messages: MessageDto[]; threadRootId?: ID }>>;
   convertMessageToTask(input: ConvertMessageToTaskInput): Promise<Ack<{ message: MessageDto; task: TaskDto }>>;
   listTasks(input: ListTasksInput): Promise<Ack<{ tasks: TaskDto[] }>>;
   summarizeAgentMetrics(input: { userId: string; teamId: string }): Promise<Ack<{ summaries: AgentMetricsSummary[] }>>;
@@ -426,6 +427,12 @@ export interface SearchMessagesInput {
   limit?: number;
 }
 
+export interface GetMessageContextInput {
+  userId: string;
+  teamId: string;
+  messageId: string;
+}
+
 export interface ConvertMessageToTaskInput {
   userId: string;
   teamId: string;
@@ -657,6 +664,7 @@ export interface ReceiveDispatchResultInput {
 export interface ReceiveDispatchResultResult {
   dispatch: DispatchDto;
   message: MessageDto;
+  task?: TaskDto;
 }
 
 export interface ReceiveDispatchErrorInput {
@@ -2431,7 +2439,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return attachmentResult;
       }
       const attachedArtifactIds = attachmentResult.artifacts.map((artifact) => artifact.id);
-      const task = messageInput.asTask
+      const shouldCreateTask = messageInput.asTask === true || shouldAutoCreateTaskThread({
+        body: messageInput.body,
+        channel,
+        route,
+        threadId: messageInput.threadId,
+      });
+      const task = shouldCreateTask
         ? await repositories.tasks.create({
             id: ids.nextId(),
             teamId: messageInput.teamId,
@@ -2608,6 +2622,43 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
       return makeSuccess({
         messages: await enrichMessagesWithArtifacts(repositories, messages),
+      });
+    },
+
+    async getMessageContext(contextInput) {
+      if (!(await repositories.teams.isMember(contextInput.teamId, contextInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const message = await repositories.messages.getById(contextInput.messageId);
+      if (!message || message.teamId !== contextInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Message not found');
+      }
+      const channelAccess = await ensureUserCanViewChannel(repositories, {
+        userId: contextInput.userId,
+        teamId: contextInput.teamId,
+        channelId: message.channelId,
+      });
+      if (!channelAccess.ok) {
+        return channelAccess;
+      }
+
+      const threadRootId = await resolveExplicitThreadRootId(repositories, message);
+      const contextMessages = threadRootId
+        ? uniqueMessagesById([
+            ...(await repositories.messages.listThreadBefore({
+              channelId: message.channelId,
+              threadId: threadRootId,
+              beforeMessageId: message.id,
+              limit: 50,
+            })),
+            message,
+          ]).sort((a, b) => a.createdAt - b.createdAt)
+        : [message];
+
+      return makeSuccess({
+        targetMessageId: message.id,
+        ...(threadRootId ? { threadRootId } : {}),
+        messages: await enrichMessagesWithArtifacts(repositories, contextMessages),
       });
     },
 
@@ -3170,7 +3221,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (dispatch.agentId !== resultInput.agentId) {
         return makeFailure('FORBIDDEN', 'Dispatch does not belong to agent');
       }
-      if (!isPendingDispatchStatus(dispatch.status)) {
+      if (!isCompletableDispatchStatus(dispatch.status)) {
         return makeFailure('CONFLICT', 'Dispatch is already completed');
       }
       const agent = await repositories.agents.getById(resultInput.agentId);
@@ -3197,6 +3248,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const workspaceRunId = resultInput.workspaceRun
         ? resultInput.workspaceRun.id ?? ids.nextId()
         : undefined;
+      const nestReplyInThread = shouldNestDispatchReplyInThread(originMessage);
       const message = await repositories.messages.append({
         id: ids.nextId(),
         teamId: completed.dispatch.teamId,
@@ -3208,10 +3260,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         createdAt: now,
         meta: {
           dispatchId: completed.dispatch.id,
-          replyScope: originMessage?.threadId && originMessage.threadId !== originMessage.id
+          replyScope: nestReplyInThread
             ? 'thread'
             : 'channel',
-          ...(originMessage?.threadId && originMessage.threadId !== originMessage.id
+          ...(nestReplyInThread && originMessage?.threadId
             ? { parentMessageId: originMessage.threadId }
             : {}),
           ...(reportedArtifactIds.length > 0 ? { artifactIds: reportedArtifactIds } : {}),
@@ -3296,13 +3348,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ...(chatArtifacts.length > 0 ? { artifacts: chatArtifacts } : {}),
         ...(workspaceRun ? { workspaceRun } : {}),
       };
+      const completedTask = await markLinkedTaskDone(repositories, originMessage, now);
       await repositories.agents.updateStatus({
         agentId: resultInput.agentId,
         status: 'online',
         lastSeenAt: now,
       });
 
-      return makeSuccess({ dispatch: toDispatchDto(completed.dispatch), message: messageWithArtifacts });
+      return makeSuccess({
+        dispatch: toDispatchDto(completed.dispatch),
+        message: messageWithArtifacts,
+        ...(completedTask ? { task: completedTask } : {}),
+      });
     },
 
     async receiveDispatchError(errorInput) {
@@ -4325,6 +4382,33 @@ async function enrichMessagesWithArtifacts(
   return enriched;
 }
 
+async function resolveExplicitThreadRootId(
+  repositories: ServerNextRepositories,
+  message: MessageRecord,
+): Promise<ID | null> {
+  if (!message.threadId || message.threadId === message.id) {
+    return null;
+  }
+  if (message.meta?.replyScope === 'thread') {
+    return message.threadId;
+  }
+  const root = await repositories.messages.getById(message.threadId);
+  const isTopLevelAgentReply = message.senderKind === 'agent'
+    && (
+      (root !== null && root.threadId === root.id)
+      || (root === null && message.meta?.replyScope === 'channel')
+    );
+  return isTopLevelAgentReply ? null : message.threadId;
+}
+
+function uniqueMessagesById(messages: MessageRecord[]): MessageRecord[] {
+  const byId = new Map<ID, MessageRecord>();
+  for (const message of messages) {
+    byId.set(message.id, message);
+  }
+  return [...byId.values()];
+}
+
 function toDmChannelDto(channel: ChannelDto, agent: AgentDto): DmChannelDto {
   return {
     channel,
@@ -4367,6 +4451,36 @@ function routeMessageForChannel(input: {
     teamId: input.teamId,
     channelId: input.channel.id,
   });
+}
+
+function shouldAutoCreateTaskThread(input: {
+  body: string;
+  channel: ChannelRecord;
+  route: RouteResult;
+  threadId?: string;
+}): boolean {
+  if (input.threadId || input.channel.kind === 'direct' || input.route.kind !== 'dispatch') {
+    return false;
+  }
+  const body = input.body.trim();
+  if (!body) {
+    return false;
+  }
+  const plain = body.replace(/^@\S+\s*/, '').trim().toLowerCase();
+  if (/^(hello|hi|hey|你好|在吗|你是谁|你能干嘛|你有哪些\s*skills?\??|有哪些\s*skills?\??|什么样的消息|哪些消息)/i.test(plain)) {
+    return false;
+  }
+  return /(?:总结|整理|改写|撰写|写(?:一|个|篇|份)?|生成|制作|调用|画|分析一下|调研|搜索|查找|实现|修复|测试|review|code\s*review|top\s*\d+|top\d+|新闻|报告|文章|封面|配图|图片|代码|上线|部署)/i.test(plain);
+}
+
+function shouldNestDispatchReplyInThread(originMessage: MessageRecord | null | undefined): boolean {
+  if (!originMessage?.threadId) {
+    return false;
+  }
+  if (originMessage.threadId !== originMessage.id) {
+    return true;
+  }
+  return typeof originMessage.meta?.taskId === 'string';
 }
 
 function toRouteReason(route: RouteResult): RouteReason | undefined {
@@ -4703,6 +4817,32 @@ function safeEqual(left: string, right: string): boolean {
 
 function isPendingDispatchStatus(status: DispatchDto['status']): boolean {
   return status === 'queued' || status === 'sent' || status === 'accepted' || status === 'running';
+}
+
+function isCompletableDispatchStatus(status: DispatchDto['status']): boolean {
+  return isPendingDispatchStatus(status) || status === 'timed_out';
+}
+
+async function markLinkedTaskDone(
+  repositories: ServerNextRepositories,
+  message: MessageRecord | null,
+  updatedAt: number,
+): Promise<TaskDto | null> {
+  const taskId = typeof message?.meta?.taskId === 'string' ? message.meta.taskId : null;
+  if (!taskId) {
+    return null;
+  }
+  const task = await repositories.tasks.getById(taskId);
+  if (!task || task.status === 'done' || task.status === 'closed') {
+    return null;
+  }
+  return await repositories.tasks.update({
+    taskId,
+    changes: {
+      status: 'done',
+      updatedAt,
+    },
+  });
 }
 
 async function allHumanMembersBelongToTeam(

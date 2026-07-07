@@ -188,6 +188,7 @@ export default function ChatPage() {
   const dms = useAgentBeanStore((s) => s.dms);
   const applyDmsSnapshot = useAgentBeanStore((s) => s.applyDmsSnapshot);
   const applyChannelHistory = useAgentBeanStore((s) => s.applyChannelHistory);
+  const upsertMessages = useAgentBeanStore((s) => s.upsertMessages);
   const appendMessage = useAgentBeanStore((s) => s.appendMessage);
   const upsertActivityMessages = useAgentBeanStore((s) => s.upsertActivityMessages);
   const applyDispatchStatus = useAgentBeanStore((s) => s.applyDispatchStatus);
@@ -869,7 +870,9 @@ export default function ChatPage() {
       return;
     }
     setTab('chat');
-    setThreadRootId(null);
+    if (!parseThreadMessageId(threadParam, activeChannel)) {
+      setThreadRootId(null);
+    }
     setThreadInput('');
     setThreadAttachments((prev) => {
       prev.forEach(revokeComposerPreview);
@@ -881,7 +884,7 @@ export default function ChatPage() {
       document.getElementById(`message-${targetMessageId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [activeChannel, messageParam, visibleMessages.length]);
+  }, [activeChannel, messageParam, threadParam, visibleMessages.length]);
   const conversationFiles = messages
     .flatMap((msg) => (msg.artifacts ?? []).map((artifact) => ({
       artifact,
@@ -1239,12 +1242,27 @@ export default function ChatPage() {
       {/* Right panel */}
       <div className="flex flex-1 flex-col min-w-0">
         {sidebarView === 'search' ? (
-          <SearchView onClose={() => setSidebarView('channels')} onJump={(chId, messageId) => {
+          <SearchView onClose={() => setSidebarView('channels')} onJump={async (chId, message) => {
             setActiveChannel(chId);
             setSidebarView('channels');
             const dm = dms.find((item) => item.id === chId);
             const path = dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`;
-            router.push(messageId ? `${path}?message=${encodeURIComponent(`${chId}:${messageId}`)}` : path);
+            let targetMessageId = message?.id;
+            let threadRootId: string | null = null;
+            if (message) {
+              upsertMessages([message]);
+              const context = await messageReactionEvents().context(message.id).catch(() => null);
+              if (context?.ok) {
+                if (context.messages) upsertMessages(context.messages);
+                targetMessageId = context.targetMessageId ?? targetMessageId;
+                threadRootId = context.threadRootId ?? null;
+              }
+            }
+            const query = new URLSearchParams();
+            if (threadRootId) query.set('thread', `${chId}:${threadRootId}`);
+            if (targetMessageId) query.set('message', `${chId}:${targetMessageId}`);
+            const qs = query.toString();
+            router.push(`${path}${qs ? `?${qs}` : ''}`);
           }} humanProfiles={humanProfiles} channelScope={searchChannelScope} onClearChannelScope={() => setSearchChannelScope(null)} />
         ) : sidebarView === 'inbox' ? (
           <ActivityView onJump={(chId) => {
@@ -1536,6 +1554,7 @@ export default function ChatPage() {
           channelMembers={channelMembers}
           mentionMembers={mentionMembers}
           chatTaskMenuTarget={chatTaskMenuTarget}
+          selectedMessageId={selectedMessageId}
           onInput={setThreadInput}
           onSend={sendThreadMessage}
           onUpload={(files) => uploadFiles(files, 'thread')}
@@ -2318,6 +2337,7 @@ function ThreadPanel({
   channelMembers,
   mentionMembers,
   chatTaskMenuTarget,
+  selectedMessageId,
   onInput,
   onSend,
   onUpload,
@@ -2358,6 +2378,7 @@ function ThreadPanel({
   channelMembers: ChannelMemberEntry[];
   mentionMembers: MentionProfileMember[];
   chatTaskMenuTarget: ChatTaskMenuTarget;
+  selectedMessageId: string | null;
   onInput: (value: string) => void;
   onSend: () => void;
   onUpload: (files: FileList | File[]) => void;
@@ -2396,6 +2417,7 @@ function ThreadPanel({
         taskNumber={task ? taskNumbers.get(task.id) : undefined}
         taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
         taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'thread' && chatTaskMenuTarget.messageId === msg.id : false}
+        selected={selectedMessageId === msg.id}
         saved={savedIds.has(msg.id)}
         readDone={doneIds.has(msg.id)}
         reacted={reactionEmojis.has(msg.id)}
@@ -2828,6 +2850,9 @@ function ChatBubble({
   const time = formatTime(msg.createdAt);
   const isOwner = isHuman && currentUser?.id === msg.senderId;
   const taskId = typeof meta.taskId === 'string' ? meta.taskId : null;
+  const hasThreadSurface = showReplyCount && (replyCount > 0 || Boolean(taskId));
+  const showInlineTaskBadge = Boolean(taskId) && !hasThreadSurface;
+  const showInlineReplyBadge = showReplyCount && replyCount > 0 && !hasThreadSurface;
   const canOpenProfile = Boolean(msg.senderId && (msg.senderKind === 'human' || msg.senderKind === 'agent'));
   const messageMentionMembers = mergeMentionProfileMembers(channelMembers, mentionMembers);
   const profileTarget = msg.senderKind === 'agent'
@@ -2909,7 +2934,9 @@ function ChatBubble({
       className={`group relative flex gap-2 rounded-md border px-2 py-2 transition-colors ${
         selected
           ? 'border-amber-400 bg-amber-50/70 shadow-[inset_3px_0_0_#f59e0b]'
-          : 'border-transparent hover:border-neutral-900 hover:bg-white'
+          : hasThreadSurface
+            ? 'border-neutral-200 bg-white shadow-sm hover:border-neutral-900'
+            : 'border-transparent hover:border-neutral-900 hover:bg-white'
       }`}
     >
       <div className="pointer-events-none absolute right-2 top-1 z-10 flex items-center gap-0.5 border border-neutral-300 bg-white opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
@@ -2991,8 +3018,8 @@ function ChatBubble({
             ))}
           </div>
         )}
-        {(taskId || (showReplyCount && replyCount > 0) || reacted || saved) && (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {hasThreadSurface && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 border border-sky-100 bg-sky-50/70 px-2 py-1.5">
             {taskId && (
               <ChatTaskBadge
                 task={task}
@@ -3004,7 +3031,27 @@ function ChatBubble({
               />
             )}
             {showReplyCount && replyCount > 0 && (
-              <button onClick={onOpenThread} className="inline-flex h-5 items-center gap-1 border border-sky-200 bg-sky-50 px-1.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100" title="打开讨论串">
+              <button onClick={onOpenThread} data-thread-id={msg.id} className="inline-flex h-5 items-center gap-1 border border-sky-200 bg-sky-50 px-1.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100" title="打开讨论串">
+                <MessageSquare size={11} />
+                <span>{replyCount} 条回复</span>
+              </button>
+            )}
+          </div>
+        )}
+        {(showInlineTaskBadge || showInlineReplyBadge || reacted || saved) && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {showInlineTaskBadge && (
+              <ChatTaskBadge
+                task={task}
+                taskNumber={taskNumber}
+                assigneeName={taskAssigneeName ?? (agent?.name ?? speaker)}
+                open={taskMenuOpen}
+                onOpen={onTaskMenu}
+                onStatus={onTaskStatus}
+              />
+            )}
+            {showInlineReplyBadge && (
+              <button onClick={onOpenThread} data-thread-id={msg.id} className="inline-flex h-5 items-center gap-1 border border-sky-200 bg-sky-50 px-1.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100" title="打开讨论串">
                 <MessageSquare size={11} />
                 <span>{replyCount} 条回复</span>
               </button>
@@ -3890,7 +3937,7 @@ function SearchView({
   onClearChannelScope,
 }: {
   onClose: () => void;
-  onJump: (channelId: string, messageId?: string) => void;
+  onJump: (channelId: string, message?: ChatMessage) => void;
   humanProfiles: HumanProfile[];
   channelScope?: SearchChannelScope | null;
   onClearChannelScope?: () => void;
@@ -4022,7 +4069,7 @@ function SearchView({
           <div>
             <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">消息</div>
             {messageMatches.map((msg) => (
-              <button key={msg.id} onClick={() => onJump(msg.channelId, msg.id)} className="mb-2 w-full rounded-lg border border-neutral-100 p-3 text-left hover:bg-neutral-50">
+              <button key={msg.id} onClick={() => onJump(msg.channelId, msg)} className="mb-2 w-full rounded-lg border border-neutral-100 p-3 text-left hover:bg-neutral-50">
                 <div className="flex items-center gap-2 text-xs text-neutral-400">
                   <span>{conversationLabel(msg.channelId, channels, dms, agents)}</span>
                   <span>· {speakerName(msg, agents, { currentUser, humanProfiles })}</span>
