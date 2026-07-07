@@ -9,7 +9,6 @@ import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { matchingWorkspaceRunDetail, workspaceRunHistoryItems, type WorkspaceRunDetailBundle } from '@/lib/task-workspace-run-detail';
-import { taskMessageSummary } from '@/lib/task-message-summary';
 import { taskRootIdFromMessageMeta, taskStatusEventForTask, taskStatusEventSummary, type TaskStatusEventSummary } from '@/lib/task-status-event';
 import { shouldHideTaskSystemMessage } from '@/lib/task-system-messages';
 import { ownedAgentsForMember } from '@/lib/agent-list';
@@ -3508,7 +3507,6 @@ function ChatBubble({
   const canEdit = isOwner && !taskId && !isDeleted && !hasPendingDispatch;
   const canDelete = isOwner && !taskId && !isDeleted && !hasPendingDispatch;
   const canOpenProfile = Boolean(msg.senderId && (msg.senderKind === 'human' || msg.senderKind === 'agent'));
-  const showTaskInlineCard = Boolean(taskId && task);
   const messageMentionMembers = mergeMentionProfileMembers(channelMembers, mentionMembers);
   const profileTarget = msg.senderKind === 'agent'
     ? { kind: 'agent' as const, id: msg.senderId ?? '' }
@@ -3720,19 +3718,6 @@ function ChatBubble({
         ) : (
           <MarkdownMessage body={displayMessageBody(msg)} mentionMembers={messageMentionMembers} onOpenMention={onOpenProfile} />
         )}
-        {!isDeleted && !editing && showTaskInlineCard && task && (
-          <ChatTaskCard
-            task={task}
-            taskNumber={taskNumber}
-            assigneeName={taskAssigneeName ?? (agent?.name ?? speaker)}
-            fallbackBody={displayMessageBody(msg)}
-            open={taskMenuOpen}
-            onOpen={onTaskMenu}
-            onOpenDetail={onOpenTaskDetail}
-            onOpenThread={onOpenThread}
-            onStatus={onTaskStatus}
-          />
-        )}
         {!isDeleted && !editing && renderDispatchStatus()}
         {!isDeleted && !editing && msg.artifacts && msg.artifacts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">
@@ -3800,107 +3785,6 @@ function ChatBubble({
             )}
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-function ChatTaskCard({
-  task,
-  taskNumber,
-  assigneeName,
-  fallbackBody,
-  open,
-  onOpen,
-  onOpenDetail,
-  onOpenThread,
-  onStatus,
-}: {
-  task: TaskItem;
-  taskNumber?: number;
-  assigneeName: string;
-  fallbackBody: string;
-  open?: boolean;
-  onOpen?: (open: boolean) => void;
-  onOpenDetail: () => void;
-  onOpenThread: () => void;
-  onStatus?: (status: TaskStatus) => void;
-}) {
-  const summary = taskMessageSummary({ task, taskNumber, assigneeName, fallbackBody });
-  const column = TASK_COLUMNS.find((item) => item.id === summary.status) ?? TASK_COLUMNS[0]!;
-  const canChange = Boolean(onStatus);
-  return (
-    <div className="mt-3 rounded-md border border-amber-200 bg-amber-50/70 px-3 py-2.5" data-smoke="chat-task-card">
-      <div className="flex items-start justify-between gap-3">
-        <button
-          type="button"
-          onClick={onOpenDetail}
-          className="min-w-0 flex-1 text-left"
-          title="查看任务详情"
-        >
-          <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-medium text-amber-700">
-            <ListTodo size={12} />
-            <span>任务 {summary.label}</span>
-            <span className="text-amber-500">@{summary.assigneeName}</span>
-            {summary.updatedAt && <span className="text-amber-500">更新于 {formatTime(summary.updatedAt)}</span>}
-          </div>
-          <div className="mt-1 truncate text-sm font-semibold text-neutral-900">{summary.title}</div>
-          {summary.description && (
-            <div className="mt-1 max-h-10 overflow-hidden text-xs leading-5 text-neutral-600">{summary.description}</div>
-          )}
-        </button>
-        <div className="relative shrink-0">
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              if (canChange) onOpen?.(!open);
-            }}
-            disabled={!canChange}
-            className={`inline-flex h-7 items-center gap-1 rounded-full border px-2 text-[11px] font-semibold leading-none transition-colors ${column.badge} hover:brightness-105 disabled:cursor-default`}
-            title={canChange ? '更改任务状态' : column.label}
-          >
-            {taskBadgeIcon(column.id)}
-            <span>{column.menuLabel}</span>
-            {canChange && <ChevronDown size={10} strokeWidth={2.5} />}
-          </button>
-          {open && canChange && (
-            <div className={`absolute right-0 top-8 ${TASK_STATUS_MENU_PANEL_CLASS}`} style={TASK_STATUS_MENU_PANEL_STYLE}>
-              {TASK_COLUMNS.map((status) => (
-                <button
-                  key={status.id}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onStatus?.(status.id);
-                  }}
-                  className={TASK_STATUS_MENU_ITEM_CLASS}
-                >
-                  <span className={`${TASK_STATUS_MENU_DOT_CLASS} ${status.dot}`} />
-                  <span className={TASK_STATUS_MENU_LABEL_CLASS}>{status.menuLabel}</span>
-                  {task.status === status.id && <Check size={12} className="text-neutral-500" />}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={onOpenDetail}
-          className="inline-flex h-6 items-center gap-1 rounded-md border border-amber-200 bg-white px-2 text-[11px] font-medium text-amber-700 hover:bg-amber-100"
-        >
-          <ExternalLink size={11} />
-          <span>详情</span>
-        </button>
-        <button
-          type="button"
-          onClick={onOpenThread}
-          className="inline-flex h-6 items-center gap-1 rounded-md border border-neutral-200 bg-white px-2 text-[11px] font-medium text-neutral-600 hover:bg-neutral-50"
-        >
-          <MessageSquare size={11} />
-          <span>后续变更</span>
-        </button>
       </div>
     </div>
   );
