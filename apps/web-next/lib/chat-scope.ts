@@ -143,12 +143,15 @@ export function isTopLevelAgentReply(
  *  - 同 id 消息：incoming 内容优先，dispatchStatus/dispatchId 缺省时回落到 current；
  *  - current 有但 incoming 没有的 pending dispatch 消息 → 暂时保留，避免切走再回来时
  *    limited history 把仍在处理的本地消息清掉；终态消息仍由 history 决定去留。
+ *  - message:context 刚拉回来的搜索跳转上下文带客户端保护标记；limited history 不应覆盖掉它，
+ *    否则旧 thread reply 会在滚动定位前消失。
  */
 export interface DispatchStateMessage {
   id: string;
   dispatchStatus?: string;
   dispatchId?: string;
   createdAt?: number;
+  meta?: Record<string, unknown>;
 }
 
 export function mergeChannelHistory<T extends DispatchStateMessage>(
@@ -173,8 +176,10 @@ export function mergeChannelHistory<T extends DispatchStateMessage>(
     .at(0);
   const pendingOnlyInCurrent = current.filter((message) => (
     !incomingIds.has(message.id)
-    && isPendingDispatchStatus(message.dispatchStatus)
-    && isWithinHistoryWindow(message, oldestIncomingCreatedAt)
+    && (
+      isContextLoadedMessage(message)
+      || (isPendingDispatchStatus(message.dispatchStatus) && isWithinHistoryWindow(message, oldestIncomingCreatedAt))
+    )
   ));
   if (pendingOnlyInCurrent.length === 0) return merged;
   const next = [...merged, ...pendingOnlyInCurrent];
@@ -186,6 +191,10 @@ export function mergeChannelHistory<T extends DispatchStateMessage>(
 
 function isPendingDispatchStatus(status: string | undefined): boolean {
   return status === 'queued' || status === 'sent' || status === 'accepted' || status === 'running';
+}
+
+function isContextLoadedMessage(message: DispatchStateMessage): boolean {
+  return message.meta?.__contextLoaded === true;
 }
 
 function isWithinHistoryWindow(message: DispatchStateMessage, oldestIncomingCreatedAt: number | undefined): boolean {

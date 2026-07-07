@@ -42,6 +42,7 @@ import {
   TASK_STATUS_MENU_PANEL_STYLE,
   type TaskStatus,
 } from '@/lib/task-status';
+import { taskRootIdFromMessageMeta } from '@/lib/task-status-event';
 
 type TaskViewMode = 'board' | 'list';
 
@@ -1387,8 +1388,7 @@ function parseMeta(msg: ChatMessage): Record<string, unknown> {
 }
 
 function metaTaskId(msg: ChatMessage): string | null {
-  const meta = parseMeta(msg);
-  return typeof meta.taskId === 'string' ? meta.taskId : null;
+  return taskRootIdFromMessageMeta(parseMeta(msg));
 }
 
 function parentMessageId(msg: ChatMessage): string | null {

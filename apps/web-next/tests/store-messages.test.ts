@@ -16,10 +16,10 @@ describe('mergeMessagesByChannel', () => {
     expect(result.c2.map((m) => m.id)).toEqual(['m3']);
   });
 
-  test('已存在 id 不覆盖(保护 active channel 滚动状态)', () => {
+  test('已存在 id 合并更新字段', () => {
     const existing = { c1: [{ ...msg('m1', 'c1'), body: 'old' }] };
     const result = mergeMessagesByChannel(existing, [{ ...msg('m1', 'c1'), body: 'new' }]);
-    expect(result.c1[0].body).toBe('old');
+    expect(result.c1[0].body).toBe('new');
   });
 
   test('同一批 msgs 内部去重', () => {

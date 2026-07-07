@@ -40,6 +40,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const tasks = new Map<string, TaskRecord>();
   const reactions = new Map<string, { id: string; messageId: string; userId: string; emoji: string; createdAt: number }>();
   const savedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
+  const pinnedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
 
   return {
     users: {
@@ -732,6 +733,24 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         messages.set(input.messageId, updated);
         return updated;
       },
+      async edit(input) {
+        const message = messages.get(input.messageId);
+        if (!message) {
+          return null;
+        }
+        const updated = { ...message, body: input.body, meta: input.meta };
+        messages.set(input.messageId, updated);
+        return updated;
+      },
+      async softDelete(input) {
+        const message = messages.get(input.messageId);
+        if (!message) {
+          return null;
+        }
+        const updated = { ...message, body: input.body, meta: input.meta };
+        messages.set(input.messageId, updated);
+        return updated;
+      },
       async setTaskIdIfAbsent(input) {
         const message = messages.get(input.messageId);
         if (!message) {
@@ -833,7 +852,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         if (!dispatch) {
           return null;
         }
-        if (!isPendingDispatchStatus(dispatch.status)) {
+        if (!isCompletableDispatchStatus(dispatch.status)) {
           return { dispatch, changed: false };
         }
         const updated = {
@@ -1028,6 +1047,30 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async isSaved(messageId, userId) {
         return savedMessages.has(`${messageId}:${userId}`);
+      },
+    },
+    pinnedMessages: {
+      async toggle(input) {
+        if (input.on) {
+          pinnedMessages.set(input.messageId, {
+            id: input.id,
+            messageId: input.messageId,
+            userId: input.userId,
+            teamId: input.teamId,
+            channelId: input.channelId,
+            createdAt: input.createdAt,
+          });
+        } else {
+          pinnedMessages.delete(input.messageId);
+        }
+      },
+      async listByChannel(input) {
+        return Array.from(pinnedMessages.values())
+          .filter((s) => s.teamId === input.teamId && s.channelId === input.channelId)
+          .sort((a, b) => b.createdAt - a.createdAt);
+      },
+      async isPinned(messageId) {
+        return pinnedMessages.has(messageId);
       },
     },
   };

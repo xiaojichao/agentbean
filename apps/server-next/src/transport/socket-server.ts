@@ -197,6 +197,24 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         }
         await emitChannelMessageSubscribers(webSubscribers, app, teamId, result);
       },
+      async afterMessagePin(payload, result) {
+        if (!isSuccessAck(result)) {
+          return;
+        }
+        const teamId = payloadTeamId(payload);
+        const channelId = resultPinnedChannelId(result);
+        const messageId = resultPinnedMessageId(result);
+        const pinned = payloadBoolean(payload, 'on');
+        if (!teamId || !channelId || !messageId || pinned === null) {
+          return;
+        }
+        await emitPinnedMessageUpdatedSubscribers(webSubscribers, app, {
+          teamId,
+          channelId,
+          messageId,
+          pinned,
+        });
+      },
       afterDeviceInviteComplete(_payload, result) {
         deliverDeviceInviteCredentials(result);
       },
@@ -261,6 +279,10 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         const task = (result as { task?: unknown }).task;
         if (task) {
           emitTaskUpdated(webSubscribers, task);
+          const teamId = taskTeamId(task);
+          if (teamId) {
+            await emitChannelMessageSubscribers(webSubscribers, app, teamId, result);
+          }
           await refreshTaskSubscribers(webSubscribers, app, task);
         }
       },
@@ -604,6 +626,27 @@ async function emitChannelMessageSubscribers(
   }
 }
 
+async function emitPinnedMessageUpdatedSubscribers(
+  subscribers: Set<WebSocketSubscription>,
+  app: ServerNextUseCases,
+  update: { teamId: string; channelId: string; messageId: string; pinned: boolean },
+): Promise<void> {
+  for (const subscriber of subscribers) {
+    if (subscriber.channels?.teamId !== update.teamId) {
+      continue;
+    }
+    const channels = await app.listChannels(subscriber.channels);
+    if (channels.ok && channels.channels.some((channel) => channel.id === update.channelId)) {
+      subscriber.socket.emit?.(WEB_EVENTS.message.pinnedUpdated, update);
+      continue;
+    }
+    const dms = await app.listDirectMessages(subscriber.channels);
+    if (dms.ok && dms.dms.some((dm) => dm.channel.id === update.channelId)) {
+      subscriber.socket.emit?.(WEB_EVENTS.message.pinnedUpdated, update);
+    }
+  }
+}
+
 async function asChannelSubscription(
   payload: unknown,
   authenticatedUser?: () => Promise<AuthenticatedUserIdentity>,
@@ -828,6 +871,14 @@ function payloadTeamId(payload: unknown): string | null {
   return typeof teamId === 'string' ? teamId : null;
 }
 
+function payloadBoolean(payload: unknown, key: string): boolean | null {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const value = (payload as Record<string, unknown>)[key];
+  return typeof value === 'boolean' ? value : null;
+}
+
 function payloadTargetTeamId(payload: unknown): string | null {
   if (!payload || typeof payload !== 'object') {
     return null;
@@ -998,6 +1049,22 @@ function resultMessage(result: unknown): { channelId: string; teamId?: string } 
 function resultMessageTeamId(result: unknown): string | null {
   const message = resultMessage(result);
   return typeof message?.teamId === 'string' ? message.teamId : null;
+}
+
+function resultPinnedMessageId(result: unknown): string | null {
+  if (!result || typeof result !== 'object') {
+    return null;
+  }
+  const messageId = (result as { messageId?: unknown }).messageId;
+  return typeof messageId === 'string' ? messageId : null;
+}
+
+function resultPinnedChannelId(result: unknown): string | null {
+  if (!result || typeof result !== 'object') {
+    return null;
+  }
+  const channelId = (result as { channelId?: unknown }).channelId;
+  return typeof channelId === 'string' ? channelId : null;
 }
 
 function taskTeamId(task: unknown): string | null {

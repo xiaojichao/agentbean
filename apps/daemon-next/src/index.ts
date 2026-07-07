@@ -3,7 +3,15 @@ import { join } from 'node:path';
 import { AGENT_EVENTS, type AgentCategory, type ArtifactPathKind, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
-import { prepareWorkspaceRun, workspaceRunEnv, persistWorkspaceRunManifest, persistWorkspaceRunResponse } from './workspace-run.js';
+import {
+  discoverRecoverableWorkspaceRuns,
+  markWorkspaceRunManifestReported,
+  markWorkspaceRunReported,
+  prepareWorkspaceRun,
+  workspaceRunEnv,
+  persistWorkspaceRunManifest,
+  persistWorkspaceRunResponse,
+} from './workspace-run.js';
 import { collectArtifacts } from './artifact-collector.js';
 import { uploadArtifacts } from './artifact-uploader.js';
 import { selectNativeDirectory } from './directory-picker.js';
@@ -15,8 +23,16 @@ export { createCommandExecutor } from './executor.js';
 export type { CommandExecutorOptions } from './executor.js';
 export { downloadAttachments } from './attachments.js';
 export type { DispatchAttachment, DownloadedAttachment } from './attachments.js';
-export { prepareWorkspaceRun, workspaceRunEnv, persistWorkspaceRunManifest, persistWorkspaceRunResponse } from './workspace-run.js';
-export type { WorkspaceRunDir, WorkspaceRunManifest } from './workspace-run.js';
+export {
+  discoverRecoverableWorkspaceRuns,
+  markWorkspaceRunManifestReported,
+  markWorkspaceRunReported,
+  prepareWorkspaceRun,
+  workspaceRunEnv,
+  persistWorkspaceRunManifest,
+  persistWorkspaceRunResponse,
+} from './workspace-run.js';
+export type { RecoverableWorkspaceRun, WorkspaceRunDir, WorkspaceRunManifest } from './workspace-run.js';
 export { collectArtifacts } from './artifact-collector.js';
 export type { CollectedArtifact } from './artifact-collector.js';
 export { uploadArtifacts } from './artifact-uploader.js';
@@ -174,6 +190,19 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       const outbox: DispatchOutbox = createDispatchOutbox(socket, {
         onWarn: (message) => console.warn(message),
       });
+      const knownRecoveryCwds = new Set<string>();
+      const rememberRecoveryCwds = (cwds: Array<string | undefined>) => {
+        for (const cwd of cwds) {
+          if (typeof cwd === 'string' && cwd.length > 0) {
+            knownRecoveryCwds.add(cwd);
+          }
+        }
+      };
+      const scheduleRecoverPersistedWorkspaceRuns = (cwds: Array<string | undefined>) => {
+        rememberRecoveryCwds(cwds);
+        void recoverPersistedWorkspaceRuns(outbox, Array.from(knownRecoveryCwds));
+      };
+      rememberRecoveryCwds(latestSnapshot.agents.map((agent) => agent.cwd));
       socket.onReconnect?.(async () => {
         try {
           const announcement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents, { onDeviceRemoved: input.onDeviceRemoved });
@@ -182,6 +211,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         } catch (error) {
           console.warn(`daemon reconnect announce failed (non-blocking): ${error instanceof Error ? error.message : String(error)}`);
         }
+        scheduleRecoverPersistedWorkspaceRuns(latestSnapshot.agents.map((agent) => agent.cwd));
         await outbox.flush();
       });
 
@@ -192,10 +222,12 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         }
         const snapshot = scan ? await scan() : latestSnapshot;
         latestSnapshot = snapshot;
+        scheduleRecoverPersistedWorkspaceRuns(snapshot.agents.map((agent) => agent.cwd));
         await reportDeviceSnapshot(socket, device.teamId, currentDeviceId, snapshot.runtimes, snapshot.agents);
         // 收到 customAgents 列表后扫描 skills 并上报（best-effort，失败仅 warn）
         if (request.customAgents && request.customAgents.length > 0) {
           await reportCustomAgentSkills(socket, { teamId: device.teamId, deviceId: currentDeviceId, customAgents: request.customAgents }, home);
+          scheduleRecoverPersistedWorkspaceRuns(request.customAgents.map((agent) => agent.cwd));
         }
         await input.onScanChanged?.(snapshot);
       });
@@ -294,29 +326,41 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               productArtifactIds = uploaded.map((u) => u.id);
             }
           }
+          const artifacts = result.artifacts ?? [];
+          const artifactIds = [...(result.artifactIds ?? []), ...productArtifactIds];
+          let reportedManifestPath: string | undefined;
           if (workspace && result.workspaceRun?.startedAt !== undefined) {
             try {
               persistWorkspaceRunResponse(workspace, result.body);
-              persistWorkspaceRunManifest(workspace, {
+              const manifest = {
                 runId: workspace.runId,
-                status: result.workspaceRun.status,
+                agentId: request.agentId,
+                channelId: request.channelId,
+                status: result.workspaceRun.status ?? 'succeeded',
+                cwd: result.workspaceRun.cwd ?? workspace.cwd,
+                command: result.workspaceRun.command,
+                logExcerpt: result.workspaceRun.logExcerpt,
                 startedAt: result.workspaceRun.startedAt,
                 completedAt: result.workspaceRun.completedAt,
                 exitCode: result.workspaceRun.exitCode,
+                artifactIds,
+                artifacts,
                 files: collectedProductArtifacts.map((c) => ({
                   relativePath: c.relativePath,
                   sha256: c.sha256,
                   sizeBytes: c.sizeBytes,
                   filename: c.filename,
                 })),
+              };
+              persistWorkspaceRunManifest(workspace, {
+                ...manifest,
               });
+              reportedManifestPath = workspace.manifestPath;
             } catch {
               // manifest persistence is best-effort; never block the dispatch result
             }
           }
 
-          const artifacts = result.artifacts ?? [];
-          const artifactIds = [...(result.artifactIds ?? []), ...productArtifactIds];
           outbox.sendOrEnqueue(AGENT_EVENTS.dispatch.result, {
             dispatchId: request.id,
             agentId: request.agentId,
@@ -324,6 +368,11 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             ...(artifactIds.length > 0 ? { artifactIds } : {}),
             ...(artifacts.length > 0 ? { artifacts } : {}),
             ...(result.workspaceRun ? { workspaceRun: result.workspaceRun } : {}),
+          }, {
+            isDeliveredAck: isDispatchResultDeliveredAck,
+            ...(reportedManifestPath
+              ? { onDelivered: () => markWorkspaceRunManifestReported(reportedManifestPath, Date.now()) }
+              : {}),
           });
         } catch (error) {
           if (cancelledDispatchIds.delete(request.id)) {
@@ -350,10 +399,36 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         });
         rescan.start();
       }
+      scheduleRecoverPersistedWorkspaceRuns([]);
     },
     rescanNow: () => rescan?.tickNow() ?? Promise.resolve(),
     stop: () => rescan?.stop(),
   };
+
+  async function recoverPersistedWorkspaceRuns(
+    outbox: DispatchOutbox,
+    cwds: string[],
+  ): Promise<void> {
+    const runs = discoverRecoverableWorkspaceRuns(cwds);
+    for (const run of runs) {
+      try {
+        const payload = {
+          dispatchId: run.runId,
+          agentId: run.agentId,
+          body: run.body,
+          ...(run.artifactIds && run.artifactIds.length > 0 ? { artifactIds: run.artifactIds } : {}),
+          ...(run.artifacts && run.artifacts.length > 0 ? { artifacts: run.artifacts } : {}),
+          workspaceRun: run.workspaceRun,
+        };
+        outbox.sendOrEnqueue(AGENT_EVENTS.dispatch.result, payload, {
+          isDeliveredAck: isDispatchResultDeliveredAck,
+          onDelivered: () => markWorkspaceRunReported(run, Date.now()),
+        });
+      } catch (error) {
+        console.warn(`daemon recover workspace run ${run.runId} failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
 
   async function applyCredentialsUpdate(credentials: DaemonDeviceCredentialsUpdate | undefined): Promise<void> {
     if (!credentials?.token) {
@@ -373,6 +448,14 @@ function normalizeDispatchResult(result: string | DaemonDispatchResult): DaemonD
     return { body: result };
   }
   return result;
+}
+
+function isDispatchResultDeliveredAck(ack: unknown): boolean {
+  if (!ack || typeof ack !== 'object') {
+    return false;
+  }
+  const fields = ack as { ok?: unknown; error?: unknown };
+  return fields.ok === true || (fields.ok === false && fields.error === 'CONFLICT');
 }
 
 async function announceDeviceSnapshot(

@@ -21,6 +21,7 @@ describe('server-next first-slice migrations', () => {
       readFileSync(migrationPath('team/0004_reactions_saved.sql'), 'utf8'),
       readFileSync(migrationPath('team/0005_workspace_run_command.sql'), 'utf8'),
       readFileSync(migrationPath('team/0006_workspace_run_log_excerpt.sql'), 'utf8'),
+      readFileSync(migrationPath('team/0009_pinned_messages.sql'), 'utf8'),
     ].join('\n');
 
     for (const tableName of [
@@ -46,6 +47,7 @@ describe('server-next first-slice migrations', () => {
       'tasks',
       'message_reactions',
       'saved_messages',
+      'pinned_messages',
     ]) {
       expect(teamSql).toContain(`CREATE TABLE ${tableName}`);
     }
@@ -317,6 +319,43 @@ describe('server-next first-slice use cases', () => {
     ]);
   });
 
+  test('getMessageContext includes the thread root even when the matched reply is deep', async () => {
+    let now = 300;
+    const replyIds = Array.from({ length: 55 }, (_, index) => `message-reply-${index + 1}`);
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'message-root',
+        ...replyIds,
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'thread root' });
+    for (let index = 0; index < replyIds.length; index += 1) {
+      now = 301 + index;
+      await app.sendMessage({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        threadId: 'message-root',
+        body: `thread reply ${index + 1}`,
+      });
+    }
+
+    const context = await app.getMessageContext({ userId: 'user-1', teamId: 'team-1', messageId: 'message-reply-55' });
+
+    expect(context).toMatchObject({
+      ok: true,
+      targetMessageId: 'message-reply-55',
+      threadRootId: 'message-root',
+    });
+    expect(context.messages.map((message) => message.id)).toContain('message-root');
+    expect(context.messages.at(-1)?.id).toBe('message-reply-55');
+  });
+
   test('searchMessages rejects scoped archived channels', async () => {
     const app = createInMemoryServerNext({
       now: () => 275,
@@ -491,6 +530,10 @@ describe('server-next first-slice use cases', () => {
       ok: false,
       error: 'NOT_FOUND',
     });
+    await expect(app.getMessageContext({ userId: 'user-1', teamId: 'team-1', messageId: 'message-dm' })).resolves.toMatchObject({
+      ok: false,
+      error: 'NOT_FOUND',
+    });
     await expect(app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'roadmap' })).resolves.toMatchObject({
       ok: true,
       messages: [],
@@ -520,6 +563,7 @@ describe('server-next first-slice use cases', () => {
         'channel-private',
         'task-public',
         'task-private',
+        'message-task-status',
         'task-global',
       ]),
       joinCodes: createIds(['code-1']),
@@ -577,6 +621,51 @@ describe('server-next first-slice use cases', () => {
     })).resolves.toMatchObject({
       ok: true,
       task: { id: 'task-public', status: 'in_progress', assigneeId: undefined },
+      message: {
+        id: 'message-task-status',
+        senderKind: 'system',
+        senderId: 'system',
+        body: '任务「public task」状态更新为进行中',
+        meta: {
+          kind: 'task-status-updated',
+          taskId: 'task-public',
+          taskTitle: 'public task',
+          previousStatus: 'todo',
+          status: 'in_progress',
+        },
+      },
+    });
+    await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
+      ok: true,
+      messages: [
+        {
+          id: 'message-task-status',
+          senderKind: 'system',
+          meta: {
+            kind: 'task-status-updated',
+            taskId: 'task-public',
+            previousStatus: 'todo',
+            status: 'in_progress',
+          },
+        },
+      ],
+    });
+    await expect(app.updateTask({
+      userId: 'user-2',
+      teamId: 'team-1',
+      taskId: 'task-public',
+      status: 'in_progress',
+    })).resolves.toMatchObject({
+      ok: true,
+      task: { id: 'task-public', status: 'in_progress' },
+    });
+    await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
+      ok: true,
+      messages: [
+        {
+          id: 'message-task-status',
+        },
+      ],
     });
     await expect(app.updateTask({
       userId: 'user-2',
@@ -852,7 +941,7 @@ describe('server-next first-slice use cases', () => {
         'join-1',
         'user-2', 'team-2', 'channel-2',
         'msg-1', 'dispatch-1',
-        'r1', 'r2', 'r3', 'r4', 's1', 's2',
+        'r1', 'r2', 'r3', 'r4', 's1', 's2', 'p1', 'p2', 's3', 'p3',
       ]),
       joinCodes: createIds(['code-join']),
     });
@@ -937,6 +1026,182 @@ describe('server-next first-slice use cases', () => {
     await expect(app.listSavedMessages({
       userId: 'user-1',
       teamId: 'team-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      messages: [],
+    });
+
+    // Pin: channel-visible pin is shared across members
+    await expect(app.pinMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: true, messageId: 'msg-1' });
+
+    await expect(app.listPinnedMessages({
+      userId: 'user-2',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      messages: [{ id: 'msg-1', body: 'Hello world' }],
+    });
+
+    // Pin: non-member cannot pin
+    await expect(app.pinMessage({
+      userId: 'user-1',
+      teamId: 'team-2',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    // Unpin
+    await expect(app.pinMessage({
+      userId: 'user-2',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: false,
+    })).resolves.toMatchObject({ ok: true });
+
+    await expect(app.listPinnedMessages({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      messages: [],
+    });
+
+    // Edit: only the original human author can edit an ordinary message
+    await expect(app.editMessage({
+      userId: 'user-2',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      body: 'Edited world',
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    await expect(app.editMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      body: '   ',
+    })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+
+    await expect(app.editMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      body: 'Edited world',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: {
+        id: 'msg-1',
+        body: 'Edited world',
+        meta: {
+          editedAt: 500,
+          editedBy: 'user-1',
+        },
+      },
+    });
+
+    await expect(app.searchMessages({
+      userId: 'user-1',
+      teamId: 'team-1',
+      query: 'Edited',
+    })).resolves.toMatchObject({
+      ok: true,
+      messages: [{ id: 'msg-1', body: 'Edited world' }],
+    });
+
+    await expect(app.saveMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: true });
+    await expect(app.pinMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: true });
+
+    // Delete: only the original human author can soft-delete an ordinary message
+    await expect(app.deleteMessage({
+      userId: 'user-2',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    await expect(app.deleteMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: {
+        id: 'msg-1',
+        body: '消息已删除',
+        meta: {
+          deletedAt: 500,
+          deletedBy: 'user-1',
+        },
+      },
+    });
+
+    await expect(app.listChannelMessages({
+      userId: 'user-2',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      messages: [{ id: 'msg-1', body: '消息已删除' }],
+    });
+
+    await expect(app.reactMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+    await expect(app.saveMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+    await expect(app.pinMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+      on: true,
+    })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+    await expect(app.convertMessageToTask({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'msg-1',
+    })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+    await expect(app.listSavedMessages({
+      userId: 'user-1',
+      teamId: 'team-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      messages: [],
+    });
+    await expect(app.listPinnedMessages({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      messages: [],
+    });
+
+    await expect(app.searchMessages({
+      userId: 'user-1',
+      teamId: 'team-1',
+      query: 'Hello',
     })).resolves.toMatchObject({
       ok: true,
       messages: [],
@@ -1829,6 +2094,12 @@ describe('server-next first-slice use cases', () => {
         meta: { taskId: 'task-1' },
       },
     });
+    await expect(app.editMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'message-1',
+      body: 'ordinary edit no longer applies',
+    })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
     await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
       ok: true,
       messages: [
@@ -1915,6 +2186,31 @@ describe('server-next first-slice use cases', () => {
         },
       ],
     });
+
+    const deleteAck = await app.deleteMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'message-1',
+    });
+    expect(deleteAck).toMatchObject({
+      ok: true,
+      message: {
+        id: 'message-1',
+        body: '消息已删除',
+      },
+    });
+    if (deleteAck.ok) {
+      expect(deleteAck.message).not.toHaveProperty('artifacts');
+    }
+
+    const listAck = await app.listChannelMessages({ channelId: 'channel-1', limit: 10 });
+    expect(listAck).toMatchObject({
+      ok: true,
+      messages: [{ id: 'message-1', body: '消息已删除' }],
+    });
+    if (listAck.ok) {
+      expect(listAck.messages[0]).not.toHaveProperty('artifacts');
+    }
   });
 
   test('listChannelMessages 投影进行中 dispatch 状态到对应消息（修复切页面/刷新后"正在处理"消失）', async () => {
@@ -2659,6 +2955,144 @@ describe('server-next first-slice use cases', () => {
     await expect(app.listTasks({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1' })).resolves.toMatchObject({
       ok: true,
       tasks: [{ id: 'task-1', status: 'done' }],
+    });
+  });
+
+  test('receiveDispatchResult keeps a failed late workspace run failed and leaves its task open', async () => {
+    let now = 2000;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'message-1',
+        'task-1',
+        'dispatch-1',
+        'request-1',
+        'workspace-run-1',
+        'reply-1',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex write a long article',
+      asTask: true,
+    });
+
+    now = 2301;
+    await expect(app.failTimedOutDispatches({ olderThan: 2300 })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [{ id: 'dispatch-1', status: 'timed_out' }],
+    });
+
+    now = 2500;
+    await expect(app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: 'late and failed',
+      workspaceRun: {
+        cwd: '/Users/shaw/longvideo',
+        status: 'failed',
+        exitCode: 1,
+        startedAt: 2001,
+        completedAt: 2500,
+      },
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatch: { id: 'dispatch-1', status: 'failed', error: 'WORKSPACE_RUN_FAILED', completedAt: 2500 },
+      message: {
+        id: 'reply-1',
+        body: 'late and failed',
+        workspaceRun: {
+          id: 'workspace-run-1',
+          status: 'failed',
+        },
+      },
+    });
+    await expect(app.listTasks({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1' })).resolves.toMatchObject({
+      ok: true,
+      tasks: [{ id: 'task-1', status: 'todo' }],
+    });
+  });
+
+  test('receiveDispatchResult does not clear busy for a newer pending dispatch', async () => {
+    let now = 3000;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+        'message-2',
+        'dispatch-2',
+        'request-2',
+        'reply-1',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex first long task',
+    });
+
+    now = 3301;
+    await app.failTimedOutDispatches({ olderThan: 3300 });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex second task',
+    });
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', status: 'busy' }],
+    });
+
+    now = 3500;
+    await expect(app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: 'first task eventually succeeded',
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatch: { id: 'dispatch-1', status: 'succeeded' },
+    });
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', status: 'busy' }],
     });
   });
 

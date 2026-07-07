@@ -234,6 +234,8 @@ export interface MessageRepository {
   append(input: MessageRecord): Promise<MessageRecord>;
   getById(messageId: ID): Promise<MessageRecord | null>;
   updateMeta(input: { messageId: ID; meta: MessageRecord['meta'] }): Promise<MessageRecord | null>;
+  edit(input: { messageId: ID; body: string; meta: MessageRecord['meta'] }): Promise<MessageRecord | null>;
+  softDelete(input: { messageId: ID; body: string; meta: MessageRecord['meta'] }): Promise<MessageRecord | null>;
   setTaskIdIfAbsent(input: { messageId: ID; taskId: ID }): Promise<{ message: MessageRecord; taskId: ID; inserted: boolean } | null>;
   listByChannel(channelId: ID, limit: number): Promise<MessageRecord[]>;
   search(input: { channelIds: ID[]; query: string; limit: number }): Promise<MessageRecord[]>;
@@ -294,6 +296,7 @@ export interface ServerNextRepositories {
   tasks: TaskRepository;
   reactions: ReactionRepository;
   savedMessages: SavedMessageRepository;
+  pinnedMessages: PinnedMessageRepository;
 }
 
 export interface ReactionRecord {
@@ -313,6 +316,15 @@ export interface SavedMessageRecord {
   createdAt: UnixMs;
 }
 
+export interface PinnedMessageRecord {
+  id: ID;
+  messageId: ID;
+  userId: ID;
+  teamId: ID;
+  channelId: ID;
+  createdAt: UnixMs;
+}
+
 export interface ReactionRepository {
   toggle(input: { id: ID; messageId: ID; userId: ID; emoji: string; createdAt: UnixMs; on: boolean }): Promise<void>;
   countByMessage(messageId: ID): Promise<Record<string, number>>;
@@ -323,4 +335,10 @@ export interface SavedMessageRepository {
   toggle(input: { id: ID; messageId: ID; userId: ID; teamId: ID; channelId: ID; createdAt: UnixMs; on: boolean }): Promise<void>;
   listByUser(input: { userId: ID; teamId: ID }): Promise<SavedMessageRecord[]>;
   isSaved(messageId: ID, userId: ID): Promise<boolean>;
+}
+
+export interface PinnedMessageRepository {
+  toggle(input: { id: ID; messageId: ID; userId: ID; teamId: ID; channelId: ID; createdAt: UnixMs; on: boolean }): Promise<void>;
+  listByChannel(input: { teamId: ID; channelId: ID }): Promise<PinnedMessageRecord[]>;
+  isPinned(messageId: ID): Promise<boolean>;
 }
