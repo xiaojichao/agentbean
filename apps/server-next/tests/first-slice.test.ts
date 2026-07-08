@@ -2236,6 +2236,170 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('sendMessage resolves non-task thread ownership outside the latest channel window', async () => {
+    let now = 334;
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => now },
+      ids: {
+        nextId: createIds([
+          'user-1',
+          'team-1',
+          'channel-1',
+          'message-1',
+          'dispatch-1',
+          'request-1',
+          'message-2',
+          'message-3',
+          'dispatch-2',
+          'request-2',
+        ]),
+      },
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-2',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      channelIds: ['channel-1'],
+      name: 'Claude-Agent',
+      adapterKind: 'claude-code',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-2',
+      lastSeenAt: now,
+    });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      channelIds: ['channel-1'],
+      name: 'Codex-Agent',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex-Agent 你有哪些 skills?',
+    });
+
+    now = 335;
+    await app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: '我可以写代码、查日志和整理计划。',
+    });
+
+    for (let index = 0; index < 205; index += 1) {
+      await repositories.messages.append({
+        id: `unrelated-${index}`,
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        threadId: `unrelated-${index}`,
+        senderKind: 'human',
+        senderId: 'user-1',
+        body: `unrelated channel message ${index}`,
+        createdAt: 336 + index,
+        meta: {},
+      });
+    }
+
+    now = 542;
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'message-1',
+      body: '那你继续说说怎么做验证',
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [{ id: 'dispatch-2', agentId: 'agent-1', messageId: 'message-3' }],
+      route: { kind: 'dispatch', agentId: 'agent-1' },
+    });
+  });
+
+  test('sendMessage does not dispatch unmentioned task replies assigned to a human', async () => {
+    let now = 543;
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => now },
+      ids: {
+        nextId: createIds([
+          'user-1',
+          'team-1',
+          'channel-1',
+          'join-1',
+          'user-2',
+          'task-1',
+          'message-2',
+          'message-3',
+          'message-4',
+        ]),
+      },
+      joinCodes: { nextCode: createIds(['code-1']) },
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
+    await app.registerUser({ username: 'lin', password: 'secret', teamName: 'AgentBean', joinCode: 'code-1' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      channelIds: ['channel-1'],
+      name: 'Codex-Agent',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+    const taskAck = await app.createTask({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      title: '人工负责人任务',
+      assigneeId: 'user-2',
+    });
+    if (!taskAck.ok) {
+      throw new Error(`Expected task creation to succeed: ${taskAck.error}`);
+    }
+    await repositories.messages.append({
+      id: 'message-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'message-1',
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: '这个任务由 lin 负责',
+      createdAt: now,
+      meta: { taskId: taskAck.task.id },
+    });
+
+    now = 544;
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'message-1',
+      body: '继续跟进一下',
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [],
+      route: { kind: 'no-dispatch', reason: 'human-assignee' },
+    });
+  });
+
   test('sendMessage keeps lightweight capability questions as ordinary channel messages', async () => {
     const app = createInMemoryServerNext({
       now: () => 325,

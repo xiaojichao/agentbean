@@ -1321,6 +1321,26 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             return message;
           });
       },
+      async listByThread(input) {
+        return teamDb
+          .prepare(`
+            SELECT * FROM (
+              SELECT *, rowid AS _message_rowid FROM messages
+              WHERE channel_id = ? AND (id = ? OR thread_id = ?)
+              ORDER BY created_at DESC, _message_rowid DESC
+              LIMIT ?
+            )
+            ORDER BY created_at ASC, _message_rowid ASC
+          `)
+          .all(input.channelId, input.threadId, input.threadId, input.limit)
+          .map((row) => {
+            const message = mapMessage(row);
+            if (!message) {
+              throw new Error('SQLite message row could not be mapped');
+            }
+            return message;
+          });
+      },
       async search(input) {
         if (input.channelIds.length === 0) {
           return [];
