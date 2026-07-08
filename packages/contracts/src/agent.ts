@@ -51,7 +51,7 @@ export interface AgentDto {
   cwd?: string;
   gatewayInstanceKey?: string;
   envKeys?: string[];
-  description?: string;
+  description?: string | null;
   skills?: SkillDto[];
   lastSeenAt?: UnixMs;
   lastError?: string;
@@ -93,7 +93,7 @@ export interface UpdateAgentConfigCommandDto {
   agentId: ID;
   runtimeId?: ID;
   name?: string;
-  description?: string;
+  description?: string | null;
   adapterKind?: AdapterKind;
   command?: string;
   args?: string[];
