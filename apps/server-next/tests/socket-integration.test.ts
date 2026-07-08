@@ -48,8 +48,10 @@ describe('server-next Socket.IO namespaces', () => {
         'runtime-1',
         'agent-1',
         'message-1',
+        'task-1',
         'dispatch-1',
         'request-1',
+        'message-2',
         'reply-1',
       ]),
     });
@@ -118,12 +120,14 @@ describe('server-next Socket.IO namespaces', () => {
         userId: 'user-1',
         teamId: 'team-1',
         channelId: 'channel-1',
-        body: '@Codex hello',
+        body: '@Codex 总结一下今天新闻 Top20',
       }),
     ).resolves.toMatchObject({
       ok: true,
       message: { id: 'message-1', senderKind: 'human' },
+      task: { id: 'task-1', status: 'in_progress' },
       dispatches: [{ id: 'dispatch-1', requestId: 'request-1' }],
+      acknowledgementMessage: { id: 'message-2', senderKind: 'agent', body: '我来处理，会先看请求和附件，再把结果发在线程里。' },
     });
     await expect(
       agent.emitWithAck(AGENT_EVENTS.dispatch.result, {
@@ -135,12 +139,73 @@ describe('server-next Socket.IO namespaces', () => {
       ok: true,
       dispatch: { id: 'dispatch-1', status: 'succeeded' },
       message: { id: 'reply-1', senderKind: 'agent', body: 'done' },
+      task: { id: 'task-1', status: 'in_review' },
     });
     await eventually(async () => {
       expect(channelMessages).toEqual([
-        expect.objectContaining({ id: 'message-1', senderKind: 'human', body: '@Codex hello' }),
+        expect.objectContaining({ id: 'message-1', senderKind: 'human', body: '@Codex 总结一下今天新闻 Top20' }),
+        expect.objectContaining({ id: 'message-2', senderKind: 'agent', body: '我来处理，会先看请求和附件，再把结果发在线程里。' }),
         expect.objectContaining({ id: 'reply-1', senderKind: 'agent', body: 'done' }),
       ]);
+    });
+  });
+
+  test('does not claim a task for an online agent without a connected daemon socket', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1100,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'message-1',
+        'task-1',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 1100,
+    });
+
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const web = await connectClient(`${baseUrl}/web`);
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+
+    await expect(
+      web.emitWithAck(WEB_EVENTS.message.send, {
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        body: '@Codex stale socket should not claim',
+        asTask: true,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      route: { kind: 'no-dispatch', reason: 'no-online-agent' },
+      dispatches: [],
+      task: { id: 'task-1', status: 'todo' },
+    });
+
+    const messages = await app.listChannelMessages({ channelId: 'channel-1', limit: 10 });
+    expect(messages).toMatchObject({
+      ok: true,
+      messages: [
+        { id: 'message-1', senderKind: 'human', body: '@Codex stale socket should not claim' },
+      ],
     });
   });
 

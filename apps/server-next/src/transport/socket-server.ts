@@ -168,6 +168,9 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
       dispatchStatus(dispatch) {
         emitDispatchStatus(webSubscribers, dispatch);
       },
+      connectedAgentDeviceIds() {
+        return [...agentSocketsByDeviceId.keys()];
+      },
       deviceScan(request) {
         agentSocketsByDeviceId.get(request.deviceId)?.emit?.(AGENT_EVENTS.device.scanRequested, request);
       },
@@ -276,11 +279,11 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         if (!isSuccessAck(result)) {
           return;
         }
-        const task = (result as { task?: unknown }).task;
-        if (task) {
+        const tasks = resultTasks(result);
+        for (const task of tasks) {
           emitTaskUpdated(webSubscribers, task);
           const teamId = taskTeamId(task);
-          if (teamId) {
+          if (teamId && !isMessageSendResult(result)) {
             await emitChannelMessageSubscribers(webSubscribers, app, teamId, result);
           }
           await refreshTaskSubscribers(webSubscribers, app, task);
@@ -605,8 +608,8 @@ async function emitChannelMessageSubscribers(
   teamId: string,
   result: unknown,
 ): Promise<void> {
-  const message = resultMessage(result);
-  if (!message) {
+  const messages = resultMessages(result);
+  if (messages.length === 0) {
     return;
   }
   for (const subscriber of subscribers) {
@@ -614,14 +617,18 @@ async function emitChannelMessageSubscribers(
       continue;
     }
     const channels = await app.listChannels(subscriber.channels);
-    if (channels.ok && channels.channels.some((channel) => channel.id === message.channelId)) {
-      subscriber.socket.emit?.(WEB_EVENTS.channel.message, message);
-      continue;
-    }
-    // Not found in regular channels — check DM membership
-    const dms = await app.listDirectMessages(subscriber.channels);
-    if (dms.ok && dms.dms.some((dm) => dm.channel.id === message.channelId)) {
-      subscriber.socket.emit?.(WEB_EVENTS.channel.message, message);
+    const visibleChannelIds = new Set(channels.ok ? channels.channels.map((channel) => channel.id) : []);
+    let dms: Awaited<ReturnType<ServerNextUseCases['listDirectMessages']>> | null = null;
+    for (const message of messages) {
+      if (visibleChannelIds.has(message.channelId)) {
+        subscriber.socket.emit?.(WEB_EVENTS.channel.message, message);
+        continue;
+      }
+      // Not found in regular channels — check DM membership
+      dms ??= await app.listDirectMessages(subscriber.channels);
+      if (dms.ok && dms.dms.some((dm) => dm.channel.id === message.channelId)) {
+        subscriber.socket.emit?.(WEB_EVENTS.channel.message, message);
+      }
     }
   }
 }
@@ -1030,6 +1037,18 @@ function resultDispatch(result: unknown): unknown {
   return (result as { dispatch?: unknown }).dispatch ?? null;
 }
 
+function resultTasks(result: unknown): unknown[] {
+  if (!result || typeof result !== 'object') {
+    return [];
+  }
+  const single = (result as { task?: unknown }).task;
+  const many = (result as { tasks?: unknown }).tasks;
+  return [
+    ...(single ? [single] : []),
+    ...(Array.isArray(many) ? many : []),
+  ];
+}
+
 function dispatchTeamId(dispatch: unknown): string | null {
   if (!dispatch || typeof dispatch !== 'object') {
     return null;
@@ -1046,9 +1065,25 @@ function resultMessage(result: unknown): { channelId: string; teamId?: string } 
   return typeof message?.channelId === 'string' ? message as { channelId: string; teamId?: string } : null;
 }
 
+function resultMessages(result: unknown): Array<{ channelId: string; teamId?: string }> {
+  const primary = resultMessage(result);
+  if (!result || typeof result !== 'object') {
+    return primary ? [primary] : [];
+  }
+  const acknowledgement = (result as { acknowledgementMessage?: { channelId?: unknown } }).acknowledgementMessage;
+  return [
+    ...(primary ? [primary] : []),
+    ...(typeof acknowledgement?.channelId === 'string' ? [acknowledgement as { channelId: string; teamId?: string }] : []),
+  ];
+}
+
 function resultMessageTeamId(result: unknown): string | null {
   const message = resultMessage(result);
   return typeof message?.teamId === 'string' ? message.teamId : null;
+}
+
+function isMessageSendResult(result: unknown): boolean {
+  return Boolean(result && typeof result === 'object' && Array.isArray((result as { dispatches?: unknown }).dispatches));
 }
 
 function resultPinnedMessageId(result: unknown): string | null {

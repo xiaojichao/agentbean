@@ -301,7 +301,7 @@ Socket 事件包括：
 - `task:reorder`
 - `task:updated`
 
-聊天中向 Agent 发送消息或显式 `asTask` 时，可以自动创建任务。dispatch 开始时任务进入 `in_progress`，Agent 成功回复时进入 `done`，失败时进入 `in_review`。
+聊天中向 Agent 发送任务式消息或显式 `asTask` 时，可以自动创建任务。dispatch 开始时任务进入 `in_progress`，Agent 会先在线程内发短认领确认；Agent 成功交付后任务进入 `in_review`，等待用户确认后再进入 `done`。
 
 ### 不继承旧说法
 

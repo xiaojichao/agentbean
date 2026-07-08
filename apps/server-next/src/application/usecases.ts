@@ -101,8 +101,8 @@ export interface ServerNextUseCases {
   registerAgent(input: AgentDto): Promise<Ack<{ agent: AgentDto }>>;
   sendMessage(input: SendMessageInput): Promise<Ack<SendMessageResult>>;
   getDispatchRequest(input: { dispatchId: string }): Promise<Ack<{ request: DispatchRequestDto & { id: string } }>>;
-  cancelDispatch(input: CancelDispatchInput): Promise<Ack<{ dispatch: DispatchDto }>>;
-  cancelChannelDispatches(input: CancelChannelDispatchesInput): Promise<Ack<{ dispatches: DispatchDto[] }>>;
+  cancelDispatch(input: CancelDispatchInput): Promise<Ack<{ dispatch: DispatchDto; task?: TaskDto }>>;
+  cancelChannelDispatches(input: CancelChannelDispatchesInput): Promise<Ack<{ dispatches: DispatchDto[]; tasks?: TaskDto[] }>>;
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   searchMessages(input: SearchMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   getMessageContext(input: GetMessageContextInput): Promise<Ack<{ targetMessageId: ID; messages: MessageDto[]; threadRootId?: ID }>>;
@@ -123,7 +123,7 @@ export interface ServerNextUseCases {
   getWorkspaceRunLogFile(input: GetWorkspaceRunInput): Promise<Ack<{ artifact: ArtifactDto; storagePath?: string }>>;
   listTeamWorkspaceRuns(input: ListTeamWorkspaceRunsInput): Promise<Ack<{ runs: TeamWorkspaceRunListItemDto[]; nextCursor?: string }>>;
   listAgentWorkspaceRuns(input: ListAgentWorkspaceRunsInput): Promise<Ack<{ runs: AgentWorkspaceRunListItemDto[] }>>;
-  failTimedOutDispatches(input: { olderThan: number }): Promise<Ack<{ dispatches: DispatchDto[] }>>;
+  failTimedOutDispatches(input: { olderThan: number }): Promise<Ack<{ dispatches: DispatchDto[]; tasks?: TaskDto[] }>>;
   receiveDispatchResult(input: ReceiveDispatchResultInput): Promise<Ack<ReceiveDispatchResultResult>>;
   receiveDispatchError(input: ReceiveDispatchErrorInput): Promise<Ack<ReceiveDispatchErrorResult>>;
   reactMessage(input: ReactMessageInput): Promise<Ack<{ messageId: string }>>;
@@ -411,6 +411,7 @@ export interface SendMessageInput {
   clientMessageId?: string;
   senderId?: string;
   senderKind?: string;
+  connectedAgentDeviceIds?: string[];
 }
 
 export interface SendMessageResult {
@@ -418,6 +419,7 @@ export interface SendMessageResult {
   dispatches: DispatchDto[];
   route: RouteResult;
   task?: TaskDto;
+  acknowledgementMessage?: MessageDto;
 }
 
 export interface ListChannelMessagesInput {
@@ -682,6 +684,7 @@ export interface ReceiveDispatchErrorInput {
 
 export interface ReceiveDispatchErrorResult {
   dispatch: DispatchDto;
+  task?: TaskDto;
 }
 
 export interface ReactMessageInput {
@@ -2468,6 +2471,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         teamId: messageInput.teamId,
         body: messageInput.body,
         contextOwner,
+        connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
       });
       const attachmentResult = await getAttachableUploadedArtifacts(repositories, {
         userId: messageInput.userId,
@@ -2491,7 +2495,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             teamId: messageInput.teamId,
             title: messageInput.body.trim() || '附件',
             description: undefined,
-            status: 'todo',
+            status: route.kind === 'dispatch' ? 'in_progress' : 'todo',
             creatorId: messageInput.userId,
             assigneeId: route.kind === 'dispatch' ? route.agentId : undefined,
             channelId: messageInput.channelId,
@@ -2525,6 +2529,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         }));
       }
       const dispatches: DispatchDto[] = [];
+      let acknowledgementMessage: MessageDto | undefined;
 
       if (route.kind === 'dispatch') {
         const dispatch = await repositories.dispatches.create({
@@ -2545,6 +2550,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           status: 'busy',
           lastSeenAt: now,
         });
+        if (task) {
+          acknowledgementMessage = await appendTaskClaimAcknowledgementMessage(repositories, {
+            id: ids.nextId(),
+            message,
+            task,
+            dispatch: toDispatchDto(dispatch),
+            createdAt: now,
+          });
+        }
       }
 
       return makeSuccess({
@@ -2554,6 +2568,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         dispatches,
         route,
         ...(task ? { task } : {}),
+        ...(acknowledgementMessage ? { acknowledgementMessage } : {}),
       });
     },
 
@@ -2578,6 +2593,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             limit: 20,
           })
         : [];
+      const dispatchHistory = history.filter((message) => !isTaskClaimAcknowledgementMessage(message));
       const attachments = await repositories.artifacts.listByMessage(dispatch.messageId);
 
       return makeSuccess({
@@ -2591,7 +2607,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           deviceId: agent.deviceId,
           requestId: dispatch.requestId,
           prompt: dispatch.prompt,
-          history: history.map(toDispatchHistoryMessageDto),
+          history: dispatchHistory.map(toDispatchHistoryMessageDto),
           ...(attachments.length > 0 ? { attachments: attachments.map(toDispatchAttachmentDto) } : {}),
           ...(executionConfig
             ? {
@@ -3202,22 +3218,30 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
 
+      const now = clock.now();
       const cancelled = await repositories.dispatches.markCancelled({
         dispatchId: cancelInput.dispatchId,
-        completedAt: clock.now(),
+        completedAt: now,
       });
       if (!cancelled) {
         return makeFailure('NOT_FOUND', 'Dispatch not found');
       }
+      const originMessage = await repositories.messages.getById(cancelled.dispatch.messageId);
+      const task = cancelled.changed
+        ? await markLinkedTaskTodoIfInProgress(repositories, originMessage, now)
+        : null;
       const agent = await repositories.agents.getById(cancelled.dispatch.agentId);
       if (agent && agent.status === 'busy') {
         await repositories.agents.updateStatus({
           agentId: cancelled.dispatch.agentId,
           status: 'online',
-          lastSeenAt: clock.now(),
+          lastSeenAt: now,
         });
       }
-      return makeSuccess({ dispatch: toDispatchDto(cancelled.dispatch) });
+      return makeSuccess({
+        dispatch: toDispatchDto(cancelled.dispatch),
+        ...(task ? { task } : {}),
+      });
     },
 
     async cancelChannelDispatches(cancelInput) {
@@ -3235,6 +3259,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const now = clock.now();
       const dispatches = await repositories.dispatches.listByTeam(cancelInput.teamId);
       const cancelled: DispatchDto[] = [];
+      const tasks: TaskDto[] = [];
       for (const dispatch of dispatches) {
         if (dispatch.channelId !== cancelInput.channelId || !isPendingDispatchStatus(dispatch.status)) {
           continue;
@@ -3254,15 +3279,24 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             lastSeenAt: now,
           });
         }
+        const originMessage = await repositories.messages.getById(result.dispatch.messageId);
+        const task = await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
+        if (task) {
+          tasks.push(task);
+        }
         cancelled.push(toDispatchDto(result.dispatch));
       }
-      return makeSuccess({ dispatches: cancelled });
+      return makeSuccess({
+        dispatches: cancelled,
+        ...(tasks.length > 0 ? { tasks } : {}),
+      });
     },
 
     async failTimedOutDispatches(timeoutInput) {
       const now = clock.now();
       const pending = await repositories.dispatches.listPendingOlderThan(timeoutInput.olderThan);
       const dispatches: DispatchDto[] = [];
+      const tasks: TaskDto[] = [];
       for (const dispatch of pending) {
         if (!isPendingDispatchStatus(dispatch.status)) {
           continue;
@@ -3281,10 +3315,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               lastSeenAt: now,
             });
           }
+          const originMessage = await repositories.messages.getById(timedOut.dispatch.messageId);
+          const task = await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
+          if (task) {
+            tasks.push(task);
+          }
           dispatches.push(toDispatchDto(timedOut.dispatch));
         }
       }
-      return makeSuccess({ dispatches });
+      return makeSuccess({
+        dispatches,
+        ...(tasks.length > 0 ? { tasks } : {}),
+      });
     },
 
     async receiveDispatchResult(resultInput) {
@@ -3430,8 +3472,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ...(workspaceRun ? { workspaceRun } : {}),
       };
       const completedTask = resultSucceeded
-        ? await markLinkedTaskDone(repositories, originMessage, now)
-        : null;
+        ? await markLinkedTaskInReview(repositories, originMessage, now)
+        : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
       await markAgentOnlineIfIdle(repositories, {
         agentId: resultInput.agentId,
         teamId: completed.dispatch.teamId,
@@ -3479,8 +3521,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         lastSeenAt: now,
         lastError: errorInput.error,
       });
+      const originMessage = await repositories.messages.getById(failed.dispatch.messageId);
+      const task = await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
 
-      return makeSuccess({ dispatch: toDispatchDto(failed.dispatch) });
+      return makeSuccess({
+        dispatch: toDispatchDto(failed.dispatch),
+        ...(task ? { task } : {}),
+      });
     },
 
     async reactMessage(reactInput) {
@@ -4689,13 +4736,20 @@ function routeMessageForChannel(input: {
   teamId: string;
   body: string;
   contextOwner?: RoutingContextOwner;
+  connectedAgentDeviceIds?: string[];
 }): RouteResult {
+  const connectedAgentDeviceIds = input.connectedAgentDeviceIds
+    ? new Set(input.connectedAgentDeviceIds)
+    : undefined;
+  const isSocketReachable = (agent: AgentDto): boolean =>
+    !connectedAgentDeviceIds || !agent.deviceId || connectedAgentDeviceIds.has(agent.deviceId);
   if (input.channel.kind === 'direct') {
     const targetAgentId = input.channel.dmTargetAgentId ?? input.channel.agentMemberIds[0];
     const targetAgent = input.visibleAgents.find((agent) =>
       agent.id === targetAgentId &&
       agent.visibleTeamIds.includes(input.teamId) &&
-      agent.status === 'online'
+      agent.status === 'online' &&
+      isSocketReachable(agent)
     );
     return targetAgent
       ? { kind: 'dispatch', agentId: targetAgent.id, reason: 'direct' }
@@ -4709,7 +4763,13 @@ function routeMessageForChannel(input: {
     channelId: input.channel.id,
   });
   if ((route.kind === 'dispatch' && route.reason === 'mention') || (route.kind === 'no-dispatch' && route.reason !== 'no-online-agent')) {
-    return route;
+    if (route.kind !== 'dispatch') {
+      return route;
+    }
+    const agent = input.visibleAgents.find((candidate) => candidate.id === route.agentId);
+    return agent && isSocketReachable(agent)
+      ? route
+      : { kind: 'no-dispatch', reason: 'no-online-agent' };
   }
   const contextOwner = input.contextOwner;
   if (contextOwner?.kind === 'human') {
@@ -4717,7 +4777,7 @@ function routeMessageForChannel(input: {
   }
   if (contextOwner?.kind === 'agent') {
     const contextAgent = input.visibleAgents.find((agent) => agent.id === contextOwner.agentId);
-    return contextAgent && isDispatchEligibleAgent(contextAgent, input)
+    return contextAgent && isDispatchEligibleAgent(contextAgent, input) && isSocketReachable(contextAgent)
       ? { kind: 'dispatch', agentId: contextAgent.id, reason: 'fallback' }
       : { kind: 'no-dispatch', reason: 'no-online-agent' };
   }
@@ -4821,6 +4881,41 @@ function shouldNestDispatchReplyInThread(originMessage: MessageRecord | null | u
     return true;
   }
   return typeof originMessage.meta?.taskId === 'string';
+}
+
+const TASK_CLAIM_ACKNOWLEDGEMENT_BODY = '我来处理，会先看请求和附件，再把结果发在线程里。';
+
+async function appendTaskClaimAcknowledgementMessage(
+  repositories: ServerNextRepositories,
+  input: {
+    id: string;
+    message: MessageDto;
+    task: TaskDto;
+    dispatch: DispatchDto;
+    createdAt: number;
+  },
+): Promise<MessageDto> {
+  return await repositories.messages.append({
+    id: input.id,
+    teamId: input.message.teamId,
+    channelId: input.message.channelId,
+    threadId: input.message.threadId ?? input.message.id,
+    senderKind: 'agent',
+    senderId: input.dispatch.agentId,
+    body: TASK_CLAIM_ACKNOWLEDGEMENT_BODY,
+    createdAt: input.createdAt,
+    meta: {
+      kind: 'task-claim-confirmed',
+      taskId: input.task.id,
+      dispatchId: input.dispatch.id,
+      parentMessageId: input.message.id,
+      replyScope: 'thread',
+    },
+  });
+}
+
+function isTaskClaimAcknowledgementMessage(message: MessageRecord): boolean {
+  return message.meta?.kind === 'task-claim-confirmed';
 }
 
 function toRouteReason(route: RouteResult): RouteReason | undefined {
@@ -5189,7 +5284,7 @@ async function markAgentOnlineIfIdle(
   });
 }
 
-async function markLinkedTaskDone(
+async function markLinkedTaskInReview(
   repositories: ServerNextRepositories,
   message: MessageRecord | null,
   updatedAt: number,
@@ -5199,13 +5294,35 @@ async function markLinkedTaskDone(
     return null;
   }
   const task = await repositories.tasks.getById(taskId);
-  if (!task || task.status === 'done' || task.status === 'closed') {
+  if (!task || task.status === 'in_review' || task.status === 'done' || task.status === 'closed') {
     return null;
   }
   return await repositories.tasks.update({
     taskId,
     changes: {
-      status: 'done',
+      status: 'in_review',
+      updatedAt,
+    },
+  });
+}
+
+async function markLinkedTaskTodoIfInProgress(
+  repositories: ServerNextRepositories,
+  message: MessageRecord | null,
+  updatedAt: number,
+): Promise<TaskDto | null> {
+  const taskId = typeof message?.meta?.taskId === 'string' ? message.meta.taskId : null;
+  if (!taskId) {
+    return null;
+  }
+  const task = await repositories.tasks.getById(taskId);
+  if (!task || task.status !== 'in_progress') {
+    return null;
+  }
+  return await repositories.tasks.update({
+    taskId,
+    changes: {
+      status: 'todo',
       updatedAt,
     },
   });
@@ -5279,7 +5396,7 @@ function taskStatusLabel(status: TaskStatus): string {
     case 'in_progress':
       return '进行中';
     case 'in_review':
-      return '待确认';
+      return '待审核';
     case 'done':
       return '已完成';
     case 'closed':
