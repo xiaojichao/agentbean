@@ -384,7 +384,7 @@ export interface UpdateAgentConfigInput {
   agentId: string;
   runtimeId?: string;
   name?: string;
-  description?: string;
+  description?: string | null;
   adapterKind?: AdapterKind;
   command?: string;
   args?: string[];
@@ -1998,7 +1998,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         changes.name = agentInput.name.trim();
       }
       if (agentInput.description !== undefined) {
-        changes.description = agentInput.description.trim();
+        // 前端 AgentConfigDialog 在"功能介绍"为空时下发 description: null（表示清空），
+        // repository 也以 null 表示清空；这里把 null/空串规整为 null，避免对 null 调 .trim()
+        // 抛 TypeError（曾被 socket 兜底吞成 INTERNAL_ERROR）。
+        changes.description = (agentInput.description ?? '').trim() || null;
       }
 
       if (isCustom) {

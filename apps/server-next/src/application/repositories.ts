@@ -72,7 +72,7 @@ export type AgentUpsertRecord = AgentRecord & { env?: Record<string, string> };
 
 export interface AgentConfigUpdate {
   name?: string;
-  description?: string;
+  description?: string | null;
   adapterKind?: AgentDto['adapterKind'];
   deviceId?: ID;
   command?: string;
