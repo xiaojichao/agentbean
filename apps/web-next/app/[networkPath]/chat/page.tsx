@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, RotateCcw, BellOff, Pin, PinOff } from 'lucide-react';
+import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
 import { WEB_EVENTS } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
@@ -14,9 +14,9 @@ import { shouldHideTaskSystemMessage } from '@/lib/task-system-messages';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
-import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, setMessageDone, visibleConversationIds } from '@/lib/chat-scope';
+import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
-import { displayMessageBody, plainTextForMessage } from '@/lib/chat-message-text';
+import { displayMessageBody } from '@/lib/chat-message-text';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import {
   TASK_STATUS_COLUMNS as TASK_COLUMNS,
@@ -1109,14 +1109,6 @@ export default function ChatPage() {
     void copyTextToClipboard(markdownForMessage(msg, speaker, currentTeamId ?? msg.teamId));
   };
 
-  const copyMessageText = (msg: ChatMessage) => {
-    void copyTextToClipboard(plainTextForMessage(msg));
-  };
-
-  const toggleMessageReadState = (msg: ChatMessage) => {
-    setDoneIds((prev) => setMessageDone(prev, msg.id, !prev.has(msg.id)));
-  };
-
   const convertMessageToTask = async (msg: ChatMessage) => {
     const res = await messageReactionEvents().convertToTask(msg.id);
     if (res?.ok && res.message && res.task) {
@@ -1588,7 +1580,6 @@ export default function ChatPage() {
                         selected={selectedMessageId === msg.id}
                         saved={savedIds.has(msg.id)}
                         pinned={pinnedIds.has(msg.id)}
-                        readDone={doneIds.has(msg.id)}
                         reacted={reactionEmojis.has(msg.id)}
                         reactionEmoji={reactionEmojis.get(msg.id)}
                         humanProfiles={humanProfiles}
@@ -1602,16 +1593,13 @@ export default function ChatPage() {
                         onToggleSave={() => toggleSave(msg.id)}
                         onTogglePin={() => togglePin(msg)}
                         onCopyLink={() => copyMessageLink(msg)}
-                        onCopyText={() => copyMessageText(msg)}
                         onCopyMarkdown={() => copyMessageMarkdown(msg)}
-                        onToggleReadDone={() => toggleMessageReadState(msg)}
                         onSelectMessage={() => selectMessage(msg)}
                         onEditMessage={(body) => editMessage(msg, body)}
                         onDeleteMessage={() => deleteMessage(msg)}
                         onOpenTaskDetail={() => openTaskDetail(msg)}
                         onOpenTaskDetailById={openTaskDetailById}
                         onConvertToTask={() => convertMessageToTask(msg)}
-                        onReopenTask={() => { if (task) updateTaskStatus(task, 'todo'); }}
                         onUnfollowThread={() => unfollowThreadLocally(msg)}
                         onTaskMenu={(open) => setChatTaskMenuTarget(open && task ? { surface: 'main', messageId: msg.id } : null)}
                         onTaskStatus={(status) => { if (task) updateTaskStatus(task, status); }}
@@ -1779,7 +1767,6 @@ export default function ChatPage() {
           fileInputRef={threadFileInputRef}
           savedIds={savedIds}
           pinnedIds={pinnedIds}
-          doneIds={doneIds}
           reactionEmojis={reactionEmojis}
           tasks={tasks}
           taskNumbers={taskNumbers}
@@ -1803,9 +1790,7 @@ export default function ChatPage() {
           onToggleReaction={toggleReaction}
           onReactWithEmoji={reactWithEmoji}
           onCopyLink={copyMessageLink}
-          onCopyText={copyMessageText}
           onCopyMarkdown={copyMessageMarkdown}
-          onToggleReadDone={toggleMessageReadState}
           onSelectMessage={selectMessage}
           onEditMessage={editMessage}
           onDeleteMessage={deleteMessage}
@@ -2908,7 +2893,6 @@ function ThreadPanel({
   fileInputRef,
   savedIds,
   pinnedIds,
-  doneIds,
   reactionEmojis,
   tasks,
   taskNumbers,
@@ -2928,9 +2912,7 @@ function ThreadPanel({
   onToggleReaction,
   onReactWithEmoji,
   onCopyLink,
-  onCopyText,
   onCopyMarkdown,
-  onToggleReadDone,
   onSelectMessage,
   onEditMessage,
   onDeleteMessage,
@@ -2955,7 +2937,6 @@ function ThreadPanel({
   fileInputRef: RefObject<HTMLInputElement>;
   savedIds: Set<string>;
   pinnedIds: Set<string>;
-  doneIds: Set<string>;
   reactionEmojis: ReactionEmojiMap;
   tasks: TaskItem[];
   taskNumbers: Map<string, number>;
@@ -2975,9 +2956,7 @@ function ThreadPanel({
   onToggleReaction: (msgId: string) => void;
   onReactWithEmoji: (msgId: string, emoji: string) => void;
   onCopyLink: (msg: ChatMessage) => void;
-  onCopyText: (msg: ChatMessage) => void;
   onCopyMarkdown: (msg: ChatMessage) => void;
-  onToggleReadDone: (msg: ChatMessage) => void;
   onSelectMessage: (msg: ChatMessage) => void;
   onEditMessage: (msg: ChatMessage, body: string) => Promise<boolean>;
   onDeleteMessage: (msg: ChatMessage) => void;
@@ -3010,7 +2989,6 @@ function ThreadPanel({
         selected={selectedMessageId === msg.id}
         saved={savedIds.has(msg.id)}
         pinned={pinnedIds.has(msg.id)}
-        readDone={doneIds.has(msg.id)}
         reacted={reactionEmojis.has(msg.id)}
         reactionEmoji={reactionEmojis.get(msg.id)}
         humanProfiles={humanProfiles}
@@ -3024,16 +3002,13 @@ function ThreadPanel({
         onToggleSave={() => onToggleSave(msg.id)}
         onTogglePin={() => onTogglePin(msg)}
         onCopyLink={() => onCopyLink(msg)}
-        onCopyText={() => onCopyText(msg)}
         onCopyMarkdown={() => onCopyMarkdown(msg)}
-        onToggleReadDone={() => onToggleReadDone(msg)}
         onSelectMessage={() => onSelectMessage(msg)}
         onEditMessage={(body) => onEditMessage(msg, body)}
         onDeleteMessage={() => onDeleteMessage(msg)}
         onOpenTaskDetail={() => onOpenTaskDetail(msg)}
         onOpenTaskDetailById={onOpenTaskDetailById}
         onConvertToTask={() => onConvertToTask(msg)}
-        onReopenTask={() => { if (task) onTaskStatus(task, 'todo'); }}
         onUnfollowThread={() => onUnfollowThread(msg)}
         onTaskMenu={(open) => onTaskMenu(open && task ? msg.id : null)}
         onTaskStatus={(status) => { if (task) onTaskStatus(task, status); }}
@@ -3342,7 +3317,6 @@ function ChatBubble({
   selected = false,
   saved,
   pinned,
-  readDone,
   reacted,
   reactionEmoji,
   humanProfiles = [],
@@ -3356,16 +3330,13 @@ function ChatBubble({
   onToggleSave,
   onTogglePin,
   onCopyLink,
-  onCopyText,
   onCopyMarkdown,
-  onToggleReadDone,
   onSelectMessage,
   onEditMessage,
   onDeleteMessage,
   onOpenTaskDetail,
   onOpenTaskDetailById,
   onConvertToTask,
-  onReopenTask,
   onUnfollowThread,
   onTaskMenu,
   onTaskStatus,
@@ -3381,7 +3352,6 @@ function ChatBubble({
   selected?: boolean;
   saved: boolean;
   pinned: boolean;
-  readDone: boolean;
   reacted: boolean;
   reactionEmoji?: string;
   humanProfiles?: HumanProfile[];
@@ -3395,16 +3365,13 @@ function ChatBubble({
   onToggleSave: () => void;
   onTogglePin: () => void;
   onCopyLink: () => void;
-  onCopyText: () => void;
   onCopyMarkdown: () => void;
-  onToggleReadDone: () => void;
   onSelectMessage: () => void;
   onEditMessage: (body: string) => Promise<boolean>;
   onDeleteMessage: () => void;
   onOpenTaskDetail: () => void;
   onOpenTaskDetailById?: (taskId: string) => void;
   onConvertToTask: () => void;
-  onReopenTask: () => void;
   onUnfollowThread: () => void;
   onTaskMenu?: (open: boolean) => void;
   onTaskStatus?: (status: TaskStatus) => void;
@@ -3515,7 +3482,7 @@ function ChatBubble({
     if (isDeleted || editing) return;
     event.preventDefault();
     const width = 220;
-    const height = taskId ? 392 : (canEdit || canDelete) ? 418 : 354;
+    const height = taskId ? 320 : (canEdit || canDelete) ? 360 : 296;
     setContextMenu({
       x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)),
       y: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8)),
@@ -3643,27 +3610,26 @@ function ChatBubble({
             ))}
           </div>
           <MessageContextMenuItem icon={<Link2 size={14} />} label="复制链接" onClick={() => runMenuAction(onCopyLink)} />
-          <MessageContextMenuItem icon={<ClipboardCopy size={14} />} label="复制文本" onClick={() => runMenuAction(onCopyText)} />
           <MessageContextMenuItem icon={<ClipboardCopy size={14} />} label="复制 Markdown" onClick={() => runMenuAction(onCopyMarkdown)} />
           <MessageContextMenuItem icon={<MousePointer2 size={14} />} label="选中消息" onClick={() => runMenuAction(onSelectMessage)} />
-          <MessageContextMenuItem icon={readDone ? <Eye size={14} /> : <CheckCircle2 size={14} />} label={readDone ? '标记未读' : '标记已读'} onClick={() => runMenuAction(onToggleReadDone)} />
+          <div className="my-1 border-t border-neutral-100" />
           <MessageContextMenuItem icon={<MessageSquare size={14} />} label="打开讨论串" onClick={() => runMenuAction(onOpenThread)} />
           <MessageContextMenuItem icon={saved ? <BookmarkCheck size={14} /> : <Bookmark size={14} />} label={saved ? '取消收藏' : '保存消息'} onClick={() => runMenuAction(onToggleSave)} />
-          <MessageContextMenuItem icon={pinned ? <PinOff size={14} /> : <Pin size={14} />} label={pinned ? '取消固定' : '固定到频道'} onClick={() => runMenuAction(onTogglePin)} />
           {canEdit && <MessageContextMenuItem icon={<Pencil size={14} />} label="编辑消息" onClick={() => runMenuAction(startEditing)} />}
           {canDelete && <MessageContextMenuItem icon={<Trash2 size={14} />} label="删除消息" onClick={() => runMenuAction(onDeleteMessage)} />}
           {taskId ? (
             <>
+              <MessageContextMenuItem icon={<MessageSquare size={14} />} label="取消关注讨论串" onClick={() => runMenuAction(onUnfollowThread)} />
               <div className="my-1 border-t border-neutral-100" />
-              <MessageContextMenuItem icon={<ListTodo size={14} />} label="查看任务详情" onClick={() => runMenuAction(onOpenTaskDetail)} />
-              <MessageContextMenuItem icon={<BellOff size={14} />} label="取消关注讨论串" onClick={() => runMenuAction(onUnfollowThread)} />
-              <MessageContextMenuItem icon={<RotateCcw size={14} />} label="重新打开任务" onClick={() => runMenuAction(onReopenTask)} disabled={!task} />
+              <MessageContextMenuItem
+                icon={<CheckCircle2 size={14} />}
+                label="标记为完成"
+                onClick={() => runMenuAction(() => onTaskStatus?.('done'))}
+                disabled={!task || task.status === 'done' || task.status === 'closed'}
+              />
             </>
           ) : (
-            <>
-              <div className="my-1 border-t border-neutral-100" />
-              <MessageContextMenuItem icon={<ListTodo size={14} />} label="转换为任务" onClick={() => runMenuAction(onConvertToTask)} />
-            </>
+            <MessageContextMenuItem icon={<ListTodo size={14} />} label="转换为任务" onClick={() => runMenuAction(onConvertToTask)} />
           )}
         </div>
       )}
@@ -3735,7 +3701,6 @@ function ChatBubble({
                 assigneeName={taskAssigneeName ?? (agent?.name ?? speaker)}
                 open={taskMenuOpen}
                 onOpen={onTaskMenu}
-                onOpenDetail={onOpenTaskDetail}
                 onStatus={onTaskStatus}
               />
             )}
@@ -3821,7 +3786,6 @@ function ChatTaskBadge({
   assigneeName,
   open,
   onOpen,
-  onOpenDetail,
   onStatus,
 }: {
   task?: TaskItem | null;
@@ -3829,41 +3793,25 @@ function ChatTaskBadge({
   assigneeName: string;
   open: boolean;
   onOpen?: (open: boolean) => void;
-  onOpenDetail?: () => void;
   onStatus?: (status: TaskStatus) => void;
 }) {
   const column = TASK_COLUMNS.find((item) => item.id === task?.status) ?? TASK_COLUMNS[0]!;
   const label = taskNumber ? `#${taskNumber}` : '#任务';
   const canChange = Boolean(task && onStatus);
-  const opensDetail = Boolean(onOpenDetail);
   return (
     <span className="relative inline-flex">
       <button
         onClick={(event) => {
           event.stopPropagation();
-          if (opensDetail) onOpenDetail?.();
-          else if (canChange) onOpen?.(!open);
+          if (canChange) onOpen?.(!open);
         }}
-        className={`inline-flex h-5 items-center gap-1 ${canChange ? 'rounded-l-full border border-r-0' : 'rounded-full border'} px-2 text-[11px] font-semibold leading-none transition-colors ${column.badge} hover:brightness-105`}
-        title={opensDetail ? `${column.label} · 查看任务详情` : canChange ? `${column.label} · 更改任务状态` : `${column.label} · 查看任务`}
+        className={`inline-flex h-5 items-center gap-1 rounded-full border px-2 text-[11px] font-semibold leading-none transition-colors ${column.badge} hover:brightness-105`}
+        title={canChange ? `${column.label} · 更改任务状态` : column.label}
       >
         {taskBadgeIcon(column.id)}
         <span>{label}</span>
         <span>@{assigneeName}</span>
       </button>
-      {canChange && (
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onOpen?.(!open);
-          }}
-          className={`inline-flex h-5 w-5 items-center justify-center rounded-r-full border text-[11px] font-semibold leading-none transition-colors ${column.badge} hover:brightness-105`}
-          title="更改任务状态"
-        >
-          <ChevronDown size={10} strokeWidth={2.5} />
-        </button>
-      )}
       {open && canChange && (
         <div className={`absolute left-0 top-6 ${TASK_STATUS_MENU_PANEL_CLASS}`} style={TASK_STATUS_MENU_PANEL_STYLE}>
           {TASK_COLUMNS.map((status) => (
