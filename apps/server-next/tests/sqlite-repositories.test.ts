@@ -1334,6 +1334,7 @@ describe('server-next SQLite repositories', () => {
             'task-1',
             'dispatch-1',
             'request-1',
+            'message-2',
             'workspace-run-1',
             'reply-1',
           ]),
@@ -1374,7 +1375,7 @@ describe('server-next SQLite repositories', () => {
         ok: true,
         dispatch: { id: 'dispatch-1', status: 'succeeded', completedAt: 1500 },
         message: { id: 'reply-1', body: 'late but complete' },
-        task: { id: 'task-1', status: 'done', updatedAt: 1500 },
+        task: { id: 'task-1', status: 'in_review', updatedAt: 1500 },
       });
 
       expect(teamDb.prepare('SELECT status, completed_at AS completedAt, error_message AS errorMessage FROM dispatches WHERE id = ?').get('dispatch-1')).toEqual({
@@ -1383,7 +1384,7 @@ describe('server-next SQLite repositories', () => {
         errorMessage: null,
       });
       expect(teamDb.prepare('SELECT status, updated_at AS updatedAt FROM tasks WHERE id = ?').get('task-1')).toEqual({
-        status: 'done',
+        status: 'in_review',
         updatedAt: 1500,
       });
       expect(teamDb.prepare('SELECT message_id AS messageId, dispatch_id AS dispatchId, status FROM workspace_runs WHERE id = ?').get('workspace-run-1')).toEqual({

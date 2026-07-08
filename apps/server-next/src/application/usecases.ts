@@ -418,6 +418,7 @@ export interface SendMessageResult {
   dispatches: DispatchDto[];
   route: RouteResult;
   task?: TaskDto;
+  acknowledgementMessage?: MessageDto;
 }
 
 export interface ListChannelMessagesInput {
@@ -2491,7 +2492,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             teamId: messageInput.teamId,
             title: messageInput.body.trim() || '附件',
             description: undefined,
-            status: 'todo',
+            status: route.kind === 'dispatch' ? 'in_progress' : 'todo',
             creatorId: messageInput.userId,
             assigneeId: route.kind === 'dispatch' ? route.agentId : undefined,
             channelId: messageInput.channelId,
@@ -2525,6 +2526,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         }));
       }
       const dispatches: DispatchDto[] = [];
+      let acknowledgementMessage: MessageDto | undefined;
 
       if (route.kind === 'dispatch') {
         const dispatch = await repositories.dispatches.create({
@@ -2545,6 +2547,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           status: 'busy',
           lastSeenAt: now,
         });
+        if (task) {
+          acknowledgementMessage = await appendTaskClaimAcknowledgementMessage(repositories, {
+            id: ids.nextId(),
+            message,
+            task,
+            dispatch: toDispatchDto(dispatch),
+            createdAt: now,
+          });
+        }
       }
 
       return makeSuccess({
@@ -2554,6 +2565,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         dispatches,
         route,
         ...(task ? { task } : {}),
+        ...(acknowledgementMessage ? { acknowledgementMessage } : {}),
       });
     },
 
@@ -3430,7 +3442,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ...(workspaceRun ? { workspaceRun } : {}),
       };
       const completedTask = resultSucceeded
-        ? await markLinkedTaskDone(repositories, originMessage, now)
+        ? await markLinkedTaskInReview(repositories, originMessage, now)
         : null;
       await markAgentOnlineIfIdle(repositories, {
         agentId: resultInput.agentId,
@@ -4823,6 +4835,37 @@ function shouldNestDispatchReplyInThread(originMessage: MessageRecord | null | u
   return typeof originMessage.meta?.taskId === 'string';
 }
 
+const TASK_CLAIM_ACKNOWLEDGEMENT_BODY = '我来处理，会先看请求和附件，再把结果发在线程里。';
+
+async function appendTaskClaimAcknowledgementMessage(
+  repositories: ServerNextRepositories,
+  input: {
+    id: string;
+    message: MessageDto;
+    task: TaskDto;
+    dispatch: DispatchDto;
+    createdAt: number;
+  },
+): Promise<MessageDto> {
+  return await repositories.messages.append({
+    id: input.id,
+    teamId: input.message.teamId,
+    channelId: input.message.channelId,
+    threadId: input.message.threadId ?? input.message.id,
+    senderKind: 'agent',
+    senderId: input.dispatch.agentId,
+    body: TASK_CLAIM_ACKNOWLEDGEMENT_BODY,
+    createdAt: input.createdAt,
+    meta: {
+      kind: 'task-claim-confirmed',
+      taskId: input.task.id,
+      dispatchId: input.dispatch.id,
+      parentMessageId: input.message.id,
+      replyScope: 'thread',
+    },
+  });
+}
+
 function toRouteReason(route: RouteResult): RouteReason | undefined {
   if (route.kind !== 'dispatch') {
     return undefined;
@@ -5189,7 +5232,7 @@ async function markAgentOnlineIfIdle(
   });
 }
 
-async function markLinkedTaskDone(
+async function markLinkedTaskInReview(
   repositories: ServerNextRepositories,
   message: MessageRecord | null,
   updatedAt: number,
@@ -5199,13 +5242,13 @@ async function markLinkedTaskDone(
     return null;
   }
   const task = await repositories.tasks.getById(taskId);
-  if (!task || task.status === 'done' || task.status === 'closed') {
+  if (!task || task.status === 'in_review' || task.status === 'done' || task.status === 'closed') {
     return null;
   }
   return await repositories.tasks.update({
     taskId,
     changes: {
-      status: 'done',
+      status: 'in_review',
       updatedAt,
     },
   });
@@ -5279,7 +5322,7 @@ function taskStatusLabel(status: TaskStatus): string {
     case 'in_progress':
       return '进行中';
     case 'in_review':
-      return '待确认';
+      return '待审核';
     case 'done':
       return '已完成';
     case 'closed':
