@@ -150,6 +150,65 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('does not claim a task for an online agent without a connected daemon socket', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1100,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'message-1',
+        'task-1',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 1100,
+    });
+
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const web = await connectClient(`${baseUrl}/web`);
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+
+    await expect(
+      web.emitWithAck(WEB_EVENTS.message.send, {
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        body: '@Codex stale socket should not claim',
+        asTask: true,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      route: { kind: 'no-dispatch', reason: 'no-online-agent' },
+      dispatches: [],
+      task: { id: 'task-1', status: 'todo' },
+    });
+
+    const messages = await app.listChannelMessages({ channelId: 'channel-1', limit: 10 });
+    expect(messages).toMatchObject({
+      ok: true,
+      messages: [
+        { id: 'message-1', senderKind: 'human', body: '@Codex stale socket should not claim' },
+      ],
+    });
+  });
+
   test('emits agent:status busy on dispatch and online on cancel', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,

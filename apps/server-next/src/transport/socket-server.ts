@@ -168,6 +168,9 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
       dispatchStatus(dispatch) {
         emitDispatchStatus(webSubscribers, dispatch);
       },
+      connectedAgentDeviceIds() {
+        return [...agentSocketsByDeviceId.keys()];
+      },
       deviceScan(request) {
         agentSocketsByDeviceId.get(request.deviceId)?.emit?.(AGENT_EVENTS.device.scanRequested, request);
       },
@@ -276,8 +279,8 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
         if (!isSuccessAck(result)) {
           return;
         }
-        const task = (result as { task?: unknown }).task;
-        if (task) {
+        const tasks = resultTasks(result);
+        for (const task of tasks) {
           emitTaskUpdated(webSubscribers, task);
           const teamId = taskTeamId(task);
           if (teamId && !isMessageSendResult(result)) {
@@ -1032,6 +1035,18 @@ function resultDispatch(result: unknown): unknown {
     return null;
   }
   return (result as { dispatch?: unknown }).dispatch ?? null;
+}
+
+function resultTasks(result: unknown): unknown[] {
+  if (!result || typeof result !== 'object') {
+    return [];
+  }
+  const single = (result as { task?: unknown }).task;
+  const many = (result as { tasks?: unknown }).tasks;
+  return [
+    ...(single ? [single] : []),
+    ...(Array.isArray(many) ? many : []),
+  ];
 }
 
 function dispatchTeamId(dispatch: unknown): string | null {

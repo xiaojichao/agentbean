@@ -438,6 +438,7 @@ describe('server-next socket handlers', () => {
       teamId: 'team-1',
       channelId: 'channel-1',
       body: 'hello',
+      connectedAgentDeviceIds: [],
     });
     expect(app.getDevice).toHaveBeenCalledWith({
       userId: 'user-1',
@@ -674,6 +675,7 @@ describe('server-next socket handlers', () => {
         channelId: 'channel-1',
         body: 'ship it',
         asTask: true,
+        connectedAgentDeviceIds: [],
       },
       taskAck,
     );

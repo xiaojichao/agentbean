@@ -2006,6 +2006,13 @@ describe('server-next first-slice use cases', () => {
         },
       },
     });
+    await expect(app.getDispatchRequest({ dispatchId: 'dispatch-1' })).resolves.toMatchObject({
+      ok: true,
+      request: {
+        id: 'dispatch-1',
+        history: [],
+      },
+    });
 
     now = 321;
     await expect(app.receiveDispatchResult({
@@ -2052,6 +2059,7 @@ describe('server-next first-slice use cases', () => {
         'request-1',
         'message-2',
         'message-3',
+        'message-4',
         'dispatch-2',
         'request-2',
       ]),
@@ -2111,8 +2119,8 @@ describe('server-next first-slice use cases', () => {
       body: '继续补一条回归测试',
     })).resolves.toMatchObject({
       ok: true,
-      message: { id: 'message-3', threadId: 'message-1' },
-      dispatches: [{ id: 'dispatch-2', agentId: 'agent-1', messageId: 'message-3' }],
+      message: { id: 'message-4', threadId: 'message-1' },
+      dispatches: [{ id: 'dispatch-2', agentId: 'agent-1', messageId: 'message-4' }],
       route: { kind: 'dispatch', agentId: 'agent-1' },
     });
   });
@@ -2123,7 +2131,7 @@ describe('server-next first-slice use cases', () => {
     const app = createServerNextUseCases({
       repositories,
       clock: { now: () => now },
-      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'task-1', 'dispatch-1', 'request-1', 'message-2']) },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'task-1', 'dispatch-1', 'request-1', 'message-2', 'message-3']) },
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
     await app.registerAgent({
@@ -2174,7 +2182,7 @@ describe('server-next first-slice use cases', () => {
       body: '继续补一条回归测试',
     })).resolves.toMatchObject({
       ok: true,
-      message: { id: 'message-2', threadId: 'message-1' },
+      message: { id: 'message-3', threadId: 'message-1' },
       dispatches: [],
       route: { kind: 'no-dispatch', reason: 'no-online-agent' },
     });
@@ -3095,6 +3103,48 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('cancelDispatch restores a claimed task to todo', async () => {
+    let now = 452;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'task-1', 'dispatch-1', 'request-1', 'message-2']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      lastSeenAt: now,
+    });
+
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex 实现任务认领',
+    })).resolves.toMatchObject({
+      ok: true,
+      task: { id: 'task-1', status: 'in_progress' },
+      acknowledgementMessage: { id: 'message-2' },
+    });
+
+    now = 470;
+    await expect(app.cancelDispatch({ userId: 'user-1', dispatchId: 'dispatch-1' })).resolves.toMatchObject({
+      ok: true,
+      dispatch: { id: 'dispatch-1', status: 'cancelled', completedAt: 470 },
+      task: { id: 'task-1', status: 'todo', updatedAt: 470 },
+    });
+    await expect(app.listTasks({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1' })).resolves.toMatchObject({
+      ok: true,
+      tasks: [{ id: 'task-1', status: 'todo', updatedAt: 470 }],
+    });
+  });
+
   test('cancelChannelDispatches cancels pending dispatches in a channel once', async () => {
     let now = 460;
     const app = createInMemoryServerNext({
@@ -3425,7 +3475,7 @@ describe('server-next first-slice use cases', () => {
     });
     await expect(app.listTasks({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1' })).resolves.toMatchObject({
       ok: true,
-      tasks: [{ id: 'task-1', status: 'in_progress' }],
+      tasks: [{ id: 'task-1', status: 'todo' }],
     });
   });
 

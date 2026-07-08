@@ -29,6 +29,7 @@ type UseCaseName = keyof ServerNextUseCases;
 type BindOptions = Pick<WebSocketHandlerOptions, 'authenticatedUser'> & {
   currentTeamFromSession?: boolean;
   requireAuthenticatedUser?: boolean;
+  augmentInput?(input: unknown): unknown | Promise<unknown>;
 };
 type DeviceRenameSocketInput = {
   userId: string;
@@ -52,6 +53,7 @@ export interface WebSocketHandlerOptions {
   dispatch?(request: DispatchRequestDto & { id: string }): void;
   dispatchCancel?(request: DispatchRequestDto & { id: string }): void;
   dispatchStatus?(dispatch: unknown): void;
+  connectedAgentDeviceIds?(): string[];
   deviceScan?(request: DeviceScanEmitRequest): void;
   deviceSelectDirectory?(request: { deviceId: string }): Promise<{ ok: boolean; path?: string; error?: string }>;
   afterMessageSend?(payload: unknown, result: unknown): Promise<void> | void;
@@ -70,6 +72,7 @@ export interface AgentSocketHandlerOptions {
   afterDeviceInviteWait?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  afterTaskMutation?(payload: unknown, result: unknown): Promise<void> | void;
   // hello 成功后首推 scanRequested（带 customAgents）给该 device，触发 daemon 扫 custom skills。
   // 复用 web 端 requestDeviceScan 的下发通道（按 deviceId emit 到对应 device socket）。
   deviceScan?(request: DeviceScanEmitRequest): void;
@@ -315,7 +318,15 @@ export function registerWebSocketHandlers(
         options.dispatch(request.request);
       }
     }
-  }, { authenticatedUser: options.authenticatedUser });
+  }, {
+    authenticatedUser: options.authenticatedUser,
+    augmentInput(input) {
+      const connectedAgentDeviceIds = options.connectedAgentDeviceIds?.() ?? [];
+      return connectedAgentDeviceIds.length > 0
+        ? { ...(input as Record<string, unknown>), connectedAgentDeviceIds }
+        : { ...(input as Record<string, unknown>), connectedAgentDeviceIds: [] };
+    },
+  });
   bind(socket, WEB_EVENTS.message.search, app, 'searchMessages', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.context, app, 'getMessageContext', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.react, app, 'reactMessage', undefined, { authenticatedUser: options.authenticatedUser });
@@ -343,6 +354,7 @@ export function registerWebSocketHandlers(
       return;
     }
     await options.afterAgentMutation?.(_payload, result);
+    await options.afterTaskMutation?.(_payload, result);
     options.dispatchStatus?.(result.dispatch);
     if (!options.dispatchCancel) {
       return;
@@ -357,6 +369,7 @@ export function registerWebSocketHandlers(
       return;
     }
     await options.afterAgentMutation?.(_payload, result);
+    await options.afterTaskMutation?.(_payload, result);
     for (const dispatch of result.dispatches) {
       options.dispatchStatus?.(dispatch);
       if (!options.dispatchCancel) {
@@ -424,10 +437,14 @@ export function registerAgentSocketHandlers(
   bind(socket, AGENT_EVENTS.device.runtimes, app, 'reportDeviceRuntimes', afterDeviceMutation);
   const afterAgentMutation = (payload: unknown, result: unknown) =>
     options.afterAgentMutation?.(payload, result);
+  const afterDispatchCompletion = async (payload: unknown, result: unknown) => {
+    await options.afterAgentMutation?.(payload, result);
+    await options.afterTaskMutation?.(payload, result);
+  };
   bind(socket, AGENT_EVENTS.agent.registerBatch, app, 'registerDiscoveredAgents', afterAgentMutation);
   bind(socket, AGENT_EVENTS.agent.reportCustomSkills, app, 'reportCustomSkills', afterAgentMutation);
-  bind(socket, AGENT_EVENTS.dispatch.result, app, 'receiveDispatchResult', afterAgentMutation);
-  bind(socket, AGENT_EVENTS.dispatch.error, app, 'receiveDispatchError', afterAgentMutation);
+  bind(socket, AGENT_EVENTS.dispatch.result, app, 'receiveDispatchResult', afterDispatchCompletion);
+  bind(socket, AGENT_EVENTS.dispatch.error, app, 'receiveDispatchError', afterDispatchCompletion);
 }
 
 function bind(
@@ -441,7 +458,8 @@ function bind(
   socket.on(event, async (payload, ack) => {
     try {
       const method = app[methodName] as (input: unknown) => Promise<unknown>;
-      const input = await withAuthenticatedUserId(payload, options);
+      const baseInput = await withAuthenticatedUserId(payload, options);
+      const input = options.augmentInput ? await options.augmentInput(baseInput) : baseInput;
       const result = await method(input);
       ack?.(result);
       await afterResult?.(input, result);
