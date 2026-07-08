@@ -500,6 +500,47 @@ describe('daemon-next command executor', () => {
     expect(output.workspaceRun?.exitCode).toBe(0);
   });
 
+  test('openclaw surfaces stderr (not just the exit code) when the agent command fails, so the real error reaches the user', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
+    const scriptPath = join(cwd, 'fake-openclaw-fail.mjs');
+    writeFileSync(
+      scriptPath,
+      [
+        `// Simulate openclaw failing before replying: emit a diagnostic on stderr, then exit 1.`,
+        `process.stderr.write('Error: agent main not found\\n');`,
+        `process.exit(1);`,
+      ].join('\n'),
+    );
+
+    const executor = createCommandExecutor({ clock: createClock([1000, 1010]) });
+    const output = await executor({
+      id: 'dispatch-fail',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'hi',
+      customAgent: {
+        adapterKind: 'openclaw',
+        command: process.execPath,
+        args: [scriptPath, 'agent', '--agent', 'main'],
+        cwd,
+      },
+    });
+
+    expect(typeof output).toBe('object');
+    if (typeof output !== 'object') {
+      throw new Error('expected structured command result');
+    }
+    // The real cause (stderr) must reach the user instead of a bare exit code —
+    // otherwise a failing OpenClaw run is indistinguishable from any other failure.
+    expect(output.body).toContain('agent main not found');
+    expect(output.body).not.toBe('custom agent command exited with code 1');
+    expect(output.workspaceRun?.status).toBe('failed');
+    expect(output.workspaceRun?.exitCode).toBe(1);
+  });
+
   test('normalizes openclaw custom args so agent options stay under the agent subcommand', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
     const scriptPath = join(cwd, 'fake-openclaw.mjs');

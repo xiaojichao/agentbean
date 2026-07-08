@@ -509,6 +509,23 @@ interface AgentAdapterSpec {
   extractReply?: (stdout: string, code: number | null, stderr: string) => string;
 }
 
+// Generic argv-mode reply extractor for agents without agent-specific stdout quirks (openclaw):
+// return stdout when present, otherwise surface stderr (capped) so a failing run tells the user
+// why instead of a bare exit code. Hermes has its own extractor (strips quiet-mode metadata);
+// agents without an extractReply fall through to the generic stdout/exit-code rule in
+// runCustomAgentCommand, which is what dropped OpenClaw's stderr on failure.
+function extractFallbackReply(stdout: string, code: number | null, stderr: string): string {
+  const reply = stdout.trim();
+  if (reply) {
+    return reply;
+  }
+  if (code !== 0) {
+    const detail = stderr.trim();
+    return detail ? detail.slice(0, 2000) : `custom agent command exited with code ${code ?? 1}`;
+  }
+  return stdout.trimEnd();
+}
+
 // Custom invocation contracts for agents that cannot use the generic stdin path. Argv-mode
 // adapters (hermes, openclaw) put the prompt on argv; stdin-mode adapters (claude-code) keep it
 // on stdin but inject a non-interactive flag. Unregistered adapterKinds (codex, gemini, kimi-cli)
@@ -522,6 +539,7 @@ const ARGV_MODE_ADAPTERS: Partial<Record<AdapterKind, AgentAdapterSpec>> = {
   openclaw: {
     buildArgs: buildOpenClawArgs,
     redactCommandArgs: redactOpenClawCommandArgs,
+    extractReply: extractFallbackReply,
   },
   'claude-code': {
     buildArgs: buildClaudeCodeArgs,
