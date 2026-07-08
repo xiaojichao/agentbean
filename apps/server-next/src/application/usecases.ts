@@ -2455,7 +2455,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const messageId = ids.nextId();
       const threadId = messageInput.threadId ?? messageId;
       const visibleAgents = await repositories.agents.listVisibleInTeam(messageInput.teamId);
-      const contextAgentId = messageInput.threadId
+      const contextOwner = messageInput.threadId
         ? await resolveRoutingContextAgentId(repositories, {
             teamId: messageInput.teamId,
             channel,
@@ -2467,7 +2467,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         visibleAgents,
         teamId: messageInput.teamId,
         body: messageInput.body,
-        contextAgentId,
+        contextOwner,
       });
       const attachmentResult = await getAttachableUploadedArtifacts(repositories, {
         userId: messageInput.userId,
@@ -4688,7 +4688,7 @@ function routeMessageForChannel(input: {
   visibleAgents: AgentDto[];
   teamId: string;
   body: string;
-  contextAgentId?: string;
+  contextOwner?: RoutingContextOwner;
 }): RouteResult {
   if (input.channel.kind === 'direct') {
     const targetAgentId = input.channel.dmTargetAgentId ?? input.channel.agentMemberIds[0];
@@ -4711,8 +4711,12 @@ function routeMessageForChannel(input: {
   if ((route.kind === 'dispatch' && route.reason === 'mention') || (route.kind === 'no-dispatch' && route.reason !== 'no-online-agent')) {
     return route;
   }
-  if (input.contextAgentId) {
-    const contextAgent = input.visibleAgents.find((agent) => agent.id === input.contextAgentId);
+  const contextOwner = input.contextOwner;
+  if (contextOwner?.kind === 'human') {
+    return { kind: 'no-dispatch', reason: 'human-assignee' };
+  }
+  if (contextOwner?.kind === 'agent') {
+    const contextAgent = input.visibleAgents.find((agent) => agent.id === contextOwner.agentId);
     return contextAgent && isDispatchEligibleAgent(contextAgent, input)
       ? { kind: 'dispatch', agentId: contextAgent.id, reason: 'fallback' }
       : { kind: 'no-dispatch', reason: 'no-online-agent' };
@@ -4720,42 +4724,47 @@ function routeMessageForChannel(input: {
   return route;
 }
 
+type RoutingContextOwner =
+  | { kind: 'agent'; agentId: string }
+  | { kind: 'human' };
+
 async function resolveRoutingContextAgentId(
   repositories: ServerNextRepositories,
   input: { teamId: string; channel: ChannelRecord; threadId: string },
-): Promise<string | undefined> {
+): Promise<RoutingContextOwner | undefined> {
   const root = await repositories.messages.getById(input.threadId);
   if (!root || root.teamId !== input.teamId || root.channelId !== input.channel.id) {
     return undefined;
   }
 
-  const rootTaskAssignee = await taskAgentAssigneeId(repositories, input.teamId, root);
+  const rootTaskAssignee = await taskAssigneeOwner(repositories, input.teamId, root);
   if (rootTaskAssignee) {
     return rootTaskAssignee;
   }
 
-  const recentMessages = await repositories.messages.listByChannel(input.channel.id, 200);
-  const threadMessages = recentMessages
-    .filter((message) => message.id === input.threadId || message.threadId === input.threadId)
-    .sort((left, right) => left.createdAt - right.createdAt);
+  const threadMessages = await repositories.messages.listByThread({
+    channelId: input.channel.id,
+    threadId: input.threadId,
+    limit: 200,
+  });
   for (const message of [...threadMessages].reverse()) {
-    const taskAssignee = await taskAgentAssigneeId(repositories, input.teamId, message);
+    const taskAssignee = await taskAssigneeOwner(repositories, input.teamId, message);
     if (taskAssignee) {
       return taskAssignee;
     }
     if (message.senderKind === 'agent' && message.senderId) {
-      return message.senderId;
+      return { kind: 'agent', agentId: message.senderId };
     }
   }
 
   return undefined;
 }
 
-async function taskAgentAssigneeId(
+async function taskAssigneeOwner(
   repositories: ServerNextRepositories,
   teamId: string,
   message: MessageRecord,
-): Promise<string | undefined> {
+): Promise<RoutingContextOwner | undefined> {
   const taskId = typeof message.meta?.taskId === 'string' ? message.meta.taskId : undefined;
   if (!taskId) {
     return undefined;
@@ -4765,7 +4774,10 @@ async function taskAgentAssigneeId(
     return undefined;
   }
   const agent = await repositories.agents.getById(task.assigneeId);
-  return agent && agent.visibleTeamIds.includes(teamId) ? agent.id : undefined;
+  if (agent) {
+    return agent.visibleTeamIds.includes(teamId) ? { kind: 'agent', agentId: agent.id } : undefined;
+  }
+  return await repositories.teams.isMember(teamId, task.assigneeId) ? { kind: 'human' } : undefined;
 }
 
 function isDispatchEligibleAgent(

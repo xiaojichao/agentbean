@@ -24,7 +24,7 @@ export interface RouteMessageInput {
 
 export type RouteResult =
   | { kind: 'dispatch'; agentId: string; reason: 'mention' | 'fallback' | 'direct' }
-  | { kind: 'no-dispatch'; reason: 'unknown-mention' | 'human-mention' | 'no-online-agent' };
+  | { kind: 'no-dispatch'; reason: 'unknown-mention' | 'human-mention' | 'human-assignee' | 'no-online-agent' };
 
 export function normalizeMentionName(value: string): string {
   return value.trim().toLowerCase().replace(/[\s_]+/g, '-').replace(/-+/g, '-');

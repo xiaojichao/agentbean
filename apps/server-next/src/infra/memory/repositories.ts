@@ -776,6 +776,15 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           .sort((left, right) => left.createdAt - right.createdAt)
           .slice(-limit);
       },
+      async listByThread(input) {
+        return Array.from(messages.values())
+          .filter((message) =>
+            message.channelId === input.channelId &&
+            (message.id === input.threadId || message.threadId === input.threadId)
+          )
+          .sort((left, right) => left.createdAt - right.createdAt)
+          .slice(-input.limit);
+      },
       async search(input) {
         const channelIds = new Set(input.channelIds);
         const pool = Array.from(messages.values()).filter((message) => channelIds.has(message.channelId));
