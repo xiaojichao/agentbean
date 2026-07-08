@@ -2021,6 +2021,221 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('sendMessage routes task thread replies back to the assigned agent', async () => {
+    let now = 326;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'message-1',
+        'task-1',
+        'dispatch-1',
+        'request-1',
+        'message-2',
+        'message-3',
+        'dispatch-2',
+        'request-2',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-2',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      channelIds: ['channel-1'],
+      name: 'Claude-Agent',
+      adapterKind: 'claude-code',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-2',
+      lastSeenAt: now,
+    });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      channelIds: ['channel-1'],
+      name: 'Codex-Agent',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex-Agent 实现任务归属规则',
+    })).resolves.toMatchObject({
+      ok: true,
+      task: { id: 'task-1', assigneeId: 'agent-1' },
+      dispatches: [{ id: 'dispatch-1', agentId: 'agent-1' }],
+    });
+
+    now = 327;
+    await app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: '已完成第一轮',
+    });
+
+    now = 328;
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'message-1',
+      body: '继续补一条回归测试',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: { id: 'message-3', threadId: 'message-1' },
+      dispatches: [{ id: 'dispatch-2', agentId: 'agent-1', messageId: 'message-3' }],
+      route: { kind: 'dispatch', agentId: 'agent-1' },
+    });
+  });
+
+  test('sendMessage does not let another agent steal a thread when the assignee is offline', async () => {
+    let now = 329;
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => now },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'task-1', 'dispatch-1', 'request-1', 'message-2']) },
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-2',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      channelIds: ['channel-1'],
+      name: 'Claude-Agent',
+      adapterKind: 'claude-code',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-2',
+      lastSeenAt: now,
+    });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      channelIds: ['channel-1'],
+      name: 'Codex-Agent',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex-Agent 实现任务归属规则',
+    });
+    await repositories.agents.updateStatus({
+      agentId: 'agent-1',
+      status: 'offline',
+      lastSeenAt: now,
+    });
+
+    now = 330;
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'message-1',
+      body: '继续补一条回归测试',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: { id: 'message-2', threadId: 'message-1' },
+      dispatches: [],
+      route: { kind: 'no-dispatch', reason: 'no-online-agent' },
+    });
+  });
+
+  test('sendMessage keeps non-task thread replies with the latest agent responder', async () => {
+    let now = 331;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+        'message-2',
+        'message-3',
+        'dispatch-2',
+        'request-2',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-2',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      channelIds: ['channel-1'],
+      name: 'Claude-Agent',
+      adapterKind: 'claude-code',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-2',
+      lastSeenAt: now,
+    });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      channelIds: ['channel-1'],
+      name: 'Codex-Agent',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex-Agent 你有哪些 skills?',
+    });
+
+    now = 332;
+    await app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: '我可以写代码、查日志和整理计划。',
+    });
+
+    now = 333;
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'message-1',
+      body: '那你继续说说怎么做验证',
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [{ id: 'dispatch-2', agentId: 'agent-1', messageId: 'message-3' }],
+      route: { kind: 'dispatch', agentId: 'agent-1' },
+    });
+  });
+
   test('sendMessage keeps lightweight capability questions as ordinary channel messages', async () => {
     const app = createInMemoryServerNext({
       now: () => 325,

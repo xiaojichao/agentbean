@@ -2455,11 +2455,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const messageId = ids.nextId();
       const threadId = messageInput.threadId ?? messageId;
       const visibleAgents = await repositories.agents.listVisibleInTeam(messageInput.teamId);
+      const contextAgentId = messageInput.threadId
+        ? await resolveRoutingContextAgentId(repositories, {
+            teamId: messageInput.teamId,
+            channel,
+            threadId: messageInput.threadId,
+          })
+        : undefined;
       const route = routeMessageForChannel({
         channel,
         visibleAgents,
         teamId: messageInput.teamId,
         body: messageInput.body,
+        contextAgentId,
       });
       const attachmentResult = await getAttachableUploadedArtifacts(repositories, {
         userId: messageInput.userId,
@@ -4680,6 +4688,7 @@ function routeMessageForChannel(input: {
   visibleAgents: AgentDto[];
   teamId: string;
   body: string;
+  contextAgentId?: string;
 }): RouteResult {
   if (input.channel.kind === 'direct') {
     const targetAgentId = input.channel.dmTargetAgentId ?? input.channel.agentMemberIds[0];
@@ -4692,13 +4701,84 @@ function routeMessageForChannel(input: {
       ? { kind: 'dispatch', agentId: targetAgent.id, reason: 'direct' }
       : { kind: 'no-dispatch', reason: 'no-online-agent' };
   }
-  return routeMessage({
+  const route = routeMessage({
     body: input.body,
     agents: input.visibleAgents,
     humanMembers: [],
     teamId: input.teamId,
     channelId: input.channel.id,
   });
+  if ((route.kind === 'dispatch' && route.reason === 'mention') || (route.kind === 'no-dispatch' && route.reason !== 'no-online-agent')) {
+    return route;
+  }
+  if (input.contextAgentId) {
+    const contextAgent = input.visibleAgents.find((agent) => agent.id === input.contextAgentId);
+    return contextAgent && isDispatchEligibleAgent(contextAgent, input)
+      ? { kind: 'dispatch', agentId: contextAgent.id, reason: 'fallback' }
+      : { kind: 'no-dispatch', reason: 'no-online-agent' };
+  }
+  return route;
+}
+
+async function resolveRoutingContextAgentId(
+  repositories: ServerNextRepositories,
+  input: { teamId: string; channel: ChannelRecord; threadId: string },
+): Promise<string | undefined> {
+  const root = await repositories.messages.getById(input.threadId);
+  if (!root || root.teamId !== input.teamId || root.channelId !== input.channel.id) {
+    return undefined;
+  }
+
+  const rootTaskAssignee = await taskAgentAssigneeId(repositories, input.teamId, root);
+  if (rootTaskAssignee) {
+    return rootTaskAssignee;
+  }
+
+  const recentMessages = await repositories.messages.listByChannel(input.channel.id, 200);
+  const threadMessages = recentMessages
+    .filter((message) => message.id === input.threadId || message.threadId === input.threadId)
+    .sort((left, right) => left.createdAt - right.createdAt);
+  for (const message of [...threadMessages].reverse()) {
+    const taskAssignee = await taskAgentAssigneeId(repositories, input.teamId, message);
+    if (taskAssignee) {
+      return taskAssignee;
+    }
+    if (message.senderKind === 'agent' && message.senderId) {
+      return message.senderId;
+    }
+  }
+
+  return undefined;
+}
+
+async function taskAgentAssigneeId(
+  repositories: ServerNextRepositories,
+  teamId: string,
+  message: MessageRecord,
+): Promise<string | undefined> {
+  const taskId = typeof message.meta?.taskId === 'string' ? message.meta.taskId : undefined;
+  if (!taskId) {
+    return undefined;
+  }
+  const task = await repositories.tasks.getById(taskId);
+  if (!task || task.teamId !== teamId || !task.assigneeId) {
+    return undefined;
+  }
+  const agent = await repositories.agents.getById(task.assigneeId);
+  return agent && agent.visibleTeamIds.includes(teamId) ? agent.id : undefined;
+}
+
+function isDispatchEligibleAgent(
+  agent: AgentDto,
+  input: { teamId: string; channel: ChannelRecord },
+): boolean {
+  if (agent.status !== 'online') {
+    return false;
+  }
+  if (!agent.visibleTeamIds.includes(input.teamId)) {
+    return false;
+  }
+  return true;
 }
 
 function shouldAutoCreateTaskThread(input: {
