@@ -7,7 +7,7 @@ import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, Fol
 import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl, fetchAgentWorkspace, authedApiUrl } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { daemonVersionDisplay } from '@/lib/daemon-version';
-import { canAddCustomAgentToDevice, canManageDeviceForUser } from '@/lib/device-permissions';
+import { canAddCustomAgentToDevice, canBrowseDirectory, canManageDeviceForUser, hasLocalDevice, requiresDeleteNameConfirm } from '@/lib/device-permissions';
 import { formatRelative } from '@/lib/format-time';
 import { directoryPickerErrorMessage } from '@/lib/directory-picker-error';
 import { formatCreateAgentError } from '@/lib/agent-create-error';
@@ -93,12 +93,14 @@ function DirectoryBrowseButton({
   deviceId,
   daemonVersion,
   disabled = false,
+  isLocal = true,
 }: {
   onSelect: (path: string) => void;
   onError?: (message: string) => void;
   deviceId?: string;
   daemonVersion?: string | null;
   disabled?: boolean;
+  isLocal?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [browsing, setBrowsing] = useState(false);
@@ -144,6 +146,13 @@ function DirectoryBrowseButton({
     setBrowsing(false);
   };
 
+  if (!canBrowseDirectory(isLocal)) {
+    return (
+      <span className="shrink-0 self-center text-[11px] text-neutral-400">
+        远程设备请手动填写该设备上的项目绝对路径
+      </span>
+    );
+  }
   return (
     <>
       <button type="button" disabled={disabled || browsing} onClick={browse} className="shrink-0 flex items-center gap-1 rounded-md border border-neutral-200 px-3 py-1.5 text-xs text-neutral-600 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50">
@@ -205,6 +214,7 @@ export default function DevicesPage() {
   }, [conn, deviceTeamId, applyDevicesSnapshot, applyDeviceStatus]);
 
   const deviceList = useMemo(() => Object.values(devices).sort(compareDevices), [devices]);
+  const noLocalDevice = !hasLocalDevice(deviceList);
   const deviceGroups = useMemo(() => {
     const groups = new Map<string, typeof deviceList>();
     for (const device of deviceList) {
@@ -275,6 +285,11 @@ export default function DevicesPage() {
               <Plus size={16} />
             </button>
           </div>
+        {noLocalDevice && deviceList.length > 0 && (
+          <div className="mx-2 mb-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-700">
+            未关联本机设备：目录浏览、删除确认等操作将按远程设备处理。请在当前使用的设备上完成设备登录以启用本机功能。
+          </div>
+        )}
         <div className="flex-1 overflow-y-auto p-1.5">
           {deviceGroups.map((group) => (
             <div key={group.ownerName} className="mb-3 last:mb-0">
@@ -297,7 +312,12 @@ export default function DevicesPage() {
                     <Circle size={6} className={`absolute -right-0.5 -top-0.5 fill-current ${STATUS_COLORS[device.status] ?? 'text-neutral-300'}`} />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium leading-tight">{deviceDisplayName(device) === device.id ? '未命名设备' : deviceDisplayName(device)}</div>
+                    <div className="flex items-center gap-1">
+                      <span className="truncate text-sm font-medium leading-tight">{deviceDisplayName(device) === device.id ? '未命名设备' : deviceDisplayName(device)}</span>
+                      {device.isLocal === true && (
+                        <span className="shrink-0 rounded bg-green-50 px-1 text-[10px] font-medium text-green-700">本机</span>
+                      )}
+                    </div>
                     <div className="flex items-center gap-1 text-[11px] text-neutral-400">
                       <span>daemon</span>
                       <span className={device.status === 'online' ? 'text-neutral-600' : ''}>{formatDaemonVersion(device)}</span>
@@ -382,6 +402,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const [deviceNameError, setDeviceNameError] = useState('');
   const [deviceDeleteSaving, setDeviceDeleteSaving] = useState(false);
   const [deviceDeleteError, setDeviceDeleteError] = useState('');
+  const [deviceDeleteConfirmName, setDeviceDeleteConfirmName] = useState('');
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentTeamRole = useAgentBeanStore((s) => s.teams.find((team) => team.id === currentTeamId)?.currentUserRole);
@@ -566,7 +587,12 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
             <Monitor size={24} className="text-neutral-600" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold">{displayName}</h1>
+            <h1 className="flex items-center gap-2 text-lg font-semibold">
+              <span>{displayName}</span>
+              {isLocalDevice && (
+                <span className="rounded bg-green-50 px-1.5 py-0.5 text-[10px] font-medium text-green-700">本机</span>
+              )}
+            </h1>
             <div className="mt-1 flex items-center gap-3">
               <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${STATUS_BG[device.status] ?? 'bg-neutral-100 text-neutral-500'}`}>
                 <Circle size={5} className="fill-current" />
@@ -729,21 +755,38 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
               <div className="text-sm font-medium text-red-700">删除设备</div>
               <div className="text-xs text-red-400">永久删除此设备。需先删除所有 Agent。</div>
             </div>
-            <button onClick={() => setShowDeleteConfirm(true)} className="rounded-md border border-red-300 px-4 py-2 text-sm text-red-600 hover:bg-red-50" data-smoke="device-delete-open">
+            <button onClick={() => { setDeviceDeleteConfirmName(''); setShowDeleteConfirm(true); }} className="rounded-md border border-red-300 px-4 py-2 text-sm text-red-600 hover:bg-red-50" data-smoke="device-delete-open">
               删除设备
             </button>
           </div>
           {showDeleteConfirm && (
             <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-4">
               <p className="mb-3 text-sm text-red-700">确定要删除设备 <strong>{displayName}</strong> 吗？此操作不可撤销。</p>
+              {requiresDeleteNameConfirm(isLocalDevice) && (
+                <>
+                  <p className="mb-2 text-xs font-medium text-red-600">这是远程设备，删除将影响该设备的 daemon 连接。请输入设备名 <strong>{displayName}</strong> 以确认：</p>
+                  <input
+                    value={deviceDeleteConfirmName}
+                    onChange={(e) => setDeviceDeleteConfirmName(e.target.value)}
+                    placeholder={displayName}
+                    className="mb-3 w-full rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-red-400"
+                    data-smoke="device-delete-name-input"
+                  />
+                </>
+              )}
               {deviceDeleteError && (
                 <div className="mb-3 rounded-md border border-red-200 bg-white px-3 py-2 text-xs text-red-700" data-smoke="device-delete-error">
                   {deviceDeleteError}
                 </div>
               )}
               <div className="flex gap-2">
-                <button onClick={() => { setDeviceDeleteError(''); setShowDeleteConfirm(false); }} disabled={deviceDeleteSaving} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50">取消</button>
-                <button onClick={confirmDeleteDevice} disabled={deviceDeleteSaving} className="rounded-md bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50" data-smoke="device-delete-confirm">
+                <button onClick={() => { setDeviceDeleteError(''); setDeviceDeleteConfirmName(''); setShowDeleteConfirm(false); }} disabled={deviceDeleteSaving} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50">取消</button>
+                <button
+                  onClick={confirmDeleteDevice}
+                  disabled={deviceDeleteSaving || (requiresDeleteNameConfirm(isLocalDevice) && deviceDeleteConfirmName.trim() !== displayName)}
+                  className="rounded-md bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50"
+                  data-smoke="device-delete-confirm"
+                >
                   {deviceDeleteSaving ? '删除中...' : '确认删除'}
                 </button>
               </div>
@@ -785,6 +828,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           networkId={currentTeamId}
           daemonVersion={device.systemInfo?.daemonVersion ?? device.daemonVersionInfo?.current ?? null}
           runtimes={runtimeList}
+          isLocal={isLocalDevice}
           onClose={() => setShowAddCustom(false)}
           onCreated={() => {
             setShowAddCustom(false);
@@ -1288,7 +1332,7 @@ function EnvironmentVariableEditor({ rows, onChange }: { rows: EnvRow[]; onChang
   );
 }
 
-function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDeviceSettings, onClose, onSaved }: { agent: any; device?: { systemInfo?: { daemonVersion?: string } | null; daemonVersionInfo?: { current: string | null } }; runtimes: any[]; canEditMetadata: boolean; canEditDeviceSettings: boolean; onClose: () => void; onSaved: () => void }) {
+function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDeviceSettings, onClose, onSaved }: { agent: any; device?: { systemInfo?: { daemonVersion?: string } | null; daemonVersionInfo?: { current: string | null }; isLocal?: boolean }; runtimes: any[]; canEditMetadata: boolean; canEditDeviceSettings: boolean; onClose: () => void; onSaved: () => void }) {
   const isCustom = agent.source === 'custom';
   const isAgentOS = agent.category === 'agentos-hosted';
   const editable = isCustom || isAgentOS;
@@ -1369,7 +1413,7 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
               <div className="flex gap-2">
                 <input value={cwd} onChange={(e) => setCwd(e.target.value)} disabled={!canEditRuntimeFields} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50" placeholder="/path/to/project（可选）" />
                 {canEditRuntimeFields && (
-                  <DirectoryBrowseButton deviceId={agent.deviceId} daemonVersion={device?.systemInfo?.daemonVersion ?? device?.daemonVersionInfo?.current ?? null} onSelect={setCwd} onError={setError} />
+                  <DirectoryBrowseButton deviceId={agent.deviceId} daemonVersion={device?.systemInfo?.daemonVersion ?? device?.daemonVersionInfo?.current ?? null} onSelect={setCwd} onError={setError} isLocal={device?.isLocal === true} />
                 )}
               </div>
               {canEditRuntimeFields && <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录，留空则使用默认路径</p>}
@@ -1397,7 +1441,7 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
   );
 }
 
-function AddCustomAgentDialog({ deviceId, networkId, daemonVersion, runtimes, onClose, onCreated }: { deviceId: string; networkId?: string | null; daemonVersion?: string | null; runtimes: any[]; onClose: () => void; onCreated: () => void }) {
+function AddCustomAgentDialog({ deviceId, networkId, daemonVersion, runtimes, isLocal = true, onClose, onCreated }: { deviceId: string; networkId?: string | null; daemonVersion?: string | null; runtimes: any[]; isLocal?: boolean; onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState('');
   const runtimeOptions = useMemo(() => buildRuntimeOptions(runtimes), [runtimes]);
   const [runtimeIndex, setRuntimeIndex] = useState('0');
@@ -1493,7 +1537,7 @@ function AddCustomAgentDialog({ deviceId, networkId, daemonVersion, runtimes, on
             <label className="mb-1 block text-xs font-medium text-neutral-600">项目目录 <span className="text-red-500">*</span></label>
             <div className="flex gap-2">
               <input value={cwd} onChange={(e) => setCwd(e.target.value)} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="/path/to/project" />
-              <DirectoryBrowseButton deviceId={deviceId} daemonVersion={daemonVersion} onSelect={setCwd} onError={setError} />
+              <DirectoryBrowseButton deviceId={deviceId} daemonVersion={daemonVersion} onSelect={setCwd} onError={setError} isLocal={isLocal} />
             </div>
             <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录</p>
           </div>
