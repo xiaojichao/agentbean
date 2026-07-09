@@ -859,7 +859,8 @@ describe('daemon-next command executor', () => {
     writeFileSync(
       scriptPath,
       [
-        `// Simulate 'claude -p' hitting an upstream gateway error: emit the diagnostic on stderr, then exit 1.`,
+        `// Simulate 'claude -p' writing partial stdout before an upstream gateway error.`,
+        `process.stdout.write('warming up claude-code\\n');`,
         `process.stderr.write('API Error: 529 [该模型当前访问量过大，请您稍后再试]\\n');`,
         `process.exit(1);`,
       ].join('\n'),
@@ -890,6 +891,7 @@ describe('daemon-next command executor', () => {
     // otherwise a failing claude-code run (e.g. upstream gateway 529) is
     // indistinguishable from any other failure.
     expect(output.body).toContain('该模型当前访问量过大');
+    expect(output.body).not.toContain('warming up claude-code');
     expect(output.body).not.toBe('custom agent command exited with code 1');
     expect(output.workspaceRun?.status).toBe('failed');
     expect(output.workspaceRun?.exitCode).toBe(1);
