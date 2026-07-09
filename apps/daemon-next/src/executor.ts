@@ -593,5 +593,10 @@ const ARGV_MODE_ADAPTERS: Partial<Record<AdapterKind, AgentAdapterSpec>> = {
   'claude-code': {
     buildArgs: buildClaudeCodeArgs,
     promptOnStdin: true,
+    // claude-code -p writes the reply to stdout with no session-metadata lines to
+    // strip, so the generic extractor suffices. The load-bearing part is surfacing
+    // stderr on failure — without it an upstream error (e.g. gateway HTTP 529) shows
+    // up as a bare "exited with code 1" and the real cause never reaches the user.
+    extractReply: extractFallbackReply,
   },
 };

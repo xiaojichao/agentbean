@@ -852,6 +852,48 @@ describe('daemon-next command executor', () => {
     expect(output.workspaceRun?.status).toBe('succeeded');
     expect(output.workspaceRun?.exitCode).toBe(0);
   });
+
+  test('claude-code surfaces stderr (not just the exit code) when the agent command fails, so the real error reaches the user', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
+    const scriptPath = join(cwd, 'fake-claude-fail.mjs');
+    writeFileSync(
+      scriptPath,
+      [
+        `// Simulate 'claude -p' hitting an upstream gateway error: emit the diagnostic on stderr, then exit 1.`,
+        `process.stderr.write('API Error: 529 [该模型当前访问量过大，请您稍后再试]\\n');`,
+        `process.exit(1);`,
+      ].join('\n'),
+    );
+
+    const executor = createCommandExecutor({ clock: createClock([1000, 1010]) });
+    const output = await executor({
+      id: 'dispatch-claude-fail',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: '你在用什么模型',
+      customAgent: {
+        adapterKind: 'claude-code',
+        command: process.execPath,
+        args: [scriptPath],
+        cwd,
+      },
+    });
+
+    expect(typeof output).toBe('object');
+    if (typeof output !== 'object') {
+      throw new Error('expected structured command result');
+    }
+    // The real cause (stderr) must reach the user instead of a bare exit code —
+    // otherwise a failing claude-code run (e.g. upstream gateway 529) is
+    // indistinguishable from any other failure.
+    expect(output.body).toContain('该模型当前访问量过大');
+    expect(output.body).not.toBe('custom agent command exited with code 1');
+    expect(output.workspaceRun?.status).toBe('failed');
+    expect(output.workspaceRun?.exitCode).toBe(1);
+  });
 });
 
 function createClock(values: number[]) {
