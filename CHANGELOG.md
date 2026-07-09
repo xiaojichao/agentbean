@@ -6,8 +6,19 @@
 
 ## [Daily 2026-07-09] - 2026-07-09
 ### Added
+- 发布 daemon-next 0.3.4：透传 claude-code 失败时的 stderr
 - 发布包含 OpenClaw 失败诊断的 daemon 版本
+### Changed
+- 让连续消息赶上 Agent 派发窗口
+- 让 Agent 一次接住连续补充消息
+- 透传 claude-code 失败时的 stderr 到回复体
+- 让更新日志更贴近参考产品的可扫描形态
+- 阻止 OpenClaw 健康警告进入聊天回复
+- 让设置页更新日志每天自动刷新
+### Removed
+- 移除无本机设备身份的全局告警
 ### Fixed
+- 防止远程设备触发本机专属操作
 - 防止 Agent 配置和 OpenClaw 失败隐藏真实错误
 
 ## [0.2.0] - 2026-07-03
