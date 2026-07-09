@@ -16,7 +16,7 @@ import {
   type BrowserSettings,
 } from '@/lib/browser-settings';
 import { releases } from '@/lib/releases.generated';
-import type { Release, ChangeType } from '@/lib/changelog';
+import { formatReleaseVersion, type Release, type ChangeType } from '@/lib/changelog';
 import { RunsPanel } from './RunsPanel';
 
 type Tab = 'account' | 'browser' | 'server' | 'runs' | 'releases';
@@ -681,7 +681,7 @@ function ReleaseEntry({ release }: { release: Release }) {
   return (
     <div>
       <div className="flex items-center gap-2">
-        <span className="text-sm font-semibold">v{release.version}</span>
+        <span className="text-sm font-semibold">{formatReleaseVersion(release.version)}</span>
         <span className="text-xs text-neutral-400">{release.date}</span>
       </div>
       <div className="mt-1.5 space-y-2 pl-2">

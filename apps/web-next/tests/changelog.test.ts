@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { parseChangelog } from '../lib/changelog';
+import { formatReleaseVersion, parseChangelog } from '../lib/changelog';
 
 const SAMPLE = `# Changelog
 
@@ -102,5 +102,11 @@ describe('parseChangelog', () => {
     expect(v1.sections[0].type).toBe('Added');
     expect(v1.sections[0].items).toEqual(['real']);
     expect(v1.sections.flatMap((s) => s.items)).not.toContain('draft');
+  });
+
+  test('formatReleaseVersion 仅给 semver 版本补 v 前缀', () => {
+    expect(formatReleaseVersion('0.2.0')).toBe('v0.2.0');
+    expect(formatReleaseVersion('0.2.0-beta.1')).toBe('v0.2.0-beta.1');
+    expect(formatReleaseVersion('Daily 2026-07-09')).toBe('Daily 2026-07-09');
   });
 });
