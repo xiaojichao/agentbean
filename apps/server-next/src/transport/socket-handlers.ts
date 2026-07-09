@@ -41,6 +41,36 @@ type DeviceRenameSocketInput = {
 };
 const INTERNAL_SOCKET_ERROR_MESSAGE = 'Internal server error';
 
+type SendMessageAckMessage = {
+  id?: string;
+  teamId?: string;
+  channelId?: string;
+  threadId?: string;
+  senderId?: string;
+  body: string;
+};
+
+type SendMessageDispatchAck = {
+  id: string;
+  teamId: string;
+  channelId: string;
+  messageId: string;
+  agentId: string;
+  requestId: string;
+};
+
+interface DispatchCoalesceScope {
+  teamId?: string;
+  channelId: string;
+  senderId?: string;
+}
+
+interface PendingDispatchRequest {
+  dispatchId: string;
+  scope: DispatchCoalesceScope;
+  timer?: ReturnType<typeof setTimeout>;
+}
+
 // deviceScan 下发 request 的统一契约（hello 首推与 web-path 共用）。
 export interface DeviceScanEmitRequest {
   requestId: string;
@@ -51,6 +81,7 @@ export interface DeviceScanEmitRequest {
 export interface WebSocketHandlerOptions {
   authenticatedUser?: AuthenticatedUserProvider;
   dispatch?(request: DispatchRequestDto & { id: string }): void;
+  dispatchRequestCoalesceMs?: number;
   dispatchCancel?(request: DispatchRequestDto & { id: string }): void;
   dispatchStatus?(dispatch: unknown): void;
   connectedAgentDeviceIds?(): string[];
@@ -83,6 +114,46 @@ export function registerWebSocketHandlers(
   app: ServerNextUseCases,
   options: WebSocketHandlerOptions = {},
 ): void {
+  const dispatchRequestCoalesceMs = Math.max(0, options.dispatchRequestCoalesceMs ?? 0);
+  const pendingDispatchRequests = new Map<string, PendingDispatchRequest>();
+  const scheduleDispatchRequest = (dispatch: SendMessageDispatchAck, message: SendMessageAckMessage) => {
+    if (!options.dispatch) {
+      return;
+    }
+    if (dispatchRequestCoalesceMs <= 0) {
+      requestDispatchEmission(app, options, dispatch.id);
+      return;
+    }
+    const pending = {
+      dispatchId: dispatch.id,
+      scope: toDispatchCoalesceScope(dispatch, message),
+    };
+    pendingDispatchRequests.set(dispatch.id, pending);
+    resetPendingDispatchRequestTimer(pendingDispatchRequests, pending, dispatchRequestCoalesceMs, () => {
+      requestDispatchEmission(app, options, dispatch.id);
+    });
+  };
+  const extendPendingDispatchRequests = (message: SendMessageAckMessage) => {
+    if (dispatchRequestCoalesceMs <= 0 || pendingDispatchRequests.size === 0) {
+      return;
+    }
+    for (const pending of pendingDispatchRequests.values()) {
+      if (!messageMatchesDispatchCoalesceScope(message, pending.scope)) {
+        continue;
+      }
+      resetPendingDispatchRequestTimer(pendingDispatchRequests, pending, dispatchRequestCoalesceMs, () => {
+        requestDispatchEmission(app, options, pending.dispatchId);
+      });
+    }
+  };
+  const cancelPendingDispatchRequest = (dispatchId: string) => {
+    const pending = pendingDispatchRequests.get(dispatchId);
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timer);
+    pendingDispatchRequests.delete(dispatchId);
+  };
   bind(socket, WEB_EVENTS.auth.register, app, 'registerUser');
   bind(socket, WEB_EVENTS.auth.login, app, 'loginUser');
   bind(socket, WEB_EVENTS.auth.whoami, app, 'whoami');
@@ -312,11 +383,9 @@ export function registerWebSocketHandlers(
     if (!options.dispatch || !isSendMessageAck(result)) {
       return;
     }
+    extendPendingDispatchRequests(result.message);
     for (const dispatch of result.dispatches) {
-      const request = await app.getDispatchRequest({ dispatchId: dispatch.id });
-      if (request.ok) {
-        options.dispatch(request.request);
-      }
+      scheduleDispatchRequest(dispatch, result.message);
     }
   }, {
     authenticatedUser: options.authenticatedUser,
@@ -356,6 +425,7 @@ export function registerWebSocketHandlers(
     await options.afterAgentMutation?.(_payload, result);
     await options.afterTaskMutation?.(_payload, result);
     options.dispatchStatus?.(result.dispatch);
+    cancelPendingDispatchRequest(result.dispatch.id);
     if (!options.dispatchCancel) {
       return;
     }
@@ -372,6 +442,7 @@ export function registerWebSocketHandlers(
     await options.afterTaskMutation?.(_payload, result);
     for (const dispatch of result.dispatches) {
       options.dispatchStatus?.(dispatch);
+      cancelPendingDispatchRequest(dispatch.id);
       if (!options.dispatchCancel) {
         continue;
       }
@@ -661,18 +732,79 @@ function isDeviceScanAck(result: unknown): result is {
   );
 }
 
+async function emitDispatchRequest(
+  app: ServerNextUseCases,
+  options: Pick<WebSocketHandlerOptions, 'dispatch'>,
+  dispatchId: string,
+): Promise<void> {
+  if (!options.dispatch) {
+    return;
+  }
+  const request = await app.getDispatchRequest({ dispatchId });
+  if (request.ok) {
+    options.dispatch(request.request);
+  }
+}
+
+function requestDispatchEmission(
+  app: ServerNextUseCases,
+  options: Pick<WebSocketHandlerOptions, 'dispatch'>,
+  dispatchId: string,
+): void {
+  void emitDispatchRequest(app, options, dispatchId).catch((error) => {
+    console.error(
+      '[server-next] dispatch request emission failed:',
+      error instanceof Error ? error.stack ?? error.message : error,
+    );
+  });
+}
+
+function resetPendingDispatchRequestTimer(
+  pendingDispatchRequests: Map<string, PendingDispatchRequest>,
+  pending: PendingDispatchRequest,
+  delayMs: number,
+  callback: () => void,
+): void {
+  clearTimeout(pending.timer);
+  pending.timer = setTimeout(() => {
+    pendingDispatchRequests.delete(pending.dispatchId);
+    callback();
+  }, delayMs);
+  (pending.timer as { unref?: () => void }).unref?.();
+}
+
+function toDispatchCoalesceScope(
+  dispatch: SendMessageDispatchAck,
+  message: SendMessageAckMessage,
+): DispatchCoalesceScope {
+  return {
+    teamId: message.teamId ?? dispatch.teamId,
+    channelId: message.channelId ?? dispatch.channelId,
+    senderId: message.senderId,
+  };
+}
+
+function messageMatchesDispatchCoalesceScope(
+  message: SendMessageAckMessage,
+  scope: DispatchCoalesceScope,
+): boolean {
+  if (message.channelId !== scope.channelId) {
+    return false;
+  }
+  if (scope.teamId && message.teamId && message.teamId !== scope.teamId) {
+    return false;
+  }
+  if (scope.senderId && message.senderId && message.senderId !== scope.senderId) {
+    return false;
+  }
+  return true;
+}
+
 function isSendMessageAck(result: unknown): result is {
   ok: true;
-  message: { body: string };
+  message: SendMessageAckMessage;
   task?: unknown;
-  dispatches: Array<{
-    id: string;
-    teamId: string;
-    channelId: string;
-    messageId: string;
-    agentId: string;
-    requestId: string;
-  }>;
+  dispatches: SendMessageDispatchAck[];
 } {
   if (!result || typeof result !== 'object') {
     return false;

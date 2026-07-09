@@ -24,6 +24,10 @@ export interface ServerNextRealtime {
   refreshAgents(teamId: string): Promise<void>;
 }
 
+export interface ServerNextSocketOptions {
+  dispatchRequestCoalesceMs?: number;
+}
+
 interface ChannelSubscription {
   userId: string;
   teamId: string;
@@ -54,7 +58,14 @@ interface DiscoveredAgentReport {
   gatewayInstanceKey?: string;
 }
 
-export function attachServerNextNamespaces(server: SocketServerLike, app: ServerNextUseCases): ServerNextRealtime {
+const DEFAULT_DISPATCH_REQUEST_COALESCE_MS = 1200;
+
+export function attachServerNextNamespaces(
+  server: SocketServerLike,
+  app: ServerNextUseCases,
+  options: ServerNextSocketOptions = {},
+): ServerNextRealtime {
+  const dispatchRequestCoalesceMs = options.dispatchRequestCoalesceMs ?? DEFAULT_DISPATCH_REQUEST_COALESCE_MS;
   const agentNamespace = server.of('/agent');
   const webSubscribers = new Set<WebSocketSubscription>();
   const agentSocketsByDeviceId = new Map<string, SocketLike>();
@@ -145,6 +156,7 @@ export function attachServerNextNamespaces(server: SocketServerLike, app: Server
     });
     registerWebSocketHandlers(socket, app, {
       authenticatedUser,
+      dispatchRequestCoalesceMs,
       dispatch(request) {
         if (request.deviceId) {
           agentSocketsByDeviceId.get(request.deviceId)?.emit?.(AGENT_EVENTS.dispatch.request, request);
