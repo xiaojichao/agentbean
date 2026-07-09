@@ -7,7 +7,7 @@ import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, Fol
 import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl, fetchAgentWorkspace, authedApiUrl } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { daemonVersionDisplay } from '@/lib/daemon-version';
-import { canAddCustomAgentToDevice, canManageDeviceForUser } from '@/lib/device-permissions';
+import { canAddCustomAgentToDevice, canManageDeviceForUser, requiresDeleteNameConfirm } from '@/lib/device-permissions';
 import { formatRelative } from '@/lib/format-time';
 import { directoryPickerErrorMessage } from '@/lib/directory-picker-error';
 import { formatCreateAgentError } from '@/lib/agent-create-error';
@@ -396,6 +396,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const [deviceNameError, setDeviceNameError] = useState('');
   const [deviceDeleteSaving, setDeviceDeleteSaving] = useState(false);
   const [deviceDeleteError, setDeviceDeleteError] = useState('');
+  const [deviceDeleteConfirmName, setDeviceDeleteConfirmName] = useState('');
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentTeamRole = useAgentBeanStore((s) => s.teams.find((team) => team.id === currentTeamId)?.currentUserRole);
@@ -748,21 +749,38 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
               <div className="text-sm font-medium text-red-700">删除设备</div>
               <div className="text-xs text-red-400">永久删除此设备。需先删除所有 Agent。</div>
             </div>
-            <button onClick={() => setShowDeleteConfirm(true)} className="rounded-md border border-red-300 px-4 py-2 text-sm text-red-600 hover:bg-red-50" data-smoke="device-delete-open">
+            <button onClick={() => { setDeviceDeleteConfirmName(''); setShowDeleteConfirm(true); }} className="rounded-md border border-red-300 px-4 py-2 text-sm text-red-600 hover:bg-red-50" data-smoke="device-delete-open">
               删除设备
             </button>
           </div>
           {showDeleteConfirm && (
             <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-4">
               <p className="mb-3 text-sm text-red-700">确定要删除设备 <strong>{displayName}</strong> 吗？此操作不可撤销。</p>
+              {requiresDeleteNameConfirm(isLocalDevice) && (
+                <>
+                  <p className="mb-2 text-xs font-medium text-red-600">这是远程设备，删除将影响该设备的 daemon 连接。请输入设备名 <strong>{displayName}</strong> 以确认：</p>
+                  <input
+                    value={deviceDeleteConfirmName}
+                    onChange={(e) => setDeviceDeleteConfirmName(e.target.value)}
+                    placeholder={displayName}
+                    className="mb-3 w-full rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-red-400"
+                    data-smoke="device-delete-name-input"
+                  />
+                </>
+              )}
               {deviceDeleteError && (
                 <div className="mb-3 rounded-md border border-red-200 bg-white px-3 py-2 text-xs text-red-700" data-smoke="device-delete-error">
                   {deviceDeleteError}
                 </div>
               )}
               <div className="flex gap-2">
-                <button onClick={() => { setDeviceDeleteError(''); setShowDeleteConfirm(false); }} disabled={deviceDeleteSaving} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50">取消</button>
-                <button onClick={confirmDeleteDevice} disabled={deviceDeleteSaving} className="rounded-md bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50" data-smoke="device-delete-confirm">
+                <button onClick={() => { setDeviceDeleteError(''); setDeviceDeleteConfirmName(''); setShowDeleteConfirm(false); }} disabled={deviceDeleteSaving} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50">取消</button>
+                <button
+                  onClick={confirmDeleteDevice}
+                  disabled={deviceDeleteSaving || (requiresDeleteNameConfirm(isLocalDevice) && deviceDeleteConfirmName !== displayName)}
+                  className="rounded-md bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50"
+                  data-smoke="device-delete-confirm"
+                >
                   {deviceDeleteSaving ? '删除中...' : '确认删除'}
                 </button>
               </div>
