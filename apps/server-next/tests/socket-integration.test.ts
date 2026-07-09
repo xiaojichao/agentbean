@@ -1981,6 +1981,117 @@ describe('server-next Socket.IO namespaces', () => {
     expect(otherDispatches).toEqual([]);
   });
 
+  test('coalesces rapid direct messages before emitting the agent dispatch request', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-all',
+        'device-1',
+        'runtime-1',
+        'agent-1',
+        'dm-channel-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+        'message-2',
+        'message-3',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app, {
+      dispatchRequestCoalesceMs: 20,
+    });
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      agent.disconnect();
+    });
+
+    const dispatchRequests: unknown[] = [];
+    agent.on(AGENT_EVENTS.dispatch.request, (payload) => {
+      dispatchRequests.push(payload);
+    });
+
+    const register = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    const web = await connectClient(`${baseUrl}/web`, { auth: { token: (register as { token: string }).token } });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+    await agent.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+    });
+    await agent.emitWithAck(AGENT_EVENTS.device.runtimes, {
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimes: [
+        {
+          adapterKind: 'codex',
+          name: 'Codex CLI',
+          command: '/opt/homebrew/bin/codex',
+          installed: true,
+        },
+      ],
+    });
+    await agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      agents: [{ name: 'Codex', adapterKind: 'codex', category: 'agentos-hosted' }],
+    });
+    await expect(
+      web.emitWithAck(WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-1' }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      web.emitWithAck(WEB_EVENTS.dm.start, { agentId: 'agent-1' }),
+    ).resolves.toMatchObject({ ok: true, dm: { id: 'dm-channel-1' } });
+
+    await expect(
+      web.emitWithAck(WEB_EVENTS.message.send, {
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'dm-channel-1',
+        body: '你能说明你能做什么吗？',
+      }),
+    ).resolves.toMatchObject({ ok: true, dispatches: [{ id: 'dispatch-1' }] });
+    await expect(
+      web.emitWithAck(WEB_EVENTS.message.send, {
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'dm-channel-1',
+        body: '并且列出你有多少skills?',
+      }),
+    ).resolves.toMatchObject({ ok: true, dispatches: [] });
+    await expect(
+      web.emitWithAck(WEB_EVENTS.message.send, {
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'dm-channel-1',
+        body: '和用什么模型吗？',
+      }),
+    ).resolves.toMatchObject({ ok: true, dispatches: [] });
+
+    expect(dispatchRequests).toEqual([]);
+    await eventually(async () => {
+      expect(dispatchRequests).toHaveLength(1);
+    });
+    expect(dispatchRequests[0]).toMatchObject({
+      id: 'dispatch-1',
+      prompt: '你能说明你能做什么吗？\n\n并且列出你有多少skills?\n\n和用什么模型吗？',
+    });
+  });
+
   test('routes device scan requests only to the matching daemon socket', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,
@@ -2694,10 +2805,15 @@ describe('server-next Socket.IO namespaces', () => {
   });
 });
 
-async function startSocketServer(app: ReturnType<typeof createInMemoryServerNext>) {
+async function startSocketServer(
+  app: ReturnType<typeof createInMemoryServerNext>,
+  options: { dispatchRequestCoalesceMs?: number } = {},
+) {
   const httpServer = createServer();
   const ioServer = new Server(httpServer, { cors: { origin: '*' } });
-  const realtime = attachServerNextNamespaces(ioServer, app);
+  const realtime = attachServerNextNamespaces(ioServer, app, {
+    dispatchRequestCoalesceMs: options.dispatchRequestCoalesceMs ?? 0,
+  });
   await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', () => resolve()));
   const address = httpServer.address() as AddressInfo;
   return {

@@ -336,7 +336,7 @@ describe('AgentBean Next first-slice smoke', () => {
 async function startSocketServer(app: ReturnType<typeof createInMemoryServerNext>) {
   const httpServer = createServer();
   const ioServer = new Server(httpServer, { cors: { origin: '*' } });
-  attachServerNextNamespaces(ioServer, app);
+  attachServerNextNamespaces(ioServer, app, { dispatchRequestCoalesceMs: 0 });
   await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', () => resolve()));
   const address = httpServer.address() as AddressInfo;
   return {
