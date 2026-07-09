@@ -40,8 +40,3 @@ export function canBrowseDirectory(isLocal: boolean | null | undefined): boolean
 export function requiresDeleteNameConfirm(isLocal: boolean | null | undefined): boolean {
   return isLocal !== true;
 }
-
-// 设备列表中是否存在本机设备（用于「未关联本机设备」引导提示）。
-export function hasLocalDevice(devices: { isLocal?: boolean | null }[]): boolean {
-  return devices.some((d) => d.isLocal === true);
-}

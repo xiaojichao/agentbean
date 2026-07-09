@@ -7,7 +7,7 @@ import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, Fol
 import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl, fetchAgentWorkspace, authedApiUrl } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { daemonVersionDisplay } from '@/lib/daemon-version';
-import { canAddCustomAgentToDevice, canBrowseDirectory, canManageDeviceForUser, hasLocalDevice, requiresDeleteNameConfirm } from '@/lib/device-permissions';
+import { canAddCustomAgentToDevice, canBrowseDirectory, canManageDeviceForUser, requiresDeleteNameConfirm } from '@/lib/device-permissions';
 import { formatRelative } from '@/lib/format-time';
 import { directoryPickerErrorMessage } from '@/lib/directory-picker-error';
 import { formatCreateAgentError } from '@/lib/agent-create-error';
@@ -214,7 +214,6 @@ export default function DevicesPage() {
   }, [conn, deviceTeamId, applyDevicesSnapshot, applyDeviceStatus]);
 
   const deviceList = useMemo(() => Object.values(devices).sort(compareDevices), [devices]);
-  const noLocalDevice = !hasLocalDevice(deviceList);
   const deviceGroups = useMemo(() => {
     const groups = new Map<string, typeof deviceList>();
     for (const device of deviceList) {
@@ -285,11 +284,6 @@ export default function DevicesPage() {
               <Plus size={16} />
             </button>
           </div>
-        {noLocalDevice && deviceList.length > 0 && (
-          <div className="mx-2 mb-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-700">
-            未关联本机设备：目录浏览、删除确认等操作将按远程设备处理。请在当前使用的设备上完成设备登录以启用本机功能。
-          </div>
-        )}
         <div className="flex-1 overflow-y-auto p-1.5">
           {deviceGroups.map((group) => (
             <div key={group.ownerName} className="mb-3 last:mb-0">

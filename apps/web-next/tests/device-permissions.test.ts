@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { canAddCustomAgentToDevice, canBrowseDirectory, canManageDeviceForUser, hasLocalDevice, requiresDeleteNameConfirm } from '../lib/device-permissions';
+import { canAddCustomAgentToDevice, canBrowseDirectory, canManageDeviceForUser, requiresDeleteNameConfirm } from '../lib/device-permissions';
 
 describe('device detail permissions', () => {
   // canAddCustomAgentToDevice：runtime 配置由设备拥有者授权（canManageDeviceAsUser），
@@ -78,11 +78,5 @@ describe('device local/remote distinction (本机/远程分流)', () => {
     expect(requiresDeleteNameConfirm(false)).toBe(true);
     expect(requiresDeleteNameConfirm(undefined)).toBe(true);
     expect(requiresDeleteNameConfirm(null)).toBe(true);
-  });
-
-  test('hasLocalDevice: 含本机设备为真，全远程/空为假', () => {
-    expect(hasLocalDevice([{ isLocal: true }, { isLocal: false }])).toBe(true);
-    expect(hasLocalDevice([{ isLocal: false }, { isLocal: undefined }])).toBe(false);
-    expect(hasLocalDevice([])).toBe(false);
   });
 });
