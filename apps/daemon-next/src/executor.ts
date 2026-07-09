@@ -526,6 +526,14 @@ function extractFallbackReply(stdout: string, code: number | null, stderr: strin
   return stdout.trimEnd();
 }
 
+function extractClaudeCodeReply(stdout: string, code: number | null, stderr: string): string {
+  if (code !== 0) {
+    const detail = stderr.trim();
+    return detail ? detail.slice(0, 2000) : `custom agent command exited with code ${code ?? 1}`;
+  }
+  return stdout.trimEnd();
+}
+
 const OPENCLAW_WARNING_PANEL_HEADING_RE = /^\s*◇\s+(?:Doctor|Config) warnings\b/i;
 const OPENCLAW_WARNING_PANEL_END_RE = /^[\s│├╰╮╯─]+$/;
 const OPENCLAW_BOX_ONLY_LINE_RE = /^[\s│├╰╮╯─]+$/;
@@ -593,5 +601,8 @@ const ARGV_MODE_ADAPTERS: Partial<Record<AdapterKind, AgentAdapterSpec>> = {
   'claude-code': {
     buildArgs: buildClaudeCodeArgs,
     promptOnStdin: true,
+    // claude-code -p writes successful replies to stdout, but failures can still
+    // leave partial stdout before the actionable API/gateway error lands on stderr.
+    extractReply: extractClaudeCodeReply,
   },
 };
