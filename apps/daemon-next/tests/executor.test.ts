@@ -541,6 +541,92 @@ describe('daemon-next command executor', () => {
     expect(output.workspaceRun?.exitCode).toBe(1);
   });
 
+  test('openclaw keeps doctor/config warning panels out of chat replies while preserving them in run logs', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
+    const warningOnlyScriptPath = join(cwd, 'fake-openclaw-warning-only.mjs');
+    const warningThenReplyScriptPath = join(cwd, 'fake-openclaw-warning-reply.mjs');
+    const warningPanels = [
+      '│',
+      '◇  Doctor warnings ──────────────────────────────────────────────────────╮',
+      '│                                                                        │',
+      '│  - Left plugin install index in place because shared SQLite state has  │',
+      '│    conflicting plugin install metadata for: discord, openclaw-weixin,  │',
+      '│    slack                                                               │',
+      '├────────────────────────────────────────────────────────────────────────╯',
+      '│',
+      '◇  Config warnings ────────────────────────────────────────────────────────╮',
+      '│                                                                          │',
+      '│  - plugins: plugin openclaw-weixin: duplicate plugin id resolved by      │',
+      '│    explicit config-selected plugin; global plugin will be overridden by  │',
+      '│    config plugin                                                         │',
+      '│    (/Users/xiao/.openclaw/extensions/openclaw-weixin/index.ts)           │',
+      '├──────────────────────────────────────────────────────────────────────────╯',
+    ].join('\n');
+    writeFileSync(
+      warningOnlyScriptPath,
+      [
+        `process.stdout.write(${JSON.stringify(`${warningPanels}\n`)});`,
+        `process.exit(1);`,
+      ].join('\n'),
+    );
+    writeFileSync(
+      warningThenReplyScriptPath,
+      [
+        `process.stdout.write(${JSON.stringify(`${warningPanels}\nOpenClaw actual answer\n`)});`,
+      ].join('\n'),
+    );
+
+    const executor = createCommandExecutor({ clock: createClock([1000, 1010, 2000, 2010]) });
+    const failedOutput = await executor({
+      id: 'dispatch-openclaw-warning-only',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'hi',
+      customAgent: {
+        adapterKind: 'openclaw',
+        command: process.execPath,
+        args: [warningOnlyScriptPath, 'agent', '--agent', 'main'],
+        cwd,
+      },
+    });
+    const succeededOutput = await executor({
+      id: 'dispatch-openclaw-warning-reply',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-2',
+      agentId: 'agent-1',
+      requestId: 'request-2',
+      prompt: 'hi again',
+      customAgent: {
+        adapterKind: 'openclaw',
+        command: process.execPath,
+        args: [warningThenReplyScriptPath, 'agent', '--agent', 'main'],
+        cwd,
+      },
+    });
+
+    if (typeof failedOutput !== 'object' || typeof succeededOutput !== 'object') {
+      throw new Error('expected structured command results');
+    }
+    expect(failedOutput.body).toBe('custom agent command exited with code 1');
+    expect(failedOutput.body).not.toContain('Doctor warnings');
+    expect(failedOutput.body).not.toContain('openclaw-weixin');
+    expect(failedOutput.workspaceRun?.status).toBe('failed');
+    expect(failedOutput.workspaceRun?.exitCode).toBe(1);
+    const failedLogContent = Buffer.from(failedOutput.artifacts?.[0]?.contentBase64 ?? '', 'base64').toString('utf8');
+    expect(failedLogContent).toContain('Doctor warnings');
+    expect(failedLogContent).toContain('openclaw-weixin');
+
+    expect(succeededOutput.body).toBe('OpenClaw actual answer');
+    expect(succeededOutput.body).not.toContain('Config warnings');
+    expect(succeededOutput.body).not.toContain('openclaw-weixin');
+    expect(succeededOutput.workspaceRun?.status).toBe('succeeded');
+    expect(succeededOutput.workspaceRun?.exitCode).toBe(0);
+  });
+
   test('normalizes openclaw custom args so agent options stay under the agent subcommand', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
     const scriptPath = join(cwd, 'fake-openclaw.mjs');

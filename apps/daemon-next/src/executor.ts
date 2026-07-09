@@ -526,6 +526,45 @@ function extractFallbackReply(stdout: string, code: number | null, stderr: strin
   return stdout.trimEnd();
 }
 
+const OPENCLAW_WARNING_PANEL_HEADING_RE = /^\s*◇\s+(?:Doctor|Config) warnings\b/i;
+const OPENCLAW_WARNING_PANEL_END_RE = /^[\s│├╰╮╯─]+$/;
+const OPENCLAW_BOX_ONLY_LINE_RE = /^[\s│├╰╮╯─]+$/;
+
+function stripOpenClawWarningPanels(stdout: string): string {
+  const lines = stdout.replace(/\r\n?/g, '\n').split('\n');
+  const kept: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    if (!OPENCLAW_WARNING_PANEL_HEADING_RE.test(line)) {
+      kept.push(line);
+      continue;
+    }
+    while (kept.length > 0 && OPENCLAW_BOX_ONLY_LINE_RE.test(kept[kept.length - 1] ?? '')) {
+      kept.pop();
+    }
+    while (index + 1 < lines.length) {
+      index += 1;
+      const nextLine = lines[index] ?? '';
+      if (nextLine.includes('╯') && OPENCLAW_WARNING_PANEL_END_RE.test(nextLine)) {
+        break;
+      }
+    }
+  }
+  return kept.join('\n').trim();
+}
+
+function extractOpenClawReply(stdout: string, code: number | null, stderr: string): string {
+  const reply = stripOpenClawWarningPanels(stdout);
+  if (reply) {
+    return reply.slice(0, 2000);
+  }
+  if (code !== 0) {
+    const detail = stderr.trim();
+    return detail ? detail.slice(0, 2000) : `custom agent command exited with code ${code ?? 1}`;
+  }
+  return stdout.trimEnd();
+}
+
 // Custom invocation contracts for agents that cannot use the generic stdin path. Argv-mode
 // adapters (hermes, openclaw) put the prompt on argv; stdin-mode adapters (claude-code) keep it
 // on stdin but inject a non-interactive flag. Unregistered adapterKinds (codex, gemini, kimi-cli)
@@ -539,7 +578,7 @@ const ARGV_MODE_ADAPTERS: Partial<Record<AdapterKind, AgentAdapterSpec>> = {
   openclaw: {
     buildArgs: buildOpenClawArgs,
     redactCommandArgs: redactOpenClawCommandArgs,
-    extractReply: extractFallbackReply,
+    extractReply: extractOpenClawReply,
   },
   'claude-code': {
     buildArgs: buildClaudeCodeArgs,

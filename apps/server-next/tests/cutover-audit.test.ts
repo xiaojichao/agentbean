@@ -20,11 +20,11 @@ describe('AgentBean Next cutover audit', () => {
         ],
         npmVersions: {
           '@agentbean/contracts@0.2.1': '0.2.1',
-          '@agentbean/daemon-next@0.3.2': '0.3.2',
-          '@agentbean/daemon@0.3.2': '0.3.2',
+          '@agentbean/daemon-next@0.3.3': '0.3.3',
+          '@agentbean/daemon@0.3.3': '0.3.3',
         },
         distTags: {
-          '@agentbean/daemon': { latest: '0.3.2' },
+          '@agentbean/daemon': { latest: '0.3.3' },
         },
       }),
     });
@@ -42,7 +42,7 @@ describe('AgentBean Next cutover audit', () => {
         variables: [],
         secrets: [{ name: 'RAILWAY_TOKEN' }, { name: 'NPM_TOKEN' }],
         npmVersions: {
-          '@agentbean/daemon-next@0.3.2': '0.3.2',
+          '@agentbean/daemon-next@0.3.3': '0.3.3',
         },
         distTags: {
           '@agentbean/daemon': { latest: '0.1.35' },
@@ -77,11 +77,11 @@ describe('AgentBean Next cutover audit', () => {
         ],
         npmVersions: {
           '@agentbean/contracts@0.2.1': '0.2.1',
-          '@agentbean/daemon-next@0.3.2': '0.3.2',
-          '@agentbean/daemon@0.3.2': '0.3.2',
+          '@agentbean/daemon-next@0.3.3': '0.3.3',
+          '@agentbean/daemon@0.3.3': '0.3.3',
         },
         distTags: {
-          '@agentbean/daemon': { latest: '0.3.2' },
+          '@agentbean/daemon': { latest: '0.3.3' },
         },
       }),
     });
@@ -140,12 +140,12 @@ describe('AgentBean Next cutover audit', () => {
         }
         if (args[0] === 'view') {
           if (args[2] === 'dist-tags') {
-            return `${JSON.stringify({ latest: '0.3.2' })}\n`;
+            return `${JSON.stringify({ latest: '0.3.3' })}\n`;
           }
           const versions: Record<string, string> = {
             '@agentbean/contracts@0.2.1': '0.2.1',
-            '@agentbean/daemon-next@0.3.2': '0.3.2',
-            '@agentbean/daemon@0.3.2': '0.3.2',
+            '@agentbean/daemon-next@0.3.3': '0.3.3',
+            '@agentbean/daemon@0.3.3': '0.3.3',
           };
           const version = versions[args[1]];
           if (!version) {
@@ -180,12 +180,12 @@ describe('AgentBean Next cutover audit', () => {
         }
         if (args[0] === 'view') {
           if (args[2] === 'dist-tags') {
-            return `${JSON.stringify({ latest: '0.3.2' })}\n`;
+            return `${JSON.stringify({ latest: '0.3.3' })}\n`;
           }
           const versions: Record<string, string> = {
             '@agentbean/contracts@0.2.1': '0.2.1',
-            '@agentbean/daemon-next@0.3.2': '0.3.2',
-            '@agentbean/daemon@0.3.2': '0.3.2',
+            '@agentbean/daemon-next@0.3.3': '0.3.3',
+            '@agentbean/daemon@0.3.3': '0.3.3',
           };
           const version = versions[args[1]];
           if (!version) {
