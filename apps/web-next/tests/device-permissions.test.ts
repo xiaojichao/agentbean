@@ -77,6 +77,7 @@ describe('device local/remote distinction (本机/远程分流)', () => {
     expect(requiresDeleteNameConfirm(true)).toBe(false);
     expect(requiresDeleteNameConfirm(false)).toBe(true);
     expect(requiresDeleteNameConfirm(undefined)).toBe(true);
+    expect(requiresDeleteNameConfirm(null)).toBe(true);
   });
 
   test('hasLocalDevice: 含本机设备为真，全远程/空为假', () => {

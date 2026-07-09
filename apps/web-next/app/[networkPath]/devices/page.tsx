@@ -7,7 +7,7 @@ import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, Fol
 import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl, fetchAgentWorkspace, authedApiUrl } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
 import { daemonVersionDisplay } from '@/lib/daemon-version';
-import { canAddCustomAgentToDevice, canManageDeviceForUser, hasLocalDevice, requiresDeleteNameConfirm } from '@/lib/device-permissions';
+import { canAddCustomAgentToDevice, canBrowseDirectory, canManageDeviceForUser, hasLocalDevice, requiresDeleteNameConfirm } from '@/lib/device-permissions';
 import { formatRelative } from '@/lib/format-time';
 import { directoryPickerErrorMessage } from '@/lib/directory-picker-error';
 import { formatCreateAgentError } from '@/lib/agent-create-error';
@@ -146,7 +146,7 @@ function DirectoryBrowseButton({
     setBrowsing(false);
   };
 
-  if (isLocal === false) {
+  if (!canBrowseDirectory(isLocal)) {
     return (
       <span className="shrink-0 self-center text-[11px] text-neutral-400">
         远程设备请手动填写该设备上的项目绝对路径
@@ -783,7 +783,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
                 <button onClick={() => { setDeviceDeleteError(''); setDeviceDeleteConfirmName(''); setShowDeleteConfirm(false); }} disabled={deviceDeleteSaving} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50">取消</button>
                 <button
                   onClick={confirmDeleteDevice}
-                  disabled={deviceDeleteSaving || (requiresDeleteNameConfirm(isLocalDevice) && deviceDeleteConfirmName !== displayName)}
+                  disabled={deviceDeleteSaving || (requiresDeleteNameConfirm(isLocalDevice) && deviceDeleteConfirmName.trim() !== displayName)}
                   className="rounded-md bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50"
                   data-smoke="device-delete-confirm"
                 >
