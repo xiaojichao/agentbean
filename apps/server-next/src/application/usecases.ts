@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
 import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
-import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
+import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
@@ -2597,7 +2597,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           })
         : [];
       const dispatchHistory = history.filter((message) => !isTaskClaimAcknowledgementMessage(message));
-      const attachments = await repositories.artifacts.listByMessage(dispatch.messageId);
+      const promptMessages = originMessage
+        ? await collectCoalescedDispatchPromptMessages(repositories, {
+            originMessage,
+            agent,
+          })
+        : [];
+      const requestPrompt = promptMessages.length > 0
+        ? renderCoalescedDispatchPrompt(promptMessages)
+        : dispatch.prompt;
+      const attachmentMessageIds = promptMessages.length > 0
+        ? promptMessages.map((message) => message.id)
+        : [dispatch.messageId];
+      const attachments: ArtifactRecord[] = [];
+      for (const messageId of attachmentMessageIds) {
+        attachments.push(...await repositories.artifacts.listByMessage(messageId));
+      }
 
       return makeSuccess({
         request: {
@@ -2609,7 +2624,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           agentId: dispatch.agentId,
           deviceId: agent.deviceId,
           requestId: dispatch.requestId,
-          prompt: dispatch.prompt,
+          prompt: requestPrompt,
           history: dispatchHistory.map(toDispatchHistoryMessageDto),
           ...(attachments.length > 0 ? { attachments: attachments.map(toDispatchAttachmentDto) } : {}),
           ...(executionConfig
@@ -4731,6 +4746,95 @@ function toDispatchHistoryMessageDto(message: MessageRecord): DispatchHistoryMes
     body: message.body,
     createdAt: message.createdAt,
   };
+}
+
+const DISPATCH_PROMPT_COALESCING_CHANNEL_WINDOW = 100;
+
+async function collectCoalescedDispatchPromptMessages(
+  repositories: ServerNextRepositories,
+  input: {
+    originMessage: MessageRecord;
+    agent: AgentRecord;
+  },
+): Promise<MessageRecord[]> {
+  const channelMessages = await repositories.messages.listByChannel(
+    input.originMessage.channelId,
+    DISPATCH_PROMPT_COALESCING_CHANNEL_WINDOW,
+  );
+  const originIndex = channelMessages.findIndex((message) => message.id === input.originMessage.id);
+  if (originIndex === -1) {
+    return [input.originMessage];
+  }
+
+  const messages = [input.originMessage];
+  for (const candidate of channelMessages.slice(originIndex + 1)) {
+    if (isTaskClaimAcknowledgementMessage(candidate) || candidate.senderKind === 'system') {
+      continue;
+    }
+    if (!canCoalesceDispatchPromptMessage({
+      originMessage: input.originMessage,
+      candidate,
+      agent: input.agent,
+    })) {
+      break;
+    }
+    messages.push(candidate);
+  }
+  return messages;
+}
+
+function canCoalesceDispatchPromptMessage(input: {
+  originMessage: MessageRecord;
+  candidate: MessageRecord;
+  agent: AgentRecord;
+}): boolean {
+  if (isDeletedMessage(input.candidate)) {
+    return false;
+  }
+  if (input.candidate.senderKind !== 'human') {
+    return false;
+  }
+  if (input.candidate.senderId !== input.originMessage.senderId) {
+    return false;
+  }
+  if (!isInDispatchPromptCoalescingScope(input.originMessage, input.candidate)) {
+    return false;
+  }
+
+  const originTaskId = taskIdForMessage(input.originMessage);
+  const candidateTaskId = taskIdForMessage(input.candidate);
+  if (candidateTaskId && candidateTaskId !== originTaskId) {
+    return false;
+  }
+  if (!originTaskId && candidateTaskId) {
+    return false;
+  }
+  return messageMentionTargetsAgent(input.candidate, input.agent);
+}
+
+function isInDispatchPromptCoalescingScope(originMessage: MessageRecord, candidate: MessageRecord): boolean {
+  if (originMessage.threadId && originMessage.threadId !== originMessage.id) {
+    return candidate.threadId === originMessage.threadId;
+  }
+  return candidate.threadId === candidate.id || candidate.threadId === originMessage.threadId;
+}
+
+function taskIdForMessage(message: MessageRecord): string | undefined {
+  return typeof message.meta?.taskId === 'string' ? message.meta.taskId : undefined;
+}
+
+function messageMentionTargetsAgent(message: MessageRecord, agent: AgentRecord): boolean {
+  const mentionText = message.body.trimStart().match(/^@(.+)/)?.[1];
+  if (!mentionText) {
+    return true;
+  }
+  const mention = normalizeMentionName(mentionText);
+  const agentName = normalizeMentionName(agent.name);
+  return mention === agentName || mention.startsWith(`${agentName}-`);
+}
+
+function renderCoalescedDispatchPrompt(messages: MessageRecord[]): string {
+  return messages.map((message) => message.body).join('\n\n');
 }
 
 function routeMessageForChannel(input: {

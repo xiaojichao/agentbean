@@ -2045,6 +2045,87 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('dispatch request coalesces consecutive human messages for the same agent', async () => {
+    let now = 325;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'message-1',
+        'task-1',
+        'dispatch-1',
+        'request-1',
+        'message-2',
+        'message-3',
+        'message-4',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      channelIds: ['channel-1'],
+      name: 'Hermes-Agent',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Hermes-Agent 总结一下今天的国内新闻 Top20',
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [{ id: 'dispatch-1', messageId: 'message-1' }],
+      acknowledgementMessage: { id: 'message-2' },
+    });
+
+    now = 326;
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '并且按重要性排序',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: { id: 'message-3' },
+      dispatches: [],
+    });
+
+    now = 327;
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '最后给我一个三句话摘要',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: { id: 'message-4' },
+      dispatches: [],
+    });
+
+    await expect(app.getDispatchRequest({ dispatchId: 'dispatch-1' })).resolves.toMatchObject({
+      ok: true,
+      request: {
+        id: 'dispatch-1',
+        prompt: [
+          '@Hermes-Agent 总结一下今天的国内新闻 Top20',
+          '并且按重要性排序',
+          '最后给我一个三句话摘要',
+        ].join('\n\n'),
+        history: [],
+      },
+    });
+  });
+
   test('sendMessage routes task thread replies back to the assigned agent', async () => {
     let now = 326;
     const app = createInMemoryServerNext({
