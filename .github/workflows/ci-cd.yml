@@ -65,6 +65,11 @@ on:
         required: true
         default: false
         type: boolean
+      skip_npm_publish:
+        description: Skip npm publish jobs for content-only workflow dispatches such as the daily changelog deploy.
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -553,7 +558,7 @@ jobs:
     needs:
       - validate
       - validate-agentbean-next
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env && !inputs.promote_agentbean_daemon_latest)
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.skip_npm_publish && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env && !inputs.promote_agentbean_daemon_latest)
     timeout-minutes: 15
 
     env:

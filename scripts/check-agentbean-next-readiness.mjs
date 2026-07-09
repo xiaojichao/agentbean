@@ -16,6 +16,8 @@ export function collectAgentBeanNextReadinessChecks({
   const daemonNextPackageJson = readJson(join(root, 'apps/daemon-next/package.json'));
   const railwayJson = readJson(join(root, 'railway.json'));
   const workflow = readFileSync(join(root, '.github/workflows/ci-cd.yml'), 'utf8');
+  const publishJobCondition =
+    "if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.skip_npm_publish && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env && !inputs.promote_agentbean_daemon_latest)";
   const cutoverRunbook = readFileSync(join(root, 'agentbean-next/docs/production-cutover-runbook.md'), 'utf8');
   const verificationMatrix = readFileSync(join(root, 'agentbean-next/docs/verification-matrix.md'), 'utf8');
   const parityBackfillAudit = readFileSync(join(root, 'agentbean-next/docs/parity-backfill-audit.md'), 'utf8');
@@ -324,7 +326,7 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes('Railway Next preflight') &&
         workflow.includes('npm run check:agentbean-next-railway-preflight') &&
         workflow.includes("if: github.event_name == 'workflow_dispatch' && inputs.run_railway_preflight") &&
-        workflow.includes("github.event_name == 'workflow_dispatch' && !inputs.run_railway_preflight") &&
+        workflow.includes(publishJobCondition) &&
         workflow.includes('run: npm run check:agentbean-next-readiness -- --production'),
       'CI must allow read-only Railway Next preflight without running production deploy',
     ),
@@ -343,7 +345,8 @@ export function collectAgentBeanNextReadinessChecks({
     ),
     check(
       'ci-publishes-on-main-push',
-      workflow.includes("if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env && !inputs.promote_agentbean_daemon_latest)") &&
+      workflow.includes('skip_npm_publish') &&
+        workflow.includes(publishJobCondition) &&
         workflow.includes('Publish agent to npm') &&
         workflow.includes('NPM_TOKEN') &&
         cutoverRunbook.includes('推送 `main` 触发生产部署'),

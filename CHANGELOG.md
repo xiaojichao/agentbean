@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [Daily 2026-07-09] - 2026-07-09
+### Added
+- 发布包含 OpenClaw 失败诊断的 daemon 版本
+### Fixed
+- 防止 Agent 配置和 OpenClaw 失败隐藏真实错误
+
 ## [0.2.0] - 2026-07-03
 ### Added
 - 更新日志页动态化：版本记录改为由 CHANGELOG.md 驱动，自动按时间倒序展示，并区分新增/修复等分类。

@@ -15,6 +15,7 @@ export interface Release {
   sections: ReleaseSection[];
 }
 
+const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 const VERSION_RE = /^##\s*\[([^\]]+)\]\s*-\s*(\d{4}-\d{2}-\d{2})\s*$/;
 const VERSION_HEADER_RE = /^##\s*\[([^\]]+)\]/;
 const SECTION_RE = /^###\s+(Added|Changed|Deprecated|Removed|Fixed|Security)\s*$/;
@@ -68,4 +69,8 @@ export function parseChangelog(md: string): Release[] {
   return Array.from(byVersion.values())
     .map((r) => ({ ...r, sections: r.sections.filter((s) => s.items.length > 0) }))
     .sort((a, b) => b.date.localeCompare(a.date));
+}
+
+export function formatReleaseVersion(version: string): string {
+  return SEMVER_RE.test(version) ? `v${version}` : version;
 }

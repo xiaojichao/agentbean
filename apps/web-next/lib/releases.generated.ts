@@ -2,6 +2,24 @@
 import type { Release } from './changelog';
 export const releases: Release[] = [
   {
+    "version": "Daily 2026-07-09",
+    "date": "2026-07-09",
+    "sections": [
+      {
+        "type": "Added",
+        "items": [
+          "发布包含 OpenClaw 失败诊断的 daemon 版本"
+        ]
+      },
+      {
+        "type": "Fixed",
+        "items": [
+          "防止 Agent 配置和 OpenClaw 失败隐藏真实错误"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.2.0",
     "date": "2026-07-03",
     "sections": [

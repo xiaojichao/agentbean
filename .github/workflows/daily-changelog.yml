@@ -1,0 +1,121 @@
+name: Daily changelog
+
+on:
+  schedule:
+    # 00:10 Asia/Shanghai, after the previous local day has closed.
+    - cron: '10 16 * * *'
+  workflow_dispatch:
+    inputs:
+      changelog_date:
+        description: Changelog date to generate in YYYY-MM-DD. Defaults to today for manual runs and yesterday for scheduled runs.
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: agentbean-daily-changelog
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update daily changelog
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.15.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install workspace tooling
+        run: npm ci --ignore-scripts
+
+      - name: Resolve changelog date
+        id: changelog-date
+        env:
+          INPUT_DATE: ${{ inputs.changelog_date }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ -n "$INPUT_DATE" ]; then
+            changelog_date="$INPUT_DATE"
+          elif [ "$EVENT_NAME" = "schedule" ]; then
+            changelog_date="$(TZ=Asia/Shanghai date -d 'yesterday' +%F)"
+          else
+            changelog_date="$(TZ=Asia/Shanghai date +%F)"
+          fi
+
+          if ! printf '%s' "$changelog_date" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
+            echo "::error::changelog_date must use YYYY-MM-DD, got '$changelog_date'"
+            exit 1
+          fi
+
+          echo "date=$changelog_date" >> "$GITHUB_OUTPUT"
+
+      - name: Update changelog source
+        run: node_modules/.bin/tsx scripts/update-daily-changelog.ts --date "${{ steps.changelog-date.outputs.date }}"
+
+      - name: Regenerate web changelog bundle
+        run: node_modules/.bin/tsx apps/web-next/scripts/gen-changelog.ts
+
+      - name: Detect changelog changes
+        id: changes
+        run: |
+          if git diff --quiet -- CHANGELOG.md apps/web-next/lib/releases.generated.ts; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Daily changelog is already fresh."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff -- CHANGELOG.md apps/web-next/lib/releases.generated.ts
+          fi
+
+      - name: Commit daily changelog
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          CHANGELOG_DATE: ${{ steps.changelog-date.outputs.date }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md apps/web-next/lib/releases.generated.ts
+          git commit -m "记录 ${CHANGELOG_DATE} 每日更新日志" -m "自动把当天提交摘要同步到 CHANGELOG.md，并刷新设置页使用的 releases.generated.ts，让线上更新日志可以按天展示最新产品变化。" -m "Constraint: 设置页更新日志由 CHANGELOG.md 生成产物驱动" -m "Confidence: high" -m "Scope-risk: narrow" -m "Tested: Daily changelog workflow generated source and web bundle" -m "Not-tested: Production deploy is handled by the dispatched CI/CD workflow"
+          git push origin HEAD:main
+
+      - name: Dispatch CI/CD deploy
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AGENTBEAN_DEPLOY_TARGET: ${{ vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
+          AGENTBEAN_NPM_PUBLISH_TARGET: ${{ vars.AGENTBEAN_NPM_PUBLISH_TARGET || vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
+        run: |
+          next_smoke=false
+          old_smoke=true
+          if [ "$AGENTBEAN_DEPLOY_TARGET" = "next" ]; then
+            next_smoke=true
+            old_smoke=false
+          fi
+
+          gh workflow run ci-cd.yml \
+            --ref main \
+            -f agentbean_deploy_target="$AGENTBEAN_DEPLOY_TARGET" \
+            -f agentbean_npm_publish_target="$AGENTBEAN_NPM_PUBLISH_TARGET" \
+            -f run_production_deploy=true \
+            -f run_railway_preflight=false \
+            -f sync_railway_next_runtime_env=false \
+            -f run_agentbean_next_production_smoke="$next_smoke" \
+            -f agentbean_next_entry_url='' \
+            -f run_agentbean_old_production_smoke="$old_smoke" \
+            -f agentbean_old_entry_url='' \
+            -f promote_agentbean_daemon_latest=false \
+            -f skip_npm_publish=true
