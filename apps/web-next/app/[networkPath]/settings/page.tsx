@@ -653,51 +653,69 @@ function ServerPanel() {
 }
 
 function ReleasesPanel() {
+  const releaseCount = releases.length;
+  const itemCount = releases.reduce(
+    (total, release) => total + release.sections.reduce((sum, section) => sum + section.items.length, 0),
+    0,
+  );
+
   return (
-    <div className="mx-auto max-w-xl space-y-6">
-      <h2 className="text-xl font-semibold">更新日志</h2>
-      <section className="rounded-lg border border-neutral-200 p-5">
-        <div className="space-y-4">
-          {releases.map((r) => (
-            <ReleaseEntry key={r.version} release={r} />
-          ))}
+    <div className="mx-auto max-w-3xl space-y-5" data-smoke="settings-releases-panel">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-neutral-500">
+            <FileText size={16} />
+            <span>What's New</span>
+          </div>
+          <h2 className="text-xl font-semibold leading-tight text-neutral-950">更新日志</h2>
         </div>
-      </section>
+        <div className="rounded-full bg-neutral-100 px-3 py-1 text-xs font-medium text-neutral-600">
+          {releaseCount} 天 · {itemCount} 条
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        {releases.map((r) => (
+          <ReleaseEntry key={r.version} release={r} />
+        ))}
+      </div>
     </div>
   );
 }
 
-const SECTION_STYLE: Record<ChangeType, { label: string; badge: string }> = {
-  Added:      { label: '新增', badge: 'bg-green-100 text-green-700' },
-  Changed:    { label: '变更', badge: 'bg-blue-100 text-blue-700' },
-  Deprecated: { label: '弃用', badge: 'bg-yellow-100 text-yellow-700' },
-  Removed:    { label: '移除', badge: 'bg-red-100 text-red-700' },
-  Fixed:      { label: '修复', badge: 'bg-orange-100 text-orange-700' },
-  Security:   { label: '安全', badge: 'bg-purple-100 text-purple-700' },
+const SECTION_STYLE: Record<ChangeType, { label: string; badge: string; item: string }> = {
+  Added:      { label: 'NEW', badge: 'bg-emerald-50 text-emerald-700', item: 'text-neutral-900 font-medium' },
+  Changed:    { label: 'IMPROVED', badge: 'bg-blue-50 text-blue-700', item: 'text-neutral-700' },
+  Deprecated: { label: 'DEPRECATED', badge: 'bg-yellow-50 text-yellow-700', item: 'text-neutral-700' },
+  Removed:    { label: 'REMOVED', badge: 'bg-red-50 text-red-700', item: 'text-neutral-900 font-medium' },
+  Fixed:      { label: 'FIX', badge: 'bg-orange-50 text-orange-700', item: 'text-neutral-700' },
+  Security:   { label: 'SECURITY', badge: 'bg-purple-50 text-purple-700', item: 'text-neutral-900 font-medium' },
 };
 
 function ReleaseEntry({ release }: { release: Release }) {
   const sections = release.sections.filter((s) => s.items.length > 0);
+  const version = formatReleaseVersion(release.version);
   return (
-    <div>
-      <div className="flex items-center gap-2">
-        <span className="text-sm font-semibold">{formatReleaseVersion(release.version)}</span>
-        <span className="text-xs text-neutral-400">{release.date}</span>
+    <article className="rounded-lg border border-neutral-200 bg-white p-5" data-smoke="settings-release-entry">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <span className="rounded-md bg-neutral-100 px-2.5 py-1 font-mono text-sm font-semibold text-neutral-800">
+          {release.date}
+        </span>
+        <span className="font-mono text-xs font-bold text-neutral-400">{version}</span>
       </div>
-      <div className="mt-1.5 space-y-2 pl-2">
-        {sections.map((s) => (
-          <div key={s.type}>
-            <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${SECTION_STYLE[s.type].badge}`}>
-              {SECTION_STYLE[s.type].label}
-            </span>
-            <ul className="mt-1 space-y-1 pl-4">
-              {s.items.map((n, i) => (
-                <li key={i} className="text-sm text-neutral-600 list-disc">{n}</li>
-              ))}
-            </ul>
-          </div>
+
+      <div className="space-y-2.5">
+        {sections.flatMap((s) => (
+          s.items.map((n, i) => (
+            <div key={`${s.type}-${i}`} className="flex items-start gap-2.5">
+              <span className={`inline-flex shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase leading-none ${SECTION_STYLE[s.type].badge}`}>
+                {SECTION_STYLE[s.type].label}
+              </span>
+              <span className={`min-w-0 flex-1 text-left text-sm leading-5 ${SECTION_STYLE[s.type].item}`}>{n}</span>
+            </div>
+          ))
         ))}
       </div>
-    </div>
+    </article>
   );
 }
