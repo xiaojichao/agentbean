@@ -93,12 +93,14 @@ function DirectoryBrowseButton({
   deviceId,
   daemonVersion,
   disabled = false,
+  isLocal = true,
 }: {
   onSelect: (path: string) => void;
   onError?: (message: string) => void;
   deviceId?: string;
   daemonVersion?: string | null;
   disabled?: boolean;
+  isLocal?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [browsing, setBrowsing] = useState(false);
@@ -144,6 +146,13 @@ function DirectoryBrowseButton({
     setBrowsing(false);
   };
 
+  if (isLocal === false) {
+    return (
+      <span className="shrink-0 self-center text-[11px] text-neutral-400">
+        远程设备请手动填写该设备上的项目绝对路径
+      </span>
+    );
+  }
   return (
     <>
       <button type="button" disabled={disabled || browsing} onClick={browse} className="shrink-0 flex items-center gap-1 rounded-md border border-neutral-200 px-3 py-1.5 text-xs text-neutral-600 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50">
@@ -795,6 +804,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           networkId={currentTeamId}
           daemonVersion={device.systemInfo?.daemonVersion ?? device.daemonVersionInfo?.current ?? null}
           runtimes={runtimeList}
+          isLocal={isLocalDevice}
           onClose={() => setShowAddCustom(false)}
           onCreated={() => {
             setShowAddCustom(false);
@@ -1298,7 +1308,7 @@ function EnvironmentVariableEditor({ rows, onChange }: { rows: EnvRow[]; onChang
   );
 }
 
-function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDeviceSettings, onClose, onSaved }: { agent: any; device?: { systemInfo?: { daemonVersion?: string } | null; daemonVersionInfo?: { current: string | null } }; runtimes: any[]; canEditMetadata: boolean; canEditDeviceSettings: boolean; onClose: () => void; onSaved: () => void }) {
+function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDeviceSettings, onClose, onSaved }: { agent: any; device?: { systemInfo?: { daemonVersion?: string } | null; daemonVersionInfo?: { current: string | null }; isLocal?: boolean }; runtimes: any[]; canEditMetadata: boolean; canEditDeviceSettings: boolean; onClose: () => void; onSaved: () => void }) {
   const isCustom = agent.source === 'custom';
   const isAgentOS = agent.category === 'agentos-hosted';
   const editable = isCustom || isAgentOS;
@@ -1379,7 +1389,7 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
               <div className="flex gap-2">
                 <input value={cwd} onChange={(e) => setCwd(e.target.value)} disabled={!canEditRuntimeFields} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50" placeholder="/path/to/project（可选）" />
                 {canEditRuntimeFields && (
-                  <DirectoryBrowseButton deviceId={agent.deviceId} daemonVersion={device?.systemInfo?.daemonVersion ?? device?.daemonVersionInfo?.current ?? null} onSelect={setCwd} onError={setError} />
+                  <DirectoryBrowseButton deviceId={agent.deviceId} daemonVersion={device?.systemInfo?.daemonVersion ?? device?.daemonVersionInfo?.current ?? null} onSelect={setCwd} onError={setError} isLocal={device?.isLocal === true} />
                 )}
               </div>
               {canEditRuntimeFields && <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录，留空则使用默认路径</p>}
@@ -1407,7 +1417,7 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
   );
 }
 
-function AddCustomAgentDialog({ deviceId, networkId, daemonVersion, runtimes, onClose, onCreated }: { deviceId: string; networkId?: string | null; daemonVersion?: string | null; runtimes: any[]; onClose: () => void; onCreated: () => void }) {
+function AddCustomAgentDialog({ deviceId, networkId, daemonVersion, runtimes, isLocal = true, onClose, onCreated }: { deviceId: string; networkId?: string | null; daemonVersion?: string | null; runtimes: any[]; isLocal?: boolean; onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState('');
   const runtimeOptions = useMemo(() => buildRuntimeOptions(runtimes), [runtimes]);
   const [runtimeIndex, setRuntimeIndex] = useState('0');
@@ -1503,7 +1513,7 @@ function AddCustomAgentDialog({ deviceId, networkId, daemonVersion, runtimes, on
             <label className="mb-1 block text-xs font-medium text-neutral-600">项目目录 <span className="text-red-500">*</span></label>
             <div className="flex gap-2">
               <input value={cwd} onChange={(e) => setCwd(e.target.value)} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="/path/to/project" />
-              <DirectoryBrowseButton deviceId={deviceId} daemonVersion={daemonVersion} onSelect={setCwd} onError={setError} />
+              <DirectoryBrowseButton deviceId={deviceId} daemonVersion={daemonVersion} onSelect={setCwd} onError={setError} isLocal={isLocal} />
             </div>
             <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录</p>
           </div>
