@@ -297,7 +297,12 @@ export default function DevicesPage() {
                     <Circle size={6} className={`absolute -right-0.5 -top-0.5 fill-current ${STATUS_COLORS[device.status] ?? 'text-neutral-300'}`} />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium leading-tight">{deviceDisplayName(device) === device.id ? '未命名设备' : deviceDisplayName(device)}</div>
+                    <div className="flex items-center gap-1">
+                      <span className="truncate text-sm font-medium leading-tight">{deviceDisplayName(device) === device.id ? '未命名设备' : deviceDisplayName(device)}</span>
+                      {device.isLocal === true && (
+                        <span className="shrink-0 rounded bg-green-50 px-1 text-[10px] font-medium text-green-700">本机</span>
+                      )}
+                    </div>
                     <div className="flex items-center gap-1 text-[11px] text-neutral-400">
                       <span>daemon</span>
                       <span className={device.status === 'online' ? 'text-neutral-600' : ''}>{formatDaemonVersion(device)}</span>
@@ -566,7 +571,12 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
             <Monitor size={24} className="text-neutral-600" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold">{displayName}</h1>
+            <h1 className="flex items-center gap-2 text-lg font-semibold">
+              <span>{displayName}</span>
+              {isLocalDevice && (
+                <span className="rounded bg-green-50 px-1.5 py-0.5 text-[10px] font-medium text-green-700">本机</span>
+              )}
+            </h1>
             <div className="mt-1 flex items-center gap-3">
               <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${STATUS_BG[device.status] ?? 'bg-neutral-100 text-neutral-500'}`}>
                 <Circle size={5} className="fill-current" />
