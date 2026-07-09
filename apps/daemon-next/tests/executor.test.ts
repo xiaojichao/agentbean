@@ -545,6 +545,9 @@ describe('daemon-next command executor', () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
     const warningOnlyScriptPath = join(cwd, 'fake-openclaw-warning-only.mjs');
     const warningThenReplyScriptPath = join(cwd, 'fake-openclaw-warning-reply.mjs');
+    const warningOnlySuccessScriptPath = join(cwd, 'fake-openclaw-warning-only-success.mjs');
+    const warningThenLongReplyScriptPath = join(cwd, 'fake-openclaw-warning-long-reply.mjs');
+    const incompleteWarningHeadingScriptPath = join(cwd, 'fake-openclaw-incomplete-warning-heading.mjs');
     const warningPanels = [
       '│',
       '◇  Doctor warnings ──────────────────────────────────────────────────────╮',
@@ -575,8 +578,28 @@ describe('daemon-next command executor', () => {
         `process.stdout.write(${JSON.stringify(`${warningPanels}\nOpenClaw actual answer\n`)});`,
       ].join('\n'),
     );
+    writeFileSync(
+      warningOnlySuccessScriptPath,
+      [
+        `process.stdout.write(${JSON.stringify(`${warningPanels}\n`)});`,
+      ].join('\n'),
+    );
+    writeFileSync(
+      warningThenLongReplyScriptPath,
+      [
+        `process.stdout.write(${JSON.stringify(`${warningPanels}\n${'OpenClaw long answer '.repeat(130)}\n`)});`,
+      ].join('\n'),
+    );
+    writeFileSync(
+      incompleteWarningHeadingScriptPath,
+      [
+        `process.stdout.write(${JSON.stringify('◇ Doctor warnings mentioned by the model\nThis is the real reply body\n')});`,
+      ].join('\n'),
+    );
 
-    const executor = createCommandExecutor({ clock: createClock([1000, 1010, 2000, 2010]) });
+    const executor = createCommandExecutor({
+      clock: createClock([1000, 1010, 2000, 2010, 3000, 3010, 4000, 4010, 5000, 5010]),
+    });
     const failedOutput = await executor({
       id: 'dispatch-openclaw-warning-only',
       teamId: 'team-1',
@@ -607,8 +630,59 @@ describe('daemon-next command executor', () => {
         cwd,
       },
     });
+    const warningOnlySuccessOutput = await executor({
+      id: 'dispatch-openclaw-warning-only-success',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-3',
+      agentId: 'agent-1',
+      requestId: 'request-3',
+      prompt: 'warning only success',
+      customAgent: {
+        adapterKind: 'openclaw',
+        command: process.execPath,
+        args: [warningOnlySuccessScriptPath, 'agent', '--agent', 'main'],
+        cwd,
+      },
+    });
+    const longReplyOutput = await executor({
+      id: 'dispatch-openclaw-warning-long-reply',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-4',
+      agentId: 'agent-1',
+      requestId: 'request-4',
+      prompt: 'long reply',
+      customAgent: {
+        adapterKind: 'openclaw',
+        command: process.execPath,
+        args: [warningThenLongReplyScriptPath, 'agent', '--agent', 'main'],
+        cwd,
+      },
+    });
+    const incompleteHeadingOutput = await executor({
+      id: 'dispatch-openclaw-incomplete-warning-heading',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-5',
+      agentId: 'agent-1',
+      requestId: 'request-5',
+      prompt: 'summarize warnings',
+      customAgent: {
+        adapterKind: 'openclaw',
+        command: process.execPath,
+        args: [incompleteWarningHeadingScriptPath, 'agent', '--agent', 'main'],
+        cwd,
+      },
+    });
 
-    if (typeof failedOutput !== 'object' || typeof succeededOutput !== 'object') {
+    if (
+      typeof failedOutput !== 'object'
+      || typeof succeededOutput !== 'object'
+      || typeof warningOnlySuccessOutput !== 'object'
+      || typeof longReplyOutput !== 'object'
+      || typeof incompleteHeadingOutput !== 'object'
+    ) {
       throw new Error('expected structured command results');
     }
     expect(failedOutput.body).toBe('custom agent command exited with code 1');
@@ -625,6 +699,20 @@ describe('daemon-next command executor', () => {
     expect(succeededOutput.body).not.toContain('openclaw-weixin');
     expect(succeededOutput.workspaceRun?.status).toBe('succeeded');
     expect(succeededOutput.workspaceRun?.exitCode).toBe(0);
+
+    expect(warningOnlySuccessOutput.body).toBe('');
+    expect(warningOnlySuccessOutput.body).not.toContain('Doctor warnings');
+    expect(warningOnlySuccessOutput.body).not.toContain('openclaw-weixin');
+    expect(warningOnlySuccessOutput.workspaceRun?.status).toBe('succeeded');
+    expect(warningOnlySuccessOutput.workspaceRun?.exitCode).toBe(0);
+
+    expect(longReplyOutput.body.length).toBeGreaterThan(2000);
+    expect(longReplyOutput.body).toBe(`${'OpenClaw long answer '.repeat(130)}`.trim());
+    expect(longReplyOutput.body).not.toContain('Config warnings');
+
+    expect(incompleteHeadingOutput.body).toBe('◇ Doctor warnings mentioned by the model\nThis is the real reply body');
+    expect(incompleteHeadingOutput.workspaceRun?.status).toBe('succeeded');
+    expect(incompleteHeadingOutput.workspaceRun?.exitCode).toBe(0);
   });
 
   test('normalizes openclaw custom args so agent options stay under the agent subcommand', async () => {

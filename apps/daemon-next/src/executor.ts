@@ -539,16 +539,26 @@ function stripOpenClawWarningPanels(stdout: string): string {
       kept.push(line);
       continue;
     }
-    while (kept.length > 0 && OPENCLAW_BOX_ONLY_LINE_RE.test(kept[kept.length - 1] ?? '')) {
-      kept.pop();
+    if (!line.includes('╮')) {
+      kept.push(line);
+      continue;
     }
-    while (index + 1 < lines.length) {
-      index += 1;
-      const nextLine = lines[index] ?? '';
-      if (nextLine.includes('╯') && OPENCLAW_WARNING_PANEL_END_RE.test(nextLine)) {
+    let endIndex = -1;
+    for (let candidate = index + 1; candidate < lines.length; candidate += 1) {
+      const candidateLine = lines[candidate] ?? '';
+      if (candidateLine.includes('╯') && OPENCLAW_WARNING_PANEL_END_RE.test(candidateLine)) {
+        endIndex = candidate;
         break;
       }
     }
+    if (endIndex < 0) {
+      kept.push(line);
+      continue;
+    }
+    while (kept.length > 0 && OPENCLAW_BOX_ONLY_LINE_RE.test(kept[kept.length - 1] ?? '')) {
+      kept.pop();
+    }
+    index = endIndex;
   }
   return kept.join('\n').trim();
 }
@@ -556,13 +566,13 @@ function stripOpenClawWarningPanels(stdout: string): string {
 function extractOpenClawReply(stdout: string, code: number | null, stderr: string): string {
   const reply = stripOpenClawWarningPanels(stdout);
   if (reply) {
-    return reply.slice(0, 2000);
+    return reply;
   }
   if (code !== 0) {
     const detail = stderr.trim();
     return detail ? detail.slice(0, 2000) : `custom agent command exited with code ${code ?? 1}`;
   }
-  return stdout.trimEnd();
+  return reply;
 }
 
 // Custom invocation contracts for agents that cannot use the generic stdin path. Argv-mode
