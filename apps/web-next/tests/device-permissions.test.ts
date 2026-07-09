@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { canAddCustomAgentToDevice, canManageDeviceForUser } from '../lib/device-permissions';
+import { canAddCustomAgentToDevice, canBrowseDirectory, canManageDeviceForUser, hasLocalDevice, requiresDeleteNameConfirm } from '../lib/device-permissions';
 
 describe('device detail permissions', () => {
   // canAddCustomAgentToDevice：runtime 配置由设备拥有者授权（canManageDeviceAsUser），
@@ -62,5 +62,26 @@ describe('device detail permissions', () => {
         currentTeamRole: 'admin',
       }),
     ).toBe(false);
+  });
+});
+
+describe('device local/remote distinction (本机/远程分流)', () => {
+  test('canBrowseDirectory: 仅本机可浏览目录，远程降级手动填', () => {
+    expect(canBrowseDirectory(true)).toBe(true);
+    expect(canBrowseDirectory(false)).toBe(false);
+    expect(canBrowseDirectory(undefined)).toBe(false);
+    expect(canBrowseDirectory(null)).toBe(false);
+  });
+
+  test('requiresDeleteNameConfirm: 远程删除需输入设备名，本机无需', () => {
+    expect(requiresDeleteNameConfirm(true)).toBe(false);
+    expect(requiresDeleteNameConfirm(false)).toBe(true);
+    expect(requiresDeleteNameConfirm(undefined)).toBe(true);
+  });
+
+  test('hasLocalDevice: 含本机设备为真，全远程/空为假', () => {
+    expect(hasLocalDevice([{ isLocal: true }, { isLocal: false }])).toBe(true);
+    expect(hasLocalDevice([{ isLocal: false }, { isLocal: undefined }])).toBe(false);
+    expect(hasLocalDevice([])).toBe(false);
   });
 });
