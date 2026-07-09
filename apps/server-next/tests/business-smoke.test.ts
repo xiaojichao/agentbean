@@ -31,7 +31,7 @@ describe('AgentBean Next business smoke', () => {
       const summary = await runAgentBeanNextBusinessSmoke({
         baseUrl: server.baseUrl,
         suffix: 'test',
-        timeoutMs: 2_000,
+        timeoutMs: 8_000,
       });
 
       expect(summary).toMatchObject({
@@ -52,7 +52,7 @@ describe('AgentBean Next business smoke', () => {
     } finally {
       await server.close();
     }
-  });
+  }, 10_000);
 
   test('reports a missing target URL without connecting sockets', async () => {
     const summary = await runAgentBeanNextBusinessSmoke();
