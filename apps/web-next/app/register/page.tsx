@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react';
 import { Search, Bot } from 'lucide-react';
 import { useAgentBeanStore } from '@/lib/store';
 import { getWebSocket, agentEvents, deviceEvents } from '@/lib/socket';
-import type { DiscoveredAgent } from '@/lib/schema';
+import type { AgentSnapshot, DiscoveredAgent } from '@/lib/schema';
+import { findRegisteredExecutor } from '@/lib/agent-registration';
 import { RegisterAgentModal } from '@/components/register-agent-modal';
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -24,10 +25,6 @@ const SOURCE_STYLE: Record<DiscoveredAgent['source'], string> = {
   filesystem: 'bg-amber-50 text-amber-600 border-amber-100',
 };
 
-function generateAgentId(name: string) {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-}
-
 export default function RegisterPage() {
   const discovered = useAgentBeanStore((s) => s.discovered);
   const existingAgents = useAgentBeanStore((s) => s.agents);
@@ -36,6 +33,7 @@ export default function RegisterPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<DiscoveredAgent | null>(null);
   const [modalMode, setModalMode] = useState<'create' | 'update'>('create');
+  const [registeredAgent, setRegisteredAgent] = useState<AgentSnapshot | null>(null);
   const [scanDeviceId, setScanDeviceId] = useState<string | null>(null);
   const [scanError, setScanError] = useState('');
 
@@ -94,9 +92,9 @@ export default function RegisterPage() {
       setScanError('当前扫描设备或团队不可用');
       return;
     }
-    const id = generateAgentId(agent.name);
-    const exists = id in existingAgents;
-    setModalMode(exists ? 'update' : 'create');
+    const existingAgent = findRegisteredExecutor(agent, Object.values(existingAgents), scanDeviceId);
+    setRegisteredAgent(existingAgent);
+    setModalMode(existingAgent ? 'update' : 'create');
     setSelectedAgent(agent);
     setModalOpen(true);
   };
@@ -183,12 +181,13 @@ export default function RegisterPage() {
 
                     <div className="mt-3 flex justify-end items-center gap-2">
                       {(() => {
-                        const id = generateAgentId(agent.name);
-                        const exists = id in existingAgents;
+                        const existingAgent = scanDeviceId
+                          ? findRegisteredExecutor(agent, Object.values(existingAgents), scanDeviceId)
+                          : null;
                         if (agent.category === 'agentos-hosted') {
                           return <span className="text-xs font-medium text-emerald-600">已由设备自动注册</span>;
                         }
-                        return exists ? (
+                        return existingAgent ? (
                           <>
                             <span className="text-xs text-emerald-600 font-medium">已注册</span>
                             <button
@@ -223,9 +222,12 @@ export default function RegisterPage() {
         onClose={() => {
           setModalOpen(false);
           setSelectedAgent(null);
+          setRegisteredAgent(null);
         }}
         discoveredAgent={selectedAgent}
         mode={modalMode}
+        registeredAgentId={registeredAgent?.id}
+        initiallyVisible={registeredAgent?.visibleTeamIds.includes(currentTeamId ?? '') ?? false}
       />
     </div>
   );

@@ -12,6 +12,8 @@ interface Props {
   onClose: () => void;
   discoveredAgent: DiscoveredAgent | null;
   mode?: 'create' | 'update';
+  registeredAgentId?: string;
+  initiallyVisible?: boolean;
 }
 
 export function RegisterAgentModal({
@@ -21,6 +23,8 @@ export function RegisterAgentModal({
   onClose,
   discoveredAgent,
   mode = 'create',
+  registeredAgentId,
+  initiallyVisible = false,
 }: Props) {
   const [name, setName] = useState('');
   const [visible, setVisible] = useState(false);
@@ -30,9 +34,9 @@ export function RegisterAgentModal({
   useEffect(() => {
     if (!discoveredAgent) return;
     setName(discoveredAgent.name);
-    setVisible(false);
+    setVisible(initiallyVisible);
     setError('');
-  }, [discoveredAgent]);
+  }, [discoveredAgent, initiallyVisible]);
 
   if (!open || !discoveredAgent) return null;
 
@@ -70,8 +74,11 @@ export function RegisterAgentModal({
     setError('');
     try {
       if (mode === 'update') {
-        const agentId = discoveredAgent.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-        const res = await agentEvents().setVisibility(agentId, teamId, visible);
+        if (!registeredAgentId) {
+          setError('未找到已注册 Agent');
+          return;
+        }
+        const res = await agentEvents().setVisibility(registeredAgentId, teamId, visible);
         if (!res.ok) setError(res.error ?? '更新失败');
         else onClose();
         return;
