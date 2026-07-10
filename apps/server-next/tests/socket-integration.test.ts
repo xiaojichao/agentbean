@@ -1247,6 +1247,13 @@ describe('server-next Socket.IO namespaces', () => {
         userId: 'member-user',
         userName: 'member',
         agentCount: 1,
+        runtimes: [expect.objectContaining({
+          id: 'runtime-admin',
+          deviceId: 'device-admin',
+          adapterKind: 'codex',
+          name: 'Codex CLI',
+          installed: true,
+        })],
         agents: [expect.objectContaining({
           id: 'agent-admin',
           name: 'Drama',
@@ -1318,6 +1325,11 @@ describe('server-next Socket.IO namespaces', () => {
         userId: 'new-owner',
         ownerId: 'new-owner',
         userName: 'new-owner',
+        runtimes: [expect.objectContaining({
+          id: 'runtime-admin',
+          deviceId: 'device-admin',
+          adapterKind: 'codex',
+        })],
       },
     });
     await expect(admin.emitWithAck(WEB_EVENTS.admin.listAgents, {})).resolves.toMatchObject({

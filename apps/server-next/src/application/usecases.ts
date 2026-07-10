@@ -195,6 +195,7 @@ type AdminDeviceDto = DeviceDto & {
   userName: string;
   teamName: string;
   agentCount: number;
+  runtimes: RuntimeDto[];
   agents: AdminAgentDto[];
 };
 
@@ -4464,10 +4465,11 @@ async function toAdminDeviceDto(
   repositories: ServerNextRepositories,
   device: DeviceRecord,
 ): Promise<AdminDeviceDto> {
-  const [owner, team, agents, allUsers, allTeams] = await Promise.all([
+  const [owner, team, agents, runtimes, allUsers, allTeams] = await Promise.all([
     repositories.users.getById(device.ownerId),
     repositories.teams.getById(device.teamId),
     repositories.agents.listByDevice(device.id),
+    repositories.runtimes.listByDevice(device.id),
     repositories.users.listAll(),
     repositories.teams.listAll(),
   ]);
@@ -4480,6 +4482,7 @@ async function toAdminDeviceDto(
     userName: owner?.username ?? '未知用户',
     teamName: team?.name ?? '未知团队',
     agentCount: agents.length,
+    runtimes: runtimes.map(toRuntimeDto),
     agents: adminAgents,
   };
 }
