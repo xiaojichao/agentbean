@@ -324,6 +324,58 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('rolls back device revocation schema changes when recording the migration ledger fails', () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      globalDb.exec('DROP TABLE device_revocations');
+      globalDb.exec(readFileSync(join(MIGRATIONS_DIR, 'global/0011_device_revocations.sql'), 'utf8'));
+      globalDb.prepare(
+        `INSERT INTO device_revocations
+         (teamId, machineId, profileId, profileKey, deviceId, deletedAt)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run('team-1', 'machine-1', 'profile-1', 'profile-1', 'device-1', 100);
+      globalDb.prepare("DELETE FROM schema_migrations WHERE id = 'global/0014_device_revocations_team_columns.sql'").run();
+      globalDb.exec(`
+        CREATE TRIGGER reject_0014_migration_ledger
+        BEFORE INSERT ON schema_migrations
+        WHEN NEW.id = 'global/0014_device_revocations_team_columns.sql'
+        BEGIN
+          SELECT RAISE(ABORT, 'reject 0014 migration ledger');
+        END;
+      `);
+
+      expect(() => applyGlobalMigrations(globalDb)).toThrow(/reject 0014 migration ledger/);
+      expect(columnNames(globalDb, 'device_revocations')).toEqual([
+        'teamId',
+        'machineId',
+        'profileId',
+        'profileKey',
+        'deviceId',
+        'deletedAt',
+      ]);
+      expect(globalDb.prepare('SELECT * FROM device_revocations').get()).toEqual({
+        teamId: 'team-1',
+        machineId: 'machine-1',
+        profileId: 'profile-1',
+        profileKey: 'profile-1',
+        deviceId: 'device-1',
+        deletedAt: 100,
+      });
+      expect(tableNames(globalDb)).not.toContain('device_revocations_legacy');
+      expect(indexNames(globalDb, 'device_revocations')).toContain('idx_revocations_machine');
+      expect(
+        globalDb
+          .prepare('PRAGMA index_info(idx_revocations_machine)')
+          .all()
+          .map((row) => (row as { name: string }).name),
+      ).toEqual(['teamId', 'machineId']);
+      expect(globalDb.prepare("SELECT id FROM schema_migrations WHERE id = 'global/0014_device_revocations_team_columns.sql'").get()).toBeUndefined();
+    } finally {
+      teamDb.exec('SELECT 1');
+      close();
+    }
+  });
+
   test('applies workspace run pagination index migration', () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {

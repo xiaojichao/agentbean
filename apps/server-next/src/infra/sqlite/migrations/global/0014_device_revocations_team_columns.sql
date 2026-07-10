@@ -1,5 +1,3 @@
-BEGIN IMMEDIATE;
-
 ALTER TABLE device_revocations RENAME TO device_revocations_legacy;
 
 CREATE TABLE device_revocations (
@@ -33,5 +31,3 @@ DROP TABLE device_revocations_legacy;
 
 CREATE INDEX idx_revocations_machine
   ON device_revocations(team_id, machine_id);
-
-COMMIT;

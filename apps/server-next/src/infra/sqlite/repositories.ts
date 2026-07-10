@@ -1961,19 +1961,18 @@ function applyMigration(db: SqliteDatabase, relativePath: string): void {
     return;
   }
   try {
+    db.exec('BEGIN IMMEDIATE;');
     db.exec(readFileSync(resolveMigrationPath(relativePath), 'utf8'));
+    db.prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)').run(relativePath, Date.now());
+    db.exec('COMMIT;');
   } catch (error) {
-    // Migrations may wrap DDL/data movement in an explicit transaction. SQLite
-    // leaves that transaction open after a statement error, so always roll it
-    // back before surfacing the original migration failure.
     try {
       db.exec('ROLLBACK;');
     } catch {
-      // Non-transactional migrations have nothing to roll back.
+      // The transaction may already be closed by SQLite after a fatal error.
     }
     throw error;
   }
-  db.prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)').run(relativePath, Date.now());
 }
 
 function resolveMigrationPath(relativePath: string): string {
