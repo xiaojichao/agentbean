@@ -24,7 +24,7 @@
 | P-1-08 | Release A 首次读取旧 browser key 时写入 `agentbean.teamPath` 并删除旧键，此后不再写旧键。 | Web storage | `team-path.test.ts`、真实浏览器 storage inspection | Partial local |
 | P-1-09 | Release B 删除旧 browser key 读取、旧 Team 页面 redirect 和全部 checker allowlist。 | Web/CI | `team-path.test.ts`、redirect test、`npm run check:team-terminology` | Not started |
 | P-1-10 | Artifact upload proxy 与 Server HTTP 只存在 `/api/teams/:teamId/...`。 | HTTP/Web | route existence test、multipart upload/preview/download smoke | Partial local |
-| P-1-11 | Device login、invite、list/detail/scan/rename 与 custom Agent create 只使用 Team payload。 | Device/Web/E2E | targeted tests、browser Device flow | Partial local |
+| P-1-11 | Device list/Agent 查询显式使用 `teamId`；device-bound get/scan/select-directory/delete/rename 只使用 `deviceId`；invite/login/custom Agent create 符合各自 canonical contract。 | Device/Web/E2E | targeted tests、browser Device flow | Partial local |
 | P-1-12 | `main` 不再构建、测试、部署或发布 legacy source trees；rollback 使用 Git/Railway/npm artifact。 | Repository/CI/Operations | cutover audit、workflow inspection、rollback runbook、npm dist-tags | Not started |
 | P-1-13 | README、AgentBean Next 活动文档和当前 specs 只描述 Team product contract。 | Docs | 活动文档静态扫描零结果 | Green local |
 | P-1-14 | CI 静态门禁能拒绝旧字段、事件、route、storage key、schema 和已废弃产品名。 | CI | checker unit tests、PR check | Not started |
@@ -38,9 +38,9 @@
 | P-1-01 | `5f3d7b5` | `npm run test:contracts`; `npm run build:contracts` | contracts 已通过本地测试与构建。 |
 | P-1-02 / P-1-03 | `ff0ce25`, `16be460` | server-next targeted tests; `npm run test:server-next`; `npm run build:server-next` | canonical admin handler、DTO 与权限回归通过。 |
 | P-1-04 / P-1-05 | `3c6d1d8`, `48ddb52` | device revocation / SQLite repository tests; `npm run build:server-next` | fresh schema 与追加迁移通过；production DB 备份恢复尚未演练。 |
-| P-1-06 | `cc7a8e9`, `b6521ae`, `d298271` | `npm run test:web-next -- --api.host 127.0.0.1`（25 files / 187 tests）; `npm run build:web-next` | Web canonical DTO、payload 与完整 App Router build 通过。 |
+| P-1-06 | `cc7a8e9`, `b6521ae`, `d298271`, `68a26ac` | `npm run test:web-next -- --api.host 127.0.0.1`（26 files / 194 tests）; `npm run build:web-next` | Web canonical DTO、payload 与完整 App Router build 通过。 |
 | P-1-07 / P-1-08 | `3f3be1c`, `2ed4bdd` | team-path/socket-client tests; browser smoke unit 16/16; readiness 54/54; `npm run build:web-next`; `npm run build:server-next` | Team 子流程两次通过，但完整长 smoke 随后的 runs projection 超时，故暂记 `Partial local`。 |
-| P-1-10 / P-1-11 | `d298271`, `b550710`, `d0b09c4`, `68a26ac` | Web tests 187/187; Web build；Device/Agent scan targeted regressions | route 与 payload 单元证据已具备；本轮完整长 smoke 未完成 Device/Artifact 阶段。 |
+| P-1-10 / P-1-11 | `d298271`, `b550710`, `68a26ac` | Web tests 194/194; Web build；Device/Agent scan targeted regressions | route 与 payload 单元证据已具备；本轮完整长 smoke 未完成 Device/Artifact 阶段。 |
 | P-1-13 | 本 Task 9 | 计划给定的 README、AgentBean Next docs 与当前 specs forbidden-token scan 返回零结果；三份被主 PRD 取代的设计已删除 | 活动文档达到 `Green local`。 |
 
 当前 Phase -1 仍为 `in_progress`。P-1-09、P-1-12、P-1-14 属于后续任务；P-1-15 尚缺全量 root gate 与 CI；P-1-16 尚无 Release B production evidence。

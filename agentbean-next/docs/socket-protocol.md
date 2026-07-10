@@ -394,6 +394,22 @@ Ack<{ device: DeviceDetailDto }>
 - `device:get` 成功前，server 会根据 device 所属 team 确认 session 派生或 payload 兼容字段中的 `userId` 是 team member。
 - `DeviceDetailDto` 包含 device projection、该 device 的 runtimes，以及对该 team 可见且绑定到该 device 的 agents。
 
+#### `device:agents:list`
+
+客户端：
+
+```ts
+{ teamId: string; deviceId: string }
+```
+
+Ack：
+
+```ts
+Ack<{ agents: DeviceAgentListDto[]; runtimes: RuntimeDto[] }>
+```
+
+这是 Team-scoped 查询；Server 同时校验 `teamId` membership 与 Device 的真实 Team 归属。
+
 #### `device:scan`
 
 客户端：
@@ -410,21 +426,29 @@ Ack<{ request: { requestId: string; deviceId: string } }>
 
 服务器行为：
 
-- `device:scan` 成功前，server 会根据 device 所属 team 确认 session 派生或 payload 兼容字段中的 `userId` 是 team member。
+- `device:scan` 成功前，Server 根据 Device record 解析归属 Team，并确认调用者是 Device owner 或系统 admin。
 - 目标 device 必须处于 `online` 状态，否则返回 `DEVICE_OFFLINE`。
 - 成功后，server 只向该 device 当前绑定的 daemon socket 发送 `device:scan-requested`。
+
+#### `device:select-directory`
+
+客户端：`{ deviceId: string }`。Server 先按 `deviceId` 读取 Device、解析归属 Team 并校验访问权限，再把请求转发给 owning Device 的 daemon。
+
+#### `device:rename`
+
+客户端：`{ deviceId: string; name: string }`。
+
+#### `device:delete`
+
+客户端：`{ deviceId: string }`。
+
+这些都是 device-bound 操作，客户端不发送 `teamId`。Server 从 Device record 解析 Team：get/select-directory 要求 Team 访问权，scan/rename/delete 要求 Device owner 或系统 admin 权限。
 
 服务器事件：
 
 - `devices:snapshot`：`DeviceDto[]`
 - `device:status`：`DeviceDto`
 - `device:runtimes`：`{ deviceId: string; runtimes: RuntimeDto[] }`
-
-延后的 device commands：
-
-- `device:rename`：保留给 device management。
-- `device:delete`：如果 target UX 需要 device removal，则保留。
-- `device:select-directory`：保留给 custom agent setup。
 
 ### Agents
 
@@ -1004,23 +1028,6 @@ Ack<{ task: TaskDto }>
 - `task:update` 可以更新 title/description/status/assignee/channel/tags/sortOrder；更新已有 private channel task 前，当前用户也必须能看见该 task 所属 channel。
 - `task:delete` 删除当前用户可见 task，并对非成员、不可见 channel task、已删除 task 返回稳定 failure ack。
 - `task:reorder` 作为独立 command 保留，更新 `sortOrder` 并校验有限数值输入。
-
-## 从目标协议中移除
-
-当前实现有 admin events，但旧产品尚未发布，且 admin surface 还不足以被带入。
-
-初始目标协议中不要包含：
-
-- `admin:list-users`
-- `admin:delete-user`
-- `admin:list-teams`
-- `admin:delete-team`
-- `admin:list-devices`
-- `admin:transfer-device-owner`
-- `admin:list-agents`
-- `admin:delete-agent`
-
-这些只能在后续具备显式 role、permission 与 audit requirements 后重新引入。
 
 ## `/agent` Namespace
 

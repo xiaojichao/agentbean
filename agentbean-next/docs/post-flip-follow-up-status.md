@@ -82,12 +82,12 @@ P0 baseline 已经收敛，不应继续作为下一条产品切片 blocker。
 - web-next preview 会在 Workspace 输出组内按 `relativePath` 展示轻量目录树。
 - web-next preview 可以从 message workspace run 摘要打开右侧独立详情面板，集中查看 run metadata 与 workspace output tree。
 - server-next 与 web-next preview 支持 workspace run detail 的授权 HTTP API 与 `workspaceRunId` URL 恢复路径。
-- apps/web 的执行详情页已支持从 agent/device 工作区列表进入，在 run 有 `messageId` 时回链到原 chat message，并在 daemon 上报时展示执行命令与可折叠日志摘要。
-- apps/web 的执行详情页已提供日志摘要排障工具：失败默认展开、复制、下载、换行切换、行数/字符数与尾部摘要提示。
-- server-next 原生 agent workspace run 列表 route 已补齐；apps/web 的 agent/device 工作区入口可展示最新 runs、状态、命令上下文与关联 workspace artifacts，并继续链接到执行详情。
-- server-next 团队级 workspace runs 最新列表 route 已补齐；apps/web 侧栏提供 `/runs` 运行记录入口，可按当前用户可见 channel 展示团队最近执行记录、来源消息跳转、agent/device、退出码与文件数量。
+- `apps/web-next` 的执行详情页已支持从 Agent/Device 工作区列表进入，在 run 有 `messageId` 时回链到原 chat message，并在 daemon 上报时展示执行命令与可折叠日志摘要。
+- `apps/web-next` 的执行详情页已提供日志摘要排障工具：失败默认展开、复制、下载、换行切换、行数/字符数与尾部摘要提示。
+- server-next 原生 Agent workspace run 列表 route 已补齐；`apps/web-next` 的 Agent/Device 工作区入口可展示最新 runs、状态、命令上下文与关联 workspace artifacts，并继续链接到执行详情。
+- server-next Team workspace runs 最新列表 route 已补齐；`apps/web-next` 侧栏提供 `/runs` 运行记录入口，可按当前用户可见 Channel 展示 Team 最近执行记录、来源消息跳转、Agent/Device、退出码与文件数量。
 - App Router 运行记录入口已补 browser smoke 与 readiness gate：执行列表、状态/Agent/设备筛选、状态分组、详情路由、刷新恢复、完整日志 artifact、文件树、inline 日志搜索、返回列表与返回触发消息都进入 `webui-runs-business-flow` / `runs-parity-browser-smoke`。
-- daemon-next custom command 的完整 stdout/stderr 日志已 artifact 化为 `logs/workspace-run.log`，server-next 写入自身 artifact storage 后复用现有 preview/download 授权，apps/web run detail 会提示完整日志可在文件列表下载。
+- daemon-next custom command 的完整 stdout/stderr 日志已 artifact 化为 `logs/workspace-run.log`，server-next 写入自身 artifact storage 后复用现有 preview/download 授权，`apps/web-next` run detail 会提示完整日志可在文件列表下载。
 
 剩余边界：
 
@@ -108,7 +108,7 @@ canonical npm 包 `@agentbean/daemon` 的 `@latest` dist-tag 已推进到基于 
 
 ## 下一步判定
 
-当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。P0 生产观察 baseline 已完成，页面入口也已经迁入 App Router；逐入口 parity backfill 当前已经全部进入 Green。`channels / channel members` 已补 App Router browser smoke 与 readiness gate，覆盖 creator 添加/移除 human 与 agent member、private channel visibility 回收、mention scope，以及 `channel:members` projection 不能被其他接口替代。`devices` 已补 App Router browser smoke 与 readiness gate，覆盖设备 list/detail、runtime 投影、自定义 Agent 投影、targeted scan 后 AgentOS 托管 Agent 投影、rename/refresh restore 与 delete redirect/list disappearance。`agents` 已补 App Router browser smoke 与 readiness gate，覆盖 custom agent create、list/detail、config update、publish/unpublish、metrics 与 delete/list disappearance。`tasks` 已补 App Router browser smoke 与 readiness gate，覆盖 task create/status/reorder/delete/refresh restore。`runs` / 运行记录已补 App Router browser smoke 与 readiness gate，覆盖执行列表、状态/Agent/设备筛选、状态分组、详情路由、刷新恢复、完整日志 artifact、文件树、inline 日志搜索、返回列表与返回触发消息。`settings / teams` 已补 App Router browser smoke 与 readiness gate，覆盖 account 当前用户身份/logout 入口、browser preferences 持久化/刷新恢复/reset、team rename、join link create/revoke、team create/switch/delete/fallback restore。`dashboard / admin` 已补 App Router browser smoke 与 readiness gate，覆盖 global admin 访问、teams/users/devices/agents tab、设备详情 runtime/public agent 投影、owner transfer 与 Agent owner projection。`daemon onboarding` 已补设备连接生命周期 readiness gate，覆盖 invite、saved profile、token refresh、reconnect、latest scan snapshot、targeted scan 与 canonical npm install smoke。Phase -1 Release A 期间旧源码只保留为限时回退参考，不再参与 build、deploy 或 publish；Release B 将把回退完全固定到 Git、Railway 与 npm 已发布 artifact。下一步应按真实线上症状或新增产品需求开小切片，而不是继续做迁移补账。
+当前不应再从旧 #141-#148 follow-up 清单直接挑“未完成项”开工。P0 生产观察 baseline 已完成，页面入口也已经迁入 App Router；逐入口 parity backfill 当前已经全部进入 Green。`channels / channel members`、`devices`、`agents`、`tasks`、`runs`、`settings / teams`、`dashboard / admin` 与 `daemon onboarding` 都已有对应 browser/readiness 证据。Release A 当前仍保留旧栈验证、old-target deploy 与 legacy daemon 发布/标签能力；Release B 完成源码退役后，回退才只依赖 Git、Railway 与 npm 已发布 artifact。下一步应按真实线上症状或新增产品需求开小切片，而不是继续做迁移补账。
 
 ## 已迁移入口的回头验规则
 

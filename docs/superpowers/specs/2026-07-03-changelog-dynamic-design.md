@@ -264,7 +264,7 @@ function ReleasesPanel() {
 4. 生成 `apps/web-next/lib/releases.generated.ts` 并提交。
 5. 重构 `ReleaseEntry` 为分类可视化，`ReleasesPanel` 改为 map `releases`。
 6. UI 冒烟测试。
-7. 不修改旧 Web 源码；Release A 起旧源码不再参与 build、deploy 或 publish，回退使用版本化 artifact。
+7. Release A 仍按现有 CI 验证旧 Web；Release B 退役旧源码后不再同步该实现。
 
 ## 9. 风险与回退
 

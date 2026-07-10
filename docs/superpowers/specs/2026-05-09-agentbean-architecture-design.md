@@ -6,7 +6,7 @@
 
 ## 1. 系统边界
 
-AgentBean 由 Web、Server 与 Device Runtime 三部分组成，三者通过 HTTPS、Socket.IO 和共享 contracts 协作。AgentBean 不定义独立的产品级网络容器；所有成员、频道、任务、设备、Agent 与 Artifact 都归属于 Team。
+AgentBean 只有 Team 一种协作容器。Web、Server 与 Device Runtime 通过 HTTPS、Socket.IO 和共享 contracts 协作；所有成员、频道、任务、设备、Agent 与 Artifact 都归属于 Team。
 
 ```text
 Human ── HTTPS / Socket.IO ──> apps/web-next
@@ -65,11 +65,11 @@ Artifact HTTP 只使用 Team 路由：
 
 Web 从 `[teamPath]` 解析当前 Team，并通过 canonical Team API 取回 `teamId`。浏览器持久化只写 `agentbean.teamPath`。
 
-Release A 允许隔离 helper 首次读取历史 key、写入 `agentbean.teamPath` 后立即删除历史 key；业务组件不得直接读取或写入历史 key。历史 Team 管理收藏入口只保留一次 permanent redirect，不保留第二份页面实现。
+Release A 允许隔离 helper 首次读取旧 key、写入 `agentbean.teamPath` 后立即删除旧 key；业务组件不得直接读取或写入旧 key。旧收藏兼容只保留一次 permanent redirect，不保留第二份页面实现。
 
 ## 5. Device 与 Agent
 
-Device 是 AgentBean 的统一设备概念。Device hello、invite、list/detail、scan、rename 与自定义 Agent 创建均显式携带 `teamId`。
+Device 是 AgentBean 的统一设备概念。Team-scoped 的 list 与 Agent 列表查询显式携带 `teamId`；device-bound 的 get、scan、select-directory、delete、rename 只携带 `deviceId`，由 Server 解析 Device 与归属 Team。get/select-directory 校验 Team 访问权，scan/rename/delete 校验 Device owner 或系统 admin 权限。Device invite/login 返回 Team 与 Device credentials；自定义 Agent 创建显式携带 `teamId` 与 `deviceId`。
 
 Agent 只有两类产品形态：
 
@@ -94,9 +94,9 @@ Artifact 的上传、预览、下载和 workspace 查询都只接受 Team 路由
 
 ## 8. Release A 回退边界
 
-Phase -1 Release A 期间，旧源码只作为限时回退参考，不再参与 build、deploy 或 publish。回退必须固定到 Git commit、Railway 历史 deployment 或 npm 已发布 artifact；不得从 `main` 重新构建旧源码。
+Phase -1 Release A 期间，当前 workflow 仍验证旧栈、支持 old-target deploy，并维护 legacy daemon 发布/标签；默认开发和生产流量仍以 AgentBean Next 为准。
 
-Release B 会移除旧源码和一次性 Web 兼容入口，回退只依赖 Git、Railway 与 npm artifact。生产证据在 Release A 发布后写入 Phase -1 验收矩阵，不用本地验证替代生产事实。
+Release B 会移除旧源码和一次性 Web 兼容入口；从那时起回退只依赖 Git、Railway 与 npm artifact，不再从 `main` 重建已退役源码。生产证据在 Release A 发布后写入 Phase -1 验收矩阵，不用本地验证替代生产事实。
 
 ## 9. 事实来源
 
