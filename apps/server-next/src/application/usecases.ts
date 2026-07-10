@@ -48,7 +48,6 @@ export interface ServerNextUseCases {
   changePassword(input: { userId: string; currentPassword: string; newPassword: string }): Promise<Ack<{}>>;
   listTeams(input: { userId: string }): Promise<Ack<ListTeamsResult>>;
   listAdminTeams(input: { userId: string }): Promise<Ack<{ teams: AdminTeamDto[] }>>;
-  listAdminNetworks(input: { userId: string }): Promise<Ack<{ networks: AdminTeamDto[] }>>;
   listAdminUsers(input: { userId: string }): Promise<Ack<{ users: AdminUserDto[] }>>;
   listAdminDevices(input: { userId: string }): Promise<Ack<{ devices: AdminDeviceDto[] }>>;
   listAdminAgents(input: { userId: string }): Promise<Ack<{ agents: AdminAgentDto[] }>>;
@@ -161,9 +160,6 @@ export interface RegisterUserResult {
 
 type DeviceAgentListDto = AgentDto & {
   deviceName?: string;
-  networkId: string;
-  publishedNetworkIds: string[];
-  unpublishedNetworkIds: string[];
 };
 
 type AgentMemberDto = AgentDto & {
@@ -186,25 +182,20 @@ type AdminUserDto = UserDto & {
 
 type AdminAgentDto = AgentDto & {
   role?: string;
-  networkId: string;
-  networkName: string;
+  primaryTeamName: string;
   ownerName?: string | null;
   userName?: string | null;
-  deviceName?: string;
+  deviceName?: string | null;
   deviceUserId?: string | null;
   deviceUserName?: string | null;
-  publishedNetworkIds: string[];
-  unpublishedNetworkIds: string[];
 };
 
 type AdminDeviceDto = DeviceDto & {
   userId: string;
   userName: string;
-  networkId: string;
-  networkName: string;
+  teamName: string;
   agentCount: number;
-  runtimes: RuntimeDto[];
-  publicAgents: AdminAgentDto[];
+  agents: AdminAgentDto[];
 };
 
 export interface LoginUserInput {
@@ -990,22 +981,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         });
       }
       return makeSuccess({ teams: result });
-    },
-
-    async listAdminNetworks(adminInput) {
-      const admin = await requireGlobalAdmin(repositories, adminInput.userId);
-      if (!admin.ok) {
-        return admin;
-      }
-      const teams = await repositories.teams.listAll();
-      const result: AdminTeamDto[] = [];
-      for (const team of teams) {
-        result.push({
-          ...team,
-          members: await repositories.teams.listAllMembers(team.id),
-        });
-      }
-      return makeSuccess({ networks: result });
     },
 
     async listAdminUsers(adminInput) {
@@ -4489,28 +4464,23 @@ async function toAdminDeviceDto(
   repositories: ServerNextRepositories,
   device: DeviceRecord,
 ): Promise<AdminDeviceDto> {
-  const [owner, team, agents, runtimes, allUsers, allTeams] = await Promise.all([
+  const [owner, team, agents, allUsers, allTeams] = await Promise.all([
     repositories.users.getById(device.ownerId),
     repositories.teams.getById(device.teamId),
     repositories.agents.listByDevice(device.id),
-    repositories.runtimes.listByDevice(device.id),
     repositories.users.listAll(),
     repositories.teams.listAll(),
   ]);
   const usersById = new Map(allUsers.map((user) => [user.id, user]));
   const teamsById = new Map(allTeams.map((candidate) => [candidate.id, candidate]));
-  const publicAgents = agents
-    .filter((agent) => agent.visibleTeamIds.includes(device.teamId))
-    .map((agent) => toAdminAgentDto(agent, { device, usersById, teamsById }));
+  const adminAgents = agents.map((agent) => toAdminAgentDto(agent, { device, usersById, teamsById }));
   return {
     ...toDeviceDto(device),
     userId: device.ownerId,
     userName: owner?.username ?? '未知用户',
-    networkId: device.teamId,
-    networkName: team?.name ?? '未知团队',
+    teamName: team?.name ?? '未知团队',
     agentCount: agents.length,
-    runtimes: runtimes.map(toRuntimeDto),
-    publicAgents,
+    agents: adminAgents,
   };
 }
 
@@ -4529,16 +4499,13 @@ function toAdminAgentDto(
   return {
     ...toPublicAgent(agent),
     role: undefined,
-    networkId: agent.primaryTeamId,
-    networkName: team?.name ?? '未知团队',
+    primaryTeamName: team?.name ?? '未知团队',
     ownerId,
     ownerName: owner?.username ?? null,
     userName: owner?.username ?? null,
     deviceName: context.device ? deviceDisplayName(context.device) : '未分配设备',
     deviceUserId: context.device?.ownerId ?? null,
     deviceUserName: deviceOwner?.username ?? null,
-    publishedNetworkIds: uniqueIds(agent.visibleTeamIds),
-    unpublishedNetworkIds: [],
   };
 }
 
@@ -5963,9 +5930,6 @@ function toDeviceAgentListDto(agent: AgentRecord, device?: DeviceRecord): Device
   return {
     ...toPublicAgent(agent),
     deviceName: device ? deviceDisplayName(device) : undefined,
-    networkId: agent.primaryTeamId,
-    publishedNetworkIds: uniqueIds(agent.visibleTeamIds),
-    unpublishedNetworkIds: [],
   };
 }
 

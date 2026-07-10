@@ -366,23 +366,28 @@ describe('server-next Socket.IO namespaces', () => {
     ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-list-1', status: 'online' }] });
 
     // 协议漂移修复前：此处会超时/回 INTERNAL_ERROR，因为 server 没注册 device:agents:list
-    await expect(
-      web.emitWithAck(WEB_EVENTS.device.agentsList, {
-        userId: 'user-list-1',
-        teamId: 'team-list-1',
-        deviceId: 'device-list-1',
-      }),
-    ).resolves.toMatchObject({
+    const deviceAgentsResult = await web.emitWithAck(WEB_EVENTS.device.agentsList, {
+      userId: 'user-list-1',
+      teamId: 'team-list-1',
+      deviceId: 'device-list-1',
+    });
+    expect(deviceAgentsResult).toMatchObject({
       ok: true,
       agents: [{
         id: 'agent-list-1',
         deviceId: 'device-list-1',
         status: 'online',
-        networkId: 'team-list-1',
-        publishedNetworkIds: ['team-list-1'],
       }],
       runtimes: [{ id: 'runtime-list-1', deviceId: 'device-list-1', adapterKind: 'codex' }],
     });
+    const [deviceAgent] = deviceAgentsResult.agents;
+    expect(deviceAgent).toMatchObject({
+      primaryTeamId: 'team-list-1',
+      visibleTeamIds: ['team-list-1'],
+    });
+    expect(deviceAgent).not.toHaveProperty('networkId');
+    expect(deviceAgent).not.toHaveProperty('publishedNetworkIds');
+    expect(deviceAgent).not.toHaveProperty('unpublishedNetworkIds');
   });
 
   test('does not expose internal subscription exception messages in failure acks', async () => {
@@ -1217,10 +1222,6 @@ describe('server-next Socket.IO namespaces', () => {
       ok: true,
       teams: [{ id: 'team-admin', name: 'AgentBean', members: expect.arrayContaining([expect.objectContaining({ userId: 'member-user' })]) }],
     });
-    await expect(admin.emitWithAck(WEB_EVENTS.admin.listNetworks, {})).resolves.toMatchObject({
-      ok: true,
-      networks: [{ id: 'team-admin', name: 'AgentBean' }],
-    });
     await expect(admin.emitWithAck(WEB_EVENTS.admin.listUsers, {})).resolves.toMatchObject({
       ok: true,
       users: expect.arrayContaining([
@@ -1228,27 +1229,29 @@ describe('server-next Socket.IO namespaces', () => {
         expect.objectContaining({ id: 'member-user', username: 'member', role: 'user' }),
       ]),
     });
-    await expect(admin.emitWithAck(WEB_EVENTS.admin.listDevices, {})).resolves.toMatchObject({
+    const adminDevicesResult = await admin.emitWithAck(WEB_EVENTS.admin.listDevices, {});
+    expect(adminDevicesResult).toMatchObject({
       ok: true,
       devices: [expect.objectContaining({
         id: 'device-admin',
         name: 'Mac Studio',
         userId: 'member-user',
         userName: 'member',
-        networkId: 'team-admin',
-        networkName: 'AgentBean',
         agentCount: 1,
-        publicAgents: [expect.objectContaining({
+        agents: [expect.objectContaining({
           id: 'agent-admin',
           name: 'Drama',
           deviceName: 'Mac Studio',
           deviceUserName: 'member',
           ownerName: 'member',
-          networkName: 'AgentBean',
         })],
       })],
     });
-    await expect(admin.emitWithAck(WEB_EVENTS.admin.listAgents, {})).resolves.toMatchObject({
+    const [adminDevice] = adminDevicesResult.devices;
+    expect(adminDevice).toMatchObject({ teamId: 'team-admin', teamName: 'AgentBean' });
+
+    const adminAgentsResult = await admin.emitWithAck(WEB_EVENTS.admin.listAgents, {});
+    expect(adminAgentsResult).toMatchObject({
       ok: true,
       agents: [expect.objectContaining({
         id: 'agent-admin',
@@ -1258,10 +1261,13 @@ describe('server-next Socket.IO namespaces', () => {
         userName: 'member',
         deviceName: 'Mac Studio',
         deviceUserName: 'member',
-        networkId: 'team-admin',
-        networkName: 'AgentBean',
-        publishedNetworkIds: ['team-admin'],
       })],
+    });
+    const [adminAgent] = adminAgentsResult.agents;
+    expect(adminAgent).toMatchObject({
+      primaryTeamId: 'team-admin',
+      primaryTeamName: 'AgentBean',
+      visibleTeamIds: ['team-admin'],
     });
 
     await expect(
