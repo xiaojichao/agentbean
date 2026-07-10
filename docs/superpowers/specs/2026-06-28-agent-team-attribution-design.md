@@ -9,7 +9,7 @@
 - AgentOS 托管型 Agent 与自定义 Agent 是 Team 成员型 Agent。
 - executor runtime 只是 Device 能力；扫描结果为自定义 Agent 创建提供参数，不建立稳定 Agent identity。
 - Agent 使用 `primaryTeamId` 表示稳定归属，使用 `visibleTeamIds` 表示当前可见 Team。
-- Server 与 Web 直接消费 canonical DTO，不派生第二套空间字段。
+- Server 与 Web 直接消费 canonical DTO，不派生 non-canonical alias、projection 或重复字段。
 - 设备详情只提供当前 Team 可见性控制，不提供多 Team 选择对话框。
 - `visibleTeamIds = []` 表示从当前 Team 移出；重新可见时恢复为包含 `primaryTeamId`。
 - 可见性变化同步影响成员列表、DM/Task 权限与默认 Channel membership。

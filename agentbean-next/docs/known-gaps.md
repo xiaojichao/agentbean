@@ -24,7 +24,7 @@ AgentBean 统一使用 `team` 作为产品与 domain model 术语。
 已确认：
 
 - UI、domain、contract、schema 与 protocol 都应使用 `team`。
-- 不再保留第二套团队容器概念或同义术语。
+- Team 是唯一协作容器，不保留 alternate alias 或同义产品术语。
 - 旧实现中残留的旧命名只可在盘点历史时作为 identifier 出现；目标实现不应继续采用。
 
 ### Agent Types
@@ -107,7 +107,7 @@ Tasks 第一版已经落地为 server-side task model。
 - Admin Device projection 使用 `teamId/teamName`；Admin Agent projection 使用 `primaryTeamId/primaryTeamName/visibleTeamIds`。
 - 全局 admin 与 Team owner/admin 是不同权限边界。
 
-剩余缺口是 audit trail、批量删除/恢复与 metrics drilldown，不是恢复第二套空间协议。
+剩余缺口是 audit trail、批量删除/恢复与 metrics drilldown，不是恢复旧 admin Team events。
 
 ## 数据模型缺口
 

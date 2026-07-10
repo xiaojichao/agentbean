@@ -38,7 +38,7 @@ Human ── HTTPS / Socket.IO ──> apps/web-next
 - `agents.primary_team_id`
 - `device_revocations.team_id`
 
-每个 Team 的协作数据由 Team repository 管理，包括频道、频道成员、消息、任务、dispatch、workspace run 与 Artifact 元数据。Repository 和 use case 必须显式接收 `teamId`，不能依赖第二套空间标识。
+每个 Team 的协作数据由 Team repository 管理，包括频道、频道成员、消息、任务、dispatch、workspace run 与 Artifact 元数据。Repository 和 use case 必须显式接收 `teamId`，不能依赖 non-canonical alias 或重复标识。
 
 ## 3. Socket 与 HTTP 合同
 

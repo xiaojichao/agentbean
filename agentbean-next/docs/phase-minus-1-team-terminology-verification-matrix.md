@@ -14,7 +14,7 @@
 
 | ID | 验收项 | 层级 | 必需证据 | 当前状态 |
 |---|---|---|---|---|
-| P-1-01 | `WEB_EVENTS` 不再暴露第二套 admin 空间事件，只保留 Team events。 | Contracts | `npm run test:contracts`、`npm run build:contracts` | Green local |
+| P-1-01 | `WEB_EVENTS` 不再暴露旧 admin Team events，只保留 canonical Team events。 | Contracts | `npm run test:contracts`、`npm run build:contracts` | Green local |
 | P-1-02 | Server 不注册旧 admin handlers，缺少 `teamId` 时返回 canonical validation error。 | Socket | `socket-handlers.test.ts` | Green local |
 | P-1-03 | Device Agent、Admin Agent、Admin Device 响应只包含 `teamId`、`teamName`、`primaryTeamId`、`primaryTeamName`、`visibleTeamIds`。 | UseCase/Socket | `socket-integration.test.ts` | Green local |
 | P-1-04 | Fresh global SQLite 使用 `teams`、`team_members` 和 Team snake_case columns。 | Repository | `sqlite-repositories.test.ts`、schema inspection | Green local |

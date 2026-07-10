@@ -7,11 +7,11 @@
 ## 当前合同
 
 - Dispatch attachment 使用 Team-scoped download route 与当前 Device credential 下载到 per-run input 目录。
-- 执行环境通过受控 `AGENTBEAN_*` 变量暴露 Team、Agent、Run 与 workspace 路径。
+- 执行环境只通过已实现的 `AGENTBEAN_RUN_ID`、`AGENTBEAN_WORKSPACE`、`AGENTBEAN_INPUT_DIR`、`AGENTBEAN_OUTPUT_DIR` 暴露 Run、workspace、input 与 output 路径。
 - 执行后扫描输出目录，按 mtime、扩展名、忽略目录与 SHA256 去重收集产物。
 - 产物通过 `/api/teams/:teamId/artifacts/upload` 以 multipart 上传，再以 artifact id 随 `dispatch:result` 关联 Message 与 Workspace Run。
 - 完整 stdout/stderr 继续作为 `logs/workspace-run.log` Artifact 上报。
-- 附件下载或产物上传失败不吞掉主回复；错误进入受控日志和结果状态。
+- 附件下载或产物上传失败采用 best-effort skip，不阻断主 dispatch；当前没有为这些增强步骤单独记录失败状态。
 - Server 对 upload、preview、download 与 workspace run 同时校验 Device/session、Team membership 和 Channel visibility。
 
 ## 当前模块

@@ -17,7 +17,7 @@
 - `--all-profiles` 枚举 saved profiles，并为每个 profile 启动独立连接。
 - YAML 配置支持环境变量插值；配置优先级为 CLI > env > YAML > 默认值。
 - profile rename、list 与 clear 都有明确错误边界，不静默覆盖目标 profile。
-- 每个 profile 有独立 socket、heartbeat、rescan 与 scan cache；`--all-profiles` 不把多个 Team 合并成一个共享 session。
+- 每个 profile 有独立 socket、reconnect、rescan 与 scan cache；`--all-profiles` 不把多个 Team 合并成一个共享 session。
 
 ## 证据
 

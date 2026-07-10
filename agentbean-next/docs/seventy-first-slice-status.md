@@ -84,7 +84,7 @@
   - `channel:update` / `channel:members` / `channel:add-*` / `channel:remove-*` / `channel:archive` / `channel:delete` 等 App Router 调用显式携带当前 team id，不再依赖 server-side cached current team。
   - channels 列表页按 route `teamPath` resolve team，并为创建、列表、编辑、归档确认增加稳定 `data-smoke` hooks。
 - 本轮 `agents` 加深 smoke 同时补齐了 canonical payload/DTO 适配：
-  - server-next 与 web-next socket 边界直接使用 canonical `primaryTeamId/visibleTeamIds`，不再为页面生成第二套空间字段。
+  - server-next 与 web-next socket 边界直接使用 canonical `primaryTeamId/visibleTeamIds`，不再为页面生成 non-canonical alias、projection 或重复字段。
   - `agent:publish` / `agent:unpublish` / `agent:update-config` / `agent:delete` 客户端调用支持显式管理 team id，避免详情页依赖 cached current team。
   - agents 列表、详情、metrics 页按 route `teamPath` resolve team，不再隐式依赖可能滞后的 store `currentTeamId`。
 - 本轮 `devices` 加深 smoke 同时抓到并修复了 canonical contract/UI 问题：
