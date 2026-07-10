@@ -693,6 +693,22 @@ test('uses only Team route segments', () => {
   expect(existsSync(join(appDir, oldSegment))).toBe(false);
   expect(existsSync(join(appDir, '[teamPath]', oldPage))).toBe(false);
 });
+
+test('keeps only the temporary Release A Team page redirect', async () => {
+  const nextConfig = (await import('../next.config.mjs')).default;
+  const redirects = (await nextConfig.redirects?.()) ?? [];
+  const temporarySource = `/:teamPath/${['net', 'works'].join('')}`;
+
+  expect(redirects).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        source: temporarySource,
+        destination: '/:teamPath/teams',
+        permanent: true,
+      }),
+    ]),
+  );
+});
 ```
 
 - [ ] **Step 2: 运行新测试并确认 module 不存在**
@@ -731,7 +747,7 @@ export function writeStoredTeamPath(storage: StorageLike, teamPath: string): voi
 }
 ```
 
-只有该 helper 和测试可在 Release A 期间进入静态门禁 allowlist。
+只有该 helper、测试和 `next.config.mjs` redirect 配置可在 Release A 期间进入静态门禁 allowlist。
 
 - [ ] **Step 4: 用 Git move 重命名 route segments**
 
@@ -1308,6 +1324,7 @@ const ignoredSegments = new Set(['.git', '.next', 'coverage', 'dist', 'node_modu
 const releaseAAllowlist = new Set([
   'apps/web-next/lib/team-path.ts',
   'apps/web-next/tests/team-path.test.ts',
+  'apps/web-next/next.config.mjs',
 ]);
 const requestedRoots = process.argv.slice(2);
 const scanRoots = (requestedRoots.length > 0 ? requestedRoots : defaultRoots)
@@ -1475,12 +1492,18 @@ test('ignores removed legacy storage keys', () => {
   const legacyKey = ['agentbean', 'networkPath'].join('.');
   const storage = new MemoryStorage({ [legacyKey]: 'stale-team' });
 
-expect(readStoredTeamPath(storage)).toBeNull();
-expect(storage.getItem('agentbean.teamPath')).toBeNull();
+  expect(readStoredTeamPath(storage)).toBeNull();
+  expect(storage.getItem('agentbean.teamPath')).toBeNull();
 });
 
 test('does not retain removed Team page aliases', async () => {
-  expect(await resolveRedirect('/team-one/networks')).toBeNull();
+  const nextConfig = (await import('../next.config.mjs')).default;
+  const redirects = (await nextConfig.redirects?.()) ?? [];
+  const removedSource = `/:teamPath/${['net', 'works'].join('')}`;
+
+  expect(redirects).not.toEqual(
+    expect.arrayContaining([expect.objectContaining({ source: removedSource })]),
+  );
 });
 ```
 

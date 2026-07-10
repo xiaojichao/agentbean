@@ -545,13 +545,11 @@ HTTP artifact 路由使用与 Socket 相同的 Team 和 Channel 授权规则。
 - Dispatch、Workspace Run、Artifact 和恢复。
 - Agent Skills、状态、可见性和基础指标。
 
-### Phase B：Device Service
+### Phase B：Device Runtime Core
 
 - 先交付可测试、可恢复的 `DeviceServiceCore`，提供 Worker、credential、lease、durable outbox 和结果补报能力。
-- 后台安装、启动、停止、状态、日志和诊断。
-- 每个 Team/Profile 独立 Runner。
-- 自包含二进制、升级和回滚。
-- 旧前台进程配置和凭据迁移。
+- 过渡期由现有 Device 进程承载，每个 Team/Profile 使用独立 Runner。
+- 本阶段不要求平台安装器或自包含二进制，不阻塞 PI 单 Agent 管理调用。
 
 ### Phase C：PI 管理 Agent
 
@@ -574,6 +572,13 @@ HTTP artifact 路由使用与 Socket 相同的 Team 和 Channel 授权规则。
 - managed/device/auto placement。
 - 跨 host checkpoint 恢复。
 - 预算、容量、费用和隐私策略。
+
+### Phase F：Device Service 自包含发布
+
+- 将已经验证的 `DeviceServiceCore` 封装为 macOS、Linux 和 Windows 后台服务。
+- 后台安装、启动、停止、状态、日志和诊断。
+- 自包含二进制、升级和回滚。
+- 旧前台进程配置和凭据迁移。
 
 ## 16. 总体验收标准
 

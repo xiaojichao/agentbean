@@ -636,10 +636,31 @@ export type AgentInvocationStatus =
 export interface AgentInvocationRecord {
   id: string;
   managementRunId: string;
-  taskId?: string;
-  targetAgentId: string;
+  intent: AgentInvocationIntentV1;
+  intentHash: string;
   idempotencyKey: string;
   createdAt: number;
+}
+
+export interface AgentInvocationIntentV1 {
+  schemaVersion: 1;
+  teamId: string;
+  channelId: string;
+  targetAgentId: string;
+  targetKind: 'custom' | 'agentos-hosted';
+  objective: string;
+  taskContext?: {
+    taskId: string;
+    rootTaskId?: string;
+    taskRevision: number;
+    taskAttempt: number;
+    claimLeaseId: string;
+  };
+  acceptanceCriteria: AcceptanceCriterion[];
+  dependencyResults: DependencyResultRef[];
+  memoryCapsuleId?: string;
+  attachmentIds: string[];
+  deadlineAt?: number;
 }
 
 export interface AgentInvocationView extends AgentInvocationRecord {
@@ -656,7 +677,8 @@ export interface AgentInvocationView extends AgentInvocationRecord {
 - 一个 Invocation 可以因重试、Worker 接管或受控改派产生多个 Dispatch attempt，但同一时刻只能有一个 active attempt。
 - `dispatches` 继续保存实际发送目标、执行状态、timeout、cancel 和 Workspace Run 关联；managed Dispatch 增加不可变 `agent_invocation_id` 外键和从 1 开始的 `attempt_number`。
 - 数据库对 `(agent_invocation_id, attempt_number)` 建唯一约束，并以 partial unique index 或等价事务锁保证每个 Invocation 最多一个非终态 attempt。Direct 和历史 Dispatch 的 `agent_invocation_id` 为 `NULL`。
-- `agent_invocations` 只持久化调用意图、目标和 idempotency key，不持久化 status、attempt ID 列表或 active Dispatch。`AgentInvocationView` 完全从关联 Dispatch 和 Server 终态规则查询派生，没有独立写接口。
+- `agent_invocations` 持久化 versioned、不可变的 intent snapshot、canonical `intentHash` 和 idempotency key，不持久化 status、attempt ID 列表或 active Dispatch。Worker 接管和重试必须读取该 snapshot，不能从已经变化的 Task 重新生成意图；相同 idempotency key 但 intent hash 不同返回 conflict。
+- `AgentInvocationView` 完全从不可变 intent、关联 Dispatch 和 Server 终态规则查询派生，没有独立状态写接口。修改目标、Task revision、criteria、依赖、Capsule 或附件都必须创建新的 Invocation。
 - Invocation 终态由 canonical Dispatch rows 和 Server 验证规则派生；创建 attempt、切换 active attempt 和写 Dispatch 状态必须在同一事务中满足上述约束，不能通过双写让两套状态独立前进。
 - 历史 Dispatch 不迁移、不重写，只读页面继续按现有方式展示；只有启用 `managed` 后的新调用创建 Invocation 关联。
 - 现有 Web 可以继续展示 Dispatch 状态；ManagementRun/Task DAG 页面从 Invocation 聚合 attempts、重试和贡献 Agent。
@@ -809,7 +831,8 @@ sequenceDiagram
 ### 14.3 用户补充要求
 
 - ManagementRun 正在运行：补充消息进入 PI Manager Session 的 `steer`。
-- PI 正在等待外部 Agent：更新相关 Task 验收条件；支持 steer 的外部 Agent 可收到追加指令，不支持则创建 follow-up invocation。
+- PI 正在等待外部 Agent：Task 验收条件禁止原地改写；任何新增、删除或语义修改都创建新 Task revision，使旧 claim lease、Invocation、delivery 和 acceptance stale。语义未变化的 criterion 跨 revision 保持原 ID；发生语义变化的 criterion 使用新 ID，被删除的 ID 永不复用。
+- 新 revision 创建新的不可变 AgentInvocation intent。外部 Runtime 支持 steer 时可以复用其底层 Session 传递补充说明，但仍必须建立新的逻辑 Invocation；不支持则创建普通 follow-up Invocation。旧 Invocation 的 late result 只作为可追溯证据，不能满足新 revision。
 - ManagementRun 已进入 `in_review`：补充要求使根任务返回 `running`，并创建修订任务。
 
 ## 15. 数据模型
@@ -848,12 +871,52 @@ export interface ManagementEventPayloadMap {
   'worker-lost': { workerId: string; lastHeartbeatAt: number; reason: string };
   'checkpoint-updated': { checkpointRevision: number; lastEventSequence: number };
   'task-created': { taskId: string; parentTaskId?: string; taskRevision: number };
-  'task-claimed': { taskId: string; agentId: string; claimLeaseId: string; attempt: number };
-  'task-accepted': { taskId: string; acceptance: SubtaskAcceptance };
-  'invocation-started': { invocationId: string; dispatchId: string; attempt: number };
-  'invocation-completed': { invocationId: string; dispatchId: string; status: AgentInvocationResult['status'] };
+  'task-revised': {
+    taskId: string;
+    previousRevision: number;
+    taskRevision: number;
+    criterionIds: string[];
+    reasonCode: string;
+  };
+  'task-state-changed': {
+    taskId: string;
+    taskRevision: number;
+    from: 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
+    to: 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
+  };
+  'task-claimed': {
+    taskId: string;
+    taskRevision: number;
+    agentId: string;
+    claimLeaseId: string;
+    attempt: number;
+  };
+  'claim-invalidated': {
+    taskId: string;
+    previousTaskRevision: number;
+    claimLeaseId: string;
+    invalidatedInvocationIds: string[];
+    reasonCode: string;
+  };
+  'subtask-delivered': {
+    deliveryId: string;
+    taskId: string;
+    taskRevision: number;
+    taskAttempt: number;
+    claimLeaseId: string;
+    invocationId: string;
+  };
+  'task-acceptance-decided': { taskId: string; acceptance: SubtaskAcceptance };
+  'invocation-created': { invocationId: string; intentHash: string; taskRevision?: number };
+  'dispatch-attempt-started': { invocationId: string; dispatchId: string; attemptNumber: number };
+  'dispatch-attempt-completed': {
+    invocationId: string;
+    dispatchId: string;
+    attemptNumber: number;
+    status: AgentInvocationResult['status'];
+  };
   'waiting-for-user': { reasonCode: string; questionMessageId?: string };
-  'delivery-submitted': { messageId: string; contributingInvocationIds: string[] };
+  'root-delivery-submitted': { messageId: string; contributingInvocationIds: string[] };
   'run-completed': { completedTaskId?: string; deliveryMessageId: string };
   'run-failed': { errorCode: string; recoverable: boolean };
   'run-cancelled': { reason: string; cancelledBy: string };
@@ -879,6 +942,8 @@ export type ManagementEvent = {
 ```
 
 `sequence` 在单个 Run 内单调递增，恢复和 Web 订阅都以它去重。相同 `managementRunId + idempotencyKey` 且 payload hash 相同返回原事件；key 相同但 type 或 payload 不同返回 conflict。Server 只按 sequence 重放，不按到达时间重排。
+
+Task revision、状态、claim lease、SubtaskDelivery、acceptance、Invocation intent 和 Dispatch attempt 的每次持久变化都必须对应上述 typed event；Task 业务写入与 event append 位于同一事务。重放方不通过消息文案猜测状态，缺少对应 event 的状态写入视为完整性错误。
 
 Event payload 禁止包含模型完整 prompt、思维链、模型密钥、附件短期 token、Memory 原文、本地绝对路径、源码和未脱敏日志。新增 event type 或 payload 变更必须提升 schema version、提供 upcaster 或明确拒绝旧版本，不能把自由 JSON 当成恢复契约。
 
@@ -1064,6 +1129,7 @@ agentbean device uninstall
 - capability negotiation 和 adapter 降级。
 - Management Event discriminated union、schema version、payload 禁止字段和 idempotency conflict。
 - Subtask Delivery、Acceptance、criteria result 与 evidence refs。
+- Immutable Invocation intent snapshot、intent hash conflict 与 schema version。
 
 ### 22.2 Domain
 
@@ -1074,6 +1140,7 @@ agentbean device uninstall
 - idempotency key 去重。
 - 缺少证据、冲突结果和高风险交付不能进入 `done`。
 - stale Task revision、attempt、claim lease 或 delivery acceptance 返回 conflict。
+- criteria 增删改递增 Task revision，未变 criterion ID 稳定，旧 claim/Invocation/delivery 全部失效。
 - `direct`、`shadow`、`managed` 模式不会产生重复 Invocation 或 Dispatch。
 
 ### 22.3 Server
@@ -1088,6 +1155,7 @@ agentbean device uninstall
 - managed barrier 前允许受控回退；任一持久或用户可见写入后禁止隐式 direct dispatch。
 - checkpoint 引用失效时忽略模型摘要并从 Server 事实重建。
 - Event 重放按 sequence、version 和 idempotency key 保持确定性。
+- Task revision/state、claim invalidation、SubtaskDelivery/Acceptance 与 Invocation/Dispatch attempt 写入都有同事务 typed event。
 
 ### 22.4 Device
 
