@@ -58,7 +58,7 @@ interface DiscoveredAgentReport {
   gatewayInstanceKey?: string;
 }
 
-const DEFAULT_DISPATCH_REQUEST_COALESCE_MS = 1200;
+const DEFAULT_DISPATCH_REQUEST_COALESCE_MS = 5000;
 
 export function attachServerNextNamespaces(
   server: SocketServerLike,

@@ -1981,7 +1981,7 @@ describe('server-next Socket.IO namespaces', () => {
     expect(otherDispatches).toEqual([]);
   });
 
-  test('coalesces rapid direct messages before emitting the agent dispatch request', async () => {
+  test('coalesces spaced direct messages before emitting the agent dispatch request', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,
       ids: createIds([
@@ -2000,7 +2000,7 @@ describe('server-next Socket.IO namespaces', () => {
       ]),
     });
     const { baseUrl, ioServer, httpServer } = await startSocketServer(app, {
-      dispatchRequestCoalesceMs: 20,
+      dispatchRequestCoalesceMs: 1_000,
     });
     cleanups.push(async () => {
       await new Promise<void>((resolve) => ioServer.close(() => resolve()));
@@ -2065,6 +2065,7 @@ describe('server-next Socket.IO namespaces', () => {
         body: '你能说明你能做什么吗？',
       }),
     ).resolves.toMatchObject({ ok: true, dispatches: [{ id: 'dispatch-1' }] });
+    await delay(400);
     await expect(
       web.emitWithAck(WEB_EVENTS.message.send, {
         userId: 'user-1',
@@ -2073,6 +2074,8 @@ describe('server-next Socket.IO namespaces', () => {
         body: '并且列出你有多少skills?',
       }),
     ).resolves.toMatchObject({ ok: true, dispatches: [] });
+    await delay(700);
+    expect(dispatchRequests).toEqual([]);
     await expect(
       web.emitWithAck(WEB_EVENTS.message.send, {
         userId: 'user-1',
@@ -2085,7 +2088,7 @@ describe('server-next Socket.IO namespaces', () => {
     expect(dispatchRequests).toEqual([]);
     await eventually(async () => {
       expect(dispatchRequests).toHaveLength(1);
-    });
+    }, 300);
     expect(dispatchRequests[0]).toMatchObject({
       id: 'dispatch-1',
       prompt: '你能说明你能做什么吗？\n\n并且列出你有多少skills?\n\n和用什么模型吗？',
