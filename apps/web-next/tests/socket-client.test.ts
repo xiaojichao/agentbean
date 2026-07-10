@@ -1,7 +1,8 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { WEB_EVENTS, type AgentDto, type ChannelDto, type DeviceDto, type DispatchDto, type MessageDto, type RuntimeDto } from '../../../packages/contracts/src/index';
 import { createWebSocketClient, type WebSocketTransport } from '../src/index';
-import { agentEvents, authEvents, deviceEvents } from '../lib/socket';
+import { agentEvents, authEvents, deviceEvents, emitWithTimeout } from '../lib/socket';
 
 describe('web-next socket client', () => {
   test('keeps artifact upload fallback aligned with the App Router teams proxy', async () => {
@@ -462,6 +463,92 @@ describe('web-next socket client', () => {
     }]);
     expect(JSON.stringify(snapshots)).not.toContain('networkId');
     expect(JSON.stringify(snapshots)).not.toContain('publishedNetworkIds');
+  });
+
+  test('keeps device and admin snapshots on canonical Team fields', async () => {
+    const schemaSource = readFileSync(new URL('../lib/schema.ts', import.meta.url), 'utf8');
+    expect(schemaSource).toContain('teamId: string;');
+    expect(schemaSource).toContain('teamName?: string;');
+    expect(schemaSource).not.toContain('networkId');
+    expect(schemaSource).not.toContain('networkName');
+    expect(schemaSource).not.toContain('publishedNetworkIds');
+    expect(schemaSource).not.toContain('unpublishedNetworkIds');
+
+    const socket = new CanonicalSocket();
+    const device = {
+      id: 'device-1',
+      teamId: 'team-1',
+      teamName: 'Ops',
+      status: 'online',
+      lastSeenAt: 1,
+      agentIds: ['agent-1'],
+    };
+    const adminAgent = {
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      primaryTeamName: 'Ops',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      status: 'online',
+    };
+    socket.responses.set(WEB_EVENTS.admin.listDevices, { ok: true, devices: [device] });
+    socket.responses.set(WEB_EVENTS.admin.listAgents, { ok: true, agents: [adminAgent] });
+
+    const deviceSnapshots: unknown[] = [];
+    deviceEvents(socket as any).onSnapshot((snapshot) => deviceSnapshots.push(snapshot));
+    await socket.trigger(WEB_EVENTS.device.snapshot, [device]);
+    expect(deviceSnapshots).toEqual([[device]]);
+
+    const adminDevices = await emitWithTimeout(socket as any, WEB_EVENTS.admin.listDevices, {});
+    const adminAgents = await emitWithTimeout(socket as any, WEB_EVENTS.admin.listAgents, {});
+    expect(adminDevices).toMatchObject({ ok: true, devices: [{ teamId: 'team-1', teamName: 'Ops' }] });
+    expect(adminAgents).toMatchObject({
+      ok: true,
+      agents: [{ primaryTeamId: 'team-1', primaryTeamName: 'Ops', visibleTeamIds: ['team-1'] }],
+    });
+    expect(JSON.stringify({ deviceSnapshots, adminDevices, adminAgents })).not.toContain('networkId');
+    expect(JSON.stringify({ deviceSnapshots, adminDevices, adminAgents })).not.toContain('networkName');
+    expect(JSON.stringify({ deviceSnapshots, adminDevices, adminAgents })).not.toContain('publishedNetworkIds');
+    expect(JSON.stringify({ deviceSnapshots, adminDevices, adminAgents })).not.toContain('unpublishedNetworkIds');
+  });
+
+  test('returns canonical teamId and teamPath from device login', async () => {
+    const socket = new CanonicalSocket();
+    socket.responses.set(WEB_EVENTS.auth.login, {
+      ok: true,
+      token: 'token-1',
+      user: { id: 'user-1', username: 'shaw', role: 'user' },
+      currentTeam: { id: 'team-1', name: 'Ops', path: 'ops' },
+    });
+    socket.responses.set(WEB_EVENTS.deviceInvite.complete, {
+      ok: true,
+      team: { id: 'team-1', name: 'Ops', path: 'ops' },
+      credentials: { deviceId: 'device-1' },
+    });
+
+    const result = await authEvents(socket as any).deviceLogin({
+      inviteCode: 'invite-1',
+      username: 'shaw',
+      password: 'secret',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      token: 'token-1',
+      teamId: 'team-1',
+      teamPath: 'ops',
+      userId: 'user-1',
+      username: 'shaw',
+      role: 'user',
+      deviceId: 'device-1',
+    });
+    expect(JSON.stringify(result)).not.toContain('networkId');
+    expect(JSON.stringify(result)).not.toContain('networkPath');
+    expect(socket.emitted).toEqual([
+      [WEB_EVENTS.auth.login, { username: 'shaw', password: 'secret' }],
+      [WEB_EVENTS.deviceInvite.complete, { code: 'invite-1', userId: 'user-1' }],
+    ]);
   });
 });
 
