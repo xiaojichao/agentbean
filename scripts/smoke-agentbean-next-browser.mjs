@@ -557,6 +557,54 @@ export function summarizeBrowserSmoke(checks, artifacts) {
   };
 }
 
+export async function runAgentBeanNextReleaseABrowserGate(
+  options = {},
+  {
+    previewRunner = runAgentBeanNextBrowserSmoke,
+    webUiRunner = runAgentBeanNextWebUiBrowserSmoke,
+  } = {},
+) {
+  const resolvedArtifactsDir = resolve(
+    options.artifactsDir ?? join(tmpdir(), `agentbean-next-release-a-browser-smoke-${Date.now()}`),
+  );
+  mkdirSync(resolvedArtifactsDir, { recursive: true });
+
+  const sharedOptions = { ...options };
+  delete sharedOptions.artifactsDir;
+  const externalBaseUrl = options.baseUrl
+    ? normalizeBaseUrlOrThrow(options.baseUrl)
+    : undefined;
+  const previewBaseUrl = externalBaseUrl
+    ? new URL('/preview', externalBaseUrl).toString()
+    : undefined;
+  const webUiBaseUrl = externalBaseUrl?.toString();
+
+  const preview = await previewRunner({
+    ...sharedOptions,
+    ...(previewBaseUrl ? { baseUrl: previewBaseUrl } : {}),
+    artifactsDir: join(resolvedArtifactsDir, 'preview'),
+  });
+  const webUi = await webUiRunner({
+    ...sharedOptions,
+    ...(webUiBaseUrl ? { baseUrl: webUiBaseUrl } : {}),
+    artifactsDir: join(resolvedArtifactsDir, 'webui'),
+  });
+  const checks = [...preview.checks, ...webUi.checks];
+
+  return {
+    ok: preview.ok && webUi.ok,
+    total: preview.total + webUi.total,
+    failed: preview.failed + webUi.failed,
+    checks,
+    summaries: { preview, webUi },
+    artifacts: {
+      dir: resolvedArtifactsDir,
+      preview: preview.artifacts,
+      webUi: webUi.artifacts,
+    },
+  };
+}
+
 async function startLocalServer({ suffix, skipBuild, timeoutMs, webEntry = 'preview' }) {
   if (!skipBuild) {
     await runCommand('npm', ['run', webEntry === 'app' ? 'build:packages' : 'build:server-next'], { timeoutMs: Math.max(timeoutMs, 60_000) });
@@ -1588,6 +1636,7 @@ export async function exerciseWebUiRunsBusinessSmoke({
     if (typeof dispatchId !== 'string') {
       throw new Error(`WebUI runs smoke message did not create a dispatch: ${formatAck(sendAck)}`);
     }
+    await daemon.waitForDispatchResult(dispatchId);
 
     await page.navigate(new URL(`/${teamPath}/settings`, root).toString());
     await page.click('[data-smoke="settings-tab-runs"]');
@@ -2079,6 +2128,17 @@ export async function exerciseWebUiDevicesBusinessSmoke({
     await page.waitForFunction(
       `Boolean(document.querySelector('[data-smoke="device-delete-confirm"]'))`,
       'device delete confirmation to render',
+      timeoutMs,
+    );
+    await page.waitForFunction(
+      `Boolean(document.querySelector('[data-smoke="device-delete-name-input"]'))`,
+      'remote device delete name confirmation to render',
+      timeoutMs,
+    );
+    await page.fillInputAsUser('[data-smoke="device-delete-name-input"]', renamedDeviceName);
+    await page.waitForFunction(
+      `document.querySelector('[data-smoke="device-delete-name-input"]')?.value === ${JSON.stringify(renamedDeviceName)}`,
+      'remote device delete confirmation name to update',
       timeoutMs,
     );
     await page.click('[data-smoke="device-delete-confirm"]');
@@ -3039,15 +3099,38 @@ async function waitForWebUiAdminAgentDetail({ page, agentId, ownerId, deviceId, 
 
 async function connectSmokeDaemon({ baseUrl, ioFactory, session, suffix, timeoutMs, dispatchResultFactory }) {
   const socket = await connectSocket(ioFactory, new URL('/agent', baseUrl).toString(), timeoutMs);
-  socket.on(AGENT_EVENTS.dispatch.request, (request) => {
+  const dispatchResults = new Map();
+  const dispatchResultFor = (dispatchId) => {
+    let pending = dispatchResults.get(dispatchId);
+    if (!pending) {
+      let resolveResult;
+      const promise = new Promise((resolve) => {
+        resolveResult = resolve;
+      });
+      pending = { promise, resolve: resolveResult };
+      dispatchResults.set(dispatchId, pending);
+    }
+    return pending;
+  };
+  socket.on(AGENT_EVENTS.dispatch.request, async (request) => {
+    const pending = dispatchResultFor(request.id);
     const result = dispatchResultFactory?.(request) ?? {
       body: `browser-smoke:${request.prompt}`,
     };
-    emitAck(socket, AGENT_EVENTS.dispatch.result, {
-      dispatchId: request.id,
-      agentId: request.agentId,
-      ...result,
-    }, timeoutMs).catch(() => {});
+    try {
+      const ack = await emitAck(socket, AGENT_EVENTS.dispatch.result, {
+        dispatchId: request.id,
+        agentId: request.agentId,
+        ...result,
+      }, timeoutMs);
+      pending.resolve(
+        ack?.ok === false
+          ? { ok: false, error: new Error(`Smoke daemon dispatch result was rejected: ${formatAck(ack)}`) }
+          : { ok: true },
+      );
+    } catch (error) {
+      pending.resolve({ ok: false, error: error instanceof Error ? error : new Error(String(error)) });
+    }
   });
 
   const helloAck = await emitAck(socket, AGENT_EVENTS.device.hello, {
@@ -3077,7 +3160,21 @@ async function connectSmokeDaemon({ baseUrl, ioFactory, session, suffix, timeout
     throw new Error(`Smoke daemon runtime report did not return a runtime id: ${formatAck(runtimesAck)}`);
   }
 
-  return { socket, deviceId, runtimeId };
+  return {
+    socket,
+    deviceId,
+    runtimeId,
+    async waitForDispatchResult(dispatchId) {
+      const result = await promiseWithTimeout(
+        dispatchResultFor(dispatchId).promise,
+        timeoutMs,
+        `dispatch result ${dispatchId} to persist`,
+      );
+      if (!result.ok) {
+        throw result.error;
+      }
+    },
+  };
 }
 
 async function createSmokeBrowserSession({ baseUrl, ioFactory, suffix, timeoutMs }) {
@@ -3885,7 +3982,7 @@ export function formatBrowserSmokeText(summary) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
-  const summary = await runAgentBeanNextBrowserSmoke({
+  const summary = await runAgentBeanNextReleaseABrowserGate({
     baseUrl: args.url ?? process.env.AGENTBEAN_NEXT_ENTRY_URL,
     chromeBin: args.chromeBin,
     timeoutMs: Number.isFinite(args.timeoutMs) ? args.timeoutMs : undefined,

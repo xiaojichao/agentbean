@@ -1,6 +1,103 @@
 import { describe, expect, test } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 describe('AgentBean Next browser smoke script', () => {
+  test('runs preview and WebUI smoke as the default Release A browser gate', async () => {
+    const { runAgentBeanNextReleaseABrowserGate } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
+    const calls: string[] = [];
+    const previewSummary = {
+      ok: true,
+      total: 1,
+      failed: 0,
+      checks: [{ id: 'preview-check', ok: true, message: 'preview passed' }],
+      artifacts: { dir: '/tmp/release-a/preview', screenshot: '/tmp/release-a/preview/final.png' },
+    };
+    const webUiSummary = {
+      ok: true,
+      total: 1,
+      failed: 0,
+      checks: [{ id: 'webui-check', ok: true, message: 'WebUI passed' }],
+      artifacts: { dir: '/tmp/release-a/webui', screenshot: '/tmp/release-a/webui/final.png' },
+    };
+
+    const summary = await runAgentBeanNextReleaseABrowserGate(
+      { artifactsDir: '/tmp/release-a', baseUrl: 'https://agentbean.example/app' },
+      {
+        previewRunner: async (options: { artifactsDir?: string; baseUrl?: string }) => {
+          calls.push(`preview:${options.baseUrl}:${options.artifactsDir}`);
+          return previewSummary;
+        },
+        webUiRunner: async (options: { artifactsDir?: string; baseUrl?: string }) => {
+          calls.push(`webui:${options.baseUrl}:${options.artifactsDir}`);
+          return webUiSummary;
+        },
+      },
+    );
+
+    expect(calls).toEqual([
+      'preview:https://agentbean.example/preview:/tmp/release-a/preview',
+      'webui:https://agentbean.example/app:/tmp/release-a/webui',
+    ]);
+    expect(summary).toMatchObject({
+      ok: true,
+      total: 2,
+      failed: 0,
+      checks: [...previewSummary.checks, ...webUiSummary.checks],
+      summaries: { preview: previewSummary, webUi: webUiSummary },
+      artifacts: {
+        dir: '/tmp/release-a',
+        preview: previewSummary.artifacts,
+        webUi: webUiSummary.artifacts,
+      },
+    });
+  });
+
+  test('keeps both smoke summaries and fails the Release A gate when either flow fails', async () => {
+    const { runAgentBeanNextReleaseABrowserGate } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
+    const calls: string[] = [];
+    const previewSummary = {
+      ok: false,
+      total: 1,
+      failed: 1,
+      checks: [{ id: 'preview-failure', ok: false, message: 'preview failed' }],
+      artifacts: { dir: '/tmp/preview' },
+    };
+    const webUiSummary = {
+      ok: true,
+      total: 1,
+      failed: 0,
+      checks: [{ id: 'webui-check', ok: true, message: 'WebUI passed' }],
+      artifacts: { dir: '/tmp/webui' },
+    };
+
+    const summary = await runAgentBeanNextReleaseABrowserGate(
+      {},
+      {
+        previewRunner: async () => {
+          calls.push('preview');
+          return previewSummary;
+        },
+        webUiRunner: async () => {
+          calls.push('webui');
+          return webUiSummary;
+        },
+      },
+    );
+
+    expect(calls).toEqual(['preview', 'webui']);
+    expect(summary.ok).toBe(false);
+    expect(summary.failed).toBe(1);
+    expect(summary.summaries).toEqual({ preview: previewSummary, webUi: webUiSummary });
+  });
+
+  test('uses the Release A orchestrator from the default browser smoke CLI', () => {
+    const source = readFileSync(new URL('../../../scripts/smoke-agentbean-next-browser.mjs', import.meta.url), 'utf8');
+    const cliSource = source.slice(source.indexOf('if (process.argv[1]'));
+
+    expect(cliSource).toContain('runAgentBeanNextReleaseABrowserGate');
+    expect(cliSource).not.toContain('await runAgentBeanNextBrowserSmoke({');
+  });
+
   test('exercises App Router page routes in the browser', async () => {
     const { exerciseWebUiRouteSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];
@@ -466,8 +563,13 @@ describe('AgentBean Next browser smoke script', () => {
     const calls: Array<[string, unknown]> = [];
     const webSocketCalls: Array<[string, unknown]> = [];
     const daemonCalls: Array<[string, unknown]> = [];
+    const daemonHandlers = new Map<string, (payload: any) => void | Promise<void>>();
+    let dispatchResultPersisted = false;
     const page = {
       async navigate(url: string) {
+        if (url.endsWith('/team-one/settings') && !dispatchResultPersisted) {
+          throw new Error('workspace run page opened before dispatch result persistence completed');
+        }
         calls.push(['navigate', url]);
       },
       async waitForFunction(expression: string, description: string) {
@@ -491,14 +593,22 @@ describe('AgentBean Next browser smoke script', () => {
       async emitWithAck(event: string, payload: unknown) {
         webSocketCalls.push([event, payload]);
         if (event === 'agent:create') return { ok: true, agent: { id: 'agent-1' } };
-        if (event === 'message:send') return { ok: true, dispatches: [{ id: 'dispatch-1' }] };
+        if (event === 'message:send') {
+          void daemonHandlers.get('dispatch:request')?.({
+            id: 'dispatch-1',
+            agentId: 'agent-1',
+            prompt: '@WebUIRununsmoke produce workspace run',
+          });
+          return { ok: true, dispatches: [{ id: 'dispatch-1' }] };
+        }
         return { ok: true };
       },
     };
     const ioFactory = () => {
       let onConnect: (() => void) | undefined;
       return {
-        on(event: string, handler: () => void) {
+        on(event: string, handler: (payload?: unknown) => void | Promise<void>) {
+          daemonHandlers.set(event, handler);
           if (event === 'connect') onConnect = handler;
         },
         off() {},
@@ -512,6 +622,10 @@ describe('AgentBean Next browser smoke script', () => {
           daemonCalls.push([event, payload]);
           if (event === 'device:hello') return { ok: true, device: { id: 'device-1' } };
           if (event === 'device:runtimes') return { ok: true, runtimes: [{ id: 'runtime-1' }] };
+          if (event === 'dispatch:result') {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            dispatchResultPersisted = true;
+          }
           return { ok: true };
         },
       };
@@ -1041,6 +1155,10 @@ describe('AgentBean Next browser smoke script', () => {
     expect(calls).toContainEqual(['click', '[data-smoke="device-rename-save"]']);
     expect(calls).toContainEqual(['reload', undefined]);
     expect(calls).toContainEqual(['click', '[data-smoke="device-delete-open"]']);
+    expect(calls).toContainEqual([
+      'fillInputAsUser',
+      { selector: '[data-smoke="device-delete-name-input"]', value: 'webui-device-devices-smoke' },
+    ]);
     expect(calls).toContainEqual(['click', '[data-smoke="device-delete-confirm"]']);
     expect(webSocketCalls).toContainEqual([
       'agent:create',
