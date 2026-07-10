@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
+import { writeStoredTeamPath } from '@/lib/team-path';
 import type { TeamSummary } from '@/lib/schema';
 
 export default function TeamsPage() {
@@ -34,6 +35,9 @@ export default function TeamsPage() {
     const res = await teamEvents().create({ name: trimmed, description: description || undefined });
     if (res.ok && res.team) {
       setTeams((prev) => [...prev, res.team!]);
+      setCurrentTeamId(res.team.id);
+      writeStoredTeamPath(localStorage, res.team.path);
+      router.push(`/${res.team.path}/teams`);
       setName('');
       setDescription('');
     }

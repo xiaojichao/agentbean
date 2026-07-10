@@ -46,6 +46,10 @@ const WEB_EVENTS = {
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_VIEWPORT = { width: 1440, height: 1000 };
 
+export function webUiFlowSuffix(suffix, flow) {
+  return `${suffix}-${flow}`;
+}
+
 export async function runAgentBeanNextBrowserSmoke({
   baseUrl,
   chromeBin,
@@ -355,7 +359,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       baseUrl: target.baseUrl,
       session: seededSession.session,
       ioFactory,
-      suffix,
+      suffix: webUiFlowSuffix(suffix, 'channels'),
       timeoutMs,
     });
     checks.push(
@@ -407,7 +411,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       webSocket: seededSession.socket,
       session: seededSession.session,
       ioFactory,
-      suffix,
+      suffix: webUiFlowSuffix(suffix, 'runs'),
       timeoutMs,
     });
     checks.push(
@@ -440,7 +444,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       webSocket: seededSession.socket,
       session: seededSession.session,
       ioFactory,
-      suffix,
+      suffix: webUiFlowSuffix(suffix, 'devices'),
       timeoutMs,
     });
     checks.push(
@@ -472,14 +476,14 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       webSocket: seededSession.socket,
       session: seededSession.session,
       ioFactory,
-      suffix,
+      suffix: webUiFlowSuffix(suffix, 'agents'),
       timeoutMs,
     });
     checks.push(
       check(
         'webui-agents-business-flow',
         true,
-        `Created agent "${agentsResult.agentName}", updated config, toggled publish to ${agentsResult.targetTeamName}, verified metrics, and deleted it from the list`,
+        `Created agent "${agentsResult.agentName}", updated config, verified metrics, and deleted it from the list`,
       ),
     );
 
@@ -489,7 +493,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
         baseUrl: target.baseUrl,
         dataDir: target.dataDir,
         ioFactory,
-        suffix,
+        suffix: webUiFlowSuffix(suffix, 'admin'),
         timeoutMs,
       });
       checks.push(
@@ -1198,56 +1202,54 @@ export async function exerciseWebUiTeamsBusinessSmoke({
   await page.setInputValue('[data-smoke="team-create-name"]', teamName);
   await page.setInputValue('[data-smoke="team-create-description"]', description);
   await page.click('[data-smoke="team-create-submit"]');
-  await waitForWebUiCurrentTeam({
-    page,
-    teamId: session.team.id,
-    teamName: session.team.name,
-    teamPath,
-    phase: 'session team after create',
-    timeoutMs,
-  });
-  let created = await waitForWebUiTeamListItem({ page, teamName, timeoutMs });
+  const created = await waitForWebUiTeamListItem({ page, teamName, timeoutMs });
   if (!created?.id || !created?.path) {
     throw new Error(`WebUI teams smoke could not resolve created team from list: ${formatAck(created)}`);
   }
+  await waitForWebUiCurrentTeam({
+    page,
+    teamId: created.id,
+    teamName,
+    teamPath: created.path,
+    phase: 'created team immediately after create',
+    timeoutMs,
+  });
+  await page.reload();
+  await waitForWebUiCurrentTeam({
+    page,
+    teamId: created.id,
+    teamName,
+    teamPath: created.path,
+    phase: 'created team after create refresh',
+    timeoutMs,
+  });
+
+  await switchWebUiTeam({ page, teamId: session.team.id });
+  await waitForWebUiCurrentTeam({
+    page,
+    teamId: session.team.id,
+    teamName: session.team.name,
+    teamPath,
+    phase: 'session team after explicit switch back',
+    timeoutMs,
+  });
   await page.reload();
   await waitForWebUiCurrentTeam({
     page,
     teamId: session.team.id,
     teamName: session.team.name,
     teamPath,
-    phase: 'session team after create refresh',
+    phase: 'session team after explicit switch refresh',
     timeoutMs,
   });
-  created = await waitForWebUiTeamListItem({ page, teamName, timeoutMs });
-  if (!created?.id || !created?.path) {
-    throw new Error(`WebUI teams smoke did not restore the created team after refresh: ${formatAck(created)}`);
-  }
 
-  await page.evaluateJson(`
-    (() => {
-      const teamId = ${JSON.stringify(created.id)};
-      const button = document.querySelector(\`[data-smoke="team-switch"][data-team-id="\${teamId}"]\`);
-      if (!button) throw new Error("Missing team switch button");
-      button.click();
-      return true;
-    })()
-  `);
+  await switchWebUiTeam({ page, teamId: created.id });
   await waitForWebUiCurrentTeam({
     page,
     teamId: created.id,
     teamName,
     teamPath: created.path,
-    phase: 'created team after switch',
-    timeoutMs,
-  });
-  await page.reload();
-  await waitForWebUiCurrentTeam({
-    page,
-    teamId: created.id,
-    teamName,
-    teamPath: created.path,
-    phase: 'created team after switch refresh',
+    phase: 'created team after explicit switch for delete',
     timeoutMs,
   });
   const restoredTeamPath = session.team.path ?? session.team.id;
@@ -1307,6 +1309,21 @@ export async function exerciseWebUiTeamsBusinessSmoke({
   });
   await waitForWebUiTeamListMissing({ page, teamId: created.id, teamName, timeoutMs });
   return { teamId: created.id, teamPath: created.path, teamName, restoredTeamPath, deleted: true };
+}
+
+async function switchWebUiTeam({ page, teamId }) {
+  const switched = await page.evaluateJson(`
+    (() => {
+      const teamId = ${JSON.stringify(teamId)};
+      const button = document.querySelector(\`[data-smoke="team-switch"][data-team-id="\${teamId}"]\`);
+      if (!button) return false;
+      button.click();
+      return true;
+    })()
+  `);
+  if (!switched) {
+    throw new Error(`Missing team switch button for ${teamId}`);
+  }
 }
 
 async function waitForWebUiTeamListItem({ page, teamName, timeoutMs }) {
@@ -2451,7 +2468,6 @@ export async function exerciseWebUiAgentsBusinessSmoke({
   const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-32);
   const agentName = `WebUIAgent${safeSuffix.replace(/[^a-zA-Z0-9]/g, '').slice(-10)}`;
   const configuredAgentName = `${agentName}Cfg`;
-  const targetTeamName = `WebUI Agent Target ${safeSuffix}`;
   const daemon = await connectSmokeDaemon({
     baseUrl: root,
     ioFactory,
@@ -2478,20 +2494,6 @@ export async function exerciseWebUiAgentsBusinessSmoke({
       throw new Error(`WebUI agents smoke could not create a custom agent: ${formatAck(agentAck)}`);
     }
 
-    const targetTeamAck = await emitAck(webSocket, WEB_EVENTS.team.create, {
-      userId: session.user.id,
-      name: targetTeamName,
-      visibility: 'private',
-    }, timeoutMs);
-    const targetTeamId = readNestedString(targetTeamAck, ['team', 'id']);
-    if (!targetTeamId) {
-      throw new Error(`WebUI agents smoke could not create target team: ${formatAck(targetTeamAck)}`);
-    }
-    await emitAck(webSocket, WEB_EVENTS.team.switch, {
-      userId: session.user.id,
-      teamId: session.team.id,
-    }, timeoutMs);
-
     await page.navigate(new URL(`/${teamPath}/agents`, root).toString());
     await waitForWebUiAgentListItem({ page, agentId, name: agentName, timeoutMs });
     await page.navigate(new URL(`/${teamPath}/agents/${agentId}`, root).toString());
@@ -2506,30 +2508,6 @@ export async function exerciseWebUiAgentsBusinessSmoke({
     await page.setInputValue('[data-smoke="agent-config-cwd"]', '/tmp/agentbean-next-agents-smoke');
     await page.click('[data-smoke="agent-config-save"]');
     await waitForWebUiAgentDetail({ page, agentId, name: configuredAgentName, timeoutMs });
-
-    await waitForWebUiAgentPublishToggle({ page, targetTeamId, published: false, timeoutMs });
-    await page.evaluateJson(`
-      (() => {
-        const teamId = ${JSON.stringify(targetTeamId)};
-        const button = Array.from(document.querySelectorAll('[data-smoke="agent-publish-toggle"]'))
-          .find((candidate) => candidate.dataset.teamId === teamId);
-        if (!button) throw new Error("Missing publish toggle for target team");
-        button.click();
-        return true;
-      })()
-    `);
-    await waitForWebUiAgentPublishToggle({ page, targetTeamId, published: true, timeoutMs });
-    await page.evaluateJson(`
-      (() => {
-        const teamId = ${JSON.stringify(targetTeamId)};
-        const button = Array.from(document.querySelectorAll('[data-smoke="agent-publish-toggle"]'))
-          .find((candidate) => candidate.dataset.teamId === teamId);
-        if (!button) throw new Error("Missing publish toggle for target team");
-        button.click();
-        return true;
-      })()
-    `);
-    await waitForWebUiAgentPublishToggle({ page, targetTeamId, published: false, timeoutMs });
 
     await emitAck(webSocket, WEB_EVENTS.channel.subscribe, {
       userId: session.user.id,
@@ -2556,7 +2534,7 @@ export async function exerciseWebUiAgentsBusinessSmoke({
     await waitForWebUiAgentAction({ page, selector: '[data-smoke="agent-delete-dialog"]', timeoutMs });
     await page.click('[data-smoke="agent-delete-confirm"]');
     await waitForWebUiAgentListItemAbsent({ page, agentId, timeoutMs });
-    return { agentId, agentName: configuredAgentName, targetTeamId, targetTeamName, dispatchId, deleted: true };
+    return { agentId, agentName: configuredAgentName, dispatchId, deleted: true };
   } finally {
     daemon.socket.disconnect?.();
   }
@@ -2617,24 +2595,6 @@ async function waitForWebUiAgentAction({ page, selector, timeoutMs }) {
   await page.waitForFunction(
     `Boolean(document.querySelector(${JSON.stringify(selector)}))`,
     `${selector} to render`,
-    timeoutMs,
-  );
-}
-
-async function waitForWebUiAgentPublishToggle({ page, targetTeamId, published, timeoutMs }) {
-  await page.waitForFunction(
-    `
-    (() => {
-      const targetTeamId = ${JSON.stringify(targetTeamId)};
-      const published = ${JSON.stringify(String(published))};
-      return Array.from(document.querySelectorAll('[data-smoke="agent-publish-toggle"]'))
-        .some((candidate) =>
-          candidate.dataset.teamId === targetTeamId
-          && candidate.dataset.published === published
-        );
-    })()
-    `,
-    `agent publish toggle for team "${targetTeamId}" to become ${published}`,
     timeoutMs,
   );
 }

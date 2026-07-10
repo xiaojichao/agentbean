@@ -69,7 +69,7 @@
   - `members` 页面通过 canonical `join:create` + `auth:register(joinCode)` 造出第二个人类成员，再在真实页面里执行 owner 视角的 `member:update-role` 提升为 admin、降回 member，并刷新详情页确认恢复。
   - `devices` 页面通过真实 daemon `device:hello` / `device:runtimes` 造出在线设备，在 App Router 详情页执行 `device:rename`，并刷新详情页确认 canonical `name/ownerId/teamId` 恢复。
   - `settings` 页面在真实团队设置页执行 `team:update` 改名、`join:create` 创建加入链接、`join:revoke` 撤销加入链接，并刷新后确认团队名与撤销状态恢复。
-  - `agents` 页面通过真实 daemon `device:hello` / `device:runtimes` 创建自定义 agent，验证列表与详情页按 route team 渲染，执行 `agent:publish` / `agent:unpublish` 切换目标团队可见性，再通过 `message:send` 触发 dispatch 并验证 metrics 页展示该 agent。
+  - `agents` 页面通过真实 daemon `device:hello` / `device:runtimes` 创建自定义 agent，验证列表与详情页按 route Team 渲染、更新配置，再通过 `message:send` 触发 dispatch 并验证 metrics 页展示该 agent，最后删除并验证列表消失。Agent detail 不提供跨 Team 可见性切换。
   - `channels` 页面通过真实 UI 创建频道，进入频道详情，打开编辑弹窗执行 `channel:archive`，并返回列表确认该频道不再可见。
   - Team 管理页面通过真实 UI 创建新团队，执行 `team:switch` 切到新团队并验证当前团队标记，再进入 settings 执行受控 `team:delete`，确认 fallback 回原团队且临时团队从列表消失。
   - 为稳定驱动 React controlled inputs，CDP helper 改为调用原生 value setter 后派发 input/change 事件；同时补 `icon.svg`，清理 `/favicon.ico` 404 console 噪音。
@@ -114,6 +114,6 @@ npm run check:agentbean-next-readiness -- --json
 - `npm run build:server-next` 通过。
 - `npm run test:web-next -- --api.host 127.0.0.1` 通过，3 个 test file、44 个用例。
 - `npm run test:server-next -- --api.host 127.0.0.1 tests/browser-smoke-script.test.ts` 通过，23 个 test file、201 个用例。
-- `npm run smoke:agentbean-next-webui -- --skip-build --timeout-ms 30000 --json` 通过，真实 Chrome 渲染 4 个公开 App Router 页面 + 7 个登录后业务页面，并覆盖 chat send/refresh restore、channels create/archive/list disappearance、Team create/switch/delete/restore、tasks create/status update/refresh restore、workspace run list/detail/refresh restore、member join/role update/refresh restore、device rename/refresh restore、settings team rename/join link create+revoke/refresh restore、agents create/publish/unpublish/metrics，且 console clean。
+- `npm run smoke:agentbean-next-webui -- --skip-build --timeout-ms 30000 --json` 通过，真实 Chrome 渲染 4 个公开 App Router 页面 + 7 个登录后业务页面，并覆盖 chat send/refresh restore、channels create/archive/list disappearance、Team create/switch/delete/restore、tasks create/status update/refresh restore、workspace run list/detail/refresh restore、member join/role update/refresh restore、device rename/refresh restore、settings team rename/join link create+revoke/refresh restore、agents create/config/metrics/delete，且 console clean。
 - `npm run build:packages` 通过。
 - `npm run check:agentbean-next-readiness -- --json` 通过，38/38。

@@ -98,6 +98,21 @@ describe('AgentBean Next browser smoke script', () => {
     expect(cliSource).not.toContain('await runAgentBeanNextBrowserSmoke({');
   });
 
+  test('isolates daemon identity between WebUI business flows that can revoke a Device', async () => {
+    const { webUiFlowSuffix } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
+    const identities = ['channels', 'runs', 'devices', 'agents', 'admin']
+      .map((flow) => webUiFlowSuffix('smoke-1', flow));
+
+    expect(new Set(identities).size).toBe(identities.length);
+    expect(identities).toEqual([
+      'smoke-1-channels',
+      'smoke-1-runs',
+      'smoke-1-devices',
+      'smoke-1-agents',
+      'smoke-1-admin',
+    ]);
+  });
+
   test('exercises App Router page routes in the browser', async () => {
     const { exerciseWebUiRouteSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];
@@ -448,17 +463,18 @@ describe('AgentBean Next browser smoke script', () => {
     expect(waitForFunctionCalls.map((call) => call[1].description)).toEqual(
       expect.arrayContaining([
         'initial session team before create: team "Team One" to be current',
-        'session team after create: team "Team One" to be current',
-        'session team after create refresh: team "Team One" to be current',
-        'created team after switch: team "WebUI Team teams-smoke" to be current',
-        'created team after switch refresh: team "WebUI Team teams-smoke" to be current',
+        'created team immediately after create: team "WebUI Team teams-smoke" to be current',
+        'created team after create refresh: team "WebUI Team teams-smoke" to be current',
+        'session team after explicit switch back: team "Team One" to be current',
+        'session team after explicit switch refresh: team "Team One" to be current',
+        'created team after explicit switch for delete: team "WebUI Team teams-smoke" to be current',
         'fallback team after delete: team "Team One" to be current',
         'fallback team after delete refresh: team "Team One" to be current',
       ]),
     );
     const evaluateJsonCalls = calls.filter((call): call is ['evaluateJson', string] => call[0] === 'evaluateJson');
     expect(evaluateJsonCalls).toHaveLength(3);
-    expect(evaluateJsonCalls.filter((call) => call[1].includes('team-switch'))).toHaveLength(1);
+    expect(evaluateJsonCalls.filter((call) => call[1].includes('team-switch'))).toHaveLength(2);
   });
 
   test('keeps readiness and verification evidence on canonical Team routes', async () => {
@@ -781,7 +797,7 @@ describe('AgentBean Next browser smoke script', () => {
     expect(evaluateJsonCalls.some((call) => call[1].includes('settings-join-revoke'))).toBe(true);
   });
 
-  test('exercises WebUI agents create, publish toggle, and metrics route', async () => {
+  test('exercises WebUI agents create, config, metrics, and delete flow', async () => {
     const { exerciseWebUiAgentsBusinessSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];
     const webSocketCalls: Array<[string, unknown]> = [];
@@ -791,8 +807,6 @@ describe('AgentBean Next browser smoke script', () => {
         webSocketCalls.push([event, payload]);
         if (event === 'agents:subscribe') return { ok: true, agents: [] };
         if (event === 'agent:create') return { ok: true, agent: { id: 'agent-1' } };
-        if (event === 'team:create') return { ok: true, team: { id: 'team-2', name: 'Target Team', path: 'target-team' } };
-        if (event === 'team:switch') return { ok: true, currentTeam: { id: 'team-1', name: 'Team One', path: 'team-one' } };
         if (event === 'channels:subscribe') return { ok: true, channels: [] };
         if (event === 'message:send') return { ok: true, dispatches: [{ id: 'dispatch-1' }] };
         return { ok: true };
@@ -810,10 +824,6 @@ describe('AgentBean Next browser smoke script', () => {
       },
       async waitForFunction(expression: string, description: string) {
         calls.push(['waitForFunction', { expression, description }]);
-      },
-      async evaluateJson(expression: string) {
-        calls.push(['evaluateJson', expression]);
-        return true;
       },
     };
     const ioFactory = () => {
@@ -856,8 +866,6 @@ describe('AgentBean Next browser smoke script', () => {
     expect(result).toEqual({
       agentId: 'agent-1',
       agentName: 'WebUIAgentgentssmokeCfg',
-      targetTeamId: 'team-2',
-      targetTeamName: 'WebUI Agent Target agents-smoke',
       dispatchId: 'dispatch-1',
       deleted: true,
     });
@@ -880,8 +888,6 @@ describe('AgentBean Next browser smoke script', () => {
       'agent:create',
       expect.objectContaining({ userId: 'user-1', teamId: 'team-1', deviceId: 'device-1', runtimeId: 'runtime-1' }),
     ]);
-    expect(webSocketCalls).toContainEqual(['team:create', expect.objectContaining({ userId: 'user-1', name: 'WebUI Agent Target agents-smoke' })]);
-    expect(webSocketCalls).toContainEqual(['team:switch', { userId: 'user-1', teamId: 'team-1' }]);
     expect(webSocketCalls).toContainEqual(['message:send', expect.objectContaining({ teamId: 'team-1', channelId: 'channel-1' })]);
     const waitForFunctionCalls = calls.filter(
       (call): call is ['waitForFunction', { expression: string; description: string }] => call[0] === 'waitForFunction',
@@ -889,13 +895,9 @@ describe('AgentBean Next browser smoke script', () => {
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-list-item'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-detail'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-config-dialog'))).toBe(true);
-    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-publish-toggle'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-metrics-panel'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-delete-dialog'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-list-page'))).toBe(true);
-    const evaluateJsonCalls = calls.filter((call): call is ['evaluateJson', string] => call[0] === 'evaluateJson');
-    expect(evaluateJsonCalls).toHaveLength(2);
-    expect(evaluateJsonCalls.every((call) => call[1].includes('agent-publish-toggle'))).toBe(true);
     expect(daemonCalls).toContainEqual(['device:hello', expect.objectContaining({ teamId: 'team-1', ownerId: 'user-1' })]);
     expect(daemonCalls).toContainEqual(['device:runtimes', expect.objectContaining({ teamId: 'team-1', deviceId: 'device-1' })]);
   });

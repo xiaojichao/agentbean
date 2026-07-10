@@ -520,7 +520,6 @@ export function collectAgentBeanNextReadinessChecks({
         browserSmokeScript.includes('agent-config-save') &&
         browserSmokeScript.includes('agent-delete-confirm') &&
         browserSmokeScript.includes('agent-list-page') &&
-        browserSmokeScript.includes('agent-publish-toggle') &&
         browserSmokeScript.includes('agent-metrics-panel') &&
         webNextAgentsPage.includes('data-smoke="agent-list-page"') &&
         webNextAgentDetailPage.includes('data-smoke="agent-config-open"') &&
@@ -528,7 +527,7 @@ export function collectAgentBeanNextReadinessChecks({
         webNextAgentDetailPage.includes('data-smoke="agent-delete-confirm"') &&
         verificationMatrix.includes('webui-agents-business-flow') &&
         parityBackfillAudit.includes('| `agents` | Green |'),
-      'Agent parity must stay covered by an App Router browser smoke for list/detail, config update, publish/unpublish, metrics, and delete/list disappearance',
+      'Agent parity must stay covered by an App Router browser smoke for list/detail, config update, metrics, and delete/list disappearance',
     ),
     check(
       'tasks-parity-browser-smoke',
