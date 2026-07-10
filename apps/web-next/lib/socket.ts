@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS } from '@agentbean/contracts';
+import { WEB_EVENTS, type JoinLinkDto, type TeamDto } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
@@ -203,7 +203,7 @@ export interface AgentEvents {
   // 设置 Agent 对指定团队的可见性（替代旧的 publish/unpublish，由后端统一收敛到 visibleTeamIds）
   setVisibility(agentId: string, teamId: string, visible: boolean): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
   delete(agentId: string, teamId?: string): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
-  create(payload: { teamId: string; name: string; adapterKind: string; command: string; args?: string[]; category?: string; cwd?: string; env?: Record<string, string>; description?: string; deviceId?: string }): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
+  create(payload: { teamId: string; deviceId: string; name: string; adapterKind?: string; command?: string; args?: string[]; cwd?: string; env?: Record<string, string>; description?: string }): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
   updateConfig(payload: { id: string; teamId?: string; name: string; adapterKind?: string; command?: string; cwd?: string | null; description?: string | null }): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
   subscribe(teamId: string): void;
 }
@@ -423,7 +423,7 @@ export interface JoinEvents {
   create(payload: { teamId?: string; maxUses?: number; expiresAt?: number }): Promise<{ ok: boolean; link?: import('./schema').JoinLinkInfo; error?: string; message?: string }>;
   list(payload?: { teamId?: string }): Promise<{ ok: boolean; links?: import('./schema').JoinLinkInfo[]; error?: string; message?: string }>;
   revoke(payload: { teamId?: string; code: string }): Promise<{ ok: boolean; error?: string; message?: string }>;
-  validate(payload: { code: string }): Promise<{ ok: boolean; teamName?: string; expiresAt?: number | null; error?: string; message?: string }>;
+  validate(payload: { code: string }): Promise<{ ok: boolean; link?: JoinLinkDto; team?: TeamDto; error?: string; message?: string }>;
 }
 
 // server 的 JoinLinkDto 只返回 code，不含 url；前端按 /join/[code] 路由构造完整邀请链接

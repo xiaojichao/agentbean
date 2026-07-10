@@ -41,7 +41,7 @@ export default function JoinPage() {
       socket.disconnect();
       setValidating(false);
       if (res.ok) {
-        setTeamName(res.teamName ?? '团队');
+        setTeamName(res.team?.name ?? '团队');
       } else {
         setValidateError(
           res.error === 'INVALID_CODE' ? '无效的邀请链接' :

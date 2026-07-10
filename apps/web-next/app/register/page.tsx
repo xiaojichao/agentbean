@@ -89,6 +89,11 @@ export default function RegisterPage() {
   };
 
   const handleRegister = (agent: DiscoveredAgent) => {
+    if (agent.category === 'agentos-hosted') return;
+    if (!currentTeamId || !scanDeviceId) {
+      setScanError('当前扫描设备或团队不可用');
+      return;
+    }
     const id = generateAgentId(agent.name);
     const exists = id in existingAgents;
     setModalMode(exists ? 'update' : 'create');
@@ -107,7 +112,7 @@ export default function RegisterPage() {
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">注册 Agent</h1>
-          <p className="mt-1 text-sm text-neutral-500">扫描本机已安装的 Agent 并注册到 Mesh</p>
+          <p className="mt-1 text-sm text-neutral-500">扫描设备上的 Agent，并将可创建的执行器注册到当前团队</p>
         </div>
         <button
           onClick={handleDiscover}
@@ -180,6 +185,9 @@ export default function RegisterPage() {
                       {(() => {
                         const id = generateAgentId(agent.name);
                         const exists = id in existingAgents;
+                        if (agent.category === 'agentos-hosted') {
+                          return <span className="text-xs font-medium text-emerald-600">已由设备自动注册</span>;
+                        }
                         return exists ? (
                           <>
                             <span className="text-xs text-emerald-600 font-medium">已注册</span>
@@ -210,6 +218,8 @@ export default function RegisterPage() {
 
       <RegisterAgentModal
         open={modalOpen}
+        teamId={currentTeamId ?? ''}
+        scanDeviceId={scanDeviceId ?? ''}
         onClose={() => {
           setModalOpen(false);
           setSelectedAgent(null);

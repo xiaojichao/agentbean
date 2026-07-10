@@ -22,6 +22,7 @@ describe('web-next socket client', () => {
     expect(existsSync(join(appDir, 'api/teams/[teamId]/artifacts/upload/route.ts'))).toBe(true);
     expect(existsSync(join(
       appDir,
+      'api',
       ['net', 'works'].join(''),
       `[${['network', 'Id'].join('')}]`,
       'artifacts/upload/route.ts',
@@ -456,11 +457,12 @@ describe('web-next socket client', () => {
 
     const created = await agentEvents(socket as any).create({
       teamId: 'team-1',
+      deviceId: 'device-1',
       name: 'Codex',
       adapterKind: 'codex',
       command: 'codex',
     });
-    expect(socket.lastPayload(WEB_EVENTS.agent.create)).toMatchObject({ teamId: 'team-1' });
+    expect(socket.lastPayload(WEB_EVENTS.agent.create)).toMatchObject({ teamId: 'team-1', deviceId: 'device-1' });
     expect(JSON.stringify(created.agent)).not.toContain('networkId');
     expect(JSON.stringify(created.agent)).not.toContain('publishedNetworkIds');
 
@@ -576,6 +578,34 @@ describe('web-next socket client', () => {
       [WEB_EVENTS.auth.login, { username: 'shaw', password: 'secret' }],
       [WEB_EVENTS.deviceInvite.complete, { code: 'invite-1', userId: 'user-1' }],
     ]);
+  });
+
+  test('returns the canonical join link and team response shape', async () => {
+    const socket = new CanonicalSocket();
+    socket.responses.set(WEB_EVENTS.join.validate, {
+      ok: true,
+      link: { id: 'join-1', code: 'code-1', teamId: 'team-1' },
+      team: { id: 'team-1', name: 'Ops', path: 'ops' },
+    });
+
+    const { joinEvents } = await import('../lib/socket.js');
+    const result = await joinEvents(socket as any).validate({ code: 'code-1' });
+
+    expect(result).toMatchObject({
+      ok: true,
+      link: { code: 'code-1', teamId: 'team-1' },
+      team: { id: 'team-1', name: 'Ops', path: 'ops' },
+    });
+
+    const joinPageSource = readFileSync(new URL('../app/join/[token]/page.tsx', import.meta.url), 'utf8');
+    expect(joinPageSource).toContain('res.team?.name');
+    expect(joinPageSource).not.toContain('res.teamName');
+  });
+
+  test('presents scanned AgentOS agents as server-managed Team members', () => {
+    const registerPageSource = readFileSync(new URL('../app/register/page.tsx', import.meta.url), 'utf8');
+    expect(registerPageSource).toContain('已由设备自动注册');
+    expect(registerPageSource).not.toContain('Mesh');
   });
 });
 
