@@ -5,20 +5,20 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, AlertTriangle, Copy, Check, Monitor, Settings, Terminal, Trash2, User, X } from 'lucide-react';
 import { agentEvents, fetchAgentWorkspace } from '@/lib/socket';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { AgentStatusBadge } from '@/components/agent-status-badge';
 import { formatRelative } from '@/lib/format-time';
 import type { AgentSnapshot, AgentWorkspaceRun } from '@/lib/schema';
 import { AgentWorkspaceSection } from '@/components/agent-workspace-section';
 
 export default function AgentDetailPage() {
-  const params = useParams<{ networkPath: string; agentId: string }>();
+  const params = useParams<{ teamPath: string; agentId: string }>();
   const router = useRouter();
   const agent = useAgentBeanStore((s) => s.agents[params.agentId] ?? null);
   const agentMap = useAgentBeanStore((s) => s.agents);
   const setAgents = useAgentBeanStore((s) => s.applyAgentsSnapshot);
   const upsert = useAgentBeanStore((s) => s.applyAgentStatus);
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
   const [copied, setCopied] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [configSaving, setConfigSaving] = useState(false);
@@ -32,8 +32,8 @@ export default function AgentDetailPage() {
   const [deleteError, setDeleteError] = useState('');
   const teams = useAgentBeanStore((s) => s.teams);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
-  const routeNetworkPath = typeof params.networkPath === 'string' ? params.networkPath : np;
-  const routeTeam = teams.find((team) => team.path === routeNetworkPath || team.id === routeNetworkPath);
+  const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : np;
+  const routeTeam = teams.find((team) => team.path === routeTeamPath || team.id === routeTeamPath);
   const agentTeamId = agent?.networkId ?? routeTeam?.id ?? currentTeamId;
   const [workspaceRuns, setWorkspaceRuns] = useState<AgentWorkspaceRun[]>([]);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
@@ -125,7 +125,7 @@ export default function AgentDetailPage() {
     if (res.ok) {
       setAgents(Object.values(agentMap).filter((candidate) => candidate.id !== agent.id));
       setDeleteOpen(false);
-      router.replace(`/${routeNetworkPath || np}/agents`);
+      router.replace(`/${routeTeamPath || np}/agents`);
       return;
     }
     setDeleteError(res.error ?? '删除失败');

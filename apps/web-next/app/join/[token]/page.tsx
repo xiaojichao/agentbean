@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { Bot } from 'lucide-react';
 import { createInviteSocket, authEvents, resetWebSocket, joinEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
+import { writeStoredTeamPath } from '@/lib/team-path';
 
 type Mode = 'login' | 'register';
 
@@ -88,7 +89,7 @@ export default function JoinPage() {
         });
         resetWebSocket();
         const np = res.currentTeam?.path || 'default';
-        localStorage.setItem('agentbean.networkPath', np);
+        writeStoredTeamPath(localStorage, np);
         router.replace(`/${np}/chat`);
       } else {
         setError(res.error ?? '注册失败');
@@ -129,7 +130,7 @@ export default function JoinPage() {
         });
         resetWebSocket();
         const np = res.currentTeam?.path || 'default';
-        localStorage.setItem('agentbean.networkPath', np);
+        writeStoredTeamPath(localStorage, np);
         router.replace(`/${np}/chat`);
       } else {
         setError(res.error ?? '登录失败');

@@ -16,7 +16,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { agentEvents, channelEvents, deviceEvents, dmEvents, fetchTeamWorkspaceRuns, getWebSocket } from '@/lib/socket';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { formatRelative } from '@/lib/format-time';
 import type { AgentSnapshot, TeamWorkspaceRun, WorkspaceRunStatus } from '@/lib/schema';
 
@@ -81,7 +81,7 @@ function sourceMessageHref(np: string, channelId: string, messageId: string | un
 }
 
 export function RunsPanel() {
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
   const conn = useAgentBeanStore((s) => s.conn);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const teams = useAgentBeanStore((s) => s.teams);
@@ -110,9 +110,9 @@ export function RunsPanel() {
   const [deviceFilter, setDeviceFilter] = useState('');
   const [groupBy, setGroupBy] = useState<RunGroupBy>('');
 
-  const routeNetworkPath = typeof params.networkPath === 'string' ? params.networkPath : np;
-  const routeTeamId = teams.find((team) => team.path === routeNetworkPath || team.id === routeNetworkPath)?.id;
-  const workspaceTeamId = routeTeamId ?? (routeNetworkPath === 'default' ? currentTeamId : '');
+  const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : np;
+  const routeTeamId = teams.find((team) => team.path === routeTeamPath || team.id === routeTeamPath)?.id;
+  const workspaceTeamId = routeTeamId ?? (routeTeamPath === 'default' ? currentTeamId : '');
   const hasFilter = Boolean(statusFilter || agentFilter || deviceFilter);
 
   const clearFilters = useCallback(() => {

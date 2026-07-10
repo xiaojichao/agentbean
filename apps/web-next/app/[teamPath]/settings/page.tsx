@@ -419,10 +419,10 @@ function ServerPanel() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [joinError, setJoinError] = useState('');
 
-  const currentNetwork = teams.find((n) => n.id === currentTeamId);
-  const routeNetworkPath = typeof params.networkPath === 'string' ? params.networkPath : '';
-  const routeTeam = teams.find((team) => team.path === routeNetworkPath || team.id === routeNetworkPath);
-  const settingsTeam = routeTeam ?? currentNetwork ?? null;
+  const currentTeam = teams.find((n) => n.id === currentTeamId);
+  const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : '';
+  const routeTeam = teams.find((team) => team.path === routeTeamPath || team.id === routeTeamPath);
+  const settingsTeam = routeTeam ?? currentTeam ?? null;
   const settingsTeamId = settingsTeam?.id ?? currentTeamId;
 
   const displayedName = settingsTeam?.name ?? '当前团队';

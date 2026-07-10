@@ -22,7 +22,7 @@ import {
   WrapText,
 } from 'lucide-react';
 import { fetchWorkspaceRunDetail, fetchWorkspaceRunLog, authedApiUrl } from '@/lib/socket';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { formatRelative } from '@/lib/format-time';
 import type { WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunStatus } from '@/lib/schema';
 
@@ -120,8 +120,8 @@ function buildArtifactTreeEntries(artifacts: WorkspaceArtifact[]): ArtifactTreeE
 }
 
 export default function RunDetailPage() {
-  const params = useParams<{ networkPath: string; runId: string }>();
-  const np = useCurrentNetworkPath();
+  const params = useParams<{ teamPath: string; runId: string }>();
+  const np = useCurrentTeamPath();
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const teams = useAgentBeanStore((s) => s.teams);
   const agents = useAgentBeanStore((s) => s.agents);
@@ -146,9 +146,9 @@ export default function RunDetailPage() {
     query?: string;
   } | null>(null);
 
-  const routeNetworkPath = typeof params.networkPath === 'string' ? params.networkPath : np;
-  const routeTeamId = teams.find((team) => team.path === routeNetworkPath || team.id === routeNetworkPath)?.id;
-  const workspaceTeamId = routeTeamId ?? (routeNetworkPath === 'default' ? currentTeamId : '');
+  const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : np;
+  const routeTeamId = teams.find((team) => team.path === routeTeamPath || team.id === routeTeamPath)?.id;
+  const workspaceTeamId = routeTeamId ?? (routeTeamPath === 'default' ? currentTeamId : '');
   const runId = params.runId;
 
   useEffect(() => {

@@ -15,8 +15,8 @@ export default function AgentsPage() {
   const agents = useAgentBeanStore((s) => Object.values(s.agents));
   const teams = useAgentBeanStore((s) => s.teams);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
-  const routeNetworkPath = typeof params.networkPath === 'string' ? params.networkPath : '';
-  const routeTeam = teams.find((team) => team.path === routeNetworkPath || team.id === routeNetworkPath);
+  const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : '';
+  const routeTeam = teams.find((team) => team.path === routeTeamPath || team.id === routeTeamPath);
   const agentsTeamId = routeTeam?.id ?? currentTeamId;
   const visibleAgents = agents.filter((agent) => agentVisibleInNetwork(agent, agentsTeamId));
   const [inviteCommand, setInviteCommand] = useState('');
@@ -76,7 +76,7 @@ export default function AgentsPage() {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {visibleAgents.map((agent) => (
-            <Link key={agent.id} href={`/${routeNetworkPath || 'default'}/agents/${agent.id}`} className="block hover:shadow-md transition-shadow" data-smoke="agent-list-item" data-agent-id={agent.id} data-agent-name={agent.name}>
+            <Link key={agent.id} href={`/${routeTeamPath || 'default'}/agents/${agent.id}`} className="block hover:shadow-md transition-shadow" data-smoke="agent-list-item" data-agent-id={agent.id} data-agent-name={agent.name}>
               <AgentCard agent={agent} />
             </Link>
           ))}

@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createInviteSocket, authEvents, resetWebSocket, setStoredDeviceId, resolveDeviceLoginDeviceId } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
+import { readStoredTeamPath } from '@/lib/team-path';
 
 export default function DeviceLoginPage() {
   const params = useParams();
@@ -37,7 +38,7 @@ export default function DeviceLoginPage() {
         const deviceId = resolveDeviceLoginDeviceId(complete);
         if (deviceId) setStoredDeviceId(deviceId);
         resetWebSocket();
-        const np = complete.team?.path ?? complete.team?.id ?? localStorage.getItem('agentbean.networkPath') ?? 'default';
+        const np = complete.team?.path ?? complete.team?.id ?? readStoredTeamPath(localStorage) ?? 'default';
         router.push(`/${np}/devices`);
         return;
       }
@@ -67,8 +68,8 @@ export default function DeviceLoginPage() {
           role: res.role ?? 'user',
         });
         resetWebSocket();
-        const savedNp = localStorage.getItem('agentbean.networkPath');
-        const np = savedNp || res.networkPath || 'default';
+        const savedNp = readStoredTeamPath(localStorage);
+        const np = savedNp || res.teamPath || 'default';
         router.push(`/${np}/devices`);
       } finally {
         socket.close();

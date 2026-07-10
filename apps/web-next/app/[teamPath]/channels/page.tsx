@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { agentEvents, channelEvents, getWebSocket } from '@/lib/socket';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 
 export default function ChannelsPage() {
@@ -15,11 +15,11 @@ export default function ChannelsPage() {
   const setConn = useAgentBeanStore((s) => s.setConn);
   const teams = useAgentBeanStore((s) => s.teams);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
-  const fallbackNetworkPath = useCurrentNetworkPath();
-  const routeNetworkPath = typeof params.networkPath === 'string' ? params.networkPath : fallbackNetworkPath;
-  const routeTeam = teams.find((team) => team.path === routeNetworkPath || team.id === routeNetworkPath);
+  const fallbackTeamPath = useCurrentTeamPath();
+  const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : fallbackTeamPath;
+  const routeTeam = teams.find((team) => team.path === routeTeamPath || team.id === routeTeamPath);
   const channelTeamId = routeTeam?.id ?? currentTeamId;
-  const np = routeNetworkPath || fallbackNetworkPath;
+  const np = routeTeamPath || fallbackTeamPath;
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -84,7 +84,7 @@ export default function ChannelsPage() {
         </ul>
       )}
       </div>
-      {open && <NewChannelDialog onClose={() => setOpen(false)} teamId={channelTeamId} networkPath={np} />}
+      {open && <NewChannelDialog onClose={() => setOpen(false)} teamId={channelTeamId} teamPath={np} />}
     </div>
   );
 }

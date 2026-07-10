@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 export default function Page({
   params,
 }: {
-  params: { networkPath: string };
+  params: { teamPath: string };
 }) {
-  redirect(`/${params.networkPath}/settings?tab=runs`);
+  redirect(`/${params.teamPath}/settings?tab=runs`);
 }

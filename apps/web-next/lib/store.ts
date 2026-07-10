@@ -434,7 +434,7 @@ export const useAgentBeanStore = create<State>((set) => ({
   },
 }));
 
-export function useCurrentNetworkPath(): string {
+export function useCurrentTeamPath(): string {
   const teams = useAgentBeanStore((s) => s.teams);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   return teams.find((n) => n.id === currentTeamId)?.path ?? 'default';

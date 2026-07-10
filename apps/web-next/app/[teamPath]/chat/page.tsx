@@ -5,7 +5,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
 import { WEB_EVENTS } from '@agentbean/contracts';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { matchingWorkspaceRunDetail, workspaceRunHistoryItems, type WorkspaceRunDetailBundle } from '@/lib/task-workspace-run-detail';
@@ -197,8 +197,8 @@ export default function ChatPage() {
   const applyDispatchStatus = useAgentBeanStore((s) => s.applyDispatchStatus);
   const router = useRouter();
   const params = useParams();
-  const np = useCurrentNetworkPath();
-  const routeNetworkPath = typeof params.networkPath === 'string' ? params.networkPath : np;
+  const np = useCurrentTeamPath();
+  const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : np;
 
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
   const searchParams = useSearchParams();
@@ -241,7 +241,7 @@ export default function ChatPage() {
   const [mutedChannelIds, setMutedChannelIds] = useState<Set<string>>(new Set());
   const [loadedMutedChannelKey, setLoadedMutedChannelKey] = useState<string | null>(null);
   const conversationVisibleIds = visibleConversationIds(channels, dms);
-  const mutedChannelStorageKey = mutedChannelKey(routeNetworkPath);
+  const mutedChannelStorageKey = mutedChannelKey(routeTeamPath);
   const mutedChannelsReady = loadedMutedChannelKey === mutedChannelStorageKey;
   const activityVisibleIds = activityConversationIds(conversationVisibleIds, mutedChannelIds, mutedChannelsReady);
   const activityVisibleList = [...activityVisibleIds];
@@ -280,8 +280,8 @@ export default function ChatPage() {
   const threadImageInputRef = useRef<HTMLInputElement>(null);
   const threadFileInputRef = useRef<HTMLInputElement>(null);
   const dmsRef = useRef(dms);
-  const savedKey = `agentbean:chat:saved:${routeNetworkPath}`;
-  const reactionsKey = `agentbean:chat:reactions:${routeNetworkPath}`;
+  const savedKey = `agentbean:chat:saved:${routeTeamPath}`;
+  const reactionsKey = `agentbean:chat:reactions:${routeTeamPath}`;
   const activeChannelMuted = activeChannel ? mutedChannelIds.has(activeChannel) : false;
 
   useEffect(() => {
@@ -462,28 +462,28 @@ export default function ChatPage() {
   }, [reactionEmojis, reactionsKey, loadedReactionsKey]);
 
   useEffect(() => {
-    setDoneIds(loadReadIds(routeNetworkPath));
-    setLoadedDoneKey(readKey(routeNetworkPath));
-  }, [routeNetworkPath]);
+    setDoneIds(loadReadIds(routeTeamPath));
+    setLoadedDoneKey(readKey(routeTeamPath));
+  }, [routeTeamPath]);
 
   useEffect(() => {
-    if (loadedDoneKey !== readKey(routeNetworkPath)) return;
+    if (loadedDoneKey !== readKey(routeTeamPath)) return;
     try {
-      saveReadIds(routeNetworkPath, doneIds);
+      saveReadIds(routeTeamPath, doneIds);
     } catch {}
-  }, [doneIds, loadedDoneKey, routeNetworkPath]);
+  }, [doneIds, loadedDoneKey, routeTeamPath]);
 
   useEffect(() => {
-    setMutedChannelIds(loadMutedChannelIds(routeNetworkPath));
-    setLoadedMutedChannelKey(mutedChannelKey(routeNetworkPath));
-  }, [routeNetworkPath]);
+    setMutedChannelIds(loadMutedChannelIds(routeTeamPath));
+    setLoadedMutedChannelKey(mutedChannelKey(routeTeamPath));
+  }, [routeTeamPath]);
 
   useEffect(() => {
     if (loadedMutedChannelKey !== mutedChannelStorageKey) return;
     try {
-      saveMutedChannelIds(routeNetworkPath, mutedChannelIds);
+      saveMutedChannelIds(routeTeamPath, mutedChannelIds);
     } catch {}
-  }, [mutedChannelIds, loadedMutedChannelKey, mutedChannelStorageKey, routeNetworkPath]);
+  }, [mutedChannelIds, loadedMutedChannelKey, mutedChannelStorageKey, routeTeamPath]);
 
   // Fetch members for @mention
   useEffect(() => {
@@ -1099,7 +1099,7 @@ export default function ChatPage() {
     if (typeof window === 'undefined') return;
     const url = new URL(window.location.href);
     const isDirectMessage = dms.some((dm) => dm.id === msg.channelId);
-    url.pathname = `/${routeNetworkPath}/${isDirectMessage ? 'dm' : 'channel'}/${msg.channelId}`;
+    url.pathname = `/${routeTeamPath}/${isDirectMessage ? 'dm' : 'channel'}/${msg.channelId}`;
     url.search = '';
     url.searchParams.set('message', `${msg.channelId}:${msg.id}`);
     void copyTextToClipboard(url.toString());
@@ -1744,7 +1744,7 @@ export default function ChatPage() {
           channelMembers={channelMembers}
           mentionMembers={mentionMembers}
           currentTeamId={currentTeamId}
-          routeNetworkPath={routeNetworkPath}
+          routeTeamPath={routeTeamPath}
           onClose={closeTaskDetail}
           onViewInChannel={() => jumpToMessage(taskDetailMessage.id)}
           onOpenThread={() => {
@@ -1807,7 +1807,7 @@ export default function ChatPage() {
         />
       )}
 
-      {showNewChannel && <NewChannelDialog onClose={() => setShowNewChannel(false)} teamId={currentTeamId} networkPath={np} />}
+      {showNewChannel && <NewChannelDialog onClose={() => setShowNewChannel(false)} teamId={currentTeamId} teamPath={np} />}
       {showEditChannel && activeChannelObj && (
         <ChannelEditDialog
           channel={activeChannelObj}
@@ -2552,7 +2552,7 @@ function TaskDetailPanel({
   channelMembers,
   mentionMembers,
   currentTeamId,
-  routeNetworkPath,
+  routeTeamPath,
   onClose,
   onViewInChannel,
   onOpenThread,
@@ -2567,7 +2567,7 @@ function TaskDetailPanel({
   channelMembers: ChannelMemberEntry[];
   mentionMembers: MentionProfileMember[];
   currentTeamId?: string | null;
-  routeNetworkPath: string;
+  routeTeamPath: string;
   onClose: () => void;
   onViewInChannel: () => void;
   onOpenThread: () => void;
@@ -2743,7 +2743,7 @@ function TaskDetailPanel({
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">环境信息</h3>
               <a
-                href={`/${routeNetworkPath}/runs/${encodeURIComponent(environmentRun.id)}`}
+                href={`/${routeTeamPath}/runs/${encodeURIComponent(environmentRun.id)}`}
                 className="inline-flex h-7 items-center gap-1 rounded-md border border-neutral-200 px-2 text-xs font-medium text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900"
               >
                 详情
@@ -2800,7 +2800,7 @@ function TaskDetailPanel({
                 {workspaceRunHistory.map(({ workspaceRun: run, isLatest }) => (
                   <a
                     key={run.id}
-                    href={`/${routeNetworkPath}/runs/${encodeURIComponent(run.id)}`}
+                    href={`/${routeTeamPath}/runs/${encodeURIComponent(run.id)}`}
                     className="flex items-center justify-between rounded-md border border-neutral-200 bg-white px-3 py-2 text-xs hover:bg-neutral-50"
                   >
                     <span className="min-w-0">

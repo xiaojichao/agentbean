@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Bot, Circle, ChevronRight, Monitor, User } from 'lucide-react';
 import { memberEvents, deviceEvents, agentEvents } from '@/lib/socket';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { AgentDetail, AgentTopBar, HumanDetail, type AgentMemberTab } from '@/components/member-detail';
 import type { AgentSnapshot } from '@/lib/schema';
 import { agentDeviceDisplayName } from '@/lib/agent-device';
@@ -44,7 +44,7 @@ export default function MembersPage() {
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
   const conn = useAgentBeanStore((s) => s.conn);
   const devices = useAgentBeanStore((s) => s.devices);
   const agents = useAgentBeanStore((s) => s.agents);
@@ -65,9 +65,9 @@ export default function MembersPage() {
   const [humansExpanded, setHumansExpanded] = useState(true);
   const routeAgentId = typeof params.agentId === 'string' ? params.agentId : null;
   const routeUserId = typeof params.userId === 'string' ? params.userId : null;
-  const routeNetworkPath = typeof params.networkPath === 'string' ? params.networkPath : np;
-  const routeTeamId = teams.find((team) => team.path === routeNetworkPath || team.id === routeNetworkPath)?.id;
-  const memberTeamId = routeTeamId ?? (routeNetworkPath === 'default' ? currentTeamId : '');
+  const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : np;
+  const routeTeamId = teams.find((team) => team.path === routeTeamPath || team.id === routeTeamPath)?.id;
+  const memberTeamId = routeTeamId ?? (routeTeamPath === 'default' ? currentTeamId : '');
   const routeTab = searchParams.get('agentTab') as AgentMemberTab | null;
 
   useEffect(() => {

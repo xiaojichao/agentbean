@@ -5,8 +5,8 @@ import { teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import type { TeamSummary } from '@/lib/schema';
 
-export default function NetworksPage() {
-  const [teams, setNetworks] = useState<TeamSummary[]>([]);
+export default function TeamsPage() {
+  const [teams, setTeams] = useState<TeamSummary[]>([]);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [loading, setLoading] = useState(true);
@@ -15,16 +15,16 @@ export default function NetworksPage() {
   const setCurrentTeamId = useAgentBeanStore((s) => s.setCurrentTeamId);
   const router = useRouter();
 
-  const fetchNetworks = async () => {
+  const fetchTeams = async () => {
     const res = await teamEvents().list();
     if (res.ok && res.teams) {
-      setNetworks(res.teams);
+      setTeams(res.teams);
     }
     setLoading(false);
   };
 
   useEffect(() => {
-    if (conn === 'open') fetchNetworks();
+    if (conn === 'open') fetchTeams();
   }, [conn]);
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -33,18 +33,18 @@ export default function NetworksPage() {
     if (!trimmed) return;
     const res = await teamEvents().create({ name: trimmed, description: description || undefined });
     if (res.ok && res.team) {
-      setNetworks((prev) => [...prev, res.team!]);
+      setTeams((prev) => [...prev, res.team!]);
       setName('');
       setDescription('');
     }
   };
 
-  const handleSwitch = async (networkId: string) => {
-    const res = await teamEvents().switch(networkId);
+  const handleSwitch = async (teamId: string) => {
+    const res = await teamEvents().switch(teamId);
     if (res.ok) {
-      setCurrentTeamId(networkId);
-      const target = res.currentTeam ?? teams.find((team) => team.id === networkId);
-      if (target?.path) router.push(`/${target.path}/networks`);
+      setCurrentTeamId(teamId);
+      const target = res.currentTeam ?? teams.find((team) => team.id === teamId);
+      if (target?.path) router.push(`/${target.path}/teams`);
     }
   };
 
