@@ -52,6 +52,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0011_device_revocations.sql');
   applyMigration(db, 'global/0012_device_name_columns.sql');
   applyMigration(db, 'global/0013_device_name_backfill.sql');
+  applyMigration(db, 'global/0014_device_revocations_team_columns.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
@@ -1917,15 +1918,22 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       async find({ teamId, machineId, profileId }) {
         const row = globalDb
           .prepare(
-            `SELECT teamId, machineId, profileId, deviceId, deletedAt FROM device_revocations
-             WHERE teamId = ? AND machineId = ? AND profileKey = ?`,
+            `SELECT
+               team_id AS teamId,
+               machine_id AS machineId,
+               profile_id AS profileId,
+               profile_key AS profileKey,
+               device_id AS deviceId,
+               deleted_at AS deletedAt
+             FROM device_revocations
+             WHERE team_id = ? AND machine_id = ? AND profile_key = ?`,
           )
           .get(teamId, machineId, profileId ?? '') as any;
         return row ? { ...row, profileId: row.profileId ?? null } : null;
       },
       async upsertAll({ revocations }) {
         const stmt = globalDb.prepare(
-          `INSERT OR REPLACE INTO device_revocations (teamId, machineId, profileId, profileKey, deviceId, deletedAt)
+          `INSERT OR REPLACE INTO device_revocations (team_id, machine_id, profile_id, profile_key, device_id, deleted_at)
            VALUES (@teamId, @machineId, @profileId, @profileKey, @deviceId, @deletedAt)`,
         );
         for (const r of revocations) {
@@ -1934,7 +1942,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       },
       async clear({ teamId, machineId }) {
         globalDb
-          .prepare(`DELETE FROM device_revocations WHERE teamId = ? AND machineId = ?`)
+          .prepare(`DELETE FROM device_revocations WHERE team_id = ? AND machine_id = ?`)
           .run(teamId, machineId);
       },
     },
@@ -1952,7 +1960,19 @@ function applyMigration(db: SqliteDatabase, relativePath: string): void {
   if (existing) {
     return;
   }
-  db.exec(readFileSync(resolveMigrationPath(relativePath), 'utf8'));
+  try {
+    db.exec(readFileSync(resolveMigrationPath(relativePath), 'utf8'));
+  } catch (error) {
+    // Migrations may wrap DDL/data movement in an explicit transaction. SQLite
+    // leaves that transaction open after a statement error, so always roll it
+    // back before surfacing the original migration failure.
+    try {
+      db.exec('ROLLBACK;');
+    } catch {
+      // Non-transactional migrations have nothing to roll back.
+    }
+    throw error;
+  }
   db.prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)').run(relativePath, Date.now());
 }
 

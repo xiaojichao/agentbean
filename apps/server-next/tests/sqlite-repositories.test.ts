@@ -212,6 +212,110 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('migrates legacy device revocations to team snake_case columns without losing rows', () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      // Recreate the table as it existed after the already-deployed 0011 migration.
+      globalDb.exec('DROP TABLE device_revocations');
+      globalDb.exec(readFileSync(join(MIGRATIONS_DIR, 'global/0011_device_revocations.sql'), 'utf8'));
+      globalDb.prepare("DELETE FROM schema_migrations WHERE id = 'global/0014_device_revocations_team_columns.sql'").run();
+      globalDb.prepare(
+        `INSERT INTO device_revocations
+         (teamId, machineId, profileId, profileKey, deviceId, deletedAt)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run('team-1', 'machine-1', 'profile-1', 'profile-1', 'device-1', 100);
+      globalDb.prepare(
+        `INSERT INTO device_revocations
+         (teamId, machineId, profileId, profileKey, deviceId, deletedAt)
+         VALUES (?, ?, NULL, ?, ?, ?)`,
+      ).run('team-1', 'machine-2', '__default__', 'device-2', 200);
+
+      applyGlobalMigrations(globalDb);
+
+      expect(columnNames(globalDb, 'device_revocations')).toEqual([
+        'team_id',
+        'machine_id',
+        'profile_id',
+        'profile_key',
+        'device_id',
+        'deleted_at',
+      ]);
+      expect(
+        globalDb
+          .prepare(
+            `SELECT team_id AS teamId, machine_id AS machineId,
+                    profile_id AS profileId, profile_key AS profileKey,
+                    device_id AS deviceId, deleted_at AS deletedAt
+             FROM device_revocations ORDER BY machine_id`,
+          )
+          .all(),
+      ).toEqual([
+        { teamId: 'team-1', machineId: 'machine-1', profileId: 'profile-1', profileKey: 'profile-1', deviceId: 'device-1', deletedAt: 100 },
+        { teamId: 'team-1', machineId: 'machine-2', profileId: null, profileKey: '__default__', deviceId: 'device-2', deletedAt: 200 },
+      ]);
+
+      const primaryKey = globalDb
+        .prepare('PRAGMA table_info(device_revocations)')
+        .all()
+        .filter((row) => (row as { pk: number }).pk > 0)
+        .map((row) => (row as { name: string; pk: number }).name);
+      expect(primaryKey).toEqual(['team_id', 'machine_id', 'profile_key']);
+      expect(indexNames(globalDb, 'device_revocations')).toContain('idx_revocations_machine');
+      expect(
+        globalDb
+          .prepare('PRAGMA index_info(idx_revocations_machine)')
+          .all()
+          .map((row) => (row as { name: string }).name),
+      ).toEqual(['team_id', 'machine_id']);
+    } finally {
+      teamDb.exec('SELECT 1');
+      close();
+    }
+  });
+
+  test('rolls back device revocation migration when the rebuilt primary key rejects legacy rows', () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      // Use a deliberately malformed legacy table with duplicate keys to force the
+      // INSERT ... SELECT inside 0014 to fail after the table rename/create steps.
+      globalDb.exec('DROP TABLE device_revocations');
+      globalDb.exec(`
+        CREATE TABLE device_revocations (
+          teamId TEXT NOT NULL,
+          machineId TEXT NOT NULL,
+          profileId TEXT,
+          profileKey TEXT NOT NULL,
+          deviceId TEXT,
+          deletedAt INTEGER NOT NULL
+        );
+      `);
+      const insert = globalDb.prepare(
+        `INSERT INTO device_revocations
+         (teamId, machineId, profileId, profileKey, deviceId, deletedAt)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      );
+      insert.run('team-1', 'machine-1', 'profile-1', 'profile-1', 'device-1', 100);
+      insert.run('team-1', 'machine-1', null, 'profile-1', 'device-2', 200);
+      globalDb.prepare("DELETE FROM schema_migrations WHERE id = 'global/0014_device_revocations_team_columns.sql'").run();
+
+      expect(() => applyGlobalMigrations(globalDb)).toThrow(/UNIQUE constraint failed/);
+      expect(columnNames(globalDb, 'device_revocations')).toEqual([
+        'teamId',
+        'machineId',
+        'profileId',
+        'profileKey',
+        'deviceId',
+        'deletedAt',
+      ]);
+      expect(globalDb.prepare('SELECT COUNT(*) AS count FROM device_revocations').get()).toEqual({ count: 2 });
+      expect(tableNames(globalDb)).not.toContain('device_revocations_legacy');
+      expect(globalDb.prepare("SELECT id FROM schema_migrations WHERE id = 'global/0014_device_revocations_team_columns.sql'").get()).toBeUndefined();
+    } finally {
+      teamDb.exec('SELECT 1');
+      close();
+    }
+  });
+
   test('applies workspace run pagination index migration', () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
