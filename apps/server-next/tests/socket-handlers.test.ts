@@ -871,6 +871,7 @@ describe('server-next socket handlers', () => {
       deviceHello: vi.fn(async (payload) => makeSuccess({ payload })),
       reportDeviceRuntimes: vi.fn(async (payload) => makeSuccess({ payload })),
       registerDiscoveredAgents: vi.fn(async (payload) => makeSuccess({ payload })),
+      acceptDispatch: vi.fn(async (payload) => makeSuccess({ payload })),
       receiveDispatchResult: vi.fn(async (payload) => makeSuccess({ payload })),
       receiveDispatchError: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
@@ -883,6 +884,7 @@ describe('server-next socket handlers', () => {
       AGENT_EVENTS.device.runtimes,
       AGENT_EVENTS.agent.registerBatch,
       AGENT_EVENTS.agent.reportCustomSkills,
+      AGENT_EVENTS.dispatch.accepted,
       AGENT_EVENTS.dispatch.result,
       AGENT_EVENTS.dispatch.error,
     ]);
@@ -895,6 +897,13 @@ describe('server-next socket handlers', () => {
     await socket.trigger(AGENT_EVENTS.deviceInvite.wait, {
       code: 'device-code-1',
       machineId: 'machine-1',
+    });
+    await expect(socket.trigger(AGENT_EVENTS.dispatch.accepted, {
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+    })).resolves.toEqual({
+      ok: true,
+      payload: { dispatchId: 'dispatch-1', agentId: 'agent-1', quietWindowMs: 0 },
     });
     await socket.trigger(AGENT_EVENTS.dispatch.result, {
       dispatchId: 'dispatch-1',
@@ -924,6 +933,11 @@ describe('server-next socket handlers', () => {
     expect(app.waitForDeviceInvite).toHaveBeenCalledWith({
       code: 'device-code-1',
       machineId: 'machine-1',
+    });
+    expect(app.acceptDispatch).toHaveBeenCalledWith({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      quietWindowMs: 0,
     });
     expect(app.receiveDispatchResult).toHaveBeenCalledWith({
       dispatchId: 'dispatch-1',
