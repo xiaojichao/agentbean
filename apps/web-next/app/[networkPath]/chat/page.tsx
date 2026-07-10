@@ -17,6 +17,7 @@ import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
 import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
 import { displayMessageBody } from '@/lib/chat-message-text';
+import { isMessageGroupContinuation } from '@/lib/chat-message-grouping';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import {
   TASK_STATUS_COLUMNS as TASK_COLUMNS,
@@ -1565,14 +1566,15 @@ export default function ChatPage() {
                 {activeChannel && rootMessages.length > 0 && (
                   <div className="mb-4 text-center text-xs text-neutral-300">消息的开头</div>
                 )}
-                <div className="space-y-4">
-                  {rootMessages.map((msg) => {
+                <div>
+                  {rootMessages.map((msg, index) => {
                     const taskId = metaTaskId(msg);
                     const task = taskId ? tasks.find((item) => item.id === taskId) ?? null : null;
                     return (
                       <ChatBubble
                         key={msg.id}
                         msg={msg}
+                        groupedWithPrevious={isMessageGroupContinuation(rootMessages[index - 1], msg)}
                         task={task}
                         taskNumber={task ? taskNumbers.get(task.id) : undefined}
                         taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
@@ -3310,6 +3312,7 @@ function AttachmentStrip({ attachments, onRemove }: { attachments: ComposerAttac
 
 function ChatBubble({
   msg,
+  groupedWithPrevious = false,
   task,
   taskNumber,
   taskAssigneeName,
@@ -3345,6 +3348,7 @@ function ChatBubble({
   showReplyCount = true,
 }: {
   msg: ChatMessage;
+  groupedWithPrevious?: boolean;
   task?: TaskItem | null;
   taskNumber?: number;
   taskAssigneeName?: string;
@@ -3563,8 +3567,9 @@ function ChatBubble({
       data-smoke="chat-message"
       data-message-body={msg.body}
       data-message-selected={selected ? 'true' : 'false'}
+      data-message-group={groupedWithPrevious ? 'continuation' : 'start'}
       onContextMenu={openContextMenu}
-      className={`group relative flex gap-2 rounded-md border px-2 py-2 transition-colors ${
+      className={`group relative flex gap-2 rounded-md border px-2 transition-colors ${groupedWithPrevious ? 'mt-0.5 py-1' : 'mt-4 py-2 first:mt-0'} ${
         selected
           ? 'border-amber-400 bg-amber-50/70 shadow-[inset_3px_0_0_#f59e0b]'
           : hasThreadSurface
@@ -3634,21 +3639,29 @@ function ChatBubble({
         </div>
       )}
       {/* Avatar */}
-      <button
-        onClick={() => { if (canOpenProfile) onOpenProfile(profileTarget); }}
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-purple-100 text-xs font-semibold text-purple-700 hover:ring-2 hover:ring-neutral-900"
-        title="查看资料"
-      >
-        {speaker[0].toUpperCase()}
-      </button>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <button onClick={() => { if (canOpenProfile) onOpenProfile(profileTarget); }} className="text-sm font-semibold text-neutral-900 hover:underline">{speaker}</button>
-          {isOwner && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700">你</span>}
-          {!isHuman && agent?.role && <span className="text-xs text-neutral-400">{agent.role}</span>}
-          <span className="text-[10px] text-neutral-400">{time}</span>
-          {!isDeleted && meta.editedAt && <span className="text-[10px] text-neutral-400">已编辑</span>}
+      {groupedWithPrevious ? (
+        <div className="flex w-9 shrink-0 items-start justify-center pt-1" aria-hidden="true">
+          <span className="text-[9px] text-neutral-400 opacity-0 transition-opacity group-hover:opacity-100">{time}</span>
         </div>
+      ) : (
+        <button
+          onClick={() => { if (canOpenProfile) onOpenProfile(profileTarget); }}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-purple-100 text-xs font-semibold text-purple-700 hover:ring-2 hover:ring-neutral-900"
+          title="查看资料"
+        >
+          {speaker[0].toUpperCase()}
+        </button>
+      )}
+      <div className="min-w-0 flex-1">
+        {!groupedWithPrevious && (
+          <div className="flex items-center gap-2">
+            <button onClick={() => { if (canOpenProfile) onOpenProfile(profileTarget); }} className="text-sm font-semibold text-neutral-900 hover:underline">{speaker}</button>
+            {isOwner && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700">你</span>}
+            {!isHuman && agent?.role && <span className="text-xs text-neutral-400">{agent.role}</span>}
+            <span className="text-[10px] text-neutral-400">{time}</span>
+            {!isDeleted && meta.editedAt && <span className="text-[10px] text-neutral-400">已编辑</span>}
+          </div>
+        )}
         {editing ? (
           <div className="mt-2 space-y-2">
             <textarea
@@ -3682,7 +3695,7 @@ function ChatBubble({
         ) : isDeleted ? (
           <div className="mt-1 text-sm italic text-neutral-400">消息已删除</div>
         ) : (
-          <MarkdownMessage body={displayMessageBody(msg)} mentionMembers={messageMentionMembers} onOpenMention={onOpenProfile} />
+          <MarkdownMessage body={displayMessageBody(msg)} mentionMembers={messageMentionMembers} onOpenMention={onOpenProfile} compact={groupedWithPrevious} />
         )}
         {!isDeleted && !editing && renderDispatchStatus()}
         {!isDeleted && !editing && msg.artifacts && msg.artifacts.length > 0 && (
@@ -3848,14 +3861,16 @@ function MarkdownMessage({
   body,
   mentionMembers = [],
   onOpenMention,
+  compact = false,
 }: {
   body: string;
   mentionMembers?: MentionProfileMember[];
   onOpenMention?: (target: ProfileTarget) => void;
+  compact?: boolean;
 }) {
   const markdownOptions = { mentionMembers, onOpenMention };
   return (
-    <div className="mt-1 space-y-2 break-words text-sm leading-relaxed text-neutral-700">
+    <div className={`${compact ? 'mt-0' : 'mt-1'} space-y-2 break-words text-sm leading-relaxed text-neutral-700`}>
       {renderMarkdownBlocks(body, markdownOptions)}
     </div>
   );
