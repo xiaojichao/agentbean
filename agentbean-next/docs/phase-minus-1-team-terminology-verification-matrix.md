@@ -19,9 +19,9 @@
 | P-1-04 | Fresh global SQLite 使用 `teams`、`team_members` 和 Team snake_case columns。 | Repository | `sqlite-repositories.test.ts`、schema inspection | Not started |
 | P-1-05 | 0011 形状的 `device_revocations` 可升级到 snake_case，普通 profile、`NULL profile_id`、主键和索引全部保留。 | Repository/Migration | `device-revocations-repository.test.ts`、`sqlite-repositories.test.ts` | Not started |
 | P-1-06 | Web socket/client/store 不再声明、映射或发送旧空间字段。 | Web unit | `socket-client.test.ts`、`npm run build:web-next` | Not started |
-| P-1-07 | App Router 动态 segment 为 `[teamPath]`，团队管理入口为 `/:teamPath/teams`。 | Web route | route manifest、Web build、browser smoke | Not started |
+| P-1-07 | App Router 动态 segment 为 `[teamPath]`，团队管理入口为 `/:teamPath/teams`；Release A 的旧收藏 URL 只经过 permanent redirect，不保留旧页面实现。 | Web route | route manifest、redirect test、Web build、browser smoke | Not started |
 | P-1-08 | Release A 首次读取旧 browser key 时写入 `agentbean.teamPath` 并删除旧键，此后不再写旧键。 | Web storage | `team-path.test.ts`、真实浏览器 storage inspection | Not started |
-| P-1-09 | Release B 删除旧 browser key 读取和 checker allowlist。 | Web/CI | `team-path.test.ts`、`npm run check:team-terminology` | Not started |
+| P-1-09 | Release B 删除旧 browser key 读取、旧 Team 页面 redirect 和全部 checker allowlist。 | Web/CI | `team-path.test.ts`、redirect test、`npm run check:team-terminology` | Not started |
 | P-1-10 | Artifact upload proxy 与 Server HTTP 只存在 `/api/teams/:teamId/...`。 | HTTP/Web | route existence test、multipart upload/preview/download smoke | Not started |
 | P-1-11 | Device login、invite、list/detail/scan/rename 与 custom Agent create 只使用 Team payload。 | Device/Web/E2E | targeted tests、browser Device flow | Not started |
 | P-1-12 | `main` 不再构建、测试、部署或发布 legacy source trees；rollback 使用 Git/Railway/npm artifact。 | Repository/CI/Operations | cutover audit、workflow inspection、rollback runbook、npm dist-tags | Not started |
@@ -52,7 +52,7 @@ npm run smoke:agentbean-next-browser
 
 ## Release B 必需命令
 
-Release B 删除一次性 browser migration 后，重复 Release A 全部命令，并再次运行 `npm run check:team-terminology`。Expected: checker 在没有 allowlist 的状态下 exit 0。
+Release B 删除一次性 browser migration、旧 Team 页面 redirect、checker allowlist 和 legacy source 后，重复 Release A 全部命令，并再次运行 `npm run check:team-terminology`。Expected: checker 在没有 allowlist 的状态下 exit 0。
 
 ## Production evidence template
 

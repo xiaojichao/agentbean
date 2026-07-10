@@ -31,6 +31,25 @@
 
 ---
 
+## Migration Decision Matrix
+
+本表是 Phase -1 唯一旧→新迁移账本。PRD 和目标设计只保存 Team 产品合同，不重复保存退出中的标识符。
+
+| 迁移面 | 当前标识 | 目标标识 | Release A | Release B 删除节点 | 回滚 | 必需测试 |
+|---|---|---|---|---|---|---|
+| App Router 参数 | `[networkPath]` / `params.networkPath` | `[teamPath]` / `params.teamPath` | 源码和 route manifest 原子切换；用户 URL 第一段值不变，无需 redirect | 静态门禁禁止旧参数名 | 回滚前一 deployment | route existence、Web build、刷新恢复 |
+| Team 管理页面 | `/:teamPath/networks` | `/:teamPath/teams` | 旧页面实现删除；`next.config.mjs` 提供临时 308 redirect | 观察 7 天后删除 redirect 和 allowlist | 回滚前一 deployment | redirect、Team create/switch/delete、刷新恢复 |
+| Browser storage | `agentbean.networkPath` | `agentbean.teamPath` | 一次读取、写入新键并删除旧键；停止写旧键 | 观察 7 天后删除旧键读取和 allowlist | 回滚前一 Web deployment；新键不影响旧部署 | unit test、真实浏览器 storage inspection |
+| Artifact proxy | `/api/networks/:id/...` | `/api/teams/:teamId/...` | 官方 Web 与 Server 同一发布单元切换；删除重复 proxy，不保留写请求 redirect | 静态门禁保持零别名 | 回滚 Server/Web deployment | route existence、multipart upload/preview/download |
+| Admin socket | `listAdminNetworks` / `deleteNetwork` 与对应 events | `listAdminTeams` / `deleteTeam` | contracts、Server、Web 同一发布单元切换；这些内部管理事件不提供兼容 alias | 静态门禁禁止旧 key/value | 回滚同一 deployment | contracts、handler registration、admin browser smoke |
+| Agent/Device DTO | `networkId`、`networkName`、`publishedNetworkIds`、`unpublishedNetworkIds` | `teamId`、`teamName`、`primaryTeamId`、`primaryTeamName`、`visibleTeamIds` | Server 与唯一官方 Web consumer 原子切换；不双写用户可见响应 | 静态门禁禁止旧 projection | 回滚同一 deployment | socket integration、admin/device pages |
+| Device revocation schema | camelCase columns | `team_id`、`machine_id`、`profile_id`、`profile_key`、`device_id`、`deleted_at` | 追加 forward migration，保留全部行、空 profile、主键与索引 | 不修改历史 migration；新 schema 进入门禁 | 恢复 Release A 前 global DB backup | fresh/upgrade repository tests、真实 revocation smoke |
+| Legacy source | `apps/server`、`apps/web`、`apps/daemon` | `apps/*-next` + `packages/*` | 先验证 Next production 与 npm rollback artifact，不在 Release A 前删除 | Release B 从 `main` 退役 legacy source | Git/Railway 上一 deployment、npm `legacy` dist-tag、DB backup | cutover audit、entry/business smoke、package preparation |
+
+兼容策略遵循最小原则：只有浏览器持久化和用户可收藏 URL 保留 7 天读取/redirect 窗口；内部 socket、DTO 与 artifact 写入由同一官方发布单元原子切换，不建立长期双写。旧 Device 或旧 Web 只有在真实活跃客户端证据存在时才允许增加独立、带删除日期的 adapter；不能以“可能有人使用”为由扩大 Phase -1 compatibility surface。
+
+---
+
 ## File Structure
 
 ### Create
@@ -747,6 +766,18 @@ export default function Page({ params }: { params: { teamPath: string } }) {
 }
 ```
 
+Release A 同时增加限时 Team 管理页面 redirect：
+
+```js
+{
+  source: '/:teamPath/networks',
+  destination: '/:teamPath/teams',
+  permanent: true,
+}
+```
+
+该 redirect 只保护用户收藏 URL，不保留旧页面实现；Release B 必须删除。
+
 - [ ] **Step 6: 运行 path tests 和 client build**
 
 Run: `cd apps/web-next && npm run test -- tests/team-path.test.ts tests/socket-client.test.ts --api.host 127.0.0.1`
@@ -932,6 +963,8 @@ export async function seedWebUiAuthStorage({ page, session }) {
 
 `check-agentbean-next-readiness.mjs` 读取 `[teamPath]` 新路径，并把 `settings / networks` gate label 改为 `settings / teams`。
 
+Browser smoke 必须验证 Release A 的 `/:teamPath/networks` 返回 permanent redirect 且落到 `/:teamPath/teams`，并验证 Team create/switch/delete 后刷新仍保持 current Team。
+
 - [ ] **Step 4: 运行 readiness、browser smoke tests 和本地真实 smoke**
 
 Run: Task 7 Step 2 的 targeted command。
@@ -959,7 +992,7 @@ git commit -m "让入口级验证证明 Team 切换已经真实生效" \
 
 ---
 
-### Task 8: 从 `main` 退役仍承载旧空间模型的 legacy source trees
+### Task 8: Release B 从 `main` 退役仍承载旧空间模型的 legacy source trees
 
 **Files:**
 - Delete: `apps/server/**`
@@ -977,8 +1010,10 @@ git commit -m "让入口级验证证明 Team 切换已经真实生效" \
 - Modify: `agentbean-next/docs/production-cutover-runbook.md`
 
 **Interfaces:**
-- Consumes: AgentBean Next 已是 production/default、canonical `@agentbean/daemon` 已由 daemon-next 生成、npm `legacy` dist-tag 已存在。
+- Consumes: Release A 已完成 7 天观察且没有触发回滚；AgentBean Next 已是 production/default、canonical `@agentbean/daemon` 已由 daemon-next 生成、npm `legacy` dist-tag 已存在。
 - Produces: `main` 只保留 `apps/*-next` 与 `packages/*` 产品源码；rollback 通过已发布 artifact 和 Git/Railway 历史完成。
+
+本任务是 **Release B-only broad-risk gate**。Task 编号只用于需求追踪，不代表它在 Release A 前执行；必须在 Task 11 Step 3 的观察窗口结束后、Task 11 Step 4 前执行。
 
 - [ ] **Step 1: 在删除前验证退役前提**
 
@@ -1094,7 +1129,7 @@ git commit -m "避免 main 继续维护已退出生产的平行产品模型" \
 - Modify: `docs/superpowers/specs/2026-07-10-agentbean-pi-management-agent-design.md`
 
 **Interfaces:**
-- Consumes: Tasks 1-8 的最终 event、DTO、route、schema 和 deployment truth。
+- Consumes: Tasks 1-7 的最终 event、DTO、route、schema 和 Release A truth；Task 8 在 Release B 进一步收口 rollback 文档。
 - Produces: 活动文档只描述 Team product contract；Phase -1 验收矩阵记录真实证据。
 
 - [ ] **Step 1: 删除已被当前 PRD 取代的三份旧设计**
@@ -1119,7 +1154,7 @@ git rm \
 - artifact HTTP 只列 `/api/teams/:teamId/...`；
 - browser storage 只列 `agentbean.teamPath`；
 - schema 只列 Team snake_case columns；
-- rollback 文档不再指向 `main` 内的 legacy source。
+- Release A rollback 文档明确 legacy source 只作为限时 rollback source，不再参与 build/deploy/publish；Release B 由 Task 8 改为只依赖 Git/Railway/npm artifact。
 
 - [ ] **Step 3: 在 PI 设计的 Phase -1 下链接本计划和验收矩阵**
 
@@ -1315,6 +1350,7 @@ Release A 期间只允许以下两个文件，不允许目录级 allowlist：
 
 - `apps/web-next/lib/team-path.ts`
 - `apps/web-next/tests/team-path.test.ts`
+- `apps/web-next/next.config.mjs`
 
 输出必须包含 `file:line:rule`，发现一处即最终 exit 1。
 
@@ -1375,7 +1411,7 @@ git commit -m "防止旧空间模型重新进入 AgentBean 主线" \
 - Modify: `agentbean-next/docs/production-cutover-runbook.md`
 
 **Interfaces:**
-- Consumes: Tasks 1-10 的全部产物。
+- Consumes: Release A 使用 Tasks 1-7、9-10 的产物；Release B 在 7 天观察后再加入 Task 8 的产物。
 - Produces: 两阶段生产发布证据；Release B 后零兼容读取和零 allowlist，Phase -1 才算完成。
 
 - [ ] **Step 1: 执行 Release A 前完整本地验证**
@@ -1428,7 +1464,9 @@ Expected: post-deploy `main` CI、Deploy production、Publish agent to npm、pro
 
 任何 revocation 数据异常立即恢复 global DB backup 并回滚 deployment。
 
-- [ ] **Step 4: 写 Release B 的失败测试，要求不再读取旧键**
+观察窗口结束且所有退出条件满足后，先执行 Task 8；Task 8 完成并重新验证 rollback artifact 后，才进入以下 Release B cleanup。
+
+- [ ] **Step 4: 写 Release B 的失败测试，要求不再读取旧键或旧页面 redirect**
 
 把 `team-path.test.ts` 改为：
 
@@ -1437,8 +1475,12 @@ test('ignores removed legacy storage keys', () => {
   const legacyKey = ['agentbean', 'networkPath'].join('.');
   const storage = new MemoryStorage({ [legacyKey]: 'stale-team' });
 
-  expect(readStoredTeamPath(storage)).toBeNull();
-  expect(storage.getItem('agentbean.teamPath')).toBeNull();
+expect(readStoredTeamPath(storage)).toBeNull();
+expect(storage.getItem('agentbean.teamPath')).toBeNull();
+});
+
+test('does not retain removed Team page aliases', async () => {
+  expect(await resolveRedirect('/team-one/networks')).toBeNull();
 });
 ```
 
@@ -1446,7 +1488,7 @@ Run: `cd apps/web-next && npm run test -- tests/team-path.test.ts --api.host 127
 
 Expected: FAIL，Release A helper 仍迁移旧键。
 
-- [ ] **Step 5: 删除旧键读取分支和静态门禁 allowlist**
+- [ ] **Step 5: 删除旧键读取、Team 页面 redirect 和静态门禁 allowlist**
 
 Release B 的 `readStoredTeamPath()` 只读取新键：
 
@@ -1462,7 +1504,7 @@ export function writeStoredTeamPath(storage: StorageLike, teamPath: string): voi
 }
 ```
 
-删除 checker 对 `team-path.ts` 和 `team-path.test.ts` 的 allowlist；重新运行 `npm run check:team-terminology` 必须零结果。
+删除 `next.config.mjs` 的旧 Team 页面 redirect，并删除 checker 对 `team-path.ts`、`team-path.test.ts` 和 `next.config.mjs` 的 allowlist；重新运行 `npm run check:team-terminology` 必须零结果。
 
 - [ ] **Step 6: 运行 Release B 完整验证并发布**
 
@@ -1492,11 +1534,12 @@ git commit -m "结束 Team path 的一次性浏览器迁移窗口" \
 
 1. Tasks 1-3 可以分别 review，但必须先于 Web 字段删除。
 2. Tasks 4-7 在同一 release branch 完成；Task 2 Server DTO 与 Task 4 Web consumer 不得拆成两个生产 deploy。
-3. Task 8 是 broad-risk gate；只有 Next production、npm canonical/legacy truth 和 rollback runbook 都确认后才能执行。
+3. **Release A slice** 为 Tasks 1-7、9-10 加 Task 11 Steps 1-3；此时保留 legacy source 作为限时 rollback source，不把 Phase -1 标记 Green。
 4. Task 9 必须基于实现后的真实字段和路由更新，不能提前猜测。
-5. Task 10 只能在旧术语基本清零后合入，否则 checker 会形成长期 allowlist。
-6. Task 11 分 Release A 与 Release B；Phase -1 在 Release B 和 production verification 之前保持 `in_progress`。
-7. Phase -1 Green 后才能编写 Phase 0 的独立实施计划。
+5. Task 10 只能在活动 Next 源码与活动文档旧术语基本清零后合入；Release A allowlist 仅限一次性 browser migration helper、测试和 redirect 配置。
+6. Task 8 是 **Release B-only broad-risk gate**；只有 Release A 观察期结束、Next production、npm canonical/legacy truth 和 rollback runbook 都确认后才能执行。
+7. Task 8 完成后执行 Task 11 Steps 4-8；Release B 删除 browser compatibility、redirect、checker allowlist 和 legacy source。
+8. Phase -1 在 Release B 和 production verification 之前保持 `in_progress`；Green 后才能编写 Phase 0 的独立实施计划。
 
 ## Out of Scope
 

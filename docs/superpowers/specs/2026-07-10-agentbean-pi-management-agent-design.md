@@ -199,6 +199,21 @@ Device Service 使用系统后台机制运行：
 
 目标发布物是平台自包含二进制；npm 包只保留迁移入口和兼容 shim。
 
+#### 7.1.1 Runtime core 与平台发布解耦
+
+Phase 1 先交付可测试的 `DeviceServiceCore` 和 `PiManagerWorkerHost`，过渡期由现有 Device 进程承载；Phase 5 再把同一 runtime core 封装为 macOS、Linux 和 Windows 的自包含后台服务。Phase 1 不重复实现一套临时 Worker protocol，也不把平台安装器作为单 Agent 管理调用的前置依赖。
+
+Phase 1 最小宿主必须具备：
+
+- 使用系统凭证存储或现有加密 credential store，模型密钥不进入 Server、Event 或日志。
+- 进程重启后从 Server ManagementRun、Lease、Event 和 checkpoint 引用恢复。
+- durable outbox 保存尚未确认的 Management Event、Invocation 状态和外部执行结果。
+- lease 续租和 fencing token 校验，旧进程恢复后不能继续写入过期 Run。
+- Device 断线期间不丢外部执行结果，重连后按 idempotency key 补报。
+- profile/Runner 故障隔离，一个 Team/Profile 崩溃不影响其他 Runner。
+
+Phase 5 只改变分发、系统服务注册、升级、回滚和迁移体验，不改变上述恢复与 outbox 合同。
+
 ### 7.2 Agent Collaboration Kernel
 
 运行在 Server，负责：
@@ -352,30 +367,57 @@ queued/running/waiting/recovering
 
 ### 9.3 结构化 checkpoint
 
-Checkpoint 只保存恢复管理流程需要的结构：
+Checkpoint 是从 Server 事实源派生的恢复索引，不是新的事实源。它把可验证引用与模型生成提示严格分开：
 
 ```ts
 export interface ManagementCheckpoint {
   managementRunId: string;
   revision: number;
-  objective: string;
-  planSummary: string;
-  openTaskIds: string[];
-  waitingInvocationIds: string[];
-  completedInvocationSummaries: Array<{
-    invocationId: string;
-    taskId?: string;
-    agentId: string;
-    summary: string;
-    artifactIds: string[];
-  }>;
-  unresolvedQuestions: string[];
-  nextAction?: string;
+  authoritative: {
+    lastEventSequence: number;
+    taskGraphRevision: number;
+    openTaskIds: string[];
+    waitingInvocationIds: string[];
+    completedInvocationIds: string[];
+    memoryCapsuleIds: string[];
+  };
+  contextHints: {
+    objective: string;
+    planSummary: string;
+    completedInvocationSummaries: Array<{
+      invocationId: string;
+      summary: string;
+    }>;
+    unresolvedQuestions: string[];
+    nextAction?: string;
+  };
   updatedAt: number;
 }
 ```
 
-Checkpoint 不包含完整频道历史、完整本地日志、源码或模型思维链。
+恢复时 Server 先按 `lastEventSequence`、Task revision 和 Invocation IDs 校验事实；任何引用缺失、revision 落后或 event gap 都会使 `contextHints` 失效，新 Worker 必须从 Server 事实重新构建。Task 状态、Invocation 终态、Artifact、Memory 权限和用户审核结果绝不能只凭 `contextHints` 改写。
+
+Checkpoint 不包含完整频道历史、完整本地日志、源码或模型思维链。`objective`、`planSummary`、结果摘要和 `nextAction` 只用于重建 PI Active Context，不是状态机输入。
+
+### 9.4 灰度启用、并存与回退
+
+PI 管理能力使用 Team 级 rollout policy：
+
+```ts
+export type ManagementMode = 'direct' | 'shadow' | 'managed';
+```
+
+- `direct`：沿用现有消息路由和 Dispatch，不创建 ManagementRun。
+- `shadow`：PI 可以读取相同的权限过滤上下文并生成不可执行的管理决策记录，但不能创建 Task、Invocation、消息或 Memory Candidate，也不能调用外部 Agent。
+- `managed`：需要外部 Agent 的请求创建 ManagementRun，并通过 Agent Invocation Gateway 调用。
+
+进入 `managed` 前，Server 必须完成 Worker、模型凭证、placement、预算和目标 Agent 可用性预检。回退规则按是否已产生副作用划分：
+
+1. 尚未预留 idempotency key、创建 Invocation 或发送 Dispatch：显式单 Agent 请求可以按 Team policy 回退 `direct`；需要分解、认领或多 Agent 汇总的请求没有等价 direct 语义，必须返回能力暂不可用或进入 `waiting_for_user`。
+2. 已创建 Invocation 或任一 Dispatch attempt：禁止再走 direct dispatch。系统只能重试当前 attempt、创建受控新 attempt、等待 Worker 接管或向用户报告阻塞，避免重复执行和重复消息。
+3. PI Session、Provider、Worker 或 Management Tool 在运行中失败：释放或转移 Manager Lease，但保留同一个 ManagementRun 和 Invocation idempotency key。
+
+最终目标态是新 Team 默认 `managed`，但 `direct` 在灰度期和紧急回滚期仍是显式模式，不作为运行中异常的隐式逃生路径。
 
 ## 10. AgentBean Management Tools
 
@@ -436,6 +478,11 @@ export interface TaskCoordinationFields {
   reviewPolicy: 'human' | 'manager';
   claimPolicy: 'open' | 'targeted';
   requiredCapabilities: string[];
+  acceptanceCriteria: Array<{
+    id: string;
+    description: string;
+    evidenceRequired: boolean;
+  }>;
   dependencyTaskIds: string[];
   attempt: number;
   maxAttempts: number;
@@ -445,6 +492,35 @@ export interface TaskCoordinationFields {
 - 根任务固定 `reviewPolicy = human`。
 - 管理 Agent 创建的子任务默认 `reviewPolicy = manager`。
 - 用户手工创建的普通任务不自动进入 Task DAG，除非启动 ManagementRun。
+
+外部 Agent 的子任务交付使用结构化证据：
+
+```ts
+export interface SubtaskDelivery {
+  taskId: string;
+  invocationId: string;
+  summary: string;
+  claims: Array<{
+    statement: string;
+    evidenceRefs: string[];
+  }>;
+  artifactRefs: string[];
+  sourceMessageIds: string[];
+}
+
+export interface SubtaskAcceptance {
+  taskId: string;
+  decision: 'accepted' | 'rejected' | 'needs_human';
+  criteriaResults: Array<{
+    criterionId: string;
+    passed: boolean;
+    evidenceRefs: string[];
+  }>;
+  reason: string;
+  decidedBy: 'manager' | 'human';
+  decidedAt: number;
+}
+```
 
 ### 11.2 分解约束
 
@@ -467,7 +543,10 @@ export interface TaskCoordinationFields {
 4. 成功者获得 Task Claim Lease，任务进入 `in_progress`。
 5. 失败者停止执行，不产生重复 Dispatch。
 6. Agent 交付后子任务进入 `in_review`。
-7. PI Manager 根据结构化结果和验收条件接受，子任务进入 `done`；不接受则重开或创建补充任务。
+7. PI Manager 提交 `SubtaskAcceptance`；Server 校验所有必需 criterion、evidence reference、Invocation 归属和 Task revision。
+8. 只有 Server 校验通过的 `accepted` 决定可以让子任务进入 `done`；不接受则重开或创建补充任务。
+
+高风险操作、冲突结果、缺少必需证据、来源不可见或需要主观取舍时，PI 只能提交 `needs_human`。Server 将根任务保持 `in_review` 或把 ManagementRun 转为 `waiting_for_user`，不得把子任务直接置为 `done`。每次验收决定都写入 typed Management Event，记录 criteria 结果、证据引用和原因。
 
 定向调用流程仍创建 Task Node 和 Agent Invocation，只是 `claimPolicy = targeted`，由指定 Agent 直接获得 lease。
 
@@ -518,6 +597,32 @@ export interface AgentInvocationResult {
 }
 ```
 
+### 12.1 AgentInvocation 与现有 Dispatch
+
+`AgentInvocation` 是管理层的一次逻辑调用，`Dispatch` 是把该调用交给某个外部 Runtime 的一次传输/执行 attempt：
+
+```ts
+export interface AgentInvocationRecord {
+  id: string;
+  managementRunId: string;
+  taskId?: string;
+  targetAgentId: string;
+  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
+  dispatchAttemptIds: string[];
+  activeDispatchId?: string;
+  idempotencyKey: string;
+  createdAt: number;
+  updatedAt: number;
+}
+```
+
+- 一个 Invocation 可以因重试、Worker 接管或受控改派产生多个 Dispatch attempt，但同一时刻只能有一个 active attempt。
+- `dispatches` 继续保存实际发送目标、执行状态、timeout、cancel 和 Workspace Run 关联；`agent_invocations` 不复制一套独立的执行事实。
+- Invocation 终态由其 attempt 和 Server 验证规则派生；不能通过双写让两套状态独立前进。
+- 历史 Dispatch 不迁移、不重写，只读页面继续按现有方式展示；只有启用 `managed` 后的新调用创建 Invocation 关联。
+- 现有 Web 可以继续展示 Dispatch 状态；ManagementRun/Task DAG 页面从 Invocation 聚合 attempts、重试和贡献 Agent。
+- 同一 Invocation 的重复工具调用返回已有记录；新的 Dispatch attempt 必须使用新的 attempt id，但继承 Invocation idempotency scope。
+
 能力协商字段至少包括：
 
 - `supportsStreaming`
@@ -550,9 +655,18 @@ export interface MemoryCapsule {
   targetAgentId: string;
   items: Array<{
     memoryId: string;
-    kind: string;
+    scopeType: 'team' | 'channel' | 'dm' | 'task' | 'agent' | 'user' | 'local-workspace';
+    scopeRef: string;
+    sourceVisibility: 'team' | 'private' | 'dm-participants' | 'local-only';
+    contentKind: 'summary' | 'fact' | 'decision' | 'preference' | 'procedure';
+    redactionLevel: 'none' | 'summary-only' | 'sensitive-removed';
     content: string;
-    sourceRefs: string[];
+    sourceRefs: Array<{
+      sourceKind: 'message' | 'task' | 'artifact' | 'workspace-run' | 'invocation' | 'memory';
+      sourceId: string;
+    }>;
+    authorizationRef?: string;
+    expiresAt?: number;
   }>;
   createdAt: number;
   expiresAt: number;
@@ -566,6 +680,9 @@ Capsule 规则：
 - 默认在 ManagementRun 完成后过期。
 - Capsule 本身不是新的长期 Memory。
 - 外部 Agent 不能使用 Capsule ID 查询其他 Memory。
+- `content` 是经过权限过滤和脱敏后的最终注入文本，不是 Memory 原文的无条件复制。
+- DM、私有频道和本地 Workspace 默认禁止原文进入 Server-hosted Capsule；只有脱敏摘要且具备显式 `authorizationRef` 时才能离开原 scope，本地调用可以保持 Device-only 注入。
+- Capsule create、read、inject、expire 都写访问审计，记录目标 Agent、scope、source refs、redaction level 和调用者，不记录敏感正文。
 
 ### 13.3 写入与共享
 
@@ -646,6 +763,7 @@ export interface ManagementRun {
   channelId: string;
   rootTaskId?: string;
   rootMessageId: string;
+  mode: ManagementMode;
   status: ManagementRunStatus;
   placementPolicy: ManagerPlacementPolicy;
   activeWorkerId?: string;
@@ -664,33 +782,45 @@ export interface ManagementRun {
 ### 15.2 ManagementEvent
 
 ```ts
-export interface ManagementEvent {
-  id: string;
-  managementRunId: string;
-  sequence: number;
-  type:
-    | 'run-started'
-    | 'worker-leased'
-    | 'worker-lost'
-    | 'checkpoint-updated'
-    | 'task-created'
-    | 'task-claimed'
-    | 'task-completed'
-    | 'invocation-started'
-    | 'invocation-completed'
-    | 'waiting-for-user'
-    | 'delivery-submitted'
-    | 'run-completed'
-    | 'run-failed'
-    | 'run-cancelled';
-  actorKind: 'system' | 'manager' | 'agent' | 'human';
-  actorId?: string;
-  payload: Record<string, unknown>;
-  createdAt: number;
+export interface ManagementEventPayloadMap {
+  'run-started': { rootMessageId: string; rootTaskId?: string; mode: ManagementMode };
+  'worker-leased': { workerId: string; leaseTokenHash: string; expiresAt: number };
+  'worker-lost': { workerId: string; lastHeartbeatAt: number; reason: string };
+  'checkpoint-updated': { checkpointRevision: number; lastEventSequence: number };
+  'task-created': { taskId: string; parentTaskId?: string; taskRevision: number };
+  'task-claimed': { taskId: string; agentId: string; claimLeaseId: string; attempt: number };
+  'task-accepted': { taskId: string; acceptance: SubtaskAcceptance };
+  'invocation-started': { invocationId: string; dispatchId: string; attempt: number };
+  'invocation-completed': { invocationId: string; dispatchId: string; status: AgentInvocationResult['status'] };
+  'waiting-for-user': { reasonCode: string; questionMessageId?: string };
+  'delivery-submitted': { messageId: string; contributingInvocationIds: string[] };
+  'run-completed': { completedTaskId?: string; deliveryMessageId: string };
+  'run-failed': { errorCode: string; recoverable: boolean };
+  'run-cancelled': { reason: string; cancelledBy: string };
 }
+
+export type ManagementEventType = keyof ManagementEventPayloadMap;
+
+export type ManagementEvent = {
+  [T in ManagementEventType]: {
+    id: string;
+    managementRunId: string;
+    sequence: number;
+    schemaVersion: 1;
+    type: T;
+    actorKind: 'system' | 'manager' | 'agent' | 'human';
+    actorId?: string;
+    idempotencyKey: string;
+    causationEventId?: string;
+    payload: ManagementEventPayloadMap[T];
+    createdAt: number;
+  }
+}[ManagementEventType];
 ```
 
-`sequence` 在单个 Run 内单调递增，恢复和 Web 订阅都以它去重。
+`sequence` 在单个 Run 内单调递增，恢复和 Web 订阅都以它去重。相同 `managementRunId + idempotencyKey` 且 payload hash 相同返回原事件；key 相同但 type 或 payload 不同返回 conflict。Server 只按 sequence 重放，不按到达时间重排。
+
+Event payload 禁止包含模型完整 prompt、思维链、模型密钥、附件短期 token、Memory 原文、本地绝对路径、源码和未脱敏日志。新增 event type 或 payload 变更必须提升 schema version、提供 upcaster 或明确拒绝旧版本，不能把自由 JSON 当成恢复契约。
 
 ### 15.3 Agent Capability
 
@@ -825,14 +955,17 @@ agentbean device uninstall
 - 验证 `@earendil-works/pi-coding-agent` 与目标 Node SEA 打包方式。
 - 建立 Management Tool 权限测试和无 coding tools 断言。
 - 为现有 Dispatch、Task、Artifact 和 Memory 边界补回归测试。
+- 固定 `direct`、`shadow`、`managed` rollout policy、预检和副作用后的禁止回退规则。
+- 固定 AgentInvocation 与 Dispatch attempt、typed ManagementEvent、checkpoint 权威引用和子任务验收契约。
 
 ### Phase 1：Device-hosted PI Manager 单 Agent 调用
 
-- 建立 Device Service 后台宿主和 `PiManagerWorkerHost`。
+- 在现有 Device 进程中建立可恢复的 `DeviceServiceCore` 和 `PiManagerWorkerHost` 过渡宿主；平台安装器仍属于 Phase 5。
 - Server 创建 `ManagementRun` 和 lease。
 - PI Manager 可以查询外部 Agent 并发起一次 targeted invocation。
 - 结果归属于外部 Agent；普通轻问答不生成 PI 汇总，任务型请求才生成管理交付。
 - 不做自动任务分解。
+- 先以 `shadow` 验证决策，再按 Team 切换 `managed`；Worker、Provider 或工具故障不得重复触发 direct dispatch。
 
 ### Phase 2：Task DAG 与团队认领
 
@@ -869,6 +1002,8 @@ agentbean device uninstall
 - ManagementRun、Event、Lease、Task coordination、Invocation、Memory Capsule DTO。
 - 新字段向旧 Device/Server 的兼容行为。
 - capability negotiation 和 adapter 降级。
+- Management Event discriminated union、schema version、payload 禁止字段和 idempotency conflict。
+- Subtask Delivery、Acceptance、criteria result 与 evidence refs。
 
 ### 22.2 Domain
 
@@ -877,6 +1012,8 @@ agentbean device uninstall
 - 原子 claim 和 lease 过期。
 - 根任务 human review 与子任务 manager review。
 - idempotency key 去重。
+- 缺少证据、冲突结果和高风险交付不能进入 `done`。
+- `direct`、`shadow`、`managed` 模式不会产生重复 Invocation 或 Dispatch。
 
 ### 22.3 Server
 
@@ -886,6 +1023,10 @@ agentbean device uninstall
 - 自定义 Agent 与 AgentOS Agent 统一调用。
 - late result、重派和 attempt 隔离。
 - Memory Capsule 权限、过期和来源。
+- Invocation 聚合多个 Dispatch attempts，但执行终态只来自实际 attempt。
+- 副作用前允许受控回退，副作用后禁止隐式 direct dispatch。
+- checkpoint 引用失效时忽略模型摘要并从 Server 事实重建。
+- Event 重放按 sequence、version 和 idempotency key 保持确定性。
 
 ### 22.4 Device
 
@@ -894,6 +1035,7 @@ agentbean device uninstall
 - PI Session 创建、steer、followUp、abort、compaction 和恢复。
 - Device 断线后外部执行结果可经 outbox 补报。
 - 一个 profile/Runner 崩溃不影响其他 profile。
+- 过渡宿主重启后恢复 lease、outbox 和未确认结果；过期 fencing token 不能写入。
 
 ### 22.5 Web
 
@@ -912,21 +1054,32 @@ agentbean device uninstall
 6. DM Memory 不得进入公开频道子任务 Capsule。
 7. 用户拒绝根任务结果，系统创建修订子任务，原交付仍可追溯。
 8. 没有匹配 Agent 时 PI 报告阻塞，不自行执行。
+9. `shadow` 模式只记录决策，不创建 Task、Invocation、消息或 Memory Candidate。
+10. PI disabled 或预检失败时，只有尚未产生副作用的显式单 Agent 请求可以回退 direct。
+11. Invocation 已创建后 PI Worker 或 Provider 失败，不产生第二条 direct dispatch。
+12. 子任务缺少必需 evidence、来源不可见或结果冲突时不能进入 `done`。
+13. 重复 idempotency key 不创建重复 Task、Invocation、Dispatch attempt 或 Memory Candidate；key 冲突返回 conflict。
+14. checkpoint 模型摘要与 Server revision 冲突时，以 Event、Task、Invocation 和 Artifact 事实为准。
+15. Device 过渡宿主重启和断线后通过 durable outbox 补报结果，不丢失或重复消息。
 
 ## 23. 验收标准
 
 - 内置 PI 管理 Agent 不出现在 Team Agent 列表，不接收普通 @mention。
 - PI Manager 不能调用 shell、文件读写、浏览器或任意项目 Extension。
 - 文档、代码、路由、持久化键、共享 contracts 和数据库 schema 统一使用 Team 术语。
-- 所有需要外部 Agent 的请求都由 PI Manager 创建 ManagementRun 并发起调用；普通轻问答不必创建 Task。
+- `managed` 模式下，所有需要外部 Agent 的请求都由 PI Manager 创建 ManagementRun 并发起调用；普通轻问答不必创建 Task。
+- 灰度期间 `direct`、`shadow`、`managed` 行为可区分、可审计，任何故障回退都不会重复执行外部任务。
 - 用户具体任务由实际外部 Agent 执行并正确归因。
 - 自定义 Agent 和 AgentOS 托管型 Agent 使用同一 Invocation 生命周期。
 - 复杂根任务可以生成有界、无环的 Task DAG。
 - 团队中的多个 Agent 同时 claim 时只有一个成功。
 - 子任务完成后由 PI Manager 验收，根任务完成后仍需用户确认。
+- 子任务只有在 acceptance criteria 和 evidence refs 经 Server 校验闭合后才能进入 `done`。
 - 跨 Agent Memory 只在权限和任务需要范围内进入 Capsule。
+- DM、私有频道和本地 Workspace 的原文默认不能进入 Server-hosted Capsule，Capsule 访问可审计。
 - PI Worker 或 Device 掉线后，任务图和已完成结果不丢失，可由新 Worker 恢复。
 - 同一管理工具重试不会重复创建任务、调用或记忆。
+- Management Event 是 typed、versioned、可确定重放的契约；checkpoint 模型摘要不是状态事实源。
 - Device Service 在关闭终端和设备重启后仍能自动运行。
 - 用户可在任务详情查看全部子任务、执行 Agent、结果、Artifact 和状态历史。
 
