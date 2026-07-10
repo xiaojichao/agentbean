@@ -436,7 +436,24 @@ describe('first-slice contract result shape', () => {
     expect(AGENT_EVENTS.deviceInvite.wait).toBe('device-invite:wait');
     expect(AGENT_EVENTS.deviceInvite.credentials).toBe('device-invite:credentials');
     expect(AGENT_EVENTS.dispatch.request).toBe('dispatch:request');
-    expect(Object.values(WEB_EVENTS.team)).not.toContain('network:list');
+  });
+
+  test('exposes only Team terminology for collaboration-space events', () => {
+    const keys = JSON.stringify(WEB_EVENTS);
+    const legacyListKey = ['list', 'Networks'].join('');
+    const legacyDeleteKey = ['delete', 'Network'].join('');
+    const legacyListEvent = ['admin:list-', 'networks'].join('');
+    const legacyDeleteEvent = ['admin:delete-', 'network'].join('');
+
+    expect(WEB_EVENTS.team.list).toBe('team:list');
+    expect(WEB_EVENTS.team.create).toBe('team:create');
+    expect(WEB_EVENTS.team.switch).toBe('team:switch');
+    expect(WEB_EVENTS.admin.listTeams).toBe('admin:list-teams');
+    expect(WEB_EVENTS.admin.deleteTeam).toBe('admin:delete-team');
+    expect(keys).not.toContain(legacyListKey);
+    expect(keys).not.toContain(legacyDeleteKey);
+    expect(keys).not.toContain(legacyListEvent);
+    expect(keys).not.toContain(legacyDeleteEvent);
   });
 
   test('keeps agent contracts aligned with runtime capability and custom agent docs', () => {
