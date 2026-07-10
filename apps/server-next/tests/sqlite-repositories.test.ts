@@ -289,6 +289,7 @@ describe('server-next SQLite repositories', () => {
           deletedAt INTEGER NOT NULL
         );
       `);
+      globalDb.exec('CREATE INDEX idx_revocations_machine ON device_revocations(teamId, machineId);');
       const insert = globalDb.prepare(
         `INSERT INTO device_revocations
          (teamId, machineId, profileId, profileKey, deviceId, deletedAt)
@@ -310,6 +311,13 @@ describe('server-next SQLite repositories', () => {
       expect(globalDb.prepare('SELECT COUNT(*) AS count FROM device_revocations').get()).toEqual({ count: 2 });
       expect(tableNames(globalDb)).not.toContain('device_revocations_legacy');
       expect(globalDb.prepare("SELECT id FROM schema_migrations WHERE id = 'global/0014_device_revocations_team_columns.sql'").get()).toBeUndefined();
+      expect(indexNames(globalDb, 'device_revocations')).toContain('idx_revocations_machine');
+      expect(
+        globalDb
+          .prepare('PRAGMA index_info(idx_revocations_machine)')
+          .all()
+          .map((row) => (row as { name: string }).name),
+      ).toEqual(['teamId', 'machineId']);
     } finally {
       teamDb.exec('SELECT 1');
       close();
