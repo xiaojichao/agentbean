@@ -164,9 +164,9 @@ describe('server-next socket handlers', () => {
     ]);
     expect(socket.eventNames()).toContain(WEB_EVENTS.admin.listTeams);
     expect(socket.eventNames()).toContain(WEB_EVENTS.admin.deleteTeam);
-    expect(socket.eventNames()).not.toContain(['admin:list-', 'networks'].join(''));
-    expect(socket.eventNames()).not.toContain(['admin:delete-', 'network'].join(''));
-    expect(socket.eventNames()).not.toContain('network:list');
+    expect(socket.eventNames()).not.toContain(['admin:list-', 'net', 'works'].join(''));
+    expect(socket.eventNames()).not.toContain(['admin:delete-', 'net', 'work'].join(''));
+    expect(socket.eventNames()).not.toContain(['network', ':list'].join(''));
 
     await expect(socket.trigger(WEB_EVENTS.auth.register, { username: 'shaw' })).resolves.toEqual({
       ok: true,

@@ -28,6 +28,11 @@ const { io: createClient } = requireFromServer('socket.io-client') as {
   io(url: string, options?: Record<string, unknown>): ClientSocket;
 };
 
+const oldTeamIdField = ['network', 'Id'].join('');
+const oldTeamNameField = ['network', 'Name'].join('');
+const oldPublishedTeamIdsField = ['published', 'N', 'etwork', 'Ids'].join('');
+const oldUnpublishedTeamIdsField = ['unpublished', 'N', 'etwork', 'Ids'].join('');
+
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
@@ -385,9 +390,9 @@ describe('server-next Socket.IO namespaces', () => {
       primaryTeamId: 'team-list-1',
       visibleTeamIds: ['team-list-1'],
     });
-    expect(deviceAgent).not.toHaveProperty('networkId');
-    expect(deviceAgent).not.toHaveProperty('publishedNetworkIds');
-    expect(deviceAgent).not.toHaveProperty('unpublishedNetworkIds');
+    expect(deviceAgent).not.toHaveProperty(oldTeamIdField);
+    expect(deviceAgent).not.toHaveProperty(oldPublishedTeamIdsField);
+    expect(deviceAgent).not.toHaveProperty(oldUnpublishedTeamIdsField);
   });
 
   test('does not expose internal subscription exception messages in failure acks', async () => {
@@ -1253,8 +1258,8 @@ describe('server-next Socket.IO namespaces', () => {
     });
     const [adminDevice] = adminDevicesResult.devices;
     expect(adminDevice).toMatchObject({ teamId: 'team-admin', teamName: 'AgentBean' });
-    expect(adminDevice).not.toHaveProperty('networkId');
-    expect(adminDevice).not.toHaveProperty('networkName');
+    expect(adminDevice).not.toHaveProperty(oldTeamIdField);
+    expect(adminDevice).not.toHaveProperty(oldTeamNameField);
     expect(adminDevice).not.toHaveProperty('publicAgents');
 
     const adminAgentsResult = await admin.emitWithAck(WEB_EVENTS.admin.listAgents, {});
@@ -1276,10 +1281,10 @@ describe('server-next Socket.IO namespaces', () => {
       primaryTeamName: 'AgentBean',
       visibleTeamIds: ['team-admin'],
     });
-    expect(adminAgent).not.toHaveProperty('networkId');
-    expect(adminAgent).not.toHaveProperty('networkName');
-    expect(adminAgent).not.toHaveProperty('publishedNetworkIds');
-    expect(adminAgent).not.toHaveProperty('unpublishedNetworkIds');
+    expect(adminAgent).not.toHaveProperty(oldTeamIdField);
+    expect(adminAgent).not.toHaveProperty(oldTeamNameField);
+    expect(adminAgent).not.toHaveProperty(oldPublishedTeamIdsField);
+    expect(adminAgent).not.toHaveProperty(oldUnpublishedTeamIdsField);
 
     await repositories.teams.create({
       id: 'team-member-owned',

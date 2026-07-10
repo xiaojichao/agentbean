@@ -470,7 +470,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
     if (res.ok && res.agent) {
       setDeviceAgents((list) => list.map((a) => (a.id === agent.id ? { ...a, visibleTeamIds: res.agent!.visibleTeamIds } : a)));
       setCustomAgents((list) => list.map((a) => (a.id === agent.id ? { ...a, visibleTeamIds: res.agent!.visibleTeamIds } : a)));
-      // 同步全局 members store：visible=false 时 applyAgentStatus 经 agentVisibleInNetwork
+      // 同步全局 members store：visible=false 时 applyAgentStatus 经 agentVisibleInTeam
       // 判定不可见，从共享 store 移除该 agent——成员页等读取全局 store 的页面立即消失，
       // 而非因残留旧快照显示为「没消失变不在线」。
       applyAgentStatus(res.agent);

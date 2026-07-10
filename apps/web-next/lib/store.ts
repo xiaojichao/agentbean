@@ -2,7 +2,7 @@
 import { create } from 'zustand';
 import type { AgentSnapshot, ChannelSummary, ChatMessage, ConnState, DispatchStatus, OutboundMessage, DiscoveredAgent, RuntimeInfo, TeamSummary, AgentMetricsSummary, UserInfo, DeviceInfo, HumanMember } from './schema.js';
 import type { DmChannel } from './socket.js';
-import { agentVisibleInNetwork } from './agent-scope';
+import { agentVisibleInTeam } from './agent-scope';
 import { mergeChannelHistory } from './chat-scope';
 
 function normalizeKind(value?: string | null): string {
@@ -282,7 +282,7 @@ export const useAgentBeanStore = create<State>((set) => ({
   },
   applyAgentStatus(snap) {
     set((s) => {
-      if (!agentVisibleInNetwork(snap, s.currentTeamId)) {
+      if (!agentVisibleInTeam(snap, s.currentTeamId)) {
         if (!s.agents[snap.id]) return s;
         const next = { ...s.agents };
         delete next[snap.id];

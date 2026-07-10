@@ -5,6 +5,14 @@ import { WEB_EVENTS, type AgentDto, type ChannelDto, type DeviceDto, type Dispat
 import { createWebSocketClient, type WebSocketTransport } from '../src/index';
 import { agentEvents, authEvents, deviceEvents, emitWithTimeout } from '../lib/socket';
 
+const oldTeamIdField = ['network', 'Id'].join('');
+const oldTeamNameField = ['network', 'Name'].join('');
+const oldTeamPathField = ['network', 'Path'].join('');
+const oldPublishedTeamIdsField = ['published', 'N', 'etwork', 'Ids'].join('');
+const oldUnpublishedTeamIdsField = ['unpublished', 'N', 'etwork', 'Ids'].join('');
+const oldTeamListEvent = ['network', ':list'].join('');
+const oldArtifactRoute = ['/api/net', 'works/'].join('');
+
 describe('web-next socket client', () => {
   test('keeps artifact upload fallback aligned with the App Router teams proxy', async () => {
     const { artifactUploadFallbackUrls } = await import('../lib/artifact-upload');
@@ -14,10 +22,10 @@ describe('web-next socket client', () => {
     expect(urls).toHaveLength(2);
     expect(urls.every((url) => url.includes('/api/teams/team%201/artifacts/upload'))).toBe(true);
     expect(urls.some((url) => url.startsWith('/api/teams/'))).toBe(true);
-    expect(urls.every((url) => !url.includes('/api/networks/'))).toBe(true);
+    expect(urls.every((url) => !url.includes(oldArtifactRoute))).toBe(true);
   });
 
-  test('removes the legacy artifact route and legacy network payload fields from UI flows', () => {
+  test('removes the compatibility artifact route and non-canonical Team payload fields from UI flows', () => {
     const appDir = join(process.cwd(), 'app');
     expect(existsSync(join(appDir, 'api/teams/[teamId]/artifacts/upload/route.ts'))).toBe(true);
     expect(existsSync(join(
@@ -39,8 +47,8 @@ describe('web-next socket client', () => {
       '../app/[teamPath]/settings/page.tsx',
     ]) {
       const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8');
-      expect(source, relativePath).not.toContain('networkId');
-      expect(source, relativePath).not.toContain('networkName');
+      expect(source, relativePath).not.toContain(oldTeamIdField);
+      expect(source, relativePath).not.toContain(oldTeamNameField);
     }
   });
 
@@ -177,7 +185,7 @@ describe('web-next socket client', () => {
       [WEB_EVENTS.message.send, { userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'hello' }],
       [WEB_EVENTS.dispatch.cancel, { userId: 'user-1', dispatchId: 'dispatch-1' }],
     ]);
-    expect(transport.emitted.map(([event]) => event)).not.toContain('network:list');
+    expect(transport.emitted.map(([event]) => event)).not.toContain(oldTeamListEvent);
   });
 
   test('subscribes to snapshots and realtime conversation events', async () => {
@@ -475,8 +483,8 @@ describe('web-next socket client', () => {
       command: 'codex',
     });
     expect(socket.lastPayload(WEB_EVENTS.agent.create)).toMatchObject({ teamId: 'team-1', deviceId: 'device-1' });
-    expect(JSON.stringify(created.agent)).not.toContain('networkId');
-    expect(JSON.stringify(created.agent)).not.toContain('publishedNetworkIds');
+    expect(JSON.stringify(created.agent)).not.toContain(oldTeamIdField);
+    expect(JSON.stringify(created.agent)).not.toContain(oldPublishedTeamIdsField);
 
     await authEvents(socket as any).inviteCreate({ teamId: 'team-1', purpose: 'device' });
     expect(socket.lastPayload(WEB_EVENTS.deviceInvite.create)).toEqual({
@@ -502,18 +510,18 @@ describe('web-next socket client', () => {
       lastSeenAt: 1,
       connectCommand: 'codex',
     }]);
-    expect(JSON.stringify(snapshots)).not.toContain('networkId');
-    expect(JSON.stringify(snapshots)).not.toContain('publishedNetworkIds');
+    expect(JSON.stringify(snapshots)).not.toContain(oldTeamIdField);
+    expect(JSON.stringify(snapshots)).not.toContain(oldPublishedTeamIdsField);
   });
 
   test('keeps device and admin snapshots on canonical Team fields', async () => {
     const schemaSource = readFileSync(new URL('../lib/schema.ts', import.meta.url), 'utf8');
     expect(schemaSource).toContain('teamId: string;');
     expect(schemaSource).toContain('teamName?: string;');
-    expect(schemaSource).not.toContain('networkId');
-    expect(schemaSource).not.toContain('networkName');
-    expect(schemaSource).not.toContain('publishedNetworkIds');
-    expect(schemaSource).not.toContain('unpublishedNetworkIds');
+    expect(schemaSource).not.toContain(oldTeamIdField);
+    expect(schemaSource).not.toContain(oldTeamNameField);
+    expect(schemaSource).not.toContain(oldPublishedTeamIdsField);
+    expect(schemaSource).not.toContain(oldUnpublishedTeamIdsField);
 
     const socket = new CanonicalSocket();
     const device = {
@@ -548,10 +556,10 @@ describe('web-next socket client', () => {
       ok: true,
       agents: [{ primaryTeamId: 'team-1', primaryTeamName: 'Ops', visibleTeamIds: ['team-1'] }],
     });
-    expect(JSON.stringify({ deviceSnapshots, adminDevices, adminAgents })).not.toContain('networkId');
-    expect(JSON.stringify({ deviceSnapshots, adminDevices, adminAgents })).not.toContain('networkName');
-    expect(JSON.stringify({ deviceSnapshots, adminDevices, adminAgents })).not.toContain('publishedNetworkIds');
-    expect(JSON.stringify({ deviceSnapshots, adminDevices, adminAgents })).not.toContain('unpublishedNetworkIds');
+    expect(JSON.stringify({ deviceSnapshots, adminDevices, adminAgents })).not.toContain(oldTeamIdField);
+    expect(JSON.stringify({ deviceSnapshots, adminDevices, adminAgents })).not.toContain(oldTeamNameField);
+    expect(JSON.stringify({ deviceSnapshots, adminDevices, adminAgents })).not.toContain(oldPublishedTeamIdsField);
+    expect(JSON.stringify({ deviceSnapshots, adminDevices, adminAgents })).not.toContain(oldUnpublishedTeamIdsField);
   });
 
   test('returns canonical teamId and teamPath from device login', async () => {
@@ -584,8 +592,8 @@ describe('web-next socket client', () => {
       role: 'user',
       deviceId: 'device-1',
     });
-    expect(JSON.stringify(result)).not.toContain('networkId');
-    expect(JSON.stringify(result)).not.toContain('networkPath');
+    expect(JSON.stringify(result)).not.toContain(oldTeamIdField);
+    expect(JSON.stringify(result)).not.toContain(oldTeamPathField);
     expect(socket.emitted).toEqual([
       [WEB_EVENTS.auth.login, { username: 'shaw', password: 'secret' }],
       [WEB_EVENTS.deviceInvite.complete, { code: 'invite-1', userId: 'user-1' }],

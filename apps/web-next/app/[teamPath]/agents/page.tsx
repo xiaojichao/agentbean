@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { Copy, Terminal } from 'lucide-react';
 import { AgentCard } from '@/components/agent-card';
 import { ConnectionBanner } from '@/components/connection-banner';
-import { agentVisibleInNetwork } from '@/lib/agent-scope';
+import { agentVisibleInTeam } from '@/lib/agent-scope';
 import { authEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 
@@ -18,7 +18,7 @@ export default function AgentsPage() {
   const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : '';
   const routeTeam = teams.find((team) => team.path === routeTeamPath || team.id === routeTeamPath);
   const agentsTeamId = routeTeam?.id ?? currentTeamId;
-  const visibleAgents = agents.filter((agent) => agentVisibleInNetwork(agent, agentsTeamId));
+  const visibleAgents = agents.filter((agent) => agentVisibleInTeam(agent, agentsTeamId));
   const [inviteCommand, setInviteCommand] = useState('');
   const [inviteError, setInviteError] = useState('');
   const [copied, setCopied] = useState(false);

@@ -1,6 +1,6 @@
 import type { AgentSnapshot } from './schema';
 
-export function agentVisibleInNetwork(
+export function agentVisibleInTeam(
   agent: Pick<AgentSnapshot, 'primaryTeamId' | 'visibleTeamIds' | 'visibility'>,
   teamId: string,
 ): boolean {

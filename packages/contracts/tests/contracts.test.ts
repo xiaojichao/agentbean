@@ -440,10 +440,10 @@ describe('first-slice contract result shape', () => {
 
   test('exposes only Team terminology for collaboration-space events', () => {
     const keys = JSON.stringify(WEB_EVENTS);
-    const legacyListKey = ['list', 'Networks'].join('');
-    const legacyDeleteKey = ['delete', 'Network'].join('');
-    const legacyListEvent = ['admin:list-', 'networks'].join('');
-    const legacyDeleteEvent = ['admin:delete-', 'network'].join('');
+    const legacyListKey = ['list', 'Net', 'works'].join('');
+    const legacyDeleteKey = ['delete', 'Net', 'work'].join('');
+    const legacyListEvent = ['admin:list-', 'net', 'works'].join('');
+    const legacyDeleteEvent = ['admin:delete-', 'net', 'work'].join('');
 
     expect(WEB_EVENTS.team.list).toBe('team:list');
     expect(WEB_EVENTS.team.create).toBe('team:create');

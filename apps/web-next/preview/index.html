@@ -3055,7 +3055,7 @@
 
       function compareDevices(left, right) {
         return deviceDisplayName(left).localeCompare(deviceDisplayName(right), "zh-CN", { sensitivity: "base", numeric: true }) ||
-          String(left.teamId || left.networkId || "").localeCompare(String(right.teamId || right.networkId || ""), "zh-CN", { sensitivity: "base", numeric: true }) ||
+          String(left.teamId || "").localeCompare(String(right.teamId || ""), "zh-CN", { sensitivity: "base", numeric: true }) ||
           String(left.id).localeCompare(String(right.id));
       }
 
@@ -3175,8 +3175,8 @@
           return `<div class="rail-muted">暂无 Agent。</div>`;
         }
         return `<div class="device-agent-list">${agents.map((agent) => {
-          const publishCount = Array.isArray(agent.publishedNetworkIds || agent.visibleTeamIds)
-            ? (agent.publishedNetworkIds || agent.visibleTeamIds).length
+          const publishCount = Array.isArray(agent.visibleTeamIds)
+            ? agent.visibleTeamIds.length
             : 0;
           const meta = [
             statusLabel(agent.status),

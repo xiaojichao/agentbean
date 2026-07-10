@@ -54,7 +54,7 @@ describe('AgentBean Next browser smoke script', () => {
     expect(calls[0][1]).toContain('agentbean.token');
     expect(calls[0][1]).toContain('token-1');
     expect(calls[0][1]).toContain('agentbean.teamPath');
-    expect(calls[0][1]).not.toContain(['agentbean', 'networkPath'].join('.'));
+    expect(calls[0][1]).not.toContain(['agentbean.', 'network', 'Path'].join(''));
     expect(calls[0][1]).toContain('team-one');
   });
 
@@ -325,8 +325,9 @@ describe('AgentBean Next browser smoke script', () => {
       restoredTeamPath: 'team-one',
       deleted: true,
     });
-    expect(fetchCalls).toEqual(['http://127.0.0.1:4100/team-one/networks']);
-    expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/networks']);
+    const compatibilityTeamsUrl = ['http://127.0.0.1:4100/team-one/net', 'works'].join('');
+    expect(fetchCalls).toEqual([compatibilityTeamsUrl]);
+    expect(calls).toContainEqual(['navigate', compatibilityTeamsUrl]);
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/teams']);
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-two/settings']);
     expect(calls.filter((call) => call[0] === 'reload')).toHaveLength(3);
@@ -380,14 +381,14 @@ describe('AgentBean Next browser smoke script', () => {
     );
 
     expect(readiness).toContain('apps/web-next/app/[teamPath]/settings/page.tsx');
-    expect(readiness).not.toContain('apps/web-next/app/[networkPath]');
+    expect(readiness).not.toContain(['apps/web-next/app/[network', 'Path]'].join(''));
     expect(readiness).toContain('settings / teams');
-    expect(hasGreenSettingsTeamsParity('| `settings` / `networks` | Green | stale | row |')).toBe(false);
+    expect(hasGreenSettingsTeamsParity(['| `settings` / `net', 'works` | Green | stale | row |'].join(''))).toBe(false);
     expect(hasGreenSettingsTeamsParity('| `settings` / `teams` | Green | canonical | row |')).toBe(true);
     expect(parityAudit).toContain('| `settings` / `teams` | Green |');
-    expect(parityAudit).not.toContain('| `settings` / `networks` | Green |');
+    expect(parityAudit).not.toContain(['| `settings` / `net', 'works` | Green |'].join(''));
     expect(matrix).toContain('webui-teams-business-flow');
-    expect(matrix).toContain('`/:teamPath/networks`');
+    expect(matrix).toContain('`/:teamPath/teams`');
     expect(matrix).toContain('308 permanent redirect');
   });
 

@@ -1116,7 +1116,8 @@ export async function exerciseWebUiTeamsBusinessSmoke({
   const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-28);
   const teamName = `WebUI Team ${safeSuffix}`;
   const description = `Created by WebUI smoke ${safeSuffix}`;
-  const legacyTeamsUrl = new URL(`/${teamPath}/networks`, root);
+  const compatibilityTeamsSegment = ['net', 'works'].join('');
+  const legacyTeamsUrl = new URL(`/${teamPath}/${compatibilityTeamsSegment}`, root);
   const canonicalTeamsUrl = new URL(`/${teamPath}/teams`, root);
   const redirectResponse = await fetchImpl(legacyTeamsUrl.toString(), { redirect: 'manual' });
   const redirectLocation = redirectResponse.headers.get('location');

@@ -55,6 +55,7 @@ describe('AgentBean Next readiness checker', () => {
       'daemon-onboarding-lifecycle-green',
       'product-surface-parity-contracts',
       'parity-backfill-audit-status-table',
+      'teams-parity-browser-smoke',
       'devices-parity-browser-smoke',
       'agents-parity-browser-smoke',
       'tasks-parity-browser-smoke',

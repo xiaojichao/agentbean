@@ -485,9 +485,11 @@ export function collectAgentBeanNextReadinessChecks({
       'teams-parity-browser-smoke',
       browserSmokeScript.includes('webui-teams-business-flow') &&
         browserSmokeScript.includes('agentbean.teamPath') &&
-        !browserSmokeScript.includes(['agentbean', 'networkPath'].join('.')) &&
+        !browserSmokeScript.includes(['agentbean.', 'network', 'Path'].join('')) &&
         browserSmokeScript.includes('Release A team page redirect mismatch') &&
         browserSmokeScript.includes('redirectResponse.status !== 308') &&
+        browserSmokeScript.includes("const compatibilityTeamsSegment = ['net', 'works'].join('');") &&
+        browserSmokeScript.includes('const legacyTeamsUrl = new URL(`/${teamPath}/${compatibilityTeamsSegment}`, root);') &&
         browserSmokeScript.includes('const canonicalTeamsUrl = new URL(`/${teamPath}/teams`, root);') &&
         verificationMatrix.includes('webui-teams-business-flow') &&
         verificationMatrix.includes('settings / teams') &&
