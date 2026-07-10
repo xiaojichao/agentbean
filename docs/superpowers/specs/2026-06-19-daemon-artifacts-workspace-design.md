@@ -30,7 +30,7 @@ AgentBean 从原版（`apps/daemon` v0.1.35）迁移到重写版（`apps/daemon-
 - **附件注入**（`agent-instance.ts:69-75`）：把附件清单（filename/mimeType/size/localPath）追加到 prompt。
 - **产物扫描**（`apps/daemon/src/post-process.ts`）：三策略并集——Codex 原生目录（`~/.codex/generated_images`）、回复文本中的路径正则、`outputDirs`/`AGENT_BEAN_OUTPUT_DIRS` 目录扫描（`mtime > dispatchStart` 过滤）。
 - **去重归档**（`apps/daemon/src/workspace-manager.ts:144-190`）：SHA256 聚合，文件名优先级（`ig_*.png` > `image*.png` > 其他），归档到 `run.outputDir`。
-- **上传**（`apps/daemon/src/uploader.ts:11-60`）：`POST /api/networks/{networkId}/artifacts/upload`，multipart `file` + `channelId` + `uploaderId` + `metaJson`，返回 `{id, filename, downloadUrl}`。
+- **上传**（`apps/daemon/src/uploader.ts:11-60`）：`POST /api/teams/{teamId}/artifacts/upload`，multipart `file` + `channelId` + `uploaderId` + `metaJson`，返回 `{id, filename, downloadUrl}`。
 - **目录结构**（`workspace-manager.ts:87-129`）：`~/.agentbean/teams/{teamId}/agents/{agentId}/runs/{runId}/{inputs,outputs,intermediates,logs}` + `manifest.json` + `response.md`。
 - **env 注入**（`workspace-manager.ts:131-142`）：`AGENTBEAN_TEAM_ID/AGENT_ID/RUN_ID/WORKSPACE/INPUT_DIR/OUTPUT_DIR/INTERMEDIATE_DIR`。
 

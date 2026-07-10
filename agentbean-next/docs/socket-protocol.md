@@ -179,12 +179,18 @@ Ack：
 Ack<{ teams: Array<TeamDto & { members: HumanMemberDto[] }> }>
 ```
 
-#### `admin:list-networks`
+#### `admin:delete-team`
 
-旧版 dashboard 兼容别名；返回字段名仍为 `networks`：
+客户端：
 
 ```ts
-Ack<{ networks: Array<TeamDto & { members: HumanMemberDto[] }> }>
+{ teamId: string }
+```
+
+Ack：
+
+```ts
+Ack<{}>
 ```
 
 #### `admin:list-users`
@@ -203,11 +209,9 @@ Ack：
 Ack<{ devices: Array<DeviceDto & {
   userId: string;
   userName: string;
-  networkId: string;
-  networkName: string;
+  teamName: string;
   agentCount: number;
-  runtimes: RuntimeDto[];
-  publicAgents: AdminAgentDto[];
+  agents: AdminAgentDto[];
 }> }>
 ```
 
@@ -219,7 +223,7 @@ Ack：
 Ack<{ agents: AdminAgentDto[] }>
 ```
 
-`AdminAgentDto` 是 dashboard projection：`AgentDto` 加上 `networkId`、`networkName`、`ownerName`、`userName`、`deviceName`、`deviceUserName`、`publishedNetworkIds` 与 `unpublishedNetworkIds`。
+`AdminAgentDto` 是 dashboard projection：保留 `AgentDto` 的 `primaryTeamId` 与 `visibleTeamIds`，并补充 `primaryTeamName`、`ownerName`、`userName`、`deviceName`、`deviceUserId` 与 `deviceUserName`。
 
 #### `admin:transfer-device-owner`
 

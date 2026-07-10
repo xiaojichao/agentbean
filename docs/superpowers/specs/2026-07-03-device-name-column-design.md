@@ -89,10 +89,10 @@ applyMigration(db, 'global/0013_device_name_backfill.sql');
 |---|---|
 | `apps/web-next/lib/socket.ts:518` | rename emit 网络键 `hostname` → `name` |
 | `apps/web-next/lib/schema.ts:195` | 移除死的 `hostname?` 字段 |
-| `apps/web-next/app/[networkPath]/devices/page.tsx:43-45` | `deviceDisplayName` 简化为 `(device.name ?? device.systemInfo?.hostname ?? '').trim() \|\| device.id` |
+| `apps/web-next/app/[teamPath]/devices/page.tsx:43-45` | `deviceDisplayName` 简化为 `(device.name ?? device.systemInfo?.hostname ?? '').trim() \|\| device.id` |
 | `apps/web-next/lib/agent-device.ts:7` | `device.hostname` → `device.name` |
 | `apps/web-next/components/member-detail.tsx:467` | `device.hostname` → `device.name` |
-| `apps/web`（legacy） | 不动（rollback 备份） |
+| 旧 Web 源码 | 不作为当前实现或可执行回退入口；不在本设计中修改 |
 
 ## 四、测试策略（vitest，TDD 红→绿）
 
@@ -114,7 +114,7 @@ applyMigration(db, 'global/0013_device_name_backfill.sql');
 ## 五、范围边界（不做）
 
 - `nameSource` 不进 `DeviceDto` 契约（内部字段）。
-- `apps/web` legacy 不清理（rollback 备份）。
+- 旧 Web 源码不参与 build、deploy 或 publish；回退使用 Git、Railway 与 npm 已发布 artifact。
 - 不改 daemon 侧（daemon 无法自救，见根因）。
 - 不引入 daemon 自更新（独立大项，见 [[agentbean-daemon-no-auto-update]]）。
 

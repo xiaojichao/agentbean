@@ -7,7 +7,7 @@
 
 ## 背景
 
-设备详情页现有「将 Agent 加入某个团队」功能：通过 `SelectNetworkDialog`（`apps/web-next/app/[networkPath]/devices/page.tsx:1172`）把一个 Agent「发布」到多个团队，底层调用 `agentEvents().publish / unpublish`。本次重构移除该多团队发布能力，改为：
+设备详情页曾有「将 Agent 加入某个团队」的多团队发布对话框，底层调用 `agentEvents().publish / unpublish`。本次重构已移除该能力，改为：
 
 1. AgentOS 托管型 Agent、自定义 Agent 默认归属当前团队；
 2. 编程智能体运行时不再作为团队成员；
@@ -30,14 +30,14 @@
 - 创建自定义 agent：`usecases.ts:1704`（`createCustomAgent`，`visibleTeamIds:[agentInput.teamId]`、`category:'executor-hosted'`）
 - `publishAgent` / `unpublishAgent`：`usecases.ts:1756` / `1786`
 - 成员查询：`repositories.ts:209`（接口 `listVisibleInTeam`）、`infra/sqlite/repositories.ts:1082`（实现）
-- 成员页：`apps/web-next/app/[networkPath]/members/page.tsx`（`memberEvents().list()` → `agents`）
-- 多团队发布 UI：`devices/page.tsx:1172`（`SelectNetworkDialog`）
+- 成员页：`apps/web-next/app/[teamPath]/members/page.tsx`（`memberEvents().list()` → `agents`）
+- 多团队发布 UI：已从 `devices/page.tsx` 移除。
 - 私聊/任务权限检查：`usecases.ts:2193` / `2246`（均为 `agent.visibleTeamIds.includes(teamId)`）
 - AgentDto 定义：`packages/contracts/src/agent.ts:29-48`（`primaryTeamId` + `visibleTeamIds: ID[]`）
 
 关键发现：
 
-1. **`publish/unpublish` 操作的就是 `visibleTeamIds`**；前端 DTO 的 `publishedNetworkIds` 只是从 `visibleTeamIds` 派生的兼容字段（`usecases.ts:3816` / `4659` 的 `publishedNetworkIds: uniqueIds(agent.visibleTeamIds)`）。
+1. **`publish/unpublish` 操作的就是 `visibleTeamIds`**；Server 与 Web 直接消费同一个 canonical 字段，不再派生兼容投影。
 2. **创建路径其实已默认归属当前团队**（1664 / 1735 行 `visibleTeamIds:[teamId]`）。因此本需求不是「新增归属逻辑」，而是「移除多团队发布 + 收窄为当前团队可见性 + 剥离编程执行器」。
 3. **`visibleTeamIds` 同时承担两个职责**：① 成员页是否展示；② 私聊/任务权限检查。这一点是可见性设计的核心约束。
 
@@ -45,7 +45,7 @@
 
 **目标**
 
-1. 移除设备详情页「将 Agent 加入某个团队」的多团队发布能力（`SelectNetworkDialog`）。
+1. 移除设备详情页「将 Agent 加入某个团队」的多团队发布能力。
 2. AgentOS 托管型 Agent 与自定义 Agent 默认归属当前团队（保持现状）。
 3. 扫描发现的编程执行器（`executor-hosted + scanned`）不再作为 Agent 成员实体，仅作为 `RuntimeDto` 存在。
 4. 详情页为 `agentos-hosted` 与 `custom` Agent 提供「对当前团队可见性」开关。
@@ -110,7 +110,7 @@
 ### 3. 前端变更
 
 - **设备详情页**（`devices/page.tsx`，`AgentRow` 组件 1118-1170）：
-  - 移除 `SelectNetworkDialog`（1172）及其触发按钮「选择团队」（1153-1157）、「已发布到 N 个团队」徽章（1147-1151）；相应移除 `AgentRow` 的 `onSelectNetwork` prop 与「自定义仅可发布到私有/自有团队」限制（1180）。
+  - 移除多团队选择对话框及其触发按钮、「已发布到 N 个团队」徽章和 `AgentRow` 的对应回调；同时移除只服务于多团队发布的限制分支。
   - 在 `agentos-hosted` 与 `custom` 两个分组的**每个 Agent 行尾**（状态圆点之后、删除按钮之前）增加一个**复选框**，标注「对当前团队可见」：
     - 勾选状态 = `visibleTeamIds.includes(currentTeamId)`；
     - 勾选/取消勾选调用 `setAgentTeamVisibility({ teamId: currentTeamId, agentId, visible })`；
@@ -122,7 +122,7 @@
 
 ### 4. 「当前团队」判定
 
-「当前团队」= 设备详情页 URL 的 `networkPath` 解析得到的 `teamId`（与 `members/page.tsx:66` 现有解析一致）。扫描发现、添加自定义、可见性切换均以此为 `teamId`。
+「当前团队」= 设备详情页 URL 的 `teamPath` 解析得到的 `teamId`（与 `members/page.tsx:66` 现有解析一致）。扫描发现、添加自定义、可见性切换均以此为 `teamId`。
 
 ### 5. 边界与连带
 
@@ -146,7 +146,7 @@
   - `setAgentTeamVisibility` 正确切换 `visibleTeamIds` 并联动频道 membership。
   - `listVisibleInTeam` 排除被移出 agent 与 `executor-hosted + scanned`。
   - 移出后发起私聊/任务被权限检查拦截。
-- **前端**：可见性 toggle 双向工作；`SelectNetworkDialog` 已彻底移除。
+- **前端**：可见性 toggle 双向工作；多团队选择对话框已彻底移除。
 - **迁移**：历史执行器正确删除；多团队 `visibleTeamIds` 正确收窄；脚本可重复执行无副作用。
 - **回归**：成员页、智能体私聊、工作区运行列表。
 

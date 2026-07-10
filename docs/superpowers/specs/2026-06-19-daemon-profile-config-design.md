@@ -23,11 +23,11 @@
 ## 2. 基线
 
 ### 2.1 原版 apps/daemon（参考）
-- **auth-store**（`auth-store.ts`）：`~/.agentbean/teams/{profileId}/auth.json`；`AuthData { token, serverUrl, userId?, networkId? }`；`loadAuth/saveAuth/clearAuth/listAuthProfiles`。
-- **profile-paths**（`profile-paths.ts`）：`profileRoot(profileId)`/`authFile`/`scanCacheFile`；`profileId = slugify(networkId)`。
+- **auth-store**（`auth-store.ts`）：`~/.agentbean/teams/{profileId}/auth.json`；`AuthData { token, serverUrl, userId?, teamId? }`；`loadAuth/saveAuth/clearAuth/listAuthProfiles`。
+- **profile-paths**（`profile-paths.ts`）：`profileRoot(profileId)`/`authFile`/`scanCacheFile`；`profileId = slugify(teamId)`。
 - **--all-profiles**（`index.ts:194-210`）：`listAuthProfiles()` → `Promise.all(profiles.map(startDeviceDaemon))`，每 profile 独立 socket/scan 缓存。
 - **YAML config**（`config.ts`）：`AgentConfig`/`DeviceConfig`；`ENV_PATTERN=/\$\{([A-Z0-9_]+)\}/g` + `deepInterpolate`；`loadConfig`/`loadDeviceConfig` + 字段验证。
-- **invite → profile**：invite 完成 → token + networkId → `profileId = slugify(networkId)` → `saveAuth`。
+- **invite → profile**：invite 完成 → token + teamId → `profileId = slugify(teamId)` → `saveAuth`。
 
 ### 2.2 daemon-next 现状（缺口）
 - `cli.ts` `parseDaemonNextCliConfig`：config 来自 argv/env；`profileId`（默认 `default`）仅标识、**无持久化**。
@@ -39,7 +39,7 @@
 | 决策 | 选定 | 理由 |
 |------|------|------|
 | scope | 完整（token 持久化 + 多 profile + YAML + env 插值） | 用户选定；对齐原版 |
-| profileId 来源 | `slugify(teamId)`（invite 后）或 config `profileId`（默认 `default`） | 对齐原版 networkId slugify；daemon-next 用 teamId |
+| profileId 来源 | `slugify(teamId)`（invite 后）或 config `profileId`（默认 `default`） | profile 身份与 canonical `teamId` 对齐 |
 | auth 存储路径 | `~/.agentbean/teams/{profileId}/auth.json` | 对齐原版 + 与 #303 scan-cache 同根（`teams/{profileId}/`） |
 | AuthData | `{ token, serverUrl, teamId, ownerId }` | daemon-next 需要 teamId/ownerId（announce hello） |
 | 配置优先级 | CLI args > env > YAML > 内置默认 | 对齐常见约定；CLI 显式覆盖 |
@@ -126,5 +126,5 @@ runDaemonNextCli(config)
 
 - **YAML 依赖**：原版用 `js-yaml`？需确认 daemon-next 是否已有/需新增依赖。若不想加依赖，可用最小 YAML 子集解析（仅 key:value 平铺）或改用 JSON 配置。**待确认**：daemon-next package.json 是否已有 yaml 解析能力，否则决策"加 js-yaml 依赖" vs "JSON 配置" vs "最小 YAML"。
 - **与 #303 冲突**：#303 新增 `scan-cache.ts`（`scanCachePath` 用 `teams/{profileId}/`）；本 feature `profile-paths.ts`/`auth-store.ts` 同根。rebase 时统一 sanitize/path 逻辑（profile-paths 作为单一来源，scan-cache 引用它）。cli.ts 改动段不同（profile 在 parseConfig/runDaemonNextCli 开头；#303 scan 在 runDaemonNextCli 中段），冲突小。
-- **profileId vs teamId**：daemon-next announce hello 需要 teamId/ownerId（AuthData 存它们）。原版 AuthData 存 networkId（=teamId 概念）。需确认 invite credentials 返回 teamId/ownerId（cli.ts 现状：credentials.teamId/ownerId/token，已确认）。
+- **profileId vs teamId**：daemon-next announce hello 需要 teamId/ownerId（AuthData 存它们）。invite credentials 已确认返回 `teamId/ownerId/token`。
 - **--all-profiles 并发资源**：N 个实例 = N 个 socket + N 个定时器（rescan/heartbeat）。第一版对齐原版（Promise.all），不做连接池。

@@ -2,24 +2,26 @@
 title: AgentBean Team Daemon Profile Isolation — 团队级本地运行隔离设计
 date: 2026-05-29
 status: 草稿，待用户复核
-related_specs:
-  - 2026-05-05-agentbean-network-isolation-design.md
-  - 2026-05-09-multi-network-visibility-design.md
+superseded_by:
+  - 2026-05-09-agentbean-prd.md
+  - 2026-07-10-agentbean-pi-management-agent-design.md
 ---
 
 # AgentBean Team Daemon Profile Isolation — 团队级本地运行隔离设计
 
+> 本文保留 Team profile 隔离的设计推导；其中旧源码路径只记录当时实现背景，不是当前 build、deploy、publish 或 rollback 入口。当前实现以 `apps/daemon-next`、主 PRD 和 PI 管理 Agent 设计为准。
+
 ## 1. 背景与结论
 
-AgentBean 当前已经在服务端按 `networkId` 隔离团队数据：每个团队有独立的 SQLite 数据库和 artifacts 目录，全局库只保存用户、团队、设备、Agent 索引等元数据。
+AgentBean 当前已经在服务端按 `teamId` 隔离团队数据：每个团队有独立的 SQLite 数据库和 artifacts 目录，全局库只保存用户、团队、设备、Agent 索引等元数据。
 
-本地 daemon 侧目前更接近“一个物理设备当前连接一个团队”的模型：一个 daemon 进程持有一个 token、一个 `networkId`、一个 Socket.IO `/agent` 连接，并把本机扫描到的 Agent 注册到这个团队。
+本地 daemon 侧目前更接近“一个物理设备当前连接一个团队”的模型：一个 daemon 进程持有一个 token、一个 `teamId`、一个 Socket.IO `/agent` 连接，并把本机扫描到的 Agent 注册到这个团队。
 
 新的产品决策是：
 
 - **一个团队对应一个本地 daemon/profile**。
 - 同一台物理机器可以加入多个团队，但每个团队在本机有独立 profile、独立 token、独立缓存、独立工作区、独立 daemon 连接。
-- 不采用“单 daemon 同时连接多个团队，然后完全靠代码传 `networkId` 隔离”的方案作为默认模型。
+- 不采用“单 daemon 同时连接多个团队，然后完全靠代码传 `teamId` 隔离”的方案作为默认模型。
 
 这个方向更适合当前阶段，因为它把团队边界变成本地进程边界和文件目录边界，用户心智也更清楚：进入团队时拿到连接命令，启动的是这个团队自己的本地运行时。
 
@@ -32,9 +34,9 @@ AgentBean 当前已经在服务端按 `networkId` 隔离团队数据：每个团
 - `apps/daemon/src/device-daemon.ts` 固定使用 `~/.agentbean/scanned-agents.json` 作为扫描缓存。
 - `apps/daemon/src/sandbox.ts` 固定使用 `~/.agentbean/workspaces/{agentId}` 和 `/tmp/agentbean-sandbox-{agentId}.sb`。
 - `apps/server/src/device-registry.ts` 当前按 `deviceId` 作为唯一 key；同一物理设备以同一个 `deviceId` 加入多个团队时，后连接的 daemon 会踢掉前一个 socket。
-- `apps/server/src/db.ts` 的 `devices` 表以 `id` 为主键，并在 upsert 时更新 `network_id`，这更像“设备当前所在团队”，不是“设备在多个团队中的多个实例”。
+- `apps/server/src/db.ts` 的 `devices` 表以 `id` 为主键，并在 upsert 时更新 `team_id`，这更像“设备当前所在团队”，不是“设备在多个团队中的多个实例”。
 
-如果做单进程多团队，任何一个漏掉 `networkId` 的 dispatch、workspace sync、artifact upload、scan cache、sandbox path 都可能造成跨团队污染。代码级 tenant 隔离可以作为优化层，但不应该作为安全边界。
+如果做单进程多团队，任何一个漏掉 `teamId` 的 dispatch、workspace sync、artifact upload、scan cache、sandbox path 都可能造成跨团队污染。代码级 tenant 隔离可以作为优化层，但不应该作为安全边界。
 
 ## 3. 目标模型
 
@@ -216,7 +218,7 @@ daemon 连接 `/agent` 时建议上报：
 ```json
 {
   "token": "...",
-  "networkId": "team-a",
+  "teamId": "team-a",
   "deviceId": "dev_xxx",
   "machineId": "machine_yyy",
   "profileId": "team-a",
@@ -244,7 +246,7 @@ DeviceRegistry key = deviceInstanceId
 如果想保留旧 `deviceId` 语义，则可以改为：
 
 ```text
-DeviceRegistry key = networkId + ":" + deviceId
+DeviceRegistry key = teamId + ":" + deviceId
 ```
 
 但这会影响更多调用点。当前阶段更推荐让 daemon 上报团队级 `deviceInstanceId`，服务端改动更小。
@@ -262,15 +264,15 @@ ALTER TABLE devices ADD COLUMN profile_id TEXT;
 
 - `devices.id`：设备实例 ID，团队内 daemon/profile 的唯一身份。
 - `devices.machine_id`：物理机器 ID。
-- `devices.network_id`：团队 ID。
+- `devices.team_id`：团队 ID。
 - `devices.profile_id`：本地 profile ID，通常等于团队 ID 或团队 slug。
 
 建议增加索引：
 
 ```sql
 CREATE INDEX IF NOT EXISTS idx_devices_machine ON devices(machine_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_network_machine
-  ON devices(network_id, machine_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_team_machine
+  ON devices(team_id, machine_id);
 ```
 
 这样可以同时支持：
@@ -302,7 +304,7 @@ npx tsx apps/daemon/src/bin.ts \
 
 命令执行后：
 
-1. 解析 token 得到 `networkId`。
+1. 解析 token 得到 `teamId`。
 2. 如果传入 `--profile`，校验它与 token/team 的关系。
 3. 创建 `~/.agentbean/teams/{teamId}/`。
 4. 写入 `auth.json` 和 `profile.json`。
@@ -373,7 +375,7 @@ team-b profile -> daemon process B -> /agent socket B
 推荐区分：
 
 - **团队级 daemon/profile**：解决本地运行隔离。
-- **agent_network_publish**：解决某个 Agent 在多个团队 UI 中可见和可被调度。
+- **agent_publications**：记录 Agent 对 Team 的可见性；产品 DTO 只暴露 `visibleTeamIds`。
 
 如果一个 Agent 通过 team-a 的 daemon 发布到 team-b，它实际执行仍发生在 team-a profile 对应的 daemon 上。这种模式适合“共享能力”，但不等于 team-b 拥有独立本地运行时。
 
@@ -398,7 +400,7 @@ team-b profile -> daemon process B -> /agent socket B
 
 ### 9.3 不应依赖的隔离
 
-不要把“每个请求都带 `networkId`”作为唯一隔离手段。`networkId` 校验仍然必要，但本地 profile 和服务端 device instance 才是更稳的边界。
+不要把“每个请求都带 `teamId`”作为唯一隔离手段。`teamId` 校验仍然必要，但本地 profile 和服务端 device instance 才是更稳的边界。
 
 ## 10. 迁移计划
 
@@ -448,7 +450,7 @@ team-b profile -> daemon process B -> /agent socket B
 
 - `apps/server/src/connect-command.ts`：生成带 `--profile` 的连接命令。
 - `apps/server/src/namespaces/agent.ts`：保存 connect command 时按设备实例保存。
-- `apps/web/app/[networkPath]/devices/page.tsx`：设备页文案改为“本团队本地运行时”。
+- `apps/web/app/[teamPath]/devices/page.tsx`：设备页文案改为“本团队本地运行时”。
 - `apps/web/app/device-login/[code]/page.tsx`：加入团队流程说明 profile 会独立保存。
 - `apps/daemon/README.md`：更新多团队启动示例。
 
@@ -511,7 +513,7 @@ agentbean-daemon profiles migrate-default --team team-a
 - 不要在 sandbox path 中只使用 `agentId`，必须包含 team/profile。
 - 不要让 connect command 被不同团队共享或覆盖。
 - 不要为了省进程，把多团队隔离压进一个 daemon 的多 socket 管理里，除非后续有明确性能瓶颈。
-- 不要把 `agent_network_publish` 当成本地隔离机制；它只是跨团队可见性机制。
+- 不要把 `agent_publications` 当成本地隔离机制；它只是跨团队可见性机制。
 
 ## 13. 推荐实现顺序
 
@@ -530,6 +532,6 @@ agentbean-daemon profiles migrate-default --team team-a
 
 团队级 daemon/profile 是 AgentBean 当前阶段最稳妥的多团队隔离方案。
 
-它牺牲了一点进程数量和重复扫描成本，但换来更清楚的用户心智、更低的实现风险、更强的本地隔离边界。服务端继续保持按 `networkId` 的数据隔离；本地则通过 team profile 把 token、缓存、workspace、运行记录和 daemon 生命周期都绑定到团队。
+它牺牲了一点进程数量和重复扫描成本，但换来更清楚的用户心智、更低的实现风险、更强的本地隔离边界。服务端继续保持按 `teamId` 的数据隔离；本地则通过 team profile 把 token、缓存、workspace、运行记录和 daemon 生命周期都绑定到团队。
 
 后续如果确实出现大量团队同时在线导致资源浪费，可以再演进为“一个 controller 管多个 team worker”的模型，但 worker 仍应保留团队级进程或沙箱边界，而不是把所有团队状态混进一个普通 daemon 进程里。

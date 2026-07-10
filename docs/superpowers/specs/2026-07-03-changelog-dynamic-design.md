@@ -2,11 +2,11 @@
 
 - **日期**：2026-07-03
 - **状态**：设计稿（待用户复审）
-- **关联页面**：`https://www.agentbean.dev/{networkPath}/settings` → 更新日志 Tab
+- **关联页面**：`https://www.agentbean.dev/{teamPath}/settings` → 更新日志 Tab
 
 ## 1. 背景
 
-设置页的"更新日志"目前只展示 `v0.1.0` 一条记录，且版本数据是硬编码在 JSX 字面量里的（`apps/web-next/app/[networkPath]/settings/page.tsx:643`）：
+设置页的"更新日志"目前只展示 `v0.1.0` 一条记录，且版本数据是硬编码在 JSX 字面量里的（`apps/web-next/app/[teamPath]/settings/page.tsx:643`）：
 
 ```tsx
 <ReleaseEntry version="v0.1.0" date="2026-05-05" notes={['初始版本，支持 Agent 管理、设备管理、聊天和任务看板。']} />
@@ -264,7 +264,7 @@ function ReleasesPanel() {
 4. 生成 `apps/web-next/lib/releases.generated.ts` 并提交。
 5. 重构 `ReleaseEntry` 为分类可视化，`ReleasesPanel` 改为 map `releases`。
 6. UI 冒烟测试。
-7. 删除 legacy `apps/web/app/[teamPath]/settings/page.tsx` 中对应硬编码（可选，若 legacy 仍在用则保持一致改动）。
+7. 不修改旧 Web 源码；Release A 起旧源码不再参与 build、deploy 或 publish，回退使用版本化 artifact。
 
 ## 9. 风险与回退
 

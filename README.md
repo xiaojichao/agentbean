@@ -9,7 +9,7 @@ AgentBean 是一个面向人类与 Agent 协作的本地优先团队平台。它
 - **AgentOS 托管型 Agent**：由 OpenClaw、Hermes 等 AgentOS / Gateway 托管，可以作为团队成员响应频道或私聊消息。
 - **自定义 Agent**：用户创建的专属 Agent，连接某台设备上的项目目录和本地工具，把个人工作流转化为团队可协作的能力。
 
-> **当前默认入口是 AgentBean Next**（`apps/*-next` + `packages/*`）。截至 2026-06-17 核对，生产 `https://api.agentbean.dev/` 已切换到 `server-next`，`AGENTBEAN_DEPLOY_TARGET=next` 已生效，npm canonical `@agentbean/daemon` 的 `@latest` dist-tag 已推进到基于 `daemon-next` 的 `0.2.0`。旧的 `apps/web`、`apps/server`、`apps/daemon` 仅作为 **legacy / rollback** 路径保留，不再是默认开发或生产入口（见文末「Legacy / Rollback」段落）。
+> **当前默认入口是 AgentBean Next**（`apps/*-next` + `packages/*`）。截至 2026-06-17 核对，生产 `https://api.agentbean.dev/` 已切换到 `server-next`，`AGENTBEAN_DEPLOY_TARGET=next` 已生效，npm canonical `@agentbean/daemon` 的 `@latest` dist-tag 已推进到基于 `daemon-next` 的 `0.2.0`。Phase -1 Release A 期间旧源码只作为限时回退参考保留，不再参与 build、deploy 或 publish；正式回退应优先使用 Git、Railway 与 npm 已发布 artifact（见文末「Legacy / Rollback」段落）。
 
 ## 仓库结构
 
@@ -20,11 +20,11 @@ AgentBean/
     domain/      纯领域逻辑：消息路由、Agent 身份规范化、可见性规则
   apps/
     server-next/  生产默认协作中枢（Express + Socket.IO + SQLite）
-    web-next/     生产 web 入口（preview shell，由 server-next 托管）
+    web-next/     生产 App Router Web，由 server-next 托管
     daemon-next/  设备守护进程（npm @agentbean/daemon-next，canonical @agentbean/daemon）
-    server/       [Legacy] 旧协作中枢，仅作 rollback
-    web/          [Legacy] 旧 Next.js 前端，仅作 rollback
-    daemon/       [Legacy] 旧守护进程
+    server/       [Legacy] 限时回退参考，不参与构建或部署
+    web/          [Legacy] 限时回退参考，不参与构建或部署
+    daemon/       [Legacy] 限时回退参考，不参与发布
   scripts/        readiness / cutover / smoke 检查与发布脚本
   agentbean-next/ 重写设计文档、slice 状态与验证矩阵
 ```
@@ -33,7 +33,7 @@ AgentBean/
 
 ```mermaid
 flowchart LR
-  U["人类用户"] --> W["apps/web-next<br/>Preview UI"]
+  U["人类用户"] --> W["apps/web-next<br/>App Router Web"]
   W <-->|"/web Socket.IO"| S["apps/server-next<br/>协作中枢"]
   W -->|"HTTP Artifact API"| S
 
@@ -259,27 +259,27 @@ AGENTBEAN_NEXT_ENTRY_URL=http://127.0.0.1:4100 npm run smoke:agentbean-next-busi
 GitHub Actions 会在 PR 和 push 到 `main` 时验证：
 
 - AgentBean Next：`packages/*` 与 `apps/*-next` 的 readiness、phase tests、build 与 preview / business / browser smoke gate。
-- 旧栈：`apps/web`、`apps/server`、`apps/daemon` 的 test / build（仅作 legacy 兼容验证，不作为默认入口）。
+- Phase -1 Release A 不再构建、测试、部署或发布旧源码树；回退依赖已发布 artifact 与版本化部署记录。
 
 合并到 `main` 且验证通过后：
 
 - 根据 `AGENTBEAN_NPM_PUBLISH_TARGET` 发布 npm 包（next 目标会发布 contracts / daemon-next / canonical daemon）。
-- 根据 `AGENTBEAN_DEPLOY_TARGET` 部署 server-next（next）或旧 server（old）到 Railway。
+- 部署 `server-next` 到 Railway；旧版本恢复使用 Railway deployment rollback 或 Git 固定提交重建。
 - 当 `AGENTBEAN_DEPLOY_TARGET=next` 时，部署后自动运行 AgentBean Next production smoke。
 
 生产切换、rollback 与外部条件检查的完整步骤见 `agentbean-next/docs/production-cutover-runbook.md`。
 
 ## Legacy / Rollback（旧 AgentBean）
 
-旧的 `apps/web`（Next.js 14）、`apps/server`（Express + Socket.IO）、`apps/daemon`（旧守护进程）**不再是默认开发或生产入口**，仅作为 rollback / 历史参考保留。旧栈仍是 CI 支持的显式 rollback deploy target（`AGENTBEAN_DEPLOY_TARGET=old`）。
+旧的 `apps/web`、`apps/server`、`apps/daemon` 在 Phase -1 Release A 期间只作为限时回退参考保留，**不再参与仓库 build、deploy 或 publish**。Release A 的可执行回退入口是 Git 固定提交、Railway 历史 deployment 与 npm registry 中已发布版本；Release B 会删除这些源码目录，使回退只依赖已发布 artifact。
 
-- 旧 web 页面（`/[team]/chat`、`/[team]/members`、`/[team]/devices`、`/[team]/settings`、`/[team]/tasks` 等）属于旧 Next.js 应用，已不在生产提供流量；生产 web 入口是 server-next 托管的 web-next preview。
+- 旧 web 页面已不在生产提供流量；生产 Web 入口是 `server-next` 托管的 `web-next` App Router。
 - npm 包名 `@agentbean/daemon` 已发布基于 daemon-next 的 `0.2.0`（canonical 入口，保留旧 `daemon` / `agentbean-daemon` bin），且 npm `@latest` dist-tag 已指向 `0.2.0`；旧守护进程 `0.1.35` 保留在 registry 的 `legacy` dist-tag 作为 rollback 入口。
-- 仅在 rollback 演练或验证旧服务可恢复时使用旧栈，并配合 rollback smoke：
+- 仅在 rollback 演练或事故恢复时使用已发布 artifact，并配合 rollback smoke：
 
 ```bash
 # 旧入口 rollback smoke（验证旧服务 health payload 可恢复）
 AGENTBEAN_OLD_ENTRY_URL=https://<old-entry> npm run smoke:agentbean-old-entry
 ```
 
-- 旧的 per-app 开发命令（`cd apps/server && npm run dev` 等）仅作 legacy 参考，默认开发请使用上文「本地开发」中的 AgentBean Next 命令。
+- 不要从 `main` 重新构建旧源码；默认开发只使用上文「本地开发」中的 AgentBean Next 命令。

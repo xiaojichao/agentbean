@@ -98,12 +98,16 @@ Tasks 第一版已经落地为 server-side task model。
 
 ### Admin Protocol
 
-当前实现有 admin events，但没有完整 admin product spec。
+当前 admin product surface 已进入 App Router dashboard、共享 contracts、server-next use case 与 browser smoke。
 
-决策：
+已确认：
 
-- 从初始重写中删除 admin protocol。
-- 只有具备 role、permission 与 audit requirements 后才重新引入。
+- Team 管理事件只使用 `admin:list-teams` 与 `admin:delete-team`。
+- User、Device、Agent 管理继续使用各自的 canonical admin events。
+- Admin Device projection 使用 `teamId/teamName`；Admin Agent projection 使用 `primaryTeamId/primaryTeamName/visibleTeamIds`。
+- 全局 admin 与 Team owner/admin 是不同权限边界。
+
+剩余缺口是 audit trail、批量删除/恢复与 metrics drilldown，不是恢复第二套空间协议。
 
 ## 数据模型缺口
 
@@ -309,7 +313,7 @@ Native directory selection 有用，但不是第一切片核心。
 
 剩余：
 
-- 浏览器 smoke 仍主要覆盖核心 chat/custom-agent、artifact 基础链路与 tasks 第一版；更完整 search、完整 task page、settings/member/device 等后续产品面需要随着切片补浏览器级证据。
+- 浏览器 smoke 已覆盖 chat、channels、tasks、runs、members、devices、settings、teams、agents 与 dashboard/admin 的核心业务流；后续按新增产品需求补 search、audit、异常接入演练与更深 diagnostics。
 - production browser smoke 与 post-flip 生产观察 baseline 已经有独立证据；后续 production logs、socket/API 错误与 rollback drill 仍属于运维观察，不等同于每次 PR 的本地/CI smoke。
 
 ### Acceptance Tests 需要优先级
@@ -339,4 +343,4 @@ Native directory selection 有用，但不是第一切片核心。
 - 旧 daemon client compatibility。
 - 现有本地 `.agentbean` data shape。
 - Legacy `standalone-cli`。
-- 没有 product spec 的 admin events。
+- 已移除的同义 admin Team events。
