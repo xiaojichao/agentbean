@@ -8,6 +8,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': root,
+      '@agentbean/contracts': path.resolve(root, '../../packages/contracts/src/index.ts'),
     },
   },
   test: {
