@@ -97,6 +97,13 @@ export function collectAgentBeanNextReadinessChecks({
       'AgentBean Next CI must run each package test suite through its canonical working directory and Vitest config',
     ),
     check(
+      'ci-builds-canonical-packages-before-browser-smoke',
+      workflow.includes('run: npm run build:packages') &&
+        workflow.indexOf('run: npm run build:packages') <
+          workflow.indexOf('npm run smoke:agentbean-next-browser -- --skip-build'),
+      'CI must create the production Web build through the canonical package build before the combined browser smoke starts',
+    ),
+    check(
       'ci-runs-production-readiness-before-next-deploy',
       workflow.includes("env.AGENTBEAN_DEPLOY_TARGET == 'next'") &&
         workflow.includes('npm run check:agentbean-next-readiness -- --production') &&
