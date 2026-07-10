@@ -809,6 +809,8 @@ agentbean device uninstall
 
 ### Phase -1：Team 术语切换
 
+- 独立实施计划：`docs/superpowers/plans/2026-07-10-agentbean-phase-minus-1-team-terminology.md`。
+- 独立验收矩阵：`agentbean-next/docs/phase-minus-1-team-terminology-verification-matrix.md`。
 - 文档、共享 contracts、Server/Web/Device 源码、路由参数、本地持久化键和测试统一使用 Team 术语。
 - Web 动态路由统一使用 `teamPath`，HTTP 资源统一使用 `/api/teams/:teamId/...`。
 - DTO 和内部标识统一使用 `teamId`、`primaryTeamId`、`visibleTeamIds` 和 `currentTeamId`。
