@@ -403,7 +403,7 @@ function ServerPanel() {
   const setCurrentTeamId = useAgentBeanStore((s) => s.setCurrentTeamId);
   const router = useRouter();
 
-  const [networkName, setNetworkName] = useState('');
+  const [teamName, setTeamName] = useState('');
   const [nameSaved, setNameSaved] = useState(true);
   const [onboardAgent, setOnboardAgent] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -427,7 +427,7 @@ function ServerPanel() {
 
   const displayedName = settingsTeam?.name ?? '当前团队';
   useEffect(() => {
-    setNetworkName(displayedName);
+    setTeamName(displayedName);
     setNameSaved(true);
   }, [settingsTeamId, displayedName]);
 
@@ -479,16 +479,16 @@ function ServerPanel() {
   };
 
   const handleNameChange = (v: string) => {
-    setNetworkName(v);
+    setTeamName(v);
     setNameSaved(v === displayedName);
     setNameMsg(null);
   };
 
   const handleSaveName = async () => {
-    if (nameSaved || !networkName.trim()) return;
+    if (nameSaved || !teamName.trim()) return;
     setNameSaving(true);
     setNameMsg(null);
-    const res = await teamEvents().update({ teamId: settingsTeamId ?? undefined, name: networkName.trim() });
+    const res = await teamEvents().update({ teamId: settingsTeamId ?? undefined, name: teamName.trim() });
     setNameSaving(false);
     if (res.ok) {
       setNameSaved(true);
@@ -498,7 +498,7 @@ function ServerPanel() {
     }
   };
 
-  const handleDeleteNetwork = async () => {
+  const handleDeleteTeam = async () => {
     if (!settingsTeam || deleteSaving) return;
     setDeleteSaving(true);
     setDeleteMsg('');
@@ -509,7 +509,7 @@ function ServerPanel() {
       return;
     }
     setShowDeleteConfirm(false);
-    const fallback = res.fallbackTeam ?? teams.find((network) => network.id !== settingsTeam.id) ?? null;
+    const fallback = res.fallbackTeam ?? teams.find((team) => team.id !== settingsTeam.id) ?? null;
     if (fallback) {
       setCurrentTeamId(fallback.id);
       router.replace(`/${fallback.path ?? 'default'}/settings`);
@@ -533,7 +533,7 @@ function ServerPanel() {
         <div className="space-y-3">
           <div>
             <label className="mb-1 block text-xs font-medium text-neutral-500">名称</label>
-          <input value={networkName} onChange={(e) => handleNameChange(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400" data-smoke="settings-team-name-input" />
+          <input value={teamName} onChange={(e) => handleNameChange(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400" data-smoke="settings-team-name-input" />
           </div>
           <button onClick={handleSaveName} disabled={nameSaved || nameSaving} className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white hover:bg-neutral-800 disabled:opacity-40" data-smoke="settings-team-name-save">
             {nameSaving ? '保存中...' : '保存资料'}
@@ -641,7 +641,7 @@ function ServerPanel() {
             <p className="mb-3 text-sm text-red-700">确定要删除团队 <strong>{settingsTeam?.name ?? '当前团队'}</strong> 吗？此操作不可撤销。</p>
             <div className="flex gap-2">
               <button onClick={() => setShowDeleteConfirm(false)} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50">取消</button>
-              <button onClick={handleDeleteNetwork} disabled={deleteSaving} className="rounded-md bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50" data-smoke="settings-team-delete-confirm">
+              <button onClick={handleDeleteTeam} disabled={deleteSaving} className="rounded-md bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50" data-smoke="settings-team-delete-confirm">
                 {deleteSaving ? '删除中...' : '确认删除'}
               </button>
             </div>

@@ -34,7 +34,7 @@ export default function AgentDetailPage() {
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : np;
   const routeTeam = teams.find((team) => team.path === routeTeamPath || team.id === routeTeamPath);
-  const agentTeamId = agent?.networkId ?? routeTeam?.id ?? currentTeamId;
+  const agentTeamId = agent?.primaryTeamId ?? routeTeam?.id ?? currentTeamId;
   const [workspaceRuns, setWorkspaceRuns] = useState<AgentWorkspaceRun[]>([]);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
 
@@ -215,7 +215,7 @@ export default function AgentDetailPage() {
         </div>
         <div>
           <dt className="text-neutral-500">团队</dt>
-          <dd>{teams.find((net) => net.id === agent.networkId)?.name ?? '默认团队'}</dd>
+          <dd>{agent.primaryTeamName ?? teams.find((team) => team.id === agent.primaryTeamId)?.name ?? '默认团队'}</dd>
         </div>
         {agent.source && (
           <div>

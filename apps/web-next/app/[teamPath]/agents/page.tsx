@@ -25,7 +25,7 @@ export default function AgentsPage() {
 
   const createInvite = async () => {
     setInviteError('');
-    const res = await authEvents().inviteCreate({ networkId: agentsTeamId, purpose: 'device' });
+    const res = await authEvents().inviteCreate({ teamId: agentsTeamId, purpose: 'device' });
     if (res.ok && res.invite?.command) {
       setInviteCommand(res.invite.command);
     } else {

@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { WEB_EVENTS, type AgentDto, type ChannelDto, type DeviceDto, type DispatchDto, type MessageDto, type RuntimeDto } from '../../../packages/contracts/src/index';
 import { createWebSocketClient, type WebSocketTransport } from '../src/index';
@@ -14,6 +15,32 @@ describe('web-next socket client', () => {
     expect(urls.every((url) => url.includes('/api/teams/team%201/artifacts/upload'))).toBe(true);
     expect(urls.some((url) => url.startsWith('/api/teams/'))).toBe(true);
     expect(urls.every((url) => !url.includes('/api/networks/'))).toBe(true);
+  });
+
+  test('removes the legacy artifact route and legacy network payload fields from UI flows', () => {
+    const appDir = join(process.cwd(), 'app');
+    expect(existsSync(join(appDir, 'api/teams/[teamId]/artifacts/upload/route.ts'))).toBe(true);
+    expect(existsSync(join(
+      appDir,
+      ['net', 'works'].join(''),
+      `[${['network', 'Id'].join('')}]`,
+      'artifacts/upload/route.ts',
+    ))).toBe(false);
+
+    for (const relativePath of [
+      '../components/add-agent-modal.tsx',
+      '../components/register-agent-modal.tsx',
+      '../components/new-channel-dialog.tsx',
+      '../app/[teamPath]/devices/page.tsx',
+      '../app/[teamPath]/agents/page.tsx',
+      '../app/[teamPath]/agents/[agentId]/page.tsx',
+      '../app/[teamPath]/dashboard/page.tsx',
+      '../app/[teamPath]/settings/page.tsx',
+    ]) {
+      const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+      expect(source, relativePath).not.toContain('networkId');
+      expect(source, relativePath).not.toContain('networkName');
+    }
   });
 
   test('uses first-slice web events for auth, team, and message commands', async () => {

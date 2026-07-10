@@ -48,9 +48,9 @@ function deviceOwnerName(device: { ownerId?: string | null; userId?: string | nu
   return (device.ownerName ?? device.userName ?? device.ownerId ?? device.userId ?? '').trim() || '未知用户';
 }
 
-function compareDevices(a: { id: string; name?: string | null; networkId?: string; teamId?: string; systemInfo?: { hostname?: string } | null }, b: { id: string; name?: string | null; networkId?: string; teamId?: string; systemInfo?: { hostname?: string } | null }): number {
+function compareDevices(a: { id: string; name?: string | null; teamId?: string; systemInfo?: { hostname?: string } | null }, b: { id: string; name?: string | null; teamId?: string; systemInfo?: { hostname?: string } | null }): number {
   return deviceDisplayName(a).localeCompare(deviceDisplayName(b), 'zh-CN', { sensitivity: 'base', numeric: true }) ||
-    (a.networkId ?? a.teamId ?? '').localeCompare(b.networkId ?? b.teamId ?? '', 'zh-CN', { sensitivity: 'base', numeric: true }) ||
+    (a.teamId ?? '').localeCompare(b.teamId ?? '', 'zh-CN', { sensitivity: 'base', numeric: true }) ||
     a.id.localeCompare(b.id);
 }
 
@@ -245,7 +245,7 @@ export default function DevicesPage() {
     deviceEvents().get({ id: routeDeviceId }).then((res) => {
       if (cancelled) return;
       if (res.ok && res.device) {
-        const responseTeamId = res.device.networkId ?? res.device.teamId;
+        const responseTeamId = res.device.teamId;
         if (!responseTeamId || responseTeamId === deviceTeamId) {
           upsertDevice(res.device);
           return;
@@ -550,7 +550,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const generateConnect = async () => {
     setGenError('');
     setInviteCommand('');
-    const res = await authEvents().inviteCreate({ networkId: currentTeamId ?? undefined, purpose: 'device' });
+    const res = await authEvents().inviteCreate({ teamId: currentTeamId ?? undefined, purpose: 'device' });
     if (res.ok && res.invite?.command) {
       const resolved = getResolvedServerUrl();
       const command = res.invite.command.replace(/--server-url\s+\S+/, `--server-url ${resolved}`);
@@ -819,7 +819,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
       {showAddCustom && (
         <AddCustomAgentDialog
           deviceId={device.id}
-          networkId={currentTeamId}
+          teamId={currentTeamId}
           daemonVersion={device.systemInfo?.daemonVersion ?? device.daemonVersionInfo?.current ?? null}
           runtimes={runtimeList}
           isLocal={isLocalDevice}
@@ -876,7 +876,7 @@ function AddDeviceDialog({ onClose, currentTeamId }: { onClose: () => void; curr
   const generateCommand = async () => {
     setLoading(true);
     setError('');
-    const res = await authEvents().inviteCreate({ networkId: currentTeamId ?? undefined, purpose: 'device' });
+    const res = await authEvents().inviteCreate({ teamId: currentTeamId ?? undefined, purpose: 'device' });
     setLoading(false);
     if (res.ok && res.invite?.command) {
       const resolved = getResolvedServerUrl();
@@ -1435,7 +1435,7 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
   );
 }
 
-function AddCustomAgentDialog({ deviceId, networkId, daemonVersion, runtimes, isLocal = true, onClose, onCreated }: { deviceId: string; networkId?: string | null; daemonVersion?: string | null; runtimes: any[]; isLocal?: boolean; onClose: () => void; onCreated: () => void }) {
+function AddCustomAgentDialog({ deviceId, teamId, daemonVersion, runtimes, isLocal = true, onClose, onCreated }: { deviceId: string; teamId?: string | null; daemonVersion?: string | null; runtimes: any[]; isLocal?: boolean; onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState('');
   const runtimeOptions = useMemo(() => buildRuntimeOptions(runtimes), [runtimes]);
   const [runtimeIndex, setRuntimeIndex] = useState('0');
@@ -1466,6 +1466,10 @@ function AddCustomAgentDialog({ deviceId, networkId, daemonVersion, runtimes, is
       setError('项目目录为必填项');
       return;
     }
+    if (!teamId) {
+      setError('当前团队未确定');
+      return;
+    }
     const env: Record<string, string> = {};
     for (const row of envRows) {
       const key = row.key.trim();
@@ -1485,7 +1489,7 @@ function AddCustomAgentDialog({ deviceId, networkId, daemonVersion, runtimes, is
       command: selectedRuntime.command,
       category: 'executor-hosted',
       deviceId,
-      networkId: networkId ?? undefined,
+      teamId,
       cwd: trimmedCwd,
       env: Object.keys(env).length > 0 ? env : undefined,
       description: description.trim() || undefined,

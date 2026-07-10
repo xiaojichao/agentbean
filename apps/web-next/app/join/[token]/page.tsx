@@ -15,7 +15,7 @@ export default function JoinPage() {
   const code = params.token as string;
 
   const [mode, setMode] = useState<Mode>('register');
-  const [networkName, setNetworkName] = useState<string | null>(null);
+  const [teamName, setTeamName] = useState<string | null>(null);
   const [validating, setValidating] = useState(true);
   const [validateError, setValidateError] = useState('');
 
@@ -41,7 +41,7 @@ export default function JoinPage() {
       socket.disconnect();
       setValidating(false);
       if (res.ok) {
-        setNetworkName(res.networkName ?? '团队');
+        setTeamName(res.teamName ?? '团队');
       } else {
         setValidateError(
           res.error === 'INVALID_CODE' ? '无效的邀请链接' :
@@ -187,7 +187,7 @@ export default function JoinPage() {
 
           <h1 className="text-2xl font-bold text-neutral-950">加入团队</h1>
           <p className="mt-2 text-sm text-neutral-600">
-            你已被邀请加入 <span className="font-medium text-neutral-950">{networkName}</span>。登录或注册账号即可加入。
+            你已被邀请加入 <span className="font-medium text-neutral-950">{teamName}</span>。登录或注册账号即可加入。
           </p>
 
           {/* Mode switcher */}
@@ -248,7 +248,7 @@ export default function JoinPage() {
           <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-2xl border border-neutral-200 bg-white shadow-sm">
             <Bot size={40} className="text-neutral-950" />
           </div>
-          <h2 className="text-xl font-semibold text-neutral-950">加入 {networkName}</h2>
+          <h2 className="text-xl font-semibold text-neutral-950">加入 {teamName}</h2>
           <p className="mt-3 text-sm leading-relaxed text-neutral-600">
             注册或登录后，你将自动加入此团队，开始与 Agent 协作。
           </p>

@@ -9,7 +9,7 @@ import { daemonVersionDisplay } from '@/lib/daemon-version';
 
 type Tab = 'teams' | 'users' | 'devices' | 'agents';
 
-interface AdminNetwork { id: string; ownerId: string; name: string; path: string | null; visibility: string; createdAt: number; members: { userId: string; role: string; username: string }[]; }
+interface AdminTeam { id: string; ownerId: string; name: string; path: string | null; visibility: string; createdAt: number; members: { userId: string; role: string; username: string }[]; }
 interface AdminUser { id: string; username: string; email: string | null; role: string; createdAt: number; }
 interface AdminDevice {
   id: string;
@@ -17,12 +17,12 @@ interface AdminDevice {
   status: string;
   agentCount: number;
   lastSeenAt: number;
-  networkId: string;
-  networkName?: string;
+  teamId: string;
+  teamName?: string;
   userId: string;
   userName: string;
   runtimes?: { name: string; adapterKind: string; command: string; installed: boolean }[];
-  publicAgents?: AdminAgent[];
+  agents?: AdminAgent[];
   connectCommand?: string | null;
   latestDaemonVersion?: string | null;
   daemonUpdateAvailable?: boolean;
@@ -52,8 +52,8 @@ interface AdminAgent {
   adapterKind: string;
   status: string;
   visibility?: string;
-  networkId?: string;
-  networkName?: string;
+  primaryTeamId: string;
+  primaryTeamName?: string;
   deviceId?: string;
   deviceName?: string;
   ownerId?: string | null;
@@ -68,7 +68,7 @@ interface AdminAgent {
   description?: string | null;
   lastSeenAt?: number;
   lastError?: string;
-  publishedNetworkIds?: string[];
+  visibleTeamIds: string[];
 }
 
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
@@ -89,7 +89,7 @@ export default function AdminDashboardPage() {
   const conn = useAgentBeanStore((s) => s.conn);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const [tab, setTab] = useState<Tab>('teams');
-  const [teams, setNetworks] = useState<AdminNetwork[]>([]);
+  const [teams, setTeams] = useState<AdminTeam[]>([]);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [devices, setDevices] = useState<AdminDevice[]>([]);
   const [agents, setAgents] = useState<AdminAgent[]>([]);
@@ -105,7 +105,7 @@ export default function AdminDashboardPage() {
     try {
       const res = await emitWithTimeout(socket, `admin:list-${t}`, {});
       if (res?.ok) {
-        if (t === 'teams') setNetworks(res.teams ?? []);
+        if (t === 'teams') setTeams(res.teams ?? []);
         if (t === 'users') setUsers(res.users ?? []);
         if (t === 'devices') {
           setDevices(res.devices ?? []);
@@ -186,7 +186,7 @@ export default function AdminDashboardPage() {
       {/* Content */}
       {loading && <div className="py-8 text-center text-sm text-neutral-400">加载中...</div>}
 
-      {!loading && tab === 'teams' && <NetworksTable teams={teams} onDelete={(id) => handleDelete('network', id)} />}
+      {!loading && tab === 'teams' && <TeamsTable teams={teams} onDelete={(id) => handleDelete('team', id)} />}
       {!loading && tab === 'users' && <UsersTable users={users} onDelete={(id) => handleDelete('user', id)} />}
       {!loading && tab === 'devices' && <DevicesTable devices={devices} teams={teams} onSelect={setSelectedDevice} />}
       {!loading && tab === 'agents' && <AgentsTable agents={agents} teams={teams} onSelect={setSelectedAgent} onDelete={(id) => handleDelete('agent', id)} />}
@@ -301,7 +301,7 @@ function DeleteButton({ onClick, disabled, label }: { onClick: () => void; disab
   );
 }
 
-function NetworksTable({ teams, onDelete }: { teams: AdminNetwork[]; onDelete: (id: string) => void }) {
+function TeamsTable({ teams, onDelete }: { teams: AdminTeam[]; onDelete: (id: string) => void }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   if (teams.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无团队</div>;
   return (
@@ -363,12 +363,12 @@ function UsersTable({ users, onDelete }: { users: AdminUser[]; onDelete: (id: st
   );
 }
 
-function DevicesTable({ devices, teams, onSelect }: { devices: AdminDevice[]; teams: AdminNetwork[]; onSelect: (device: AdminDevice) => void }) {
+function DevicesTable({ devices, teams, onSelect }: { devices: AdminDevice[]; teams: AdminTeam[]; onSelect: (device: AdminDevice) => void }) {
   if (devices.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无设备</div>;
   return (
     <Table headers={['设备名称', '所属用户', '状态', 'Agent 数', '团队', '最后心跳']}>
       {devices.map((d) => (
-        <tr key={d.id} className="hover:bg-neutral-50" data-smoke="admin-device-row" data-device-id={d.id} data-owner-id={d.userId} data-owner-name={d.userName} data-team-id={d.networkId}>
+        <tr key={d.id} className="hover:bg-neutral-50" data-smoke="admin-device-row" data-device-id={d.id} data-owner-id={d.userId} data-owner-name={d.userName} data-team-id={d.teamId}>
           <td className="px-4 py-2.5 text-sm">
             <button onClick={() => onSelect(d)} className="font-medium text-blue-600 hover:text-blue-700 hover:underline" data-smoke="admin-device-open" data-device-id={d.id}>
               {d.name || '未命名设备'}
@@ -377,7 +377,7 @@ function DevicesTable({ devices, teams, onSelect }: { devices: AdminDevice[]; te
           <td className="px-4 py-2.5 text-xs text-neutral-600">{d.userName ?? '未知用户'}</td>
           <td className="px-4 py-2.5"><StatusPill status={d.status} /></td>
           <td className="px-4 py-2.5">{d.agentCount}</td>
-          <td className="px-4 py-2.5 text-xs text-neutral-500">{d.networkName ?? teams.find((n) => n.id === d.networkId)?.name ?? '未知团队'}</td>
+          <td className="px-4 py-2.5 text-xs text-neutral-500">{d.teamName ?? teams.find((team) => team.id === d.teamId)?.name ?? '未知团队'}</td>
           <td className="px-4 py-2.5 text-xs text-neutral-500">{formatDateTime(d.lastSeenAt)}</td>
         </tr>
       ))}
@@ -385,12 +385,12 @@ function DevicesTable({ devices, teams, onSelect }: { devices: AdminDevice[]; te
   );
 }
 
-function AgentsTable({ agents, teams, onSelect, onDelete }: { agents: AdminAgent[]; teams: AdminNetwork[]; onSelect: (agent: AdminAgent) => void; onDelete: (id: string) => void }) {
+function AgentsTable({ agents, teams, onSelect, onDelete }: { agents: AdminAgent[]; teams: AdminTeam[]; onSelect: (agent: AdminAgent) => void; onDelete: (id: string) => void }) {
   if (agents.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无 Agent</div>;
   return (
     <Table headers={['名称', '所属设备', '所属用户', '适配器', '状态', '可见性', '团队', '']}>
       {agents.map((a) => (
-        <tr key={a.id} className="hover:bg-neutral-50" data-smoke="admin-agent-row" data-agent-id={a.id} data-owner-id={a.ownerId ?? ''} data-device-id={a.deviceId ?? ''} data-team-id={a.networkId ?? ''}>
+        <tr key={a.id} className="hover:bg-neutral-50" data-smoke="admin-agent-row" data-agent-id={a.id} data-owner-id={a.ownerId ?? ''} data-device-id={a.deviceId ?? ''} data-team-id={a.primaryTeamId}>
           <td className="px-4 py-2.5">
             <button onClick={() => onSelect(a)} className="font-medium text-blue-600 hover:text-blue-700 hover:underline" data-smoke="admin-agent-open" data-agent-id={a.id}>
               {a.name}
@@ -401,7 +401,7 @@ function AgentsTable({ agents, teams, onSelect, onDelete }: { agents: AdminAgent
           <td className="px-4 py-2.5 font-mono text-xs text-neutral-500">{a.adapterKind}</td>
           <td className="px-4 py-2.5"><StatusPill status={a.status} /></td>
           <td className="px-4 py-2.5"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${a.visibility === 'public' ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'}`}>{visibilityLabel(a.visibility)}</span></td>
-          <td className="px-4 py-2.5 text-xs text-neutral-500">{a.networkName ?? teams.find((n) => n.id === a.networkId)?.name ?? '默认团队'}</td>
+          <td className="px-4 py-2.5 text-xs text-neutral-500">{a.primaryTeamName ?? teams.find((team) => team.id === a.primaryTeamId)?.name ?? '默认团队'}</td>
           <td className="px-4 py-2.5"><DeleteButton onClick={() => onDelete(a.id)} label="Agent" /></td>
         </tr>
       ))}
@@ -424,7 +424,7 @@ function DeviceDetailDialog({
   const [savingOwner, setSavingOwner] = useState(false);
   const [ownerError, setOwnerError] = useState<string | null>(null);
   const runtimes = device.runtimes ?? [];
-  const publicAgents = device.publicAgents ?? [];
+  const publicAgents = device.agents ?? [];
   const ownerOptions = users.length > 0
     ? users
     : [{ id: device.userId, username: device.userName ?? '未知用户', email: null, role: 'user', createdAt: 0 }];
@@ -453,7 +453,7 @@ function DeviceDetailDialog({
         <div className="flex items-center justify-between rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
           <div>
             <div className="text-sm font-semibold text-neutral-900">{device.name || '未命名设备'}</div>
-            <div className="mt-0.5 text-xs text-neutral-500">{device.userName ?? '未知用户'} · {device.networkName ?? '未知团队'}</div>
+            <div className="mt-0.5 text-xs text-neutral-500">{device.userName ?? '未知用户'} · {device.teamName ?? '未知团队'}</div>
           </div>
           <StatusPill status={device.status} />
         </div>
@@ -463,7 +463,7 @@ function DeviceDetailDialog({
           <DetailGrid>
             <DetailItem label="设备名称" value={device.name || '未命名设备'} />
             <DetailItem label="所属用户" value={device.userName ?? '未知用户'} />
-            <DetailItem label="所属团队" value={device.networkName ?? '未知团队'} />
+            <DetailItem label="所属团队" value={device.teamName ?? '未知团队'} />
             <DetailItem label="最后心跳" value={formatDateTime(device.lastSeenAt)} />
             <DetailItem label="Agent 数量" value={`${device.agentCount}`} />
             <DetailItem label="Daemon 版本" value={<DaemonVersionValue device={device} />} />
@@ -548,7 +548,7 @@ function DeviceDetailDialog({
                     <StatusPill status={agent.status} />
                   </div>
                   <div className="mt-2 grid gap-2 text-[11px] text-neutral-500 sm:grid-cols-2">
-                    <div className="truncate">所属团队：{agent.networkName ?? '未知团队'}</div>
+                    <div className="truncate">所属团队：{agent.primaryTeamName ?? '未知团队'}</div>
                     <div className="truncate">所属用户：{agent.userName ?? agent.ownerName ?? agent.deviceUserName ?? '未知用户'}</div>
                     {agent.cwd && <div className="truncate sm:col-span-2">目录：<span className="font-mono">{agent.cwd}</span></div>}
                     {agent.description && <div className="line-clamp-2 sm:col-span-2">功能介绍：{agent.description}</div>}
@@ -589,10 +589,10 @@ function AgentDetailDialog({ agent, onClose }: { agent: AdminAgent; onClose: () 
             <DetailItem label="类型" value={agentTypeLabel(agent)} />
             <DetailItem label="所属设备" value={agent.deviceName ?? '未分配设备'} />
             <DetailItem label="所属用户" value={agent.userName ?? agent.ownerName ?? agent.deviceUserName ?? '未知用户'} />
-            <DetailItem label="所属团队" value={agent.networkName ?? '默认团队'} />
+            <DetailItem label="所属团队" value={agent.primaryTeamName ?? '默认团队'} />
             <DetailItem label="可见性" value={visibilityLabel(agent.visibility)} />
             <DetailItem label="最后在线" value={formatDateTime(agent.lastSeenAt)} />
-            <DetailItem label="发布团队数" value={`${agent.publishedNetworkIds?.length ?? 0}`} />
+            <DetailItem label="可见团队数" value={`${agent.visibleTeamIds.length}`} />
           </DetailGrid>
         </section>
 

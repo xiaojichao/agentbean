@@ -60,7 +60,7 @@ export default function DeviceLoginPage() {
         localStorage.setItem('agentbean.token', res.token);
         if (res.deviceId) setStoredDeviceId(res.deviceId);
         useAgentBeanStore.getState().setAuthToken(res.token);
-        useAgentBeanStore.getState().setCurrentTeamId(res.networkId ?? 'default');
+        useAgentBeanStore.getState().setCurrentTeamId(res.teamId ?? 'default');
         useAgentBeanStore.getState().setCurrentUser({
           id: res.userId!,
           username: res.username ?? username,

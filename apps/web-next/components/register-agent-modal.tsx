@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
-import { getWebSocket } from '@/lib/socket';
+import { agentEvents, deviceEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import type { DiscoveredAgent } from '@/lib/schema';
 
@@ -17,7 +17,7 @@ export function RegisterAgentModal({ open, onClose, discoveredAgent, mode = 'cre
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
-  const [networkId, setNetworkId] = useState(currentTeamId);
+  const [teamId, setTeamId] = useState(currentTeamId ?? 'default');
   const [visibility, setVisibility] = useState<'public' | 'private'>('private');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -26,7 +26,7 @@ export function RegisterAgentModal({ open, onClose, discoveredAgent, mode = 'cre
     if (discoveredAgent) {
       setName(discoveredAgent.name);
       setRole('');
-      setNetworkId(currentTeamId);
+      setTeamId(currentTeamId ?? 'default');
       setVisibility('private');
       setError('');
     }
@@ -34,7 +34,7 @@ export function RegisterAgentModal({ open, onClose, discoveredAgent, mode = 'cre
 
   if (!open || !discoveredAgent) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = name.trim();
     if (mode === 'create' && !trimmed) {
@@ -44,14 +44,10 @@ export function RegisterAgentModal({ open, onClose, discoveredAgent, mode = 'cre
     setSubmitting(true);
     setError('');
 
-    const socket = getWebSocket();
     const agentId = discoveredAgent.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
     if (mode === 'update') {
-      socket.emit(
-        'agent:update',
-        { id: agentId, visibility, networkId },
-        (res: { ok: boolean; error?: string }) => {
+      agentEvents().setVisibility(agentId, teamId, visibility === 'public').then((res) => {
           setSubmitting(false);
           if (res.ok) {
             onClose();
@@ -59,38 +55,47 @@ export function RegisterAgentModal({ open, onClose, discoveredAgent, mode = 'cre
           } else {
             setError(res.error ?? '更新失败');
           }
-        }
-      );
+        }).catch((error: unknown) => {
+          setSubmitting(false);
+          setError(error instanceof Error ? error.message : '更新失败');
+        });
       return;
     }
 
-    socket.emit(
-      'agent:create',
-      {
-        name: trimmed,
-        role: role.trim() || undefined,
-        adapterKind: discoveredAgent.adapterKind,
-        category: discoveredAgent.category,
-        networkId,
-        visibility,
-        command: discoveredAgent.command,
-        args: discoveredAgent.args,
-        cwd: discoveredAgent.cwd,
-      },
-      (res: { ok: boolean; error?: string; agent?: any }) => {
+    const devicesResult = await deviceEvents().list(teamId);
+    const device = devicesResult.ok
+      ? (devicesResult.devices ?? []).find((candidate) => candidate.status === 'online') ?? devicesResult.devices?.[0]
+      : undefined;
+    if (!device) {
+      setSubmitting(false);
+      setError(devicesResult.error ?? '未找到可注册的设备');
+      return;
+    }
+    agentEvents().create({
+      teamId,
+      name: trimmed,
+      adapterKind: discoveredAgent.adapterKind,
+      category: discoveredAgent.category,
+      command: discoveredAgent.command,
+      args: discoveredAgent.args,
+      cwd: discoveredAgent.cwd,
+      deviceId: device.id,
+    }).then((res) => {
         setSubmitting(false);
         if (res.ok) {
           setName('');
           setRole('');
-          setNetworkId(currentTeamId);
+          setTeamId(currentTeamId ?? 'default');
           setVisibility('private');
           onClose();
           alert('Agent 注册成功');
         } else {
           setError(res.error ?? '注册失败');
         }
-      }
-    );
+    }).catch((error: unknown) => {
+      setSubmitting(false);
+      setError(error instanceof Error ? error.message : '注册失败');
+    });
   };
 
   return (
@@ -148,8 +153,8 @@ export function RegisterAgentModal({ open, onClose, discoveredAgent, mode = 'cre
           <div>
             <label className="mb-1 block text-sm font-medium">团队</label>
             <select
-              value={networkId}
-              onChange={(e) => setNetworkId(e.target.value)}
+              value={teamId}
+              onChange={(e) => setTeamId(e.target.value)}
               className="w-full rounded border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none"
             >
               <option value="default">默认团队</option>

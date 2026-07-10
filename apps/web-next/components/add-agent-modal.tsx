@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
-import { getWebSocket } from '@/lib/socket';
+import { agentEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import type { AdapterKind, AgentCategory } from '@/lib/schema';
 
@@ -39,7 +39,7 @@ export function AddAgentModal({ open, onClose }: Props) {
   const [role, setRole] = useState('');
   const [adapterKind, setAdapterKind] = useState<AdapterKind | ''>('claude-code');
   const [category, setCategory] = useState<AgentCategory>('executor-hosted');
-  const [networkId, setNetworkId] = useState(currentTeamId);
+  const [teamId, setTeamId] = useState(currentTeamId ?? 'default');
   const [visibility, setVisibility] = useState<'public' | 'private'>('private');
   const [command, setCommand] = useState('');
   const [argsStr, setArgsStr] = useState('');
@@ -55,7 +55,7 @@ export function AddAgentModal({ open, onClose }: Props) {
       setArgsStr('');
       setCwd('');
       setOwnerId('');
-      setNetworkId(currentTeamId);
+      setTeamId(currentTeamId ?? 'default');
     }
   }, [open, currentTeamId]);
 
@@ -80,29 +80,22 @@ export function AddAgentModal({ open, onClose }: Props) {
 
     const parsedArgs = argsStr.trim().split(/\s+/).filter(Boolean);
     const effectiveAdapter = adapterKind || 'claude-code';
-    const socket = getWebSocket();
-    socket.emit(
-      'agent:create',
-      {
-        name: trimmed,
-        role: role.trim() || undefined,
-        adapterKind: effectiveAdapter,
-        category,
-        networkId,
-        visibility,
-        command: command.trim() || undefined,
-        args: parsedArgs.length > 0 ? parsedArgs : undefined,
-        cwd: cwd.trim() || undefined,
-        ownerId: ownerId.trim() || undefined,
-      },
-      (res: { ok: boolean; error?: string; agent?: any }) => {
+    agentEvents().create({
+      teamId,
+      name: trimmed,
+      adapterKind: effectiveAdapter,
+      category,
+      command: command.trim() || 'codex',
+      args: parsedArgs.length > 0 ? parsedArgs : undefined,
+      cwd: cwd.trim() || undefined,
+    }).then((res) => {
         setSubmitting(false);
         if (res.ok) {
           setName('');
           setRole('');
           setAdapterKind('claude-code');
           setCategory('executor-hosted');
-          setNetworkId(currentTeamId);
+          setTeamId(currentTeamId ?? 'default');
           setVisibility('private');
           setCommand('');
           setArgsStr('');
@@ -112,8 +105,10 @@ export function AddAgentModal({ open, onClose }: Props) {
         } else {
           setError(res.error ?? '创建失败');
         }
-      }
-    );
+    }).catch((error: unknown) => {
+      setSubmitting(false);
+      setError(error instanceof Error ? error.message : '创建失败');
+    });
   };
 
   return (
@@ -225,8 +220,8 @@ export function AddAgentModal({ open, onClose }: Props) {
           <div>
             <label className="mb-1 block text-sm font-medium">团队</label>
             <select
-              value={networkId}
-              onChange={(e) => setNetworkId(e.target.value)}
+              value={teamId}
+              onChange={(e) => setTeamId(e.target.value)}
               className="w-full rounded border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none"
             >
               <option value="default">默认团队</option>
