@@ -35,6 +35,7 @@ export interface DispatchCustomAgentDto {
 }
 
 export interface DispatchRequestDto {
+  claimRequired?: boolean;
   teamId: ID;
   channelId: ID;
   messageId: ID;

@@ -247,6 +247,14 @@ export interface MessageRepository {
 export interface DispatchRepository {
   create(input: DispatchRecord): Promise<DispatchRecord>;
   getById(id: ID): Promise<DispatchRecord | null>;
+  touchPending(input: { dispatchId: ID; updatedAt: UnixMs }): Promise<DispatchMutationResult | null>;
+  markAccepted(input: {
+    dispatchId: ID;
+    agentId: ID;
+    expectedUpdatedAt: UnixMs;
+    prompt: string;
+    acceptedAt: UnixMs;
+  }): Promise<DispatchMutationResult | null>;
   markSucceeded(input: { dispatchId: ID; completedAt: UnixMs }): Promise<DispatchMutationResult | null>;
   markTimedOut(input: { dispatchId: ID; error: string; completedAt: UnixMs }): Promise<DispatchMutationResult | null>;
   markFailed(input: { dispatchId: ID; error: string; completedAt: UnixMs }): Promise<DispatchMutationResult | null>;

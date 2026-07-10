@@ -957,6 +957,79 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('persists the dispatch quiet window and atomically accepts the coalesced prompt', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      let now = 1000;
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const app = createServerNextUseCases({
+        repositories,
+        clock: { now: () => now },
+        ids: {
+          nextId: createIds([
+            'user-1',
+            'team-1',
+            'channel-1',
+            'message-1',
+            'dispatch-1',
+            'request-1',
+            'message-2',
+            'message-3',
+          ]),
+        },
+      });
+      await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+      await repositories.agents.upsert({
+        id: 'agent-1',
+        primaryTeamId: 'team-1',
+        visibleTeamIds: ['team-1'],
+        name: 'Codex',
+        adapterKind: 'codex',
+        category: 'agentos-hosted',
+        source: 'scanned',
+        status: 'online',
+        lastSeenAt: now,
+      });
+      await expect(app.sendMessage({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        body: '@Codex first',
+      })).resolves.toMatchObject({ ok: true, dispatches: [{ id: 'dispatch-1' }] });
+      now = 2000;
+      await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'second' });
+      now = 3000;
+      await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'third' });
+
+      now = 7000;
+      await expect(app.acceptDispatch({
+        dispatchId: 'dispatch-1',
+        agentId: 'agent-1',
+        quietWindowMs: 5000,
+      })).resolves.toEqual({ ok: true, ready: false, retryAfterMs: 1000 });
+      now = 8000;
+      await expect(app.acceptDispatch({
+        dispatchId: 'dispatch-1',
+        agentId: 'agent-1',
+        quietWindowMs: 5000,
+      })).resolves.toMatchObject({
+        ok: true,
+        ready: true,
+        dispatch: { id: 'dispatch-1', status: 'accepted', acceptedAt: 8000 },
+        request: { prompt: '@Codex first\n\nsecond\n\nthird' },
+      });
+      expect(teamDb.prepare(
+        'SELECT status, prompt, accepted_at AS acceptedAt FROM dispatches WHERE id = ?',
+      ).get('dispatch-1')).toEqual({
+        status: 'accepted',
+        prompt: '@Codex first\n\nsecond\n\nthird',
+        acceptedAt: 8000,
+      });
+    } finally {
+      close();
+    }
+  });
+
   test('reconciles device hello, replaces runtimes, and dedupes discovered agents', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {

@@ -32,7 +32,7 @@ describe('daemon-next protocol client', () => {
     await client.start();
 
     expect(socket.emitted).toEqual([
-      [AGENT_EVENTS.device.hello, { teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' }],
+      [AGENT_EVENTS.device.hello, { teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default', protocolCapabilities: { dispatchClaim: true } }],
       [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-1', runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }] }],
       [AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-1', agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }] }],
     ]);
@@ -53,6 +53,101 @@ describe('daemon-next protocol client', () => {
         { dispatchId: 'dispatch-1', agentId: 'agent-1', body: 'stub:hello' },
       ]);
     });
+  });
+
+  test('retries a claim-required wake and executes only the accepted request snapshot', async () => {
+    const socket = new FakeAgentSocket();
+    socket.dispatchAcceptedAcks.push(
+      { ok: true, ready: false, retryAfterMs: 250 },
+      {
+        ok: true,
+        ready: true,
+        dispatch: { id: 'dispatch-1', status: 'accepted' },
+        request: {
+          id: 'dispatch-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          messageId: 'message-1',
+          agentId: 'agent-1',
+          requestId: 'request-1',
+          prompt: 'first\n\nsecond\n\nthird',
+        },
+      },
+    );
+    const executor = vi.fn<StubExecutor>(async (request) => `stub:${request.prompt}`);
+    const sleep = vi.fn(async () => undefined);
+    const client = createDaemonProtocolClient({
+      socket,
+      executor,
+      sleep,
+      device: { teamId: 'team-1', ownerId: 'user-1' },
+      runtimes: [],
+      agents: [],
+    });
+
+    await client.start();
+    await socket.trigger(AGENT_EVENTS.dispatch.request, {
+      id: 'dispatch-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'wake-only',
+      claimRequired: true,
+    });
+
+    expect(sleep).toHaveBeenCalledWith(250);
+    expect(executor).toHaveBeenCalledTimes(1);
+    expect(executor).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'dispatch-1',
+      prompt: 'first\n\nsecond\n\nthird',
+    }));
+    expect(socket.emitted.filter(([event]) => event === AGENT_EVENTS.dispatch.accepted)).toEqual([
+      [AGENT_EVENTS.dispatch.accepted, { dispatchId: 'dispatch-1', agentId: 'agent-1' }],
+      [AGENT_EVENTS.dispatch.accepted, { dispatchId: 'dispatch-1', agentId: 'agent-1' }],
+    ]);
+    expect(socket.emitted.at(-1)).toEqual([
+      AGENT_EVENTS.dispatch.result,
+      { dispatchId: 'dispatch-1', agentId: 'agent-1', body: 'stub:first\n\nsecond\n\nthird' },
+    ]);
+  });
+
+  test('stops claim retries when the dispatch is cancelled during the quiet window', async () => {
+    const socket = new FakeAgentSocket();
+    socket.dispatchAcceptedAcks.push({ ok: true, ready: false, retryAfterMs: 250 });
+    const executor = vi.fn<StubExecutor>(async () => 'should not run');
+    const client = createDaemonProtocolClient({
+      socket,
+      executor,
+      sleep: async () => {
+        await socket.trigger(AGENT_EVENTS.dispatch.cancel, {
+          dispatchId: 'dispatch-1',
+          agentId: 'agent-1',
+        });
+      },
+      device: { teamId: 'team-1', ownerId: 'user-1' },
+      runtimes: [],
+      agents: [],
+    });
+
+    await client.start();
+    await socket.trigger(AGENT_EVENTS.dispatch.request, {
+      id: 'dispatch-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'wake-only',
+      claimRequired: true,
+    });
+
+    expect(executor).not.toHaveBeenCalled();
+    expect(socket.emitted.filter(([event]) => event === AGENT_EVENTS.dispatch.accepted)).toHaveLength(1);
+    expect(socket.emitted.some(([event]) =>
+      event === AGENT_EVENTS.dispatch.result || event === AGENT_EVENTS.dispatch.error
+    )).toBe(false);
   });
 
   test('forwards structured executor workspace run metadata with dispatch results', async () => {
@@ -148,10 +243,10 @@ describe('daemon-next protocol client', () => {
     await socket.triggerReconnect();
 
     expect(socket.emitted).toEqual([
-      [AGENT_EVENTS.device.hello, { teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' }],
+      [AGENT_EVENTS.device.hello, { teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default', protocolCapabilities: { dispatchClaim: true } }],
       [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-1', runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }] }],
       [AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-1', agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }] }],
-      [AGENT_EVENTS.device.hello, { teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' }],
+      [AGENT_EVENTS.device.hello, { teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default', protocolCapabilities: { dispatchClaim: true } }],
       [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-2', runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }] }],
       [AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-2', agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }] }],
     ]);
@@ -324,6 +419,7 @@ describe('daemon-next protocol client', () => {
         machineId: 'machine-1',
         profileId: 'default',
         token: 'stale-invite-token',
+        protocolCapabilities: { dispatchClaim: true },
       },
       {
         teamId: 'team-1',
@@ -331,6 +427,7 @@ describe('daemon-next protocol client', () => {
         machineId: 'machine-1',
         profileId: 'default',
         token: 'fresh-token-1',
+        protocolCapabilities: { dispatchClaim: true },
       },
     ]);
     expect(socket.emitted.slice(-2)).toEqual([
@@ -410,7 +507,7 @@ describe('daemon-next protocol client', () => {
     // the explicit request targets another device, so it is ignored.
     expect(scanCount).toBe(1);
     expect(socket.emitted).toEqual([
-      [AGENT_EVENTS.device.hello, { teamId: 'team-1', ownerId: 'user-1' }],
+      [AGENT_EVENTS.device.hello, { teamId: 'team-1', ownerId: 'user-1', protocolCapabilities: { dispatchClaim: true } }],
       [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-1', runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }] }],
       [AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-1', agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }] }],
       [AGENT_EVENTS.device.runtimes, { teamId: 'team-1', deviceId: 'device-1', runtimes: [] }],
@@ -746,6 +843,7 @@ class FakeAgentSocket implements DaemonProtocolSocket {
   readonly emitted: Array<[string, unknown]> = [];
   readonly helloPayloads: unknown[] = [];
   readonly helloAcks: unknown[] = [];
+  readonly dispatchAcceptedAcks: unknown[] = [];
   private readonly handlers = new Map<string, (payload: unknown, ack?: (result: unknown) => void) => Promise<void>>();
   private reconnectHandler: (() => Promise<void>) | undefined;
   private deviceCounter = 0;
@@ -762,6 +860,9 @@ class FakeAgentSocket implements DaemonProtocolSocket {
       }
       this.deviceCounter += 1;
       return { ok: true, device: { id: `device-${this.deviceCounter}` } };
+    }
+    if (event === AGENT_EVENTS.dispatch.accepted) {
+      return this.dispatchAcceptedAcks.shift() ?? { ok: false, error: 'NO_CLAIM_ACK' };
     }
     return { ok: true };
   }

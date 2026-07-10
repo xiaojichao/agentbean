@@ -81,6 +81,7 @@ export interface DeviceScanEmitRequest {
 export interface WebSocketHandlerOptions {
   authenticatedUser?: AuthenticatedUserProvider;
   dispatch?(request: DispatchRequestDto & { id: string }): void;
+  shouldUseDispatchClaim?(request: DispatchRequestDto & { id: string }): boolean;
   dispatchRequestCoalesceMs?: number;
   dispatchCancel?(request: DispatchRequestDto & { id: string }): void;
   dispatchStatus?(dispatch: unknown): void;
@@ -107,6 +108,8 @@ export interface AgentSocketHandlerOptions {
   // hello 成功后首推 scanRequested（带 customAgents）给该 device，触发 daemon 扫 custom skills。
   // 复用 web 端 requestDeviceScan 的下发通道（按 deviceId emit 到对应 device socket）。
   deviceScan?(request: DeviceScanEmitRequest): void;
+  dispatchClaimQuietMs?: number;
+  connectedDeviceId?(): string | undefined;
 }
 
 export function registerWebSocketHandlers(
@@ -131,6 +134,12 @@ export function registerWebSocketHandlers(
     pendingDispatchRequests.set(dispatch.id, pending);
     resetPendingDispatchRequestTimer(pendingDispatchRequests, pending, dispatchRequestCoalesceMs, () => {
       requestDispatchEmission(app, options, dispatch.id);
+    });
+    void emitDispatchClaimWakeIfSupported(app, options, pendingDispatchRequests, pending).catch((error) => {
+      console.error(
+        '[server-next] dispatch claim wake emission failed:',
+        error instanceof Error ? error.stack ?? error.message : error,
+      );
     });
   };
   const extendPendingDispatchRequests = (message: SendMessageAckMessage) => {
@@ -514,6 +523,17 @@ export function registerAgentSocketHandlers(
   };
   bind(socket, AGENT_EVENTS.agent.registerBatch, app, 'registerDiscoveredAgents', afterAgentMutation);
   bind(socket, AGENT_EVENTS.agent.reportCustomSkills, app, 'reportCustomSkills', afterAgentMutation);
+  bind(socket, AGENT_EVENTS.dispatch.accepted, app, 'acceptDispatch', undefined, {
+    augmentInput(payload) {
+      const base = payload && typeof payload === 'object' ? payload : {};
+      const deviceId = options.connectedDeviceId?.();
+      return {
+        ...base,
+        quietWindowMs: Math.max(0, options.dispatchClaimQuietMs ?? 0),
+        ...(deviceId ? { deviceId } : {}),
+      };
+    },
+  });
   bind(socket, AGENT_EVENTS.dispatch.result, app, 'receiveDispatchResult', afterDispatchCompletion);
   bind(socket, AGENT_EVENTS.dispatch.error, app, 'receiveDispatchError', afterDispatchCompletion);
 }
@@ -744,6 +764,27 @@ async function emitDispatchRequest(
   if (request.ok) {
     options.dispatch(request.request);
   }
+}
+
+async function emitDispatchClaimWakeIfSupported(
+  app: ServerNextUseCases,
+  options: Pick<WebSocketHandlerOptions, 'dispatch' | 'shouldUseDispatchClaim'>,
+  pendingDispatchRequests: Map<string, PendingDispatchRequest>,
+  pending: PendingDispatchRequest,
+): Promise<void> {
+  if (!options.dispatch || !options.shouldUseDispatchClaim) {
+    return;
+  }
+  const result = await app.getDispatchRequest({ dispatchId: pending.dispatchId });
+  if (!result.ok || !options.shouldUseDispatchClaim(result.request)) {
+    return;
+  }
+  if (pendingDispatchRequests.get(pending.dispatchId) !== pending) {
+    return;
+  }
+  clearTimeout(pending.timer);
+  pendingDispatchRequests.delete(pending.dispatchId);
+  options.dispatch({ ...result.request, claimRequired: true });
 }
 
 function requestDispatchEmission(
