@@ -504,7 +504,9 @@ export interface AcceptanceCriterion {
 export interface EvidenceRef {
   kind: 'message' | 'artifact' | 'workspace-run' | 'invocation' | 'task';
   id: string;
-  sha256?: string;
+  snapshotHash: string;
+  snapshotRevision?: number;
+  capturedAt: number;
 }
 
 export interface SubtaskDelivery {
@@ -564,7 +566,7 @@ export interface SubtaskAcceptance {
 7. PI Manager 提交 `SubtaskAcceptance`；Server 以 optimistic revision check 校验 `expectedTaskRevision` 等于当前 `in_review` revision，并校验 delivery、Task attempt、claim lease、Invocation 归属以及所有必需 criterion 和 evidence reference。
 8. 只有 Server 校验通过的 `accepted` 决定可以让子任务进入 `done`；不接受则重开或创建补充任务。
 
-任何来自旧 revision、旧 Task attempt、非当前 claim lease 或非当前 delivery 的 acceptance 都返回 conflict，不能覆盖新交付。Server 逐条验证 EvidenceRef 存在、归属于该 Team/Task/Invocation、内容 hash 未变化且对验收者可见。高风险操作、冲突结果、缺少必需证据、来源不可见或需要主观取舍时，PI 只能提交 `needs_human`。Server 将根任务保持 `in_review` 或把 ManagementRun 转为 `waiting_for_user`，不得把子任务直接置为 `done`。每次验收决定都写入 typed Management Event，记录 criteria 结果、证据引用和原因。
+任何来自旧 revision、旧 Task attempt、非当前 claim lease 或非当前 delivery 的 acceptance 都返回 conflict，不能覆盖新交付。外部 Agent 提交 evidence locator 后，Server 在 delivery 事务中解析来源、生成 canonical snapshot、计算必填 `snapshotHash` 并持久化 `EvidenceRef`；客户端提供的 digest 不作为信任依据。来源无法解析、无法稳定快照或必需 evidence 缺少 hash 时 fail closed。验收时 Server 逐条验证 EvidenceRef 存在、归属于该 Team/Task/Invocation、当前 snapshot 与提交基线一致且对验收者可见。高风险操作、冲突结果、缺少必需证据、来源不可见或需要主观取舍时，PI 只能提交 `needs_human`。Server 将根任务保持 `in_review` 或把 ManagementRun 转为 `waiting_for_user`，不得把子任务直接置为 `done`。每次验收决定都写入 typed Management Event，记录 criteria 结果、证据引用和原因。
 
 定向调用流程仍创建 Task Node 和 Agent Invocation，只是 `claimPolicy = targeted`，由指定 Agent 直接获得 lease。
 
@@ -1129,6 +1131,7 @@ agentbean device uninstall
 - capability negotiation 和 adapter 降级。
 - Management Event discriminated union、schema version、payload 禁止字段和 idempotency conflict。
 - Subtask Delivery、Acceptance、criteria result 与 evidence refs。
+- Server 生成必填 evidence snapshot hash；缺少、漂移或不可稳定快照的必需证据 fail closed。
 - Immutable Invocation intent snapshot、intent hash conflict 与 schema version。
 
 ### 22.2 Domain

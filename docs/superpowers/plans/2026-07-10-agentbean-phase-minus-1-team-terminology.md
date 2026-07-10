@@ -1116,7 +1116,7 @@ Expected: exit 0。
 - [ ] **Step 7: Commit**
 
 ```bash
-git add .github package.json railway.json scripts README.md agentbean-next/docs apps
+git add .github package.json package-lock.json railway.json scripts README.md agentbean-next/docs apps
 git commit -m "避免 main 继续维护已退出生产的平行产品模型" \
   -m "退役 legacy source trees，并把回滚固定到 Git、Railway 和 npm 已发布 artifact，消除主线双模型。" \
   -m "Constraint: 只有在 Next cutover、production smoke 和 npm legacy dist-tag 均确认后执行" \
@@ -1145,8 +1145,8 @@ git commit -m "避免 main 继续维护已退出生产的平行产品模型" \
 - Modify: `docs/superpowers/specs/2026-07-10-agentbean-pi-management-agent-design.md`
 
 **Interfaces:**
-- Consumes: Tasks 1-7 的最终 event、DTO、route、schema 和 Release A truth；Task 8 在 Release B 进一步收口 rollback 文档。
-- Produces: 活动文档只描述 Team product contract；Phase -1 验收矩阵记录真实证据。
+- Consumes: Tasks 1-7 已实现并通过本地验证的 event、DTO、route 和 schema 事实；Task 8 在 Release B 进一步收口 rollback 文档。
+- Produces: 活动文档只描述 Team product contract；Phase -1 验收矩阵先记录可复现本地证据，Release A production evidence 由 Task 11 Step 2 发布后补录。
 
 - [ ] **Step 1: 删除已被当前 PRD 取代的三份旧设计**
 
@@ -1423,6 +1423,7 @@ git commit -m "防止旧空间模型重新进入 AgentBean 主线" \
 **Files:**
 - Modify: `apps/web-next/lib/team-path.ts`
 - Modify: `apps/web-next/tests/team-path.test.ts`
+- Modify: `apps/web-next/next.config.mjs`
 - Modify: `scripts/check-team-terminology.mjs`
 - Modify: `agentbean-next/docs/phase-minus-1-team-terminology-verification-matrix.md`
 - Modify: `agentbean-next/docs/production-cutover-runbook.md`
@@ -1529,27 +1530,43 @@ export function writeStoredTeamPath(storage: StorageLike, teamPath: string): voi
 
 删除 `next.config.mjs` 的旧 Team 页面 redirect，并删除 checker 对 `team-path.ts`、`team-path.test.ts` 和 `next.config.mjs` 的 allowlist；重新运行 `npm run check:team-terminology` 必须零结果。
 
-- [ ] **Step 6: 运行 Release B 完整验证并发布**
+- [ ] **Step 6: 运行 Release B 完整本地验证**
 
 重复 Task 11 Step 1 的全部命令。
 
-Expected: 全绿；browser smoke 只写新键；活动源码、schema、tests 和活动文档零匹配。
+Expected: 全绿；browser smoke 只写新键；活动源码、schema、tests 和活动文档零匹配。此时验收矩阵最多标记 `Green local`，不能填写尚未发生的 merge、CI 或 production evidence。
 
-- [ ] **Step 7: 更新验收矩阵为 Green 并记录 production evidence**
-
-对 `P-1-01` 至 `P-1-16` 写入：commit SHA、CI run URL、production deploy、browser smoke、DB backup/upgrade 校验和 npm dist-tag 查询证据。没有证据的行保持未完成，不能把 Phase -1 标记 Green。
-
-- [ ] **Step 8: Commit Release B cleanup**
+- [ ] **Step 7: Commit、review 并合并 Release B cleanup**
 
 ```bash
-git add apps/web-next/lib/team-path.ts apps/web-next/tests/team-path.test.ts scripts/check-team-terminology.mjs agentbean-next/docs/phase-minus-1-team-terminology-verification-matrix.md agentbean-next/docs/production-cutover-runbook.md
+git add apps/web-next/lib/team-path.ts apps/web-next/tests/team-path.test.ts apps/web-next/next.config.mjs scripts/check-team-terminology.mjs agentbean-next/docs/phase-minus-1-team-terminology-verification-matrix.md agentbean-next/docs/production-cutover-runbook.md
 git commit -m "结束 Team path 的一次性浏览器迁移窗口" \
   -m "观察窗口完成后删除旧键读取和 checker allowlist，使 Phase -1 最终状态不再保留兼容入口。" \
   -m "Constraint: Release A 已稳定运行 7 天" \
   -m "Confidence: high" \
   -m "Scope-risk: narrow" \
-  -m "Tested: full Phase -1 verification matrix and production smoke"
+  -m "Tested: full Phase -1 local verification matrix"
 ```
+
+Task 8 的 legacy retirement commit 与本 cleanup commit 必须进入同一个 Release B PR。通过 review 和 PR checks 后合并到 `main`；尚未合并时不得声称已经发布。
+
+- [ ] **Step 8: 发布 Release B、验证生产并用 verification-only PR 收口证据**
+
+Release B PR 合并后等待对应 `main` CI、Deploy production、Publish agent to npm 和 production smoke 完成，再验证 Team、Device、Artifact、revocation、browser storage 和 redirect 真实行为。
+
+随后从最新 `main` 创建 verification-only closeout branch，对 `P-1-01` 至 `P-1-16` 写入实际 merge commit SHA、CI run URL、production deploy、browser smoke、DB backup/upgrade 校验和 npm dist-tag 查询证据。没有证据的行保持未完成，不能把 Phase -1 标记 Green。
+
+```bash
+git add agentbean-next/docs/phase-minus-1-team-terminology-verification-matrix.md agentbean-next/docs/production-cutover-runbook.md
+git commit -m "让 Phase -1 完成状态只由生产证据决定" \
+  -m "Release B 上线后补录 merge、CI、deployment、backup、npm 和真实业务 smoke 证据，避免在发布前预填 Green。" \
+  -m "Constraint: 证据必须来自已合并的 main commit" \
+  -m "Confidence: high" \
+  -m "Scope-risk: narrow" \
+  -m "Tested: production Team/Device/Artifact/revocation smoke and evidence link verification"
+```
+
+verification-only PR 合并且矩阵全部为 `Green production` 后，Phase -1 才完成。
 
 ---
 
