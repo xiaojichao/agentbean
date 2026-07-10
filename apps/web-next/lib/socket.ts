@@ -15,16 +15,6 @@ const DEVICE_ID_STORAGE_KEY = 'agentbean.deviceId';
 let webSocket: Socket | null = null;
 const webToken = process.env.NEXT_PUBLIC_AGENT_BEAN_WEB_TOKEN ?? process.env.NEXT_PUBLIC_AGENT_BEAN_AGENT_TOKEN ?? '';
 
-function normalizeAgentSnapshot(agent: AgentSnapshot): AgentSnapshot {
-  const networkId = agent.networkId ?? agent.primaryTeamId;
-  const publishedNetworkIds = agent.publishedNetworkIds ?? agent.visibleTeamIds;
-  return {
-    ...agent,
-    ...(networkId ? { networkId } : {}),
-    ...(publishedNetworkIds ? { publishedNetworkIds } : {}),
-  };
-}
-
 function getStoredToken(): string {
   if (typeof window === 'undefined') return webToken;
   return window.localStorage.getItem(TOKEN_STORAGE_KEY) ?? webToken;
@@ -63,16 +53,16 @@ export function authedApiUrl(path: string): string {
   return `${getServerUrl()}${path}${sep}token=${encodeURIComponent(getStoredAuthToken())}`;
 }
 
-export function artifactUploadUrl(networkId: string): string {
-  return buildArtifactUploadUrl(getServerUrl(), networkId, getStoredAuthToken());
+export function artifactUploadUrl(teamId: string): string {
+  return buildArtifactUploadUrl(getServerUrl(), teamId, getStoredAuthToken());
 }
 
-export function artifactUploadProxyUrl(networkId: string): string {
-  return buildArtifactUploadProxyUrl(networkId, getStoredAuthToken());
+export function artifactUploadProxyUrl(teamId: string): string {
+  return buildArtifactUploadProxyUrl(teamId, getStoredAuthToken());
 }
 
-export function artifactUploadFallbackUrls(networkId: string): string[] {
-  return buildArtifactUploadFallbackUrls(getServerUrl(), networkId, getStoredAuthToken());
+export function artifactUploadFallbackUrls(teamId: string): string[] {
+  return buildArtifactUploadFallbackUrls(getServerUrl(), teamId, getStoredAuthToken());
 }
 
 function cloneFormData(form: FormData): FormData {
@@ -83,9 +73,9 @@ function cloneFormData(form: FormData): FormData {
   return cloned;
 }
 
-export async function uploadArtifact(networkId: string, form: FormData): Promise<Artifact> {
+export async function uploadArtifact(teamId: string, form: FormData): Promise<Artifact> {
   let lastError: Error | null = null;
-  for (const url of artifactUploadFallbackUrls(networkId)) {
+  for (const url of artifactUploadFallbackUrls(teamId)) {
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -105,9 +95,9 @@ export async function uploadArtifact(networkId: string, form: FormData): Promise
   throw lastError ?? new Error('Failed to upload artifact');
 }
 
-export async function fetchAgentWorkspace(networkId: string, agentId: string): Promise<{ ok: boolean; runs?: AgentWorkspaceRun[]; error?: string }> {
+export async function fetchAgentWorkspace(teamId: string, agentId: string): Promise<{ ok: boolean; runs?: AgentWorkspaceRun[]; error?: string }> {
   try {
-    const res = await fetch(authedApiUrl(`/api/teams/${encodeURIComponent(networkId)}/agents/${encodeURIComponent(agentId)}/workspace`));
+    const res = await fetch(authedApiUrl(`/api/teams/${encodeURIComponent(teamId)}/agents/${encodeURIComponent(agentId)}/workspace`));
     if (!res.ok) return { ok: false, error: await res.text() };
     return await res.json();
   } catch (err) {
@@ -213,7 +203,7 @@ export interface AgentEvents {
   // 设置 Agent 对指定团队的可见性（替代旧的 publish/unpublish，由后端统一收敛到 visibleTeamIds）
   setVisibility(agentId: string, teamId: string, visible: boolean): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
   delete(agentId: string, teamId?: string): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
-  create(payload: { name: string; adapterKind: string; command: string; args?: string[]; category?: string; cwd?: string; env?: Record<string, string>; description?: string; deviceId?: string; networkId?: string }): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
+  create(payload: { teamId: string; name: string; adapterKind: string; command: string; args?: string[]; category?: string; cwd?: string; env?: Record<string, string>; description?: string; deviceId?: string }): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
   updateConfig(payload: { id: string; teamId?: string; name: string; adapterKind?: string; command?: string; cwd?: string | null; description?: string | null }): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
   subscribe(teamId: string): void;
 }
@@ -236,12 +226,12 @@ export function emitWithTimeout(socket: Socket, event: string, payload: any, tim
 export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
   return {
     onSnapshot(handler) {
-      const wrapped = (snap: AgentSnapshot[]) => handler(snap.map(normalizeAgentSnapshot));
+      const wrapped = (snap: AgentSnapshot[]) => handler(snap);
       socket.on(WEB_EVENTS.agent.snapshot, wrapped);
       return () => { socket.off(WEB_EVENTS.agent.snapshot, wrapped); };
     },
     onStatus(handler) {
-      const wrapped = (snap: AgentSnapshot) => handler(normalizeAgentSnapshot(snap));
+      const wrapped = (snap: AgentSnapshot) => handler(snap);
       socket.on(WEB_EVENTS.agent.status, wrapped);
       return () => { socket.off(WEB_EVENTS.agent.status, wrapped); };
     },
@@ -253,21 +243,17 @@ export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
       return emitWithTimeout(socket, WEB_EVENTS.agent.metrics, { teamId });
     },
     subscribe(teamId) { socket.emit(WEB_EVENTS.agent.subscribe, { teamId }); },
-    create({ networkId, ...rest }) {
-      return emitWithTimeout(socket, WEB_EVENTS.agent.create, { teamId: networkId, ...rest })
-        .then((res) => res?.agent ? { ...res, agent: normalizeAgentSnapshot(res.agent) } : res);
+    create(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.agent.create, payload);
     },
     updateConfig({ id, ...rest }) {
-      return emitWithTimeout(socket, WEB_EVENTS.agent.updateConfig, { agentId: id, ...rest })
-        .then((res) => res?.agent ? { ...res, agent: normalizeAgentSnapshot(res.agent) } : res);
+      return emitWithTimeout(socket, WEB_EVENTS.agent.updateConfig, { agentId: id, ...rest });
     },
     setVisibility(agentId, teamId, visible) {
-      return emitWithTimeout(socket, WEB_EVENTS.agent.setVisibility, { agentId, teamId, visible })
-        .then((res) => (res?.agent ? { ...res, agent: normalizeAgentSnapshot(res.agent) } : res));
+      return emitWithTimeout(socket, WEB_EVENTS.agent.setVisibility, { agentId, teamId, visible });
     },
     delete(agentId, teamId) {
-      return emitWithTimeout(socket, WEB_EVENTS.agent.delete, { agentId, ...(teamId ? { teamId } : {}) })
-        .then((res) => res?.agent ? { ...res, agent: normalizeAgentSnapshot(res.agent) } : res);
+      return emitWithTimeout(socket, WEB_EVENTS.agent.delete, { agentId, ...(teamId ? { teamId } : {}) });
     },
   };
 }
@@ -277,7 +263,7 @@ export interface TeamEvents {
   create(payload: { name: string; path?: string; description?: string; visibility?: 'public' | 'private' }): Promise<{ ok: boolean; team?: TeamSummary; defaultChannel?: { id: string; name: string }; error?: string }>;
   switch(teamId: string): Promise<{ ok: boolean; currentTeam?: TeamSummary; error?: string }>;
   update(payload: { teamId?: string; name?: string }): Promise<{ ok: boolean; team?: TeamSummary; error?: string }>;
-  delete(networkId: string): Promise<{ ok: boolean; fallbackTeam?: TeamSummary | null; error?: string }>;
+  delete(teamId: string): Promise<{ ok: boolean; fallbackTeam?: TeamSummary | null; error?: string }>;
   onSnapshot(handler: (nets: TeamSummary[]) => void): () => void;
   subscribe(): void;
 }
@@ -306,9 +292,6 @@ export function teamEvents(socket: Socket = getWebSocket()): TeamEvents {
     subscribe() { socket.emit(WEB_EVENTS.team.list, {}); },
   };
 }
-
-/** @deprecated Use teamEvents() instead */
-export const networkEvents = teamEvents;
 
 export interface ChannelEvents {
   join(teamId: string, channelId: string, limit?: number): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
@@ -384,8 +367,8 @@ export interface AuthEvents {
   register(payload: { username: string; password: string; email?: string; joinCode?: string; sessionId?: string }): Promise<{ ok: boolean; token?: string; user?: UserInfo; currentTeam?: { id: string; name: string; path: string }; defaultChannel?: { id: string; name: string }; error?: string }>;
   login(payload: { username: string; password: string; joinCode?: string }): Promise<{ ok: boolean; token?: string; user?: UserInfo; currentTeam?: { id: string; name: string; path: string }; error?: string }>;
   whoami(): Promise<{ ok: boolean; user?: UserInfo; currentTeam?: TeamSummary; error?: string }>;
-  inviteCreate(payload?: { networkId?: string; purpose?: 'user' | 'device' }): Promise<{ ok: boolean; invite?: InviteInfo; error?: string }>;
-  deviceLogin(payload: { inviteCode: string; username: string; password: string }): Promise<{ ok: boolean; token?: string; networkId?: string; networkPath?: string; userId?: string; username?: string; role?: 'admin' | 'user'; deviceId?: string; error?: string }>;
+  inviteCreate(payload?: { teamId?: string; purpose?: 'user' | 'device' }): Promise<{ ok: boolean; invite?: InviteInfo; error?: string }>;
+  deviceLogin(payload: { inviteCode: string; username: string; password: string }): Promise<{ ok: boolean; token?: string; teamId?: string; teamPath?: string; userId?: string; username?: string; role?: 'admin' | 'user'; deviceId?: string; error?: string }>;
   changePassword(payload: { currentPassword: string; newPassword: string }): Promise<{ ok: boolean; error?: string }>;
   // 已登录用户直接用现有 token 完成 device invite（不需再输密码），用于让 web 关联本机设备。
   completeDeviceInvite(payload: { code: string }): Promise<{ ok: boolean; invite?: { deviceId?: string }; credentials?: { deviceId?: string; machineId?: string }; team?: { id: string; name: string; path: string }; error?: string }>;
@@ -403,9 +386,7 @@ export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
       return emitWithTimeout(socket, WEB_EVENTS.auth.whoami, { token: getStoredAuthToken() });
     },
     inviteCreate(payload = {}) {
-      const { networkId, ...rest } = payload;
-      const teamId = networkId && networkId !== 'default' ? networkId : undefined;
-      return emitWithTimeout(socket, WEB_EVENTS.deviceInvite.create, { ...rest, ...(teamId ? { teamId } : {}) });
+      return emitWithTimeout(socket, WEB_EVENTS.deviceInvite.create, payload);
     },
     async deviceLogin({ inviteCode, username, password }) {
       const login = await emitWithTimeout(socket, WEB_EVENTS.auth.login, { username, password }, 20000);
@@ -421,8 +402,8 @@ export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
       return {
         ok: true,
         token: login.token,
-        networkId: team?.id ?? credentials.teamId,
-        networkPath: team?.path ?? team?.id ?? credentials.teamId,
+        teamId: team?.id ?? credentials.teamId,
+        teamPath: team?.path ?? team?.id ?? credentials.teamId,
         userId: login.user.id,
         username: login.user.username,
         role: login.user.role,
@@ -442,7 +423,7 @@ export interface JoinEvents {
   create(payload: { teamId?: string; maxUses?: number; expiresAt?: number }): Promise<{ ok: boolean; link?: import('./schema').JoinLinkInfo; error?: string; message?: string }>;
   list(payload?: { teamId?: string }): Promise<{ ok: boolean; links?: import('./schema').JoinLinkInfo[]; error?: string; message?: string }>;
   revoke(payload: { teamId?: string; code: string }): Promise<{ ok: boolean; error?: string; message?: string }>;
-  validate(payload: { code: string }): Promise<{ ok: boolean; networkName?: string; expiresAt?: number | null; error?: string; message?: string }>;
+  validate(payload: { code: string }): Promise<{ ok: boolean; teamName?: string; expiresAt?: number | null; error?: string; message?: string }>;
 }
 
 // server 的 JoinLinkDto 只返回 code，不含 url；前端按 /join/[code] 路由构造完整邀请链接
@@ -494,8 +475,8 @@ export interface DeviceAgent {
   description: string | null;
   deviceId: string;
   status: string;
-  publishedNetworkIds: string[];
-  unpublishedNetworkIds?: string[];
+  primaryTeamId: string;
+  visibleTeamIds: string[];
 }
 
 export interface DeviceRuntime {
@@ -508,7 +489,7 @@ export interface DeviceRuntime {
 export interface DeviceEvents {
   list(teamId?: string): Promise<{ ok: boolean; devices?: DeviceInfo[]; error?: string }>;
   get(payload: { id: string }): Promise<{ ok: boolean; device?: any; error?: string }>;
-  agentsList(deviceId: string, networkId?: string | null): Promise<{ ok: boolean; agents?: DeviceAgent[]; runtimes?: DeviceRuntime[]; error?: string }>;
+  agentsList(deviceId: string, teamId?: string | null): Promise<{ ok: boolean; agents?: DeviceAgent[]; runtimes?: DeviceRuntime[]; error?: string }>;
   scan(deviceId: string): Promise<{ ok: boolean; error?: string }>;
   selectDirectory(deviceId: string): Promise<{ ok: boolean; path?: string; error?: string }>;
   delete(id: string): Promise<{ ok: boolean; error?: string }>;
@@ -526,8 +507,8 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
     get({ id }) {
       return emitWithTimeout(socket, WEB_EVENTS.device.get, { id, deviceId: id });
     },
-    agentsList(deviceId, networkId) {
-      return emitWithTimeout(socket, WEB_EVENTS.device.agentsList, networkId ? { deviceId, teamId: networkId } : { deviceId });
+    agentsList(deviceId, teamId) {
+      return emitWithTimeout(socket, WEB_EVENTS.device.agentsList, teamId ? { deviceId, teamId } : { deviceId });
     },
     scan(deviceId) {
       return emitWithTimeout(socket, WEB_EVENTS.device.scan, { deviceId });

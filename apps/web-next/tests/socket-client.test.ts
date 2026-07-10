@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { WEB_EVENTS, type AgentDto, type ChannelDto, type DeviceDto, type DispatchDto, type MessageDto, type RuntimeDto } from '../../../packages/contracts/src/index';
 import { createWebSocketClient, type WebSocketTransport } from '../src/index';
+import { agentEvents, authEvents, deviceEvents } from '../lib/socket';
 
 describe('web-next socket client', () => {
   test('keeps artifact upload fallback aligned with the App Router teams proxy', async () => {
@@ -408,6 +409,60 @@ describe('web-next socket client', () => {
       [WEB_EVENTS.agent.setVisibility, { agentId: 'agent-1', teamId: 'team-1', visible: false }],
     ]);
   });
+
+  test('uses canonical Team fields for agent, invite, device-agent, and snapshot payloads', async () => {
+    const socket = new CanonicalSocket();
+    socket.responses.set(WEB_EVENTS.agent.create, {
+      ok: true,
+      agent: {
+        id: 'agent-1',
+        primaryTeamId: 'team-1',
+        visibleTeamIds: ['team-1'],
+        name: 'Codex',
+        adapterKind: 'codex',
+        status: 'online',
+        lastSeenAt: 1,
+        connectCommand: 'codex',
+      },
+    });
+
+    const created = await agentEvents(socket as any).create({
+      teamId: 'team-1',
+      name: 'Codex',
+      adapterKind: 'codex',
+      command: 'codex',
+    });
+    expect(socket.lastPayload(WEB_EVENTS.agent.create)).toMatchObject({ teamId: 'team-1' });
+    expect(JSON.stringify(created.agent)).not.toContain('networkId');
+    expect(JSON.stringify(created.agent)).not.toContain('publishedNetworkIds');
+
+    await authEvents(socket as any).inviteCreate({ teamId: 'team-1', purpose: 'device' });
+    expect(socket.lastPayload(WEB_EVENTS.deviceInvite.create)).toEqual({
+      teamId: 'team-1',
+      purpose: 'device',
+    });
+
+    await deviceEvents(socket as any).agentsList('device-1', 'team-1');
+    expect(socket.lastPayload(WEB_EVENTS.device.agentsList)).toEqual({
+      deviceId: 'device-1',
+      teamId: 'team-1',
+    });
+
+    const snapshots: unknown[] = [];
+    agentEvents(socket as any).onSnapshot((snapshot) => snapshots.push(snapshot));
+    await socket.trigger(WEB_EVENTS.agent.snapshot, [{
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      status: 'online',
+      lastSeenAt: 1,
+      connectCommand: 'codex',
+    }]);
+    expect(JSON.stringify(snapshots)).not.toContain('networkId');
+    expect(JSON.stringify(snapshots)).not.toContain('publishedNetworkIds');
+  });
 });
 
 class FakeWebTransport implements WebSocketTransport {
@@ -454,4 +509,39 @@ class FakeAgentEventsSocket {
 
   on(): this { return this; }
   off(): this { return this; }
+}
+
+class CanonicalSocket {
+  readonly emitted: Array<[string, unknown]> = [];
+  readonly responses = new Map<string, unknown>();
+  private readonly handlers = new Map<string, Array<(payload: unknown) => void>>();
+
+  emit(event: string, payload: unknown, ack: (res: unknown) => void): this {
+    this.emitted.push([event, payload]);
+    ack(this.responses.get(event) ?? { ok: true });
+    return this;
+  }
+
+  on(event: string, handler: (payload: unknown) => void): this {
+    this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
+    return this;
+  }
+
+  off(event?: string, handler?: (payload: unknown) => void): this {
+    if (!event) return this;
+    if (!handler) {
+      this.handlers.delete(event);
+      return this;
+    }
+    this.handlers.set(event, (this.handlers.get(event) ?? []).filter((candidate) => candidate !== handler));
+    return this;
+  }
+
+  lastPayload(event: string): unknown {
+    return [...this.emitted].reverse().find(([candidate]) => candidate === event)?.[1];
+  }
+
+  async trigger(event: string, payload: unknown): Promise<void> {
+    for (const handler of this.handlers.get(event) ?? []) await handler(payload);
+  }
 }

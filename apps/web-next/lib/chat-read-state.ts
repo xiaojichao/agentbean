@@ -12,12 +12,12 @@ function resolveStorage(storage?: ReadIdStorage): ReadIdStorage | null {
   return window.localStorage;
 }
 
-export function readKey(networkPath: string): string {
-  return `${READ_KEY_PREFIX}${networkPath}`;
+export function readKey(teamId: string): string {
+  return `${READ_KEY_PREFIX}${teamId}`;
 }
 
-export function mutedChannelKey(networkPath: string): string {
-  return `${MUTED_CHANNEL_KEY_PREFIX}${networkPath}`;
+export function mutedChannelKey(teamId: string): string {
+  return `${MUTED_CHANNEL_KEY_PREFIX}${teamId}`;
 }
 
 export function deserializeReadIds(raw: string | null): Set<string> {
@@ -35,26 +35,26 @@ export function serializeReadIds(ids: Set<string>): string {
   return JSON.stringify([...ids]);
 }
 
-export function loadReadIds(networkPath: string, storage?: ReadIdStorage): Set<string> {
+export function loadReadIds(teamId: string, storage?: ReadIdStorage): Set<string> {
   const store = resolveStorage(storage);
   if (!store) return new Set();
-  return deserializeReadIds(store.getItem(readKey(networkPath)));
+  return deserializeReadIds(store.getItem(readKey(teamId)));
 }
 
-export function saveReadIds(networkPath: string, ids: Set<string>, storage?: ReadIdStorage): void {
+export function saveReadIds(teamId: string, ids: Set<string>, storage?: ReadIdStorage): void {
   const store = resolveStorage(storage);
   if (!store) return;
-  store.setItem(readKey(networkPath), serializeReadIds(ids));
+  store.setItem(readKey(teamId), serializeReadIds(ids));
 }
 
-export function loadMutedChannelIds(networkPath: string, storage?: ReadIdStorage): Set<string> {
+export function loadMutedChannelIds(teamId: string, storage?: ReadIdStorage): Set<string> {
   const store = resolveStorage(storage);
   if (!store) return new Set();
-  return deserializeReadIds(store.getItem(mutedChannelKey(networkPath)));
+  return deserializeReadIds(store.getItem(mutedChannelKey(teamId)));
 }
 
-export function saveMutedChannelIds(networkPath: string, ids: Set<string>, storage?: ReadIdStorage): void {
+export function saveMutedChannelIds(teamId: string, ids: Set<string>, storage?: ReadIdStorage): void {
   const store = resolveStorage(storage);
   if (!store) return;
-  store.setItem(mutedChannelKey(networkPath), serializeReadIds(ids));
+  store.setItem(mutedChannelKey(teamId), serializeReadIds(ids));
 }
