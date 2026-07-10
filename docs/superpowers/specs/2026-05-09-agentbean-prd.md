@@ -1,343 +1,600 @@
-# AgentBean 产品需求文档 (PRD)
+# AgentBean 产品需求文档（PRD）
 
-**日期:** 2026-05-09
-**版本:** 1.3
-**状态:** Phase 0-3 已完成，Phase 4+ 进行中
-**更新:** 2026-07-08 — 补充多 Agent 频道消息处理优先级与任务认领语义
+- 日期：2026-05-09
+- 版本：1.5
+- 状态：AgentBean Next 已成为生产基线，持续迭代中
+- 更新：2026-07-10 — 全面采用 Team 产品模型，并纳入 Device Service 与 PI 管理 Agent 目标架构
 
 ---
 
 ## 1. 产品概述
 
-AgentBean 是一个多 Agent 协作平台，支持用户在一个统一界面中管理、调度多个 AI Agent。它采用 Tailscale 网络隔离架构，每个用户拥有私有网络，通过 Web UI + Socket.IO 实现实时通信，支持频道式聊天、Agent 编排和任务管理。
+AgentBean 是一个面向人类与 Agent 协作的本地优先团队平台。人类成员、本地自定义 Agent、远程设备上的自定义 Agent，以及 AgentOS 托管型 Agent，可以在同一个 Team 中通过频道、私聊、讨论串和任务共同工作。
+
+Team 是 AgentBean 唯一的产品与数据隔离边界。频道、消息、任务、Artifact、Workspace Run、共享记忆、Device 和 Agent 可见性都必须归属于明确的 Team。
 
 ### 1.1 核心价值
 
-- **多 Agent 编排**：同时管理 codex、claude-code、openclaw 等多种 Agent
-- **网络隔离**：每用户独立 SQLite 数据库，通过 Tailscale mesh 网络实现私有部署
-- **实时协作**：Socket.IO 驱动的频道系统，支持人与 Agent 的混合对话
-- **多网络发布**：Agent 可发布到用户加入的多个网络
+- **统一协作**：在一个 Team 内管理人类成员、自定义 Agent 和 AgentOS 托管型 Agent。
+- **任务编排**：用频道消息、讨论串、任务、认领和状态历史承载多 Agent 协作。
+- **本地优先**：用户项目目录、完整运行日志和本地项目记忆默认留在 Device。
+- **可靠执行**：Device Service 后台常驻，管理 Agent 发现、调用、恢复、Artifact 和 Workspace Run。
+- **智能管理**：内置 PI 管理 Agent 负责请求理解、任务分解、Agent 调用、结果汇总和跨 Agent 记忆编排。
+- **权限正确**：Team membership、Channel visibility、Agent ownership 和 Artifact scope 由 Server 统一校验。
 
 ### 1.2 目标用户
 
-- 开发者和团队，需要在同一界面中调度多个 AI Agent
-- 需要 Agent 协作的场景（编码、审查、设计等）
+- 希望在统一界面中使用多个 Coding Agent 的个人开发者。
+- 需要人类与多个 Agent 在频道和任务中协作的团队。
+- 需要将本地 Agent 与 OpenClaw、Hermes Agent 等托管 Agent 统一管理的用户。
+- 重视本地 Workspace、执行记录、Artifact 和记忆边界的用户。
 
----
+### 1.3 核心术语
+
+| 术语 | 定义 |
+|---|---|
+| Team | 唯一的产品、权限和数据隔离边界 |
+| Device | 运行 Device Service、外部 Runtime 和本地 Agent 的机器身份 |
+| Device Service | Device 上的后台服务，负责连接、Agent 调用、Workspace、Artifact、恢复和 PI Manager Worker |
+| Agent | Team 中可被调用或认领任务的外部执行者 |
+| 自定义 Agent | 运行在 Claude Code、Codex、Kimi CLI、Gemini CLI、PI CLI 等 Coding Agent 之上的 Agent |
+| AgentOS 托管型 Agent | 由 OpenClaw、Hermes Agent 等 AgentOS/Gateway 托管的 Agent |
+| PI 管理 Agent | AgentBean 内部管理组件，只负责编排，不直接执行用户领域任务 |
+| ManagementRun | 一次需要调用外部 Agent 的管理流程；任务型请求关联根 Task，轻问答只关联根 Message |
+| Workspace Run | 外部 Agent 在明确 cwd 中的一次执行记录 |
+| Artifact | 输入附件、外部 Agent 产物或 Workspace Run 日志的受控文件记录 |
+| Memory | 从消息、任务、执行和 Artifact 投影出的可追溯长期上下文 |
 
 ## 2. 系统架构
 
-### 2.1 仓库结构
+### 2.1 生产基线
 
-```
+```text
 AgentBean/
 ├── apps/
-│   ├── server/     # Express + Socket.IO 服务端
-│   ├── web/        # Next.js 前端
-│   └── daemon/     # 设备端 Daemon（原 agent/，2026-05-12 重命名）
-└── docs/superpowers/  # PRD/Specs/Plans
+│   ├── server-next/   # 协作控制平面、Socket/HTTP transport、SQLite repositories
+│   ├── web-next/      # 当前 Web 产品界面
+│   └── daemon-next/   # 当前 Device 兼容实现，目标迁移为 Device Service
+├── packages/
+│   ├── contracts/     # DTO、Socket event、错误码
+│   └── domain/        # 纯领域规则
+└── docs/superpowers/  # PRD、设计与实施计划
 ```
 
-### 2.2 技术栈
+`apps/server`、`apps/web` 和 `apps/daemon` 是历史实现，不再作为新产品行为的事实来源。所有新增能力以 Next 应用和共享 packages 为准。
 
-| 层 | 技术 |
+### 2.2 三层职责
+
+#### AgentBean Server
+
+Server 是协作事实源，负责：
+
+- 用户认证和 Team membership。
+- Team、Channel、DM、Message 和 Task 持久化。
+- Device identity、Agent identity、Agent visibility 和在线状态。
+- 路由、Dispatch、Task claim 和状态机。
+- Artifact 元数据、下载授权和 Workspace Run 投影。
+- 共享 Memory 的权限、来源、状态和审计。
+- ManagementRun、Task DAG、Manager lease 和 Agent invocation。
+
+#### AgentBean Web
+
+Web 是交互与投影层，负责：
+
+- 登录、Team 切换和 Team 管理。
+- 频道、DM、讨论串和消息交互。
+- Agent、Device、Task、Artifact、Workspace Run 和 Memory 页面。
+- 展示 Server 下发的 snapshot、状态事件和执行详情。
+
+Web 不自行推断权限、Agent 归属、Task 真相或跨 Agent 路由结果。
+
+#### AgentBean Device Service
+
+Device Service 是 Device bridge，负责：
+
+- 后台启动、重连、升级和诊断。
+- 每个 Team/Profile 独立 Runner。
+- Runtime 与外部 Agent 扫描。
+- 自定义 Agent 调用和 AgentOS Connector。
+- Workspace Run、输入附件、Artifact 收集与补报。
+- 本地 Workspace Memory。
+- Device-hosted PI Manager Worker。
+
+### 2.3 PI 管理 Agent 与外部执行 Agent
+
+PI 只用于 AgentBean 内部管理事务：
+
+- 理解用户请求。
+- 检索权限允许的协作记忆。
+- 查询团队 Agent 能力和状态。
+- 定向调用外部 Agent。
+- 分解复杂任务并发布可认领子任务。
+- 等待、重试、重派和汇总外部结果。
+- 提交根任务交付并等待用户审核。
+
+PI 管理 Agent 不具备 shell、文件读写、浏览器或项目代码工具。没有合适外部 Agent 时，它必须报告阻塞或请求用户输入，不能自行完成用户领域任务。
+
+用户具体任务仍由两类外部 Agent 执行：
+
+1. 自定义 Agent。
+2. AgentOS 托管型 Agent。
+
+详细设计见 `docs/superpowers/specs/2026-07-10-agentbean-pi-management-agent-design.md`。
+
+PI 管理能力按 `direct`、`shadow`、`managed` 三种 Team rollout mode 推进。只有 `managed` 创建可执行 ManagementRun；`shadow` 不得产生外部调用或其他副作用。任何运行中故障都不能通过隐式 direct dispatch 重复执行已经开始的外部任务。
+
+### 2.4 Team 命名合同
+
+Team 语义必须贯穿文档、代码、协议、路由和数据库：
+
+- 领域对象：`Team`、`TeamDto`、`TeamRecord`。
+- 标识符：`teamId`、`primaryTeamId`、`visibleTeamIds`、`currentTeamId`。
+- Web 路由：`teamPath`。
+- HTTP 路径：`/api/teams/:teamId/...`。
+- 数据库：`teams`、`team_members`、`team_id`、`current_team_id`、`primary_team_id`。
+- Socket commands：`team:list`、`team:create`、`team:switch`、`teams:snapshot`。
+- 本地状态键和测试 fixture 使用 Team 命名。
+
+新代码不得引入 Team 的历史同义命名。迁移完成标准是产品代码、共享 contracts、数据库 schema、路由参数、持久化键和测试中只保留 Team 术语；兼容别名必须有明确删除版本，且不能出现在用户可见响应中。
+
+具体迁移映射、兼容窗口、删除节点、回滚和测试证据由 `docs/superpowers/plans/2026-07-10-agentbean-phase-minus-1-team-terminology.md` 与独立验收矩阵维护，PRD 不重复保存已经退出产品合同的标识符。
+
+## 3. 数据与隔离架构
+
+### 3.1 Global DB
+
+Global DB 保存跨 Team 但仍有明确 Team 归属的身份和配置：
+
+| 表 | 用途 |
 |---|---|
-| 服务端 | Express + Socket.IO + better-sqlite3 |
-| 前端 | Next.js App Router + Tailwind CSS + Zustand |
-| Agent 端 | TypeScript + node-pty (codex) + child_process (claude-code) |
-| 数据库 | SQLite (全局 DB + 每网络独立 DB) |
-| 网络 | Tailscale mesh 网络 |
-| 认证 | 用户名密码 (scrypt) + JWT + 设备三截 token |
+| `users` | 用户身份、认证信息和 `current_team_id` |
+| `teams` | Team 定义、owner、名称、path 和可见性 |
+| `team_members` | 用户与 Team 的 membership 和 role |
+| `join_links` | 用户加入 Team 的邀请链接 |
+| `device_invites` | Device 接入 Team 的一次性邀请 |
+| `devices` | Device identity、owner、machine/profile 和状态 |
+| `device_runtimes` | Device 上发现的 Runtime |
+| `device_revocations` | 被撤销的 Device 凭据边界 |
+| `agents` | Agent identity、配置、owner、primary Team 和状态 |
+| `agent_identity_links` | 扫描、Gateway 和自定义 Agent 身份关联 |
+| `agent_publications` | Agent 对额外 Team 的显式可见关系 |
 
-### 2.3 数据库架构
+所有 Team 归属列使用 `team_id` 或 `primary_team_id`。用户当前 Team 使用 `current_team_id`。
 
-**全局 DB**（`global.db`）：
-- `users` — 用户信息
-- `networks` — 网络定义
-- `network_members` — 用户-网络关联
-- `agents` — Agent 全局注册
-- `agent_network_publish` — Agent 多网络发布
-- `invites` — 邀请码
-- `join_links` — 加入链接
-- `devices` — 设备注册
-- `agent_metrics` — Agent 性能指标
+### 3.2 Team DB
 
-**每网络 DB**（`<networkId>.sqlite`）：
-- `channels` — 频道定义（含 visibility、created_by）
-- `channel_agents` — 频道-Agent 关联
-- `channel_user_members` — 私有频道用户成员
-- `messages` — 消息记录
-- `artifacts` — 文件附件
+每个 Team 使用独立的 Team 数据空间，保存协作内容：
 
----
+| 表 | 用途 |
+|---|---|
+| `channels` | 公开频道、私有频道和 DM channel |
+| `channel_human_members` | 频道人类成员 |
+| `channel_agent_members` | 频道 Agent 成员 |
+| `messages` | 频道、DM 和讨论串消息 |
+| `dispatches` | Server 到外部 Agent 的调用状态 |
+| `tasks` | Task、assignee、状态、频道和排序 |
+| `artifacts` | 输入、生成文件和运行日志元数据 |
+| `workspace_runs` | 外部 Agent 执行记录 |
+| `message_reactions` | 消息 reaction |
+| `saved_messages` | 用户收藏消息 |
+| `pinned_messages` | 频道置顶消息 |
 
-## 3. 功能需求
+后续 PI 管理 Agent 切片增加：
 
-### 3.1 用户系统
+- `management_runs`
+- `management_events`
+- `manager_leases`
+- `task_dependencies`
+- `task_claim_leases`
+- `agent_invocations`
+- Memory 相关表
 
-#### 3.1.1 注册/登录
-- 用户注册：用户名 + 密码（scrypt 加密），自动创建私有网络
-- 用户登录：用户名 + 密码 → JWT token
-- 邀请注册：通过邀请链接加入他人网络
+### 3.3 隔离规则
 
-#### 3.1.2 网络管理
-- 每个用户拥有至少一个私有网络
-- 通过邀请码/加入链接加入他人网络
-- 网络成员管理：查看、移除成员
-- 网络可见性：公开/私有
+1. 所有 Team DB 读写必须携带明确 `teamId`。
+2. Server 先验证 Team membership，再验证 Channel visibility。
+3. DM 只对参与人类和目标 Agent 可见。
+4. Device token 必须绑定 Team、owner、machine/profile，并在可用时绑定 canonical deviceId。
+5. Agent 只能在 `visibleTeamIds` 范围内展示、被调用或认领任务。
+6. Artifact 必须同时满足 Team 和 Channel 可见性。
+7. Workspace Run 必须关联 Team、Channel、Dispatch、Agent 和 Device。
+8. Memory 先做 Team/Channel/DM/Agent/User scope 硬过滤，再做相关性排序。
+9. 删除 Team 时必须级联清理 Team DB 内容、Agent 可见关系、Device invite 和共享 Memory。
 
-### 3.2 Agent 管理
+## 4. 用户、Team 与成员
 
-#### 3.2.1 Agent 注册协议
-Agent 通过 `/agent` Socket.IO 命名空间注册到服务端：
-- 设备端 Daemon 启动 → 扫描本地 Agent 运行时 → 注册到所属网络
-- 注册时验证：设备 token (userId:networkId:random) 或用户 JWT
-- 支持断线重连（同 agentId 替换旧 socket）
+### 4.1 注册和登录
 
-#### 3.2.2 Agent 分类
-- `executor-hosted`：codex (node-pty)、claude-code (spawn)、kimi-cli (spawn)
-- `agentos-hosted`：hermes (gateway)、openclaw (gateway)
+- 用户使用用户名和密码注册。
+- 密码使用 `scrypt` 哈希，不保存明文。
+- 注册创建用户的初始 private Team 和默认 `all` 频道。
+- 登录返回用户 session 和当前 Team。
+- `currentTeamId` 必须指向用户仍然加入的 Team，否则回退到可用 Team。
 
-> 注：`standalone-cli` 分类已于 2026-05-12 移除，所有 Agent 统一归入上述两类。
+### 4.2 Team 管理
 
-#### 3.2.3 多网络发布
-- Agent 属于创建者的私有网络（主网络）
-- 可发布到用户加入的其他网络
-- `agent_network_publish` 多对多关联表
-- 网络内的 `agents:subscribe` 返回：主网络 Agent + 已发布 Agent
+- 用户可以创建 Team。
+- Team 创建者成为 owner。
+- Team 创建时自动建立默认频道。
+- 用户可以通过 join link 加入 Team。
+- Team owner/admin 可以管理成员角色和移除成员。
+- 用户可以在已加入的 Team 之间切换。
+- 删除 Team 属于高风险操作，必须二次确认并展示影响范围。
 
-#### 3.2.4 Agent 扫描
-设备端 Daemon 的三层扫描器：
-- PATH 运行时扫描：检测 claude-code、codex、kimi-cli 等 CLI 是否已安装
-  - PATH 扩展：自动包含所有 nvm Node 版本的 bin 目录（解决跨版本 CLI 检测）
-- AgentOS 网关扫描：检测 Hermes、OpenClaw 等网关注册的 Agent
-- 本地文件系统扫描：检测 `~/.agentbean/agents/` 配置文件中定义的 Agent
+### 4.3 成员模型
 
-**周期重扫：** Daemon 每 5 分钟自动重新扫描，服务端标记消失的 Agent 为离线。
+Team 成员页统一展示：
 
-#### 3.2.5 Agent 去重
-两条注册路径可能注册同一 Agent（`register` 事件使用 Daemon 自定义 ID，`device:register-agents` 使用 `scan-{deviceId}-{name}` ID）：
-- `findByDeviceAndName(deviceId, name)` 按设备+名称查找已有注册
-- 已存在则更新 DB 而不创建重复条目
-- `resolveScanId(scanId)` 解析旧的 scan-prefix ID，用于 channel_members 回退查找
+- 人类成员。
+- Team 中可见的外部 Agent。
 
-### 3.3 频道系统
+内置 PI 管理 Agent 是系统基础设施，不作为 Team 成员展示，也不参与普通 @mention。
 
-#### 3.3.1 频道类型
-- **公开频道**：网络内所有用户可见
-- **私有频道**：仅被邀请的用户可见（通过 `channel_user_members`）
+## 5. Device 与 Device Service
 
-#### 3.3.2 消息系统
-- 消息类型：`human`、`agent`、`system`
-- 消息中的 @mention 高亮显示
-- 消息持久化（per-network SQLite）
-- 人类消息的 `senderId` 从 JWT/Socket context 填入
+### 5.1 Device 接入
 
-#### 3.3.3 频道-Agent 关联
-- 频道中可添加 Agent 参与者
-- Agent 自动回复频道消息（通过 Pipeline 编排）
-- `@AgentName` 提及触发 Agent 响应（正则 `[\w-]*` 支持连字符名称）
+1. 用户在 Web 创建 Device invite。
+2. 用户在目标机器运行 Device 安装或接入命令。
+3. Device Service 使用 invite 完成认证。
+4. Server 返回绑定 Team、owner、machine/profile 的 Device 凭据。
+5. Device Service 使用凭据连接 `/agent` namespace。
+6. Device 上报 Runtime、Agent 和 capability snapshot。
 
-#### 3.3.4 私信 (DM)
-- 用户可向 Agent 发起私信（创建 DM 频道）
-- DM 中 @mention 下拉仅显示私聊目标成员，不列出其他成员
-- DM 输入框 placeholder 显示目标 Agent 名称
+用户 join link 与 Device invite 是两种独立凭据，不能混用。
 
-#### 3.3.5 多 Agent 消息处理优先级
+### 5.2 Device 状态
 
-当频道、讨论串或任务上下文中同时存在多个在线 Agent 时，系统目标不是让所有 Agent 同时回复，而是让最合适、最有归属的 Agent 接手，并抑制重复刷屏。
+- Device 状态来自当前有效 Socket 和 heartbeat/lastSeenAt。
+- Device 下的 Agent 状态不能仅由历史扫描结果推导。
+- Device 断开时，Server 将受影响 Agent 标记为离线。
+- Device reconnect 后重新上报 canonical snapshot。
+- 删除 Device 后，Server 通知 Device Service 停止重连并清理凭据。
 
-消息处理优先级：
+### 5.3 Profile 隔离
 
-1. **明确点名优先**：用户消息明确 `@AgentName` 时，由被点名 Agent 处理；未被点名的 Agent 不主动抢答。若同一消息点名多个 Agent，则只允许被点名的 Agent 按各自职责响应。
-2. **任务归属优先**：消息已关联任务且任务有 `assignee` 或已被某个 Agent 认领时，由被分配/认领的 Agent 继续处理；其他 Agent 只观察上下文，不重复执行。
-3. **上下文负责人优先**：如果消息延续某个频道讨论串、任务详情或既有执行线程，默认由原负责人继续处理；只有原负责人离线、明确放弃或用户重新点名时才转交。
-4. **普通聊天先合理响应**：没有指定 Agent、也不构成明确可执行工作的普通聊天，由先看到且判断自己适合回答的在线 Agent 回复。其他 Agent 看到已有有效回答后应保持克制，除非能补充明显缺口、纠正错误或被用户继续追问。
-5. **可执行工作先认领再执行**：没有指定 Agent 的可执行工作，Agent 先判断自己是否适合、任务是否无人认领；要执行时必须先完成 claim。只有 claim 成功的 Agent 才能开始执行，claim 失败的 Agent 不继续跑同一工作。
+- 一个 Team/Profile 对应一个独立 Runner。
+- Token、缓存、Workspace、Memory 和进程状态不得跨 Profile 混用。
+- 单个 Runner 崩溃不能影响其他 Runner。
+- Device Service 负责 Runner 重启、退避和 degraded 状态。
 
-补充规则：
+### 5.4 后台服务目标
 
-- 点名规则高于任务归属；用户可以通过新的 `@AgentName` 明确请求协助、转交或追加处理。
-- 讨论串内消息优先继承讨论串负责人，避免频道级广播把同一上下文分裂给多个 Agent。
-- 如果 Agent 已经回复，后续 Agent 应基于最新频道消息重新判断是否仍需补充，不能只按本地旧快照重复回答。
-- 系统消息、任务状态事件、dispatch 结果不应被误判为新的普通聊天请求，除非它们携带明确的下一步指令或点名。
+Device Service 支持：
 
-### 3.4 任务系统
+```text
+agentbean device install
+agentbean device start
+agentbean device stop
+agentbean device restart
+agentbean device status
+agentbean device logs
+agentbean device doctor
+agentbean device update
+agentbean device uninstall
+```
 
-#### 3.4.1 当前状态
-- AgentBean Next 已具备轻量任务持久化、创建、列表、更新与任务页入口。
-- `TaskDto` 已包含 `status`、`assigneeId`、`channelId`、`tags`、`sortOrder` 等基础字段。
-- 频道消息、任务详情与任务状态事件已经成为多 Agent 协作归属判断的重要上下文。
+关闭终端和设备重启后，Device Service 应继续或自动恢复运行。
 
-#### 3.4.2 需求
-- 任务创建/更新/删除
-- 任务与频道/消息关联
-- 任务状态跟踪
-- 任务分配、认领、转交与状态历史
+## 6. Agent 管理
 
-#### 3.4.3 任务分配与认领
+### 6.1 Agent 分类
 
-任务系统需要承载多 Agent 协作中的“谁负责”语义，避免同一任务被多个 Agent 重复执行。
+产品层只使用两类外部 Agent：
 
-- 任务可以有明确 `assignee`，被分配对象可以是人类成员或 Agent。
-- 未分配任务可被适合的 Agent 认领；认领必须是原子操作，服务端保证同一时刻只有一个认领成功。
-- 已分配或已认领任务的后续消息、状态更新、讨论串回复，默认归属于当前 assignee / claimant。
-- 其他 Agent 可以观察任务状态，但不能在未被点名、未被重新分配、未成功 claim 的情况下执行同一任务。
-- 任务需要记录分配、认领、转交、取消认领、完成等状态事件，并在频道流和任务详情中可追溯。
+#### 自定义 Agent
 
-验收标准：
+- 运行在 Coding Agent 或用户自定义命令之上。
+- 绑定明确 Device、adapter、command、args 和可选 cwd。
+- 由 Device Service 调用并管理 Workspace Run。
 
-- 对带 `@AgentName` 的任务消息，只触发被点名 Agent；若任务已有其他 assignee，需要生成清晰的转交或协助语义。
-- 对已有 assignee 的任务消息，只触发 assignee；其他 Agent 不产生重复 dispatch。
-- 对未分配的可执行任务，多个 Agent 同时看到时只能有一个 claim 成功，失败者不执行。
-- 对普通聊天，已有 Agent 给出有效回答后，其他 Agent 默认不再回复。
-- 对讨论串中的连续问题，负责人继承生效，除非用户显式点名或任务被转交。
+#### AgentOS 托管型 Agent
 
-### 3.5 设备管理
+- 由 AgentOS/Gateway 托管。
+- 通过 Gateway Connector 上报 identity、capability 和状态。
+- AgentBean 不控制其内部 Runtime。
 
-#### 3.5.1 设备注册（邀请流程）
-1. 用户从 Web UI 创建设备邀请码（`invite:create`，purpose=device）
-2. 用户在目标设备上运行邀请命令（`npx tsx agent/src/bin.ts --invite <code>`）
-3. Daemon 连接到 `/web` 命名空间（invite auth），验证邀请码，等待 token
-4. 浏览器打开 `device-login/<code>` 页面，用户登录
-5. 服务器通过 `auth:token:deliver` 将用户 token 推送给 Daemon
-6. Daemon 断开 `/web`，携带 token 重新连接到 `/agent` 命名空间
-7. Daemon 扫描本地 Agent 运行时，注册到服务端
+### 6.2 Agent Identity
 
-**关键机制：**
-- `inviteSessions` Map 存储 Daemon socket（key: `device:<code>`）
-- 首次存储保护：浏览器验证不会覆盖 Daemon socket
-- 三截 token 认证：`userId:networkId:random`
-- Agent namespace middleware：legacy token 跳过 parseToken 检查
+- Agent identity 必须稳定，不因重复扫描创建重复成员。
+- 自定义 Agent 使用持久化 Agent ID。
+- 扫描结果使用 machine/profile、Device、adapter、normalized name 和 Gateway instance key 解析 identity。
+- 删除 Agent 使用 soft delete，旧扫描结果不得自动复活已删除 Agent。
+- canonical alias 必须归并到同一 Agent。
 
-#### 3.5.2 设备页面
-- 显示设备状态、hostname、Tailscale IP
-- 显示设备上运行的 Agent 列表
-- Agent 可见性配置（发布到多网络）
-- 设备状态：在线/离线取决于 Daemon 是否运行（心跳机制）
-- Agent 状态：在线/离线/忙碌，通过 `agent:status` 实时推送到 Web 端
+### 6.3 Agent 可见性
 
-#### 3.5.3 服务器端网络持久化
-- `users.current_network_id` 列表储用户当前工作网络
-- 登录时优先使用 `currentNetworkId`（需验证仍是网络成员）
-- `network:switch` 事件自动保存到数据库
-- 注册时自动将私有网络设为当前网络
-- 设备登录时自动将邀请网络设为当前网络
+- `primaryTeamId` 表示 Agent 的主要归属 Team。
+- `visibleTeamIds` 表示 Agent 当前可以出现和被调用的 Team。
+- Team 内隐藏使用 `agent:set-visibility` 语义。
+- Agent visibility 是 Server 事实，Device 不自行决定。
+- Agent 只在可见 Team 的成员、频道、DM、任务和搜索结果中出现。
 
----
+### 6.4 Agent Skills 与 Capability
 
-## 4. Socket.IO 事件设计
+- Device Service 扫描自定义 Agent 可用 Skills。
+- Agent 详情展示 skill name、description、scope 和来源。
+- Capability Registry 综合显式配置、Skills、adapter 能力和历史成功任务。
+- 自动推断 capability 只用于候选排序，不能扩大权限。
 
-### 4.1 `/web` 命名空间（浏览器客户端）
+## 7. 频道、消息与讨论串
 
-| 事件 | 方向 | 用途 |
-|------|------|------|
-| `auth:login` | C→S | 用户登录 |
-| `auth:register` | C→S | 用户注册 |
-| `networks:list` | C→S | 列出用户所属网络 |
-| `network:create` | C→S | 创建网络 |
-| `agents:subscribe` | C→S | 订阅网络内 Agent 列表 |
-| `agent:status` | S→C | Agent 状态更新广播 |
-| `agent:publish` | C→S | 发布 Agent 到网络 |
-| `agent:unpublish` | C→S | 取消发布 |
-| `channels:subscribe` | C→S | 订阅频道列表 |
-| `channel:create` | C→S | 创建频道 |
-| `channel:join` | C→S | 加入频道（获取历史消息） |
-| `channel:add-member` | C→S | 添加频道用户成员 |
-| `channel:remove-member` | C→S | 移除频道用户成员 |
-| `message:send` | C→S | 发送消息 |
-| `channel:message` | S→C | 频道新消息广播 |
-| `members:list` | C→S | 列出网络成员（人+Agent） |
-| `device:register` | C→S | 设备注册 |
-| `device:heartbeat` | C→S | 设备心跳 |
-| `device:save-name` | C→S | 保存设备名称 |
-| `device:list` | C→S | 列出设备 |
-| `device:get` | C→S | 获取设备详情 |
-| `device:scan` | C→S | 触发设备扫描 |
-| `device:agents:list` | C→S | 列出设备上的 Agent |
-| `invite:create` | C→S | 创建邀请码（user/device） |
-| `auth:invite:validate` | C→S | 验证邀请码 |
-| `auth:device-login` | C→S | 设备登录（用户名+密码+邀请码） |
-| `auth:token:deliver` | S→C | 向 Daemon 推送 token |
-| `auth:whoami` | C→S | 获取当前用户信息 |
-| `auth:change-password` | C→S | 修改密码 |
-| `network:switch` | C→S | 切换网络（自动保存到 DB） |
+### 7.1 Channel 类型
 
-### 4.2 `/agent` 命名空间（设备端 Daemon）
+- 默认频道：Team 创建时建立，所有 Team 成员可见。
+- 公开频道：Team 成员可发现和加入。
+- 私有频道：仅显式成员可见。
+- DM：人类用户与目标 Agent 的特殊私有 Channel。
 
-| 事件 | 方向 | 用途 |
-|------|------|------|
-| `register` | C→S | Agent 注册（含去重检查） |
-| `heartbeat` | C→S | 心跳（驱动设备+Agent 状态更新） |
-| `device:register-agents` | C→S | 扫描结果批量注册（含去重+离线标记） |
-| `reply` | C→S | Agent 执行结果回复 |
-| `error_event` | C→S | Agent 错误上报 |
-| `agents:discovered` | S→C | 扫描发现的 Agent 广播 |
-| `agents:discover` | S→C | 服务端触发重新扫描 |
-| `dispatch` | S→C | 服务端分发执行任务 |
-| `message` | C→S | Agent 发送消息 |
-| `response` | C→S | Agent 执行结果 |
-| `error` | C→S | Agent 错误上报 |
-| `token` | S→C | Server 分发执行任务 |
-| `cancel` | S→C | 取消执行 |
+### 7.2 Message
 
----
+- Message 必须持久化到所属 Team DB。
+- 支持 Markdown、mention、附件、reaction、收藏、置顶、编辑和软删除。
+- 软删除消息不能继续 reaction、收藏、置顶、转任务或作为 Artifact/Run 投影入口。
+- 搜索必须先确定用户可见的 Channel 集合。
+- 搜索和 deep link 可以加载目标消息的 thread context。
 
-## 5. 安全需求
+### 7.3 Thread
 
-- 密码加密：使用 Node.js `crypto.scrypt`，不可逆哈希
-- Token 认证：JWT (用户) + 三截 token (设备)
-- 时间安全比较：`crypto.timingSafeEqual` 防止时序攻击
-- Artifact 认证：下载 URL 需要有效 token
-- 每网络 SQLite 隔离：网络间数据物理隔离
-- 队列捕获：serial dispatch queue 防止并发冲突
+- 顶层消息保留在频道主时间线。
+- 明确任务和长执行输出进入讨论串。
+- 普通轻问答保持在主时间线，不因存在外部 Agent 回复就自动转任务。
+- Thread 负责人优先继承 Task assignee 或最近有效外部 Agent。
 
----
+### 7.4 多 Agent 路由优先级
 
-## 6. 非功能需求
+1. **显式点名优先**：`@AgentName` 只调用被点名 Agent。
+2. **任务归属优先**：有 assignee 或 claimant 时由负责人继续处理。
+3. **线程上下文负责人优先**：未重新点名时沿用原负责人。
+4. **DM 目标优先**：DM 只调用目标 Agent。
+5. **状态与可达性约束**：只调用当前 Team 可见、在线且可达的 Agent。
+6. **可执行工作先认领**：开放任务必须 claim 成功后才执行。
+7. **普通聊天克制响应**：已有有效回复后其他 Agent 不重复刷屏。
 
-- **性能**：Socket.IO 实时通信延迟 < 100ms
-- **可靠性**：Agent 断线自动重连，消息持久化
-- **可扩展性**：每网络独立 SQLite，支持多用户部署
-- **可用性**：Next.js App Router 前端，响应式设计
+系统消息、管理事件、Task 状态事件和 Dispatch 结果不得被重新当作用户请求。
 
----
+## 8. Task 与跨 Agent 协作
 
-## 7. 待实现功能
+### 8.1 Task 状态
 
-### 7.1 Phase 3: 自定义 Agent（已完成 2026-05-10）
-- [x] 自定义 Agent 配置 UI（名称/命令/参数/工作目录/适配器类型）
-- [x] Agent 详情页完整运行时配置（source badge、device info、runtime config）
-- [x] standalone-cli 分类已移除（2026-05-12）
+```text
+todo -> in_progress -> in_review -> done
+  \         |             |
+   \--------+-----------> closed
+```
 
-### 7.1.5 Phase 3.5: Agent 稳定性修复（已完成 2026-05-12）
-- [x] Agent 去重：findByDeviceAndName + resolveScanId
-- [x] @mention 正则修复（支持连字符 Agent 名）
-- [x] NO_ONLINE 路由修复（channel_members scan-prefix 回退）
-- [x] DM 私聊 @mention 过滤（仅显示目标成员）
-- [x] 成员页实时 Agent 状态更新（agent:status 订阅）
-- [x] 成员页 UI 修复（去掉"2网"badge、修复详情页显示）
-- [x] Scanner PATH 扩展（nvm 全版本 bin 目录）
-- [x] Daemon 周期重扫（5 分钟间隔）
-- [x] apps/agent → apps/daemon 重命名
+- `todo`：等待处理或认领。
+- `in_progress`：已分配/认领并正在执行。
+- `in_review`：外部 Agent 已交付，等待审核。
+- `done`：审核确认完成。
+- `closed`：取消或不再继续。
 
-### 7.2 Phase 4: 任务系统
-- 任务数据持久化
-- 任务 CRUD API
-- 任务与频道/消息关联
-- 任务拖拽排序
+### 8.2 认领与分配
 
-### 7.3 Phase 5: 用户体验
-- ~~设备名称持久化~~ (已完成 2026-05-12)
-- 频道编辑功能
-- 消息搜索
-- ~~私信系统~~ (已完成 2026-05-12)
-- 收藏功能对接
-- Agent DMs/Reminders/Workspace/Activity 标签页
+- Task 可以分配给人类或外部 Agent。
+- 未分配 Task 可以由能力匹配的外部 Agent 认领。
+- claim 必须由 Server 原子执行，同一时刻只有一个成功者。
+- claim 失败的 Agent 不得继续执行同一 Task。
+- 转交、取消认领、重派和状态变化必须可追溯。
+- Agent 交付后默认进入 `in_review`；用户明确确认根 Task 后才进入 `done`。
 
-### 7.4 Phase 6: 生产化
-- Tailscale 深度集成
-- 文件预览增强（图片/PDF/代码）
-- Agent 性能看板
-- 日志聚合
-- 备份/恢复
+### 8.3 接单确认
+
+任务成功派发后，线程中先发送简短接单确认。确认只表示已接住，不是正式交付。正式执行、进度和结果随后进入同一线程。
+
+### 8.4 PI 管理 Agent
+
+- 所有需要调用外部 Agent 的请求创建 `ManagementRun`。
+- 普通轻问答不创建 Task，由 PI 管理 Agent 定向调用外部 Agent。
+- 复杂请求创建根 Task，并允许 PI 生成有限深度、无环 Task DAG。
+- 子 Task 可以公开认领或定向分配。
+- 子 Task 由 PI 管理 Agent 按验收条件审核。
+- 根 Task 汇总交付后进入 `in_review`，仍由用户最终确认。
+- PI Worker 失联后，Server 从 Management Event、Task DAG 和 Invocation 结果恢复。
+
+## 9. Agent Invocation
+
+### 9.1 统一生命周期
+
+自定义 Agent 和 AgentOS 托管型 Agent 都映射到同一调用生命周期：
+
+```text
+queued -> sent -> accepted -> running
+  -> succeeded | failed | cancelled | timed_out
+```
+
+每次调用关联：
+
+- Team、Channel、Message。
+- 可选 ManagementRun、根 Task 和子 Task。
+- 目标 Agent 和所属 Device/Gateway。
+- 输入附件和 Memory Capsule。
+- Workspace Run、Artifact 和最终结果。
+- attempt、deadline 和 idempotency key。
+
+### 9.2 Capability 协商
+
+Adapter 可以声明：
+
+- streaming
+- cancel
+- steer
+- persistent session
+- attachments
+- structured result
+- skills/capabilities
+
+不支持的能力必须保守降级。补充要求无法 steer 时创建 follow-up invocation。
+
+## 10. Workspace Run 与 Artifact
+
+### 10.1 Workspace Run
+
+- 每次自定义 Agent 执行使用独立 Run 目录。
+- Run 记录 command、cwd、status、startedAt、completedAt、exitCode 和脱敏 log excerpt。
+- 完整 stdout/stderr 以受控日志 Artifact 保存，不直接塞入频道消息。
+- Device 重启或断线后，未上报终态可以从 manifest 恢复并补报。
+
+### 10.2 Artifact
+
+- 用户附件先上传 Server，再按 Dispatch 下载到 Run input 目录。
+- 外部 Agent 输出从 Run output 和允许的生成目录收集。
+- Artifact 记录 filename、mimeType、size、sha256、relativePath 和 storagePath。
+- Preview、download 和列表都必须执行 Team membership 与 Channel visibility 校验。
+- 用户源代码目录不是 AgentBean 管理的可删除 Artifact 空间。
+
+## 11. Memory
+
+### 11.1 分层
+
+- Role：Agent 身份、职责、Skills 和默认行为。
+- Key Knowledge：Team 协作记忆与 Device 本地项目记忆。
+- Active Context：当前 Message、Thread、Task、Attachment、Memory Capsule 和 Run 状态。
+
+### 11.2 事实源与权限
+
+- Message、Task、Artifact、Workspace Run 和 Agent Invocation 是事实源。
+- Memory 是可编辑、可废弃和可替代的投影。
+- Server 只保存协作级 Memory。
+- Device 本地项目 Memory 默认不上报。
+- 检索先做权限过滤，再做关键词、embedding 或其他排序。
+
+### 11.3 跨 Agent Memory
+
+- PI 管理 Agent 为每次外部调用生成最小必要 Memory Capsule。
+- Capsule 只包含目标 Agent 完成当前 Task/Invocation 所需内容。
+- 外部 Agent 可以返回带来源的 Memory Candidate。
+- 强规则、Team 决策、冲突和敏感摘要默认等待确认。
+- 跨 Agent 共享不等于共享其他 Agent 的私有 Session、DM 或本地 Workspace 历史。
+
+详细设计见 `docs/superpowers/specs/2026-07-06-agentbean-memory-design.md`。
+
+## 12. 协议要求
+
+### 12.1 `/web` namespace
+
+核心 commands/events：
+
+| 范围 | Commands / Events |
+|---|---|
+| Auth | `auth:login`、`auth:register`、`auth:whoami` |
+| Team | `team:list`、`team:create`、`team:switch`、`teams:snapshot` |
+| Member | `members:list`、`member:update-role`、`member:remove` |
+| Device | `device:list`、`device:get`、`device:scan`、`devices:snapshot` |
+| Agent | `agents:subscribe`、`agent:create`、`agent:set-visibility`、`agents:snapshot` |
+| Channel | `channels:subscribe`、`channel:create`、`channel:message`、`channel:history` |
+| Message | `message:send`、`message:search`、`message:context`、`message:edit`、`message:delete` |
+| Task | `task:list`、`task:create`、`task:update`、`task:delete`、`tasks:snapshot` |
+| Dispatch | `dispatch:cancel`、`dispatch:cancel-channel`、`message:dispatch-status` |
+
+所有 authenticated command 从 Socket session 派生 userId，不信任客户端自由指定身份。
+
+### 12.2 `/agent` namespace
+
+核心 Device commands/events：
+
+| 范围 | Commands / Events |
+|---|---|
+| Device | `device:hello`、`device:runtimes`、`device:scan-requested`、`device:removed` |
+| Agent | `agent:register-batch`、`agent:report-custom-skills` |
+| Dispatch | `dispatch:request`、`dispatch:accepted`、`dispatch:cancel`、`dispatch:result`、`dispatch:error` |
+
+Device event payload 必须携带或由凭据派生明确 Team scope。Server 必须验证 Device、Agent 和 Team 绑定。
+
+### 12.3 HTTP
+
+- `/api/teams/:teamId/artifacts/upload`
+- `/api/teams/:teamId/artifacts/:artifactId/preview`
+- `/api/teams/:teamId/artifacts/:artifactId/download`
+- Health、readiness 和 production smoke endpoints
+
+HTTP artifact 路由使用与 Socket 相同的 Team 和 Channel 授权规则。
+
+## 13. 安全需求
+
+1. 密码使用 `scrypt` 哈希。
+2. 用户 session、Device credential 和 invite 使用不同 token purpose。
+3. Device credential 绑定 Team、owner、machine/profile 和 canonical identity。
+4. 私有 Channel 和 DM 的权限在 Server 强制执行。
+5. Artifact storage path 不得接受用户任意绝对路径。
+6. Workspace 下载必须阻止目录穿越和符号链接越界。
+7. 自定义 Agent 环境变量由 Device 按 `envRef` 拉取，不通过普通频道消息传播。
+8. PI 管理 Agent 只加载内置管理工具和签名扩展，不加载 coding tools。
+9. 所有管理工具从 ManagementRun 派生 scope，并使用 lease 和 idempotency key。
+10. 删除 Team、Device、Agent、Memory 或 Artifact 前必须展示真实影响范围。
+
+## 14. 非功能需求
+
+- **可靠性**：Server、Device 和外部 Agent 断线可恢复；终态通过 outbox 幂等补报。
+- **一致性**：Team、Task、Dispatch、ManagementRun 和 Memory 有单一事实源。
+- **隔离性**：Team 数据、Device profile、Workspace Run 和 Memory scope 不串用。
+- **可观测性**：记录调用耗时、状态、模型用量、Task DAG、重派、恢复和 Artifact。
+- **可扩展性**：新增外部 Agent adapter 不改变 Team、Task、Memory 和 Invocation 事实模型。
+- **可测试性**：Domain rules 可脱离 Socket、文件系统和 SQLite 单测。
+- **可迁移性**：旧字段和兼容入口有明确移除版本，不能成为新增产品 API。
+- **可用性**：频道主时间线保持克制，长执行和管理事件进入线程或详情面板。
+
+## 15. 交付路线
+
+### Phase A：当前 AgentBean Next 基线
+
+- Team、用户、成员和切换。
+- Device invite、identity、runtime 和 Agent snapshot。
+- Channel、DM、Message、Thread、Task 和搜索。
+- 自定义 Agent 与 AgentOS Connector。
+- Dispatch、Workspace Run、Artifact 和恢复。
+- Agent Skills、状态、可见性和基础指标。
+
+### Phase B：Device Runtime Core
+
+- 先交付可测试、可恢复的 `DeviceServiceCore`，提供 Worker、credential、lease、durable outbox 和结果补报能力。
+- 过渡期由现有 Device 进程承载，每个 Team/Profile 使用独立 Runner。
+- 本阶段不要求平台安装器或自包含二进制，不阻塞 PI 单 Agent 管理调用。
+
+### Phase C：PI 管理 Agent
+
+- PI SDK wrapper 和无 coding tools 安全边界。
+- Device-hosted Manager Worker。
+- ManagementRun、lease 和单外部 Agent 调用。
+- 轻问答与任务型请求统一经过管理调用。
+- 先以 `shadow` 验证管理决策，再按 Team 灰度启用 `managed`。
+- AgentInvocation 复用现有 Dispatch 作为执行 attempt，不建立平行执行事实源。
+
+### Phase D：多 Agent 协作
+
+- Task DAG、dependency、claim lease 和 capability matching。
+- 子 Task 认领、验收、重派和根 Task 汇总。
+- 跨 Agent Memory Capsule 和 Candidate。
+
+### Phase E：混合 Manager Worker Pool
+
+- Server-hosted Manager Worker。
+- managed/device/auto placement。
+- 跨 host checkpoint 恢复。
+- 预算、容量、费用和隐私策略。
+
+### Phase F：Device Service 自包含发布
+
+- 将已经验证的 `DeviceServiceCore` 封装为 macOS、Linux 和 Windows 后台服务。
+- 后台安装、启动、停止、状态、日志和诊断。
+- 自包含二进制、升级和回滚。
+- 旧前台进程配置和凭据迁移。
+
+## 16. 总体验收标准
+
+- 产品文案、领域对象、共享 contracts、路由、持久化键和数据库 schema 统一使用 Team 术语。
+- 全部业务数据都能追溯到明确 Team。
+- Server 对 Team membership 和 Channel visibility 做强制校验。
+- Device Service 在关闭终端和设备重启后继续运行。
+- 自定义 Agent 与 AgentOS 托管型 Agent 使用统一 Invocation 生命周期。
+- PI 管理 Agent 只能管理和调用外部 Agent，不能直接执行用户领域任务。
+- 普通轻问答不创建 Task；复杂任务可以生成有界 Task DAG。
+- 多 Agent 同时 claim 时只有一个成功。
+- 子 Task 必须携带可验证 acceptance criteria 和 evidence refs；证据不足、高风险或冲突交付不能自动进入 `done`。
+- 外部 Agent 原始结果、Workspace Run 和 Artifact 正确归因。
+- 根 Task 交付后进入 `in_review`，用户明确确认后才进入 `done`。
+- 跨 Agent Memory 不越过 Team、Channel、DM、Agent 和 User scope。
+- Memory Capsule 携带来源可见性、内容类型、脱敏级别和审计引用，私有或本地原文默认不得离开原 scope。
+- Worker、Device 或外部 Agent 掉线后，已持久化任务和结果能够恢复。
+- Management Event 使用 typed、versioned payload；checkpoint 摘要不能替代 Server 事实源。
+- 用户源代码目录不因 Team、Device、Agent 或 Workspace Run 删除而被误删。
