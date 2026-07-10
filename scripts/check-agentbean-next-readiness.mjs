@@ -90,6 +90,13 @@ export function collectAgentBeanNextReadinessChecks({
       'AgentBean Next CI must run the readiness checker before deploy/publish can continue',
     ),
     check(
+      'ci-runs-package-scoped-phase-tests',
+      packageJson.scripts?.['test:phase1'] ===
+        'npm run test:contracts -- --api.host 127.0.0.1 && npm run test:domain -- --api.host 127.0.0.1 && npm run test:server-next -- --api.host 127.0.0.1 && npm run test:daemon-next -- --api.host 127.0.0.1 && npm run test:web-next -- --api.host 127.0.0.1' &&
+        workflow.includes('run: npm run test:phase1'),
+      'AgentBean Next CI must run each package test suite through its canonical working directory and Vitest config',
+    ),
+    check(
       'ci-runs-production-readiness-before-next-deploy',
       workflow.includes("env.AGENTBEAN_DEPLOY_TARGET == 'next'") &&
         workflow.includes('npm run check:agentbean-next-readiness -- --production') &&

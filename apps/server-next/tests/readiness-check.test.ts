@@ -17,6 +17,7 @@ describe('AgentBean Next readiness checker', () => {
       'ci-validates-root-railway-config',
       'ci-runs-on-main-push',
       'ci-runs-readiness-checker',
+      'ci-runs-package-scoped-phase-tests',
       'ci-runs-production-readiness-before-next-deploy',
       'daemon-install-smoke-script',
       'entry-smoke-script',

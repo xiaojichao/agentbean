@@ -224,15 +224,7 @@ jobs:
 
       - name: Run AgentBean Next phase tests
         if: steps.changes.outputs.should_validate == 'true'
-        run: |
-          node apps/server/node_modules/vitest/vitest.mjs run \
-            packages/contracts/tests \
-            packages/domain/tests \
-            apps/server-next/tests \
-            apps/daemon-next/tests \
-            apps/web-next/tests \
-            --environment node \
-            --api.host 127.0.0.1
+        run: npm run test:phase1
 
       - name: Build AgentBean Next packages
         if: steps.changes.outputs.should_validate == 'true'
