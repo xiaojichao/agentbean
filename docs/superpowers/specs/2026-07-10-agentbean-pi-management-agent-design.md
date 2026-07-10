@@ -805,7 +805,17 @@ agentbean device uninstall
 
 ## 21. 分阶段落地
 
-本文是跨 Device、Server、Task、Memory 和 Web 的总纲设计，不合并成一个超大实施计划。每个 Phase 必须有独立实施计划和验收矩阵；只在前一 Phase 合并、发布并通过真实链路验证后启动下一 Phase。第一份实施计划只覆盖 Phase 0。
+本文是跨 Device、Server、Task、Memory 和 Web 的总纲设计，不合并成一个超大实施计划。每个 Phase 必须有独立实施计划和验收矩阵；只在前一 Phase 合并、发布并通过真实链路验证后启动下一 Phase。第一份实施计划只覆盖 Phase -1。
+
+### Phase -1：Team 术语切换
+
+- 文档、共享 contracts、Server/Web/Device 源码、路由参数、本地持久化键和测试统一使用 Team 术语。
+- Web 动态路由统一使用 `teamPath`，HTTP 资源统一使用 `/api/teams/:teamId/...`。
+- DTO 和内部标识统一使用 `teamId`、`primaryTeamId`、`visibleTeamIds` 和 `currentTeamId`。
+- SQLite 全局与 Team migrations 统一使用 `teams`、`team_members`、`team_id`、`current_team_id` 和 `primary_team_id`。
+- 删除不再需要的 admin、artifact、登录与浏览器状态兼容投影；需要迁移的本地值先完成一次性读取转换，再停止写入旧键。
+- CI 增加禁止历史同义命名重新进入产品代码和 schema 的静态检查。
+- 完成 targeted tests、Server/Contracts/Web 构建和真实 Team 切换、Device 接入、Artifact 上传 smoke。
 
 ### Phase 0：契约与 PI 兼容性验证
 
@@ -905,6 +915,7 @@ agentbean device uninstall
 
 - 内置 PI 管理 Agent 不出现在 Team Agent 列表，不接收普通 @mention。
 - PI Manager 不能调用 shell、文件读写、浏览器或任意项目 Extension。
+- 文档、代码、路由、持久化键、共享 contracts 和数据库 schema 统一使用 Team 术语。
 - 所有需要外部 Agent 的请求都由 PI Manager 创建 ManagementRun 并发起调用；普通轻问答不必创建 Task。
 - 用户具体任务由实际外部 Agent 执行并正确归因。
 - 自定义 Agent 和 AgentOS 托管型 Agent 使用同一 Invocation 生命周期。
