@@ -1,9 +1,9 @@
 # AgentBean 产品需求文档 (PRD)
 
 **日期:** 2026-05-09
-**版本:** 1.3
+**版本:** 1.4
 **状态:** Phase 0-3 已完成，Phase 4+ 进行中
-**更新:** 2026-07-08 — 补充多 Agent 频道消息处理优先级与任务认领语义
+**更新:** 2026-07-10 — 确立 Device Service、内置 PI 管理 Agent 与外部执行 Agent 的目标架构
 
 ---
 
@@ -34,7 +34,7 @@ AgentBean/
 ├── apps/
 │   ├── server/     # Express + Socket.IO 服务端
 │   ├── web/        # Next.js 前端
-│   └── daemon/     # 设备端 Daemon（原 agent/，2026-05-12 重命名）
+│   └── daemon-next/ # 当前兼容实现；目标迁移为 AgentBean Device Service
 └── docs/superpowers/  # PRD/Specs/Plans
 ```
 
@@ -44,12 +44,28 @@ AgentBean/
 |---|---|
 | 服务端 | Express + Socket.IO + better-sqlite3 |
 | 前端 | Next.js App Router + Tailwind CSS + Zustand |
-| Agent 端 | TypeScript + node-pty (codex) + child_process (claude-code) |
+| Device 端 | TypeScript + PI SDK 管理 Worker + 外部 Agent adapter/connector |
 | 数据库 | SQLite (全局 DB + 每网络独立 DB) |
 | 网络 | Tailscale mesh 网络 |
 | 认证 | 用户名密码 (scrypt) + JWT + 设备三截 token |
 
-### 2.3 数据库架构
+### 2.3 目标协作架构
+
+AgentBean 的目标架构由三层组成：
+
+1. **AgentBean Server**：保存 Team、Channel、Task DAG、认领租约、Agent 调用、共享记忆、ManagementRun 和审计事件，是协作事实源。
+2. **内置 PI 管理 Agent**：只负责 AgentBean 内部管理事务，包括请求理解、任务分解、Agent 选择、子任务发布与等待、失败恢复、结果汇总和跨 Agent 记忆编排；不直接执行用户领域任务。
+3. **外部执行 Agent**：继续分为两类：
+   - 自定义 Agent：运行在 Claude Code、Codex、Kimi CLI、PI CLI 等 Coding Agent 之上。
+   - AgentOS 托管型 Agent：由 OpenClaw、Hermes Agent 等 AgentOS/Gateway 托管。
+
+内置 PI 管理 Agent 采用混合 Manager Worker Pool。Server 持久化确定性状态，每个需要调用外部 Agent 的请求创建独立 `ManagementRun`：任务型请求关联根 Task，普通轻问答只关联根 Message。PI Manager Worker 可以调度到 Server 托管环境或用户授权的 Device Service。第一实施切片使用 Device-hosted Worker，但协议不绑定单一部署位置。
+
+当前 npm 前台 Daemon 将迁移为后台常驻的 **AgentBean Device Service**。所有新增产品文案、API 和页面统一使用 `Device`；`Daemon` 只保留在历史目录、兼容包和迁移代码中。
+
+详细设计见 `docs/superpowers/specs/2026-07-10-agentbean-pi-management-agent-design.md`。
+
+### 2.4 数据库架构
 
 **全局 DB**（`global.db`）：
 - `users` — 用户信息
@@ -341,3 +357,11 @@ Agent 通过 `/agent` Socket.IO 命名空间注册到服务端：
 - Agent 性能看板
 - 日志聚合
 - 备份/恢复
+
+### 7.5 Phase 7: PI 管理 Agent 与 Device Service
+- Device Service 后台安装、升级、诊断和旧 Daemon 迁移
+- Device-hosted PI Manager Worker 与 ManagementRun
+- 统一 Agent Invocation Contract
+- Task DAG、依赖、认领租约和子任务验收
+- 跨 Agent Memory Capsule 与来源审计
+- Server-hosted Worker 和 managed/device/auto 混合调度
