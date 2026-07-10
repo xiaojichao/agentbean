@@ -411,11 +411,13 @@ export type ManagementMode = 'direct' | 'shadow' | 'managed';
 - `shadow`：PI 可以读取相同的权限过滤上下文并生成不可执行的管理决策记录，但不能创建 Task、Invocation、消息或 Memory Candidate，也不能调用外部 Agent。
 - `managed`：需要外部 Agent 的请求创建 ManagementRun，并通过 Agent Invocation Gateway 调用。
 
-进入 `managed` 前，Server 必须完成 Worker、模型凭证、placement、预算和目标 Agent 可用性预检。回退规则按是否已产生副作用划分：
+进入 `managed` 前，Server 必须在创建 ManagementRun 之前完成 Worker、模型凭证、placement、预算和目标 Agent 可用性预检。Server 把“首次预留 managed idempotency key，或首次写入 ManagementRun、Task、ManagementEvent、checkpoint、管理消息、Memory Capsule、Invocation、Dispatch 中任意一项”定义为单向 `managedFallbackBarrier`：
 
-1. 尚未预留 idempotency key、创建 Invocation 或发送 Dispatch：显式单 Agent 请求可以按 Team policy 回退 `direct`；需要分解、认领或多 Agent 汇总的请求没有等价 direct 语义，必须返回能力暂不可用或进入 `waiting_for_user`。
-2. 已创建 Invocation 或任一 Dispatch attempt：禁止再走 direct dispatch。系统只能重试当前 attempt、创建受控新 attempt、等待 Worker 接管或向用户报告阻塞，避免重复执行和重复消息。
-3. PI Session、Provider、Worker 或 Management Tool 在运行中失败：释放或转移 Manager Lease，但保留同一个 ManagementRun 和 Invocation idempotency key。
+1. 尚未越过 barrier：显式单 Agent 请求可以按 Team policy 选择 `direct`；需要分解、认领或多 Agent 汇总的请求没有等价 direct 语义，必须返回能力暂不可用。
+2. 一旦越过 barrier：同一用户请求永久禁止再走 direct dispatch，即使外部调用尚未开始。系统只能继续当前 ManagementRun、恢复或转移 Worker、重试受控 attempt、进入 `waiting_for_user`，或以可审计终态报告失败。
+3. PI Session、Provider、Worker 或 Management Tool 在运行中失败：释放或转移 Manager Lease，但保留同一个 ManagementRun 和 Invocation idempotency scope；不能通过删除内部记录重新获得 direct fallback 资格。
+
+`managedFallbackBarrier` 的越过与路由决定写入同一 Server 事务，并由用户请求级 idempotency key 唯一约束。`shadow` 产生的只读决策记录使用独立 namespace，不会创建 managed 执行记录，也不能随后被解释为已经执行。
 
 最终目标态是新 Team 默认 `managed`，但 `direct` 在灰度期和紧急回滚期仍是显式模式，不作为运行中异常的隐式逃生路径。
 
@@ -478,11 +480,7 @@ export interface TaskCoordinationFields {
   reviewPolicy: 'human' | 'manager';
   claimPolicy: 'open' | 'targeted';
   requiredCapabilities: string[];
-  acceptanceCriteria: Array<{
-    id: string;
-    description: string;
-    evidenceRequired: boolean;
-  }>;
+  acceptanceCriteria: AcceptanceCriterion[];
   dependencyTaskIds: string[];
   attempt: number;
   maxAttempts: number;
@@ -496,25 +494,45 @@ export interface TaskCoordinationFields {
 外部 Agent 的子任务交付使用结构化证据：
 
 ```ts
+export interface AcceptanceCriterion {
+  id: string;
+  description: string;
+  evidenceRequired: boolean;
+  allowedEvidenceKinds?: EvidenceRef['kind'][];
+}
+
+export interface EvidenceRef {
+  kind: 'message' | 'artifact' | 'workspace-run' | 'invocation' | 'task';
+  id: string;
+  sha256?: string;
+}
+
 export interface SubtaskDelivery {
+  id: string;
   taskId: string;
+  taskRevision: number;
+  taskAttempt: number;
+  claimLeaseId: string;
   invocationId: string;
   summary: string;
   claims: Array<{
     statement: string;
-    evidenceRefs: string[];
+    evidenceRefs: EvidenceRef[];
   }>;
-  artifactRefs: string[];
-  sourceMessageIds: string[];
+  evidenceRefs: EvidenceRef[];
 }
 
 export interface SubtaskAcceptance {
   taskId: string;
+  deliveryId: string;
+  expectedTaskRevision: number;
+  taskAttempt: number;
+  claimLeaseId: string;
   decision: 'accepted' | 'rejected' | 'needs_human';
   criteriaResults: Array<{
     criterionId: string;
     passed: boolean;
-    evidenceRefs: string[];
+    evidenceRefs: EvidenceRef[];
   }>;
   reason: string;
   decidedBy: 'manager' | 'human';
@@ -543,10 +561,10 @@ export interface SubtaskAcceptance {
 4. 成功者获得 Task Claim Lease，任务进入 `in_progress`。
 5. 失败者停止执行，不产生重复 Dispatch。
 6. Agent 交付后子任务进入 `in_review`。
-7. PI Manager 提交 `SubtaskAcceptance`；Server 校验所有必需 criterion、evidence reference、Invocation 归属和 Task revision。
+7. PI Manager 提交 `SubtaskAcceptance`；Server 以 optimistic revision check 校验 `expectedTaskRevision` 等于当前 `in_review` revision，并校验 delivery、Task attempt、claim lease、Invocation 归属以及所有必需 criterion 和 evidence reference。
 8. 只有 Server 校验通过的 `accepted` 决定可以让子任务进入 `done`；不接受则重开或创建补充任务。
 
-高风险操作、冲突结果、缺少必需证据、来源不可见或需要主观取舍时，PI 只能提交 `needs_human`。Server 将根任务保持 `in_review` 或把 ManagementRun 转为 `waiting_for_user`，不得把子任务直接置为 `done`。每次验收决定都写入 typed Management Event，记录 criteria 结果、证据引用和原因。
+任何来自旧 revision、旧 Task attempt、非当前 claim lease 或非当前 delivery 的 acceptance 都返回 conflict，不能覆盖新交付。Server 逐条验证 EvidenceRef 存在、归属于该 Team/Task/Invocation、内容 hash 未变化且对验收者可见。高风险操作、冲突结果、缺少必需证据、来源不可见或需要主观取舍时，PI 只能提交 `needs_human`。Server 将根任务保持 `in_review` 或把 ManagementRun 转为 `waiting_for_user`，不得把子任务直接置为 `done`。每次验收决定都写入 typed Management Event，记录 criteria 结果、证据引用和原因。
 
 定向调用流程仍创建 Task Node 和 Agent Invocation，只是 `claimPolicy = targeted`，由指定 Agent 直接获得 lease。
 
@@ -574,7 +592,10 @@ export interface AgentInvocationRequest {
   targetAgentId: string;
   targetKind: 'custom' | 'agentos-hosted';
   objective: string;
-  acceptanceCriteria: string[];
+  taskRevision?: number;
+  taskAttempt?: number;
+  claimLeaseId?: string;
+  acceptanceCriteria: AcceptanceCriterion[];
   dependencyResults: DependencyResultRef[];
   memoryCapsuleId?: string;
   attachmentIds: string[];
@@ -597,28 +618,46 @@ export interface AgentInvocationResult {
 }
 ```
 
+`taskId` 存在时，`taskRevision`、`taskAttempt` 和 `claimLeaseId` 必须同时存在，并与当前 Task claim 快照一致；轻量无 Task 调用则四者全部缺省。
+
 ### 12.1 AgentInvocation 与现有 Dispatch
 
 `AgentInvocation` 是管理层的一次逻辑调用，`Dispatch` 是把该调用交给某个外部 Runtime 的一次传输/执行 attempt：
 
 ```ts
+export type AgentInvocationStatus =
+  | 'pending'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'timed_out';
+
 export interface AgentInvocationRecord {
   id: string;
   managementRunId: string;
   taskId?: string;
   targetAgentId: string;
-  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
-  dispatchAttemptIds: string[];
-  activeDispatchId?: string;
   idempotencyKey: string;
   createdAt: number;
-  updatedAt: number;
+}
+
+export interface AgentInvocationView extends AgentInvocationRecord {
+  status: AgentInvocationStatus;
+  dispatchAttempts: Array<{
+    dispatchId: string;
+    attemptNumber: number;
+    status: AgentInvocationStatus;
+  }>;
+  activeDispatchId?: string;
 }
 ```
 
 - 一个 Invocation 可以因重试、Worker 接管或受控改派产生多个 Dispatch attempt，但同一时刻只能有一个 active attempt。
-- `dispatches` 继续保存实际发送目标、执行状态、timeout、cancel 和 Workspace Run 关联；`agent_invocations` 不复制一套独立的执行事实。
-- Invocation 终态由其 attempt 和 Server 验证规则派生；不能通过双写让两套状态独立前进。
+- `dispatches` 继续保存实际发送目标、执行状态、timeout、cancel 和 Workspace Run 关联；managed Dispatch 增加不可变 `agent_invocation_id` 外键和从 1 开始的 `attempt_number`。
+- 数据库对 `(agent_invocation_id, attempt_number)` 建唯一约束，并以 partial unique index 或等价事务锁保证每个 Invocation 最多一个非终态 attempt。Direct 和历史 Dispatch 的 `agent_invocation_id` 为 `NULL`。
+- `agent_invocations` 只持久化调用意图、目标和 idempotency key，不持久化 status、attempt ID 列表或 active Dispatch。`AgentInvocationView` 完全从关联 Dispatch 和 Server 终态规则查询派生，没有独立写接口。
+- Invocation 终态由 canonical Dispatch rows 和 Server 验证规则派生；创建 attempt、切换 active attempt 和写 Dispatch 状态必须在同一事务中满足上述约束，不能通过双写让两套状态独立前进。
 - 历史 Dispatch 不迁移、不重写，只读页面继续按现有方式展示；只有启用 `managed` 后的新调用创建 Invocation 关联。
 - 现有 Web 可以继续展示 Dispatch 状态；ManagementRun/Task DAG 页面从 Invocation 聚合 attempts、重试和贡献 Agent。
 - 同一 Invocation 的重复工具调用返回已有记录；新的 Dispatch attempt 必须使用新的 attempt id，但继承 Invocation idempotency scope。
@@ -661,14 +700,33 @@ export interface MemoryCapsule {
     contentKind: 'summary' | 'fact' | 'decision' | 'preference' | 'procedure';
     redactionLevel: 'none' | 'summary-only' | 'sensitive-removed';
     content: string;
-    sourceRefs: Array<{
-      sourceKind: 'message' | 'task' | 'artifact' | 'workspace-run' | 'invocation' | 'memory';
-      sourceId: string;
-    }>;
-    authorizationRef?: string;
+    sourceRefs: MemorySourceRef[];
+    authorization: MemoryCapsuleAuthorization;
     expiresAt?: number;
   }>;
   createdAt: number;
+  expiresAt: number;
+}
+
+export interface MemorySourceRef {
+  sourceKind: 'message' | 'task' | 'artifact' | 'workspace-run' | 'invocation' | 'memory';
+  sourceId: string;
+}
+
+export interface MemoryCapsuleAuthorization {
+  decisionId: string;
+  mode: 'scope-policy' | 'explicit-grant';
+  policyVersion: number;
+  grantId?: string;
+  grantVersion?: number;
+  targetAgentId: string;
+  sourceScopeType: 'team' | 'channel' | 'dm' | 'task' | 'agent' | 'user' | 'local-workspace';
+  sourceScopeRef: string;
+  sourceRefsHash: string;
+  contentHash: string;
+  authorizedContentKind: 'summary' | 'fact' | 'decision' | 'preference' | 'procedure';
+  authorizedRedactionLevel: 'none' | 'summary-only' | 'sensitive-removed';
+  issuedAt: number;
   expiresAt: number;
 }
 ```
@@ -681,8 +739,10 @@ Capsule 规则：
 - Capsule 本身不是新的长期 Memory。
 - 外部 Agent 不能使用 Capsule ID 查询其他 Memory。
 - `content` 是经过权限过滤和脱敏后的最终注入文本，不是 Memory 原文的无条件复制。
-- DM、私有频道和本地 Workspace 默认禁止原文进入 Server-hosted Capsule；只有脱敏摘要且具备显式 `authorizationRef` 时才能离开原 scope，本地调用可以保持 Device-only 注入。
-- Capsule create、read、inject、expire 都写访问审计，记录目标 Agent、scope、source refs、redaction level 和调用者，不记录敏感正文。
+- 每个 item 都必须带 Server 生成的结构化 authorization decision，并绑定目标 Agent、来源 scope、规范化 source refs hash、最终 content hash、内容类型、脱敏级别、policy version 和过期时间；不能用 PI 提供的 opaque reference 代替授权判断。
+- `scope-policy` 只适用于目标 Agent 原本可见的普通内容。DM、私有频道和本地 Workspace 默认禁止原文进入 Server-hosted Capsule；脱敏摘要离开原 scope 必须使用 `explicit-grant`，且同时存在 `grantId` 与 `grantVersion`。本地调用可以保持 Device-only 注入。
+- Server 在 Capsule create 和每次 inject 前都重新执行授权：核对当前 Team 成员关系和来源可见性、目标 Agent、source/content hash、授权脱敏级别、expiry，以及 grant/policy version 是否仍有效或已撤销。任一不匹配都 fail closed，不把 item 交给外部 Agent。
+- Capsule create、read、inject、deny、expire 都写访问审计，记录 authorization decision、目标 Agent、scope、source refs、redaction level 和调用者，不记录敏感正文。
 
 ### 13.3 写入与共享
 
@@ -1013,6 +1073,7 @@ agentbean device uninstall
 - 根任务 human review 与子任务 manager review。
 - idempotency key 去重。
 - 缺少证据、冲突结果和高风险交付不能进入 `done`。
+- stale Task revision、attempt、claim lease 或 delivery acceptance 返回 conflict。
 - `direct`、`shadow`、`managed` 模式不会产生重复 Invocation 或 Dispatch。
 
 ### 22.3 Server
@@ -1022,9 +1083,9 @@ agentbean device uninstall
 - Management Tool 权限与 scope 派生。
 - 自定义 Agent 与 AgentOS Agent 统一调用。
 - late result、重派和 attempt 隔离。
-- Memory Capsule 权限、过期和来源。
-- Invocation 聚合多个 Dispatch attempts，但执行终态只来自实际 attempt。
-- 副作用前允许受控回退，副作用后禁止隐式 direct dispatch。
+- Memory Capsule create/inject 双重授权、grant 撤销、target/content hash 变化和过期都 fail closed。
+- Invocation 聚合多个 Dispatch attempts，唯一/active-attempt 约束有效，执行终态只来自 canonical Dispatch rows。
+- managed barrier 前允许受控回退；任一持久或用户可见写入后禁止隐式 direct dispatch。
 - checkpoint 引用失效时忽略模型摘要并从 Server 事实重建。
 - Event 重放按 sequence、version 和 idempotency key 保持确定性。
 

@@ -1346,7 +1346,7 @@ if (violations.length > 0) {
 console.log(`Team terminology check passed (${scanRoots.length} roots).`);
 ```
 
-Release A 期间只允许以下两个文件，不允许目录级 allowlist：
+Release A 期间只允许以下三个文件，不允许目录级 allowlist：
 
 - `apps/web-next/lib/team-path.ts`
 - `apps/web-next/tests/team-path.test.ts`
