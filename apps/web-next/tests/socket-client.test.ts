@@ -44,6 +44,18 @@ describe('web-next socket client', () => {
     }
   });
 
+  test('treats discovered executor runtimes only as custom Agent creation sources', () => {
+    const pageSource = readFileSync(new URL('../app/register/page.tsx', import.meta.url), 'utf8');
+    const modalSource = readFileSync(new URL('../components/register-agent-modal.tsx', import.meta.url), 'utf8');
+
+    expect(pageSource).toContain('创建自定义 Agent');
+    expect(pageSource).not.toContain('existingAgents');
+    expect(pageSource).not.toContain('findRegisteredExecutor');
+    expect(pageSource).not.toContain('编辑配置');
+    expect(modalSource).not.toContain('setVisibility');
+    expect(modalSource).not.toContain("mode === 'update'");
+  });
+
   test('uses first-slice web events for auth, team, and message commands', async () => {
     const transport = new FakeWebTransport();
     const client = createWebSocketClient(transport);

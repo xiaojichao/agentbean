@@ -4,8 +4,7 @@ import { useEffect, useState } from 'react';
 import { Search, Bot } from 'lucide-react';
 import { useAgentBeanStore } from '@/lib/store';
 import { getWebSocket, agentEvents, deviceEvents } from '@/lib/socket';
-import type { AgentSnapshot, DiscoveredAgent } from '@/lib/schema';
-import { findRegisteredExecutor } from '@/lib/agent-registration';
+import type { DiscoveredAgent } from '@/lib/schema';
 import { RegisterAgentModal } from '@/components/register-agent-modal';
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -27,13 +26,10 @@ const SOURCE_STYLE: Record<DiscoveredAgent['source'], string> = {
 
 export default function RegisterPage() {
   const discovered = useAgentBeanStore((s) => s.discovered);
-  const existingAgents = useAgentBeanStore((s) => s.agents);
   const discovering = useAgentBeanStore((s) => s.discovering);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<DiscoveredAgent | null>(null);
-  const [modalMode, setModalMode] = useState<'create' | 'update'>('create');
-  const [registeredAgent, setRegisteredAgent] = useState<AgentSnapshot | null>(null);
   const [scanDeviceId, setScanDeviceId] = useState<string | null>(null);
   const [scanError, setScanError] = useState('');
 
@@ -86,15 +82,12 @@ export default function RegisterPage() {
     }
   };
 
-  const handleRegister = (agent: DiscoveredAgent) => {
+  const handleCreate = (agent: DiscoveredAgent) => {
     if (agent.category === 'agentos-hosted') return;
     if (!currentTeamId || !scanDeviceId) {
       setScanError('当前扫描设备或团队不可用');
       return;
     }
-    const existingAgent = findRegisteredExecutor(agent, Object.values(existingAgents), scanDeviceId);
-    setRegisteredAgent(existingAgent);
-    setModalMode(existingAgent ? 'update' : 'create');
     setSelectedAgent(agent);
     setModalOpen(true);
   };
@@ -110,7 +103,7 @@ export default function RegisterPage() {
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">注册 Agent</h1>
-          <p className="mt-1 text-sm text-neutral-500">扫描设备上的 Agent，并将可创建的执行器注册到当前团队</p>
+          <p className="mt-1 text-sm text-neutral-500">扫描设备上的运行时，并基于执行器创建自定义 Agent</p>
         </div>
         <button
           onClick={handleDiscover}
@@ -180,32 +173,16 @@ export default function RegisterPage() {
                     </div>
 
                     <div className="mt-3 flex justify-end items-center gap-2">
-                      {(() => {
-                        const existingAgent = scanDeviceId
-                          ? findRegisteredExecutor(agent, Object.values(existingAgents), scanDeviceId)
-                          : null;
-                        if (agent.category === 'agentos-hosted') {
-                          return <span className="text-xs font-medium text-emerald-600">已由设备自动注册</span>;
-                        }
-                        return existingAgent ? (
-                          <>
-                            <span className="text-xs text-emerald-600 font-medium">已注册</span>
-                            <button
-                              onClick={() => handleRegister(agent)}
-                              className="rounded border border-neutral-300 px-3 py-1.5 text-xs hover:bg-neutral-50"
-                            >
-                              编辑配置
-                            </button>
-                          </>
-                        ) : (
-                          <button
-                            onClick={() => handleRegister(agent)}
-                            className="rounded bg-neutral-900 px-3 py-1.5 text-xs text-white hover:bg-neutral-800"
-                          >
-                            注册
-                          </button>
-                        );
-                      })()}
+                      {agent.category === 'agentos-hosted' ? (
+                        <span className="text-xs font-medium text-emerald-600">已由设备自动注册</span>
+                      ) : (
+                        <button
+                          onClick={() => handleCreate(agent)}
+                          className="rounded bg-neutral-900 px-3 py-1.5 text-xs text-white hover:bg-neutral-800"
+                        >
+                          创建自定义 Agent
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -222,12 +199,8 @@ export default function RegisterPage() {
         onClose={() => {
           setModalOpen(false);
           setSelectedAgent(null);
-          setRegisteredAgent(null);
         }}
         discoveredAgent={selectedAgent}
-        mode={modalMode}
-        registeredAgentId={registeredAgent?.id}
-        initiallyVisible={registeredAgent?.visibleTeamIds.includes(currentTeamId ?? '') ?? false}
       />
     </div>
   );
