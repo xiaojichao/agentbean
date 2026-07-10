@@ -119,6 +119,7 @@ export type DaemonCustomAgent = DispatchCustomAgentDto & { env?: Record<string, 
 
 export interface DispatchRequestPayload {
   id: string;
+  claimRequired?: boolean;
   teamId: string;
   channelId: string;
   messageId: string;
@@ -151,6 +152,7 @@ export interface CreateDaemonProtocolClientInput {
   /** Injectable fetch for tests; defaults to global fetch. */
   fetch?: typeof fetch;
   envResolver?: AgentEnvResolver;
+  sleep?(ms: number): Promise<void>;
   rescanIntervalMs?: number;
   /**
    * Home directory used for scanning custom-agent skills (e.g. ~/.claude/skills).
@@ -174,6 +176,7 @@ export interface DaemonProtocolClient {
 
 export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInput): DaemonProtocolClient {
   const { socket, executor, device, runtimes, agents, scan, serverUrl, fetch: fetchFn, envResolver } = input;
+  const sleep = input.sleep ?? sleepFor;
   // 复用 scanner 同款 home 解析；默认 homedir()。custom-agent skills 扫描必须用同一个 home。
   const home = input.homeDir ?? homedir();
   const codexGeneratedImagesDir = join(home, '.codex', 'generated_images');
@@ -258,11 +261,25 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       });
 
       socket.on(AGENT_EVENTS.dispatch.request, async (payload) => {
-        const request = payload as DispatchRequestPayload;
+        let request = payload as DispatchRequestPayload;
         if (cancelledDispatchIds.delete(request.id)) {
           return;
         }
         try {
+          if (request.claimRequired) {
+            const wake = request;
+            const accepted = await claimDispatchRequest(
+              socket,
+              wake,
+              sleep,
+              () => cancelledDispatchIds.has(wake.id),
+            );
+            if (!accepted) {
+              cancelledDispatchIds.delete(wake.id);
+              return;
+            }
+            request = accepted;
+          }
           if (request.customAgent?.envRef && !request.customAgent.env) {
             if (!envResolver) {
               throw new Error('Custom agent env resolver is not configured');
@@ -450,6 +467,49 @@ function normalizeDispatchResult(result: string | DaemonDispatchResult): DaemonD
   return result;
 }
 
+async function claimDispatchRequest(
+  socket: DaemonProtocolSocket,
+  wake: DispatchRequestPayload,
+  sleep: (ms: number) => Promise<void>,
+  isCancelled: () => boolean,
+): Promise<DispatchRequestPayload | null> {
+  for (;;) {
+    if (isCancelled()) {
+      return null;
+    }
+    const ack = await socket.emitWithAck(AGENT_EVENTS.dispatch.accepted, {
+      dispatchId: wake.id,
+      agentId: wake.agentId,
+    });
+    if (!ack || typeof ack !== 'object' || (ack as { ok?: unknown }).ok !== true) {
+      throw new Error('dispatch claim failed');
+    }
+    if ((ack as { ready?: unknown }).ready === true) {
+      const request = (ack as { request?: unknown }).request;
+      if (!request || typeof request !== 'object') {
+        throw new Error('dispatch claim response missing request');
+      }
+      const accepted = request as DispatchRequestPayload;
+      if (accepted.id !== wake.id || accepted.agentId !== wake.agentId) {
+        throw new Error('dispatch claim response does not match wake');
+      }
+      return accepted;
+    }
+    if ((ack as { ready?: unknown }).ready !== false) {
+      throw new Error('dispatch claim response missing readiness');
+    }
+    const retryAfterMs = (ack as { retryAfterMs?: unknown }).retryAfterMs;
+    if (typeof retryAfterMs !== 'number' || !Number.isFinite(retryAfterMs)) {
+      throw new Error('dispatch claim response missing retry delay');
+    }
+    await sleep(Math.max(1, Math.ceil(retryAfterMs)));
+  }
+}
+
+function sleepFor(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function isDispatchResultDeliveredAck(ack: unknown): boolean {
   if (!ack || typeof ack !== 'object') {
     return false;
@@ -465,7 +525,10 @@ async function announceDeviceSnapshot(
   agents: DaemonAgentReport[],
   options: { onDeviceRemoved?: () => Promise<void> | void } = {},
 ): Promise<{ deviceId: string; credentials?: DaemonDeviceCredentialsUpdate }> {
-  const helloAck = await socket.emitWithAck(AGENT_EVENTS.device.hello, device);
+  const helloAck = await socket.emitWithAck(AGENT_EVENTS.device.hello, {
+    ...device,
+    protocolCapabilities: { dispatchClaim: true },
+  });
   // 层2：离线删除后重连被拒——复用 onDeviceRemoved 退出，不复活。
   // 检查必须在 readAckDeviceId 之前，避免对 error ack 调 readAckDeviceId。
   if (helloAck && typeof helloAck === 'object' && (helloAck as { ok?: unknown }).ok === false && (helloAck as { error?: unknown }).error === 'DEVICE_REVOKED') {

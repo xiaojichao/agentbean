@@ -69,6 +69,7 @@ export function attachServerNextNamespaces(
   const agentNamespace = server.of('/agent');
   const webSubscribers = new Set<WebSocketSubscription>();
   const agentSocketsByDeviceId = new Map<string, SocketLike>();
+  const dispatchClaimDeviceIds = new Set<string>();
   const waitingDeviceInviteSocketsByCode = new Map<string, SocketLike>();
   const waitingDeviceInviteCodeBySocket = new Map<SocketLike, string>();
 
@@ -164,6 +165,9 @@ export function attachServerNextNamespaces(
         }
         agentNamespace.emit?.(AGENT_EVENTS.dispatch.request, request);
       },
+      shouldUseDispatchClaim(request) {
+        return Boolean(request.deviceId && dispatchClaimDeviceIds.has(request.deviceId));
+      },
       dispatchCancel(request) {
         if (request.deviceId) {
           agentSocketsByDeviceId.get(request.deviceId)?.emit?.(AGENT_EVENTS.dispatch.cancel, {
@@ -250,6 +254,7 @@ export function attachServerNextNamespaces(
           // 用全新 id 把已删设备复活。device:removed 是让 daemon 真正退出的唯一可靠信号。
           agentSocket.emit?.(AGENT_EVENTS.device.removed, { deviceId });
           agentSocketsByDeviceId.delete(deviceId);
+          dispatchClaimDeviceIds.delete(deviceId);
           agentSocket.disconnect?.();
         }
       },
@@ -385,6 +390,7 @@ export function attachServerNextNamespaces(
       );
       if (connectedDeviceId && ownsConnectedDevice) {
         agentSocketsByDeviceId.delete(connectedDeviceId);
+        dispatchClaimDeviceIds.delete(connectedDeviceId);
       }
       const waitingInviteCode = waitingDeviceInviteCodeBySocket.get(socket);
       if (waitingInviteCode) {
@@ -408,6 +414,8 @@ export function attachServerNextNamespaces(
       }
     });
     registerAgentSocketHandlers(socket, app, {
+      dispatchClaimQuietMs: dispatchRequestCoalesceMs,
+      connectedDeviceId: () => connectedDeviceId,
       async afterDeviceInviteWait(payload, result) {
         if (!isSuccessAck(result)) {
           return;
@@ -446,9 +454,16 @@ export function attachServerNextNamespaces(
             agentSocketsByDeviceId.get(connectedDeviceId) === socket
           ) {
             agentSocketsByDeviceId.delete(connectedDeviceId);
+            dispatchClaimDeviceIds.delete(connectedDeviceId);
           }
           connectedDeviceId = deviceId;
           agentSocketsByDeviceId.set(deviceId, socket);
+          const dispatchClaimCapability = payloadDispatchClaimCapability(payload);
+          if (dispatchClaimCapability === true) {
+            dispatchClaimDeviceIds.add(deviceId);
+          } else if (dispatchClaimCapability === false) {
+            dispatchClaimDeviceIds.delete(deviceId);
+          }
         }
         const teamId = payloadTeamId(payload) ?? resultDeviceTeamId(result);
         if (!teamId) {
@@ -1136,6 +1151,18 @@ function resultDeviceId(result: unknown): string | null {
   }
   const device = (result as { device?: { id?: unknown } }).device;
   return typeof device?.id === 'string' ? device.id : null;
+}
+
+function payloadDispatchClaimCapability(payload: unknown): boolean | undefined {
+  if (!payload || typeof payload !== 'object') {
+    return undefined;
+  }
+  const capabilities = (payload as { protocolCapabilities?: unknown }).protocolCapabilities;
+  if (!capabilities || typeof capabilities !== 'object') {
+    return undefined;
+  }
+  const value = (capabilities as { dispatchClaim?: unknown }).dispatchClaim;
+  return typeof value === 'boolean' ? value : undefined;
 }
 
 /**

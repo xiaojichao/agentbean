@@ -2,7 +2,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
 import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
-import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
+import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
 
@@ -101,6 +101,7 @@ export interface ServerNextUseCases {
   registerAgent(input: AgentDto): Promise<Ack<{ agent: AgentDto }>>;
   sendMessage(input: SendMessageInput): Promise<Ack<SendMessageResult>>;
   getDispatchRequest(input: { dispatchId: string }): Promise<Ack<{ request: DispatchRequestDto & { id: string } }>>;
+  acceptDispatch(input: AcceptDispatchInput): Promise<Ack<AcceptDispatchResult>>;
   cancelDispatch(input: CancelDispatchInput): Promise<Ack<{ dispatch: DispatchDto; task?: TaskDto }>>;
   cancelChannelDispatches(input: CancelChannelDispatchesInput): Promise<Ack<{ dispatches: DispatchDto[]; tasks?: TaskDto[] }>>;
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
@@ -421,6 +422,17 @@ export interface SendMessageResult {
   task?: TaskDto;
   acknowledgementMessage?: MessageDto;
 }
+
+export interface AcceptDispatchInput {
+  dispatchId: string;
+  agentId: string;
+  deviceId?: string;
+  quietWindowMs: number;
+}
+
+export type AcceptDispatchResult =
+  | { ready: false; retryAfterMs: number }
+  | { ready: true; dispatch: DispatchDto; request: DispatchRequestDto & { id: string } };
 
 export interface ListChannelMessagesInput {
   channelId: string;
@@ -2524,6 +2536,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           routeReason: toRouteReason(route),
         },
       });
+      await touchPendingCoalescibleDispatch(repositories, {
+        message,
+        updatedAt: now,
+      });
       const attachedArtifacts: ArtifactRecord[] = [];
       for (const artifact of attachmentResult.artifacts) {
         attachedArtifacts.push(await repositories.artifacts.create({
@@ -2584,65 +2600,55 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!agent) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
-      const executionConfig = agent.source === 'custom' || (agent.source === 'scanned' && agent.command)
-        ? await repositories.agents.getExecutionConfig(agent.id)
-        : null;
-      const originMessage = await repositories.messages.getById(dispatch.messageId);
-      const history = originMessage?.threadId
-        ? await repositories.messages.listThreadBefore({
-            channelId: dispatch.channelId,
-            threadId: originMessage.threadId,
-            beforeMessageId: originMessage.id,
-            limit: 20,
-          })
-        : [];
-      const dispatchHistory = history.filter((message) => !isTaskClaimAcknowledgementMessage(message));
-      const promptMessages = originMessage
-        ? await collectCoalescedDispatchPromptMessages(repositories, {
-            originMessage,
-            agent,
-          })
-        : [];
-      const requestPrompt = promptMessages.length > 0
-        ? renderCoalescedDispatchPrompt(promptMessages)
-        : dispatch.prompt;
-      const attachmentMessageIds = promptMessages.length > 0
-        ? promptMessages.map((message) => message.id)
-        : [dispatch.messageId];
-      const attachments: ArtifactRecord[] = [];
-      for (const messageId of attachmentMessageIds) {
-        attachments.push(...await repositories.artifacts.listByMessage(messageId));
+      return makeSuccess({
+        request: await buildDispatchRequest(repositories, dispatch, agent),
+      });
+    },
+
+    async acceptDispatch(acceptInput) {
+      const dispatch = await repositories.dispatches.getById(acceptInput.dispatchId);
+      if (!dispatch) {
+        return makeFailure('NOT_FOUND', 'Dispatch not found');
+      }
+      if (dispatch.agentId !== acceptInput.agentId) {
+        return makeFailure('FORBIDDEN', 'Dispatch does not belong to agent');
+      }
+      if (dispatch.status !== 'queued' && dispatch.status !== 'sent') {
+        return makeFailure('CONFLICT', 'Dispatch cannot be accepted');
+      }
+      const agent = await repositories.agents.getById(dispatch.agentId);
+      if (!agent) {
+        return makeFailure('NOT_FOUND', 'Agent not found');
+      }
+      if (acceptInput.deviceId && agent.deviceId !== acceptInput.deviceId) {
+        return makeFailure('FORBIDDEN', 'Dispatch does not belong to device');
       }
 
+      const now = clock.now();
+      const readyAt = dispatch.updatedAt + Math.max(0, acceptInput.quietWindowMs);
+      if (now < readyAt) {
+        return makeSuccess({ ready: false, retryAfterMs: readyAt - now });
+      }
+
+      const request = await buildDispatchRequest(repositories, dispatch, agent);
+      const accepted = await repositories.dispatches.markAccepted({
+        dispatchId: dispatch.id,
+        agentId: agent.id,
+        expectedUpdatedAt: dispatch.updatedAt,
+        prompt: request.prompt,
+        acceptedAt: now,
+      });
+      if (!accepted) {
+        return makeFailure('NOT_FOUND', 'Dispatch not found');
+      }
+      if (!accepted.changed) {
+        const retryAfterMs = Math.max(1, accepted.dispatch.updatedAt + Math.max(0, acceptInput.quietWindowMs) - now);
+        return makeSuccess({ ready: false, retryAfterMs });
+      }
       return makeSuccess({
-        request: {
-          id: dispatch.id,
-          teamId: dispatch.teamId,
-          channelId: dispatch.channelId,
-          messageId: dispatch.messageId,
-          ...(originMessage?.threadId ? { threadId: originMessage.threadId } : {}),
-          agentId: dispatch.agentId,
-          deviceId: agent.deviceId,
-          requestId: dispatch.requestId,
-          prompt: requestPrompt,
-          history: dispatchHistory.map(toDispatchHistoryMessageDto),
-          ...(attachments.length > 0 ? { attachments: attachments.map(toDispatchAttachmentDto) } : {}),
-          ...(executionConfig
-            ? {
-                customAgent: {
-                  id: agent.id,
-                  name: agent.name,
-                  adapterKind: executionConfig.adapterKind,
-                  command: executionConfig.command,
-                  args: executionConfig.args,
-                  cwd: executionConfig.cwd,
-                  ...(agent.source === 'custom'
-                    ? { envRef: { agentId: agent.id, teamId: agent.primaryTeamId } }
-                    : {}),
-                },
-              }
-            : {}),
-        },
+        ready: true,
+        dispatch: toDispatchDto(accepted.dispatch),
+        request,
       });
     },
 
@@ -4749,6 +4755,104 @@ function toDispatchHistoryMessageDto(message: MessageRecord): DispatchHistoryMes
 }
 
 const DISPATCH_PROMPT_COALESCING_CHANNEL_WINDOW = 100;
+
+async function touchPendingCoalescibleDispatch(
+  repositories: ServerNextRepositories,
+  input: { message: MessageRecord; updatedAt: UnixMs },
+): Promise<void> {
+  const dispatches = await repositories.dispatches.listByTeam(input.message.teamId);
+  const candidates = dispatches
+    .filter((dispatch) =>
+      dispatch.channelId === input.message.channelId &&
+      (dispatch.status === 'queued' || dispatch.status === 'sent') &&
+      dispatch.messageId !== input.message.id
+    )
+    .sort((left, right) => right.createdAt - left.createdAt);
+
+  for (const dispatch of candidates) {
+    const [originMessage, agent] = await Promise.all([
+      repositories.messages.getById(dispatch.messageId),
+      repositories.agents.getById(dispatch.agentId),
+    ]);
+    if (!originMessage || !agent || !canCoalesceDispatchPromptMessage({
+      originMessage,
+      candidate: input.message,
+      agent,
+    })) {
+      continue;
+    }
+    await repositories.dispatches.touchPending({
+      dispatchId: dispatch.id,
+      updatedAt: input.updatedAt,
+    });
+    return;
+  }
+}
+
+async function buildDispatchRequest(
+  repositories: ServerNextRepositories,
+  dispatch: DispatchRecord,
+  agent: AgentRecord,
+): Promise<DispatchRequestDto & { id: string }> {
+  const executionConfig = agent.source === 'custom' || (agent.source === 'scanned' && agent.command)
+    ? await repositories.agents.getExecutionConfig(agent.id)
+    : null;
+  const originMessage = await repositories.messages.getById(dispatch.messageId);
+  const history = originMessage?.threadId
+    ? await repositories.messages.listThreadBefore({
+        channelId: dispatch.channelId,
+        threadId: originMessage.threadId,
+        beforeMessageId: originMessage.id,
+        limit: 20,
+      })
+    : [];
+  const dispatchHistory = history.filter((message) => !isTaskClaimAcknowledgementMessage(message));
+  const promptMessages = originMessage
+    ? await collectCoalescedDispatchPromptMessages(repositories, {
+        originMessage,
+        agent,
+      })
+    : [];
+  const requestPrompt = promptMessages.length > 0
+    ? renderCoalescedDispatchPrompt(promptMessages)
+    : dispatch.prompt;
+  const attachmentMessageIds = promptMessages.length > 0
+    ? promptMessages.map((message) => message.id)
+    : [dispatch.messageId];
+  const attachments: ArtifactRecord[] = [];
+  for (const messageId of attachmentMessageIds) {
+    attachments.push(...await repositories.artifacts.listByMessage(messageId));
+  }
+
+  return {
+    id: dispatch.id,
+    teamId: dispatch.teamId,
+    channelId: dispatch.channelId,
+    messageId: dispatch.messageId,
+    ...(originMessage?.threadId ? { threadId: originMessage.threadId } : {}),
+    agentId: dispatch.agentId,
+    deviceId: agent.deviceId,
+    requestId: dispatch.requestId,
+    prompt: requestPrompt,
+    history: dispatchHistory.map(toDispatchHistoryMessageDto),
+    ...(attachments.length > 0 ? { attachments: attachments.map(toDispatchAttachmentDto) } : {}),
+    ...(executionConfig
+      ? {
+          customAgent: {
+            id: agent.id,
+            name: agent.name,
+            adapterKind: executionConfig.adapterKind,
+            command: executionConfig.command,
+            args: executionConfig.args,
+            cwd: executionConfig.cwd,
+            ...(agent.source === 'custom'
+              ? { envRef: { agentId: agent.id, teamId: agent.primaryTeamId } }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
 
 async function collectCoalescedDispatchPromptMessages(
   repositories: ServerNextRepositories,

@@ -821,6 +821,43 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       async getById(id) {
         return dispatches.get(id) ?? null;
       },
+      async touchPending(input) {
+        const dispatch = dispatches.get(input.dispatchId);
+        if (!dispatch) {
+          return null;
+        }
+        if (dispatch.status !== 'queued' && dispatch.status !== 'sent') {
+          return { dispatch, changed: false };
+        }
+        const updated = {
+          ...dispatch,
+          updatedAt: Math.max(input.updatedAt, dispatch.updatedAt + 1),
+        };
+        dispatches.set(input.dispatchId, updated);
+        return { dispatch: updated, changed: true };
+      },
+      async markAccepted(input) {
+        const dispatch = dispatches.get(input.dispatchId);
+        if (!dispatch) {
+          return null;
+        }
+        if (
+          dispatch.agentId !== input.agentId ||
+          (dispatch.status !== 'queued' && dispatch.status !== 'sent') ||
+          dispatch.updatedAt !== input.expectedUpdatedAt
+        ) {
+          return { dispatch, changed: false };
+        }
+        const updated = {
+          ...dispatch,
+          status: 'accepted' as const,
+          prompt: input.prompt,
+          updatedAt: input.acceptedAt,
+          acceptedAt: input.acceptedAt,
+        };
+        dispatches.set(input.dispatchId, updated);
+        return { dispatch: updated, changed: true };
+      },
       async markSucceeded(input) {
         const dispatch = dispatches.get(input.dispatchId);
         if (!dispatch) {

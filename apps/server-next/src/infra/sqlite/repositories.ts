@@ -1423,6 +1423,40 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       async getById(id) {
         return mapDispatch(teamDb.prepare('SELECT * FROM dispatches WHERE id = ?').get(id));
       },
+      async touchPending(input) {
+        const result = teamDb
+          .prepare(
+            `UPDATE dispatches
+             SET updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END
+             WHERE id = ?
+             AND status IN ('queued', 'sent')`,
+          )
+          .run(input.updatedAt, input.updatedAt, input.dispatchId);
+        const dispatch = mapDispatch(teamDb.prepare('SELECT * FROM dispatches WHERE id = ?').get(input.dispatchId));
+        return dispatch ? { dispatch, changed: sqliteChanges(result) > 0 } : null;
+      },
+      async markAccepted(input) {
+        const result = teamDb
+          .prepare(
+            `UPDATE dispatches
+             SET status = ?, prompt = ?, updated_at = ?, accepted_at = ?
+             WHERE id = ?
+             AND agent_id = ?
+             AND updated_at = ?
+             AND status IN ('queued', 'sent')`,
+          )
+          .run(
+            'accepted',
+            input.prompt,
+            input.acceptedAt,
+            input.acceptedAt,
+            input.dispatchId,
+            input.agentId,
+            input.expectedUpdatedAt,
+          );
+        const dispatch = mapDispatch(teamDb.prepare('SELECT * FROM dispatches WHERE id = ?').get(input.dispatchId));
+        return dispatch ? { dispatch, changed: sqliteChanges(result) > 0 } : null;
+      },
       async markSucceeded(input) {
         const result = teamDb
           .prepare(

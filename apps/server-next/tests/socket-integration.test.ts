@@ -2095,6 +2095,120 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('claim-capable daemon receives one wake and claims the persisted coalesced request', async () => {
+    let now = 1000;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-all',
+        'device-1',
+        'runtime-1',
+        'agent-1',
+        'dm-channel-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+        'message-2',
+        'message-3',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app, {
+      dispatchRequestCoalesceMs: 1000,
+    });
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const agent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      agent.disconnect();
+    });
+
+    const wakes: unknown[] = [];
+    agent.on(AGENT_EVENTS.dispatch.request, (payload) => {
+      wakes.push(payload);
+    });
+    const register = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    });
+    const web = await connectClient(`${baseUrl}/web`, { auth: { token: (register as { token: string }).token } });
+    cleanups.push(async () => {
+      web.disconnect();
+    });
+    await agent.emitWithAck(AGENT_EVENTS.device.hello, {
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'machine-1',
+      profileId: 'default',
+      protocolCapabilities: { dispatchClaim: true },
+    });
+    await agent.emitWithAck(AGENT_EVENTS.device.runtimes, {
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      runtimes: [{ adapterKind: 'codex', name: 'Codex CLI', installed: true }],
+    });
+    await agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      agents: [{ name: 'Codex', adapterKind: 'codex', category: 'agentos-hosted' }],
+    });
+    await web.emitWithAck(WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-1' });
+    await web.emitWithAck(WEB_EVENTS.dm.start, { agentId: 'agent-1' });
+
+    await web.emitWithAck(WEB_EVENTS.message.send, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'dm-channel-1',
+      body: '你能说明你能做什么吗？',
+    });
+    await eventually(async () => {
+      expect(wakes).toHaveLength(1);
+    }, 300);
+    expect(wakes[0]).toMatchObject({ id: 'dispatch-1', claimRequired: true });
+
+    now = 1200;
+    await web.emitWithAck(WEB_EVENTS.message.send, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'dm-channel-1',
+      body: '并且列出你有多少skills?',
+    });
+    now = 1400;
+    await web.emitWithAck(WEB_EVENTS.message.send, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'dm-channel-1',
+      body: '和用什么模型吗？',
+    });
+
+    now = 1500;
+    await expect(agent.emitWithAck(AGENT_EVENTS.dispatch.accepted, {
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+    })).resolves.toEqual({ ok: true, ready: false, retryAfterMs: 900 });
+
+    now = 2400;
+    await expect(agent.emitWithAck(AGENT_EVENTS.dispatch.accepted, {
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      ready: true,
+      dispatch: { id: 'dispatch-1', status: 'accepted' },
+      request: {
+        id: 'dispatch-1',
+        prompt: '你能说明你能做什么吗？\n\n并且列出你有多少skills?\n\n和用什么模型吗？',
+      },
+    });
+    expect(wakes).toHaveLength(1);
+  });
+
   test('routes device scan requests only to the matching daemon socket', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,
