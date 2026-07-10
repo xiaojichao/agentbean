@@ -49,11 +49,12 @@ describe('AgentBean Next browser smoke script', () => {
       },
     });
 
-    expect(result).toEqual({ networkPath: 'team-one' });
+    expect(result).toEqual({ teamPath: 'team-one' });
     expect(calls).toHaveLength(2);
     expect(calls[0][1]).toContain('agentbean.token');
     expect(calls[0][1]).toContain('token-1');
-    expect(calls[0][1]).toContain('agentbean.networkPath');
+    expect(calls[0][1]).toContain('agentbean.teamPath');
+    expect(calls[0][1]).not.toContain(['agentbean', 'networkPath'].join('.'));
     expect(calls[0][1]).toContain('team-one');
   });
 
@@ -265,10 +266,11 @@ describe('AgentBean Next browser smoke script', () => {
   });
 
   test('exercises WebUI team create, switch, delete, and restore flow', async () => {
-    const { exerciseWebUiNetworksBusinessSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
+    const { exerciseWebUiTeamsBusinessSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];
     const evaluateJsonResponses = [
-      { id: 'team-2', name: 'WebUI Team networks-smoke', path: 'team-two' },
+      { id: 'team-2', name: 'WebUI Team teams-smoke', path: 'team-two' },
+      { id: 'team-2', name: 'WebUI Team teams-smoke', path: 'team-two' },
       true,
     ];
     const page = {
@@ -288,9 +290,22 @@ describe('AgentBean Next browser smoke script', () => {
         calls.push(['evaluateJson', expression]);
         return evaluateJsonResponses.shift();
       },
+      async reload() {
+        calls.push(['reload', undefined]);
+      },
+    };
+    const fetchCalls: string[] = [];
+    const fetchImpl = async (url: string) => {
+      fetchCalls.push(url);
+      return {
+        status: 308,
+        headers: {
+          get: (name: string) => (name.toLowerCase() === 'location' ? '/team-one/teams' : null),
+        },
+      };
     };
 
-    const result = await exerciseWebUiNetworksBusinessSmoke({
+    const result = await exerciseWebUiTeamsBusinessSmoke({
       page,
       baseUrl: 'http://127.0.0.1:4100/',
       session: {
@@ -298,22 +313,25 @@ describe('AgentBean Next browser smoke script', () => {
         user: { id: 'user-1', username: 'alice' },
         team: { id: 'team-1', name: 'Team One', path: 'team-one' },
       },
-      suffix: 'networks-smoke',
+      suffix: 'teams-smoke',
       timeoutMs: 1000,
+      fetchImpl,
     });
 
     expect(result).toEqual({
       teamId: 'team-2',
       teamPath: 'team-two',
-      teamName: 'WebUI Team networks-smoke',
+      teamName: 'WebUI Team teams-smoke',
       restoredTeamPath: 'team-one',
       deleted: true,
     });
+    expect(fetchCalls).toEqual(['http://127.0.0.1:4100/team-one/networks']);
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/networks']);
+    expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/teams']);
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-two/settings']);
-    expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/networks']);
-    expect(calls).toContainEqual(['setInputValue', { selector: '[data-smoke="team-create-name"]', value: 'WebUI Team networks-smoke' }]);
-    expect(calls).toContainEqual(['setInputValue', { selector: '[data-smoke="team-create-description"]', value: 'Created by WebUI smoke networks-smoke' }]);
+    expect(calls.filter((call) => call[0] === 'reload')).toHaveLength(3);
+    expect(calls).toContainEqual(['setInputValue', { selector: '[data-smoke="team-create-name"]', value: 'WebUI Team teams-smoke' }]);
+    expect(calls).toContainEqual(['setInputValue', { selector: '[data-smoke="team-create-description"]', value: 'Created by WebUI smoke teams-smoke' }]);
     expect(calls).toContainEqual(['click', '[data-smoke="team-create-submit"]']);
     expect(calls).toContainEqual(['click', '[data-smoke="settings-tab-server"]']);
     expect(calls).toContainEqual(['click', '[data-smoke="settings-team-delete-open"]']);
@@ -327,10 +345,30 @@ describe('AgentBean Next browser smoke script', () => {
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('settings-team-delete-open'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('settings-team-delete-dialog'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].description.includes('leave temporary team'))).toBe(true);
-    expect(waitForFunctionCalls.some((call) => call[1].description.includes('disappear from networks list'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].description.includes('permanent redirect to the teams page'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].description.includes('disappear from teams list'))).toBe(true);
     const evaluateJsonCalls = calls.filter((call): call is ['evaluateJson', string] => call[0] === 'evaluateJson');
-    expect(evaluateJsonCalls).toHaveLength(2);
+    expect(evaluateJsonCalls).toHaveLength(3);
     expect(evaluateJsonCalls.filter((call) => call[1].includes('team-switch'))).toHaveLength(1);
+  });
+
+  test('keeps readiness and verification evidence on canonical Team routes', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const readiness = await readFile(
+      new URL('../../../scripts/check-agentbean-next-readiness.mjs', import.meta.url),
+      'utf8',
+    );
+    const matrix = await readFile(
+      new URL('../../../agentbean-next/docs/verification-matrix.md', import.meta.url),
+      'utf8',
+    );
+
+    expect(readiness).toContain('apps/web-next/app/[teamPath]/settings/page.tsx');
+    expect(readiness).not.toContain('apps/web-next/app/[networkPath]');
+    expect(readiness).toContain('settings / teams');
+    expect(matrix).toContain('webui-teams-business-flow');
+    expect(matrix).toContain('`/:teamPath/networks`');
+    expect(matrix).toContain('308 permanent redirect');
   });
 
   test('exercises WebUI task create, reorder, delete, status update, and refresh restore', async () => {
