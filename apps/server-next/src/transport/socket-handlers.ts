@@ -332,7 +332,7 @@ export function registerWebSocketHandlers(
         ack?.(makeFailure('VALIDATION_ERROR', 'teamId is required'));
         return;
       }
-      ack?.(await app.deleteTeam({ userId, teamId }));
+      ack?.(await app.deleteAdminTeam({ userId, teamId }));
     } catch (error) {
       ack?.(socketErrorAck(error, WEB_EVENTS.admin.deleteTeam));
     }

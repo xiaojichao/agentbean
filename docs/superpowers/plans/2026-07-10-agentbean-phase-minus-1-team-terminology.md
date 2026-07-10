@@ -271,7 +271,7 @@ Expected: FAIL，旧 handler 仍注册或旧 projection 字段仍存在。
 
 - [ ] **Step 3: 删除重复 usecase 与 handler**
 
-从 `ServerNextUseCases`、factory implementation 与 socket bindings 删除 `listAdminNetworks()`；删除旧 admin delete handler 中同时读取两种 payload key 的逻辑。唯一 delete handler 使用：
+从 `ServerNextUseCases`、factory implementation 与 socket bindings 删除 `listAdminNetworks()`；删除旧 admin delete handler 中同时读取两种 payload key 的逻辑。唯一 delete handler 仍转发到 `deleteAdminTeam()`，保留该 usecase 的 `requireGlobalAdmin` authorization，不能改走 owner-only 的 `deleteTeam()`：
 
 ```ts
 const teamId = payloadString(payload, 'teamId');
@@ -279,7 +279,7 @@ if (!teamId) {
   ack?.(makeFailure('VALIDATION_ERROR', 'teamId is required'));
   return;
 }
-ack?.(await options.useCases.deleteTeam({ userId, teamId }));
+ack?.(await options.useCases.deleteAdminTeam({ userId, teamId }));
 ```
 
 - [ ] **Step 4: 收敛 Server DTO types 和 mapper**

@@ -646,10 +646,10 @@ describe('server-next socket handlers', () => {
     });
   });
 
-  test('routes the canonical admin delete-team payload through deleteTeam', async () => {
+  test('routes the canonical admin delete-team payload through the global-admin use case', async () => {
     const socket = new FakeSocket();
-    const deleteTeam = vi.fn(async (payload) => makeSuccess({ payload }));
-    const app = { deleteTeam } as unknown as ServerNextUseCases;
+    const deleteAdminTeam = vi.fn(async (payload) => makeSuccess({ payload }));
+    const app = { deleteAdminTeam } as unknown as ServerNextUseCases;
 
     registerWebSocketHandlers(socket, app, {
       authenticatedUser: async () => ({
@@ -664,7 +664,7 @@ describe('server-next socket handlers', () => {
       ok: true,
       payload: { userId: 'admin-1', teamId: 'team-1' },
     });
-    expect(deleteTeam).toHaveBeenCalledWith({ userId: 'admin-1', teamId: 'team-1' });
+    expect(deleteAdminTeam).toHaveBeenCalledWith({ userId: 'admin-1', teamId: 'team-1' });
   });
 
   test('notifies task subscribers when message:send creates a task', async () => {

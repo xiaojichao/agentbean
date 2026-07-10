@@ -1208,6 +1208,10 @@ describe('server-next Socket.IO namespaces', () => {
         userId: 'new-owner',
       }),
     ).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    await expect(member.emitWithAck(WEB_EVENTS.admin.deleteTeam, { teamId: 'team-admin' })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
 
     const adminLogin = await app.loginUser({ username: 'admin', password: 'secret' });
     expect(adminLogin.ok).toBe(true);
@@ -1249,6 +1253,9 @@ describe('server-next Socket.IO namespaces', () => {
     });
     const [adminDevice] = adminDevicesResult.devices;
     expect(adminDevice).toMatchObject({ teamId: 'team-admin', teamName: 'AgentBean' });
+    expect(adminDevice).not.toHaveProperty('networkId');
+    expect(adminDevice).not.toHaveProperty('networkName');
+    expect(adminDevice).not.toHaveProperty('publicAgents');
 
     const adminAgentsResult = await admin.emitWithAck(WEB_EVENTS.admin.listAgents, {});
     expect(adminAgentsResult).toMatchObject({
@@ -1269,6 +1276,30 @@ describe('server-next Socket.IO namespaces', () => {
       primaryTeamName: 'AgentBean',
       visibleTeamIds: ['team-admin'],
     });
+    expect(adminAgent).not.toHaveProperty('networkId');
+    expect(adminAgent).not.toHaveProperty('networkName');
+    expect(adminAgent).not.toHaveProperty('publishedNetworkIds');
+    expect(adminAgent).not.toHaveProperty('unpublishedNetworkIds');
+
+    await repositories.teams.create({
+      id: 'team-member-owned',
+      name: 'Member-owned Team',
+      path: 'member-owned-team',
+      visibility: 'private',
+      ownerId: 'member-user',
+      createdAt: 7050,
+    });
+    await repositories.teams.addMember({
+      teamId: 'team-member-owned',
+      userId: 'member-user',
+      username: 'member',
+      role: 'owner',
+      joinedAt: 7050,
+    });
+    await expect(admin.emitWithAck(WEB_EVENTS.admin.deleteTeam, { teamId: 'team-member-owned' })).resolves.toEqual({
+      ok: true,
+    });
+    await expect(repositories.teams.getById('team-member-owned')).resolves.toBeNull();
 
     await expect(
       admin.emitWithAck(WEB_EVENTS.admin.transferDeviceOwner, {
