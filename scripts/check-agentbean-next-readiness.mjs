@@ -21,9 +21,7 @@ export function collectAgentBeanNextReadinessChecks({
   const cutoverRunbook = readFileSync(join(root, 'agentbean-next/docs/production-cutover-runbook.md'), 'utf8');
   const verificationMatrix = readFileSync(join(root, 'agentbean-next/docs/verification-matrix.md'), 'utf8');
   const parityBackfillAudit = readFileSync(join(root, 'agentbean-next/docs/parity-backfill-audit.md'), 'utf8');
-  const hasGreenSettingsTeamsParity = parityBackfillAudit
-    .split('\n')
-    .some((line) => line.startsWith('| `settings` /') && line.includes('| Green |'));
+  const settingsTeamsParityGreen = hasGreenSettingsTeamsParity(parityBackfillAudit);
   const knownGaps = readFileSync(join(root, 'agentbean-next/docs/known-gaps.md'), 'utf8');
   const socketProtocol = readFileSync(join(root, 'agentbean-next/docs/socket-protocol.md'), 'utf8');
   const contractsSocket = readFileSync(join(root, 'packages/contracts/src/socket.ts'), 'utf8');
@@ -475,7 +473,7 @@ export function collectAgentBeanNextReadinessChecks({
         parityBackfillAudit.includes('| `agents` | Green |') &&
         parityBackfillAudit.includes('| `tasks` | Green |') &&
         parityBackfillAudit.includes('| `runs` / `运行记录` | Green |') &&
-        hasGreenSettingsTeamsParity &&
+        settingsTeamsParityGreen &&
         parityBackfillAudit.includes('| `dashboard` / `admin` | Green |') &&
         parityBackfillAudit.includes('| `daemon onboarding` | Green |') &&
         parityBackfillAudit.includes('| `channels` / `channel members` | Green |') &&
@@ -587,7 +585,7 @@ export function collectAgentBeanNextReadinessChecks({
         webNextSettingsPage.includes('data-smoke="settings-join-revoke"') &&
         verificationMatrix.includes('webui-settings-business-flow') &&
         verificationMatrix.includes('settings / teams') &&
-        hasGreenSettingsTeamsParity,
+        settingsTeamsParityGreen,
       'Settings parity must stay covered by an App Router browser smoke for account identity, browser preference persistence/reset, team rename, join link revoke, and refresh restore',
     ),
     check(
@@ -667,6 +665,10 @@ export function collectAgentBeanNextReadinessChecks({
   }
 
   return checks;
+}
+
+export function hasGreenSettingsTeamsParity(parityBackfillAudit) {
+  return parityBackfillAudit.includes('| `settings` / `teams` | Green |');
 }
 
 export function summarizeReadiness(checks) {

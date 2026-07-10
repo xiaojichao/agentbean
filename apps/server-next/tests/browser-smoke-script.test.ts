@@ -347,6 +347,17 @@ describe('AgentBean Next browser smoke script', () => {
     expect(waitForFunctionCalls.some((call) => call[1].description.includes('leave temporary team'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].description.includes('permanent redirect to the teams page'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].description.includes('disappear from teams list'))).toBe(true);
+    expect(waitForFunctionCalls.map((call) => call[1].description)).toEqual(
+      expect.arrayContaining([
+        'initial session team before create: team "Team One" to be current',
+        'session team after create: team "Team One" to be current',
+        'session team after create refresh: team "Team One" to be current',
+        'created team after switch: team "WebUI Team teams-smoke" to be current',
+        'created team after switch refresh: team "WebUI Team teams-smoke" to be current',
+        'fallback team after delete: team "Team One" to be current',
+        'fallback team after delete refresh: team "Team One" to be current',
+      ]),
+    );
     const evaluateJsonCalls = calls.filter((call): call is ['evaluateJson', string] => call[0] === 'evaluateJson');
     expect(evaluateJsonCalls).toHaveLength(3);
     expect(evaluateJsonCalls.filter((call) => call[1].includes('team-switch'))).toHaveLength(1);
@@ -354,6 +365,7 @@ describe('AgentBean Next browser smoke script', () => {
 
   test('keeps readiness and verification evidence on canonical Team routes', async () => {
     const { readFile } = await import('node:fs/promises');
+    const { hasGreenSettingsTeamsParity } = await import('../../../scripts/check-agentbean-next-readiness.mjs');
     const readiness = await readFile(
       new URL('../../../scripts/check-agentbean-next-readiness.mjs', import.meta.url),
       'utf8',
@@ -362,10 +374,18 @@ describe('AgentBean Next browser smoke script', () => {
       new URL('../../../agentbean-next/docs/verification-matrix.md', import.meta.url),
       'utf8',
     );
+    const parityAudit = await readFile(
+      new URL('../../../agentbean-next/docs/parity-backfill-audit.md', import.meta.url),
+      'utf8',
+    );
 
     expect(readiness).toContain('apps/web-next/app/[teamPath]/settings/page.tsx');
     expect(readiness).not.toContain('apps/web-next/app/[networkPath]');
     expect(readiness).toContain('settings / teams');
+    expect(hasGreenSettingsTeamsParity('| `settings` / `networks` | Green | stale | row |')).toBe(false);
+    expect(hasGreenSettingsTeamsParity('| `settings` / `teams` | Green | canonical | row |')).toBe(true);
+    expect(parityAudit).toContain('| `settings` / `teams` | Green |');
+    expect(parityAudit).not.toContain('| `settings` / `networks` | Green |');
     expect(matrix).toContain('webui-teams-business-flow');
     expect(matrix).toContain('`/:teamPath/networks`');
     expect(matrix).toContain('308 permanent redirect');

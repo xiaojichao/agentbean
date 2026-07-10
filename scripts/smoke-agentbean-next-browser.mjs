@@ -1138,14 +1138,38 @@ export async function exerciseWebUiTeamsBusinessSmoke({
     'teams page exposes the create team form',
     timeoutMs,
   );
+  await waitForWebUiCurrentTeam({
+    page,
+    teamId: session.team.id,
+    teamName: session.team.name,
+    teamPath,
+    phase: 'initial session team before create',
+    timeoutMs,
+  });
   await page.setInputValue('[data-smoke="team-create-name"]', teamName);
   await page.setInputValue('[data-smoke="team-create-description"]', description);
   await page.click('[data-smoke="team-create-submit"]');
+  await waitForWebUiCurrentTeam({
+    page,
+    teamId: session.team.id,
+    teamName: session.team.name,
+    teamPath,
+    phase: 'session team after create',
+    timeoutMs,
+  });
   let created = await waitForWebUiTeamListItem({ page, teamName, timeoutMs });
   if (!created?.id || !created?.path) {
     throw new Error(`WebUI teams smoke could not resolve created team from list: ${formatAck(created)}`);
   }
   await page.reload();
+  await waitForWebUiCurrentTeam({
+    page,
+    teamId: session.team.id,
+    teamName: session.team.name,
+    teamPath,
+    phase: 'session team after create refresh',
+    timeoutMs,
+  });
   created = await waitForWebUiTeamListItem({ page, teamName, timeoutMs });
   if (!created?.id || !created?.path) {
     throw new Error(`WebUI teams smoke did not restore the created team after refresh: ${formatAck(created)}`);
@@ -1160,9 +1184,23 @@ export async function exerciseWebUiTeamsBusinessSmoke({
       return true;
     })()
   `);
-  await waitForWebUiCurrentTeam({ page, teamId: created.id, teamName, teamPath: created.path, timeoutMs });
+  await waitForWebUiCurrentTeam({
+    page,
+    teamId: created.id,
+    teamName,
+    teamPath: created.path,
+    phase: 'created team after switch',
+    timeoutMs,
+  });
   await page.reload();
-  await waitForWebUiCurrentTeam({ page, teamId: created.id, teamName, teamPath: created.path, timeoutMs });
+  await waitForWebUiCurrentTeam({
+    page,
+    teamId: created.id,
+    teamName,
+    teamPath: created.path,
+    phase: 'created team after switch refresh',
+    timeoutMs,
+  });
   const restoredTeamPath = session.team.path ?? session.team.id;
   await page.navigate(new URL(`/${created.path}/settings`, root).toString());
   await page.click('[data-smoke="settings-tab-server"]');
@@ -1200,16 +1238,25 @@ export async function exerciseWebUiTeamsBusinessSmoke({
     timeoutMs,
   });
   await page.navigate(new URL(`/${restoredTeamPath}/teams`, root).toString());
-  await waitForWebUiTeamListMissing({ page, teamId: created.id, teamName, timeoutMs });
-  await page.reload();
-  await waitForWebUiTeamListMissing({ page, teamId: created.id, teamName, timeoutMs });
   await waitForWebUiCurrentTeam({
     page,
     teamId: session.team.id,
     teamName: session.team.name,
     teamPath: restoredTeamPath,
+    phase: 'fallback team after delete',
     timeoutMs,
   });
+  await waitForWebUiTeamListMissing({ page, teamId: created.id, teamName, timeoutMs });
+  await page.reload();
+  await waitForWebUiCurrentTeam({
+    page,
+    teamId: session.team.id,
+    teamName: session.team.name,
+    teamPath: restoredTeamPath,
+    phase: 'fallback team after delete refresh',
+    timeoutMs,
+  });
+  await waitForWebUiTeamListMissing({ page, teamId: created.id, teamName, timeoutMs });
   return { teamId: created.id, teamPath: created.path, teamName, restoredTeamPath, deleted: true };
 }
 
@@ -1246,7 +1293,7 @@ async function waitForWebUiTeamListItem({ page, teamName, timeoutMs }) {
   `);
 }
 
-async function waitForWebUiCurrentTeam({ page, teamId, teamName, teamPath, timeoutMs }) {
+async function waitForWebUiCurrentTeam({ page, teamId, teamName, teamPath, phase, timeoutMs }) {
   await page.waitForFunction(
     `
     (() => {
@@ -1261,7 +1308,7 @@ async function waitForWebUiCurrentTeam({ page, teamId, teamName, teamPath, timeo
         && window.location.pathname.includes(\`/\${teamPath}/teams\`);
     })()
     `,
-    `team "${teamName}" to become current`,
+    `${phase}: team "${teamName}" to be current`,
     timeoutMs,
   );
 }
