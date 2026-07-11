@@ -50,6 +50,13 @@ type SendMessageAckMessage = {
   body: string;
 };
 
+type SendMessageAck = {
+  ok: true;
+  message: SendMessageAckMessage;
+  dispatches: SendMessageDispatchAck[];
+  coalescedDispatchId?: string;
+};
+
 type SendMessageDispatchAck = {
   id: string;
   teamId: string;
@@ -59,15 +66,8 @@ type SendMessageDispatchAck = {
   requestId: string;
 };
 
-interface DispatchCoalesceScope {
-  teamId?: string;
-  channelId: string;
-  senderId?: string;
-}
-
 interface PendingDispatchRequest {
   dispatchId: string;
-  scope: DispatchCoalesceScope;
   timer?: ReturnType<typeof setTimeout>;
 }
 
@@ -121,7 +121,7 @@ export function registerWebSocketHandlers(
 ): void {
   const dispatchRequestCoalesceMs = Math.max(0, options.dispatchRequestCoalesceMs ?? 0);
   const pendingDispatchRequests = new Map<string, PendingDispatchRequest>();
-  const scheduleDispatchRequest = (dispatch: SendMessageDispatchAck, message: SendMessageAckMessage) => {
+  const scheduleDispatchRequest = (dispatch: SendMessageDispatchAck) => {
     if (!options.dispatch) {
       return;
     }
@@ -131,7 +131,6 @@ export function registerWebSocketHandlers(
     }
     const pending = {
       dispatchId: dispatch.id,
-      scope: toDispatchCoalesceScope(dispatch, message),
     };
     pendingDispatchRequests.set(dispatch.id, pending);
     resetPendingDispatchRequestTimer(pendingDispatchRequests, pending, dispatchRequestCoalesceMs, () => {
@@ -144,18 +143,17 @@ export function registerWebSocketHandlers(
       );
     });
   };
-  const extendPendingDispatchRequests = (message: SendMessageAckMessage) => {
-    if (dispatchRequestCoalesceMs <= 0 || pendingDispatchRequests.size === 0) {
+  const extendPendingDispatchRequest = (dispatchId: string | undefined) => {
+    if (dispatchRequestCoalesceMs <= 0 || !dispatchId) {
       return;
     }
-    for (const pending of pendingDispatchRequests.values()) {
-      if (!messageMatchesDispatchCoalesceScope(message, pending.scope)) {
-        continue;
-      }
-      resetPendingDispatchRequestTimer(pendingDispatchRequests, pending, dispatchRequestCoalesceMs, () => {
-        requestDispatchEmission(app, options, pending.dispatchId);
-      });
+    const pending = pendingDispatchRequests.get(dispatchId);
+    if (!pending) {
+      return;
     }
+    resetPendingDispatchRequestTimer(pendingDispatchRequests, pending, dispatchRequestCoalesceMs, () => {
+      requestDispatchEmission(app, options, pending.dispatchId);
+    });
   };
   const cancelPendingDispatchRequest = (dispatchId: string) => {
     const pending = pendingDispatchRequests.get(dispatchId);
@@ -380,9 +378,9 @@ export function registerWebSocketHandlers(
     if (!options.dispatch || !isSendMessageAck(result)) {
       return;
     }
-    extendPendingDispatchRequests(result.message);
+    extendPendingDispatchRequest(result.coalescedDispatchId);
     for (const dispatch of result.dispatches) {
-      scheduleDispatchRequest(dispatch, result.message);
+      scheduleDispatchRequest(dispatch);
     }
   }, {
     authenticatedUser: options.authenticatedUser,
@@ -806,39 +804,7 @@ function resetPendingDispatchRequestTimer(
   (pending.timer as { unref?: () => void }).unref?.();
 }
 
-function toDispatchCoalesceScope(
-  dispatch: SendMessageDispatchAck,
-  message: SendMessageAckMessage,
-): DispatchCoalesceScope {
-  return {
-    teamId: message.teamId ?? dispatch.teamId,
-    channelId: message.channelId ?? dispatch.channelId,
-    senderId: message.senderId,
-  };
-}
-
-function messageMatchesDispatchCoalesceScope(
-  message: SendMessageAckMessage,
-  scope: DispatchCoalesceScope,
-): boolean {
-  if (message.channelId !== scope.channelId) {
-    return false;
-  }
-  if (scope.teamId && message.teamId && message.teamId !== scope.teamId) {
-    return false;
-  }
-  if (scope.senderId && message.senderId && message.senderId !== scope.senderId) {
-    return false;
-  }
-  return true;
-}
-
-function isSendMessageAck(result: unknown): result is {
-  ok: true;
-  message: SendMessageAckMessage;
-  task?: unknown;
-  dispatches: SendMessageDispatchAck[];
-} {
+function isSendMessageAck(result: unknown): result is SendMessageAck & { task?: unknown } {
   if (!result || typeof result !== 'object') {
     return false;
   }

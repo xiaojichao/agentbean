@@ -1,5 +1,5 @@
 import type { ServerNextUseCases } from '../application/usecases.js';
-import { AGENT_EVENTS, WEB_EVENTS } from '../../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, MESSAGE_BATCH_QUIET_WINDOW_MS, WEB_EVENTS } from '../../../../packages/contracts/src/index.js';
 import { normalizeAdapterKind } from '../../../../packages/domain/src/index.js';
 import {
   registerAgentSocketHandlers,
@@ -58,14 +58,12 @@ interface DiscoveredAgentReport {
   gatewayInstanceKey?: string;
 }
 
-const DEFAULT_DISPATCH_REQUEST_COALESCE_MS = 5000;
-
 export function attachServerNextNamespaces(
   server: SocketServerLike,
   app: ServerNextUseCases,
   options: ServerNextSocketOptions = {},
 ): ServerNextRealtime {
-  const dispatchRequestCoalesceMs = options.dispatchRequestCoalesceMs ?? DEFAULT_DISPATCH_REQUEST_COALESCE_MS;
+  const dispatchRequestCoalesceMs = options.dispatchRequestCoalesceMs ?? MESSAGE_BATCH_QUIET_WINDOW_MS;
   const agentNamespace = server.of('/agent');
   const webSubscribers = new Set<WebSocketSubscription>();
   const agentSocketsByDeviceId = new Map<string, SocketLike>();

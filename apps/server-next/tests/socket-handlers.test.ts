@@ -705,6 +705,59 @@ describe('server-next socket handlers', () => {
     );
   });
 
+  test('does not let a new dispatch reset another dispatch quiet-window timer', async () => {
+    vi.useFakeTimers();
+    try {
+      const socket = new FakeSocket();
+      const sendMessage = vi
+        .fn()
+        .mockResolvedValueOnce(makeSuccess({
+          message: {
+            id: 'message-1', teamId: 'team-1', channelId: 'channel-1', senderId: 'user-1', body: '@AgentA first',
+          },
+          dispatches: [{
+            id: 'dispatch-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
+            agentId: 'agent-1', requestId: 'request-1',
+          }],
+          route: { kind: 'dispatch', agentId: 'agent-1', reason: 'mention' },
+        }))
+        .mockResolvedValueOnce(makeSuccess({
+          message: {
+            id: 'message-2', teamId: 'team-1', channelId: 'channel-1', senderId: 'user-1', body: '@AgentB second',
+          },
+          dispatches: [{
+            id: 'dispatch-2', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-2',
+            agentId: 'agent-2', requestId: 'request-2',
+          }],
+          route: { kind: 'dispatch', agentId: 'agent-2', reason: 'mention' },
+        }));
+      const getDispatchRequest = vi.fn(async ({ dispatchId }: { dispatchId: string }) => makeSuccess({
+        request: { id: dispatchId, agentId: dispatchId === 'dispatch-1' ? 'agent-1' : 'agent-2' },
+      }));
+      const dispatch = vi.fn();
+      const app = { sendMessage, getDispatchRequest } as unknown as ServerNextUseCases;
+
+      registerWebSocketHandlers(socket, app, { dispatch, dispatchRequestCoalesceMs: 100 });
+      await socket.trigger(WEB_EVENTS.message.send, {
+        userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@AgentA first',
+      });
+      await vi.advanceTimersByTimeAsync(50);
+      await socket.trigger(WEB_EVENTS.message.send, {
+        userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@AgentB second',
+      });
+
+      await vi.advanceTimersByTimeAsync(50);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'dispatch-1', agentId: 'agent-1' }));
+
+      await vi.advanceTimersByTimeAsync(50);
+      expect(dispatch).toHaveBeenCalledTimes(2);
+      expect(dispatch).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: 'dispatch-2', agentId: 'agent-2' }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test('derives join management team from the authenticated session', async () => {
     const socket = new FakeSocket();
     const app = {

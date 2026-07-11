@@ -5,6 +5,8 @@ import type { DispatchStatus } from './dispatch.js';
 export type SenderKind = 'human' | 'agent' | 'system';
 export type RouteReason = 'MENTION' | 'DIRECT' | 'CHANNEL_DEFAULT' | 'MANUAL';
 
+export const MESSAGE_BATCH_QUIET_WINDOW_MS = 15_000;
+
 export interface MessageMetaDto {
   routeReason?: RouteReason;
   mentionedName?: string;

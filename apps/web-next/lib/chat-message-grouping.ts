@@ -1,6 +1,7 @@
+import { MESSAGE_BATCH_QUIET_WINDOW_MS } from '../../../packages/contracts/src/message';
 import type { ChatMessage } from './schema';
 
-export const MESSAGE_GROUP_WINDOW_MS = 5 * 60 * 1000;
+export const MESSAGE_GROUP_WINDOW_MS = MESSAGE_BATCH_QUIET_WINDOW_MS;
 
 export function isMessageGroupContinuation(
   previous: ChatMessage | undefined,

@@ -2149,7 +2149,7 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
-  test('claim-capable daemon receives one wake and claims the persisted coalesced request', async () => {
+  test('claim-capable daemon waits for the default 15-second message batch window', async () => {
     let now = 1000;
     const app = createInMemoryServerNext({
       now: () => now,
@@ -2169,7 +2169,7 @@ describe('server-next Socket.IO namespaces', () => {
       ]),
     });
     const { baseUrl, ioServer, httpServer } = await startSocketServer(app, {
-      dispatchRequestCoalesceMs: 1000,
+      useProductionDefaultDispatchRequestCoalesceMs: true,
     });
     cleanups.push(async () => {
       await new Promise<void>((resolve) => ioServer.close(() => resolve()));
@@ -2245,9 +2245,9 @@ describe('server-next Socket.IO namespaces', () => {
     await expect(agent.emitWithAck(AGENT_EVENTS.dispatch.accepted, {
       dispatchId: 'dispatch-1',
       agentId: 'agent-1',
-    })).resolves.toEqual({ ok: true, ready: false, retryAfterMs: 900 });
+    })).resolves.toEqual({ ok: true, ready: false, retryAfterMs: 14_900 });
 
-    now = 2400;
+    now = 16_400;
     await expect(agent.emitWithAck(AGENT_EVENTS.dispatch.accepted, {
       dispatchId: 'dispatch-1',
       agentId: 'agent-1',
@@ -3038,13 +3038,20 @@ describe('server-next Socket.IO namespaces', () => {
 
 async function startSocketServer(
   app: ReturnType<typeof createInMemoryServerNext>,
-  options: { dispatchRequestCoalesceMs?: number } = {},
+  options: {
+    dispatchRequestCoalesceMs?: number;
+    useProductionDefaultDispatchRequestCoalesceMs?: boolean;
+  } = {},
 ) {
   const httpServer = createServer();
   const ioServer = new Server(httpServer, { cors: { origin: '*' } });
-  const realtime = attachServerNextNamespaces(ioServer, app, {
-    dispatchRequestCoalesceMs: options.dispatchRequestCoalesceMs ?? 0,
-  });
+  const realtime = attachServerNextNamespaces(
+    ioServer,
+    app,
+    options.useProductionDefaultDispatchRequestCoalesceMs
+      ? {}
+      : { dispatchRequestCoalesceMs: options.dispatchRequestCoalesceMs ?? 0 },
+  );
   await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', () => resolve()));
   const address = httpServer.address() as AddressInfo;
   return {

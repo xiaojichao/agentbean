@@ -412,6 +412,7 @@ export interface SendMessageResult {
   message: MessageDto;
   dispatches: DispatchDto[];
   route: RouteResult;
+  coalescedDispatchId?: string;
   task?: TaskDto;
   acknowledgementMessage?: MessageDto;
 }
@@ -2520,7 +2521,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         `${message.teamId}:${message.channelId}:${message.senderId}`,
       );
       try {
-        const coalescedIntoPendingDispatch = await touchPendingCoalescibleDispatch(repositories, {
+        const coalescedDispatchId = await touchPendingCoalescibleDispatch(repositories, {
           message,
           updatedAt: now,
         });
@@ -2534,7 +2535,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         const dispatches: DispatchDto[] = [];
         let acknowledgementMessage: MessageDto | undefined;
 
-        if (route.kind === 'dispatch' && !coalescedIntoPendingDispatch) {
+        if (route.kind === 'dispatch' && !coalescedDispatchId) {
           const dispatch = await repositories.dispatches.create({
             id: ids.nextId(),
             teamId: messageInput.teamId,
@@ -2570,6 +2571,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             : message,
           dispatches,
           route,
+          ...(coalescedDispatchId ? { coalescedDispatchId } : {}),
           ...(task ? { task } : {}),
           ...(acknowledgementMessage ? { acknowledgementMessage } : {}),
         });
@@ -4758,7 +4760,7 @@ async function acquireKeyedLock(
 async function touchPendingCoalescibleDispatch(
   repositories: ServerNextRepositories,
   input: { message: MessageRecord; updatedAt: UnixMs },
-): Promise<boolean> {
+): Promise<string | undefined> {
   const dispatches = await repositories.dispatches.listByTeam(input.message.teamId);
   const candidates = dispatches
     .filter((dispatch) =>
@@ -4788,10 +4790,10 @@ async function touchPendingCoalescibleDispatch(
       updatedAt: input.updatedAt,
     });
     if (touched?.changed) {
-      return true;
+      return dispatch.id;
     }
   }
-  return false;
+  return undefined;
 }
 
 async function buildDispatchRequest(

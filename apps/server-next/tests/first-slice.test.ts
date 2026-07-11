@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
+import { MESSAGE_BATCH_QUIET_WINDOW_MS } from '../../../packages/contracts/src/index';
 import { createInMemoryRepositories, createInMemoryServerNext, createServerNextUseCases } from '../src/index';
 
 const migrationPath = (...parts: string[]) =>
@@ -2045,8 +2046,8 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
-  test('dispatch request coalesces consecutive human messages for the same agent', async () => {
-    let now = 325;
+  test('one 15-second message batch creates one dispatch for the same routing scope', async () => {
+    let now = 1_000;
     const app = createInMemoryServerNext({
       now: () => now,
       ids: createIds([
@@ -2088,7 +2089,7 @@ describe('server-next first-slice use cases', () => {
       acknowledgementMessage: { id: 'message-2' },
     });
 
-    now = 326;
+    now = 11_000;
     await expect(app.sendMessage({
       userId: 'user-1',
       teamId: 'team-1',
@@ -2098,9 +2099,10 @@ describe('server-next first-slice use cases', () => {
       ok: true,
       message: { id: 'message-3' },
       dispatches: [],
+      coalescedDispatchId: 'dispatch-1',
     });
 
-    now = 327;
+    now = 15_999;
     await expect(app.sendMessage({
       userId: 'user-1',
       teamId: 'team-1',
@@ -2110,6 +2112,7 @@ describe('server-next first-slice use cases', () => {
       ok: true,
       message: { id: 'message-4' },
       dispatches: [],
+      coalescedDispatchId: 'dispatch-1',
     });
 
     await expect(app.getDispatchRequest({ dispatchId: 'dispatch-1' })).resolves.toMatchObject({
@@ -2183,25 +2186,25 @@ describe('server-next first-slice use cases', () => {
     await expect(app.acceptDispatch({
       dispatchId: 'dispatch-1',
       agentId: 'agent-1',
-      quietWindowMs: 5000,
+      quietWindowMs: MESSAGE_BATCH_QUIET_WINDOW_MS,
     })).resolves.toEqual({
       ok: true,
       ready: false,
-      retryAfterMs: 3500,
+      retryAfterMs: 13_500,
     });
 
-    now = 9500;
+    now = 19_500;
     await expect(app.acceptDispatch({
       dispatchId: 'dispatch-1',
       agentId: 'agent-1',
-      quietWindowMs: 5000,
+      quietWindowMs: MESSAGE_BATCH_QUIET_WINDOW_MS,
     })).resolves.toMatchObject({
       ok: true,
       ready: true,
       dispatch: {
         id: 'dispatch-1',
         status: 'accepted',
-        acceptedAt: 9500,
+        acceptedAt: 19_500,
       },
       request: {
         id: 'dispatch-1',
@@ -2254,13 +2257,14 @@ describe('server-next first-slice use cases', () => {
       ok: true,
       dispatches: [{ id: 'dispatch-1' }],
     });
+    now = 25_000;
     await expect(app.acceptDispatch({
       dispatchId: 'dispatch-1',
       agentId: 'agent-1',
-      quietWindowMs: 0,
+      quietWindowMs: MESSAGE_BATCH_QUIET_WINDOW_MS,
     })).resolves.toMatchObject({ ok: true, ready: true });
 
-    now = 16_000;
+    now = 26_000;
     await expect(app.sendMessage({
       userId: 'user-1',
       teamId: 'team-1',
@@ -2273,7 +2277,7 @@ describe('server-next first-slice use cases', () => {
       dispatches: [{ id: 'dispatch-2', messageId: 'message-2' }],
     });
 
-    now = 17_000;
+    now = 27_000;
     await expect(app.sendMessage({
       userId: 'user-1',
       teamId: 'team-1',
