@@ -113,6 +113,64 @@ describe('daemon-next protocol client', () => {
     ]);
   });
 
+  test('keeps same-agent follow-ups queued until the active executor actually stops after cancellation', async () => {
+    const socket = new FakeAgentSocket();
+    const executionOrder: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstCanFinish = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const executor: StubExecutor = async (request) => {
+      executionOrder.push(`start:${request.id}`);
+      if (request.id === 'dispatch-1') {
+        await firstCanFinish;
+      }
+      executionOrder.push(`end:${request.id}`);
+      return `stub:${request.prompt}`;
+    };
+    const client = createDaemonProtocolClient({
+      socket,
+      executor,
+      device: { teamId: 'team-1', ownerId: 'user-1' },
+      runtimes: [],
+      agents: [],
+    });
+    const request = (id: string, prompt: string): DispatchRequestPayload => ({
+      id,
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: `message-${id}`,
+      agentId: 'agent-1',
+      requestId: `request-${id}`,
+      prompt,
+    });
+
+    await client.start();
+    const first = socket.trigger(AGENT_EVENTS.dispatch.request, request('dispatch-1', 'first'));
+    await vi.waitFor(() => expect(executionOrder).toEqual(['start:dispatch-1']));
+    const second = socket.trigger(AGENT_EVENTS.dispatch.request, request('dispatch-2', 'second'));
+    await socket.trigger(AGENT_EVENTS.dispatch.cancel, {
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(executionOrder).toEqual(['start:dispatch-1']);
+    releaseFirst?.();
+    await Promise.all([first, second]);
+    expect(executionOrder).toEqual([
+      'start:dispatch-1',
+      'end:dispatch-1',
+      'start:dispatch-2',
+      'end:dispatch-2',
+    ]);
+    expect(socket.emitted.some(([event, payload]) =>
+      event === AGENT_EVENTS.dispatch.result &&
+      (payload as { dispatchId?: string }).dispatchId === 'dispatch-1'
+    )).toBe(false);
+  });
+
   test('stops claim retries when the dispatch is cancelled during the quiet window', async () => {
     const socket = new FakeAgentSocket();
     socket.dispatchAcceptedAcks.push({ ok: true, ready: false, retryAfterMs: 250 });

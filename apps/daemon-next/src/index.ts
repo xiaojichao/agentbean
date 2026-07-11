@@ -190,6 +190,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       currentDeviceId = initialAnnouncement.deviceId;
       await applyCredentialsUpdate(initialAnnouncement.credentials);
       const cancelledDispatchIds = new Set<string>();
+      const dispatchExecutionTails = new Map<string, Promise<void>>();
       const outbox: DispatchOutbox = createDispatchOutbox(socket, {
         onWarn: (message) => console.warn(message),
       });
@@ -261,11 +262,19 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       });
 
       socket.on(AGENT_EVENTS.dispatch.request, async (payload) => {
-        let request = payload as DispatchRequestPayload;
-        if (cancelledDispatchIds.delete(request.id)) {
-          return;
-        }
+        const incomingRequest = payload as DispatchRequestPayload;
+        const previousExecution = dispatchExecutionTails.get(incomingRequest.agentId) ?? Promise.resolve();
+        let releaseExecution: (() => void) | undefined;
+        const executionTail = new Promise<void>((resolve) => {
+          releaseExecution = resolve;
+        });
+        dispatchExecutionTails.set(incomingRequest.agentId, executionTail);
+        await previousExecution;
+        let request = incomingRequest;
         try {
+          if (cancelledDispatchIds.delete(request.id)) {
+            return;
+          }
           if (request.claimRequired) {
             const wake = request;
             const accepted = await claimDispatchRequest(
@@ -400,6 +409,13 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             agentId: request.agentId,
             error: readErrorMessage(error),
           });
+        } finally {
+          // cancel suppresses a late result, but only the executor actually returning makes
+          // it safe to start another request for the same Agent.
+          releaseExecution?.();
+          if (dispatchExecutionTails.get(incomingRequest.agentId) === executionTail) {
+            dispatchExecutionTails.delete(incomingRequest.agentId);
+          }
         }
       });
 
