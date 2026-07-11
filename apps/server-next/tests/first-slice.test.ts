@@ -3753,6 +3753,69 @@ describe('server-next first-slice use cases', () => {
     },
   );
 
+  test('terminal status write converges back to busy when a dispatch is created concurrently', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 500 },
+      ids: { nextId: createIds([
+        'user-1', 'team-1', 'channel-1',
+        'message-1', 'dispatch-1', 'request-1',
+      ]) },
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 500,
+    });
+    await app.sendMessage({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex first',
+    });
+    await app.acceptDispatch({ dispatchId: 'dispatch-1', agentId: 'agent-1', quietWindowMs: 0 });
+
+    const updateStatus = repositories.agents.updateStatus.bind(repositories.agents);
+    let injectedSuccessor = false;
+    repositories.agents.updateStatus = async (input) => {
+      if (input.status === 'offline' && !injectedSuccessor) {
+        injectedSuccessor = true;
+        await repositories.dispatches.create({
+          id: 'dispatch-2',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          messageId: 'message-2',
+          agentId: 'agent-1',
+          status: 'queued',
+          requestId: 'request-2',
+          prompt: 'concurrent successor',
+          createdAt: 500,
+          updatedAt: 500,
+        });
+        await updateStatus({ agentId: 'agent-1', status: 'busy', lastSeenAt: 500 });
+      }
+      await updateStatus(input);
+    };
+
+    await app.receiveDispatchError({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      error: 'executor failed',
+    });
+
+    expect(injectedSuccessor).toBe(true);
+    await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      agents: [{ id: 'agent-1', status: 'busy' }],
+    });
+  });
+
   test('failTimedOutDispatches clears busy back to online on timeout', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,

@@ -5496,6 +5496,7 @@ async function markAgentOnlineIfIdle(
     status: 'online',
     lastSeenAt: input.lastSeenAt,
   });
+  await restoreAgentBusyIfDispatchArrived(repositories, input);
 }
 
 async function markAgentOfflineIfIdle(
@@ -5511,6 +5512,7 @@ async function markAgentOfflineIfIdle(
     lastSeenAt: input.lastSeenAt,
     lastError: input.lastError,
   });
+  await restoreAgentBusyIfDispatchArrived(repositories, input);
 }
 
 async function hasPendingDispatchForAgent(
@@ -5521,6 +5523,20 @@ async function hasPendingDispatchForAgent(
   return teamDispatches.some((dispatch) =>
     dispatch.agentId === input.agentId && isPendingDispatchStatus(dispatch.status)
   );
+}
+
+async function restoreAgentBusyIfDispatchArrived(
+  repositories: ServerNextRepositories,
+  input: { agentId: ID; teamId: ID; lastSeenAt: UnixMs },
+): Promise<void> {
+  if (!(await hasPendingDispatchForAgent(repositories, input))) {
+    return;
+  }
+  await repositories.agents.updateStatus({
+    agentId: input.agentId,
+    status: 'busy',
+    lastSeenAt: input.lastSeenAt,
+  });
 }
 
 async function markLinkedTaskInReview(
