@@ -406,9 +406,19 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_OLD_ENTRY_URL=h
 
 Rollback 后保留 AgentBean Next 的 Railway volume，不要删除。先保存失败日志和 smoke 记录，再决定是否清理数据。
 
+## Release A 当前生产状态（2026-07-11）
+
+- PR #470 已 squash merge 为 `c31ce9d955d0dfb7f9407a6d5724763568a60b7b`。
+- main-push [CI/CD Run #996](https://github.com/xiaojichao/agentbean/actions/runs/29134937662) 已完成且结论为 `success`。
+- Railway deployment `58e4c03e-1e73-4513-85c7-74705709b488` 已成功，production service 使用 `/data` volume。
+- strict cutover audit `12/12`、entry smoke `4/4`、business smoke `8/8`、GitHub-hosted combined browser smoke `39/39` 均通过。
+- Release A 发布后 SQLite 观察期基线备份位于 `/data/agentbean-next/backups/release-a-observation/`；global/team 两份快照均为 `integrity_check=ok`、权限 `0600`。完整路径、size、SHA256 与 migration ledger 记录在 `phase-minus-1-team-terminology-verification-matrix.md`。
+- 计划要求的发布前 global SQLite backup 没有可验证证据；发布后基线不能冒充发布前备份。
+- 观察窗口为 `2026-07-11 09:41:41` 至 `2026-07-18 09:41:41`（Asia/Shanghai）。窗口结束并满足退出条件前，不执行 Release B。
+
 ## 仍未完成
 
-- 用户明确批准 final production flip。
-- production deploy flip。
-- production browser smoke。
+- 7 天观察期内持续检查旧 Team path 首次迁移、login/device-login redirect 404、旧 route 访问、SQLite migration error 和已撤销 Device 重连。
+- 对 P-1-08 执行真实旧 browser key migration storage inspection。
+- 观察窗口结束后再决定是否执行 Release B：退役 legacy source、删除旧键读取、旧 Team redirect 和 checker allowlist。
 - 如果旧 Vercel web 仍是主要用户入口，需要单独决定用户访问入口是继续使用旧 Vercel、改 Vercel 指向 AgentBean Next，还是由 Railway server-next 托管 preview/正式界面。
