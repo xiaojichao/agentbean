@@ -879,8 +879,15 @@ export async function exerciseWebUiChannelsBusinessSmoke({
 
     await page.navigate(new URL(`/${teamPath}/channels`, root).toString());
     await page.waitForFunction(
-      `document.querySelector('[data-smoke="channel-create-open"]') !== null`,
-      'channels page exposes the create channel control',
+      `
+      (() => {
+        const control = document.querySelector('[data-smoke="channel-create-open"]');
+        return control !== null
+          && control.getAttribute('data-team-id') === ${JSON.stringify(session.team.id)}
+          && control.disabled === false;
+      })()
+      `,
+      `channels page exposes the create channel control for Team ${session.team.id}`,
       timeoutMs,
     );
     await page.click('[data-smoke="channel-create-open"]');
