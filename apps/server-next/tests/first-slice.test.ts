@@ -2334,6 +2334,62 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('does not coalesce a mentioned follow-up across another agent mention', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 25_000,
+      ids: createIds([
+        'user-1', 'team-1', 'channel-1',
+        'message-1', 'dispatch-1', 'request-1',
+        'message-2', 'dispatch-2', 'request-2',
+        'message-3', 'dispatch-3', 'request-3',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    for (const [id, name, deviceId] of [
+      ['agent-1', 'AgentA', 'device-1'],
+      ['agent-2', 'AgentB', 'device-2'],
+    ] as const) {
+      await app.registerAgent({
+        id,
+        primaryTeamId: 'team-1',
+        visibleTeamIds: ['team-1'],
+        name,
+        adapterKind: 'codex',
+        category: 'agentos-hosted',
+        source: 'scanned',
+        status: 'online',
+        deviceId,
+        lastSeenAt: 25_000,
+      });
+    }
+
+    await app.sendMessage({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@AgentA first',
+    });
+    await app.sendMessage({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@AgentB second',
+    });
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@AgentA third',
+      dispatchClaimDeviceIds: ['device-1', 'device-2'],
+    })).resolves.toMatchObject({
+      ok: true,
+      route: { kind: 'dispatch', agentId: 'agent-1', reason: 'mention' },
+      dispatches: [{ id: 'dispatch-3', messageId: 'message-3' }],
+    });
+    await expect(app.getDispatchRequest({ dispatchId: 'dispatch-1' })).resolves.toMatchObject({
+      ok: true,
+      request: { prompt: '@AgentA first' },
+    });
+    await expect(app.getDispatchRequest({ dispatchId: 'dispatch-3' })).resolves.toMatchObject({
+      ok: true,
+      request: { prompt: '@AgentA third' },
+    });
+  });
+
   test('queues direct-message follow-ups that arrive after the active dispatch was accepted', async () => {
     let now = 10_000;
     const app = createInMemoryServerNext({
@@ -2461,6 +2517,68 @@ describe('server-next first-slice use cases', () => {
     await expect(app.getDispatchRequest({ dispatchId: queuedDispatches[0]!.id })).resolves.toMatchObject({
       ok: true,
       request: { prompt: '你能干哪些事情？\n\n有哪些 Skills？' },
+    });
+  });
+
+  test('coalesces concurrent follow-ups into an existing queued successor without duplication', async () => {
+    let now = 27_000;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1', 'team-1', 'channel-1', 'dm-1',
+        'message-1', 'dispatch-1', 'request-1',
+        'message-2', 'dispatch-2', 'request-2',
+        'message-3', 'message-4',
+        'dispatch-3', 'request-3', 'dispatch-4', 'request-4',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'testclaudecode',
+      adapterKind: 'claude-code',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+    await app.startDirectMessage({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' });
+    await app.sendMessage({
+      userId: 'user-1', teamId: 'team-1', channelId: 'dm-1', body: 'first',
+    });
+    await app.acceptDispatch({ dispatchId: 'dispatch-1', agentId: 'agent-1', quietWindowMs: 0 });
+
+    now = 28_000;
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'dm-1',
+      body: 'second',
+      dispatchClaimDeviceIds: ['device-1'],
+    });
+
+    now = 29_000;
+    const concurrent = await Promise.all([
+      app.sendMessage({
+        userId: 'user-1', teamId: 'team-1', channelId: 'dm-1', body: 'third',
+        dispatchClaimDeviceIds: ['device-1'],
+      }),
+      app.sendMessage({
+        userId: 'user-1', teamId: 'team-1', channelId: 'dm-1', body: 'fourth',
+        dispatchClaimDeviceIds: ['device-1'],
+      }),
+    ]);
+    expect(concurrent.flatMap((result) => result.ok ? result.dispatches : [])).toEqual([]);
+    await expect(app.getDispatchRequest({ dispatchId: 'dispatch-2' })).resolves.toMatchObject({
+      ok: true,
+      request: { prompt: 'second\n\nthird\n\nfourth' },
+    });
+    await expect(app.getDispatchRequest({ dispatchId: 'dispatch-3' })).resolves.toMatchObject({
+      ok: false,
+      error: 'NOT_FOUND',
     });
   });
 

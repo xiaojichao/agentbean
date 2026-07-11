@@ -4773,11 +4773,14 @@ async function touchPendingCoalescibleDispatch(
       repositories.messages.getById(dispatch.messageId),
       repositories.agents.getById(dispatch.agentId),
     ]);
-    if (!originMessage || !agent || !canCoalesceDispatchPromptMessage({
+    if (!originMessage || !agent) {
+      continue;
+    }
+    const promptMessages = await collectCoalescedDispatchPromptMessages(repositories, {
       originMessage,
-      candidate: input.message,
       agent,
-    })) {
+    });
+    if (!promptMessages.some((message) => message.id === input.message.id)) {
       continue;
     }
     const touched = await repositories.dispatches.touchPending({
