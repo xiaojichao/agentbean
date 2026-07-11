@@ -366,6 +366,12 @@ describe('AgentBean Next browser smoke script', () => {
     const waitForFunctionCalls = calls.filter(
       (call): call is ['waitForFunction', { expression: string; description: string }] => call[0] === 'waitForFunction',
     );
+    expect(waitForFunctionCalls.some((call) => (
+      call[1].description === 'channels page exposes the create channel control for Team team-1'
+      && call[1].expression.includes('data-team-id')
+      && call[1].expression.includes('team-1')
+      && call[1].expression.includes('disabled')
+    ))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('channel-create-dialog'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('channel-members-dialog'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('channel-member-item'))).toBe(true);

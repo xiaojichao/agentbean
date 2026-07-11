@@ -18,7 +18,7 @@ export default function ChannelsPage() {
   const fallbackTeamPath = useCurrentTeamPath();
   const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : fallbackTeamPath;
   const routeTeam = teams.find((team) => team.path === routeTeamPath || team.id === routeTeamPath);
-  const channelTeamId = routeTeam?.id ?? currentTeamId;
+  const channelTeamId = routeTeam?.id ?? (routeTeamPath === 'default' ? currentTeamId : '');
   const np = routeTeamPath || fallbackTeamPath;
   const [open, setOpen] = useState(false);
 
@@ -59,8 +59,10 @@ export default function ChannelsPage() {
         <span className="text-sm font-semibold">频道</span>
         <button
           onClick={() => setOpen(true)}
+          disabled={!channelTeamId}
           data-smoke="channel-create-open"
-          className="rounded bg-neutral-900 text-white text-sm px-3 py-1.5"
+          data-team-id={channelTeamId}
+          className="rounded bg-neutral-900 text-white text-sm px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-50"
         >新建频道</button>
       </div>
       <div className="flex-1 overflow-y-auto p-6">
@@ -84,7 +86,7 @@ export default function ChannelsPage() {
         </ul>
       )}
       </div>
-      {open && <NewChannelDialog onClose={() => setOpen(false)} teamId={channelTeamId} teamPath={np} />}
+      {open && channelTeamId && <NewChannelDialog onClose={() => setOpen(false)} teamId={channelTeamId} teamPath={np} />}
     </div>
   );
 }
