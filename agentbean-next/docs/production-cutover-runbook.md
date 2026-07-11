@@ -6,7 +6,7 @@
 
 截至 2026-06-12，AgentBean Next final flip 已经完成，post-flip strict cutover audit、production entry smoke、business smoke 与 browser smoke gate 已进入主线验证。当前 follow-up 状态见 `post-flip-follow-up-status.md`。
 
-本文后续仍保留切换前 gate、manual deploy、rollback 与 smoke 的操作说明，供回放、审计或受控 rollback 演练使用；不要把下方历史 pre-flip 状态误读为当前仍未切换。
+本文后续仍保留切换前 gate、manual deploy、rollback 与 smoke 的历史说明，供回放和审计使用；不要把下方历史 pre-flip 状态误读为当前仍未切换，也不要据此执行 old-target rollback。Release A 当前限制以本文“Rollback”章节为准。
 
 ## 切换前 gate 状态（历史）
 
@@ -82,7 +82,7 @@ gh workflow run "CI/CD" \
 
 该 job 只运行 `smoke:agentbean-next-entry` 与 `smoke:agentbean-next-business`，不会执行 Railway deploy，也不会发布 npm。
 
-如果需要在回滚或 old-target deploy 后单独验证旧生产入口，可以运行：
+以下命令只验证一个已经完成且已经单独批准的 old-target deploy，不授权执行 rollback。Release A 当前 old-target rollback 已冻结，不得先运行部署再用 smoke 补证：
 
 ```bash
 gh workflow run "CI/CD" \
@@ -323,7 +323,7 @@ gh variable set AGENTBEAN_DEPLOY_TARGET --repo xiaojichao/agentbean --body next
 
 如果使用 workflow dispatch 触发 `agentbean_deploy_target=next` 与 `run_production_deploy=true`，必须先设置 repository variable `AGENTBEAN_DEPLOY_TARGET=next`，并同时设置 `run_agentbean_next_production_smoke=true`。CI 会阻止只靠 workflow input 的临时 Next deploy，也会阻止只切不验的手动 Next production deploy。
 
-如果使用 workflow dispatch 触发 `agentbean_deploy_target=old` 与 `run_production_deploy=true`，必须同时设置 `run_agentbean_old_production_smoke=true`。CI 会阻止反向只切不验的手动 rollback/old production deploy。
+历史 workflow gate 要求 `agentbean_deploy_target=old` 与 `run_production_deploy=true` 必须同时设置 `run_agentbean_old_production_smoke=true`，但这只防止反向只切不验，不证明 schema rollback 安全。Release A 当前不得触发该 old-target deploy，限制见“Rollback”章节。
 
 如果通过 repository variable `AGENTBEAN_DEPLOY_TARGET=next` 后推送 `main` 触发生产部署，CI 会在 push run 的 deploy 成功后自动运行 `AgentBean Next production smoke`。
 
@@ -369,46 +369,39 @@ PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH npm run smoke:agentbean-n
 
 ## Rollback
 
-如果 production smoke 失败，立即切回旧系统：
+### Release A 当前限制
 
-```bash
-gh variable set AGENTBEAN_DEPLOY_TARGET --repo xiaojichao/agentbean --body old
-```
+Release A 前 global SQLite backup 没有可验证证据，而 production global DB 已应用 `global/0014_device_revocations_team_columns.sql`。因此 **不得** 直接把 `AGENTBEAN_DEPLOY_TARGET` 切为 `old`，也不得按历史 workflow-dispatch 示例把旧 `apps/server` 部署到当前 production volume。实施计划要求旧 binary 回滚时恢复 Release A 前 global DB backup；当前不存在满足该合同的恢复点。
 
-随后重新触发 production deploy，并确认：
+发布后写入同一 production volume 的 SQLite 文件只是观察快照。它们已包含迁移后的 schema，只能在停止写入、确认目标 Next deployment 与该 schema 兼容、并由 operator 明确批准后作为逻辑状态恢复候选；它们不是 old binary rollback point，也不能覆盖 volume 丢失或损坏。当前尚无 off-volume copy、保留期或恢复演练证据。
 
-- `Deploy production` 使用旧 `apps/server` deploy path。
-- `Run AgentBean Next production readiness checks` skipped。
-- 旧生产 `/healthz` 恢复。
-- `Old AgentBean production smoke` 通过。
+### 当前允许的事故恢复路径
 
-推荐使用 workflow dispatch 同时部署 old target 并运行 old entry smoke：
+如果观察期 production smoke、日志或数据校验失败：
 
-```bash
-gh workflow run "CI/CD" \
-  --repo xiaojichao/agentbean \
-  --ref main \
-  -f agentbean_deploy_target=old \
-  -f agentbean_npm_publish_target=old \
-  -f run_production_deploy=true \
-  -f run_railway_preflight=false \
-  -f sync_railway_next_runtime_env=false \
-  -f run_agentbean_next_production_smoke=false \
-  -f run_agentbean_old_production_smoke=true \
-  -f agentbean_old_entry_url=https://api.agentbean.dev
-```
+1. 停止 Release B 和后续 production deploy，保存失败日志、deployment ID、当前 global/team DB metadata 与 incident 时间线。
+2. 保持 `AGENTBEAN_DEPLOY_TARGET=next`。代码回滚只允许选择已知兼容 `0014` schema 的上一成功 AgentBean Next Railway deployment，或 revert 到同样兼容该 schema 的 AgentBean Next commit 后重新部署。
+3. 回滚后重新运行 strict cutover audit、public entry smoke、business smoke，以及与故障面对应的 browser/SQLite 验证；把 run/deployment URL 写入验收矩阵的观察台账。
+4. 涉及 SQLite 数据恢复时先停止所有写入。只有确认快照时间点、目标 schema、影响范围和恢复命令后才能执行；本 runbook 当前不提供未经演练的 production restore 命令。
+5. 若唯一可行方案需要旧 binary，保持服务冻结并升级为人工 incident 决策；必须先建立迁移前兼容备份或经过验证的 reverse migration/restore 方案，完成恢复演练后才可解除 old-target rollback 冻结。
 
-本机也可以直接复核：
+无论采取哪条路径，都保留 AgentBean Next Railway volume，不要删除或覆盖现场数据。`Old AgentBean production smoke` 只用于未来已经满足 schema 恢复前提的受控 old-target 演练；它不能证明当前 old-target rollback 安全。
 
-```bash
-PATH=/Users/shaw/.nvm/versions/node/v24.15.0/bin:$PATH AGENTBEAN_OLD_ENTRY_URL=https://api.agentbean.dev npm run smoke:agentbean-old-entry
-```
+## Release A 当前生产状态（2026-07-11）
 
-Rollback 后保留 AgentBean Next 的 Railway volume，不要删除。先保存失败日志和 smoke 记录，再决定是否清理数据。
+- PR #470 已 squash merge 为 `c31ce9d955d0dfb7f9407a6d5724763568a60b7b`。
+- main-push [CI/CD Run #996](https://github.com/xiaojichao/agentbean/actions/runs/29134937662) 已完成且结论为 `success`。
+- Railway deployment `58e4c03e-1e73-4513-85c7-74705709b488` 已成功，production service 使用 `/data` volume。
+- strict cutover audit `12/12`、entry smoke `4/4`、business smoke `8/8` 均针对 production 通过；GitHub-hosted combined browser gate `39/39` 也通过，但它使用 CI runner 本地 Server，不是 production-host browser smoke。
+- Release A 发布后 SQLite 观察快照位于 `/data/agentbean-next/backups/release-a-observation/`；global/team 两份快照均为 `integrity_check=ok`、权限 `0600`。完整路径、size、SHA256 与 migration ledger 记录在 `phase-minus-1-team-terminology-verification-matrix.md`。
+- 计划要求的发布前 global SQLite backup 没有可验证证据；发布后快照不能冒充发布前备份，old-target schema rollback 当前冻结。
+- 观察窗口为 `2026-07-11 09:41:41` 至 `2026-07-18 09:41:41`（Asia/Shanghai）。窗口结束并满足退出条件前，不执行 Release B。
 
 ## 仍未完成
 
-- 用户明确批准 final production flip。
-- production deploy flip。
-- production browser smoke。
+- 7 天观察期内按验收矩阵台账每天及每次 deploy/incident 后检查：旧 Team path 首次迁移、login/device-login redirect 404、Artifact upload 404/403、Admin DTO rendering error、SQLite migration error 和已撤销 Device 重连。
+- 对 P-1-08 执行真实旧 browser key migration storage inspection。
+- 对 `https://api.agentbean.dev` 执行 production-host browser smoke，并保存 URL、console 与截图证据；Run #996 的本地 combined browser gate 不能替代。
+- 对 production `device_revocations` 执行只读 row count、普通/`NULL profile_id`、PK/index inspection，并验证已撤销 Device 仍被拒绝；migration ledger 与 `integrity_check` 不能替代行为证据。
+- 观察窗口结束后只有在台账完整、所有阈值通过、incident 全部关闭、最终 smoke 复验和 verification-only sign-off 完成时，才决定是否执行 Release B；日期到点本身不是退出证据。
 - 如果旧 Vercel web 仍是主要用户入口，需要单独决定用户访问入口是继续使用旧 Vercel、改 Vercel 指向 AgentBean Next，还是由 Railway server-next 托管 preview/正式界面。
