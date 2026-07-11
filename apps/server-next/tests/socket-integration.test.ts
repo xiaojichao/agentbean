@@ -2263,6 +2263,66 @@ describe('server-next Socket.IO namespaces', () => {
     expect(wakes).toHaveLength(1);
   });
 
+  test('replaces stale dispatch-claim capability when a legacy socket takes over the same device', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 3000,
+      ids: createIds([
+        'user-1', 'team-1', 'channel-all', 'device-1', 'runtime-1', 'agent-1',
+        'dm-channel-1', 'message-1', 'dispatch-1', 'request-1',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app, {
+      dispatchRequestCoalesceMs: 20,
+    });
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const claimAgent = await connectClient(`${baseUrl}/agent`);
+    const legacyAgent = await connectClient(`${baseUrl}/agent`);
+    cleanups.push(async () => {
+      bootstrap.disconnect();
+      claimAgent.disconnect();
+      legacyAgent.disconnect();
+    });
+    const register = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw', password: 'secret', teamName: 'AgentBean',
+    });
+    const web = await connectClient(`${baseUrl}/web`, { auth: { token: (register as { token: string }).token } });
+    cleanups.push(async () => web.disconnect());
+
+    const identity = {
+      teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default',
+    };
+    await claimAgent.emitWithAck(AGENT_EVENTS.device.hello, {
+      ...identity,
+      protocolCapabilities: { dispatchClaim: true },
+    });
+    await claimAgent.emitWithAck(AGENT_EVENTS.device.runtimes, {
+      teamId: 'team-1', deviceId: 'device-1',
+      runtimes: [{ adapterKind: 'codex', name: 'Codex CLI', installed: true }],
+    });
+    await claimAgent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
+      teamId: 'team-1', deviceId: 'device-1',
+      agents: [{ name: 'Codex', adapterKind: 'codex', category: 'agentos-hosted' }],
+    });
+    await legacyAgent.emitWithAck(AGENT_EVENTS.device.hello, identity);
+    claimAgent.disconnect();
+
+    const legacyRequests: unknown[] = [];
+    legacyAgent.on(AGENT_EVENTS.dispatch.request, (payload) => legacyRequests.push(payload));
+    await web.emitWithAck(WEB_EVENTS.channel.subscribe, { teamId: 'team-1' });
+    await web.emitWithAck(WEB_EVENTS.dm.start, { agentId: 'agent-1' });
+    await web.emitWithAck(WEB_EVENTS.message.send, {
+      teamId: 'team-1', channelId: 'dm-channel-1', body: 'legacy request',
+    });
+
+    await eventually(async () => expect(legacyRequests).toHaveLength(1));
+    expect(legacyRequests[0]).toMatchObject({ id: 'dispatch-1', prompt: 'legacy request' });
+    expect(legacyRequests[0]).not.toHaveProperty('claimRequired');
+  });
+
   test('routes device scan requests only to the matching daemon socket', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,

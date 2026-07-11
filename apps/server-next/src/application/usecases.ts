@@ -405,6 +405,7 @@ export interface SendMessageInput {
   senderId?: string;
   senderKind?: string;
   connectedAgentDeviceIds?: string[];
+  dispatchClaimDeviceIds?: string[];
 }
 
 export interface SendMessageResult {
@@ -795,6 +796,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const deviceInviteCodes = input.deviceInviteCodes ?? { nextCode: generateJoinCode };
   const sessionSecret = input.sessionSecret ?? 'agentbean-next-dev-session-secret';
   const artifactContentStore = input.artifactContentStore;
+  const dispatchCoalescingLocks = new Map<string, Promise<void>>();
 
   return {
     async registerUser(registerInput) {
@@ -2463,6 +2465,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         body: messageInput.body,
         contextOwner,
         connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
+        dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
       });
       const attachmentResult = await getAttachableUploadedArtifacts(repositories, {
         userId: messageInput.userId,
@@ -2512,59 +2515,67 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           routeReason: toRouteReason(route),
         },
       });
-      await touchPendingCoalescibleDispatch(repositories, {
-        message,
-        updatedAt: now,
-      });
-      const attachedArtifacts: ArtifactRecord[] = [];
-      for (const artifact of attachmentResult.artifacts) {
-        attachedArtifacts.push(await repositories.artifacts.create({
-          ...artifact,
-          messageId: message.id,
-        }));
-      }
-      const dispatches: DispatchDto[] = [];
-      let acknowledgementMessage: MessageDto | undefined;
-
-      if (route.kind === 'dispatch') {
-        const dispatch = await repositories.dispatches.create({
-          id: ids.nextId(),
-          teamId: messageInput.teamId,
-          channelId: messageInput.channelId,
-          messageId: message.id,
-          agentId: route.agentId,
-          status: 'queued',
-          requestId: ids.nextId(),
-          prompt: messageInput.body,
-          createdAt: now,
+      const releaseDispatchCoalescingLock = await acquireKeyedLock(
+        dispatchCoalescingLocks,
+        `${message.teamId}:${message.channelId}:${message.senderId}`,
+      );
+      try {
+        const coalescedIntoPendingDispatch = await touchPendingCoalescibleDispatch(repositories, {
+          message,
           updatedAt: now,
         });
-        dispatches.push(toDispatchDto(dispatch));
-        await repositories.agents.updateStatus({
-          agentId: dispatch.agentId,
-          status: 'busy',
-          lastSeenAt: now,
-        });
-        if (task) {
-          acknowledgementMessage = await appendTaskClaimAcknowledgementMessage(repositories, {
-            id: ids.nextId(),
-            message,
-            task,
-            dispatch: toDispatchDto(dispatch),
-            createdAt: now,
-          });
+        const attachedArtifacts: ArtifactRecord[] = [];
+        for (const artifact of attachmentResult.artifacts) {
+          attachedArtifacts.push(await repositories.artifacts.create({
+            ...artifact,
+            messageId: message.id,
+          }));
         }
-      }
+        const dispatches: DispatchDto[] = [];
+        let acknowledgementMessage: MessageDto | undefined;
 
-      return makeSuccess({
-        message: attachedArtifacts.length > 0
-          ? { ...message, artifacts: attachedArtifacts.map(toArtifactDto) }
-          : message,
-        dispatches,
-        route,
-        ...(task ? { task } : {}),
-        ...(acknowledgementMessage ? { acknowledgementMessage } : {}),
-      });
+        if (route.kind === 'dispatch' && !coalescedIntoPendingDispatch) {
+          const dispatch = await repositories.dispatches.create({
+            id: ids.nextId(),
+            teamId: messageInput.teamId,
+            channelId: messageInput.channelId,
+            messageId: message.id,
+            agentId: route.agentId,
+            status: 'queued',
+            requestId: ids.nextId(),
+            prompt: messageInput.body,
+            createdAt: now,
+            updatedAt: now,
+          });
+          dispatches.push(toDispatchDto(dispatch));
+          await repositories.agents.updateStatus({
+            agentId: dispatch.agentId,
+            status: 'busy',
+            lastSeenAt: now,
+          });
+          if (task) {
+            acknowledgementMessage = await appendTaskClaimAcknowledgementMessage(repositories, {
+              id: ids.nextId(),
+              message,
+              task,
+              dispatch: toDispatchDto(dispatch),
+              createdAt: now,
+            });
+          }
+        }
+
+        return makeSuccess({
+          message: attachedArtifacts.length > 0
+            ? { ...message, artifacts: attachedArtifacts.map(toArtifactDto) }
+            : message,
+          dispatches,
+          route,
+          ...(task ? { task } : {}),
+          ...(acknowledgementMessage ? { acknowledgementMessage } : {}),
+        });
+      } finally {
+        releaseDispatchCoalescingLock();
+      }
     },
 
     async getDispatchRequest(requestInput) {
@@ -2599,7 +2610,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (acceptInput.deviceId && agent.deviceId !== acceptInput.deviceId) {
         return makeFailure('FORBIDDEN', 'Dispatch does not belong to device');
       }
-
       const now = clock.now();
       const readyAt = dispatch.updatedAt + Math.max(0, acceptInput.quietWindowMs);
       if (now < readyAt) {
@@ -3232,9 +3242,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         : null;
       const agent = await repositories.agents.getById(cancelled.dispatch.agentId);
       if (agent && agent.status === 'busy') {
-        await repositories.agents.updateStatus({
+        await markAgentOnlineIfIdle(repositories, {
           agentId: cancelled.dispatch.agentId,
-          status: 'online',
+          teamId: cancelled.dispatch.teamId,
           lastSeenAt: now,
         });
       }
@@ -3273,9 +3283,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         }
         const agent = await repositories.agents.getById(result.dispatch.agentId);
         if (agent && agent.status === 'busy') {
-          await repositories.agents.updateStatus({
+          await markAgentOnlineIfIdle(repositories, {
             agentId: result.dispatch.agentId,
-            status: 'online',
+            teamId: result.dispatch.teamId,
             lastSeenAt: now,
           });
         }
@@ -3309,9 +3319,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (timedOut?.changed) {
           const agent = await repositories.agents.getById(dispatch.agentId);
           if (agent && agent.status === 'busy') {
-            await repositories.agents.updateStatus({
+            await markAgentOnlineIfIdle(repositories, {
               agentId: dispatch.agentId,
-              status: 'online',
+              teamId: dispatch.teamId,
               lastSeenAt: now,
             });
           }
@@ -3515,9 +3525,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!failed.changed) {
         return makeFailure('CONFLICT', 'Dispatch is already completed');
       }
-      await repositories.agents.updateStatus({
+      await markAgentOfflineIfIdle(repositories, {
         agentId: errorInput.agentId,
-        status: 'offline',
+        teamId: failed.dispatch.teamId,
         lastSeenAt: now,
         lastError: errorInput.error,
       });
@@ -4726,10 +4736,29 @@ function toDispatchHistoryMessageDto(message: MessageRecord): DispatchHistoryMes
 
 const DISPATCH_PROMPT_COALESCING_CHANNEL_WINDOW = 100;
 
+async function acquireKeyedLock(
+  locks: Map<string, Promise<void>>,
+  key: string,
+): Promise<() => void> {
+  const previous = locks.get(key) ?? Promise.resolve();
+  let releaseCurrent: (() => void) | undefined;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  locks.set(key, current);
+  await previous;
+  return () => {
+    releaseCurrent?.();
+    if (locks.get(key) === current) {
+      locks.delete(key);
+    }
+  };
+}
+
 async function touchPendingCoalescibleDispatch(
   repositories: ServerNextRepositories,
   input: { message: MessageRecord; updatedAt: UnixMs },
-): Promise<void> {
+): Promise<boolean> {
   const dispatches = await repositories.dispatches.listByTeam(input.message.teamId);
   const candidates = dispatches
     .filter((dispatch) =>
@@ -4744,19 +4773,25 @@ async function touchPendingCoalescibleDispatch(
       repositories.messages.getById(dispatch.messageId),
       repositories.agents.getById(dispatch.agentId),
     ]);
-    if (!originMessage || !agent || !canCoalesceDispatchPromptMessage({
-      originMessage,
-      candidate: input.message,
-      agent,
-    })) {
+    if (!originMessage || !agent) {
       continue;
     }
-    await repositories.dispatches.touchPending({
+    const promptMessages = await collectCoalescedDispatchPromptMessages(repositories, {
+      originMessage,
+      agent,
+    });
+    if (!promptMessages.some((message) => message.id === input.message.id)) {
+      continue;
+    }
+    const touched = await repositories.dispatches.touchPending({
       dispatchId: dispatch.id,
       updatedAt: input.updatedAt,
     });
-    return;
+    if (touched?.changed) {
+      return true;
+    }
   }
+  return false;
 }
 
 async function buildDispatchRequest(
@@ -4918,27 +4953,39 @@ function routeMessageForChannel(input: {
   body: string;
   contextOwner?: RoutingContextOwner;
   connectedAgentDeviceIds?: string[];
+  dispatchClaimDeviceIds?: string[];
 }): RouteResult {
   const connectedAgentDeviceIds = input.connectedAgentDeviceIds
     ? new Set(input.connectedAgentDeviceIds)
     : undefined;
   const isSocketReachable = (agent: AgentDto): boolean =>
     !connectedAgentDeviceIds || !agent.deviceId || connectedAgentDeviceIds.has(agent.deviceId);
+  const dispatchClaimDeviceIds = new Set(input.dispatchClaimDeviceIds ?? []);
+  const canQueueForBusyAgent = (agent: AgentDto): boolean =>
+    agent.status === 'busy' && Boolean(agent.deviceId && dispatchClaimDeviceIds.has(agent.deviceId));
   if (input.channel.kind === 'direct') {
     const targetAgentId = input.channel.dmTargetAgentId ?? input.channel.agentMemberIds[0];
     const targetAgent = input.visibleAgents.find((agent) =>
       agent.id === targetAgentId &&
       agent.visibleTeamIds.includes(input.teamId) &&
-      agent.status === 'online' &&
+      (
+        agent.status === 'online' ||
+        canQueueForBusyAgent(agent)
+      ) &&
       isSocketReachable(agent)
     );
     return targetAgent
       ? { kind: 'dispatch', agentId: targetAgent.id, reason: 'direct' }
       : { kind: 'no-dispatch', reason: 'no-online-agent' };
   }
+  const hasLeadingMention = /^@(.+)/.test(input.body.trimStart());
   const route = routeMessage({
     body: input.body,
-    agents: input.visibleAgents,
+    agents: hasLeadingMention
+      ? input.visibleAgents.map((agent) => canQueueForBusyAgent(agent)
+          ? { ...agent, status: 'online' as const }
+          : agent)
+      : input.visibleAgents,
     humanMembers: [],
     teamId: input.teamId,
     channelId: input.channel.id,
@@ -5451,16 +5498,53 @@ async function markAgentOnlineIfIdle(
   repositories: ServerNextRepositories,
   input: { agentId: ID; teamId: ID; lastSeenAt: UnixMs },
 ): Promise<void> {
-  const teamDispatches = await repositories.dispatches.listByTeam(input.teamId);
-  const hasPendingDispatch = teamDispatches.some((dispatch) =>
-    dispatch.agentId === input.agentId && isPendingDispatchStatus(dispatch.status)
-  );
-  if (hasPendingDispatch) {
+  if (await hasPendingDispatchForAgent(repositories, input)) {
     return;
   }
   await repositories.agents.updateStatus({
     agentId: input.agentId,
     status: 'online',
+    lastSeenAt: input.lastSeenAt,
+  });
+  await restoreAgentBusyIfDispatchArrived(repositories, input);
+}
+
+async function markAgentOfflineIfIdle(
+  repositories: ServerNextRepositories,
+  input: { agentId: ID; teamId: ID; lastSeenAt: UnixMs; lastError: string },
+): Promise<void> {
+  if (await hasPendingDispatchForAgent(repositories, input)) {
+    return;
+  }
+  await repositories.agents.updateStatus({
+    agentId: input.agentId,
+    status: 'offline',
+    lastSeenAt: input.lastSeenAt,
+    lastError: input.lastError,
+  });
+  await restoreAgentBusyIfDispatchArrived(repositories, input);
+}
+
+async function hasPendingDispatchForAgent(
+  repositories: ServerNextRepositories,
+  input: { agentId: ID; teamId: ID },
+): Promise<boolean> {
+  const teamDispatches = await repositories.dispatches.listByTeam(input.teamId);
+  return teamDispatches.some((dispatch) =>
+    dispatch.agentId === input.agentId && isPendingDispatchStatus(dispatch.status)
+  );
+}
+
+async function restoreAgentBusyIfDispatchArrived(
+  repositories: ServerNextRepositories,
+  input: { agentId: ID; teamId: ID; lastSeenAt: UnixMs },
+): Promise<void> {
+  if (!(await hasPendingDispatchForAgent(repositories, input))) {
+    return;
+  }
+  await repositories.agents.updateStatus({
+    agentId: input.agentId,
+    status: 'busy',
     lastSeenAt: input.lastSeenAt,
   });
 }

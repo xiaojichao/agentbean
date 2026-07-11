@@ -86,6 +86,7 @@ export interface WebSocketHandlerOptions {
   dispatchCancel?(request: DispatchRequestDto & { id: string }): void;
   dispatchStatus?(dispatch: unknown): void;
   connectedAgentDeviceIds?(): string[];
+  dispatchClaimDeviceIds?(): string[];
   deviceScan?(request: DeviceScanEmitRequest): void;
   deviceSelectDirectory?(request: { deviceId: string }): Promise<{ ok: boolean; path?: string; error?: string }>;
   afterMessageSend?(payload: unknown, result: unknown): Promise<void> | void;
@@ -101,6 +102,7 @@ export interface WebSocketHandlerOptions {
 }
 
 export interface AgentSocketHandlerOptions {
+  afterDeviceHello?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceInviteWait?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
@@ -386,9 +388,12 @@ export function registerWebSocketHandlers(
     authenticatedUser: options.authenticatedUser,
     augmentInput(input) {
       const connectedAgentDeviceIds = options.connectedAgentDeviceIds?.() ?? [];
-      return connectedAgentDeviceIds.length > 0
-        ? { ...(input as Record<string, unknown>), connectedAgentDeviceIds }
-        : { ...(input as Record<string, unknown>), connectedAgentDeviceIds: [] };
+      const dispatchClaimDeviceIds = options.dispatchClaimDeviceIds?.() ?? [];
+      return {
+        ...(input as Record<string, unknown>),
+        connectedAgentDeviceIds,
+        dispatchClaimDeviceIds,
+      };
     },
   });
   bind(socket, WEB_EVENTS.message.search, app, 'searchMessages', undefined, { authenticatedUser: options.authenticatedUser });
@@ -474,6 +479,7 @@ export function registerAgentSocketHandlers(
         ? await app.deviceHelloFromCredentials(payload as Parameters<ServerNextUseCases['deviceHelloFromCredentials']>[0])
         : await app.deviceHello(payload as Parameters<ServerNextUseCases['deviceHello']>[0]);
       ack?.(result);
+      await options.afterDeviceHello?.(payload, result);
       await afterDeviceMutation(payload, result);
 
       // hello 成功后首推一次 scanRequested（带 customAgents），触发 daemon 扫 custom skills。

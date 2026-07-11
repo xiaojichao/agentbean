@@ -187,6 +187,9 @@ export function attachServerNextNamespaces(
       connectedAgentDeviceIds() {
         return [...agentSocketsByDeviceId.keys()];
       },
+      dispatchClaimDeviceIds() {
+        return [...dispatchClaimDeviceIds];
+      },
       deviceScan(request) {
         agentSocketsByDeviceId.get(request.deviceId)?.emit?.(AGENT_EVENTS.device.scanRequested, request);
       },
@@ -416,6 +419,20 @@ export function attachServerNextNamespaces(
     registerAgentSocketHandlers(socket, app, {
       dispatchClaimQuietMs: dispatchRequestCoalesceMs,
       connectedDeviceId: () => connectedDeviceId,
+      afterDeviceHello(payload, result) {
+        if (!isSuccessAck(result)) {
+          return;
+        }
+        const deviceId = resultDeviceId(result);
+        if (!deviceId) {
+          return;
+        }
+        if (payloadDispatchClaimCapability(payload) === true) {
+          dispatchClaimDeviceIds.add(deviceId);
+        } else {
+          dispatchClaimDeviceIds.delete(deviceId);
+        }
+      },
       async afterDeviceInviteWait(payload, result) {
         if (!isSuccessAck(result)) {
           return;
@@ -458,12 +475,6 @@ export function attachServerNextNamespaces(
           }
           connectedDeviceId = deviceId;
           agentSocketsByDeviceId.set(deviceId, socket);
-          const dispatchClaimCapability = payloadDispatchClaimCapability(payload);
-          if (dispatchClaimCapability === true) {
-            dispatchClaimDeviceIds.add(deviceId);
-          } else if (dispatchClaimCapability === false) {
-            dispatchClaimDeviceIds.delete(deviceId);
-          }
         }
         const teamId = payloadTeamId(payload) ?? resultDeviceTeamId(result);
         if (!teamId) {
