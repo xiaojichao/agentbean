@@ -3242,9 +3242,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         : null;
       const agent = await repositories.agents.getById(cancelled.dispatch.agentId);
       if (agent && agent.status === 'busy') {
-        await repositories.agents.updateStatus({
+        await markAgentOnlineIfIdle(repositories, {
           agentId: cancelled.dispatch.agentId,
-          status: 'online',
+          teamId: cancelled.dispatch.teamId,
           lastSeenAt: now,
         });
       }
@@ -3283,9 +3283,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         }
         const agent = await repositories.agents.getById(result.dispatch.agentId);
         if (agent && agent.status === 'busy') {
-          await repositories.agents.updateStatus({
+          await markAgentOnlineIfIdle(repositories, {
             agentId: result.dispatch.agentId,
-            status: 'online',
+            teamId: result.dispatch.teamId,
             lastSeenAt: now,
           });
         }
@@ -3319,9 +3319,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (timedOut?.changed) {
           const agent = await repositories.agents.getById(dispatch.agentId);
           if (agent && agent.status === 'busy') {
-            await repositories.agents.updateStatus({
+            await markAgentOnlineIfIdle(repositories, {
               agentId: dispatch.agentId,
-              status: 'online',
+              teamId: dispatch.teamId,
               lastSeenAt: now,
             });
           }
@@ -3525,9 +3525,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!failed.changed) {
         return makeFailure('CONFLICT', 'Dispatch is already completed');
       }
-      await repositories.agents.updateStatus({
+      await markAgentOfflineIfIdle(repositories, {
         agentId: errorInput.agentId,
-        status: 'offline',
+        teamId: failed.dispatch.teamId,
         lastSeenAt: now,
         lastError: errorInput.error,
       });
@@ -4780,11 +4780,13 @@ async function touchPendingCoalescibleDispatch(
     })) {
       continue;
     }
-    await repositories.dispatches.touchPending({
+    const touched = await repositories.dispatches.touchPending({
       dispatchId: dispatch.id,
       updatedAt: input.updatedAt,
     });
-    return true;
+    if (touched?.changed) {
+      return true;
+    }
   }
   return false;
 }
@@ -5486,11 +5488,7 @@ async function markAgentOnlineIfIdle(
   repositories: ServerNextRepositories,
   input: { agentId: ID; teamId: ID; lastSeenAt: UnixMs },
 ): Promise<void> {
-  const teamDispatches = await repositories.dispatches.listByTeam(input.teamId);
-  const hasPendingDispatch = teamDispatches.some((dispatch) =>
-    dispatch.agentId === input.agentId && isPendingDispatchStatus(dispatch.status)
-  );
-  if (hasPendingDispatch) {
+  if (await hasPendingDispatchForAgent(repositories, input)) {
     return;
   }
   await repositories.agents.updateStatus({
@@ -5498,6 +5496,31 @@ async function markAgentOnlineIfIdle(
     status: 'online',
     lastSeenAt: input.lastSeenAt,
   });
+}
+
+async function markAgentOfflineIfIdle(
+  repositories: ServerNextRepositories,
+  input: { agentId: ID; teamId: ID; lastSeenAt: UnixMs; lastError: string },
+): Promise<void> {
+  if (await hasPendingDispatchForAgent(repositories, input)) {
+    return;
+  }
+  await repositories.agents.updateStatus({
+    agentId: input.agentId,
+    status: 'offline',
+    lastSeenAt: input.lastSeenAt,
+    lastError: input.lastError,
+  });
+}
+
+async function hasPendingDispatchForAgent(
+  repositories: ServerNextRepositories,
+  input: { agentId: ID; teamId: ID },
+): Promise<boolean> {
+  const teamDispatches = await repositories.dispatches.listByTeam(input.teamId);
+  return teamDispatches.some((dispatch) =>
+    dispatch.agentId === input.agentId && isPendingDispatchStatus(dispatch.status)
+  );
 }
 
 async function markLinkedTaskInReview(
