@@ -6,6 +6,7 @@ import { Bot, MessagesSquare, ClipboardList, Users, ChevronDown, Settings, Monit
 import { agentEvents, channelEvents, deviceEvents, getWebSocket, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import { writeStoredTeamPath } from '@/lib/team-path';
+import type { TeamSummary } from '@/lib/schema';
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -14,6 +15,7 @@ export function Sidebar() {
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const teams = useAgentBeanStore((s) => s.teams);
+  const addTeam = useAgentBeanStore((s) => s.addTeam);
   const setCurrentTeamId = useAgentBeanStore((s) => s.setCurrentTeamId);
   const applyTeamsSnapshot = useAgentBeanStore((s) => s.applyTeamsSnapshot);
   const [showTeams, setShowTeams] = useState(false);
@@ -147,15 +149,17 @@ export function Sidebar() {
       {showCreateDialog && (
         <CreateTeamDialog
           onClose={() => setShowCreateDialog(false)}
-          onCreated={(teamId, teamPath) => {
-            setCurrentTeamId(teamId);
+          onCreated={(team) => {
+            addTeam(team);
+            setCurrentTeamId(team.id);
+            writeStoredTeamPath(localStorage, team.path);
             const segments = pathname.split('/');
             const subPath = segments.length > 2 ? segments.slice(2).join('/') : 'chat';
-            router.push(`/${teamPath}/${subPath}`);
+            router.push(`/${team.path}/${subPath}`);
             const socket = getWebSocket();
-            agentEvents(socket).subscribe(teamId);
-            channelEvents(socket).subscribe(teamId);
-            deviceEvents(socket).subscribe(teamId);
+            agentEvents(socket).subscribe(team.id);
+            channelEvents(socket).subscribe(team.id);
+            deviceEvents(socket).subscribe(team.id);
           }}
         />
       )}
@@ -177,7 +181,7 @@ function NavItem({ href, icon, label, active }: { href: string; icon: React.Reac
   );
 }
 
-function CreateTeamDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (teamId: string, teamPath: string) => void }) {
+function CreateTeamDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (team: TeamSummary) => void }) {
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const [name, setName] = useState('');
   const [path, setPath] = useState('');
@@ -206,7 +210,7 @@ function CreateTeamDialog({ onClose, onCreated }: { onClose: () => void; onCreat
       const res = await teamEvents().create({ name: trimmedName, path: trimmedPath || undefined, visibility });
       if (res.ok && res.team) {
         onClose();
-        onCreated(res.team.id, res.team.path ?? 'default');
+        onCreated(res.team);
       } else {
         setError(res.error === 'RESERVED_PATH' ? '该路径为系统保留路径，请使用其他名称' : (res.error ?? '创建失败'));
       }
