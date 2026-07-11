@@ -47,3 +47,17 @@ TypeScript changes to `apps/server-next`, `apps/daemon-next`, `apps/web-next`, `
 - `cd apps/web && npm run build` after `apps/web` changes
 
 Why: `vitest` transpiles with esbuild and skips type checking; strict-mode errors (e.g. `noUncheckedIndexedAccess` making `arr[i]` possibly `undefined`) only surface under `tsc`. Running only `vitest` hides build breaks (see PR #259 review P1).
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in this repository's GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Triage uses the five canonical labels without aliases. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Domain documentation uses a multi-context layout. See `docs/agents/domain.md`.
