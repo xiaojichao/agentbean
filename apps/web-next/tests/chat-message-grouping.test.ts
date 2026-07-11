@@ -16,7 +16,7 @@ describe('chat message visual grouping', () => {
   test('groups adjacent messages from the same sender inside the display window', () => {
     expect(isMessageGroupContinuation(
       message({ id: 'first', createdAt: 1_000 }),
-      message({ id: 'second', createdAt: 61_000 }),
+      message({ id: 'second', createdAt: 16_000 }),
     )).toBe(true);
   });
 
@@ -28,10 +28,10 @@ describe('chat message visual grouping', () => {
     expect(isMessageGroupContinuation(first, message({ id: 'system', createdAt: 2_000, senderKind: 'system', senderId: null }))).toBe(false);
   });
 
-  test('starts a new group after a long silence', () => {
+  test('starts a new group after 15 seconds of silence', () => {
     expect(isMessageGroupContinuation(
       message({ id: 'first', createdAt: 1_000 }),
-      message({ id: 'later', createdAt: 301_001 }),
+      message({ id: 'later', createdAt: 16_001 }),
     )).toBe(false);
   });
 });

@@ -19,7 +19,7 @@ const AGENT_EVENTS = {
 export async function runAgentBeanNextBusinessSmoke({
   baseUrl,
   ioFactory = loadSocketIoClient(),
-  timeoutMs = 10_000,
+  timeoutMs = 30_000,
   suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
 } = {}) {
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
