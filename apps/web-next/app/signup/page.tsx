@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { Bot } from 'lucide-react';
 import { createInviteSocket, authEvents, resetWebSocket } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
+import { readStoredTeamPath } from '@/lib/team-path';
 
 export default function SignupPage() {
   const router = useRouter();
@@ -45,7 +46,7 @@ export default function SignupPage() {
           role: user.role ?? 'user',
         });
         resetWebSocket();
-        const savedNp = localStorage.getItem('agentbean.networkPath');
+        const savedNp = readStoredTeamPath(localStorage);
         const np = res.currentTeam?.path || savedNp || user.primaryTeamId || 'default';
         router.replace(`/${np}/chat`);
       } else {

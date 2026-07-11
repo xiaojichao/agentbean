@@ -12,6 +12,8 @@ export interface SkillDto {
 
 export interface AgentSnapshot {
   id: string;
+  primaryTeamId: string;
+  visibleTeamIds: string[];
   name: string;
   role: string;
   adapterKind: AdapterKind;
@@ -21,9 +23,7 @@ export interface AgentSnapshot {
   connectCommand: string;
   visibility?: 'public' | 'private';
   category?: AgentCategory;
-  primaryTeamId?: string;
-  visibleTeamIds?: string[];
-  networkId?: string;
+  primaryTeamName?: string;
   ownerId?: string | null;
   ownerName?: string | null;
   command?: string | null;
@@ -33,8 +33,6 @@ export interface AgentSnapshot {
   description?: string | null;
   deviceId?: string;
   deviceName?: string | null;
-  publishedNetworkIds?: string[];
-  unpublishedNetworkIds?: string[];
   source?: 'self-register' | 'scanned' | 'custom';
   skills?: SkillDto[];
 }
@@ -194,13 +192,13 @@ export interface AgentMetricsSummary {
 
 export interface DeviceInfo {
   id: string;
-  teamId?: string;
+  teamId: string;
+  teamName?: string;
   ownerId?: string | null;
   userId?: string | null;
   ownerName?: string | null;
   userName?: string | null;
   name?: string;
-  networkId?: string;
   lastSeenAt: number;
   status: AgentStatus;
   agentIds: string[];

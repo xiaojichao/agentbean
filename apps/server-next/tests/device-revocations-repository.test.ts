@@ -75,8 +75,16 @@ function openMigratedRepos() {
 
 describe('device revocations repository (sqlite)', () => {
   test('upsertAll/find/clear round-trip with profileId value', async () => {
-    const { repos, close } = openMigratedRepos();
+    const { globalDb, repos, close } = openMigratedRepos();
     try {
+      expect(globalDb.prepare('PRAGMA table_info(device_revocations)').all().map((row) => (row as { name: string }).name)).toEqual([
+        'team_id',
+        'machine_id',
+        'profile_id',
+        'profile_key',
+        'device_id',
+        'deleted_at',
+      ]);
       await repos.revocations.upsertAll({
         revocations: [{ teamId: 't1', machineId: 'm1', profileId: 'p1', deviceId: 'd1', deletedAt: 1000 }],
       });
@@ -117,7 +125,7 @@ describe('device revocations repository (sqlite)', () => {
       const found = await repos.revocations.find({ teamId: 't1', machineId: 'm1', profileId: null });
       expect(found).toMatchObject({ deviceId: 'd2', deletedAt: 2000 });
       const rowCount = globalDb
-        .prepare('SELECT COUNT(*) AS count FROM device_revocations WHERE teamId = ? AND machineId = ?')
+        .prepare('SELECT COUNT(*) AS count FROM device_revocations WHERE team_id = ? AND machine_id = ?')
         .get('t1', 'm1') as { count: number };
       expect(rowCount.count).toBe(1);
     } finally {

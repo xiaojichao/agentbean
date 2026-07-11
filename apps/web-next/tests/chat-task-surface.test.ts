@@ -3,7 +3,7 @@ import { describe, expect, test } from 'vitest';
 
 describe('chat task surface', () => {
   test('keeps task-linked messages as compact timeline badges', () => {
-    const source = readFileSync(new URL('../app/[networkPath]/chat/page.tsx', import.meta.url), 'utf8');
+    const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
 
     expect(source).toContain('function ChatTaskBadge');
     expect(source).not.toContain('data-smoke="chat-task-card"');
@@ -11,7 +11,7 @@ describe('chat task surface', () => {
   });
 
   test('opens the status menu from the whole task badge instead of task detail', () => {
-    const source = readFileSync(new URL('../app/[networkPath]/chat/page.tsx', import.meta.url), 'utf8');
+    const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
     const start = source.indexOf('function ChatTaskBadge');
     const end = source.indexOf('function taskBadgeIcon', start);
     expect(start).toBeGreaterThan(-1);

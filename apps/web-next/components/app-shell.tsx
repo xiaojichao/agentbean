@@ -6,11 +6,12 @@ import { Sidebar } from '@/components/sidebar';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { authEvents, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
+import { readStoredTeamPath, writeStoredTeamPath } from '@/lib/team-path';
 
 const MARKETING_ROUTES = ['/', '/login', '/signup', '/register'];
 const RESERVED_PREFIXES = ['/join/', '/device-login/'];
 
-function isNetworkRoute(pathname: string): boolean {
+function isTeamRoute(pathname: string): boolean {
   if (MARKETING_ROUTES.includes(pathname)) return false;
   for (const prefix of RESERVED_PREFIXES) {
     if (pathname.startsWith(prefix)) return false;
@@ -42,7 +43,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         useAgentBeanStore.getState().setCurrentUser(res.user);
         if (res.currentTeam?.id) {
           useAgentBeanStore.getState().setCurrentTeamId(res.currentTeam.id);
-          localStorage.setItem('agentbean.networkPath', res.currentTeam.path ?? res.currentTeam.id);
+          writeStoredTeamPath(localStorage, res.currentTeam.path ?? res.currentTeam.id);
         }
         teamEvents().list().then((teamsRes) => {
           if (teamsRes.ok && teamsRes.teams) {
@@ -59,12 +60,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [authToken, conn]);
 
   const marketing = MARKETING_ROUTES.includes(pathname);
-  const networked = isNetworkRoute(pathname);
+  const networked = isTeamRoute(pathname);
 
   useEffect(() => {
     if (!hydrated) return;
     if (authToken && marketing) {
-      const savedNp = localStorage.getItem('agentbean.networkPath');
+      const savedNp = readStoredTeamPath(localStorage);
       const s = useAgentBeanStore.getState();
       const net = s.teams.find((n) => n.id === s.currentTeamId);
       router.replace(`/${savedNp || net?.path || 'default'}/chat`);

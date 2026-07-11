@@ -10,7 +10,7 @@
 
 ## 2. 根因
 
-徽标当前实现(`apps/web-next/app/[networkPath]/chat/page.tsx:898`):
+徽标当前实现(`apps/web-next/app/[teamPath]/chat/page.tsx:898`):
 
 ```tsx
 {Object.values(messagesByChannel).flat().filter((m) => m.senderKind !== 'system').length}
@@ -70,7 +70,7 @@ upsertMessages(msgs: ChatMessage[]) {
 
 - 从 `ActivityView` 内部移到顶层(与 `savedIds`/`reactionIds` 并列,约 `page.tsx:169`);
 - 顶层加 hydrate/persist effect,**复用 PR#395 已 merged 的 `lib/chat-read-state`**(`loadReadIds`/`saveReadIds`/`readKey`);
-- 沿用 PR#395 的 `loadedDoneKey` guard 防初始化竞态、按 `networkPath` 隔离 key;
+- 沿用 PR#395 的 `loadedDoneKey` guard 防初始化竞态、按 `teamPath` 隔离 key;
 - `ActivityView` 改为接收 `doneIds`/`setDoneIds` 作为 props(不再自持 state)。
 
 ### 5.3 共享未读计算:`lib/chat-scope.ts` 新增 `inboxActivityMessages`
@@ -117,7 +117,7 @@ ActivityView mount → join visible channels → upsertMessages → store
 store 变化        → 顶层 inboxUnread 重算  → 徽标更新
 标记已读          → 顶层 setDoneIds        → persist(localStorage) + 徽标更新
 ActivityView 卸载 → store + doneIds 都在顶层 → 徽标仍实时准确
-切 team           → store 清空 + doneIds 按 networkPath 重新 hydrate
+切 team           → store 清空 + doneIds 按 teamPath 重新 hydrate
 ```
 
 ## 7. 测试策略

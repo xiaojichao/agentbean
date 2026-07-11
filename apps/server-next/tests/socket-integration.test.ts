@@ -28,6 +28,11 @@ const { io: createClient } = requireFromServer('socket.io-client') as {
   io(url: string, options?: Record<string, unknown>): ClientSocket;
 };
 
+const oldTeamIdField = ['network', 'Id'].join('');
+const oldTeamNameField = ['network', 'Name'].join('');
+const oldPublishedTeamIdsField = ['published', 'N', 'etwork', 'Ids'].join('');
+const oldUnpublishedTeamIdsField = ['unpublished', 'N', 'etwork', 'Ids'].join('');
+
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
@@ -366,23 +371,28 @@ describe('server-next Socket.IO namespaces', () => {
     ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-list-1', status: 'online' }] });
 
     // 协议漂移修复前：此处会超时/回 INTERNAL_ERROR，因为 server 没注册 device:agents:list
-    await expect(
-      web.emitWithAck(WEB_EVENTS.device.agentsList, {
-        userId: 'user-list-1',
-        teamId: 'team-list-1',
-        deviceId: 'device-list-1',
-      }),
-    ).resolves.toMatchObject({
+    const deviceAgentsResult = await web.emitWithAck(WEB_EVENTS.device.agentsList, {
+      userId: 'user-list-1',
+      teamId: 'team-list-1',
+      deviceId: 'device-list-1',
+    });
+    expect(deviceAgentsResult).toMatchObject({
       ok: true,
       agents: [{
         id: 'agent-list-1',
         deviceId: 'device-list-1',
         status: 'online',
-        networkId: 'team-list-1',
-        publishedNetworkIds: ['team-list-1'],
       }],
       runtimes: [{ id: 'runtime-list-1', deviceId: 'device-list-1', adapterKind: 'codex' }],
     });
+    const [deviceAgent] = deviceAgentsResult.agents;
+    expect(deviceAgent).toMatchObject({
+      primaryTeamId: 'team-list-1',
+      visibleTeamIds: ['team-list-1'],
+    });
+    expect(deviceAgent).not.toHaveProperty(oldTeamIdField);
+    expect(deviceAgent).not.toHaveProperty(oldPublishedTeamIdsField);
+    expect(deviceAgent).not.toHaveProperty(oldUnpublishedTeamIdsField);
   });
 
   test('does not expose internal subscription exception messages in failure acks', async () => {
@@ -1203,6 +1213,10 @@ describe('server-next Socket.IO namespaces', () => {
         userId: 'new-owner',
       }),
     ).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    await expect(member.emitWithAck(WEB_EVENTS.admin.deleteTeam, { teamId: 'team-admin' })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
 
     const adminLogin = await app.loginUser({ username: 'admin', password: 'secret' });
     expect(adminLogin.ok).toBe(true);
@@ -1217,10 +1231,6 @@ describe('server-next Socket.IO namespaces', () => {
       ok: true,
       teams: [{ id: 'team-admin', name: 'AgentBean', members: expect.arrayContaining([expect.objectContaining({ userId: 'member-user' })]) }],
     });
-    await expect(admin.emitWithAck(WEB_EVENTS.admin.listNetworks, {})).resolves.toMatchObject({
-      ok: true,
-      networks: [{ id: 'team-admin', name: 'AgentBean' }],
-    });
     await expect(admin.emitWithAck(WEB_EVENTS.admin.listUsers, {})).resolves.toMatchObject({
       ok: true,
       users: expect.arrayContaining([
@@ -1228,27 +1238,39 @@ describe('server-next Socket.IO namespaces', () => {
         expect.objectContaining({ id: 'member-user', username: 'member', role: 'user' }),
       ]),
     });
-    await expect(admin.emitWithAck(WEB_EVENTS.admin.listDevices, {})).resolves.toMatchObject({
+    const adminDevicesResult = await admin.emitWithAck(WEB_EVENTS.admin.listDevices, {});
+    expect(adminDevicesResult).toMatchObject({
       ok: true,
       devices: [expect.objectContaining({
         id: 'device-admin',
         name: 'Mac Studio',
         userId: 'member-user',
         userName: 'member',
-        networkId: 'team-admin',
-        networkName: 'AgentBean',
         agentCount: 1,
-        publicAgents: [expect.objectContaining({
+        runtimes: [expect.objectContaining({
+          id: 'runtime-admin',
+          deviceId: 'device-admin',
+          adapterKind: 'codex',
+          name: 'Codex CLI',
+          installed: true,
+        })],
+        agents: [expect.objectContaining({
           id: 'agent-admin',
           name: 'Drama',
           deviceName: 'Mac Studio',
           deviceUserName: 'member',
           ownerName: 'member',
-          networkName: 'AgentBean',
         })],
       })],
     });
-    await expect(admin.emitWithAck(WEB_EVENTS.admin.listAgents, {})).resolves.toMatchObject({
+    const [adminDevice] = adminDevicesResult.devices;
+    expect(adminDevice).toMatchObject({ teamId: 'team-admin', teamName: 'AgentBean' });
+    expect(adminDevice).not.toHaveProperty(oldTeamIdField);
+    expect(adminDevice).not.toHaveProperty(oldTeamNameField);
+    expect(adminDevice).not.toHaveProperty('publicAgents');
+
+    const adminAgentsResult = await admin.emitWithAck(WEB_EVENTS.admin.listAgents, {});
+    expect(adminAgentsResult).toMatchObject({
       ok: true,
       agents: [expect.objectContaining({
         id: 'agent-admin',
@@ -1258,11 +1280,38 @@ describe('server-next Socket.IO namespaces', () => {
         userName: 'member',
         deviceName: 'Mac Studio',
         deviceUserName: 'member',
-        networkId: 'team-admin',
-        networkName: 'AgentBean',
-        publishedNetworkIds: ['team-admin'],
       })],
     });
+    const [adminAgent] = adminAgentsResult.agents;
+    expect(adminAgent).toMatchObject({
+      primaryTeamId: 'team-admin',
+      primaryTeamName: 'AgentBean',
+      visibleTeamIds: ['team-admin'],
+    });
+    expect(adminAgent).not.toHaveProperty(oldTeamIdField);
+    expect(adminAgent).not.toHaveProperty(oldTeamNameField);
+    expect(adminAgent).not.toHaveProperty(oldPublishedTeamIdsField);
+    expect(adminAgent).not.toHaveProperty(oldUnpublishedTeamIdsField);
+
+    await repositories.teams.create({
+      id: 'team-member-owned',
+      name: 'Member-owned Team',
+      path: 'member-owned-team',
+      visibility: 'private',
+      ownerId: 'member-user',
+      createdAt: 7050,
+    });
+    await repositories.teams.addMember({
+      teamId: 'team-member-owned',
+      userId: 'member-user',
+      username: 'member',
+      role: 'owner',
+      joinedAt: 7050,
+    });
+    await expect(admin.emitWithAck(WEB_EVENTS.admin.deleteTeam, { teamId: 'team-member-owned' })).resolves.toEqual({
+      ok: true,
+    });
+    await expect(repositories.teams.getById('team-member-owned')).resolves.toBeNull();
 
     await expect(
       admin.emitWithAck(WEB_EVENTS.admin.transferDeviceOwner, {
@@ -1276,6 +1325,11 @@ describe('server-next Socket.IO namespaces', () => {
         userId: 'new-owner',
         ownerId: 'new-owner',
         userName: 'new-owner',
+        runtimes: [expect.objectContaining({
+          id: 'runtime-admin',
+          deviceId: 'device-admin',
+          adapterKind: 'codex',
+        })],
       },
     });
     await expect(admin.emitWithAck(WEB_EVENTS.admin.listAgents, {})).resolves.toMatchObject({

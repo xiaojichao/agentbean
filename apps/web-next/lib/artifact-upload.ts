@@ -1,15 +1,15 @@
-export function artifactUploadUrl(serverUrl: string, networkId: string, token: string): string {
-  return authedApiUrl(serverUrl, `/api/teams/${encodeURIComponent(networkId)}/artifacts/upload`, token);
+export function artifactUploadUrl(serverUrl: string, teamId: string, token: string): string {
+  return authedApiUrl(serverUrl, `/api/teams/${encodeURIComponent(teamId)}/artifacts/upload`, token);
 }
 
-export function artifactUploadProxyUrl(networkId: string, token: string): string {
-  return `/api/teams/${encodeURIComponent(networkId)}/artifacts/upload?token=${encodeURIComponent(token)}`;
+export function artifactUploadProxyUrl(teamId: string, token: string): string {
+  return `/api/teams/${encodeURIComponent(teamId)}/artifacts/upload?token=${encodeURIComponent(token)}`;
 }
 
-export function artifactUploadFallbackUrls(serverUrl: string, networkId: string, token: string): string[] {
+export function artifactUploadFallbackUrls(serverUrl: string, teamId: string, token: string): string[] {
   const urls = [
-    artifactUploadUrl(serverUrl, networkId, token),
-    artifactUploadProxyUrl(networkId, token),
+    artifactUploadUrl(serverUrl, teamId, token),
+    artifactUploadProxyUrl(teamId, token),
   ];
   return [...new Set(urls)];
 }

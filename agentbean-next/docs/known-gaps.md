@@ -24,7 +24,7 @@ AgentBean 统一使用 `team` 作为产品与 domain model 术语。
 已确认：
 
 - UI、domain、contract、schema 与 protocol 都应使用 `team`。
-- 不再保留第二套团队容器概念或同义术语。
+- Team 是唯一协作容器，不保留 alternate alias 或同义产品术语。
 - 旧实现中残留的旧命名只可在盘点历史时作为 identifier 出现；目标实现不应继续采用。
 
 ### Agent Types
@@ -98,12 +98,16 @@ Tasks 第一版已经落地为 server-side task model。
 
 ### Admin Protocol
 
-当前实现有 admin events，但没有完整 admin product spec。
+当前 admin product surface 已进入 App Router dashboard、共享 contracts、server-next use case 与 browser smoke。
 
-决策：
+已确认：
 
-- 从初始重写中删除 admin protocol。
-- 只有具备 role、permission 与 audit requirements 后才重新引入。
+- Team 管理事件只使用 `admin:list-teams` 与 `admin:delete-team`。
+- User、Device、Agent 管理继续使用各自的 canonical admin events。
+- Admin Device projection 使用 `teamId/teamName`；Admin Agent projection 使用 `primaryTeamId/primaryTeamName/visibleTeamIds`。
+- 全局 admin 与 Team owner/admin 是不同权限边界。
+
+剩余缺口是 audit trail、批量删除/恢复与 metrics drilldown，不是恢复旧 admin Team events。
 
 ## 数据模型缺口
 
@@ -121,7 +125,7 @@ Dispatch lifecycle 的第一版已经落地到 `server-next` repository/usecase/
 
 剩余：
 
-- Web 上的 dispatch 状态展示与取消按钮已落地（`apps/web/components/{conversation-page,channel-message}.tsx`：监听 `message:dispatch-status` 更新 `ChatMessage.dispatchStatus`，running 时显示「正在处理…」+ 取消按钮发 `dispatch:cancel`）；更完整的 dispatch history/diagnostics UI 仍需后续产品切片覆盖。
+- Web 上的 dispatch 状态展示与取消按钮已迁入 `apps/web-next` App Router surface；更完整的 dispatch history/diagnostics UI 仍需后续产品切片覆盖。
 - 长时间运行 adapter 的真实进程级 cancel 语义仍需要按 adapter 逐个验证。
 
 ### 运行记录第一版已定义
@@ -133,8 +137,8 @@ Workspace run persistence 的第一版已经落地到 `server-next` repository/u
 - `workspace_runs` model 记录 `teamId`、`channelId`、`messageId`、`dispatchId`、`agentId`、`deviceId`、`command`、受限 `logExcerpt` 与 `artifactIds`。
 - daemon 可以在 `dispatch:result` 上报 workspace run metadata，server 会把 run 绑定到 agent reply message；daemon-next custom command executor 会把执行命令、cwd、exitCode 与脱敏日志摘要带入该 metadata。
 - server-next 提供授权 HTTP workspace run detail route，web-next preview 可以从消息摘要打开详情面板，并通过 `workspaceRunId` URL 恢复。
-- apps/web 的执行详情页可从 agent/device 工作区列表进入，在 run 有 `messageId` 时回链到原 chat message，并在 daemon 上报时展示执行命令与可折叠日志摘要。
-- apps/web 的执行详情页为受限日志摘要提供失败默认展开、复制、下载、换行切换、行数/字符数与尾部摘要提示，方便直接排障。
+- `apps/web-next` 的执行详情页可从 Agent/Device 工作区列表进入，在 run 有 `messageId` 时回链到原 chat message，并在 daemon 上报时展示执行命令与可折叠日志摘要。
+- `apps/web-next` 的执行详情页为受限日志摘要提供失败默认展开、复制、下载、换行切换、行数/字符数与尾部摘要提示，方便直接排障。
 - server-next 原生 agent workspace run 列表 route 已补齐，apps/web 的 agent/device 工作区入口可按 team membership 与 channel visibility 展示最新 runs、状态、命令上下文与关联 workspace artifacts。
 - server-next 提供团队级最新 workspace runs route，apps/web 侧栏提供 `/runs` 运行记录入口，可按当前用户可见 channel 展示团队最近执行记录、来源消息跳转、agent/device、退出码与文件数量。
 - App Router 运行记录入口已补入口级 browser smoke：执行列表、状态/Agent/设备筛选、状态分组、详情路由、刷新恢复、完整日志 artifact、文件树、inline 日志搜索、返回列表与返回触发消息都进入 `webui-runs-business-flow`。
@@ -223,7 +227,7 @@ Saved messages 与 reactions 的第一版已经落地为 server-side persistence
 已确认：
 
 - `message:react`、`message:save` 与 `message:list-saved` 已进入 contracts、server-next socket/usecase/repository 与 SQLite/memory repositories。
-- `apps/web` 的 chat/tasks surfaces 已通过 `messageReactionEvents` 接入 socket-backed optimistic update。
+- `apps/web-next` 的 chat/tasks surfaces 已通过 `messageReactionEvents` 接入 socket-backed optimistic update。
 - 本地 `localStorage` 只作为界面恢复兜底，不再是唯一 source of truth。
 
 剩余：
@@ -309,7 +313,7 @@ Native directory selection 有用，但不是第一切片核心。
 
 剩余：
 
-- 浏览器 smoke 仍主要覆盖核心 chat/custom-agent、artifact 基础链路与 tasks 第一版；更完整 search、完整 task page、settings/member/device 等后续产品面需要随着切片补浏览器级证据。
+- 浏览器 smoke 已覆盖 chat、channels、tasks、runs、members、devices、settings、teams、agents 与 dashboard/admin 的核心业务流；后续按新增产品需求补 search、audit、异常接入演练与更深 diagnostics。
 - production browser smoke 与 post-flip 生产观察 baseline 已经有独立证据；后续 production logs、socket/API 错误与 rollback drill 仍属于运维观察，不等同于每次 PR 的本地/CI smoke。
 
 ### Acceptance Tests 需要优先级
@@ -339,4 +343,4 @@ Native directory selection 有用，但不是第一切片核心。
 - 旧 daemon client compatibility。
 - 现有本地 `.agentbean` data shape。
 - Legacy `standalone-cli`。
-- 没有 product spec 的 admin events。
+- 已移除的同义 admin Team events。

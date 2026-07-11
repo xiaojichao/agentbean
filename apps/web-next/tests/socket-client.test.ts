@@ -1,6 +1,17 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { WEB_EVENTS, type AgentDto, type ChannelDto, type DeviceDto, type DispatchDto, type MessageDto, type RuntimeDto } from '../../../packages/contracts/src/index';
 import { createWebSocketClient, type WebSocketTransport } from '../src/index';
+import { agentEvents, authEvents, deviceEvents, emitWithTimeout } from '../lib/socket';
+
+const oldTeamIdField = ['network', 'Id'].join('');
+const oldTeamNameField = ['network', 'Name'].join('');
+const oldTeamPathField = ['network', 'Path'].join('');
+const oldPublishedTeamIdsField = ['published', 'N', 'etwork', 'Ids'].join('');
+const oldUnpublishedTeamIdsField = ['unpublished', 'N', 'etwork', 'Ids'].join('');
+const oldTeamListEvent = ['network', ':list'].join('');
+const oldArtifactRoute = ['/api/net', 'works/'].join('');
 
 describe('web-next socket client', () => {
   test('keeps artifact upload fallback aligned with the App Router teams proxy', async () => {
@@ -11,7 +22,46 @@ describe('web-next socket client', () => {
     expect(urls).toHaveLength(2);
     expect(urls.every((url) => url.includes('/api/teams/team%201/artifacts/upload'))).toBe(true);
     expect(urls.some((url) => url.startsWith('/api/teams/'))).toBe(true);
-    expect(urls.every((url) => !url.includes('/api/networks/'))).toBe(true);
+    expect(urls.every((url) => !url.includes(oldArtifactRoute))).toBe(true);
+  });
+
+  test('removes the compatibility artifact route and non-canonical Team payload fields from UI flows', () => {
+    const appDir = join(process.cwd(), 'app');
+    expect(existsSync(join(appDir, 'api/teams/[teamId]/artifacts/upload/route.ts'))).toBe(true);
+    expect(existsSync(join(
+      appDir,
+      'api',
+      ['net', 'works'].join(''),
+      `[${['network', 'Id'].join('')}]`,
+      'artifacts/upload/route.ts',
+    ))).toBe(false);
+
+    for (const relativePath of [
+      '../components/add-agent-modal.tsx',
+      '../components/register-agent-modal.tsx',
+      '../components/new-channel-dialog.tsx',
+      '../app/[teamPath]/devices/page.tsx',
+      '../app/[teamPath]/agents/page.tsx',
+      '../app/[teamPath]/agents/[agentId]/page.tsx',
+      '../app/[teamPath]/dashboard/page.tsx',
+      '../app/[teamPath]/settings/page.tsx',
+    ]) {
+      const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+      expect(source, relativePath).not.toContain(oldTeamIdField);
+      expect(source, relativePath).not.toContain(oldTeamNameField);
+    }
+  });
+
+  test('treats discovered executor runtimes only as custom Agent creation sources', () => {
+    const pageSource = readFileSync(new URL('../app/register/page.tsx', import.meta.url), 'utf8');
+    const modalSource = readFileSync(new URL('../components/register-agent-modal.tsx', import.meta.url), 'utf8');
+
+    expect(pageSource).toContain('创建自定义 Agent');
+    expect(pageSource).not.toContain('existingAgents');
+    expect(pageSource).not.toContain('findRegisteredExecutor');
+    expect(pageSource).not.toContain('编辑配置');
+    expect(modalSource).not.toContain('setVisibility');
+    expect(modalSource).not.toContain("mode === 'update'");
   });
 
   test('uses first-slice web events for auth, team, and message commands', async () => {
@@ -135,7 +185,7 @@ describe('web-next socket client', () => {
       [WEB_EVENTS.message.send, { userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'hello' }],
       [WEB_EVENTS.dispatch.cancel, { userId: 'user-1', dispatchId: 'dispatch-1' }],
     ]);
-    expect(transport.emitted.map(([event]) => event)).not.toContain('network:list');
+    expect(transport.emitted.map(([event]) => event)).not.toContain(oldTeamListEvent);
   });
 
   test('subscribes to snapshots and realtime conversation events', async () => {
@@ -408,6 +458,180 @@ describe('web-next socket client', () => {
       [WEB_EVENTS.agent.setVisibility, { agentId: 'agent-1', teamId: 'team-1', visible: false }],
     ]);
   });
+
+  test('uses canonical Team fields for agent, invite, device-agent, and snapshot payloads', async () => {
+    const socket = new CanonicalSocket();
+    socket.responses.set(WEB_EVENTS.agent.create, {
+      ok: true,
+      agent: {
+        id: 'agent-1',
+        primaryTeamId: 'team-1',
+        visibleTeamIds: ['team-1'],
+        name: 'Codex',
+        adapterKind: 'codex',
+        status: 'online',
+        lastSeenAt: 1,
+        connectCommand: 'codex',
+      },
+    });
+
+    const created = await agentEvents(socket as any).create({
+      teamId: 'team-1',
+      deviceId: 'device-1',
+      name: 'Codex',
+      adapterKind: 'codex',
+      command: 'codex',
+    });
+    expect(socket.lastPayload(WEB_EVENTS.agent.create)).toMatchObject({ teamId: 'team-1', deviceId: 'device-1' });
+    expect(JSON.stringify(created.agent)).not.toContain(oldTeamIdField);
+    expect(JSON.stringify(created.agent)).not.toContain(oldPublishedTeamIdsField);
+
+    await authEvents(socket as any).inviteCreate({ teamId: 'team-1', purpose: 'device' });
+    expect(socket.lastPayload(WEB_EVENTS.deviceInvite.create)).toEqual({
+      teamId: 'team-1',
+      purpose: 'device',
+    });
+
+    await authEvents(socket as any).inviteCreate({ teamId: 'default', purpose: 'device' });
+    expect(socket.lastPayload(WEB_EVENTS.deviceInvite.create)).toEqual({
+      purpose: 'device',
+    });
+
+    await deviceEvents(socket as any).agentsList('device-1', 'team-1');
+    expect(socket.lastPayload(WEB_EVENTS.device.agentsList)).toEqual({
+      deviceId: 'device-1',
+      teamId: 'team-1',
+    });
+
+    const snapshots: unknown[] = [];
+    agentEvents(socket as any).onSnapshot((snapshot) => snapshots.push(snapshot));
+    await socket.trigger(WEB_EVENTS.agent.snapshot, [{
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      status: 'online',
+      lastSeenAt: 1,
+      connectCommand: 'codex',
+    }]);
+    expect(JSON.stringify(snapshots)).not.toContain(oldTeamIdField);
+    expect(JSON.stringify(snapshots)).not.toContain(oldPublishedTeamIdsField);
+  });
+
+  test('keeps device and admin snapshots on canonical Team fields', async () => {
+    const schemaSource = readFileSync(new URL('../lib/schema.ts', import.meta.url), 'utf8');
+    expect(schemaSource).toContain('teamId: string;');
+    expect(schemaSource).toContain('teamName?: string;');
+    expect(schemaSource).not.toContain(oldTeamIdField);
+    expect(schemaSource).not.toContain(oldTeamNameField);
+    expect(schemaSource).not.toContain(oldPublishedTeamIdsField);
+    expect(schemaSource).not.toContain(oldUnpublishedTeamIdsField);
+
+    const socket = new CanonicalSocket();
+    const device = {
+      id: 'device-1',
+      teamId: 'team-1',
+      teamName: 'Ops',
+      status: 'online',
+      lastSeenAt: 1,
+      agentIds: ['agent-1'],
+    };
+    const adminAgent = {
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      primaryTeamName: 'Ops',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      status: 'online',
+    };
+    socket.responses.set(WEB_EVENTS.admin.listDevices, { ok: true, devices: [device] });
+    socket.responses.set(WEB_EVENTS.admin.listAgents, { ok: true, agents: [adminAgent] });
+
+    const deviceSnapshots: unknown[] = [];
+    deviceEvents(socket as any).onSnapshot((snapshot) => deviceSnapshots.push(snapshot));
+    await socket.trigger(WEB_EVENTS.device.snapshot, [device]);
+    expect(deviceSnapshots).toEqual([[device]]);
+
+    const adminDevices = await emitWithTimeout(socket as any, WEB_EVENTS.admin.listDevices, {});
+    const adminAgents = await emitWithTimeout(socket as any, WEB_EVENTS.admin.listAgents, {});
+    expect(adminDevices).toMatchObject({ ok: true, devices: [{ teamId: 'team-1', teamName: 'Ops' }] });
+    expect(adminAgents).toMatchObject({
+      ok: true,
+      agents: [{ primaryTeamId: 'team-1', primaryTeamName: 'Ops', visibleTeamIds: ['team-1'] }],
+    });
+    expect(JSON.stringify({ deviceSnapshots, adminDevices, adminAgents })).not.toContain(oldTeamIdField);
+    expect(JSON.stringify({ deviceSnapshots, adminDevices, adminAgents })).not.toContain(oldTeamNameField);
+    expect(JSON.stringify({ deviceSnapshots, adminDevices, adminAgents })).not.toContain(oldPublishedTeamIdsField);
+    expect(JSON.stringify({ deviceSnapshots, adminDevices, adminAgents })).not.toContain(oldUnpublishedTeamIdsField);
+  });
+
+  test('returns canonical teamId and teamPath from device login', async () => {
+    const socket = new CanonicalSocket();
+    socket.responses.set(WEB_EVENTS.auth.login, {
+      ok: true,
+      token: 'token-1',
+      user: { id: 'user-1', username: 'shaw', role: 'user' },
+      currentTeam: { id: 'team-1', name: 'Ops', path: 'ops' },
+    });
+    socket.responses.set(WEB_EVENTS.deviceInvite.complete, {
+      ok: true,
+      team: { id: 'team-1', name: 'Ops', path: 'ops' },
+      credentials: { deviceId: 'device-1' },
+    });
+
+    const result = await authEvents(socket as any).deviceLogin({
+      inviteCode: 'invite-1',
+      username: 'shaw',
+      password: 'secret',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      token: 'token-1',
+      teamId: 'team-1',
+      teamPath: 'ops',
+      userId: 'user-1',
+      username: 'shaw',
+      role: 'user',
+      deviceId: 'device-1',
+    });
+    expect(JSON.stringify(result)).not.toContain(oldTeamIdField);
+    expect(JSON.stringify(result)).not.toContain(oldTeamPathField);
+    expect(socket.emitted).toEqual([
+      [WEB_EVENTS.auth.login, { username: 'shaw', password: 'secret' }],
+      [WEB_EVENTS.deviceInvite.complete, { code: 'invite-1', userId: 'user-1' }],
+    ]);
+  });
+
+  test('returns the canonical join link and team response shape', async () => {
+    const socket = new CanonicalSocket();
+    socket.responses.set(WEB_EVENTS.join.validate, {
+      ok: true,
+      link: { id: 'join-1', code: 'code-1', teamId: 'team-1' },
+      team: { id: 'team-1', name: 'Ops', path: 'ops' },
+    });
+
+    const { joinEvents } = await import('../lib/socket.js');
+    const result = await joinEvents(socket as any).validate({ code: 'code-1' });
+
+    expect(result).toMatchObject({
+      ok: true,
+      link: { code: 'code-1', teamId: 'team-1' },
+      team: { id: 'team-1', name: 'Ops', path: 'ops' },
+    });
+
+    const joinPageSource = readFileSync(new URL('../app/join/[token]/page.tsx', import.meta.url), 'utf8');
+    expect(joinPageSource).toContain('res.team?.name');
+    expect(joinPageSource).not.toContain('res.teamName');
+  });
+
+  test('presents scanned AgentOS agents as server-managed Team members', () => {
+    const registerPageSource = readFileSync(new URL('../app/register/page.tsx', import.meta.url), 'utf8');
+    expect(registerPageSource).toContain('已由设备自动注册');
+    expect(registerPageSource).not.toContain('Mesh');
+  });
 });
 
 class FakeWebTransport implements WebSocketTransport {
@@ -454,4 +678,39 @@ class FakeAgentEventsSocket {
 
   on(): this { return this; }
   off(): this { return this; }
+}
+
+class CanonicalSocket {
+  readonly emitted: Array<[string, unknown]> = [];
+  readonly responses = new Map<string, unknown>();
+  private readonly handlers = new Map<string, Array<(payload: unknown) => void>>();
+
+  emit(event: string, payload: unknown, ack: (res: unknown) => void): this {
+    this.emitted.push([event, payload]);
+    ack(this.responses.get(event) ?? { ok: true });
+    return this;
+  }
+
+  on(event: string, handler: (payload: unknown) => void): this {
+    this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
+    return this;
+  }
+
+  off(event?: string, handler?: (payload: unknown) => void): this {
+    if (!event) return this;
+    if (!handler) {
+      this.handlers.delete(event);
+      return this;
+    }
+    this.handlers.set(event, (this.handlers.get(event) ?? []).filter((candidate) => candidate !== handler));
+    return this;
+  }
+
+  lastPayload(event: string): unknown {
+    return [...this.emitted].reverse().find(([candidate]) => candidate === event)?.[1];
+  }
+
+  async trigger(event: string, payload: unknown): Promise<void> {
+    for (const handler of this.handlers.get(event) ?? []) await handler(payload);
+  }
 }

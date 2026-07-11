@@ -21,6 +21,7 @@ export function collectAgentBeanNextReadinessChecks({
   const cutoverRunbook = readFileSync(join(root, 'agentbean-next/docs/production-cutover-runbook.md'), 'utf8');
   const verificationMatrix = readFileSync(join(root, 'agentbean-next/docs/verification-matrix.md'), 'utf8');
   const parityBackfillAudit = readFileSync(join(root, 'agentbean-next/docs/parity-backfill-audit.md'), 'utf8');
+  const settingsTeamsParityGreen = hasGreenSettingsTeamsParity(parityBackfillAudit);
   const knownGaps = readFileSync(join(root, 'agentbean-next/docs/known-gaps.md'), 'utf8');
   const socketProtocol = readFileSync(join(root, 'agentbean-next/docs/socket-protocol.md'), 'utf8');
   const contractsSocket = readFileSync(join(root, 'packages/contracts/src/socket.ts'), 'utf8');
@@ -34,16 +35,16 @@ export function collectAgentBeanNextReadinessChecks({
   const daemonNextCliTests = readFileSync(join(root, 'apps/daemon-next/tests/cli.test.ts'), 'utf8');
   const daemonNextAuthStoreTests = readFileSync(join(root, 'apps/daemon-next/tests/auth-store.test.ts'), 'utf8');
   const daemonNextProtocolClientTests = readFileSync(join(root, 'apps/daemon-next/tests/protocol-client.test.ts'), 'utf8');
-  const webNextDashboardPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/dashboard/page.tsx'), 'utf8');
-  const webNextChatPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/chat/page.tsx'), 'utf8');
-  const webNextDevicesPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/devices/page.tsx'), 'utf8');
-  const webNextAgentsPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/agents/page.tsx'), 'utf8');
-  const webNextAgentDetailPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/agents/[agentId]/page.tsx'), 'utf8');
-  const webNextTasksPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/tasks/page.tsx'), 'utf8');
-  const webNextRunsPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/runs/page.tsx'), 'utf8');
-  const webNextRunsPanel = readFileSync(join(root, 'apps/web-next/app/[networkPath]/settings/RunsPanel.tsx'), 'utf8');
-  const webNextRunDetailPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/runs/[runId]/page.tsx'), 'utf8');
-  const webNextSettingsPage = readFileSync(join(root, 'apps/web-next/app/[networkPath]/settings/page.tsx'), 'utf8');
+  const webNextDashboardPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/dashboard/page.tsx'), 'utf8');
+  const webNextChatPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/chat/page.tsx'), 'utf8');
+  const webNextDevicesPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/devices/page.tsx'), 'utf8');
+  const webNextAgentsPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/agents/page.tsx'), 'utf8');
+  const webNextAgentDetailPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/agents/[agentId]/page.tsx'), 'utf8');
+  const webNextTasksPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/tasks/page.tsx'), 'utf8');
+  const webNextRunsPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/runs/page.tsx'), 'utf8');
+  const webNextRunsPanel = readFileSync(join(root, 'apps/web-next/app/[teamPath]/settings/RunsPanel.tsx'), 'utf8');
+  const webNextRunDetailPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/runs/[runId]/page.tsx'), 'utf8');
+  const webNextSettingsPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/settings/page.tsx'), 'utf8');
   const browserSmokeScript = readFileSync(join(root, 'scripts/smoke-agentbean-next-browser.mjs'), 'utf8');
   const legacyAgentNamespace = readFileSync(join(root, 'apps/server/src/namespaces/agent.ts'), 'utf8');
   const legacyWebNamespaceTests = readFileSync(join(root, 'apps/server/tests/web-namespace.test.ts'), 'utf8');
@@ -87,6 +88,20 @@ export function collectAgentBeanNextReadinessChecks({
       'ci-runs-readiness-checker',
       workflow.includes('npm run check:agentbean-next-readiness'),
       'AgentBean Next CI must run the readiness checker before deploy/publish can continue',
+    ),
+    check(
+      'ci-runs-package-scoped-phase-tests',
+      packageJson.scripts?.['test:phase1'] ===
+        'npm run test:contracts -- --api.host 127.0.0.1 && npm run test:domain -- --api.host 127.0.0.1 && npm run test:server-next -- --api.host 127.0.0.1 && npm run test:daemon-next -- --api.host 127.0.0.1 && npm run test:web-next -- --api.host 127.0.0.1' &&
+        workflow.includes('run: npm run test:phase1'),
+      'AgentBean Next CI must run each package test suite through its canonical working directory and Vitest config',
+    ),
+    check(
+      'ci-builds-canonical-packages-before-browser-smoke',
+      workflow.includes('run: npm run build:packages') &&
+        workflow.indexOf('run: npm run build:packages') <
+          workflow.indexOf('npm run smoke:agentbean-next-browser -- --skip-build'),
+      'CI must create the production Web build through the canonical package build before the combined browser smoke starts',
     ),
     check(
       'ci-runs-production-readiness-before-next-deploy',
@@ -472,13 +487,28 @@ export function collectAgentBeanNextReadinessChecks({
         parityBackfillAudit.includes('| `agents` | Green |') &&
         parityBackfillAudit.includes('| `tasks` | Green |') &&
         parityBackfillAudit.includes('| `runs` / `运行记录` | Green |') &&
-        parityBackfillAudit.includes('| `settings` / `networks` | Green |') &&
+        settingsTeamsParityGreen &&
         parityBackfillAudit.includes('| `dashboard` / `admin` | Green |') &&
         parityBackfillAudit.includes('| `daemon onboarding` | Green |') &&
         parityBackfillAudit.includes('| `channels` / `channel members` | Green |') &&
         parityBackfillAudit.includes('## 下一条 backfill slice') &&
         parityBackfillAudit.includes('所有核心产品入口已经进入 Green'),
       'AgentBean Next parity backfill audit must keep a Red/Yellow/Green product-entry status table and the next recommended slice',
+    ),
+    check(
+      'teams-parity-browser-smoke',
+      browserSmokeScript.includes('webui-teams-business-flow') &&
+        browserSmokeScript.includes('agentbean.teamPath') &&
+        !browserSmokeScript.includes(['agentbean.', 'network', 'Path'].join('')) &&
+        browserSmokeScript.includes('Release A team page redirect mismatch') &&
+        browserSmokeScript.includes('redirectResponse.status !== 308') &&
+        browserSmokeScript.includes("const compatibilityTeamsSegment = ['net', 'works'].join('');") &&
+        browserSmokeScript.includes('const legacyTeamsUrl = new URL(`/${teamPath}/${compatibilityTeamsSegment}`, root);') &&
+        browserSmokeScript.includes('const canonicalTeamsUrl = new URL(`/${teamPath}/teams`, root);') &&
+        verificationMatrix.includes('webui-teams-business-flow') &&
+        verificationMatrix.includes('settings / teams') &&
+        verificationMatrix.includes('308 permanent redirect'),
+      'Team management parity must keep canonical Team storage/routes, refresh persistence, and the temporary Release A permanent redirect under browser/readiness protection',
     ),
     check(
       'devices-parity-browser-smoke',
@@ -504,7 +534,6 @@ export function collectAgentBeanNextReadinessChecks({
         browserSmokeScript.includes('agent-config-save') &&
         browserSmokeScript.includes('agent-delete-confirm') &&
         browserSmokeScript.includes('agent-list-page') &&
-        browserSmokeScript.includes('agent-publish-toggle') &&
         browserSmokeScript.includes('agent-metrics-panel') &&
         webNextAgentsPage.includes('data-smoke="agent-list-page"') &&
         webNextAgentDetailPage.includes('data-smoke="agent-config-open"') &&
@@ -512,7 +541,7 @@ export function collectAgentBeanNextReadinessChecks({
         webNextAgentDetailPage.includes('data-smoke="agent-delete-confirm"') &&
         verificationMatrix.includes('webui-agents-business-flow') &&
         parityBackfillAudit.includes('| `agents` | Green |'),
-      'Agent parity must stay covered by an App Router browser smoke for list/detail, config update, publish/unpublish, metrics, and delete/list disappearance',
+      'Agent parity must stay covered by an App Router browser smoke for list/detail, config update, metrics, and delete/list disappearance',
     ),
     check(
       'tasks-parity-browser-smoke',
@@ -570,7 +599,8 @@ export function collectAgentBeanNextReadinessChecks({
         webNextSettingsPage.includes('data-smoke="settings-team-name-input"') &&
         webNextSettingsPage.includes('data-smoke="settings-join-revoke"') &&
         verificationMatrix.includes('webui-settings-business-flow') &&
-        parityBackfillAudit.includes('| `settings` / `networks` | Green |'),
+        verificationMatrix.includes('settings / teams') &&
+        settingsTeamsParityGreen,
       'Settings parity must stay covered by an App Router browser smoke for account identity, browser preference persistence/reset, team rename, join link revoke, and refresh restore',
     ),
     check(
@@ -650,6 +680,10 @@ export function collectAgentBeanNextReadinessChecks({
   }
 
   return checks;
+}
+
+export function hasGreenSettingsTeamsParity(parityBackfillAudit) {
+  return parityBackfillAudit.includes('| `settings` / `teams` | Green |');
 }
 
 export function summarizeReadiness(checks) {

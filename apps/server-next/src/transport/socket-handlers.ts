@@ -321,7 +321,6 @@ export function registerWebSocketHandlers(
   });
   bind(socket, WEB_EVENTS.agent.metrics, app, 'summarizeAgentMetrics', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.admin.listTeams, app, 'listAdminTeams', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.admin.listNetworks, app, 'listAdminNetworks', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.admin.listUsers, app, 'listAdminUsers', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.admin.listDevices, app, 'listAdminDevices', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.admin.listAgents, app, 'listAdminAgents', undefined, { authenticatedUser: options.authenticatedUser });
@@ -336,19 +335,6 @@ export function registerWebSocketHandlers(
       ack?.(await app.deleteAdminTeam({ userId, teamId }));
     } catch (error) {
       ack?.(socketErrorAck(error, WEB_EVENTS.admin.deleteTeam));
-    }
-  });
-  socket.on(WEB_EVENTS.admin.deleteNetwork, async (payload, ack) => {
-    try {
-      const userId = await requireAuthenticatedSocketUser(options.authenticatedUser);
-      const teamId = payloadString(payload, 'networkId') ?? payloadString(payload, 'teamId');
-      if (!teamId) {
-        ack?.(makeFailure('VALIDATION_ERROR', 'networkId is required'));
-        return;
-      }
-      ack?.(await app.deleteAdminTeam({ userId, teamId }));
-    } catch (error) {
-      ack?.(socketErrorAck(error, WEB_EVENTS.admin.deleteNetwork));
     }
   });
   socket.on(WEB_EVENTS.admin.deleteUser, async (payload, ack) => {

@@ -2,7 +2,7 @@
 import { create } from 'zustand';
 import type { AgentSnapshot, ChannelSummary, ChatMessage, ConnState, DispatchStatus, OutboundMessage, DiscoveredAgent, RuntimeInfo, TeamSummary, AgentMetricsSummary, UserInfo, DeviceInfo, HumanMember } from './schema.js';
 import type { DmChannel } from './socket.js';
-import { agentVisibleInNetwork } from './agent-scope';
+import { agentVisibleInTeam } from './agent-scope';
 import { mergeChannelHistory } from './chat-scope';
 
 function normalizeKind(value?: string | null): string {
@@ -34,37 +34,37 @@ function runtimeLocationKey(agent: Pick<AgentSnapshot, 'cwd' | 'command'>): stri
   return normalizeRuntimePath(agent.cwd) || dirnameFromCommand(agent.command);
 }
 
-function agentNameLogicalKey(agent: AgentSnapshot, networkId: string): string | null {
+function agentNameLogicalKey(agent: AgentSnapshot, teamId: string): string | null {
   if (!agent.deviceId) return null;
   const adapterKind = normalizeKind(agent.adapterKind);
   const name = normalizeLogicalAgentName(agent.name);
   if (!adapterKind || !name) return null;
-  return [networkId, agent.deviceId, adapterKind, 'name', name].join('\u0000');
+  return [teamId, agent.deviceId, adapterKind, 'name', name].join('\u0000');
 }
 
-function agentRuntimeLogicalKey(agent: AgentSnapshot, networkId: string): string | null {
+function agentRuntimeLogicalKey(agent: AgentSnapshot, teamId: string): string | null {
   if (!agent.deviceId) return null;
   const adapterKind = normalizeKind(agent.adapterKind);
   const location = runtimeLocationKey(agent);
   if (!adapterKind || !location) return null;
-  return [networkId, agent.deviceId, adapterKind, 'runtime', location, normalizeAgentArgs(agent.args)].join('\u0000');
+  return [teamId, agent.deviceId, adapterKind, 'runtime', location, normalizeAgentArgs(agent.args)].join('\u0000');
 }
 
-function agentGatewayLogicalKey(agent: AgentSnapshot, networkId: string): string | null {
+function agentGatewayLogicalKey(agent: AgentSnapshot, teamId: string): string | null {
   if (!agent.deviceId || agent.category !== 'agentos-hosted' || agent.source === 'custom') return null;
   const adapterKind = normalizeKind(agent.adapterKind);
   if (adapterKind !== 'hermes' && adapterKind !== 'openclaw') return null;
-  return [networkId, agent.deviceId, adapterKind, 'gateway'].join('\u0000');
+  return [teamId, agent.deviceId, adapterKind, 'gateway'].join('\u0000');
 }
 
-function visibleAgentLogicalKeys(agent: AgentSnapshot, networkId: string): string[] {
+function visibleAgentLogicalKeys(agent: AgentSnapshot, teamId: string): string[] {
   const keys = new Set<string>();
-  const gatewayKey = agentGatewayLogicalKey(agent, networkId);
+  const gatewayKey = agentGatewayLogicalKey(agent, teamId);
   if (gatewayKey) keys.add(gatewayKey);
-  const runtimeKey = agentRuntimeLogicalKey(agent, networkId);
+  const runtimeKey = agentRuntimeLogicalKey(agent, teamId);
   if (runtimeKey) keys.add(runtimeKey);
   if (agent.category === 'agentos-hosted') {
-    const nameKey = agentNameLogicalKey(agent, networkId);
+    const nameKey = agentNameLogicalKey(agent, teamId);
     if (nameKey) keys.add(nameKey);
   }
   return [...keys];
@@ -100,7 +100,7 @@ function agentDisplayRank(agent: AgentSnapshot): number {
   if (agent.source === 'custom') return 4;
   if (agent.source === 'self-register') return 3;
   if (agent.category === 'agentos-hosted' && agent.name && !isGenericGatewayName(agent)) return 2;
-  if (agent.category === 'agentos-hosted' && agent.name && !agentGatewayLogicalKey(agent, agent.networkId ?? '') && !agentIdHasNameSlug(agent.id, agent.name)) return 2;
+  if (agent.category === 'agentos-hosted' && agent.name && !agentGatewayLogicalKey(agent, agent.primaryTeamId) && !agentIdHasNameSlug(agent.id, agent.name)) return 2;
   return 1;
 }
 
@@ -128,11 +128,11 @@ function preferAgentSnapshot(candidate: AgentSnapshot, current: AgentSnapshot): 
   return (candidate.lastSeenAt ?? 0) > (current.lastSeenAt ?? 0) ? candidate : current;
 }
 
-function dedupeAgents(list: AgentSnapshot[], networkId: string): AgentSnapshot[] {
+function dedupeAgents(list: AgentSnapshot[], teamId: string): AgentSnapshot[] {
   const result: AgentSnapshot[] = [];
   const indexByKey = new Map<string, number>();
   for (const agent of list) {
-    const keys = visibleAgentLogicalKeys(agent, networkId);
+    const keys = visibleAgentLogicalKeys(agent, teamId);
     const existingIndex = keys
       .map((key) => indexByKey.get(key))
       .find((index): index is number => index !== undefined);
@@ -142,7 +142,7 @@ function dedupeAgents(list: AgentSnapshot[], networkId: string): AgentSnapshot[]
       continue;
     }
     result[existingIndex] = preferAgentSnapshot(agent, result[existingIndex]!);
-    for (const key of visibleAgentLogicalKeys(result[existingIndex]!, networkId)) {
+    for (const key of visibleAgentLogicalKeys(result[existingIndex]!, teamId)) {
       indexByKey.set(key, existingIndex);
     }
     for (const key of keys) indexByKey.set(key, existingIndex);
@@ -150,9 +150,9 @@ function dedupeAgents(list: AgentSnapshot[], networkId: string): AgentSnapshot[]
   return result;
 }
 
-function agentListToMap(list: AgentSnapshot[], networkId: string): Record<string, AgentSnapshot> {
+function agentListToMap(list: AgentSnapshot[], teamId: string): Record<string, AgentSnapshot> {
   const map: Record<string, AgentSnapshot> = {};
-  for (const agent of dedupeAgents(list, networkId)) map[agent.id] = agent;
+  for (const agent of dedupeAgents(list, teamId)) map[agent.id] = agent;
   return map;
 }
 
@@ -282,7 +282,7 @@ export const useAgentBeanStore = create<State>((set) => ({
   },
   applyAgentStatus(snap) {
     set((s) => {
-      if (!agentVisibleInNetwork(snap, s.currentTeamId)) {
+      if (!agentVisibleInTeam(snap, s.currentTeamId)) {
         if (!s.agents[snap.id]) return s;
         const next = { ...s.agents };
         delete next[snap.id];
@@ -400,13 +400,13 @@ export const useAgentBeanStore = create<State>((set) => ({
   },
   upsertDevice(device) {
     set((s) => {
-      if (device.networkId && device.networkId !== s.currentTeamId) return s;
+      if (device.teamId && device.teamId !== s.currentTeamId) return s;
       return { devices: { ...s.devices, [device.id]: { ...s.devices[device.id], ...device } } };
     });
   },
   applyDeviceStatus(device) {
     set((s) => {
-      if (device.networkId && device.networkId !== s.currentTeamId) {
+      if (device.teamId && device.teamId !== s.currentTeamId) {
         const existing = s.devices[device.id];
         if (!existing) return s;
         return { devices: { ...s.devices, [device.id]: { ...existing, ...device } } };
@@ -434,7 +434,7 @@ export const useAgentBeanStore = create<State>((set) => ({
   },
 }));
 
-export function useCurrentNetworkPath(): string {
+export function useCurrentTeamPath(): string {
   const teams = useAgentBeanStore((s) => s.teams);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   return teams.find((n) => n.id === currentTeamId)?.path ?? 'default';

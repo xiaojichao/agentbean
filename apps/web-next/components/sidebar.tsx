@@ -5,6 +5,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Bot, MessagesSquare, ClipboardList, Users, ChevronDown, Settings, Monitor, LayoutDashboard, Plus, Check, Globe, Lock } from 'lucide-react';
 import { agentEvents, channelEvents, deviceEvents, getWebSocket, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
+import { writeStoredTeamPath } from '@/lib/team-path';
+import type { TeamSummary } from '@/lib/schema';
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -13,9 +15,10 @@ export function Sidebar() {
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const teams = useAgentBeanStore((s) => s.teams);
+  const addTeam = useAgentBeanStore((s) => s.addTeam);
   const setCurrentTeamId = useAgentBeanStore((s) => s.setCurrentTeamId);
   const applyTeamsSnapshot = useAgentBeanStore((s) => s.applyTeamsSnapshot);
-  const [showNetworks, setShowNetworks] = useState(false);
+  const [showTeams, setShowTeams] = useState(false);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
 
   useEffect(() => {
@@ -31,32 +34,32 @@ export function Sidebar() {
 
   // Close popover on outside click
   useEffect(() => {
-    if (!showNetworks) return;
-    const handler = (e: MouseEvent) => setShowNetworks(false);
+    if (!showTeams) return;
+    const handler = (e: MouseEvent) => setShowTeams(false);
     document.addEventListener('click', handler);
     return () => document.removeEventListener('click', handler);
-  }, [showNetworks]);
+  }, [showTeams]);
 
-  const currentNetwork = teams.find((n) => n.id === currentTeamId);
-  const np = currentNetwork?.path ?? 'default';
+  const currentTeam = teams.find((n) => n.id === currentTeamId);
+  const np = currentTeam?.path ?? 'default';
   const isAdmin = currentUser?.role === 'admin';
 
-  const handleSwitch = async (networkId: string) => {
-    const res = await teamEvents().switch(networkId);
+  const handleSwitch = async (teamId: string) => {
+    const res = await teamEvents().switch(teamId);
     if (res.ok) {
-      setCurrentTeamId(networkId);
-      setShowNetworks(false);
-      const target = teams.find((n) => n.id === networkId);
+      setCurrentTeamId(teamId);
+      setShowTeams(false);
+      const target = teams.find((n) => n.id === teamId);
       if (target) {
-        localStorage.setItem('agentbean.networkPath', target.path);
+        writeStoredTeamPath(localStorage, target.path);
         const segments = pathname.split('/');
         const subPath = segments.length > 2 ? segments.slice(2).join('/') : 'chat';
         router.push(`/${target.path}/${subPath}`);
       }
       const socket = getWebSocket();
-      agentEvents(socket).subscribe(networkId);
-      channelEvents(socket).subscribe(networkId);
-      deviceEvents(socket).subscribe(networkId);
+      agentEvents(socket).subscribe(teamId);
+      channelEvents(socket).subscribe(teamId);
+      deviceEvents(socket).subscribe(teamId);
     }
   };
 
@@ -76,13 +79,13 @@ export function Sidebar() {
       <div className="px-3 py-2 flex items-center gap-1.5">
         <div className="relative flex-1 min-w-0">
           <button
-            onClick={() => { setShowNetworks((v) => !v); }}
+            onClick={() => { setShowTeams((v) => !v); }}
             className="flex w-full items-center justify-between gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 py-1.5 text-xs hover:bg-neutral-50 transition-colors"
           >
-            <span className="truncate font-medium">{currentNetwork?.name ?? '当前团队'}</span>
-            <ChevronDown size={12} className={`shrink-0 text-neutral-400 transition-transform ${showNetworks ? 'rotate-180' : ''}`} />
+            <span className="truncate font-medium">{currentTeam?.name ?? '当前团队'}</span>
+            <ChevronDown size={12} className={`shrink-0 text-neutral-400 transition-transform ${showTeams ? 'rotate-180' : ''}`} />
           </button>
-          {showNetworks && (
+          {showTeams && (
             <div
               className="absolute top-full left-0 mt-1 rounded-lg border border-neutral-200 bg-white shadow-xl z-30 w-52 overflow-hidden"
               onClick={(e) => e.stopPropagation()}
@@ -144,17 +147,19 @@ export function Sidebar() {
 
       {/* Create Team Dialog */}
       {showCreateDialog && (
-        <CreateNetworkDialog
+        <CreateTeamDialog
           onClose={() => setShowCreateDialog(false)}
-          onCreated={(networkId, networkPath) => {
-            setCurrentTeamId(networkId);
+          onCreated={(team) => {
+            addTeam(team);
+            setCurrentTeamId(team.id);
+            writeStoredTeamPath(localStorage, team.path);
             const segments = pathname.split('/');
             const subPath = segments.length > 2 ? segments.slice(2).join('/') : 'chat';
-            router.push(`/${networkPath}/${subPath}`);
+            router.push(`/${team.path}/${subPath}`);
             const socket = getWebSocket();
-            agentEvents(socket).subscribe(networkId);
-            channelEvents(socket).subscribe(networkId);
-            deviceEvents(socket).subscribe(networkId);
+            agentEvents(socket).subscribe(team.id);
+            channelEvents(socket).subscribe(team.id);
+            deviceEvents(socket).subscribe(team.id);
           }}
         />
       )}
@@ -176,7 +181,7 @@ function NavItem({ href, icon, label, active }: { href: string; icon: React.Reac
   );
 }
 
-function CreateNetworkDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (networkId: string, networkPath: string) => void }) {
+function CreateTeamDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (team: TeamSummary) => void }) {
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const [name, setName] = useState('');
   const [path, setPath] = useState('');
@@ -205,7 +210,7 @@ function CreateNetworkDialog({ onClose, onCreated }: { onClose: () => void; onCr
       const res = await teamEvents().create({ name: trimmedName, path: trimmedPath || undefined, visibility });
       if (res.ok && res.team) {
         onClose();
-        onCreated(res.team.id, res.team.path ?? 'default');
+        onCreated(res.team);
       } else {
         setError(res.error === 'RESERVED_PATH' ? '该路径为系统保留路径，请使用其他名称' : (res.error ?? '创建失败'));
       }

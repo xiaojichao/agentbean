@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { FolderOpen, Image as ImageIcon, Paperclip, ExternalLink, CheckCircle2, XCircle, Clock, AlertCircle } from 'lucide-react';
 import { authedApiUrl } from '@/lib/socket';
-import { useCurrentNetworkPath } from '@/lib/store';
+import { useCurrentTeamPath } from '@/lib/store';
 import { formatRelative } from '@/lib/format-time';
 import type { AgentWorkspaceFile, AgentWorkspaceRun, WorkspaceRunStatus } from '@/lib/schema';
 
@@ -15,7 +15,7 @@ const RUN_STATUS: Record<WorkspaceRunStatus, { label: string; className: string;
 };
 
 export function AgentWorkspaceSection({ runs, loading }: { runs: AgentWorkspaceRun[]; loading: boolean }) {
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
   return (
     <section className="rounded-lg border border-neutral-200 bg-white p-4">
       <div className="mb-3 flex items-center justify-between">

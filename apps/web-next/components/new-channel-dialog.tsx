@@ -1,16 +1,16 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { channelEvents, memberEvents } from '@/lib/socket';
 import { useRouter } from 'next/navigation';
 import { Globe, Lock, ChevronRight } from 'lucide-react';
 
-export function NewChannelDialog({ onClose, teamId, networkPath }: { onClose: () => void; teamId?: string; networkPath?: string }) {
+export function NewChannelDialog({ onClose, teamId, teamPath }: { onClose: () => void; teamId?: string; teamPath?: string }) {
   const agents = useAgentBeanStore((s) => Object.values(s.agents));
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
-  const currentNetworkPath = useCurrentNetworkPath();
-  const np = networkPath ?? currentNetworkPath;
+  const currentTeamPath = useCurrentTeamPath();
+  const np = teamPath ?? currentTeamPath;
   const channelTeamId = teamId ?? currentTeamId;
   const [name, setName] = useState('');
   const [visibility, setVisibility] = useState<'public' | 'private'>('public');

@@ -1,6 +1,118 @@
 import { describe, expect, test } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 describe('AgentBean Next browser smoke script', () => {
+  test('runs preview and WebUI smoke as the default Release A browser gate', async () => {
+    const { runAgentBeanNextReleaseABrowserGate } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
+    const calls: string[] = [];
+    const previewSummary = {
+      ok: true,
+      total: 1,
+      failed: 0,
+      checks: [{ id: 'preview-check', ok: true, message: 'preview passed' }],
+      artifacts: { dir: '/tmp/release-a/preview', screenshot: '/tmp/release-a/preview/final.png' },
+    };
+    const webUiSummary = {
+      ok: true,
+      total: 1,
+      failed: 0,
+      checks: [{ id: 'webui-check', ok: true, message: 'WebUI passed' }],
+      artifacts: { dir: '/tmp/release-a/webui', screenshot: '/tmp/release-a/webui/final.png' },
+    };
+
+    const summary = await runAgentBeanNextReleaseABrowserGate(
+      { artifactsDir: '/tmp/release-a', baseUrl: 'https://agentbean.example/app' },
+      {
+        previewRunner: async (options: { artifactsDir?: string; baseUrl?: string }) => {
+          calls.push(`preview:${options.baseUrl}:${options.artifactsDir}`);
+          return previewSummary;
+        },
+        webUiRunner: async (options: { artifactsDir?: string; baseUrl?: string }) => {
+          calls.push(`webui:${options.baseUrl}:${options.artifactsDir}`);
+          return webUiSummary;
+        },
+      },
+    );
+
+    expect(calls).toEqual([
+      'preview:https://agentbean.example/preview:/tmp/release-a/preview',
+      'webui:https://agentbean.example/app:/tmp/release-a/webui',
+    ]);
+    expect(summary).toMatchObject({
+      ok: true,
+      total: 2,
+      failed: 0,
+      checks: [...previewSummary.checks, ...webUiSummary.checks],
+      summaries: { preview: previewSummary, webUi: webUiSummary },
+      artifacts: {
+        dir: '/tmp/release-a',
+        preview: previewSummary.artifacts,
+        webUi: webUiSummary.artifacts,
+      },
+    });
+  });
+
+  test('keeps both smoke summaries and fails the Release A gate when either flow fails', async () => {
+    const { runAgentBeanNextReleaseABrowserGate } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
+    const calls: string[] = [];
+    const previewSummary = {
+      ok: false,
+      total: 1,
+      failed: 1,
+      checks: [{ id: 'preview-failure', ok: false, message: 'preview failed' }],
+      artifacts: { dir: '/tmp/preview' },
+    };
+    const webUiSummary = {
+      ok: true,
+      total: 1,
+      failed: 0,
+      checks: [{ id: 'webui-check', ok: true, message: 'WebUI passed' }],
+      artifacts: { dir: '/tmp/webui' },
+    };
+
+    const summary = await runAgentBeanNextReleaseABrowserGate(
+      {},
+      {
+        previewRunner: async () => {
+          calls.push('preview');
+          return previewSummary;
+        },
+        webUiRunner: async () => {
+          calls.push('webui');
+          return webUiSummary;
+        },
+      },
+    );
+
+    expect(calls).toEqual(['preview', 'webui']);
+    expect(summary.ok).toBe(false);
+    expect(summary.failed).toBe(1);
+    expect(summary.summaries).toEqual({ preview: previewSummary, webUi: webUiSummary });
+  });
+
+  test('uses the Release A orchestrator from the default browser smoke CLI', () => {
+    const source = readFileSync(new URL('../../../scripts/smoke-agentbean-next-browser.mjs', import.meta.url), 'utf8');
+    const cliSource = source.slice(source.indexOf('if (process.argv[1]'));
+
+    expect(cliSource).toContain('runAgentBeanNextReleaseABrowserGate');
+    expect(cliSource).not.toContain('await runAgentBeanNextBrowserSmoke({');
+  });
+
+  test('isolates daemon identity between WebUI business flows that can revoke a Device', async () => {
+    const { webUiFlowSuffix } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
+    const identities = ['channels', 'runs', 'devices', 'agents', 'admin']
+      .map((flow) => webUiFlowSuffix('smoke-1', flow));
+
+    expect(new Set(identities).size).toBe(identities.length);
+    expect(identities).toEqual([
+      'smoke-1-channels',
+      'smoke-1-runs',
+      'smoke-1-devices',
+      'smoke-1-agents',
+      'smoke-1-admin',
+    ]);
+  });
+
   test('exercises App Router page routes in the browser', async () => {
     const { exerciseWebUiRouteSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];
@@ -49,11 +161,12 @@ describe('AgentBean Next browser smoke script', () => {
       },
     });
 
-    expect(result).toEqual({ networkPath: 'team-one' });
+    expect(result).toEqual({ teamPath: 'team-one' });
     expect(calls).toHaveLength(2);
     expect(calls[0][1]).toContain('agentbean.token');
     expect(calls[0][1]).toContain('token-1');
-    expect(calls[0][1]).toContain('agentbean.networkPath');
+    expect(calls[0][1]).toContain('agentbean.teamPath');
+    expect(calls[0][1]).not.toContain(['agentbean.', 'network', 'Path'].join(''));
     expect(calls[0][1]).toContain('team-one');
   });
 
@@ -265,10 +378,11 @@ describe('AgentBean Next browser smoke script', () => {
   });
 
   test('exercises WebUI team create, switch, delete, and restore flow', async () => {
-    const { exerciseWebUiNetworksBusinessSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
+    const { exerciseWebUiTeamsBusinessSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];
     const evaluateJsonResponses = [
-      { id: 'team-2', name: 'WebUI Team networks-smoke', path: 'team-two' },
+      { id: 'team-2', name: 'WebUI Team teams-smoke', path: 'team-two' },
+      { id: 'team-2', name: 'WebUI Team teams-smoke', path: 'team-two' },
       true,
     ];
     const page = {
@@ -288,9 +402,22 @@ describe('AgentBean Next browser smoke script', () => {
         calls.push(['evaluateJson', expression]);
         return evaluateJsonResponses.shift();
       },
+      async reload() {
+        calls.push(['reload', undefined]);
+      },
+    };
+    const fetchCalls: string[] = [];
+    const fetchImpl = async (url: string) => {
+      fetchCalls.push(url);
+      return {
+        status: 308,
+        headers: {
+          get: (name: string) => (name.toLowerCase() === 'location' ? '/team-one/teams' : null),
+        },
+      };
     };
 
-    const result = await exerciseWebUiNetworksBusinessSmoke({
+    const result = await exerciseWebUiTeamsBusinessSmoke({
       page,
       baseUrl: 'http://127.0.0.1:4100/',
       session: {
@@ -298,22 +425,26 @@ describe('AgentBean Next browser smoke script', () => {
         user: { id: 'user-1', username: 'alice' },
         team: { id: 'team-1', name: 'Team One', path: 'team-one' },
       },
-      suffix: 'networks-smoke',
+      suffix: 'teams-smoke',
       timeoutMs: 1000,
+      fetchImpl,
     });
 
     expect(result).toEqual({
       teamId: 'team-2',
       teamPath: 'team-two',
-      teamName: 'WebUI Team networks-smoke',
+      teamName: 'WebUI Team teams-smoke',
       restoredTeamPath: 'team-one',
       deleted: true,
     });
-    expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/networks']);
+    const compatibilityTeamsUrl = ['http://127.0.0.1:4100/team-one/net', 'works'].join('');
+    expect(fetchCalls).toEqual([compatibilityTeamsUrl]);
+    expect(calls).toContainEqual(['navigate', compatibilityTeamsUrl]);
+    expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/teams']);
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-two/settings']);
-    expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/networks']);
-    expect(calls).toContainEqual(['setInputValue', { selector: '[data-smoke="team-create-name"]', value: 'WebUI Team networks-smoke' }]);
-    expect(calls).toContainEqual(['setInputValue', { selector: '[data-smoke="team-create-description"]', value: 'Created by WebUI smoke networks-smoke' }]);
+    expect(calls.filter((call) => call[0] === 'reload')).toHaveLength(3);
+    expect(calls).toContainEqual(['setInputValue', { selector: '[data-smoke="team-create-name"]', value: 'WebUI Team teams-smoke' }]);
+    expect(calls).toContainEqual(['setInputValue', { selector: '[data-smoke="team-create-description"]', value: 'Created by WebUI smoke teams-smoke' }]);
     expect(calls).toContainEqual(['click', '[data-smoke="team-create-submit"]']);
     expect(calls).toContainEqual(['click', '[data-smoke="settings-tab-server"]']);
     expect(calls).toContainEqual(['click', '[data-smoke="settings-team-delete-open"]']);
@@ -327,10 +458,51 @@ describe('AgentBean Next browser smoke script', () => {
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('settings-team-delete-open'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('settings-team-delete-dialog'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].description.includes('leave temporary team'))).toBe(true);
-    expect(waitForFunctionCalls.some((call) => call[1].description.includes('disappear from networks list'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].description.includes('permanent redirect to the teams page'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].description.includes('disappear from teams list'))).toBe(true);
+    expect(waitForFunctionCalls.map((call) => call[1].description)).toEqual(
+      expect.arrayContaining([
+        'initial session team before create: team "Team One" to be current',
+        'created team immediately after create: team "WebUI Team teams-smoke" to be current',
+        'created team after create refresh: team "WebUI Team teams-smoke" to be current',
+        'session team after explicit switch back: team "Team One" to be current',
+        'session team after explicit switch refresh: team "Team One" to be current',
+        'created team after explicit switch for delete: team "WebUI Team teams-smoke" to be current',
+        'fallback team after delete: team "Team One" to be current',
+        'fallback team after delete refresh: team "Team One" to be current',
+      ]),
+    );
     const evaluateJsonCalls = calls.filter((call): call is ['evaluateJson', string] => call[0] === 'evaluateJson');
-    expect(evaluateJsonCalls).toHaveLength(2);
-    expect(evaluateJsonCalls.filter((call) => call[1].includes('team-switch'))).toHaveLength(1);
+    expect(evaluateJsonCalls).toHaveLength(3);
+    expect(evaluateJsonCalls.filter((call) => call[1].includes('team-switch'))).toHaveLength(2);
+  });
+
+  test('keeps readiness and verification evidence on canonical Team routes', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { hasGreenSettingsTeamsParity } = await import('../../../scripts/check-agentbean-next-readiness.mjs');
+    const readiness = await readFile(
+      new URL('../../../scripts/check-agentbean-next-readiness.mjs', import.meta.url),
+      'utf8',
+    );
+    const matrix = await readFile(
+      new URL('../../../agentbean-next/docs/verification-matrix.md', import.meta.url),
+      'utf8',
+    );
+    const parityAudit = await readFile(
+      new URL('../../../agentbean-next/docs/parity-backfill-audit.md', import.meta.url),
+      'utf8',
+    );
+
+    expect(readiness).toContain('apps/web-next/app/[teamPath]/settings/page.tsx');
+    expect(readiness).not.toContain(['apps/web-next/app/[network', 'Path]'].join(''));
+    expect(readiness).toContain('settings / teams');
+    expect(hasGreenSettingsTeamsParity(['| `settings` / `net', 'works` | Green | stale | row |'].join(''))).toBe(false);
+    expect(hasGreenSettingsTeamsParity('| `settings` / `teams` | Green | canonical | row |')).toBe(true);
+    expect(parityAudit).toContain('| `settings` / `teams` | Green |');
+    expect(parityAudit).not.toContain(['| `settings` / `net', 'works` | Green |'].join(''));
+    expect(matrix).toContain('webui-teams-business-flow');
+    expect(matrix).toContain('`/:teamPath/teams`');
+    expect(matrix).toContain('308 permanent redirect');
   });
 
   test('exercises WebUI task create, reorder, delete, status update, and refresh restore', async () => {
@@ -407,8 +579,13 @@ describe('AgentBean Next browser smoke script', () => {
     const calls: Array<[string, unknown]> = [];
     const webSocketCalls: Array<[string, unknown]> = [];
     const daemonCalls: Array<[string, unknown]> = [];
+    const daemonHandlers = new Map<string, (payload: any) => void | Promise<void>>();
+    let dispatchResultPersisted = false;
     const page = {
       async navigate(url: string) {
+        if (url.endsWith('/team-one/settings') && !dispatchResultPersisted) {
+          throw new Error('workspace run page opened before dispatch result persistence completed');
+        }
         calls.push(['navigate', url]);
       },
       async waitForFunction(expression: string, description: string) {
@@ -432,14 +609,22 @@ describe('AgentBean Next browser smoke script', () => {
       async emitWithAck(event: string, payload: unknown) {
         webSocketCalls.push([event, payload]);
         if (event === 'agent:create') return { ok: true, agent: { id: 'agent-1' } };
-        if (event === 'message:send') return { ok: true, dispatches: [{ id: 'dispatch-1' }] };
+        if (event === 'message:send') {
+          void daemonHandlers.get('dispatch:request')?.({
+            id: 'dispatch-1',
+            agentId: 'agent-1',
+            prompt: '@WebUIRununsmoke produce workspace run',
+          });
+          return { ok: true, dispatches: [{ id: 'dispatch-1' }] };
+        }
         return { ok: true };
       },
     };
     const ioFactory = () => {
       let onConnect: (() => void) | undefined;
       return {
-        on(event: string, handler: () => void) {
+        on(event: string, handler: (payload?: unknown) => void | Promise<void>) {
+          daemonHandlers.set(event, handler);
           if (event === 'connect') onConnect = handler;
         },
         off() {},
@@ -453,6 +638,10 @@ describe('AgentBean Next browser smoke script', () => {
           daemonCalls.push([event, payload]);
           if (event === 'device:hello') return { ok: true, device: { id: 'device-1' } };
           if (event === 'device:runtimes') return { ok: true, runtimes: [{ id: 'runtime-1' }] };
+          if (event === 'dispatch:result') {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            dispatchResultPersisted = true;
+          }
           return { ok: true };
         },
       };
@@ -608,7 +797,7 @@ describe('AgentBean Next browser smoke script', () => {
     expect(evaluateJsonCalls.some((call) => call[1].includes('settings-join-revoke'))).toBe(true);
   });
 
-  test('exercises WebUI agents create, publish toggle, and metrics route', async () => {
+  test('exercises WebUI agents create, config, metrics, and delete flow', async () => {
     const { exerciseWebUiAgentsBusinessSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];
     const webSocketCalls: Array<[string, unknown]> = [];
@@ -618,8 +807,6 @@ describe('AgentBean Next browser smoke script', () => {
         webSocketCalls.push([event, payload]);
         if (event === 'agents:subscribe') return { ok: true, agents: [] };
         if (event === 'agent:create') return { ok: true, agent: { id: 'agent-1' } };
-        if (event === 'team:create') return { ok: true, team: { id: 'team-2', name: 'Target Team', path: 'target-team' } };
-        if (event === 'team:switch') return { ok: true, currentTeam: { id: 'team-1', name: 'Team One', path: 'team-one' } };
         if (event === 'channels:subscribe') return { ok: true, channels: [] };
         if (event === 'message:send') return { ok: true, dispatches: [{ id: 'dispatch-1' }] };
         return { ok: true };
@@ -637,10 +824,6 @@ describe('AgentBean Next browser smoke script', () => {
       },
       async waitForFunction(expression: string, description: string) {
         calls.push(['waitForFunction', { expression, description }]);
-      },
-      async evaluateJson(expression: string) {
-        calls.push(['evaluateJson', expression]);
-        return true;
       },
     };
     const ioFactory = () => {
@@ -683,8 +866,6 @@ describe('AgentBean Next browser smoke script', () => {
     expect(result).toEqual({
       agentId: 'agent-1',
       agentName: 'WebUIAgentgentssmokeCfg',
-      targetTeamId: 'team-2',
-      targetTeamName: 'WebUI Agent Target agents-smoke',
       dispatchId: 'dispatch-1',
       deleted: true,
     });
@@ -707,8 +888,6 @@ describe('AgentBean Next browser smoke script', () => {
       'agent:create',
       expect.objectContaining({ userId: 'user-1', teamId: 'team-1', deviceId: 'device-1', runtimeId: 'runtime-1' }),
     ]);
-    expect(webSocketCalls).toContainEqual(['team:create', expect.objectContaining({ userId: 'user-1', name: 'WebUI Agent Target agents-smoke' })]);
-    expect(webSocketCalls).toContainEqual(['team:switch', { userId: 'user-1', teamId: 'team-1' }]);
     expect(webSocketCalls).toContainEqual(['message:send', expect.objectContaining({ teamId: 'team-1', channelId: 'channel-1' })]);
     const waitForFunctionCalls = calls.filter(
       (call): call is ['waitForFunction', { expression: string; description: string }] => call[0] === 'waitForFunction',
@@ -716,13 +895,9 @@ describe('AgentBean Next browser smoke script', () => {
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-list-item'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-detail'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-config-dialog'))).toBe(true);
-    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-publish-toggle'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-metrics-panel'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-delete-dialog'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agent-list-page'))).toBe(true);
-    const evaluateJsonCalls = calls.filter((call): call is ['evaluateJson', string] => call[0] === 'evaluateJson');
-    expect(evaluateJsonCalls).toHaveLength(2);
-    expect(evaluateJsonCalls.every((call) => call[1].includes('agent-publish-toggle'))).toBe(true);
     expect(daemonCalls).toContainEqual(['device:hello', expect.objectContaining({ teamId: 'team-1', ownerId: 'user-1' })]);
     expect(daemonCalls).toContainEqual(['device:runtimes', expect.objectContaining({ teamId: 'team-1', deviceId: 'device-1' })]);
   });
@@ -982,6 +1157,10 @@ describe('AgentBean Next browser smoke script', () => {
     expect(calls).toContainEqual(['click', '[data-smoke="device-rename-save"]']);
     expect(calls).toContainEqual(['reload', undefined]);
     expect(calls).toContainEqual(['click', '[data-smoke="device-delete-open"]']);
+    expect(calls).toContainEqual([
+      'fillInputAsUser',
+      { selector: '[data-smoke="device-delete-name-input"]', value: 'webui-device-devices-smoke' },
+    ]);
     expect(calls).toContainEqual(['click', '[data-smoke="device-delete-confirm"]']);
     expect(webSocketCalls).toContainEqual([
       'agent:create',

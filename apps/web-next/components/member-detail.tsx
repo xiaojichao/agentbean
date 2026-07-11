@@ -22,7 +22,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { agentEvents, dmEvents, fetchAgentWorkspace, memberEvents } from '@/lib/socket';
-import { useAgentBeanStore, useCurrentNetworkPath } from '@/lib/store';
+import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { formatRelative } from '@/lib/format-time';
 import type { AgentMetricsSummary, AgentSnapshot, AgentWorkspaceRun, DeviceInfo, HumanMember, UserInfo } from '@/lib/schema';
 import { agentDeviceDisplayName } from '@/lib/agent-device';
@@ -98,7 +98,7 @@ function statusDotClass(status?: string): string {
 }
 
 export function AgentTopBar({ agent, device }: { agent: AgentSnapshot; device?: DeviceInfo }) {
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const [dmLoading, setDmLoading] = useState(false);
   const canManageOnDevice = Boolean(agent.deviceId && currentUser?.id && (
@@ -187,7 +187,7 @@ export function AgentDetail({ agent, device, tab }: { agent: AgentSnapshot; devi
 }
 
 function AgentProfile({ agent, device, applyAgentStatus }: { agent: AgentSnapshot; device?: DeviceInfo; applyAgentStatus: (snap: AgentSnapshot) => void }) {
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const [editing, setEditing] = useState<'name' | 'description' | null>(null);
   const [name, setName] = useState(agent.name);
@@ -398,7 +398,7 @@ function AgentPermissions({ agentId }: { agentId: string }) {
 }
 
 function AgentDms({ agent, dms }: { agent: AgentSnapshot; dms: Array<{ id: string; name: string; dmTargetId: string; createdAt: number }> }) {
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
   const [dmLoading, setDmLoading] = useState(false);
 
   const startDm = async () => {
@@ -518,7 +518,7 @@ export function HumanDetail({
   currentMemberRole?: 'owner' | 'admin' | 'member';
   onUpdated?: (human: HumanMember) => void;
 }) {
-  const np = useCurrentNetworkPath();
+  const np = useCurrentTeamPath();
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const agents = useAgentBeanStore((s) => s.agents);
   const ownedAgents = ownedAgentsForMember(agents, human.userId);

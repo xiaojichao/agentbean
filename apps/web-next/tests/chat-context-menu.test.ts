@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const source = readFileSync(new URL('../app/[networkPath]/chat/page.tsx', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
 
 function messageContextMenuSource(): string {
   const start = source.indexOf('aria-label="Message context menu"');

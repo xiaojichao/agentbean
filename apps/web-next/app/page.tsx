@@ -11,7 +11,6 @@ import {
   ListChecks,
   MessageSquare,
   Monitor,
-  Network,
   ShieldCheck,
   Users,
   Workflow,
@@ -177,7 +176,7 @@ function ProductSnapshot() {
       <div className="mb-3 flex items-center justify-between border-b border-neutral-100 pb-3">
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-md bg-neutral-950 text-white">
-            <Network size={16} />
+            <Users size={16} />
           </div>
           <div>
             <div className="text-sm font-semibold">testsns Team</div>

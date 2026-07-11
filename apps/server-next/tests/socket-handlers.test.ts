@@ -54,7 +54,6 @@ describe('server-next socket handlers', () => {
       deleteAgent: vi.fn(async (payload) => makeSuccess({ payload })),
       summarizeAgentMetrics: vi.fn(async (payload) => makeSuccess({ payload })),
       listAdminTeams: vi.fn(async (payload) => makeSuccess({ payload })),
-      listAdminNetworks: vi.fn(async (payload) => makeSuccess({ payload })),
       listAdminUsers: vi.fn(async (payload) => makeSuccess({ payload })),
       listAdminDevices: vi.fn(async (payload) => makeSuccess({ payload })),
       listAdminAgents: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -132,12 +131,10 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.agent.delete,
       WEB_EVENTS.agent.metrics,
       WEB_EVENTS.admin.listTeams,
-      WEB_EVENTS.admin.listNetworks,
       WEB_EVENTS.admin.listUsers,
       WEB_EVENTS.admin.listDevices,
       WEB_EVENTS.admin.listAgents,
       WEB_EVENTS.admin.deleteTeam,
-      WEB_EVENTS.admin.deleteNetwork,
       WEB_EVENTS.admin.deleteUser,
       WEB_EVENTS.admin.deleteAgent,
       WEB_EVENTS.admin.transferDeviceOwner,
@@ -165,7 +162,11 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.task.delete,
       WEB_EVENTS.task.reorder,
     ]);
-    expect(socket.eventNames()).not.toContain('network:list');
+    expect(socket.eventNames()).toContain(WEB_EVENTS.admin.listTeams);
+    expect(socket.eventNames()).toContain(WEB_EVENTS.admin.deleteTeam);
+    expect(socket.eventNames()).not.toContain(['admin:list-', 'net', 'works'].join(''));
+    expect(socket.eventNames()).not.toContain(['admin:delete-', 'net', 'work'].join(''));
+    expect(socket.eventNames()).not.toContain(['network', ':list'].join(''));
 
     await expect(socket.trigger(WEB_EVENTS.auth.register, { username: 'shaw' })).resolves.toEqual({
       ok: true,
@@ -643,6 +644,27 @@ describe('server-next socket handlers', () => {
       teamId: 'team-1',
       targetUserId: 'user-2',
     });
+  });
+
+  test('routes the canonical admin delete-team payload through the global-admin use case', async () => {
+    const socket = new FakeSocket();
+    const deleteAdminTeam = vi.fn(async (payload) => makeSuccess({ payload }));
+    const app = { deleteAdminTeam } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, {
+      authenticatedUser: async () => ({
+        hasToken: true,
+        userId: 'admin-1',
+        currentTeamId: 'team-1',
+        currentDeviceId: null,
+      }),
+    });
+
+    await expect(socket.trigger(WEB_EVENTS.admin.deleteTeam, { teamId: 'team-1' })).resolves.toEqual({
+      ok: true,
+      payload: { userId: 'admin-1', teamId: 'team-1' },
+    });
+    expect(deleteAdminTeam).toHaveBeenCalledWith({ userId: 'admin-1', teamId: 'team-1' });
   });
 
   test('notifies task subscribers when message:send creates a task', async () => {
