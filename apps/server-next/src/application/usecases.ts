@@ -4958,6 +4958,8 @@ function routeMessageForChannel(input: {
   const isSocketReachable = (agent: AgentDto): boolean =>
     !connectedAgentDeviceIds || !agent.deviceId || connectedAgentDeviceIds.has(agent.deviceId);
   const dispatchClaimDeviceIds = new Set(input.dispatchClaimDeviceIds ?? []);
+  const canQueueForBusyAgent = (agent: AgentDto): boolean =>
+    agent.status === 'busy' && Boolean(agent.deviceId && dispatchClaimDeviceIds.has(agent.deviceId));
   if (input.channel.kind === 'direct') {
     const targetAgentId = input.channel.dmTargetAgentId ?? input.channel.agentMemberIds[0];
     const targetAgent = input.visibleAgents.find((agent) =>
@@ -4965,7 +4967,7 @@ function routeMessageForChannel(input: {
       agent.visibleTeamIds.includes(input.teamId) &&
       (
         agent.status === 'online' ||
-        (agent.status === 'busy' && Boolean(agent.deviceId && dispatchClaimDeviceIds.has(agent.deviceId)))
+        canQueueForBusyAgent(agent)
       ) &&
       isSocketReachable(agent)
     );
@@ -4973,9 +4975,14 @@ function routeMessageForChannel(input: {
       ? { kind: 'dispatch', agentId: targetAgent.id, reason: 'direct' }
       : { kind: 'no-dispatch', reason: 'no-online-agent' };
   }
+  const hasLeadingMention = /^@(.+)/.test(input.body.trimStart());
   const route = routeMessage({
     body: input.body,
-    agents: input.visibleAgents,
+    agents: hasLeadingMention
+      ? input.visibleAgents.map((agent) => canQueueForBusyAgent(agent)
+          ? { ...agent, status: 'online' as const }
+          : agent)
+      : input.visibleAgents,
     humanMembers: [],
     teamId: input.teamId,
     channelId: input.channel.id,

@@ -2214,6 +2214,126 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('queues mentioned channel follow-ups that arrive after the active dispatch was accepted', async () => {
+    let now = 10_000;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+        'message-2',
+        'dispatch-2',
+        'request-2',
+        'message-3',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'testclaudecode',
+      adapterKind: 'claude-code',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@testclaudecode 你有哪些模型？',
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [{ id: 'dispatch-1' }],
+    });
+    await expect(app.acceptDispatch({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      quietWindowMs: 0,
+    })).resolves.toMatchObject({ ok: true, ready: true });
+
+    now = 16_000;
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@testclaudecode 你能干哪些事情？',
+      dispatchClaimDeviceIds: ['device-1'],
+    })).resolves.toMatchObject({
+      ok: true,
+      route: { kind: 'dispatch', agentId: 'agent-1', reason: 'mention' },
+      dispatches: [{ id: 'dispatch-2', messageId: 'message-2' }],
+    });
+
+    now = 17_000;
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@testclaudecode 有哪些 Skills？',
+      dispatchClaimDeviceIds: ['device-1'],
+    })).resolves.toMatchObject({
+      ok: true,
+      route: { kind: 'dispatch', agentId: 'agent-1', reason: 'mention' },
+      dispatches: [],
+    });
+    await expect(app.getDispatchRequest({ dispatchId: 'dispatch-2' })).resolves.toMatchObject({
+      ok: true,
+      request: {
+        prompt: '@testclaudecode 你能干哪些事情？\n\n@testclaudecode 有哪些 Skills？',
+      },
+    });
+  });
+
+  test('does not queue mentioned channel follow-ups for a daemon without dispatch claim support', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 20_000,
+      ids: createIds([
+        'user-1', 'team-1', 'channel-1',
+        'message-1', 'dispatch-1', 'request-1', 'message-2',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'legacy-agent',
+      adapterKind: 'claude-code',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 20_000,
+    });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@legacy-agent first',
+    });
+    await app.acceptDispatch({ dispatchId: 'dispatch-1', agentId: 'agent-1', quietWindowMs: 0 });
+
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@legacy-agent follow-up',
+    })).resolves.toMatchObject({
+      ok: true,
+      route: { kind: 'no-dispatch', reason: 'unknown-mention' },
+      dispatches: [],
+    });
+  });
+
   test('queues direct-message follow-ups that arrive after the active dispatch was accepted', async () => {
     let now = 10_000;
     const app = createInMemoryServerNext({
