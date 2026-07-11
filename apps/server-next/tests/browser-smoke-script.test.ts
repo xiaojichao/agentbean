@@ -455,6 +455,23 @@ describe('AgentBean Next browser smoke script', () => {
     expect(calls).toContainEqual(['click', '[data-smoke="settings-tab-server"]']);
     expect(calls).toContainEqual(['click', '[data-smoke="settings-team-delete-open"]']);
     expect(calls).toContainEqual(['click', '[data-smoke="settings-team-delete-confirm"]']);
+    const settingsNavigationIndex = calls.findIndex(
+      (call) => call[0] === 'navigate' && call[1] === 'http://127.0.0.1:4100/team-two/settings',
+    );
+    const settingsTabReadyIndex = calls.findIndex(
+      (call) => call[0] === 'waitForFunction'
+        && typeof call[1] === 'object'
+        && call[1] !== null
+        && 'expression' in call[1]
+        && typeof call[1].expression === 'string'
+        && call[1].expression.includes('settings-tab-server'),
+    );
+    const settingsTabClickIndex = calls.findIndex(
+      (call) => call[0] === 'click' && call[1] === '[data-smoke="settings-tab-server"]',
+    );
+    expect(settingsNavigationIndex).toBeGreaterThanOrEqual(0);
+    expect(settingsTabReadyIndex).toBeGreaterThan(settingsNavigationIndex);
+    expect(settingsTabClickIndex).toBeGreaterThan(settingsTabReadyIndex);
     const waitForFunctionCalls = calls.filter(
       (call): call is ['waitForFunction', { expression: string; description: string }] => call[0] === 'waitForFunction',
     );
@@ -677,6 +694,19 @@ describe('AgentBean Next browser smoke script', () => {
     });
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/settings']);
     expect(calls).toContainEqual(['click', '[data-smoke="settings-tab-runs"]']);
+    const runsTabReadyIndex = calls.findIndex(
+      (call) => call[0] === 'waitForFunction'
+        && typeof call[1] === 'object'
+        && call[1] !== null
+        && 'expression' in call[1]
+        && typeof call[1].expression === 'string'
+        && call[1].expression.includes('settings-tab-runs'),
+    );
+    const runsTabClickIndex = calls.findIndex(
+      (call) => call[0] === 'click' && call[1] === '[data-smoke="settings-tab-runs"]',
+    );
+    expect(runsTabReadyIndex).toBeGreaterThanOrEqual(0);
+    expect(runsTabClickIndex).toBeGreaterThan(runsTabReadyIndex);
     expect(calls).toContainEqual(['reload', undefined]);
     expect(calls).toContainEqual([
       'setInputValue',
