@@ -2099,6 +2099,7 @@ describe('server-next first-slice use cases', () => {
       ok: true,
       message: { id: 'message-3' },
       dispatches: [],
+      coalescedDispatchId: 'dispatch-1',
     });
 
     now = 15_999;
@@ -2111,6 +2112,7 @@ describe('server-next first-slice use cases', () => {
       ok: true,
       message: { id: 'message-4' },
       dispatches: [],
+      coalescedDispatchId: 'dispatch-1',
     });
 
     await expect(app.getDispatchRequest({ dispatchId: 'dispatch-1' })).resolves.toMatchObject({
