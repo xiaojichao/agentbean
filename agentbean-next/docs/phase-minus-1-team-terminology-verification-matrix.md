@@ -20,10 +20,10 @@
 | P-1-02 | Server 不注册旧 admin handlers，缺少 `teamId` 时返回 canonical validation error。 | Socket | `socket-handlers.test.ts` | Green Release A |
 | P-1-03 | Device Agent、Admin Agent、Admin Device 响应只包含 `teamId`、`teamName`、`primaryTeamId`、`primaryTeamName`、`visibleTeamIds`。 | UseCase/Socket | `socket-integration.test.ts` | Green Release A |
 | P-1-04 | Fresh global SQLite 使用 `teams`、`team_members` 和 Team snake_case columns。 | Repository | `sqlite-repositories.test.ts`、schema inspection | Green Release A |
-| P-1-05 | 0011 形状的 `device_revocations` 可升级到 snake_case，普通 profile、`NULL profile_id`、主键和索引全部保留。 | Repository/Migration | `device-revocations-repository.test.ts`、`sqlite-repositories.test.ts`、production row/index inspection 与 revoked Device rejection | Partial Release A |
+| P-1-05 | 0011 形状的 `device_revocations` 可升级到 snake_case，普通 profile、`NULL profile_id`、主键和索引全部保留。 | Repository/Migration | `device-revocations-repository.test.ts`、`sqlite-repositories.test.ts`、production row/index inspection 与 revoked Device rejection | Green Release A |
 | P-1-06 | Web socket/client/store 不再声明、映射或发送 non-canonical Team aliases/fields。 | Web unit | `socket-client.test.ts`、`npm run build:web-next` | Green Release A |
 | P-1-07 | App Router 动态 segment 为 `[teamPath]`，团队管理入口为 `/:teamPath/teams`；Release A 的旧收藏 URL 只经过 permanent redirect，不保留旧页面实现。 | Web route | route manifest、redirect test、Web build、browser smoke | Green Release A |
-| P-1-08 | Release A 首次读取旧 browser key 时写入 `agentbean.teamPath` 并删除旧键，此后不再写旧键。 | Web storage | `team-path.test.ts`、真实浏览器 storage inspection | Partial local |
+| P-1-08 | Release A 首次读取旧 browser key 时写入 `agentbean.teamPath` 并删除旧键，此后不再写旧键。 | Web storage | `team-path.test.ts`、真实浏览器 storage inspection | Green Release A |
 | P-1-09 | Release B 删除旧 browser key 读取、旧 Team 页面 redirect 和全部 checker allowlist。 | Web/CI | `team-path.test.ts`、redirect test、`npm run check:team-terminology` | Not started |
 | P-1-10 | Artifact upload proxy 与 Server HTTP 只存在 `/api/teams/:teamId/...`。 | HTTP/Web | route existence test、multipart upload/preview/download smoke | Green Release A |
 | P-1-11 | Device list/Agent 查询显式使用 `teamId`；device-bound get/scan/select-directory/delete/rename 只使用 `deviceId`；invite/login/custom Agent create 符合各自 canonical contract。 | Device/Web/E2E | targeted tests、browser Device flow | Green Release A |
@@ -62,8 +62,12 @@
   - global migration ledger 包含 `global/0014_device_revocations_team_columns.sql`，applied_at 为 `1783734054646`。
 - 计划要求的 Release A **发布前** global SQLite backup 没有可验证证据；上述文件是同一 production volume 内的发布后观察快照，不能追溯替代发布前备份，也不能覆盖 volume 丢失或损坏。当前没有 off-volume copy、保留期或恢复演练证据。
 - 7 天观察窗口从 production smoke 完成时开始：`2026-07-11 09:41:41` 至 `2026-07-18 09:41:41`（Asia/Shanghai）。窗口结束前禁止执行 Release B。
+- 窗口内后续 production deploy 均已记录并通过：PR #471 的 [Run #1000](https://github.com/xiaojichao/agentbean/actions/runs/29136243401)、PR #475 的 [Run 29146998708](https://github.com/xiaojichao/agentbean/actions/runs/29146998708)、PR #476 的 [Run 29147805169](https://github.com/xiaojichao/agentbean/actions/runs/29147805169)、PR #473 的 [Run 29149484675](https://github.com/xiaojichao/agentbean/actions/runs/29149484675) 均为 `success`，对应 `Deploy production` 与 `AgentBean Next production smoke` 成功。
+- `2026-07-11 19:09`（Asia/Shanghai）从最新 `main` `8bd3bbbf646518a154f7ccf8d99f719f8ce0c17e` 对 `https://api.agentbean.dev` 执行 production-host combined browser gate，`39/39` 通过，preview/WebUI console 均无 error；[外部观察记录](https://github.com/xiaojichao/agentbean/issues/469#issuecomment-4945200798) 已写入，本地 artifact 位于 `/private/tmp/agentbean-release-a-current-main-production-browser/`。
+- P-1-08 production browser inspection 已完成：同一已登录 context 中只保留 legacy browser path key 后访问 `/login`，页面恢复到 canonical Team chat，最终 `agentbean.teamPath` 写入且旧键删除；console error 为 0。证据见 [Issue #469 observation](https://github.com/xiaojichao/agentbean/issues/469#issuecomment-4944639434)。
+- P-1-05 production evidence 已完成：普通 profile 与 `NULL profile_id` Device 删除后重连均返回 `DEVICE_REVOKED`；随后以 `readonly: true` 和 `PRAGMA query_only=ON` 检查 global SQLite，确认 5 行中包含 1 行 NULL profile、复合主键 `(team_id, machine_id, profile_key)`、索引 `idx_revocations_machine(team_id, machine_id)`、migration 0014 ledger 与 `integrity_check=ok`。证据见 [行为记录](https://github.com/xiaojichao/agentbean/issues/469#issuecomment-4944639434) 与 [SQLite inspection](https://github.com/xiaojichao/agentbean/issues/469#issuecomment-4945160676)。临时 Railway SSH key 与本地 key/known_hosts 记录均已删除。
 
-当前 Phase -1 仍为 `in_progress`。P-1-05 尚缺 production revocation row/index inspection 与 revoked Device rejection；P-1-08 尚缺真实旧键迁移的浏览器 storage inspection；P-1-09、P-1-12 属于 Release B；P-1-16 要求 Release B production evidence。production-host browser smoke 也尚未执行。Release A 的发布前 backup 证据缺失，old-target schema rollback 当前冻结；发布后观察快照已完成完整性校验，但不是旧 binary 的恢复点。
+当前 Phase -1 仍为 `in_progress`。P-1-05、P-1-08 与 production-host browser 已达到 `Green Release A`；P-1-09、P-1-12 属于 Release B，P-1-16 要求 Release B production evidence。7 天观察尚未结束，`device-login` redirect 与 production Admin DTO rendering 仍缺独立观察证据。Release A 的发布前 backup 证据缺失，old-target schema rollback 当前冻结；发布后观察快照已完成完整性校验，但不是旧 binary 的恢复点。
 
 ## Release A 观察台账
 
@@ -73,13 +77,18 @@
 |---|---|---|---|---|---|---|
 | 2026-07-11 09:41:41 | Release A deploy/smoke baseline | main Run #996；Railway deployment `58e4c03e-1e73-4513-85c7-74705709b488`；本节上方 smoke 证据 | CI、deploy、strict audit、entry/business smoke 与 CI-local browser gate 全部通过 | 通过；观察开始；production browser 待检查 | Release A deploy | 待最终复核 |
 | 2026-07-11 09:57:11 | SQLite observation snapshot baseline | 本节上方 global/team snapshot 路径、SHA256、权限、`integrity_check` 与 migration ledger | 两份 snapshot 写入完成且 `integrity_check=ok` | 通过；仅为同 volume post-deploy snapshot | none | 待最终复核 |
-| 待填写 | 旧 Team path 首次打开与旧 browser key 迁移 | browser storage inspection 记录 | 旧 URL 正确跳转；首次读取后只保留 `agentbean.teamPath` | 待检查 | 待填写 | 待填写 |
-| 待填写 | login / device-login redirect | Railway request log 或 browser/network 记录 | 无非预期 404 | 待检查 | 待填写 | 待填写 |
-| 待填写 | Artifact upload | Railway request log 与一次 multipart upload/preview/download 记录 | 无非预期 404/403；上传、预览、下载成功 | 待检查 | 待填写 | 待填写 |
+| 2026-07-11 10:27:46 | PR #471 post-deploy observation | [main Run #1000](https://github.com/xiaojichao/agentbean/actions/runs/29136243401) | CI、deploy 与 production smoke 成功 | 通过 | production deploy | 待最终复核 |
+| 2026-07-11 约 10:33 | 首次 production browser incident | [Issue #474](https://github.com/xiaojichao/agentbean/issues/474)；`/private/tmp/agentbean-release-a-day1-production-browser/` | production browser target flow 通过且 console clean | 失败；频道创建因 stale Team 返回 `FORBIDDEN`；已由 PR #475 关闭 | incident | 待最终复核 |
+| 2026-07-11 17:04:14 | PR #475 incident fix deploy | [main Run 29146998708](https://github.com/xiaojichao/agentbean/actions/runs/29146998708)；[合并后生产验证](https://github.com/xiaojichao/agentbean/issues/474#issuecomment-4944493640) | CI、deploy、production smoke 与 production browser 全部通过 | 通过；Issue #474 已关闭 | production deploy / incident close | 待最终复核 |
+| 2026-07-11 17:34:34 | PR #476 post-deploy observation | [main Run 29147805169](https://github.com/xiaojichao/agentbean/actions/runs/29147805169) | CI、deploy 与 production smoke 成功 | 通过 | production deploy | 待最终复核 |
+| 2026-07-11 17:59:42 | 旧 Team path 与旧 browser key 迁移 | [Issue #469 browser observation](https://github.com/xiaojichao/agentbean/issues/469#issuecomment-4944639434)；latest-main production browser gate | 旧 URL 正确 308 跳转；首次读取后只保留 `agentbean.teamPath` | 通过；旧键删除且 canonical Team chat 恢复 | none | 待最终复核 |
+| 2026-07-11 18:36:44 | PR #473 post-deploy observation | [main Run 29149484675](https://github.com/xiaojichao/agentbean/actions/runs/29149484675) | CI、deploy 与 production smoke 成功 | 通过 | production deploy | 待最终复核 |
+| 2026-07-11 19:07:03 | `device_revocations` production upgrade | [行为记录](https://github.com/xiaojichao/agentbean/issues/469#issuecomment-4944639434)；[SQLite inspection](https://github.com/xiaojichao/agentbean/issues/469#issuecomment-4945160676) | 行与 NULL profile 未丢失；PK/index 正确；已撤销凭据不能重新连接 | 通过；query-only、integrity、rows、PK/index、普通/NULL profile 与双重 `DEVICE_REVOKED` 均符合 | none | 待最终复核 |
+| 2026-07-11 19:09 | Production browser（latest main） | [Issue #469 observation](https://github.com/xiaojichao/agentbean/issues/469#issuecomment-4945200798)；`npm run smoke:agentbean-next-browser -- --url https://api.agentbean.dev --timeout-ms 90000`；`/private/tmp/agentbean-release-a-current-main-production-browser/` | production host 上的目标 browser flow 通过且 console clean | `39/39` 通过；preview/WebUI console clean | post-deploy observation | 待最终复核 |
+| 待填写 | login / device-login redirect | Railway request log 或 browser/network 记录 | 无非预期 404 | `/login` 已通过 production browser；`device-login` 待检查 | 待填写 | 待填写 |
+| 2026-07-11 19:09 | Artifact upload | [latest-main production browser observation](https://github.com/xiaojichao/agentbean/issues/469#issuecomment-4945200798)；`/private/tmp/agentbean-release-a-current-main-production-browser/` | 无非预期 404/403；上传、预览、下载成功 | 通过；upload/preview/download 均成功 | post-deploy observation | 待最终复核 |
 | 待填写 | Admin DTO rendering | browser console 与 admin teams/devices/agents 页面记录 | 无 DTO rendering error；页面数据可见 | 待检查 | 待填写 | 待填写 |
-| 待填写 | SQLite migration | Railway application log 与 migration ledger | 无 migration error；`integrity_check=ok` | 待检查 | 待填写 | 待填写 |
-| 待填写 | Production browser | `npm run smoke:agentbean-next-browser -- --url https://api.agentbean.dev` 或覆盖同等 production UI 路径的记录 | production host 上的目标 browser flow 通过且 console clean | 待检查 | 待填写 | 待填写 |
-| 待填写 | `device_revocations` production upgrade | 只读 row count、普通/`NULL profile_id`、PK/index inspection，以及一次已撤销 Device 连接记录 | 行与 NULL profile 未丢失；PK/index 正确；已撤销凭据不能重新连接 | 待检查 | 待填写 | 待填写 |
+| 2026-07-11 19:07:03 | SQLite migration | [production query-only inspection](https://github.com/xiaojichao/agentbean/issues/469#issuecomment-4945160676) | 无 migration error；`integrity_check=ok` | 通过；0014 ledger 存在、legacy table 不存在、integrity ok | none | 待最终复核 |
 
 Release B 只能在 `2026-07-18 09:41:41` 之后且同时满足以下条件时开始：
 
@@ -123,7 +132,7 @@ Release B 删除一次性 browser migration、旧 Team 页面 redirect、checker
 - Release A `main` CI run：<https://github.com/xiaojichao/agentbean/actions/runs/29134937662>（Run #996，success）
 - Release A production deployment：Railway `58e4c03e-1e73-4513-85c7-74705709b488`（RUNNING）
 - Release A SQLite backup / snapshot path、size、SHA256：见“2026-07-11 Release A 已发布证据”；仅有同 volume post-deploy observation snapshots，pre-release backup evidence 缺失
-- Release A browser smoke：main CI combined browser `39/39`
+- Release A browser smoke：main CI combined browser `39/39`；latest-main production-host combined browser `39/39`（`2026-07-11 19:09`，Asia/Shanghai）
 - 7 天观察开始与结束时间：`2026-07-11 09:41:41` 至 `2026-07-18 09:41:41`（Asia/Shanghai）
 - Release B merge commit：
 - Release B `main` CI run：
