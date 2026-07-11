@@ -397,6 +397,7 @@ Release A 前 global SQLite backup 没有可验证证据，而 production global
 - Release A 发布后 SQLite 观察快照位于 `/data/agentbean-next/backups/release-a-observation/`；global/team 两份快照均为 `integrity_check=ok`、权限 `0600`。完整路径、size、SHA256 与 migration ledger 记录在 `phase-minus-1-team-terminology-verification-matrix.md`。
 - P-1-05 production inspection 已完成：普通 profile 与 `NULL profile_id` revocation 行均存在，复合主键和 machine index 正确，两类 Device 删除后重连均返回 `DEVICE_REVOKED`；P-1-08 production storage inspection 也已确认旧 key 首次读取后写入 `agentbean.teamPath` 并删除旧键。证据链接见验收矩阵。
 - production `device-login` inspection 已完成：真实 `device-invite:create`、`@agentbean/daemon@0.3.5` 注册与浏览器登录最终进入 canonical Team Device 页面，Device/Team identity 写入、旧 browser key 不存在，console 与网络检查通过。证据链接见验收矩阵。
+- `2026-07-12` 每日 production observation 已通过 strict cutover audit `12/12`、entry `4/4`、business `8/8` 与 production-host combined browser `39/39`；当前 canonical `@agentbean/daemon@latest` 为 `0.3.6`，无 incident，Admin dashboard 仍按 external-target 合同跳过。外部记录与 artifacts 路径见验收矩阵。
 - 计划要求的发布前 global SQLite backup 没有可验证证据；发布后快照不能冒充发布前备份，old-target schema rollback 当前冻结。
 - 观察窗口为 `2026-07-11 09:41:41` 至 `2026-07-18 09:41:41`（Asia/Shanghai）。窗口结束并满足退出条件前，不执行 Release B。
 
