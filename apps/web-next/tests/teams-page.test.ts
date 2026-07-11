@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   list: vi.fn(),
   push: vi.fn(),
+  addTeam: vi.fn(),
   setCurrentTeamId: vi.fn(),
   writeStoredTeamPath: vi.fn(),
   storeState: {
@@ -44,6 +45,7 @@ vi.mock('@/lib/socket', () => ({
 vi.mock('@/lib/store', () => ({
   useAgentBeanStore: (selector: (state: unknown) => unknown) => selector({
     ...mocks.storeState,
+    addTeam: mocks.addTeam,
     setCurrentTeamId: mocks.setCurrentTeamId,
   }),
 }));
@@ -80,6 +82,7 @@ describe('TeamsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
 
     await waitFor(() => expect(mocks.create).toHaveBeenCalledWith({ name: 'Team Two', description: undefined }));
+    expect(mocks.addTeam).toHaveBeenCalledWith({ id: 'team-2', name: 'Team Two', path: 'team-two' });
     expect(mocks.setCurrentTeamId).toHaveBeenCalledWith('team-2');
     expect(mocks.writeStoredTeamPath).toHaveBeenCalledWith(localStorage, 'team-two');
     expect(mocks.push).toHaveBeenCalledWith('/team-two/teams');

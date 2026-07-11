@@ -386,7 +386,12 @@ export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
       return emitWithTimeout(socket, WEB_EVENTS.auth.whoami, { token: getStoredAuthToken() });
     },
     inviteCreate(payload = {}) {
-      return emitWithTimeout(socket, WEB_EVENTS.deviceInvite.create, payload);
+      const { teamId, ...rest } = payload;
+      const resolvedTeamId = teamId && teamId !== 'default' ? teamId : undefined;
+      return emitWithTimeout(socket, WEB_EVENTS.deviceInvite.create, {
+        ...rest,
+        ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
+      });
     },
     async deviceLogin({ inviteCode, username, password }) {
       const login = await emitWithTimeout(socket, WEB_EVENTS.auth.login, { username, password }, 20000);

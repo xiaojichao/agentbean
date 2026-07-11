@@ -13,6 +13,7 @@ export default function TeamsPage() {
   const [loading, setLoading] = useState(true);
   const conn = useAgentBeanStore((s) => s.conn);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
+  const addTeam = useAgentBeanStore((s) => s.addTeam);
   const setCurrentTeamId = useAgentBeanStore((s) => s.setCurrentTeamId);
   const router = useRouter();
 
@@ -35,6 +36,7 @@ export default function TeamsPage() {
     const res = await teamEvents().create({ name: trimmed, description: description || undefined });
     if (res.ok && res.team) {
       setTeams((prev) => [...prev, res.team!]);
+      addTeam(res.team);
       setCurrentTeamId(res.team.id);
       writeStoredTeamPath(localStorage, res.team.path);
       router.push(`/${res.team.path}/teams`);

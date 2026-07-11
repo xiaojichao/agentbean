@@ -492,6 +492,11 @@ describe('web-next socket client', () => {
       purpose: 'device',
     });
 
+    await authEvents(socket as any).inviteCreate({ teamId: 'default', purpose: 'device' });
+    expect(socket.lastPayload(WEB_EVENTS.deviceInvite.create)).toEqual({
+      purpose: 'device',
+    });
+
     await deviceEvents(socket as any).agentsList('device-1', 'team-1');
     expect(socket.lastPayload(WEB_EVENTS.device.agentsList)).toEqual({
       deviceId: 'device-1',
