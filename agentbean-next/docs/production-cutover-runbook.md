@@ -392,7 +392,7 @@ Release A 前 global SQLite backup 没有可验证证据，而 production global
 - PR #470 已 squash merge 为 `c31ce9d955d0dfb7f9407a6d5724763568a60b7b`。
 - main-push [CI/CD Run #996](https://github.com/xiaojichao/agentbean/actions/runs/29134937662) 已完成且结论为 `success`。
 - Railway deployment `58e4c03e-1e73-4513-85c7-74705709b488` 已成功，production service 使用 `/data` volume。
-- strict cutover audit `12/12`、entry smoke `4/4`、business smoke `8/8`、GitHub-hosted combined browser smoke `39/39` 均通过。
+- strict cutover audit `12/12`、entry smoke `4/4`、business smoke `8/8` 均针对 production 通过；GitHub-hosted combined browser gate `39/39` 也通过，但它使用 CI runner 本地 Server，不是 production-host browser smoke。
 - Release A 发布后 SQLite 观察快照位于 `/data/agentbean-next/backups/release-a-observation/`；global/team 两份快照均为 `integrity_check=ok`、权限 `0600`。完整路径、size、SHA256 与 migration ledger 记录在 `phase-minus-1-team-terminology-verification-matrix.md`。
 - 计划要求的发布前 global SQLite backup 没有可验证证据；发布后快照不能冒充发布前备份，old-target schema rollback 当前冻结。
 - 观察窗口为 `2026-07-11 09:41:41` 至 `2026-07-18 09:41:41`（Asia/Shanghai）。窗口结束并满足退出条件前，不执行 Release B。
@@ -401,5 +401,7 @@ Release A 前 global SQLite backup 没有可验证证据，而 production global
 
 - 7 天观察期内按验收矩阵台账每天及每次 deploy/incident 后检查：旧 Team path 首次迁移、login/device-login redirect 404、Artifact upload 404/403、Admin DTO rendering error、SQLite migration error 和已撤销 Device 重连。
 - 对 P-1-08 执行真实旧 browser key migration storage inspection。
+- 对 `https://api.agentbean.dev` 执行 production-host browser smoke，并保存 URL、console 与截图证据；Run #996 的本地 combined browser gate 不能替代。
+- 对 production `device_revocations` 执行只读 row count、普通/`NULL profile_id`、PK/index inspection，并验证已撤销 Device 仍被拒绝；migration ledger 与 `integrity_check` 不能替代行为证据。
 - 观察窗口结束后只有在台账完整、所有阈值通过、incident 全部关闭、最终 smoke 复验和 verification-only sign-off 完成时，才决定是否执行 Release B；日期到点本身不是退出证据。
 - 如果旧 Vercel web 仍是主要用户入口，需要单独决定用户访问入口是继续使用旧 Vercel、改 Vercel 指向 AgentBean Next，还是由 Railway server-next 托管 preview/正式界面。
