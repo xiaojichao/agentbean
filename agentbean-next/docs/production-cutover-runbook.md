@@ -393,15 +393,17 @@ Release A 前 global SQLite backup 没有可验证证据，而 production global
 - main-push [CI/CD Run #996](https://github.com/xiaojichao/agentbean/actions/runs/29134937662) 已完成且结论为 `success`。
 - Railway deployment `58e4c03e-1e73-4513-85c7-74705709b488` 已成功，production service 使用 `/data` volume。
 - strict cutover audit `12/12`、entry smoke `4/4`、business smoke `8/8` 均针对 production 通过；GitHub-hosted combined browser gate `39/39` 通过。`2026-07-11 19:09`（Asia/Shanghai）又从最新 `main` `8bd3bbbf646518a154f7ccf8d99f719f8ce0c17e` 对 `https://api.agentbean.dev` 执行 production-host combined browser gate，结果同为 `39/39`，preview/WebUI console clean。
-- PR #471、#475、#476 与 #473 均在观察窗口内触发 production deploy；对应 main runs [29136243401](https://github.com/xiaojichao/agentbean/actions/runs/29136243401)、[29146998708](https://github.com/xiaojichao/agentbean/actions/runs/29146998708)、[29147805169](https://github.com/xiaojichao/agentbean/actions/runs/29147805169)、[29149484675](https://github.com/xiaojichao/agentbean/actions/runs/29149484675) 的 deploy 与 production smoke 全部成功。频道 stale Team incident 已由 #475 关闭，完整时间线见验收矩阵观察台账。
+- PR #471、#475、#476、#473 与 #478 均在观察窗口内触发 production deploy；对应 main runs [29136243401](https://github.com/xiaojichao/agentbean/actions/runs/29136243401)、[29146998708](https://github.com/xiaojichao/agentbean/actions/runs/29146998708)、[29147805169](https://github.com/xiaojichao/agentbean/actions/runs/29147805169)、[29149484675](https://github.com/xiaojichao/agentbean/actions/runs/29149484675)、[29158694977](https://github.com/xiaojichao/agentbean/actions/runs/29158694977) 的 deploy 与 production smoke 全部成功。频道 stale Team incident 已由 #475 关闭，完整时间线见验收矩阵观察台账。
 - Release A 发布后 SQLite 观察快照位于 `/data/agentbean-next/backups/release-a-observation/`；global/team 两份快照均为 `integrity_check=ok`、权限 `0600`。完整路径、size、SHA256 与 migration ledger 记录在 `phase-minus-1-team-terminology-verification-matrix.md`。
 - P-1-05 production inspection 已完成：普通 profile 与 `NULL profile_id` revocation 行均存在，复合主键和 machine index 正确，两类 Device 删除后重连均返回 `DEVICE_REVOKED`；P-1-08 production storage inspection 也已确认旧 key 首次读取后写入 `agentbean.teamPath` 并删除旧键。证据链接见验收矩阵。
+- production `device-login` inspection 已完成：真实 `device-invite:create`、`@agentbean/daemon@0.3.5` 注册与浏览器登录最终进入 canonical Team Device 页面，Device/Team identity 写入、旧 browser key 不存在，console 与网络检查通过。证据链接见验收矩阵。
+- `2026-07-12` 每日 production observation 已通过 strict cutover audit `12/12`、entry `4/4`、business `8/8` 与 production-host combined browser `39/39`；当前 canonical `@agentbean/daemon@latest` 为 `0.3.6`，无 incident，Admin dashboard 仍按 external-target 合同跳过。外部记录与 artifacts 路径见验收矩阵。
 - 计划要求的发布前 global SQLite backup 没有可验证证据；发布后快照不能冒充发布前备份，old-target schema rollback 当前冻结。
 - 观察窗口为 `2026-07-11 09:41:41` 至 `2026-07-18 09:41:41`（Asia/Shanghai）。窗口结束并满足退出条件前，不执行 Release B。
 
 ## 仍未完成
 
 - 7 天观察期内按验收矩阵台账每天及每次 deploy/incident 后检查：旧 Team path 首次迁移、login/device-login redirect 404、Artifact upload 404/403、Admin DTO rendering error、SQLite migration error 和已撤销 Device 重连。
-- 补齐 `device-login` redirect 与 production Admin DTO rendering 的独立观察记录；`/login`、Artifact、SQLite migration、production browser、P-1-05 revocation 与 P-1-08 storage migration 已有 production 证据。
+- 补齐 production Admin DTO rendering 的独立观察记录；必须使用受控全局管理员会话，不得猜测口令或临时提升生产用户角色。`/login`、`device-login`、Artifact、SQLite migration、production browser、P-1-05 revocation 与 P-1-08 storage migration 已有 production 证据。
 - 观察窗口结束后只有在台账完整、所有阈值通过、incident 全部关闭、最终 smoke 复验和 verification-only sign-off 完成时，才决定是否执行 Release B；日期到点本身不是退出证据。
 - 如果旧 Vercel web 仍是主要用户入口，需要单独决定用户访问入口是继续使用旧 Vercel、改 Vercel 指向 AgentBean Next，还是由 Railway server-next 托管 preview/正式界面。
