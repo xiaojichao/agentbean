@@ -1480,7 +1480,7 @@ Expected: post-deploy `main` CI、Deploy production、Publish agent to npm、pro
 - SQLite migration error；
 - 已撤销 Device 重新连接。
 
-任何 revocation 数据异常立即恢复 global DB backup 并回滚 deployment。
+任何 revocation 数据异常都先停止 Release B 和后续 production deploy，保留日志、deployment ID、当前 DB metadata 与 incident 时间线，并保持 `AGENTBEAN_DEPLOY_TARGET=next`。代码回滚只允许选择已知兼容 `global/0014_device_revocations_team_columns.sql` 的上一成功 AgentBean Next deployment，或 revert 到兼容该 schema 的 AgentBean Next commit 后重新部署。当前没有可验证的 Release A 前 global DB backup；不得把发布后观察快照当作 old binary rollback point，也不得恢复数据库或切回 old target。只有在停止写入、确认恢复点与目标 schema 兼容、完成恢复演练并获得 operator 明确批准后，才可执行数据恢复或解除 old-target rollback 冻结。完整事故恢复步骤以 `agentbean-next/docs/production-cutover-runbook.md` 的 Rollback 章节为准。
 
 观察窗口结束且所有退出条件满足后，先执行 Task 8；Task 8 完成并重新验证 rollback artifact 后，才进入以下 Release B cleanup。
 
