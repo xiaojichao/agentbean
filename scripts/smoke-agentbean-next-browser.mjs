@@ -1261,7 +1261,7 @@ export async function exerciseWebUiTeamsBusinessSmoke({
   });
   const restoredTeamPath = session.team.path ?? session.team.id;
   await page.navigate(new URL(`/${created.path}/settings`, root).toString());
-  await page.click('[data-smoke="settings-tab-server"]');
+  await openWebUiSettingsTab({ page, tab: 'server', timeoutMs });
   await page.waitForFunction(
     `
     (() => {
@@ -1663,7 +1663,7 @@ export async function exerciseWebUiRunsBusinessSmoke({
     await daemon.waitForDispatchResult(dispatchId);
 
     await page.navigate(new URL(`/${teamPath}/settings`, root).toString());
-    await page.click('[data-smoke="settings-tab-runs"]');
+    await openWebUiSettingsTab({ page, tab: 'runs', timeoutMs });
     await waitForWebUiWorkspaceRunCard({ page, command, timeoutMs });
     await page.setInputValue('[data-smoke="workspace-runs-filter-status"]', 'succeeded');
     await waitForWebUiWorkspaceRunCard({ page, command, timeoutMs });
@@ -2302,7 +2302,7 @@ export async function exerciseWebUiSettingsBusinessSmoke({
     timeoutMs,
   );
 
-  await page.click('[data-smoke="settings-tab-browser"]');
+  await openWebUiSettingsTab({ page, tab: 'browser', timeoutMs });
   await page.waitForFunction(
     `Boolean(document.querySelector('[data-smoke="settings-browser-panel"]'))`,
     'settings browser panel to render',
@@ -2333,7 +2333,7 @@ export async function exerciseWebUiSettingsBusinessSmoke({
   );
 
   await page.reload();
-  await page.click('[data-smoke="settings-tab-browser"]');
+  await openWebUiSettingsTab({ page, tab: 'browser', timeoutMs });
   await page.waitForFunction(
     `
     (() => {
@@ -2361,10 +2361,10 @@ export async function exerciseWebUiSettingsBusinessSmoke({
     timeoutMs,
   );
 
-  await page.click('[data-smoke="settings-tab-server"]');
+  await openWebUiSettingsTab({ page, tab: 'server', timeoutMs });
   await page.waitForFunction(
-    `Boolean(document.querySelector('[data-smoke="settings-team-name-input"]'))`,
-    'settings team name input to render',
+    `document.querySelector('[data-smoke="settings-team-name-input"]')?.dataset.teamId === ${JSON.stringify(session.team.id)}`,
+    `settings team name input to bind Team ${session.team.id}`,
     timeoutMs,
   );
 
@@ -2426,7 +2426,7 @@ export async function exerciseWebUiSettingsBusinessSmoke({
   );
 
   await page.reload();
-  await page.click('[data-smoke="settings-tab-server"]');
+  await openWebUiSettingsTab({ page, tab: 'server', timeoutMs });
   await page.waitForFunction(
     `
     (() => {
@@ -2440,6 +2440,16 @@ export async function exerciseWebUiSettingsBusinessSmoke({
     timeoutMs,
   );
   return { teamName, joinCode, username: session.user.username, browserPreferencesReset: true };
+}
+
+async function openWebUiSettingsTab({ page, tab, timeoutMs }) {
+  const selector = `[data-smoke="settings-tab-${tab}"]`;
+  await page.waitForFunction(
+    `Boolean(document.querySelector(${JSON.stringify(selector)}))`,
+    `settings ${tab} tab to become clickable`,
+    timeoutMs,
+  );
+  await page.click(selector);
 }
 
 async function waitForWebUiSettingsJoinLink({ page, timeoutMs }) {

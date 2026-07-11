@@ -422,8 +422,8 @@ function ServerPanel() {
   const currentTeam = teams.find((n) => n.id === currentTeamId);
   const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : '';
   const routeTeam = teams.find((team) => team.path === routeTeamPath || team.id === routeTeamPath);
-  const settingsTeam = routeTeam ?? currentTeam ?? null;
-  const settingsTeamId = settingsTeam?.id ?? currentTeamId;
+  const settingsTeam = routeTeam ?? (routeTeamPath === 'default' ? currentTeam : null);
+  const settingsTeamId = settingsTeam?.id ?? (routeTeamPath === 'default' ? currentTeamId : '');
 
   const displayedName = settingsTeam?.name ?? '当前团队';
   useEffect(() => {
@@ -485,7 +485,7 @@ function ServerPanel() {
   };
 
   const handleSaveName = async () => {
-    if (nameSaved || !teamName.trim()) return;
+    if (!settingsTeamId || nameSaved || !teamName.trim()) return;
     setNameSaving(true);
     setNameMsg(null);
     const res = await teamEvents().update({ teamId: settingsTeamId ?? undefined, name: teamName.trim() });
@@ -533,9 +533,9 @@ function ServerPanel() {
         <div className="space-y-3">
           <div>
             <label className="mb-1 block text-xs font-medium text-neutral-500">名称</label>
-          <input value={teamName} onChange={(e) => handleNameChange(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400" data-smoke="settings-team-name-input" />
+          <input value={teamName} onChange={(e) => handleNameChange(e.target.value)} className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400" data-smoke="settings-team-name-input" data-team-id={settingsTeamId} />
           </div>
-          <button onClick={handleSaveName} disabled={nameSaved || nameSaving} className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white hover:bg-neutral-800 disabled:opacity-40" data-smoke="settings-team-name-save">
+          <button onClick={handleSaveName} disabled={!settingsTeamId || nameSaved || nameSaving} className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white hover:bg-neutral-800 disabled:opacity-40" data-smoke="settings-team-name-save">
             {nameSaving ? '保存中...' : '保存资料'}
           </button>
           {nameMsg && <div className={`text-sm ${nameMsg.ok ? 'text-emerald-600' : 'text-red-600'}`} data-smoke="settings-team-name-message">{nameMsg.text}</div>}
@@ -579,7 +579,7 @@ function ServerPanel() {
             <label className="mb-1 block text-xs font-medium text-neutral-500">过期时间</label>
             <input type="datetime-local" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} className="rounded-md border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400" data-smoke="settings-join-expires-at" />
           </div>
-          <button onClick={createJoinLink} className="rounded-md border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-50" data-smoke="settings-join-create">
+          <button onClick={createJoinLink} disabled={!settingsTeamId} className="rounded-md border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50" data-smoke="settings-join-create">
             创建加入链接
           </button>
         </div>
@@ -630,7 +630,7 @@ function ServerPanel() {
             <div className="text-sm font-medium text-red-700">删除团队</div>
             <div className="text-xs text-red-400">永久删除此团队及所有关联数据，此操作不可撤销。</div>
           </div>
-          <button onClick={() => setShowDeleteConfirm(true)} disabled={settingsTeam?.id === 'default'} className="rounded-md border border-red-300 px-4 py-2 text-sm text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50" data-smoke="settings-team-delete-open">
+          <button onClick={() => setShowDeleteConfirm(true)} disabled={!settingsTeam || settingsTeam.id === 'default'} className="rounded-md border border-red-300 px-4 py-2 text-sm text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50" data-smoke="settings-team-delete-open">
             删除团队
           </button>
         </div>
