@@ -61,3 +61,39 @@ Triage uses the five canonical labels without aliases. See `docs/agents/triage-l
 ### Domain docs
 
 Domain documentation uses a multi-context layout. See `docs/agents/domain.md`.
+
+## Default development workflow
+
+Use direct solo execution by default. Matt Pocock's engineering skills are
+on-demand gates inside the delivery loop, not a mandatory pipeline and not a
+replacement for repository inspection, local verification, PR review, or
+post-merge production checks.
+
+1. **Establish current truth.** Inspect the repository, relevant GitHub issue or
+   PR, and the domain context selected through `docs/agents/domain.md`.
+2. **Choose the lightest intake path.** Execute a clear, bounded request
+   directly. Use `to-prd` only when the conversation needs to become a durable
+   product contract. Use `to-issues` only when an approved PRD or plan contains
+   independently grabbable vertical slices. Use `triage` for incoming or
+   underspecified GitHub issues; `ready-for-agent` means the issue is complete
+   enough for autonomous implementation.
+3. **Select an execution discipline only when it fits.** Use `diagnose` for hard
+   bugs or performance regressions. Use `tdd` when test-first development is
+   requested or materially reduces regression risk. Use `zoom-out` when the
+   current code area is unfamiliar, and `improve-codebase-architecture` only
+   for explicit architecture or refactoring work informed by domain docs and
+   ADRs.
+4. **Implement in an isolated worktree.** Keep the diff small and complete one
+   user-visible vertical slice at a time. Use native subagents only for bounded,
+   independent work that benefits from parallel execution.
+5. **Verify and close the loop.** Run targeted tests plus the matching build
+   required by the Local Verification Contract, create or update the Chinese
+   PR, resolve review findings, merge, and verify the corresponding `main`
+   CI/CD and production-facing truth when applicable.
+6. **Clean up conservatively.** Remove only worktrees and branches proven clean
+   and merged; preserve dirty, unmerged, or uncertain local state.
+
+Do not invoke `to-prd`, `to-issues`, `triage`, `diagnose`, `tdd`,
+`improve-codebase-architecture`, or other workflow skills merely because they
+are installed. Do not require Superpowers or OMX runtime modes for ordinary
+AgentBean development.
