@@ -120,6 +120,23 @@ test('rejects PI imports from root scripts', () => {
   });
 });
 
+test('allows the dedicated SEA scripts to inspect PI manifests but not import the SDK', () => {
+  withFixture((root) => {
+    scaffoldWrapper(root);
+    write(root, 'scripts/build-pi-management-sea.mjs', [
+      "const packageName = '@earendil-works/pi-coding-agent';",
+      "const manifestPath = 'node_modules/@earendil-works/pi-ai/package.json';",
+    ].join('\n'));
+    let result = runChecker(root);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    write(root, 'scripts/build-pi-management-sea.mjs', "import '@earendil-works/pi-coding-agent';\n");
+    result = runChecker(root);
+    assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /scripts\/build-pi-management-sea\.mjs:1:PI_BOUNDARY_VIOLATION/);
+  });
+});
+
 test('rejects PI dependencies from the root manifest', () => {
   withFixture((root) => {
     scaffoldWrapper(root);
