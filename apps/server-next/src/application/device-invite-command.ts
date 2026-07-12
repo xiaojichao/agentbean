@@ -1,5 +1,5 @@
 // 生成"添加设备"对话框使用的 daemon 连接命令。
-// 移植自旧 apps/server 的 buildInviteCommand（apps/server/src/index.ts:45），适配 server-next 编译运行环境：
+// Device invite 命令由 server-next 直接维护，并适配当前编译运行环境：
 // - 优先使用 AGENT_BEAN_INVITE_COMMAND_TEMPLATE 模板（支持 {code}/{serverUrl}/{profile} 占位符）
 // - 否则返回 production 默认命令 `npx @agentbean/daemon@latest ...`
 //   （去掉旧版基于 process.cwd() 的本地 tsx 分支：server-next 从 dist 运行，相对路径判断不可靠，

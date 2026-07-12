@@ -9,7 +9,6 @@ describe('AgentBean Next cutover audit', () => {
     const checks = collectAgentBeanNextCutoverAudit({
       runCommand: createFakeRunCommand({
         variables: [
-          { name: 'AGENTBEAN_DEPLOY_TARGET', value: 'next' },
           { name: 'AGENTBEAN_NEXT_DATA_DIR', value: '/data/agentbean-next' },
           { name: 'AGENTBEAN_NEXT_ENTRY_URL', value: 'https://agentbean.example.com' },
         ],
@@ -24,7 +23,7 @@ describe('AgentBean Next cutover audit', () => {
           '@agentbean/daemon@0.3.6': '0.3.6',
         },
         distTags: {
-          '@agentbean/daemon': { latest: '0.3.6' },
+          '@agentbean/daemon': { latest: '0.3.6', legacy: '0.1.35' },
         },
       }),
     });
@@ -36,7 +35,7 @@ describe('AgentBean Next cutover audit', () => {
     });
   });
 
-  test('reports missing final flip configuration and unpublished npm packages', () => {
+  test('reports missing production configuration and unpublished npm packages', () => {
     const checks = collectAgentBeanNextCutoverAudit({
       runCommand: createFakeRunCommand({
         variables: [],
@@ -53,50 +52,14 @@ describe('AgentBean Next cutover audit', () => {
     const summary = summarizeCutoverAudit(checks);
     expect(summary.ok).toBe(false);
     expect(checks.filter((check) => !check.ok).map((check) => check.id)).toEqual([
-      'github-variable-deploy-target-next',
       'github-variable-next-data-dir',
       'github-variable-next-entry-url',
       'github-secret-next-session-secret',
       'npm-contracts-next-version',
       'npm-canonical-daemon-next-version',
       'npm-canonical-daemon-latest-dist-tag',
+      'npm-canonical-daemon-legacy-dist-tag',
     ]);
-  });
-
-  test('can pass ready-to-flip mode when only final deploy target is pending', () => {
-    const checks = collectAgentBeanNextCutoverAudit({
-      runCommand: createFakeRunCommand({
-        variables: [
-          { name: 'AGENTBEAN_NEXT_DATA_DIR', value: '/data/agentbean-next' },
-          { name: 'AGENTBEAN_NEXT_ENTRY_URL', value: 'https://agentbean.example.com' },
-        ],
-        secrets: [
-          { name: 'RAILWAY_TOKEN' },
-          { name: 'NPM_TOKEN' },
-          { name: 'AGENTBEAN_NEXT_SESSION_SECRET' },
-        ],
-        npmVersions: {
-          '@agentbean/contracts@0.2.2': '0.2.2',
-          '@agentbean/daemon-next@0.3.6': '0.3.6',
-          '@agentbean/daemon@0.3.6': '0.3.6',
-        },
-        distTags: {
-          '@agentbean/daemon': { latest: '0.3.6' },
-        },
-      }),
-    });
-
-    expect(summarizeCutoverAudit(checks)).toMatchObject({
-      ok: false,
-      failed: 1,
-      pendingFinalFlip: false,
-    });
-    expect(summarizeCutoverAudit(checks, { allowPendingFinalFlip: true })).toMatchObject({
-      ok: true,
-      failed: 0,
-      pendingFinalFlip: true,
-      total: 12,
-    });
   });
 
   test('reports GitHub command failures instead of crashing', () => {
@@ -126,7 +89,6 @@ describe('AgentBean Next cutover audit', () => {
   test('can audit CI-provided production environment without GitHub CLI variable or secret listing', () => {
     const checks = collectAgentBeanNextCutoverAudit({
       env: {
-        AGENTBEAN_DEPLOY_TARGET: 'next',
         AGENTBEAN_NEXT_DATA_DIR: '/data/agentbean-next',
         AGENTBEAN_NEXT_AUDIT_ENTRY_URL: 'https://agentbean.example.com',
         AGENTBEAN_NEXT_ENTRY_URL: 'https://agentbean.example.com',
@@ -140,7 +102,7 @@ describe('AgentBean Next cutover audit', () => {
         }
         if (args[0] === 'view') {
           if (args[2] === 'dist-tags') {
-            return `${JSON.stringify({ latest: '0.3.6' })}\n`;
+            return `${JSON.stringify({ latest: '0.3.6', legacy: '0.1.35' })}\n`;
           }
           const versions: Record<string, string> = {
             '@agentbean/contracts@0.2.2': '0.2.2',
@@ -167,7 +129,6 @@ describe('AgentBean Next cutover audit', () => {
   test('does not treat workflow smoke URL override as repository entry URL evidence', () => {
     const checks = collectAgentBeanNextCutoverAudit({
       env: {
-        AGENTBEAN_DEPLOY_TARGET: 'next',
         AGENTBEAN_NEXT_DATA_DIR: '/data/agentbean-next',
         AGENTBEAN_NEXT_ENTRY_URL: 'https://override.example.com',
         RAILWAY_TOKEN: 'railway-token',
@@ -180,7 +141,7 @@ describe('AgentBean Next cutover audit', () => {
         }
         if (args[0] === 'view') {
           if (args[2] === 'dist-tags') {
-            return `${JSON.stringify({ latest: '0.3.6' })}\n`;
+            return `${JSON.stringify({ latest: '0.3.6', legacy: '0.1.35' })}\n`;
           }
           const versions: Record<string, string> = {
             '@agentbean/contracts@0.2.2': '0.2.2',

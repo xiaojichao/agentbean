@@ -89,33 +89,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add CHANGELOG.md apps/web-next/lib/releases.generated.ts
-          git commit -m "记录 ${CHANGELOG_DATE} 每日更新日志" -m "自动把当天提交摘要同步到 CHANGELOG.md，并刷新设置页使用的 releases.generated.ts，让线上更新日志可以按天展示最新产品变化。" -m "Constraint: 设置页更新日志由 CHANGELOG.md 生成产物驱动" -m "Confidence: high" -m "Scope-risk: narrow" -m "Tested: Daily changelog workflow generated source and web bundle" -m "Not-tested: Production deploy is handled by the dispatched CI/CD workflow"
+          git commit -m "记录 ${CHANGELOG_DATE} 每日更新日志" -m "自动把当天提交摘要同步到 CHANGELOG.md，并刷新设置页使用的 releases.generated.ts，让线上更新日志可以按天展示最新产品变化。" -m "Constraint: 设置页更新日志由 CHANGELOG.md 生成产物驱动" -m "Confidence: high" -m "Scope-risk: narrow" -m "Tested: Daily changelog workflow generated source and web bundle" -m "Not-tested: Production deploy is handled by the main-push CI/CD workflow"
           git push origin HEAD:main
-
-      - name: Dispatch CI/CD deploy
-        if: steps.changes.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          AGENTBEAN_DEPLOY_TARGET: ${{ vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
-          AGENTBEAN_NPM_PUBLISH_TARGET: ${{ vars.AGENTBEAN_NPM_PUBLISH_TARGET || vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
-        run: |
-          next_smoke=false
-          old_smoke=true
-          if [ "$AGENTBEAN_DEPLOY_TARGET" = "next" ]; then
-            next_smoke=true
-            old_smoke=false
-          fi
-
-          gh workflow run ci-cd.yml \
-            --ref main \
-            -f agentbean_deploy_target="$AGENTBEAN_DEPLOY_TARGET" \
-            -f agentbean_npm_publish_target="$AGENTBEAN_NPM_PUBLISH_TARGET" \
-            -f run_production_deploy=true \
-            -f run_railway_preflight=false \
-            -f sync_railway_next_runtime_env=false \
-            -f run_agentbean_next_production_smoke="$next_smoke" \
-            -f agentbean_next_entry_url='' \
-            -f run_agentbean_old_production_smoke="$old_smoke" \
-            -f agentbean_old_entry_url='' \
-            -f promote_agentbean_daemon_latest=false \
-            -f skip_npm_publish=true

@@ -176,8 +176,8 @@ async function startSqliteServer(startServer, dataDir) {
 }
 
 function loadSocketIoClient() {
-  const requireFromServer = createRequire(new URL('../apps/server/package.json', import.meta.url));
-  const { io } = requireFromServer('socket.io-client');
+  const requireFromRoot = createRequire(new URL('../package.json', import.meta.url));
+  const { io } = requireFromRoot('socket.io-client');
   return io;
 }
 

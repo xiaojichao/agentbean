@@ -9,7 +9,7 @@ AgentBean 是一个面向人类与 Agent 协作的本地优先团队平台。它
 - **AgentOS 托管型 Agent**：由 OpenClaw、Hermes 等 AgentOS / Gateway 托管，可以作为团队成员响应频道或私聊消息。
 - **自定义 Agent**：用户创建的专属 Agent，连接某台设备上的项目目录和本地工具，把个人工作流转化为团队可协作的能力。
 
-> **当前默认入口是 AgentBean Next**（`apps/*-next` + `packages/*`）。截至 2026-06-17 核对，生产 `https://api.agentbean.dev/` 已切换到 `server-next`，`AGENTBEAN_DEPLOY_TARGET=next` 已生效，npm canonical `@agentbean/daemon` 的 `@latest` dist-tag 已推进到基于 `daemon-next` 的 `0.2.0`。Release A 仍保留旧源码的验证、old-target deploy 与 legacy daemon 发布/标签能力；只有完成 Release B 的源码退役后，回退才只依赖 Git、Railway 与 npm 已发布 artifact。
+> **当前唯一产品入口是 AgentBean Next**（`apps/*-next` + `packages/*`）。生产 `https://api.agentbean.dev/` 由 `server-next` 提供服务；canonical `@agentbean/daemon@latest` 指向基于 `daemon-next` 的 `0.3.6`。本 Release B 候选变更将从 `main` 退役旧源码；合并前状态只记 `Green local`，合并后还必须用 main CI、production deploy 与 smoke 证明真实发布。
 
 ## 仓库结构
 
@@ -22,9 +22,6 @@ AgentBean/
     server-next/  生产默认协作中枢（Express + Socket.IO + SQLite）
     web-next/     生产 App Router Web，由 server-next 托管
     daemon-next/  设备守护进程（npm @agentbean/daemon-next，canonical @agentbean/daemon）
-    server/       [Legacy] 旧协作中枢，Release A 回退目标
-    web/          [Legacy] 旧 Next.js 前端，Release A 仍验证
-    daemon/       [Legacy] 旧守护进程，保留 legacy dist-tag
   scripts/        readiness / cutover / smoke 检查与发布脚本
   agentbean-next/ 重写设计文档、slice 状态与验证矩阵
 ```
@@ -212,14 +209,11 @@ npm run build:packages
 ## 常用验证
 
 ```bash
-# readiness 契约检查（35/35）
+# readiness 契约检查
 npm run check:agentbean-next-readiness
 
-# strict 生产切换审计（通过时 ok=true；未完成 final flip 会失败）
+# strict 生产发布审计（通过时 ok=true）
 npm run audit:agentbean-next-cutover -- --json
-
-# final flip 前预检（允许 pendingFinalFlip）
-npm run audit:agentbean-next-ready-to-flip -- --json
 
 # phase 测试（contracts / domain / server-next / daemon-next / web-next）
 npm run test:phase1
@@ -239,13 +233,13 @@ AGENTBEAN_NEXT_ENTRY_URL=http://127.0.0.1:4100 npm run smoke:agentbean-next-busi
 
 ## 生产状态与发布
 
-以下状态是截至 2026-06-17 的核对结果；执行生产操作前请重新运行 cutover audit、smoke 与 npm registry 查询。
+以下状态是截至 2026-07-12 的核对结果；执行生产操作前请重新运行 cutover audit、smoke 与 npm registry 查询。
 
-- 生产部署目标：`AGENTBEAN_DEPLOY_TARGET=next`（已生效）。生产入口 `https://api.agentbean.dev/` 由 `server-next` 提供服务。
-- 生产切换门禁持续通过：strict cutover audit `11/11`、readiness `35/35`、public entry smoke `4/4`、business smoke `8/8`。
-- npm 发布：当 `AGENTBEAN_NPM_PUBLISH_TARGET=next`（未单独设置时 CI 回退到 `AGENTBEAN_DEPLOY_TARGET`）时，CI 依次发布 `@agentbean/contracts`、`@agentbean/daemon-next`，再发布 canonical `@agentbean/daemon`（基于 daemon-next）。
-  - 已发布版本：`@agentbean/contracts@0.2.0`、`@agentbean/daemon-next@0.2.0`、canonical `@agentbean/daemon@0.2.0`（指向 daemon-next，`main` 为 `./dist/apps/daemon-next/src/index.js`）。
-  - npm 入口边界已收敛：canonical `@agentbean/daemon` 的 `@latest` dist-tag 已推进到 `0.2.0`，默认 `npm install @agentbean/daemon` 现在安装 daemon-next；旧守护进程 `0.1.35` 保留在 `legacy` dist-tag 作为 rollback 入口。cutover audit 的 `npm-canonical-daemon-latest-dist-tag` check 会持续验证该状态，防止回退。
+- 生产入口 `https://api.agentbean.dev/` 由 `server-next` 提供服务，CI 固定从仓库根目录部署，不再提供 old-target 分支。
+- Release B 前置门禁已通过：strict cutover audit `12/12`、public entry smoke `4/4`、business smoke `8/8`。
+- CI 依次发布 `@agentbean/contracts`、`@agentbean/daemon-next`，再发布基于 daemon-next 的 canonical `@agentbean/daemon`。
+  - 已发布版本：`@agentbean/contracts@0.2.2`、`@agentbean/daemon-next@0.3.6`、canonical `@agentbean/daemon@0.3.6`。
+  - canonical `@agentbean/daemon@latest` 指向 `0.3.6`；旧守护进程 `0.1.35` 只作为 registry 中的 `legacy` 历史归档，因协议不兼容不能连接 server-next，主线不会重新构建或发布它。
   - 如果本机 npm registry 使用 `npmmirror`，可能会暂时只看到旧版本；以 `https://registry.npmjs.org` 为准：
     ```bash
     npm view @agentbean/daemon versions --registry=https://registry.npmjs.org
@@ -258,28 +252,20 @@ AGENTBEAN_NEXT_ENTRY_URL=http://127.0.0.1:4100 npm run smoke:agentbean-next-busi
 
 GitHub Actions 会在 PR 和 push 到 `main` 时验证：
 
-- AgentBean Next：`packages/*` 与 `apps/*-next` 的 readiness、phase tests、build 与 preview / business / browser smoke gate。
-- 旧栈：`apps/web`、`apps/server`、`apps/daemon` 的 test / build；Release A 仍把它们作为兼容与回退门禁。
+- `packages/*` 与 `apps/*-next` 的 readiness、phase tests、build 与 preview / business / browser smoke gate。
 
 合并到 `main` 且验证通过后：
 
-- 根据 `AGENTBEAN_NPM_PUBLISH_TARGET` 发布 npm 包（next 目标会发布 contracts / daemon-next / canonical daemon）。
-- 根据 `AGENTBEAN_DEPLOY_TARGET` 部署 `server-next`（next）或旧 server（old）到 Railway。
-- 当 `AGENTBEAN_DEPLOY_TARGET=next` 时，部署后自动运行 AgentBean Next production smoke。
+- 发布 contracts / daemon-next / canonical daemon，并验证 npm `legacy` 历史归档仍可解析。
+- 固定从仓库根目录向 Railway 部署 `server-next`。
+- 部署后自动运行 AgentBean Next production smoke。
 
 生产切换、rollback 与外部条件检查的完整步骤见 `agentbean-next/docs/production-cutover-runbook.md`。
 
 ## Legacy / Rollback（旧 AgentBean）
 
-旧的 `apps/web`、`apps/server`、`apps/daemon` 已不是默认开发或生产入口，但 Release A 仍验证旧栈、支持 `AGENTBEAN_DEPLOY_TARGET=old`，并维护旧 daemon 的 `legacy` dist-tag。Release B 完成源码退役后，才停止从当前主线 build、deploy 或 publish 这些目录。
+本 Release B 候选分支已删除旧的 `apps/web`、`apps/server`、`apps/daemon`。合并后主线将不再 build、test、deploy 或 publish 旧实现。
 
 - 旧 web 页面已不在生产提供流量；生产 Web 入口是 `server-next` 托管的 `web-next` App Router。
-- npm 包名 `@agentbean/daemon` 已发布基于 daemon-next 的 `0.2.0`（canonical 入口，保留旧 `daemon` / `agentbean-daemon` bin），且 npm `@latest` dist-tag 已指向 `0.2.0`；旧守护进程 `0.1.35` 保留在 registry 的 `legacy` dist-tag 作为 rollback 入口。
-- 仅在 rollback 演练或事故恢复时使用旧目标，并配合 rollback smoke：
-
-```bash
-# 旧入口 rollback smoke（验证旧服务 health payload 可恢复）
-AGENTBEAN_OLD_ENTRY_URL=https://<old-entry> npm run smoke:agentbean-old-entry
-```
-
-- 旧的 per-app 开发命令仅作 Release A 回退验证；默认开发使用上文 AgentBean Next 命令。Release B 后不得从 `main` 重新构建已退役源码。
+- npm `@agentbean/daemon@latest` 指向 daemon-next `0.3.6`；旧守护进程 `0.1.35` 保留在 registry 的 `legacy` dist-tag 仅作历史归档，Device rollback 必须选择经 server-next smoke 验证的 canonical daemon-next 已发布版本。
+- 服务端应用回滚选择与当前 SQLite schema 兼容的上一成功 Railway deployment，或从 Git 历史 revert 后重新部署 AgentBean Next；不得从 `main` 重建已退役源码。

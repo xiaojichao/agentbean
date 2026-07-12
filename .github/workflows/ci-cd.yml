@@ -9,22 +9,6 @@ on:
       - main
   workflow_dispatch:
     inputs:
-      agentbean_deploy_target:
-        description: Deploy target for Railway production deploy.
-        required: true
-        default: old
-        type: choice
-        options:
-          - old
-          - next
-      agentbean_npm_publish_target:
-        description: npm publish target for AgentBean packages.
-        required: true
-        default: old
-        type: choice
-        options:
-          - old
-          - next
       run_production_deploy:
         description: Run Railway production deploy during this manual dispatch.
         required: true
@@ -50,16 +34,6 @@ on:
         required: false
         default: ''
         type: string
-      run_agentbean_old_production_smoke:
-        description: Run old AgentBean entry smoke after rollback or old-target deploy.
-        required: true
-        default: false
-        type: boolean
-      agentbean_old_entry_url:
-        description: Old AgentBean deployed URL for rollback smoke. Falls back to agentbean_next_entry_url or repository variable AGENTBEAN_NEXT_ENTRY_URL.
-        required: false
-        default: ''
-        type: string
       promote_agentbean_daemon_latest:
         description: Promote canonical @agentbean/daemon npm latest dist-tag to the daemon-next version. Outward-facing; run only when ready to make daemon-next the default npm install.
         required: true
@@ -79,84 +53,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
-    name: Validate ${{ matrix.name }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: web
-            app_dir: apps/web
-            lockfile: apps/web/package-lock.json
-          - name: server
-            app_dir: apps/server
-            lockfile: apps/server/package-lock.json
-          - name: daemon
-            app_dir: apps/daemon
-            lockfile: apps/daemon/package-lock.json
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Detect app changes
-        id: changes
-        working-directory: .
-        run: |
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "should_validate=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          git fetch origin "${{ github.base_ref }}" --depth=1
-          changed_files="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
-          if [ "${{ matrix.app_dir }}" = "apps/web" ]; then
-            app_changed_files="$(printf '%s\n' "$changed_files" | grep -E '^apps/web/' | grep -Ev '^apps/web/vercel\.json$' || true)"
-          else
-            app_changed_files="$(printf '%s\n' "$changed_files" | grep -E "^${{ matrix.app_dir }}/" || true)"
-          fi
-
-          if [ -n "$app_changed_files" ]; then
-            echo "should_validate=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "No changes under ${{ matrix.app_dir }}; skipping validation for this app."
-            echo "should_validate=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Set up Node.js
-        if: steps.changes.outputs.should_validate == 'true'
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24.15.0
-          cache: npm
-          cache-dependency-path: ${{ matrix.lockfile }}
-
-      - name: Ensure localhost resolves
-        if: steps.changes.outputs.should_validate == 'true'
-        run: |
-          grep -qE '(^|[[:space:]])localhost([[:space:]]|$)' /etc/hosts || \
-            echo '127.0.0.1 localhost' | sudo tee -a /etc/hosts
-
-      - name: Install dependencies
-        if: steps.changes.outputs.should_validate == 'true'
-        working-directory: ${{ matrix.app_dir }}
-        run: npm --workspaces=false ci
-
-      - name: Run tests
-        if: steps.changes.outputs.should_validate == 'true'
-        working-directory: ${{ matrix.app_dir }}
-        run: npm --workspaces=false test -- --api.host 127.0.0.1
-
-      - name: Build
-        if: steps.changes.outputs.should_validate == 'true'
-        working-directory: ${{ matrix.app_dir }}
-        run: npm --workspaces=false run build
-
   validate-agentbean-next:
     name: Validate AgentBean Next
     runs-on: ubuntu-latest
@@ -178,7 +74,7 @@ jobs:
 
           git fetch origin "${{ github.base_ref }}" --depth=1
           changed_files="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
-          next_changed_files="$(printf '%s\n' "$changed_files" | grep -E '^agentbean-next/|^packages/|^apps/(server-next|daemon-next|web-next)/|^scripts/(check-agentbean-next-readiness|check-agentbean-next-railway-preflight|check-team-terminology(\.test)?|audit-agentbean-next-cutover|prepare-agentbean-next-daemon-release|smoke-agentbean-next-.*)\.mjs$|^docs/superpowers/specs/|^README\.md$|^package\.json$|^railway\.json$|^\.github/workflows/ci-cd\.yml$' || true)"
+          next_changed_files="$(printf '%s\n' "$changed_files" | grep -E '^agentbean-next/|^packages/|^apps/(server-next|daemon-next|web-next)/|^scripts/(check-agentbean-next-readiness|check-agentbean-next-railway-preflight|check-team-terminology(\.test)?|audit-agentbean-next-cutover|prepare-agentbean-next-daemon-release|smoke-agentbean-next-.*)\.mjs$|^docs/superpowers/specs/|^README\.md$|^package\.json$|^railway\.json$|^\.github/workflows/(ci-cd|daily-changelog)\.yml$' || true)"
 
           if [ -n "$next_changed_files" ]; then
             echo "should_validate=true" >> "$GITHUB_OUTPUT"
@@ -193,9 +89,7 @@ jobs:
         with:
           node-version: 24.15.0
           cache: npm
-          cache-dependency-path: |
-            apps/server/package-lock.json
-            package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Ensure localhost resolves
         if: steps.changes.outputs.should_validate == 'true'
@@ -203,9 +97,9 @@ jobs:
           grep -qE '(^|[[:space:]])localhost([[:space:]]|$)' /etc/hosts || \
             echo '127.0.0.1 localhost' | sudo tee -a /etc/hosts
 
-      - name: Verify AgentBean Next root install plan
+      - name: Install AgentBean Next workspace dependencies
         if: steps.changes.outputs.should_validate == 'true'
-        run: npm ci --ignore-scripts
+        run: npm ci
 
       - name: Run AgentBean Next readiness checks
         if: steps.changes.outputs.should_validate == 'true'
@@ -216,11 +110,6 @@ jobs:
         run: |
           npm run test:team-terminology
           npm run check:team-terminology
-
-      - name: Install shared validation dependencies
-        if: steps.changes.outputs.should_validate == 'true'
-        working-directory: apps/server
-        run: npm --workspaces=false ci
 
       - name: Run AgentBean Next phase tests
         if: steps.changes.outputs.should_validate == 'true'
@@ -233,7 +122,7 @@ jobs:
       - name: Verify changelog generated file is fresh
         if: steps.changes.outputs.should_validate == 'true'
         run: |
-          apps/server/node_modules/.bin/tsx apps/web-next/scripts/gen-changelog.ts
+          node_modules/.bin/tsx apps/web-next/scripts/gen-changelog.ts
           git diff --exit-code apps/web-next/lib/releases.generated.ts
 
       - name: Run AgentBean Next daemon install smoke
@@ -243,7 +132,7 @@ jobs:
       - name: Run AgentBean Next preview smoke
         if: steps.changes.outputs.should_validate == 'true'
         run: |
-          node apps/server/node_modules/vitest/vitest.mjs run \
+          node node_modules/vitest/vitest.mjs run \
             apps/server-next/tests/e2e-first-slice.test.ts \
             --environment node \
             --api.host 127.0.0.1 \
@@ -268,19 +157,30 @@ jobs:
     name: Deploy production
     runs-on: ubuntu-latest
     needs:
-      - validate
       - validate-agentbean-next
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run_production_deploy)
+      - publish
+    if: always() && needs.validate-agentbean-next.result == 'success' && (needs.publish.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.skip_npm_publish && needs.publish.result == 'skipped')) && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run_production_deploy))
     timeout-minutes: 30
 
     env:
-      AGENTBEAN_DEPLOY_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.agentbean_deploy_target || vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_PROJECT_ID: c6b70675-f7d5-47a1-a8e7-05b37d13e476
       RAILWAY_SERVICE_ID: 7b1dce9b-b7e7-4cfb-bb3f-ef86d10e8647
       RAILWAY_ENVIRONMENT: e9c1a221-28b1-49c0-b279-be249a428737
 
     steps:
+      - name: Reject production deploy when npm publish is skipped
+        if: github.event_name == 'workflow_dispatch' && inputs.run_production_deploy && inputs.skip_npm_publish
+        run: |
+          echo "::error::Manual production deploy cannot use skip_npm_publish=true; publish must complete before deploy."
+          exit 1
+
+      - name: Require RAILWAY_TOKEN for production deploy
+        if: env.RAILWAY_TOKEN == ''
+        run: |
+          echo "::error::RAILWAY_TOKEN is required for production deploy; deploy cannot be skipped silently."
+          exit 1
+
       - name: Check out repository
         uses: actions/checkout@v6
 
@@ -291,28 +191,16 @@ jobs:
           node-version: 24.15.0
 
       - name: Run AgentBean Next production readiness checks
-        if: env.RAILWAY_TOKEN != '' && env.AGENTBEAN_DEPLOY_TARGET == 'next'
+        if: env.RAILWAY_TOKEN != ''
         env:
           AGENTBEAN_NEXT_SESSION_SECRET: ${{ secrets.AGENTBEAN_NEXT_SESSION_SECRET }}
           AGENTBEAN_NEXT_DATA_DIR: ${{ vars.AGENTBEAN_NEXT_DATA_DIR }}
         run: npm run check:agentbean-next-readiness -- --production
 
-      - name: Require repository deploy target for manual AgentBean Next deploy
-        if: github.event_name == 'workflow_dispatch' && inputs.run_production_deploy && env.AGENTBEAN_DEPLOY_TARGET == 'next' && vars.AGENTBEAN_DEPLOY_TARGET != 'next'
-        run: |
-          echo "::error::Manual AgentBean Next production deploy requires repository variable AGENTBEAN_DEPLOY_TARGET=next. The workflow input alone is not the final production flip."
-          exit 1
-
       - name: Require production smoke for manual AgentBean Next deploy
-        if: github.event_name == 'workflow_dispatch' && inputs.run_production_deploy && env.AGENTBEAN_DEPLOY_TARGET == 'next' && !inputs.run_agentbean_next_production_smoke
+        if: github.event_name == 'workflow_dispatch' && inputs.run_production_deploy && !inputs.run_agentbean_next_production_smoke
         run: |
           echo "::error::Manual AgentBean Next production deploy requires run_agentbean_next_production_smoke=true."
-          exit 1
-
-      - name: Require old production smoke for manual AgentBean rollback deploy
-        if: github.event_name == 'workflow_dispatch' && inputs.run_production_deploy && env.AGENTBEAN_DEPLOY_TARGET == 'old' && !inputs.run_agentbean_old_production_smoke
-        run: |
-          echo "::error::Manual old AgentBean production deploy requires run_agentbean_old_production_smoke=true."
           exit 1
 
       - name: Install Railway CLI
@@ -322,22 +210,9 @@ jobs:
       - name: Deploy Railway backend
         if: env.RAILWAY_TOKEN != ''
         run: |
-          case "${AGENTBEAN_DEPLOY_TARGET}" in
-            old)
-              deploy_path="apps/server"
-              ;;
-            next)
-              deploy_path="."
-              ;;
-            *)
-              echo "::error::AGENTBEAN_DEPLOY_TARGET must be old or next, got '${AGENTBEAN_DEPLOY_TARGET}'"
-              exit 1
-              ;;
-          esac
-
           for attempt in 1 2 3; do
             echo "Railway deploy attempt ${attempt}/3"
-            if timeout 8m railway up "$deploy_path" \
+            if timeout 8m railway up . \
               --ci \
               --path-as-root \
               --project "$RAILWAY_PROJECT_ID" \
@@ -352,10 +227,6 @@ jobs:
             sleep $((attempt * 15))
           done
 
-      - name: Skip Railway deploy
-        if: env.RAILWAY_TOKEN == ''
-        run: echo "::notice::RAILWAY_TOKEN is not configured; skipping Railway deploy."
-
   railway-next-preflight:
     name: Railway Next preflight
     runs-on: ubuntu-latest
@@ -369,7 +240,6 @@ jobs:
       RAILWAY_PROJECT_ID: c6b70675-f7d5-47a1-a8e7-05b37d13e476
       RAILWAY_SERVICE_ID: 7b1dce9b-b7e7-4cfb-bb3f-ef86d10e8647
       RAILWAY_ENVIRONMENT: e9c1a221-28b1-49c0-b279-be249a428737
-      AGENTBEAN_DEPLOY_TARGET: next
       AGENTBEAN_NEXT_SESSION_SECRET: ${{ secrets.AGENTBEAN_NEXT_SESSION_SECRET }}
       AGENTBEAN_NEXT_DATA_DIR: ${{ vars.AGENTBEAN_NEXT_DATA_DIR }}
 
@@ -404,7 +274,6 @@ jobs:
       RAILWAY_PROJECT_ID: c6b70675-f7d5-47a1-a8e7-05b37d13e476
       RAILWAY_SERVICE_ID: 7b1dce9b-b7e7-4cfb-bb3f-ef86d10e8647
       RAILWAY_ENVIRONMENT: e9c1a221-28b1-49c0-b279-be249a428737
-      AGENTBEAN_DEPLOY_TARGET: next
       AGENTBEAN_NEXT_SESSION_SECRET: ${{ secrets.AGENTBEAN_NEXT_SESSION_SECRET }}
       AGENTBEAN_NEXT_DATA_DIR: ${{ vars.AGENTBEAN_NEXT_DATA_DIR }}
 
@@ -446,11 +315,10 @@ jobs:
       - validate-agentbean-next
       - deploy
       - publish
-    if: always() && needs.validate-agentbean-next.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') && (needs.publish.result == 'success' || needs.publish.result == 'skipped') && ((github.event_name == 'workflow_dispatch' && inputs.run_agentbean_next_production_smoke) || (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AGENTBEAN_DEPLOY_TARGET == 'next'))
+    if: always() && needs.validate-agentbean-next.result == 'success' && ((github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.publish.result == 'success' && needs.deploy.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.run_agentbean_next_production_smoke && (needs.publish.result == 'success' || needs.publish.result == 'skipped') && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped')))
     timeout-minutes: 15
 
     env:
-      AGENTBEAN_DEPLOY_TARGET: ${{ vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
       AGENTBEAN_NEXT_DATA_DIR: ${{ vars.AGENTBEAN_NEXT_DATA_DIR }}
       AGENTBEAN_NEXT_AUDIT_ENTRY_URL: ${{ vars.AGENTBEAN_NEXT_ENTRY_URL }}
       AGENTBEAN_NEXT_ENTRY_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}
@@ -468,16 +336,10 @@ jobs:
         with:
           node-version: 24.15.0
           cache: npm
-          cache-dependency-path: |
-            apps/server/package-lock.json
-            package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install root smoke dependencies
         run: npm ci --ignore-scripts
-
-      - name: Install Socket.IO smoke client dependency
-        working-directory: apps/server
-        run: npm --workspaces=false ci
 
       - name: Verify production smoke target URL
         run: |
@@ -486,12 +348,7 @@ jobs:
             exit 1
           fi
 
-      - name: Run AgentBean Next ready-to-flip audit
-        if: vars.AGENTBEAN_DEPLOY_TARGET != 'next'
-        run: npm run audit:agentbean-next-ready-to-flip
-
       - name: Run AgentBean Next strict cutover audit
-        if: vars.AGENTBEAN_DEPLOY_TARGET == 'next'
         run: npm run audit:agentbean-next-cutover
 
       - name: Wait for production server healthcheck
@@ -514,52 +371,24 @@ jobs:
       - name: Run AgentBean Next business smoke
         run: npm run smoke:agentbean-next-business
 
-  agentbean-old-production-smoke:
-    name: Old AgentBean production smoke
-    runs-on: ubuntu-latest
-    needs:
-      - validate-agentbean-next
-      - deploy
-    if: always() && needs.validate-agentbean-next.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') && github.event_name == 'workflow_dispatch' && inputs.run_agentbean_old_production_smoke
-    timeout-minutes: 10
-
-    env:
-      AGENTBEAN_OLD_ENTRY_URL: ${{ inputs.agentbean_old_entry_url || inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24.15.0
-
-      - name: Verify old production smoke target URL
-        run: |
-          if [ -z "$AGENTBEAN_OLD_ENTRY_URL" ]; then
-            echo "::error::AGENTBEAN_OLD_ENTRY_URL is required. Set workflow input agentbean_old_entry_url, agentbean_next_entry_url, or repository variable AGENTBEAN_NEXT_ENTRY_URL."
-            exit 1
-          fi
-
-      - name: Run old AgentBean public entry smoke
-        run: npm run smoke:agentbean-old-entry
-
   publish:
     name: Publish agent to npm
     runs-on: ubuntu-latest
     needs:
-      - validate
       - validate-agentbean-next
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.skip_npm_publish && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env && !inputs.promote_agentbean_daemon_latest)
     timeout-minutes: 15
 
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-      AGENTBEAN_DEPLOY_TARGET: ${{ vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
-      AGENTBEAN_NPM_PUBLISH_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.agentbean_npm_publish_target || vars.AGENTBEAN_NPM_PUBLISH_TARGET || vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
 
     steps:
+      - name: Require NPM_TOKEN for npm publish
+        if: env.NPM_TOKEN == ''
+        run: |
+          echo "::error::NPM_TOKEN is required for npm publish; publish cannot be skipped silently."
+          exit 1
+
       - name: Check out repository
         if: env.NPM_TOKEN != ''
         uses: actions/checkout@v6
@@ -571,75 +400,26 @@ jobs:
           node-version: 24.15.0
           registry-url: https://registry.npmjs.org
           cache: npm
-          cache-dependency-path: |
-            apps/daemon/package-lock.json
-            package-lock.json
+          cache-dependency-path: package-lock.json
 
-      - name: Install, build, and publish
-        id: agent-package
+      - name: Verify legacy daemon historical archive dist-tag
         if: env.NPM_TOKEN != ''
-        working-directory: apps/daemon
         run: |
-          npm --workspaces=false ci
-          npm --workspaces=false run build
-          PKG_VERSION="$(node -p "require('./package.json').version")"
-          echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
-          if npm view "@agentbean/daemon@$PKG_VERSION" version >/dev/null 2>&1; then
-            echo "::notice::@agentbean/daemon@$PKG_VERSION is already published; skipping npm publish."
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_publish=true" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish npm package
-        if: env.NPM_TOKEN != '' && steps.agent-package.outputs.should_publish == 'true'
-        working-directory: apps/daemon
-        run: |
-          if [ "$AGENTBEAN_NPM_PUBLISH_TARGET" = "next" ]; then
-            echo "::notice::Publishing legacy daemon under 'legacy' dist-tag so it cannot reclaim npm 'latest' in the next-target world."
-            npm publish --access public --tag legacy
-          else
-            npm publish --access public
-          fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Ensure legacy daemon rollback dist-tag
-        if: env.NPM_TOKEN != '' && env.AGENTBEAN_NPM_PUBLISH_TARGET == 'next'
-        run: |
-          LEGACY_VERSION="${{ steps.agent-package.outputs.pkg_version }}"
-          if [ -z "$LEGACY_VERSION" ]; then
-            echo "::error::Could not resolve legacy daemon package version."
+          LEGACY_TAG="$(npm view "@agentbean/daemon" dist-tags --json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).legacy || ''")"
+          if [ "$LEGACY_TAG" != "0.1.35" ]; then
+            echo "::error::npm @agentbean/daemon legacy must remain pinned to the historical archive 0.1.35, observed '$LEGACY_TAG'."
             exit 1
           fi
-          if ! npm view "@agentbean/daemon@$LEGACY_VERSION" version >/dev/null 2>&1; then
-            echo "::error::@agentbean/daemon@$LEGACY_VERSION is not published; cannot create rollback legacy dist-tag."
-            exit 1
-          fi
-          npm dist-tag add "@agentbean/daemon@$LEGACY_VERSION" legacy
-          LEGACY_TAG=""
-          for attempt in $(seq 1 12); do
-            LEGACY_TAG="$(npm view "@agentbean/daemon" dist-tags --json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).legacy || ''")"
-            if [ "$LEGACY_TAG" = "$LEGACY_VERSION" ]; then
-              break
-            fi
-            echo "::notice::Waiting for npm legacy dist-tag propagation (${attempt}/12); observed '$LEGACY_TAG'."
-            sleep 5
-          done
-          if [ "$LEGACY_TAG" != "$LEGACY_VERSION" ]; then
-            echo "::error::npm legacy ($LEGACY_TAG) does not match legacy daemon ($LEGACY_VERSION)."
-            exit 1
-          fi
+          npm view "@agentbean/daemon@$LEGACY_TAG" version >/dev/null
+          echo "npm @agentbean/daemon dist-tags.legacy=$LEGACY_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Install and build AgentBean Next npm packages
         id: agentbean-next-packages
-        if: env.NPM_TOKEN != '' && env.AGENTBEAN_NPM_PUBLISH_TARGET == 'next'
+        if: env.NPM_TOKEN != ''
         run: |
-          npm ci --ignore-scripts
+          npm ci
           npm run build:contracts
           npm run build:daemon-next
           node scripts/prepare-agentbean-next-daemon-release.mjs --out .agentbean-next-release/daemon
@@ -672,29 +452,25 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish AgentBean Next contracts package
-        if: env.NPM_TOKEN != '' && env.AGENTBEAN_NPM_PUBLISH_TARGET == 'next' && steps.agentbean-next-packages.outputs.should_publish_contracts == 'true'
+        if: env.NPM_TOKEN != '' && steps.agentbean-next-packages.outputs.should_publish_contracts == 'true'
         working-directory: packages/contracts
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish AgentBean Next daemon package
-        if: env.NPM_TOKEN != '' && env.AGENTBEAN_NPM_PUBLISH_TARGET == 'next' && steps.agentbean-next-packages.outputs.should_publish_daemon_next == 'true'
+        if: env.NPM_TOKEN != '' && steps.agentbean-next-packages.outputs.should_publish_daemon_next == 'true'
         working-directory: apps/daemon-next
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish AgentBean Next canonical daemon package
-        if: env.NPM_TOKEN != '' && env.AGENTBEAN_NPM_PUBLISH_TARGET == 'next' && steps.agentbean-next-packages.outputs.should_publish_canonical_daemon == 'true'
+        if: env.NPM_TOKEN != '' && steps.agentbean-next-packages.outputs.should_publish_canonical_daemon == 'true'
         working-directory: .agentbean-next-release/daemon
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Skip npm publish
-        if: env.NPM_TOKEN == ''
-        run: echo "::notice::NPM_TOKEN is not configured; skipping npm publish."
 
   promote-agentbean-daemon-latest:
     name: Promote canonical daemon npm latest
@@ -706,7 +482,6 @@ jobs:
 
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-      AGENTBEAN_NPM_PUBLISH_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.agentbean_npm_publish_target || vars.AGENTBEAN_NPM_PUBLISH_TARGET || vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}
 
     steps:
       - name: Require NPM_TOKEN for latest promotion
@@ -726,14 +501,10 @@ jobs:
           node-version: 24.15.0
           registry-url: https://registry.npmjs.org
 
-      - name: Resolve canonical daemon-next version and guard target
+      - name: Resolve canonical daemon-next version
         if: env.NPM_TOKEN != ''
         id: versions
         run: |
-          if [ "$AGENTBEAN_NPM_PUBLISH_TARGET" != "next" ]; then
-            echo "::error::Cannot promote daemon-next to npm latest when AGENTBEAN_NPM_PUBLISH_TARGET is not 'next' (resolved: $AGENTBEAN_NPM_PUBLISH_TARGET). Flip the deploy/publish target to next first."
-            exit 1
-          fi
           DAEMON_NEXT_VERSION="$(node -p "require('./apps/daemon-next/package.json').version")"
           echo "daemon_next_version=$DAEMON_NEXT_VERSION" >> "$GITHUB_OUTPUT"
           if ! npm view "@agentbean/daemon@$DAEMON_NEXT_VERSION" version >/dev/null 2>&1; then
@@ -743,29 +514,16 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Ensure legacy daemon rollback tag before latest promotion
+      - name: Verify legacy daemon historical archive before latest promotion
         if: env.NPM_TOKEN != ''
         run: |
-          LEGACY_DAEMON_VERSION="$(node -p "require('./apps/daemon/package.json').version")"
-          if ! npm view "@agentbean/daemon@$LEGACY_DAEMON_VERSION" version >/dev/null 2>&1; then
-            echo "::error::@agentbean/daemon@$LEGACY_DAEMON_VERSION is not published; cannot create rollback legacy dist-tag before promoting latest."
+          LEGACY_TAG="$(npm view "@agentbean/daemon" dist-tags --json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).legacy || ''")"
+          if [ "$LEGACY_TAG" != "0.1.35" ]; then
+            echo "::error::npm @agentbean/daemon legacy must remain pinned to the historical archive 0.1.35, observed '$LEGACY_TAG'."
             exit 1
           fi
-          npm dist-tag add "@agentbean/daemon@$LEGACY_DAEMON_VERSION" legacy
-          LEGACY_TAG=""
-          for attempt in $(seq 1 12); do
-            LEGACY_TAG="$(npm view "@agentbean/daemon" dist-tags --json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).legacy || ''")"
-            if [ "$LEGACY_TAG" = "$LEGACY_DAEMON_VERSION" ]; then
-              break
-            fi
-            echo "::notice::Waiting for npm legacy dist-tag propagation (${attempt}/12); observed '$LEGACY_TAG'."
-            sleep 5
-          done
+          npm view "@agentbean/daemon@$LEGACY_TAG" version >/dev/null
           echo "npm @agentbean/daemon dist-tags.legacy=$LEGACY_TAG"
-          if [ "$LEGACY_TAG" != "$LEGACY_DAEMON_VERSION" ]; then
-            echo "::error::npm legacy ($LEGACY_TAG) does not match legacy daemon ($LEGACY_DAEMON_VERSION)."
-            exit 1
-          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

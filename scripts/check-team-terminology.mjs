@@ -17,6 +17,7 @@ const defaultRoots = [
   'scripts/check-agentbean-next-railway-preflight.mjs',
   'scripts/prepare-agentbean-next-daemon-release.mjs',
   '.github/workflows/ci-cd.yml',
+  '.github/workflows/daily-changelog.yml',
   'package.json',
   'railway.json',
   'README.md',
@@ -52,11 +53,6 @@ const ignoredSegments = new Set([
   'test-results',
 ]);
 const generatedOrBinaryExtensions = /\.(?:tsbuildinfo|png|jpe?g|gif|webp|ico|zip|gz|pdf|sqlite|db|woff2?|ttf|eot)$/i;
-const releaseAAllowlist = new Set([
-  'apps/web-next/lib/team-path.ts',
-  'apps/web-next/tests/team-path.test.ts',
-  'apps/web-next/next.config.mjs',
-]);
 const requestedRoots = process.argv.slice(2);
 const scanRoots = (requestedRoots.length > 0 ? requestedRoots : defaultRoots)
   .map((entry) => resolve(workspaceRoot, entry));
@@ -78,7 +74,6 @@ function walk(entry) {
 const violations = [];
 for (const file of scanRoots.flatMap(walk)) {
   const repoPath = relative(workspaceRoot, file).split(sep).join('/');
-  if (requestedRoots.length === 0 && releaseAAllowlist.has(repoPath)) continue;
   if (generatedOrBinaryExtensions.test(file)) continue;
 
   const source = readFileSync(file, 'utf8');

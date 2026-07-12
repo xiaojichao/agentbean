@@ -1178,20 +1178,13 @@ export async function exerciseWebUiTeamsBusinessSmoke({
   const compatibilityTeamsSegment = ['net', 'works'].join('');
   const legacyTeamsUrl = new URL(`/${teamPath}/${compatibilityTeamsSegment}`, root);
   const canonicalTeamsUrl = new URL(`/${teamPath}/teams`, root);
-  const redirectResponse = await fetchImpl(legacyTeamsUrl.toString(), { redirect: 'manual' });
-  const redirectLocation = redirectResponse.headers.get('location');
-  const redirectPath = redirectLocation ? new URL(redirectLocation, root).pathname : null;
-  if (redirectResponse.status !== 308 || redirectPath !== canonicalTeamsUrl.pathname) {
+  const removedAliasResponse = await fetchImpl(legacyTeamsUrl.toString(), { redirect: 'manual' });
+  const removedAliasLocation = removedAliasResponse.headers.get('location');
+  if (removedAliasResponse.status !== 404 || removedAliasLocation !== null) {
     throw new Error(
-      `Release A team page redirect mismatch: expected 308 ${canonicalTeamsUrl.pathname}, received ${redirectResponse.status} ${redirectLocation ?? '<missing location>'}`,
+      `Release B removed Team page alias mismatch: expected 404 without redirect, received ${removedAliasResponse.status} ${removedAliasLocation ?? '<no location>'}`,
     );
   }
-  await page.navigate(legacyTeamsUrl.toString());
-  await page.waitForFunction(
-    `window.location.pathname === ${JSON.stringify(canonicalTeamsUrl.pathname)}`,
-    'Release A compatibility URL uses a permanent redirect to the teams page',
-    timeoutMs,
-  );
   await page.navigate(canonicalTeamsUrl.toString());
   await page.waitForFunction(
     `document.querySelector('[data-smoke="team-create-form"]') !== null`,
@@ -3782,8 +3775,8 @@ async function emitAck(socket, event, payload, timeoutMs) {
 }
 
 function loadSocketIoClient() {
-  const requireFromServer = createRequire(new URL('../apps/server/package.json', import.meta.url));
-  const { io } = requireFromServer('socket.io-client');
+  const requireFromRoot = createRequire(new URL('../package.json', import.meta.url));
+  const { io } = requireFromRoot('socket.io-client');
   return io;
 }
 

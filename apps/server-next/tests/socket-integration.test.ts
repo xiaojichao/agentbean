@@ -22,7 +22,7 @@ type ClientSocket = {
   on(event: string, handler: (...args: unknown[]) => void): void;
 };
 
-const requireFromServer = createRequire(new URL('../../server/package.json', import.meta.url));
+const requireFromServer = createRequire(new URL('../package.json', import.meta.url));
 const { Server } = requireFromServer('socket.io') as { Server: SocketIoServerConstructor };
 const { io: createClient } = requireFromServer('socket.io-client') as {
   io(url: string, options?: Record<string, unknown>): ClientSocket;
