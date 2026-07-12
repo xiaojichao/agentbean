@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -26,10 +26,15 @@ export function collectAgentBeanNextReadinessChecks({
   const knownGaps = readFileSync(join(root, 'agentbean-next/docs/known-gaps.md'), 'utf8');
   const socketProtocol = readFileSync(join(root, 'agentbean-next/docs/socket-protocol.md'), 'utf8');
   const contractsSocket = readFileSync(join(root, 'packages/contracts/src/socket.ts'), 'utf8');
+  const contractsArtifact = readFileSync(join(root, 'packages/contracts/src/artifact.ts'), 'utf8');
   const serverNextUseCases = readFileSync(join(root, 'apps/server-next/src/application/usecases.ts'), 'utf8');
   const serverNextSocketHandlers = readFileSync(join(root, 'apps/server-next/src/transport/socket-handlers.ts'), 'utf8');
   const serverNextFirstSliceTests = readFileSync(join(root, 'apps/server-next/tests/first-slice.test.ts'), 'utf8');
   const serverNextSocketIntegrationTests = readFileSync(join(root, 'apps/server-next/tests/socket-integration.test.ts'), 'utf8');
+  const phase0ManagementBoundaryTests = readFileSync(join(root, 'apps/server-next/tests/phase-0-management-boundary.test.ts'), 'utf8');
+  const serverNextRepositories = readFileSync(join(root, 'apps/server-next/src/application/repositories.ts'), 'utf8');
+  const serverNextSource = readTreeText(join(root, 'apps/server-next/src'));
+  const serverNextMigrations = readTreeText(join(root, 'apps/server-next/src/infra/sqlite/migrations'));
   const serverNextDevServer = readFileSync(join(root, 'apps/server-next/src/dev-server.ts'), 'utf8');
   const serverNextFullPreview = readFileSync(join(root, 'apps/server-next/src/full-preview.ts'), 'utf8');
   const daemonNextCli = readFileSync(join(root, 'apps/daemon-next/src/cli.ts'), 'utf8');
@@ -630,6 +635,19 @@ export function collectAgentBeanNextReadinessChecks({
         parityBackfillAudit.includes('| `dashboard` / `admin` | Green |'),
       'Admin dashboard parity must stay covered by an App Router browser smoke for admin tabs, list rows, device detail, owner transfer, and agent ownership projection',
     ),
+    check(
+      'phase-0-management-boundary-regression',
+      hasPhase0ManagementBoundary({
+        boundaryTests: phase0ManagementBoundaryTests,
+        contractsSocket,
+        contractsArtifact,
+        serverSource: serverNextSource,
+        serverRepositories: serverNextRepositories,
+        serverMigrations: serverNextMigrations,
+        socketHandlers: serverNextSocketHandlers,
+      }),
+      'Phase 0 must lock existing direct Dispatch, Task review, Artifact/Workspace Run, Socket, repository, and migration boundaries without production management wiring',
+    ),
   ];
 
   if (production) {
@@ -660,6 +678,33 @@ export function hasGreenSettingsTeamsParity(parityBackfillAudit) {
   return parityBackfillAudit.includes('| `settings` / `teams` | Green |');
 }
 
+export function hasPhase0ManagementBoundary(input) {
+  const agentEventsContract = extractSourceSection(
+    input.contractsSocket,
+    'export const AGENT_EVENTS',
+    'export interface ScanRequestCustomAgent',
+  );
+  const agentSocketHandlers = extractSourceSection(
+    input.socketHandlers,
+    'export function registerAgentSocketHandlers',
+  );
+  if (agentEventsContract === null || agentSocketHandlers === null) return false;
+
+  return input.boundaryTests.includes('direct channel and DM messages create only canonical Dispatch records') &&
+    input.boundaryTests.includes('message dispatch status is projected from the Dispatch repository at read time') &&
+    input.boundaryTests.includes('only a human update completes it') &&
+    input.boundaryTests.includes('existing Task create, update, and delete APIs') &&
+    input.boundaryTests.includes('remain linked by dispatchId without invocationId') &&
+    input.boundaryTests.includes('have no management execution surface') &&
+    !/["'][^"'\n]*(?:management|invocation|checkpoint)[^"'\n]*["']/i.test(input.contractsSocket) &&
+    !/["']task:|:task:|\btask\s*:/.test(agentEventsContract) &&
+    !/app,\s*'(?:createTask|updateTask|deleteTask|reorderTask)'/.test(agentSocketHandlers) &&
+    !/pi-management-runtime|createManagementRuntimeFactory|ManagementRuntimeFactory|ManagementSession|PiManagerWorkerHost|ManagementWorkerHost|ManagementOutbox/.test(input.serverSource) &&
+    !/\b(?:invocationId|managementRunId)\b/.test(input.contractsArtifact) &&
+    !/\b(?:Management(?:Run|Event|Checkpoint)?|AgentInvocation|Invocation)Repository\b|\b(?:managementRuns?|managementEvents?|agentInvocations?|invocations?|managementCheckpoints?|checkpoints?)\s*:/.test(input.serverRepositories) &&
+    !/\b(?:management_runs?|management_events?|agent_invocations?|management_checkpoints?|invocation_id|management_run_id)\b/i.test(input.serverMigrations);
+}
+
 export function summarizeReadiness(checks) {
   const failed = checks.filter((candidate) => !candidate.ok);
   return {
@@ -672,6 +717,23 @@ export function summarizeReadiness(checks) {
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function readTreeText(root) {
+  return readdirSync(root, { withFileTypes: true })
+    .flatMap((entry) => {
+      const path = join(root, entry.name);
+      return `${entry.name}\n${entry.isDirectory() ? readTreeText(path) : readFileSync(path, 'utf8')}`;
+    })
+    .join('\n');
+}
+
+function extractSourceSection(source, startMarker, endMarker) {
+  const start = source.indexOf(startMarker);
+  if (start < 0) return null;
+  if (endMarker === undefined) return source.slice(start);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  return end < 0 ? null : source.slice(start, end);
 }
 
 function check(id, ok, message) {

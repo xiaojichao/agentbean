@@ -1,7 +1,7 @@
 # Phase 0：PI 契约与兼容性验证矩阵
 
 - 基线计划：`docs/superpowers/plans/2026-07-12-agentbean-phase-0-pi-contract-compatibility.md`
-- 当前实施切片：PR 2，Contracts 与纯 Domain rules（Tasks 4–5）
+- 当前实施切片：PR 3，Existing behavior lock（Task 6）
 - Phase 0 总体状态：进行中
 
 本矩阵记录可复现证据，不用日期或观察时长代替验收。只有 P0-01 至 P0-10、P0-12 全绿，且 P0-11 已形成明确 verdict，才允许进入 Phase 1。
@@ -17,9 +17,9 @@
 | P0-07 | rollout policy 与 fallback barrier 是纯领域规则 | Green（本地） | `npm run test:domain`（57 项，含既有 24 项）；纯函数覆盖 direct 零 management side effect、shadow namespaced decision record、managed 五项 preflight、受控单 Agent 回退、reservation 前置命令、全部八类持久副作用后的不可逆 barrier，以及“已有副作用但缺 reservation”强制 recovery。 |
 | P0-08 | Invocation intent immutable 且幂等冲突规则固定 | Green（本地） | `npm run test:contracts` + `npm run test:domain`；readonly intent compile contract、稳定 canonical serialization，以及同一 ManagementRun 内 same-key/same-hash existing、same-key/different-hash conflict，不同 Run 的同名 key 互不冲突。Phase 0 不实现数据库唯一约束。 |
 | P0-09 | authoritative refs 失效时拒绝 context hints | Green（本地） | `npm run test:domain`；ManagementRun、event sequence、task graph revision、open Task、waiting/completed Invocation 分类和有效 Memory Capsule 任一 authoritative fact 不一致即 `rebuild_required`，返回值不含 `contextHints`。 |
-| P0-10 | 现有 direct Dispatch/Task/Artifact/Workspace Run 行为不变 | Not started | 后续 Existing behavior lock PR。 |
+| P0-10 | 现有 direct Dispatch/Task/Artifact/Workspace Run 行为不变 | Green（本地） | `phase-0-management-boundary.test.ts` 通过公开 Server use cases 与 repository read seam 锁定：channel/DM direct 只创建 Dispatch；Message 只在读路径投影 repository 中的 `dispatchId/dispatchStatus`；agent delivery 进入 `in_review` 后由 human Task update 转 `done`；Task CRUD 不变；Artifact/Workspace Run 继续只关联 `dispatchId`。同一测试与 readiness 静态门禁确认 Socket、repository、SQLite migration 均无 management execution surface。 |
 | P0-11 | SEA 跨平台形成 `compatible` 或 `blocked-for-phase5` verdict | Unknown | 后续独立 SEA verdict PR；当前不升级生产 Node。 |
-| P0-12 | Phase 0 root scripts、build、readiness、既有全量 suite 与 CI 通过 | In progress | Node 24.18 本地 `test:phase1` 876 项通过、1 项既有 PTY E2E 跳过；`build:packages`、PI runtime 21 项测试/build、boundary 12 项测试/check、readiness 55/55 和 Team 术语检查通过。待本 PR CI；完整 `test:phase0` / `build:phase0` gate 在后续 CI integration PR 收口。 |
+| P0-12 | Phase 0 root scripts、build、readiness、既有全量 suite 与 CI 通过 | In progress | Node 24.18 本地 `test:phase1` 883 项通过、1 项既有 PTY E2E 跳过；Server 389/389；`build:packages`、boundary 12 项测试/check、readiness 56/56 和 Team 术语检查通过。待本 PR CI；完整 `test:phase0` / `build:phase0` gate 在后续 CI integration PR 收口。 |
 
 ## Runtime 边界不变量
 
