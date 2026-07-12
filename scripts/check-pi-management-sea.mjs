@@ -182,7 +182,8 @@ function runCli(argv) {
   }
   if (command === 'validate') {
     if (!values.file) throw new Error('SEA_ARGUMENTS_INVALID');
-    return validatePiSeaVerdict(JSON.parse(readFileSync(resolve(values.file), 'utf8'))).ok ? 0 : 1;
+    const validation = validatePiSeaVerdict(JSON.parse(readFileSync(resolve(values.file), 'utf8')));
+    return validation.ok && validation.verdict.status === 'compatible' ? 0 : 1;
   }
   throw new Error('SEA_COMMAND_INVALID');
 }

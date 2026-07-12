@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   collectAgentBeanNextReadinessChecks,
+  hasPhase0CiGate,
   hasPhase0ManagementBoundary,
   summarizeReadiness,
 } from '../../../scripts/check-agentbean-next-readiness.mjs';
@@ -67,7 +68,58 @@ describe('AgentBean Next readiness checker', () => {
       'admin-dashboard-parity-regression',
       'admin-dashboard-parity-browser-smoke',
       'phase-0-management-boundary-regression',
+      'phase-0-root-scripts',
+      'ci-runs-phase-0-gates',
+      'ci-detects-phase-0-changes',
+      'sea-workflow-consumes-root-verdict-check',
     ]);
+  });
+
+  test('fails closed when the Phase 0 root or CI gate is incomplete', () => {
+    const valid = {
+      scripts: {
+        'test:phase0': 'npm run test:pi-management-runtime && npm run test:contracts -- --api.host 127.0.0.1 && npm run test:domain -- --api.host 127.0.0.1 && npm run test:phase0-boundary && npm run check:phase0-pi-boundary && cd apps/server-next && ../../node_modules/.bin/vitest run tests/phase-0-management-boundary.test.ts --config vitest.config.ts --api.host 127.0.0.1',
+        'build:phase0': 'npm run build:contracts && npm run build:domain && npm run build:pi-management-runtime && npm run build:server-next',
+        'check:pi-sea-compatibility': 'node scripts/check-pi-management-sea.mjs validate',
+      },
+      workflow: [
+        '^agentbean-next/',
+        '^packages/',
+        'check-phase-0-pi-boundary',
+        'check-pi-management-sea',
+        'build-pi-management-sea',
+        'package(-lock)?\\.json',
+        'pi-sea-compatibility',
+        'run: npm run test:phase1',
+        'run: npm run test:phase0',
+        'run: npm run build:phase0',
+      ].join('\n'),
+      seaWorkflow: [
+        '- packages/contracts/**',
+        '- packages/domain/**',
+        '      - name: Consume platform verdict through root gate',
+        '        if: always()',
+        '        run: npm run check:pi-sea-compatibility -- --file artifacts/pi-sea-verdict/verdict.json',
+      ].join('\n'),
+    };
+    expect(hasPhase0CiGate(valid)).toBe(true);
+    expect(hasPhase0CiGate({
+      ...valid,
+      seaWorkflow: valid.seaWorkflow.replaceAll('\n', '\r\n'),
+    })).toBe(true);
+
+    for (const bypass of [
+      { scripts: { ...valid.scripts, 'test:phase0': 'npm run test:pi-management-runtime' } },
+      { scripts: { ...valid.scripts, 'build:phase0': 'npm run build:pi-management-runtime' } },
+      { scripts: { ...valid.scripts, 'check:pi-sea-compatibility': 'node scripts/build-pi-management-sea.mjs' } },
+      { workflow: valid.workflow.replace('run: npm run test:phase0', '') },
+      { workflow: valid.workflow.replace('package(-lock)?\\.json', '') },
+      { seaWorkflow: valid.seaWorkflow.replace('- packages/contracts/**', '') },
+      { seaWorkflow: valid.seaWorkflow.replace('if: always()', '') },
+      { seaWorkflow: valid.seaWorkflow.replace('npm run check:pi-sea-compatibility', 'node scripts/check-pi-management-sea.mjs') },
+    ]) {
+      expect(hasPhase0CiGate({ ...valid, ...bypass })).toBe(false);
+    }
   });
 
   test('requires production environment for production smoke audits', () => {
