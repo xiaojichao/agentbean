@@ -6,10 +6,16 @@ on:
       - main
     paths:
       - packages/pi-management-runtime/**
+      - packages/contracts/**
+      - packages/domain/**
+      - apps/server-next/tests/phase-0-management-boundary.test.ts
       - scripts/build-pi-management-sea.mjs
       - scripts/build-pi-management-sea.test.mjs
       - scripts/check-pi-management-sea.mjs
       - scripts/check-pi-management-sea.test.mjs
+      - scripts/check-phase-0-pi-boundary.mjs
+      - scripts/check-phase-0-pi-boundary.test.mjs
+      - agentbean-next/docs/phase-0-pi-contract-compatibility-verification-matrix.md
       - package.json
       - package-lock.json
       - .github/workflows/pi-sea-compatibility.yml
@@ -18,10 +24,16 @@ on:
       - main
     paths:
       - packages/pi-management-runtime/**
+      - packages/contracts/**
+      - packages/domain/**
+      - apps/server-next/tests/phase-0-management-boundary.test.ts
       - scripts/build-pi-management-sea.mjs
       - scripts/build-pi-management-sea.test.mjs
       - scripts/check-pi-management-sea.mjs
       - scripts/check-pi-management-sea.test.mjs
+      - scripts/check-phase-0-pi-boundary.mjs
+      - scripts/check-phase-0-pi-boundary.test.mjs
+      - agentbean-next/docs/phase-0-pi-contract-compatibility-verification-matrix.md
       - package.json
       - package-lock.json
       - .github/workflows/pi-sea-compatibility.yml
@@ -75,6 +87,10 @@ jobs:
 
       - name: Build and execute PI management SEA
         run: node scripts/build-pi-management-sea.mjs --out-dir .sea/${{ matrix.verdict_os }}-${{ matrix.arch }} --verdict artifacts/pi-sea-verdict/verdict.json --os ${{ matrix.verdict_os }} --arch ${{ matrix.arch }}
+
+      - name: Consume platform verdict through root gate
+        if: always()
+        run: npm run check:pi-sea-compatibility -- --file artifacts/pi-sea-verdict/verdict.json
 
       - name: Upload platform verdict
         if: always()

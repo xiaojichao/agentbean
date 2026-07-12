@@ -16,6 +16,7 @@ export function collectAgentBeanNextReadinessChecks({
   const daemonNextPackageJson = readJson(join(root, 'apps/daemon-next/package.json'));
   const railwayJson = readJson(join(root, 'railway.json'));
   const workflow = readFileSync(join(root, '.github/workflows/ci-cd.yml'), 'utf8');
+  const seaWorkflow = readFileSync(join(root, '.github/workflows/pi-sea-compatibility.yml'), 'utf8');
   const dailyChangelogWorkflow = readFileSync(join(root, '.github/workflows/daily-changelog.yml'), 'utf8');
   const publishJobCondition =
     "if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.skip_npm_publish && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env && !inputs.promote_agentbean_daemon_latest)";
@@ -648,6 +649,26 @@ export function collectAgentBeanNextReadinessChecks({
       }),
       'Phase 0 must lock existing direct Dispatch, Task review, Artifact/Workspace Run, Socket, repository, and migration boundaries without production management wiring',
     ),
+    check(
+      'phase-0-root-scripts',
+      hasPhase0RootScripts(packageJson.scripts),
+      'Phase 0 must expose deterministic root test, build, boundary, and SEA verdict consumer scripts',
+    ),
+    check(
+      'ci-runs-phase-0-gates',
+      ciRunsPhase0Gates(workflow),
+      'AgentBean Next CI must run existing product regressions before Phase 0 tests and builds',
+    ),
+    check(
+      'ci-detects-phase-0-changes',
+      ciDetectsPhase0Changes(workflow),
+      'AgentBean Next CI change detection must cover Phase 0 scripts, lockfile, matrix, packages, and SEA workflow',
+    ),
+    check(
+      'sea-workflow-consumes-root-verdict-check',
+      seaWorkflowConsumesRootVerdictCheck(seaWorkflow),
+      'SEA workflow must cover PI contracts and consume each generated verdict through the root compatibility checker',
+    ),
   ];
 
   if (production) {
@@ -703,6 +724,46 @@ export function hasPhase0ManagementBoundary(input) {
     !/\b(?:invocationId|managementRunId)\b/.test(input.contractsArtifact) &&
     !/\b(?:Management(?:Run|Event|Checkpoint)?|AgentInvocation|Invocation)Repository\b|\b(?:managementRuns?|managementEvents?|agentInvocations?|invocations?|managementCheckpoints?|checkpoints?)\s*:/.test(input.serverRepositories) &&
     !/\b(?:management_runs?|management_events?|agent_invocations?|management_checkpoints?|invocation_id|management_run_id)\b/i.test(input.serverMigrations);
+}
+
+export function hasPhase0CiGate({ scripts, workflow, seaWorkflow }) {
+  return hasPhase0RootScripts(scripts) &&
+    ciRunsPhase0Gates(workflow) &&
+    ciDetectsPhase0Changes(workflow) &&
+    seaWorkflowConsumesRootVerdictCheck(seaWorkflow);
+}
+
+function hasPhase0RootScripts(scripts) {
+  return scripts?.['test:phase0'] ===
+      'npm run test:pi-management-runtime && npm run test:contracts -- --api.host 127.0.0.1 && npm run test:domain -- --api.host 127.0.0.1 && npm run test:phase0-boundary && npm run check:phase0-pi-boundary && cd apps/server-next && ../../node_modules/.bin/vitest run tests/phase-0-management-boundary.test.ts --config vitest.config.ts --api.host 127.0.0.1' &&
+    scripts?.['build:phase0'] ===
+      'npm run build:contracts && npm run build:domain && npm run build:pi-management-runtime && npm run build:server-next' &&
+    scripts?.['check:pi-sea-compatibility'] === 'node scripts/check-pi-management-sea.mjs validate';
+}
+
+function ciRunsPhase0Gates(workflow) {
+  const productTests = workflow.indexOf('run: npm run test:phase1');
+  const phase0Tests = workflow.indexOf('run: npm run test:phase0');
+  const phase0Build = workflow.indexOf('run: npm run build:phase0');
+  return productTests >= 0 && productTests < phase0Tests && phase0Tests < phase0Build;
+}
+
+function ciDetectsPhase0Changes(workflow) {
+  return [
+    '^packages/',
+    '^agentbean-next/',
+    'check-phase-0-pi-boundary',
+    'check-pi-management-sea',
+    'build-pi-management-sea',
+    'package(-lock)?\\.json',
+    'pi-sea-compatibility',
+  ].every((token) => workflow.includes(token));
+}
+
+function seaWorkflowConsumesRootVerdictCheck(seaWorkflow) {
+  return seaWorkflow.includes('- packages/contracts/**') &&
+    seaWorkflow.includes('- packages/domain/**') &&
+    /name: Consume platform verdict through root gate\n\s+if: always\(\)\n\s+run: npm run check:pi-sea-compatibility -- --file artifacts\/pi-sea-verdict\/verdict\.json/u.test(seaWorkflow);
 }
 
 export function summarizeReadiness(checks) {

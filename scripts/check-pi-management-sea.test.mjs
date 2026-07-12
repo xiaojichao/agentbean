@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   aggregatePiSeaVerdicts,
@@ -26,6 +30,7 @@ const compatibleLinux = {
     'sea-smoke',
   ].map((id) => ({ id, ok: true })),
 };
+const checker = fileURLToPath(new URL('./check-pi-management-sea.mjs', import.meta.url));
 
 test('accepts only the exact versioned per-platform verdict contract', () => {
   assert.deepEqual(validatePiSeaVerdict(compatibleLinux), { ok: true, verdict: compatibleLinux });
@@ -100,6 +105,24 @@ test('aggregator blocks otherwise-valid verdicts for an unexpected platform', ()
   assert.deepEqual(result.diagnosticCodes, ['SEA_UNEXPECTED_PLATFORM_VERDICT']);
 });
 
+test('root compatibility consumer fails a valid blocked verdict', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'agentbean-pi-sea-consumer-'));
+  const verdictPath = join(directory, 'verdict.json');
+  try {
+    writeFileSync(verdictPath, JSON.stringify(compatibleLinux));
+    assert.equal(spawnSync(process.execPath, [checker, 'validate', '--file', verdictPath]).status, 0);
+
+    writeFileSync(verdictPath, JSON.stringify({
+      ...compatibleLinux,
+      status: 'blocked-for-phase5',
+      checks: [{ id: 'sea-smoke', ok: false, diagnosticCode: 'SEA_RUNTIME_SMOKE_FAILED' }],
+    }));
+    assert.equal(spawnSync(process.execPath, [checker, 'validate', '--file', verdictPath]).status, 1);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('workflow runs native three-platform SEA jobs and always aggregates real verdict artifacts', () => {
   const workflow = readFileSync('.github/workflows/pi-sea-compatibility.yml', 'utf8');
   for (const required of [
@@ -116,10 +139,17 @@ test('workflow runs native three-platform SEA jobs and always aggregates real ve
     'Upload platform verdict',
     'Aggregate fail-closed verdict',
     'Upload aggregate verdict',
+    'npm run check:pi-sea-compatibility -- --file artifacts/pi-sea-verdict/verdict.json',
+    '- packages/contracts/**',
+    '- packages/domain/**',
   ]) {
     assert.ok(workflow.includes(required), `missing workflow contract: ${required}`);
   }
   assert.equal(workflow.includes('continue-on-error'), false);
   assert.ok(workflow.match(/if: always\(\)/g)?.length >= 4);
   assert.doesNotMatch(workflow, /name: Build and execute PI management SEA\n\s+if: always\(\)/);
+  assert.match(
+    workflow,
+    /name: Consume platform verdict through root gate\n\s+if: always\(\)/,
+  );
 });
