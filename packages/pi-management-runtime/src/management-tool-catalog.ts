@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 
@@ -8,6 +9,9 @@ import {
   type ManagementToolMetadata,
   type ManagementToolName,
   type ManagementToolPhase,
+  type ManagementRuntimeEvent,
+  type ManagementSessionContextV1,
+  type ManagementSessionMode,
 } from './types.js';
 
 const toolPolicy: Record<ManagementToolName, {
@@ -49,40 +53,75 @@ export function getManagementToolMetadata(name: ManagementToolName): ManagementT
   };
 }
 
-export function assertExactManagementToolAllowlist(toolNames: readonly ManagementToolName[]): void {
-  const expected = new Set<ManagementToolName>(MANAGEMENT_TOOL_NAMES);
+export function assertExactManagementToolAllowlist(
+  toolNames: readonly ManagementToolName[],
+  expectedToolNames: readonly ManagementToolName[] = MANAGEMENT_TOOL_NAMES,
+): void {
+  const expected = new Set<ManagementToolName>(expectedToolNames);
   const actual = new Set<ManagementToolName>(toolNames);
-  const missing = MANAGEMENT_TOOL_NAMES.filter((name) => !actual.has(name));
+  const missing = expectedToolNames.filter((name) => !actual.has(name));
   const extra = [...actual].filter((name) => !expected.has(name));
   if (actual.size !== toolNames.length || missing.length > 0 || extra.length > 0) {
     throw new Error(`P0_TOOL_ALLOWLIST_MISMATCH: missing=${missing.join(',')}; extra=${extra.join(',')}; duplicates=${actual.size !== toolNames.length}`);
   }
 }
 
-function schemaFor(effect: ManagementToolEffect) {
-  const common = {
-    managementRunId: Type.String({ minLength: 1 }),
-    leaseToken: Type.String({ minLength: 1 }),
-  };
-  return effect === 'write'
-    ? Type.Object({ ...common, idempotencyKey: Type.String({ minLength: 1 }) }, { additionalProperties: true })
-    : Type.Object(common, { additionalProperties: true });
+function schemaFor() {
+  return Type.Object({}, { additionalProperties: true });
 }
 
-export function createManagementToolCatalog(executor: ManagementToolExecutor): ToolDefinition[] {
-  return MANAGEMENT_TOOL_NAMES.map((name) => {
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return JSON.stringify(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? JSON.stringify(value) : 'null';
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, nested]) => nested !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(String(value));
+}
+
+export interface CreateManagementToolCatalogInput {
+  executor: ManagementToolExecutor;
+  toolNames?: readonly ManagementToolName[];
+  mode: ManagementSessionMode;
+  sessionContext: ManagementSessionContextV1;
+  emitRuntimeEvent?: (event: ManagementRuntimeEvent) => void;
+}
+
+export function createManagementToolCatalog(options: CreateManagementToolCatalogInput): ToolDefinition[] {
+  const toolNames = options.toolNames ?? MANAGEMENT_TOOL_NAMES;
+  return toolNames.map((name) => {
     const metadata = getManagementToolMetadata(name);
     return defineTool({
       name,
       label: name,
       description: `AgentBean management operation ${name}`,
-      parameters: schemaFor(metadata.effect),
+      parameters: schemaFor(),
       executionMode: metadata.effect === 'write' ? 'sequential' : 'parallel',
-      async execute(toolCallId, input, signal) {
-        const result = await executor({
+      async execute(toolCallId, toolInput, signal) {
+        if (options.mode === 'shadow' && metadata.effect === 'write') {
+          options.emitRuntimeEvent?.({
+            type: 'shadow-tool-intent',
+            schemaVersion: 1,
+            toolCallId,
+            name,
+            argumentHash: createHash('sha256').update(canonicalJson(toolInput)).digest('hex'),
+          });
+          return {
+            content: [{ type: 'text', text: 'dry_run_recorded' }],
+            details: { schemaVersion: 1, effect: metadata.effect, phase: metadata.phase },
+            isError: false,
+          };
+        }
+        const result = await options.executor({
           toolCallId,
           name,
-          input: input as Parameters<ManagementToolExecutor>[0]['input'],
+          scope: options.sessionContext.scope,
+          input: toolInput as Parameters<ManagementToolExecutor>[0]['input'],
           metadata,
           signal,
         });

@@ -1,5 +1,5 @@
 import {
-  MANAGEMENT_TOOL_NAMES,
+  PHASE_1_MANAGEMENT_TOOL_NAMES,
   createManagementRuntimeFactory,
   type ManagementModelAdapter,
   type ManagementRuntimeEvent,
@@ -30,8 +30,11 @@ async function runSmoke() {
             type: 'toolCall',
             id: 'sea-tool-call-1',
             name: 'context.get_root_message',
-            arguments: { managementRunId: 'sea-run-1', leaseToken: 'sea-lease' },
+            arguments: {},
           }],
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 2 },
+          finishReason: 'tool_use',
+          responseModel: 'phase-1-sea-model',
         };
       }
       if (modelCalls === 3) {
@@ -48,7 +51,12 @@ async function runSmoke() {
           }, { once: true });
         });
       }
-      return { content: [{ type: 'text', text: `sea-response-${modelCalls}` }] };
+      return {
+        content: [{ type: 'text', text: `sea-response-${modelCalls}` }],
+        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 2 },
+        finishReason: 'stop',
+        responseModel: 'phase-1-sea-model',
+      };
     },
   };
   const session = await createManagementRuntimeFactory({
@@ -60,6 +68,19 @@ async function runSmoke() {
     },
   }).createSession({
     systemPrompt: { id: 'phase-0-sea', version: 1, content: 'Run the AgentBean SEA management smoke.' },
+    mode: 'managed',
+    context: {
+      schemaVersion: 1,
+      scope: {
+        kind: 'managed',
+        managementRunId: 'sea-run-1',
+        teamId: 'sea-team',
+        channelId: 'sea-channel',
+        rootMessageId: 'sea-message',
+      },
+      frozenTarget: { agentId: 'sea-agent', kind: 'custom' },
+      visibleThread: { revision: 1, messages: [] },
+    },
   });
   const unsubscribe = session.subscribe((event) => events.push(event));
 
@@ -75,8 +96,8 @@ async function runSmoke() {
   unsubscribe();
   await Promise.all([session.dispose(), session.dispose()]);
 
-  const firstModelTools = observedToolNames.length === MANAGEMENT_TOOL_NAMES.length
-    && MANAGEMENT_TOOL_NAMES.every((name) => observedToolNames.includes(name));
+  const firstModelTools = observedToolNames.length === PHASE_1_MANAGEMENT_TOOL_NAMES.length
+    && PHASE_1_MANAGEMENT_TOOL_NAMES.every((name) => observedToolNames.includes(name));
   const checks = [
     { id: 'runtime-session', ok: modelCalls >= 3 },
     { id: 'effective-tools', ok: firstModelTools },

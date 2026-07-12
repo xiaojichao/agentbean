@@ -1,11 +1,12 @@
 export { createManagementRuntimeFactory } from './pi-session-adapter.js';
-export { MANAGEMENT_TOOL_NAMES } from './types.js';
+export { MANAGEMENT_TOOL_NAMES, PHASE_1_MANAGEMENT_TOOL_NAMES } from './types.js';
 export type {
   CreateManagementRuntimeFactoryInput,
   CreateManagementSessionInput,
   ManagementCompactionRequest,
   ManagementCompactionResult,
   ManagementFollowUp,
+  ManagementFinishReason,
   ManagementModelAdapter,
   ManagementModelContent,
   ManagementModelMessage,
@@ -13,11 +14,16 @@ export type {
   ManagementModelResponse,
   ManagementModelState,
   ManagementModelTextContent,
+  ManagementModelTelemetry,
   ManagementModelToolDescriptor,
+  ManagementModelUsage,
   ManagementPrompt,
   ManagementRuntimeEvent,
   ManagementRuntimeFactory,
   ManagementSession,
+  ManagementSessionContextV1,
+  ManagementSessionMode,
+  ManagementSessionScopeV1,
   ManagementSteer,
   ManagementToolCall,
   ManagementToolEffect,
@@ -26,5 +32,7 @@ export type {
   ManagementToolName,
   ManagementToolPhase,
   ManagementToolResult,
+  ManagementVisibleCheckpointV1,
+  ManagementVisibleMessageV1,
   VersionedManagementPrompt,
 } from './types.js';

@@ -13,6 +13,7 @@ export function collectAgentBeanNextReadinessChecks({
 } = {}) {
   const packageJson = readJson(join(root, 'package.json'));
   const contractsPackageJson = readJson(join(root, 'packages/contracts/package.json'));
+  const piManagementRuntimePackageJson = readJson(join(root, 'packages/pi-management-runtime/package.json'));
   const daemonNextPackageJson = readJson(join(root, 'apps/daemon-next/package.json'));
   const railwayJson = readJson(join(root, 'railway.json'));
   const workflow = readFileSync(join(root, '.github/workflows/ci-cd.yml'), 'utf8');
@@ -271,6 +272,19 @@ export function collectAgentBeanNextReadinessChecks({
       '@agentbean/contracts must be publishable before daemon-next can be installed from npm',
     ),
     check(
+      'pi-management-runtime-package-publishable',
+      piManagementRuntimePackageJson.private === false &&
+        piManagementRuntimePackageJson.version !== '0.0.0' &&
+        Array.isArray(piManagementRuntimePackageJson.files) &&
+        piManagementRuntimePackageJson.files.includes('dist/**/*.js') &&
+        piManagementRuntimePackageJson.files.includes('dist/index.d.ts') &&
+        piManagementRuntimePackageJson.files.includes('dist/types.d.ts') &&
+        piManagementRuntimePackageJson.scripts?.prepublishOnly === 'npm run build' &&
+        piManagementRuntimePackageJson.dependencies?.['@earendil-works/pi-ai'] === '0.80.6' &&
+        piManagementRuntimePackageJson.dependencies?.['@earendil-works/pi-coding-agent'] === '0.80.6',
+      '@agentbean/pi-management-runtime must be publishable with exact PI dependencies',
+    ),
+    check(
       'daemon-next-package-publishable',
       daemonNextPackageJson.private === false &&
         daemonNextPackageJson.version !== '0.0.0' &&
@@ -283,9 +297,10 @@ export function collectAgentBeanNextReadinessChecks({
     check(
       'daemon-next-runtime-dependencies',
       daemonNextPackageJson.dependencies?.['@agentbean/contracts'] === contractsPackageJson.version &&
+        daemonNextPackageJson.dependencies?.['@agentbean/pi-management-runtime'] === piManagementRuntimePackageJson.version &&
         Boolean(daemonNextPackageJson.dependencies?.['js-yaml']) &&
         Boolean(daemonNextPackageJson.dependencies?.['socket.io-client']),
-      '@agentbean/daemon-next must depend on published contracts, js-yaml, and socket.io-client',
+      '@agentbean/daemon-next must depend on exact published contracts and PI runtime plus its transport dependencies',
     ),
     check(
       'daemon-runtime-does-not-probe-retired-source',
@@ -314,14 +329,17 @@ export function collectAgentBeanNextReadinessChecks({
     check(
       'ci-publishes-next-packages',
       workflow.includes('@agentbean/contracts@$CONTRACTS_VERSION') &&
+        workflow.includes('@agentbean/pi-management-runtime@$PI_RUNTIME_VERSION') &&
         workflow.includes('@agentbean/daemon-next@$DAEMON_NEXT_VERSION') &&
         workflow.indexOf('Publish AgentBean Next contracts package') <
+          workflow.indexOf('Publish AgentBean PI management runtime package') &&
+        workflow.indexOf('Publish AgentBean PI management runtime package') <
           workflow.indexOf('Publish AgentBean Next daemon package') &&
         workflow.includes('prepare-agentbean-next-daemon-release.mjs') &&
         workflow.includes('@agentbean/daemon@$CANONICAL_DAEMON_VERSION') &&
         workflow.indexOf('Publish AgentBean Next daemon package') <
           workflow.indexOf('Publish AgentBean Next canonical daemon package'),
-      'CI publish job must publish contracts, daemon-next, then canonical @agentbean/daemon',
+      'CI publish job must publish contracts, PI runtime, daemon-next, then canonical @agentbean/daemon',
     ),
     check(
       'ci-runs-railway-next-preflight-without-deploy',
@@ -653,6 +671,15 @@ export function collectAgentBeanNextReadinessChecks({
       'phase-0-root-scripts',
       hasPhase0RootScripts(packageJson.scripts),
       'Phase 0 must expose deterministic root test, build, boundary, and SEA verdict consumer scripts',
+    ),
+    check(
+      'phase-1-management-boundary-scaffold',
+      packageJson.scripts?.['test:phase1-management-boundary'] ===
+        'node --test scripts/check-phase-1-management-boundary.test.mjs' &&
+        packageJson.scripts?.['check:phase1-management-boundary'] ===
+          'node scripts/check-phase-1-management-boundary.mjs' &&
+        workflow.includes('check-phase-1-management-boundary'),
+      'Phase 1 must expose a fail-closed management boundary checker and include it in CI change detection',
     ),
     check(
       'ci-runs-phase-0-gates',

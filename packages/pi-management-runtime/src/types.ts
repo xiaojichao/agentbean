@@ -33,7 +33,12 @@ export type ManagementRuntimeEvent =
     }
   | {
       type: 'message';
-      role: 'user' | 'assistant' | 'toolResult';
+      role: 'user' | 'toolResult';
+    }
+  | {
+      type: 'message';
+      role: 'assistant';
+      telemetry: ManagementModelTelemetry;
     }
   | {
       type: 'queue';
@@ -46,6 +51,13 @@ export type ManagementRuntimeEvent =
       toolCallId: string;
       name: ManagementToolName;
       isError?: boolean;
+    }
+  | {
+      type: 'shadow-tool-intent';
+      schemaVersion: 1;
+      toolCallId: string;
+      name: ManagementToolName;
+      argumentHash: string;
     }
   | {
       type: 'unsupported';
@@ -69,8 +81,60 @@ export interface VersionedManagementPrompt {
   content: string;
 }
 
+export type ManagementSessionMode = 'managed' | 'shadow';
+
+export interface ManagementVisibleMessageV1 {
+  readonly id: string;
+  readonly senderKind: 'human' | 'agent' | 'system';
+  readonly senderId: string;
+  readonly body: string;
+  readonly createdAt: number;
+}
+
+export type ManagementSessionScopeV1 =
+  | {
+      readonly kind: 'managed';
+      readonly managementRunId: string;
+      readonly teamId: string;
+      readonly channelId: string;
+      readonly rootMessageId: string;
+      readonly rootTaskId?: string;
+    }
+  | {
+      readonly kind: 'shadow';
+      readonly shadowRequestKey: string;
+      readonly teamId: string;
+      readonly channelId: string;
+      readonly rootMessageId: string;
+      readonly rootTaskId?: string;
+    };
+
+export interface ManagementVisibleCheckpointV1 {
+  readonly revision: number;
+  readonly lastEventSequence: number;
+  readonly objective: string;
+  readonly planSummary: string;
+  readonly nextAction?: string;
+}
+
+export interface ManagementSessionContextV1 {
+  readonly schemaVersion: 1;
+  readonly scope: ManagementSessionScopeV1;
+  readonly frozenTarget: {
+    readonly agentId: string;
+    readonly kind: 'custom' | 'agentos-hosted';
+  };
+  readonly visibleThread: {
+    readonly revision: number;
+    readonly messages: readonly ManagementVisibleMessageV1[];
+  };
+  readonly checkpoint?: ManagementVisibleCheckpointV1;
+}
+
 export interface CreateManagementSessionInput {
   systemPrompt: VersionedManagementPrompt;
+  mode: ManagementSessionMode;
+  context: ManagementSessionContextV1;
 }
 
 export interface ManagementRuntimeFactory {
@@ -108,6 +172,7 @@ export interface ManagementModelToolDescriptor {
 
 export interface ManagementModelRequest {
   systemPrompt: string;
+  sessionContext: ManagementSessionContextV1;
   messages: readonly ManagementModelMessage[];
   tools: readonly ManagementModelToolDescriptor[];
   signal?: AbortSignal;
@@ -124,6 +189,32 @@ export type ManagementModelContent =
 
 export interface ManagementModelResponse {
   content: readonly ManagementModelContent[];
+  usage: ManagementModelUsage;
+  finishReason: ManagementFinishReason;
+  responseModel: string;
+}
+
+export interface ManagementModelUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadTokens: number;
+  readonly cacheWriteTokens: number;
+  readonly totalTokens: number;
+}
+
+export type ManagementFinishReason =
+  | 'stop'
+  | 'tool_use'
+  | 'length'
+  | 'content_filter'
+  | 'aborted'
+  | 'error'
+  | 'unknown';
+
+export interface ManagementModelTelemetry {
+  readonly usage: ManagementModelUsage;
+  readonly finishReason: ManagementFinishReason;
+  readonly responseModel: string;
 }
 
 export interface ManagementModelState {
@@ -161,6 +252,20 @@ export const MANAGEMENT_TOOL_NAMES = [
   'review.submit_root_delivery',
 ] as const;
 
+export const PHASE_1_MANAGEMENT_TOOL_NAMES = [
+  'context.get_root_message',
+  'context.get_root_task',
+  'context.get_visible_thread',
+  'context.get_management_state',
+  'agents.list_capabilities',
+  'agents.get_status',
+  'agents.invoke',
+  'agents.cancel_invocation',
+  'channel.post_management_status',
+  'user.request_input',
+  'review.submit_root_delivery',
+] as const satisfies readonly ManagementToolName[];
+
 export type ManagementToolName = (typeof MANAGEMENT_TOOL_NAMES)[number];
 export type ManagementToolEffect = 'read' | 'write';
 export type ManagementToolPhase = 1 | 2 | 3 | 4;
@@ -175,11 +280,8 @@ export interface ManagementToolMetadata {
 export interface ManagementToolCall {
   toolCallId: string;
   name: ManagementToolName;
-  input: Record<string, unknown> & {
-    managementRunId: string;
-    leaseToken: string;
-    idempotencyKey?: string;
-  };
+  scope: ManagementSessionScopeV1;
+  input: Record<string, unknown>;
   metadata: ManagementToolMetadata;
   signal?: AbortSignal;
 }

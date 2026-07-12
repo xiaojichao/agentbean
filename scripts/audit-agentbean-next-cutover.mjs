@@ -14,12 +14,18 @@ export function collectAgentBeanNextCutoverAudit({
   runCommand = runCommandSync,
 } = {}) {
   const contractsPackage = readJson(join(root, 'packages/contracts/package.json'));
+  const piManagementRuntimePackage = readJson(join(root, 'packages/pi-management-runtime/package.json'));
   const daemonNextPackage = readJson(join(root, 'apps/daemon-next/package.json'));
   const canonicalDaemonVersion = daemonNextPackage.version;
   const variablesResult = readGitHubVariables(runCommand, env);
   const secretsResult = readGitHubSecrets(runCommand, env);
   const registry = {
     contracts: npmVersionExists(runCommand, '@agentbean/contracts', contractsPackage.version),
+    piManagementRuntime: npmVersionExists(
+      runCommand,
+      '@agentbean/pi-management-runtime',
+      piManagementRuntimePackage.version,
+    ),
     daemonNext: npmVersionExists(runCommand, '@agentbean/daemon-next', daemonNextPackage.version),
     canonicalDaemon: npmVersionExists(runCommand, '@agentbean/daemon', canonicalDaemonVersion),
     canonicalDaemonLatest: npmDistTagVersion(runCommand, '@agentbean/daemon', 'latest'),
@@ -74,6 +80,11 @@ export function collectAgentBeanNextCutoverAudit({
       'npm-contracts-next-version',
       registry.contracts,
       `npm registry must contain @agentbean/contracts@${contractsPackage.version}`,
+    ),
+    check(
+      'npm-pi-management-runtime-version',
+      registry.piManagementRuntime,
+      `npm registry must contain @agentbean/pi-management-runtime@${piManagementRuntimePackage.version}`,
     ),
     check(
       'npm-daemon-next-version',

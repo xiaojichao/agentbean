@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   MANAGEMENT_TOOL_NAMES,
+  PHASE_1_MANAGEMENT_TOOL_NAMES,
   createManagementRuntimeFactory,
+  type ManagementModelRequest,
   type ManagementToolName,
 } from '../src/index.js';
 import {
@@ -10,7 +12,169 @@ import {
   getManagementToolMetadata,
 } from '../src/management-tool-catalog.js';
 
+function modelResponse(
+  content: import('../src/index.js').ManagementModelResponse['content'],
+  finishReason: 'stop' | 'tool_use' = 'stop',
+) {
+  return {
+    content,
+    usage: {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      totalTokens: 0,
+    },
+    finishReason,
+    responseModel: 'tool-boundary-model',
+  };
+}
+
+function managedSessionInput(id = 'manager') {
+  return {
+    systemPrompt: { id, version: 1, content: 'Manage.' },
+    mode: 'managed' as const,
+    context: {
+      schemaVersion: 1 as const,
+      scope: {
+        kind: 'managed' as const,
+        managementRunId: `run-${id}`,
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        rootMessageId: `message-${id}`,
+      },
+      frozenTarget: { agentId: 'agent-1', kind: 'custom' as const },
+      visibleThread: { revision: 1, messages: [] },
+    },
+  };
+}
+
+function shadowSessionInput(id = 'shadow') {
+  return {
+    systemPrompt: { id, version: 1, content: 'Evaluate without executing.' },
+    mode: 'shadow' as const,
+    context: {
+      schemaVersion: 1 as const,
+      scope: {
+        kind: 'shadow' as const,
+        shadowRequestKey: `shadow:${id}`,
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        rootMessageId: `message-${id}`,
+      },
+      frozenTarget: { agentId: 'agent-1', kind: 'custom' as const },
+      visibleThread: { revision: 1, messages: [] },
+    },
+  };
+}
+
 describe('management tool boundary', () => {
+  it('exposes only the eleven Phase 1 management tools to managed sessions', async () => {
+    const requests: ManagementModelRequest[] = [];
+    const factory = createManagementRuntimeFactory({
+      model: {
+        id: 'phase-1-tool-surface',
+        async respond(request) {
+          requests.push(request);
+          return modelResponse([{ type: 'text', text: 'done' }]);
+        },
+      },
+      toolExecutor: async () => ({ text: 'unused' }),
+    });
+    const session = await factory.createSession({
+      systemPrompt: { id: 'manager', version: 1, content: 'Manage this run.' },
+      mode: 'managed',
+      context: {
+        schemaVersion: 1,
+        scope: {
+          kind: 'managed',
+          managementRunId: 'run-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          rootMessageId: 'message-1',
+        },
+        frozenTarget: { agentId: 'agent-1', kind: 'custom' },
+        visibleThread: { revision: 1, messages: [] },
+      },
+    });
+
+    await session.prompt({ text: 'invoke the target' });
+    await session.waitForIdle();
+
+    expect(PHASE_1_MANAGEMENT_TOOL_NAMES).toHaveLength(11);
+    expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([...PHASE_1_MANAGEMENT_TOOL_NAMES]);
+    expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain('tasks.create_subtasks');
+    expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain('memory.search');
+    await session.dispose();
+  });
+
+  it('keeps managed and shadow descriptors identical without model-supplied authority fields', async () => {
+    const managedRequests: ManagementModelRequest[] = [];
+    const shadowRequests: ManagementModelRequest[] = [];
+    const createFactory = (requests: ManagementModelRequest[]) => createManagementRuntimeFactory({
+      model: {
+        id: 'descriptor-model',
+        async respond(request) {
+          requests.push(request);
+          return modelResponse([{ type: 'text', text: 'done' }]);
+        },
+      },
+      toolExecutor: async () => ({ text: 'unused' }),
+    });
+    const managed = await createFactory(managedRequests).createSession(managedSessionInput('descriptor-managed'));
+    const shadow = await createFactory(shadowRequests).createSession(shadowSessionInput('descriptor-shadow'));
+
+    await managed.prompt({ text: 'plan' });
+    await shadow.prompt({ text: 'plan' });
+    await Promise.all([managed.waitForIdle(), shadow.waitForIdle()]);
+
+    expect(shadowRequests[0]?.tools).toEqual(managedRequests[0]?.tools);
+    const schemas = JSON.stringify(managedRequests[0]?.tools.map((tool) => tool.inputSchema));
+    expect(schemas).not.toMatch(/managementRunId|leaseToken|idempotencyKey/);
+    await Promise.all([managed.dispose(), shadow.dispose()]);
+  });
+
+  it('records shadow write intent hashes without calling the real executor or exposing arguments', async () => {
+    const executorCalls: unknown[] = [];
+    const events: import('../src/index.js').ManagementRuntimeEvent[] = [];
+    const session = await createManagementRuntimeFactory({
+      model: {
+        id: 'shadow-write-model',
+        async respond(_request, state) {
+          if (state.callCount === 1) {
+            return modelResponse([{
+              type: 'toolCall',
+              id: 'shadow-invoke-1',
+              name: 'agents.invoke',
+              arguments: { targetAgentId: 'agent-1', objective: 'SENSITIVE_SHADOW_OBJECTIVE' },
+            }], 'tool_use');
+          }
+          return modelResponse([{ type: 'text', text: 'done' }]);
+        },
+      },
+      toolExecutor: async (call) => {
+        executorCalls.push(call);
+        return { text: 'must-not-run' };
+      },
+    }).createSession(shadowSessionInput('write-intent'));
+    session.subscribe((event) => events.push(event));
+
+    await session.prompt({ text: 'evaluate' });
+    await session.waitForIdle();
+
+    expect(executorCalls).toHaveLength(0);
+    const shadowEvent = events.find((event) => event.type === 'shadow-tool-intent');
+    expect(shadowEvent).toMatchObject({
+      type: 'shadow-tool-intent',
+      schemaVersion: 1,
+      toolCallId: 'shadow-invoke-1',
+      name: 'agents.invoke',
+      argumentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(JSON.stringify(shadowEvent)).not.toContain('SENSITIVE_SHADOW_OBJECTIVE');
+    await session.dispose();
+  });
+
   it('freezes the complete management tool allowlist', () => {
     expect(MANAGEMENT_TOOL_NAMES).toEqual([
       'context.get_root_message',
@@ -65,30 +229,28 @@ describe('management tool boundary', () => {
     expect(MANAGEMENT_TOOL_NAMES.map(getManagementToolMetadata)).toMatchSnapshot();
   });
 
-  it('requires write tool idempotency metadata before invoking the executor', async () => {
+  it('rejects Phase 2 tool calls before invoking the executor', async () => {
     const calls: unknown[] = [];
     const session = await createManagementRuntimeFactory({
       model: {
         id: 'tool-call',
         async respond(_request, state) {
           if (state.callCount === 1) {
-            return {
-              content: [{
+            return modelResponse([{
                 type: 'toolCall',
                 id: 'call-1',
                 name: 'tasks.assign',
-                arguments: { managementRunId: 'run-1', leaseToken: 'lease-1' },
-              }],
-            };
+                arguments: {},
+              }], 'tool_use');
           }
-          return { content: [{ type: 'text', text: 'done' }] };
+          return modelResponse([{ type: 'text', text: 'done' }]);
         },
       },
       toolExecutor: async (call) => {
         calls.push(call);
         return { text: 'assigned' };
       },
-    }).createSession({ systemPrompt: { id: 'manager', version: 1, content: 'Manage.' } });
+    }).createSession(managedSessionInput());
 
     await session.prompt({ text: 'assign' });
     await session.waitForIdle();
@@ -106,61 +268,58 @@ describe('management tool boundary', () => {
         async respond(request, state) {
           requests.push(request);
           if (state.callCount === 1) {
-            return {
-              content: [{
+            return modelResponse([{
                 type: 'toolCall',
                 id: 'call-2',
-                name: 'tasks.assign',
+                name: 'agents.invoke',
                 arguments: {
-                  managementRunId: 'run-1',
-                  leaseToken: 'lease-1',
-                  idempotencyKey: 'assign-1',
+                  targetAgentId: 'agent-1',
+                  objective: 'Handle the request',
                 },
-              }],
-            };
+              }], 'tool_use');
           }
-          return { content: [{ type: 'text', text: 'done' }] };
+          return modelResponse([{ type: 'text', text: 'done' }]);
         },
       },
       toolExecutor: async (call) => {
         calls.push({ name: call.name, metadata: call.metadata });
         return { text: 'assigned' };
       },
-    }).createSession({ systemPrompt: { id: 'manager', version: 1, content: 'Manage.' } });
+    }).createSession(managedSessionInput());
     session.subscribe((event) => events.push(event));
 
     await session.prompt({ text: 'assign' });
     await session.waitForIdle();
     expect(calls).toEqual([{
-      name: 'tasks.assign',
+      name: 'agents.invoke',
       metadata: {
-        name: 'tasks.assign',
+        name: 'agents.invoke',
         effect: 'write',
-        phase: 2,
+        phase: 1,
         inputSchemaVersion: 1,
       },
     }]);
-    const assignDescriptor = requests[0]?.tools.find((tool) => tool.name === 'tasks.assign');
+    const assignDescriptor = requests[0]?.tools.find((tool) => tool.name === 'agents.invoke');
     expect(assignDescriptor).toMatchObject({
-      name: 'tasks.assign',
-      metadata: { effect: 'write', phase: 2, inputSchemaVersion: 1 },
-      inputSchema: { type: 'object', required: expect.arrayContaining(['managementRunId', 'leaseToken', 'idempotencyKey']) },
+      name: 'agents.invoke',
+      metadata: { effect: 'write', phase: 1, inputSchemaVersion: 1 },
+      inputSchema: { type: 'object', properties: {}, additionalProperties: true },
     });
     expect(requests[1]?.messages).toEqual(expect.arrayContaining([
       expect.objectContaining({
         role: 'assistant',
-        content: [expect.objectContaining({ type: 'toolCall', id: 'call-2', name: 'tasks.assign' })],
+        content: [expect.objectContaining({ type: 'toolCall', id: 'call-2', name: 'agents.invoke' })],
       }),
       expect.objectContaining({
         role: 'toolResult',
         toolCallId: 'call-2',
-        toolName: 'tasks.assign',
+        toolName: 'agents.invoke',
         isError: false,
       }),
     ]));
     expect(events).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'tool', phase: 'start', toolCallId: 'call-2', name: 'tasks.assign' }),
-      expect.objectContaining({ type: 'tool', phase: 'end', toolCallId: 'call-2', name: 'tasks.assign', isError: false }),
+      expect.objectContaining({ type: 'tool', phase: 'start', toolCallId: 'call-2', name: 'agents.invoke' }),
+      expect.objectContaining({ type: 'tool', phase: 'end', toolCallId: 'call-2', name: 'agents.invoke', isError: false }),
     ]));
     await session.dispose();
   });
