@@ -153,7 +153,7 @@ test('workflow runs native three-platform SEA jobs and always aggregates real ve
     /name: Consume platform verdict through root gate\r?\n\s+if: always\(\)/,
   );
   assert.match(
-    workflow.replaceAll('\n', '\r\n'),
+    workflow.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n'),
     /name: Consume platform verdict through root gate\r?\n\s+if: always\(\)/,
   );
 });
