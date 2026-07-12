@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
@@ -12,7 +13,13 @@ import {
   diagnosticCodeForStage,
   normalizeSeaPlatform,
   resolvePiRuntimeVersion,
+  SEA_VIRTUAL_ENTRY_URL,
 } from './build-pi-management-sea.mjs';
+
+test('uses an absolute virtual file URL on POSIX and Windows', () => {
+  assert.equal(fileURLToPath(SEA_VIRTUAL_ENTRY_URL, { windows: false }), '/C:/agentbean-pi-sea/entry.cjs');
+  assert.equal(fileURLToPath(SEA_VIRTUAL_ENTRY_URL, { windows: true }), 'C:\\agentbean-pi-sea\\entry.cjs');
+});
 
 test('bundles the real PI management smoke as a self-contained CommonJS entry', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'agentbean-pi-sea-bundle-'));

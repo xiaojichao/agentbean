@@ -22,6 +22,7 @@ import {
 } from './check-pi-management-sea.mjs';
 
 const rootDir = join(fileURLToPath(new URL('.', import.meta.url)), '..');
+export const SEA_VIRTUAL_ENTRY_URL = 'file:///C:/agentbean-pi-sea/entry.cjs';
 const REQUIRED_SMOKE_CHECKS = [
   'runtime-session',
   'effective-tools',
@@ -150,7 +151,7 @@ export async function bundleSeaEntry(outfile, piVersion = loadPiRuntimeVersion()
     format: 'cjs',
     packages: 'bundle',
     define: {
-      'import.meta.url': '"file:///agentbean-pi-sea/entry.cjs"',
+      'import.meta.url': JSON.stringify(SEA_VIRTUAL_ENTRY_URL),
       __AGENTBEAN_PI_VERSION__: JSON.stringify(piVersion),
     },
     metafile: true,
