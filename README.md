@@ -9,7 +9,7 @@ AgentBean 是一个面向人类与 Agent 协作的本地优先团队平台。它
 - **AgentOS 托管型 Agent**：由 OpenClaw、Hermes 等 AgentOS / Gateway 托管，可以作为团队成员响应频道或私聊消息。
 - **自定义 Agent**：用户创建的专属 Agent，连接某台设备上的项目目录和本地工具，把个人工作流转化为团队可协作的能力。
 
-> **当前唯一产品入口是 AgentBean Next**（`apps/*-next` + `packages/*`）。生产 `https://api.agentbean.dev/` 由 `server-next` 提供服务；canonical `@agentbean/daemon@latest` 指向基于 `daemon-next` 的 `0.3.6`。本 Release B 候选变更将从 `main` 退役旧源码；合并前状态只记 `Green local`，合并后还必须用 main CI、production deploy 与 smoke 证明真实发布。
+> **当前唯一产品入口是 AgentBean Next**（`apps/*-next` + `packages/*`）。生产 `https://api.agentbean.dev/` 由 `server-next` 提供服务；canonical `@agentbean/daemon@latest` 指向基于 `daemon-next` 的 `0.3.6`。Release B 已随 PR #485 发布，`main` 已退役旧源码；对应 main CI、Railway deploy、production smoke 与 production-host browser gate 均已通过。
 
 ## 仓库结构
 
@@ -264,7 +264,7 @@ GitHub Actions 会在 PR 和 push 到 `main` 时验证：
 
 ## Legacy / Rollback（旧 AgentBean）
 
-本 Release B 候选分支已删除旧的 `apps/web`、`apps/server`、`apps/daemon`。合并后主线将不再 build、test、deploy 或 publish 旧实现。
+Release B 已删除旧的 `apps/web`、`apps/server`、`apps/daemon`；主线不再 build、test、deploy 或 publish 旧实现。
 
 - 旧 web 页面已不在生产提供流量；生产 Web 入口是 `server-next` 托管的 `web-next` App Router。
 - npm `@agentbean/daemon@latest` 指向 daemon-next `0.3.6`；旧守护进程 `0.1.35` 保留在 registry 的 `legacy` dist-tag 仅作历史归档，Device rollback 必须选择经 server-next smoke 验证的 canonical daemon-next 已发布版本。

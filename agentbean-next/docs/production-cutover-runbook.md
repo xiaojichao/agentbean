@@ -13,7 +13,7 @@
 - Server rollback：与当前 SQLite schema 兼容的上一成功 Railway deployment，或 Git revert 后重新部署 AgentBean Next。
 - 不从 `main` 重建已经退役的 `apps/server`、`apps/web` 或 `apps/daemon`。
 
-本 Release B 候选分支只有本地证据。合并后必须等待 main CI、npm publish、Railway deploy 和 production smoke 全部成功，才能把验收矩阵从 `Green local` 更新为 `Green production`。
+Release B 已通过 PR #485 合并到 `main`，merge commit 为 `b9238c5b8c14b7daf327ecb982f9853a739afd28`。对应 [main CI/CD run 29177487834](https://github.com/xiaojichao/agentbean/actions/runs/29177487834) 的 validate、npm publish gate、Railway deploy 和 production smoke 全部成功；Phase -1 的完整发布证据记录在验收矩阵中。
 
 ## 自动 main 发布
 

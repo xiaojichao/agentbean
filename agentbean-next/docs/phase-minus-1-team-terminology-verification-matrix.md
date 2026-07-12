@@ -16,22 +16,22 @@
 
 | ID | 验收项 | 层级 | 必需证据 | 当前状态 |
 |---|---|---|---|---|
-| P-1-01 | `WEB_EVENTS` 不再暴露旧 admin Team events，只保留 canonical Team events。 | Contracts | `npm run test:contracts`、`npm run build:contracts` | Green Release A |
-| P-1-02 | Server 不注册旧 admin handlers，缺少 `teamId` 时返回 canonical validation error。 | Socket | `socket-handlers.test.ts` | Green Release A |
-| P-1-03 | Device Agent、Admin Agent、Admin Device 响应只包含 `teamId`、`teamName`、`primaryTeamId`、`primaryTeamName`、`visibleTeamIds`。 | UseCase/Socket | `socket-integration.test.ts` | Green Release A |
-| P-1-04 | Fresh global SQLite 使用 `teams`、`team_members` 和 Team snake_case columns。 | Repository | `sqlite-repositories.test.ts`、schema inspection | Green Release A |
-| P-1-05 | 0011 形状的 `device_revocations` 可升级到 snake_case，普通 profile、`NULL profile_id`、主键和索引全部保留。 | Repository/Migration | `device-revocations-repository.test.ts`、`sqlite-repositories.test.ts`、production row/index inspection 与 revoked Device rejection | Green Release A |
-| P-1-06 | Web socket/client/store 不再声明、映射或发送 non-canonical Team aliases/fields。 | Web unit | `socket-client.test.ts`、`npm run build:web-next` | Green Release A |
-| P-1-07 | App Router 动态 segment 为 `[teamPath]`，团队管理入口为 `/:teamPath/teams`；Release A 的旧收藏 URL 只经过 permanent redirect，不保留旧页面实现。 | Web route | route manifest、redirect test、Web build、browser smoke | Green Release A |
-| P-1-08 | Release A 首次读取旧 browser key 时写入 `agentbean.teamPath` 并删除旧键，此后不再写旧键。 | Web storage | `team-path.test.ts`、真实浏览器 storage inspection | Green Release A |
-| P-1-09 | Release B 删除旧 browser key 读取、旧 Team 页面 redirect 和全部 checker allowlist。 | Web/CI | `team-path.test.ts`、redirect test、`npm run check:team-terminology` | Green local |
-| P-1-10 | Artifact upload proxy 与 Server HTTP 只存在 `/api/teams/:teamId/...`。 | HTTP/Web | route existence test、multipart upload/preview/download smoke | Green Release A |
-| P-1-11 | Device list/Agent 查询显式使用 `teamId`；device-bound get/scan/select-directory/delete/rename 只使用 `deviceId`；invite/login/custom Agent create 符合各自 canonical contract。 | Device/Web/E2E | targeted tests、browser Device flow | Green Release A |
-| P-1-12 | `main` 不再构建、测试、部署或发布 legacy source trees；Server rollback 使用 Git/Railway，Device rollback 使用经 server-next smoke 验证的 canonical npm artifact。 | Repository/CI/Operations | cutover audit、workflow inspection、rollback runbook、npm dist-tags | Green local |
-| P-1-13 | README、AgentBean Next 活动文档和当前 specs 只描述 Team product contract。 | Docs | 活动文档静态扫描零结果 | Green Release A |
-| P-1-14 | CI 静态门禁能拒绝旧字段、事件、route、storage key、schema 和已废弃产品名。 | CI | checker unit tests、PR check | Green Release A |
-| P-1-15 | Contracts、Domain、Server、Daemon、Web tests 与全部 TypeScript builds 通过。 | Regression | root test/build commands、CI run URL | Green Release A |
-| P-1-16 | Release B 后真实 Team switch、Device 接入、Artifact 上传和 SQLite revocation 行为通过 production smoke。 | Production | deploy URL/run、smoke logs、DB backup/upgrade evidence | Not started |
+| P-1-01 | `WEB_EVENTS` 不再暴露旧 admin Team events，只保留 canonical Team events。 | Contracts | `npm run test:contracts`、`npm run build:contracts` | Green production |
+| P-1-02 | Server 不注册旧 admin handlers，缺少 `teamId` 时返回 canonical validation error。 | Socket | `socket-handlers.test.ts` | Green production |
+| P-1-03 | Device Agent、Admin Agent、Admin Device 响应只包含 `teamId`、`teamName`、`primaryTeamId`、`primaryTeamName`、`visibleTeamIds`。 | UseCase/Socket | `socket-integration.test.ts` | Green production |
+| P-1-04 | Fresh global SQLite 使用 `teams`、`team_members` 和 Team snake_case columns。 | Repository | `sqlite-repositories.test.ts`、schema inspection | Green production |
+| P-1-05 | 0011 形状的 `device_revocations` 可升级到 snake_case，普通 profile、`NULL profile_id`、主键和索引全部保留。 | Repository/Migration | `device-revocations-repository.test.ts`、`sqlite-repositories.test.ts`、production row/index inspection 与 revoked Device rejection | Green production |
+| P-1-06 | Web socket/client/store 不再声明、映射或发送 non-canonical Team aliases/fields。 | Web unit | `socket-client.test.ts`、`npm run build:web-next` | Green production |
+| P-1-07 | App Router 动态 segment 为 `[teamPath]`，团队管理入口为 `/:teamPath/teams`；Release A 的旧收藏 URL 只经过 permanent redirect，不保留旧页面实现。 | Web route | route manifest、redirect test、Web build、browser smoke | Green production |
+| P-1-08 | Release A 首次读取旧 browser key 时写入 `agentbean.teamPath` 并删除旧键，此后不再写旧键。 | Web storage | `team-path.test.ts`、真实浏览器 storage inspection | Green production |
+| P-1-09 | Release B 删除旧 browser key 读取、旧 Team 页面 redirect 和全部 checker allowlist。 | Web/CI | `team-path.test.ts`、redirect test、`npm run check:team-terminology` | Green production |
+| P-1-10 | Artifact upload proxy 与 Server HTTP 只存在 `/api/teams/:teamId/...`。 | HTTP/Web | route existence test、multipart upload/preview/download smoke | Green production |
+| P-1-11 | Device list/Agent 查询显式使用 `teamId`；device-bound get/scan/select-directory/delete/rename 只使用 `deviceId`；invite/login/custom Agent create 符合各自 canonical contract。 | Device/Web/E2E | targeted tests、browser Device flow | Green production |
+| P-1-12 | `main` 不再构建、测试、部署或发布 legacy source trees；Server rollback 使用 Git/Railway，Device rollback 使用经 server-next smoke 验证的 canonical npm artifact。 | Repository/CI/Operations | cutover audit、workflow inspection、rollback runbook、npm dist-tags | Green production |
+| P-1-13 | README、AgentBean Next 活动文档和当前 specs 只描述 Team product contract。 | Docs | 活动文档静态扫描零结果 | Green production |
+| P-1-14 | CI 静态门禁能拒绝旧字段、事件、route、storage key、schema 和已废弃产品名。 | CI | checker unit tests、PR check | Green production |
+| P-1-15 | Contracts、Domain、Server、Daemon、Web tests 与全部 TypeScript builds 通过。 | Regression | root test/build commands、CI run URL | Green production |
+| P-1-16 | Release B 后真实 Team switch、Device 接入、Artifact 上传和 SQLite revocation 行为通过 production smoke。 | Production | deploy URL/run、smoke logs、DB backup/upgrade evidence | Green production |
 
 ## 2026-07-10 Release A 本地证据
 
@@ -69,7 +69,18 @@
 - `device-login` production inspection 已完成：真实 `device-invite:create`、已发布 `@agentbean/daemon@0.3.5` 等待/注册、浏览器账号登录与 canonical Team Device 页面形成完整链路；最终 Device 与 Team browser identity 均写入，旧 browser path key 不存在，相关 RSC 请求为 HTTP 200，console 0 error/0 warning。证据见 [Issue #469 observation](https://github.com/xiaojichao/agentbean/issues/469#issuecomment-4947472515)。
 - `2026-07-12 00:21–00:27`（Asia/Shanghai）每日 production observation 已完成：strict cutover audit `12/12`、entry `4/4`、business `8/8`、production-host combined browser `39/39` 均通过，preview/WebUI console 无 error；当前 npm truth 为 `@agentbean/daemon-next@0.3.6`、canonical `@agentbean/daemon@0.3.6` 且 `latest` 指向 `0.3.6`。证据见 [Issue #469 daily observation](https://github.com/xiaojichao/agentbean/issues/469#issuecomment-4947642857)。
 
-当前 Phase -1 仍为 `in_progress`。P-1-09 与 P-1-12 已达到 `Green local`，P-1-16 仍要求 Release B 合并后的 production evidence。production Admin DTO rendering 可继续作为独立增强证据补充，但不阻塞 P-1-09/P-1-12；Release A 的发布前 backup 证据缺失，old-target schema rollback 保持冻结，发布后观察快照不是旧 binary 的恢复点。
+## 2026-07-12 Release B 已发布证据
+
+- Release B 通过 [PR #485](https://github.com/xiaojichao/agentbean/pull/485) 合并到 `main`，merge commit 为 `b9238c5b8c14b7daf327ecb982f9853a739afd28`；跟踪 Issue #484 已由 closing keyword 关闭。
+- 对应 [main CI/CD run 29177487834](https://github.com/xiaojichao/agentbean/actions/runs/29177487834) 结论为 `success`。Validate AgentBean Next、Publish agent to npm、Deploy production、AgentBean Next production smoke 四个串行 job 均成功。
+- publish job 先验证 `legacy=0.1.35` 历史归档，再确认 contracts、daemon-next 和 canonical daemon `0.3.6` 已存在，因此三个幂等 publish step 正确跳过；独立 registry 查询再次得到 `latest=0.3.6`、`legacy=0.1.35`。
+- Railway deploy job 对 merge commit 执行 production readiness `59/59`，`railway up` 输出 `Deploy complete`。workflow 未输出不可变 deployment ID，因此以 [Deploy production job 86609340386](https://github.com/xiaojichao/agentbean/actions/runs/29177487834/job/86609340386) 作为可追溯 deployment run 证据，不虚构 ID。
+- production smoke job 先通过 strict cutover audit `12/12`，随后 healthcheck、public entry `4/4` 与 business `8/8` 全部成功；独立访问 `https://api.agentbean.dev/healthz` 返回 `{"ok":true,"service":"agentbean-next-server"}`。
+- `2026-07-12 11:08`（Asia/Shanghai）从 merge commit 对 `https://api.agentbean.dev` 运行 production-host combined browser gate，`39/39` 通过，preview/WebUI console 均无 error。真实链路覆盖 Team create/switch/delete/restore、Device register/runtime/custom Agent/scan/rename/delete、Artifact upload/preview/download、刷新恢复、任务、Run、成员与设置；artifact 保存在 `/private/tmp/agentbean-phase-minus-1-release-b-production-browser/`。
+- SQLite revocation 结论由三段可复现证据组成：本次 production browser 的真实 Device delete 触发 revocation 写入；main CI 的 SQLite/device revocation regressions 全部通过；Release A 已在同一 production schema/volume 上完成普通与 `NULL profile_id` 凭据重连双重 `DEVICE_REVOKED` 和 query-only row/PK/index/integrity inspection。Release B 未修改 migration 或 revocation 实现。本次没有再次执行删除后重连或 production DB query，不把这两个动作描述为本次新证据。
+- Release A 发布前 global SQLite backup 证据仍然缺失；同 volume post-deploy snapshots 不能替代它，old-target schema rollback 继续冻结。这是已记录的恢复限制，不改变 Release B 当前 server-next deploy、数据完整性和 canonical rollback 合同的通过结论。
+
+Phase -1 的 P-1-01 至 P-1-16 均达到 `Green production`。verification-only closeout PR 合并后，Phase -1 状态为 `complete`，可以开始编写 Phase 0 的独立实施计划。production Admin DTO rendering 仍可作为独立增强证据补充，但不阻塞 Phase -1；不得因完成状态解除 old-target schema rollback 冻结。
 
 ## Release A 风险证据台账
 
@@ -137,10 +148,10 @@ Release B 删除一次性 browser migration、旧 Team 页面 redirect、checker
 - Release A production deployment：Railway `58e4c03e-1e73-4513-85c7-74705709b488`（RUNNING）
 - Release A SQLite backup / snapshot path、size、SHA256：见“2026-07-11 Release A 已发布证据”；仅有同 volume post-deploy observation snapshots，pre-release backup evidence 缺失
 - Release A browser smoke：main CI combined browser `39/39`；latest-main production-host combined browser `39/39`（`2026-07-11 19:09`，Asia/Shanghai）
-- Release B 证据门禁复验：2026-07-12，cutover `12/12`、entry `4/4`、business `8/8`、npm `latest=0.3.6` / `legacy=0.1.35`（仅历史归档）；本地完整测试 contracts `9/9`、domain `24/24`、server-next `381/381`、daemon-next `223/223`（1 个既有 e2e skip）、web-next `199/199`，combined browser `39/39`、persistence `6/6`、daemon install smoke 与全量 build 通过；最终 CI/runbook 修正后 readiness `55/55`、terminology `6/6` / 19 roots、workflow YAML 与 `git diff --check` 通过，code review `APPROVE`、architecture review `CLEAR`
-- Release B merge commit：
-- Release B `main` CI run：
-- Release B production deployment：
-- Release B terminology checker：
-- Release B Team/Device/Artifact production smoke：
-- npm `@agentbean/daemon` dist-tags 查询结果：
+- Release B 证据门禁复验：2026-07-12，cutover `12/12`、entry `4/4`、business `8/8`、npm `latest=0.3.6` / `legacy=0.1.35`（仅历史归档）；本地完整测试 contracts `9/9`、domain `24/24`、server-next `382/382`、daemon-next `223/223`（1 个既有 e2e skip）、web-next `199/199`，combined browser `39/39`、persistence `6/6`、daemon install smoke 与全量 build 通过；最终 CI/runbook 修正后 readiness `55/55`、terminology `6/6` / 19 roots、workflow YAML 与 `git diff --check` 通过，code review `APPROVE`、architecture review `CLEAR`
+- Release B merge commit：`b9238c5b8c14b7daf327ecb982f9853a739afd28`
+- Release B `main` CI run：<https://github.com/xiaojichao/agentbean/actions/runs/29177487834>（success）
+- Release B production deployment：[Deploy production job 86609340386](https://github.com/xiaojichao/agentbean/actions/runs/29177487834/job/86609340386)（success，Railway `Deploy complete`；workflow 未输出 deployment ID）
+- Release B terminology checker：main CI `Enforce Team terminology` success；checker `6/6` / 19 roots
+- Release B Team/Device/Artifact production smoke：main production smoke success；`2026-07-12 11:08` production-host combined browser `39/39`，console clean，artifacts `/private/tmp/agentbean-phase-minus-1-release-b-production-browser/`
+- npm `@agentbean/daemon` dist-tags 查询结果：`latest=0.3.6`、`legacy=0.1.35`（历史归档，不可用于 server-next Device rollback）
