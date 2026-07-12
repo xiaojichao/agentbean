@@ -103,6 +103,10 @@ describe('AgentBean Next readiness checker', () => {
       ].join('\n'),
     };
     expect(hasPhase0CiGate(valid)).toBe(true);
+    expect(hasPhase0CiGate({
+      ...valid,
+      seaWorkflow: valid.seaWorkflow.replaceAll('\n', '\r\n'),
+    })).toBe(true);
 
     for (const bypass of [
       { scripts: { ...valid.scripts, 'test:phase0': 'npm run test:pi-management-runtime' } },

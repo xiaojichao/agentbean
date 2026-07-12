@@ -763,7 +763,7 @@ function ciDetectsPhase0Changes(workflow) {
 function seaWorkflowConsumesRootVerdictCheck(seaWorkflow) {
   return seaWorkflow.includes('- packages/contracts/**') &&
     seaWorkflow.includes('- packages/domain/**') &&
-    /name: Consume platform verdict through root gate\n\s+if: always\(\)\n\s+run: npm run check:pi-sea-compatibility -- --file artifacts\/pi-sea-verdict\/verdict\.json/u.test(seaWorkflow);
+    /name: Consume platform verdict through root gate\r?\n\s+if: always\(\)\r?\n\s+run: npm run check:pi-sea-compatibility -- --file artifacts\/pi-sea-verdict\/verdict\.json/u.test(seaWorkflow);
 }
 
 export function summarizeReadiness(checks) {

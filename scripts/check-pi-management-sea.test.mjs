@@ -150,6 +150,10 @@ test('workflow runs native three-platform SEA jobs and always aggregates real ve
   assert.doesNotMatch(workflow, /name: Build and execute PI management SEA\n\s+if: always\(\)/);
   assert.match(
     workflow,
-    /name: Consume platform verdict through root gate\n\s+if: always\(\)/,
+    /name: Consume platform verdict through root gate\r?\n\s+if: always\(\)/,
+  );
+  assert.match(
+    workflow.replaceAll('\n', '\r\n'),
+    /name: Consume platform verdict through root gate\r?\n\s+if: always\(\)/,
   );
 });
