@@ -1432,7 +1432,7 @@ git commit -m "防止旧空间模型重新进入 AgentBean 主线" \
 - Consumes: Release A 使用 Tasks 1-7、9-10 的产物；Release B 在真实风险证据门禁通过后再加入 Task 8 的产物。
 - Produces: 两阶段生产发布证据；Release B 后零兼容读取和零 allowlist，Phase -1 才算完成。
 
-- [ ] **Step 1: 执行 Release A 前完整本地验证**
+- [x] **Step 1: 执行 Release A 前完整本地验证**
 
 Run:
 
@@ -1456,9 +1456,9 @@ npm run smoke:agentbean-next-browser
 
 Expected: 全部 exit 0；任何失败都必须在 Release A 前修复。
 
-- [ ] **Step 2: 备份生产 SQLite 并发布 Release A**
+- [x] **Step 2: 发布 Release A 并记录 SQLite backup / upgrade truth**
 
-发布前记录 global DB backup 路径、size、SHA256 和创建时间。发布后验证：
+原计划要求发布前记录 global DB backup 路径、size、SHA256 和创建时间；实际发布前 backup 没有可验证证据。验收矩阵已如实记录该缺口、同 volume post-deploy snapshots 及其校验和，并冻结 old-target schema rollback。发布后已验证：
 
 - Team create/switch/delete/fallback；
 - Device invite、连接、scan、rename；
@@ -1484,7 +1484,7 @@ Expected: post-deploy `main` CI、Deploy production、Publish agent to npm、pro
 
 上述风险信号、incident 关闭状态和 server-next-compatible recovery artifact 全部满足后，先执行 Task 8；Task 8 完成并重新验证 recovery artifact 后，才进入以下 Release B cleanup。固定 7 天等待已取消，因为时间本身不证明兼容性或可恢复性。
 
-- [ ] **Step 4: 写 Release B 的失败测试，要求不再读取旧键或旧页面 redirect**
+- [x] **Step 4: 写 Release B 的失败测试，要求不再读取旧键或旧页面 redirect**
 
 把 `team-path.test.ts` 改为：
 
@@ -1512,7 +1512,7 @@ Run: `cd apps/web-next && npm run test -- tests/team-path.test.ts --api.host 127
 
 Expected: FAIL，Release A helper 仍迁移旧键。
 
-- [ ] **Step 5: 删除旧键读取、Team 页面 redirect 和静态门禁 allowlist**
+- [x] **Step 5: 删除旧键读取、Team 页面 redirect 和静态门禁 allowlist**
 
 Release B 的 `readStoredTeamPath()` 只读取新键：
 
@@ -1530,13 +1530,13 @@ export function writeStoredTeamPath(storage: StorageLike, teamPath: string): voi
 
 删除 `next.config.mjs` 的旧 Team 页面 redirect，并删除 checker 对 `team-path.ts`、`team-path.test.ts` 和 `next.config.mjs` 的 allowlist；重新运行 `npm run check:team-terminology` 必须零结果。
 
-- [ ] **Step 6: 运行 Release B 完整本地验证**
+- [x] **Step 6: 运行 Release B 完整本地验证**
 
 重复 Task 11 Step 1 的全部命令。
 
 Expected: 全绿；browser smoke 只写新键；活动源码、schema、tests 和活动文档零匹配。此时验收矩阵最多标记 `Green local`，不能填写尚未发生的 merge、CI 或 production evidence。
 
-- [ ] **Step 7: Commit、review 并合并 Release B cleanup**
+- [x] **Step 7: Commit、review 并合并 Release B cleanup**
 
 ```bash
 git add apps/web-next/lib/team-path.ts apps/web-next/tests/team-path.test.ts apps/web-next/next.config.mjs scripts/check-team-terminology.mjs agentbean-next/docs/phase-minus-1-team-terminology-verification-matrix.md agentbean-next/docs/production-cutover-runbook.md
@@ -1550,7 +1550,7 @@ git commit -m "结束 Team path 的一次性浏览器迁移窗口" \
 
 Task 8 的 legacy retirement commit 与本 cleanup commit 必须进入同一个 Release B PR。通过 review 和 PR checks 后合并到 `main`；尚未合并时不得声称已经发布。
 
-- [ ] **Step 8: 发布 Release B、验证生产并用 verification-only PR 收口证据**
+- [x] **Step 8: 发布 Release B、验证生产并用 verification-only PR 收口证据**
 
 Release B PR 合并后等待对应 `main` CI、Deploy production、Publish agent to npm 和 production smoke 完成，再验证 Team、Device、Artifact、revocation、browser storage 和 redirect 真实行为。
 
@@ -1593,10 +1593,10 @@ verification-only PR 合并且矩阵全部为 `Green production` 后，Phase -1 
 
 ## Self-Review Checklist
 
-- [ ] Spec coverage：Phase -1 的文档、contracts、Server/Web/Device、routes、storage、schema、CI 和 smoke 均有对应 task。
-- [ ] Placeholder scan：计划中不存在占位项、空泛“补测试”或未定义接口。
-- [ ] Type consistency：所有 downstream tasks 使用 `teamId/teamPath/primaryTeamId/visibleTeamIds/currentTeamId`。
-- [ ] Migration safety：没有修改已应用 migration；revocation upgrade 保留 `NULL profile_id` 和所有行。
-- [ ] Atomicity：Server DTO 删除与 Web consumer 修改在同一 Release A。
-- [ ] Rollback：schema rollback 使用 backup，应用 rollback 使用 Railway/Git，Device rollback 使用经 server-next smoke 验证的 canonical daemon-next 已发布版本；禁止使用 npm `legacy=0.1.35`。
-- [ ] Completion truth：Release B 删除一次性旧键读取和 checker allowlist 后才标记 Phase -1 Green。
+- [x] Spec coverage：Phase -1 的文档、contracts、Server/Web/Device、routes、storage、schema、CI 和 smoke 均有对应 task。
+- [x] Placeholder scan：计划中不存在占位项、空泛“补测试”或未定义接口。
+- [x] Type consistency：所有 downstream tasks 使用 `teamId/teamPath/primaryTeamId/visibleTeamIds/currentTeamId`。
+- [x] Migration safety：没有修改已应用 migration；revocation upgrade 保留 `NULL profile_id` 和所有行。
+- [x] Atomicity：Server DTO 删除与 Web consumer 修改在同一 Release A。
+- [x] Rollback：schema rollback 只在存在可验证 backup 时执行，应用 rollback 使用 Railway/Git，Device rollback 使用经 server-next smoke 验证的 canonical daemon-next 已发布版本；禁止使用 npm `legacy=0.1.35`。Release A 发布前 backup 缺失，因此 old-target schema rollback 保持冻结。
+- [x] Completion truth：Release B 删除一次性旧键读取和 checker allowlist 后才标记 Phase -1 Green。
