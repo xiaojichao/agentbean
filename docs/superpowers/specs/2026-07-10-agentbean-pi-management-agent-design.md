@@ -1078,6 +1078,7 @@ agentbean device uninstall
 
 ### Phase 0：契约与 PI 兼容性验证
 
+- 独立实施计划：`docs/superpowers/plans/2026-07-12-agentbean-phase-0-pi-contract-compatibility.md`。
 - 固定 PI SDK wrapper，只暴露 `AgentSession`、event、tool、compaction、abort、steer/followUp 的必要子集。
 - 验证 `@earendil-works/pi-coding-agent` 与目标 Node SEA 打包方式。
 - 建立 Management Tool 权限测试和无 coding tools 断言。
