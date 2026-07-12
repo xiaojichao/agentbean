@@ -22,7 +22,13 @@ import {
   getManagementToolMetadata,
 } from './management-tool-catalog.js';
 import {
+  normalizeManagementModelResponse,
+  safeProviderFailureTelemetry,
+  toPiStopReason,
+} from './provider-adapter.js';
+import {
   MANAGEMENT_TOOL_NAMES,
+  PHASE_1_MANAGEMENT_TOOL_NAMES,
   type CreateManagementRuntimeFactoryInput,
   type CreateManagementSessionInput,
   type ManagementCompactionRequest,
@@ -30,13 +36,50 @@ import {
   type ManagementModelAdapter,
   type ManagementModelContent,
   type ManagementModelMessage,
+  type ManagementModelTelemetry,
   type ManagementRuntimeEvent,
   type ManagementRuntimeFactory,
   type ManagementSession,
+  type ManagementSessionContextV1,
   type ManagementToolName,
 } from './types.js';
 
 let runtimeSequence = 0;
+
+function cloneAndFreeze<T>(value: T): T {
+  const clone = structuredClone(value);
+  const freeze = (entry: unknown): void => {
+    if (!entry || typeof entry !== 'object' || Object.isFrozen(entry)) return;
+    for (const nested of Object.values(entry)) freeze(nested);
+    Object.freeze(entry);
+  };
+  freeze(clone);
+  return clone;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function assertSessionContext(input: CreateManagementSessionInput): void {
+  const { context, mode } = input;
+  const scope = context?.scope;
+  const validCommon = context?.schemaVersion === 1
+    && isNonEmptyString(scope?.teamId)
+    && isNonEmptyString(scope?.channelId)
+    && isNonEmptyString(scope?.rootMessageId)
+    && isNonEmptyString(context?.frozenTarget?.agentId)
+    && (context?.frozenTarget?.kind === 'custom' || context?.frozenTarget?.kind === 'agentos-hosted')
+    && Number.isInteger(context?.visibleThread?.revision)
+    && context.visibleThread.revision >= 0
+    && Array.isArray(context?.visibleThread?.messages);
+  const validScope = mode === 'managed'
+    ? scope?.kind === 'managed' && isNonEmptyString(scope.managementRunId)
+    : mode === 'shadow'
+      && scope?.kind === 'shadow'
+      && isNonEmptyString(scope.shadowRequestKey);
+  if (!validCommon || !validScope) throw new Error('P1_SESSION_CONTEXT_INVALID');
+}
 
 function textItems(content: unknown) {
   if (typeof content === 'string') return [{ type: 'text' as const, text: content }];
@@ -80,22 +123,28 @@ function messagesFromContext(context: Context): ManagementModelMessage[] {
   });
 }
 
-function emptyUsage() {
+function piUsage(telemetry: ManagementModelTelemetry) {
   return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
+    input: telemetry.usage.inputTokens,
+    output: telemetry.usage.outputTokens,
+    cacheRead: telemetry.usage.cacheReadTokens,
+    cacheWrite: telemetry.usage.cacheWriteTokens,
+    totalTokens: telemetry.usage.totalTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
 }
+
+type AssistantMessageWithTelemetry = AssistantMessage & {
+  __agentbeanTelemetry: ManagementModelTelemetry;
+};
 
 function createStreamSimple(
   adapter: ManagementModelAdapter,
   providerId: string,
   apiId: string,
   systemPrompt: string,
+  expectedToolNames: readonly ManagementToolName[],
+  sessionContext: ManagementSessionContextV1,
 ) {
   let callCount = 0;
   return (_model: Model<string>, context: Context, options?: SimpleStreamOptions) => {
@@ -104,21 +153,22 @@ function createStreamSimple(
       try {
         callCount += 1;
         const effectiveToolNames = (context.tools ?? []).map((tool) => tool.name as ManagementToolName);
-        assertExactManagementToolAllowlist(effectiveToolNames);
+        assertExactManagementToolAllowlist(effectiveToolNames, expectedToolNames);
         const tools = (context.tools ?? []).map((tool) => ({
           name: tool.name as ManagementToolName,
           description: tool.description,
           inputSchema: structuredClone(tool.parameters) as Record<string, unknown>,
           metadata: getManagementToolMetadata(tool.name as ManagementToolName),
         }));
-        const response = await adapter.respond({
+        const response = normalizeManagementModelResponse(await adapter.respond({
           systemPrompt,
+          sessionContext,
           messages: messagesFromContext(context),
           tools,
           signal: options?.signal,
-        }, { callCount });
+        }, { callCount }));
         for (const item of response.content) {
-          if (item.type === 'toolCall' && !MANAGEMENT_TOOL_NAMES.includes(item.name)) {
+          if (item.type === 'toolCall' && !expectedToolNames.includes(item.name)) {
             throw new Error(`P0_MODEL_TOOL_REJECTED: ${String(item.name)}`);
           }
         }
@@ -130,30 +180,47 @@ function createStreamSimple(
               name: item.name,
               arguments: item.arguments,
             });
-        const hasToolCall = content.some((item) => item.type === 'toolCall');
-        const message: AssistantMessage = {
+        const telemetry: ManagementModelTelemetry = {
+          usage: response.usage,
+          finishReason: response.finishReason,
+          responseModel: response.responseModel,
+        };
+        const stopReason = toPiStopReason(response.finishReason);
+        const message: AssistantMessageWithTelemetry = {
           role: 'assistant',
           content,
           api: apiId,
           provider: providerId,
-          model: adapter.id,
-          usage: emptyUsage(),
-          stopReason: hasToolCall ? 'toolUse' : 'stop',
+          model: response.responseModel,
+          usage: piUsage(telemetry),
+          stopReason,
           timestamp: Date.now(),
+          __agentbeanTelemetry: telemetry,
         };
         stream.push({ type: 'start', partial: { ...message, content: [] } });
-        stream.push({ type: 'done', reason: hasToolCall ? 'toolUse' : 'stop', message });
-      } catch (error) {
-        const message: AssistantMessage = {
+        if (stopReason === 'error' || stopReason === 'aborted') {
+          stream.push({ type: 'error', reason: stopReason, error: message });
+        } else {
+          stream.push({ type: 'done', reason: stopReason, message });
+        }
+      } catch {
+        const telemetry = safeProviderFailureTelemetry({
+          aborted: options?.signal?.aborted ?? false,
+          responseModel: adapter.id,
+        });
+        const message: AssistantMessageWithTelemetry = {
           role: 'assistant',
           content: [],
           api: apiId,
           provider: providerId,
           model: adapter.id,
-          usage: emptyUsage(),
-          stopReason: options?.signal?.aborted ? 'aborted' : 'error',
-          errorMessage: error instanceof Error ? error.message : 'management model failure',
+          usage: piUsage(telemetry),
+          stopReason: telemetry.finishReason === 'aborted' ? 'aborted' : 'error',
+          errorMessage: telemetry.finishReason === 'aborted'
+            ? 'MANAGEMENT_PROVIDER_ABORTED'
+            : 'MANAGEMENT_PROVIDER_FAILED',
           timestamp: Date.now(),
+          __agentbeanTelemetry: telemetry,
         };
         stream.push({ type: 'error', reason: message.stopReason === 'aborted' ? 'aborted' : 'error', error: message });
       }
@@ -168,7 +235,12 @@ function normalizeEvent(event: AgentSessionEvent): ManagementRuntimeEvent {
     return { type: 'lifecycle', phase: event.type };
   }
   if (event.type === 'message_end') {
-    if (event.message.role === 'user' || event.message.role === 'assistant' || event.message.role === 'toolResult') {
+    if (event.message.role === 'assistant') {
+      const telemetry = (event.message as AssistantMessageWithTelemetry).__agentbeanTelemetry;
+      if (!telemetry) return { type: 'unsupported', eventType: 'message_end:assistant_without_telemetry' };
+      return { type: 'message', role: 'assistant', telemetry: structuredClone(telemetry) };
+    }
+    if (event.message.role === 'user' || event.message.role === 'toolResult') {
       return { type: 'message', role: event.message.role };
     }
     return { type: 'unsupported', eventType: `message_end:${event.message.role}` };
@@ -230,6 +302,7 @@ class PiManagementSession implements ManagementSession {
   constructor(
     private readonly session: AgentSession,
     private readonly cleanup: () => void,
+    private readonly localListeners: Set<(event: ManagementRuntimeEvent) => void>,
   ) {}
 
   prompt(input: { text: string }): Promise<void> {
@@ -270,7 +343,12 @@ class PiManagementSession implements ManagementSession {
   }
 
   subscribe(listener: (event: ManagementRuntimeEvent) => void): () => void {
-    return this.session.subscribe((event) => listener(normalizeEvent(event)));
+    this.localListeners.add(listener);
+    const unsubscribePi = this.session.subscribe((event) => listener(normalizeEvent(event)));
+    return () => {
+      this.localListeners.delete(listener);
+      unsubscribePi();
+    };
   }
 
   async dispose(): Promise<void> {
@@ -297,7 +375,10 @@ class PiManagementRuntimeFactory implements ManagementRuntimeFactory {
       || input.systemPrompt.version < 1 || !input.systemPrompt.content.trim()) {
       throw new Error('P0_SYSTEM_PROMPT_INVALID');
     }
+    assertSessionContext(input);
     runtimeSequence += 1;
+    const sessionContext = cloneAndFreeze(input.context);
+    const effectiveToolNames = [...PHASE_1_MANAGEMENT_TOOL_NAMES];
     const providerId = `agentbean-management-runtime-${runtimeSequence}`;
     const apiId = providerId;
     const authStorage = AuthStorage.inMemory();
@@ -308,7 +389,14 @@ class PiManagementRuntimeFactory implements ManagementRuntimeFactory {
       baseUrl: 'http://agentbean.invalid',
       api: apiId,
       apiKey: 'agentbean-in-memory-provider',
-      streamSimple: createStreamSimple(this.input.model, providerId, apiId, input.systemPrompt.content),
+      streamSimple: createStreamSimple(
+        this.input.model,
+        providerId,
+        apiId,
+        input.systemPrompt.content,
+        effectiveToolNames,
+        sessionContext,
+      ),
       models: [{
         id: this.input.model.id,
         name: this.input.model.id,
@@ -321,11 +409,20 @@ class PiManagementRuntimeFactory implements ManagementRuntimeFactory {
       }],
     });
     let createdSession: AgentSession | undefined;
+    const localListeners = new Set<(event: ManagementRuntimeEvent) => void>();
     try {
       const model = modelRegistry.find(providerId, this.input.model.id);
       if (!model) throw new Error('P0_MODEL_REGISTRATION_FAILED');
 
-      const customTools = createManagementToolCatalog(this.input.toolExecutor);
+      const customTools = createManagementToolCatalog({
+        executor: this.input.toolExecutor,
+        toolNames: effectiveToolNames,
+        mode: input.mode,
+        sessionContext,
+        emitRuntimeEvent: (event) => {
+          for (const listener of localListeners) listener(event);
+        },
+      });
       const { session } = await createAgentSession({
         cwd: '/',
         agentDir: '/',
@@ -333,7 +430,7 @@ class PiManagementRuntimeFactory implements ManagementRuntimeFactory {
         modelRegistry,
         model,
         noTools: 'builtin',
-        tools: [...MANAGEMENT_TOOL_NAMES],
+        tools: effectiveToolNames,
         customTools,
         resourceLoader: createManagementResourceLoader(input.systemPrompt.content),
         sessionManager: SessionManager.inMemory('/'),
@@ -344,8 +441,12 @@ class PiManagementRuntimeFactory implements ManagementRuntimeFactory {
       });
       createdSession = session;
       const effectiveTools = session.getActiveToolNames();
-      assertExactManagementToolAllowlist(effectiveTools as ManagementToolName[]);
-      return new PiManagementSession(session, () => modelRegistry.unregisterProvider(providerId));
+      assertExactManagementToolAllowlist(effectiveTools as ManagementToolName[], effectiveToolNames);
+      return new PiManagementSession(
+        session,
+        () => modelRegistry.unregisterProvider(providerId),
+        localListeners,
+      );
     } catch (error) {
       await cleanupFailedSession(createdSession, () => modelRegistry.unregisterProvider(providerId));
       throw error;

@@ -137,6 +137,26 @@ test('allows the dedicated SEA scripts to inspect PI manifests but not import th
   });
 });
 
+test('allows dedicated readiness guards to inspect PI manifests but not import the SDK', () => {
+  withFixture((root) => {
+    scaffoldWrapper(root);
+    for (const path of [
+      'scripts/check-agentbean-next-readiness.mjs',
+      'scripts/check-phase-1-management-boundary.mjs',
+      'scripts/check-phase-1-management-boundary.test.mjs',
+    ]) {
+      write(root, path, "const packageName = '@earendil-works/pi-coding-agent';\n");
+    }
+    let result = runChecker(root);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    write(root, 'scripts/check-phase-1-management-boundary.mjs', "import '@earendil-works/pi-coding-agent';\n");
+    result = runChecker(root);
+    assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /scripts\/check-phase-1-management-boundary\.mjs:1:PI_BOUNDARY_VIOLATION/);
+  });
+});
+
 test('rejects PI dependencies from the root manifest', () => {
   withFixture((root) => {
     scaffoldWrapper(root);

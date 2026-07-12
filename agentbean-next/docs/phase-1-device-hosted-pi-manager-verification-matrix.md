@@ -2,16 +2,16 @@
 
 - 基线计划：`docs/superpowers/plans/2026-07-12-agentbean-phase-1-device-hosted-pi-manager.md`
 - 前置矩阵：`agentbean-next/docs/phase-0-pi-contract-compatibility-verification-matrix.md`
-- 当前实施切片：计划阶段
-- Phase 1 总体状态：Not started
+- 当前实施切片：Task 2（PI runtime package 与 Phase 1 tool/provider boundary）
+- Phase 1 总体状态：In progress
 
 本矩阵只记录可复现证据，不以观察时长替代验收。初始状态保持 Red/Not implemented；每项只有在对应实现进入 `main` 且 CI/真实链路证据可访问后才能改为 Green。
 
 | ID | 验收项 | 当前状态 | 当前证据 / 后续动作 |
 |---|---|---|---|
-| P1-01 | PI wrapper 只暴露 Phase 1 effective tools，shadow write tools 仅 dry-run | Not implemented | Task 2：phase-aware catalog、dry-run recorder、runtime snapshot 与负向测试。 |
-| P1-02 | 真实 provider telemetry 与 typed context 不泄漏 PI 类型/secret | Not implemented | Task 2：AgentBean-owned usage/finish reason/model、declaration 与 redaction tests。 |
-| P1-03 | published daemon 在 clean install 中加载内置 PI runtime | Not implemented | Task 2：publish order、exact dependency、clean npm pack/install smoke。 |
+| P1-01 | PI wrapper 只暴露 Phase 1 effective tools，shadow write tools 仅 dry-run | Candidate（PR） | 本地 runtime 回归验证 effective tools 精确为 11 个；Phase 2/3 工具不可调用；managed/shadow descriptor 一致；shadow write 仅产生 SHA-256 intent，不触发 executor。合入 `main` 且 CI 通过后转 Green。 |
+| P1-02 | 真实 provider telemetry 与 typed context 不泄漏 PI 类型/secret | Candidate（PR） | 本地 runtime 回归验证冻结的 `ManagementSessionContextV1`、AgentBean-owned usage/finishReason/responseModel、异常 provider 脱敏与发布声明边界；29 项测试通过。合入 `main` 且 CI 通过后转 Green。 |
+| P1-03 | published daemon 在 clean install 中加载内置 PI runtime | Candidate（PR） | `@agentbean/pi-management-runtime@0.1.0` 与 daemon `0.3.7` 使用精确依赖；本地 npm pack/空目录安装后成功 import runtime，并确认 11 个 Phase 1 工具。合入 `main`、npm 发布与 main CI 通过后转 Green。 |
 | P1-04 | management schema/constraints/migrations 可升级且可回滚 | Not implemented | Task 4：team migration、constraint inspection、upgrade/rollback tests。 |
 | P1-05 | reservation + Run + first Event 原子且请求幂等 | Not implemented | Task 4-5：UoW failure injection、same-key existing / conflict。 |
 | P1-06 | lease acquire/renew/expire/reacquire 与 fencing 正确 | Not implemented | Task 3、5、7：fake clock、Socket 与 stale Worker tests。 |

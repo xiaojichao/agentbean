@@ -15,9 +15,12 @@ const guardFiles = new Set([
   'scripts/check-phase-0-pi-boundary.mjs',
   'scripts/check-phase-0-pi-boundary.test.mjs',
 ]);
-const seaManifestInspectorFiles = new Set([
+const manifestInspectorFiles = new Set([
   'scripts/build-pi-management-sea.mjs',
   'scripts/build-pi-management-sea.test.mjs',
+  'scripts/check-agentbean-next-readiness.mjs',
+  'scripts/check-phase-1-management-boundary.mjs',
+  'scripts/check-phase-1-management-boundary.test.mjs',
 ]);
 const sourceExtensions = /\.(?:[cm]?[jt]sx?)$/i;
 
@@ -68,7 +71,7 @@ for (const file of scanFiles) {
   const path = repoPath(file);
   const source = readFileSync(file, 'utf8');
   if (!source.includes(PI_SCOPE)) continue;
-  if (seaManifestInspectorFiles.has(path)) {
+  if (manifestInspectorFiles.has(path)) {
     const sdkImport = /(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)['"]@earendil-works\/pi-/u.test(source);
     if (!sdkImport) continue;
   }

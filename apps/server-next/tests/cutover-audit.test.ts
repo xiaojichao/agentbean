@@ -19,11 +19,12 @@ describe('AgentBean Next cutover audit', () => {
         ],
         npmVersions: {
           '@agentbean/contracts@0.2.2': '0.2.2',
-          '@agentbean/daemon-next@0.3.6': '0.3.6',
-          '@agentbean/daemon@0.3.6': '0.3.6',
+          '@agentbean/pi-management-runtime@0.1.0': '0.1.0',
+          '@agentbean/daemon-next@0.3.7': '0.3.7',
+          '@agentbean/daemon@0.3.7': '0.3.7',
         },
         distTags: {
-          '@agentbean/daemon': { latest: '0.3.6', legacy: '0.1.35' },
+          '@agentbean/daemon': { latest: '0.3.7', legacy: '0.1.35' },
         },
       }),
     });
@@ -31,7 +32,7 @@ describe('AgentBean Next cutover audit', () => {
     expect(summarizeCutoverAudit(checks)).toMatchObject({
       ok: true,
       failed: 0,
-      total: 12,
+      total: 13,
     });
   });
 
@@ -41,7 +42,7 @@ describe('AgentBean Next cutover audit', () => {
         variables: [],
         secrets: [{ name: 'RAILWAY_TOKEN' }, { name: 'NPM_TOKEN' }],
         npmVersions: {
-          '@agentbean/daemon-next@0.3.6': '0.3.6',
+          '@agentbean/daemon-next@0.3.7': '0.3.7',
         },
         distTags: {
           '@agentbean/daemon': { latest: '0.1.35' },
@@ -56,6 +57,7 @@ describe('AgentBean Next cutover audit', () => {
       'github-variable-next-entry-url',
       'github-secret-next-session-secret',
       'npm-contracts-next-version',
+      'npm-pi-management-runtime-version',
       'npm-canonical-daemon-next-version',
       'npm-canonical-daemon-latest-dist-tag',
       'npm-canonical-daemon-legacy-dist-tag',
@@ -102,12 +104,13 @@ describe('AgentBean Next cutover audit', () => {
         }
         if (args[0] === 'view') {
           if (args[2] === 'dist-tags') {
-            return `${JSON.stringify({ latest: '0.3.6', legacy: '0.1.35' })}\n`;
+            return `${JSON.stringify({ latest: '0.3.7', legacy: '0.1.35' })}\n`;
           }
           const versions: Record<string, string> = {
             '@agentbean/contracts@0.2.2': '0.2.2',
-            '@agentbean/daemon-next@0.3.6': '0.3.6',
-            '@agentbean/daemon@0.3.6': '0.3.6',
+            '@agentbean/pi-management-runtime@0.1.0': '0.1.0',
+            '@agentbean/daemon-next@0.3.7': '0.3.7',
+            '@agentbean/daemon@0.3.7': '0.3.7',
           };
           const version = versions[args[1]];
           if (!version) {
@@ -122,7 +125,7 @@ describe('AgentBean Next cutover audit', () => {
     expect(summarizeCutoverAudit(checks)).toMatchObject({
       ok: true,
       failed: 0,
-      total: 12,
+      total: 13,
     });
   });
 
@@ -141,12 +144,13 @@ describe('AgentBean Next cutover audit', () => {
         }
         if (args[0] === 'view') {
           if (args[2] === 'dist-tags') {
-            return `${JSON.stringify({ latest: '0.3.6', legacy: '0.1.35' })}\n`;
+            return `${JSON.stringify({ latest: '0.3.7', legacy: '0.1.35' })}\n`;
           }
           const versions: Record<string, string> = {
             '@agentbean/contracts@0.2.2': '0.2.2',
-            '@agentbean/daemon-next@0.3.6': '0.3.6',
-            '@agentbean/daemon@0.3.6': '0.3.6',
+            '@agentbean/pi-management-runtime@0.1.0': '0.1.0',
+            '@agentbean/daemon-next@0.3.7': '0.3.7',
+            '@agentbean/daemon@0.3.7': '0.3.7',
           };
           const version = versions[args[1]];
           if (!version) {

@@ -17,7 +17,9 @@
     "test:phase0": "npm run test:pi-management-runtime && npm run test:contracts -- --api.host 127.0.0.1 && npm run test:domain -- --api.host 127.0.0.1 && npm run test:phase0-boundary && npm run check:phase0-pi-boundary && cd apps/server-next && ../../node_modules/.bin/vitest run tests/phase-0-management-boundary.test.ts --config vitest.config.ts --api.host 127.0.0.1",
     "test:team-terminology": "node --test scripts/check-team-terminology.test.mjs",
     "test:phase0-boundary": "node --test scripts/check-phase-0-pi-boundary.test.mjs",
+    "test:phase1-management-boundary": "node --test scripts/check-phase-1-management-boundary.test.mjs",
     "check:phase0-pi-boundary": "node scripts/check-phase-0-pi-boundary.mjs",
+    "check:phase1-management-boundary": "node scripts/check-phase-1-management-boundary.mjs",
     "check:pi-sea-compatibility": "node scripts/check-pi-management-sea.mjs validate",
     "check:team-terminology": "node scripts/check-team-terminology.mjs",
     "check:agentbean-next-readiness": "node scripts/check-agentbean-next-readiness.mjs",
@@ -44,7 +46,7 @@
     "build:server-next": "tsc -p apps/server-next/tsconfig.json",
     "build:daemon-next": "tsc -p apps/daemon-next/tsconfig.json",
     "build:web-next": "cd apps/web-next && npm run build",
-    "build:packages": "npm run build:contracts && npm run build:domain && npm run build:server-next && npm run build:daemon-next && npm run build:web-next"
+    "build:packages": "npm run build:contracts && npm run build:domain && npm run build:pi-management-runtime && npm run build:server-next && npm run build:daemon-next && npm run build:web-next"
   },
   "devDependencies": {
     "@types/node": "^20.16.5",

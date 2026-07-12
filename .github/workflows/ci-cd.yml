@@ -74,7 +74,7 @@ jobs:
 
           git fetch origin "${{ github.base_ref }}" --depth=1
           changed_files="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
-          next_changed_files="$(printf '%s\n' "$changed_files" | grep -E '^agentbean-next/|^packages/|^apps/(server-next|daemon-next|web-next)/|^scripts/(check-agentbean-next-readiness|check-agentbean-next-railway-preflight|check-team-terminology(\.test)?|check-phase-0-pi-boundary(\.test)?|check-pi-management-sea(\.test)?|build-pi-management-sea(\.test)?|audit-agentbean-next-cutover|prepare-agentbean-next-daemon-release|smoke-agentbean-next-.*)\.mjs$|^docs/superpowers/specs/|^README\.md$|^package(-lock)?\.json$|^railway\.json$|^\.github/workflows/(ci-cd|daily-changelog|pi-sea-compatibility)\.yml$' || true)"
+          next_changed_files="$(printf '%s\n' "$changed_files" | grep -E '^agentbean-next/|^packages/|^apps/(server-next|daemon-next|web-next)/|^scripts/(check-agentbean-next-readiness|check-agentbean-next-railway-preflight|check-team-terminology(\.test)?|check-phase-0-pi-boundary(\.test)?|check-phase-1-management-boundary(\.test)?|check-pi-management-sea(\.test)?|build-pi-management-sea(\.test)?|audit-agentbean-next-cutover|prepare-agentbean-next-daemon-release|smoke-agentbean-next-.*)\.mjs$|^docs/superpowers/specs/|^README\.md$|^package(-lock)?\.json$|^railway\.json$|^\.github/workflows/(ci-cd|daily-changelog|pi-sea-compatibility)\.yml$' || true)"
 
           if [ -n "$next_changed_files" ]; then
             echo "should_validate=true" >> "$GITHUB_OUTPUT"
@@ -429,10 +429,12 @@ jobs:
         run: |
           npm ci
           npm run build:contracts
+          npm run build:pi-management-runtime
           npm run build:daemon-next
           node scripts/prepare-agentbean-next-daemon-release.mjs --out .agentbean-next-release/daemon
 
           CONTRACTS_VERSION="$(node -p "require('./packages/contracts/package.json').version")"
+          PI_RUNTIME_VERSION="$(node -p "require('./packages/pi-management-runtime/package.json').version")"
           DAEMON_NEXT_VERSION="$(node -p "require('./apps/daemon-next/package.json').version")"
           CANONICAL_DAEMON_VERSION="$(node -p "require('./.agentbean-next-release/daemon/package.json').version")"
 
@@ -441,6 +443,13 @@ jobs:
             echo "should_publish_contracts=false" >> "$GITHUB_OUTPUT"
           else
             echo "should_publish_contracts=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          if npm view "@agentbean/pi-management-runtime@$PI_RUNTIME_VERSION" version >/dev/null 2>&1; then
+            echo "::notice::@agentbean/pi-management-runtime@$PI_RUNTIME_VERSION is already published; skipping npm publish."
+            echo "should_publish_pi_runtime=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish_pi_runtime=true" >> "$GITHUB_OUTPUT"
           fi
 
           if npm view "@agentbean/daemon-next@$DAEMON_NEXT_VERSION" version >/dev/null 2>&1; then
@@ -462,6 +471,13 @@ jobs:
       - name: Publish AgentBean Next contracts package
         if: env.NPM_TOKEN != '' && steps.agentbean-next-packages.outputs.should_publish_contracts == 'true'
         working-directory: packages/contracts
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish AgentBean PI management runtime package
+        if: env.NPM_TOKEN != '' && steps.agentbean-next-packages.outputs.should_publish_pi_runtime == 'true'
+        working-directory: packages/pi-management-runtime
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

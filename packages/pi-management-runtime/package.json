@@ -1,7 +1,7 @@
 {
   "name": "@agentbean/pi-management-runtime",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "private": false,
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
@@ -15,11 +15,14 @@
     }
   },
   "files": [
-    "dist/**/*"
+    "dist/**/*.js",
+    "dist/index.d.ts",
+    "dist/types.d.ts"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run --config vitest.config.ts --api.host 127.0.0.1"
+    "test": "vitest run --config vitest.config.ts --api.host 127.0.0.1",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.80.6",

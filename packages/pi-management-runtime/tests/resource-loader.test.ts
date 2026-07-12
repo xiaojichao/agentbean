@@ -35,12 +35,36 @@ describe('hermetic management resources', () => {
           id: 'hermetic',
           async respond(request) {
             requests.push(request);
-            return { content: [{ type: 'text', text: 'ok' }] };
+            return {
+              content: [{ type: 'text', text: 'ok' }],
+              usage: {
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheWriteTokens: 0,
+                totalTokens: 0,
+              },
+              finishReason: 'stop',
+              responseModel: 'hermetic-model',
+            };
           },
         },
         toolExecutor: async () => ({ text: 'unused' }),
       }).createSession({
         systemPrompt: { id: 'manager', version: 7, content: 'EXPLICIT_SYSTEM_PROMPT' },
+        mode: 'managed',
+        context: {
+          schemaVersion: 1,
+          scope: {
+            kind: 'managed',
+            managementRunId: 'run-hermetic',
+            teamId: 'team-hermetic',
+            channelId: 'channel-hermetic',
+            rootMessageId: 'message-hermetic',
+          },
+          frozenTarget: { agentId: 'agent-hermetic', kind: 'custom' },
+          visibleThread: { revision: 1, messages: [] },
+        },
       });
 
       session.subscribe((event) => events.push(event));

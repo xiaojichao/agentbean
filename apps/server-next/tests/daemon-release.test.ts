@@ -28,6 +28,7 @@ describe('AgentBean Next daemon release package', () => {
         files: ['dist/**/*'],
         dependencies: {
           '@agentbean/contracts': '0.2.0',
+          '@agentbean/pi-management-runtime': '0.1.0',
           'js-yaml': '^4.1.0',
           'socket.io-client': '^4.8.3',
         },
@@ -55,6 +56,7 @@ describe('AgentBean Next daemon release package', () => {
       });
       expect(packageJson.dependencies).toMatchObject({
         '@agentbean/contracts': '0.2.0',
+        '@agentbean/pi-management-runtime': '0.1.0',
         'js-yaml': '^4.1.0',
         'socket.io-client': '^4.8.3',
       });
@@ -95,6 +97,7 @@ describe('AgentBean Next daemon release package', () => {
         files: ['dist/**/*'],
         dependencies: {
           '@agentbean/contracts': '0.2.0',
+          '@agentbean/pi-management-runtime': '0.1.0',
           'js-yaml': '^4.1.0',
           'socket.io-client': '^4.8.3',
           // 模拟未来新增的硬依赖：必须被透传，验证脚本不是手工列举。
@@ -121,6 +124,7 @@ describe('AgentBean Next daemon release package', () => {
       expect(packageJson.dependencies['pino-pretty']).toBe('^11.0.0');
       // @agentbean/contracts 版本对齐同时发布的 contracts 包（0.2.1），覆盖源字面量 0.2.0。
       expect(packageJson.dependencies['@agentbean/contracts']).toBe('0.2.1');
+      expect(packageJson.dependencies['@agentbean/pi-management-runtime']).toBe('0.1.0');
       // optionalDependencies 必须透传——本 bug 的核心回归点。
       expect(packageJson.optionalDependencies).toEqual({ 'node-pty': '^1.1.0' });
     } finally {
