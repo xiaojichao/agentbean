@@ -219,6 +219,22 @@ npm run audit:agentbean-next-cutover -- --json
 npm run test:phase1
 ```
 
+Phase 0 的 PI management runtime 仅供 AgentBean 内部开发与兼容性验证；以下命令不表示 PI 管理能力已向用户开放：
+
+```bash
+# Node 24：wrapper、contracts、domain、server boundary 与 TypeScript build
+npm run test:phase0
+npm run build:phase0
+
+# PI dependency/import 边界
+npm run check:phase0-pi-boundary
+
+# 消费独立 Node 26 SEA workflow 生成的平台 verdict
+npm run check:pi-sea-compatibility -- --file <platform-verdict.json>
+```
+
+Phase 0 的逐项证据、main CI 和 Linux/macOS/Windows SEA verdict 见 `agentbean-next/docs/phase-0-pi-contract-compatibility-verification-matrix.md`。
+
 更细分的测试与 smoke：
 
 ```bash
