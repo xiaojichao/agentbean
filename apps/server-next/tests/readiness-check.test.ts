@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   collectAgentBeanNextReadinessChecks,
+  hasPhase0ManagementBoundary,
   summarizeReadiness,
 } from '../../../scripts/check-agentbean-next-readiness.mjs';
 
@@ -65,6 +66,7 @@ describe('AgentBean Next readiness checker', () => {
       'channel-members-parity-browser-smoke',
       'admin-dashboard-parity-regression',
       'admin-dashboard-parity-browser-smoke',
+      'phase-0-management-boundary-regression',
     ]);
   });
 
@@ -74,6 +76,47 @@ describe('AgentBean Next readiness checker', () => {
     expect(summary.checks.find((check) => check.id === 'ci-provides-production-env-for-production-smoke-audits')).toMatchObject({
       ok: true,
     });
+  });
+
+  test('fails closed when Phase 0 Server management boundaries are bypassed', () => {
+    const boundaryTests = [
+      'direct channel and DM messages create only canonical Dispatch records',
+      'message dispatch status is projected from the Dispatch repository at read time',
+      'only a human update completes it',
+      'existing Task create, update, and delete APIs',
+      'remain linked by dispatchId without invocationId',
+      'have no management execution surface',
+    ].join('\n');
+    const valid = {
+      boundaryTests,
+      contractsSocket: "export const AGENT_EVENTS = { dispatch: { result: 'dispatch:result' } }; export interface ScanRequestCustomAgent {}",
+      contractsArtifact: 'interface ArtifactDto { dispatchId?: string }',
+      serverSource: 'export function startServer() {}',
+      serverRepositories: 'export interface DispatchRepository {}',
+      serverMigrations: 'dispatch_id TEXT',
+      socketHandlers: "export function registerAgentSocketHandlers() { bind(socket, AGENT_EVENTS.dispatch.result, app, 'receiveDispatchResult'); }",
+    };
+    expect(hasPhase0ManagementBoundary(valid)).toBe(true);
+
+    for (const bypass of [
+      { contractsSocket: "export const AGENT_EVENTS = { task: { update: 'task:update' } }; export interface ScanRequestCustomAgent {}" },
+      { contractsSocket: "export const AGENT_EVENTS = { run: 'management-run:start' }; export interface ScanRequestCustomAgent {}" },
+      { contractsSocket: "export const AGENT_EVENTS = { invoke: 'agent-invocation:start' }; export interface ScanRequestCustomAgent {}" },
+      { contractsSocket: "export const AGENT_EVENTS = { restore: 'checkpoint:restore' }; export interface ScanRequestCustomAgent {}" },
+      { contractsSocket: "export const AGENT_EVENTS = {};" },
+      { socketHandlers: "export function registerAgentSocketHandlers() { bind(socket, AGENT_EVENTS.task.update, app, 'updateTask'); }" },
+      { socketHandlers: 'export function registerWebSocketHandlers() {}' },
+      { serverSource: "import { createManagementRuntimeFactory } from '@agentbean/pi-management-runtime';" },
+      { serverSource: "import { createRuntime } from '../../../../packages/pi-management-runtime/src/index.js';" },
+      { serverRepositories: 'export interface ManagementRunRepository {}' },
+      { serverRepositories: 'export interface Repositories { managementRuns: unknown }' },
+      { serverRepositories: 'export interface Repositories { invocations: unknown }' },
+      { contractsArtifact: 'interface ArtifactDto { invocationId?: string }' },
+      { serverMigrations: 'ALTER TABLE artifacts ADD COLUMN invocation_id TEXT' },
+      { serverMigrations: 'CREATE TABLE management_runs (id TEXT)' },
+    ]) {
+      expect(hasPhase0ManagementBoundary({ ...valid, ...bypass })).toBe(false);
+    }
   });
 
   test('fails production readiness when required flip configuration is absent', () => {
