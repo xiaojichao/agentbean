@@ -1,0 +1,144 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`management tool boundary > freezes effect, earliest phase, and schema version for every tool 1`] = `
+[
+  {
+    "effect": "read",
+    "inputSchemaVersion": 1,
+    "name": "context.get_root_message",
+    "phase": 1,
+  },
+  {
+    "effect": "read",
+    "inputSchemaVersion": 1,
+    "name": "context.get_root_task",
+    "phase": 1,
+  },
+  {
+    "effect": "read",
+    "inputSchemaVersion": 1,
+    "name": "context.get_visible_thread",
+    "phase": 1,
+  },
+  {
+    "effect": "read",
+    "inputSchemaVersion": 1,
+    "name": "context.get_management_state",
+    "phase": 1,
+  },
+  {
+    "effect": "read",
+    "inputSchemaVersion": 1,
+    "name": "agents.list_capabilities",
+    "phase": 1,
+  },
+  {
+    "effect": "read",
+    "inputSchemaVersion": 1,
+    "name": "agents.get_status",
+    "phase": 1,
+  },
+  {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "agents.invoke",
+    "phase": 1,
+  },
+  {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "agents.cancel_invocation",
+    "phase": 1,
+  },
+  {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "tasks.create_subtasks",
+    "phase": 2,
+  },
+  {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "tasks.add_dependency",
+    "phase": 2,
+  },
+  {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "tasks.publish_for_claim",
+    "phase": 2,
+  },
+  {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "tasks.assign",
+    "phase": 2,
+  },
+  {
+    "effect": "read",
+    "inputSchemaVersion": 1,
+    "name": "tasks.wait",
+    "phase": 2,
+  },
+  {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "tasks.retry",
+    "phase": 2,
+  },
+  {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "tasks.accept_subtask",
+    "phase": 2,
+  },
+  {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "tasks.report_blocked",
+    "phase": 2,
+  },
+  {
+    "effect": "read",
+    "inputSchemaVersion": 1,
+    "name": "memory.search",
+    "phase": 3,
+  },
+  {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "memory.create_capsule",
+    "phase": 3,
+  },
+  {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "memory.propose_candidate",
+    "phase": 3,
+  },
+  {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "memory.link_sources",
+    "phase": 3,
+  },
+  {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "channel.post_management_status",
+    "phase": 1,
+  },
+  {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "user.request_input",
+    "phase": 1,
+  },
+  {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "review.submit_root_delivery",
+    "phase": 1,
+  },
+]
+`;
