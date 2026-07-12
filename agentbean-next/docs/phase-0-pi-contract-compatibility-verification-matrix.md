@@ -1,7 +1,7 @@
 # Phase 0：PI 契约与兼容性验证矩阵
 
 - 基线计划：`docs/superpowers/plans/2026-07-12-agentbean-phase-0-pi-contract-compatibility.md`
-- 当前实施切片：PR 1，PI Runtime 边界（Tasks 1–3）
+- 当前实施切片：PR 2，Contracts 与纯 Domain rules（Tasks 4–5）
 - Phase 0 总体状态：进行中
 
 本矩阵记录可复现证据，不用日期或观察时长代替验收。只有 P0-01 至 P0-10、P0-12 全绿，且 P0-11 已形成明确 verdict，才允许进入 Phase 1。
@@ -13,13 +13,13 @@
 | P0-03 | Session 支持 event、prompt、steer、followUp、compaction、abort、dispose | Green（本地） | wrapper 共 4 个 test files / 21 项测试，使用真实 `createAgentSession` 与零网络 deterministic model adapter；覆盖结构化 tool loop、脱敏 tool lifecycle、active abort、并发 Session、并发 dispose 与失败补偿清理。只有 PI 明确的短上下文/已压缩错误映射为 `not_needed`。 |
 | P0-04 | effective tools 与 management allowlist 完全相等 | Green（本地） | `tool-boundary.test.ts`；固定 23 项 metadata snapshot；Session 创建后及每次 model call 前检查无重复集合等值，缺失、额外或 coding tool 均 fail closed；完整 descriptor/schema 进入 AgentBean model seam。 |
 | P0-05 | 不加载 coding tools、PI 全局/项目资源或 cwd | Green（本地） | `packages/pi-management-runtime/tests/resource-loader.test.ts` 在恶意 HOME/cwd fixture 下验证只有显式 system prompt 和固定工具进入模型上下文。 |
-| P0-06 | Management contracts typed/versioned，禁止敏感 payload | Not started | 后续 Contract boundary PR。 |
-| P0-07 | rollout policy 与 fallback barrier 是纯领域规则 | Not started | 后续 Domain policy PR。 |
-| P0-08 | Invocation intent immutable 且幂等冲突规则固定 | Not started | 后续 Contract/Domain PR。 |
-| P0-09 | authoritative refs 失效时拒绝 context hints | Not started | 后续 Contract/Domain PR。 |
+| P0-06 | Management contracts typed/versioned，禁止敏感 payload | Green（本地） | `npm run test:contracts`（15 项）；Management、Task coordination、Invocation、Event、Checkpoint、Memory reference 均使用显式类型和 `schemaVersion: 1`。compile-negative fixture 证明 public schema 不声明自由 `Record<string, unknown>` payload 或敏感字段，并拒绝 `direct/shadow` Run 与 Invocation intent mutation；declaration scan 拒绝 PI SDK import。 |
+| P0-07 | rollout policy 与 fallback barrier 是纯领域规则 | Green（本地） | `npm run test:domain`（57 项，含既有 24 项）；纯函数覆盖 direct 零 management side effect、shadow namespaced decision record、managed 五项 preflight、受控单 Agent 回退、reservation 前置命令、全部八类持久副作用后的不可逆 barrier，以及“已有副作用但缺 reservation”强制 recovery。 |
+| P0-08 | Invocation intent immutable 且幂等冲突规则固定 | Green（本地） | `npm run test:contracts` + `npm run test:domain`；readonly intent compile contract、稳定 canonical serialization，以及同一 ManagementRun 内 same-key/same-hash existing、same-key/different-hash conflict，不同 Run 的同名 key 互不冲突。Phase 0 不实现数据库唯一约束。 |
+| P0-09 | authoritative refs 失效时拒绝 context hints | Green（本地） | `npm run test:domain`；ManagementRun、event sequence、task graph revision、open Task、waiting/completed Invocation 分类和有效 Memory Capsule 任一 authoritative fact 不一致即 `rebuild_required`，返回值不含 `contextHints`。 |
 | P0-10 | 现有 direct Dispatch/Task/Artifact/Workspace Run 行为不变 | Not started | 后续 Existing behavior lock PR。 |
 | P0-11 | SEA 跨平台形成 `compatible` 或 `blocked-for-phase5` verdict | Unknown | 后续独立 SEA verdict PR；当前不升级生产 Node。 |
-| P0-12 | Phase 0 root scripts、build、readiness、既有全量 suite 与 CI 通过 | In progress | 本 PR 提供 runtime boundary scripts/build；待本地全量验证与 PR CI，完整 Phase 0 CI gate 在后续 CI integration PR 收口。 |
+| P0-12 | Phase 0 root scripts、build、readiness、既有全量 suite 与 CI 通过 | In progress | Node 24.18 本地 `test:phase1` 876 项通过、1 项既有 PTY E2E 跳过；`build:packages`、PI runtime 21 项测试/build、boundary 12 项测试/check、readiness 55/55 和 Team 术语检查通过。待本 PR CI；完整 `test:phase0` / `build:phase0` gate 在后续 CI integration PR 收口。 |
 
 ## Runtime 边界不变量
 
@@ -35,4 +35,6 @@
 
 - 当前 deterministic model response 的 usage/cost 固定为零。真实 provider 接线前必须扩展 AgentBean-owned usage、finish reason 与 response model，不能让 Server 或 Device 直接读取 PI 类型。
 - Phase 1 的 checkpoint、权限过滤 context 和 Memory Capsule 必须以 typed session input 扩展，不得拼成长 prompt，也不得暴露 PI `ResourceLoader`。
+- TypeScript event DTO 只冻结 public schema；Phase 1 Server append 边界必须增加 exact-key runtime validator 与脱敏，不能依赖 structural typing 阻止额外敏感字段。
+- Phase 1 组装 checkpoint facts 时必须使用同一数据库快照，并补 exact/disjoint set 校验；Dispatch rows 到 Invocation view 只能有一套纯派生规则，不得增加独立 Invocation status writer。
 - 固定 `/` cwd/agentDir 的 Windows 与 SEA 行为尚未裁决，只能由 P0-11 三平台 matrix 形成 `compatible` 或 `blocked-for-phase5` verdict。
