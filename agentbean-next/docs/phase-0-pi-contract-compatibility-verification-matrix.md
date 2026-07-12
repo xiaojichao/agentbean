@@ -1,7 +1,7 @@
 # Phase 0：PI 契约与兼容性验证矩阵
 
 - 基线计划：`docs/superpowers/plans/2026-07-12-agentbean-phase-0-pi-contract-compatibility.md`
-- 当前实施切片：PR 3，Existing behavior lock（Task 6）
+- 当前实施切片：PR 4，SEA verdict（Task 7）
 - Phase 0 总体状态：进行中
 
 本矩阵记录可复现证据，不用日期或观察时长代替验收。只有 P0-01 至 P0-10、P0-12 全绿，且 P0-11 已形成明确 verdict，才允许进入 Phase 1。
@@ -18,8 +18,8 @@
 | P0-08 | Invocation intent immutable 且幂等冲突规则固定 | Green（本地） | `npm run test:contracts` + `npm run test:domain`；readonly intent compile contract、稳定 canonical serialization，以及同一 ManagementRun 内 same-key/same-hash existing、same-key/different-hash conflict，不同 Run 的同名 key 互不冲突。Phase 0 不实现数据库唯一约束。 |
 | P0-09 | authoritative refs 失效时拒绝 context hints | Green（本地） | `npm run test:domain`；ManagementRun、event sequence、task graph revision、open Task、waiting/completed Invocation 分类和有效 Memory Capsule 任一 authoritative fact 不一致即 `rebuild_required`，返回值不含 `contextHints`。 |
 | P0-10 | 现有 direct Dispatch/Task/Artifact/Workspace Run 行为不变 | Green（本地） | `phase-0-management-boundary.test.ts` 通过公开 Server use cases 与 repository read seam 锁定：channel/DM direct 只创建 Dispatch；Message 只在读路径投影 repository 中的 `dispatchId/dispatchStatus`；agent delivery 进入 `in_review` 后由 human Task update 转 `done`；Task CRUD 不变；Artifact/Workspace Run 继续只关联 `dispatchId`。同一测试与 readiness 静态门禁确认 Socket、repository、SQLite migration 均无 management execution surface。 |
-| P0-11 | SEA 跨平台形成 `compatible` 或 `blocked-for-phase5` verdict | Unknown | 后续独立 SEA verdict PR；当前不升级生产 Node。 |
-| P0-12 | Phase 0 root scripts、build、readiness、既有全量 suite 与 CI 通过 | In progress | Node 24.18 本地 `test:phase1` 883 项通过、1 项既有 PTY E2E 跳过；Server 389/389；`build:packages`、boundary 12 项测试/check、readiness 56/56 和 Team 术语检查通过。待本 PR CI；完整 `test:phase0` / `build:phase0` gate 在后续 CI integration PR 收口。 |
+| P0-11 | SEA 跨平台形成 `compatible` 或 `blocked-for-phase5` verdict | Green（compatible） | [PI SEA compatibility run #29190092169](https://github.com/xiaojichao/agentbean/actions/runs/29190092169) 在 Node 26.5.0 原生 runner 上完成 Linux x64、macOS arm64、Windows x64 的 bundle、executable build、平台签名、clean-directory execution 与真实 PI Session smoke；三份平台 verdict 和 aggregate artifact 均为 `compatible`，`diagnosticCodes: []`。生产与常规 CI 的 Node 24 基线未改变。 |
+| P0-12 | Phase 0 root scripts、build、readiness、既有全量 suite 与 CI 通过 | In progress | Node 24.18 本地 `test:phase1` 883 项通过、1 项既有 PTY E2E 跳过；Server 389/389；`build:packages`、boundary 13 项测试/check、SEA 13 项 tests、readiness 56/56 和 Team 术语检查通过。完整 `test:phase0` / `build:phase0` gate 在后续 CI integration PR 收口。 |
 
 ## Runtime 边界不变量
 
@@ -37,4 +37,4 @@
 - Phase 1 的 checkpoint、权限过滤 context 和 Memory Capsule 必须以 typed session input 扩展，不得拼成长 prompt，也不得暴露 PI `ResourceLoader`。
 - TypeScript event DTO 只冻结 public schema；Phase 1 Server append 边界必须增加 exact-key runtime validator 与脱敏，不能依赖 structural typing 阻止额外敏感字段。
 - Phase 1 组装 checkpoint facts 时必须使用同一数据库快照，并补 exact/disjoint set 校验；Dispatch rows 到 Invocation view 只能有一套纯派生规则，不得增加独立 Invocation status writer。
-- 固定 `/` cwd/agentDir 的 Windows 与 SEA 行为尚未裁决，只能由 P0-11 三平台 matrix 形成 `compatible` 或 `blocked-for-phase5` verdict。
+- P0-11 已证明固定 `/` cwd/agentDir、完整 management allowlist 与自定义 resource loader 在三平台 SEA 中 compatible；若未来启用 PI 内建 themes/docs/skills 或 package assets，必须新增 asset-aware SEA gate，不能沿用本次 verdict 扩大兼容承诺。

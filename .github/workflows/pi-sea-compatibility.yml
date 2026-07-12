@@ -1,0 +1,121 @@
+name: PI SEA compatibility
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - packages/pi-management-runtime/**
+      - scripts/build-pi-management-sea.mjs
+      - scripts/build-pi-management-sea.test.mjs
+      - scripts/check-pi-management-sea.mjs
+      - scripts/check-pi-management-sea.test.mjs
+      - package.json
+      - package-lock.json
+      - .github/workflows/pi-sea-compatibility.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - packages/pi-management-runtime/**
+      - scripts/build-pi-management-sea.mjs
+      - scripts/build-pi-management-sea.test.mjs
+      - scripts/check-pi-management-sea.mjs
+      - scripts/check-pi-management-sea.test.mjs
+      - package.json
+      - package-lock.json
+      - .github/workflows/pi-sea-compatibility.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-sea-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  platform-verdict:
+    name: SEA ${{ matrix.verdict_os }} ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            verdict_os: linux
+            arch: x64
+          - runner: macos-14
+            verdict_os: macos
+            arch: arm64
+          - runner: windows-latest
+            verdict_os: windows
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Initialize fail-closed platform verdict
+        run: node scripts/check-pi-management-sea.mjs init --out artifacts/pi-sea-verdict/verdict.json --os ${{ matrix.verdict_os }} --arch ${{ matrix.arch }}
+
+      - name: Set up Node.js 26.5.0
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26.5.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install locked workspace dependencies
+        run: npm ci
+
+      - name: Verify SEA build and verdict contracts
+        run: node --test scripts/check-pi-management-sea.test.mjs scripts/build-pi-management-sea.test.mjs
+
+      - name: Build and execute PI management SEA
+        run: node scripts/build-pi-management-sea.mjs --out-dir .sea/${{ matrix.verdict_os }}-${{ matrix.arch }} --verdict artifacts/pi-sea-verdict/verdict.json --os ${{ matrix.verdict_os }} --arch ${{ matrix.arch }}
+
+      - name: Upload platform verdict
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-sea-verdict-${{ matrix.verdict_os }}-${{ matrix.arch }}
+          path: artifacts/pi-sea-verdict/verdict.json
+          if-no-files-found: error
+
+  aggregate-verdict:
+    name: Aggregate PI SEA verdict
+    needs:
+      - platform-verdict
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js 26.5.0
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26.5.0
+
+      - name: Download platform verdicts
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pi-sea-verdict-*
+          path: artifacts/pi-sea-platform-verdicts
+
+      - name: Aggregate fail-closed verdict
+        if: always()
+        run: node scripts/check-pi-management-sea.mjs aggregate --dir artifacts/pi-sea-platform-verdicts --out artifacts/pi-sea-aggregate/verdict.json
+
+      - name: Upload aggregate verdict
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-sea-aggregate-verdict
+          path: artifacts/pi-sea-aggregate/verdict.json
+          if-no-files-found: error
