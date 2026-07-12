@@ -2,6 +2,42 @@
 import type { Release } from './changelog';
 export const releases: Release[] = [
   {
+    "version": "Daily 2026-07-12",
+    "date": "2026-07-12",
+    "sections": [
+      {
+        "type": "Added",
+        "items": [
+          "让主线只维护可验证发布的 AgentBean Next"
+        ]
+      },
+      {
+        "type": "Changed",
+        "items": [
+          "先冻结 Phase 1 的可靠调用边界再开放 managed",
+          "固化 Phase 0 验收事实以允许进入 Phase 1",
+          "Phase 0 PR 5：接入 root CI 聚合门禁",
+          "Phase 0 PR 4：验证 PI Management Runtime 的三平台 SEA 兼容性",
+          "守住 Phase 1 接线前的现有执行事实",
+          "为 Phase 1 冻结可审计的管理边界",
+          "让 AgentBean 按需使用工程技能而不增加默认流程负担",
+          "让 Phase 0 先证明 PI 边界再进入运行时实现",
+          "让 Phase -1 完成状态只由生产证据决定",
+          "让工程 skills 遵循仓库统一协作约定",
+          "统一连续消息的 15 秒批次与单次回复语义",
+          "记录 2026-07-11 每日更新日志"
+        ]
+      },
+      {
+        "type": "Security",
+        "items": [
+          "让 PI 管理运行时先受安全边界约束",
+          "补记 Release A 生产观察并收紧安全恢复合同（#480）"
+        ]
+      }
+    ]
+  },
+  {
     "version": "Daily 2026-07-11",
     "date": "2026-07-11",
     "sections": [
