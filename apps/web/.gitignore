@@ -1,9 +1,0 @@
-node_modules/
-.next/
-out/
-coverage/
-.env
-.env.local
-.omc/
-*.tsbuildinfo
-.vercel

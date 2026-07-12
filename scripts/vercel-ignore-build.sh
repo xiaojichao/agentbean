@@ -54,10 +54,5 @@ if echo "$changed_files" | grep -E '^scripts/vercel-ignore-build\.sh$' >/dev/nul
   exit 1
 fi
 
-if echo "$changed_files" | grep -E '^apps/web/' | grep -Ev '^apps/web/(vercel\.json|\.nvmrc)$' >/dev/null; then
-  echo "Legacy web changes detected (transition). Continue Vercel build."
-  exit 1
-fi
-
 echo "No web-related changes detected. Skip Vercel build."
 exit 0

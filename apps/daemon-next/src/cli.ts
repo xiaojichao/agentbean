@@ -689,11 +689,8 @@ async function connectSocketIoClient(serverUrl: string): Promise<SocketIoClientL
 
 function loadSocketIoClient(): { io(url: string, options?: Record<string, unknown>): SocketIoClientLike } {
   const requireUrls = [
-    new URL('../../../../package.json', import.meta.url),
-    new URL('../../../../../server/package.json', import.meta.url),
-    new URL('../../server/package.json', import.meta.url),
     new URL('../package.json', import.meta.url),
-    pathToFileURL(join(process.cwd(), 'apps/server/package.json')),
+    new URL('../../../../package.json', import.meta.url),
     pathToFileURL(join(process.cwd(), 'apps/daemon-next/package.json')),
   ];
   for (const requireUrl of requireUrls) {
@@ -705,7 +702,7 @@ function loadSocketIoClient(): { io(url: string, options?: Record<string, unknow
       // Try the next known repository layout.
     }
   }
-  throw new Error('socket.io-client is not installed; run npm ci in apps/server or provide a workspace install');
+  throw new Error('socket.io-client is not installed; run npm ci at the repository root');
 }
 
 function parseArgs(argv: string[]): { args: Record<string, string>; booleanFlags: Record<string, true> } {

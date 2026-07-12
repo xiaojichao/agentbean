@@ -8,11 +8,6 @@ const nextConfig = {
         destination: '/:teamPath/devices/:id',
         permanent: true,
       },
-      {
-        source: '/:teamPath/networks',
-        destination: '/:teamPath/teams',
-        permanent: true,
-      },
     ];
   },
 };

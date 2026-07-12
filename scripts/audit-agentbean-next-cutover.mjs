@@ -23,6 +23,7 @@ export function collectAgentBeanNextCutoverAudit({
     daemonNext: npmVersionExists(runCommand, '@agentbean/daemon-next', daemonNextPackage.version),
     canonicalDaemon: npmVersionExists(runCommand, '@agentbean/daemon', canonicalDaemonVersion),
     canonicalDaemonLatest: npmDistTagVersion(runCommand, '@agentbean/daemon', 'latest'),
+    canonicalDaemonLegacy: npmDistTagVersion(runCommand, '@agentbean/daemon', 'legacy'),
   };
 
   const variableMap = new Map(variablesResult.items.map((variable) => [variable.name, variable.value]));
@@ -42,11 +43,6 @@ export function collectAgentBeanNextCutoverAudit({
       secretsResult.ok
         ? 'GitHub repository secrets must be readable'
         : `GitHub repository secrets could not be read: ${secretsResult.error}`,
-    ),
-    check(
-      'github-variable-deploy-target-next',
-      variableMap.get('AGENTBEAN_DEPLOY_TARGET') === 'next',
-      'GitHub variable AGENTBEAN_DEPLOY_TARGET must be next for the final production flip',
     ),
     check(
       'github-variable-next-data-dir',
@@ -94,32 +90,30 @@ export function collectAgentBeanNextCutoverAudit({
       registry.canonicalDaemonLatest === canonicalDaemonVersion,
       `npm @agentbean/daemon dist-tags.latest must point to daemon-next canonical version ${canonicalDaemonVersion}`,
     ),
+    check(
+      'npm-canonical-daemon-legacy-dist-tag',
+      registry.canonicalDaemonLegacy === '0.1.35',
+      'npm @agentbean/daemon dist-tags.legacy must remain pinned to the historical archive 0.1.35; it is not compatible with server-next',
+    ),
   ];
 }
 
-const finalFlipPendingCheckIds = new Set(['github-variable-deploy-target-next']);
-
-export function summarizeCutoverAudit(checks, { allowPendingFinalFlip = false } = {}) {
+export function summarizeCutoverAudit(checks) {
   const failed = checks.filter((candidate) => !candidate.ok);
-  const effectiveFailed = allowPendingFinalFlip
-    ? failed.filter((candidate) => !finalFlipPendingCheckIds.has(candidate.id))
-    : failed;
   return {
-    ok: effectiveFailed.length === 0,
+    ok: failed.length === 0,
     total: checks.length,
-    failed: effectiveFailed.length,
-    pendingFinalFlip: allowPendingFinalFlip && effectiveFailed.length === 0 && failed.length > 0,
+    failed: failed.length,
     checks,
   };
 }
 
 function readGitHubVariables(runCommand, env) {
   const envItems = [
-    envVariable(env, 'AGENTBEAN_DEPLOY_TARGET'),
     envVariable(env, 'AGENTBEAN_NEXT_DATA_DIR'),
     envVariable(env, 'AGENTBEAN_NEXT_AUDIT_ENTRY_URL', 'AGENTBEAN_NEXT_ENTRY_URL'),
   ].filter(Boolean);
-  if (envItems.length === 3) {
+  if (envItems.length === 2) {
     return { ok: true, items: envItems, error: undefined };
   }
   try {
@@ -238,16 +232,13 @@ function check(id, ok, message) {
 function parseArgs(argv) {
   return {
     json: argv.includes('--json'),
-    allowPendingFinalFlip: argv.includes('--allow-pending-final-flip'),
   };
 }
 
 function formatText(summary) {
   const lines = [
     summary.ok
-      ? summary.pendingFinalFlip
-        ? `AgentBean Next is ready for final flip; AGENTBEAN_DEPLOY_TARGET=next is still pending (${summary.total - 1}/${summary.total} strict checks passed).`
-        : `AgentBean Next cutover audit passed (${summary.total}/${summary.total}).`
+      ? `AgentBean Next cutover audit passed (${summary.total}/${summary.total}).`
       : `AgentBean Next cutover audit failed (${summary.failed}/${summary.total}).`,
   ];
   for (const checkResult of summary.checks) {
@@ -258,9 +249,7 @@ function formatText(summary) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
-  const summary = summarizeCutoverAudit(collectAgentBeanNextCutoverAudit(), {
-    allowPendingFinalFlip: args.allowPendingFinalFlip,
-  });
+  const summary = summarizeCutoverAudit(collectAgentBeanNextCutoverAudit());
   console.log(args.json ? JSON.stringify(summary, null, 2) : formatText(summary));
   process.exitCode = summary.ok ? 0 : 1;
 }

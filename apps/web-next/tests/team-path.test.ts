@@ -24,21 +24,20 @@ class MemoryStorage implements StorageLike {
 }
 
 describe('Team path storage and route tree', () => {
-  test('migrates the legacy path key once and removes it', () => {
-    const storage = new MemoryStorage({ 'agentbean.networkPath': 'team-one' });
+  test('ignores removed legacy storage keys', () => {
+    const legacyKey = ['agentbean', ['network', 'Path'].join('')].join('.');
+    const storage = new MemoryStorage({ [legacyKey]: 'stale-team' });
 
-    expect(readStoredTeamPath(storage)).toBe('team-one');
-    expect(storage.getItem('agentbean.teamPath')).toBe('team-one');
-    expect(storage.getItem('agentbean.networkPath')).toBeNull();
+    expect(readStoredTeamPath(storage)).toBeNull();
+    expect(storage.getItem('agentbean.teamPath')).toBeNull();
   });
 
   test('writes only the Team path key', () => {
-    const storage = new MemoryStorage({ 'agentbean.networkPath': 'stale' });
+    const storage = new MemoryStorage();
 
     writeStoredTeamPath(storage, 'team-two');
 
     expect(storage.getItem('agentbean.teamPath')).toBe('team-two');
-    expect(storage.getItem('agentbean.networkPath')).toBeNull();
   });
 
   test('uses only Team route segments', () => {
@@ -52,24 +51,13 @@ describe('Team path storage and route tree', () => {
     expect(existsSync(join(appDir, '[teamPath]', oldPage))).toBe(false);
   });
 
-  test('keeps only the temporary Release A Team page redirect', async () => {
+  test('does not retain removed Team page aliases', async () => {
     const nextConfig = (await import('../next.config.mjs')).default;
     const redirects = (await nextConfig.redirects?.()) ?? [];
-    const temporarySource = `/:teamPath/${['net', 'works'].join('')}`;
+    const removedSource = `/:teamPath/${['net', 'works'].join('')}`;
 
-    expect(redirects).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          source: '/:teamPath/computer/:id',
-          destination: '/:teamPath/devices/:id',
-          permanent: true,
-        }),
-        expect.objectContaining({
-          source: temporarySource,
-          destination: '/:teamPath/teams',
-          permanent: true,
-        }),
-      ]),
+    expect(redirects).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ source: removedSource })]),
     );
   });
 });

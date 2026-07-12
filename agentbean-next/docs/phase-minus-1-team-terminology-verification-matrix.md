@@ -9,7 +9,7 @@
 - `Partial local`：已有实现或局部测试证据，但必需的完整 browser/smoke/build gate 尚未全部完成。
 - `Green local`：本地测试、构建和 smoke 已通过，但尚未发布。
 - `Partial Release A`：实现已随 Release A 发布，但该验收项要求的 production-specific inspection 或行为证据尚未完成。
-- `Green Release A`：Release A 已进入 `main`，对应 main-push CI、production deploy 与 Release A smoke 已通过；7 天观察与 Release B 仍未完成。
+- `Green Release A`：Release A 已进入 `main`，对应 main-push CI、production deploy 与 Release A smoke 已通过；Release B 仍未完成。
 - `Green production`：Release B 已发布，production smoke 与数据校验通过。
 
 ## 必需验收项
@@ -24,10 +24,10 @@
 | P-1-06 | Web socket/client/store 不再声明、映射或发送 non-canonical Team aliases/fields。 | Web unit | `socket-client.test.ts`、`npm run build:web-next` | Green Release A |
 | P-1-07 | App Router 动态 segment 为 `[teamPath]`，团队管理入口为 `/:teamPath/teams`；Release A 的旧收藏 URL 只经过 permanent redirect，不保留旧页面实现。 | Web route | route manifest、redirect test、Web build、browser smoke | Green Release A |
 | P-1-08 | Release A 首次读取旧 browser key 时写入 `agentbean.teamPath` 并删除旧键，此后不再写旧键。 | Web storage | `team-path.test.ts`、真实浏览器 storage inspection | Green Release A |
-| P-1-09 | Release B 删除旧 browser key 读取、旧 Team 页面 redirect 和全部 checker allowlist。 | Web/CI | `team-path.test.ts`、redirect test、`npm run check:team-terminology` | Not started |
+| P-1-09 | Release B 删除旧 browser key 读取、旧 Team 页面 redirect 和全部 checker allowlist。 | Web/CI | `team-path.test.ts`、redirect test、`npm run check:team-terminology` | Green local |
 | P-1-10 | Artifact upload proxy 与 Server HTTP 只存在 `/api/teams/:teamId/...`。 | HTTP/Web | route existence test、multipart upload/preview/download smoke | Green Release A |
 | P-1-11 | Device list/Agent 查询显式使用 `teamId`；device-bound get/scan/select-directory/delete/rename 只使用 `deviceId`；invite/login/custom Agent create 符合各自 canonical contract。 | Device/Web/E2E | targeted tests、browser Device flow | Green Release A |
-| P-1-12 | `main` 不再构建、测试、部署或发布 legacy source trees；rollback 使用 Git/Railway/npm artifact。 | Repository/CI/Operations | cutover audit、workflow inspection、rollback runbook、npm dist-tags | Not started |
+| P-1-12 | `main` 不再构建、测试、部署或发布 legacy source trees；Server rollback 使用 Git/Railway，Device rollback 使用经 server-next smoke 验证的 canonical npm artifact。 | Repository/CI/Operations | cutover audit、workflow inspection、rollback runbook、npm dist-tags | Green local |
 | P-1-13 | README、AgentBean Next 活动文档和当前 specs 只描述 Team product contract。 | Docs | 活动文档静态扫描零结果 | Green Release A |
 | P-1-14 | CI 静态门禁能拒绝旧字段、事件、route、storage key、schema 和已废弃产品名。 | CI | checker unit tests、PR check | Green Release A |
 | P-1-15 | Contracts、Domain、Server、Daemon、Web tests 与全部 TypeScript builds 通过。 | Regression | root test/build commands、CI run URL | Green Release A |
@@ -61,7 +61,7 @@
   - `/data/agentbean-next/backups/release-a-observation/team.sqlite.release-a-postdeploy-20260711T0157Z.bak`；`2203648` bytes；SHA256 `b634c14cb01c0afa82638c008f7ba1930372f1a058f88c8bd56c7dbbf6efa340`；权限 `0600`；`integrity_check=ok`。
   - global migration ledger 包含 `global/0014_device_revocations_team_columns.sql`，applied_at 为 `1783734054646`。
 - 计划要求的 Release A **发布前** global SQLite backup 没有可验证证据；上述文件是同一 production volume 内的发布后观察快照，不能追溯替代发布前备份，也不能覆盖 volume 丢失或损坏。当前没有 off-volume copy、保留期或恢复演练证据。
-- 7 天观察窗口从 production smoke 完成时开始：`2026-07-11 09:41:41` 至 `2026-07-18 09:41:41`（Asia/Shanghai）。窗口结束前禁止执行 Release B。
+- 原计划设置的固定 7 天等待不对应独立风险阈值，已在 2026-07-12 取消。Release B 改由可复现证据门禁控制：cutover audit、production entry/business/browser smoke、真实 Device/Artifact/storage/revocation 观察、incident 关闭状态与 server-next-compatible npm artifact 必须同时通过。
 - 窗口内后续 production deploy 均已记录并通过：PR #471 的 [Run #1000](https://github.com/xiaojichao/agentbean/actions/runs/29136243401)、PR #475 的 [Run 29146998708](https://github.com/xiaojichao/agentbean/actions/runs/29146998708)、PR #476 的 [Run 29147805169](https://github.com/xiaojichao/agentbean/actions/runs/29147805169)、PR #473 的 [Run 29149484675](https://github.com/xiaojichao/agentbean/actions/runs/29149484675) 与 PR #478 的 [Run 29158694977](https://github.com/xiaojichao/agentbean/actions/runs/29158694977) 均为 `success`，对应 `Deploy production` 与 `AgentBean Next production smoke` 成功。
 - `2026-07-11 19:09`（Asia/Shanghai）从最新 `main` `8bd3bbbf646518a154f7ccf8d99f719f8ce0c17e` 对 `https://api.agentbean.dev` 执行 production-host combined browser gate，`39/39` 通过，preview/WebUI console 均无 error；[外部观察记录](https://github.com/xiaojichao/agentbean/issues/469#issuecomment-4945200798) 已写入，本地 artifact 位于 `/private/tmp/agentbean-release-a-current-main-production-browser/`。
 - P-1-08 production browser inspection 已完成：同一已登录 context 中只保留 legacy browser path key 后访问 `/login`，页面恢复到 canonical Team chat，最终 `agentbean.teamPath` 写入且旧键删除；console error 为 0。证据见 [Issue #469 observation](https://github.com/xiaojichao/agentbean/issues/469#issuecomment-4944639434)。
@@ -69,11 +69,11 @@
 - `device-login` production inspection 已完成：真实 `device-invite:create`、已发布 `@agentbean/daemon@0.3.5` 等待/注册、浏览器账号登录与 canonical Team Device 页面形成完整链路；最终 Device 与 Team browser identity 均写入，旧 browser path key 不存在，相关 RSC 请求为 HTTP 200，console 0 error/0 warning。证据见 [Issue #469 observation](https://github.com/xiaojichao/agentbean/issues/469#issuecomment-4947472515)。
 - `2026-07-12 00:21–00:27`（Asia/Shanghai）每日 production observation 已完成：strict cutover audit `12/12`、entry `4/4`、business `8/8`、production-host combined browser `39/39` 均通过，preview/WebUI console 无 error；当前 npm truth 为 `@agentbean/daemon-next@0.3.6`、canonical `@agentbean/daemon@0.3.6` 且 `latest` 指向 `0.3.6`。证据见 [Issue #469 daily observation](https://github.com/xiaojichao/agentbean/issues/469#issuecomment-4947642857)。
 
-当前 Phase -1 仍为 `in_progress`。P-1-05、P-1-08、`device-login` 与 production-host browser 已达到 `Green Release A`；P-1-09、P-1-12 属于 Release B，P-1-16 要求 Release B production evidence。7 天观察尚未结束，production Admin DTO rendering 仍缺受控全局管理员会话下的独立观察证据。Release A 的发布前 backup 证据缺失，old-target schema rollback 当前冻结；发布后观察快照已完成完整性校验，但不是旧 binary 的恢复点。
+当前 Phase -1 仍为 `in_progress`。P-1-09 与 P-1-12 已达到 `Green local`，P-1-16 仍要求 Release B 合并后的 production evidence。production Admin DTO rendering 可继续作为独立增强证据补充，但不阻塞 P-1-09/P-1-12；Release A 的发布前 backup 证据缺失，old-target schema rollback 保持冻结，发布后观察快照不是旧 binary 的恢复点。
 
-## Release A 观察台账
+## Release A 风险证据台账
 
-观察窗口不是单纯的计时器。每天至少记录一次检查，并在每次 production deploy 或 incident 后追加检查；没有可追溯记录的日期不算已观察。每条记录必须链接到 GitHub run、Railway deployment/log、browser inspection 或 incident 记录，不能只写“正常”。
+本台账记录实际发生的 deploy、incident 和目标行为验证，不再要求按自然日凑满观察天数。每条记录必须链接到 GitHub run、Railway deployment/log、browser inspection 或 incident 记录，不能只写“正常”。
 
 | 检查时间（Asia/Shanghai） | 信号 | 查询或证据位置 | 通过阈值 | 结果 | deploy / incident | 复核人 |
 |---|---|---|---|---|---|---|
@@ -94,15 +94,15 @@
 | 待填写 | Admin DTO rendering | browser console 与 admin teams/devices/agents 页面记录 | 无 DTO rendering error；页面数据可见 | 待受控 production 全局管理员会话验证；不得猜测口令或临时提升生产用户角色 | 待填写 | 待填写 |
 | 2026-07-11 19:07:03 | SQLite migration | [production query-only inspection](https://github.com/xiaojichao/agentbean/issues/469#issuecomment-4945160676) | 无 migration error；`integrity_check=ok` | 通过；0014 ledger 存在、legacy table 不存在、integrity ok | none | 待最终复核 |
 
-Release B 只能在 `2026-07-18 09:41:41` 之后且同时满足以下条件时开始：
+Release B 只由以下证据门禁控制，不设置任意日历等待：
 
-1. 观察窗口内每天及每次 production deploy/incident 都有上表或等价外部记录，没有未解释的缺口。
+1. Release A 之后每次 production deploy/incident 都有上表或等价外部记录，没有未解释的缺口。
 2. P-1-08 的真实旧 browser key migration inspection 已完成并链接证据。
-3. 上述七类信号均达到通过阈值，期间所有 incident 已关闭；若没有 incident，也要显式记录 `none`。
+3. 阻塞 Release B 的信号——旧 key/旧 URL migration、login/device-login、Artifact、SQLite migration/revocation、production browser 主链与 incident 状态——均达到阈值，所有 incident 已关闭或显式记录 `none`。Admin DTO rendering 是独立增强证据，不属于 P-1-09/P-1-12 的删除门禁。
 4. 重新运行 strict cutover audit、public entry smoke、business smoke 和 production-host browser smoke，并记录 run URL 与结论。
-5. 复核观察期 deployment/incident 列表、SQLite snapshot 限制和 old-target rollback 冻结状态，由复核人在本节追加最终 verification-only sign-off。
+5. 复核 deployment/incident 列表、SQLite snapshot 限制和 old-target rollback 冻结状态。
 
-任一条件缺少证据时，观察窗口保持未完成，不得仅因截止时间已到而执行 Release B。
+2026-07-12 执行 Release B 前置复验：strict cutover audit `12/12`、public entry `4/4`、business `8/8` 通过；npm `latest=0.3.6`、`legacy=0.1.35`；上述真实 browser、Device、Artifact、storage、SQLite/revocation 证据齐全，stale Team incident 已关闭。因此 Release B 获准进入本地实施。产品明确接受这一 breaking change：仅保留旧 browser key 的休眠客户端会回到登录/默认 Team，旧 Team 管理书签会返回 404；当前没有旧 key/旧 URL 使用率 telemetry，单次 smoke 只证明迁移机制正确，不被描述为“全部存量用户已迁移”。任一阻塞证据后续失效时必须停止发布。
 
 ## Release A 必需命令
 
@@ -137,7 +137,7 @@ Release B 删除一次性 browser migration、旧 Team 页面 redirect、checker
 - Release A production deployment：Railway `58e4c03e-1e73-4513-85c7-74705709b488`（RUNNING）
 - Release A SQLite backup / snapshot path、size、SHA256：见“2026-07-11 Release A 已发布证据”；仅有同 volume post-deploy observation snapshots，pre-release backup evidence 缺失
 - Release A browser smoke：main CI combined browser `39/39`；latest-main production-host combined browser `39/39`（`2026-07-11 19:09`，Asia/Shanghai）
-- 7 天观察开始与结束时间：`2026-07-11 09:41:41` 至 `2026-07-18 09:41:41`（Asia/Shanghai）
+- Release B 证据门禁复验：2026-07-12，cutover `12/12`、entry `4/4`、business `8/8`、npm `latest=0.3.6` / `legacy=0.1.35`（仅历史归档）；本地完整测试 contracts `9/9`、domain `24/24`、server-next `381/381`、daemon-next `223/223`（1 个既有 e2e skip）、web-next `199/199`，combined browser `39/39`、persistence `6/6`、daemon install smoke 与全量 build 通过；最终 CI/runbook 修正后 readiness `55/55`、terminology `6/6` / 19 roots、workflow YAML 与 `git diff --check` 通过，code review `APPROVE`、architecture review `CLEAR`
 - Release B merge commit：
 - Release B `main` CI run：
 - Release B production deployment：

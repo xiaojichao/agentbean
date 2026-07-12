@@ -10,7 +10,7 @@
 // still boots and every other agent path works on platforms where node-pty has no usable native
 // binary (notably the daemon-next CI, which installs with `--ignore-scripts` on Linux — no prebuilt,
 // compilation skipped). When node-pty is unavailable, codex dispatch returns an explicit error
-// rather than silently succeeding. Logic ported from apps/daemon/src/adapters/codex.ts.
+// rather than silently succeeding. This module now owns the complete PTY adapter contract.
 
 import { createRequire } from 'node:module';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -21,9 +21,8 @@ import type { DaemonDispatchResult, DispatchRequestPayload } from './index.js';
 import { buildChildEnv, buildLogArtifactContent, buildLogExcerpt, formatCommand } from './executor-helpers.js';
 
 // node-pty is loaded via createRequire (see defaultPtySpawnLoader), NOT a typed import, so tsc
-// never resolves the module: its types are absent in the CI install (daemon-next tests run against
-// apps/server's node_modules, which has no node-pty) and a typed import would also duplicate the
-// real package's bundled types where node-pty is hoisted locally.
+// never resolves the module: a typed import would make optional native availability a build-time
+// requirement and duplicate the real package's bundled types where node-pty is hoisted locally.
 
 // ── codex argv normalization ──────────────────────────────────────────────────
 

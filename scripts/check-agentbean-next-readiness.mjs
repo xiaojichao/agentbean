@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -16,6 +16,7 @@ export function collectAgentBeanNextReadinessChecks({
   const daemonNextPackageJson = readJson(join(root, 'apps/daemon-next/package.json'));
   const railwayJson = readJson(join(root, 'railway.json'));
   const workflow = readFileSync(join(root, '.github/workflows/ci-cd.yml'), 'utf8');
+  const dailyChangelogWorkflow = readFileSync(join(root, '.github/workflows/daily-changelog.yml'), 'utf8');
   const publishJobCondition =
     "if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.skip_npm_publish && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env && !inputs.promote_agentbean_daemon_latest)";
   const cutoverRunbook = readFileSync(join(root, 'agentbean-next/docs/production-cutover-runbook.md'), 'utf8');
@@ -29,6 +30,8 @@ export function collectAgentBeanNextReadinessChecks({
   const serverNextSocketHandlers = readFileSync(join(root, 'apps/server-next/src/transport/socket-handlers.ts'), 'utf8');
   const serverNextFirstSliceTests = readFileSync(join(root, 'apps/server-next/tests/first-slice.test.ts'), 'utf8');
   const serverNextSocketIntegrationTests = readFileSync(join(root, 'apps/server-next/tests/socket-integration.test.ts'), 'utf8');
+  const serverNextDevServer = readFileSync(join(root, 'apps/server-next/src/dev-server.ts'), 'utf8');
+  const serverNextFullPreview = readFileSync(join(root, 'apps/server-next/src/full-preview.ts'), 'utf8');
   const daemonNextCli = readFileSync(join(root, 'apps/daemon-next/src/cli.ts'), 'utf8');
   const daemonNextProtocolClient = readFileSync(join(root, 'apps/daemon-next/src/index.ts'), 'utf8');
   const daemonNextAuthStore = readFileSync(join(root, 'apps/daemon-next/src/auth-store.ts'), 'utf8');
@@ -46,8 +49,6 @@ export function collectAgentBeanNextReadinessChecks({
   const webNextRunDetailPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/runs/[runId]/page.tsx'), 'utf8');
   const webNextSettingsPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/settings/page.tsx'), 'utf8');
   const browserSmokeScript = readFileSync(join(root, 'scripts/smoke-agentbean-next-browser.mjs'), 'utf8');
-  const legacyAgentNamespace = readFileSync(join(root, 'apps/server/src/namespaces/agent.ts'), 'utf8');
-  const legacyWebNamespaceTests = readFileSync(join(root, 'apps/server/tests/web-namespace.test.ts'), 'utf8');
   const checks = [
     check(
       'root-build-script',
@@ -104,12 +105,11 @@ export function collectAgentBeanNextReadinessChecks({
       'CI must create the production Web build through the canonical package build before the combined browser smoke starts',
     ),
     check(
-      'ci-runs-production-readiness-before-next-deploy',
-      workflow.includes("env.AGENTBEAN_DEPLOY_TARGET == 'next'") &&
-        workflow.includes('npm run check:agentbean-next-readiness -- --production') &&
+      'ci-runs-production-readiness-before-deploy',
+      workflow.includes('npm run check:agentbean-next-readiness -- --production') &&
         workflow.includes('AGENTBEAN_NEXT_SESSION_SECRET') &&
         workflow.includes('AGENTBEAN_NEXT_DATA_DIR'),
-      'CI deploy job must run production readiness checks before AGENTBEAN_DEPLOY_TARGET=next deploys',
+      'CI deploy job must run production readiness checks before server-next deploys',
     ),
     check(
       'daemon-install-smoke-script',
@@ -144,17 +144,14 @@ export function collectAgentBeanNextReadinessChecks({
       'root package.json and production runbook must expose the AgentBean Next SQLite restart persistence smoke',
     ),
     check(
-      'old-entry-smoke-script',
-      packageJson.scripts?.['smoke:agentbean-old-entry'] ===
-        'node scripts/smoke-agentbean-old-entry.mjs' &&
-        workflow.includes('run_agentbean_old_production_smoke') &&
-        workflow.includes('agentbean_old_entry_url') &&
-        workflow.includes('Old AgentBean production smoke') &&
-        workflow.includes('npm run smoke:agentbean-old-entry') &&
-        cutoverRunbook.includes('npm run smoke:agentbean-old-entry') &&
-        cutoverRunbook.includes('run_agentbean_old_production_smoke') &&
-        cutoverRunbook.includes('旧生产 `/healthz`'),
-      'root package.json, CI, and production runbook must expose an old AgentBean rollback entry smoke',
+      'legacy-source-retired',
+      !existsSync(join(root, 'apps/server')) &&
+        !existsSync(join(root, 'apps/web')) &&
+        !existsSync(join(root, 'apps/daemon')) &&
+        !existsSync(join(root, 'scripts/smoke-agentbean-old-entry.mjs')) &&
+        !packageJson.scripts?.['smoke:agentbean-old-entry'] &&
+        !workflow.includes('run_agentbean_old_production_smoke'),
+      'Release B must remove legacy source trees, old entry smoke, and old-target CI controls',
     ),
     check(
       'ci-runs-production-smoke-on-demand',
@@ -172,67 +169,41 @@ export function collectAgentBeanNextReadinessChecks({
       'CI must expose an explicit workflow_dispatch AgentBean Next production smoke gate',
     ),
     check(
-      'ci-requires-production-smoke-for-next-deploy',
+      'ci-requires-production-smoke-for-manual-deploy',
       workflow.includes('Require production smoke for manual AgentBean Next deploy') &&
         workflow.includes('Manual AgentBean Next production deploy requires run_agentbean_next_production_smoke=true') &&
-        workflow.includes("inputs.run_production_deploy && env.AGENTBEAN_DEPLOY_TARGET == 'next' && !inputs.run_agentbean_next_production_smoke") &&
+        workflow.includes('inputs.run_production_deploy && !inputs.run_agentbean_next_production_smoke') &&
         cutoverRunbook.includes('run_agentbean_next_production_smoke=true') &&
         cutoverRunbook.includes('只切不验'),
-      'CI must block manual AgentBean Next production deploys that do not also request production smoke',
+      'CI must block manual server-next production deploys that do not also request production smoke',
     ),
     check(
-      'ci-requires-repository-target-for-manual-next-deploy',
-      workflow.includes('Require repository deploy target for manual AgentBean Next deploy') &&
-        workflow.includes('repository variable AGENTBEAN_DEPLOY_TARGET=next') &&
-        workflow.includes('The workflow input alone is not the final production flip') &&
-        workflow.includes("inputs.run_production_deploy && env.AGENTBEAN_DEPLOY_TARGET == 'next' && vars.AGENTBEAN_DEPLOY_TARGET != 'next'") &&
-        cutoverRunbook.includes('workflow input alone') &&
-        cutoverRunbook.includes('repository variable，不是 workflow dispatch input'),
-      'CI must block manual AgentBean Next deploys when only the workflow input is next but the repository variable is still old',
+      'ci-forbids-deploy-when-npm-publish-is-skipped',
+      workflow.includes('Reject production deploy when npm publish is skipped') &&
+        workflow.includes('inputs.run_production_deploy && inputs.skip_npm_publish') &&
+        workflow.includes('Manual production deploy cannot use skip_npm_publish=true; publish must complete before deploy.') &&
+        cutoverRunbook.includes('`skip_npm_publish=true`'),
+      'CI must fail before a manual production deploy can bypass npm publication',
     ),
     check(
-      'ci-requires-old-smoke-for-manual-rollback-deploy',
-      workflow.includes('Require old production smoke for manual AgentBean rollback deploy') &&
-        workflow.includes('Manual old AgentBean production deploy requires run_agentbean_old_production_smoke=true') &&
-        workflow.includes("inputs.run_production_deploy && env.AGENTBEAN_DEPLOY_TARGET == 'old' && !inputs.run_agentbean_old_production_smoke") &&
-        cutoverRunbook.includes('run_agentbean_old_production_smoke=true') &&
-        cutoverRunbook.includes('反向只切不验'),
-      'CI must block manual old AgentBean rollback deploys that do not also request old entry smoke',
-    ),
-    check(
-      'ci-runs-ready-to-flip-before-production-smoke',
-      workflow.includes('Run AgentBean Next ready-to-flip audit') &&
-        workflow.includes("if: vars.AGENTBEAN_DEPLOY_TARGET != 'next'") &&
-        workflow.includes('npm run audit:agentbean-next-ready-to-flip') &&
-        workflow.indexOf('Run AgentBean Next ready-to-flip audit') <
-          workflow.indexOf('Run AgentBean Next public entry smoke') &&
-        cutoverRunbook.includes('ready-to-flip audit') &&
-        cutoverRunbook.includes('production smoke'),
-      'CI production smoke must first prove external state is ready except for the final deploy target',
-    ),
-    check(
-      'ci-runs-strict-cutover-after-final-flip-before-production-smoke',
+      'ci-runs-strict-cutover-before-production-smoke',
       workflow.includes('Run AgentBean Next strict cutover audit') &&
-        workflow.includes("if: vars.AGENTBEAN_DEPLOY_TARGET == 'next'") &&
         workflow.includes('npm run audit:agentbean-next-cutover') &&
         workflow.indexOf('Run AgentBean Next strict cutover audit') <
           workflow.indexOf('Run AgentBean Next public entry smoke') &&
         cutoverRunbook.includes('strict cutover audit') &&
-        cutoverRunbook.includes('final flip 后'),
-      'CI production smoke must run strict cutover audit after the final deploy target is next',
+        cutoverRunbook.includes('production smoke 先运行 strict cutover audit'),
+      'CI production smoke must run strict cutover audit before public entry and business smoke',
     ),
     check(
       'ci-provides-production-env-for-production-smoke-audits',
       workflow.includes('GH_TOKEN: ${{ github.token }}') &&
-        workflow.includes("AGENTBEAN_DEPLOY_TARGET: ${{ vars.AGENTBEAN_DEPLOY_TARGET || 'old' }}") &&
         workflow.includes('AGENTBEAN_NEXT_DATA_DIR: ${{ vars.AGENTBEAN_NEXT_DATA_DIR }}') &&
         workflow.includes('AGENTBEAN_NEXT_AUDIT_ENTRY_URL: ${{ vars.AGENTBEAN_NEXT_ENTRY_URL }}') &&
         workflow.includes("AGENTBEAN_NEXT_ENTRY_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}") &&
         workflow.includes('AGENTBEAN_NEXT_SESSION_SECRET: ${{ secrets.AGENTBEAN_NEXT_SESSION_SECRET }}') &&
         workflow.includes('NPM_TOKEN: ${{ secrets.NPM_TOKEN }}') &&
         workflow.includes('RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}') &&
-        workflow.indexOf('GH_TOKEN: ${{ github.token }}') <
-          workflow.indexOf('Run AgentBean Next ready-to-flip audit') &&
         workflow.indexOf('GH_TOKEN: ${{ github.token }}') <
           workflow.indexOf('Run AgentBean Next strict cutover audit'),
       'CI production smoke audits must receive production variables and secrets before running cutover audits',
@@ -244,15 +215,34 @@ export function collectAgentBeanNextReadinessChecks({
       'AgentBean Next CI must verify the canonical daemon package can be installed through the old npm entry',
     ),
     check(
-      'deploy-target-gate',
-      workflow.includes('AGENTBEAN_DEPLOY_TARGET') &&
-        workflow.includes('deploy_path="apps/server"') &&
-        workflow.includes('deploy_path="."'),
-      'CI deploy job must keep old|next deployment target gate',
+      'ci-deploys-only-server-next',
+      workflow.includes('timeout 8m railway up .') &&
+        workflow.includes("needs.publish.result == 'success'") &&
+        !workflow.includes('agentbean_deploy_target') &&
+        !workflow.includes('deploy_path=') &&
+        !workflow.includes('apps/server/package-lock.json'),
+      'CI deploy job must deploy only the root server-next application',
+    ),
+    check(
+      'daily-changelog-uses-single-main-push-deploy',
+      dailyChangelogWorkflow.includes('git push origin HEAD:main') &&
+        !dailyChangelogWorkflow.includes('gh workflow run ci-cd.yml'),
+      'Daily changelog must rely on its main push and never dispatch a competing second production deploy',
+    ),
+    check(
+      'ci-fails-closed-without-production-tokens',
+      workflow.includes('Require RAILWAY_TOKEN for production deploy') &&
+        workflow.includes('RAILWAY_TOKEN is required for production deploy; deploy cannot be skipped silently.') &&
+        workflow.includes('Require NPM_TOKEN for npm publish') &&
+        workflow.includes('NPM_TOKEN is required for npm publish; publish cannot be skipped silently.') &&
+        !workflow.includes('- name: Skip Railway deploy') &&
+        !workflow.includes('- name: Skip npm publish'),
+      'Main release workflow must fail closed when Railway or npm credentials are missing',
     ),
     check(
       'ci-deploys-production-on-main-push',
-      workflow.includes("if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run_production_deploy)") &&
+      workflow.includes("github.event_name == 'push'") &&
+        workflow.includes("github.event_name == 'workflow_dispatch' && inputs.run_production_deploy") &&
         workflow.includes('Deploy Railway backend') &&
         workflow.includes('RAILWAY_TOKEN') &&
         cutoverRunbook.includes('推送 `main` 触发生产部署'),
@@ -264,15 +254,6 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes('Railway deploy attempt ${attempt}/3') &&
         workflow.includes('timeout-minutes: 30'),
       'CI deploy job must bound each Railway CLI deploy attempt so production deploy cannot hang indefinitely',
-    ),
-    check(
-      'ready-to-flip-audit-script',
-      packageJson.scripts?.['audit:agentbean-next-ready-to-flip'] ===
-        'node scripts/audit-agentbean-next-cutover.mjs --allow-pending-final-flip' &&
-        cutoverRunbook.includes('npm run audit:agentbean-next-ready-to-flip') &&
-        cutoverRunbook.includes('AGENTBEAN_DEPLOY_TARGET=next') &&
-        cutoverRunbook.includes('最终开关'),
-      'root package.json and production runbook must expose a pre-final-flip audit that allows only the final deploy target to remain pending',
     ),
     check(
       'contracts-package-publishable',
@@ -301,15 +282,32 @@ export function collectAgentBeanNextReadinessChecks({
       '@agentbean/daemon-next must depend on published contracts, js-yaml, and socket.io-client',
     ),
     check(
+      'daemon-runtime-does-not-probe-retired-source',
+      !daemonNextCli.includes('apps/server') &&
+        !daemonNextCli.includes('server/package.json') &&
+        !daemonNextCli.includes('npm ci in apps/server'),
+      'daemon-next runtime dependency loading must be owned by daemon-next and never probe retired server source',
+    ),
+    check(
+      'server-runtime-dependencies-owned-by-server-next',
+      serverNextDevServer.includes("new URL('../package.json', import.meta.url)") &&
+        serverNextDevServer.includes("new URL('../../../../package.json', import.meta.url)") &&
+        serverNextDevServer.includes("join(process.cwd(), 'apps/server-next/package.json')") &&
+        serverNextFullPreview.includes("new URL('../package.json', import.meta.url)") &&
+        serverNextFullPreview.includes("new URL('../../../../package.json', import.meta.url)") &&
+        serverNextFullPreview.includes("join(process.cwd(), 'apps/server-next/package.json')") &&
+        !serverNextDevServer.includes("join(process.cwd(), 'package.json')") &&
+        !serverNextFullPreview.includes("join(process.cwd(), 'package.json')"),
+      'server-next runtime dependency loading must resolve from its owning workspace in source and compiled layouts',
+    ),
+    check(
       'daemon-next-version-replaces-old-daemon',
       compareSemver(daemonNextPackageJson.version, '0.1.35') > 0,
       '@agentbean/daemon-next version must be higher than the current @agentbean/daemon release before replacement',
     ),
     check(
       'ci-publishes-next-packages',
-      workflow.includes('AGENTBEAN_NPM_PUBLISH_TARGET') &&
-        workflow.includes("env.AGENTBEAN_NPM_PUBLISH_TARGET == 'next'") &&
-        workflow.includes('@agentbean/contracts@$CONTRACTS_VERSION') &&
+      workflow.includes('@agentbean/contracts@$CONTRACTS_VERSION') &&
         workflow.includes('@agentbean/daemon-next@$DAEMON_NEXT_VERSION') &&
         workflow.indexOf('Publish AgentBean Next contracts package') <
           workflow.indexOf('Publish AgentBean Next daemon package') &&
@@ -317,21 +315,7 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes('@agentbean/daemon@$CANONICAL_DAEMON_VERSION') &&
         workflow.indexOf('Publish AgentBean Next daemon package') <
           workflow.indexOf('Publish AgentBean Next canonical daemon package'),
-      'CI publish job must publish contracts, daemon-next, then canonical @agentbean/daemon when npm publish target is next',
-    ),
-    check(
-      'ci-decouples-next-npm-publish-from-production-deploy',
-        workflow.includes('agentbean_npm_publish_target') &&
-        workflow.includes('agentbean_deploy_target') &&
-        workflow.includes('run_production_deploy') &&
-        workflow.includes('inputs.agentbean_npm_publish_target') &&
-        workflow.includes('inputs.agentbean_deploy_target') &&
-        workflow.includes('inputs.run_production_deploy') &&
-        workflow.includes('AGENTBEAN_NPM_PUBLISH_TARGET') &&
-        workflow.includes('AGENTBEAN_DEPLOY_TARGET') &&
-        workflow.includes("env.AGENTBEAN_NPM_PUBLISH_TARGET == 'next'") &&
-        workflow.includes("env.AGENTBEAN_DEPLOY_TARGET == 'next'"),
-      'CI must allow publishing AgentBean Next npm packages without flipping the Railway production deploy target',
+      'CI publish job must publish contracts, daemon-next, then canonical @agentbean/daemon',
     ),
     check(
       'ci-runs-railway-next-preflight-without-deploy',
@@ -369,10 +353,10 @@ export function collectAgentBeanNextReadinessChecks({
     ),
     check(
       'ci-runs-next-production-smoke-after-main-push',
-      workflow.includes("github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AGENTBEAN_DEPLOY_TARGET == 'next'") &&
+      workflow.includes("github.event_name == 'push' && github.ref == 'refs/heads/main'") &&
         workflow.includes("AGENTBEAN_NEXT_ENTRY_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}") &&
         cutoverRunbook.includes('push run 的 deploy 成功后自动运行 `AgentBean Next production smoke`'),
-      'CI must run AgentBean Next production smoke automatically after main-push deploys when the repository deploy target is next',
+      'CI must run AgentBean Next production smoke automatically after main-push deploys',
     ),
     check(
       'ci-promotes-canonical-daemon-latest-on-demand',
@@ -381,28 +365,30 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes("if: github.event_name == 'workflow_dispatch' && inputs.promote_agentbean_daemon_latest") &&
         workflow.includes('Require NPM_TOKEN for latest promotion') &&
         workflow.includes('NPM_TOKEN is required when promote_agentbean_daemon_latest=true') &&
-        workflow.includes('Ensure legacy daemon rollback tag before latest promotion') &&
-        workflow.indexOf('Ensure legacy daemon rollback tag before latest promotion') <
+        workflow.includes('Verify legacy daemon historical archive before latest promotion') &&
+        workflow.indexOf('Verify legacy daemon historical archive before latest promotion') <
           workflow.indexOf('Promote canonical daemon to npm latest') &&
         workflow.includes('npm dist-tag add') &&
         workflow.includes('Verify npm latest points to daemon-next'),
       'CI must expose an explicit, gated workflow_dispatch to promote canonical @agentbean/daemon npm latest to the daemon-next version, so the default npm install entry can be flipped to next on demand',
     ),
     check(
-      'ci-legacy-daemon-does-not-reclaim-latest-when-next',
-      workflow.includes('npm publish --access public --tag legacy') &&
-        workflow.includes('AGENTBEAN_NPM_PUBLISH_TARGET" = "next"') &&
-        workflow.includes('Ensure legacy daemon rollback dist-tag') &&
-        workflow.includes('npm dist-tag add "@agentbean/daemon@$LEGACY_VERSION" legacy'),
-      'When npm publish target is next, the legacy apps/daemon package must publish under a non-latest dist-tag so it cannot reclaim the canonical @agentbean/daemon npm latest entry',
+      'ci-verifies-published-legacy-daemon-artifact',
+      workflow.includes('Verify legacy daemon historical archive dist-tag') &&
+        workflow.includes('Verify legacy daemon historical archive before latest promotion') &&
+        workflow.includes('npm view "@agentbean/daemon@$LEGACY_TAG" version') &&
+        workflow.includes('LEGACY_TAG" != "0.1.35') &&
+        !/^\s*working-directory:\s+apps\/daemon\s*$/m.test(workflow),
+      'CI must verify the published npm legacy historical archive without presenting it as a server-next rollback',
     ),
     check(
-      'cutover-audit-requires-canonical-daemon-latest',
+      'cutover-audit-requires-canonical-daemon-dist-tags',
       workflow.includes('Run AgentBean Next strict cutover audit') &&
         workflow.includes('npm run audit:agentbean-next-cutover') &&
         cutoverRunbook.includes('npm `@latest` dist-tag 已指向 daemon-next') &&
-        readFileSync(join(root, 'scripts/audit-agentbean-next-cutover.mjs'), 'utf8').includes('npm-canonical-daemon-latest-dist-tag'),
-      'Strict cutover audit must require npm @agentbean/daemon dist-tags.latest to point at the daemon-next canonical version before declaring final replacement readiness',
+        readFileSync(join(root, 'scripts/audit-agentbean-next-cutover.mjs'), 'utf8').includes('npm-canonical-daemon-latest-dist-tag') &&
+        readFileSync(join(root, 'scripts/audit-agentbean-next-cutover.mjs'), 'utf8').includes('npm-canonical-daemon-legacy-dist-tag'),
+      'Strict cutover audit must require npm latest to point at daemon-next and preserve legacy only as a historical archive',
     ),
     check(
       'members-list-agent-parity-regression',
@@ -412,13 +398,6 @@ export function collectAgentBeanNextReadinessChecks({
         serverNextFirstSliceTests.includes("category: 'agentos-hosted'") &&
         serverNextFirstSliceTests.includes("source: 'custom'"),
       'members:list must keep the old member-page contract: human members plus visible scanned AgentOS and custom agents',
-    ),
-    check(
-      'daemon-next-register-batch-legacy-compatibility',
-      legacyAgentNamespace.includes("socket.on('agent:register-batch', handleDeviceRegisterAgents)") &&
-        legacyAgentNamespace.includes("socket.on('device:register-agents', handleDeviceRegisterAgents)") &&
-        legacyWebNamespaceTests.includes('shows daemon-next scanned and custom device agents in the members list'),
-      'Old production server must continue accepting daemon-next agent:register-batch until the final migration has no old-server compatibility surface',
     ),
     check(
       'daemon-onboarding-profile-lifecycle',
@@ -500,15 +479,15 @@ export function collectAgentBeanNextReadinessChecks({
       browserSmokeScript.includes('webui-teams-business-flow') &&
         browserSmokeScript.includes('agentbean.teamPath') &&
         !browserSmokeScript.includes(['agentbean.', 'network', 'Path'].join('')) &&
-        browserSmokeScript.includes('Release A team page redirect mismatch') &&
-        browserSmokeScript.includes('redirectResponse.status !== 308') &&
+        browserSmokeScript.includes('Release B removed Team page alias mismatch') &&
+        browserSmokeScript.includes('removedAliasResponse.status !== 404') &&
         browserSmokeScript.includes("const compatibilityTeamsSegment = ['net', 'works'].join('');") &&
         browserSmokeScript.includes('const legacyTeamsUrl = new URL(`/${teamPath}/${compatibilityTeamsSegment}`, root);') &&
         browserSmokeScript.includes('const canonicalTeamsUrl = new URL(`/${teamPath}/teams`, root);') &&
         verificationMatrix.includes('webui-teams-business-flow') &&
         verificationMatrix.includes('settings / teams') &&
-        verificationMatrix.includes('308 permanent redirect'),
-      'Team management parity must keep canonical Team storage/routes, refresh persistence, and the temporary Release A permanent redirect under browser/readiness protection',
+        verificationMatrix.includes('Release B 后旧页面 alias 返回 404'),
+      'Team management parity must keep canonical Team storage/routes, refresh persistence, and removed alias 404 behavior under browser/readiness protection',
     ),
     check(
       'devices-parity-browser-smoke',
@@ -655,11 +634,6 @@ export function collectAgentBeanNextReadinessChecks({
 
   if (production) {
     checks.push(
-      check(
-        'production-deploy-target-next',
-        env.AGENTBEAN_DEPLOY_TARGET === 'next',
-        'AGENTBEAN_DEPLOY_TARGET must be next before replacing old AgentBean',
-      ),
       check('railway-token-present', Boolean(env.RAILWAY_TOKEN), 'RAILWAY_TOKEN must be configured for production deploy'),
       check(
         'production-session-secret-present',

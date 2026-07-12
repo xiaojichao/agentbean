@@ -416,9 +416,9 @@ describe('AgentBean Next browser smoke script', () => {
     const fetchImpl = async (url: string) => {
       fetchCalls.push(url);
       return {
-        status: 308,
+        status: 404,
         headers: {
-          get: (name: string) => (name.toLowerCase() === 'location' ? '/team-one/teams' : null),
+          get: () => null,
         },
       };
     };
@@ -445,7 +445,7 @@ describe('AgentBean Next browser smoke script', () => {
     });
     const compatibilityTeamsUrl = ['http://127.0.0.1:4100/team-one/net', 'works'].join('');
     expect(fetchCalls).toEqual([compatibilityTeamsUrl]);
-    expect(calls).toContainEqual(['navigate', compatibilityTeamsUrl]);
+    expect(calls).not.toContainEqual(['navigate', compatibilityTeamsUrl]);
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/teams']);
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-two/settings']);
     expect(calls.filter((call) => call[0] === 'reload')).toHaveLength(3);
@@ -481,7 +481,7 @@ describe('AgentBean Next browser smoke script', () => {
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('settings-team-delete-open'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('settings-team-delete-dialog'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].description.includes('leave temporary team'))).toBe(true);
-    expect(waitForFunctionCalls.some((call) => call[1].description.includes('permanent redirect to the teams page'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].description.includes('permanent redirect to the teams page'))).toBe(false);
     expect(waitForFunctionCalls.some((call) => call[1].description.includes('disappear from teams list'))).toBe(true);
     expect(waitForFunctionCalls.map((call) => call[1].description)).toEqual(
       expect.arrayContaining([
@@ -525,7 +525,7 @@ describe('AgentBean Next browser smoke script', () => {
     expect(parityAudit).not.toContain(['| `settings` / `net', 'works` | Green |'].join(''));
     expect(matrix).toContain('webui-teams-business-flow');
     expect(matrix).toContain('`/:teamPath/teams`');
-    expect(matrix).toContain('308 permanent redirect');
+    expect(matrix).toContain('Release B 后旧页面 alias 返回 404');
   });
 
   test('exercises WebUI task create, reorder, delete, status update, and refresh restore', async () => {

@@ -80,18 +80,14 @@ test('recursively scans directories and reports file, line, and rule', () => {
   }
 });
 
-test('does not apply the default Release A allowlist to explicitly requested roots', () => {
-  const allowlistedFile = join(
-    dirname(checker),
-    '..',
-    'apps',
-    'web-next',
-    'lib',
-    'team-path.ts',
+test('scans the former Release A compatibility files without an allowlist', () => {
+  const webNextRoot = join(dirname(checker), '..', 'apps', 'web-next');
+  const result = runChecker(
+    join(webNextRoot, 'lib', 'team-path.ts'),
+    join(webNextRoot, 'tests', 'team-path.test.ts'),
+    join(webNextRoot, 'next.config.mjs'),
   );
-  const result = runChecker(allowlistedFile);
-  assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
-  assert.match(result.stderr, /team-path\.ts:\d+:(?:product identifier|browser key):/);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
 });
 
 test('ignores generated TypeScript build metadata during recursive scans', () => {
@@ -126,6 +122,7 @@ test('CI change detection covers the default scan roots and checker files', () =
     'scripts/check-team-terminology.mjs',
     'scripts/check-team-terminology.test.mjs',
     '.github/workflows/ci-cd.yml',
+    '.github/workflows/daily-changelog.yml',
     'package.json',
     'railway.json',
     'README.md',

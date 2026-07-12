@@ -1201,9 +1201,9 @@ export async function runServerNextDevServer(config = parseServerNextDevConfig()
 
 function loadSocketIoServer(): SocketIoServerConstructor {
   const requireUrls = [
-    new URL('../../../../../server/package.json', import.meta.url),
-    new URL('../../server/package.json', import.meta.url),
-    pathToFileURL(join(process.cwd(), 'apps/server/package.json')),
+    new URL('../package.json', import.meta.url),
+    new URL('../../../../package.json', import.meta.url),
+    pathToFileURL(join(process.cwd(), 'apps/server-next/package.json')),
   ];
   for (const requireUrl of requireUrls) {
     try {
@@ -1213,14 +1213,14 @@ function loadSocketIoServer(): SocketIoServerConstructor {
       // Try the next known repository layout.
     }
   }
-  throw new Error('socket.io is not installed; run npm ci in apps/server or provide a workspace install');
+  throw new Error('socket.io is not installed; run npm ci at the repository root');
 }
 
 function loadBetterSqlite3(): BetterSqlite3Constructor {
   const requireUrls = [
-    new URL('../../../../../server/package.json', import.meta.url),
-    new URL('../../server/package.json', import.meta.url),
-    pathToFileURL(join(process.cwd(), 'apps/server/package.json')),
+    new URL('../package.json', import.meta.url),
+    new URL('../../../../package.json', import.meta.url),
+    pathToFileURL(join(process.cwd(), 'apps/server-next/package.json')),
   ];
   for (const requireUrl of requireUrls) {
     try {
@@ -1232,7 +1232,7 @@ function loadBetterSqlite3(): BetterSqlite3Constructor {
       // Try the next installed copy; native modules are ABI-specific.
     }
   }
-  throw new Error('better-sqlite3 is not installed for this Node.js runtime; run npm ci in apps/server');
+  throw new Error('better-sqlite3 is not installed for this Node.js runtime; run npm ci at the repository root');
 }
 
 function parseArgs(argv: string[]): Record<string, string> {

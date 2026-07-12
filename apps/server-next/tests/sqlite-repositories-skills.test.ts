@@ -153,7 +153,7 @@ function loadBetterSqlite3(): BetterSqlite3Constructor {
   const candidates = [
     () => requireFromWorkspace('better-sqlite3') as BetterSqlite3Constructor,
     () => {
-      const requireFromServer = createRequire(new URL('../../server/package.json', import.meta.url));
+      const requireFromServer = createRequire(new URL('../package.json', import.meta.url));
       return requireFromServer('better-sqlite3') as BetterSqlite3Constructor;
     },
   ];

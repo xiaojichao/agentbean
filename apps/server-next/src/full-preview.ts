@@ -257,9 +257,9 @@ async function emitAck<T extends object>(
 
 function loadSocketIoClient(): SocketIoClientFactory {
   const requireUrls = [
-    new URL('../../../../../server/package.json', import.meta.url),
-    new URL('../../server/package.json', import.meta.url),
-    pathToFileURL(join(process.cwd(), 'apps/server/package.json')),
+    new URL('../package.json', import.meta.url),
+    new URL('../../../../package.json', import.meta.url),
+    pathToFileURL(join(process.cwd(), 'apps/server-next/package.json')),
   ];
   for (const requireUrl of requireUrls) {
     try {
@@ -269,7 +269,7 @@ function loadSocketIoClient(): SocketIoClientFactory {
       // Try the next known repository layout.
     }
   }
-  throw new Error('socket.io-client is not installed; run npm ci in apps/server or provide a workspace install');
+  throw new Error('socket.io-client is not installed; run npm ci at the repository root');
 }
 
 function openPreviewUrl(url: string): void {
