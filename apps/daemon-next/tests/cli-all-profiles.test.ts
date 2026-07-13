@@ -246,6 +246,7 @@ describe('runDaemonNextCli device-removed shutdown', () => {
         captured.onDeviceRemoved = input.onDeviceRemoved;
         return { start: async () => {} };
       }),
+      createManagementWorkerHost: vi.fn(async () => ({ start: async () => {} })),
       exit,
     };
 

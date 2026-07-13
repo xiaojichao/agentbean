@@ -59,11 +59,35 @@ function scaffoldFutureBoundaries(root) {
   scaffoldServerKernel(root);
   scaffoldInvocationGateway(root);
   scaffoldWorkerTransport(root);
+  scaffoldDeviceWorkerHost(root);
   for (const path of [
-    'apps/daemon-next/src/pi-manager-worker-host.ts',
+    'apps/server-next/src/application/management/management-router.ts',
   ]) {
     write(root, path, '// scaffolded\n');
   }
+}
+
+function scaffoldDeviceWorkerHost(root) {
+  write(root, 'apps/daemon-next/src/device-service-core.ts', 'createDeviceServiceCore dispatchClient managementWorkerHost\n');
+  write(root, 'apps/daemon-next/src/pi-manager-worker-host.ts', [
+    'createPiManagerWorkerHost',
+    'replayManagementOutboxForLease',
+    'activeLeaseCount',
+    'worker-disconnected',
+    'taskGraphRevision',
+  ].join('\n'));
+  write(root, 'apps/daemon-next/src/management-worker-protocol.ts', [
+    'createManagementWorkerProtocol', 'leaseOffer', 'acquireLease', 'fetchCheckpoint', 'replayOutbox', 'onDisconnect',
+  ].join('\n'));
+  write(root, 'apps/daemon-next/src/management-durable-outbox.ts', [
+    'createManagementDurableOutbox', 'managementRunId', 'commandId', 'idempotencyKey', 'requestHash', '0o700', '0o600',
+  ].join('\n'));
+  write(root, 'apps/daemon-next/src/management-credential-provider.ts', [
+    'createEnvironmentManagementCredentialProvider', 'managementCredentialCapability', 'test_only', 'unavailable',
+  ].join('\n'));
+  write(root, 'apps/daemon-next/src/management-model-adapter.ts', 'createManagementModelAdapter\n');
+  write(root, 'apps/daemon-next/src/profile-paths.ts', 'managementOutboxFile\n');
+  write(root, 'apps/daemon-next/src/cli.ts', 'createDefaultManagementWorkerHost createDeviceServiceCore\n');
 }
 
 function scaffoldWorkerTransport(root) {
@@ -239,7 +263,7 @@ test('reports Invocation Gateway while Worker transport remains Red', () => {
   });
 });
 
-test('reports Worker transport while WorkerHost remains Red', () => {
+test('reports Worker transport while Device WorkerHost remains Red', () => {
   withFixture((root) => {
     scaffoldRuntimeSlice(root);
     scaffoldWorkerContracts(root);
@@ -250,7 +274,23 @@ test('reports Worker transport while WorkerHost remains Red', () => {
     const result = runChecker(root);
     assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
     assert.match(result.stdout, /P1_WORKER_TRANSPORT_PRESENT/);
-    assert.match(result.stderr, /P1_NOT_IMPLEMENTED:.*pi-manager-worker-host\.ts/);
+    assert.match(result.stderr, /P1_DEVICE_WORKER_HOST_INVALID/);
+  });
+});
+
+test('reports Device WorkerHost while managed routing remains Red', () => {
+  withFixture((root) => {
+    scaffoldRuntimeSlice(root);
+    scaffoldWorkerContracts(root);
+    scaffoldManagementPersistence(root);
+    scaffoldServerKernel(root);
+    scaffoldInvocationGateway(root);
+    scaffoldWorkerTransport(root);
+    scaffoldDeviceWorkerHost(root);
+    const result = runChecker(root);
+    assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /P1_DEVICE_WORKER_HOST_PRESENT/);
+    assert.match(result.stderr, /P1_NOT_IMPLEMENTED:.*management-router\.ts/);
   });
 });
 

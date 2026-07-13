@@ -1,17 +1,24 @@
 import { hostname as readHostname } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { AGENT_EVENTS, type DeviceInviteCredentialsDto } from '../../../packages/contracts/src/index.js';
 import { createBuiltinScanProvider } from './scanner.js';
 import { loadScanCache, saveScanCache } from './scan-cache.js';
-import { collectSystemInfo, readDaemonVersion } from './system-info.js';
+import { collectSystemInfo, readDaemonVersion, readPiManagementRuntimeVersion } from './system-info.js';
 import { createCommandExecutor } from './executor.js';
 import { createDaemonProtocolClient, createHttpEnvResolver, type DaemonDeviceConfig, type DaemonProtocolSocket, type DaemonScanSnapshot } from './index.js';
 import { loadYamlConfig } from './config.js';
 import { clearAuth, listAuthProfiles, loadAuth, renameAuthProfile, saveAuth, type AuthData, type AuthProfile } from './auth-store.js';
 import { sanitizeProfileId } from './profile-paths.js';
 import { loadOrCreateMachineId } from './machine-id.js';
+import { createDeviceServiceCore, type DeviceServiceComponent } from './device-service-core.js';
+import { createEnvironmentManagementCredentialProvider } from './management-credential-provider.js';
+import { createManagementDurableOutbox } from './management-durable-outbox.js';
+import { createManagementModelAdapter } from './management-model-adapter.js';
+import { createManagementWorkerProtocol, type ManagementWorkerProtocolSocket } from './management-worker-protocol.js';
+import { createPiManagerWorkerHost } from './pi-manager-worker-host.js';
 
 let globalErrorGuardsInstalled = false;
 function installGlobalErrorGuards(): void {
@@ -37,6 +44,8 @@ function isSocketDisconnectError(reason: unknown): boolean {
 }
 
 type CliStatusReporter = (message: string) => void;
+type PiManagementRuntimeModule = typeof import('@agentbean/pi-management-runtime');
+const PI_MANAGEMENT_RUNTIME_PACKAGE = '@agentbean/pi-management-runtime';
 
 export interface SocketIoClientLike {
   connected: boolean;
@@ -86,8 +95,14 @@ export interface DaemonNextCliDeps {
   createExecutor?: typeof createCommandExecutor;
   collectSystemInfo?: typeof collectSystemInfo;
   readDaemonVersion?: typeof readDaemonVersion;
+  readPiManagementRuntimeVersion?: typeof readPiManagementRuntimeVersion;
   createEnvResolver?: typeof createHttpEnvResolver;
   runDaemon?: (config: DaemonNextCliConfig, deps: DaemonNextCliDeps) => Promise<void>;
+  createManagementWorkerHost?: (input: {
+    socket: ManagementWorkerProtocolSocket;
+    profileId: string;
+    runtimeVersion: string;
+  }) => Promise<DeviceServiceComponent>;
   /** 进程退出钩子（测试可注入）；默认 process.exit。用于 daemon 被告知设备删除后退出。 */
   exit?: (code: number) => void;
 }
@@ -216,6 +231,11 @@ export function createSocketIoDaemonSocket(socket: SocketIoClientLike): DaemonPr
           hasConnected = true;
           return;
         }
+        void handler();
+      });
+    },
+    onDisconnect(handler) {
+      socket.on('disconnect', () => {
         void handler();
       });
     },
@@ -358,9 +378,11 @@ export async function runDaemonNextCli(
   const createExecutor = deps.createExecutor ?? createCommandExecutor;
   const collectSystemInfoFn = deps.collectSystemInfo ?? collectSystemInfo;
   const readDaemonVersionFn = deps.readDaemonVersion ?? readDaemonVersion;
+  const readPiManagementRuntimeVersionFn = deps.readPiManagementRuntimeVersion ?? readPiManagementRuntimeVersion;
   const createEnvResolver = deps.createEnvResolver ?? createHttpEnvResolver;
   const runDaemon = deps.runDaemon ?? runDaemonNextCli;
   const exit = deps.exit ?? ((code: number) => process.exit(code));
+  const createManagementWorkerHost = deps.createManagementWorkerHost ?? createDefaultManagementWorkerHost;
 
   if (config.listProfiles) {
     const profiles = listAuthProfilesFn();
@@ -526,7 +548,7 @@ export async function runDaemonNextCli(
     daemonVersion,
     systemInfo: { ...collectSystemInfoFn(), daemonVersion },
   };
-  await createProtocolClient({
+  const dispatchClient = createProtocolClient({
     serverUrl,
     socket: protocolSocket,
     executor: createExecutor({ fallbackPrefix: config.fallbackPrefix }),
@@ -558,10 +580,50 @@ export async function runDaemonNextCli(
       }
       return createEnvResolver({ serverUrl, token: device.token })(envRef);
     },
-  }).start();
+  });
+  const managementWorkerHost = await createManagementWorkerHost({
+    socket: protocolSocket,
+    profileId: config.profileId,
+    runtimeVersion: readPiManagementRuntimeVersionFn(),
+  });
+  await createDeviceServiceCore({ dispatchClient, managementWorkerHost }).start();
   if (config.inviteCode) {
     console.log(`AgentBean daemon connected for profile "${config.profileId}".`);
   }
+}
+
+async function createDefaultManagementWorkerHost(input: {
+  socket: ManagementWorkerProtocolSocket;
+  profileId: string;
+  runtimeVersion: string;
+}): Promise<DeviceServiceComponent> {
+  const outbox = await createManagementDurableOutbox({ profileId: input.profileId });
+  const credentialProvider = createEnvironmentManagementCredentialProvider();
+  const protocol = createManagementWorkerProtocol({
+    socket: input.socket,
+    workerInstanceId: randomUUID(),
+    profileId: input.profileId,
+    runtimeVersion: input.runtimeVersion,
+  });
+  return createPiManagerWorkerHost({
+    profileId: input.profileId,
+    runtimeVersion: input.runtimeVersion,
+    protocol,
+    credentialProvider,
+    outbox,
+    createRuntimeFactory: async ({ credential, toolExecutor }) => {
+      // daemon tests run before workspace package builds, so Vite must not resolve this
+      // published-package boundary eagerly. Production Node resolves the exact dependency
+      // only after a usable local model credential makes the runtime necessary.
+      const { createManagementRuntimeFactory } = await import(
+        /* @vite-ignore */ PI_MANAGEMENT_RUNTIME_PACKAGE
+      ) as PiManagementRuntimeModule;
+      return createManagementRuntimeFactory({
+        model: createManagementModelAdapter({ credential }),
+        toolExecutor,
+      });
+    },
+  });
 }
 
 export function formatScanSnapshot(

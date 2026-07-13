@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { collectSystemInfo, readDaemonVersion } from '../src/system-info';
+import { collectSystemInfo, readDaemonVersion, readPiManagementRuntimeVersion } from '../src/system-info';
 
 describe('system-info', () => {
   test('collectSystemInfo returns os-derived fields with expected shapes', () => {
@@ -34,5 +34,14 @@ describe('system-info', () => {
 
     expect(version).toBe('9.8.7');
     expect(requested).toEqual(['../package.json', '../../../../package.json']);
+  });
+
+  test('readPiManagementRuntimeVersion reads only the daemon exact dependency', () => {
+    expect(readPiManagementRuntimeVersion(() => ({
+      dependencies: { '@agentbean/pi-management-runtime': '0.1.0' },
+    }))).toBe('0.1.0');
+    expect(readPiManagementRuntimeVersion(() => ({
+      dependencies: { '@agentbean/pi-management-runtime': '^0.1.0' },
+    }))).toBe('unknown');
   });
 });

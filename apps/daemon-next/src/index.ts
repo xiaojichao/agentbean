@@ -38,6 +38,12 @@ export type { CollectedArtifact } from './artifact-collector.js';
 export { uploadArtifacts } from './artifact-uploader.js';
 export type { UploadedArtifact } from './artifact-uploader.js';
 export { createHttpEnvResolver } from './env-fetcher.js';
+export { createDeviceServiceCore } from './device-service-core.js';
+export type { DeviceServiceComponent, DeviceServiceCore } from './device-service-core.js';
+export { createManagementDurableOutbox } from './management-durable-outbox.js';
+export type { ManagementDurableOutbox, ManagementDurableOutboxItem } from './management-durable-outbox.js';
+export { createPiManagerWorkerHost } from './pi-manager-worker-host.js';
+export type { PiManagerWorkerHost } from './pi-manager-worker-host.js';
 import { createRescanController, type RescanController } from './rescan.js';
 import { createDispatchOutbox, type DispatchOutbox } from './outbox.js';
 
@@ -47,6 +53,7 @@ export interface DaemonProtocolSocket {
   on(event: string, handler: (payload: unknown, ack?: (result: unknown) => void) => Promise<void>): void;
   off?(event: string, handler: (payload: unknown, ack?: (result: unknown) => void) => Promise<void>): void;
   onReconnect?(handler: () => Promise<void>): void;
+  onDisconnect?(handler: () => Promise<void>): void;
 }
 
 export interface DaemonWorkspaceRunResult {

@@ -46,6 +46,8 @@ function createRunDaemonHarness(overrides: Partial<DaemonNextCliDeps> = {}) {
     createExecutor: vi.fn(() => executor),
     collectSystemInfo: vi.fn(() => ({ hostname: 'host.local' })),
     readDaemonVersion: vi.fn(() => '0.2.2-test'),
+    readPiManagementRuntimeVersion: vi.fn(() => '0.1.0-test'),
+    createManagementWorkerHost: vi.fn(async () => ({ start: vi.fn(async () => undefined) })),
     createEnvResolver: vi.fn(() => vi.fn(async () => ({}))),
     ...overrides,
   };
