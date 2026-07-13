@@ -22,6 +22,8 @@ import type {
 import { DEFAULT_CHANNEL_NAME, rankMessageSearch, splitSearchTerms } from '../../../../../packages/domain/src/index.js';
 import type { SkillDto } from '../../../../../packages/contracts/src/index.js';
 import { createSqliteManagementPersistence } from './management-repositories.js';
+import { createSqliteTaskCoordinationRepositories } from './task-coordination-repositories.js';
+import { createTaskCoordinationUnitOfWork } from '../../application/task-coordination-unit-of-work.js';
 
 export interface SqliteStatement {
   run(...params: unknown[]): unknown;
@@ -69,6 +71,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0010_management_phase_1.sql');
   applyMigration(db, 'team/0011_management_shadow_namespace.sql');
   applyMigration(db, 'team/0012_management_frozen_target.sql');
+  applyMigration(db, 'team/0013_management_phase_2_task_dag.sql');
 }
 
 // 清理 channel_agent_members 中指向已删 agent 的孤儿行（PRD §6）。
@@ -133,6 +136,7 @@ export function cleanupOrphanedChannelMembers(
 export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): ServerNextRepositories {
   const { globalDb, teamDb } = input;
   const management = createSqliteManagementPersistence(teamDb);
+  const taskCoordination = createSqliteTaskCoordinationRepositories(teamDb);
 
   let repositories!: ServerNextRepositories;
   repositories = {
@@ -144,6 +148,15 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           operation({ management: managementRepositories, dispatches: repositories.dispatches }));
       },
     },
+    taskCoordination,
+    taskCoordinationUnitOfWork: createTaskCoordinationUnitOfWork((operation) =>
+      management.unitOfWork.run((managementRepositories) =>
+        operation({
+          tasks: repositories.tasks,
+          coordination: taskCoordination,
+          management: managementRepositories,
+        })),
+    ),
     users: {
       async create(user) {
         globalDb
@@ -1748,12 +1761,13 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
     },
     tasks: {
       async create(task) {
+        const revision = task.revision ?? 1;
         teamDb
           .prepare(
             `INSERT INTO tasks (
               id, team_id, title, description, status, creator_id, assignee_id, channel_id,
-              tags_json, sort_order, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              tags_json, sort_order, created_at, updated_at, revision
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             task.id,
@@ -1768,8 +1782,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             task.sortOrder,
             task.createdAt,
             task.updatedAt,
+            revision,
           );
-        return task;
+        return { ...task, revision };
       },
       async getById(taskId) {
         return mapTask(teamDb.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId));
@@ -1825,6 +1840,34 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             input.taskId,
           );
         return updated;
+      },
+      async updateAtRevision(input) {
+        const existing = mapTask(teamDb.prepare('SELECT * FROM tasks WHERE id = ?').get(input.taskId));
+        if (!existing || existing.revision !== input.expectedRevision) {
+          return null;
+        }
+        const updated = { ...existing, ...input.changes, revision: input.nextRevision };
+        const result = teamDb
+          .prepare(
+            `UPDATE tasks SET
+              title = ?, description = ?, status = ?, assignee_id = ?, channel_id = ?,
+              tags_json = ?, sort_order = ?, updated_at = ?, revision = ?
+             WHERE id = ? AND revision = ?`,
+          )
+          .run(
+            updated.title,
+            updated.description ?? null,
+            updated.status,
+            updated.assigneeId ?? null,
+            updated.channelId ?? null,
+            JSON.stringify(updated.tags),
+            updated.sortOrder,
+            updated.updatedAt,
+            input.nextRevision,
+            input.taskId,
+            input.expectedRevision,
+          );
+        return sqliteChanges(result) === 1 ? updated : null;
       },
       async delete(input) {
         const existing = mapTask(teamDb.prepare('SELECT * FROM tasks WHERE id = ?').get(input.taskId));
@@ -2302,6 +2345,7 @@ function mapTask(row: unknown): TaskRecord | null {
     sortOrder: sqliteNumber(row, 'sort_order'),
     createdAt: sqliteNumber(row, 'created_at'),
     updatedAt: sqliteNumber(row, 'updated_at'),
+    revision: sqliteNumber(row, 'revision'),
   };
 }
 

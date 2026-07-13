@@ -1,6 +1,8 @@
 import type { AgentDto, ArtifactDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, RuntimeDto, SkillDto, TaskDto, TeamDto, UnixMs, UserDto, WorkspaceRunDto, WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import type { ManagementRepositories } from './management-repositories.js';
 import type { ManagementUnitOfWork } from './management-unit-of-work.js';
+import type { TaskCoordinationRepositories } from './task-coordination-repositories.js';
+import type { TaskCoordinationUnitOfWork } from './task-coordination-unit-of-work.js';
 
 export interface UserRecord extends UserDto {
   passwordHash: string;
@@ -57,7 +59,8 @@ export interface ArtifactRecord extends Omit<ArtifactDto, 'downloadUrl' | 'previ
   storagePath?: string;
 }
 export type WorkspaceRunRecord = WorkspaceRunDto;
-export type TaskRecord = TaskDto;
+export type TaskRecord = TaskDto & { revision: number };
+export type NewTaskRecord = TaskDto & { revision?: number };
 export interface DispatchMutationResult {
   dispatch: DispatchRecord;
   changed: boolean;
@@ -292,10 +295,16 @@ export interface WorkspaceRunRepository {
 }
 
 export interface TaskRepository {
-  create(input: TaskRecord): Promise<TaskRecord>;
+  create(input: NewTaskRecord): Promise<TaskRecord>;
   getById(taskId: ID): Promise<TaskRecord | null>;
   list(input: { teamId: ID; channelIds: ID[]; includeGlobal: boolean }): Promise<TaskRecord[]>;
   update(input: { taskId: ID; changes: Partial<Pick<TaskRecord, 'title' | 'description' | 'status' | 'assigneeId' | 'channelId' | 'tags' | 'sortOrder' | 'updatedAt'>> }): Promise<TaskRecord | null>;
+  updateAtRevision(input: {
+    taskId: ID;
+    expectedRevision: number;
+    nextRevision: number;
+    changes: Partial<Pick<TaskRecord, 'title' | 'description' | 'status' | 'assigneeId' | 'channelId' | 'tags' | 'sortOrder' | 'updatedAt'>>;
+  }): Promise<TaskRecord | null>;
   delete(input: { taskId: ID }): Promise<TaskRecord | null>;
 }
 
@@ -303,6 +312,8 @@ export interface ServerNextRepositories {
   management: ManagementRepositories;
   managementUnitOfWork: ManagementUnitOfWork;
   managementDispatchUnitOfWork: ManagementDispatchUnitOfWork;
+  taskCoordination: TaskCoordinationRepositories;
+  taskCoordinationUnitOfWork: TaskCoordinationUnitOfWork;
   users: UserRepository;
   teams: TeamRepository;
   joinLinks: JoinLinkRepository;

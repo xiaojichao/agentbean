@@ -18,9 +18,18 @@ import type {
 } from '../../application/repositories.js';
 import { DEFAULT_CHANNEL_NAME, rankMessageSearch } from '../../../../../packages/domain/src/index.js';
 import { createInMemoryManagementPersistence } from './management-repositories.js';
+import {
+  cloneTaskCoordinationMemoryState,
+  createInMemoryTaskCoordinationRepositories,
+  createTaskCoordinationMemoryState,
+  restoreTaskCoordinationMemoryState,
+} from './task-coordination-repositories.js';
+import { createTaskCoordinationUnitOfWork } from '../../application/task-coordination-unit-of-work.js';
 
 export function createInMemoryRepositories(): ServerNextRepositories {
   const management = createInMemoryManagementPersistence();
+  const taskCoordinationState = createTaskCoordinationMemoryState();
+  const taskCoordination = createInMemoryTaskCoordinationRepositories(taskCoordinationState);
   const users = new Map<string, UserRecord>();
   const teams = new Map<string, TeamRecord>();
   const members = new Map<string, TeamMemberRecord>();
@@ -62,6 +71,25 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         });
       },
     },
+    taskCoordination,
+    taskCoordinationUnitOfWork: createTaskCoordinationUnitOfWork((operation) =>
+      management.unitOfWork.run(async (managementRepositories) => {
+        const taskSnapshot = new Map(tasks);
+        const coordinationSnapshot = cloneTaskCoordinationMemoryState(taskCoordinationState);
+        try {
+          return await operation({
+            tasks: repositories.tasks,
+            coordination: taskCoordination,
+            management: managementRepositories,
+          });
+        } catch (error) {
+          tasks.clear();
+          for (const [id, task] of taskSnapshot) tasks.set(id, task);
+          restoreTaskCoordinationMemoryState(taskCoordinationState, coordinationSnapshot);
+          throw error;
+        }
+      }),
+    ),
     users: {
       async create(input) {
         users.set(input.id, input);
@@ -1036,8 +1064,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
     },
     tasks: {
       async create(input) {
-        tasks.set(input.id, input);
-        return input;
+        const task = { ...input, revision: input.revision ?? 1 };
+        tasks.set(input.id, task);
+        return task;
       },
       async getById(taskId) {
         return tasks.get(taskId) ?? null;
@@ -1057,6 +1086,15 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           return null;
         }
         const updated = { ...task, ...input.changes };
+        tasks.set(input.taskId, updated);
+        return updated;
+      },
+      async updateAtRevision(input) {
+        const task = tasks.get(input.taskId);
+        if (!task || task.revision !== input.expectedRevision) {
+          return null;
+        }
+        const updated = { ...task, ...input.changes, revision: input.nextRevision };
         tasks.set(input.taskId, updated);
         return updated;
       },
