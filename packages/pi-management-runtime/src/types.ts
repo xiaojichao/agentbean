@@ -131,10 +131,23 @@ export interface ManagementSessionContextV1 {
   readonly checkpoint?: ManagementVisibleCheckpointV1;
 }
 
+export interface ManagementSessionContextV2 {
+  readonly schemaVersion: 2;
+  readonly managementPhase: 2;
+  readonly scope: Omit<Extract<ManagementSessionScopeV1, { kind: 'managed' }>, 'rootTaskId'> & {
+    readonly rootTaskId: string;
+  };
+  readonly frozenTarget?: ManagementSessionContextV1['frozenTarget'];
+  readonly visibleThread: ManagementSessionContextV1['visibleThread'];
+  readonly checkpoint?: ManagementVisibleCheckpointV1;
+}
+
+export type ManagementSessionContext = ManagementSessionContextV1 | ManagementSessionContextV2;
+
 export interface CreateManagementSessionInput {
   systemPrompt: VersionedManagementPrompt;
   mode: ManagementSessionMode;
-  context: ManagementSessionContextV1;
+  context: ManagementSessionContext;
 }
 
 export interface ManagementRuntimeFactory {
@@ -172,7 +185,7 @@ export interface ManagementModelToolDescriptor {
 
 export interface ManagementModelRequest {
   systemPrompt: string;
-  sessionContext: ManagementSessionContextV1;
+  sessionContext: ManagementSessionContext;
   messages: readonly ManagementModelMessage[];
   tools: readonly ManagementModelToolDescriptor[];
   signal?: AbortSignal;
@@ -264,6 +277,18 @@ export const PHASE_1_MANAGEMENT_TOOL_NAMES = [
   'channel.post_management_status',
   'user.request_input',
   'review.submit_root_delivery',
+] as const satisfies readonly ManagementToolName[];
+
+export const PHASE_2_MANAGEMENT_TOOL_NAMES = [
+  ...PHASE_1_MANAGEMENT_TOOL_NAMES,
+  'tasks.create_subtasks',
+  'tasks.add_dependency',
+  'tasks.publish_for_claim',
+  'tasks.assign',
+  'tasks.wait',
+  'tasks.retry',
+  'tasks.accept_subtask',
+  'tasks.report_blocked',
 ] as const satisfies readonly ManagementToolName[];
 
 export type ManagementToolName = (typeof MANAGEMENT_TOOL_NAMES)[number];

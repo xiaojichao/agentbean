@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MANAGEMENT_TOOL_NAMES,
   PHASE_1_MANAGEMENT_TOOL_NAMES,
+  PHASE_2_MANAGEMENT_TOOL_NAMES,
   createManagementRuntimeFactory,
   type ManagementModelRequest,
   type ManagementToolName,
@@ -111,6 +112,68 @@ describe('management tool boundary', () => {
     expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain('tasks.create_subtasks');
     expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain('memory.search');
     await session.dispose();
+  });
+
+  it('exposes Phase 1 plus eight Task tools only for an explicit Phase 2 context', async () => {
+    const requests: ManagementModelRequest[] = [];
+    const session = await createManagementRuntimeFactory({
+      model: {
+        id: 'phase-2-tool-surface',
+        async respond(request) {
+          requests.push(request);
+          return modelResponse([{ type: 'text', text: 'done' }]);
+        },
+      },
+      toolExecutor: async () => ({ text: 'unused' }),
+    }).createSession({
+      systemPrompt: { id: 'phase-2', version: 1, content: 'Coordinate tasks.' },
+      mode: 'managed',
+      context: {
+        schemaVersion: 2,
+        managementPhase: 2,
+        scope: {
+          kind: 'managed',
+          managementRunId: 'run-phase-2',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          rootMessageId: 'message-1',
+          rootTaskId: 'task-root',
+        },
+        visibleThread: { revision: 1, messages: [] },
+      },
+    });
+
+    await session.prompt({ text: 'decompose' });
+    await session.waitForIdle();
+
+    expect(PHASE_2_MANAGEMENT_TOOL_NAMES).toHaveLength(19);
+    expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([...PHASE_2_MANAGEMENT_TOOL_NAMES]);
+    expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain('memory.search');
+    expect(requests[0]?.sessionContext).toMatchObject({ schemaVersion: 2, managementPhase: 2 });
+    await session.dispose();
+  });
+
+  it('rejects Phase 2 context in shadow mode', async () => {
+    await expect(createManagementRuntimeFactory({
+      model: { id: 'phase-2-shadow', async respond() { return modelResponse([]); } },
+      toolExecutor: async () => ({ text: 'unused' }),
+    }).createSession({
+      systemPrompt: { id: 'phase-2-shadow', version: 1, content: 'No.' },
+      mode: 'shadow',
+      context: {
+        schemaVersion: 2,
+        managementPhase: 2,
+        scope: {
+          kind: 'managed',
+          managementRunId: 'run-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          rootMessageId: 'message-1',
+          rootTaskId: 'task-1',
+        },
+        visibleThread: { revision: 1, messages: [] },
+      },
+    })).rejects.toThrow(/P1_SESSION_CONTEXT_INVALID/);
   });
 
   it('keeps managed and shadow descriptors identical without model-supplied authority fields', async () => {

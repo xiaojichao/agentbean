@@ -13,6 +13,8 @@ import type {
   TaskCoordinationDto,
   ManagementCheckpointV1,
   ManagementRunDto,
+  ManagementRunV2Dto,
+  TeamManagementPolicyV2Dto,
 } from '../src/index.js';
 
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -28,6 +30,36 @@ function compileFixture(path: string) {
 }
 
 describe('Phase 0 management contracts', () => {
+  test('freezes explicit Phase 2 Run and Team rollout policy contracts', () => {
+    const policy: TeamManagementPolicyV2Dto = {
+      schemaVersion: 2,
+      teamId: 'team-1',
+      mode: 'managed',
+      maxManagementPhase: 2,
+      placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true },
+      updatedBy: 'user-1',
+      updatedAt: 1,
+    };
+    const run: ManagementRunV2Dto = {
+      schemaVersion: 2,
+      managementPhase: 2,
+      id: 'run-2',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      rootTaskId: 'task-root',
+      rootMessageId: 'message-1',
+      mode: 'managed',
+      status: 'queued',
+      placementPolicy: policy.placementPolicy,
+      checkpointRevision: 0,
+      budget: { maxSubtasks: 20, maxDepth: 3, maxExternalInvocations: 20 },
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    expect(policy.maxManagementPhase).toBe(2);
+    expect(run.frozenTarget).toBeUndefined();
+  });
+
   test('exports ManagementRun and checkpoint through public declarations', () => {
     const result = compileFixture('tests/fixtures/management-contracts-valid.ts');
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);

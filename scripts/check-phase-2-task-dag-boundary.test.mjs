@@ -1,0 +1,36 @@
+import assert from 'node:assert/strict';
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import test from 'node:test';
+
+const root = fileURLToPath(new URL('..', import.meta.url));
+const checker = join(root, 'scripts/check-phase-2-task-dag-boundary.mjs');
+const run = (workspace) => spawnSync(process.execPath, [checker, '--workspace-root', workspace], { encoding: 'utf8' });
+
+test('accepts the repository Phase 2 boundary scaffold', () => {
+  const result = run(root);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+});
+
+test('fails closed when the Phase 2 tool surface exposes Memory', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'agentbean-phase2-boundary-'));
+  try {
+    cpSync(root, fixture, {
+      recursive: true,
+      filter: (source) => !source.split('/').includes('node_modules') && !source.split('/').includes('.git'),
+    });
+    const path = join(fixture, 'packages/pi-management-runtime/src/types.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replace(
+      'export const PHASE_2_MANAGEMENT_TOOL_NAMES = [',
+      "export const PHASE_2_MANAGEMENT_TOOL_NAMES = [\n  'memory.search',",
+    ));
+    const result = run(fixture);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /P2_RUNTIME_BOUNDARY_INVALID/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});

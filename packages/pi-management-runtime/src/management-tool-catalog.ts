@@ -10,7 +10,7 @@ import {
   type ManagementToolName,
   type ManagementToolPhase,
   type ManagementRuntimeEvent,
-  type ManagementSessionContextV1,
+  type ManagementSessionContext,
   type ManagementSessionMode,
 } from './types.js';
 
@@ -88,7 +88,7 @@ export interface CreateManagementToolCatalogInput {
   executor: ManagementToolExecutor;
   toolNames?: readonly ManagementToolName[];
   mode: ManagementSessionMode;
-  sessionContext: ManagementSessionContextV1;
+  sessionContext: ManagementSessionContext;
   emitRuntimeEvent?: (event: ManagementRuntimeEvent) => void;
 }
 
