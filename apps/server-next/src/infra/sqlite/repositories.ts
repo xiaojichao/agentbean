@@ -132,9 +132,16 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
   const { globalDb, teamDb } = input;
   const management = createSqliteManagementPersistence(teamDb);
 
-  return {
+  let repositories!: ServerNextRepositories;
+  repositories = {
     management: management.repositories,
     managementUnitOfWork: management.unitOfWork,
+    managementDispatchUnitOfWork: {
+      run(operation) {
+        return management.unitOfWork.run((managementRepositories) =>
+          operation({ management: managementRepositories, dispatches: repositories.dispatches }));
+      },
+    },
     users: {
       async create(user) {
         globalDb
@@ -1952,6 +1959,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       },
     },
   };
+  return repositories;
 }
 
 function applyMigration(db: SqliteDatabase, relativePath: string): void {

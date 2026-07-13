@@ -178,11 +178,13 @@ describe('Phase 0 existing execution fact boundary', () => {
     expect(Object.keys(repositories).filter((name) => /management|invocation|checkpoint/i.test(name))).toEqual([
       'management',
       'managementUnitOfWork',
+      'managementDispatchUnitOfWork',
     ]);
 
     const repositorySource = readFileSync(join(serverRoot, 'application/repositories.ts'), 'utf8');
     expect(repositorySource).toContain('management: ManagementRepositories');
     expect(repositorySource).toContain('managementUnitOfWork: ManagementUnitOfWork');
+    expect(repositorySource).toContain('managementDispatchUnitOfWork: ManagementDispatchUnitOfWork');
 
     const migrationSql = readTreeText(join(serverRoot, 'infra/sqlite/migrations'));
     expect(migrationSql).toMatch(/CREATE TABLE management_runs/i);

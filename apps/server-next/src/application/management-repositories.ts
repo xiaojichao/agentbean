@@ -85,10 +85,13 @@ export interface ManagementRepositories {
   invocations: {
     create(record: AgentInvocationRecordDto): Promise<AgentInvocationRecordDto>;
     getById(id: ID): Promise<AgentInvocationRecordDto | null>;
+    getByIdempotencyKey(input: { managementRunId: ID; idempotencyKey: string }): Promise<AgentInvocationRecordDto | null>;
     listByRun(managementRunId: ID): Promise<AgentInvocationRecordDto[]>;
   };
   dispatchAttempts: {
     create(record: InvocationDispatchAttemptRecord): Promise<InvocationDispatchAttemptRecord>;
+    update(record: InvocationDispatchAttemptRecord): Promise<InvocationDispatchAttemptRecord>;
+    getByDispatchId(dispatchId: ID): Promise<InvocationDispatchAttemptRecord | null>;
     list(invocationId: ID): Promise<InvocationDispatchAttemptRecord[]>;
   };
   shadowDecisions: {
