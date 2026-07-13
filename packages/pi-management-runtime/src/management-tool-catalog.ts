@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
+import { parsePhase2TaskToolInputV1, type Phase2ManagementWorkerToolInputMapV1 } from '@agentbean/contracts';
 
 import {
   MANAGEMENT_TOOL_NAMES,
@@ -66,7 +67,70 @@ export function assertExactManagementToolAllowlist(
   }
 }
 
-function schemaFor() {
+type Phase2TaskToolName = keyof Phase2ManagementWorkerToolInputMapV1;
+
+function phase2TaskSchemaFor(name: Phase2TaskToolName) {
+  const id = () => Type.String({ minLength: 1 });
+  const revision = () => Type.Integer({ minimum: 1 });
+  if (name === 'tasks.create_subtasks') {
+    const criterion = Type.Object({
+      id: id(),
+      description: id(),
+      evidenceRequired: Type.Boolean(),
+      allowedEvidenceKinds: Type.Optional(Type.Array(Type.Union([
+        Type.Literal('message'), Type.Literal('artifact'), Type.Literal('workspace-run'),
+        Type.Literal('invocation'), Type.Literal('task'),
+      ]))),
+    }, { additionalProperties: false });
+    return Type.Object({
+      parentTaskId: id(),
+      subtasks: Type.Array(Type.Object({
+        clientKey: id(),
+        title: id(),
+        description: Type.Optional(id()),
+        claimPolicy: Type.Union([Type.Literal('open'), Type.Literal('targeted')]),
+        targetAgentId: Type.Optional(id()),
+        requiredCapabilities: Type.Array(id()),
+        acceptanceCriteria: Type.Array(criterion),
+        maxAttempts: Type.Integer({ minimum: 1 }),
+      }, { additionalProperties: false }), { minItems: 1, maxItems: 8 }),
+    }, { additionalProperties: false });
+  }
+  if (name === 'tasks.add_dependency') return Type.Object({ taskId: id(), dependencyTaskId: id(), expectedTaskRevision: revision() }, { additionalProperties: false });
+  if (name === 'tasks.publish_for_claim') return Type.Object({ taskId: id(), expectedTaskRevision: revision() }, { additionalProperties: false });
+  if (name === 'tasks.assign') return Type.Object({ taskId: id(), agentId: id(), expectedTaskRevision: revision() }, { additionalProperties: false });
+  if (name === 'tasks.wait') return Type.Object({ taskIds: Type.Array(id()) }, { additionalProperties: false });
+  if (name === 'tasks.retry' || name === 'tasks.report_blocked') {
+    return Type.Object({ taskId: id(), expectedTaskRevision: revision(), reasonCode: id() }, { additionalProperties: false });
+  }
+  const evidenceRef = Type.Object({
+    kind: Type.Union([Type.Literal('message'), Type.Literal('artifact'), Type.Literal('workspace-run'), Type.Literal('invocation'), Type.Literal('task')]),
+    id: id(),
+    snapshotHash: id(),
+    snapshotRevision: Type.Optional(Type.Integer({ minimum: 0 })),
+    capturedAt: Type.Integer({ minimum: 0 }),
+  }, { additionalProperties: false });
+  return Type.Object({
+    acceptance: Type.Object({
+      schemaVersion: Type.Literal(1),
+      taskId: id(),
+      deliveryId: id(),
+      expectedTaskRevision: revision(),
+      taskAttempt: revision(),
+      claimLeaseId: id(),
+      decision: Type.Union([Type.Literal('accepted'), Type.Literal('rejected'), Type.Literal('needs_human')]),
+      criteriaResults: Type.Array(Type.Object({ criterionId: id(), passed: Type.Boolean(), evidenceRefs: Type.Array(evidenceRef) }, { additionalProperties: false })),
+      reason: id(),
+      decidedBy: Type.Union([Type.Literal('manager'), Type.Literal('human')]),
+      decidedAt: Type.Integer({ minimum: 0 }),
+    }, { additionalProperties: false }),
+  }, { additionalProperties: false });
+}
+
+function schemaFor(name: ManagementToolName, context: ManagementSessionContext) {
+  if (context.schemaVersion === 2 && getManagementToolMetadata(name).phase === 2) {
+    return phase2TaskSchemaFor(name as Phase2TaskToolName);
+  }
   return Type.Object({}, { additionalProperties: true });
 }
 
@@ -100,7 +164,7 @@ export function createManagementToolCatalog(options: CreateManagementToolCatalog
       name,
       label: name,
       description: `AgentBean management operation ${name}`,
-      parameters: schemaFor(),
+      parameters: schemaFor(name, options.sessionContext),
       executionMode: metadata.effect === 'write' ? 'sequential' : 'parallel',
       async execute(toolCallId, toolInput, signal) {
         if (options.mode === 'shadow' && metadata.effect === 'write') {
@@ -117,11 +181,14 @@ export function createManagementToolCatalog(options: CreateManagementToolCatalog
             isError: false,
           };
         }
+        const validatedInput = options.sessionContext.schemaVersion === 2 && metadata.phase === 2
+          ? parsePhase2TaskToolInputV1(name as Phase2TaskToolName, toolInput)
+          : toolInput;
         const result = await options.executor({
           toolCallId,
           name,
           scope: options.sessionContext.scope,
-          input: toolInput as Parameters<ManagementToolExecutor>[0]['input'],
+          input: validatedInput as Parameters<ManagementToolExecutor>[0]['input'],
           metadata,
           signal,
         });

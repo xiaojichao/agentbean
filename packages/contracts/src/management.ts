@@ -80,13 +80,11 @@ export interface TeamManagementPolicyV2Dto {
   readonly updatedAt: UnixMs;
 }
 
-export interface ManagementRunV2Dto {
+interface ManagementRunV2BaseDto {
   readonly schemaVersion: 2;
-  readonly managementPhase: 1 | 2;
   readonly id: ID;
   readonly teamId: ID;
   readonly channelId: ID;
-  readonly rootTaskId?: ID;
   readonly rootMessageId: ID;
   readonly frozenTarget?: ManagementRunDto['frozenTarget'];
   readonly mode: 'managed';
@@ -99,6 +97,11 @@ export interface ManagementRunV2Dto {
   readonly updatedAt: UnixMs;
   readonly completedAt?: UnixMs;
 }
+
+export type ManagementRunV2Dto = ManagementRunV2BaseDto & (
+  | { readonly managementPhase: 1; readonly rootTaskId?: ID }
+  | { readonly managementPhase: 2; readonly rootTaskId: ID }
+);
 
 export interface ManagementCheckpointAuthoritativeV1 {
   readonly lastEventSequence: number;

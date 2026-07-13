@@ -49,6 +49,10 @@ describe('Phase 2 management worker contracts', () => {
     const { rootTaskId: _rootTaskId, ...withoutRootTask } = value;
     expect(() => parseManagementWorkerSessionContextV2(withoutRootTask))
       .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    expect(() => parseManagementWorkerSessionContextV2({
+      ...value,
+      frozenTarget: { agentId: '', kind: 'unknown' },
+    })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
   });
 
   test('parses only Phase 2 Task tool requests with write authority', () => {
@@ -70,7 +74,51 @@ describe('Phase 2 management worker contracts', () => {
       .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
     expect(() => parsePhase2TaskToolRequestV2({ ...value, leaseToken: '' }))
       .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    for (const field of ['commandId', 'workerId', 'toolCallId', 'idempotencyKey'] as const) {
+      expect(() => parsePhase2TaskToolRequestV2({ ...value, [field]: '' }))
+        .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    }
     expect(() => parsePhase2TaskToolRequestV2({ ...value, input: { taskIds: ['task-1'], prompt: 'forbidden' } }))
       .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+  });
+
+  test('parses dependency inputs and rejects invalid subtask policy or evidence kinds', () => {
+    const envelope = {
+      schemaVersion: 2,
+      managementPhase: 2,
+      commandId: 'command-1',
+      managementRunId: 'run-1',
+      workerId: 'worker-1',
+      toolCallId: 'tool-call-1',
+      leaseToken: 'lease-token',
+      fencingToken: 1,
+      idempotencyKey: 'idempotency-1',
+    };
+    expect(parsePhase2TaskToolRequestV2({
+      ...envelope,
+      toolName: 'tasks.add_dependency',
+      input: { taskId: 'task-1', dependencyTaskId: 'task-0', expectedTaskRevision: 1 },
+    })).toMatchObject({ toolName: 'tasks.add_dependency' });
+    const draft = {
+      clientKey: 'draft-1',
+      title: 'Implement slice',
+      claimPolicy: 'open',
+      requiredCapabilities: [],
+      acceptanceCriteria: [{ id: 'criterion-1', description: 'Verified', evidenceRequired: true, allowedEvidenceKinds: ['task'] }],
+      maxAttempts: 2,
+    };
+    expect(() => parsePhase2TaskToolRequestV2({
+      ...envelope,
+      toolName: 'tasks.create_subtasks',
+      input: { parentTaskId: 'task-root', subtasks: [{ ...draft, targetAgentId: '' }] },
+    })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    expect(() => parsePhase2TaskToolRequestV2({
+      ...envelope,
+      toolName: 'tasks.create_subtasks',
+      input: {
+        parentTaskId: 'task-root',
+        subtasks: [{ ...draft, acceptanceCriteria: [{ ...draft.acceptanceCriteria[0], allowedEvidenceKinds: ['provider-secret'] }] }],
+      },
+    })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
   });
 });

@@ -60,6 +60,12 @@ describe('Phase 0 management contracts', () => {
     expect(run.frozenTarget).toBeUndefined();
   });
 
+  test('requires a root Task for every Phase 2 Run', () => {
+    const result = compileFixture('tests/fixtures/management-run-v2-forbidden.ts');
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain('rootTaskId');
+  });
+
   test('exports ManagementRun and checkpoint through public declarations', () => {
     const result = compileFixture('tests/fixtures/management-contracts-valid.ts');
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);

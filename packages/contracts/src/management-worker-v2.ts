@@ -140,7 +140,14 @@ function assertCriterion(value: unknown): void {
   if (!nonEmpty(value.id) || !nonEmpty(value.description) || typeof value.evidenceRequired !== 'boolean') {
     throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
   }
-  if (value.allowedEvidenceKinds !== undefined) assertStringArray(value.allowedEvidenceKinds);
+  if (value.allowedEvidenceKinds !== undefined) {
+    assertStringArray(value.allowedEvidenceKinds);
+    if ((value.allowedEvidenceKinds as readonly string[]).some((kind) => ![
+      'message', 'artifact', 'workspace-run', 'invocation', 'task',
+    ].includes(kind))) {
+      throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    }
+  }
 }
 
 function assertTaskToolInput(toolName: string, value: unknown): void {
@@ -155,7 +162,10 @@ function assertTaskToolInput(toolName: string, value: unknown): void {
         throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
       }
       if (draft.description !== undefined && !nonEmpty(draft.description)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
-      if ((draft.claimPolicy === 'targeted') !== nonEmpty(draft.targetAgentId)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+      if ((draft.claimPolicy === 'open' && draft.targetAgentId !== undefined)
+        || (draft.claimPolicy === 'targeted' && !nonEmpty(draft.targetAgentId))) {
+        throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+      }
       assertStringArray(draft.requiredCapabilities);
       if (!Array.isArray(draft.acceptanceCriteria)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
       draft.acceptanceCriteria.forEach(assertCriterion);
@@ -191,13 +201,23 @@ function assertTaskToolInput(toolName: string, value: unknown): void {
     return;
   }
   const withAgent = toolName === 'tasks.assign';
+  const withDependency = toolName === 'tasks.add_dependency';
   const withReason = toolName === 'tasks.retry' || toolName === 'tasks.report_blocked';
-  const allowed = ['taskId', 'expectedTaskRevision', ...(withAgent ? ['agentId'] : []), ...(withReason ? ['reasonCode'] : [] as string[])];
+  const allowed = ['taskId', 'expectedTaskRevision', ...(withDependency ? ['dependencyTaskId'] : []), ...(withAgent ? ['agentId'] : []), ...(withReason ? ['reasonCode'] : [] as string[])];
   assertExactKeys(value, allowed, allowed);
   if (!nonEmpty(value.taskId)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
   assertInteger(value.expectedTaskRevision, 1);
+  if (withDependency && !nonEmpty(value.dependencyTaskId)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
   if (withAgent && !nonEmpty(value.agentId)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
   if (withReason && !nonEmpty(value.reasonCode)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+}
+
+export function parsePhase2TaskToolInputV1<K extends keyof Phase2ManagementWorkerToolInputMapV1>(
+  toolName: K,
+  value: unknown,
+): Phase2ManagementWorkerToolInputMapV1[K] {
+  assertTaskToolInput(toolName, value);
+  return structuredClone(value) as Phase2ManagementWorkerToolInputMapV1[K];
 }
 
 export function parseManagementWorkerRegisterV2(value: unknown): ManagementWorkerRegisterV2 {
@@ -249,10 +269,11 @@ export function parsePhase2TaskToolRequestV2(value: unknown): Phase2TaskToolRequ
   assertExactKeys(value, taskRequestKeys, taskRequestKeys);
   if (value.schemaVersion !== 2 || value.managementPhase !== 2
     || !PHASE_2_TASK_WORKER_TOOL_NAMES.includes(value.toolName as never)
-    || !nonEmpty(value.managementRunId) || !nonEmpty(value.leaseToken)
+    || !nonEmpty(value.commandId) || !nonEmpty(value.managementRunId) || !nonEmpty(value.workerId)
+    || !nonEmpty(value.toolCallId) || !nonEmpty(value.leaseToken) || !nonEmpty(value.idempotencyKey)
     || !Number.isSafeInteger(value.fencingToken) || Number(value.fencingToken) < 1) {
     throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
   }
-  assertTaskToolInput(String(value.toolName), value.input);
+  parsePhase2TaskToolInputV1(value.toolName as keyof Phase2ManagementWorkerToolInputMapV1, value.input);
   return structuredClone(value) as unknown as Phase2TaskToolRequestV2;
 }

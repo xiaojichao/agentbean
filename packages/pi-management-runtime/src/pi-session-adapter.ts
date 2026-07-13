@@ -65,13 +65,16 @@ function isNonEmptyString(value: unknown): value is string {
 function assertSessionContext(input: CreateManagementSessionInput): void {
   const { context, mode } = input;
   const scope = context?.scope;
+  const validFrozenTarget = context?.frozenTarget === undefined
+    ? context?.schemaVersion === 2
+    : isNonEmptyString(context.frozenTarget.agentId)
+      && (context.frozenTarget.kind === 'custom' || context.frozenTarget.kind === 'agentos-hosted');
   const validCommon = (context?.schemaVersion === 1 || (context?.schemaVersion === 2 && context.managementPhase === 2))
     && isNonEmptyString(scope?.teamId)
     && isNonEmptyString(scope?.channelId)
     && isNonEmptyString(scope?.rootMessageId)
     && (context.schemaVersion === 1 || isNonEmptyString(scope?.rootTaskId))
-    && (context.schemaVersion === 2 || (isNonEmptyString(context?.frozenTarget?.agentId)
-      && (context?.frozenTarget?.kind === 'custom' || context?.frozenTarget?.kind === 'agentos-hosted')))
+    && validFrozenTarget
     && Number.isInteger(context?.visibleThread?.revision)
     && context.visibleThread.revision >= 0
     && Array.isArray(context?.visibleThread?.messages);
