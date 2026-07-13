@@ -139,15 +139,15 @@ describe('AgentBean Next readiness checker', () => {
       'only a human update completes it',
       'existing Task create, update, and delete APIs',
       'remain linked by dispatchId without invocationId',
-      'Worker contracts remain inert until Server handlers, repositories, and migrations are implemented',
+      'Worker contracts and management persistence remain inert until Server handlers are implemented',
     ].join('\n');
     const valid = {
       boundaryTests,
       contractsSocket: "export const AGENT_EVENTS = { dispatch: { result: 'dispatch:result' }, managementWorker: { register: 'management-worker:register', leaseOffer: 'management-worker:lease-offer', leaseAcquire: 'management-worker:lease-acquire', leaseRenew: 'management-worker:lease-renew', leaseRelease: 'management-worker:lease-release', abort: 'management-worker:abort', toolRequest: 'management-worker:tool-request', checkpointFetch: 'management-worker:checkpoint-fetch', outboxReplay: 'management-worker:outbox-replay', shadowEvaluate: 'management-worker:shadow-evaluate', shadowResult: 'management-worker:shadow-result' } }; export interface ScanRequestCustomAgent {}",
       contractsArtifact: 'interface ArtifactDto { dispatchId?: string }',
       serverSource: 'export function startServer() {}',
-      serverRepositories: 'export interface DispatchRepository {}',
-      serverMigrations: 'dispatch_id TEXT',
+      serverRepositories: 'export interface Repositories { management: ManagementRepositories; managementUnitOfWork: ManagementUnitOfWork }',
+      serverMigrations: 'CREATE TABLE management_runs (id TEXT); CREATE TABLE management_events (id TEXT); CREATE TABLE agent_invocations (id TEXT); CREATE TABLE management_checkpoints (id TEXT);',
       socketHandlers: "export function registerAgentSocketHandlers() { bind(socket, AGENT_EVENTS.dispatch.result, app, 'receiveDispatchResult'); }",
     };
     expect(hasPhase0ManagementBoundary(valid)).toBe(true);
@@ -163,12 +163,11 @@ describe('AgentBean Next readiness checker', () => {
       { socketHandlers: 'export function registerWebSocketHandlers() {}' },
       { serverSource: "import { createManagementRuntimeFactory } from '@agentbean/pi-management-runtime';" },
       { serverSource: "import { createRuntime } from '../../../../packages/pi-management-runtime/src/index.js';" },
-      { serverRepositories: 'export interface ManagementRunRepository {}' },
-      { serverRepositories: 'export interface Repositories { managementRuns: unknown }' },
-      { serverRepositories: 'export interface Repositories { invocations: unknown }' },
+      { serverRepositories: 'export interface Repositories { managementUnitOfWork: ManagementUnitOfWork }' },
+      { serverRepositories: 'export interface Repositories { management: ManagementRepositories }' },
       { contractsArtifact: 'interface ArtifactDto { invocationId?: string }' },
-      { serverMigrations: 'ALTER TABLE artifacts ADD COLUMN invocation_id TEXT' },
-      { serverMigrations: 'CREATE TABLE management_runs (id TEXT)' },
+      { serverMigrations: 'CREATE TABLE management_runs (id TEXT); CREATE TABLE management_events (id TEXT); CREATE TABLE management_checkpoints (id TEXT);' },
+      { serverMigrations: 'CREATE TABLE management_runs (id TEXT); CREATE TABLE agent_invocations (id TEXT); CREATE TABLE management_checkpoints (id TEXT);' },
     ]) {
       expect(hasPhase0ManagementBoundary({ ...valid, ...bypass })).toBe(false);
     }

@@ -17,8 +17,10 @@ import type {
   WorkspaceRunRecord,
 } from '../../application/repositories.js';
 import { DEFAULT_CHANNEL_NAME, rankMessageSearch } from '../../../../../packages/domain/src/index.js';
+import { createInMemoryManagementPersistence } from './management-repositories.js';
 
 export function createInMemoryRepositories(): ServerNextRepositories {
+  const management = createInMemoryManagementPersistence();
   const users = new Map<string, UserRecord>();
   const teams = new Map<string, TeamRecord>();
   const members = new Map<string, TeamMemberRecord>();
@@ -43,6 +45,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const pinnedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
 
   return {
+    management: management.repositories,
+    managementUnitOfWork: management.unitOfWork,
     users: {
       async create(input) {
         users.set(input.id, input);

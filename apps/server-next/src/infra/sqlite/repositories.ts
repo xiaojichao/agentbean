@@ -21,6 +21,7 @@ import type {
 } from '../../application/repositories.js';
 import { DEFAULT_CHANNEL_NAME, rankMessageSearch, splitSearchTerms } from '../../../../../packages/domain/src/index.js';
 import type { SkillDto } from '../../../../../packages/contracts/src/index.js';
+import { createSqliteManagementPersistence } from './management-repositories.js';
 
 export interface SqliteStatement {
   run(...params: unknown[]): unknown;
@@ -65,6 +66,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0007_workspace_run_pagination_index.sql');
   applyMigration(db, 'team/0008_artifact_workspace_boundary_index.sql');
   applyMigration(db, 'team/0009_pinned_messages.sql');
+  applyMigration(db, 'team/0010_management_phase_1.sql');
 }
 
 // 清理 channel_agent_members 中指向已删 agent 的孤儿行（PRD §6）。
@@ -128,8 +130,11 @@ export function cleanupOrphanedChannelMembers(
 
 export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): ServerNextRepositories {
   const { globalDb, teamDb } = input;
+  const management = createSqliteManagementPersistence(teamDb);
 
   return {
+    management: management.repositories,
+    managementUnitOfWork: management.unitOfWork,
     users: {
       async create(user) {
         globalDb
