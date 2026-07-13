@@ -54,14 +54,68 @@ function scaffoldRuntimeSlice(root, options = {}) {
 }
 
 function scaffoldFutureBoundaries(root) {
+  scaffoldWorkerContracts(root);
   for (const path of [
-    'packages/contracts/src/management-worker.ts',
     'apps/server-next/src/infra/sqlite/migrations/team/0010_management_phase_1.sql',
     'apps/server-next/src/application/management/management-kernel.ts',
     'apps/daemon-next/src/pi-manager-worker-host.ts',
   ]) {
     write(root, path, '// scaffolded\n');
   }
+}
+
+function scaffoldWorkerContracts(root) {
+  write(root, 'packages/contracts/src/management-worker.ts', [
+    'PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES',
+    'ManagementWorkerPayloadMapV1',
+    'parseManagementWorkerPayload',
+    'safeParseManagementWorkerPayload',
+    'production_ready',
+    'test_only',
+    'unavailable',
+    'leaseToken',
+    'fencingToken',
+    'idempotencyKey',
+    'shadow-evaluate',
+    'outbox-replay',
+    'context.get_root_message',
+    'context.get_root_task',
+    'context.get_visible_thread',
+    'context.get_management_state',
+    'agents.list_capabilities',
+    'agents.get_status',
+    'agents.invoke',
+    'agents.cancel_invocation',
+    'channel.post_management_status',
+    'user.request_input',
+    'review.submit_root_delivery',
+  ].join('\n'));
+  write(root, 'packages/contracts/src/socket.ts', [
+    'managementWorker',
+    'management-worker:register',
+    'management-worker:lease-offer',
+    'management-worker:lease-acquire',
+    'management-worker:lease-renew',
+    'management-worker:lease-release',
+    'management-worker:abort',
+    'management-worker:tool-request',
+    'management-worker:checkpoint-fetch',
+    'management-worker:outbox-replay',
+    'management-worker:shadow-evaluate',
+    'management-worker:shadow-result',
+  ].join('\n'));
+  write(root, 'packages/contracts/src/index.ts', "export * from './management-worker.js';\n");
+  write(root, 'packages/domain/src/manager-lease-policy.ts', [
+    'evaluateManagerLeaseAcquire',
+    'evaluateManagerLeaseRenew',
+    'evaluateManagerLeaseRelease',
+    'authorizeManagerLeaseWrite',
+    'expired-same-host',
+    'cross-host-recovery-not-supported',
+    'stale-fencing-token',
+    'future-fencing-token',
+  ].join('\n'));
+  write(root, 'packages/domain/src/index.ts', "export * from './manager-lease-policy.js';\n");
 }
 
 test('reports the runtime/package slice as not ready before it is publishable', () => {
@@ -78,8 +132,20 @@ test('reports future Phase 1 boundaries as explicitly not implemented after the 
     scaffoldRuntimeSlice(root);
     const result = runChecker(root);
     assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
-    assert.match(result.stderr, /P1_NOT_IMPLEMENTED:.*management-worker\.ts/);
+    assert.match(result.stderr, /P1_WORKER_CONTRACTS_INVALID/);
     assert.match(result.stdout, /P1_RUNTIME_PACKAGE_READY/);
+  });
+});
+
+test('reports the static Worker/lease surface while later boundaries remain Red', () => {
+  withFixture((root) => {
+    scaffoldRuntimeSlice(root);
+    scaffoldWorkerContracts(root);
+    const result = runChecker(root);
+    assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /P1_WORKER_CONTRACT_SURFACE_PRESENT/);
+    assert.match(result.stderr, /P1_NOT_IMPLEMENTED:.*0010_management_phase_1\.sql/);
+    assert.doesNotMatch(result.stderr, /management-worker\.ts/);
   });
 });
 

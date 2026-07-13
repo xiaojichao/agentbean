@@ -17,10 +17,14 @@ function readJson(path) {
   }
 }
 
+function readSource(path) {
+  const absolute = resolve(root, path);
+  return existsSync(absolute) ? readFileSync(absolute, 'utf8') : '';
+}
+
 const runtime = readJson('packages/pi-management-runtime/package.json');
 const daemon = readJson('apps/daemon-next/package.json');
-const runtimeTypesPath = resolve(root, 'packages/pi-management-runtime/src/types.ts');
-const runtimeTypes = existsSync(runtimeTypesPath) ? readFileSync(runtimeTypesPath, 'utf8') : '';
+const runtimeTypes = readSource('packages/pi-management-runtime/src/types.ts');
 const violations = [];
 
 if (!runtime
@@ -49,8 +53,79 @@ if (violations.length > 0) {
 
 console.log(`P1_RUNTIME_PACKAGE_READY: @agentbean/pi-management-runtime@${runtime.version}`);
 
+const workerContract = readSource('packages/contracts/src/management-worker.ts');
+const socketContract = readSource('packages/contracts/src/socket.ts');
+const contractsIndex = readSource('packages/contracts/src/index.ts');
+const leasePolicy = readSource('packages/domain/src/manager-lease-policy.ts');
+const domainIndex = readSource('packages/domain/src/index.ts');
+const phase1Tools = [
+  'context.get_root_message',
+  'context.get_root_task',
+  'context.get_visible_thread',
+  'context.get_management_state',
+  'agents.list_capabilities',
+  'agents.get_status',
+  'agents.invoke',
+  'agents.cancel_invocation',
+  'channel.post_management_status',
+  'user.request_input',
+  'review.submit_root_delivery',
+];
+const workerMarkers = [
+  'PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES',
+  'ManagementWorkerPayloadMapV1',
+  'parseManagementWorkerPayload',
+  'safeParseManagementWorkerPayload',
+  'production_ready',
+  'test_only',
+  'unavailable',
+  'leaseToken',
+  'fencingToken',
+  'idempotencyKey',
+  'shadow-evaluate',
+  'outbox-replay',
+  ...phase1Tools,
+];
+const socketMarkers = [
+  'managementWorker',
+  'management-worker:register',
+  'management-worker:lease-offer',
+  'management-worker:lease-acquire',
+  'management-worker:lease-renew',
+  'management-worker:lease-release',
+  'management-worker:abort',
+  'management-worker:tool-request',
+  'management-worker:checkpoint-fetch',
+  'management-worker:outbox-replay',
+  'management-worker:shadow-evaluate',
+  'management-worker:shadow-result',
+];
+const leaseMarkers = [
+  'evaluateManagerLeaseAcquire',
+  'evaluateManagerLeaseRenew',
+  'evaluateManagerLeaseRelease',
+  'authorizeManagerLeaseWrite',
+  'expired-same-host',
+  'cross-host-recovery-not-supported',
+  'stale-fencing-token',
+  'future-fencing-token',
+];
+const workerContractSurfacePresent = workerMarkers.every((marker) => workerContract.includes(marker))
+  && socketMarkers.every((marker) => socketContract.includes(marker))
+  && contractsIndex.includes("export * from './management-worker.js'")
+  && leaseMarkers.every((marker) => leasePolicy.includes(marker))
+  && domainIndex.includes("export * from './manager-lease-policy.js'")
+  && !workerContract.includes('@earendil-works')
+  && !leasePolicy.includes('@earendil-works');
+
+if (!workerContractSurfacePresent) {
+  console.error('P1_WORKER_CONTRACTS_INVALID: Worker RPC/parser and lease/fencing Domain rules are incomplete');
+  process.exit(2);
+}
+
+console.log('P1_WORKER_CONTRACT_SURFACE_PRESENT: static Worker RPC and lease/fencing exports are present; semantic readiness is verified by package tests');
+
 const futureBoundaries = [
-  'packages/contracts/src/management-worker.ts',
   'apps/server-next/src/infra/sqlite/migrations/team/0010_management_phase_1.sql',
   'apps/server-next/src/application/management/management-kernel.ts',
   'apps/daemon-next/src/pi-manager-worker-host.ts',

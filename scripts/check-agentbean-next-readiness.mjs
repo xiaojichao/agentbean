@@ -737,15 +737,34 @@ export function hasPhase0ManagementBoundary(input) {
     'export function registerAgentSocketHandlers',
   );
   if (agentEventsContract === null || agentSocketHandlers === null) return false;
+  const managementWorkerEvents = [
+    'management-worker:register',
+    'management-worker:lease-offer',
+    'management-worker:lease-acquire',
+    'management-worker:lease-renew',
+    'management-worker:lease-release',
+    'management-worker:abort',
+    'management-worker:tool-request',
+    'management-worker:checkpoint-fetch',
+    'management-worker:outbox-replay',
+    'management-worker:shadow-evaluate',
+    'management-worker:shadow-result',
+  ];
+  const contractsWithoutWorkerEvents = input.contractsSocket.replace(
+    /management-worker:[a-z-]+/g,
+    '',
+  );
 
   return input.boundaryTests.includes('direct channel and DM messages create only canonical Dispatch records') &&
     input.boundaryTests.includes('message dispatch status is projected from the Dispatch repository at read time') &&
     input.boundaryTests.includes('only a human update completes it') &&
     input.boundaryTests.includes('existing Task create, update, and delete APIs') &&
     input.boundaryTests.includes('remain linked by dispatchId without invocationId') &&
-    input.boundaryTests.includes('have no management execution surface') &&
-    !/["'][^"'\n]*(?:management|invocation|checkpoint)[^"'\n]*["']/i.test(input.contractsSocket) &&
+    input.boundaryTests.includes('Worker contracts remain inert until Server handlers, repositories, and migrations are implemented') &&
+    managementWorkerEvents.every((eventName) => input.contractsSocket.includes(eventName)) &&
+    !hasQuotedManagementExecutionName(contractsWithoutWorkerEvents) &&
     !/["']task:|:task:|\btask\s*:/.test(agentEventsContract) &&
+    !/AGENT_EVENTS\.managementWorker/.test(agentSocketHandlers) &&
     !/app,\s*'(?:createTask|updateTask|deleteTask|reorderTask)'/.test(agentSocketHandlers) &&
     !/pi-management-runtime|createManagementRuntimeFactory|ManagementRuntimeFactory|ManagementSession|PiManagerWorkerHost|ManagementWorkerHost|ManagementOutbox/.test(input.serverSource) &&
     !/\b(?:invocationId|managementRunId)\b/.test(input.contractsArtifact) &&
@@ -822,6 +841,11 @@ function extractSourceSection(source, startMarker, endMarker) {
   if (endMarker === undefined) return source.slice(start);
   const end = source.indexOf(endMarker, start + startMarker.length);
   return end < 0 ? null : source.slice(start, end);
+}
+
+function hasQuotedManagementExecutionName(source) {
+  return [...source.matchAll(/(['"])([^'"\n]*)\1/g)]
+    .some((match) => /management|invocation|checkpoint/i.test(match[2]));
 }
 
 function check(id, ok, message) {
