@@ -353,6 +353,57 @@ describe('server-next second-slice channel controls', () => {
       agents: [],
     });
   });
+
+  test('preserves non-ASCII (Chinese) channel names on create and update (#525)', async () => {
+    const { app } = createApp(['user-1', 'team-1', 'channel-all', 'channel-ops']);
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+
+    // Regression #525: slugify used to collapse pure-Chinese names ("一起努力" → "team"),
+    // so creating or renaming a channel with a Chinese name silently failed — the socket
+    // ack came back ok, but the stored name became a meaningless English slug.
+    await expect(
+      app.createChannel({
+        userId: 'user-1',
+        teamId: 'team-1',
+        name: '一起努力',
+        visibility: 'private',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      channel: { id: 'channel-ops', name: '一起努力', visibility: 'private' },
+    });
+
+    await expect(
+      app.updateChannel({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-ops',
+        name: '闲聊小队',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      channel: { id: 'channel-ops', name: '闲聊小队' },
+    });
+  });
+
+  test('keeps a non-empty fallback name when creating a channel with a blank name', async () => {
+    const { app } = createApp(['user-1', 'team-1', 'channel-all', 'channel-ops']);
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+
+    await expect(
+      app.createChannel({
+        userId: 'user-1',
+        teamId: 'team-1',
+        name: '   ',
+        visibility: 'public',
+      }),
+    ).resolves.toMatchObject({ ok: true, channel: { id: 'channel-ops' } });
+
+    const listed = await app.listChannels({ teamId: 'team-1', userId: 'user-1' });
+    const ops = listed.channels!.find((c) => c.id === 'channel-ops');
+    expect(ops?.name).toBeTruthy();
+    expect(ops?.name).not.toBe('');
+  });
 });
 
 function createApp(ids: string[]) {
