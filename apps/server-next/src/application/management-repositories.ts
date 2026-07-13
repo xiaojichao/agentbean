@@ -45,7 +45,7 @@ export interface InvocationDispatchAttemptRecord {
 
 export interface ManagementShadowDecisionRecord {
   readonly id: ID;
-  readonly managementRunId: ID;
+  readonly shadowRequestKey: string;
   readonly inputHash: string;
   readonly objectiveHash: string;
   readonly argumentHash: string;
@@ -96,5 +96,6 @@ export interface ManagementRepositories {
   };
   shadowDecisions: {
     create(record: ManagementShadowDecisionRecord): Promise<ManagementShadowDecisionRecord>;
+    getByRequestKey(shadowRequestKey: string): Promise<ManagementShadowDecisionRecord | null>;
   };
 }

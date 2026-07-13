@@ -101,7 +101,10 @@ function createRepositories(state: ManagementMemoryState): ManagementRepositorie
       async getByDispatchId(dispatchId) { return [...state.attempts.values()].find((item) => item.dispatchId === dispatchId) ?? null; },
       async list(invocationId) { return [...state.attempts.values()].filter((item) => item.invocationId === invocationId).sort((a, b) => a.attemptNumber - b.attemptNumber); },
     },
-    shadowDecisions: { async create(record) { if (state.shadowDecisions.has(record.id)) throw new Error('shadow decision already exists'); state.shadowDecisions.set(record.id, record); return record; } },
+    shadowDecisions: {
+      async create(record) { if (state.shadowDecisions.has(record.id)) throw new Error('shadow decision already exists'); state.shadowDecisions.set(record.id, record); return record; },
+      async getByRequestKey(shadowRequestKey) { return [...state.shadowDecisions.values()].find((item) => item.shadowRequestKey === shadowRequestKey) ?? null; },
+    },
   };
 }
 

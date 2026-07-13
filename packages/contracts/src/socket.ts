@@ -28,6 +28,10 @@ export const WEB_EVENTS = {
     update: 'team:update',
     delete: 'team:delete',
   },
+  managementPolicy: {
+    get: 'management-policy:get',
+    update: 'management-policy:update',
+  },
   join: {
     create: 'join:create',
     validate: 'join:validate',

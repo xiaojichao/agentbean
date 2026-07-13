@@ -8,6 +8,16 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   updateTeam: vi.fn(async () => ({ ok: true })),
+  getManagementPolicy: vi.fn(async () => ({
+    ok: true,
+    policy: {
+      teamId: 'route-team-id', mode: 'direct',
+      placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true },
+      updatedBy: '', updatedAt: 0,
+    },
+    canManage: true,
+  })),
+  updateManagementPolicy: vi.fn(async () => ({ ok: true })),
   storeState: {
     currentTeamId: 'stale-team',
     teams: [{ id: 'stale-team', name: 'Stale Team', path: 'stale-team' }],
@@ -38,6 +48,10 @@ vi.mock('@/lib/socket', () => ({
   teamEvents: () => ({
     update: mocks.updateTeam,
     delete: vi.fn(),
+  }),
+  managementPolicyEvents: () => ({
+    get: mocks.getManagementPolicy,
+    update: mocks.updateManagementPolicy,
   }),
 }));
 
@@ -74,6 +88,7 @@ describe('SettingsPage Team route binding', () => {
     view.rerender(React.createElement(SettingsPage));
 
     await waitFor(() => expect(input.value).toBe('Route Team'));
+    await waitFor(() => expect(mocks.getManagementPolicy).toHaveBeenCalledWith('route-team-id'));
     fireEvent.change(input, { target: { value: 'Renamed Route Team' } });
     fireEvent.click(save);
 

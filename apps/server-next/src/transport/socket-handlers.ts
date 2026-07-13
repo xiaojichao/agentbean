@@ -199,6 +199,8 @@ export function registerWebSocketHandlers(
     updateAuthenticatedCurrentTeam(options.authenticatedUser, result, 'currentTeam');
   }, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.team.update, app, 'updateTeam', afterTeamMutation, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.managementPolicy.get, app, 'getManagementPolicy', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.managementPolicy.update, app, 'updateManagementPolicy', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.team.delete, app, 'deleteTeam', async (payload, result) => {
     updateAuthenticatedCurrentTeam(options.authenticatedUser, result, 'fallbackTeam');
     await afterTeamMutation(payload, result);

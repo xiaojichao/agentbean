@@ -6,6 +6,8 @@ import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, Dev
 import { buildDeviceInviteCommand } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
 import { createInvocationGateway } from './management/invocation-gateway.js';
+import { createManagementKernel } from './management/management-kernel.js';
+import { createManagementRouter, type ManagementRoutingResult } from './management/management-router.js';
 
 export interface ServerNextClock {
   now(): number;
@@ -141,6 +143,8 @@ export interface ServerNextUseCases {
   getAgentEnvForDevice(input: { token: string; teamId: string; agentId: string }): Promise<Ack<{ env: Record<string, string> }>>;
   updateMemberHuman(input: UpdateMemberHumanInput): Promise<Ack<{ human: { id: string; teamId: string; userId: string; username: string; role: string; displayName?: string; joinedAt: number } }>>;
   updateTeam(input: UpdateTeamInput): Promise<Ack<{ team: { id: string; name: string; path: string } }>>;
+  getManagementPolicy(input: { userId: string; teamId: string }): Promise<Ack<{ policy: import('./management-repositories.js').ManagementPolicyRecord; canManage: boolean }>>;
+  updateManagementPolicy(input: { userId: string; teamId: string; mode: import('../../../../packages/contracts/src/index.js').ManagementMode; placementPolicy?: import('../../../../packages/contracts/src/index.js').ManagerPlacementPolicyDto }): Promise<Ack<{ policy: import('./management-repositories.js').ManagementPolicyRecord; canManage: boolean }>>;
   deleteTeam(input: DeleteTeamInput): Promise<Ack<{ fallbackTeam: { id: string; name: string; path: string } | null }>>;
 }
 
@@ -416,6 +420,7 @@ export interface SendMessageResult {
   coalescedDispatchId?: string;
   task?: TaskDto;
   acknowledgementMessage?: MessageDto;
+  management?: ManagementRoutingResult;
 }
 
 export interface AcceptDispatchInput {
@@ -790,6 +795,7 @@ export interface CreateServerNextUseCasesInput {
   deviceInviteCodes?: ServerNextDeviceInviteCodes;
   sessionSecret?: string;
   artifactContentStore?: ArtifactContentStore;
+  managementRouter?: ReturnType<typeof createManagementRouter>;
 }
 
 export function createServerNextUseCases(input: CreateServerNextUseCasesInput): ServerNextUseCases {
@@ -800,6 +806,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const artifactContentStore = input.artifactContentStore;
   const dispatchCoalescingLocks = new Map<string, Promise<void>>();
   const invocationGateway = createInvocationGateway({ repositories, clock, ids });
+  const managementRouter = input.managementRouter ?? createManagementRouter({
+    repositories,
+    kernel: createManagementKernel({ repositories: repositories.management, unitOfWork: repositories.managementUnitOfWork, clock, ids }),
+    clock,
+    ids,
+  });
 
   return {
     async registerUser(registerInput) {
@@ -2486,9 +2498,23 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         route,
         threadId: messageInput.threadId,
       });
+      const taskId = shouldCreateTask ? ids.nextId() : undefined;
+      let management: ManagementRoutingResult = await managementRouter.route({
+        userId: messageInput.userId,
+        teamId: messageInput.teamId,
+        channelId: messageInput.channelId,
+        rootMessageId: messageId,
+        ...(taskId ? { rootTaskId: taskId } : {}),
+        ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
+        body: messageInput.body,
+        ...(route.kind === 'dispatch' ? { targetAgentId: route.agentId } : {}),
+      });
+      if (management.kind === 'unavailable') {
+        return makeFailure('VALIDATION_ERROR', management.diagnostics.join(','));
+      }
       const task = shouldCreateTask
         ? await repositories.tasks.create({
-            id: ids.nextId(),
+            id: taskId!,
             teamId: messageInput.teamId,
             title: messageInput.body.trim() || '附件',
             description: undefined,
@@ -2523,10 +2549,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         `${message.teamId}:${message.channelId}:${message.senderId}`,
       );
       try {
-        const coalescedDispatchId = await touchPendingCoalescibleDispatch(repositories, {
-          message,
-          updatedAt: now,
-        });
+        const coalescedDispatchId = management.kind === 'managed'
+          ? undefined
+          : await touchPendingCoalescibleDispatch(repositories, { message, updatedAt: now });
         const attachedArtifacts: ArtifactRecord[] = [];
         for (const artifact of attachmentResult.artifacts) {
           attachedArtifacts.push(await repositories.artifacts.create({
@@ -2537,7 +2562,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         const dispatches: DispatchDto[] = [];
         let acknowledgementMessage: MessageDto | undefined;
 
-        if (route.kind === 'dispatch' && !coalescedDispatchId) {
+        if (route.kind === 'dispatch' && management.kind !== 'managed' && !coalescedDispatchId) {
           const dispatch = await repositories.dispatches.create({
             id: ids.nextId(),
             teamId: messageInput.teamId,
@@ -2567,6 +2592,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           }
         }
 
+        if (management.kind === 'managed') {
+          management = await managementRouter.scheduleManaged(management);
+        }
+
+        if (management.mode === 'shadow' && management.shadowRequestKey) {
+          void managementRouter.recordShadowDecision({
+            shadowRequestKey: management.shadowRequestKey,
+            body: messageInput.body,
+            ...(route.kind === 'dispatch' ? { targetAgentId: route.agentId } : {}),
+          }).catch(() => undefined);
+        }
+
         return makeSuccess({
           message: attachedArtifacts.length > 0
             ? { ...message, artifacts: attachedArtifacts.map(toArtifactDto) }
@@ -2576,6 +2613,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ...(coalescedDispatchId ? { coalescedDispatchId } : {}),
           ...(task ? { task } : {}),
           ...(acknowledgementMessage ? { acknowledgementMessage } : {}),
+          management,
         });
       } finally {
         releaseDispatchCoalescingLock();
@@ -4000,6 +4038,20 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeSuccess({
         team: { id: updated.id, name: updated.name, path: updated.path },
       });
+    },
+
+    async getManagementPolicy(policyInput) {
+      const result = await managementRouter.getPolicy(policyInput);
+      return result.ok
+        ? makeSuccess({ policy: result.policy, canManage: result.canManage })
+        : makeFailure('FORBIDDEN', 'Management policy is not available');
+    },
+
+    async updateManagementPolicy(policyInput) {
+      const result = await managementRouter.updatePolicy(policyInput);
+      return result.ok
+        ? makeSuccess({ policy: result.policy, canManage: result.canManage })
+        : makeFailure(result.error === 'FORBIDDEN' ? 'FORBIDDEN' : 'VALIDATION_ERROR', 'Management policy update rejected');
     },
 
     async deleteTeam(deleteInput) {

@@ -18,6 +18,7 @@ import {
 import { releases } from '@/lib/releases.generated';
 import { formatReleaseVersion, type Release, type ChangeType } from '@/lib/changelog';
 import { RunsPanel } from './RunsPanel';
+import { ManagementPolicyPanel } from './ManagementPolicyPanel';
 
 type Tab = 'account' | 'browser' | 'server' | 'runs' | 'releases';
 
@@ -438,6 +439,8 @@ function ServerPanel() {
   }, [settingsTeamId]);
 
   const agentList = Object.values(agents);
+  const managementDeviceIds = agentList.flatMap((agent) => agent.deviceId ? [agent.deviceId] : []);
+  const canManagePolicy = settingsTeam?.currentUserRole === 'owner' || settingsTeam?.currentUserRole === 'admin';
 
   const loadLinks = useCallback(async () => {
     if (!settingsTeamId) return;
@@ -541,6 +544,10 @@ function ServerPanel() {
           {nameMsg && <div className={`text-sm ${nameMsg.ok ? 'text-emerald-600' : 'text-red-600'}`} data-smoke="settings-team-name-message">{nameMsg.text}</div>}
         </div>
       </section>
+
+      {settingsTeamId && (
+        <ManagementPolicyPanel teamId={settingsTeamId} canManage={canManagePolicy} deviceIds={managementDeviceIds} />
+      )}
 
       {/* ADMINS */}
       <section className="rounded-lg border border-neutral-200 p-5">

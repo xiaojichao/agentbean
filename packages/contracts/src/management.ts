@@ -30,6 +30,24 @@ export interface ManagementBudgetDto {
   readonly maxExternalInvocations: number;
 }
 
+export interface TeamManagementPolicyDto {
+  readonly teamId: ID;
+  readonly mode: ManagementMode;
+  readonly placementPolicy: ManagerPlacementPolicyDto;
+  readonly updatedBy: ID;
+  readonly updatedAt: UnixMs;
+}
+
+export interface GetTeamManagementPolicyInput {
+  readonly teamId: ID;
+}
+
+export interface UpdateTeamManagementPolicyInput {
+  readonly teamId: ID;
+  readonly mode: ManagementMode;
+  readonly placementPolicy?: ManagerPlacementPolicyDto;
+}
+
 export interface ManagementRunDto {
   readonly schemaVersion: 1;
   readonly id: ID;

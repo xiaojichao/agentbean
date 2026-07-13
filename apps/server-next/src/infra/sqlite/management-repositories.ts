@@ -189,11 +189,15 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
     shadowDecisions: {
       async create(record) {
         db.prepare(`INSERT INTO management_shadow_decisions
-          (id, management_run_id, input_hash, objective_hash, argument_hash, target_json,
+          (id, shadow_request_key, input_hash, objective_hash, argument_hash, target_json,
            tool_sequence_json, diagnostics_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-          .run(record.id, record.managementRunId, record.inputHash, record.objectiveHash, record.argumentHash,
+          .run(record.id, record.shadowRequestKey, record.inputHash, record.objectiveHash, record.argumentHash,
             json(record.target), json(record.toolSequence), json(record.diagnostics), record.createdAt);
         return record;
+      },
+      async getByRequestKey(shadowRequestKey) {
+        const value = db.prepare('SELECT * FROM management_shadow_decisions WHERE shadow_request_key = ?').get(shadowRequestKey);
+        return value ? mapShadowDecision(value) : null;
       },
     },
   };
@@ -217,3 +221,4 @@ function mapLease(value: unknown): ManagerLeaseRecord | null { return value ? { 
 function mapEvent(value: unknown): ManagementEventRecord { return { event: { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), sequence: number(value, 'sequence'), type: text(value, 'type'), actorKind: text(value, 'actor_kind'), actorId: nullableText(value, 'actor_id'), idempotencyKey: text(value, 'idempotency_key'), causationEventId: nullableText(value, 'causation_event_id'), payload: parseJson(text(value, 'payload_json')), createdAt: number(value, 'created_at') } as ManagementEventV1, payloadHash: text(value, 'payload_hash') }; }
 function mapInvocation(value: unknown): AgentInvocationRecordDto | null { return value ? { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), intent: parseJson(text(value, 'intent_json')), intentHash: text(value, 'intent_hash'), idempotencyKey: text(value, 'idempotency_key'), createdAt: number(value, 'created_at') } : null; }
 function mapAttempt(value: unknown): InvocationDispatchAttemptRecord { return { id: text(value, 'id'), invocationId: text(value, 'invocation_id'), dispatchId: text(value, 'dispatch_id'), attemptNumber: number(value, 'attempt_number'), status: text(value, 'status') as InvocationDispatchAttemptRecord['status'], startedAt: number(value, 'started_at'), completedAt: nullableNumber(value, 'completed_at') }; }
+function mapShadowDecision(value: unknown): ManagementShadowDecisionRecord { return { id: text(value, 'id'), shadowRequestKey: text(value, 'shadow_request_key'), inputHash: text(value, 'input_hash'), objectiveHash: text(value, 'objective_hash'), argumentHash: text(value, 'argument_hash'), target: parseJson(text(value, 'target_json')), toolSequence: parseJson(text(value, 'tool_sequence_json')), diagnostics: parseJson(text(value, 'diagnostics_json')), createdAt: number(value, 'created_at') }; }

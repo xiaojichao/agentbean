@@ -753,7 +753,8 @@ export function hasPhase0ManagementBoundary(input) {
   const contractsWithoutWorkerEvents = input.contractsSocket.replace(
     /management-worker:[a-z-]+/g,
     '',
-  ).replace(/from\s+['"]\.\/management-worker\.js['"]/g, '');
+  ).replace(/management-policy:[a-z-]+/g, '')
+    .replace(/from\s+['"]\.\/management-worker\.js['"]/g, '');
 
   return input.boundaryTests.includes('direct channel and DM messages create only canonical Dispatch records') &&
     input.boundaryTests.includes('message dispatch status is projected from the Dispatch repository at read time') &&
