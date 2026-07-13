@@ -14,6 +14,8 @@ import type {
   ManagementWorkerToolResultV1,
 } from '../../../../../packages/contracts/src/index.js';
 import { inspectManagerLease } from '../../../../../packages/domain/src/index.js';
+import type { ManagementPreflight } from '../../../../../packages/domain/src/index.js';
+import type { ManagerPlacementPolicyDto } from '../../../../../packages/contracts/src/index.js';
 import type { DeviceRepository } from '../repositories.js';
 import type { ManagementRepositories } from '../management-repositories.js';
 import { ManagementConflictError, type createManagementKernel } from './management-kernel.js';
@@ -136,6 +138,31 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
         if (offer.connectionId === connectionId) pendingOffers.delete(offerId);
       }
       return { workerId, activeRunIds: [...worker.activeRunIds] };
+    },
+
+    async managementPreflight(input: {
+      teamId: string;
+      deviceId: string;
+      profileId: string;
+      placementPolicy: ManagerPlacementPolicyDto;
+      targetAvailable: boolean;
+    }): Promise<ManagementPreflight> {
+      const placementAllowed = input.placementPolicy.placement !== 'managed'
+        && (!input.placementPolicy.allowedDeviceIds || input.placementPolicy.allowedDeviceIds.includes(input.deviceId));
+      const candidates = [...workersById.values()].filter((worker) =>
+        worker.connected
+        && worker.teamId === input.teamId
+        && worker.deviceId === input.deviceId
+        && worker.profileId === input.profileId
+        && effectiveActiveLeaseCount(worker) < worker.capability.capacity.maxConcurrentLeases,
+      );
+      return {
+        workerAvailable: candidates.length > 0,
+        credentialAvailable: candidates.some((worker) => credentialReady(worker.capability, input.placementPolicy.requireLocalModelCredentials)),
+        placementAllowed,
+        budgetAvailable: true,
+        targetAvailable: input.targetAvailable,
+      };
     },
 
     async scheduleManagementRun(input: ScheduleManagementRunInput): Promise<ScheduleManagementRunResult> {

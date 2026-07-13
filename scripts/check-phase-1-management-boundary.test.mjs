@@ -60,11 +60,30 @@ function scaffoldFutureBoundaries(root) {
   scaffoldInvocationGateway(root);
   scaffoldWorkerTransport(root);
   scaffoldDeviceWorkerHost(root);
-  for (const path of [
-    'apps/server-next/src/application/management/management-router.ts',
-  ]) {
-    write(root, path, '// scaffolded\n');
-  }
+  scaffoldManagementRouting(root);
+  write(root, 'apps/server-next/tests/managed-single-agent.test.ts', '// scaffolded\n');
+}
+
+function scaffoldManagementRouting(root) {
+  write(root, 'apps/server-next/src/application/management/management-router.ts', [
+    'createManagementRouter', 'getPolicy', 'updatePolicy', 'evaluateManagementRoute',
+    'createOrResumeRun', 'shadowRequestKey', 'allowDirectFallbackBeforeBarrier: false',
+  ].join('\n'));
+  write(root, 'apps/server-next/src/application/usecases.ts', [
+    'invocationGateway.completeAttempt', 'managedAttempt', 'managementRouter.route', "management.kind !== 'managed'",
+  ].join('\n'));
+  write(root, 'apps/server-next/src/transport/socket-handlers.ts', [
+    'safeParseManagementWorkerPayload', 'AGENT_EVENTS.managementWorker.register',
+    'WEB_EVENTS.managementPolicy.get', 'WEB_EVENTS.managementPolicy.update',
+  ].join('\n'));
+  write(root, 'packages/contracts/src/socket.ts', [
+    'managementWorker', 'management-worker:register', 'management-worker:lease-offer',
+    'management-worker:lease-acquire', 'management-worker:lease-renew', 'management-worker:lease-release',
+    'management-worker:abort', 'management-worker:tool-request', 'management-worker:checkpoint-fetch',
+    'management-worker:outbox-replay', 'management-worker:shadow-evaluate', 'management-worker:shadow-result',
+    'management-policy:get', 'management-policy:update',
+  ].join('\n'));
+  write(root, 'apps/web-next/app/[teamPath]/settings/ManagementPolicyPanel.tsx', 'settings-management-policy settings-management-preflight\n');
 }
 
 function scaffoldDeviceWorkerHost(root) {
@@ -290,7 +309,24 @@ test('reports Device WorkerHost while managed routing remains Red', () => {
     const result = runChecker(root);
     assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
     assert.match(result.stdout, /P1_DEVICE_WORKER_HOST_PRESENT/);
-    assert.match(result.stderr, /P1_NOT_IMPLEMENTED:.*management-router\.ts/);
+    assert.match(result.stderr, /P1_MANAGEMENT_ROUTING_INVALID/);
+  });
+});
+
+test('reports managed routing while single-Agent vertical execution remains Red', () => {
+  withFixture((root) => {
+    scaffoldRuntimeSlice(root);
+    scaffoldWorkerContracts(root);
+    scaffoldManagementPersistence(root);
+    scaffoldServerKernel(root);
+    scaffoldInvocationGateway(root);
+    scaffoldWorkerTransport(root);
+    scaffoldDeviceWorkerHost(root);
+    scaffoldManagementRouting(root);
+    const result = runChecker(root);
+    assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /P1_MANAGEMENT_ROUTING_PRESENT/);
+    assert.match(result.stderr, /P1_NOT_IMPLEMENTED:.*managed-single-agent\.test\.ts/);
   });
 });
 

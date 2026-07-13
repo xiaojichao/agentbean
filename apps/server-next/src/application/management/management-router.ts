@@ -1,0 +1,248 @@
+import { createHash } from 'node:crypto';
+import type {
+  ManagementBudgetDto,
+  ManagementMode,
+  ManagerPlacementPolicyDto,
+} from '../../../../../packages/contracts/src/index.js';
+import {
+  evaluateManagementRoute,
+  type ManagementPreflight,
+} from '../../../../../packages/domain/src/index.js';
+import type { AgentRecord, ServerNextRepositories } from '../repositories.js';
+import type { ManagementPolicyRecord } from '../management-repositories.js';
+import type { createManagementKernel } from './management-kernel.js';
+
+type ManagementKernel = ReturnType<typeof createManagementKernel>;
+
+const DEFAULT_PLACEMENT_POLICY: ManagerPlacementPolicyDto = {
+  placement: 'device',
+  allowServerContext: false,
+  requireLocalModelCredentials: true,
+};
+
+const PHASE_1_BUDGET: ManagementBudgetDto = {
+  maxSubtasks: 1,
+  maxDepth: 1,
+  maxExternalInvocations: 1,
+};
+
+export interface ManagementRoutingGateway {
+  preflight(input: {
+    teamId: string;
+    target: AgentRecord;
+    placementPolicy: ManagerPlacementPolicyDto;
+  }): Promise<ManagementPreflight>;
+  schedule(input: { managementRunId: string; profileId: string }): Promise<{
+    ok: boolean;
+    diagnosticCode?: string;
+  }>;
+}
+
+export type ManagementRoutingResult =
+  | { kind: 'direct'; mode: 'direct' | 'shadow'; shadowRequestKey?: string }
+  | {
+      kind: 'managed';
+      mode: 'managed';
+      managementRunId: string;
+      profileId: string;
+      disposition: 'created' | 'existing';
+      schedulingDiagnostic?: string;
+    }
+  | { kind: 'unavailable'; mode: 'managed'; diagnostics: readonly string[] };
+
+export interface ManagementRouterDependencies {
+  repositories: ServerNextRepositories;
+  kernel: ManagementKernel;
+  gateway?: ManagementRoutingGateway;
+  clock: { now(): number };
+  ids: { nextId(): string };
+}
+
+export function createManagementRouter(dependencies: ManagementRouterDependencies) {
+  const { repositories, kernel, clock } = dependencies;
+
+  async function policyForTeam(teamId: string): Promise<ManagementPolicyRecord> {
+    return (await repositories.management.policies.get(teamId)) ?? {
+      teamId,
+      mode: 'direct',
+      placementPolicy: DEFAULT_PLACEMENT_POLICY,
+      updatedBy: '',
+      updatedAt: 0,
+    };
+  }
+
+  return {
+    async getPolicy(input: { userId: string; teamId: string }) {
+      const role = await repositories.teams.getMemberRole(input.teamId, input.userId);
+      if (!role) return { ok: false as const, error: 'FORBIDDEN' };
+      return { ok: true as const, policy: await policyForTeam(input.teamId), canManage: role === 'owner' || role === 'admin' };
+    },
+
+    async updatePolicy(input: {
+      userId: string;
+      teamId: string;
+      mode: ManagementMode;
+      placementPolicy?: ManagerPlacementPolicyDto;
+    }) {
+      const role = await repositories.teams.getMemberRole(input.teamId, input.userId);
+      if (role !== 'owner' && role !== 'admin') return { ok: false as const, error: 'FORBIDDEN' };
+      if (!isManagementMode(input.mode)) return { ok: false as const, error: 'VALIDATION_ERROR' };
+      const placementPolicy = normalizePlacementPolicy(input.placementPolicy ?? DEFAULT_PLACEMENT_POLICY);
+      if (!placementPolicy) return { ok: false as const, error: 'VALIDATION_ERROR' };
+      if (input.mode === 'managed' && !placementPolicy.allowedDeviceIds?.length) {
+        return { ok: false as const, error: 'VALIDATION_ERROR' };
+      }
+      for (const deviceId of placementPolicy.allowedDeviceIds ?? []) {
+        const device = await repositories.devices.getById(deviceId);
+        if (!device || device.teamId !== input.teamId) return { ok: false as const, error: 'VALIDATION_ERROR' };
+      }
+      const policy = await repositories.management.policies.upsert({
+        teamId: input.teamId,
+        mode: input.mode,
+        placementPolicy,
+        updatedBy: input.userId,
+        updatedAt: clock.now(),
+      });
+      return { ok: true as const, policy, canManage: true as const };
+    },
+
+    async route(input: {
+      userId: string;
+      teamId: string;
+      channelId: string;
+      rootMessageId: string;
+      rootTaskId?: string;
+      clientMessageId?: string;
+      body: string;
+      targetAgentId?: string;
+    }): Promise<ManagementRoutingResult> {
+      const policy = await policyForTeam(input.teamId);
+      if (policy.mode === 'direct') return { kind: 'direct', mode: 'direct' };
+
+      const target = input.targetAgentId
+        ? await repositories.agents.getById(input.targetAgentId)
+        : null;
+      if (policy.mode === 'shadow') {
+        const shadowRequestKey = `shadow:${requestKey(input)}`;
+        return {
+          kind: 'direct',
+          mode: 'shadow',
+          shadowRequestKey,
+        };
+      }
+
+      const diagnostics: string[] = [];
+      if (!input.clientMessageId?.trim()) diagnostics.push('MANAGEMENT_CLIENT_MESSAGE_ID_REQUIRED');
+      if (!target) diagnostics.push('MANAGEMENT_EXPLICIT_TARGET_REQUIRED');
+      const device = target?.deviceId ? await repositories.devices.getById(target.deviceId) : null;
+      if (!device?.profileId) diagnostics.push('MANAGEMENT_TARGET_PROFILE_UNAVAILABLE');
+      if (diagnostics.length > 0 || !target || !device?.profileId) {
+        return { kind: 'unavailable', mode: 'managed', diagnostics };
+      }
+
+      const gateway = dependencies.gateway;
+      const preflight = gateway
+        ? await gateway.preflight({ teamId: input.teamId, target, placementPolicy: policy.placementPolicy })
+        : unavailablePreflight();
+      const decision = evaluateManagementRoute({
+        requestId: requestKey(input),
+        mode: 'managed',
+        requestShape: 'single-agent',
+        allowDirectFallbackBeforeBarrier: false,
+        preflight,
+        barrier: { idempotencyReserved: false, persistedEffects: [] },
+      });
+      if (decision.kind !== 'managed-preflight-passed') {
+        return {
+          kind: 'unavailable',
+          mode: 'managed',
+          diagnostics: decision.kind === 'unavailable'
+            ? decision.missingPreflight.map((item) => `MANAGEMENT_PREFLIGHT_${item.toUpperCase()}_MISSING`)
+            : ['MANAGEMENT_ROUTE_UNAVAILABLE'],
+        };
+      }
+
+      const created = await kernel.createOrResumeRun({
+        teamId: input.teamId,
+        channelId: input.channelId,
+        ...(input.rootTaskId ? { rootTaskId: input.rootTaskId } : {}),
+        rootMessageId: input.rootMessageId,
+        requestKey: requestKey(input),
+        requestHash: hash({ body: input.body, targetAgentId: target.id, channelId: input.channelId }),
+        placementPolicy: policy.placementPolicy,
+        budget: PHASE_1_BUDGET,
+      });
+      return {
+        kind: 'managed',
+        mode: 'managed',
+        managementRunId: created.run.id,
+        profileId: device.profileId,
+        disposition: created.disposition,
+      };
+    },
+
+    async scheduleManaged(input: Extract<ManagementRoutingResult, { kind: 'managed' }>) {
+      const scheduled = await dependencies.gateway?.schedule({
+        managementRunId: input.managementRunId,
+        profileId: input.profileId,
+      }) ?? { ok: false, diagnosticCode: 'MANAGEMENT_WORKER_UNAVAILABLE' };
+      return {
+        ...input,
+        ...(!scheduled.ok ? {
+          schedulingDiagnostic: scheduled.diagnosticCode ?? 'MANAGEMENT_WORKER_UNAVAILABLE',
+        } : {}),
+      };
+    },
+
+    async recordShadowDecision(input: { shadowRequestKey: string; body: string; targetAgentId?: string }) {
+      const target = input.targetAgentId ? await repositories.agents.getById(input.targetAgentId) : null;
+      await persistShadowDecision({ shadowRequestKey: input.shadowRequestKey, body: input.body, target });
+    },
+  };
+
+  async function persistShadowDecision(input: { shadowRequestKey: string; body: string; target: AgentRecord | null }) {
+    if (await repositories.management.shadowDecisions.getByRequestKey(input.shadowRequestKey)) return;
+    const inputHash = hash({ body: input.body, targetAgentId: input.target?.id ?? null });
+    await repositories.management.shadowDecisions.create({
+      id: dependencies.ids.nextId(),
+      shadowRequestKey: input.shadowRequestKey,
+      inputHash,
+      objectiveHash: hash(input.body),
+      argumentHash: hash([]),
+      target: input.target ? { agentId: input.target.id, kind: input.target.category } : {},
+      toolSequence: [],
+      diagnostics: { codes: ['MANAGEMENT_SHADOW_EVALUATION_UNAVAILABLE'] },
+      createdAt: clock.now(),
+    });
+  }
+}
+
+function requestKey(input: { teamId: string; userId: string; clientMessageId?: string; rootMessageId: string }): string {
+  return `${input.teamId}:${input.userId}:${input.clientMessageId?.trim() || input.rootMessageId}`;
+}
+
+function hash(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function unavailablePreflight(): ManagementPreflight {
+  return { workerAvailable: false, credentialAvailable: false, placementAllowed: false, budgetAvailable: true, targetAvailable: false };
+}
+
+function isManagementMode(value: unknown): value is ManagementMode {
+  return value === 'direct' || value === 'shadow' || value === 'managed';
+}
+
+function normalizePlacementPolicy(value: ManagerPlacementPolicyDto): ManagerPlacementPolicyDto | null {
+  if (value.placement !== 'device' && value.placement !== 'auto' && value.placement !== 'managed') return null;
+  if (value.placement === 'managed') return null;
+  const allowedDeviceIds = value.allowedDeviceIds?.filter((item) => typeof item === 'string' && item.length > 0);
+  return {
+    placement: value.placement,
+    ...(allowedDeviceIds?.length ? { allowedDeviceIds: [...new Set(allowedDeviceIds)] } : {}),
+    allowServerContext: value.allowServerContext === true,
+    requireLocalModelCredentials: value.requireLocalModelCredentials !== false,
+    ...(value.preferredProvider?.trim() ? { preferredProvider: value.preferredProvider.trim() } : {}),
+    ...(value.preferredModel?.trim() ? { preferredModel: value.preferredModel.trim() } : {}),
+  };
+}

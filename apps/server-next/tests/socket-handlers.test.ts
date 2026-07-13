@@ -85,6 +85,8 @@ describe('server-next socket handlers', () => {
       listMembers: vi.fn(async (payload) => makeSuccess({ payload })),
       updateMemberHuman: vi.fn(async (payload) => makeSuccess({ payload })),
       updateTeam: vi.fn(async (payload) => makeSuccess({ payload })),
+      getManagementPolicy: vi.fn(async (payload) => makeSuccess({ payload })),
+      updateManagementPolicy: vi.fn(async (payload) => makeSuccess({ payload })),
       deleteTeam: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
 
@@ -100,6 +102,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.team.create,
       WEB_EVENTS.team.switch,
       WEB_EVENTS.team.update,
+      WEB_EVENTS.managementPolicy.get,
+      WEB_EVENTS.managementPolicy.update,
       WEB_EVENTS.team.delete,
       WEB_EVENTS.join.create,
       WEB_EVENTS.join.validate,

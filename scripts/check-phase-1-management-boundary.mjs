@@ -221,7 +221,7 @@ const workerTransportPresent = [
   && socketHandlers.includes('AGENT_EVENTS.managementWorker.register')
   && socketServer.includes('managementWorkerScheduler')
   && socketServer.includes('scheduleManagementRun')
-  && devServer.includes('createDefaultManagementWorkerScheduler')
+  && (devServer.includes('createDefaultManagementWorkerScheduler') || devServer.includes('createDefaultManagementRuntime'))
   && devServer.includes('createDeviceWorkerScheduler');
 
 if (!workerTransportPresent) {
@@ -286,8 +286,35 @@ if (!deviceWorkerHostPresent) {
 
 console.log('P1_DEVICE_WORKER_HOST_PRESENT: Device runtime composition, credential fail-closed capability, durable replay, lease fencing, and PI Session cleanup are present; semantic readiness is verified by daemon tests');
 
+const managementRouter = readSource('apps/server-next/src/application/management/management-router.ts');
+const managementPolicyPanel = readSource('apps/web-next/app/[teamPath]/settings/ManagementPolicyPanel.tsx');
+const managementRoutingPresent = [
+  'createManagementRouter',
+  'getPolicy',
+  'updatePolicy',
+  'evaluateManagementRoute',
+  'createOrResumeRun',
+  'shadowRequestKey',
+  'allowDirectFallbackBeforeBarrier: false',
+].every((marker) => managementRouter.includes(marker))
+  && serverUseCases.includes('managementRouter.route')
+  && serverUseCases.includes("management.kind !== 'managed'")
+  && socketHandlers.includes('WEB_EVENTS.managementPolicy.get')
+  && socketHandlers.includes('WEB_EVENTS.managementPolicy.update')
+  && socketContract.includes('management-policy:get')
+  && socketContract.includes('management-policy:update')
+  && managementPolicyPanel.includes('settings-management-policy')
+  && managementPolicyPanel.includes('settings-management-preflight');
+
+if (!managementRoutingPresent) {
+  console.error('P1_MANAGEMENT_ROUTING_INVALID: Team policy, shadow namespace, managed fail-closed routing, or minimal settings control is incomplete');
+  process.exit(2);
+}
+
+console.log('P1_MANAGEMENT_ROUTING_PRESENT: direct baseline, shadow decision isolation, managed reservation barrier, policy authorization, and minimal settings control are present; semantic readiness is verified by server/web tests');
+
 const futureBoundaries = [
-  'apps/server-next/src/application/management/management-router.ts',
+  'apps/server-next/tests/managed-single-agent.test.ts',
 ];
 const missing = futureBoundaries.filter((path) => !existsSync(resolve(root, path)));
 if (missing.length > 0) {

@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type JoinLinkDto, type TeamDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type JoinLinkDto, type TeamDto, type ManagementMode, type ManagerPlacementPolicyDto, type TeamManagementPolicyDto } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
@@ -290,6 +290,18 @@ export function teamEvents(socket: Socket = getWebSocket()): TeamEvents {
       return () => { socket.off(WEB_EVENTS.team.snapshot, handler); };
     },
     subscribe() { socket.emit(WEB_EVENTS.team.list, {}); },
+  };
+}
+
+export interface ManagementPolicyEvents {
+  get(teamId: string): Promise<{ ok: boolean; policy?: TeamManagementPolicyDto; canManage?: boolean; error?: string }>;
+  update(payload: { teamId: string; mode: ManagementMode; placementPolicy: ManagerPlacementPolicyDto }): Promise<{ ok: boolean; policy?: TeamManagementPolicyDto; canManage?: boolean; error?: string }>;
+}
+
+export function managementPolicyEvents(socket: Socket = getWebSocket()): ManagementPolicyEvents {
+  return {
+    get(teamId) { return emitWithTimeout(socket, WEB_EVENTS.managementPolicy.get, { teamId }); },
+    update(payload) { return emitWithTimeout(socket, WEB_EVENTS.managementPolicy.update, payload); },
   };
 }
 

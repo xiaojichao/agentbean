@@ -10,6 +10,7 @@ import type { ServerNextRepositories } from './application/repositories.js';
 import { createDeviceWorkerScheduler, type DeviceWorkerScheduler } from './application/management/device-worker-scheduler.js';
 import { createManagementKernel } from './application/management/management-kernel.js';
 import { createManagementToolExecutor } from './application/management/management-tool-executor.js';
+import { createManagementRouter } from './application/management/management-router.js';
 import { createInMemoryRepositories } from './infra/memory/repositories.js';
 import {
   applyGlobalMigrations,
@@ -1126,6 +1127,7 @@ function createDefaultApp(
     const repositories = createInMemoryRepositories();
     const clock = { now: () => Date.now() };
     const ids = { nextId: () => randomUUID() };
+    const management = createDefaultManagementRuntime(repositories, clock, ids);
     return {
       app: createServerNextUseCases({
         repositories,
@@ -1133,8 +1135,9 @@ function createDefaultApp(
         ids,
         sessionSecret: config.sessionSecret,
         artifactContentStore,
+        managementRouter: management.router,
       }),
-      managementWorkerScheduler: createDefaultManagementWorkerScheduler(repositories, clock, ids),
+      managementWorkerScheduler: management.scheduler,
       reconcileDisconnectedDevicesOnStart: false,
       close: async () => undefined,
     };
@@ -1152,6 +1155,7 @@ function createDefaultApp(
   const repositories = createSqliteRepositories({ globalDb, teamDb });
   const clock = { now: () => Date.now() };
   const ids = { nextId: () => randomUUID() };
+  const management = createDefaultManagementRuntime(repositories, clock, ids);
   return {
     app: createServerNextUseCases({
       repositories,
@@ -1159,8 +1163,9 @@ function createDefaultApp(
       ids,
       sessionSecret: config.sessionSecret,
       artifactContentStore,
+      managementRouter: management.router,
     }),
-    managementWorkerScheduler: createDefaultManagementWorkerScheduler(repositories, clock, ids),
+    managementWorkerScheduler: management.scheduler,
     reconcileDisconnectedDevicesOnStart: true,
     async close() {
       globalDb.close();
@@ -1169,18 +1174,18 @@ function createDefaultApp(
   };
 }
 
-function createDefaultManagementWorkerScheduler(
+function createDefaultManagementRuntime(
   repositories: ServerNextRepositories,
   clock: { now(): number },
   ids: { nextId(): string },
-): DeviceWorkerScheduler {
+) {
   const kernel = createManagementKernel({
     repositories: repositories.management,
     unitOfWork: repositories.managementUnitOfWork,
     clock,
     ids,
   });
-  return createDeviceWorkerScheduler({
+  const scheduler = createDeviceWorkerScheduler({
     devices: repositories.devices,
     management: repositories.management,
     kernel,
@@ -1189,6 +1194,29 @@ function createDefaultManagementWorkerScheduler(
     ids,
     leaseTokens: { nextToken: () => randomBytes(32).toString('base64url') },
   });
+  const router = createManagementRouter({
+    repositories,
+    kernel,
+    clock,
+    ids,
+    gateway: {
+      async preflight({ teamId, target, placementPolicy }) {
+        const device = target.deviceId ? await repositories.devices.getById(target.deviceId) : null;
+        if (!device?.profileId) {
+          return { workerAvailable: false, credentialAvailable: false, placementAllowed: false, budgetAvailable: true, targetAvailable: false };
+        }
+        return scheduler.managementPreflight({
+          teamId,
+          deviceId: device.id,
+          profileId: device.profileId,
+          placementPolicy,
+          targetAvailable: target.status !== 'offline' && device.status === 'online',
+        });
+      },
+      schedule: (input) => scheduler.scheduleManagementRun(input),
+    },
+  });
+  return { scheduler, router };
 }
 
 function findPreviewHtmlPath(): string | undefined {

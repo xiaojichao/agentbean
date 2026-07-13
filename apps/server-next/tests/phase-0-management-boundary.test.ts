@@ -25,8 +25,8 @@ describe('Phase 0 existing execution fact boundary', () => {
     expect(channelAck).toMatchObject({
       ok: true,
       dispatches: [{ id: 'dispatch-1', messageId: 'message-1', status: 'queued' }],
+      management: { kind: 'direct', mode: 'direct' },
     });
-    expect(Object.keys(channelAck).filter((key) => /management|invocation/i.test(key))).toEqual([]);
     await expect(channel.repositories.dispatches.listByMessage('message-1')).resolves.toMatchObject([
       { id: 'dispatch-1', requestId: 'request-1' },
     ]);
@@ -43,8 +43,8 @@ describe('Phase 0 existing execution fact boundary', () => {
     expect(dmAck).toMatchObject({
       ok: true,
       dispatches: [{ id: 'dispatch-1', messageId: 'message-1', status: 'queued' }],
+      management: { kind: 'direct', mode: 'direct' },
     });
-    expect(Object.keys(dmAck).filter((key) => /management|invocation/i.test(key))).toEqual([]);
     await expect(dm.repositories.dispatches.listByMessage('message-1')).resolves.toHaveLength(1);
   });
 
