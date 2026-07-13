@@ -33,6 +33,8 @@ const REQUIRED_SMOKE_CHECKS = [
   'active-abort-dispose',
 ];
 const ALLOWED_OPTIONAL_EXTERNALS = new Set(['bufferutil', 'utf-8-validate']);
+const SEA_BLOB_RESOURCE = 'NODE_SEA_BLOB';
+const SEA_FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
 
 export function normalizeSeaPlatform(platform) {
   if (platform === 'linux') return 'linux';
@@ -128,6 +130,10 @@ function run(command, args, options = {}) {
   return result.stdout;
 }
 
+function seaNodeExecutable() {
+  return process.env.AGENTBEAN_PI_SEA_NODE_EXECUTABLE?.trim() || process.execPath;
+}
+
 export function assertBundleIsSelfContained(result) {
   if (result.warnings.length > 0) throw new Error('SEA_BUNDLE_WARNING');
   const builtins = new Set([...builtinModules, ...builtinModules.map((name) => `node:${name}`)]);
@@ -147,7 +153,7 @@ export async function bundleSeaEntry(outfile, piVersion = loadPiRuntimeVersion()
     outfile,
     bundle: true,
     platform: 'node',
-    target: 'node26',
+    target: 'node24',
     format: 'cjs',
     packages: 'bundle',
     define: {
@@ -201,6 +207,10 @@ async function buildSea({ outDir, verdictPath, os, arch }) {
 
     stage = 'node-version';
     if (process.versions.node !== PI_SEA_NODE_VERSION) throw new Error('SEA_NODE_VERSION_MISMATCH');
+    const nodeExecutable = seaNodeExecutable();
+    if (run(nodeExecutable, ['--version']).trim() !== `v${PI_SEA_NODE_VERSION}`) {
+      throw new Error('SEA_NODE_VERSION_MISMATCH');
+    }
     checks.push({ id: 'node-version', ok: true });
 
     rmSync(outDir, { recursive: true, force: true });
@@ -208,6 +218,7 @@ async function buildSea({ outDir, verdictPath, os, arch }) {
     const bundlePath = join(outDir, 'sea-smoke-entry.cjs');
     const executableName = os === 'windows' ? 'agentbean-pi-sea.exe' : 'agentbean-pi-sea';
     const executablePath = join(outDir, executableName);
+    const blobPath = join(outDir, 'sea-preparation.blob');
 
     stage = 'pi-version';
     const piVersion = loadPiRuntimeVersion();
@@ -219,9 +230,24 @@ async function buildSea({ outDir, verdictPath, os, arch }) {
 
     stage = 'build';
     const configPath = join(outDir, 'sea-config.json');
-    writeFileSync(configPath, `${JSON.stringify(createSeaConfig(bundlePath, executablePath), null, 2)}\n`);
-    run(process.execPath, ['--build-sea', configPath], { cwd: rootDir });
+    writeFileSync(configPath, `${JSON.stringify(createSeaConfig(bundlePath, blobPath), null, 2)}\n`);
+    run(nodeExecutable, ['--experimental-sea-config', configPath], { cwd: rootDir });
+    copyFileSync(nodeExecutable, executablePath);
     if (os !== 'windows') chmodSync(executablePath, 0o755);
+    if (os === 'macos') {
+      run('codesign', ['--remove-signature', executablePath]);
+    }
+    const postjectCli = join(rootDir, 'node_modules/postject/dist/cli.js');
+    run(process.execPath, [
+      postjectCli,
+      executablePath,
+      SEA_BLOB_RESOURCE,
+      blobPath,
+      '--sentinel-fuse',
+      SEA_FUSE,
+      '--macho-segment-name',
+      'NODE_SEA',
+    ], { cwd: rootDir });
     checks.push({ id: 'executable-build', ok: true });
 
     stage = 'sign';

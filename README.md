@@ -229,11 +229,21 @@ npm run build:phase0
 # PI dependency/import 边界
 npm run check:phase0-pi-boundary
 
-# 消费独立 Node 26 SEA workflow 生成的平台 verdict
+# 消费独立 Node 24 SEA workflow 生成的平台 verdict
 npm run check:pi-sea-compatibility -- --file <platform-verdict.json>
 ```
 
 Phase 0 的逐项证据、main CI 和 Linux/macOS/Windows SEA verdict 见 `agentbean-next/docs/phase-0-pi-contract-compatibility-verification-matrix.md`。
+
+Phase 1 的 Device-hosted PI Manager 已提供受控开发者入口，但 Team 默认仍为 `direct`。只有 Team owner/admin 可以通过 `management-policy:update` 将指定 Team 切到 `shadow` 或 `managed`；`managed` 必须显式传入 `placement: "device"`、`allowedDeviceIds`，并要求目标 Device 在线且具备本地模型凭证。preflight 不完整时 fail closed，不会回退成重复 direct Dispatch。
+
+```bash
+# Node 24：Phase 1 management 完整测试与构建门禁
+npm run test:phase1-management
+npm run build:phase1-management
+```
+
+Node 24 SEA 使用官方 Node 可执行文件执行 blob 注入；若本机 Node 来自不含 SEA fuse 的共享库发行版，可通过 `AGENTBEAN_PI_SEA_NODE_EXECUTABLE=/path/to/node` 指定官方 Node 24.18.0 binary。
 
 更细分的测试与 smoke：
 

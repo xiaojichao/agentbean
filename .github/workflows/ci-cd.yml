@@ -74,7 +74,7 @@ jobs:
 
           git fetch origin "${{ github.base_ref }}" --depth=1
           changed_files="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
-          next_changed_files="$(printf '%s\n' "$changed_files" | grep -E '^agentbean-next/|^packages/|^apps/(server-next|daemon-next|web-next)/|^scripts/(check-agentbean-next-readiness|check-agentbean-next-railway-preflight|check-team-terminology(\.test)?|check-phase-0-pi-boundary(\.test)?|check-phase-1-management-boundary(\.test)?|check-pi-management-sea(\.test)?|build-pi-management-sea(\.test)?|audit-agentbean-next-cutover|prepare-agentbean-next-daemon-release|smoke-agentbean-next-.*)\.mjs$|^docs/superpowers/specs/|^README\.md$|^package(-lock)?\.json$|^railway\.json$|^\.github/workflows/(ci-cd|daily-changelog|pi-sea-compatibility)\.yml$' || true)"
+          next_changed_files="$(printf '%s\n' "$changed_files" | grep -E '^agentbean-next/|^packages/|^apps/(server-next|daemon-next|web-next)/|^scripts/(check-agentbean-next-readiness|check-agentbean-next-railway-preflight|check-team-terminology(\.test)?|check-phase-0-pi-boundary(\.test)?|check-phase-1-management-boundary(\.test)?|check-pi-management-sea(\.test)?|build-pi-management-sea(\.test)?|audit-agentbean-next-cutover|prepare-agentbean-next-daemon-release|smoke-agentbean-next-.*)\.mjs$|^docs/superpowers/specs/|^README\.md$|^\.nvmrc$|^package(-lock)?\.json$|^railway\.json$|^\.github/workflows/(ci-cd|daily-changelog|pi-sea-compatibility)\.yml$' || true)"
 
           if [ -n "$next_changed_files" ]; then
             echo "should_validate=true" >> "$GITHUB_OUTPUT"
@@ -87,7 +87,7 @@ jobs:
         if: steps.changes.outputs.should_validate == 'true'
         uses: actions/setup-node@v6
         with:
-          node-version: 24.15.0
+          node-version: 24.18.0
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -119,9 +119,17 @@ jobs:
         if: steps.changes.outputs.should_validate == 'true'
         run: npm run test:phase0
 
+      - name: Run Phase 1 management gates
+        if: steps.changes.outputs.should_validate == 'true'
+        run: npm run test:phase1-management
+
       - name: Build Phase 0 packages
         if: steps.changes.outputs.should_validate == 'true'
         run: npm run build:phase0
+
+      - name: Build Phase 1 management packages
+        if: steps.changes.outputs.should_validate == 'true'
+        run: npm run build:phase1-management
 
       - name: Build AgentBean Next packages
         if: steps.changes.outputs.should_validate == 'true'
@@ -196,7 +204,7 @@ jobs:
         if: env.RAILWAY_TOKEN != ''
         uses: actions/setup-node@v6
         with:
-          node-version: 24.15.0
+          node-version: 24.18.0
 
       - name: Run AgentBean Next production readiness checks
         if: env.RAILWAY_TOKEN != ''
@@ -258,7 +266,7 @@ jobs:
       - name: Set up Node.js for Railway CLI
         uses: actions/setup-node@v6
         with:
-          node-version: 24.15.0
+          node-version: 24.18.0
 
       - name: Run AgentBean Next production readiness checks
         run: npm run check:agentbean-next-readiness -- --production
@@ -292,7 +300,7 @@ jobs:
       - name: Set up Node.js for Railway CLI
         uses: actions/setup-node@v6
         with:
-          node-version: 24.15.0
+          node-version: 24.18.0
 
       - name: Run AgentBean Next production readiness checks
         run: npm run check:agentbean-next-readiness -- --production
@@ -342,7 +350,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 24.15.0
+          node-version: 24.18.0
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -405,7 +413,7 @@ jobs:
         if: env.NPM_TOKEN != ''
         uses: actions/setup-node@v6
         with:
-          node-version: 24.15.0
+          node-version: 24.18.0
           registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: package-lock.json
@@ -522,7 +530,7 @@ jobs:
         if: env.NPM_TOKEN != ''
         uses: actions/setup-node@v6
         with:
-          node-version: 24.15.0
+          node-version: 24.18.0
           registry-url: https://registry.npmjs.org
 
       - name: Resolve canonical daemon-next version

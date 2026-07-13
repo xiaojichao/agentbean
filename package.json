@@ -2,6 +2,9 @@
   "name": "agentbean",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
   "workspaces": [
     "packages/*",
     "apps/*"
@@ -15,6 +18,7 @@
     "test:web-next": "cd apps/web-next && npm run test -- tests --config vitest.config.ts",
     "test:phase1": "npm run test:contracts -- --api.host 127.0.0.1 && npm run test:domain -- --api.host 127.0.0.1 && npm run test:server-next -- --api.host 127.0.0.1 && npm run test:daemon-next -- --api.host 127.0.0.1 && npm run test:web-next -- --api.host 127.0.0.1",
     "test:phase0": "npm run test:pi-management-runtime && npm run test:contracts -- --api.host 127.0.0.1 && npm run test:domain -- --api.host 127.0.0.1 && npm run test:phase0-boundary && npm run check:phase0-pi-boundary && cd apps/server-next && ../../node_modules/.bin/vitest run tests/phase-0-management-boundary.test.ts --config vitest.config.ts --api.host 127.0.0.1",
+    "test:phase1-management": "npm run test:phase1-management-boundary && npm run check:phase1-management-boundary && npm run test:pi-management-runtime && npm run test:phase1",
     "test:team-terminology": "node --test scripts/check-team-terminology.test.mjs",
     "test:phase0-boundary": "node --test scripts/check-phase-0-pi-boundary.test.mjs",
     "test:phase1-management-boundary": "node --test scripts/check-phase-1-management-boundary.test.mjs",
@@ -43,6 +47,7 @@
     "build:domain": "tsc -p packages/domain/tsconfig.json",
     "build:pi-management-runtime": "tsc -p packages/pi-management-runtime/tsconfig.json",
     "build:phase0": "npm run build:contracts && npm run build:domain && npm run build:pi-management-runtime && npm run build:server-next",
+    "build:phase1-management": "npm run build:packages",
     "build:server-next": "tsc -p apps/server-next/tsconfig.json",
     "build:daemon-next": "tsc -p apps/daemon-next/tsconfig.json",
     "build:web-next": "cd apps/web-next && npm run build",
@@ -51,6 +56,7 @@
   "devDependencies": {
     "@types/node": "^20.16.5",
     "esbuild": "0.28.1",
+    "postject": "1.0.0-alpha.6",
     "socket.io-client": "^4.8.3",
     "typescript": "^5.6.2",
     "vitest": "^2.0.5"

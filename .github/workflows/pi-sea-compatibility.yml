@@ -72,10 +72,10 @@ jobs:
       - name: Initialize fail-closed platform verdict
         run: node scripts/check-pi-management-sea.mjs init --out artifacts/pi-sea-verdict/verdict.json --os ${{ matrix.verdict_os }} --arch ${{ matrix.arch }}
 
-      - name: Set up Node.js 26.5.0
+      - name: Set up Node.js 24.18.0
         uses: actions/setup-node@v6
         with:
-          node-version: 26.5.0
+          node-version: 24.18.0
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -112,10 +112,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Set up Node.js 26.5.0
+      - name: Set up Node.js 24.18.0
         uses: actions/setup-node@v6
         with:
-          node-version: 26.5.0
+          node-version: 24.18.0
 
       - name: Download platform verdicts
         if: always()
