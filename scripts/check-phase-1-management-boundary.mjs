@@ -152,8 +152,32 @@ if (!managementPersistencePresent) {
 
 console.log('P1_MANAGEMENT_PERSISTENCE_PRESENT: schema, repository ports, and atomic Unit of Work are present; semantic readiness is verified by server tests');
 
+const managementKernel = readSource('apps/server-next/src/application/management/management-kernel.ts');
+const managementEventValidator = readSource('apps/server-next/src/application/management/management-event-validator.ts');
+const managementCheckpoint = readSource('apps/server-next/src/application/management/management-checkpoint.ts');
+const managementToolExecutor = readSource('apps/server-next/src/application/management/management-tool-executor.ts');
+const serverKernelPresent = [
+  'createOrResumeRun',
+  'acquireLease',
+  'renewLease',
+  'releaseLease',
+  'appendEvent',
+  'authorizeManagementWrite',
+].every((marker) => managementKernel.includes(marker))
+  && managementEventValidator.includes('parsePhase1ManagementEvent')
+  && managementEventValidator.includes('hashManagementEventPayload')
+  && managementCheckpoint.includes('collectManagementCheckpointFacts')
+  && managementCheckpoint.includes('restoreOrRebuildManagementCheckpoint')
+  && managementToolExecutor.includes('createManagementToolExecutor');
+
+if (!serverKernelPresent) {
+  console.error('P1_SERVER_KERNEL_INVALID: Collaboration Kernel, Event, Checkpoint, or tool boundary is incomplete');
+  process.exit(2);
+}
+
+console.log('P1_SERVER_KERNEL_PRESENT: Collaboration Kernel, Event, Checkpoint, and tool boundaries are present; semantic readiness is verified by server tests');
+
 const futureBoundaries = [
-  'apps/server-next/src/application/management/management-kernel.ts',
   'apps/daemon-next/src/pi-manager-worker-host.ts',
 ];
 const missing = futureBoundaries.filter((path) => !existsSync(resolve(root, path)));

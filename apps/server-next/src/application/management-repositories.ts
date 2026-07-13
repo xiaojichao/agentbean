@@ -67,6 +67,7 @@ export interface ManagementRepositories {
   runs: {
     create(record: ManagementRunDto): Promise<ManagementRunDto>;
     getById(id: ID): Promise<ManagementRunDto | null>;
+    update(record: ManagementRunDto): Promise<ManagementRunDto>;
   };
   leases: {
     get(managementRunId: ID): Promise<ManagerLeaseRecord | null>;
@@ -78,11 +79,13 @@ export interface ManagementRepositories {
   };
   checkpoints: {
     put(record: ManagementCheckpointV1): Promise<ManagementCheckpointV1>;
+    get(input: { managementRunId: ID; revision: number }): Promise<ManagementCheckpointV1 | null>;
     getLatest(managementRunId: ID): Promise<ManagementCheckpointV1 | null>;
   };
   invocations: {
     create(record: AgentInvocationRecordDto): Promise<AgentInvocationRecordDto>;
     getById(id: ID): Promise<AgentInvocationRecordDto | null>;
+    listByRun(managementRunId: ID): Promise<AgentInvocationRecordDto[]>;
   };
   dispatchAttempts: {
     create(record: InvocationDispatchAttemptRecord): Promise<InvocationDispatchAttemptRecord>;

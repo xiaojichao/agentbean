@@ -79,6 +79,14 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
       async getById(id) {
         return mapRun(db.prepare('SELECT * FROM management_runs WHERE id = ?').get(id));
       },
+      async update(record) {
+        const result = db.prepare(`UPDATE management_runs SET status = ?, placement_policy_json = ?,
+          active_worker_id = ?, checkpoint_revision = ?, budget_json = ?, updated_at = ?, completed_at = ?
+          WHERE id = ?`).run(record.status, json(record.placementPolicy), record.activeWorkerId ?? null,
+          record.checkpointRevision, json(record.budget), record.updatedAt, record.completedAt ?? null, record.id);
+        if ((result as { changes?: number }).changes === 0) throw new Error('management run does not exist');
+        return record;
+      },
     },
     leases: {
       async get(managementRunId) {
@@ -122,6 +130,11 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
           .run(record.managementRunId, record.revision, json(record), record.updatedAt);
         return record;
       },
+      async get(input) {
+        const row = db.prepare(`SELECT checkpoint_json FROM management_checkpoints
+          WHERE management_run_id = ? AND revision = ?`).get(input.managementRunId, input.revision);
+        return row ? parseJson<ManagementCheckpointV1>(text(row, 'checkpoint_json')) : null;
+      },
       async getLatest(managementRunId) {
         const row = db.prepare(`SELECT checkpoint_json FROM management_checkpoints
           WHERE management_run_id = ? ORDER BY revision DESC LIMIT 1`).get(managementRunId);
@@ -137,6 +150,14 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
       },
       async getById(id) {
         return mapInvocation(db.prepare('SELECT * FROM agent_invocations WHERE id = ?').get(id));
+      },
+      async listByRun(managementRunId) {
+        return db.prepare('SELECT * FROM agent_invocations WHERE management_run_id = ? ORDER BY created_at, id')
+          .all(managementRunId).map((value) => {
+            const invocation = mapInvocation(value);
+            if (!invocation) throw new Error('SQLite invocation row could not be mapped');
+            return invocation;
+          });
       },
     },
     dispatchAttempts: {
