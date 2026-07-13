@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { createServerNextUseCases } from '../src/application/usecases.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
@@ -72,6 +73,23 @@ function createIds(ids: string[]) {
 }
 
 describe('AgentOS managed agent: scan must not override user rename', () => {
+  test('migration conservatively protects names of agents that predate name_source tracking', () => {
+    const Database = loadBetterSqlite3();
+    const db = new Database(':memory:');
+    try {
+      db.exec('CREATE TABLE agents (id TEXT PRIMARY KEY, name TEXT NOT NULL)');
+      db.prepare('INSERT INTO agents (id, name) VALUES (?, ?)').run('legacy-agent', '用户已有名称');
+      db.exec(readFileSync(new URL('../src/infra/sqlite/migrations/global/0015_agent_name_source.sql', import.meta.url), 'utf8'));
+
+      expect(db.prepare('SELECT name, name_source FROM agents WHERE id = ?').get('legacy-agent')).toEqual({
+        name: '用户已有名称',
+        name_source: 'custom',
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   test('in-memory: agentos-hosted agent renamed via updateAgentConfig keeps user name after re-scan', async () => {
     const repositories = createInMemoryRepositories();
     let now = 10;
@@ -103,13 +121,16 @@ describe('AgentOS managed agent: scan must not override user rename', () => {
     });
     if (!first.ok) throw new Error(`first scan failed: ${first.error}`);
     const agentId = first.agents[0]!.id;
+    expect(first.agents[0]).not.toHaveProperty('nameSource');
+    expect((await repositories.agents.getById(agentId))?.nameSource).toBe('scanned');
 
     const renamed = await app.updateAgentConfig({
       userId: 'user-1', teamId: 'team-1', agentId, name: '我的助手',
     });
     if (!renamed.ok) throw new Error(`rename failed: ${renamed.error}`);
+    expect(renamed.agent).not.toHaveProperty('nameSource');
     // 排除 H4（改名未落库）
-    expect((await repositories.agents.getById(agentId))?.name).toBe('我的助手');
+    expect(await repositories.agents.getById(agentId)).toMatchObject({ name: '我的助手', nameSource: 'custom' });
 
     const second = await app.registerDiscoveredAgents({
       teamId: 'team-1', deviceId: 'device-1',
@@ -120,6 +141,7 @@ describe('AgentOS managed agent: scan must not override user rename', () => {
     // 排除 H2（identity 匹配失败→新建）：同一 agent，未产生第二条
     expect(second.agents).toHaveLength(1);
     expect(second.agents[0]!.id).toBe(agentId);
+    expect(second.agents[0]).not.toHaveProperty('nameSource');
     // 主断言（H1）：再次扫描后用户改的名必须保留（查 DB 排除 H3）
     expect((await repositories.agents.getById(agentId))?.name).toBe('我的助手');
     expect(second.agents[0]!.name).toBe('我的助手');
@@ -143,12 +165,29 @@ describe('AgentOS managed agent: scan must not override user rename', () => {
       });
       if (!first.ok) throw new Error(`first scan failed: ${first.error}`);
       const agentId = first.agents[0]!.id;
+      expect(first.agents[0]).not.toHaveProperty('nameSource');
+      expect((await repositories.agents.getById(agentId))?.nameSource).toBe('scanned');
 
       const renamed = await app.updateAgentConfig({
         userId: 'user-1', teamId: 'team-1', agentId, name: '我的助手',
       });
       if (!renamed.ok) throw new Error(`rename failed: ${renamed.error}`);
-      expect((await repositories.agents.getById(agentId))?.name).toBe('我的助手');
+      expect(renamed.agent).not.toHaveProperty('nameSource');
+      expect(await repositories.agents.getById(agentId)).toMatchObject({ name: '我的助手', nameSource: 'custom' });
+
+      const rescanned = await repositories.agents.upsert({
+        id: agentId,
+        primaryTeamId: 'team-1',
+        visibleTeamIds: ['team-1'],
+        name: 'hermes-01',
+        adapterKind: 'hermes',
+        category: 'agentos-hosted',
+        source: 'scanned',
+        status: 'online',
+        deviceId: 'device-1',
+        lastSeenAt: 500,
+      });
+      expect(rescanned).toMatchObject({ name: '我的助手', nameSource: 'custom' });
 
       const second = await app.registerDiscoveredAgents({
         teamId: 'team-1', deviceId: 'device-1',
@@ -158,6 +197,7 @@ describe('AgentOS managed agent: scan must not override user rename', () => {
 
       expect(second.agents).toHaveLength(1);
       expect(second.agents[0]!.id).toBe(agentId);
+      expect(second.agents[0]).not.toHaveProperty('nameSource');
       expect((await repositories.agents.getById(agentId))?.name).toBe('我的助手');
       expect(second.agents[0]!.name).toBe('我的助手');
     } finally {

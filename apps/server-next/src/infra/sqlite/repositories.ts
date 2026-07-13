@@ -1048,10 +1048,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         // existing.name（不取 excluded.name）。直接返回 input agent 会让调用方（如
         // registerDiscoveredAgents → 前端）看到 discovered.name 而非受保护的用户自定义名。
         const stored = mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(agent.id));
-        if (stored) {
-          agent.name = stored.name;
-        }
-        return agent;
+        return stored ?? agent;
       },
       async getByIdentityKey(identityKey) {
         return mapAgent(
