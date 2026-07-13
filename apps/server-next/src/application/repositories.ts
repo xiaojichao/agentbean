@@ -81,7 +81,7 @@ export interface AgentExecutionConfig {
   cwd?: string;
   env?: Record<string, string>;
 }
-export type AgentRecord = AgentDto & { deletedAt?: UnixMs };
+export type AgentRecord = AgentDto & { deletedAt?: UnixMs; nameSource?: 'scanned' | 'custom' };
 export type AgentUpsertRecord = AgentRecord & { env?: Record<string, string> };
 
 export interface AgentConfigUpdate {

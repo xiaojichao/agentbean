@@ -1884,7 +1884,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           teamId: discoveredInput.teamId,
           agentId: agent.id,
         });
-        agents.push(agent);
+        agents.push(toPublicAgent(agent));
       }
 
       const missingOfflineIds = await repositories.agents.markMissingScannedOffline({
@@ -2455,7 +2455,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       for (const teamId of agent.visibleTeamIds) {
         await ensureDefaultChannelMembership(repositories, clock, { teamId, agentId: agent.id });
       }
-      return makeSuccess({ agent });
+      return makeSuccess({ agent: toPublicAgent(agent) });
     },
 
     async sendMessage(messageInput) {
@@ -5962,7 +5962,7 @@ function hasOwn(value: object, key: PropertyKey): boolean {
 }
 
 function toPublicAgent(agent: AgentRecord): AgentDto {
-  const { deletedAt: _deletedAt, ...publicAgent } = agent;
+  const { deletedAt: _deletedAt, nameSource: _nameSource, ...publicAgent } = agent;
   return publicAgent;
 }
 

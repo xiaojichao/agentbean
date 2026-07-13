@@ -615,6 +615,14 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           // 独立于 upsert 控制，memory 这里保留 existing.visibleTeamIds，避免 daemon
           // 周期上报把已 hidden agent 的可见性重置回 [primary]（导致成员页重现）。
           agent.visibleTeamIds = existing.visibleTeamIds;
+          // 用户自定义名受保护：name_source='custom' 时不被扫描报告名覆盖
+          // （对齐 sqlite agents.upsert ON CONFLICT 的 CASE WHEN name_source='custom' 分支）。
+          if (existing.nameSource === 'custom') {
+            agent.name = existing.name;
+          }
+          agent.nameSource = existing.nameSource;
+        } else {
+          agent.nameSource = agent.nameSource ?? 'scanned';
         }
         agents.set(input.id, agent);
         if (env) {
@@ -665,6 +673,10 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const updated = {
           ...agent,
           ...changes,
+          // 用户改名后标记 'custom'，扫描 upsert 据此保护名（对齐 sqlite name_source）。
+          nameSource: changes.name !== undefined && changes.name !== agent.name
+            ? 'custom'
+            : (agent.nameSource ?? 'scanned'),
           lastSeenAt: changes.lastSeenAt ?? agent.lastSeenAt,
         };
         agents.set(agent.id, updated);
