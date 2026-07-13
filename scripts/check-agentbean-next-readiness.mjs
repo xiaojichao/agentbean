@@ -760,7 +760,7 @@ export function hasPhase0ManagementBoundary(input) {
     input.boundaryTests.includes('only a human update completes it') &&
     input.boundaryTests.includes('existing Task create, update, and delete APIs') &&
     input.boundaryTests.includes('remain linked by dispatchId without invocationId') &&
-    input.boundaryTests.includes('Worker contracts remain inert until Server handlers, repositories, and migrations are implemented') &&
+    input.boundaryTests.includes('Worker contracts and management persistence remain inert until Server handlers are implemented') &&
     managementWorkerEvents.every((eventName) => input.contractsSocket.includes(eventName)) &&
     !hasQuotedManagementExecutionName(contractsWithoutWorkerEvents) &&
     !/["']task:|:task:|\btask\s*:/.test(agentEventsContract) &&
@@ -768,8 +768,12 @@ export function hasPhase0ManagementBoundary(input) {
     !/app,\s*'(?:createTask|updateTask|deleteTask|reorderTask)'/.test(agentSocketHandlers) &&
     !/pi-management-runtime|createManagementRuntimeFactory|ManagementRuntimeFactory|ManagementSession|PiManagerWorkerHost|ManagementWorkerHost|ManagementOutbox/.test(input.serverSource) &&
     !/\b(?:invocationId|managementRunId)\b/.test(input.contractsArtifact) &&
-    !/\b(?:Management(?:Run|Event|Checkpoint)?|AgentInvocation|Invocation)Repository\b|\b(?:managementRuns?|managementEvents?|agentInvocations?|invocations?|managementCheckpoints?|checkpoints?)\s*:/.test(input.serverRepositories) &&
-    !/\b(?:management_runs?|management_events?|agent_invocations?|management_checkpoints?|invocation_id|management_run_id)\b/i.test(input.serverMigrations);
+    input.serverRepositories.includes('management: ManagementRepositories') &&
+    input.serverRepositories.includes('managementUnitOfWork: ManagementUnitOfWork') &&
+    /CREATE TABLE management_runs/i.test(input.serverMigrations) &&
+    /CREATE TABLE management_events/i.test(input.serverMigrations) &&
+    /CREATE TABLE agent_invocations/i.test(input.serverMigrations) &&
+    /CREATE TABLE management_checkpoints/i.test(input.serverMigrations);
 }
 
 export function hasPhase0CiGate({ scripts, workflow, seaWorkflow }) {

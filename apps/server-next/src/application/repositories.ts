@@ -1,4 +1,6 @@
 import type { AgentDto, ArtifactDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, RuntimeDto, SkillDto, TaskDto, TeamDto, UnixMs, UserDto, WorkspaceRunDto, WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import type { ManagementRepositories } from './management-repositories.js';
+import type { ManagementUnitOfWork } from './management-unit-of-work.js';
 
 export interface UserRecord extends UserDto {
   passwordHash: string;
@@ -289,6 +291,8 @@ export interface TaskRepository {
 }
 
 export interface ServerNextRepositories {
+  management: ManagementRepositories;
+  managementUnitOfWork: ManagementUnitOfWork;
   users: UserRepository;
   teams: TeamRepository;
   joinLinks: JoinLinkRepository;

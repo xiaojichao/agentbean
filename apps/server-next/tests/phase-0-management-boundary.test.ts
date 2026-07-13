@@ -151,7 +151,7 @@ describe('Phase 0 existing execution fact boundary', () => {
     expect(workspaceRun).not.toHaveProperty('invocationId');
   });
 
-  test('Worker contracts remain inert until Server handlers, repositories, and migrations are implemented', () => {
+  test('Worker contracts and management persistence remain inert until Server handlers are implemented', () => {
     expect(AGENT_EVENTS.managementWorker).toEqual({
       register: 'management-worker:register',
       leaseOffer: 'management-worker:lease-offer',
@@ -175,17 +175,20 @@ describe('Phase 0 existing execution fact boundary', () => {
     expect(agentHandlerSource).not.toMatch(/app,\s*'(?:createTask|updateTask|deleteTask|reorderTask)'/);
 
     const repositories = createInMemoryRepositories();
-    expect(Object.keys(repositories).filter((name) => /management|invocation|checkpoint/i.test(name))).toEqual([]);
+    expect(Object.keys(repositories).filter((name) => /management|invocation|checkpoint/i.test(name))).toEqual([
+      'management',
+      'managementUnitOfWork',
+    ]);
 
     const repositorySource = readFileSync(join(serverRoot, 'application/repositories.ts'), 'utf8');
-    expect(repositorySource).not.toMatch(
-      /\b(?:Management(?:Run|Event|Checkpoint)?|AgentInvocation|Invocation)Repository\b|\b(?:managementRuns?|managementEvents?|agentInvocations?|invocations?|managementCheckpoints?|checkpoints?)\s*:/,
-    );
+    expect(repositorySource).toContain('management: ManagementRepositories');
+    expect(repositorySource).toContain('managementUnitOfWork: ManagementUnitOfWork');
 
     const migrationSql = readTreeText(join(serverRoot, 'infra/sqlite/migrations'));
-    expect(migrationSql).not.toMatch(
-      /\b(?:management_runs?|management_events?|agent_invocations?|management_checkpoints?|invocation_id|management_run_id)\b/i,
-    );
+    expect(migrationSql).toMatch(/CREATE TABLE management_runs/i);
+    expect(migrationSql).toMatch(/CREATE TABLE management_events/i);
+    expect(migrationSql).toMatch(/CREATE TABLE agent_invocations/i);
+    expect(migrationSql).toMatch(/CREATE TABLE management_checkpoints/i);
 
     const artifactContract = readFileSync(
       fileURLToPath(new URL('../../../packages/contracts/src/artifact.ts', import.meta.url)),

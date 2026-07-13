@@ -55,13 +55,23 @@ function scaffoldRuntimeSlice(root, options = {}) {
 
 function scaffoldFutureBoundaries(root) {
   scaffoldWorkerContracts(root);
+  scaffoldManagementPersistence(root);
   for (const path of [
-    'apps/server-next/src/infra/sqlite/migrations/team/0010_management_phase_1.sql',
     'apps/server-next/src/application/management/management-kernel.ts',
     'apps/daemon-next/src/pi-manager-worker-host.ts',
   ]) {
     write(root, path, '// scaffolded\n');
   }
+}
+
+function scaffoldManagementPersistence(root) {
+  write(root, 'apps/server-next/src/infra/sqlite/migrations/team/0010_management_phase_1.sql', [
+    'team_management_policies', 'managed_request_reservations', 'management_runs', 'manager_leases',
+    'management_events', 'management_checkpoints', 'agent_invocations', 'invocation_dispatch_attempts',
+    'management_shadow_decisions', 'one_active_dispatch_attempt_per_invocation',
+  ].join('\n'));
+  write(root, 'apps/server-next/src/application/management-repositories.ts', 'export interface ManagementRepositories {}\n');
+  write(root, 'apps/server-next/src/application/management-unit-of-work.ts', 'export interface ManagementUnitOfWork { createRun: unknown }\n');
 }
 
 function scaffoldWorkerContracts(root) {
@@ -144,8 +154,20 @@ test('reports the static Worker/lease surface while later boundaries remain Red'
     const result = runChecker(root);
     assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
     assert.match(result.stdout, /P1_WORKER_CONTRACT_SURFACE_PRESENT/);
-    assert.match(result.stderr, /P1_NOT_IMPLEMENTED:.*0010_management_phase_1\.sql/);
+    assert.match(result.stderr, /P1_MANAGEMENT_PERSISTENCE_INVALID/);
     assert.doesNotMatch(result.stderr, /management-worker\.ts/);
+  });
+});
+
+test('reports management persistence while Server kernel and WorkerHost remain Red', () => {
+  withFixture((root) => {
+    scaffoldRuntimeSlice(root);
+    scaffoldWorkerContracts(root);
+    scaffoldManagementPersistence(root);
+    const result = runChecker(root);
+    assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /P1_MANAGEMENT_PERSISTENCE_PRESENT/);
+    assert.match(result.stderr, /P1_NOT_IMPLEMENTED:.*management-kernel\.ts/);
   });
 });
 

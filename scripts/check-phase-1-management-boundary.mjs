@@ -125,8 +125,34 @@ if (!workerContractSurfacePresent) {
 
 console.log('P1_WORKER_CONTRACT_SURFACE_PRESENT: static Worker RPC and lease/fencing exports are present; semantic readiness is verified by package tests');
 
+const managementMigration = readSource('apps/server-next/src/infra/sqlite/migrations/team/0010_management_phase_1.sql');
+const managementRepositories = readSource('apps/server-next/src/application/management-repositories.ts');
+const managementUnitOfWork = readSource('apps/server-next/src/application/management-unit-of-work.ts');
+const persistenceMarkers = [
+  'team_management_policies',
+  'managed_request_reservations',
+  'management_runs',
+  'manager_leases',
+  'management_events',
+  'management_checkpoints',
+  'agent_invocations',
+  'invocation_dispatch_attempts',
+  'management_shadow_decisions',
+  'one_active_dispatch_attempt_per_invocation',
+];
+const managementPersistencePresent = persistenceMarkers.every((marker) => managementMigration.includes(marker))
+  && managementRepositories.includes('export interface ManagementRepositories')
+  && managementUnitOfWork.includes('export interface ManagementUnitOfWork')
+  && managementUnitOfWork.includes('createRun');
+
+if (!managementPersistencePresent) {
+  console.error('P1_MANAGEMENT_PERSISTENCE_INVALID: schema, repository ports, or atomic Unit of Work are incomplete');
+  process.exit(2);
+}
+
+console.log('P1_MANAGEMENT_PERSISTENCE_PRESENT: schema, repository ports, and atomic Unit of Work are present; semantic readiness is verified by server tests');
+
 const futureBoundaries = [
-  'apps/server-next/src/infra/sqlite/migrations/team/0010_management_phase_1.sql',
   'apps/server-next/src/application/management/management-kernel.ts',
   'apps/daemon-next/src/pi-manager-worker-host.ts',
 ];
