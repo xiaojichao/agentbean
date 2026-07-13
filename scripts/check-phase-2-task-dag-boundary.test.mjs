@@ -34,3 +34,20 @@ test('fails closed when the Phase 2 tool surface exposes Memory', () => {
     rmSync(fixture, { recursive: true, force: true });
   }
 });
+
+test('fails closed when a Phase 2 Domain policy disappears', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'agentbean-phase2-domain-boundary-'));
+  try {
+    cpSync(root, fixture, {
+      recursive: true,
+      filter: (source) => !source.split('/').includes('node_modules') && !source.split('/').includes('.git'),
+    });
+    const path = join(fixture, 'packages/domain/src/task-claim-policy.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replace('evaluateTaskClaimAcquire', 'removedTaskClaimAcquire'));
+    const result = run(fixture);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /P2_DOMAIN_POLICY_INVALID/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});

@@ -15,6 +15,12 @@ const contract = read('packages/contracts/src/management-worker-v2.ts');
 const management = read('packages/contracts/src/management.ts');
 const runtimeTypes = read('packages/pi-management-runtime/src/types.ts');
 const runtimeAdapter = read('packages/pi-management-runtime/src/pi-session-adapter.ts');
+const domainPolicies = [
+  read('packages/domain/src/task-dag-policy.ts'),
+  read('packages/domain/src/task-revision-policy.ts'),
+  read('packages/domain/src/task-claim-policy.ts'),
+  read('packages/domain/src/subtask-acceptance-policy.ts'),
+];
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
 
@@ -47,10 +53,22 @@ if (!runtimeTypes.includes('PHASE_2_MANAGEMENT_TOOL_NAMES')
   violations.push('P2_RUNTIME_BOUNDARY_INVALID: Phase 2 exact runtime tool boundary is incomplete or exposes Memory');
 }
 
+const domainMarkers = [
+  'evaluateTaskDag',
+  'evaluateTaskRevisionChange',
+  'evaluateTaskClaimAcquire',
+  'evaluateSubtaskAcceptance',
+];
+if (!domainPolicies.every((policy, index) => policy.includes(domainMarkers[index]))) {
+  violations.push('P2_DOMAIN_POLICY_INVALID: DAG, revision, claim, and acceptance policies are required');
+}
+
 const scripts = packageJson.scripts ?? {};
 if (scripts['test:phase2-task-dag-boundary'] !== 'node --test scripts/check-phase-2-task-dag-boundary.test.mjs'
   || scripts['check:phase2-task-dag-boundary'] !== 'node scripts/check-phase-2-task-dag-boundary.mjs'
   || !String(scripts['test:phase2-task-dag']).includes('test:phase2-task-dag-boundary')
+  || !String(scripts['test:phase2-task-dag']).includes('test:domain')
+  || !String(scripts['build:phase2-task-dag']).includes('build:domain')
   || !workflow.includes('npm run test:phase2-task-dag')
   || !workflow.includes('npm run build:phase2-task-dag')
   || !workflow.includes('check-phase-2-task-dag-boundary')) {
