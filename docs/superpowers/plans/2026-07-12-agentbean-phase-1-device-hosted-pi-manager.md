@@ -114,7 +114,7 @@ shadow 验收使用 replay、一致性和零管理副作用证据，不设置任
 - 不把内置 PI Manager 显示为 Team Agent，不允许用户直接 @ 它。
 - 不制作 launchd/systemd/Windows Service 安装器，不迁移旧 Daemon；这些属于 Phase 5。
 - 不把所有 Team 默认切到 `managed`。
-- 不升级生产 Node 24；Node 26 继续只用于 SEA。
+- 不升级到 Node 26；安装、原生依赖、测试、构建、生产与 SEA 全部统一使用 Node 24。
 
 ## 5. 核心决策
 
@@ -491,7 +491,7 @@ explicit task entry → rootTaskId Run → one Invocation/Dispatch → actual Ag
 - contracts/domain/server/device/Web test counts。
 - migration constraints 与 rollback evidence。
 - clean npm install + PI runtime load。
-- Node 24 build/runtime、Node 26 SEA rerun。
+- Node 24 clean install、build/runtime 与三平台 SEA rerun。
 - custom Agent 真实 Device smoke；AgentOS adapter contract 与可用环境 live smoke。
 - disconnect/restart/outbox/fencing/idempotency evidence。
 - shadow zero-management-side-effect diff。

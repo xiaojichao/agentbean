@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'vitest';
 import {
   collectAgentBeanNextReadinessChecks,
+  hasNode24Toolchain,
   hasPhase0CiGate,
   hasPhase0ManagementBoundary,
+  hasPhase1ManagementCiGate,
   summarizeReadiness,
 } from '../../../scripts/check-agentbean-next-readiness.mjs';
 
@@ -71,6 +73,8 @@ describe('AgentBean Next readiness checker', () => {
       'phase-0-management-boundary-regression',
       'phase-0-root-scripts',
       'phase-1-management-boundary-scaffold',
+      'phase-1-management-root-and-ci-gates',
+      'node-24-toolchain-contract',
       'ci-runs-phase-0-gates',
       'ci-detects-phase-0-changes',
       'sea-workflow-consumes-root-verdict-check',
@@ -90,6 +94,7 @@ describe('AgentBean Next readiness checker', () => {
         'check-phase-0-pi-boundary',
         'check-pi-management-sea',
         'build-pi-management-sea',
+        '^\\.nvmrc$',
         'package(-lock)?\\.json',
         'pi-sea-compatibility',
         'run: npm run test:phase1',
@@ -115,12 +120,74 @@ describe('AgentBean Next readiness checker', () => {
       { scripts: { ...valid.scripts, 'build:phase0': 'npm run build:pi-management-runtime' } },
       { scripts: { ...valid.scripts, 'check:pi-sea-compatibility': 'node scripts/build-pi-management-sea.mjs' } },
       { workflow: valid.workflow.replace('run: npm run test:phase0', '') },
+      { workflow: valid.workflow.replace('^\\.nvmrc$', '') },
       { workflow: valid.workflow.replace('package(-lock)?\\.json', '') },
       { seaWorkflow: valid.seaWorkflow.replace('- packages/contracts/**', '') },
       { seaWorkflow: valid.seaWorkflow.replace('if: always()', '') },
       { seaWorkflow: valid.seaWorkflow.replace('npm run check:pi-sea-compatibility', 'node scripts/check-pi-management-sea.mjs') },
     ]) {
       expect(hasPhase0CiGate({ ...valid, ...bypass })).toBe(false);
+    }
+  });
+
+  test('fails closed when a Phase 1 management root or CI gate is bypassed', () => {
+    const valid = {
+      scripts: {
+        'test:phase1-management': 'npm run test:phase1-management-boundary && npm run check:phase1-management-boundary && npm run test:pi-management-runtime && npm run test:phase1',
+        'build:phase1-management': 'npm run build:packages',
+      },
+      workflow: [
+        'check-phase-1-management-boundary',
+        'run: npm run test:phase1',
+        'run: npm run test:phase0',
+        'run: npm run test:phase1-management',
+        'run: npm run build:phase0',
+        'run: npm run build:phase1-management',
+        'run: npm run build:packages',
+      ].join('\n'),
+    };
+    expect(hasPhase1ManagementCiGate(valid)).toBe(true);
+
+    for (const bypass of [
+      { scripts: { ...valid.scripts, 'test:phase1-management': 'npm run test:phase1' } },
+      { scripts: { ...valid.scripts, 'build:phase1-management': 'npm run build:server-next' } },
+      { workflow: valid.workflow.replace('run: npm run test:phase1-management', '') },
+      { workflow: valid.workflow.replace('run: npm run build:phase1-management', '') },
+      { workflow: valid.workflow.replace('check-phase-1-management-boundary', '') },
+      {
+        workflow: valid.workflow.replace(
+          'run: npm run test:phase0\nrun: npm run test:phase1-management',
+          'run: npm run test:phase1-management\nrun: npm run test:phase0',
+        ),
+      },
+    ]) {
+      expect(hasPhase1ManagementCiGate({ ...valid, ...bypass })).toBe(false);
+    }
+  });
+
+  test('pins local, CI, deploy, and SEA execution to Node 24', () => {
+    const workflow = [
+      'uses: actions/setup-node@v6',
+      'node-version: 24.18.0',
+    ].join('\n');
+    const valid = {
+      packageJson: { engines: { node: '24.x' } },
+      nvmrc: 'v24.18.0\n',
+      workflows: [workflow, workflow.replaceAll('\n', '\r\n')],
+      piSeaChecker: "export const PI_SEA_NODE_VERSION = '24.18.0';",
+      piSeaBuilder: "target: 'node24'; run(process.execPath, ['--experimental-sea-config']);",
+    };
+    expect(hasNode24Toolchain(valid)).toBe(true);
+
+    for (const bypass of [
+      { packageJson: { engines: { node: '>=24' } } },
+      { nvmrc: '26.5.0\n' },
+      { workflows: [workflow, workflow.replace('24.18.0', '26.5.0')] },
+      { workflows: [`${workflow}\nuses: actions/setup-node@v6`] },
+      { piSeaChecker: "export const PI_SEA_NODE_VERSION = '26.5.0';" },
+      { piSeaBuilder: "target: 'node26'; run(process.execPath, ['--build-sea']);" },
+    ]) {
+      expect(hasNode24Toolchain({ ...valid, ...bypass })).toBe(false);
     }
   });
 

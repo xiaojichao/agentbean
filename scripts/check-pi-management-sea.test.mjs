@@ -16,7 +16,7 @@ const compatibleLinux = {
   schemaVersion: 1,
   os: 'linux',
   arch: 'x64',
-  nodeVersion: '26.5.0',
+  nodeVersion: '24.18.0',
   piVersion: '0.80.6',
   status: 'compatible',
   checks: [
@@ -36,7 +36,7 @@ test('accepts only the exact versioned per-platform verdict contract', () => {
   assert.deepEqual(validatePiSeaVerdict(compatibleLinux), { ok: true, verdict: compatibleLinux });
   for (const invalid of [
     { ...compatibleLinux, schemaVersion: 2 },
-    { ...compatibleLinux, nodeVersion: '26.4.0' },
+    { ...compatibleLinux, nodeVersion: '24.17.0' },
     { ...compatibleLinux, piVersion: '0.80.5' },
     { ...compatibleLinux, os: 'darwin' },
     { ...compatibleLinux, arch: 'armv7' },
@@ -56,7 +56,7 @@ test('pending verdict is fail-closed and contains no runtime data', () => {
     schemaVersion: 1,
     os: 'windows',
     arch: 'x64',
-    nodeVersion: '26.5.0',
+    nodeVersion: '24.18.0',
     piVersion: '0.80.6',
     status: 'blocked-for-phase5',
     checks: [{ id: 'sea-smoke', ok: false, diagnosticCode: 'SEA_VERDICT_NOT_FINALIZED' }],
@@ -126,7 +126,7 @@ test('root compatibility consumer fails a valid blocked verdict', () => {
 test('workflow runs native three-platform SEA jobs and always aggregates real verdict artifacts', () => {
   const workflow = readFileSync('.github/workflows/pi-sea-compatibility.yml', 'utf8');
   for (const required of [
-    'node-version: 26.5.0',
+    'node-version: 24.18.0',
     'runner: ubuntu-latest',
     'runner: macos-14',
     'runner: windows-latest',

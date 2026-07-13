@@ -19,6 +19,9 @@ export function collectAgentBeanNextReadinessChecks({
   const workflow = readFileSync(join(root, '.github/workflows/ci-cd.yml'), 'utf8');
   const seaWorkflow = readFileSync(join(root, '.github/workflows/pi-sea-compatibility.yml'), 'utf8');
   const dailyChangelogWorkflow = readFileSync(join(root, '.github/workflows/daily-changelog.yml'), 'utf8');
+  const nvmrc = readFileSync(join(root, '.nvmrc'), 'utf8');
+  const piSeaChecker = readFileSync(join(root, 'scripts/check-pi-management-sea.mjs'), 'utf8');
+  const piSeaBuilder = readFileSync(join(root, 'scripts/build-pi-management-sea.mjs'), 'utf8');
   const publishJobCondition =
     "if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.skip_npm_publish && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env && !inputs.promote_agentbean_daemon_latest)";
   const cutoverRunbook = readFileSync(join(root, 'agentbean-next/docs/production-cutover-runbook.md'), 'utf8');
@@ -682,6 +685,22 @@ export function collectAgentBeanNextReadinessChecks({
       'Phase 1 must expose a fail-closed management boundary checker and include it in CI change detection',
     ),
     check(
+      'phase-1-management-root-and-ci-gates',
+      hasPhase1ManagementCiGate({ scripts: packageJson.scripts, workflow }),
+      'Phase 1 management must expose and run complete root test/build gates while retaining Phase 0 and product gates',
+    ),
+    check(
+      'node-24-toolchain-contract',
+      hasNode24Toolchain({
+        packageJson,
+        nvmrc,
+        workflows: [workflow, seaWorkflow, dailyChangelogWorkflow],
+        piSeaChecker,
+        piSeaBuilder,
+      }),
+      'AgentBean installs, tests, builds, deploys, and SEA compatibility checks must use Node 24.18.0',
+    ),
+    check(
       'ci-runs-phase-0-gates',
       ciRunsPhase0Gates(workflow),
       'AgentBean Next CI must run existing product regressions before Phase 0 tests and builds',
@@ -786,6 +805,49 @@ export function hasPhase0CiGate({ scripts, workflow, seaWorkflow }) {
     seaWorkflowConsumesRootVerdictCheck(seaWorkflow);
 }
 
+export function hasPhase1ManagementCiGate({ scripts, workflow }) {
+  const expectedTest = 'npm run test:phase1-management-boundary && npm run check:phase1-management-boundary && npm run test:pi-management-runtime && npm run test:phase1';
+  const expectedBuild = 'npm run build:packages';
+  if (scripts?.['test:phase1-management'] !== expectedTest
+    || scripts?.['build:phase1-management'] !== expectedBuild) {
+    return false;
+  }
+
+  const orderedGates = [
+    'run: npm run test:phase1',
+    'run: npm run test:phase0',
+    'run: npm run test:phase1-management',
+    'run: npm run build:phase0',
+    'run: npm run build:phase1-management',
+    'run: npm run build:packages',
+  ];
+  let previous = -1;
+  for (const gate of orderedGates) {
+    const index = workflow.indexOf(gate);
+    if (index <= previous) return false;
+    previous = index;
+  }
+  return workflow.includes('check-phase-1-management-boundary');
+}
+
+export function hasNode24Toolchain({ packageJson, nvmrc, workflows, piSeaChecker, piSeaBuilder }) {
+  if (packageJson?.engines?.node !== '24.x' || nvmrc.trim() !== 'v24.18.0') return false;
+  const setupNodeVersionIsPinned = workflows.every((workflow) => {
+    const setupCount = workflow.match(/uses:\s*actions\/setup-node@/g)?.length ?? 0;
+    const versions = [...workflow.matchAll(/node-version:\s*['"]?([^'"\s]+)/g)]
+      .map((match) => match[1]);
+    return setupCount === versions.length
+      && versions.length > 0
+      && versions.every((version) => version === '24.18.0');
+  });
+  return setupNodeVersionIsPinned
+    && piSeaChecker.includes("PI_SEA_NODE_VERSION = '24.18.0'")
+    && piSeaBuilder.includes("target: 'node24'")
+    && piSeaBuilder.includes("'--experimental-sea-config'")
+    && !piSeaBuilder.includes("target: 'node26'")
+    && !piSeaBuilder.includes("'--build-sea'");
+}
+
 function hasPhase0RootScripts(scripts) {
   return scripts?.['test:phase0'] ===
       'npm run test:pi-management-runtime && npm run test:contracts -- --api.host 127.0.0.1 && npm run test:domain -- --api.host 127.0.0.1 && npm run test:phase0-boundary && npm run check:phase0-pi-boundary && cd apps/server-next && ../../node_modules/.bin/vitest run tests/phase-0-management-boundary.test.ts --config vitest.config.ts --api.host 127.0.0.1' &&
@@ -808,6 +870,7 @@ function ciDetectsPhase0Changes(workflow) {
     'check-phase-0-pi-boundary',
     'check-pi-management-sea',
     'build-pi-management-sea',
+    '^\\.nvmrc$',
     'package(-lock)?\\.json',
     'pi-sea-compatibility',
   ].every((token) => workflow.includes(token));

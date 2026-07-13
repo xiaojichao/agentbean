@@ -1089,6 +1089,7 @@ agentbean device uninstall
 
 ### Phase 1：Device-hosted PI Manager 单 Agent 调用
 
+- 实施与验收结果：`agentbean-next/docs/phase-1-device-hosted-pi-manager-verification-matrix.md`。Task 1-10 已由 PR #505、#507、#509、#511、#513、#515、#517、#519、#521、#523 进入 `main`；Task 11 的 Node 24 root gates、真实 Device smoke 与最终 CI/SEA verdict 由 Issue #526 收口。
 - 在现有 Device 进程中建立可恢复的 `DeviceServiceCore` 和 `PiManagerWorkerHost` 过渡宿主；平台安装器仍属于 Phase 5。
 - Server 创建 `ManagementRun` 和 lease。
 - PI Manager 可以查询外部 Agent 并发起一次 targeted invocation。
