@@ -1,11 +1,15 @@
 import { closeSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
 import { createRequire } from 'node:module';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { createServerNextUseCases, type ArtifactContentStore } from './application/usecases.js';
+import type { ServerNextRepositories } from './application/repositories.js';
+import { createDeviceWorkerScheduler, type DeviceWorkerScheduler } from './application/management/device-worker-scheduler.js';
+import { createManagementKernel } from './application/management/management-kernel.js';
+import { createManagementToolExecutor } from './application/management/management-tool-executor.js';
 import { createInMemoryRepositories } from './infra/memory/repositories.js';
 import {
   applyGlobalMigrations,
@@ -39,6 +43,7 @@ export interface ParseServerNextDevConfigInput {
 
 export interface StartServerNextDevServerInput {
   app?: ServerNextUseCases;
+  managementWorkerScheduler?: DeviceWorkerScheduler;
   config?: ServerNextDevConfig;
   Server?: SocketIoServerConstructor;
   Database?: BetterSqlite3Constructor;
@@ -57,6 +62,7 @@ export interface ServerNextDevServerHandle {
 
 interface AppWithCleanup {
   app: ServerNextUseCases;
+  managementWorkerScheduler?: DeviceWorkerScheduler;
   reconcileDisconnectedDevicesOnStart: boolean;
   close(): Promise<void>;
 }
@@ -142,7 +148,7 @@ export async function startServerNextDevServer(
 ): Promise<ServerNextDevServerHandle> {
   const config = input.config ?? parseServerNextDevConfig();
   const appWithCleanup = input.app
-    ? { app: input.app, reconcileDisconnectedDevicesOnStart: false, close: async () => undefined }
+    ? { app: input.app, managementWorkerScheduler: input.managementWorkerScheduler, reconcileDisconnectedDevicesOnStart: false, close: async () => undefined }
     : createDefaultApp(config, input.Database);
   const app = appWithCleanup.app;
   if (appWithCleanup.reconcileDisconnectedDevicesOnStart) {
@@ -197,7 +203,9 @@ export async function startServerNextDevServer(
     }
   });
   const ioServer = new Server(httpServer, { cors: { origin: '*' } });
-  const realtime = attachServerNextNamespaces(ioServer, app);
+  const realtime = attachServerNextNamespaces(ioServer, app, {
+    managementWorkerScheduler: input.managementWorkerScheduler ?? appWithCleanup.managementWorkerScheduler,
+  });
   const dispatchTimeoutInterval = startDispatchTimeoutScheduler(
     app,
     realtime,
@@ -1115,16 +1123,18 @@ function createDefaultApp(
 ): AppWithCleanup {
   const artifactContentStore = createFileArtifactContentStore(config.dataDir);
   if (config.storage === 'memory') {
+    const repositories = createInMemoryRepositories();
+    const clock = { now: () => Date.now() };
+    const ids = { nextId: () => randomUUID() };
     return {
       app: createServerNextUseCases({
-        repositories: createInMemoryRepositories(),
-        clock: { now: () => Date.now() },
-        ids: {
-          nextId: () => randomUUID(),
-        },
+        repositories,
+        clock,
+        ids,
         sessionSecret: config.sessionSecret,
         artifactContentStore,
       }),
+      managementWorkerScheduler: createDefaultManagementWorkerScheduler(repositories, clock, ids),
       reconcileDisconnectedDevicesOnStart: false,
       close: async () => undefined,
     };
@@ -1139,22 +1149,46 @@ function createDefaultApp(
   // PRD §6：清理 channel_agent_members 中被 0009 删除的 executor-hosted agent 留下的孤儿行。
   // 必须在两个迁移都跑完后、且 globalDbPath 已知时执行（详见函数注释）。
   cleanupOrphanedChannelMembers(join(config.dataDir, 'global.sqlite'), teamDb);
+  const repositories = createSqliteRepositories({ globalDb, teamDb });
+  const clock = { now: () => Date.now() };
+  const ids = { nextId: () => randomUUID() };
   return {
     app: createServerNextUseCases({
-      repositories: createSqliteRepositories({ globalDb, teamDb }),
-      clock: { now: () => Date.now() },
-      ids: {
-        nextId: () => randomUUID(),
-      },
+      repositories,
+      clock,
+      ids,
       sessionSecret: config.sessionSecret,
       artifactContentStore,
     }),
+    managementWorkerScheduler: createDefaultManagementWorkerScheduler(repositories, clock, ids),
     reconcileDisconnectedDevicesOnStart: true,
     async close() {
       globalDb.close();
       teamDb.close();
     },
   };
+}
+
+function createDefaultManagementWorkerScheduler(
+  repositories: ServerNextRepositories,
+  clock: { now(): number },
+  ids: { nextId(): string },
+): DeviceWorkerScheduler {
+  const kernel = createManagementKernel({
+    repositories: repositories.management,
+    unitOfWork: repositories.managementUnitOfWork,
+    clock,
+    ids,
+  });
+  return createDeviceWorkerScheduler({
+    devices: repositories.devices,
+    management: repositories.management,
+    kernel,
+    executeTool: createManagementToolExecutor({ kernel, handlers: {} }),
+    clock,
+    ids,
+    leaseTokens: { nextToken: () => randomBytes(32).toString('base64url') },
+  });
 }
 
 function findPreviewHtmlPath(): string | undefined {

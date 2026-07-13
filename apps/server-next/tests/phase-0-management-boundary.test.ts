@@ -151,7 +151,7 @@ describe('Phase 0 existing execution fact boundary', () => {
     expect(workspaceRun).not.toHaveProperty('invocationId');
   });
 
-  test('Worker contracts and management persistence remain inert until Server handlers are implemented', () => {
+  test('Worker transport stays isolated from existing Task and Dispatch APIs', () => {
     expect(AGENT_EVENTS.managementWorker).toEqual({
       register: 'management-worker:register',
       leaseOffer: 'management-worker:lease-offer',
@@ -171,7 +171,9 @@ describe('Phase 0 existing execution fact boundary', () => {
     const agentHandlerSource = socketHandlerSource.slice(
       socketHandlerSource.indexOf('export function registerAgentSocketHandlers'),
     );
-    expect(agentHandlerSource).not.toContain('AGENT_EVENTS.managementWorker');
+    expect(agentHandlerSource).toContain('AGENT_EVENTS.managementWorker.register');
+    expect(agentHandlerSource).toContain('safeParseManagementWorkerPayload');
+    expect(agentHandlerSource).not.toMatch(/app,\s*'(?:registerManagementWorker|scheduleManagementRun)'/);
     expect(agentHandlerSource).not.toMatch(/app,\s*'(?:createTask|updateTask|deleteTask|reorderTask)'/);
 
     const repositories = createInMemoryRepositories();

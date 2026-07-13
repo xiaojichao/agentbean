@@ -753,18 +753,20 @@ export function hasPhase0ManagementBoundary(input) {
   const contractsWithoutWorkerEvents = input.contractsSocket.replace(
     /management-worker:[a-z-]+/g,
     '',
-  );
+  ).replace(/from\s+['"]\.\/management-worker\.js['"]/g, '');
 
   return input.boundaryTests.includes('direct channel and DM messages create only canonical Dispatch records') &&
     input.boundaryTests.includes('message dispatch status is projected from the Dispatch repository at read time') &&
     input.boundaryTests.includes('only a human update completes it') &&
     input.boundaryTests.includes('existing Task create, update, and delete APIs') &&
     input.boundaryTests.includes('remain linked by dispatchId without invocationId') &&
-    input.boundaryTests.includes('Worker contracts and management persistence remain inert until Server handlers are implemented') &&
+    input.boundaryTests.includes('Worker transport stays isolated from existing Task and Dispatch APIs') &&
     managementWorkerEvents.every((eventName) => input.contractsSocket.includes(eventName)) &&
     !hasQuotedManagementExecutionName(contractsWithoutWorkerEvents) &&
     !/["']task:|:task:|\btask\s*:/.test(agentEventsContract) &&
-    !/AGENT_EVENTS\.managementWorker/.test(agentSocketHandlers) &&
+    (!/AGENT_EVENTS\.managementWorker/.test(agentSocketHandlers) ||
+      (/safeParseManagementWorkerPayload/.test(agentSocketHandlers) &&
+        !/app,\s*'(?:registerManagementWorker|scheduleManagementRun)'/.test(agentSocketHandlers))) &&
     !/app,\s*'(?:createTask|updateTask|deleteTask|reorderTask)'/.test(agentSocketHandlers) &&
     !/pi-management-runtime|createManagementRuntimeFactory|ManagementRuntimeFactory|ManagementSession|PiManagerWorkerHost|ManagementWorkerHost|ManagementOutbox/.test(input.serverSource) &&
     !/\b(?:invocationId|managementRunId)\b/.test(input.contractsArtifact) &&

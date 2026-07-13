@@ -161,6 +161,7 @@ const serverKernelPresent = [
   'acquireLease',
   'renewLease',
   'releaseLease',
+  'expireLease',
   'appendEvent',
   'authorizeManagementWrite',
 ].every((marker) => managementKernel.includes(marker))
@@ -199,6 +200,36 @@ if (!invocationGatewayPresent) {
 }
 
 console.log('P1_INVOCATION_GATEWAY_PRESENT: immutable Invocation, canonical Dispatch attempt, and terminal lifecycle bridge are present; semantic readiness is verified by server tests');
+
+const deviceWorkerScheduler = readSource('apps/server-next/src/application/management/device-worker-scheduler.ts');
+const socketHandlers = readSource('apps/server-next/src/transport/socket-handlers.ts');
+const socketServer = readSource('apps/server-next/src/transport/socket-server.ts');
+const devServer = readSource('apps/server-next/src/dev-server.ts');
+const workerTransportPresent = [
+  'createDeviceWorkerScheduler',
+  'registerWorker',
+  'scheduleManagementRun',
+  'acquireLease',
+  'renewLease',
+  'releaseLease',
+  'abortLease',
+  'executeTool',
+  'MANAGEMENT_WORKER_OFFER_TIMEOUT',
+].every((marker) => deviceWorkerScheduler.includes(marker))
+  && managementKernel.includes('expireLease')
+  && socketHandlers.includes('safeParseManagementWorkerPayload')
+  && socketHandlers.includes('AGENT_EVENTS.managementWorker.register')
+  && socketServer.includes('managementWorkerScheduler')
+  && socketServer.includes('scheduleManagementRun')
+  && devServer.includes('createDefaultManagementWorkerScheduler')
+  && devServer.includes('createDeviceWorkerScheduler');
+
+if (!workerTransportPresent) {
+  console.error('P1_WORKER_TRANSPORT_INVALID: Device Worker scheduler or Socket transport integration is incomplete');
+  process.exit(2);
+}
+
+console.log('P1_WORKER_TRANSPORT_PRESENT: Device eligibility, lease ACK, timeout, reconnect, and tool RPC boundaries are present; semantic readiness is verified by server tests');
 
 const futureBoundaries = [
   'apps/daemon-next/src/pi-manager-worker-host.ts',

@@ -1,4 +1,9 @@
 import type { ServerNextUseCases } from '../application/usecases.js';
+import type {
+  DeviceWorkerScheduler,
+  ScheduleManagementRunInput,
+  ScheduleManagementRunResult,
+} from '../application/management/device-worker-scheduler.js';
 import { AGENT_EVENTS, MESSAGE_BATCH_QUIET_WINDOW_MS, WEB_EVENTS } from '../../../../packages/contracts/src/index.js';
 import { normalizeAdapterKind } from '../../../../packages/domain/src/index.js';
 import {
@@ -22,10 +27,12 @@ export interface SocketServerLike {
 export interface ServerNextRealtime {
   emitDispatchStatus(dispatch: unknown): void;
   refreshAgents(teamId: string): Promise<void>;
+  scheduleManagementRun(input: ScheduleManagementRunInput): Promise<ScheduleManagementRunResult>;
 }
 
 export interface ServerNextSocketOptions {
   dispatchRequestCoalesceMs?: number;
+  managementWorkerScheduler?: DeviceWorkerScheduler;
 }
 
 interface ChannelSubscription {
@@ -70,6 +77,7 @@ export function attachServerNextNamespaces(
   const dispatchClaimDeviceIds = new Set<string>();
   const waitingDeviceInviteSocketsByCode = new Map<string, SocketLike>();
   const waitingDeviceInviteCodeBySocket = new Map<SocketLike, string>();
+  let managementConnectionSequence = 0;
 
   // 将 completeDeviceInvite 的结果（credentials）投递给正在等待该 invite code 的 daemon socket。
   // web 手动 complete 与 agent 端 wait 后自动 complete 共用此路径。
@@ -383,9 +391,11 @@ export function attachServerNextNamespaces(
     });
   });
   agentNamespace.on('connection', (socket) => {
+    const managementConnectionId = `management-socket-${++managementConnectionSequence}`;
     let connectedDeviceId: string | undefined;
     let connectedDeviceTeamId: string | undefined;
     socket.on('disconnect', async () => {
+      options.managementWorkerScheduler?.disconnect(managementConnectionId);
       const ownsConnectedDevice = Boolean(
         connectedDeviceId && agentSocketsByDeviceId.get(connectedDeviceId) === socket,
       );
@@ -425,6 +435,9 @@ export function attachServerNextNamespaces(
         if (!deviceId) {
           return;
         }
+        // 在 hello ACK 后 daemon 可能立即 register management worker；先同步记录身份，
+        // 后续 afterDeviceMutation 再完成路由表与订阅刷新，避免 register 竞态误判未 hello。
+        connectedDeviceId = deviceId;
         if (payloadDispatchClaimCapability(payload) === true) {
           dispatchClaimDeviceIds.add(deviceId);
         } else {
@@ -513,6 +526,27 @@ export function attachServerNextNamespaces(
       deviceScan(request) {
         agentSocketsByDeviceId.get(request.deviceId)?.emit?.(AGENT_EVENTS.device.scanRequested, request);
       },
+      ...(options.managementWorkerScheduler ? {
+        managementWorker: {
+          register: (payload) => options.managementWorkerScheduler!.registerWorker({
+            connectionId: managementConnectionId,
+            deviceId: connectedDeviceId,
+            capability: payload,
+            transport: {
+              async emitLeaseOffer(offer, timeoutMs) {
+                const ackSocket = socket.timeout?.(timeoutMs) ?? socket;
+                if (!ackSocket.emitWithAck) throw new Error('MANAGEMENT_WORKER_SOCKET_UNAVAILABLE');
+                return ackSocket.emitWithAck(AGENT_EVENTS.managementWorker.leaseOffer, offer);
+              },
+            },
+          }),
+          leaseAcquire: (payload) => options.managementWorkerScheduler!.acquireLease(managementConnectionId, payload),
+          leaseRenew: (payload) => options.managementWorkerScheduler!.renewLease(managementConnectionId, payload),
+          leaseRelease: (payload) => options.managementWorkerScheduler!.releaseLease(managementConnectionId, payload),
+          abort: (payload) => options.managementWorkerScheduler!.abortLease(managementConnectionId, payload),
+          toolRequest: (payload) => options.managementWorkerScheduler!.executeTool(managementConnectionId, payload),
+        },
+      } : {}),
     });
   });
   return {
@@ -521,6 +555,18 @@ export function attachServerNextNamespaces(
     },
     async refreshAgents(teamId) {
       await refreshAgentSubscribers(webSubscribers, app, teamId);
+    },
+    async scheduleManagementRun(input) {
+      if (!options.managementWorkerScheduler) {
+        return {
+          schemaVersion: 1,
+          ok: false,
+          errorCode: 'UNAVAILABLE',
+          diagnosticCode: 'MANAGEMENT_WORKER_SCHEDULER_NOT_CONFIGURED',
+          retryable: false,
+        };
+      }
+      return options.managementWorkerScheduler.scheduleManagementRun(input);
     },
   };
 }
