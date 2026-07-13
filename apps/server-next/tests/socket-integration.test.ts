@@ -755,9 +755,11 @@ describe('server-next Socket.IO namespaces', () => {
     });
 
     const ownerSnapshots: string[][] = [];
+    const ownerSnapshotNames: string[][] = [];
     const teammateSnapshots: string[][] = [];
     owner.on(WEB_EVENTS.channel.snapshot, (channels) => {
       ownerSnapshots.push(channelIds(channels));
+      ownerSnapshotNames.push(channelNames(channels));
     });
     teammate.on(WEB_EVENTS.channel.snapshot, (channels) => {
       teammateSnapshots.push(channelIds(channels));
@@ -773,6 +775,18 @@ describe('server-next Socket.IO namespaces', () => {
     await eventually(async () => {
       expect(ownerSnapshots.at(-1)).toEqual(['channel-all', 'channel-ops']);
       expect(teammateSnapshots.at(-1)).toEqual(['channel-all']);
+    });
+
+    await expect(
+      owner.emitWithAck(WEB_EVENTS.channel.update, {
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-ops',
+        name: '一起努力',
+      }),
+    ).resolves.toMatchObject({ ok: true, channel: { name: '一起努力' } });
+    await eventually(async () => {
+      expect(ownerSnapshotNames.at(-1)).toEqual(['all', '一起努力']);
     });
 
     await expect(
@@ -3165,6 +3179,18 @@ function channelIds(payload: unknown): string[] {
       throw new Error('Expected channel snapshot item to include id');
     }
     return String(channel.id);
+  });
+}
+
+function channelNames(payload: unknown): string[] {
+  if (!Array.isArray(payload)) {
+    throw new Error('Expected channel snapshot payload to be an array');
+  }
+  return payload.map((channel) => {
+    if (!channel || typeof channel !== 'object' || !('name' in channel)) {
+      throw new Error('Expected channel snapshot item to include name');
+    }
+    return String(channel.name);
   });
 }
 
