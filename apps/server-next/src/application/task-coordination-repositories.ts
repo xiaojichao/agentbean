@@ -83,6 +83,7 @@ export interface TaskCoordinationRepositories {
   coordinations: {
     create(record: TaskCoordinationRecord): Promise<TaskCoordinationRecord>;
     getByTaskId(taskId: ID): Promise<TaskCoordinationRecord | null>;
+    listByManagementRun(managementRunId: ID): Promise<TaskCoordinationRecord[]>;
     update(input: {
       record: TaskCoordinationRecord;
       expectedTaskRevision: number;
@@ -90,6 +91,11 @@ export interface TaskCoordinationRepositories {
   };
   criteria: {
     create(record: TaskAcceptanceCriterionRecord): Promise<TaskAcceptanceCriterionRecord>;
+    updatePosition(input: {
+      taskId: ID;
+      criterionId: ID;
+      position: number;
+    }): Promise<TaskAcceptanceCriterionRecord | null>;
     retire(input: {
       taskId: ID;
       criterionId: ID;

@@ -60,6 +60,11 @@ export function createInMemoryTaskCoordinationRepositories(
         return record;
       },
       async getByTaskId(taskId) { return state.coordinations.get(taskId) ?? null; },
+      async listByManagementRun(managementRunId) {
+        return [...state.coordinations.values()]
+          .filter((record) => record.managementRunId === managementRunId)
+          .sort((left, right) => left.createdAt - right.createdAt || left.taskId.localeCompare(right.taskId));
+      },
       async update(input) {
         const current = state.coordinations.get(input.record.taskId);
         if (!current || current.taskRevision !== input.expectedTaskRevision) return null;
@@ -74,6 +79,14 @@ export function createInMemoryTaskCoordinationRepositories(
         if (!state.coordinations.has(record.taskId)) throw new Error('task coordination does not exist');
         state.criteria.set(key, record);
         return record;
+      },
+      async updatePosition(input) {
+        const key = criterionKey(input.taskId, input.criterionId);
+        const current = state.criteria.get(key);
+        if (!current) return null;
+        const updated = { ...current, position: input.position };
+        state.criteria.set(key, updated);
+        return updated;
       },
       async retire(input) {
         const key = criterionKey(input.taskId, input.criterionId);

@@ -31,6 +31,11 @@ export function createSqliteTaskCoordinationRepositories(
       async getByTaskId(taskId) {
         return mapCoordination(db.prepare('SELECT * FROM task_coordinations WHERE task_id = ?').get(taskId));
       },
+      async listByManagementRun(managementRunId) {
+        return db.prepare(`SELECT * FROM task_coordinations
+          WHERE management_run_id = ? ORDER BY created_at, task_id`)
+          .all(managementRunId).map(mapCoordinationRequired);
+      },
       async update(input) {
         const record = input.record;
         const result = db.prepare(`UPDATE task_coordinations SET
@@ -55,6 +60,14 @@ export function createSqliteTaskCoordinationRepositories(
             record.allowedEvidenceKinds ? json(record.allowedEvidenceKinds) : null,
             record.introducedRevision, record.retiredRevision ?? null, record.position);
         return record;
+      },
+      async updatePosition(input) {
+        const result = db.prepare(`UPDATE task_acceptance_criteria SET position = ?
+          WHERE task_id = ? AND criterion_id = ?`)
+          .run(input.position, input.taskId, input.criterionId);
+        if (changes(result) === 0) return null;
+        return mapCriterion(db.prepare(`SELECT * FROM task_acceptance_criteria
+          WHERE task_id = ? AND criterion_id = ?`).get(input.taskId, input.criterionId));
       },
       async retire(input) {
         const result = db.prepare(`UPDATE task_acceptance_criteria SET retired_revision = ?
@@ -295,6 +308,9 @@ function mapCoordination(value: unknown): TaskCoordinationRecord | null {
     maxAttempts: number(value, 'max_attempts'),
     createdAt: number(value, 'created_at'), updatedAt: number(value, 'updated_at'),
   } : null;
+}
+function mapCoordinationRequired(value: unknown): TaskCoordinationRecord {
+  return required(mapCoordination(value));
 }
 
 function mapCriterion(value: unknown): TaskAcceptanceCriterionRecord | null {
