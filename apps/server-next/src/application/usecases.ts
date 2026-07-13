@@ -2174,10 +2174,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             humanMemberIds: channelInput.humanMemberIds,
           })
         : undefined;
+      const name = channelInput.name?.trim();
       const updated = await repositories.channels.update({
         channelId: channel.id,
         changes: {
-          ...(channelInput.name ? { name: channelInput.name.trim() } : {}),
+          ...(name ? { name } : {}),
           ...(channelInput.title !== undefined ? { title: channelInput.title } : {}),
           ...(channelInput.visibility ? { visibility: channelInput.visibility } : {}),
           ...(humanMemberIds ? { humanMemberIds } : {}),

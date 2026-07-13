@@ -384,6 +384,18 @@ describe('server-next second-slice channel controls', () => {
       ok: true,
       channel: { id: 'channel-ops', name: '闲聊小队' },
     });
+
+    await expect(
+      app.updateChannel({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-ops',
+        name: '   ',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      channel: { id: 'channel-ops', name: '闲聊小队' },
+    });
   });
 
   test('keeps a non-empty fallback name when creating a channel with a blank name', async () => {
