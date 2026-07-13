@@ -56,6 +56,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0012_device_name_columns.sql');
   applyMigration(db, 'global/0013_device_name_backfill.sql');
   applyMigration(db, 'global/0014_device_revocations_team_columns.sql');
+  applyMigration(db, 'global/0015_agent_name_source.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
@@ -987,12 +988,12 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             `INSERT INTO agents (
               id, primary_team_id, name, normalized_name, role, description, adapter_kind, category, source,
               status, owner_id, device_id, command, args_json, cwd, gateway_instance_key, env_json, last_seen_at, last_error, created_at, updated_at,
-              deleted_at, skills_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              deleted_at, skills_json, name_source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               primary_team_id = excluded.primary_team_id,
-              name = excluded.name,
-              normalized_name = excluded.normalized_name,
+              name = CASE WHEN name_source = 'custom' THEN agents.name ELSE excluded.name END,
+              normalized_name = CASE WHEN name_source = 'custom' THEN agents.normalized_name ELSE excluded.normalized_name END,
               adapter_kind = excluded.adapter_kind,
               category = excluded.category,
               source = excluded.source,
@@ -1030,6 +1031,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             agent.lastSeenAt ?? 0,
             agent.deletedAt ?? null,
             agent.skills ? JSON.stringify(agent.skills) : null,
+            agent.nameSource ?? 'scanned',
           );
         for (const teamId of agent.visibleTeamIds) {
           if (teamId === agent.primaryTeamId) {
@@ -1041,6 +1043,13 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
                VALUES (?, ?, ?, ?)`,
             )
             .run(agent.id, teamId, agent.id, agent.lastSeenAt ?? 0);
+        }
+        // 回读 DB name：ON CONFLICT 的 CASE WHEN 在 name_source='custom' 时会保护
+        // existing.name（不取 excluded.name）。直接返回 input agent 会让调用方（如
+        // registerDiscoveredAgents → 前端）看到 discovered.name 而非受保护的用户自定义名。
+        const stored = mapAgent(globalDb, globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(agent.id));
+        if (stored) {
+          agent.name = stored.name;
         }
         return agent;
       },
@@ -1098,6 +1107,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             `UPDATE agents SET
                name = ?,
                normalized_name = ?,
+               name_source = ?,
                description = ?,
                adapter_kind = ?,
                device_id = ?,
@@ -1113,6 +1123,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .run(
             nextName,
             normalizeName(nextName),
+            hasOwn(changes, 'name') ? 'custom' : (existing.nameSource ?? 'scanned'),
             hasOwn(changes, 'description') ? changes.description ?? null : existing.description ?? null,
             hasOwn(changes, 'adapterKind') ? changes.adapterKind ?? existing.adapterKind : existing.adapterKind,
             hasOwn(changes, 'deviceId') ? changes.deviceId ?? null : existing.deviceId ?? null,
@@ -2224,6 +2235,7 @@ function mapAgent(db: SqliteDatabase, row: unknown): AgentRecord | null {
     description: sqliteNullableText(row, 'description'),
     lastSeenAt: sqliteNumber(row, 'last_seen_at'),
     lastError: sqliteNullableText(row, 'last_error'),
+    nameSource: sqliteText(row, 'name_source') as AgentRecord['nameSource'],
     deletedAt,
   };
 }
