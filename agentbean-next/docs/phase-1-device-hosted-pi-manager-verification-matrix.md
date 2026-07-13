@@ -2,19 +2,19 @@
 
 - 基线计划：`docs/superpowers/plans/2026-07-12-agentbean-phase-1-device-hosted-pi-manager.md`
 - 前置矩阵：`agentbean-next/docs/phase-0-pi-contract-compatibility-verification-matrix.md`
-- 当前实施切片：Task 2（PI runtime package 与 Phase 1 tool/provider boundary）
+- 当前实施切片：Task 3（Worker/lease/tool RPC contracts 与 fencing Domain rules）
 - Phase 1 总体状态：In progress
 
 本矩阵只记录可复现证据，不以观察时长替代验收。初始状态保持 Red/Not implemented；每项只有在对应实现进入 `main` 且 CI/真实链路证据可访问后才能改为 Green。
 
 | ID | 验收项 | 当前状态 | 当前证据 / 后续动作 |
 |---|---|---|---|
-| P1-01 | PI wrapper 只暴露 Phase 1 effective tools，shadow write tools 仅 dry-run | Candidate（PR） | 本地 runtime 回归验证 effective tools 精确为 11 个；Phase 2/3 工具不可调用；managed/shadow descriptor 一致；shadow write 仅产生 SHA-256 intent，不触发 executor。合入 `main` 且 CI 通过后转 Green。 |
-| P1-02 | 真实 provider telemetry 与 typed context 不泄漏 PI 类型/secret | Candidate（PR） | 本地 runtime 回归验证冻结的 `ManagementSessionContextV1`、AgentBean-owned usage/finishReason/responseModel、异常 provider 脱敏与发布声明边界；29 项测试通过。合入 `main` 且 CI 通过后转 Green。 |
-| P1-03 | published daemon 在 clean install 中加载内置 PI runtime | Candidate（PR） | `@agentbean/pi-management-runtime@0.1.0` 与 daemon `0.3.7` 使用精确依赖；本地 npm pack/空目录安装后成功 import runtime，并确认 11 个 Phase 1 工具。合入 `main`、npm 发布与 main CI 通过后转 Green。 |
+| P1-01 | PI wrapper 只暴露 Phase 1 effective tools，shadow write tools 仅 dry-run | Green | PR #507 / merge `d216898`：managed/shadow descriptor 精确为 11 个 Phase 1 tools，Phase 2/3 不可见，shadow write 仅记录 SHA-256 intent；main run `29214232850` 全绿。 |
+| P1-02 | 真实 provider telemetry 与 typed context 不泄漏 PI 类型/secret | Green | PR #507 / merge `d216898`：冻结 `ManagementSessionContextV1`、AgentBean-owned telemetry、非法 provider content/secret fail-closed；main CI 与三平台 SEA aggregate 全绿。 |
+| P1-03 | published daemon 在 clean install 中加载内置 PI runtime | Green | main run `29214232850` 已发布 `@agentbean/pi-management-runtime@0.1.0`、`@agentbean/daemon-next@0.3.7`、`@agentbean/daemon@0.3.7`；canonical `latest=0.3.7`、`legacy=0.1.35`，production smoke 全绿。 |
 | P1-04 | management schema/constraints/migrations 可升级且可回滚 | Not implemented | Task 4：team migration、constraint inspection、upgrade/rollback tests。 |
 | P1-05 | reservation + Run + first Event 原子且请求幂等 | Not implemented | Task 4-5：UoW failure injection、same-key existing / conflict。 |
-| P1-06 | lease acquire/renew/expire/reacquire 与 fencing 正确 | Not implemented | Task 3、5、7：fake clock、Socket 与 stale Worker tests。 |
+| P1-06 | lease acquire/renew/expire/reacquire 与 fencing 正确 | Candidate（PR） | Task 3 本地 fake-clock Domain policy 已覆盖 initial/duplicate acquire、renew、半开 expiry、同 Device/profile 到期或 release 后 reacquire、cross-host 拒绝与 stale/future fencing；仍需 Task 5/7 的 Server clock、Socket 与 stale Worker 证据后转 Green。 |
 | P1-07 | event exact-key validation、sequence、replay 与脱敏正确 | Not implemented | Task 5：runtime validator、append/replay、forbidden payload fixtures。 |
 | P1-08 | checkpoint facts 同 snapshot，失效后忽略 hints 并重建 | Not implemented | Task 5、8：snapshot/exact-disjoint sets 与 recovery tests。 |
 | P1-09 | Invocation immutable，Dispatch attempt 唯一且 status 只派生 | Not implemented | Task 6：gateway/repository/domain tests。 |

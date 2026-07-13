@@ -13,4 +13,5 @@ export * from './task-coordination.js';
 export * from './invocation.js';
 export * from './management-event.js';
 export * from './management-memory.js';
+export * from './management-worker.js';
 export * from './socket.js';

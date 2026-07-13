@@ -140,6 +140,19 @@ export const AGENT_EVENTS = {
     result: 'dispatch:result',
     error: 'dispatch:error',
   },
+  managementWorker: {
+    register: 'management-worker:register',
+    leaseOffer: 'management-worker:lease-offer',
+    leaseAcquire: 'management-worker:lease-acquire',
+    leaseRenew: 'management-worker:lease-renew',
+    leaseRelease: 'management-worker:lease-release',
+    abort: 'management-worker:abort',
+    toolRequest: 'management-worker:tool-request',
+    checkpointFetch: 'management-worker:checkpoint-fetch',
+    outboxReplay: 'management-worker:outbox-replay',
+    shadowEvaluate: 'management-worker:shadow-evaluate',
+    shadowResult: 'management-worker:shadow-result',
+  },
 } as const;
 
 export interface ScanRequestCustomAgent {

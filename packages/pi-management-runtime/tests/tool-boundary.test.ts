@@ -11,6 +11,7 @@ import {
   assertExactManagementToolAllowlist,
   getManagementToolMetadata,
 } from '../src/management-tool-catalog.js';
+import { PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES } from '../../contracts/src/index.js';
 
 function modelResponse(
   content: import('../src/index.js').ManagementModelResponse['content'],
@@ -69,6 +70,10 @@ function shadowSessionInput(id = 'shadow') {
 }
 
 describe('management tool boundary', () => {
+  it('keeps the runtime tool surface identical to the Worker wire contract', () => {
+    expect(PHASE_1_MANAGEMENT_TOOL_NAMES).toEqual(PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES);
+  });
+
   it('exposes only the eleven Phase 1 management tools to managed sessions', async () => {
     const requests: ManagementModelRequest[] = [];
     const factory = createManagementRuntimeFactory({

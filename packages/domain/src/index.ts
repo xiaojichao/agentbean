@@ -5,3 +5,4 @@ export * from './search.js';
 export * from './management-policy.js';
 export * from './invocation-policy.js';
 export * from './checkpoint-policy.js';
+export * from './manager-lease-policy.js';

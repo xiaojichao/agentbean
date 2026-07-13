@@ -139,11 +139,11 @@ describe('AgentBean Next readiness checker', () => {
       'only a human update completes it',
       'existing Task create, update, and delete APIs',
       'remain linked by dispatchId without invocationId',
-      'have no management execution surface',
+      'Worker contracts remain inert until Server handlers, repositories, and migrations are implemented',
     ].join('\n');
     const valid = {
       boundaryTests,
-      contractsSocket: "export const AGENT_EVENTS = { dispatch: { result: 'dispatch:result' } }; export interface ScanRequestCustomAgent {}",
+      contractsSocket: "export const AGENT_EVENTS = { dispatch: { result: 'dispatch:result' }, managementWorker: { register: 'management-worker:register', leaseOffer: 'management-worker:lease-offer', leaseAcquire: 'management-worker:lease-acquire', leaseRenew: 'management-worker:lease-renew', leaseRelease: 'management-worker:lease-release', abort: 'management-worker:abort', toolRequest: 'management-worker:tool-request', checkpointFetch: 'management-worker:checkpoint-fetch', outboxReplay: 'management-worker:outbox-replay', shadowEvaluate: 'management-worker:shadow-evaluate', shadowResult: 'management-worker:shadow-result' } }; export interface ScanRequestCustomAgent {}",
       contractsArtifact: 'interface ArtifactDto { dispatchId?: string }',
       serverSource: 'export function startServer() {}',
       serverRepositories: 'export interface DispatchRepository {}',
@@ -158,6 +158,7 @@ describe('AgentBean Next readiness checker', () => {
       { contractsSocket: "export const AGENT_EVENTS = { invoke: 'agent-invocation:start' }; export interface ScanRequestCustomAgent {}" },
       { contractsSocket: "export const AGENT_EVENTS = { restore: 'checkpoint:restore' }; export interface ScanRequestCustomAgent {}" },
       { contractsSocket: "export const AGENT_EVENTS = {};" },
+      { socketHandlers: "export function registerAgentSocketHandlers() { bind(socket, AGENT_EVENTS.managementWorker.register, app, 'registerManagementWorker'); }" },
       { socketHandlers: "export function registerAgentSocketHandlers() { bind(socket, AGENT_EVENTS.task.update, app, 'updateTask'); }" },
       { socketHandlers: 'export function registerWebSocketHandlers() {}' },
       { serverSource: "import { createManagementRuntimeFactory } from '@agentbean/pi-management-runtime';" },

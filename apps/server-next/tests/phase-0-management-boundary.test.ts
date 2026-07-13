@@ -151,15 +151,27 @@ describe('Phase 0 existing execution fact boundary', () => {
     expect(workspaceRun).not.toHaveProperty('invocationId');
   });
 
-  test('Socket events, repositories, and SQLite migrations have no management execution surface', () => {
-    const eventNames = collectLeafStrings({ WEB_EVENTS, AGENT_EVENTS });
-    expect(eventNames.filter((name) => /management|invocation|checkpoint/i.test(name))).toEqual([]);
+  test('Worker contracts remain inert until Server handlers, repositories, and migrations are implemented', () => {
+    expect(AGENT_EVENTS.managementWorker).toEqual({
+      register: 'management-worker:register',
+      leaseOffer: 'management-worker:lease-offer',
+      leaseAcquire: 'management-worker:lease-acquire',
+      leaseRenew: 'management-worker:lease-renew',
+      leaseRelease: 'management-worker:lease-release',
+      abort: 'management-worker:abort',
+      toolRequest: 'management-worker:tool-request',
+      checkpointFetch: 'management-worker:checkpoint-fetch',
+      outboxReplay: 'management-worker:outbox-replay',
+      shadowEvaluate: 'management-worker:shadow-evaluate',
+      shadowResult: 'management-worker:shadow-result',
+    });
     expect(collectLeafStrings(AGENT_EVENTS).filter((name) => /(?:^|:)task(?::|$)/.test(name))).toEqual([]);
 
     const socketHandlerSource = readFileSync(join(serverRoot, 'transport/socket-handlers.ts'), 'utf8');
     const agentHandlerSource = socketHandlerSource.slice(
       socketHandlerSource.indexOf('export function registerAgentSocketHandlers'),
     );
+    expect(agentHandlerSource).not.toContain('AGENT_EVENTS.managementWorker');
     expect(agentHandlerSource).not.toMatch(/app,\s*'(?:createTask|updateTask|deleteTask|reorderTask)'/);
 
     const repositories = createInMemoryRepositories();
