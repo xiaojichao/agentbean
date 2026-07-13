@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MANAGEMENT_TOOL_NAMES,
   PHASE_1_MANAGEMENT_TOOL_NAMES,
+  PHASE_2_MANAGEMENT_TOOL_NAMES,
   createManagementRuntimeFactory,
   type ManagementModelRequest,
   type ManagementToolName,
@@ -69,6 +70,26 @@ function shadowSessionInput(id = 'shadow') {
   };
 }
 
+function phase2SessionInput(id = 'phase-2') {
+  return {
+    systemPrompt: { id, version: 1, content: 'Coordinate tasks.' },
+    mode: 'managed' as const,
+    context: {
+      schemaVersion: 2 as const,
+      managementPhase: 2 as const,
+      scope: {
+        kind: 'managed' as const,
+        managementRunId: `run-${id}`,
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        rootMessageId: `message-${id}`,
+        rootTaskId: 'task-root',
+      },
+      visibleThread: { revision: 1, messages: [] },
+    },
+  };
+}
+
 describe('management tool boundary', () => {
   it('keeps the runtime tool surface identical to the Worker wire contract', () => {
     expect(PHASE_1_MANAGEMENT_TOOL_NAMES).toEqual(PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES);
@@ -111,6 +132,84 @@ describe('management tool boundary', () => {
     expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain('tasks.create_subtasks');
     expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain('memory.search');
     await session.dispose();
+  });
+
+  it('exposes Phase 1 plus eight Task tools only for an explicit Phase 2 context', async () => {
+    const requests: ManagementModelRequest[] = [];
+    const session = await createManagementRuntimeFactory({
+      model: {
+        id: 'phase-2-tool-surface',
+        async respond(request) {
+          requests.push(request);
+          return modelResponse([{ type: 'text', text: 'done' }]);
+        },
+      },
+      toolExecutor: async () => ({ text: 'unused' }),
+    }).createSession({
+      systemPrompt: { id: 'phase-2', version: 1, content: 'Coordinate tasks.' },
+      mode: 'managed',
+      context: {
+        schemaVersion: 2,
+        managementPhase: 2,
+        scope: {
+          kind: 'managed',
+          managementRunId: 'run-phase-2',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          rootMessageId: 'message-1',
+          rootTaskId: 'task-root',
+        },
+        visibleThread: { revision: 1, messages: [] },
+      },
+    });
+
+    await session.prompt({ text: 'decompose' });
+    await session.waitForIdle();
+
+    expect(PHASE_2_MANAGEMENT_TOOL_NAMES).toHaveLength(19);
+    expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([...PHASE_2_MANAGEMENT_TOOL_NAMES]);
+    expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain('memory.search');
+    expect(requests[0]?.tools.find((tool) => tool.name === 'tasks.assign')?.inputSchema).toMatchObject({
+      type: 'object',
+      additionalProperties: false,
+      required: ['taskId', 'agentId', 'expectedTaskRevision'],
+    });
+    expect(requests[0]?.sessionContext).toMatchObject({ schemaVersion: 2, managementPhase: 2 });
+    await session.dispose();
+  });
+
+  it('rejects Phase 2 context in shadow mode', async () => {
+    await expect(createManagementRuntimeFactory({
+      model: { id: 'phase-2-shadow', async respond() { return modelResponse([]); } },
+      toolExecutor: async () => ({ text: 'unused' }),
+    }).createSession({
+      systemPrompt: { id: 'phase-2-shadow', version: 1, content: 'No.' },
+      mode: 'shadow',
+      context: {
+        schemaVersion: 2,
+        managementPhase: 2,
+        scope: {
+          kind: 'managed',
+          managementRunId: 'run-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          rootMessageId: 'message-1',
+          rootTaskId: 'task-1',
+        },
+        visibleThread: { revision: 1, messages: [] },
+      },
+    })).rejects.toThrow(/P1_SESSION_CONTEXT_INVALID/);
+  });
+
+  it('rejects an invalid frozen target when Phase 2 provides one', async () => {
+    const input = phase2SessionInput('invalid-target');
+    await expect(createManagementRuntimeFactory({
+      model: { id: 'invalid-target', async respond() { return modelResponse([]); } },
+      toolExecutor: async () => ({ text: 'unused' }),
+    }).createSession({
+      ...input,
+      context: { ...input.context, frozenTarget: { agentId: '', kind: 'unknown' as 'custom' } },
+    })).rejects.toThrow(/P1_SESSION_CONTEXT_INVALID/);
   });
 
   it('keeps managed and shadow descriptors identical without model-supplied authority fields', async () => {
@@ -260,6 +359,67 @@ describe('management tool boundary', () => {
     await session.prompt({ text: 'assign' });
     await session.waitForIdle();
     expect(calls).toHaveLength(0);
+    await session.dispose();
+  });
+
+  it('validates Phase 2 Task input before invoking the executor', async () => {
+    const calls: unknown[] = [];
+    const session = await createManagementRuntimeFactory({
+      model: {
+        id: 'invalid-phase-2-tool-input',
+        async respond(_request, state) {
+          if (state.callCount === 1) {
+            return modelResponse([{
+              type: 'toolCall',
+              id: 'call-phase-2-invalid',
+              name: 'tasks.assign',
+              arguments: { taskId: 'task-1', agentId: 'agent-1', prompt: 'forbidden' },
+            }], 'tool_use');
+          }
+          return modelResponse([{ type: 'text', text: 'done' }]);
+        },
+      },
+      toolExecutor: async (call) => {
+        calls.push(call);
+        return { text: 'assigned' };
+      },
+    }).createSession(phase2SessionInput('invalid-input'));
+
+    await session.prompt({ text: 'assign' });
+    await session.waitForIdle();
+    expect(calls).toHaveLength(0);
+    await session.dispose();
+  });
+
+  it('passes a valid cloned Phase 2 Task input to the executor', async () => {
+    const calls: Array<{ name: string; input: unknown }> = [];
+    const session = await createManagementRuntimeFactory({
+      model: {
+        id: 'valid-phase-2-tool-input',
+        async respond(_request, state) {
+          if (state.callCount === 1) {
+            return modelResponse([{
+              type: 'toolCall',
+              id: 'call-phase-2-valid',
+              name: 'tasks.assign',
+              arguments: { taskId: 'task-1', agentId: 'agent-1', expectedTaskRevision: 2 },
+            }], 'tool_use');
+          }
+          return modelResponse([{ type: 'text', text: 'done' }]);
+        },
+      },
+      toolExecutor: async (call) => {
+        calls.push({ name: call.name, input: call.input });
+        return { text: 'assigned' };
+      },
+    }).createSession(phase2SessionInput('valid-input'));
+
+    await session.prompt({ text: 'assign' });
+    await session.waitForIdle();
+    expect(calls).toEqual([{
+      name: 'tasks.assign',
+      input: { taskId: 'task-1', agentId: 'agent-1', expectedTaskRevision: 2 },
+    }]);
     await session.dispose();
   });
 

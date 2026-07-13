@@ -25,6 +25,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@agentbean/contracts": "0.2.3",
     "@earendil-works/pi-ai": "0.80.6",
     "@earendil-works/pi-coding-agent": "0.80.6"
   }

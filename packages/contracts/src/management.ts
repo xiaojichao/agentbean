@@ -70,6 +70,39 @@ export interface ManagementRunDto {
   readonly completedAt?: UnixMs;
 }
 
+export interface TeamManagementPolicyV2Dto {
+  readonly schemaVersion: 2;
+  readonly teamId: ID;
+  readonly mode: ManagementMode;
+  readonly maxManagementPhase: 1 | 2;
+  readonly placementPolicy: ManagerPlacementPolicyDto;
+  readonly updatedBy: ID;
+  readonly updatedAt: UnixMs;
+}
+
+interface ManagementRunV2BaseDto {
+  readonly schemaVersion: 2;
+  readonly id: ID;
+  readonly teamId: ID;
+  readonly channelId: ID;
+  readonly rootMessageId: ID;
+  readonly frozenTarget?: ManagementRunDto['frozenTarget'];
+  readonly mode: 'managed';
+  readonly status: ManagementRunStatus;
+  readonly placementPolicy: ManagerPlacementPolicyDto;
+  readonly activeWorkerId?: ID;
+  readonly checkpointRevision: number;
+  readonly budget: ManagementBudgetDto;
+  readonly createdAt: UnixMs;
+  readonly updatedAt: UnixMs;
+  readonly completedAt?: UnixMs;
+}
+
+export type ManagementRunV2Dto = ManagementRunV2BaseDto & (
+  | { readonly managementPhase: 1; readonly rootTaskId?: ID }
+  | { readonly managementPhase: 2; readonly rootTaskId: ID }
+);
+
 export interface ManagementCheckpointAuthoritativeV1 {
   readonly lastEventSequence: number;
   readonly taskGraphRevision: number;

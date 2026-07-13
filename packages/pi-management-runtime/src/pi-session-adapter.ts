@@ -29,6 +29,7 @@ import {
 import {
   MANAGEMENT_TOOL_NAMES,
   PHASE_1_MANAGEMENT_TOOL_NAMES,
+  PHASE_2_MANAGEMENT_TOOL_NAMES,
   type CreateManagementRuntimeFactoryInput,
   type CreateManagementSessionInput,
   type ManagementCompactionRequest,
@@ -40,7 +41,7 @@ import {
   type ManagementRuntimeEvent,
   type ManagementRuntimeFactory,
   type ManagementSession,
-  type ManagementSessionContextV1,
+  type ManagementSessionContext,
   type ManagementToolName,
 } from './types.js';
 
@@ -64,16 +65,22 @@ function isNonEmptyString(value: unknown): value is string {
 function assertSessionContext(input: CreateManagementSessionInput): void {
   const { context, mode } = input;
   const scope = context?.scope;
-  const validCommon = context?.schemaVersion === 1
+  const validFrozenTarget = context?.frozenTarget === undefined
+    ? context?.schemaVersion === 2
+    : isNonEmptyString(context.frozenTarget.agentId)
+      && (context.frozenTarget.kind === 'custom' || context.frozenTarget.kind === 'agentos-hosted');
+  const validCommon = (context?.schemaVersion === 1 || (context?.schemaVersion === 2 && context.managementPhase === 2))
     && isNonEmptyString(scope?.teamId)
     && isNonEmptyString(scope?.channelId)
     && isNonEmptyString(scope?.rootMessageId)
-    && isNonEmptyString(context?.frozenTarget?.agentId)
-    && (context?.frozenTarget?.kind === 'custom' || context?.frozenTarget?.kind === 'agentos-hosted')
+    && (context.schemaVersion === 1 || isNonEmptyString(scope?.rootTaskId))
+    && validFrozenTarget
     && Number.isInteger(context?.visibleThread?.revision)
     && context.visibleThread.revision >= 0
     && Array.isArray(context?.visibleThread?.messages);
-  const validScope = mode === 'managed'
+  const validScope = context?.schemaVersion === 2
+    ? mode === 'managed' && scope?.kind === 'managed' && isNonEmptyString(scope.managementRunId)
+    : mode === 'managed'
     ? scope?.kind === 'managed' && isNonEmptyString(scope.managementRunId)
     : mode === 'shadow'
       && scope?.kind === 'shadow'
@@ -144,7 +151,7 @@ function createStreamSimple(
   apiId: string,
   systemPrompt: string,
   expectedToolNames: readonly ManagementToolName[],
-  sessionContext: ManagementSessionContextV1,
+  sessionContext: ManagementSessionContext,
 ) {
   let callCount = 0;
   return (_model: Model<string>, context: Context, options?: SimpleStreamOptions) => {
@@ -378,7 +385,9 @@ class PiManagementRuntimeFactory implements ManagementRuntimeFactory {
     assertSessionContext(input);
     runtimeSequence += 1;
     const sessionContext = cloneAndFreeze(input.context);
-    const effectiveToolNames = [...PHASE_1_MANAGEMENT_TOOL_NAMES];
+    const effectiveToolNames = [...(input.context.schemaVersion === 2
+      ? PHASE_2_MANAGEMENT_TOOL_NAMES
+      : PHASE_1_MANAGEMENT_TOOL_NAMES)];
     const providerId = `agentbean-management-runtime-${runtimeSequence}`;
     const apiId = providerId;
     const authStorage = AuthStorage.inMemory();

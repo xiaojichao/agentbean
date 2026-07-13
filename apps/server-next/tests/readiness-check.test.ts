@@ -5,6 +5,7 @@ import {
   hasPhase0CiGate,
   hasPhase0ManagementBoundary,
   hasPhase1ManagementCiGate,
+  hasPhase2TaskDagCiGate,
   summarizeReadiness,
 } from '../../../scripts/check-agentbean-next-readiness.mjs';
 
@@ -74,6 +75,7 @@ describe('AgentBean Next readiness checker', () => {
       'phase-0-root-scripts',
       'phase-1-management-boundary-scaffold',
       'phase-1-management-root-and-ci-gates',
+      'phase-2-task-dag-boundary-and-ci-gates',
       'node-24-toolchain-contract',
       'ci-runs-phase-0-gates',
       'ci-detects-phase-0-changes',
@@ -163,6 +165,28 @@ describe('AgentBean Next readiness checker', () => {
     ]) {
       expect(hasPhase1ManagementCiGate({ ...valid, ...bypass })).toBe(false);
     }
+  });
+
+  test('fails closed when a Phase 2 boundary or ordered CI gate is bypassed', () => {
+    const scripts = {
+      'test:phase2-task-dag-boundary': 'node --test scripts/check-phase-2-task-dag-boundary.test.mjs',
+      'check:phase2-task-dag-boundary': 'node scripts/check-phase-2-task-dag-boundary.mjs',
+      'test:phase2-task-dag': 'npm run test:phase2-task-dag-boundary && npm run check:phase2-task-dag-boundary && npm run test:contracts -- --api.host 127.0.0.1 && npm run test:pi-management-runtime',
+      'build:phase2-task-dag': 'npm run build:contracts && npm run build:pi-management-runtime && npm run build:daemon-next && npm run build:server-next',
+    };
+    const workflow = [
+      'check-phase-2-task-dag-boundary',
+      'run: npm run test:phase1-management',
+      'run: npm run test:phase2-task-dag',
+      'run: npm run build:phase1-management',
+      'run: npm run build:phase2-task-dag',
+    ].join('\n');
+    expect(hasPhase2TaskDagCiGate({ scripts, workflow })).toBe(true);
+    expect(hasPhase2TaskDagCiGate({ scripts, workflow: workflow.replace('run: npm run test:phase2-task-dag', '') })).toBe(false);
+    expect(hasPhase2TaskDagCiGate({
+      scripts: { ...scripts, 'test:phase2-task-dag': 'npm run test:pi-management-runtime' },
+      workflow,
+    })).toBe(false);
   });
 
   test('pins local, CI, deploy, and SEA execution to Node 24', () => {

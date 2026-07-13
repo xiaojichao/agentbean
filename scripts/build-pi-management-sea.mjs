@@ -149,6 +149,9 @@ export async function bundleSeaEntry(outfile, piVersion = loadPiRuntimeVersion()
   const { build } = await import('esbuild');
   const result = await build({
     absWorkingDir: rootDir,
+    alias: {
+      '@agentbean/contracts': join(rootDir, 'packages/contracts/src/index.ts'),
+    },
     entryPoints: ['packages/pi-management-runtime/src/sea-smoke-entry.ts'],
     outfile,
     bundle: true,

@@ -690,6 +690,11 @@ export function collectAgentBeanNextReadinessChecks({
       'Phase 1 management must expose and run complete root test/build gates while retaining Phase 0 and product gates',
     ),
     check(
+      'phase-2-task-dag-boundary-and-ci-gates',
+      hasPhase2TaskDagCiGate({ scripts: packageJson.scripts, workflow }),
+      'Phase 2 must expose fail-closed boundary, test, build, and ordered CI gates while retaining Phase 1',
+    ),
+    check(
       'node-24-toolchain-contract',
       hasNode24Toolchain({
         packageJson,
@@ -828,6 +833,30 @@ export function hasPhase1ManagementCiGate({ scripts, workflow }) {
     previous = index;
   }
   return workflow.includes('check-phase-1-management-boundary');
+}
+
+export function hasPhase2TaskDagCiGate({ scripts, workflow }) {
+  const expectedTest = 'npm run test:phase2-task-dag-boundary && npm run check:phase2-task-dag-boundary && npm run test:contracts -- --api.host 127.0.0.1 && npm run test:pi-management-runtime';
+  const expectedBuild = 'npm run build:contracts && npm run build:pi-management-runtime && npm run build:daemon-next && npm run build:server-next';
+  if (scripts?.['test:phase2-task-dag-boundary'] !== 'node --test scripts/check-phase-2-task-dag-boundary.test.mjs'
+    || scripts?.['check:phase2-task-dag-boundary'] !== 'node scripts/check-phase-2-task-dag-boundary.mjs'
+    || scripts?.['test:phase2-task-dag'] !== expectedTest
+    || scripts?.['build:phase2-task-dag'] !== expectedBuild) {
+    return false;
+  }
+  const ordered = [
+    'run: npm run test:phase1-management',
+    'run: npm run test:phase2-task-dag',
+    'run: npm run build:phase1-management',
+    'run: npm run build:phase2-task-dag',
+  ];
+  let previous = -1;
+  for (const gate of ordered) {
+    const index = workflow.indexOf(gate);
+    if (index <= previous) return false;
+    previous = index;
+  }
+  return workflow.includes('check-phase-2-task-dag-boundary');
 }
 
 export function hasNode24Toolchain({ packageJson, nvmrc, workflows, piSeaChecker, piSeaBuilder }) {
