@@ -117,11 +117,25 @@ describe('AgentOS managed agent: scan must not override user rename', () => {
 
     const first = await app.registerDiscoveredAgents({
       teamId: 'team-1', deviceId: 'device-1',
-      agents: [{ name: 'hermes-01', adapterKind: 'hermes', category: 'agentos-hosted' }],
+      agents: [{ name: 'hermes-01', adapterKind: 'hermes', category: 'agentos-hosted', gatewayInstanceKey: 'gateway-1' }],
     });
     if (!first.ok) throw new Error(`first scan failed: ${first.error}`);
     const agentId = first.agents[0]!.id;
     expect(first.agents[0]).not.toHaveProperty('nameSource');
+    expect((await repositories.agents.getById(agentId))?.nameSource).toBe('scanned');
+
+    const unchanged = await app.updateAgentConfig({
+      userId: 'user-1', teamId: 'team-1', agentId, name: 'hermes-01', description: '仅改描述',
+    });
+    if (!unchanged.ok) throw new Error(`unchanged-name update failed: ${unchanged.error}`);
+    expect((await repositories.agents.getById(agentId))?.nameSource).toBe('scanned');
+
+    const reportedRename = await app.registerDiscoveredAgents({
+      teamId: 'team-1', deviceId: 'device-1',
+      agents: [{ name: 'hermes-02', adapterKind: 'hermes', category: 'agentos-hosted', gatewayInstanceKey: 'gateway-1' }],
+    });
+    if (!reportedRename.ok) throw new Error(`reported rename failed: ${reportedRename.error}`);
+    expect(reportedRename.agents[0]).toMatchObject({ id: agentId, name: 'hermes-02' });
     expect((await repositories.agents.getById(agentId))?.nameSource).toBe('scanned');
 
     const renamed = await app.updateAgentConfig({
@@ -134,7 +148,7 @@ describe('AgentOS managed agent: scan must not override user rename', () => {
 
     const second = await app.registerDiscoveredAgents({
       teamId: 'team-1', deviceId: 'device-1',
-      agents: [{ name: 'hermes-01', adapterKind: 'hermes', category: 'agentos-hosted' }],
+      agents: [{ name: 'hermes-02', adapterKind: 'hermes', category: 'agentos-hosted', gatewayInstanceKey: 'gateway-1' }],
     });
     if (!second.ok) throw new Error(`second scan failed: ${second.error}`);
 
@@ -161,11 +175,25 @@ describe('AgentOS managed agent: scan must not override user rename', () => {
 
       const first = await app.registerDiscoveredAgents({
         teamId: 'team-1', deviceId: 'device-1',
-        agents: [{ name: 'hermes-01', adapterKind: 'hermes', category: 'agentos-hosted' }],
+        agents: [{ name: 'hermes-01', adapterKind: 'hermes', category: 'agentos-hosted', gatewayInstanceKey: 'gateway-1' }],
       });
       if (!first.ok) throw new Error(`first scan failed: ${first.error}`);
       const agentId = first.agents[0]!.id;
       expect(first.agents[0]).not.toHaveProperty('nameSource');
+      expect((await repositories.agents.getById(agentId))?.nameSource).toBe('scanned');
+
+      const unchanged = await app.updateAgentConfig({
+        userId: 'user-1', teamId: 'team-1', agentId, name: 'hermes-01', description: '仅改描述',
+      });
+      if (!unchanged.ok) throw new Error(`unchanged-name update failed: ${unchanged.error}`);
+      expect((await repositories.agents.getById(agentId))?.nameSource).toBe('scanned');
+
+      const reportedRename = await app.registerDiscoveredAgents({
+        teamId: 'team-1', deviceId: 'device-1',
+        agents: [{ name: 'hermes-02', adapterKind: 'hermes', category: 'agentos-hosted', gatewayInstanceKey: 'gateway-1' }],
+      });
+      if (!reportedRename.ok) throw new Error(`reported rename failed: ${reportedRename.error}`);
+      expect(reportedRename.agents[0]).toMatchObject({ id: agentId, name: 'hermes-02' });
       expect((await repositories.agents.getById(agentId))?.nameSource).toBe('scanned');
 
       const renamed = await app.updateAgentConfig({
@@ -179,7 +207,7 @@ describe('AgentOS managed agent: scan must not override user rename', () => {
         id: agentId,
         primaryTeamId: 'team-1',
         visibleTeamIds: ['team-1'],
-        name: 'hermes-01',
+        name: 'hermes-02',
         adapterKind: 'hermes',
         category: 'agentos-hosted',
         source: 'scanned',
@@ -191,7 +219,7 @@ describe('AgentOS managed agent: scan must not override user rename', () => {
 
       const second = await app.registerDiscoveredAgents({
         teamId: 'team-1', deviceId: 'device-1',
-        agents: [{ name: 'hermes-01', adapterKind: 'hermes', category: 'agentos-hosted' }],
+        agents: [{ name: 'hermes-02', adapterKind: 'hermes', category: 'agentos-hosted', gatewayInstanceKey: 'gateway-1' }],
       });
       if (!second.ok) throw new Error(`second scan failed: ${second.error}`);
 

@@ -1120,7 +1120,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .run(
             nextName,
             normalizeName(nextName),
-            hasOwn(changes, 'name') ? 'custom' : (existing.nameSource ?? 'scanned'),
+            hasOwn(changes, 'name') && nextName !== existing.name ? 'custom' : (existing.nameSource ?? 'scanned'),
             hasOwn(changes, 'description') ? changes.description ?? null : existing.description ?? null,
             hasOwn(changes, 'adapterKind') ? changes.adapterKind ?? existing.adapterKind : existing.adapterKind,
             hasOwn(changes, 'deviceId') ? changes.deviceId ?? null : existing.deviceId ?? null,

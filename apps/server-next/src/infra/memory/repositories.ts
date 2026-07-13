@@ -674,7 +674,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           ...agent,
           ...changes,
           // 用户改名后标记 'custom'，扫描 upsert 据此保护名（对齐 sqlite name_source）。
-          nameSource: changes.name !== undefined ? 'custom' : (agent.nameSource ?? 'scanned'),
+          nameSource: changes.name !== undefined && changes.name !== agent.name
+            ? 'custom'
+            : (agent.nameSource ?? 'scanned'),
           lastSeenAt: changes.lastSeenAt ?? agent.lastSeenAt,
         };
         agents.set(agent.id, updated);
