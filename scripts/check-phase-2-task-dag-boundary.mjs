@@ -21,6 +21,13 @@ const domainPolicies = [
   read('packages/domain/src/task-claim-policy.ts'),
   read('packages/domain/src/subtask-acceptance-policy.ts'),
 ];
+const taskCoordinationMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0013_management_phase_2_task_dag.sql');
+const taskCoordinationRepositories = [
+  read('apps/server-next/src/infra/memory/task-coordination-repositories.ts'),
+  read('apps/server-next/src/infra/sqlite/task-coordination-repositories.ts'),
+];
+const taskCoordinationUnitOfWork = read('apps/server-next/src/application/task-coordination-unit-of-work.ts');
+const taskCoordinationTests = read('apps/server-next/tests/task-coordination-unit-of-work.test.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
 
@@ -63,11 +70,29 @@ if (!domainPolicies.every((policy, index) => policy.includes(domainMarkers[index
   violations.push('P2_DOMAIN_POLICY_INVALID: DAG, revision, claim, and acceptance policies are required');
 }
 
+const persistenceMarkers = [
+  'ALTER TABLE tasks', 'ADD COLUMN revision', 'task_coordinations',
+  'task_acceptance_criteria', 'task_dependencies', 'task_claim_leases',
+  'one_active_task_claim_per_attempt', 'lease_token_hash', 'lease_fingerprint',
+  'evidence_snapshots', 'subtask_deliveries', 'subtask_acceptances',
+  'one_canonical_acceptance_per_delivery', 'DEFERRABLE INITIALLY DEFERRED',
+];
+if (!persistenceMarkers.every((marker) => taskCoordinationMigration.includes(marker))
+  || !taskCoordinationRepositories.every((repository) =>
+    repository.includes('TaskCoordinationRepositories')
+      && repository.includes('evidence ref has no canonical snapshot in delivery authority'))
+  || !taskCoordinationUnitOfWork.includes('TaskCoordinationUnitOfWork')
+  || !taskCoordinationTests.includes('rolls back Task and coordination revision together')
+  || !taskCoordinationTests.includes('rolls back schema when the 0013 migration ledger write fails')) {
+  violations.push('P2_PERSISTENCE_BOUNDARY_INVALID: Phase 2 schema, repositories, atomic UoW, and rollback evidence are required');
+}
+
 const scripts = packageJson.scripts ?? {};
 if (scripts['test:phase2-task-dag-boundary'] !== 'node --test scripts/check-phase-2-task-dag-boundary.test.mjs'
   || scripts['check:phase2-task-dag-boundary'] !== 'node scripts/check-phase-2-task-dag-boundary.mjs'
   || !String(scripts['test:phase2-task-dag']).includes('test:phase2-task-dag-boundary')
   || !String(scripts['test:phase2-task-dag']).includes('test:domain')
+  || !String(scripts['test:phase2-task-dag']).includes('test:server-next')
   || !String(scripts['build:phase2-task-dag']).includes('build:domain')
   || !workflow.includes('npm run test:phase2-task-dag')
   || !workflow.includes('npm run build:phase2-task-dag')
@@ -84,4 +109,4 @@ if (violations.length > 0) {
   process.exit(1);
 }
 
-console.log('P2_BOUNDARY_READY: matrix, V2 contracts, Phase 2 exact tools, Node 24, and root CI gates are present');
+console.log('P2_BOUNDARY_READY: matrix, V2 contracts, Domain/persistence boundaries, Node 24, and root CI gates are present');

@@ -51,3 +51,20 @@ test('fails closed when a Phase 2 Domain policy disappears', () => {
     rmSync(fixture, { recursive: true, force: true });
   }
 });
+
+test('fails closed when the Phase 2 atomic persistence boundary disappears', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'agentbean-phase2-persistence-boundary-'));
+  try {
+    cpSync(root, fixture, {
+      recursive: true,
+      filter: (source) => !source.split('/').includes('node_modules') && !source.split('/').includes('.git'),
+    });
+    const path = join(fixture, 'apps/server-next/src/infra/sqlite/migrations/team/0013_management_phase_2_task_dag.sql');
+    writeFileSync(path, readFileSync(path, 'utf8').replace('DEFERRABLE INITIALLY DEFERRED', ''));
+    const result = run(fixture);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /P2_PERSISTENCE_BOUNDARY_INVALID/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
