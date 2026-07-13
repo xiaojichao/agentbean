@@ -268,10 +268,10 @@ export function registerWebSocketHandlers(
       ack?.(socketErrorAck(error, WEB_EVENTS.device.selectDirectory));
     }
   });
-  bind(socket, WEB_EVENTS.channel.create, app, 'createChannel', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.channel.update, app, 'updateChannel', undefined, { authenticatedUser: options.authenticatedUser });
   const afterChannelMutation = (payload: unknown, result: unknown) =>
     options.afterChannelMutation?.(payload, result);
+  bind(socket, WEB_EVENTS.channel.create, app, 'createChannel', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.channel.update, app, 'updateChannel', afterChannelMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.channel.addMember, app, 'addChannelHumanMember', afterChannelMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.channel.removeMember, app, 'removeChannelHumanMember', afterChannelMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.channel.leave, app, 'leaveChannel', afterChannelMutation, { authenticatedUser: options.authenticatedUser });

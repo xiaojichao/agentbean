@@ -2125,7 +2125,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         id: ids.nextId(),
         teamId: channelInput.teamId,
         kind: 'channel',
-        name: slugify(channelInput.name),
+        name: channelInput.name.trim() || 'team',
         title: channelInput.title,
         visibility: channelInput.visibility,
         createdBy: channelInput.userId,
@@ -2174,10 +2174,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             humanMemberIds: channelInput.humanMemberIds,
           })
         : undefined;
+      const name = channelInput.name?.trim();
       const updated = await repositories.channels.update({
         channelId: channel.id,
         changes: {
-          ...(channelInput.name ? { name: slugify(channelInput.name) } : {}),
+          ...(name ? { name } : {}),
           ...(channelInput.title !== undefined ? { title: channelInput.title } : {}),
           ...(channelInput.visibility ? { visibility: channelInput.visibility } : {}),
           ...(humanMemberIds ? { humanMemberIds } : {}),
