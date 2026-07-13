@@ -56,12 +56,19 @@ function scaffoldRuntimeSlice(root, options = {}) {
 function scaffoldFutureBoundaries(root) {
   scaffoldWorkerContracts(root);
   scaffoldManagementPersistence(root);
+  scaffoldServerKernel(root);
   for (const path of [
-    'apps/server-next/src/application/management/management-kernel.ts',
     'apps/daemon-next/src/pi-manager-worker-host.ts',
   ]) {
     write(root, path, '// scaffolded\n');
   }
+}
+
+function scaffoldServerKernel(root) {
+  write(root, 'apps/server-next/src/application/management/management-kernel.ts', 'createOrResumeRun acquireLease renewLease releaseLease appendEvent authorizeManagementWrite\n');
+  write(root, 'apps/server-next/src/application/management/management-event-validator.ts', 'parsePhase1ManagementEvent hashManagementEventPayload\n');
+  write(root, 'apps/server-next/src/application/management/management-checkpoint.ts', 'collectManagementCheckpointFacts restoreOrRebuildManagementCheckpoint\n');
+  write(root, 'apps/server-next/src/application/management/management-tool-executor.ts', 'createManagementToolExecutor\n');
 }
 
 function scaffoldManagementPersistence(root) {
@@ -167,7 +174,20 @@ test('reports management persistence while Server kernel and WorkerHost remain R
     const result = runChecker(root);
     assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
     assert.match(result.stdout, /P1_MANAGEMENT_PERSISTENCE_PRESENT/);
-    assert.match(result.stderr, /P1_NOT_IMPLEMENTED:.*management-kernel\.ts/);
+    assert.match(result.stderr, /P1_SERVER_KERNEL_INVALID/);
+  });
+});
+
+test('reports Server kernel while WorkerHost remains Red', () => {
+  withFixture((root) => {
+    scaffoldRuntimeSlice(root);
+    scaffoldWorkerContracts(root);
+    scaffoldManagementPersistence(root);
+    scaffoldServerKernel(root);
+    const result = runChecker(root);
+    assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /P1_SERVER_KERNEL_PRESENT/);
+    assert.match(result.stderr, /P1_NOT_IMPLEMENTED:.*pi-manager-worker-host\.ts/);
   });
 });
 

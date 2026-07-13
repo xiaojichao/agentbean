@@ -12,11 +12,11 @@
 | P1-01 | PI wrapper 只暴露 Phase 1 effective tools，shadow write tools 仅 dry-run | Green | PR #507 / merge `d216898`：managed/shadow descriptor 精确为 11 个 Phase 1 tools，Phase 2/3 不可见，shadow write 仅记录 SHA-256 intent；main run `29214232850` 全绿。 |
 | P1-02 | 真实 provider telemetry 与 typed context 不泄漏 PI 类型/secret | Green | PR #507 / merge `d216898`：冻结 `ManagementSessionContextV1`、AgentBean-owned telemetry、非法 provider content/secret fail-closed；main CI 与三平台 SEA aggregate 全绿。 |
 | P1-03 | published daemon 在 clean install 中加载内置 PI runtime | Green | main run `29214232850` 已发布 `@agentbean/pi-management-runtime@0.1.0`、`@agentbean/daemon-next@0.3.7`、`@agentbean/daemon@0.3.7`；canonical `latest=0.3.7`、`legacy=0.1.35`，production smoke 全绿。 |
-| P1-04 | management schema/constraints/migrations 可升级且可回滚 | Not implemented | Task 4：team migration、constraint inspection、upgrade/rollback tests。 |
-| P1-05 | reservation + Run + first Event 原子且请求幂等 | Not implemented | Task 4-5：UoW failure injection、same-key existing / conflict。 |
+| P1-04 | management schema/constraints/migrations 可升级且可回滚 | Green（main） | PR #511 / merge `0590dbf`：九张 management 表、唯一/partial constraints、旧库升级、重复 apply 与 migration ledger 失败 rollback 已进入 main；main run `29217437939`、Railway deploy 与 production smoke 全绿。 |
+| P1-05 | reservation + Run + first Event 原子且请求幂等 | Candidate（local） | PR #511 已提供串行 UoW 与失败全回滚；本 Task 的 memory/SQLite Kernel tests 已覆盖 same-key/same-hash existing、different hash conflict 与 Run + first Event 原子创建，待 PR 合并及 main CI 后转 Green。 |
 | P1-06 | lease acquire/renew/expire/reacquire 与 fencing 正确 | Candidate（PR） | Task 3 本地 fake-clock Domain policy 已覆盖 initial/duplicate acquire、renew、半开 expiry、同 Device/profile 到期或 release 后 reacquire、cross-host 拒绝与 stale/future fencing；仍需 Task 5/7 的 Server clock、Socket 与 stale Worker 证据后转 Green。 |
-| P1-07 | event exact-key validation、sequence、replay 与脱敏正确 | Not implemented | Task 5：runtime validator、append/replay、forbidden payload fixtures。 |
-| P1-08 | checkpoint facts 同 snapshot，失效后忽略 hints 并重建 | Not implemented | Task 5、8：snapshot/exact-disjoint sets 与 recovery tests。 |
+| P1-07 | event exact-key validation、sequence、replay 与脱敏正确 | Candidate（local） | 本 Task 已覆盖 Phase 1 writable subset exact-key validator、canonical SHA-256、递增 sequence、same-key replay/different-hash conflict、terminal guard、forbidden payload 与 client diagnostic secret redaction；待 main CI 后转 Green。 |
+| P1-08 | checkpoint facts 同 snapshot，失效后忽略 hints 并重建 | Candidate（local） | 本 Task 已在同一 UoW snapshot 中构造 exact/disjoint waiting/completed Invocation sets，支持历史 revision 幂等读取，并证明任一 authoritative set drift 后全部旧 hints 被丢弃；Task 8 的真实 Worker restart recovery 仍未实现。 |
 | P1-09 | Invocation immutable，Dispatch attempt 唯一且 status 只派生 | Not implemented | Task 6：gateway/repository/domain tests。 |
 | P1-10 | Device 重启、断线、ack 丢失与 outbox 重放不重复执行 | Not implemented | Task 8：durable outbox、same-host recovery、one Dispatch/reply assertions。 |
 | P1-11 | shadow 除独立决策记录和既有 direct 路径外零管理副作用 | Not implemented | Task 9：before/after repository diff 与 deterministic replay。 |

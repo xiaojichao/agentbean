@@ -59,6 +59,7 @@ function createRepositories(state: ManagementMemoryState): ManagementRepositorie
     runs: {
       async create(record) { if (state.runs.has(record.id)) throw new Error('management run already exists'); state.runs.set(record.id, record); return record; },
       async getById(id) { return state.runs.get(id) ?? null; },
+      async update(record) { if (!state.runs.has(record.id)) throw new Error('management run does not exist'); state.runs.set(record.id, record); return record; },
     },
     leases: {
       async get(managementRunId) { return state.leases.get(managementRunId) ?? null; },
@@ -74,6 +75,7 @@ function createRepositories(state: ManagementMemoryState): ManagementRepositorie
     },
     checkpoints: {
       async put(record) { const key = `${record.managementRunId}:${record.revision}`; if (state.checkpoints.has(key)) throw new Error('management checkpoint already exists'); state.checkpoints.set(key, record); return record; },
+      async get(input) { return state.checkpoints.get(`${input.managementRunId}:${input.revision}`) ?? null; },
       async getLatest(managementRunId) { return [...state.checkpoints.values()].filter((item) => item.managementRunId === managementRunId).sort((a, b) => b.revision - a.revision)[0] ?? null; },
     },
     invocations: {
@@ -82,6 +84,7 @@ function createRepositories(state: ManagementMemoryState): ManagementRepositorie
         state.invocations.set(record.id, record); return record;
       },
       async getById(id) { return state.invocations.get(id) ?? null; },
+      async listByRun(managementRunId) { return [...state.invocations.values()].filter((item) => item.managementRunId === managementRunId).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)); },
     },
     dispatchAttempts: {
       async create(record) {
