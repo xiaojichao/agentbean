@@ -62,6 +62,7 @@ function scaffoldFutureBoundaries(root) {
   scaffoldDeviceWorkerHost(root);
   scaffoldManagementRouting(root);
   write(root, 'apps/server-next/tests/managed-single-agent.test.ts', '// scaffolded\n');
+  write(root, 'apps/daemon-next/tests/managed-single-agent.test.ts', '// scaffolded\n');
 }
 
 function scaffoldManagementRouting(root) {

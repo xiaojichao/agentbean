@@ -68,6 +68,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0009_pinned_messages.sql');
   applyMigration(db, 'team/0010_management_phase_1.sql');
   applyMigration(db, 'team/0011_management_shadow_namespace.sql');
+  applyMigration(db, 'team/0012_management_frozen_target.sql');
 }
 
 // 清理 channel_agent_members 中指向已删 agent 的孤儿行（PRD §6）。

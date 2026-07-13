@@ -201,7 +201,9 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
       });
       lease.session = session;
       scheduleRenew(lease);
-      void session.prompt({ text: restoreObjective(restored) }).catch(() => abortLease(lease, 'session-failed'));
+      void session.prompt({ text: restoreObjective(restored) })
+        .then(() => finishLease(lease, 'session-completed'))
+        .catch(() => abortLease(lease, 'session-failed'));
     } catch {
       await abortLease(lease, 'session-start-failed');
     }
@@ -313,16 +315,36 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
     await disposeLease(lease, reason);
   }
 
-  async function disposeLease(lease: ActiveLease, reason: string): Promise<void> {
+  async function finishLease(lease: ActiveLease, reason: string): Promise<void> {
+    if (lease.disposing || activeLeases.get(lease.managementRunId) !== lease) return;
+    try {
+      await input.protocol.releaseLease({
+        schemaVersion: 1,
+        managementRunId: lease.managementRunId,
+        workerId: lease.workerId,
+        leaseToken: lease.leaseToken,
+        fencingToken: lease.fencingToken,
+        idempotencyKey: `release:${lease.managementRunId}:${lease.fencingToken}:${reason}`,
+        reasonCode: reason,
+      });
+    } catch {
+      // The server lease expires authoritatively; a completed local prompt must not hold capacity forever.
+    }
+    await disposeLease(lease, reason, false);
+  }
+
+  async function disposeLease(lease: ActiveLease, reason: string, abortSession = true): Promise<void> {
     if (lease.disposing) return;
     lease.disposing = true;
     if (lease.renewTimer) clearTimeout(lease.renewTimer);
     activeLeases.delete(lease.managementRunId);
     if (!lease.session) return;
-    try {
-      await lease.session.abort(reason);
-    } catch {
-      // Disposal still has to run after an abort failure.
+    if (abortSession) {
+      try {
+        await lease.session.abort(reason);
+      } catch {
+        // Disposal still has to run after an abort failure.
+      }
     }
     try {
       await lease.session.dispose();

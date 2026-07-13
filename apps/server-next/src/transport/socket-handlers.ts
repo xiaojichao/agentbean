@@ -130,6 +130,8 @@ export interface ManagementWorkerSocketHandlers {
   leaseRelease(payload: ManagementWorkerPayloadMapV1['lease-release']): Promise<unknown>;
   abort(payload: ManagementWorkerPayloadMapV1['abort']): Promise<unknown>;
   toolRequest(payload: ManagementWorkerPayloadMapV1['tool-request']): Promise<unknown>;
+  checkpointFetch(payload: ManagementWorkerPayloadMapV1['checkpoint-fetch']): Promise<unknown>;
+  outboxReplay(payload: ManagementWorkerPayloadMapV1['outbox-replay']): Promise<unknown>;
 }
 
 export function registerWebSocketHandlers(
@@ -553,6 +555,8 @@ export function registerAgentSocketHandlers(
     bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.leaseRelease, 'lease-release', options.managementWorker.leaseRelease);
     bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.abort, 'abort', options.managementWorker.abort);
     bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.toolRequest, 'tool-request', options.managementWorker.toolRequest);
+    bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.checkpointFetch, 'checkpoint-fetch', options.managementWorker.checkpointFetch);
+    bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.outboxReplay, 'outbox-replay', options.managementWorker.outboxReplay);
   }
 }
 

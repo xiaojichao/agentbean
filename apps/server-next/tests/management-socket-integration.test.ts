@@ -13,6 +13,18 @@ import { attachServerNextNamespaces, type NamespaceLike, type SocketServerLike }
 import type { SocketHandler, SocketLike } from '../src/transport/socket-handlers.js';
 
 describe('management worker socket integration', () => {
+  test('managed Invocation 创建的 Dispatch 可通过 realtime bridge 下发到目标 Device', async () => {
+    const harness = await createHarness({ devices: [device('device-1', 'profile-1')] });
+    const socket = harness.connect('device-1');
+    await socket.trigger(AGENT_EVENTS.device.hello, { deviceId: 'device-1' });
+
+    await harness.realtime.dispatchRequest('dispatch-managed-1');
+
+    expect(socket.outbound(AGENT_EVENTS.dispatch.request)).toMatchObject([
+      { payload: { id: 'dispatch-managed-1', deviceId: 'device-1', agentId: 'agent-1' } },
+    ]);
+  });
+
   test('keeps Dispatch claim separate and offers only to an eligible Device worker', async () => {
     const harness = await createHarness({
       devices: [
@@ -95,6 +107,25 @@ describe('management worker socket integration', () => {
       input: {},
     })).resolves.toMatchObject({ ok: true, output: { status: 'running' } });
     expect(harness.toolHandler).toHaveBeenCalledOnce();
+    await expect(socket.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
+      schemaVersion: 1,
+      managementRunId: harness.runId,
+      workerId: authority.workerId,
+      leaseToken: 'lease-secret-1',
+      fencingToken: 1,
+    })).resolves.toMatchObject({
+      managementRunId: harness.runId,
+      context: {
+        frozenTarget: { agentId: 'agent-1', kind: 'custom' },
+        visibleThread: { messages: [{ id: 'message-1', body: '执行目标' }] },
+      },
+    });
+    await expect(socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
+      ...authority,
+      commandId: 'missing-command',
+      idempotencyKey: 'missing-command',
+      requestHash: 'request-hash',
+    })).resolves.toMatchObject({ disposition: 'rejected' });
     await expect(socket.trigger(AGENT_EVENTS.managementWorker.leaseRelease, {
       ...authority,
       idempotencyKey: 'release-1',
@@ -218,6 +249,7 @@ async function createHarness(input: { devices: ReturnType<typeof device>[]; allo
   let leaseId = 0;
   const scheduler = createDeviceWorkerScheduler({
     devices: repositories.devices,
+    messages: repositories.messages,
     management: repositories.management,
     kernel,
     executeTool,
@@ -226,10 +258,15 @@ async function createHarness(input: { devices: ReturnType<typeof device>[]; allo
     leaseTokens: { nextToken: () => `lease-secret-${++leaseId}` },
     leaseTtlMs: 100,
   });
+  await repositories.messages.append({
+    id: 'message-1', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1',
+    senderKind: 'human', senderId: 'user-1', body: '执行目标', createdAt: 1,
+  });
   const run = await kernel.createOrResumeRun({
     teamId: 'team-1',
     channelId: 'channel-1',
     rootMessageId: 'message-1',
+    frozenTarget: { agentId: 'agent-1', kind: 'custom' },
     requestKey: 'run-request-1',
     requestHash: 'hash-run-request-1',
     placementPolicy: {
@@ -249,6 +286,20 @@ async function createHarness(input: { devices: ReturnType<typeof device>[]; allo
     })),
     buildDeviceScanRequest: vi.fn(async () => ({ ok: true, skipped: true })),
     markDeviceOffline: vi.fn(async () => ({ ok: true, affectedTeamIds: [] })),
+    getDispatchRequest: vi.fn(async ({ dispatchId }: { dispatchId: string }) => ({
+      ok: true,
+      request: {
+        id: dispatchId,
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        messageId: 'message-1',
+        agentId: 'agent-1',
+        deviceId: 'device-1',
+        requestId: `request-${dispatchId}`,
+        body: '执行目标',
+        createdAt: 1,
+      },
+    })),
   } as unknown as ServerNextUseCases;
   const realtime = attachServerNextNamespaces(fakeServer, app, {
     dispatchRequestCoalesceMs: 0,

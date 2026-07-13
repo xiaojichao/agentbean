@@ -796,6 +796,7 @@ export interface CreateServerNextUseCasesInput {
   sessionSecret?: string;
   artifactContentStore?: ArtifactContentStore;
   managementRouter?: ReturnType<typeof createManagementRouter>;
+  managementKernel?: ReturnType<typeof createManagementKernel>;
 }
 
 export function createServerNextUseCases(input: CreateServerNextUseCasesInput): ServerNextUseCases {
@@ -806,9 +807,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const artifactContentStore = input.artifactContentStore;
   const dispatchCoalescingLocks = new Map<string, Promise<void>>();
   const invocationGateway = createInvocationGateway({ repositories, clock, ids });
+  const managementKernel = input.managementKernel ?? createManagementKernel({
+    repositories: repositories.management,
+    unitOfWork: repositories.managementUnitOfWork,
+    clock,
+    ids,
+  });
   const managementRouter = input.managementRouter ?? createManagementRouter({
     repositories,
-    kernel: createManagementKernel({ repositories: repositories.management, unitOfWork: repositories.managementUnitOfWork, clock, ids }),
+    kernel: managementKernel,
     clock,
     ids,
   });
@@ -2988,6 +2995,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (title !== undefined && !title) {
         return makeFailure('VALIDATION_ERROR', 'Task title is required');
       }
+      let managedCompletion: { managementRunId: string; deliveryMessageId: string } | null = null;
+      if (taskInput.status === 'done' && task.status !== 'done') {
+        const managementRun = await repositories.management.runs.getByRootTaskId(task.id);
+        if (managementRun) {
+          if (managementRun.status !== 'in_review' && managementRun.status !== 'completed') {
+            return makeFailure('CONFLICT', 'Managed Task is not ready for human completion');
+          }
+          const events = await repositories.management.events.list(managementRun.id);
+          const deliveryEvent = [...events].reverse()
+            .find(({ event }) => event.type === 'root-delivery-submitted');
+          if (!deliveryEvent || deliveryEvent.event.type !== 'root-delivery-submitted') {
+            return makeFailure('CONFLICT', 'Managed Task has no review delivery');
+          }
+          managedCompletion = { managementRunId: managementRun.id, deliveryMessageId: deliveryEvent.event.payload.messageId };
+        }
+      }
       const updated = await repositories.tasks.update({
         taskId: task.id,
         changes: {
@@ -3022,6 +3045,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             },
           })
         : null;
+      if (managedCompletion) {
+        await managementKernel.completeRunFromHumanTask({
+          managementRunId: managedCompletion.managementRunId,
+          taskId: updated.id,
+          userId: taskInput.userId,
+          deliveryMessageId: managedCompletion.deliveryMessageId,
+        });
+      }
       return makeSuccess({
         task: updated,
         ...(statusMessage ? { message: statusMessage } : {}),
@@ -3282,6 +3313,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const task = cancelled.changed && !managedAttempt
         ? await markLinkedTaskTodoIfInProgress(repositories, originMessage, now)
         : null;
+      if (cancelled.changed && managedAttempt) {
+        await recordManagedDispatchTerminal(repositories, managementKernel, {
+          dispatchId: cancelled.dispatch.id,
+          status: 'cancelled',
+          actorId: cancelInput.userId,
+          errorCode: 'USER_CANCELLED',
+        });
+      }
       const agent = await repositories.agents.getById(cancelled.dispatch.agentId);
       if (agent && agent.status === 'busy') {
         await markAgentOnlineIfIdle(repositories, {
@@ -3333,6 +3372,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         }
         const originMessage = await repositories.messages.getById(result.dispatch.messageId);
         const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
+        if (managedAttempt) {
+          await recordManagedDispatchTerminal(repositories, managementKernel, {
+            dispatchId: result.dispatch.id,
+            status: 'cancelled',
+            actorId: cancelInput.userId,
+            errorCode: 'USER_CANCELLED',
+          });
+        }
         if (task) {
           tasks.push(task);
         }
@@ -3368,6 +3415,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           }
           const originMessage = await repositories.messages.getById(timedOut.dispatch.messageId);
           const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
+          if (managedAttempt) {
+            await recordManagedDispatchTerminal(repositories, managementKernel, {
+              dispatchId: timedOut.dispatch.id,
+              status: 'timed_out',
+              errorCode: 'DISPATCH_TIMEOUT',
+            });
+          }
           if (task) {
             tasks.push(task);
           }
@@ -3529,6 +3583,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         : resultSucceeded
           ? await markLinkedTaskInReview(repositories, originMessage, now)
           : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
+      if (managedAttempt) {
+        await recordManagedDispatchTerminal(repositories, managementKernel, {
+          dispatchId: completed.dispatch.id,
+          status: resultSucceeded ? 'succeeded' : 'failed',
+          deliveryMessageId: message.id,
+          actorId: resultInput.agentId,
+          ...(!resultSucceeded ? { errorCode: workspaceRunFailureError(resultInput.workspaceRun) } : {}),
+        });
+      }
       await markAgentOnlineIfIdle(repositories, {
         agentId: resultInput.agentId,
         teamId: completed.dispatch.teamId,
@@ -3577,6 +3640,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
       const originMessage = await repositories.messages.getById(failed.dispatch.messageId);
       const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
+      if (managedAttempt) {
+        await recordManagedDispatchTerminal(repositories, managementKernel, {
+          dispatchId: failed.dispatch.id,
+          status: 'failed',
+          actorId: errorInput.agentId,
+          errorCode: errorInput.error,
+        });
+      }
 
       return makeSuccess({
         dispatch: toDispatchDto(failed.dispatch),
@@ -5648,6 +5719,35 @@ async function markLinkedTaskTodoIfInProgress(
       status: 'todo',
       updatedAt,
     },
+  });
+}
+
+async function recordManagedDispatchTerminal(
+  repositories: ServerNextRepositories,
+  kernel: ReturnType<typeof createManagementKernel>,
+  input: {
+    dispatchId: string;
+    status: 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
+    deliveryMessageId?: string;
+    actorId?: string;
+    errorCode?: string;
+  },
+): Promise<void> {
+  const attempt = await repositories.management.dispatchAttempts.getByDispatchId(input.dispatchId);
+  if (!attempt) {
+    return;
+  }
+  const invocation = await repositories.management.invocations.getById(attempt.invocationId);
+  if (!invocation) {
+    throw new Error('MANAGEMENT_INVOCATION_NOT_FOUND');
+  }
+  await kernel.recordInvocationTerminal({
+    managementRunId: invocation.managementRunId,
+    dispatchId: input.dispatchId,
+    status: input.status,
+    ...(input.deliveryMessageId ? { deliveryMessageId: input.deliveryMessageId } : {}),
+    ...(input.actorId ? { actorId: input.actorId } : {}),
+    ...(input.errorCode ? { errorCode: input.errorCode } : {}),
   });
 }
 

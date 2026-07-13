@@ -53,7 +53,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
       return repositories.managementDispatchUnitOfWork.run(async (transactionRepositories) => {
         const now = clock.now();
         await authorizeManagementWrite(transactionRepositories.management, input.authority, now);
-        const run = await requireWritableRun(transactionRepositories.management, input.authority.managementRunId);
+        const run = await requireRun(transactionRepositories.management, input.authority.managementRunId);
         validateFrozenIntent(input, run);
         if (!input.idempotencyKey) throw new InvocationGatewayError('INVOCATION_IDEMPOTENCY_KEY_INVALID');
 
@@ -78,6 +78,10 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
             disposition: 'existing' as const,
             view: await deriveInvocationView(transactionRepositories.management, transactionRepositories.dispatches, existing!),
           };
+        }
+
+        if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') {
+          throw new ManagementConflictError('MANAGEMENT_RUN_TERMINAL');
         }
 
         await validateAuthoritativeTarget(repositories, input.intent, run);

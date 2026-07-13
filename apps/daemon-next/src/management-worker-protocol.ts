@@ -55,12 +55,14 @@ export interface CreateManagementWorkerProtocolInput {
   readonly profileId: string;
   readonly runtimeVersion: string;
   readonly ackTimeoutMs?: number;
+  readonly toolAckTimeoutMs?: number;
 }
 
 export function createManagementWorkerProtocol(
   input: CreateManagementWorkerProtocolInput,
 ): PiManagerWorkerProtocol {
   const ackTimeoutMs = normalizeTimeout(input.ackTimeoutMs ?? 10_000);
+  const toolAckTimeoutMs = normalizeTimeout(input.toolAckTimeoutMs ?? 6 * 60_000);
   let capability: ManagementWorkerCapabilityInput | undefined;
   let handlers: PiManagerWorkerProtocolHandlers | undefined;
   let workerId: string | undefined;
@@ -174,7 +176,7 @@ export function createManagementWorkerProtocol(
     },
     async executeTool(payload) {
       return parseManagementWorkerPayload('tool-result', await emitWithTimeout(
-        input.socket, AGENT_EVENTS.managementWorker.toolRequest, payload, ackTimeoutMs,
+        input.socket, AGENT_EVENTS.managementWorker.toolRequest, payload, toolAckTimeoutMs,
       ));
     },
     async replayOutbox(payload) {

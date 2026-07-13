@@ -36,6 +36,7 @@ export interface CreateOrResumeManagementRunInput {
   readonly channelId: string;
   readonly rootTaskId?: string;
   readonly rootMessageId: string;
+  readonly frozenTarget?: ManagementRunDto['frozenTarget'];
   readonly requestKey: string;
   readonly requestHash: string;
   readonly placementPolicy: ManagerPlacementPolicyDto;
@@ -74,6 +75,7 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
           channelId: input.channelId,
           rootTaskId: input.rootTaskId,
           rootMessageId: input.rootMessageId,
+          frozenTarget: input.frozenTarget,
           mode: 'managed',
           status: 'queued',
           placementPolicy: input.placementPolicy,
@@ -149,6 +151,8 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
     async renewLease(input: LeaseAuthorityInput & { ttlMs: number }) {
       return unitOfWork.run(async (transactionRepositories) => {
         const now = clock.now();
+        const run = await requireRun(transactionRepositories, input.managementRunId);
+        if (isTerminalRun(run)) throw new ManagementConflictError('MANAGEMENT_RUN_TERMINAL');
         const lease = (await transactionRepositories.leases.get(input.managementRunId)) ?? undefined;
         const decision = evaluateManagerLeaseRenew({ lease, proof: proof(input), now, ttlMs: input.ttlMs });
         if (decision.kind === 'rejected') throw leaseError(decision.reason);
@@ -166,7 +170,8 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
         if (decision.kind === 'already-released') return decision.lease;
         const run = await requireRun(transactionRepositories, input.managementRunId);
         await transactionRepositories.leases.put(decision.lease);
-        await transactionRepositories.runs.update({ ...run, status: isTerminalRun(run) ? run.status : 'recovering', activeWorkerId: undefined, updatedAt: now });
+        const preserveStatus = isTerminalRun(run) || run.status === 'in_review' || run.status === 'waiting_for_user';
+        await transactionRepositories.runs.update({ ...run, status: preserveStatus ? run.status : 'recovering', activeWorkerId: undefined, updatedAt: now });
         await appendManagementEventInTransaction(transactionRepositories, {
           managementRunId: input.managementRunId,
           type: 'worker-lost',
@@ -241,6 +246,74 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
     async authorizeWrite(authority: LeaseAuthorityInput): Promise<void> {
       await authorizeManagementWrite(repositories, authority, clock.now());
     },
+
+    async recordInvocationTerminal(input: {
+      managementRunId: string;
+      dispatchId: string;
+      status: 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
+      deliveryMessageId?: string;
+      actorId?: string;
+      errorCode?: string;
+    }): Promise<ManagementRunDto> {
+      return unitOfWork.run(async (transactionRepositories) => {
+        const run = await requireRun(transactionRepositories, input.managementRunId);
+        if (isTerminalRun(run)) return run;
+        if (input.status === 'succeeded' && run.rootTaskId) return run;
+        const now = clock.now();
+        const record = input.status === 'succeeded'
+          ? await appendManagementEventInTransaction(transactionRepositories, {
+              managementRunId: run.id,
+              type: 'run-completed',
+              actorKind: 'agent',
+              ...(input.actorId ? { actorId: input.actorId } : {}),
+              idempotencyKey: `run-terminal:${input.dispatchId}:succeeded`,
+              payload: { deliveryMessageId: requireValue(input.deliveryMessageId, 'MANAGEMENT_DELIVERY_MESSAGE_REQUIRED') },
+            }, now, ids)
+          : input.status === 'cancelled'
+            ? await appendManagementEventInTransaction(transactionRepositories, {
+                managementRunId: run.id,
+                type: 'run-cancelled',
+                actorKind: input.actorId ? 'human' : 'system',
+                ...(input.actorId ? { actorId: input.actorId } : {}),
+                idempotencyKey: `run-terminal:${input.dispatchId}:cancelled`,
+                payload: { reasonCode: input.errorCode ?? 'INVOCATION_CANCELLED', cancelledBy: input.actorId ?? 'system' },
+              }, now, ids)
+            : await appendManagementEventInTransaction(transactionRepositories, {
+                managementRunId: run.id,
+                type: 'run-failed',
+                actorKind: 'system',
+                idempotencyKey: `run-terminal:${input.dispatchId}:${input.status}`,
+                payload: { errorCode: input.errorCode ?? (input.status === 'timed_out' ? 'DISPATCH_TIMEOUT' : 'DISPATCH_FAILED'), recoverable: false },
+              }, now, ids);
+        await applyRunProjection(transactionRepositories, record, now);
+        return requireRun(transactionRepositories, run.id);
+      });
+    },
+
+    async completeRunFromHumanTask(input: {
+      managementRunId: string;
+      taskId: string;
+      userId: string;
+      deliveryMessageId: string;
+    }): Promise<ManagementRunDto> {
+      return unitOfWork.run(async (transactionRepositories) => {
+        const run = await requireRun(transactionRepositories, input.managementRunId);
+        if (run.rootTaskId !== input.taskId) throw new ManagementConflictError('MANAGEMENT_ROOT_TASK_MISMATCH');
+        if (isTerminalRun(run)) return run;
+        if (run.status !== 'in_review') throw new ManagementConflictError('MANAGEMENT_RUN_NOT_IN_REVIEW');
+        const now = clock.now();
+        const record = await appendManagementEventInTransaction(transactionRepositories, {
+          managementRunId: run.id,
+          type: 'run-completed',
+          actorKind: 'human',
+          actorId: input.userId,
+          idempotencyKey: `run-completed:task:${input.taskId}`,
+          payload: { completedTaskId: input.taskId, deliveryMessageId: input.deliveryMessageId },
+        }, now, ids);
+        await applyRunProjection(transactionRepositories, record, now);
+        return requireRun(transactionRepositories, run.id);
+      });
+    },
   };
 }
 
@@ -282,7 +355,12 @@ export async function authorizeManagementWrite(repositories: ManagementRepositor
 async function applyRunProjection(repositories: ManagementRepositories, record: ManagementEventRecord, now: number): Promise<void> {
   const run = await requireRun(repositories, record.event.managementRunId);
   const terminal = record.event.type === 'run-completed' ? 'completed' : record.event.type === 'run-failed' ? 'failed' : record.event.type === 'run-cancelled' ? 'cancelled' : undefined;
-  const status = terminal ?? (record.event.type === 'waiting-for-user' ? 'waiting_for_user' : run.status);
+  const status = terminal
+    ?? (record.event.type === 'waiting-for-user'
+      ? 'waiting_for_user'
+      : record.event.type === 'root-delivery-submitted'
+        ? 'in_review'
+        : run.status);
   if (status !== run.status) await repositories.runs.update({ ...run, status, updatedAt: now, ...(terminal && { completedAt: now }) });
 }
 
@@ -298,3 +376,4 @@ function proof(input: LeaseAuthorityInput): ManagerLeaseAuthorizationProof {
 function hashSecret(secret: string): string { return createHash('sha256').update(secret).digest('hex'); }
 function leaseError(reason: ManagerLeaseAuthorizationFailure): ManagementConflictError { return new ManagementConflictError(`LEASE_${reason.toUpperCase().replaceAll('-', '_')}`); }
 function isTerminalRun(run: ManagementRunDto): boolean { return run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled'; }
+function requireValue(value: string | undefined, code: string): string { if (!value) throw new ManagementConflictError(code); return value; }

@@ -69,15 +69,20 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
       async create(record) {
         db.prepare(`INSERT INTO management_runs
           (id, team_id, channel_id, root_task_id, root_message_id, status, placement_policy_json,
-           active_worker_id, checkpoint_revision, budget_json, created_at, updated_at, completed_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+           active_worker_id, checkpoint_revision, budget_json, created_at, updated_at, completed_at,
+           target_agent_id, target_kind)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(record.id, record.teamId, record.channelId, record.rootTaskId ?? null, record.rootMessageId,
             record.status, json(record.placementPolicy), record.activeWorkerId ?? null, record.checkpointRevision,
-            json(record.budget), record.createdAt, record.updatedAt, record.completedAt ?? null);
+            json(record.budget), record.createdAt, record.updatedAt, record.completedAt ?? null,
+            record.frozenTarget?.agentId ?? null, record.frozenTarget?.kind ?? null);
         return record;
       },
       async getById(id) {
         return mapRun(db.prepare('SELECT * FROM management_runs WHERE id = ?').get(id));
+      },
+      async getByRootTaskId(rootTaskId) {
+        return mapRun(db.prepare('SELECT * FROM management_runs WHERE root_task_id = ? ORDER BY created_at DESC LIMIT 1').get(rootTaskId));
       },
       async update(record) {
         const result = db.prepare(`UPDATE management_runs SET status = ?, placement_policy_json = ?,
@@ -216,7 +221,7 @@ function parseJson<T>(value: string): T { return JSON.parse(value) as T; }
 
 function mapPolicy(value: unknown): ManagementPolicyRecord | null { return value ? { teamId: text(value, 'team_id'), mode: text(value, 'mode') as ManagementPolicyRecord['mode'], placementPolicy: parseJson(text(value, 'placement_policy_json')), updatedBy: text(value, 'updated_by'), updatedAt: number(value, 'updated_at') } : null; }
 function mapReservation(value: unknown): ManagedRequestReservationRecord | null { return value ? { id: text(value, 'id'), teamId: text(value, 'team_id'), requestKey: text(value, 'request_key'), requestHash: text(value, 'request_hash'), managementRunId: text(value, 'management_run_id'), createdAt: number(value, 'created_at') } : null; }
-function mapRun(value: unknown): ManagementRunDto | null { return value ? { schemaVersion: 1, id: text(value, 'id'), teamId: text(value, 'team_id'), channelId: text(value, 'channel_id'), rootTaskId: nullableText(value, 'root_task_id'), rootMessageId: text(value, 'root_message_id'), mode: 'managed', status: text(value, 'status') as ManagementRunDto['status'], placementPolicy: parseJson(text(value, 'placement_policy_json')), activeWorkerId: nullableText(value, 'active_worker_id'), checkpointRevision: number(value, 'checkpoint_revision'), budget: parseJson(text(value, 'budget_json')), createdAt: number(value, 'created_at'), updatedAt: number(value, 'updated_at'), completedAt: nullableNumber(value, 'completed_at') } : null; }
+function mapRun(value: unknown): ManagementRunDto | null { if (!value) return null; const targetAgentId = nullableText(value, 'target_agent_id'); const targetKind = nullableText(value, 'target_kind'); return { schemaVersion: 1, id: text(value, 'id'), teamId: text(value, 'team_id'), channelId: text(value, 'channel_id'), rootTaskId: nullableText(value, 'root_task_id'), rootMessageId: text(value, 'root_message_id'), ...(targetAgentId && (targetKind === 'custom' || targetKind === 'agentos-hosted') ? { frozenTarget: { agentId: targetAgentId, kind: targetKind } } : {}), mode: 'managed', status: text(value, 'status') as ManagementRunDto['status'], placementPolicy: parseJson(text(value, 'placement_policy_json')), activeWorkerId: nullableText(value, 'active_worker_id'), checkpointRevision: number(value, 'checkpoint_revision'), budget: parseJson(text(value, 'budget_json')), createdAt: number(value, 'created_at'), updatedAt: number(value, 'updated_at'), completedAt: nullableNumber(value, 'completed_at') }; }
 function mapLease(value: unknown): ManagerLeaseRecord | null { return value ? { managementRunId: text(value, 'management_run_id'), workerId: text(value, 'worker_id'), host: { deviceId: text(value, 'device_id'), profileId: text(value, 'profile_id') }, leaseTokenHash: text(value, 'lease_token_hash'), leaseFingerprint: text(value, 'lease_fingerprint'), fencingToken: number(value, 'fencing_token'), acquiredAt: number(value, 'acquired_at'), heartbeatAt: number(value, 'heartbeat_at'), expiresAt: number(value, 'expires_at'), releasedAt: nullableNumber(value, 'released_at') } : null; }
 function mapEvent(value: unknown): ManagementEventRecord { return { event: { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), sequence: number(value, 'sequence'), type: text(value, 'type'), actorKind: text(value, 'actor_kind'), actorId: nullableText(value, 'actor_id'), idempotencyKey: text(value, 'idempotency_key'), causationEventId: nullableText(value, 'causation_event_id'), payload: parseJson(text(value, 'payload_json')), createdAt: number(value, 'created_at') } as ManagementEventV1, payloadHash: text(value, 'payload_hash') }; }
 function mapInvocation(value: unknown): AgentInvocationRecordDto | null { return value ? { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), intent: parseJson(text(value, 'intent_json')), intentHash: text(value, 'intent_hash'), idempotencyKey: text(value, 'idempotency_key'), createdAt: number(value, 'created_at') } : null; }

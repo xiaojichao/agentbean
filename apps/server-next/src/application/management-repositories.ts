@@ -67,6 +67,7 @@ export interface ManagementRepositories {
   runs: {
     create(record: ManagementRunDto): Promise<ManagementRunDto>;
     getById(id: ID): Promise<ManagementRunDto | null>;
+    getByRootTaskId(rootTaskId: ID): Promise<ManagementRunDto | null>;
     update(record: ManagementRunDto): Promise<ManagementRunDto>;
   };
   leases: {

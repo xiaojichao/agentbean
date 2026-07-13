@@ -59,6 +59,7 @@ function createRepositories(state: ManagementMemoryState): ManagementRepositorie
     runs: {
       async create(record) { if (state.runs.has(record.id)) throw new Error('management run already exists'); state.runs.set(record.id, record); return record; },
       async getById(id) { return state.runs.get(id) ?? null; },
+      async getByRootTaskId(rootTaskId) { return [...state.runs.values()].find((run) => run.rootTaskId === rootTaskId) ?? null; },
       async update(record) { if (!state.runs.has(record.id)) throw new Error('management run does not exist'); state.runs.set(record.id, record); return record; },
     },
     leases: {
