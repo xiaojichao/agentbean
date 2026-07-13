@@ -2,6 +2,43 @@
 import type { Release } from './changelog';
 export const releases: Release[] = [
   {
+    "version": "Daily 2026-07-13",
+    "date": "2026-07-13",
+    "sections": [
+      {
+        "type": "Added",
+        "items": [
+          "让 Device 发布物能够独立承载 Phase 1 PI runtime"
+        ]
+      },
+      {
+        "type": "Changed",
+        "items": [
+          "实现 Phase 2 Task coordination 持久化与原子事务",
+          "冻结 Phase 2 Task DAG 与团队认领 Domain 规则",
+          "建立 Phase 2 门禁与 V2 管理合同",
+          "制定 Phase 2 Task DAG 与团队认领实施计划",
+          "完成 Phase 1 Node 24 验证收口",
+          "实现 Phase 1 managed 单 Agent 垂直链路",
+          "实现 Phase 1 Team policy 与管理路由",
+          "实现 Phase 1 Worker transport 与设备调度器",
+          "实现 Phase 1 Invocation Gateway",
+          "实现 Phase 1 Server Collaboration Kernel",
+          "实现 Phase 1 management 原子持久化",
+          "先冻结 Worker 租约协议以阻止旧管理进程越权",
+          "记录 2026-07-12 每日更新日志"
+        ]
+      },
+      {
+        "type": "Fixed",
+        "items": [
+          "修复私有频道中文改名失效",
+          "实现 Phase 1 Device WorkerHost 与持久恢复"
+        ]
+      }
+    ]
+  },
+  {
     "version": "Daily 2026-07-12",
     "date": "2026-07-12",
     "sections": [
