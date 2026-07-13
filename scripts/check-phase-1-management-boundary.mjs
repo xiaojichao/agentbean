@@ -231,8 +231,63 @@ if (!workerTransportPresent) {
 
 console.log('P1_WORKER_TRANSPORT_PRESENT: Device eligibility, lease ACK, timeout, reconnect, and tool RPC boundaries are present; semantic readiness is verified by server tests');
 
+const deviceServiceCore = readSource('apps/daemon-next/src/device-service-core.ts');
+const piManagerWorkerHost = readSource('apps/daemon-next/src/pi-manager-worker-host.ts');
+const managementWorkerProtocol = readSource('apps/daemon-next/src/management-worker-protocol.ts');
+const managementDurableOutbox = readSource('apps/daemon-next/src/management-durable-outbox.ts');
+const managementCredentialProvider = readSource('apps/daemon-next/src/management-credential-provider.ts');
+const managementModelAdapter = readSource('apps/daemon-next/src/management-model-adapter.ts');
+const daemonProfilePaths = readSource('apps/daemon-next/src/profile-paths.ts');
+const daemonCli = readSource('apps/daemon-next/src/cli.ts');
+const deviceWorkerHostPresent = [
+  'createDeviceServiceCore',
+  'dispatchClient',
+  'managementWorkerHost',
+].every((marker) => deviceServiceCore.includes(marker))
+  && [
+    'createPiManagerWorkerHost',
+    'replayManagementOutboxForLease',
+    'activeLeaseCount',
+    'worker-disconnected',
+    'taskGraphRevision',
+  ].every((marker) => piManagerWorkerHost.includes(marker))
+  && [
+    'createManagementWorkerProtocol',
+    'leaseOffer',
+    'acquireLease',
+    'fetchCheckpoint',
+    'replayOutbox',
+    'onDisconnect',
+  ].every((marker) => managementWorkerProtocol.includes(marker))
+  && [
+    'createManagementDurableOutbox',
+    'managementRunId',
+    'commandId',
+    'idempotencyKey',
+    'requestHash',
+    '0o700',
+    '0o600',
+  ].every((marker) => managementDurableOutbox.includes(marker))
+  && [
+    'createEnvironmentManagementCredentialProvider',
+    'managementCredentialCapability',
+    'test_only',
+    'unavailable',
+  ].every((marker) => managementCredentialProvider.includes(marker))
+  && managementModelAdapter.includes('createManagementModelAdapter')
+  && daemonProfilePaths.includes('managementOutboxFile')
+  && daemonCli.includes('createDefaultManagementWorkerHost')
+  && daemonCli.includes('createDeviceServiceCore');
+
+if (!deviceWorkerHostPresent) {
+  console.error('P1_DEVICE_WORKER_HOST_INVALID: DeviceServiceCore, credential provider, durable outbox, Worker protocol, or PI WorkerHost is incomplete');
+  process.exit(2);
+}
+
+console.log('P1_DEVICE_WORKER_HOST_PRESENT: Device runtime composition, credential fail-closed capability, durable replay, lease fencing, and PI Session cleanup are present; semantic readiness is verified by daemon tests');
+
 const futureBoundaries = [
-  'apps/daemon-next/src/pi-manager-worker-host.ts',
+  'apps/server-next/src/application/management/management-router.ts',
 ];
 const missing = futureBoundaries.filter((path) => !existsSync(resolve(root, path)));
 if (missing.length > 0) {

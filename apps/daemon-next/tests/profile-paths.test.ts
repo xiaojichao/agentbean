@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentBeanHome, authFile, machineIdFile, profileRoot, sanitizeProfileId } from '../src/profile-paths';
+import { agentBeanHome, authFile, machineIdFile, managementOutboxFile, profileRoot, sanitizeProfileId } from '../src/profile-paths';
 
 describe('profile-paths', () => {
   it('sanitizes profileId (lowercase, non-alnum → -)', () => {
@@ -13,6 +13,9 @@ describe('profile-paths', () => {
   });
   it('machineIdFile is rooted at the AgentBean home', () => {
     expect(machineIdFile('/root')).toBe('/root/machine-id');
+  });
+  it('management outbox is isolated under the sanitized profile', () => {
+    expect(managementOutboxFile('Team A', '/root')).toBe('/root/teams/team-a/management/outbox.json');
   });
   it('profileRoot defaults to ~/.agentbean when no baseDir', () => {
     expect(profileRoot('default').endsWith('.agentbean/teams/default')).toBe(true);

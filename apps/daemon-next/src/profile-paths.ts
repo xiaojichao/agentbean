@@ -20,6 +20,10 @@ export function authFile(profileId?: string, baseDir?: string): string {
   return join(profileRoot(profileId, baseDir), 'auth.json');
 }
 
+export function managementOutboxFile(profileId?: string, baseDir?: string): string {
+  return join(profileRoot(profileId, baseDir), 'management', 'outbox.json');
+}
+
 export function machineIdFile(baseDir?: string): string {
   return join(agentBeanHome(baseDir), 'machine-id');
 }

@@ -42,3 +42,16 @@ export function readDaemonVersion(requireFromHere: PackageRequire = createRequir
   }
   return 'unknown';
 }
+
+export function readPiManagementRuntimeVersion(requireFromHere: PackageRequire = createRequire(import.meta.url)): string {
+  for (const candidate of DAEMON_PACKAGE_JSON_CANDIDATES) {
+    try {
+      const pkg = requireFromHere(candidate) as { dependencies?: Record<string, string> };
+      const version = pkg.dependencies?.['@agentbean/pi-management-runtime'];
+      if (version && /^\d+\.\d+\.\d+$/.test(version)) return version;
+    } catch {
+      // Source and built output sit at different depths; try the next package root candidate.
+    }
+  }
+  return 'unknown';
+}
