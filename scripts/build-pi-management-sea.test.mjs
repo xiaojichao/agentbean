@@ -28,6 +28,7 @@ test('bundles the real PI management smoke as a self-contained CommonJS entry', 
     await bundleSeaEntry(outfile);
     const bundle = readFileSync(outfile, 'utf8');
     assert.match(bundle, /phase-0-sea-deterministic/);
+    assert.doesNotMatch(bundle, /require\(["']@agentbean\/contracts["']\)/);
     assert.doesNotMatch(bundle, /require\(["']@mariozechner\/pi-agent-core["']\)/);
     const result = spawnSync(process.execPath, [outfile], {
       cwd: directory,
