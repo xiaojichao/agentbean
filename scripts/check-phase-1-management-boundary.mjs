@@ -177,6 +177,29 @@ if (!serverKernelPresent) {
 
 console.log('P1_SERVER_KERNEL_PRESENT: Collaboration Kernel, Event, Checkpoint, and tool boundaries are present; semantic readiness is verified by server tests');
 
+const invocationGateway = readSource('apps/server-next/src/application/management/invocation-gateway.ts');
+const serverRepositories = readSource('apps/server-next/src/application/repositories.ts');
+const serverUseCases = readSource('apps/server-next/src/application/usecases.ts');
+const invocationGatewayPresent = [
+  'createInvocationGateway',
+  'canonicalizeAgentInvocationIntent',
+  'resolveInvocationIdempotency',
+  'completeAttempt',
+  'deriveInvocationView',
+  'INVOCATION_ACTIVE_ATTEMPT',
+].every((marker) => invocationGateway.includes(marker))
+  && serverRepositories.includes('ManagementDispatchUnitOfWork')
+  && serverRepositories.includes('managementDispatchUnitOfWork')
+  && serverUseCases.includes('invocationGateway.completeAttempt')
+  && serverUseCases.includes('managedAttempt');
+
+if (!invocationGatewayPresent) {
+  console.error('P1_INVOCATION_GATEWAY_INVALID: Invocation/Dispatch attempt bridge or canonical lifecycle integration is incomplete');
+  process.exit(2);
+}
+
+console.log('P1_INVOCATION_GATEWAY_PRESENT: immutable Invocation, canonical Dispatch attempt, and terminal lifecycle bridge are present; semantic readiness is verified by server tests');
+
 const futureBoundaries = [
   'apps/daemon-next/src/pi-manager-worker-host.ts',
 ];

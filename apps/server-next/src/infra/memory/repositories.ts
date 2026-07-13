@@ -44,9 +44,24 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const savedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
   const pinnedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
 
-  return {
+  let repositories!: ServerNextRepositories;
+  repositories = {
     management: management.repositories,
     managementUnitOfWork: management.unitOfWork,
+    managementDispatchUnitOfWork: {
+      run(operation) {
+        return management.unitOfWork.run(async (managementRepositories) => {
+          const snapshot = new Map(dispatches);
+          try {
+            return await operation({ management: managementRepositories, dispatches: repositories.dispatches });
+          } catch (error) {
+            dispatches.clear();
+            for (const [id, dispatch] of snapshot) dispatches.set(id, dispatch);
+            throw error;
+          }
+        });
+      },
+    },
     users: {
       async create(input) {
         users.set(input.id, input);
@@ -1124,6 +1139,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
     },
   };
+  return repositories;
 }
 
 function uniqueStrings(values: string[]): string[] {

@@ -151,6 +151,9 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
       async getById(id) {
         return mapInvocation(db.prepare('SELECT * FROM agent_invocations WHERE id = ?').get(id));
       },
+      async getByIdempotencyKey(input) {
+        return mapInvocation(db.prepare('SELECT * FROM agent_invocations WHERE management_run_id = ? AND idempotency_key = ?').get(input.managementRunId, input.idempotencyKey));
+      },
       async listByRun(managementRunId) {
         return db.prepare('SELECT * FROM agent_invocations WHERE management_run_id = ? ORDER BY created_at, id')
           .all(managementRunId).map((value) => {
@@ -167,6 +170,16 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
           .run(record.id, record.invocationId, record.dispatchId, record.attemptNumber, record.status,
             record.startedAt, record.completedAt ?? null);
         return record;
+      },
+      async update(record) {
+        const result = db.prepare(`UPDATE invocation_dispatch_attempts SET status = ?, completed_at = ? WHERE id = ?`)
+          .run(record.status, record.completedAt ?? null, record.id);
+        if ((result as { changes?: number }).changes === 0) throw new Error('dispatch attempt does not exist');
+        return record;
+      },
+      async getByDispatchId(dispatchId) {
+        const value = db.prepare('SELECT * FROM invocation_dispatch_attempts WHERE dispatch_id = ?').get(dispatchId);
+        return value ? mapAttempt(value) : null;
       },
       async list(invocationId) {
         return db.prepare('SELECT * FROM invocation_dispatch_attempts WHERE invocation_id = ? ORDER BY attempt_number')

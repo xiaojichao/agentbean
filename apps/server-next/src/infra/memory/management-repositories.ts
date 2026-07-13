@@ -84,6 +84,7 @@ function createRepositories(state: ManagementMemoryState): ManagementRepositorie
         state.invocations.set(record.id, record); return record;
       },
       async getById(id) { return state.invocations.get(id) ?? null; },
+      async getByIdempotencyKey(input) { return [...state.invocations.values()].find((item) => item.managementRunId === input.managementRunId && item.idempotencyKey === input.idempotencyKey) ?? null; },
       async listByRun(managementRunId) { return [...state.invocations.values()].filter((item) => item.managementRunId === managementRunId).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)); },
     },
     dispatchAttempts: {
@@ -93,6 +94,11 @@ function createRepositories(state: ManagementMemoryState): ManagementRepositorie
         if (isActive(record.status) && attempts.some((item) => item.invocationId === record.invocationId && isActive(item.status))) throw new Error('active dispatch attempt already exists');
         state.attempts.set(record.id, record); return record;
       },
+      async update(record) {
+        if (!state.attempts.has(record.id)) throw new Error('dispatch attempt does not exist');
+        state.attempts.set(record.id, record); return record;
+      },
+      async getByDispatchId(dispatchId) { return [...state.attempts.values()].find((item) => item.dispatchId === dispatchId) ?? null; },
       async list(invocationId) { return [...state.attempts.values()].filter((item) => item.invocationId === invocationId).sort((a, b) => a.attemptNumber - b.attemptNumber); },
     },
     shadowDecisions: { async create(record) { if (state.shadowDecisions.has(record.id)) throw new Error('shadow decision already exists'); state.shadowDecisions.set(record.id, record); return record; } },

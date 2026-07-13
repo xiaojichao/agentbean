@@ -5,6 +5,7 @@ import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, 
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
+import { createInvocationGateway } from './management/invocation-gateway.js';
 
 export interface ServerNextClock {
   now(): number;
@@ -798,6 +799,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const sessionSecret = input.sessionSecret ?? 'agentbean-next-dev-session-secret';
   const artifactContentStore = input.artifactContentStore;
   const dispatchCoalescingLocks = new Map<string, Promise<void>>();
+  const invocationGateway = createInvocationGateway({ repositories, clock, ids });
 
   return {
     async registerUser(registerInput) {
@@ -3231,15 +3233,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
 
       const now = clock.now();
-      const cancelled = await repositories.dispatches.markCancelled({
-        dispatchId: cancelInput.dispatchId,
-        completedAt: now,
-      });
+      const managedAttempt = await repositories.management.dispatchAttempts.getByDispatchId(cancelInput.dispatchId);
+      const cancelled = managedAttempt
+        ? await invocationGateway.completeAttempt({ dispatchId: cancelInput.dispatchId, status: 'cancelled', actorKind: 'human', actorId: cancelInput.userId })
+        : await repositories.dispatches.markCancelled({ dispatchId: cancelInput.dispatchId, completedAt: now });
       if (!cancelled) {
         return makeFailure('NOT_FOUND', 'Dispatch not found');
       }
       const originMessage = await repositories.messages.getById(cancelled.dispatch.messageId);
-      const task = cancelled.changed
+      const task = cancelled.changed && !managedAttempt
         ? await markLinkedTaskTodoIfInProgress(repositories, originMessage, now)
         : null;
       const agent = await repositories.agents.getById(cancelled.dispatch.agentId);
@@ -3276,10 +3278,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (dispatch.channelId !== cancelInput.channelId || !isPendingDispatchStatus(dispatch.status)) {
           continue;
         }
-        const result = await repositories.dispatches.markCancelled({
-          dispatchId: dispatch.id,
-          completedAt: now,
-        });
+        const managedAttempt = await repositories.management.dispatchAttempts.getByDispatchId(dispatch.id);
+        const result = managedAttempt
+          ? await invocationGateway.completeAttempt({ dispatchId: dispatch.id, status: 'cancelled', actorKind: 'human', actorId: cancelInput.userId })
+          : await repositories.dispatches.markCancelled({ dispatchId: dispatch.id, completedAt: now });
         if (!result?.changed) {
           continue;
         }
@@ -3292,7 +3294,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           });
         }
         const originMessage = await repositories.messages.getById(result.dispatch.messageId);
-        const task = await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
+        const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
         if (task) {
           tasks.push(task);
         }
@@ -3313,11 +3315,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (!isPendingDispatchStatus(dispatch.status)) {
           continue;
         }
-        const timedOut = await repositories.dispatches.markTimedOut({
-          dispatchId: dispatch.id,
-          error: 'DISPATCH_TIMEOUT',
-          completedAt: now,
-        });
+        const managedAttempt = await repositories.management.dispatchAttempts.getByDispatchId(dispatch.id);
+        const timedOut = managedAttempt
+          ? await invocationGateway.completeAttempt({ dispatchId: dispatch.id, status: 'timed_out', error: 'DISPATCH_TIMEOUT' })
+          : await repositories.dispatches.markTimedOut({ dispatchId: dispatch.id, error: 'DISPATCH_TIMEOUT', completedAt: now });
         if (timedOut?.changed) {
           const agent = await repositories.agents.getById(dispatch.agentId);
           if (agent && agent.status === 'busy') {
@@ -3328,7 +3329,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             });
           }
           const originMessage = await repositories.messages.getById(timedOut.dispatch.messageId);
-          const task = await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
+          const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
           if (task) {
             tasks.push(task);
           }
@@ -3359,16 +3360,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
       const now = clock.now();
       const resultSucceeded = isSuccessfulDispatchResult(resultInput.workspaceRun);
-      const completed = resultSucceeded
-        ? await repositories.dispatches.markSucceeded({
+      const managedAttempt = await repositories.management.dispatchAttempts.getByDispatchId(resultInput.dispatchId);
+      const completed = managedAttempt
+        ? await invocationGateway.completeAttempt({
             dispatchId: resultInput.dispatchId,
-            completedAt: now,
+            status: resultSucceeded ? 'succeeded' : 'failed',
+            ...(resultSucceeded ? {} : { error: workspaceRunFailureError(resultInput.workspaceRun) }),
+            actorKind: 'agent',
+            actorId: resultInput.agentId,
           })
-        : await repositories.dispatches.markFailed({
-            dispatchId: resultInput.dispatchId,
-            error: workspaceRunFailureError(resultInput.workspaceRun),
-            completedAt: now,
-          });
+        : resultSucceeded
+          ? await repositories.dispatches.markSucceeded({ dispatchId: resultInput.dispatchId, completedAt: now })
+          : await repositories.dispatches.markFailed({ dispatchId: resultInput.dispatchId, error: workspaceRunFailureError(resultInput.workspaceRun), completedAt: now });
       if (!completed) {
         return makeFailure('NOT_FOUND', 'Dispatch not found');
       }
@@ -3483,9 +3486,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ...(chatArtifacts.length > 0 ? { artifacts: chatArtifacts } : {}),
         ...(workspaceRun ? { workspaceRun } : {}),
       };
-      const completedTask = resultSucceeded
-        ? await markLinkedTaskInReview(repositories, originMessage, now)
-        : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
+      const completedTask = managedAttempt
+        ? null
+        : resultSucceeded
+          ? await markLinkedTaskInReview(repositories, originMessage, now)
+          : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
       await markAgentOnlineIfIdle(repositories, {
         agentId: resultInput.agentId,
         teamId: completed.dispatch.teamId,
@@ -3516,11 +3521,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
 
       const now = clock.now();
-      const failed = await repositories.dispatches.markFailed({
-        dispatchId: errorInput.dispatchId,
-        error: errorInput.error,
-        completedAt: now,
-      });
+      const managedAttempt = await repositories.management.dispatchAttempts.getByDispatchId(errorInput.dispatchId);
+      const failed = managedAttempt
+        ? await invocationGateway.completeAttempt({ dispatchId: errorInput.dispatchId, status: 'failed', error: errorInput.error, actorKind: 'agent', actorId: errorInput.agentId })
+        : await repositories.dispatches.markFailed({ dispatchId: errorInput.dispatchId, error: errorInput.error, completedAt: now });
       if (!failed) {
         return makeFailure('NOT_FOUND', 'Dispatch not found');
       }
@@ -3534,7 +3538,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         lastError: errorInput.error,
       });
       const originMessage = await repositories.messages.getById(failed.dispatch.messageId);
-      const task = await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
+      const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
 
       return makeSuccess({
         dispatch: toDispatchDto(failed.dispatch),

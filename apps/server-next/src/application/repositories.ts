@@ -62,6 +62,15 @@ export interface DispatchMutationResult {
   dispatch: DispatchRecord;
   changed: boolean;
 }
+
+export interface ManagementDispatchRepositories {
+  management: ManagementRepositories;
+  dispatches: DispatchRepository;
+}
+
+export interface ManagementDispatchUnitOfWork {
+  run<T>(operation: (repositories: ManagementDispatchRepositories) => Promise<T>): Promise<T>;
+}
 export interface AgentExecutionConfig {
   adapterKind: AgentDto['adapterKind'];
   command?: string;
@@ -293,6 +302,7 @@ export interface TaskRepository {
 export interface ServerNextRepositories {
   management: ManagementRepositories;
   managementUnitOfWork: ManagementUnitOfWork;
+  managementDispatchUnitOfWork: ManagementDispatchUnitOfWork;
   users: UserRepository;
   teams: TeamRepository;
   joinLinks: JoinLinkRepository;

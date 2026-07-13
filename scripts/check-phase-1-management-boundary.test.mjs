@@ -57,11 +57,25 @@ function scaffoldFutureBoundaries(root) {
   scaffoldWorkerContracts(root);
   scaffoldManagementPersistence(root);
   scaffoldServerKernel(root);
+  scaffoldInvocationGateway(root);
   for (const path of [
     'apps/daemon-next/src/pi-manager-worker-host.ts',
   ]) {
     write(root, path, '// scaffolded\n');
   }
+}
+
+function scaffoldInvocationGateway(root) {
+  write(root, 'apps/server-next/src/application/management/invocation-gateway.ts', [
+    'createInvocationGateway',
+    'canonicalizeAgentInvocationIntent',
+    'resolveInvocationIdempotency',
+    'completeAttempt',
+    'deriveInvocationView',
+    'INVOCATION_ACTIVE_ATTEMPT',
+  ].join('\n'));
+  write(root, 'apps/server-next/src/application/repositories.ts', 'ManagementDispatchUnitOfWork managementDispatchUnitOfWork\n');
+  write(root, 'apps/server-next/src/application/usecases.ts', 'invocationGateway.completeAttempt managedAttempt\n');
 }
 
 function scaffoldServerKernel(root) {
@@ -178,7 +192,7 @@ test('reports management persistence while Server kernel and WorkerHost remain R
   });
 });
 
-test('reports Server kernel while WorkerHost remains Red', () => {
+test('reports Server kernel while Invocation Gateway remains Red', () => {
   withFixture((root) => {
     scaffoldRuntimeSlice(root);
     scaffoldWorkerContracts(root);
@@ -187,6 +201,20 @@ test('reports Server kernel while WorkerHost remains Red', () => {
     const result = runChecker(root);
     assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
     assert.match(result.stdout, /P1_SERVER_KERNEL_PRESENT/);
+    assert.match(result.stderr, /P1_INVOCATION_GATEWAY_INVALID/);
+  });
+});
+
+test('reports Invocation Gateway while WorkerHost remains Red', () => {
+  withFixture((root) => {
+    scaffoldRuntimeSlice(root);
+    scaffoldWorkerContracts(root);
+    scaffoldManagementPersistence(root);
+    scaffoldServerKernel(root);
+    scaffoldInvocationGateway(root);
+    const result = runChecker(root);
+    assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /P1_INVOCATION_GATEWAY_PRESENT/);
     assert.match(result.stderr, /P1_NOT_IMPLEMENTED:.*pi-manager-worker-host\.ts/);
   });
 });
