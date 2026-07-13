@@ -68,3 +68,20 @@ test('fails closed when the Phase 2 atomic persistence boundary disappears', () 
     rmSync(fixture, { recursive: true, force: true });
   }
 });
+
+test('fails closed when the Task coordination command boundary disappears', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'agentbean-phase2-kernel-boundary-'));
+  try {
+    cpSync(root, fixture, {
+      recursive: true,
+      filter: (source) => !source.split('/').includes('node_modules') && !source.split('/').includes('.git'),
+    });
+    const path = join(fixture, 'apps/server-next/src/application/management/task-coordination-kernel.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replace('createRootCoordination', 'removedRootCoordination'));
+    const result = run(fixture);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /P2_COORDINATION_KERNEL_BOUNDARY_INVALID/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});

@@ -18,7 +18,19 @@ export const PHASE_1_WRITABLE_MANAGEMENT_EVENT_TYPES = [
 
 type Phase1WritableEventType = (typeof PHASE_1_WRITABLE_MANAGEMENT_EVENT_TYPES)[number];
 
-const payloadKeys: Record<Phase1WritableEventType, { required: readonly string[]; optional?: readonly string[] }> = {
+export const TASK_COORDINATION_MANAGEMENT_EVENT_TYPES = [
+  'task-created',
+  'task-revised',
+  'task-state-changed',
+  'task-published-for-claim',
+  'task-assigned',
+  'claim-invalidated',
+] as const satisfies readonly ManagementEventTypeV1[];
+
+type TaskCoordinationEventType = (typeof TASK_COORDINATION_MANAGEMENT_EVENT_TYPES)[number];
+type WritableEventType = Phase1WritableEventType | TaskCoordinationEventType;
+
+const payloadKeys: Record<WritableEventType, { required: readonly string[]; optional?: readonly string[] }> = {
   'run-started': { required: ['rootMessageId', 'mode'], optional: ['rootTaskId'] },
   'worker-leased': { required: ['workerId', 'leaseFingerprint', 'expiresAt'] },
   'worker-lost': { required: ['workerId', 'lastHeartbeatAt', 'reasonCode'] },
@@ -31,17 +43,31 @@ const payloadKeys: Record<Phase1WritableEventType, { required: readonly string[]
   'run-completed': { required: ['deliveryMessageId'], optional: ['completedTaskId'] },
   'run-failed': { required: ['errorCode', 'recoverable'] },
   'run-cancelled': { required: ['reasonCode', 'cancelledBy'] },
+  'task-created': { required: ['taskId', 'taskRevision'], optional: ['parentTaskId'] },
+  'task-revised': { required: ['taskId', 'previousRevision', 'taskRevision', 'criterionIds', 'reasonCode'] },
+  'task-state-changed': { required: ['taskId', 'taskRevision', 'from', 'to'] },
+  'task-published-for-claim': { required: ['taskId', 'taskRevision', 'requiredCapabilities'] },
+  'task-assigned': { required: ['taskId', 'taskRevision', 'agentId'] },
+  'claim-invalidated': { required: ['taskId', 'previousTaskRevision', 'claimLeaseId', 'invalidatedInvocationIds', 'reasonCode'] },
 };
 
 export function parsePhase1ManagementEvent(input: unknown): ManagementEventV1 {
+  return parseManagementEvent(input, PHASE_1_WRITABLE_MANAGEMENT_EVENT_TYPES);
+}
+
+export function parseTaskCoordinationManagementEvent(input: unknown): ManagementEventV1 {
+  return parseManagementEvent(input, TASK_COORDINATION_MANAGEMENT_EVENT_TYPES);
+}
+
+function parseManagementEvent(input: unknown, allowedTypes: readonly WritableEventType[]): ManagementEventV1 {
   const event = record(input, 'event');
   exactKeys(event, ['schemaVersion', 'id', 'managementRunId', 'sequence', 'type', 'actorKind', 'idempotencyKey', 'payload', 'createdAt'], ['actorId', 'causationEventId']);
   if (event.schemaVersion !== 1) fail('schemaVersion');
   string(event.id, 'id');
   string(event.managementRunId, 'managementRunId');
   positiveInteger(event.sequence, 'sequence');
-  const type = string(event.type, 'type') as Phase1WritableEventType;
-  if (!PHASE_1_WRITABLE_MANAGEMENT_EVENT_TYPES.includes(type)) fail('type');
+  const type = string(event.type, 'type') as WritableEventType;
+  if (!allowedTypes.includes(type)) fail('type');
   if (!['system', 'manager', 'agent', 'human'].includes(string(event.actorKind, 'actorKind'))) fail('actorKind');
   optionalString(event.actorId, 'actorId');
   string(event.idempotencyKey, 'idempotencyKey');
@@ -59,7 +85,11 @@ export function hashManagementEventPayload(input: Pick<ManagementEventV1, 'type'
   return createHash('sha256').update(canonicalJson({ type: input.type, payload: input.payload })).digest('hex');
 }
 
-function validatePayload(type: Phase1WritableEventType, payload: Record<string, unknown>): void {
+export function hashManagementCommandInput(input: unknown): string {
+  return createHash('sha256').update(canonicalJson(input)).digest('hex');
+}
+
+function validatePayload(type: WritableEventType, payload: Record<string, unknown>): void {
   switch (type) {
     case 'run-started':
       string(payload.rootMessageId, 'payload.rootMessageId');
@@ -89,6 +119,32 @@ function validatePayload(type: Phase1WritableEventType, payload: Record<string, 
       string(payload.errorCode, 'payload.errorCode'); if (typeof payload.recoverable !== 'boolean') fail('payload.recoverable'); return;
     case 'run-cancelled':
       string(payload.reasonCode, 'payload.reasonCode'); string(payload.cancelledBy, 'payload.cancelledBy'); return;
+    case 'task-created':
+      string(payload.taskId, 'payload.taskId'); optionalString(payload.parentTaskId, 'payload.parentTaskId');
+      positiveInteger(payload.taskRevision, 'payload.taskRevision'); return;
+    case 'task-revised':
+      string(payload.taskId, 'payload.taskId'); positiveInteger(payload.previousRevision, 'payload.previousRevision');
+      positiveInteger(payload.taskRevision, 'payload.taskRevision');
+      if (payload.taskRevision !== (payload.previousRevision as number) + 1) fail('payload.taskRevision');
+      stringArray(payload.criterionIds, 'payload.criterionIds'); string(payload.reasonCode, 'payload.reasonCode'); return;
+    case 'task-state-changed': {
+      string(payload.taskId, 'payload.taskId'); positiveInteger(payload.taskRevision, 'payload.taskRevision');
+      const from = taskStatus(payload.from, 'payload.from');
+      const to = taskStatus(payload.to, 'payload.to');
+      if (from === to) fail('payload.to');
+      return;
+    }
+    case 'task-published-for-claim':
+      string(payload.taskId, 'payload.taskId'); positiveInteger(payload.taskRevision, 'payload.taskRevision');
+      stringArray(payload.requiredCapabilities, 'payload.requiredCapabilities'); return;
+    case 'task-assigned':
+      string(payload.taskId, 'payload.taskId'); positiveInteger(payload.taskRevision, 'payload.taskRevision');
+      string(payload.agentId, 'payload.agentId'); return;
+    case 'claim-invalidated':
+      string(payload.taskId, 'payload.taskId'); positiveInteger(payload.previousTaskRevision, 'payload.previousTaskRevision');
+      string(payload.claimLeaseId, 'payload.claimLeaseId');
+      stringArray(payload.invalidatedInvocationIds, 'payload.invalidatedInvocationIds');
+      string(payload.reasonCode, 'payload.reasonCode'); return;
   }
 }
 
@@ -98,7 +154,8 @@ function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   if (typeof value === 'object') {
     const valueRecord = value as Record<string, unknown>;
-    return `{${Object.keys(valueRecord).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(valueRecord[key])}`).join(',')}}`;
+    return `{${Object.keys(valueRecord).filter((key) => valueRecord[key] !== undefined).sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(valueRecord[key])}`).join(',')}}`;
   }
   fail('unsupported-value');
 }
@@ -111,4 +168,9 @@ function nonNegativeInteger(value: unknown, path: string): void { if (!Number.is
 function positiveInteger(value: unknown, path: string): void { if (!Number.isSafeInteger(value) || (value as number) <= 0) fail(path); }
 function optionalPositiveInteger(value: unknown, path: string): void { if (value !== undefined) positiveInteger(value, path); }
 function stringArray(value: unknown, path: string): void { if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || item.length === 0)) fail(path); }
+function taskStatus(value: unknown, path: string): string {
+  const status = string(value, path);
+  if (!['todo', 'in_progress', 'in_review', 'done', 'closed'].includes(status)) fail(path);
+  return status;
+}
 function fail(path: string): never { throw new Error(`INVALID_MANAGEMENT_EVENT:${path}`); }

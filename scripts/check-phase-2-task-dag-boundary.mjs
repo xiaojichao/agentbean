@@ -28,6 +28,9 @@ const taskCoordinationRepositories = [
 ];
 const taskCoordinationUnitOfWork = read('apps/server-next/src/application/task-coordination-unit-of-work.ts');
 const taskCoordinationTests = read('apps/server-next/tests/task-coordination-unit-of-work.test.ts');
+const taskCoordinationKernel = read('apps/server-next/src/application/management/task-coordination-kernel.ts');
+const taskCoordinationKernelTests = read('apps/server-next/tests/task-coordination-kernel.test.ts');
+const managementEventValidator = read('apps/server-next/src/application/management/management-event-validator.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
 
@@ -85,6 +88,26 @@ if (!persistenceMarkers.every((marker) => taskCoordinationMigration.includes(mar
   || !taskCoordinationTests.includes('rolls back Task and coordination revision together')
   || !taskCoordinationTests.includes('rolls back schema when the 0013 migration ledger write fails')) {
   violations.push('P2_PERSISTENCE_BOUNDARY_INVALID: Phase 2 schema, repositories, atomic UoW, and rollback evidence are required');
+}
+
+const coordinationCommandMarkers = [
+  'createRootCoordination', 'createSubtasks', 'addDependency', 'reviseTask',
+  'invalidateClaim', 'publishForClaim', 'assignTask', 'transitionTaskState',
+];
+const coordinationTestMarkers = [
+  'idempotent typed events',
+  'rejects a cycle atomically',
+  'invalidates current claim plus matching Invocation in one transaction',
+  'rolls back an over-budget batch and a failed Event append',
+];
+if (!coordinationCommandMarkers.every((marker) => taskCoordinationKernel.includes(marker))
+  || !taskCoordinationKernel.includes('evaluateTaskDag')
+  || !taskCoordinationKernel.includes('evaluateTaskRevisionChange')
+  || !taskCoordinationKernel.includes('appendValidatedManagementEventInTransaction')
+  || !managementEventValidator.includes('parseTaskCoordinationManagementEvent')
+  || !managementEventValidator.includes('hashManagementCommandInput')
+  || !coordinationTestMarkers.every((marker) => taskCoordinationKernelTests.includes(marker))) {
+  violations.push('P2_COORDINATION_KERNEL_BOUNDARY_INVALID: Task coordination commands, Domain policies, exact Events, and rollback evidence are required');
 }
 
 const scripts = packageJson.scripts ?? {};

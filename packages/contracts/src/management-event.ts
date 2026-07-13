@@ -40,6 +40,16 @@ export interface ManagementEventPayloadMapV1 {
     readonly from: 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
     readonly to: 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
   };
+  readonly 'task-published-for-claim': {
+    readonly taskId: ID;
+    readonly taskRevision: number;
+    readonly requiredCapabilities: readonly string[];
+  };
+  readonly 'task-assigned': {
+    readonly taskId: ID;
+    readonly taskRevision: number;
+    readonly agentId: ID;
+  };
   readonly 'task-claimed': {
     readonly taskId: ID;
     readonly taskRevision: number;

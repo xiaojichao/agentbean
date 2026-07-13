@@ -323,14 +323,33 @@ export async function appendManagementEventInTransaction<T extends ManagementEve
   now: number,
   ids: { nextId(): string },
 ): Promise<ManagementEventRecord> {
+  const payloadHash = hashManagementEventPayload({
+    type: input.type,
+    payload: input.payload,
+  } as Pick<ReturnType<typeof parsePhase1ManagementEvent>, 'type' | 'payload'>);
+  return appendValidatedManagementEventInTransaction(
+    repositories,
+    input,
+    now,
+    ids,
+    { payloadHash, parseEvent: parsePhase1ManagementEvent },
+  );
+}
+
+export async function appendValidatedManagementEventInTransaction<T extends ManagementEventTypeV1>(
+  repositories: ManagementRepositories,
+  input: { managementRunId: string; type: T; actorKind: 'system' | 'manager' | 'agent' | 'human'; actorId?: string; idempotencyKey: string; causationEventId?: string; payload: ManagementEventPayloadMapV1[T] },
+  now: number,
+  ids: { nextId(): string },
+  validation: { payloadHash: string; parseEvent(input: unknown): ReturnType<typeof parsePhase1ManagementEvent> },
+): Promise<ManagementEventRecord> {
   const events = await repositories.events.list(input.managementRunId);
-  const candidateHash = hashManagementEventPayload({ type: input.type, payload: input.payload } as Pick<ReturnType<typeof parsePhase1ManagementEvent>, 'type' | 'payload'>);
   const existing = events.find(({ event }) => event.idempotencyKey === input.idempotencyKey);
   if (existing) {
-    if (existing.event.type === input.type && existing.payloadHash === candidateHash) return existing;
+    if (existing.event.type === input.type && existing.payloadHash === validation.payloadHash) return existing;
     throw new ManagementConflictError('MANAGEMENT_EVENT_IDEMPOTENCY_CONFLICT');
   }
-  const event = parsePhase1ManagementEvent({
+  const event = validation.parseEvent({
     schemaVersion: 1,
     id: ids.nextId(),
     managementRunId: input.managementRunId,
@@ -343,7 +362,7 @@ export async function appendManagementEventInTransaction<T extends ManagementEve
     payload: input.payload,
     createdAt: now,
   });
-  return repositories.events.append({ event, payloadHash: candidateHash });
+  return repositories.events.append({ event, payloadHash: validation.payloadHash });
 }
 
 export async function authorizeManagementWrite(repositories: ManagementRepositories, authority: LeaseAuthorityInput, now: number): Promise<void> {
