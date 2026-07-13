@@ -1,4 +1,12 @@
-import { AGENT_EVENTS, WEB_EVENTS, makeFailure, type DispatchRequestDto } from '../../../../packages/contracts/src/index.js';
+import {
+  AGENT_EVENTS,
+  WEB_EVENTS,
+  makeFailure,
+  safeParseManagementWorkerPayload,
+  type DispatchRequestDto,
+  type ManagementWorkerPayloadKind,
+  type ManagementWorkerPayloadMapV1,
+} from '../../../../packages/contracts/src/index.js';
 import type { ServerNextUseCases } from '../application/usecases.js';
 
 export interface AuthenticatedUserIdentity {
@@ -112,6 +120,16 @@ export interface AgentSocketHandlerOptions {
   deviceScan?(request: DeviceScanEmitRequest): void;
   dispatchClaimQuietMs?: number;
   connectedDeviceId?(): string | undefined;
+  managementWorker?: ManagementWorkerSocketHandlers;
+}
+
+export interface ManagementWorkerSocketHandlers {
+  register(payload: ManagementWorkerPayloadMapV1['register']): Promise<unknown>;
+  leaseAcquire(payload: ManagementWorkerPayloadMapV1['lease-acquire']): Promise<unknown>;
+  leaseRenew(payload: ManagementWorkerPayloadMapV1['lease-renew']): Promise<unknown>;
+  leaseRelease(payload: ManagementWorkerPayloadMapV1['lease-release']): Promise<unknown>;
+  abort(payload: ManagementWorkerPayloadMapV1['abort']): Promise<unknown>;
+  toolRequest(payload: ManagementWorkerPayloadMapV1['tool-request']): Promise<unknown>;
 }
 
 export function registerWebSocketHandlers(
@@ -526,6 +544,40 @@ export function registerAgentSocketHandlers(
   });
   bind(socket, AGENT_EVENTS.dispatch.result, app, 'receiveDispatchResult', afterDispatchCompletion);
   bind(socket, AGENT_EVENTS.dispatch.error, app, 'receiveDispatchError', afterDispatchCompletion);
+  if (options.managementWorker) {
+    bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.register, 'register', options.managementWorker.register);
+    bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.leaseAcquire, 'lease-acquire', options.managementWorker.leaseAcquire);
+    bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.leaseRenew, 'lease-renew', options.managementWorker.leaseRenew);
+    bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.leaseRelease, 'lease-release', options.managementWorker.leaseRelease);
+    bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.abort, 'abort', options.managementWorker.abort);
+    bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.toolRequest, 'tool-request', options.managementWorker.toolRequest);
+  }
+}
+
+function bindManagementWorkerPayload<K extends ManagementWorkerPayloadKind>(
+  socket: SocketLike,
+  event: string,
+  kind: K,
+  handler: (payload: ManagementWorkerPayloadMapV1[K]) => Promise<unknown>,
+): void {
+  socket.on(event, async (payload, ack) => {
+    const parsed = safeParseManagementWorkerPayload(kind, payload);
+    if (!parsed.ok) {
+      ack?.({
+        schemaVersion: 1,
+        ok: false,
+        errorCode: 'INVALID_REQUEST',
+        diagnosticCode: `${parsed.error.code}:${parsed.error.path}`,
+        retryable: false,
+      });
+      return;
+    }
+    try {
+      ack?.(await handler(parsed.value));
+    } catch (error) {
+      ack?.(socketErrorAck(error, event));
+    }
+  });
 }
 
 function bind(

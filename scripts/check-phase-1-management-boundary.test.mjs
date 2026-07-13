@@ -58,11 +58,31 @@ function scaffoldFutureBoundaries(root) {
   scaffoldManagementPersistence(root);
   scaffoldServerKernel(root);
   scaffoldInvocationGateway(root);
+  scaffoldWorkerTransport(root);
   for (const path of [
     'apps/daemon-next/src/pi-manager-worker-host.ts',
   ]) {
     write(root, path, '// scaffolded\n');
   }
+}
+
+function scaffoldWorkerTransport(root) {
+  write(root, 'apps/server-next/src/application/management/device-worker-scheduler.ts', [
+    'createDeviceWorkerScheduler',
+    'registerWorker',
+    'scheduleManagementRun',
+    'acquireLease',
+    'renewLease',
+    'releaseLease',
+    'expireLease',
+    'abortLease',
+    'executeTool',
+    'MANAGEMENT_WORKER_OFFER_TIMEOUT',
+  ].join('\n'));
+  write(root, 'apps/server-next/src/application/management/management-kernel.ts', 'createOrResumeRun acquireLease renewLease releaseLease expireLease appendEvent authorizeManagementWrite\n');
+  write(root, 'apps/server-next/src/transport/socket-handlers.ts', 'safeParseManagementWorkerPayload AGENT_EVENTS.managementWorker.register\n');
+  write(root, 'apps/server-next/src/transport/socket-server.ts', 'managementWorkerScheduler scheduleManagementRun\n');
+  write(root, 'apps/server-next/src/dev-server.ts', 'createDefaultManagementWorkerScheduler createDeviceWorkerScheduler\n');
 }
 
 function scaffoldInvocationGateway(root) {
@@ -79,7 +99,7 @@ function scaffoldInvocationGateway(root) {
 }
 
 function scaffoldServerKernel(root) {
-  write(root, 'apps/server-next/src/application/management/management-kernel.ts', 'createOrResumeRun acquireLease renewLease releaseLease appendEvent authorizeManagementWrite\n');
+  write(root, 'apps/server-next/src/application/management/management-kernel.ts', 'createOrResumeRun acquireLease renewLease releaseLease expireLease appendEvent authorizeManagementWrite\n');
   write(root, 'apps/server-next/src/application/management/management-event-validator.ts', 'parsePhase1ManagementEvent hashManagementEventPayload\n');
   write(root, 'apps/server-next/src/application/management/management-checkpoint.ts', 'collectManagementCheckpointFacts restoreOrRebuildManagementCheckpoint\n');
   write(root, 'apps/server-next/src/application/management/management-tool-executor.ts', 'createManagementToolExecutor\n');
@@ -205,7 +225,7 @@ test('reports Server kernel while Invocation Gateway remains Red', () => {
   });
 });
 
-test('reports Invocation Gateway while WorkerHost remains Red', () => {
+test('reports Invocation Gateway while Worker transport remains Red', () => {
   withFixture((root) => {
     scaffoldRuntimeSlice(root);
     scaffoldWorkerContracts(root);
@@ -215,6 +235,21 @@ test('reports Invocation Gateway while WorkerHost remains Red', () => {
     const result = runChecker(root);
     assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
     assert.match(result.stdout, /P1_INVOCATION_GATEWAY_PRESENT/);
+    assert.match(result.stderr, /P1_WORKER_TRANSPORT_INVALID/);
+  });
+});
+
+test('reports Worker transport while WorkerHost remains Red', () => {
+  withFixture((root) => {
+    scaffoldRuntimeSlice(root);
+    scaffoldWorkerContracts(root);
+    scaffoldManagementPersistence(root);
+    scaffoldServerKernel(root);
+    scaffoldInvocationGateway(root);
+    scaffoldWorkerTransport(root);
+    const result = runChecker(root);
+    assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /P1_WORKER_TRANSPORT_PRESENT/);
     assert.match(result.stderr, /P1_NOT_IMPLEMENTED:.*pi-manager-worker-host\.ts/);
   });
 });

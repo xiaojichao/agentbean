@@ -11,6 +11,7 @@ import {
   evaluateManagerLeaseAcquire,
   evaluateManagerLeaseRelease,
   evaluateManagerLeaseRenew,
+  inspectManagerLease,
   type ManagerLeaseAuthorizationFailure,
   type ManagerLeaseAuthorizationProof,
   type ManagerLeaseHost,
@@ -106,8 +107,9 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
         if (isTerminalRun(run)) throw new ManagementConflictError('MANAGEMENT_RUN_TERMINAL');
         const now = clock.now();
         const tokenHash = hashSecret(input.leaseToken);
+        const currentLease = (await transactionRepositories.leases.get(input.managementRunId)) ?? undefined;
         const decision = evaluateManagerLeaseAcquire({
-          current: (await transactionRepositories.leases.get(input.managementRunId)) ?? undefined,
+          current: currentLease,
           managementRunId: input.managementRunId,
           workerId: input.workerId,
           host: input.host,
@@ -118,6 +120,19 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
         });
         if (decision.kind === 'rejected') throw new ManagementConflictError(`LEASE_${decision.reason.toUpperCase().replaceAll('-', '_')}`);
         if (decision.kind === 'existing') return { lease: decision.lease, disposition: 'existing' as const };
+        if (decision.reason === 'expired-same-host' && currentLease) {
+          await appendManagementEventInTransaction(transactionRepositories, {
+            managementRunId: input.managementRunId,
+            type: 'worker-lost',
+            actorKind: 'system',
+            idempotencyKey: `worker-lost:${currentLease.fencingToken}`,
+            payload: {
+              workerId: currentLease.workerId,
+              lastHeartbeatAt: currentLease.heartbeatAt,
+              reasonCode: 'LEASE_EXPIRED',
+            },
+          }, now, ids);
+        }
         await transactionRepositories.leases.put(decision.lease);
         await transactionRepositories.runs.update({ ...run, status: 'running', activeWorkerId: input.workerId, updatedAt: now });
         await appendManagementEventInTransaction(transactionRepositories, {
@@ -160,6 +175,32 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
           payload: { workerId: input.workerId, lastHeartbeatAt: decision.lease.heartbeatAt, reasonCode: input.reasonCode },
         }, now, ids);
         return decision.lease;
+      });
+    },
+
+    async expireLease(input: { managementRunId: string; reasonCode?: string }) {
+      return unitOfWork.run(async (transactionRepositories) => {
+        const now = clock.now();
+        const lease = await transactionRepositories.leases.get(input.managementRunId);
+        if (!lease || inspectManagerLease(lease, now).kind !== 'expired') {
+          return { expired: false as const, lease };
+        }
+        const run = await requireRun(transactionRepositories, input.managementRunId);
+        await appendManagementEventInTransaction(transactionRepositories, {
+          managementRunId: input.managementRunId,
+          type: 'worker-lost',
+          actorKind: 'system',
+          idempotencyKey: `worker-lost:${lease.fencingToken}`,
+          payload: {
+            workerId: lease.workerId,
+            lastHeartbeatAt: lease.heartbeatAt,
+            reasonCode: input.reasonCode ?? 'LEASE_EXPIRED',
+          },
+        }, now, ids);
+        if (!isTerminalRun(run)) {
+          await transactionRepositories.runs.update({ ...run, status: 'recovering', activeWorkerId: undefined, updatedAt: now });
+        }
+        return { expired: true as const, lease };
       });
     },
 

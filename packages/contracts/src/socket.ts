@@ -1,3 +1,18 @@
+import type {
+  ManagementLeaseAcquireAckV1,
+  ManagementLeaseAcquireV1,
+  ManagementLeaseOfferV1,
+  ManagementLeaseReleaseAckV1,
+  ManagementLeaseReleaseV1,
+  ManagementLeaseRenewAckV1,
+  ManagementLeaseRenewV1,
+  ManagementWorkerAbortV1,
+  ManagementWorkerRegisterAckV1,
+  ManagementWorkerRegisterV1,
+  ManagementWorkerToolRequestV1,
+  ManagementWorkerToolResultV1,
+} from './management-worker.js';
+
 export const WEB_EVENTS = {
   auth: {
     login: 'auth:login',
@@ -154,6 +169,32 @@ export const AGENT_EVENTS = {
     shadowResult: 'management-worker:shadow-result',
   },
 } as const;
+
+/**
+ * `/agent` management worker 的方向与 Socket.IO callback ACK 契约。
+ * Device hello/Dispatch claim 仍使用各自事件，不能据此推导 management worker 可调度。
+ */
+export interface ManagementWorkerClientToServerPayloadMapV1 {
+  readonly register: ManagementWorkerRegisterV1;
+  readonly leaseAcquire: ManagementLeaseAcquireV1;
+  readonly leaseRenew: ManagementLeaseRenewV1;
+  readonly leaseRelease: ManagementLeaseReleaseV1;
+  readonly abort: ManagementWorkerAbortV1;
+  readonly toolRequest: ManagementWorkerToolRequestV1;
+}
+
+export interface ManagementWorkerServerToClientPayloadMapV1 {
+  readonly leaseOffer: ManagementLeaseOfferV1;
+}
+
+export interface ManagementWorkerSocketAckMapV1 {
+  readonly register: ManagementWorkerRegisterAckV1;
+  readonly leaseAcquire: ManagementLeaseAcquireAckV1;
+  readonly leaseRenew: ManagementLeaseRenewAckV1;
+  readonly leaseRelease: ManagementLeaseReleaseAckV1;
+  readonly abort: ManagementLeaseReleaseAckV1;
+  readonly toolRequest: ManagementWorkerToolResultV1;
+}
 
 export interface ScanRequestCustomAgent {
   id: string;

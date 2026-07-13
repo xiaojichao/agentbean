@@ -139,7 +139,7 @@ describe('AgentBean Next readiness checker', () => {
       'only a human update completes it',
       'existing Task create, update, and delete APIs',
       'remain linked by dispatchId without invocationId',
-      'Worker contracts and management persistence remain inert until Server handlers are implemented',
+      'Worker transport stays isolated from existing Task and Dispatch APIs',
     ].join('\n');
     const valid = {
       boundaryTests,
