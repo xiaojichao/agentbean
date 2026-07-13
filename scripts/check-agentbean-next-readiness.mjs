@@ -836,8 +836,8 @@ export function hasPhase1ManagementCiGate({ scripts, workflow }) {
 }
 
 export function hasPhase2TaskDagCiGate({ scripts, workflow }) {
-  const expectedTest = 'npm run test:phase2-task-dag-boundary && npm run check:phase2-task-dag-boundary && npm run test:contracts -- --api.host 127.0.0.1 && npm run test:pi-management-runtime';
-  const expectedBuild = 'npm run build:contracts && npm run build:pi-management-runtime && npm run build:daemon-next && npm run build:server-next';
+  const expectedTest = 'npm run test:phase2-task-dag-boundary && npm run check:phase2-task-dag-boundary && npm run test:contracts -- --api.host 127.0.0.1 && npm run test:pi-management-runtime && npm run test:domain -- --api.host 127.0.0.1';
+  const expectedBuild = 'npm run build:contracts && npm run build:domain && npm run build:pi-management-runtime && npm run build:daemon-next && npm run build:server-next';
   if (scripts?.['test:phase2-task-dag-boundary'] !== 'node --test scripts/check-phase-2-task-dag-boundary.test.mjs'
     || scripts?.['check:phase2-task-dag-boundary'] !== 'node scripts/check-phase-2-task-dag-boundary.mjs'
     || scripts?.['test:phase2-task-dag'] !== expectedTest
