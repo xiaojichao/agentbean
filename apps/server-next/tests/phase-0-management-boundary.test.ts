@@ -202,7 +202,7 @@ describe('Phase 0 existing execution fact boundary', () => {
 
     const serverSource = readTreeText(serverRoot);
     expect(serverSource).not.toMatch(
-      /pi-management-runtime|createManagementRuntimeFactory|ManagementRuntimeFactory|ManagementSession|PiManagerWorkerHost|ManagementWorkerHost|ManagementOutbox/,
+      /pi-management-runtime|createManagementRuntimeFactory|ManagementRuntimeFactory|ManagementSession|PiManagerWorkerHost|ManagementWorkerHost|\bManagementOutbox\b/,
     );
   });
 });

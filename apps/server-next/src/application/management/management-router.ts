@@ -167,6 +167,10 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
         channelId: input.channelId,
         ...(input.rootTaskId ? { rootTaskId: input.rootTaskId } : {}),
         rootMessageId: input.rootMessageId,
+        frozenTarget: {
+          agentId: target.id,
+          kind: target.category === 'agentos-hosted' ? 'agentos-hosted' : 'custom',
+        },
         requestKey: requestKey(input),
         requestHash: hash({ body: input.body, targetAgentId: target.id, channelId: input.channelId }),
         placementPolicy: policy.placementPolicy,

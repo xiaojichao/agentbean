@@ -9,7 +9,7 @@ import { createServerNextUseCases, type ArtifactContentStore } from './applicati
 import type { ServerNextRepositories } from './application/repositories.js';
 import { createDeviceWorkerScheduler, type DeviceWorkerScheduler } from './application/management/device-worker-scheduler.js';
 import { createManagementKernel } from './application/management/management-kernel.js';
-import { createManagementToolExecutor } from './application/management/management-tool-executor.js';
+import { createManagementToolExecutor, createPhase1ManagementToolHandlers } from './application/management/management-tool-executor.js';
 import { createManagementRouter } from './application/management/management-router.js';
 import { createInMemoryRepositories } from './infra/memory/repositories.js';
 import {
@@ -64,6 +64,7 @@ export interface ServerNextDevServerHandle {
 interface AppWithCleanup {
   app: ServerNextUseCases;
   managementWorkerScheduler?: DeviceWorkerScheduler;
+  bindManagementDispatchEmitter?(emit: (dispatchId: string) => Promise<void>): void;
   reconcileDisconnectedDevicesOnStart: boolean;
   close(): Promise<void>;
 }
@@ -207,6 +208,7 @@ export async function startServerNextDevServer(
   const realtime = attachServerNextNamespaces(ioServer, app, {
     managementWorkerScheduler: input.managementWorkerScheduler ?? appWithCleanup.managementWorkerScheduler,
   });
+  appWithCleanup.bindManagementDispatchEmitter?.((dispatchId) => realtime.dispatchRequest(dispatchId));
   const dispatchTimeoutInterval = startDispatchTimeoutScheduler(
     app,
     realtime,
@@ -1136,8 +1138,10 @@ function createDefaultApp(
         sessionSecret: config.sessionSecret,
         artifactContentStore,
         managementRouter: management.router,
+        managementKernel: management.kernel,
       }),
       managementWorkerScheduler: management.scheduler,
+      bindManagementDispatchEmitter: management.bindDispatchEmitter,
       reconcileDisconnectedDevicesOnStart: false,
       close: async () => undefined,
     };
@@ -1164,8 +1168,10 @@ function createDefaultApp(
       sessionSecret: config.sessionSecret,
       artifactContentStore,
       managementRouter: management.router,
+      managementKernel: management.kernel,
     }),
     managementWorkerScheduler: management.scheduler,
+    bindManagementDispatchEmitter: management.bindDispatchEmitter,
     reconcileDisconnectedDevicesOnStart: true,
     async close() {
       globalDb.close();
@@ -1179,6 +1185,7 @@ function createDefaultManagementRuntime(
   clock: { now(): number },
   ids: { nextId(): string },
 ) {
+  let dispatchEmitter: ((dispatchId: string) => Promise<void>) | undefined;
   const kernel = createManagementKernel({
     repositories: repositories.management,
     unitOfWork: repositories.managementUnitOfWork,
@@ -1187,9 +1194,22 @@ function createDefaultManagementRuntime(
   });
   const scheduler = createDeviceWorkerScheduler({
     devices: repositories.devices,
+    messages: repositories.messages,
     management: repositories.management,
     kernel,
-    executeTool: createManagementToolExecutor({ kernel, handlers: {} }),
+    executeTool: createManagementToolExecutor({
+      kernel,
+      handlers: createPhase1ManagementToolHandlers({
+        repositories,
+        kernel,
+        clock,
+        ids,
+        onDispatchCreated: async (dispatchId) => {
+          if (!dispatchEmitter) throw new Error('MANAGEMENT_DISPATCH_EMITTER_UNAVAILABLE');
+          await dispatchEmitter(dispatchId);
+        },
+      }),
+    }),
     clock,
     ids,
     leaseTokens: { nextToken: () => randomBytes(32).toString('base64url') },
@@ -1216,7 +1236,14 @@ function createDefaultManagementRuntime(
       schedule: (input) => scheduler.scheduleManagementRun(input),
     },
   });
-  return { scheduler, router };
+  return {
+    kernel,
+    scheduler,
+    router,
+    bindDispatchEmitter(emit: (dispatchId: string) => Promise<void>) {
+      dispatchEmitter = emit;
+    },
+  };
 }
 
 function findPreviewHtmlPath(): string | undefined {

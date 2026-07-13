@@ -55,6 +55,10 @@ export interface ManagementRunDto {
   readonly channelId: ID;
   readonly rootTaskId?: ID;
   readonly rootMessageId: ID;
+  readonly frozenTarget?: {
+    readonly agentId: ID;
+    readonly kind: 'custom' | 'agentos-hosted';
+  };
   readonly mode: 'managed';
   readonly status: ManagementRunStatus;
   readonly placementPolicy: ManagerPlacementPolicyDto;

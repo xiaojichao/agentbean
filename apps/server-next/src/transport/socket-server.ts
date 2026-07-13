@@ -26,6 +26,7 @@ export interface SocketServerLike {
 
 export interface ServerNextRealtime {
   emitDispatchStatus(dispatch: unknown): void;
+  dispatchRequest(dispatchId: string): Promise<void>;
   refreshAgents(teamId: string): Promise<void>;
   scheduleManagementRun(input: ScheduleManagementRunInput): Promise<ScheduleManagementRunResult>;
 }
@@ -545,6 +546,8 @@ export function attachServerNextNamespaces(
           leaseRelease: (payload) => options.managementWorkerScheduler!.releaseLease(managementConnectionId, payload),
           abort: (payload) => options.managementWorkerScheduler!.abortLease(managementConnectionId, payload),
           toolRequest: (payload) => options.managementWorkerScheduler!.executeTool(managementConnectionId, payload),
+          checkpointFetch: (payload) => options.managementWorkerScheduler!.fetchCheckpoint(managementConnectionId, payload),
+          outboxReplay: (payload) => options.managementWorkerScheduler!.replayOutbox(managementConnectionId, payload),
         },
       } : {}),
     });
@@ -552,6 +555,18 @@ export function attachServerNextNamespaces(
   return {
     emitDispatchStatus(dispatch) {
       emitDispatchStatus(webSubscribers, dispatch);
+    },
+    async dispatchRequest(dispatchId) {
+      const result = await app.getDispatchRequest({ dispatchId });
+      if (!result.ok) throw new Error(`MANAGEMENT_DISPATCH_REQUEST_${result.error}`);
+      if (result.request.deviceId) {
+        const targetSocket = agentSocketsByDeviceId.get(result.request.deviceId);
+        if (!targetSocket?.emit) throw new Error('MANAGEMENT_DISPATCH_DEVICE_OFFLINE');
+        targetSocket.emit(AGENT_EVENTS.dispatch.request, result.request);
+        return;
+      }
+      if (!agentNamespace.emit) throw new Error('MANAGEMENT_DISPATCH_NAMESPACE_UNAVAILABLE');
+      agentNamespace.emit(AGENT_EVENTS.dispatch.request, result.request);
     },
     async refreshAgents(teamId) {
       await refreshAgentSubscribers(webSubscribers, app, teamId);

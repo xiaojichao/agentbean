@@ -63,8 +63,9 @@ function createProtocolHarness() {
 describe('PiManagerWorkerHost', () => {
   test('一个 lease 创建一个 typed-context PI Session；断线立即 abort/dispose 并清除 lease', async () => {
     const { protocol, handlers } = createProtocolHarness();
+    let keepPromptActive: (() => void) | undefined;
     const session: ManagementSession = {
-      prompt: vi.fn(async () => undefined), steer: vi.fn(), followUp: vi.fn(), compact: vi.fn(),
+      prompt: vi.fn(() => new Promise<void>((resolve) => { keepPromptActive = resolve; })), steer: vi.fn(), followUp: vi.fn(), compact: vi.fn(),
       abort: vi.fn(async () => undefined), waitForIdle: vi.fn(), subscribe: vi.fn(() => () => undefined),
       dispose: vi.fn(async () => undefined),
     };
@@ -102,6 +103,7 @@ describe('PiManagerWorkerHost', () => {
     expect(session.dispose).toHaveBeenCalledTimes(1);
     expect(host.activeLeaseCount()).toBe(0);
     expect(JSON.stringify(outbox)).not.toContain('raw-lease-token');
+    keepPromptActive?.();
   });
 
   test('credential unavailable 时仍注册 fail-closed capability，但拒绝 lease offer', async () => {

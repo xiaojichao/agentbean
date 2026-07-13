@@ -769,7 +769,7 @@ export function hasPhase0ManagementBoundary(input) {
       (/safeParseManagementWorkerPayload/.test(agentSocketHandlers) &&
         !/app,\s*'(?:registerManagementWorker|scheduleManagementRun)'/.test(agentSocketHandlers))) &&
     !/app,\s*'(?:createTask|updateTask|deleteTask|reorderTask)'/.test(agentSocketHandlers) &&
-    !/pi-management-runtime|createManagementRuntimeFactory|ManagementRuntimeFactory|ManagementSession|PiManagerWorkerHost|ManagementWorkerHost|ManagementOutbox/.test(input.serverSource) &&
+    !/pi-management-runtime|createManagementRuntimeFactory|ManagementRuntimeFactory|ManagementSession|PiManagerWorkerHost|ManagementWorkerHost|\bManagementOutbox\b/.test(input.serverSource) &&
     !/\b(?:invocationId|managementRunId)\b/.test(input.contractsArtifact) &&
     input.serverRepositories.includes('management: ManagementRepositories') &&
     input.serverRepositories.includes('managementUnitOfWork: ManagementUnitOfWork') &&

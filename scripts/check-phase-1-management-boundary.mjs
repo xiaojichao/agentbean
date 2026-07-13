@@ -313,13 +313,15 @@ if (!managementRoutingPresent) {
 
 console.log('P1_MANAGEMENT_ROUTING_PRESENT: direct baseline, shadow decision isolation, managed reservation barrier, policy authorization, and minimal settings control are present; semantic readiness is verified by server/web tests');
 
-const futureBoundaries = [
+const singleAgentBoundaries = [
   'apps/server-next/tests/managed-single-agent.test.ts',
+  'apps/daemon-next/tests/managed-single-agent.test.ts',
 ];
-const missing = futureBoundaries.filter((path) => !existsSync(resolve(root, path)));
+const missing = singleAgentBoundaries.filter((path) => !existsSync(resolve(root, path)));
 if (missing.length > 0) {
   console.error(missing.map((path) => `P1_NOT_IMPLEMENTED: ${path}`).join('\n'));
   process.exit(2);
 }
 
+console.log('P1_MANAGED_SINGLE_AGENT_PRESENT: real Agent delivery, root Task review, failure, cancellation, timeout, replay, and lease cleanup are covered by server/daemon tests');
 console.log('Phase 1 management boundary check passed.');

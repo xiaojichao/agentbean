@@ -1,4 +1,6 @@
 import type {
+  ManagementCheckpointFetchV1,
+  ManagementCheckpointResultV1,
   ManagementLeaseAcquireAckV1,
   ManagementLeaseAcquireV1,
   ManagementLeaseOfferV1,
@@ -6,6 +8,8 @@ import type {
   ManagementLeaseReleaseV1,
   ManagementLeaseRenewAckV1,
   ManagementLeaseRenewV1,
+  ManagementOutboxReplayAckV1,
+  ManagementOutboxReplayV1,
   ManagementWorkerAbortV1,
   ManagementWorkerFailureV1,
   ManagementWorkerRegisterAckV1,
@@ -16,9 +20,10 @@ import type {
 import { inspectManagerLease } from '../../../../../packages/domain/src/index.js';
 import type { ManagementPreflight } from '../../../../../packages/domain/src/index.js';
 import type { ManagerPlacementPolicyDto } from '../../../../../packages/contracts/src/index.js';
-import type { DeviceRepository } from '../repositories.js';
+import type { DeviceRepository, MessageRepository } from '../repositories.js';
 import type { ManagementRepositories } from '../management-repositories.js';
 import { ManagementConflictError, type createManagementKernel } from './management-kernel.js';
+import { collectManagementCheckpointFacts, restoreOrRebuildManagementCheckpoint } from './management-checkpoint.js';
 
 type ManagementKernel = ReturnType<typeof createManagementKernel>;
 type ManagementToolExecutor = (request: ManagementWorkerToolRequestV1) => Promise<ManagementWorkerToolResultV1>;
@@ -29,6 +34,7 @@ export interface ManagementWorkerOfferTransport {
 
 export interface DeviceWorkerSchedulerDependencies {
   readonly devices: DeviceRepository;
+  readonly messages?: MessageRepository;
   readonly management: ManagementRepositories;
   readonly kernel: ManagementKernel;
   readonly executeTool: ManagementToolExecutor;
@@ -300,7 +306,92 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
     async executeTool(connectionId: string, input: ManagementWorkerToolRequestV1): Promise<ManagementWorkerToolResultV1> {
       const worker = connectedWorker(connectionId, input.workerId, workersById, workerIdByConnection);
       if (!worker) return toolFailure(input, 'MANAGEMENT_WORKER_CONNECTION_MISMATCH');
+      const lease = await dependencies.management.leases.get(input.managementRunId);
+      const leaseStatus = inspectManagerLease(lease ?? undefined, dependencies.clock.now());
+      if (!worker.activeRunIds.has(input.managementRunId)
+        || leaseStatus.kind !== 'active'
+        || leaseStatus.lease.workerId !== worker.workerId) {
+        return toolFailure(input, 'MANAGEMENT_WORKER_RUN_MISMATCH');
+      }
       return dependencies.executeTool(input);
+    },
+
+    async fetchCheckpoint(connectionId: string, input: ManagementCheckpointFetchV1): Promise<ManagementCheckpointResultV1> {
+      const worker = connectedWorker(connectionId, input.workerId, workersById, workerIdByConnection);
+      if (!worker) throw new ManagementConflictError('MANAGEMENT_WORKER_CONNECTION_MISMATCH');
+      await dependencies.kernel.authorizeWrite(input);
+      const run = await dependencies.management.runs.getById(input.managementRunId);
+      if (!run || run.teamId !== worker.teamId) throw new ManagementConflictError('MANAGEMENT_RUN_NOT_FOUND');
+      if (!run.frozenTarget) throw new ManagementConflictError('MANAGEMENT_FROZEN_TARGET_MISSING');
+      if (!dependencies.messages) throw new ManagementConflictError('MANAGEMENT_CONTEXT_REPOSITORY_UNAVAILABLE');
+      const rootMessage = await dependencies.messages.getById(run.rootMessageId);
+      if (!rootMessage || rootMessage.teamId !== run.teamId || rootMessage.channelId !== run.channelId) {
+        throw new ManagementConflictError('MANAGEMENT_ROOT_MESSAGE_NOT_FOUND');
+      }
+      const messages = await dependencies.messages.listByThread({
+        channelId: run.channelId,
+        threadId: run.rootMessageId,
+        limit: 200,
+      });
+      const latest = await dependencies.management.checkpoints.getLatest(run.id);
+      const checkpoint = latest
+        ? restoreOrRebuildManagementCheckpoint({
+            checkpoint: latest,
+            facts: await collectManagementCheckpointFacts(dependencies.management, run),
+            objective: rootMessage.body,
+            now: dependencies.clock.now(),
+          }).checkpoint
+        : undefined;
+      return {
+        schemaVersion: 1,
+        managementRunId: run.id,
+        workerId: worker.workerId,
+        context: {
+          schemaVersion: 1,
+          teamId: run.teamId,
+          channelId: run.channelId,
+          rootMessageId: run.rootMessageId,
+          ...(run.rootTaskId ? { rootTaskId: run.rootTaskId } : {}),
+          frozenTarget: run.frozenTarget,
+          visibleThread: {
+            revision: messages.at(-1)?.updatedAt ?? messages.at(-1)?.createdAt ?? 0,
+            messages: messages.map((message) => ({
+              id: message.id,
+              senderKind: message.senderKind,
+              senderId: message.senderId,
+              body: message.body,
+              createdAt: message.createdAt,
+            })),
+          },
+        },
+        ...(checkpoint && input.knownCheckpointRevision !== checkpoint.revision ? { checkpoint } : {}),
+      };
+    },
+
+    async replayOutbox(connectionId: string, input: ManagementOutboxReplayV1): Promise<ManagementOutboxReplayAckV1> {
+      const base = {
+        schemaVersion: 1 as const,
+        commandId: input.commandId,
+        managementRunId: input.managementRunId,
+        idempotencyKey: input.idempotencyKey,
+      };
+      const worker = connectedWorker(connectionId, input.workerId, workersById, workerIdByConnection);
+      if (!worker) return { ...base, disposition: 'rejected' };
+      try {
+        await dependencies.kernel.authorizeWrite(input);
+      } catch {
+        return { ...base, disposition: 'rejected' };
+      }
+      const invocation = await dependencies.management.invocations.getByIdempotencyKey({
+        managementRunId: input.managementRunId,
+        idempotencyKey: input.idempotencyKey,
+      });
+      if (invocation) return { ...base, disposition: 'existing', resultReferenceId: invocation.id };
+      const event = (await dependencies.management.events.list(input.managementRunId))
+        .find((record) => record.event.idempotencyKey === input.idempotencyKey);
+      return event
+        ? { ...base, disposition: 'existing', resultReferenceId: event.event.id }
+        : { ...base, disposition: 'rejected' };
     },
   };
 }
