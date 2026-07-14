@@ -130,12 +130,17 @@ if (!rolloutMarkers.slice(0, 2).every((marker) => rolloutMigration.includes(mark
 }
 
 const scripts = packageJson.scripts ?? {};
+const expectedPackageTests = 'npm run test:contracts -- --api.host 127.0.0.1 && npm run test:pi-management-runtime && npm run test:domain -- --api.host 127.0.0.1 && npm run test:server-next-ci && npm run test:daemon-next -- --api.host 127.0.0.1 && npm run test:web-next -- --api.host 127.0.0.1';
+const expectedPackageBuild = 'npm run build:contracts && npm run build:domain && npm run build:pi-management-runtime && npm run build:server-next && npm run build:daemon-next && npm run build:web-next';
 if (scripts['test:phase2-task-dag-boundary'] !== 'node --test scripts/check-phase-2-task-dag-boundary.test.mjs'
   || scripts['check:phase2-task-dag-boundary'] !== 'node scripts/check-phase-2-task-dag-boundary.mjs'
   || !String(scripts['test:phase2-task-dag']).includes('test:phase2-task-dag-boundary')
   || !String(scripts['test:phase2-task-dag']).includes('test:domain')
   || !String(scripts['test:phase2-task-dag']).includes('test:server-next')
   || !String(scripts['build:phase2-task-dag']).includes('build:domain')
+  || scripts['test:packages'] !== expectedPackageTests
+  || scripts['test:server-next-ci'] !== 'cd apps/server-next && ../../node_modules/.bin/vitest run tests --config vitest.config.ts --api.host 127.0.0.1 --exclude tests/phase-2-managed-team-smoke.test.ts'
+  || scripts['build:packages'] !== expectedPackageBuild
   || scripts['test:ci'] !== 'npm run test:packages && npm run test:retained-boundaries'
   || !String(scripts['test:retained-boundaries']).includes('test:phase2-task-dag-boundary')
   || !String(scripts['test:retained-boundaries']).includes('test:phase2-closeout')

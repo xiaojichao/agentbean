@@ -198,11 +198,11 @@ Node 24.18.0 本地实测：
 
 | 门禁 | 改造前 main CI | 改造后本地实测 | 减少 |
 |---|---:|---:|---:|
-| package + Phase tests | 186s | 43.86s | 142.14s |
+| package + Phase tests | 186s | 46.84s | 139.16s |
 | package builds | 102s | 27.81s | 74.19s |
-| 合计 | 288s | 71.67s | **216.33s** |
+| 合计 | 288s | 74.65s | **213.35s** |
 
-若 GitHub runner 的其他 step 持平，Validate 可由 7m18s 降至约 3m42s；最终以 PR/main Actions 实测为准。
+若 GitHub runner 的其他 step 持平，Validate 可由 7m18s 降至约 3m45s；最终以 PR/main Actions 实测为准。
 
 ### 立即实施：不降正确性的四刀
 
