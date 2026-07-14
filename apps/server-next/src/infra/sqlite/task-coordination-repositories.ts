@@ -129,6 +129,16 @@ export function createSqliteTaskCoordinationRepositories(
           WHERE task_id = ? AND task_revision = ? AND task_attempt = ? AND status = 'active'`)
           .get(input.taskId, input.taskRevision, input.taskAttempt));
       },
+      async getLatest(input) {
+        return mapClaim(db.prepare(`SELECT * FROM task_claim_leases
+          WHERE task_id = ? AND task_revision = ? AND task_attempt = ?
+          ORDER BY fencing_token DESC LIMIT 1`)
+          .get(input.taskId, input.taskRevision, input.taskAttempt));
+      },
+      async listActive() {
+        return db.prepare(`SELECT * FROM task_claim_leases WHERE status = 'active' ORDER BY id`)
+          .all().map(mapClaim).filter((record): record is TaskClaimLeaseRecord => record !== null);
+      },
       async update(input) {
         const result = db.prepare(`UPDATE task_claim_leases SET
           status = ?, heartbeat_at = ?, expires_at = ?, released_at = ?

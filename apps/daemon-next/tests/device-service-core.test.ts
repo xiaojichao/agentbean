@@ -7,12 +7,16 @@ import {
 import { createManagementModelAdapter } from '../src/management-model-adapter';
 
 describe('DeviceServiceCore', () => {
-  test('先启动既有 Dispatch client，再启动 PI Manager WorkerHost，并按反序停止', async () => {
+  test('按 Dispatch、Task Claim、PI Manager 顺序启动，并按反序停止', async () => {
     const calls: string[] = [];
     const core = createDeviceServiceCore({
       dispatchClient: {
         start: vi.fn(async () => { calls.push('dispatch:start'); }),
         stop: vi.fn(() => { calls.push('dispatch:stop'); }),
+      },
+      taskClaimClient: {
+        start: vi.fn(async () => { calls.push('claim:start'); }),
+        stop: vi.fn(async () => { calls.push('claim:stop'); }),
       },
       managementWorkerHost: {
         start: vi.fn(async () => { calls.push('management:start'); }),
@@ -25,8 +29,10 @@ describe('DeviceServiceCore', () => {
 
     expect(calls).toEqual([
       'dispatch:start',
+      'claim:start',
       'management:start',
       'management:stop',
+      'claim:stop',
       'dispatch:stop',
     ]);
   });

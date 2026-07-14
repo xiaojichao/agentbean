@@ -11,6 +11,7 @@ import { createDeviceWorkerScheduler, type DeviceWorkerScheduler } from './appli
 import { createManagementKernel } from './application/management/management-kernel.js';
 import { createManagementToolExecutor, createPhase1ManagementToolHandlers } from './application/management/management-tool-executor.js';
 import { createManagementRouter } from './application/management/management-router.js';
+import { createTaskClaimBroker, type TaskClaimBroker } from './application/management/task-claim-broker.js';
 import { createInMemoryRepositories } from './infra/memory/repositories.js';
 import {
   applyGlobalMigrations,
@@ -45,6 +46,7 @@ export interface ParseServerNextDevConfigInput {
 export interface StartServerNextDevServerInput {
   app?: ServerNextUseCases;
   managementWorkerScheduler?: DeviceWorkerScheduler;
+  taskClaimBroker?: TaskClaimBroker;
   config?: ServerNextDevConfig;
   Server?: SocketIoServerConstructor;
   Database?: BetterSqlite3Constructor;
@@ -64,6 +66,7 @@ export interface ServerNextDevServerHandle {
 interface AppWithCleanup {
   app: ServerNextUseCases;
   managementWorkerScheduler?: DeviceWorkerScheduler;
+  taskClaimBroker?: TaskClaimBroker;
   bindManagementDispatchEmitter?(emit: (dispatchId: string) => Promise<void>): void;
   reconcileDisconnectedDevicesOnStart: boolean;
   close(): Promise<void>;
@@ -150,7 +153,7 @@ export async function startServerNextDevServer(
 ): Promise<ServerNextDevServerHandle> {
   const config = input.config ?? parseServerNextDevConfig();
   const appWithCleanup = input.app
-    ? { app: input.app, managementWorkerScheduler: input.managementWorkerScheduler, reconcileDisconnectedDevicesOnStart: false, close: async () => undefined }
+    ? { app: input.app, managementWorkerScheduler: input.managementWorkerScheduler, taskClaimBroker: input.taskClaimBroker, reconcileDisconnectedDevicesOnStart: false, close: async () => undefined }
     : createDefaultApp(config, input.Database);
   const app = appWithCleanup.app;
   if (appWithCleanup.reconcileDisconnectedDevicesOnStart) {
@@ -207,6 +210,7 @@ export async function startServerNextDevServer(
   const ioServer = new Server(httpServer, { cors: { origin: '*' } });
   const realtime = attachServerNextNamespaces(ioServer, app, {
     managementWorkerScheduler: input.managementWorkerScheduler ?? appWithCleanup.managementWorkerScheduler,
+    taskClaimBroker: input.taskClaimBroker ?? appWithCleanup.taskClaimBroker,
   });
   appWithCleanup.bindManagementDispatchEmitter?.((dispatchId) => realtime.dispatchRequest(dispatchId));
   const dispatchTimeoutInterval = startDispatchTimeoutScheduler(
@@ -1130,6 +1134,7 @@ function createDefaultApp(
     const clock = { now: () => Date.now() };
     const ids = { nextId: () => randomUUID() };
     const management = createDefaultManagementRuntime(repositories, clock, ids);
+    const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
     return {
       app: createServerNextUseCases({
         repositories,
@@ -1141,6 +1146,7 @@ function createDefaultApp(
         managementKernel: management.kernel,
       }),
       managementWorkerScheduler: management.scheduler,
+      taskClaimBroker,
       bindManagementDispatchEmitter: management.bindDispatchEmitter,
       reconcileDisconnectedDevicesOnStart: false,
       close: async () => undefined,
@@ -1160,6 +1166,7 @@ function createDefaultApp(
   const clock = { now: () => Date.now() };
   const ids = { nextId: () => randomUUID() };
   const management = createDefaultManagementRuntime(repositories, clock, ids);
+  const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
   return {
     app: createServerNextUseCases({
       repositories,
@@ -1171,6 +1178,7 @@ function createDefaultApp(
       managementKernel: management.kernel,
     }),
     managementWorkerScheduler: management.scheduler,
+    taskClaimBroker,
     bindManagementDispatchEmitter: management.bindDispatchEmitter,
     reconcileDisconnectedDevicesOnStart: true,
     async close() {

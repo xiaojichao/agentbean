@@ -8,7 +8,7 @@ import { createBuiltinScanProvider } from './scanner.js';
 import { loadScanCache, saveScanCache } from './scan-cache.js';
 import { collectSystemInfo, readDaemonVersion, readPiManagementRuntimeVersion } from './system-info.js';
 import { createCommandExecutor } from './executor.js';
-import { createDaemonProtocolClient, createHttpEnvResolver, type DaemonDeviceConfig, type DaemonProtocolSocket, type DaemonScanSnapshot } from './index.js';
+import { createDaemonProtocolClient, createHttpEnvResolver, createTaskClaimProtocolClient, type DaemonDeviceConfig, type DaemonProtocolSocket, type DaemonScanSnapshot } from './index.js';
 import { loadYamlConfig } from './config.js';
 import { clearAuth, listAuthProfiles, loadAuth, renameAuthProfile, saveAuth, type AuthData, type AuthProfile } from './auth-store.js';
 import { sanitizeProfileId } from './profile-paths.js';
@@ -586,7 +586,11 @@ export async function runDaemonNextCli(
     profileId: config.profileId,
     runtimeVersion: readPiManagementRuntimeVersionFn(),
   });
-  await createDeviceServiceCore({ dispatchClient, managementWorkerHost }).start();
+  const taskClaimClient = createTaskClaimProtocolClient({
+    socket: protocolSocket,
+    getDeviceId: () => dispatchClient.deviceId,
+  });
+  await createDeviceServiceCore({ dispatchClient, taskClaimClient, managementWorkerHost }).start();
   if (config.inviteCode) {
     console.log(`AgentBean daemon connected for profile "${config.profileId}".`);
   }

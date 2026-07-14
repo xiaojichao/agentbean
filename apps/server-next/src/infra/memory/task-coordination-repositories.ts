@@ -139,6 +139,15 @@ export function createInMemoryTaskCoordinationRepositories(
           item.taskRevision === input.taskRevision && item.taskAttempt === input.taskAttempt &&
           item.status === 'active') ?? null;
       },
+      async getLatest(input) {
+        return [...state.claimLeases.values()].filter((item) => item.taskId === input.taskId &&
+          item.taskRevision === input.taskRevision && item.taskAttempt === input.taskAttempt)
+          .sort((left, right) => right.fencingToken - left.fencingToken)[0] ?? null;
+      },
+      async listActive() {
+        return [...state.claimLeases.values()].filter((item) => item.status === 'active')
+          .sort((left, right) => left.id.localeCompare(right.id));
+      },
       async update(input) {
         const current = state.claimLeases.get(input.id);
         if (!current || current.status !== input.expectedStatus) return null;
