@@ -53,6 +53,66 @@ test('marks a clean PR ready only after Codex reviewed the head commit', () => {
   assert.match(formatReadiness(result), /READY/);
 });
 
+test('marks a clean draft ready for Review without requiring Codex Review', () => {
+  const result = evaluatePullRequest(fixture({
+    isDraft: true,
+    reviews: { nodes: [] },
+  }), new Date('2026-07-15T00:15:00Z'), { stage: 'review' });
+  assert.equal(result.ready, true);
+  assert.equal(result.stage, 'review');
+  assert.equal(result.review.codexCurrent, false);
+  assert.match(formatReadiness(result), /Review 前置门禁/);
+  assert.match(formatReadiness(result), /此阶段不要求/);
+});
+
+test('accepts GitHub DRAFT merge state when all current checks pass', () => {
+  const result = evaluatePullRequest(fixture({
+    isDraft: true,
+    mergeStateStatus: 'DRAFT',
+    reviews: { nodes: [] },
+  }), new Date(), { stage: 'review' });
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.blockers, []);
+});
+
+test('blocks a draft from Review while its current checks are pending', () => {
+  const pr = fixture({
+    isDraft: true,
+    mergeStateStatus: 'UNSTABLE',
+    reviews: { nodes: [] },
+  });
+  pr.commits.nodes[0].commit.statusCheckRollup.contexts.nodes = [
+    { __typename: 'CheckRun', name: 'Validate', status: 'IN_PROGRESS', conclusion: null },
+  ];
+  const result = evaluatePullRequest(pr, new Date(), { stage: 'review' });
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.blockers.map((item) => item.code), [
+    'MERGE_STATE_NOT_REVIEWABLE',
+    'CHECKS_PENDING',
+  ]);
+});
+
+test('blocks the Review preflight after a PR has already left Draft', () => {
+  const result = evaluatePullRequest(fixture({ reviews: { nodes: [] } }), new Date(), { stage: 'review' });
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.blockers.map((item) => item.code), ['PR_NOT_DRAFT']);
+});
+
+test('allows a fixed draft to request a new Review despite a stale change request', () => {
+  const result = evaluatePullRequest(fixture({
+    isDraft: true,
+    reviewDecision: 'CHANGES_REQUESTED',
+  }), new Date(), { stage: 'review' });
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.blockers, []);
+});
+
+test('keeps the merge gate blocked when Codex Review is missing', () => {
+  const result = evaluatePullRequest(fixture({ reviews: { nodes: [] } }));
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.blockers.map((item) => item.code), ['CODEX_REVIEW_MISSING']);
+});
+
 test('accepts a clean Codex comment that names the current short SHA', () => {
   const result = evaluatePullRequest(fixture({
     reviews: { nodes: [] },

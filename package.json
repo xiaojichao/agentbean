@@ -36,6 +36,7 @@
     "check:pi-sea-compatibility": "node scripts/check-pi-management-sea.mjs validate",
     "check:team-terminology": "node scripts/check-team-terminology.mjs",
     "check:agentbean-next-readiness": "node scripts/check-agentbean-next-readiness.mjs",
+    "check:pr-review-readiness": "node scripts/check-pr-merge-readiness.mjs --stage review",
     "check:pr-merge-readiness": "node scripts/check-pr-merge-readiness.mjs",
     "check:agentbean-next-railway-preflight": "node scripts/check-agentbean-next-railway-preflight.mjs",
     "audit:agentbean-next-cutover": "node scripts/audit-agentbean-next-cutover.mjs",
