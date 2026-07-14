@@ -139,6 +139,7 @@ export interface TaskCoordinationRepositories {
   deliveries: {
     create(record: SubtaskDeliveryRecord): Promise<SubtaskDeliveryRecord>;
     getById(id: ID): Promise<SubtaskDeliveryRecord | null>;
+    listByTask(taskId: ID): Promise<SubtaskDeliveryRecord[]>;
     getByIdempotencyKey(input: {
       taskId: ID;
       idempotencyKey: string;

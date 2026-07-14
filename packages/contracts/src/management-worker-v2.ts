@@ -66,6 +66,15 @@ export interface Phase2SubtaskDraftV1 {
 }
 
 export interface Phase2ManagementWorkerToolInputMapV1 {
+  readonly 'agents.invoke': {
+    readonly taskId: ID;
+    readonly expectedTaskRevision: number;
+    readonly taskAttempt: number;
+    readonly claimLeaseId: ID;
+    readonly objective: string;
+    readonly attachmentIds: readonly ID[];
+    readonly deadlineAt?: UnixMs;
+  };
   readonly 'tasks.create_subtasks': { readonly parentTaskId: ID; readonly subtasks: readonly Phase2SubtaskDraftV1[] };
   readonly 'tasks.add_dependency': { readonly taskId: ID; readonly dependencyTaskId: ID; readonly expectedTaskRevision: number };
   readonly 'tasks.publish_for_claim': { readonly taskId: ID; readonly expectedTaskRevision: number };
@@ -77,6 +86,10 @@ export interface Phase2ManagementWorkerToolInputMapV1 {
 }
 
 export interface Phase2ManagementWorkerToolOutputMapV1 {
+  readonly 'agents.invoke': {
+    readonly invocationId: ID;
+    readonly status: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
+  };
   readonly 'tasks.create_subtasks': { readonly taskIds: readonly ID[]; readonly taskGraphRevision: number };
   readonly 'tasks.add_dependency': { readonly taskId: ID; readonly taskRevision: number; readonly taskGraphRevision: number };
   readonly 'tasks.publish_for_claim': { readonly taskId: ID; readonly taskRevision: number; readonly status: 'todo' };
@@ -174,6 +187,19 @@ function assertCriterion(value: unknown): void {
 }
 
 function assertTaskToolInput(toolName: string, value: unknown): void {
+  if (toolName === 'agents.invoke') {
+    assertExactKeys(value, ['taskId', 'expectedTaskRevision', 'taskAttempt', 'claimLeaseId',
+      'objective', 'attachmentIds', 'deadlineAt'], ['taskId', 'expectedTaskRevision', 'taskAttempt',
+      'claimLeaseId', 'objective', 'attachmentIds']);
+    if (!nonEmpty(value.taskId) || !nonEmpty(value.claimLeaseId) || !nonEmpty(value.objective)) {
+      throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    }
+    assertInteger(value.expectedTaskRevision, 1);
+    assertInteger(value.taskAttempt, 1);
+    assertStringArray(value.attachmentIds);
+    if (value.deadlineAt !== undefined) assertInteger(value.deadlineAt, 0);
+    return;
+  }
   if (toolName === 'tasks.create_subtasks') {
     assertExactKeys(value, ['parentTaskId', 'subtasks'], ['parentTaskId', 'subtasks']);
     if (!nonEmpty(value.parentTaskId) || !Array.isArray(value.subtasks) || value.subtasks.length === 0 || value.subtasks.length > 8) {
@@ -236,6 +262,12 @@ function assertTaskToolInput(toolName: string, value: unknown): void {
 }
 
 function assertTaskToolOutput(toolName: string, value: unknown): void {
+  if (toolName === 'agents.invoke') {
+    assertExactKeys(value, ['invocationId', 'status'], ['invocationId', 'status']);
+    if (!nonEmpty(value.invocationId) || !['pending', 'running', 'succeeded', 'failed', 'cancelled',
+      'timed_out'].includes(String(value.status))) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    return;
+  }
   if (toolName === 'tasks.create_subtasks') {
     assertExactKeys(value, ['taskIds', 'taskGraphRevision'], ['taskIds', 'taskGraphRevision']);
     assertStringArray(value.taskIds);
@@ -341,7 +373,7 @@ export function parseManagementWorkerSessionContextV2(value: unknown): Managemen
 export function parsePhase2TaskToolRequestV2(value: unknown): Phase2TaskToolRequestV2 {
   assertExactKeys(value, taskRequestKeys, taskRequestKeys);
   if (value.schemaVersion !== 2 || value.managementPhase !== 2
-    || !PHASE_2_TASK_WORKER_TOOL_NAMES.includes(value.toolName as never)
+    || !(value.toolName === 'agents.invoke' || PHASE_2_TASK_WORKER_TOOL_NAMES.includes(value.toolName as never))
     || !nonEmpty(value.commandId) || !nonEmpty(value.managementRunId) || !nonEmpty(value.workerId)
     || !nonEmpty(value.toolCallId) || !nonEmpty(value.leaseToken) || !nonEmpty(value.idempotencyKey)
     || !Number.isSafeInteger(value.fencingToken) || Number(value.fencingToken) < 1) {
@@ -354,7 +386,7 @@ export function parsePhase2TaskToolRequestV2(value: unknown): Phase2TaskToolRequ
 export function parsePhase2TaskToolResultV2(value: unknown): Phase2TaskToolResultV2 {
   assertExactKeys(value, taskResultKeys, ['schemaVersion', 'managementPhase', 'commandId', 'managementRunId', 'workerId', 'toolCallId', 'toolName', 'ok']);
   if (value.schemaVersion !== 2 || value.managementPhase !== 2
-    || !PHASE_2_TASK_WORKER_TOOL_NAMES.includes(value.toolName as never)
+    || !(value.toolName === 'agents.invoke' || PHASE_2_TASK_WORKER_TOOL_NAMES.includes(value.toolName as never))
     || !nonEmpty(value.commandId) || !nonEmpty(value.managementRunId)
     || !nonEmpty(value.workerId) || !nonEmpty(value.toolCallId)
     || typeof value.ok !== 'boolean') {

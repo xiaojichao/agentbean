@@ -146,7 +146,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
     managementDispatchUnitOfWork: {
       run(operation) {
         return management.unitOfWork.run((managementRepositories) =>
-          operation({ management: managementRepositories, dispatches: repositories.dispatches }));
+          operation({ management: managementRepositories, dispatches: repositories.dispatches,
+            tasks: repositories.tasks, coordination: taskCoordination }));
       },
     },
     taskCoordination,

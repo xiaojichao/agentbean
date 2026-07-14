@@ -60,12 +60,18 @@ export function createInMemoryRepositories(): ServerNextRepositories {
     managementDispatchUnitOfWork: {
       run(operation) {
         return management.unitOfWork.run(async (managementRepositories) => {
-          const snapshot = new Map(dispatches);
+          const dispatchSnapshot = new Map(dispatches);
+          const taskSnapshot = new Map(tasks);
+          const coordinationSnapshot = cloneTaskCoordinationMemoryState(taskCoordinationState);
           try {
-            return await operation({ management: managementRepositories, dispatches: repositories.dispatches });
+            return await operation({ management: managementRepositories, dispatches: repositories.dispatches,
+              tasks: repositories.tasks, coordination: taskCoordination });
           } catch (error) {
             dispatches.clear();
-            for (const [id, dispatch] of snapshot) dispatches.set(id, dispatch);
+            for (const [id, dispatch] of dispatchSnapshot) dispatches.set(id, dispatch);
+            tasks.clear();
+            for (const [id, task] of taskSnapshot) tasks.set(id, task);
+            restoreTaskCoordinationMemoryState(taskCoordinationState, coordinationSnapshot);
             throw error;
           }
         });

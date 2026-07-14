@@ -4,6 +4,8 @@ import type {
   AgentInvocationRecordDto,
   AgentInvocationStatus,
   AgentInvocationViewDto,
+  AcceptanceCriterionDto,
+  DependencyResultRefDto,
   DispatchStatus,
   ManagementRunDto,
 } from '../../../../../packages/contracts/src/index.js';
@@ -15,6 +17,7 @@ import type { InvocationDispatchAttemptRecord, ManagementRepositories } from '..
 import type {
   DispatchMutationResult,
   DispatchRepository,
+  ManagementDispatchRepositories,
   ServerNextRepositories,
 } from '../repositories.js';
 import {
@@ -44,10 +47,105 @@ export interface InvokeAgentInput {
   readonly intent: AgentInvocationIntentV1;
 }
 
+export interface InvokeTaskAgentInput {
+  readonly authority: LeaseAuthorityInput;
+  readonly idempotencyKey: string;
+  readonly taskId: string;
+  readonly expectedTaskRevision: number;
+  readonly taskAttempt: number;
+  readonly claimLeaseId: string;
+  readonly objective: string;
+  readonly attachmentIds: readonly string[];
+  readonly deadlineAt?: number;
+}
+
 export function createInvocationGateway(dependencies: InvocationGatewayDependencies) {
   const { repositories, clock, ids } = dependencies;
 
   return {
+    async invokeTask(input: InvokeTaskAgentInput): Promise<{ disposition: 'created' | 'existing'; view: AgentInvocationViewDto }> {
+      return repositories.managementDispatchUnitOfWork.run(async (transactionRepositories) => {
+        const now = clock.now();
+        await authorizeManagementWrite(transactionRepositories.management, input.authority, now);
+        const run = await requireRun(transactionRepositories.management, input.authority.managementRunId);
+        if (!input.idempotencyKey) throw new InvocationGatewayError('INVOCATION_IDEMPOTENCY_KEY_INVALID');
+        if (!input.objective.trim()) throw new InvocationGatewayError('INVOCATION_OBJECTIVE_INVALID');
+        if (input.deadlineAt !== undefined && input.deadlineAt <= now) {
+          throw new InvocationGatewayError('INVOCATION_DEADLINE_EXPIRED');
+        }
+        if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') {
+          throw new ManagementConflictError('MANAGEMENT_RUN_TERMINAL');
+        }
+
+        const authority = await resolveTaskInvocationAuthority(transactionRepositories, run, input, now);
+        const agent = await repositories.agents.getById(authority.targetAgentId);
+        if (!agent || agent.deletedAt !== undefined || !agent.visibleTeamIds.includes(run.teamId)) {
+          throw new InvocationGatewayError('INVOCATION_TARGET_FORBIDDEN');
+        }
+        const targetKind = agent.category === 'agentos-hosted' ? 'agentos-hosted' as const : 'custom' as const;
+        const intent: AgentInvocationIntentV1 = {
+          schemaVersion: 1,
+          teamId: run.teamId,
+          channelId: run.channelId,
+          targetAgentId: authority.targetAgentId,
+          targetKind,
+          objective: input.objective.trim(),
+          taskContext: {
+            taskId: input.taskId,
+            ...(authority.rootTaskId && { rootTaskId: authority.rootTaskId }),
+            taskRevision: input.expectedTaskRevision,
+            taskAttempt: input.taskAttempt,
+            claimLeaseId: input.claimLeaseId,
+          },
+          acceptanceCriteria: authority.acceptanceCriteria,
+          dependencyResults: authority.dependencyResults,
+          attachmentIds: [...input.attachmentIds],
+          ...(input.deadlineAt !== undefined && { deadlineAt: input.deadlineAt }),
+        };
+        const intentHash = hashIntent(intent);
+        const existing = await transactionRepositories.management.invocations.getByIdempotencyKey({
+          managementRunId: run.id,
+          idempotencyKey: input.idempotencyKey,
+        });
+        const idempotency = resolveInvocationIdempotency({
+          existing: existing ? { invocationId: existing.id, managementRunId: existing.managementRunId,
+            idempotencyKey: existing.idempotencyKey, intentHash: existing.intentHash } : undefined,
+          requestedManagementRunId: run.id,
+          requestedIdempotencyKey: input.idempotencyKey,
+          requestedIntentHash: intentHash,
+        });
+        if (idempotency.kind === 'conflict') throw new InvocationGatewayError('INVOCATION_IDEMPOTENCY_CONFLICT');
+        if (idempotency.kind === 'existing') {
+          return { disposition: 'existing' as const,
+            view: await deriveInvocationView(transactionRepositories.management,
+              transactionRepositories.dispatches, existing!) };
+        }
+
+        await assertNoActiveTaskAttempt(transactionRepositories, run.id, input.taskId,
+          input.expectedTaskRevision, input.taskAttempt);
+        await validateAuthoritativeTarget(repositories, intent, run);
+        const invocation: AgentInvocationRecordDto = {
+          schemaVersion: 1, id: ids.nextId(), managementRunId: run.id, intent, intentHash,
+          idempotencyKey: input.idempotencyKey, createdAt: now,
+        };
+        const attempt = await createAttempt(transactionRepositories.management,
+          transactionRepositories.dispatches, invocation, 1, now, ids);
+        await appendManagementEventInTransaction(transactionRepositories.management, {
+          managementRunId: run.id,
+          type: 'invocation-created',
+          actorKind: 'manager',
+          actorId: input.authority.workerId,
+          idempotencyKey: `invocation-created:${invocation.id}`,
+          payload: { invocationId: invocation.id, intentHash, taskRevision: input.expectedTaskRevision },
+        }, now, ids);
+        await appendAttemptStartedEvent(transactionRepositories.management, invocation, attempt,
+          input.authority.workerId, now, ids);
+        return { disposition: 'created' as const,
+          view: await deriveInvocationView(transactionRepositories.management,
+            transactionRepositories.dispatches, invocation) };
+      });
+    },
+
     async invoke(input: InvokeAgentInput): Promise<{ disposition: 'created' | 'existing'; view: AgentInvocationViewDto }> {
       const intentHash = hashIntent(input.intent);
       return repositories.managementDispatchUnitOfWork.run(async (transactionRepositories) => {
@@ -173,6 +271,107 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
       return deriveInvocationView(repositories.management, repositories.dispatches, invocation);
     },
   };
+}
+
+async function resolveTaskInvocationAuthority(
+  repositories: ManagementDispatchRepositories,
+  run: ManagementRunDto,
+  input: InvokeTaskAgentInput,
+  now: number,
+): Promise<{
+  targetAgentId: string;
+  rootTaskId?: string;
+  acceptanceCriteria: AcceptanceCriterionDto[];
+  dependencyResults: DependencyResultRefDto[];
+}> {
+  const task = await repositories.tasks.getById(input.taskId);
+  const coordination = await repositories.coordination.coordinations.getByTaskId(input.taskId);
+  if (!task || !coordination || task.teamId !== run.teamId || task.channelId !== run.channelId
+    || coordination.teamId !== run.teamId || coordination.managementRunId !== run.id) {
+    throw new InvocationGatewayError('INVOCATION_TASK_FORBIDDEN');
+  }
+  if (task.revision !== input.expectedTaskRevision
+    || coordination.taskRevision !== input.expectedTaskRevision) {
+    throw new InvocationGatewayError('INVOCATION_TASK_REVISION_STALE');
+  }
+  if (coordination.attempt !== input.taskAttempt) {
+    throw new InvocationGatewayError('INVOCATION_TASK_ATTEMPT_STALE');
+  }
+  if (task.status !== 'in_progress') throw new InvocationGatewayError('INVOCATION_TASK_NOT_ACTIVE');
+  const claim = await repositories.coordination.claimLeases.getById(input.claimLeaseId);
+  const currentClaim = await repositories.coordination.claimLeases.getCurrent({
+    taskId: input.taskId, taskRevision: input.expectedTaskRevision, taskAttempt: input.taskAttempt,
+  });
+  if (!claim || !currentClaim || currentClaim.id !== claim.id || claim.id !== input.claimLeaseId
+    || claim.status !== 'active' || claim.expiresAt <= now || claim.teamId !== run.teamId
+    || claim.taskId !== input.taskId || claim.taskRevision !== input.expectedTaskRevision
+    || claim.taskAttempt !== input.taskAttempt || task.assigneeId !== claim.agentId) {
+    throw new InvocationGatewayError('INVOCATION_CLAIM_STALE');
+  }
+  const rootTaskId = coordination.rootTaskId ?? (coordination.nodeKind === 'root' ? task.id : undefined);
+  if (run.rootTaskId && rootTaskId !== run.rootTaskId) {
+    throw new InvocationGatewayError('INVOCATION_ROOT_TASK_MISMATCH');
+  }
+  const criteria = (await repositories.coordination.criteria.list(task.id))
+    .filter((criterion) => criterion.introducedRevision <= task.revision
+      && (criterion.retiredRevision === undefined || criterion.retiredRevision > task.revision))
+    .map(({ taskId: _taskId, introducedRevision: _introducedRevision,
+      retiredRevision: _retiredRevision, position: _position, ...criterion }) => criterion);
+  const dependencyResults: DependencyResultRefDto[] = [];
+  for (const dependency of await repositories.coordination.dependencies.list(task.id)) {
+    const dependencyTask = await repositories.tasks.getById(dependency.dependencyTaskId);
+    const dependencyCoordination = await repositories.coordination.coordinations
+      .getByTaskId(dependency.dependencyTaskId);
+    if (!dependencyTask || !dependencyCoordination || dependencyTask.status !== 'done') {
+      throw new InvocationGatewayError('INVOCATION_DEPENDENCIES_NOT_READY');
+    }
+    const deliveries = (await repositories.coordination.deliveries.listByTask(dependencyTask.id))
+      .filter((delivery) => delivery.taskRevision === dependencyTask.revision
+        && delivery.taskAttempt === dependencyCoordination.attempt)
+      .reverse();
+    let accepted: { delivery: (typeof deliveries)[number]; resultRevision: number } | undefined;
+    for (const delivery of deliveries) {
+      const acceptance = await repositories.coordination.acceptances.getCanonicalByDelivery(delivery.id);
+      if (acceptance?.decision === 'accepted') {
+        accepted = { delivery, resultRevision: acceptance.decisionVersion };
+        break;
+      }
+    }
+    if (!accepted) throw new InvocationGatewayError('INVOCATION_DEPENDENCIES_NOT_READY');
+    const evidence = [...accepted.delivery.evidenceRefs,
+      ...accepted.delivery.claims.flatMap((claimItem) => claimItem.evidenceRefs)];
+    dependencyResults.push({
+      invocationId: accepted.delivery.invocationId,
+      resultRevision: accepted.resultRevision,
+      artifactIds: [...new Set(evidence.filter((ref) => ref.kind === 'artifact').map((ref) => ref.id))],
+      ...(evidence.find((ref) => ref.kind === 'workspace-run')?.id
+        ? { workspaceRunId: evidence.find((ref) => ref.kind === 'workspace-run')!.id }
+        : {}),
+    });
+  }
+  return {
+    targetAgentId: claim.agentId,
+    ...(rootTaskId && { rootTaskId }),
+    acceptanceCriteria: criteria,
+    dependencyResults,
+  };
+}
+
+async function assertNoActiveTaskAttempt(
+  repositories: ManagementDispatchRepositories,
+  managementRunId: string,
+  taskId: string,
+  taskRevision: number,
+  taskAttempt: number,
+): Promise<void> {
+  const invocations = await repositories.management.invocations.listByRun(managementRunId);
+  for (const invocation of invocations) {
+    const context = invocation.intent.taskContext;
+    if (context?.taskId !== taskId || context.taskRevision !== taskRevision
+      || context.taskAttempt !== taskAttempt) continue;
+    const view = await deriveInvocationView(repositories.management, repositories.dispatches, invocation);
+    if (view.activeDispatchId) throw new InvocationGatewayError('INVOCATION_TASK_ATTEMPT_ACTIVE');
+  }
 }
 
 async function validateAuthoritativeTarget(repositories: ServerNextRepositories, intent: AgentInvocationIntentV1, run: ManagementRunDto): Promise<void> {

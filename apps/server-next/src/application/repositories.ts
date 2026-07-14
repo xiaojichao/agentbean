@@ -69,6 +69,8 @@ export interface DispatchMutationResult {
 export interface ManagementDispatchRepositories {
   management: ManagementRepositories;
   dispatches: DispatchRepository;
+  tasks: TaskRepository;
+  coordination: TaskCoordinationRepositories;
 }
 
 export interface ManagementDispatchUnitOfWork {

@@ -30,7 +30,9 @@ type Phase2ToolHandler<K extends keyof Phase2ManagementWorkerToolInputMapV1> = (
 export type Phase2ToolHandlers = {
   [K in keyof Phase2ManagementWorkerToolInputMapV1]?: Phase2ToolHandler<K>;
 };
-export type AnyToolHandlers = ToolHandlers & Phase2ToolHandlers;
+export type AnyToolHandlers = Omit<ToolHandlers, 'agents.invoke'>
+  & Omit<Phase2ToolHandlers, 'agents.invoke'>
+  & { 'agents.invoke'?: ToolHandler<'agents.invoke'> | Phase2ToolHandler<'agents.invoke'> };
 
 const readTools = new Set<string>([
   'context.get_root_message',
@@ -45,6 +47,7 @@ const readTools = new Set<string>([
 export function createManagementToolExecutor(input: {
   readonly kernel: ManagementKernel;
   readonly handlers: AnyToolHandlers;
+  readonly phase2Handlers?: Phase2ToolHandlers;
 }) {
   return async (request: ManagementToolRequest): Promise<ManagementToolResult> => {
     const base = {
@@ -66,7 +69,9 @@ export function createManagementToolExecutor(input: {
           fencingToken: request.fencingToken,
         });
       }
-      const handler = input.handlers[request.toolName] as ((value: ManagementToolRequest) => Promise<unknown>) | undefined;
+      const selectedHandlers = 'managementPhase' in request ? input.phase2Handlers ?? input.handlers : input.handlers;
+      const handler = (selectedHandlers as Partial<Record<string,
+        (value: ManagementToolRequest) => Promise<unknown>>>)[request.toolName];
       if (!handler) {
         return { ...base, ok: false, errorCode: 'UNAVAILABLE', diagnosticCode: 'TOOL_NOT_WIRED', retryable: false } as ManagementToolResult;
       }
@@ -148,6 +153,51 @@ export function createPhase2ManagementToolHandlers(input: {
         ...request.input,
       });
       return { taskId: blocked.taskId, status: blocked.status, reportedAt: blocked.reportedAt };
+    },
+  };
+}
+
+export function createPhase2InvocationToolHandlers(input: {
+  readonly repositories: ServerNextRepositories;
+  readonly kernel: ManagementKernel;
+  readonly clock: { now(): number };
+  readonly ids: { nextId(): string };
+  readonly onDispatchCreated: (dispatchId: string) => Promise<void> | void;
+  readonly pollIntervalMs?: number;
+  readonly terminalTimeoutMs?: number;
+}): Pick<Phase2ToolHandlers, 'agents.invoke'> {
+  const { repositories, kernel, clock, ids } = input;
+  const gateway = createInvocationGateway({ repositories, clock, ids });
+  const pollIntervalMs = input.pollIntervalMs ?? 50;
+  const terminalTimeoutMs = input.terminalTimeoutMs ?? 5 * 60_000;
+  return {
+    'agents.invoke': async (request) => {
+      const run = await requireRun(repositories, request.managementRunId);
+      const invoked = await gateway.invokeTask({
+        authority: authority(request),
+        idempotencyKey: request.idempotencyKey,
+        ...request.input,
+      });
+      if (invoked.disposition === 'created') {
+        const dispatchId = invoked.view.activeDispatchId;
+        if (!dispatchId) throw new Error('MANAGEMENT_ACTIVE_DISPATCH_MISSING');
+        try {
+          await input.onDispatchCreated(dispatchId);
+        } catch {
+          await gateway.completeAttempt({ dispatchId, status: 'failed',
+            error: 'MANAGEMENT_DISPATCH_EMIT_FAILED', actorKind: 'system' });
+          await kernel.recordInvocationTerminal({ managementRunId: run.id, dispatchId,
+            status: 'failed', errorCode: 'MANAGEMENT_DISPATCH_EMIT_FAILED' });
+          throw new Error('MANAGEMENT_DISPATCH_EMIT_FAILED');
+        }
+      }
+      const terminal = await waitForInvocationDelivery({
+        repositories, gateway, run, invocationId: invoked.view.id,
+        timeoutAt: Math.min(request.input.deadlineAt ?? Number.POSITIVE_INFINITY,
+          Date.now() + terminalTimeoutMs),
+        pollIntervalMs,
+      });
+      return { invocationId: terminal.id, status: terminal.status };
     },
   };
 }

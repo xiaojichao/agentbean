@@ -199,6 +199,10 @@ export function createInMemoryTaskCoordinationRepositories(
         return record;
       },
       async getById(id) { return state.deliveries.get(id) ?? null; },
+      async listByTask(taskId) {
+        return [...state.deliveries.values()].filter((item) => item.taskId === taskId)
+          .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+      },
       async getByIdempotencyKey(input) {
         return [...state.deliveries.values()].find((item) =>
           item.taskId === input.taskId && item.idempotencyKey === input.idempotencyKey) ?? null;

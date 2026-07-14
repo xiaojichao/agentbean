@@ -6,6 +6,31 @@ import { createInMemoryManagementPersistence } from '../src/infra/memory/managem
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 
 describe('management tool executor', () => {
+  test('routes agents.invoke by envelope version without overriding the frozen-target Phase 1 handler', async () => {
+    const phase1 = vi.fn(async () => ({ invocationId: 'phase1-invocation', status: 'succeeded' as const }));
+    const phase2 = vi.fn(async () => ({ invocationId: 'phase2-invocation', status: 'succeeded' as const }));
+    const execute = createManagementToolExecutor({
+      kernel: { authorizeWrite: vi.fn() } as never,
+      handlers: { 'agents.invoke': phase1 },
+      phase2Handlers: { 'agents.invoke': phase2 },
+    });
+    const authority = { commandId: 'command', managementRunId: 'run-1', workerId: 'worker-1',
+      toolCallId: 'call', toolName: 'agents.invoke' as const, leaseToken: 'token', fencingToken: 1,
+      idempotencyKey: 'key' };
+    await expect(execute({ schemaVersion: 1, ...authority,
+      input: { objective: 'Phase 1', attachmentIds: [] } })).resolves.toMatchObject({
+      schemaVersion: 1, ok: true, output: { invocationId: 'phase1-invocation' },
+    });
+    await expect(execute({ schemaVersion: 2, managementPhase: 2, ...authority,
+      input: { taskId: 'task-1', expectedTaskRevision: 1, taskAttempt: 1,
+        claimLeaseId: 'claim-1', objective: 'Phase 2', attachmentIds: [] } })).resolves.toMatchObject({
+      schemaVersion: 2, managementPhase: 2, ok: true,
+      output: { invocationId: 'phase2-invocation' },
+    });
+    expect(phase1).toHaveBeenCalledTimes(1);
+    expect(phase2).toHaveBeenCalledTimes(1);
+  });
+
   test('allows wired reads but fences writes before reporting later-task handlers unavailable', async () => {
     const persistence = createInMemoryManagementPersistence();
     let id = 0;
