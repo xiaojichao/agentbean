@@ -31,7 +31,7 @@
 
 当前 verdict：**Green / Ready（受控 opt-in）**。Phase 2 的 Task DAG 与团队认领能力已完成代码、CI、三平台 SEA、npm、Railway、Vercel 和生产浏览器闭环；但这不表示默认开放。Team 默认继续使用 `maxManagementPhase=1`，只有 owner/admin 显式把指定 Team 的 policy 设为 Phase 2、请求绑定根 Task，且 V2 Device worker preflight 为 Green 时才允许进入；任一条件缺失均 fail closed，不回退成重复 direct Dispatch。
 
-Issue #551 当前证据：`managed-multi-agent.test.ts` 覆盖失败 Invocation（含 Dispatch emit failure）的受控 attempt、max attempts 后 `waiting_for_user`、双叶子 canonical acceptance、根汇总贡献集 fail closed、根 Task `in_review` 与人类拒绝后 revision 递增且历史 acceptance 不被覆盖；`task-claim-broker.test.ts` 覆盖 claim 到期重开与 fencing 单调；既有 delivery/acceptance 与 Invocation Gateway tests 继续覆盖 stale revision/attempt/lease 隔离。Node 24 下 boundary 5、contracts 35、PI runtime 36、Domain 121、server-next 516 项测试及 `build:phase2-task-dag` 均通过。Phase 2 仍默认关闭；真实双 Agent Device 与 Web surface 尚未完成。
+Issue #551 历史证据（Task 10 阶段）：`managed-multi-agent.test.ts` 覆盖失败 Invocation（含 Dispatch emit failure）的受控 attempt、max attempts 后 `waiting_for_user`、双叶子 canonical acceptance、根汇总贡献集 fail closed、根 Task `in_review` 与人类拒绝后 revision 递增且历史 acceptance 不被覆盖；`task-claim-broker.test.ts` 覆盖 claim 到期重开与 fencing 单调；既有 delivery/acceptance 与 Invocation Gateway tests 继续覆盖 stale revision/attempt/lease 隔离。Node 24 下 boundary 5、contracts 35、PI runtime 36、Domain 121、server-next 516 项测试及 `build:phase2-task-dag` 均通过。当时 Phase 2 默认关闭，真实双 Agent Device 与 Web surface 尚未完成；后续 P2-16/P2-17 已补齐这些链路。
 
 Task 11 历史证据：Team rollout policy 与 Task DAG Web surface 已完成；Node 24 下 server-next 521 项、web-next 208 项、Phase 2 boundary 6 项全量通过，`build:contracts`、`build:domain`、`build:daemon-next`、`build:server-next`、web client/app production build、Phase 1/2 boundary checks 与 browser smoke syntax check 均通过。P2-03 在该切片转 Green；Task 12 随后补齐真实双 Agent 与浏览器链路，使 P2-17 转 Green。
 

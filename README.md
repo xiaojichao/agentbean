@@ -273,7 +273,7 @@ AGENTBEAN_NEXT_ENTRY_URL=http://127.0.0.1:4100 npm run smoke:agentbean-next-busi
 以下状态是截至 2026-07-14 的核对结果；执行生产操作前请重新运行 cutover audit、smoke 与 npm registry 查询。
 
 - 生产入口 `https://api.agentbean.dev/` 由 `server-next` 提供服务，CI 固定从仓库根目录部署，不再提供 old-target 分支。
-- Release B 与 Phase 2 生产门禁已通过：strict cutover audit `12/12`、public entry smoke `4/4`、business smoke `8/8`、production Chrome smoke `40/40`。
+- Release B 与 Phase 2 生产门禁已通过：strict cutover audit `13/13`、public entry smoke `4/4`、business smoke `8/8`、production Chrome smoke `40/40`。
 - CI 依次发布 `@agentbean/contracts`、`@agentbean/pi-management-runtime`、`@agentbean/daemon-next`，再发布基于 daemon-next 的 canonical `@agentbean/daemon`。
   - 已发布版本：`@agentbean/contracts@0.2.4`、`@agentbean/pi-management-runtime@0.1.1`、`@agentbean/daemon-next@0.3.9`、canonical `@agentbean/daemon@0.3.9`。
   - canonical `@agentbean/daemon@latest` 指向 `0.3.9`；旧守护进程 `0.1.35` 只作为 registry 中的 `legacy` 历史归档，因协议不兼容不能连接 server-next，主线不会重新构建或发布它。
