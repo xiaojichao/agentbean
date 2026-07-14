@@ -60,6 +60,10 @@ export function collectAgentBeanNextReadinessChecks({
   const webNextRunDetailPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/runs/[runId]/page.tsx'), 'utf8');
   const webNextSettingsPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/settings/page.tsx'), 'utf8');
   const browserSmokeScript = readFileSync(join(root, 'scripts/smoke-agentbean-next-browser.mjs'), 'utf8');
+  const daemonInstallSmokeScript = readFileSync(
+    join(root, 'scripts/smoke-agentbean-next-daemon-install.mjs'),
+    'utf8',
+  );
   const checks = [
     check(
       'root-build-script',
@@ -704,8 +708,13 @@ export function collectAgentBeanNextReadinessChecks({
         phase2CloseoutSmoke.includes('AGENT_EVENTS.dispatch.result') &&
         browserSmokeScript.includes('webui-phase2-task-dag-business-flow') &&
         browserSmokeScript.includes('supportedPhases: [1, 2]') &&
-        browserSmokeScript.includes('data-smoke="task-dag-panel"'),
-      'Phase 2 closeout must retain the real two-Agent claim/invocation/delivery/human-review smoke and browser Task DAG surface',
+        browserSmokeScript.includes('data-smoke="task-dag-panel"') &&
+        daemonInstallSmokeScript.includes(
+          'dist/apps/daemon-next/src/management-worker-protocol.js',
+        ) &&
+        daemonInstallSmokeScript.includes('PHASE_2_MANAGEMENT_TOOL_NAMES?.length !== 19') &&
+        daemonInstallSmokeScript.includes('createPiManagerWorkerHost'),
+      'Phase 2 closeout must retain the real two-Agent claim/invocation/delivery/human-review smoke, browser Task DAG surface, and canonical published daemon Worker runtime',
     ),
     check(
       'node-24-toolchain-contract',
