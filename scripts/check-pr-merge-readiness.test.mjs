@@ -56,7 +56,6 @@ test('marks a clean PR ready only after Codex reviewed the head commit', () => {
 test('marks a clean draft ready for Review without requiring Codex Review', () => {
   const result = evaluatePullRequest(fixture({
     isDraft: true,
-    mergeStateStatus: 'DRAFT',
     reviews: { nodes: [] },
   }), new Date('2026-07-15T00:15:00Z'), { stage: 'review' });
   assert.equal(result.ready, true);
@@ -69,7 +68,7 @@ test('marks a clean draft ready for Review without requiring Codex Review', () =
 test('blocks a draft from Review while its current checks are pending', () => {
   const pr = fixture({
     isDraft: true,
-    mergeStateStatus: 'DRAFT',
+    mergeStateStatus: 'UNSTABLE',
     reviews: { nodes: [] },
   });
   pr.commits.nodes[0].commit.statusCheckRollup.contexts.nodes = [
@@ -77,16 +76,16 @@ test('blocks a draft from Review while its current checks are pending', () => {
   ];
   const result = evaluatePullRequest(pr, new Date(), { stage: 'review' });
   assert.equal(result.ready, false);
-  assert.deepEqual(result.blockers.map((item) => item.code), ['CHECKS_PENDING']);
+  assert.deepEqual(result.blockers.map((item) => item.code), [
+    'MERGE_STATE_NOT_CLEAN',
+    'CHECKS_PENDING',
+  ]);
 });
 
 test('blocks the Review preflight after a PR has already left Draft', () => {
   const result = evaluatePullRequest(fixture({ reviews: { nodes: [] } }), new Date(), { stage: 'review' });
   assert.equal(result.ready, false);
-  assert.deepEqual(result.blockers.map((item) => item.code), [
-    'PR_NOT_DRAFT',
-    'MERGE_STATE_NOT_DRAFT',
-  ]);
+  assert.deepEqual(result.blockers.map((item) => item.code), ['PR_NOT_DRAFT']);
 });
 
 test('keeps the merge gate blocked when Codex Review is missing', () => {

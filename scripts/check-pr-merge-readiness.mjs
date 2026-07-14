@@ -152,11 +152,10 @@ export function evaluatePullRequest(pr, now = new Date(), { stage = 'merge' } = 
   }
   if (stage === 'merge' && pr.isDraft) blockers.push({ code: 'PR_DRAFT', detail: 'PR 仍是 Draft' });
   if (pr.mergeable !== 'MERGEABLE') blockers.push({ code: 'PR_NOT_MERGEABLE', detail: `mergeable=${pr.mergeable}` });
-  const expectedMergeState = stage === 'review' ? 'DRAFT' : 'CLEAN';
-  if (pr.mergeStateStatus !== expectedMergeState) {
+  if (pr.mergeStateStatus !== 'CLEAN') {
     blockers.push({
-      code: stage === 'review' ? 'MERGE_STATE_NOT_DRAFT' : 'MERGE_STATE_NOT_CLEAN',
-      detail: `mergeStateStatus=${pr.mergeStateStatus}，预期 ${expectedMergeState}`,
+      code: 'MERGE_STATE_NOT_CLEAN',
+      detail: `mergeStateStatus=${pr.mergeStateStatus}，预期 CLEAN`,
     });
   }
   if (!commit?.statusCheckRollup || contexts.length === 0) {
