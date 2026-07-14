@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type {
   AgentInvocationStatus,
   ManagementRunDto,
@@ -5,33 +6,50 @@ import type {
   ManagementWorkerToolResultV1,
   Phase1ManagementWorkerToolName,
   Phase1ManagementWorkerToolOutputMapV1,
+  Phase2ManagementWorkerToolInputMapV1,
+  Phase2ManagementWorkerToolOutputMapV1,
+  Phase2TaskToolRequestV2,
+  Phase2TaskToolResultV2,
 } from '../../../../../packages/contracts/src/index.js';
 import type { MessageRecord, ServerNextRepositories } from '../repositories.js';
 import { createInvocationGateway } from './invocation-gateway.js';
 import type { createManagementKernel } from './management-kernel.js';
+import type { createTaskCoordinationKernel } from './task-coordination-kernel.js';
 
 type ManagementKernel = ReturnType<typeof createManagementKernel>;
+type TaskCoordinationKernel = ReturnType<typeof createTaskCoordinationKernel>;
+type ManagementToolRequest = ManagementWorkerToolRequestV1 | Phase2TaskToolRequestV2;
+type ManagementToolResult = ManagementWorkerToolResultV1 | Phase2TaskToolResultV2;
 type ToolHandler<K extends Phase1ManagementWorkerToolName> = (
   input: Extract<ManagementWorkerToolRequestV1, { toolName: K }>,
 ) => Promise<Phase1ManagementWorkerToolOutputMapV1[K]>;
 export type ToolHandlers = { [K in Phase1ManagementWorkerToolName]?: ToolHandler<K> };
+type Phase2ToolHandler<K extends keyof Phase2ManagementWorkerToolInputMapV1> = (
+  input: Extract<Phase2TaskToolRequestV2, { toolName: K }>,
+) => Promise<Phase2ManagementWorkerToolOutputMapV1[K]>;
+export type Phase2ToolHandlers = {
+  [K in keyof Phase2ManagementWorkerToolInputMapV1]?: Phase2ToolHandler<K>;
+};
+export type AnyToolHandlers = ToolHandlers & Phase2ToolHandlers;
 
-const readTools = new Set<Phase1ManagementWorkerToolName>([
+const readTools = new Set<string>([
   'context.get_root_message',
   'context.get_root_task',
   'context.get_visible_thread',
   'context.get_management_state',
   'agents.list_capabilities',
   'agents.get_status',
+  'tasks.wait',
 ]);
 
 export function createManagementToolExecutor(input: {
   readonly kernel: ManagementKernel;
-  readonly handlers: ToolHandlers;
+  readonly handlers: AnyToolHandlers;
 }) {
-  return async (request: ManagementWorkerToolRequestV1): Promise<ManagementWorkerToolResultV1> => {
+  return async (request: ManagementToolRequest): Promise<ManagementToolResult> => {
     const base = {
-      schemaVersion: 1 as const,
+      schemaVersion: request.schemaVersion,
+      ...('managementPhase' in request ? { managementPhase: 2 as const } : {}),
       commandId: request.commandId,
       managementRunId: request.managementRunId,
       workerId: request.workerId,
@@ -48,12 +66,12 @@ export function createManagementToolExecutor(input: {
           fencingToken: request.fencingToken,
         });
       }
-      const handler = input.handlers[request.toolName] as ((value: ManagementWorkerToolRequestV1) => Promise<unknown>) | undefined;
+      const handler = input.handlers[request.toolName] as ((value: ManagementToolRequest) => Promise<unknown>) | undefined;
       if (!handler) {
-        return { ...base, ok: false, errorCode: 'UNAVAILABLE', diagnosticCode: 'TOOL_NOT_WIRED', retryable: false };
+        return { ...base, ok: false, errorCode: 'UNAVAILABLE', diagnosticCode: 'TOOL_NOT_WIRED', retryable: false } as ManagementToolResult;
       }
       const output = await handler(request);
-      return { ...base, ok: true, output } as ManagementWorkerToolResultV1;
+      return { ...base, ok: true, output } as ManagementToolResult;
     } catch (error) {
       const code = error instanceof Error ? error.message : 'UNKNOWN';
       const unauthorized = code.startsWith('LEASE_') || code === 'MISSING_WRITE_AUTHORITY';
@@ -61,11 +79,76 @@ export function createManagementToolExecutor(input: {
       return {
         ...base,
         ok: false,
-        errorCode: unauthorized ? 'NOT_AUTHORIZED' : diagnosticCode.includes('CONFLICT') ? 'CONFLICT' : 'INVALID_REQUEST',
+        errorCode: unauthorized ? 'NOT_AUTHORIZED' : isConflictDiagnostic(diagnosticCode) ? 'CONFLICT' : 'INVALID_REQUEST',
         diagnosticCode,
         retryable: false,
-      };
+      } as ManagementToolResult;
     }
+  };
+}
+
+export function createPhase2ManagementToolHandlers(input: {
+  readonly kernel: TaskCoordinationKernel;
+}): Phase2ToolHandlers {
+  const { kernel } = input;
+  return {
+    'tasks.create_subtasks': async (request) => {
+      const created = await kernel.createSubtasks({
+        authority: authority(request), idempotencyKey: request.idempotencyKey,
+        parentTaskId: request.input.parentTaskId,
+        subtasks: request.input.subtasks.map((draft) => ({
+          ...draft,
+          taskId: deterministicTaskId(request.managementRunId, request.input.parentTaskId, draft.clientKey),
+        })),
+      });
+      return { taskIds: created.taskIds, taskGraphRevision: created.taskGraphRevision };
+    },
+    'tasks.add_dependency': async (request) => {
+      const added = await kernel.addDependency({
+        authority: authority(request), idempotencyKey: request.idempotencyKey,
+        ...request.input,
+      });
+      return { taskId: added.taskId, taskRevision: added.taskRevision,
+        taskGraphRevision: added.taskGraphRevision };
+    },
+    'tasks.publish_for_claim': async (request) => {
+      const published = await kernel.publishForClaim({
+        authority: authority(request), idempotencyKey: request.idempotencyKey,
+        ...request.input,
+      });
+      return { taskId: published.taskId, taskRevision: published.taskRevision, status: 'todo' };
+    },
+    'tasks.assign': async (request) => {
+      const assigned = await kernel.assignTask({
+        authority: authority(request), idempotencyKey: request.idempotencyKey,
+        ...request.input,
+      });
+      return { taskId: assigned.taskId, taskRevision: assigned.taskRevision, agentId: assigned.agentId };
+    },
+    'tasks.wait': async (request) => kernel.waitForTasks({
+      managementRunId: request.managementRunId, taskIds: request.input.taskIds,
+    }),
+    'tasks.retry': async (request) => {
+      const retried = await kernel.retryTask({
+        authority: authority(request), idempotencyKey: request.idempotencyKey,
+        ...request.input,
+      });
+      return { taskId: retried.taskId, taskRevision: retried.taskRevision, attempt: retried.attempt };
+    },
+    'tasks.accept_subtask': async (request) => {
+      const accepted = await kernel.acceptSubtask({
+        authority: authority(request), idempotencyKey: request.idempotencyKey,
+        acceptance: request.input.acceptance,
+      });
+      return { taskId: accepted.taskId, taskRevision: accepted.taskRevision, status: accepted.status };
+    },
+    'tasks.report_blocked': async (request) => {
+      const blocked = await kernel.reportBlocked({
+        authority: authority(request), idempotencyKey: request.idempotencyKey,
+        ...request.input,
+      });
+      return { taskId: blocked.taskId, status: blocked.status, reportedAt: blocked.reportedAt };
+    },
   };
 }
 
@@ -298,13 +381,27 @@ export function createPhase1ManagementToolHandlers(input: {
   };
 }
 
-function authority(request: Extract<ManagementWorkerToolRequestV1, { leaseToken: string }>) {
+function authority(request: {
+  managementRunId: string;
+  workerId: string;
+  leaseToken: string;
+  fencingToken: number;
+}) {
   return {
     managementRunId: request.managementRunId,
     workerId: request.workerId,
     leaseToken: request.leaseToken,
     fencingToken: request.fencingToken,
   };
+}
+
+function deterministicTaskId(managementRunId: string, parentTaskId: string, clientKey: string): string {
+  return `task-${createHash('sha256').update(`${managementRunId}\u0000${parentTaskId}\u0000${clientKey}`).digest('hex').slice(0, 24)}`;
+}
+
+function isConflictDiagnostic(code: string): boolean {
+  return code.includes('CONFLICT') || code.includes('STALE') || code.includes('FUTURE')
+    || code.includes('ALREADY_') || code.endsWith('_ACTIVE');
 }
 
 async function requireRun(repositories: ServerNextRepositories, managementRunId: string): Promise<ManagementRunDto> {

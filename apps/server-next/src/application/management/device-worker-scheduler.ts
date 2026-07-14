@@ -16,17 +16,22 @@ import type {
   ManagementWorkerRegisterV1,
   ManagementWorkerToolRequestV1,
   ManagementWorkerToolResultV1,
+  Phase2TaskToolRequestV2,
+  Phase2TaskToolResultV2,
 } from '../../../../../packages/contracts/src/index.js';
 import { inspectManagerLease } from '../../../../../packages/domain/src/index.js';
 import type { ManagementPreflight } from '../../../../../packages/domain/src/index.js';
 import type { ManagerPlacementPolicyDto } from '../../../../../packages/contracts/src/index.js';
 import type { DeviceRepository, MessageRepository } from '../repositories.js';
 import type { ManagementRepositories } from '../management-repositories.js';
+import type { TaskCoordinationUnitOfWork } from '../task-coordination-unit-of-work.js';
 import { ManagementConflictError, type createManagementKernel } from './management-kernel.js';
-import { collectManagementCheckpointFacts, restoreOrRebuildManagementCheckpoint } from './management-checkpoint.js';
+import { collectManagementCheckpointFacts, restoreOrRebuildManagementCheckpoint, toManagementCheckpointAuthoritative } from './management-checkpoint.js';
 
 type ManagementKernel = ReturnType<typeof createManagementKernel>;
-type ManagementToolExecutor = (request: ManagementWorkerToolRequestV1) => Promise<ManagementWorkerToolResultV1>;
+type ManagementToolRequest = ManagementWorkerToolRequestV1 | Phase2TaskToolRequestV2;
+type ManagementToolResult = ManagementWorkerToolResultV1 | Phase2TaskToolResultV2;
+type ManagementToolExecutor = (request: ManagementToolRequest) => Promise<ManagementToolResult>;
 
 export interface ManagementWorkerOfferTransport {
   emitLeaseOffer(payload: ManagementLeaseOfferV1, timeoutMs: number): Promise<unknown>;
@@ -36,6 +41,7 @@ export interface DeviceWorkerSchedulerDependencies {
   readonly devices: DeviceRepository;
   readonly messages?: MessageRepository;
   readonly management: ManagementRepositories;
+  readonly taskCoordinationUnitOfWork?: TaskCoordinationUnitOfWork;
   readonly kernel: ManagementKernel;
   readonly executeTool: ManagementToolExecutor;
   readonly clock: { now(): number };
@@ -303,7 +309,7 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
       return releaseWorkerLease(connectionId, input, dependencies, workersById, workerIdByConnection);
     },
 
-    async executeTool(connectionId: string, input: ManagementWorkerToolRequestV1): Promise<ManagementWorkerToolResultV1> {
+    async executeTool(connectionId: string, input: ManagementToolRequest): Promise<ManagementToolResult> {
       const worker = connectedWorker(connectionId, input.workerId, workersById, workerIdByConnection);
       if (!worker) return toolFailure(input, 'MANAGEMENT_WORKER_CONNECTION_MISMATCH');
       const lease = await dependencies.management.leases.get(input.managementRunId);
@@ -333,15 +339,36 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
         threadId: run.rootMessageId,
         limit: 200,
       });
-      const latest = await dependencies.management.checkpoints.getLatest(run.id);
+      const snapshot = dependencies.taskCoordinationUnitOfWork
+        ? await dependencies.taskCoordinationUnitOfWork.run(async (repositories) => ({
+            latest: await repositories.management.checkpoints.getLatest(run.id),
+            facts: await collectManagementCheckpointFacts(repositories.management, run, {
+              tasks: repositories.tasks, coordination: repositories.coordination,
+            }),
+          }))
+        : {
+            latest: await dependencies.management.checkpoints.getLatest(run.id),
+            facts: await collectManagementCheckpointFacts(dependencies.management, run),
+          };
+      const latest = snapshot.latest;
       const checkpoint = latest
         ? restoreOrRebuildManagementCheckpoint({
             checkpoint: latest,
-            facts: await collectManagementCheckpointFacts(dependencies.management, run),
+            facts: snapshot.facts,
             objective: rootMessage.body,
             now: dependencies.clock.now(),
           }).checkpoint
-        : undefined;
+        : {
+            schemaVersion: 1 as const,
+            managementRunId: run.id,
+            revision: run.checkpointRevision,
+            authoritative: toManagementCheckpointAuthoritative(snapshot.facts),
+            contextHints: {
+              objective: rootMessage.body,
+              planSummary: '', completedInvocationSummaries: [], unresolvedQuestions: [],
+            },
+            updatedAt: dependencies.clock.now(),
+          };
       return {
         schemaVersion: 1,
         managementRunId: run.id,
@@ -493,9 +520,10 @@ function failure(
   return { schemaVersion: 1, ok: false, errorCode, diagnosticCode, retryable };
 }
 
-function toolFailure(input: ManagementWorkerToolRequestV1, diagnosticCode: string): ManagementWorkerToolResultV1 {
+function toolFailure(input: ManagementToolRequest, diagnosticCode: string): ManagementToolResult {
   return {
-    schemaVersion: 1,
+    schemaVersion: input.schemaVersion,
+    ...('managementPhase' in input ? { managementPhase: 2 as const } : {}),
     commandId: input.commandId,
     managementRunId: input.managementRunId,
     workerId: input.workerId,
@@ -505,5 +533,5 @@ function toolFailure(input: ManagementWorkerToolRequestV1, diagnosticCode: strin
     errorCode: 'NOT_AUTHORIZED',
     diagnosticCode,
     retryable: false,
-  };
+  } as ManagementToolResult;
 }

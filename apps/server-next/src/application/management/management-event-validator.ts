@@ -26,6 +26,7 @@ export const TASK_COORDINATION_MANAGEMENT_EVENT_TYPES = [
   'task-assigned',
   'task-claimed',
   'claim-invalidated',
+  'task-acceptance-decided',
 ] as const satisfies readonly ManagementEventTypeV1[];
 
 type TaskCoordinationEventType = (typeof TASK_COORDINATION_MANAGEMENT_EVENT_TYPES)[number];
@@ -51,6 +52,7 @@ const payloadKeys: Record<WritableEventType, { required: readonly string[]; opti
   'task-assigned': { required: ['taskId', 'taskRevision', 'agentId'] },
   'task-claimed': { required: ['taskId', 'taskRevision', 'agentId', 'claimLeaseId', 'attempt'] },
   'claim-invalidated': { required: ['taskId', 'previousTaskRevision', 'claimLeaseId', 'invalidatedInvocationIds', 'reasonCode'] },
+  'task-acceptance-decided': { required: ['taskId', 'acceptance'] },
 };
 
 export function parsePhase1ManagementEvent(input: unknown): ManagementEventV1 {
@@ -151,6 +153,28 @@ function validatePayload(type: WritableEventType, payload: Record<string, unknow
       string(payload.claimLeaseId, 'payload.claimLeaseId');
       stringArray(payload.invalidatedInvocationIds, 'payload.invalidatedInvocationIds');
       string(payload.reasonCode, 'payload.reasonCode'); return;
+    case 'task-acceptance-decided': {
+      string(payload.taskId, 'payload.taskId');
+      const acceptance = record(payload.acceptance, 'payload.acceptance');
+      exactKeys(acceptance, ['schemaVersion', 'taskId', 'deliveryId', 'expectedTaskRevision',
+        'taskAttempt', 'claimLeaseId', 'decision', 'criteriaResults', 'reason', 'decidedBy', 'decidedAt'], []);
+      if (acceptance.schemaVersion !== 1) fail('payload.acceptance.schemaVersion');
+      string(acceptance.taskId, 'payload.acceptance.taskId');
+      string(acceptance.deliveryId, 'payload.acceptance.deliveryId');
+      positiveInteger(acceptance.expectedTaskRevision, 'payload.acceptance.expectedTaskRevision');
+      positiveInteger(acceptance.taskAttempt, 'payload.acceptance.taskAttempt');
+      string(acceptance.claimLeaseId, 'payload.acceptance.claimLeaseId');
+      if (!['accepted', 'rejected', 'needs_human'].includes(string(acceptance.decision, 'payload.acceptance.decision'))) {
+        fail('payload.acceptance.decision');
+      }
+      if (!Array.isArray(acceptance.criteriaResults)) fail('payload.acceptance.criteriaResults');
+      string(acceptance.reason, 'payload.acceptance.reason');
+      if (!['manager', 'human'].includes(string(acceptance.decidedBy, 'payload.acceptance.decidedBy'))) {
+        fail('payload.acceptance.decidedBy');
+      }
+      nonNegativeInteger(acceptance.decidedAt, 'payload.acceptance.decidedAt');
+      return;
+    }
   }
 }
 

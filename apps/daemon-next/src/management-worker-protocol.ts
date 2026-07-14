@@ -13,6 +13,8 @@ import type {
   ManagementWorkerRegisterV1,
   ManagementWorkerToolRequestV1,
   ManagementWorkerToolResultV1,
+  Phase2TaskToolRequestV2,
+  Phase2TaskToolResultV2,
   TaskClaimAcquireAckV1,
   TaskClaimExpiredV1,
   TaskClaimOfferV1,
@@ -21,7 +23,7 @@ import type {
   TaskClaimRenewAckV1,
   TaskClaimRenewV1,
 } from '../../../packages/contracts/src/index.js';
-import { AGENT_EVENTS, parseManagementWorkerPayload, parseTaskClaimPayload, safeParseManagementWorkerPayload, safeParseTaskClaimPayload } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, parseManagementWorkerPayload, parsePhase2TaskToolResultV2, parseTaskClaimPayload, safeParseManagementWorkerPayload, safeParseTaskClaimPayload } from '../../../packages/contracts/src/index.js';
 
 export interface ManagementWorkerProtocolSocket {
   readonly connected: boolean;
@@ -52,7 +54,7 @@ export interface PiManagerWorkerProtocol {
   releaseLease(input: ManagementLeaseReleaseV1): Promise<ManagementLeaseReleaseAckV1>;
   abortLease(input: ManagementWorkerAbortV1): Promise<ManagementLeaseReleaseAckV1>;
   fetchCheckpoint(input: ManagementCheckpointFetchV1): Promise<ManagementCheckpointResultV1>;
-  executeTool(input: ManagementWorkerToolRequestV1): Promise<ManagementWorkerToolResultV1>;
+  executeTool(input: ManagementWorkerToolRequestV1 | Phase2TaskToolRequestV2): Promise<ManagementWorkerToolResultV1 | Phase2TaskToolResultV2>;
   replayOutbox(input: ManagementOutboxReplayV1): Promise<ManagementOutboxReplayAckV1>;
 }
 
@@ -269,9 +271,12 @@ export function createManagementWorkerProtocol(
       ));
     },
     async executeTool(payload) {
-      return parseManagementWorkerPayload('tool-result', await emitWithTimeout(
+      const result = await emitWithTimeout(
         input.socket, AGENT_EVENTS.managementWorker.toolRequest, payload, toolAckTimeoutMs,
-      ));
+      );
+      return payload.schemaVersion === 2
+        ? parsePhase2TaskToolResultV2(result)
+        : parseManagementWorkerPayload('tool-result', result);
     },
     async replayOutbox(payload) {
       return parseManagementWorkerPayload('outbox-replay-ack', await emitWithTimeout(

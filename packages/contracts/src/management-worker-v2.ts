@@ -87,6 +87,28 @@ export interface Phase2ManagementWorkerToolOutputMapV1 {
   readonly 'tasks.report_blocked': { readonly taskId: ID; readonly status: 'todo'; readonly reportedAt: UnixMs };
 }
 
+interface Phase2TaskToolResultBaseV2<K extends keyof Phase2ManagementWorkerToolOutputMapV1> {
+  readonly schemaVersion: 2;
+  readonly managementPhase: 2;
+  readonly commandId: ID;
+  readonly managementRunId: ID;
+  readonly workerId: ID;
+  readonly toolCallId: ID;
+  readonly toolName: K;
+}
+
+export type Phase2TaskToolResultV2 = {
+  readonly [K in keyof Phase2ManagementWorkerToolOutputMapV1]: Phase2TaskToolResultBaseV2<K> & {
+    readonly ok: true;
+    readonly output: Phase2ManagementWorkerToolOutputMapV1[K];
+  };
+}[keyof Phase2ManagementWorkerToolOutputMapV1] | (Phase2TaskToolResultBaseV2<keyof Phase2ManagementWorkerToolOutputMapV1> & {
+  readonly ok: false;
+  readonly errorCode: 'INVALID_REQUEST' | 'NOT_AUTHORIZED' | 'CONFLICT' | 'UNAVAILABLE';
+  readonly diagnosticCode?: string;
+  readonly retryable: boolean;
+});
+
 export type Phase2TaskToolRequestV2 = {
   readonly [K in keyof Phase2ManagementWorkerToolInputMapV1]: {
     readonly schemaVersion: 2;
@@ -106,6 +128,7 @@ export type Phase2TaskToolRequestV2 = {
 const registerKeys = ['schemaVersion', 'workerInstanceId', 'profileId', 'runtimeVersion', 'supportedProtocolVersions', 'supportedPhases', 'credentialStatus', 'providerId', 'modelId', 'capacity'];
 const contextKeys = ['schemaVersion', 'managementPhase', 'teamId', 'channelId', 'rootMessageId', 'rootTaskId', 'frozenTarget', 'visibleThread'];
 const taskRequestKeys = ['schemaVersion', 'managementPhase', 'commandId', 'managementRunId', 'workerId', 'toolCallId', 'toolName', 'leaseToken', 'fencingToken', 'idempotencyKey', 'input'];
+const taskResultKeys = ['schemaVersion', 'managementPhase', 'commandId', 'managementRunId', 'workerId', 'toolCallId', 'toolName', 'ok', 'output', 'errorCode', 'diagnosticCode', 'retryable'];
 
 function assertExactKeys(value: unknown, allowed: readonly string[], required: readonly string[]): asserts value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
@@ -212,6 +235,56 @@ function assertTaskToolInput(toolName: string, value: unknown): void {
   if (withReason && !nonEmpty(value.reasonCode)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
 }
 
+function assertTaskToolOutput(toolName: string, value: unknown): void {
+  if (toolName === 'tasks.create_subtasks') {
+    assertExactKeys(value, ['taskIds', 'taskGraphRevision'], ['taskIds', 'taskGraphRevision']);
+    assertStringArray(value.taskIds);
+    if (new Set(value.taskIds as readonly string[]).size !== (value.taskIds as readonly string[]).length) {
+      throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    }
+    assertInteger(value.taskGraphRevision, 1); return;
+  }
+  if (toolName === 'tasks.add_dependency') {
+    assertExactKeys(value, ['taskId', 'taskRevision', 'taskGraphRevision'], ['taskId', 'taskRevision', 'taskGraphRevision']);
+    if (!nonEmpty(value.taskId)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    assertInteger(value.taskRevision, 1); assertInteger(value.taskGraphRevision, 1); return;
+  }
+  if (toolName === 'tasks.publish_for_claim') {
+    assertExactKeys(value, ['taskId', 'taskRevision', 'status'], ['taskId', 'taskRevision', 'status']);
+    if (!nonEmpty(value.taskId) || value.status !== 'todo') throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    assertInteger(value.taskRevision, 1); return;
+  }
+  if (toolName === 'tasks.assign') {
+    assertExactKeys(value, ['taskId', 'taskRevision', 'agentId'], ['taskId', 'taskRevision', 'agentId']);
+    if (!nonEmpty(value.taskId) || !nonEmpty(value.agentId)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    assertInteger(value.taskRevision, 1); return;
+  }
+  if (toolName === 'tasks.wait') {
+    assertExactKeys(value, ['readyTaskIds', 'waitingTaskIds'], ['readyTaskIds', 'waitingTaskIds']);
+    assertStringArray(value.readyTaskIds); assertStringArray(value.waitingTaskIds);
+    const ready = value.readyTaskIds as readonly string[];
+    const waiting = value.waitingTaskIds as readonly string[];
+    if (new Set(ready).size !== ready.length || new Set(waiting).size !== waiting.length
+      || ready.some((id) => waiting.includes(id))) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    return;
+  }
+  if (toolName === 'tasks.retry') {
+    assertExactKeys(value, ['taskId', 'taskRevision', 'attempt'], ['taskId', 'taskRevision', 'attempt']);
+    if (!nonEmpty(value.taskId)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    assertInteger(value.taskRevision, 1); assertInteger(value.attempt, 1); return;
+  }
+  if (toolName === 'tasks.accept_subtask') {
+    assertExactKeys(value, ['taskId', 'taskRevision', 'status'], ['taskId', 'taskRevision', 'status']);
+    if (!nonEmpty(value.taskId) || !['done', 'in_review'].includes(String(value.status))) {
+      throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    }
+    assertInteger(value.taskRevision, 1); return;
+  }
+  assertExactKeys(value, ['taskId', 'status', 'reportedAt'], ['taskId', 'status', 'reportedAt']);
+  if (!nonEmpty(value.taskId) || value.status !== 'todo') throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+  assertInteger(value.reportedAt, 0);
+}
+
 export function parsePhase2TaskToolInputV1<K extends keyof Phase2ManagementWorkerToolInputMapV1>(
   toolName: K,
   value: unknown,
@@ -276,4 +349,26 @@ export function parsePhase2TaskToolRequestV2(value: unknown): Phase2TaskToolRequ
   }
   parsePhase2TaskToolInputV1(value.toolName as keyof Phase2ManagementWorkerToolInputMapV1, value.input);
   return structuredClone(value) as unknown as Phase2TaskToolRequestV2;
+}
+
+export function parsePhase2TaskToolResultV2(value: unknown): Phase2TaskToolResultV2 {
+  assertExactKeys(value, taskResultKeys, ['schemaVersion', 'managementPhase', 'commandId', 'managementRunId', 'workerId', 'toolCallId', 'toolName', 'ok']);
+  if (value.schemaVersion !== 2 || value.managementPhase !== 2
+    || !PHASE_2_TASK_WORKER_TOOL_NAMES.includes(value.toolName as never)
+    || !nonEmpty(value.commandId) || !nonEmpty(value.managementRunId)
+    || !nonEmpty(value.workerId) || !nonEmpty(value.toolCallId)
+    || typeof value.ok !== 'boolean') {
+    throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+  }
+  if (value.ok) {
+    if (value.output === undefined || value.errorCode !== undefined || value.retryable !== undefined) {
+      throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    }
+    assertTaskToolOutput(String(value.toolName), value.output);
+  } else if (!['INVALID_REQUEST', 'NOT_AUTHORIZED', 'CONFLICT', 'UNAVAILABLE'].includes(String(value.errorCode))
+    || typeof value.retryable !== 'boolean' || value.output !== undefined
+    || (value.diagnosticCode !== undefined && !nonEmpty(value.diagnosticCode))) {
+    throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+  }
+  return structuredClone(value) as unknown as Phase2TaskToolResultV2;
 }

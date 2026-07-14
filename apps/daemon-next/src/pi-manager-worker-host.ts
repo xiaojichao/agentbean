@@ -3,6 +3,7 @@ import type {
   ManagementRuntimeFactory,
   ManagementSession,
   ManagementSessionContextV1,
+  ManagementSessionContextV2,
   ManagementToolCall,
   ManagementToolExecutor,
   ManagementToolResult,
@@ -16,8 +17,10 @@ import type {
   ManagementWorkerLeaseProofV1,
   ManagementWorkerToolRequestV1,
   Phase1ManagementWorkerToolName,
+  Phase2ManagementWorkerToolName,
+  Phase2TaskToolRequestV2,
 } from '../../../packages/contracts/src/index.js';
-import { PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES } from '../../../packages/contracts/src/index.js';
+import { PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES, PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES } from '../../../packages/contracts/src/index.js';
 import type {
   ManagementCredentialProvider,
   ManagementCredentialResolution,
@@ -68,6 +71,7 @@ interface ActiveLease {
   session?: ManagementSession;
   renewTimer?: ReturnType<typeof setTimeout>;
   disposing: boolean;
+  managementPhase: 1 | 2;
 }
 
 const DEFAULT_SYSTEM_PROMPT: VersionedManagementPrompt = {
@@ -76,12 +80,19 @@ const DEFAULT_SYSTEM_PROMPT: VersionedManagementPrompt = {
   content: '你是 AgentBean 的 PI 管理运行时。只使用已提供的管理工具处理 frozen target；不得访问本地 cwd、源码或任意 coding tools。',
 };
 
-const WRITE_TOOL_NAMES = new Set<Phase1ManagementWorkerToolName>([
+const WRITE_TOOL_NAMES = new Set<Phase2ManagementWorkerToolName>([
   'agents.invoke',
   'agents.cancel_invocation',
   'channel.post_management_status',
   'user.request_input',
   'review.submit_root_delivery',
+  'tasks.create_subtasks',
+  'tasks.add_dependency',
+  'tasks.publish_for_claim',
+  'tasks.assign',
+  'tasks.retry',
+  'tasks.accept_subtask',
+  'tasks.report_blocked',
 ]);
 
 export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput): PiManagerWorkerHost {
@@ -179,6 +190,7 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
       fencingToken: acquired.fencingToken,
       expiresAt: acquired.expiresAt,
       disposing: false,
+      managementPhase: 1,
     };
     activeLeases.set(lease.managementRunId, lease);
 
@@ -194,6 +206,7 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
       if (restored.managementRunId !== lease.managementRunId || restored.workerId !== lease.workerId) {
         throw new Error('MANAGEMENT_CHECKPOINT_AUTHORITY_MISMATCH');
       }
+      lease.managementPhase = isPhase2Checkpoint(restored) ? 2 : 1;
       const session = await runtimeFactory!.createSession({
         systemPrompt: input.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
         mode: 'managed',
@@ -211,18 +224,22 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
 
   async function executeManagementTool(call: ManagementToolCall): Promise<ManagementToolResult> {
     if (call.scope.kind !== 'managed') return toolError('MANAGEMENT_SHADOW_TOOL_UNSUPPORTED');
-    if (!PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES.includes(call.name as Phase1ManagementWorkerToolName)) {
+    const allowedTools = leasePhaseTools(call.scope.managementRunId);
+    if (!allowedTools.includes(call.name as Phase2ManagementWorkerToolName)) {
       return toolError('MANAGEMENT_TOOL_PHASE_UNSUPPORTED');
     }
-    const toolName = call.name as Phase1ManagementWorkerToolName;
+    const toolName = call.name as Phase2ManagementWorkerToolName;
     const lease = activeLeases.get(call.scope.managementRunId);
     if (!lease || lease.disposing || lease.fencingToken < 1) return toolError('MANAGEMENT_LEASE_UNAVAILABLE');
 
     const commandId = `${lease.managementRunId}:${call.toolCallId}`;
     const write = WRITE_TOOL_NAMES.has(toolName);
     const idempotencyKey = commandId;
+    const phase2Task = lease.managementPhase === 2
+      && !PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES.includes(toolName as Phase1ManagementWorkerToolName);
     const base = {
-      schemaVersion: 1 as const,
+      schemaVersion: phase2Task ? 2 as const : 1 as const,
+      ...(phase2Task ? { managementPhase: 2 as const } : {}),
       commandId,
       managementRunId: lease.managementRunId,
       workerId: lease.workerId,
@@ -230,12 +247,12 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
       toolName,
       input: structuredClone(call.input),
     };
-    const request = (write ? {
+    const request = (write || phase2Task ? {
       ...base,
       leaseToken: lease.leaseToken,
       fencingToken: lease.fencingToken,
       idempotencyKey,
-    } : base) as ManagementWorkerToolRequestV1;
+    } : base) as ManagementWorkerToolRequestV1 | Phase2TaskToolRequestV2;
     let outboxItem: ManagementDurableOutboxItem | undefined;
     if (write) {
       const item: ManagementDurableOutboxItem = {
@@ -264,6 +281,12 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
     } catch {
       return toolError('MANAGEMENT_TOOL_TRANSPORT_FAILED');
     }
+  }
+
+  function leasePhaseTools(managementRunId: string): readonly Phase2ManagementWorkerToolName[] {
+    return activeLeases.get(managementRunId)?.managementPhase === 2
+      ? PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES
+      : PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES;
   }
 
   function scheduleRenew(lease: ActiveLease): void {
@@ -380,11 +403,23 @@ export async function replayManagementOutboxForLease(input: {
   }
 }
 
-function runtimeContext(restored: ManagementCheckpointResultV1): ManagementSessionContextV1 {
-  if (restored.checkpoint && restored.checkpoint.authoritative.taskGraphRevision !== 0) {
-    throw new Error('P1_TASK_GRAPH_REVISION_UNSUPPORTED');
-  }
+function runtimeContext(restored: ManagementCheckpointResultV1): ManagementSessionContextV1 | ManagementSessionContextV2 {
   const context = restored.context;
+  if (isPhase2Checkpoint(restored)) {
+    if (!context.rootTaskId) throw new Error('P2_ROOT_TASK_REQUIRED');
+    return {
+      schemaVersion: 2,
+      managementPhase: 2,
+      scope: {
+        kind: 'managed', managementRunId: restored.managementRunId,
+        teamId: context.teamId, channelId: context.channelId,
+        rootMessageId: context.rootMessageId, rootTaskId: context.rootTaskId,
+      },
+      ...(context.frozenTarget ? { frozenTarget: structuredClone(context.frozenTarget) } : {}),
+      visibleThread: structuredClone(context.visibleThread),
+      ...(restored.checkpoint ? { checkpoint: visibleCheckpoint(restored.checkpoint) } : {}),
+    };
+  }
   return {
     schemaVersion: 1,
     scope: {
@@ -398,16 +433,22 @@ function runtimeContext(restored: ManagementCheckpointResultV1): ManagementSessi
     frozenTarget: structuredClone(context.frozenTarget),
     visibleThread: structuredClone(context.visibleThread),
     ...(restored.checkpoint ? {
-      checkpoint: {
-        revision: restored.checkpoint.revision,
-        lastEventSequence: restored.checkpoint.authoritative.lastEventSequence,
-        objective: restored.checkpoint.contextHints.objective,
-        planSummary: restored.checkpoint.contextHints.planSummary,
-        ...(restored.checkpoint.contextHints.nextAction
-          ? { nextAction: restored.checkpoint.contextHints.nextAction }
-          : {}),
-      },
+      checkpoint: visibleCheckpoint(restored.checkpoint),
     } : {}),
+  };
+}
+
+function isPhase2Checkpoint(restored: ManagementCheckpointResultV1): boolean {
+  return Boolean(restored.context.rootTaskId && restored.checkpoint?.authoritative.taskSnapshots?.length);
+}
+
+function visibleCheckpoint(checkpoint: NonNullable<ManagementCheckpointResultV1['checkpoint']>) {
+  return {
+    revision: checkpoint.revision,
+    lastEventSequence: checkpoint.authoritative.lastEventSequence,
+    objective: checkpoint.contextHints.objective,
+    planSummary: checkpoint.contextHints.planSummary,
+    ...(checkpoint.contextHints.nextAction ? { nextAction: checkpoint.contextHints.nextAction } : {}),
   };
 }
 

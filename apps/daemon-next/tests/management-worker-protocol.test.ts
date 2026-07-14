@@ -86,4 +86,27 @@ describe('management worker protocol', () => {
     expect(harness.emitWithAck).toHaveBeenCalledTimes(2);
     expect(onReconnect).toHaveBeenCalledWith('worker-1');
   });
+
+  test('Phase 2 Task request 使用 V2 result parser，拒绝错误 phase 回包', async () => {
+    const harness = createSocketHarness();
+    harness.emitWithAck.mockImplementation(async (event, payload) => {
+      if (event === AGENT_EVENTS.managementWorker.toolRequest) {
+        const request = payload as { commandId: string; managementRunId: string; workerId: string; toolCallId: string };
+        return { schemaVersion: 2, managementPhase: 2,
+          commandId: request.commandId, managementRunId: request.managementRunId,
+          workerId: request.workerId, toolCallId: request.toolCallId,
+          toolName: 'tasks.wait', ok: true,
+          output: { readyTaskIds: ['task-1'], waitingTaskIds: [] } };
+      }
+      return { schemaVersion: 1, ok: true, workerId: 'worker-1', protocolVersion: 1 };
+    });
+    const protocol = createManagementWorkerProtocol({ socket: harness.socket,
+      workerInstanceId: 'instance-1', profileId: 'profile-1', runtimeVersion: '0.1.0' });
+    const result = await protocol.executeTool({ schemaVersion: 2, managementPhase: 2,
+      commandId: 'command-1', managementRunId: 'run-1', workerId: 'worker-1',
+      toolCallId: 'call-1', toolName: 'tasks.wait', leaseToken: 'token', fencingToken: 1,
+      idempotencyKey: 'wait-1', input: { taskIds: ['task-1'] } });
+    expect(result).toMatchObject({ schemaVersion: 2, managementPhase: 2, ok: true,
+      output: { readyTaskIds: ['task-1'] } });
+  });
 });
