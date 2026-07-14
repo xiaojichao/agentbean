@@ -247,6 +247,23 @@ describe('PiManagerWorkerHost', () => {
       schemaVersion: 2, managementPhase: 2, toolName: 'tasks.wait', leaseToken: 'raw-lease-token',
     }));
 
+    vi.mocked(protocol.executeTool).mockResolvedValueOnce({
+      schemaVersion: 2, managementPhase: 2, commandId: 'run-1:invoke-1',
+      managementRunId: 'run-1', workerId: 'worker-1', toolCallId: 'invoke-1',
+      toolName: 'agents.invoke', ok: true, output: { invocationId: 'invocation-1', status: 'succeeded' },
+    });
+    await expect(executeTool!({ toolCallId: 'invoke-1', name: 'agents.invoke',
+      scope: { kind: 'managed', managementRunId: 'run-1', teamId: 'team-1', channelId: 'channel-1',
+        rootMessageId: 'message-1', rootTaskId: 'root-task' },
+      input: { taskId: 'child-task', expectedTaskRevision: 2, taskAttempt: 1,
+        claimLeaseId: 'claim-1', objective: '执行 child', attachmentIds: [] },
+      metadata: { name: 'agents.invoke', effect: 'write', phase: 2, inputSchemaVersion: 1 } }))
+      .resolves.toEqual({ text: JSON.stringify({ invocationId: 'invocation-1', status: 'succeeded' }) });
+    expect(protocol.executeTool).toHaveBeenLastCalledWith(expect.objectContaining({
+      schemaVersion: 2, managementPhase: 2, toolName: 'agents.invoke', leaseToken: 'raw-lease-token',
+      input: expect.objectContaining({ taskId: 'child-task', claimLeaseId: 'claim-1' }),
+    }));
+
     await handlers()!.onDisconnect();
     await handlers()!.onReconnect?.('worker-1');
     const resumedOffer = { ...offer, offerId: 'offer-2' };

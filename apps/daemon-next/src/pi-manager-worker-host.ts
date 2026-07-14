@@ -236,7 +236,8 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
     const write = WRITE_TOOL_NAMES.has(toolName);
     const idempotencyKey = commandId;
     const phase2Task = lease.managementPhase === 2
-      && !PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES.includes(toolName as Phase1ManagementWorkerToolName);
+      && (toolName === 'agents.invoke'
+        || !PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES.includes(toolName as Phase1ManagementWorkerToolName));
     const base = {
       schemaVersion: phase2Task ? 2 as const : 1 as const,
       ...(phase2Task ? { managementPhase: 2 as const } : {}),

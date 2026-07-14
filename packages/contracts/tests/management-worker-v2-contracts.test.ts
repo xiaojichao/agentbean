@@ -56,7 +56,7 @@ describe('Phase 2 management worker contracts', () => {
     })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
   });
 
-  test('parses only Phase 2 Task tool requests with write authority', () => {
+  test('parses Phase 2 Task tools and claim-bound agents.invoke with write authority', () => {
     const value = {
       schemaVersion: 2,
       managementPhase: 2,
@@ -71,8 +71,22 @@ describe('Phase 2 management worker contracts', () => {
       input: { taskIds: ['task-1'] },
     };
     expect(parsePhase2TaskToolRequestV2(value)).toEqual(value);
-    expect(() => parsePhase2TaskToolRequestV2({ ...value, toolName: 'agents.invoke' }))
-      .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    expect(parsePhase2TaskToolRequestV2({
+      ...value,
+      toolName: 'agents.invoke',
+      input: {
+        taskId: 'task-1', expectedTaskRevision: 3, taskAttempt: 2, claimLeaseId: 'claim-1',
+        objective: '完成子任务', attachmentIds: ['artifact-1'], deadlineAt: 1_000,
+      },
+    })).toMatchObject({ schemaVersion: 2, managementPhase: 2, toolName: 'agents.invoke' });
+    expect(() => parsePhase2TaskToolRequestV2({
+      ...value,
+      toolName: 'agents.invoke',
+      input: {
+        taskId: 'task-1', expectedTaskRevision: 3, taskAttempt: 2, claimLeaseId: 'claim-1',
+        targetAgentId: 'agent-local-guess', objective: '完成子任务', attachmentIds: [],
+      },
+    })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
     expect(() => parsePhase2TaskToolRequestV2({ ...value, leaseToken: '' }))
       .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
     for (const field of ['commandId', 'workerId', 'toolCallId', 'idempotencyKey'] as const) {

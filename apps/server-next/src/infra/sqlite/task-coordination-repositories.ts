@@ -193,6 +193,10 @@ export function createSqliteTaskCoordinationRepositories(
       async getById(id) {
         return mapDelivery(db.prepare('SELECT delivery_json FROM subtask_deliveries WHERE id = ?').get(id));
       },
+      async listByTask(taskId) {
+        return db.prepare(`SELECT delivery_json FROM subtask_deliveries
+          WHERE task_id = ? ORDER BY created_at, id`).all(taskId).map(mapDeliveryRequired);
+      },
       async getByIdempotencyKey(input) {
         return mapDelivery(db.prepare(`SELECT delivery_json FROM subtask_deliveries
           WHERE task_id = ? AND idempotency_key = ?`).get(input.taskId, input.idempotencyKey));
@@ -337,6 +341,7 @@ function mapClaim(value: unknown): TaskClaimLeaseRecord | null { return value ? 
 function mapSnapshot(value: unknown): EvidenceSnapshotRecord | null { return value ? { id: text(value, 'id'), teamId: text(value, 'team_id'), taskId: text(value, 'task_id'), taskRevision: number(value, 'task_revision'), taskAttempt: number(value, 'task_attempt'), invocationId: text(value, 'invocation_id'), kind: text(value, 'kind') as EvidenceSnapshotRecord['kind'], sourceId: text(value, 'source_id'), snapshotHash: text(value, 'snapshot_hash'), snapshotRevision: nullableNumber(value, 'snapshot_revision'), snapshot: parse(text(value, 'snapshot_json')), capturedAt: number(value, 'captured_at') } : null; }
 function mapSnapshotRequired(value: unknown): EvidenceSnapshotRecord { return required(mapSnapshot(value)); }
 function mapDelivery(value: unknown): SubtaskDeliveryRecord | null { return value ? parse(text(value, 'delivery_json')) : null; }
+function mapDeliveryRequired(value: unknown): SubtaskDeliveryRecord { return required(mapDelivery(value)); }
 function mapAcceptance(value: unknown): SubtaskAcceptanceRecord | null { return value ? parse(text(value, 'acceptance_json')) : null; }
 function mapAcceptanceRequired(value: unknown): SubtaskAcceptanceRecord { return required(mapAcceptance(value)); }
 function getRequiredCoordination(db: SqliteDatabase, taskId: string): TaskCoordinationRecord {
