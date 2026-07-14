@@ -9,7 +9,7 @@ AgentBean 是一个面向人类与 Agent 协作的本地优先团队平台。它
 - **AgentOS 托管型 Agent**：由 OpenClaw、Hermes 等 AgentOS / Gateway 托管，可以作为团队成员响应频道或私聊消息。
 - **自定义 Agent**：用户创建的专属 Agent，连接某台设备上的项目目录和本地工具，把个人工作流转化为团队可协作的能力。
 
-> **当前唯一产品入口是 AgentBean Next**（`apps/*-next` + `packages/*`）。生产 `https://api.agentbean.dev/` 由 `server-next` 提供服务；canonical `@agentbean/daemon@latest` 指向基于 `daemon-next` 的 `0.3.6`。Release B 已随 PR #485 发布，`main` 已退役旧源码；对应 main CI、Railway deploy、production smoke 与 production-host browser gate 均已通过。
+> **当前唯一产品入口是 AgentBean Next**（`apps/*-next` + `packages/*`）。生产 `https://api.agentbean.dev/` 由 `server-next` 提供服务；canonical `@agentbean/daemon@latest` 指向基于 `daemon-next` 的 `0.3.9`。Release B 已随 PR #485 发布，`main` 已退役旧源码；对应 main CI、Railway deploy、production smoke 与 production-host browser gate 均已通过。
 
 ## 仓库结构
 
@@ -243,6 +243,17 @@ npm run test:phase1-management
 npm run build:phase1-management
 ```
 
+Phase 2 的 Task DAG 与团队认领能力已通过 main CI/CD、Linux/macOS/Windows SEA、npm、Railway、Vercel 与生产 Chrome 40/40 验收，但仍是受控 opt-in。Team 默认 `maxManagementPhase=1`；只有 owner/admin 显式为指定 Team 启用 Phase 2、请求绑定根 Task，且 V2 Device worker preflight 为 Green 时才会进入 Phase 2。任一条件缺失均 fail closed，不会回退成重复 direct Dispatch。
+
+```bash
+# Node 24：Phase 2 Task DAG、真实双 Agent 与 matching builds
+npm run test:phase2-task-dag
+npm run test:phase2-closeout
+npm run build:phase2-task-dag
+```
+
+逐项证据与最终 Green verdict 见 `agentbean-next/docs/phase-2-task-dag-team-claim-verification-matrix.md`。
+
 Node 24 SEA 使用官方 Node 可执行文件执行 blob 注入；若本机 Node 来自不含 SEA fuse 的共享库发行版，可通过 `AGENTBEAN_PI_SEA_NODE_EXECUTABLE=/path/to/node` 指定官方 Node 24.18.0 binary。
 
 更细分的测试与 smoke：
@@ -259,13 +270,13 @@ AGENTBEAN_NEXT_ENTRY_URL=http://127.0.0.1:4100 npm run smoke:agentbean-next-busi
 
 ## 生产状态与发布
 
-以下状态是截至 2026-07-12 的核对结果；执行生产操作前请重新运行 cutover audit、smoke 与 npm registry 查询。
+以下状态是截至 2026-07-14 的核对结果；执行生产操作前请重新运行 cutover audit、smoke 与 npm registry 查询。
 
 - 生产入口 `https://api.agentbean.dev/` 由 `server-next` 提供服务，CI 固定从仓库根目录部署，不再提供 old-target 分支。
-- Release B 前置门禁已通过：strict cutover audit `12/12`、public entry smoke `4/4`、business smoke `8/8`。
-- CI 依次发布 `@agentbean/contracts`、`@agentbean/daemon-next`，再发布基于 daemon-next 的 canonical `@agentbean/daemon`。
-  - 已发布版本：`@agentbean/contracts@0.2.2`、`@agentbean/daemon-next@0.3.6`、canonical `@agentbean/daemon@0.3.6`。
-  - canonical `@agentbean/daemon@latest` 指向 `0.3.6`；旧守护进程 `0.1.35` 只作为 registry 中的 `legacy` 历史归档，因协议不兼容不能连接 server-next，主线不会重新构建或发布它。
+- Release B 与 Phase 2 生产门禁已通过：strict cutover audit `13/13`、public entry smoke `4/4`、business smoke `8/8`、production Chrome smoke `40/40`。
+- CI 依次发布 `@agentbean/contracts`、`@agentbean/pi-management-runtime`、`@agentbean/daemon-next`，再发布基于 daemon-next 的 canonical `@agentbean/daemon`。
+  - 已发布版本：`@agentbean/contracts@0.2.4`、`@agentbean/pi-management-runtime@0.1.1`、`@agentbean/daemon-next@0.3.9`、canonical `@agentbean/daemon@0.3.9`。
+  - canonical `@agentbean/daemon@latest` 指向 `0.3.9`；旧守护进程 `0.1.35` 只作为 registry 中的 `legacy` 历史归档，因协议不兼容不能连接 server-next，主线不会重新构建或发布它。
   - 如果本机 npm registry 使用 `npmmirror`，可能会暂时只看到旧版本；以 `https://registry.npmjs.org` 为准：
     ```bash
     npm view @agentbean/daemon versions --registry=https://registry.npmjs.org
@@ -293,5 +304,5 @@ GitHub Actions 会在 PR 和 push 到 `main` 时验证：
 Release B 已删除旧的 `apps/web`、`apps/server`、`apps/daemon`；主线不再 build、test、deploy 或 publish 旧实现。
 
 - 旧 web 页面已不在生产提供流量；生产 Web 入口是 `server-next` 托管的 `web-next` App Router。
-- npm `@agentbean/daemon@latest` 指向 daemon-next `0.3.6`；旧守护进程 `0.1.35` 保留在 registry 的 `legacy` dist-tag 仅作历史归档，Device rollback 必须选择经 server-next smoke 验证的 canonical daemon-next 已发布版本。
+- npm `@agentbean/daemon@latest` 指向 daemon-next `0.3.9`；旧守护进程 `0.1.35` 保留在 registry 的 `legacy` dist-tag 仅作历史归档，Device rollback 必须选择经 server-next smoke 验证的 canonical daemon-next 已发布版本。
 - 服务端应用回滚选择与当前 SQLite schema 兼容的上一成功 Railway deployment，或从 Git 历史 revert 后重新部署 AgentBean Next；不得从 `main` 重建已退役源码。

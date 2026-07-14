@@ -1100,7 +1100,7 @@ agentbean device uninstall
 ### Phase 2：Task DAG 与团队认领
 
 - 独立实施计划：`docs/superpowers/plans/2026-07-13-agentbean-phase-2-task-dag-team-claim.md`。
-- 实际验收结果：`agentbean-next/docs/phase-2-task-dag-team-claim-verification-matrix.md`。Task 1-11 已进入 `main`；Issue #556 的真实双 Agent、浏览器 DAG 与 Node 24 本地 closeout 已完成，最终 verdict 仍等待对应 PR 的 main CI/CD、三平台 SEA、Railway deploy 与 production smoke，当前不得提前启动 Phase 3。
+- 实际验收结果：`agentbean-next/docs/phase-2-task-dag-team-claim-verification-matrix.md`。Task 1-12 已进入 `main`；Issue #558 已补齐最终 main CI/CD、三平台 SEA、npm、Railway、Vercel 与生产 Chrome 证据，最终 verdict 已冻结为 Green / Ready（受控 opt-in）。Team 默认仍为 `maxManagementPhase=1`；只有 owner/admin 显式启用、请求绑定根 Task 且 V2 Device preflight 为 Green 时进入 Phase 2，任一条件缺失均 fail closed。Phase 2 验收不再阻塞后续阶段，但 Phase 3 仍须以独立产品合同、实现与验收推进。
 - 前置条件：Phase 1 已由 PR #528 完成 Node 24 root gates、真实 Device smoke、main CI/CD、Railway deploy、production smoke 与三平台 SEA 收口。
 - 增加 Task coordination fields、dependency 和 claim lease。
 - PI Manager 可以创建有限深度子任务。

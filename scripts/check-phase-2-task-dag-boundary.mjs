@@ -11,6 +11,7 @@ const read = (path) => existsSync(resolve(root, path)) ? readFileSync(resolve(ro
 const violations = [];
 
 const matrix = read('agentbean-next/docs/phase-2-task-dag-team-claim-verification-matrix.md');
+const designSpec = read('docs/superpowers/specs/2026-07-10-agentbean-pi-management-agent-design.md');
 const contract = read('packages/contracts/src/management-worker-v2.ts');
 const management = read('packages/contracts/src/management.ts');
 const runtimeTypes = read('packages/pi-management-runtime/src/types.ts');
@@ -39,9 +40,17 @@ const taskDagRevisionGuard = read('apps/web-next/lib/task-dag.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
 
-if (![...Array(18)].every((_, index) => matrix.includes(`| P2-${String(index + 1).padStart(2, '0')} |`))
-  || !matrix.includes('当前 verdict：**Not ready**')) {
-  violations.push('P2_MATRIX_INVALID: P2-01..P2-18 and fail-closed verdict are required');
+const hasPhase2Checklist = [...Array(18)].every((_, index) =>
+  matrix.includes(`| P2-${String(index + 1).padStart(2, '0')} |`));
+const hasHistoricalFailClosedVerdict = /^当前 verdict：\*\*Not ready\*\*/m.test(matrix);
+const hasControlledGreenVerdict = /^当前 verdict：\*\*Green \/ Ready（受控 opt-in）\*\*/m.test(matrix)
+  && matrix.includes('| P2-18 | Green |')
+  && matrix.includes('`maxManagementPhase=1`')
+  && matrix.includes('任一条件缺失均 fail closed')
+  && designSpec.includes('最终 verdict 已冻结为 Green / Ready（受控 opt-in）');
+
+if (!hasPhase2Checklist || (!hasHistoricalFailClosedVerdict && !hasControlledGreenVerdict)) {
+  violations.push('P2_MATRIX_INVALID: P2-01..P2-18 and a synchronized fail-closed Not ready or controlled Green verdict are required');
 }
 
 const contractMarkers = [
