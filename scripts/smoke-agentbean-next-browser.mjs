@@ -1429,15 +1429,17 @@ export async function exerciseWebUiTaskBusinessSmoke({
   const secondaryTitle = `WebUI smoke task secondary ${suffix}`;
   const description = `Created by WebUI smoke ${suffix}`;
   const targetStatus = 'in_progress';
+  const channelId = session.channel?.id;
+  if (!channelId) throw new Error('WebUI task smoke needs a default channel in the seeded session');
   await page.navigate(new URL(`/${teamPath}/tasks`, root).toString());
   await page.waitForFunction(
     `document.querySelector('[data-smoke="tasks-create-open"]') !== null`,
     'tasks page exposes the create task control',
     timeoutMs,
   );
-  await createWebUiTask({ page, title, description, timeoutMs });
+  await createWebUiTask({ page, title, description, channelId, timeoutMs });
   await waitForWebUiTaskCard({ page, title, status: 'todo', timeoutMs });
-  await createWebUiTask({ page, title: secondaryTitle, description: `${description} secondary`, timeoutMs });
+  await createWebUiTask({ page, title: secondaryTitle, description: `${description} secondary`, channelId, timeoutMs });
   await waitForWebUiTaskCard({ page, title: secondaryTitle, status: 'todo', timeoutMs });
 
   await clickWebUiTaskAction({ page, title, selector: '[data-smoke="task-reorder-top"]', description: 'move task to top' });
@@ -1485,7 +1487,7 @@ export async function exerciseWebUiTaskBusinessSmoke({
   return { title, status: targetStatus, reordered: true, deletedTitle: secondaryTitle };
 }
 
-async function createWebUiTask({ page, title, description, timeoutMs }) {
+async function createWebUiTask({ page, title, description, channelId, timeoutMs }) {
   await page.click('[data-smoke="tasks-create-open"]');
   await page.waitForFunction(
     `document.querySelector('[data-smoke="tasks-create-form"]') !== null`,
@@ -1494,6 +1496,7 @@ async function createWebUiTask({ page, title, description, timeoutMs }) {
   );
   await page.setInputValue('[data-smoke="tasks-create-title"]', title);
   await page.setInputValue('[data-smoke="tasks-create-description"]', description);
+  await page.setInputValue('[data-smoke="tasks-create-channel"]', channelId);
   await page.setInputValue('[data-smoke="tasks-create-tags"]', 'smoke, webui');
   await page.click('[data-smoke="tasks-create-submit"]');
 }

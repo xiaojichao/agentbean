@@ -512,7 +512,7 @@ export default function TasksPage() {
               <input data-smoke="tasks-create-description" value={createDescription} onChange={(e) => setCreateDescription(e.target.value)} placeholder="补充说明" className="h-9 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm outline-none focus:border-neutral-500" />
             </Field>
             <Field label="频道">
-              <select value={createChannelId} onChange={(e) => setCreateChannelId(e.target.value)} className="h-9 w-full rounded-md border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-neutral-500">
+              <select data-smoke="tasks-create-channel" value={createChannelId} onChange={(e) => setCreateChannelId(e.target.value)} className="h-9 w-full rounded-md border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-neutral-500">
                 <option value="">无频道</option>
                 {channels.map((channel) => <option key={channel.id} value={channel.id}>#{channel.name}</option>)}
               </select>

@@ -560,6 +560,7 @@ describe('AgentBean Next browser smoke script', () => {
         token: 'token-1',
         user: { id: 'user-1', username: 'alice' },
         team: { id: 'team-1', name: 'Team One', path: 'team-one' },
+        channel: { id: 'channel-1', name: 'all' },
       },
       suffix: 'task-smoke',
       timeoutMs: 1000,
@@ -580,6 +581,10 @@ describe('AgentBean Next browser smoke script', () => {
     expect(calls).toContainEqual([
       'setInputValue',
       { selector: '[data-smoke="tasks-create-title"]', value: 'WebUI smoke task secondary task-smoke' },
+    ]);
+    expect(calls).toContainEqual([
+      'setInputValue',
+      { selector: '[data-smoke="tasks-create-channel"]', value: 'channel-1' },
     ]);
     expect(calls).toContainEqual(['click', '[data-smoke="tasks-create-submit"]']);
     expect(calls).toContainEqual(['click', '[data-smoke="task-status-option-in_progress"]']);
