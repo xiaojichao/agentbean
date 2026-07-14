@@ -2373,24 +2373,38 @@ describe('server-next first-slice use cases', () => {
     await app.sendMessage({
       userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@AgentB second',
     });
-    await expect(app.sendMessage({
+    const third = await app.sendMessage({
       userId: 'user-1',
       teamId: 'team-1',
       channelId: 'channel-1',
-      body: '@AgentA third',
+      body: '@AgentA third @AgentB',
+      meta: {
+        mentions: [
+          { id: 'agent-1', kind: 'agent', name: 'AgentA', start: 0, end: 7 },
+          // 客户端元数据不可信：同一 token 伪造为另一 Agent 时，server 必须丢弃。
+          { id: 'agent-2', kind: 'agent', name: 'AgentA', start: 0, end: 7 },
+          { id: 'agent-2', kind: 'agent', name: 'AgentB', start: 14, end: 21 },
+        ],
+      },
       dispatchClaimDeviceIds: ['device-1', 'device-2'],
-    })).resolves.toMatchObject({
+    });
+    expect(third).toMatchObject({
       ok: true,
       route: { kind: 'dispatch', agentId: 'agent-1', reason: 'mention' },
       dispatches: [{ id: 'dispatch-3', messageId: 'message-3' }],
     });
+    if (!third.ok) throw new Error('third message should succeed');
+    expect(third.message.meta?.mentions).toEqual([
+      { id: 'agent-1', kind: 'agent', name: 'AgentA', start: 0, end: 7 },
+      { id: 'agent-2', kind: 'agent', name: 'AgentB', start: 14, end: 21 },
+    ]);
     await expect(app.getDispatchRequest({ dispatchId: 'dispatch-1' })).resolves.toMatchObject({
       ok: true,
       request: { prompt: '@AgentA first' },
     });
     await expect(app.getDispatchRequest({ dispatchId: 'dispatch-3' })).resolves.toMatchObject({
       ok: true,
-      request: { prompt: '@AgentA third' },
+      request: { prompt: '@AgentA third @AgentB' },
     });
   });
 
@@ -5375,6 +5389,9 @@ describe('server-next first-slice use cases', () => {
         'channel-2',
         'device-1',
         'agent-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
       ]),
       joinCodes: createIds(['code-1']),
     });
@@ -5401,6 +5418,13 @@ describe('server-next first-slice use cases', () => {
       }],
     });
 
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Hermes-Agent 迁移这条历史提及',
+    });
+
     await expect(app.updateAgentConfig({
       userId: 'user-2',
       teamId: 'team-1',
@@ -5422,6 +5446,15 @@ describe('server-next first-slice use cases', () => {
         source: 'scanned',
         category: 'agentos-hosted',
       },
+    });
+    await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
+      ok: true,
+      messages: [{
+        id: 'message-1',
+        meta: {
+          mentions: [{ id: 'agent-1', kind: 'agent', name: 'Hermes-Agent', start: 0, end: 13 }],
+        },
+      }],
     });
   });
 });

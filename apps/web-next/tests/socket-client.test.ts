@@ -322,7 +322,10 @@ describe('web-next socket client', () => {
     await client.sendMessage({
       teamId: 'team-1',
       channelId: 'channel-1',
-      body: 'hello',
+      body: '@Codex hello',
+      meta: {
+        mentions: [{ id: 'agent-1', kind: 'agent', name: 'Codex', start: 0, end: 6 }],
+      },
     });
 
     expect(transport.emitted).toEqual([
@@ -342,7 +345,14 @@ describe('web-next socket client', () => {
         runtimeId: 'runtime-1',
         name: 'Custom Codex',
       }],
-      [WEB_EVENTS.message.send, { teamId: 'team-1', channelId: 'channel-1', body: 'hello' }],
+      [WEB_EVENTS.message.send, {
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        body: '@Codex hello',
+        meta: {
+          mentions: [{ id: 'agent-1', kind: 'agent', name: 'Codex', start: 0, end: 6 }],
+        },
+      }],
     ]);
   });
 

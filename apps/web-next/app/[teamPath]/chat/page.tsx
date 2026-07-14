@@ -1191,7 +1191,8 @@ export default function ChatPage() {
   };
 
   const editMessage = async (msg: ChatMessage, body: string) => {
-    const res = await messageReactionEvents().edit(msg.id, body);
+    const mentions = extractMentions(body.trim(), visibleMentionMembers);
+    const res = await messageReactionEvents().edit(msg.id, body, { mentions });
     if (res?.ok && res.message) {
       appendMessage(res.message);
       return true;

@@ -24,6 +24,13 @@ describe('extractMentions (send time: lock id by name)', () => {
     ]);
   });
 
+  test('keeps legacy case-insensitive matching while preserving the body snapshot', () => {
+    const members: MentionMember[] = [{ id: 'a1', name: 'Codex', kind: 'agent' }];
+    expect(extractMentions('@CODEX hi', members)).toEqual([
+      { id: 'a1', kind: 'agent', name: 'CODEX', start: 0, end: 6 },
+    ]);
+  });
+
   test('empty body or no match → []', () => {
     expect(extractMentions('普通消息', [{ id: 'a1', name: 'codex', kind: 'agent' }])).toEqual([]);
   });
@@ -37,6 +44,11 @@ describe('resolveMentionByName (render: follow rename via locked id)', () => {
     expect(resolveMentionByName('codex', mentions, agents)).toEqual({
       id: 'a1', kind: 'agent', displayName: 'NEW',
     });
+  });
+
+  test('resolves a structured mention case-insensitively', () => {
+    const mentions = [{ id: 'a1', kind: 'agent' as const, name: 'Codex', start: 0, end: 6 }];
+    expect(resolveMentionByName('CODEX', mentions, { a1: { name: 'NEW' } })?.displayName).toBe('NEW');
   });
 
   test('returns null when name not in mentions (legacy/降级 → 走 body name 兜底)', () => {

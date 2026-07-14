@@ -10,6 +10,10 @@ export interface MentionMember {
 /** body 里的 @token 正则（与 renderInlineMarkdown 的提及匹配保持一致）。 */
 const MENTION_RE = /@[\p{L}\p{N}_-]+/gu;
 
+function normalizeMentionName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
 /**
  * 发送时扫描 body，对每个 @token 按 name 匹配当前可见成员，**锁定稳定 id + 偏移**。
  * body 仍存 @name 文本（给 LLM/人读 + 向后兼容）；此处只把「name → id」的解析在发送时固化，
@@ -19,14 +23,15 @@ export function extractMentions(body: string, members: MentionMember[]): Message
   const byName = new Map<string, MentionMember>();
   for (const m of members) {
     // 同名取首个（成员列表已去重；同名歧义 inherent，不在此解决）
-    if (!byName.has(m.name)) byName.set(m.name, m);
+    const normalizedName = normalizeMentionName(m.name);
+    if (!byName.has(normalizedName)) byName.set(normalizedName, m);
   }
   const out: MessageMentionDto[] = [];
   let match: RegExpExecArray | null;
   MENTION_RE.lastIndex = 0;
   while ((match = MENTION_RE.exec(body)) !== null) {
     const name = match[0].slice(1);
-    const member = byName.get(name);
+    const member = byName.get(normalizeMentionName(name));
     if (member) {
       out.push({
         id: member.id,
@@ -57,7 +62,8 @@ export function resolveMentionByName(
   mentions: MessageMentionDto[] | undefined,
   agents: Record<string, { name?: string }>,
 ): { id: string; kind: 'human' | 'agent'; displayName: string } | null {
-  const mention = mentions?.find((m) => m.name === name);
+  const normalizedName = normalizeMentionName(name);
+  const mention = mentions?.find((m) => normalizeMentionName(m.name) === normalizedName);
   if (!mention) return null;
   const displayName = mention.kind === 'agent'
     ? (currentAgentName(mention.id, agents) ?? mention.name)
