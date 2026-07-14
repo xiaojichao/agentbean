@@ -39,9 +39,15 @@ const taskDagRevisionGuard = read('apps/web-next/lib/task-dag.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
 
-if (![...Array(18)].every((_, index) => matrix.includes(`| P2-${String(index + 1).padStart(2, '0')} |`))
-  || !matrix.includes('当前 verdict：**Not ready**')) {
-  violations.push('P2_MATRIX_INVALID: P2-01..P2-18 and fail-closed verdict are required');
+const hasPhase2Checklist = [...Array(18)].every((_, index) =>
+  matrix.includes(`| P2-${String(index + 1).padStart(2, '0')} |`));
+const hasHistoricalFailClosedVerdict = matrix.includes('当前 verdict：**Not ready**');
+const hasControlledGreenVerdict = matrix.includes('当前 verdict：**Green / Ready（受控 opt-in）**')
+  && matrix.includes('`maxManagementPhase=1`')
+  && matrix.includes('任一条件缺失均 fail closed');
+
+if (!hasPhase2Checklist || (!hasHistoricalFailClosedVerdict && !hasControlledGreenVerdict)) {
+  violations.push('P2_MATRIX_INVALID: P2-01..P2-18 and a fail-closed Not ready or controlled Green verdict are required');
 }
 
 const contractMarkers = [

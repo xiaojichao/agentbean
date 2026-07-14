@@ -15,6 +15,23 @@ test('accepts the repository Phase 2 boundary scaffold', () => {
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
 });
 
+test('fails closed when the controlled Green verdict drops the default Phase 1 boundary', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'agentbean-phase2-matrix-boundary-'));
+  try {
+    cpSync(root, fixture, {
+      recursive: true,
+      filter: (source) => !source.split('/').includes('node_modules') && !source.split('/').includes('.git'),
+    });
+    const path = join(fixture, 'agentbean-next/docs/phase-2-task-dag-team-claim-verification-matrix.md');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('`maxManagementPhase=1`', '`maxManagementPhase=2`'));
+    const result = run(fixture);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /P2_MATRIX_INVALID/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test('fails closed when the Phase 2 tool surface exposes Memory', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'agentbean-phase2-boundary-'));
   try {
