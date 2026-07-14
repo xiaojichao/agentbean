@@ -892,26 +892,34 @@ function ciRunsPhase0Gates(scripts, workflow) {
 
 function hasDeduplicatedPackageCi({ scripts, workflow }) {
   const expectedPackages = 'npm run test:contracts -- --api.host 127.0.0.1 && npm run test:pi-management-runtime && npm run test:domain -- --api.host 127.0.0.1 && npm run test:server-next -- --api.host 127.0.0.1 && npm run test:daemon-next -- --api.host 127.0.0.1 && npm run test:web-next -- --api.host 127.0.0.1';
-  const expectedBoundaries = 'npm run test:phase0-boundary && npm run check:phase0-pi-boundary && npm run test:phase1-management-boundary && npm run check:phase1-management-boundary && npm run test:phase2-task-dag-boundary && npm run check:phase2-task-dag-boundary';
-  const duplicateWorkflowGates = [
-    'run: npm run test:phase1',
-    'run: npm run test:phase0',
-    'run: npm run test:phase1-management',
-    'run: npm run test:phase2-task-dag',
-    'run: npm run build:phase0',
-    'run: npm run build:phase1-management',
-    'run: npm run build:phase2-task-dag',
+  const expectedBoundaries = 'npm run test:phase0-boundary && npm run check:phase0-pi-boundary && npm run test:phase1-management-boundary && npm run check:phase1-management-boundary && npm run test:phase2-task-dag-boundary && npm run check:phase2-task-dag-boundary && npm run test:phase2-closeout';
+  const expectedBuild = 'npm run build:contracts && npm run build:domain && npm run build:pi-management-runtime && npm run build:server-next && npm run build:daemon-next && npm run build:web-next';
+  const duplicateWorkflowScripts = [
+    'test:phase1',
+    'test:phase0',
+    'test:phase1-management',
+    'test:phase2-task-dag',
+    'test:phase2-closeout',
+    'build:phase0',
+    'build:phase1-management',
+    'build:phase2-task-dag',
   ];
   const packageTests = workflow.indexOf('run: npm run test:ci');
   const packageBuild = workflow.indexOf('run: npm run build:packages');
   return scripts?.['test:packages'] === expectedPackages &&
     scripts?.['test:retained-boundaries'] === expectedBoundaries &&
     scripts?.['test:ci'] === 'npm run test:packages && npm run test:retained-boundaries' &&
+    scripts?.['build:packages'] === expectedBuild &&
     packageTests >= 0 &&
     packageTests < packageBuild &&
     workflow.match(/run: npm run test:ci/g)?.length === 1 &&
     workflow.match(/run: npm run build:packages/g)?.length === 1 &&
-    duplicateWorkflowGates.every((gate) => !workflow.includes(gate));
+    duplicateWorkflowScripts.every((script) => !workflowRunsScript(workflow, script));
+}
+
+function workflowRunsScript(workflow, script) {
+  const escaped = script.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^\\s*(?:-\\s*)?(?:run:\\s*)?npm run ${escaped}(?:\\s|$)`, 'mu').test(workflow);
 }
 
 function ciDetectsPhase0Changes(workflow) {

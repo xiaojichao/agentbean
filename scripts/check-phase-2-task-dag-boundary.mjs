@@ -138,6 +138,7 @@ if (scripts['test:phase2-task-dag-boundary'] !== 'node --test scripts/check-phas
   || !String(scripts['build:phase2-task-dag']).includes('build:domain')
   || scripts['test:ci'] !== 'npm run test:packages && npm run test:retained-boundaries'
   || !String(scripts['test:retained-boundaries']).includes('test:phase2-task-dag-boundary')
+  || !String(scripts['test:retained-boundaries']).includes('test:phase2-closeout')
   || !workflow.includes('npm run test:ci')
   || !workflow.includes('npm run build:packages')
   || workflow.includes('run: npm run test:phase2-task-dag')
