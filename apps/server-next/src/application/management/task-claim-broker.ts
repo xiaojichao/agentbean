@@ -369,8 +369,37 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
           id: lease.id, expectedStatus: 'active', status: 'expired',
           heartbeatAt: lease.heartbeatAt, expiresAt: lease.expiresAt,
         });
-        if (updated) expired.push({ schemaVersion: 1, claimLeaseId: lease.id,
+        if (!updated) continue;
+        expired.push({ schemaVersion: 1, claimLeaseId: lease.id,
           taskId: lease.taskId, agentId: lease.agentId, expiredAt: now });
+        const task = await repositories.tasks.getById(lease.taskId);
+        const coordination = await repositories.coordination.coordinations.getByTaskId(lease.taskId);
+        if (!task || !coordination || task.status !== 'in_progress'
+          || task.revision !== lease.taskRevision
+          || coordination.taskRevision !== lease.taskRevision
+          || coordination.attempt !== lease.taskAttempt) continue;
+        const reopened = await repositories.tasks.update({ taskId: task.id,
+          changes: { status: 'todo', updatedAt: now } });
+        if (!reopened) throw new TaskClaimConflict('TASK_CLAIM_TASK_UPDATE_CONFLICT');
+        await appendTaskClaimEvent(repositories.management, {
+          managementRunId: coordination.managementRunId,
+          type: 'task-state-changed', actorKind: 'system', actorId: 'system',
+          idempotencyKey: `task-claim-expired:${lease.id}:state`,
+          payload: { taskId: task.id, taskRevision: task.revision,
+            from: 'in_progress', to: 'todo' },
+        }, now, input.ids);
+        const invalidatedInvocationIds = (await repositories.management.invocations
+          .listByRun(coordination.managementRunId))
+          .filter((invocation) => invocation.intent.taskContext?.claimLeaseId === lease.id)
+          .map((invocation) => invocation.id).sort();
+        await appendTaskClaimEvent(repositories.management, {
+          managementRunId: coordination.managementRunId,
+          type: 'claim-invalidated', actorKind: 'system', actorId: 'system',
+          idempotencyKey: `task-claim-expired:${lease.id}:invalidated`,
+          payload: { taskId: task.id, previousTaskRevision: task.revision,
+            claimLeaseId: lease.id, invalidatedInvocationIds,
+            reasonCode: 'TASK_CLAIM_EXPIRED' },
+        }, now, input.ids);
       }
       return expired;
     });

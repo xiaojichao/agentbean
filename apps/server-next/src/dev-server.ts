@@ -1146,6 +1146,7 @@ function createDefaultApp(
         artifactContentStore,
         managementRouter: management.router,
         managementKernel: management.kernel,
+        taskCoordinationKernel: management.taskCoordinationKernel,
       }),
       managementWorkerScheduler: management.scheduler,
       taskClaimBroker,
@@ -1178,6 +1179,7 @@ function createDefaultApp(
       artifactContentStore,
       managementRouter: management.router,
       managementKernel: management.kernel,
+      taskCoordinationKernel: management.taskCoordinationKernel,
     }),
     managementWorkerScheduler: management.scheduler,
     taskClaimBroker,
@@ -1223,6 +1225,7 @@ function createDefaultManagementRuntime(
       handlers: createPhase1ManagementToolHandlers({
         repositories,
         kernel,
+        taskCoordinationKernel,
         clock,
         ids,
         onDispatchCreated: async (dispatchId) => {
@@ -1273,6 +1276,7 @@ function createDefaultManagementRuntime(
   });
   return {
     kernel,
+    taskCoordinationKernel,
     scheduler,
     router,
     bindDispatchEmitter(emit: (dispatchId: string) => Promise<void>) {
