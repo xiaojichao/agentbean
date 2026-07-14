@@ -778,7 +778,10 @@ export function hasPhase0ManagementBoundary(input) {
     /management-worker:[a-z-]+/g,
     '',
   ).replace(/management-policy:[a-z-]+/g, '')
-    .replace(/from\s+['"]\.\/management-worker\.js['"]/g, '');
+    .replace(/task-claim:[a-z-]+/g, '')
+    .replace(/from\s+['"]\.\/management-worker\.js['"]/g, '')
+    // Phase 2 Task Claim 是隔离 transport，不改变 Phase 0 direct Dispatch 边界。
+    .replace(/export interface TaskClaimOfferV1[\s\S]*?(?=\/\*\*\s*\n \* `\/agent` management worker)/, '');
 
   return input.boundaryTests.includes('direct channel and DM messages create only canonical Dispatch records') &&
     input.boundaryTests.includes('message dispatch status is projected from the Dispatch repository at read time') &&

@@ -12,6 +12,7 @@ import type {
   ManagementWorkerToolRequestV1,
   ManagementWorkerToolResultV1,
 } from './management-worker.js';
+import type { AcceptanceCriterionDto } from './task-coordination.js';
 
 export const WEB_EVENTS = {
   auth: {
@@ -172,7 +173,234 @@ export const AGENT_EVENTS = {
     shadowEvaluate: 'management-worker:shadow-evaluate',
     shadowResult: 'management-worker:shadow-result',
   },
+  taskClaim: {
+    offer: 'task-claim:offer',
+    acquire: 'task-claim:acquire',
+    renew: 'task-claim:renew',
+    release: 'task-claim:release',
+    expired: 'task-claim:expired',
+  },
 } as const;
+
+export interface ScanRequestCustomAgent {
+  id: string;
+  adapterKind: string;
+  cwd?: string;
+}
+
+export interface ScanRequest {
+  requestId: string;
+  deviceId: string;
+  customAgents?: ScanRequestCustomAgent[];
+}
+
+export interface TaskClaimOfferV1 {
+  readonly schemaVersion: 1;
+  readonly offerId: string;
+  readonly deviceId: string;
+  readonly taskId: string;
+  readonly taskRevision: number;
+  readonly taskAttempt: number;
+  readonly agentId: string;
+  readonly requiredCapabilities: readonly string[];
+  readonly offerExpiresAt: number;
+}
+
+export interface TaskClaimAcquireV1 {
+  readonly schemaVersion: 1;
+  readonly offerId: string;
+  readonly agentId: string;
+}
+
+export interface TaskClaimExecutionSnapshotV1 {
+  readonly schemaVersion: 1;
+  readonly managementRunId: string;
+  readonly taskId: string;
+  readonly taskRevision: number;
+  readonly taskAttempt: number;
+  readonly title: string;
+  readonly objective: string;
+  readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];
+  readonly dependencyTaskIds: readonly string[];
+  readonly channelId?: string;
+}
+
+export interface TaskClaimAuthorityV1 {
+  readonly schemaVersion: 1;
+  readonly claimLeaseId: string;
+  readonly taskId: string;
+  readonly taskRevision: number;
+  readonly taskAttempt: number;
+  readonly agentId: string;
+  readonly leaseToken: string;
+  readonly fencingToken: number;
+}
+
+export type TaskClaimAcquireAckV1 = {
+  readonly schemaVersion: 1;
+  readonly ok: true;
+  readonly lease: TaskClaimAuthorityV1 & {
+    readonly acquiredAt: number;
+    readonly expiresAt: number;
+  };
+  readonly execution: TaskClaimExecutionSnapshotV1;
+} | TaskClaimFailureAckV1;
+
+export type TaskClaimRenewV1 = TaskClaimAuthorityV1;
+export type TaskClaimReleaseV1 = TaskClaimAuthorityV1 & { readonly reasonCode: string };
+
+export type TaskClaimRenewAckV1 = {
+  readonly schemaVersion: 1;
+  readonly ok: true;
+  readonly expiresAt: number;
+} | TaskClaimFailureAckV1;
+
+export type TaskClaimReleaseAckV1 = {
+  readonly schemaVersion: 1;
+  readonly ok: true;
+  readonly releasedAt: number;
+} | TaskClaimFailureAckV1;
+
+export interface TaskClaimFailureAckV1 {
+  readonly schemaVersion: 1;
+  readonly ok: false;
+  readonly errorCode: 'INVALID_REQUEST' | 'UNAVAILABLE' | 'CONFLICT' | 'STALE_AUTHORITY';
+  readonly diagnosticCode: string;
+  readonly retryable: boolean;
+}
+
+export interface TaskClaimExpiredV1 {
+  readonly schemaVersion: 1;
+  readonly claimLeaseId: string;
+  readonly taskId: string;
+  readonly agentId: string;
+  readonly expiredAt: number;
+}
+
+export interface TaskClaimPayloadMapV1 {
+  readonly offer: TaskClaimOfferV1;
+  readonly acquire: TaskClaimAcquireV1;
+  readonly renew: TaskClaimRenewV1;
+  readonly release: TaskClaimReleaseV1;
+  readonly 'acquire-ack': TaskClaimAcquireAckV1;
+  readonly 'renew-ack': TaskClaimRenewAckV1;
+  readonly 'release-ack': TaskClaimReleaseAckV1;
+  readonly expired: TaskClaimExpiredV1;
+}
+
+export type TaskClaimPayloadKind = keyof TaskClaimPayloadMapV1;
+
+export function parseTaskClaimPayload<K extends TaskClaimPayloadKind>(
+  kind: K,
+  input: unknown,
+): TaskClaimPayloadMapV1[K] {
+  const value = taskClaimRecord(input);
+  switch (kind) {
+    case 'offer':
+      taskClaimExact(value, ['schemaVersion', 'offerId', 'deviceId', 'taskId', 'taskRevision', 'taskAttempt', 'agentId', 'requiredCapabilities', 'offerExpiresAt']);
+      taskClaimSchema(value); taskClaimStrings(value, ['offerId', 'deviceId', 'taskId', 'agentId']);
+      taskClaimPositive(value.taskRevision); taskClaimPositive(value.taskAttempt);
+      taskClaimStringArray(value.requiredCapabilities); taskClaimNonNegative(value.offerExpiresAt);
+      break;
+    case 'acquire':
+      taskClaimExact(value, ['schemaVersion', 'offerId', 'agentId']);
+      taskClaimSchema(value); taskClaimStrings(value, ['offerId', 'agentId']);
+      break;
+    case 'renew':
+      taskClaimAuthority(value, []);
+      break;
+    case 'release':
+      taskClaimAuthority(value, ['reasonCode']); taskClaimString(value.reasonCode);
+      break;
+    case 'expired':
+      taskClaimExact(value, ['schemaVersion', 'claimLeaseId', 'taskId', 'agentId', 'expiredAt']);
+      taskClaimSchema(value); taskClaimStrings(value, ['claimLeaseId', 'taskId', 'agentId']);
+      taskClaimNonNegative(value.expiredAt);
+      break;
+    case 'acquire-ack':
+      taskClaimAck(value, 'acquire');
+      break;
+    case 'renew-ack':
+      taskClaimAck(value, 'renew');
+      break;
+    case 'release-ack':
+      taskClaimAck(value, 'release');
+      break;
+  }
+  return value as unknown as TaskClaimPayloadMapV1[K];
+}
+
+export function safeParseTaskClaimPayload<K extends TaskClaimPayloadKind>(
+  kind: K,
+  input: unknown,
+): { readonly ok: true; readonly value: TaskClaimPayloadMapV1[K] } | { readonly ok: false } {
+  try {
+    return { ok: true, value: parseTaskClaimPayload(kind, input) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function taskClaimAuthority(value: Record<string, unknown>, extra: readonly string[]): void {
+  taskClaimExact(value, ['schemaVersion', 'claimLeaseId', 'taskId', 'taskRevision', 'taskAttempt', 'agentId', 'leaseToken', 'fencingToken', ...extra]);
+  taskClaimSchema(value);
+  taskClaimStrings(value, ['claimLeaseId', 'taskId', 'agentId', 'leaseToken']);
+  taskClaimPositive(value.taskRevision); taskClaimPositive(value.taskAttempt); taskClaimPositive(value.fencingToken);
+}
+
+function taskClaimAck(value: Record<string, unknown>, kind: 'acquire' | 'renew' | 'release'): void {
+  taskClaimSchema(value);
+  if (value.ok === false) {
+    taskClaimExact(value, ['schemaVersion', 'ok', 'errorCode', 'diagnosticCode', 'retryable']);
+    if (!['INVALID_REQUEST', 'UNAVAILABLE', 'CONFLICT', 'STALE_AUTHORITY'].includes(String(value.errorCode))) taskClaimInvalid();
+    taskClaimString(value.diagnosticCode);
+    if (typeof value.retryable !== 'boolean') taskClaimInvalid();
+    return;
+  }
+  if (value.ok !== true) taskClaimInvalid();
+  if (kind === 'renew') {
+    taskClaimExact(value, ['schemaVersion', 'ok', 'expiresAt']); taskClaimNonNegative(value.expiresAt); return;
+  }
+  if (kind === 'release') {
+    taskClaimExact(value, ['schemaVersion', 'ok', 'releasedAt']); taskClaimNonNegative(value.releasedAt); return;
+  }
+  taskClaimExact(value, ['schemaVersion', 'ok', 'lease', 'execution']);
+  const lease = taskClaimRecord(value.lease);
+  taskClaimAuthority(lease, ['acquiredAt', 'expiresAt']);
+  taskClaimNonNegative(lease.acquiredAt); taskClaimNonNegative(lease.expiresAt);
+  const execution = taskClaimRecord(value.execution);
+  taskClaimExact(execution, ['schemaVersion', 'managementRunId', 'taskId', 'taskRevision', 'taskAttempt', 'title', 'objective', 'acceptanceCriteria', 'dependencyTaskIds'], ['channelId']);
+  taskClaimSchema(execution); taskClaimStrings(execution, ['managementRunId', 'taskId', 'title', 'objective']);
+  taskClaimPositive(execution.taskRevision); taskClaimPositive(execution.taskAttempt);
+  taskClaimStringArray(execution.dependencyTaskIds);
+  if (execution.channelId !== undefined) taskClaimString(execution.channelId);
+  if (!Array.isArray(execution.acceptanceCriteria)) taskClaimInvalid();
+  for (const criterion of execution.acceptanceCriteria) {
+    const item = taskClaimRecord(criterion);
+    taskClaimExact(item, ['id', 'description', 'evidenceRequired'], ['allowedEvidenceKinds']);
+    taskClaimStrings(item, ['id', 'description']);
+    if (typeof item.evidenceRequired !== 'boolean') taskClaimInvalid();
+    if (item.allowedEvidenceKinds !== undefined) taskClaimStringArray(item.allowedEvidenceKinds);
+  }
+}
+
+function taskClaimRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) taskClaimInvalid();
+  return value as Record<string, unknown>;
+}
+function taskClaimExact(value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []): void {
+  const allowed = new Set([...required, ...optional]);
+  if (required.some((key) => !(key in value)) || Object.keys(value).some((key) => !allowed.has(key))) taskClaimInvalid();
+}
+function taskClaimSchema(value: Record<string, unknown>): void { if (value.schemaVersion !== 1) taskClaimInvalid(); }
+function taskClaimString(value: unknown): void { if (typeof value !== 'string' || value.length === 0) taskClaimInvalid(); }
+function taskClaimStrings(value: Record<string, unknown>, keys: readonly string[]): void { keys.forEach((key) => taskClaimString(value[key])); }
+function taskClaimPositive(value: unknown): void { if (!Number.isSafeInteger(value) || (value as number) <= 0) taskClaimInvalid(); }
+function taskClaimNonNegative(value: unknown): void { if (!Number.isSafeInteger(value) || (value as number) < 0) taskClaimInvalid(); }
+function taskClaimStringArray(value: unknown): void {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || item.length === 0)) taskClaimInvalid();
+}
+function taskClaimInvalid(): never { throw new Error('TASK_CLAIM_PAYLOAD_INVALID'); }
 
 /**
  * `/agent` management worker 的方向与 Socket.IO callback ACK 契约。
@@ -198,16 +426,4 @@ export interface ManagementWorkerSocketAckMapV1 {
   readonly leaseRelease: ManagementLeaseReleaseAckV1;
   readonly abort: ManagementLeaseReleaseAckV1;
   readonly toolRequest: ManagementWorkerToolResultV1;
-}
-
-export interface ScanRequestCustomAgent {
-  id: string;
-  adapterKind: string;
-  cwd?: string;
-}
-
-export interface ScanRequest {
-  requestId: string;
-  deviceId: string;
-  customAgents?: ScanRequestCustomAgent[];
 }

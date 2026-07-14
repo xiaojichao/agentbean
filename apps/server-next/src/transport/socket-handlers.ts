@@ -3,9 +3,13 @@ import {
   WEB_EVENTS,
   makeFailure,
   safeParseManagementWorkerPayload,
+  safeParseTaskClaimPayload,
   type DispatchRequestDto,
   type ManagementWorkerPayloadKind,
   type ManagementWorkerPayloadMapV1,
+  type TaskClaimAcquireV1,
+  type TaskClaimReleaseV1,
+  type TaskClaimRenewV1,
 } from '../../../../packages/contracts/src/index.js';
 import type { ServerNextUseCases } from '../application/usecases.js';
 
@@ -121,6 +125,7 @@ export interface AgentSocketHandlerOptions {
   dispatchClaimQuietMs?: number;
   connectedDeviceId?(): string | undefined;
   managementWorker?: ManagementWorkerSocketHandlers;
+  taskClaim?: TaskClaimSocketHandlers;
 }
 
 export interface ManagementWorkerSocketHandlers {
@@ -132,6 +137,12 @@ export interface ManagementWorkerSocketHandlers {
   toolRequest(payload: ManagementWorkerPayloadMapV1['tool-request']): Promise<unknown>;
   checkpointFetch(payload: ManagementWorkerPayloadMapV1['checkpoint-fetch']): Promise<unknown>;
   outboxReplay(payload: ManagementWorkerPayloadMapV1['outbox-replay']): Promise<unknown>;
+}
+
+export interface TaskClaimSocketHandlers {
+  acquire(payload: TaskClaimAcquireV1): Promise<unknown>;
+  renew(payload: TaskClaimRenewV1): Promise<unknown>;
+  release(payload: TaskClaimReleaseV1): Promise<unknown>;
 }
 
 export function registerWebSocketHandlers(
@@ -558,6 +569,32 @@ export function registerAgentSocketHandlers(
     bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.checkpointFetch, 'checkpoint-fetch', options.managementWorker.checkpointFetch);
     bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.outboxReplay, 'outbox-replay', options.managementWorker.outboxReplay);
   }
+  if (options.taskClaim) {
+    bindTaskClaimPayload(socket, AGENT_EVENTS.taskClaim.acquire, 'acquire', options.taskClaim.acquire);
+    bindTaskClaimPayload(socket, AGENT_EVENTS.taskClaim.renew, 'renew', options.taskClaim.renew);
+    bindTaskClaimPayload(socket, AGENT_EVENTS.taskClaim.release, 'release', options.taskClaim.release);
+  }
+}
+
+function bindTaskClaimPayload<K extends 'acquire' | 'renew' | 'release'>(
+  socket: SocketLike,
+  event: string,
+  kind: K,
+  handler: (payload: K extends 'acquire' ? TaskClaimAcquireV1 : K extends 'renew' ? TaskClaimRenewV1 : TaskClaimReleaseV1) => Promise<unknown>,
+): void {
+  socket.on(event, async (payload, ack) => {
+    const parsed = safeParseTaskClaimPayload(kind, payload);
+    if (!parsed.ok) {
+      ack?.({ schemaVersion: 1, ok: false, errorCode: 'INVALID_REQUEST',
+        diagnosticCode: 'TASK_CLAIM_PAYLOAD_INVALID', retryable: false });
+      return;
+    }
+    try {
+      ack?.(await handler(parsed.value as never));
+    } catch (error) {
+      ack?.(socketErrorAck(error, event));
+    }
+  });
 }
 
 function bindManagementWorkerPayload<K extends ManagementWorkerPayloadKind>(

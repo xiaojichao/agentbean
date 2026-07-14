@@ -138,6 +138,11 @@ describe.each([
     try {
       await seedTaskGraph(fixture.repositories);
       await fixture.repositories.taskCoordination.claimLeases.create(claim('claim-1', 'agent-1'));
+      await expect(fixture.repositories.taskCoordination.claimLeases.getLatest({
+        taskId: 'task-1', taskRevision: 1, taskAttempt: 1,
+      })).resolves.toMatchObject({ id: 'claim-1', fencingToken: 1 });
+      await expect(fixture.repositories.taskCoordination.claimLeases.listActive())
+        .resolves.toMatchObject([{ id: 'claim-1' }]);
       await expect(fixture.repositories.taskCoordination.claimLeases.create(
         claim('claim-2', 'agent-2'),
       )).rejects.toThrow(/active task claim/i);
@@ -149,9 +154,16 @@ describe.each([
         id: 'claim-1', expectedStatus: 'active', status: 'released', heartbeatAt: 3,
         expiresAt: 101, releasedAt: 3,
       })).resolves.toMatchObject({ status: 'released' });
+      await expect(fixture.repositories.taskCoordination.claimLeases.listActive()).resolves.toEqual([]);
+      await expect(fixture.repositories.taskCoordination.claimLeases.getLatest({
+        taskId: 'task-1', taskRevision: 1, taskAttempt: 1,
+      })).resolves.toMatchObject({ id: 'claim-1', status: 'released', fencingToken: 1 });
       await expect(fixture.repositories.taskCoordination.claimLeases.create(
         claim('claim-2', 'agent-2'),
       )).resolves.toMatchObject({ id: 'claim-2', fencingToken: 2 });
+      await expect(fixture.repositories.taskCoordination.claimLeases.getLatest({
+        taskId: 'task-1', taskRevision: 1, taskAttempt: 1,
+      })).resolves.toMatchObject({ id: 'claim-2', fencingToken: 2 });
     } finally {
       fixture.close();
     }

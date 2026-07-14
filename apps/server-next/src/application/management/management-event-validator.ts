@@ -24,6 +24,7 @@ export const TASK_COORDINATION_MANAGEMENT_EVENT_TYPES = [
   'task-state-changed',
   'task-published-for-claim',
   'task-assigned',
+  'task-claimed',
   'claim-invalidated',
 ] as const satisfies readonly ManagementEventTypeV1[];
 
@@ -48,6 +49,7 @@ const payloadKeys: Record<WritableEventType, { required: readonly string[]; opti
   'task-state-changed': { required: ['taskId', 'taskRevision', 'from', 'to'] },
   'task-published-for-claim': { required: ['taskId', 'taskRevision', 'requiredCapabilities'] },
   'task-assigned': { required: ['taskId', 'taskRevision', 'agentId'] },
+  'task-claimed': { required: ['taskId', 'taskRevision', 'agentId', 'claimLeaseId', 'attempt'] },
   'claim-invalidated': { required: ['taskId', 'previousTaskRevision', 'claimLeaseId', 'invalidatedInvocationIds', 'reasonCode'] },
 };
 
@@ -140,6 +142,10 @@ function validatePayload(type: WritableEventType, payload: Record<string, unknow
     case 'task-assigned':
       string(payload.taskId, 'payload.taskId'); positiveInteger(payload.taskRevision, 'payload.taskRevision');
       string(payload.agentId, 'payload.agentId'); return;
+    case 'task-claimed':
+      string(payload.taskId, 'payload.taskId'); positiveInteger(payload.taskRevision, 'payload.taskRevision');
+      string(payload.agentId, 'payload.agentId'); string(payload.claimLeaseId, 'payload.claimLeaseId');
+      positiveInteger(payload.attempt, 'payload.attempt'); return;
     case 'claim-invalidated':
       string(payload.taskId, 'payload.taskId'); positiveInteger(payload.previousTaskRevision, 'payload.previousTaskRevision');
       string(payload.claimLeaseId, 'payload.claimLeaseId');

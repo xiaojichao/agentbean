@@ -7,6 +7,7 @@ import {
 import { createManagementKernel } from '../src/application/management/management-kernel.js';
 import { createManagementToolExecutor } from '../src/application/management/management-tool-executor.js';
 import { createDeviceWorkerScheduler } from '../src/application/management/device-worker-scheduler.js';
+import type { TaskClaimBroker } from '../src/application/management/task-claim-broker.js';
 import type { ServerNextUseCases } from '../src/application/usecases.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 import { attachServerNextNamespaces, type NamespaceLike, type SocketServerLike } from '../src/transport/socket-server.js';
@@ -184,6 +185,53 @@ describe('management worker socket integration', () => {
       { event: { type: 'worker-lost', payload: { reasonCode: 'LEASE_EXPIRED' } } },
       { event: { type: 'worker-leased' } },
     ]);
+  });
+
+  test('Task claim offer/ack 与 acquire/renew/release/expire 走独立 transport', async () => {
+    const fakeServer = new FakeServer();
+    const acquire = vi.fn(async () => ({ schemaVersion: 1, ok: false, errorCode: 'CONFLICT',
+      diagnosticCode: 'TASK_CLAIM_ACTIVE_CLAIM_HELD', retryable: true }));
+    const renew = vi.fn(async () => ({ schemaVersion: 1, ok: true, expiresAt: 200 }));
+    const release = vi.fn(async () => ({ schemaVersion: 1, ok: true, releasedAt: 100 }));
+    const disconnectDevice = vi.fn();
+    const reconnectDevice = vi.fn();
+    const broker: TaskClaimBroker = {
+      resolveCandidates: vi.fn(async () => ({ taskId: 'task-1', taskRevision: 1, taskAttempt: 1,
+        ancestorAgentIds: [], candidates: [{ agentId: 'agent-1', deviceId: 'device-1', eligible: true,
+          diagnosticCodes: [], missingCapabilities: [] }] })),
+      prepareOffers: vi.fn(async () => [{ schemaVersion: 1, offerId: 'offer-1', deviceId: 'device-1',
+        taskId: 'task-1', taskRevision: 1, taskAttempt: 1, agentId: 'agent-1',
+        requiredCapabilities: ['code-review'], offerExpiresAt: 100 }]),
+      acquire, renew, release,
+      expireClaims: vi.fn(async () => [{ schemaVersion: 1, claimLeaseId: 'lease-1',
+        taskId: 'task-1', agentId: 'agent-1', expiredAt: 100 }]),
+      disconnectDevice,
+      reconnectDevice,
+    };
+    const app = {
+      deviceHello: vi.fn(async () => ({ ok: true, device: device('device-1', 'profile-1'), affectedTeamIds: [] })),
+      buildDeviceScanRequest: vi.fn(async () => ({ ok: true, skipped: true })),
+      markDeviceOffline: vi.fn(async () => ({ ok: true, affectedTeamIds: [] })),
+    } as unknown as ServerNextUseCases;
+    const realtime = attachServerNextNamespaces(fakeServer, app, { taskClaimBroker: broker });
+    const socket = new FakeSocket();
+    fakeServer.agent.connect(socket);
+    await socket.trigger(AGENT_EVENTS.device.hello, { deviceId: 'device-1' });
+
+    await expect(realtime.offerTaskClaims('task-1')).resolves.toEqual({ taskId: 'task-1', offered: 1, accepted: 1 });
+    expect(socket.outbound(AGENT_EVENTS.taskClaim.offer)).toMatchObject([{ payload: {
+      offerId: 'offer-1', taskId: 'task-1', agentId: 'agent-1',
+    } }]);
+    await expect(socket.trigger(AGENT_EVENTS.taskClaim.acquire, {
+      schemaVersion: 1, offerId: 'offer-1', agentId: 'agent-1',
+    })).resolves.toMatchObject({ ok: false, diagnosticCode: 'TASK_CLAIM_ACTIVE_CLAIM_HELD' });
+    expect(acquire).toHaveBeenCalledOnce();
+    await expect(realtime.expireTaskClaims()).resolves.toHaveLength(1);
+    expect(socket.outbound(AGENT_EVENTS.taskClaim.expired)).toHaveLength(1);
+
+    await socket.disconnect();
+    expect(disconnectDevice).toHaveBeenCalledWith('device-1');
+    expect(reconnectDevice).toHaveBeenCalledWith('device-1');
   });
 });
 

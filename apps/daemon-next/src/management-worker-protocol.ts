@@ -13,8 +13,15 @@ import type {
   ManagementWorkerRegisterV1,
   ManagementWorkerToolRequestV1,
   ManagementWorkerToolResultV1,
+  TaskClaimAcquireAckV1,
+  TaskClaimExpiredV1,
+  TaskClaimOfferV1,
+  TaskClaimReleaseAckV1,
+  TaskClaimReleaseV1,
+  TaskClaimRenewAckV1,
+  TaskClaimRenewV1,
 } from '../../../packages/contracts/src/index.js';
-import { AGENT_EVENTS, parseManagementWorkerPayload, safeParseManagementWorkerPayload } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, parseManagementWorkerPayload, parseTaskClaimPayload, safeParseManagementWorkerPayload, safeParseTaskClaimPayload } from '../../../packages/contracts/src/index.js';
 
 export interface ManagementWorkerProtocolSocket {
   readonly connected: boolean;
@@ -56,6 +63,93 @@ export interface CreateManagementWorkerProtocolInput {
   readonly runtimeVersion: string;
   readonly ackTimeoutMs?: number;
   readonly toolAckTimeoutMs?: number;
+}
+
+export interface TaskClaimProtocolHandlers {
+  canAcceptOffer(offer: TaskClaimOfferV1): boolean;
+  onClaimed(result: Extract<TaskClaimAcquireAckV1, { ok: true }>): Promise<void>;
+  onExpired?(notice: TaskClaimExpiredV1): Promise<void>;
+  onDisconnect?(): Promise<void>;
+  onReconnect?(): Promise<void>;
+}
+
+export interface TaskClaimProtocol {
+  start(input: { deviceId: string }, handlers: TaskClaimProtocolHandlers): Promise<void>;
+  stop(): void;
+  acquire(offer: TaskClaimOfferV1): Promise<TaskClaimAcquireAckV1>;
+  renew(input: TaskClaimRenewV1): Promise<TaskClaimRenewAckV1>;
+  release(input: TaskClaimReleaseV1): Promise<TaskClaimReleaseAckV1>;
+}
+
+export function createTaskClaimProtocol(input: {
+  readonly socket: ManagementWorkerProtocolSocket;
+  readonly ackTimeoutMs?: number;
+}): TaskClaimProtocol {
+  const ackTimeoutMs = normalizeTimeout(input.ackTimeoutMs ?? 10_000);
+  let deviceId: string | undefined;
+  let handlers: TaskClaimProtocolHandlers | undefined;
+  let started = false;
+
+  const offerHandler = async (payload: unknown, ack?: (result: unknown) => void) => {
+    const parsed = safeParseTaskClaimPayload('offer', payload);
+    if (!parsed.ok || parsed.value.deviceId !== deviceId || !handlers?.canAcceptOffer(parsed.value)) {
+      ack?.({ schemaVersion: 1, ok: false, errorCode: 'UNAVAILABLE',
+        diagnosticCode: 'TASK_CLAIM_AGENT_NOT_READY', retryable: true });
+      return;
+    }
+    ack?.({ schemaVersion: 1, ok: true });
+    try {
+      const claimed = await protocol.acquire(parsed.value);
+      if (claimed.ok) await handlers.onClaimed(claimed);
+    } catch {
+      // Claim ACK owns authoritative failure; offer ACK never implies execution started.
+    }
+  };
+  const expiredHandler = async (payload: unknown) => {
+    const parsed = safeParseTaskClaimPayload('expired', payload);
+    if (parsed.ok) await handlers?.onExpired?.(parsed.value);
+  };
+
+  const protocol: TaskClaimProtocol = {
+    async start(identity, nextHandlers) {
+      if (!identity.deviceId) throw new Error('TASK_CLAIM_DEVICE_ID_MISSING');
+      deviceId = identity.deviceId;
+      handlers = nextHandlers;
+      if (started) return;
+      started = true;
+      input.socket.on(AGENT_EVENTS.taskClaim.offer, offerHandler);
+      input.socket.on(AGENT_EVENTS.taskClaim.expired, expiredHandler);
+      input.socket.onDisconnect?.(async () => {
+        if (started) await handlers?.onDisconnect?.();
+      });
+      input.socket.onReconnect?.(async () => {
+        if (started) await handlers?.onReconnect?.();
+      });
+    },
+    stop() {
+      started = false;
+      deviceId = undefined;
+      input.socket.off?.(AGENT_EVENTS.taskClaim.offer, offerHandler);
+      input.socket.off?.(AGENT_EVENTS.taskClaim.expired, expiredHandler);
+    },
+    async acquire(offer) {
+      return parseTaskClaimPayload('acquire-ack', await emitWithTimeout(
+        input.socket, AGENT_EVENTS.taskClaim.acquire,
+        { schemaVersion: 1, offerId: offer.offerId, agentId: offer.agentId }, ackTimeoutMs,
+      ));
+    },
+    async renew(payload) {
+      return parseTaskClaimPayload('renew-ack', await emitWithTimeout(
+        input.socket, AGENT_EVENTS.taskClaim.renew, payload, ackTimeoutMs,
+      ));
+    },
+    async release(payload) {
+      return parseTaskClaimPayload('release-ack', await emitWithTimeout(
+        input.socket, AGENT_EVENTS.taskClaim.release, payload, ackTimeoutMs,
+      ));
+    },
+  };
+  return protocol;
 }
 
 export function createManagementWorkerProtocol(

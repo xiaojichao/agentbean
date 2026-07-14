@@ -9,6 +9,7 @@ export interface DeviceServiceCore extends DeviceServiceComponent {
 
 export interface CreateDeviceServiceCoreInput {
   readonly dispatchClient: DeviceServiceComponent;
+  readonly taskClaimClient?: DeviceServiceComponent;
   readonly managementWorkerHost: DeviceServiceComponent;
 }
 
@@ -23,9 +24,16 @@ export function createDeviceServiceCore(input: CreateDeviceServiceCoreInput): De
       if (started) return;
       await input.dispatchClient.start();
       try {
+        await input.taskClaimClient?.start();
+      } catch (error) {
+        await input.dispatchClient.stop?.();
+        throw error;
+      }
+      try {
         await input.managementWorkerHost.start();
         started = true;
       } catch (error) {
+        await input.taskClaimClient?.stop?.();
         await input.dispatchClient.stop?.();
         throw error;
       }
@@ -36,7 +44,11 @@ export function createDeviceServiceCore(input: CreateDeviceServiceCoreInput): De
       try {
         await input.managementWorkerHost.stop?.();
       } finally {
-        await input.dispatchClient.stop?.();
+        try {
+          await input.taskClaimClient?.stop?.();
+        } finally {
+          await input.dispatchClient.stop?.();
+        }
       }
     },
   };

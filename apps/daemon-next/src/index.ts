@@ -16,6 +16,7 @@ import { collectArtifacts } from './artifact-collector.js';
 import { uploadArtifacts } from './artifact-uploader.js';
 import { selectNativeDirectory } from './directory-picker.js';
 import { scanCustomAgentSkills } from './skill-scanner.js';
+import { createTaskClaimProtocol, type ManagementWorkerProtocolSocket } from './management-worker-protocol.js';
 
 export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner.js';
 export type { BuiltinScannerOptions } from './scanner.js';
@@ -44,6 +45,8 @@ export { createManagementDurableOutbox } from './management-durable-outbox.js';
 export type { ManagementDurableOutbox, ManagementDurableOutboxItem } from './management-durable-outbox.js';
 export { createPiManagerWorkerHost } from './pi-manager-worker-host.js';
 export type { PiManagerWorkerHost } from './pi-manager-worker-host.js';
+export { createTaskClaimProtocol } from './management-worker-protocol.js';
+export type { TaskClaimProtocol, TaskClaimProtocolHandlers } from './management-worker-protocol.js';
 import { createRescanController, type RescanController } from './rescan.js';
 import { createDispatchOutbox, type DispatchOutbox } from './outbox.js';
 
@@ -176,6 +179,7 @@ export interface CreateDaemonProtocolClientInput {
 }
 
 export interface DaemonProtocolClient {
+  readonly deviceId?: string;
   start(): Promise<void>;
   rescanNow?(): Promise<void>;
   stop?(): void;
@@ -187,11 +191,12 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   // 复用 scanner 同款 home 解析；默认 homedir()。custom-agent skills 扫描必须用同一个 home。
   const home = input.homeDir ?? homedir();
   const codexGeneratedImagesDir = join(home, '.codex', 'generated_images');
-  let currentDeviceId: string;
+  let currentDeviceId = '';
   let rescan: RescanController | undefined;
   let latestSnapshot: DaemonScanSnapshot = { runtimes, agents };
 
   return {
+    get deviceId() { return currentDeviceId || undefined; },
     async start() {
       const initialAnnouncement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents, { onDeviceRemoved: input.onDeviceRemoved });
       currentDeviceId = initialAnnouncement.deviceId;
@@ -477,6 +482,28 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
     device.token = credentials.token;
     await input.onCredentialsChanged?.(credentials);
   }
+}
+
+export function createTaskClaimProtocolClient(input: {
+  readonly socket: ManagementWorkerProtocolSocket;
+  readonly getDeviceId: () => string | undefined;
+}): import('./device-service-core.js').DeviceServiceComponent {
+  const protocol = createTaskClaimProtocol({ socket: input.socket });
+  return {
+    async start() {
+      const deviceId = input.getDeviceId();
+      // 兼容测试替身/旧嵌入方：没有 hello 产生的 canonical device identity 时禁用认领，
+      // 不能因此拖垮既有 Dispatch 与 Manager WorkerHost。
+      if (!deviceId) return;
+      await protocol.start({ deviceId }, {
+        canAcceptOffer: () => true,
+        async onClaimed() {
+          // Task 6 only establishes claim authority. Invocation/Dispatch starts in Task 8.
+        },
+      });
+    },
+    stop() { protocol.stop(); },
+  };
 }
 
 function isCodexAdapterKind(adapterKind: string | undefined): boolean {

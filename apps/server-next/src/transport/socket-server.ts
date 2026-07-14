@@ -4,7 +4,8 @@ import type {
   ScheduleManagementRunInput,
   ScheduleManagementRunResult,
 } from '../application/management/device-worker-scheduler.js';
-import { AGENT_EVENTS, MESSAGE_BATCH_QUIET_WINDOW_MS, WEB_EVENTS } from '../../../../packages/contracts/src/index.js';
+import type { TaskClaimBroker } from '../application/management/task-claim-broker.js';
+import { AGENT_EVENTS, MESSAGE_BATCH_QUIET_WINDOW_MS, WEB_EVENTS, type TaskClaimExpiredV1 } from '../../../../packages/contracts/src/index.js';
 import { normalizeAdapterKind } from '../../../../packages/domain/src/index.js';
 import {
   registerAgentSocketHandlers,
@@ -29,11 +30,15 @@ export interface ServerNextRealtime {
   dispatchRequest(dispatchId: string): Promise<void>;
   refreshAgents(teamId: string): Promise<void>;
   scheduleManagementRun(input: ScheduleManagementRunInput): Promise<ScheduleManagementRunResult>;
+  offerTaskClaims(taskId: string): Promise<{ taskId: string; offered: number; accepted: number }>;
+  expireTaskClaims(): Promise<readonly TaskClaimExpiredV1[]>;
 }
 
 export interface ServerNextSocketOptions {
   dispatchRequestCoalesceMs?: number;
   managementWorkerScheduler?: DeviceWorkerScheduler;
+  taskClaimBroker?: TaskClaimBroker;
+  taskClaimOfferTimeoutMs?: number;
 }
 
 interface ChannelSubscription {
@@ -401,6 +406,7 @@ export function attachServerNextNamespaces(
         connectedDeviceId && agentSocketsByDeviceId.get(connectedDeviceId) === socket,
       );
       if (connectedDeviceId && ownsConnectedDevice) {
+        options.taskClaimBroker?.disconnectDevice(connectedDeviceId);
         agentSocketsByDeviceId.delete(connectedDeviceId);
         dispatchClaimDeviceIds.delete(connectedDeviceId);
       }
@@ -439,6 +445,7 @@ export function attachServerNextNamespaces(
         // 在 hello ACK 后 daemon 可能立即 register management worker；先同步记录身份，
         // 后续 afterDeviceMutation 再完成路由表与订阅刷新，避免 register 竞态误判未 hello。
         connectedDeviceId = deviceId;
+        options.taskClaimBroker?.reconnectDevice(deviceId);
         if (payloadDispatchClaimCapability(payload) === true) {
           dispatchClaimDeviceIds.add(deviceId);
         } else {
@@ -550,6 +557,13 @@ export function attachServerNextNamespaces(
           outboxReplay: (payload) => options.managementWorkerScheduler!.replayOutbox(managementConnectionId, payload),
         },
       } : {}),
+      ...(options.taskClaimBroker ? {
+        taskClaim: {
+          acquire: (payload) => options.taskClaimBroker!.acquire(payload),
+          renew: (payload) => options.taskClaimBroker!.renew(payload),
+          release: (payload) => options.taskClaimBroker!.release(payload),
+        },
+      } : {}),
     });
   });
   return {
@@ -582,6 +596,33 @@ export function attachServerNextNamespaces(
         };
       }
       return options.managementWorkerScheduler.scheduleManagementRun(input);
+    },
+    async offerTaskClaims(taskId) {
+      if (!options.taskClaimBroker) return { taskId, offered: 0, accepted: 0 };
+      const offers = await options.taskClaimBroker.prepareOffers(taskId);
+      let accepted = 0;
+      await Promise.all(offers.map(async (offer) => {
+        const socket = agentSocketsByDeviceId.get(offer.deviceId);
+        const ackSocket = socket?.timeout?.(options.taskClaimOfferTimeoutMs ?? 5_000) ?? socket;
+        if (!ackSocket?.emitWithAck) return;
+        try {
+          const ack = await ackSocket.emitWithAck(AGENT_EVENTS.taskClaim.offer, offer);
+          if (ack && typeof ack === 'object' && (ack as { ok?: unknown }).ok === true) accepted += 1;
+        } catch {
+          // Offer timeout only rejects this candidate; no execution has started.
+        }
+      }));
+      return { taskId, offered: offers.length, accepted };
+    },
+    async expireTaskClaims() {
+      if (!options.taskClaimBroker) return [];
+      const expired = await options.taskClaimBroker.expireClaims();
+      for (const notice of expired) {
+        const resolution = await options.taskClaimBroker.resolveCandidates(notice.taskId);
+        const deviceId = resolution.candidates.find((candidate) => candidate.agentId === notice.agentId)?.deviceId;
+        if (deviceId) agentSocketsByDeviceId.get(deviceId)?.emit?.(AGENT_EVENTS.taskClaim.expired, notice);
+      }
+      return expired;
     },
   };
 }

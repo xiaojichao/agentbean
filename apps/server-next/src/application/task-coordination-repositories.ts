@@ -116,6 +116,12 @@ export interface TaskCoordinationRepositories {
       taskRevision: number;
       taskAttempt: number;
     }): Promise<TaskClaimLeaseRecord | null>;
+    getLatest(input: {
+      taskId: ID;
+      taskRevision: number;
+      taskAttempt: number;
+    }): Promise<TaskClaimLeaseRecord | null>;
+    listActive(): Promise<TaskClaimLeaseRecord[]>;
     update(input: {
       id: ID;
       expectedStatus: TaskClaimLeaseStatus;
