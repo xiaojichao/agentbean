@@ -7,13 +7,12 @@ import type {
   AcceptanceCriterionDto,
   DependencyResultRefDto,
   DispatchStatus,
-  ManagementRunDto,
 } from '../../../../../packages/contracts/src/index.js';
 import {
   canonicalizeAgentInvocationIntent,
   resolveInvocationIdempotency,
 } from '../../../../../packages/domain/src/index.js';
-import type { InvocationDispatchAttemptRecord, ManagementRepositories } from '../management-repositories.js';
+import type { InvocationDispatchAttemptRecord, ManagementRepositories, ManagementRunRecord } from '../management-repositories.js';
 import type {
   DispatchMutationResult,
   DispatchRepository,
@@ -269,7 +268,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
 
 async function resolveTaskInvocationAuthority(
   repositories: ManagementDispatchRepositories,
-  run: ManagementRunDto,
+  run: ManagementRunRecord,
   input: InvokeTaskAgentInput,
   now: number,
 ): Promise<{
@@ -384,7 +383,7 @@ async function assertNoActiveTaskAttempt(
   }
 }
 
-async function validateAuthoritativeTarget(repositories: ServerNextRepositories, intent: AgentInvocationIntentV1, run: ManagementRunDto): Promise<void> {
+async function validateAuthoritativeTarget(repositories: ServerNextRepositories, intent: AgentInvocationIntentV1, run: ManagementRunRecord): Promise<void> {
   const team = await repositories.teams.getById(intent.teamId);
   if (!team) throw new InvocationGatewayError('INVOCATION_TEAM_NOT_FOUND');
   const channel = await repositories.channels.getById(intent.channelId);
@@ -407,7 +406,7 @@ async function validateAuthoritativeTarget(repositories: ServerNextRepositories,
   }
 }
 
-function validateFrozenIntent(input: InvokeAgentInput, run: ManagementRunDto): void {
+function validateFrozenIntent(input: InvokeAgentInput, run: ManagementRunRecord): void {
   if (input.intent.targetAgentId !== input.frozenTargetAgentId) throw new InvocationGatewayError('INVOCATION_FROZEN_TARGET_MISMATCH');
   if (!input.allowedTargetAgentIds.includes(input.intent.targetAgentId)) throw new InvocationGatewayError('INVOCATION_TARGET_FORBIDDEN');
   if (input.intent.teamId !== run.teamId) throw new InvocationGatewayError('INVOCATION_TEAM_MISMATCH');
@@ -522,13 +521,13 @@ function hashIntent(intent: AgentInvocationIntentV1): string {
   return createHash('sha256').update(canonicalizeAgentInvocationIntent(intent)).digest('hex');
 }
 
-async function requireRun(management: ManagementRepositories, managementRunId: string): Promise<ManagementRunDto> {
+async function requireRun(management: ManagementRepositories, managementRunId: string): Promise<ManagementRunRecord> {
   const run = await management.runs.getById(managementRunId);
   if (!run) throw new InvocationGatewayError('MANAGEMENT_RUN_NOT_FOUND');
   return run;
 }
 
-async function requireWritableRun(management: ManagementRepositories, managementRunId: string): Promise<ManagementRunDto> {
+async function requireWritableRun(management: ManagementRepositories, managementRunId: string): Promise<ManagementRunRecord> {
   const run = await requireRun(management, managementRunId);
   if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') {
     throw new ManagementConflictError('MANAGEMENT_RUN_TERMINAL');

@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   getManagementPolicy: vi.fn(async () => ({
     ok: true,
     policy: {
-      teamId: 'route-team-id', mode: 'direct',
+      schemaVersion: 2, teamId: 'route-team-id', mode: 'direct', maxManagementPhase: 1,
       placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true },
       updatedBy: '', updatedAt: 0,
     },
@@ -96,6 +96,29 @@ describe('SettingsPage Team route binding', () => {
     await waitFor(() => expect(mocks.updateTeam).toHaveBeenCalledWith({
       teamId: 'route-team-id',
       name: 'Renamed Route Team',
+    }));
+  });
+
+  test('saves an explicit Phase 2 ceiling only through the owner/admin management control', async () => {
+    const { ManagementPolicyPanel } = await import('../app/[teamPath]/settings/ManagementPolicyPanel');
+    const view = render(React.createElement(ManagementPolicyPanel, {
+      teamId: 'route-team-id', canManage: true, deviceIds: ['device-1'],
+    }));
+    await waitFor(() => expect(mocks.getManagementPolicy).toHaveBeenCalledWith('route-team-id'));
+    fireEvent.change(view.container.querySelector('[data-smoke="settings-management-mode"]')!, { target: { value: 'managed' } });
+    fireEvent.click(view.container.querySelector('input[type="checkbox"]')!);
+    fireEvent.change(view.container.querySelector('[data-smoke="settings-management-phase"]')!, { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存管理模式' }));
+    await waitFor(() => expect(mocks.updateManagementPolicy).toHaveBeenCalledWith({
+      teamId: 'route-team-id',
+      mode: 'managed',
+      maxManagementPhase: 2,
+      placementPolicy: {
+        placement: 'device',
+        allowedDeviceIds: ['device-1'],
+        allowServerContext: false,
+        requireLocalModelCredentials: true,
+      },
     }));
   });
 });

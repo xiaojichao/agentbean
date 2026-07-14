@@ -127,6 +127,7 @@ export const WEB_EVENTS = {
   },
   task: {
     list: 'task:list',
+    dag: 'task:dag',
     create: 'task:create',
     update: 'task:update',
     delete: 'task:delete',

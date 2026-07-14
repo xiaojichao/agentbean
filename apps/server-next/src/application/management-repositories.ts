@@ -4,9 +4,9 @@ import type {
   ID,
   ManagementCheckpointV1,
   ManagementEventV1,
-  ManagementMode,
   ManagementRunDto,
-  ManagerPlacementPolicyDto,
+  ManagementRunV2Dto,
+  TeamManagementPolicyV2Dto,
   UnixMs,
 } from '../../../../packages/contracts/src/index.js';
 import type { ManagerLeaseRecord } from '../../../../packages/domain/src/index.js';
@@ -20,13 +20,8 @@ export interface ManagedRequestReservationRecord {
   readonly createdAt: UnixMs;
 }
 
-export interface ManagementPolicyRecord {
-  readonly teamId: ID;
-  readonly mode: ManagementMode;
-  readonly placementPolicy: ManagerPlacementPolicyDto;
-  readonly updatedBy: ID;
-  readonly updatedAt: UnixMs;
-}
+export type ManagementPolicyRecord = TeamManagementPolicyV2Dto;
+export type ManagementRunRecord = ManagementRunDto | ManagementRunV2Dto;
 
 export interface ManagementEventRecord {
   readonly event: ManagementEventV1;
@@ -65,10 +60,10 @@ export interface ManagementRepositories {
     getByRequestKey(input: { teamId: ID; requestKey: string }): Promise<ManagedRequestReservationRecord | null>;
   };
   runs: {
-    create(record: ManagementRunDto): Promise<ManagementRunDto>;
-    getById(id: ID): Promise<ManagementRunDto | null>;
-    getByRootTaskId(rootTaskId: ID): Promise<ManagementRunDto | null>;
-    update(record: ManagementRunDto): Promise<ManagementRunDto>;
+    create(record: ManagementRunRecord): Promise<ManagementRunRecord>;
+    getById(id: ID): Promise<ManagementRunRecord | null>;
+    getByRootTaskId(rootTaskId: ID): Promise<ManagementRunRecord | null>;
+    update(record: ManagementRunRecord): Promise<ManagementRunRecord>;
   };
   leases: {
     get(managementRunId: ID): Promise<ManagerLeaseRecord | null>;

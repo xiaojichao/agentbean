@@ -29,8 +29,10 @@ import {
   X,
 } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, channelEvents, dmEvents, memberEvents, taskEvents, messageReactionEvents } from '@/lib/socket';
-import { WEB_EVENTS } from '@agentbean/contracts';
+import { WEB_EVENTS, type TaskDagViewDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
+import { TaskDagPanel } from '@/components/TaskDagPanel';
+import { acceptTaskDagSnapshot } from '@/lib/task-dag';
 import type { AgentSnapshot, Artifact, ChannelSummary, ChatMessage } from '@/lib/schema';
 import {
   TASK_STATUS_BY_ID as STATUS_BY_ID,
@@ -94,6 +96,8 @@ export default function TasksPage() {
   const searchParams = useSearchParams();
 
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [taskDag, setTaskDag] = useState<TaskDagViewDto | null>(null);
+  const [taskDagLoading, setTaskDagLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<TaskViewMode>(() => searchParams.get('view') === 'list' ? 'list' : 'board');
   const [selectedChannels, setSelectedChannels] = useState<Set<string>>(new Set());
@@ -280,6 +284,24 @@ export default function TasksPage() {
     const taskId = root ? metaTaskId(root) : null;
     return taskId ? tasks.find((task) => task.id === taskId) ?? null : null;
   }, [tasks, threadMessages, threadTarget]);
+
+  useEffect(() => {
+    if (!selectedTask) {
+      setTaskDag(null);
+      setTaskDagLoading(false);
+      return;
+    }
+    let active = true;
+    setTaskDagLoading(true);
+    void taskEvents().getDag(selectedTask.id).then((result) => {
+      if (!active) return;
+      setTaskDag((current) => result.ok && result.dag
+        ? acceptTaskDagSnapshot(current, result.dag)
+        : null);
+      setTaskDagLoading(false);
+    });
+    return () => { active = false; };
+  }, [selectedTask?.id, selectedTask?.updatedAt]);
   const threadRoot = selectedTask ? findTaskRootMessage(selectedTask, threadMessages) : null;
   const threadParentId = threadRoot?.id ?? selectedTask?.id ?? null;
   const threadReplies = threadParentId ? threadMessages.filter((msg) => parentMessageId(msg) === threadParentId) : [];
@@ -490,7 +512,7 @@ export default function TasksPage() {
               <input data-smoke="tasks-create-description" value={createDescription} onChange={(e) => setCreateDescription(e.target.value)} placeholder="补充说明" className="h-9 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm outline-none focus:border-neutral-500" />
             </Field>
             <Field label="频道">
-              <select value={createChannelId} onChange={(e) => setCreateChannelId(e.target.value)} className="h-9 w-full rounded-md border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-neutral-500">
+              <select data-smoke="tasks-create-channel" value={createChannelId} onChange={(e) => setCreateChannelId(e.target.value)} className="h-9 w-full rounded-md border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-neutral-500">
                 <option value="">无频道</option>
                 {channels.map((channel) => <option key={channel.id} value={channel.id}>#{channel.name}</option>)}
               </select>
@@ -567,6 +589,9 @@ export default function TasksPage() {
           fileInputRef={fileInputRef}
           savedIds={savedIds}
           reactionIds={reactionIds}
+          taskDag={taskDag}
+          taskDagLoading={taskDagLoading}
+          teamPath={np}
           onInput={setThreadInput}
           onSend={sendThreadMessage}
           onUpload={uploadFiles}
@@ -968,6 +993,9 @@ function TaskThreadPanel({
   fileInputRef,
   savedIds,
   reactionIds,
+  taskDag,
+  taskDagLoading,
+  teamPath,
   onInput,
   onSend,
   onUpload,
@@ -991,6 +1019,9 @@ function TaskThreadPanel({
   fileInputRef: React.RefObject<HTMLInputElement>;
   savedIds: Set<string>;
   reactionIds: Set<string>;
+  taskDag: TaskDagViewDto | null;
+  taskDagLoading: boolean;
+  teamPath: string;
   onInput: (value: string) => void;
   onSend: () => void;
   onUpload: (files: FileList | File[]) => void;
@@ -1034,6 +1065,11 @@ function TaskThreadPanel({
         ) : (
           <TaskThreadRoot task={task} />
         )}
+        {taskDagLoading
+          ? <div className="text-center text-[11px] text-neutral-400" data-smoke="task-dag-loading">正在读取 Task DAG…</div>
+          : taskDag
+            ? <TaskDagPanel dag={taskDag} teamPath={teamPath} />
+            : <div className="text-center text-[11px] text-neutral-400" data-smoke="task-dag-unmanaged">此任务未进入 Phase 2 协作。</div>}
         <div className="border-t border-neutral-100 pt-3 text-center text-[11px] text-neutral-400">
           <div>回复的开头</div>
           <div>{replies.length === 0 ? '暂无回复' : `${replies.length} 条回复`}</div>

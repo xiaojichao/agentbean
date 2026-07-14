@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type JoinLinkDto, type TeamDto, type ManagementMode, type ManagerPlacementPolicyDto, type TeamManagementPolicyDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type JoinLinkDto, type TeamDto, type ManagementMode, type ManagerPlacementPolicyDto, type TaskDagViewDto, type TeamManagementPolicyV2Dto } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
@@ -294,8 +294,8 @@ export function teamEvents(socket: Socket = getWebSocket()): TeamEvents {
 }
 
 export interface ManagementPolicyEvents {
-  get(teamId: string): Promise<{ ok: boolean; policy?: TeamManagementPolicyDto; canManage?: boolean; error?: string }>;
-  update(payload: { teamId: string; mode: ManagementMode; placementPolicy: ManagerPlacementPolicyDto }): Promise<{ ok: boolean; policy?: TeamManagementPolicyDto; canManage?: boolean; error?: string }>;
+  get(teamId: string): Promise<{ ok: boolean; policy?: TeamManagementPolicyV2Dto; canManage?: boolean; error?: string }>;
+  update(payload: { teamId: string; mode: ManagementMode; maxManagementPhase: 1 | 2; placementPolicy: ManagerPlacementPolicyDto }): Promise<{ ok: boolean; policy?: TeamManagementPolicyV2Dto; canManage?: boolean; error?: string }>;
 }
 
 export function managementPolicyEvents(socket: Socket = getWebSocket()): ManagementPolicyEvents {
@@ -554,6 +554,7 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
 export interface TaskEvents {
   create(payload: { title: string; description?: string; status?: string; assigneeId?: string; channelId?: string; tags?: string[] }): Promise<{ ok: boolean; task?: any; error?: string }>;
   list(channelId?: string): Promise<{ ok: boolean; tasks?: any[]; error?: string }>;
+  getDag(rootTaskId: string): Promise<{ ok: boolean; dag?: TaskDagViewDto; error?: string }>;
   update(payload: { id: string; title?: string; description?: string; status?: string; assigneeId?: string | null; channelId?: string | null; tags?: string[]; sortOrder?: number }): Promise<{ ok: boolean; task?: any; error?: string }>;
   delete(id: string): Promise<{ ok: boolean; error?: string }>;
   reorder(id: string, sortOrder: number): Promise<{ ok: boolean; error?: string }>;
@@ -564,6 +565,7 @@ export function taskEvents(socket: Socket = getWebSocket()): TaskEvents {
   return {
     create(payload) { return emitWithTimeout(socket, WEB_EVENTS.task.create, payload); },
     list(channelId) { return emitWithTimeout(socket, WEB_EVENTS.task.list, { channelId }); },
+    getDag(rootTaskId) { return emitWithTimeout(socket, WEB_EVENTS.task.dag, { rootTaskId }); },
     update({ id, ...rest }) { return emitWithTimeout(socket, WEB_EVENTS.task.update, { taskId: id, ...rest }); },
     delete(id) { return emitWithTimeout(socket, WEB_EVENTS.task.delete, { taskId: id }); },
     reorder(id, sortOrder) { return emitWithTimeout(socket, WEB_EVENTS.task.reorder, { taskId: id, sortOrder }); },

@@ -486,6 +486,7 @@ export function registerWebSocketHandlers(
     }
   }, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.task.list, app, 'listTasks', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.task.dag, app, 'getTaskDag', undefined, { authenticatedUser: options.authenticatedUser });
   const afterTaskMutation = (payload: unknown, result: unknown) =>
     options.afterTaskMutation?.(payload, result);
   bind(socket, WEB_EVENTS.task.create, app, 'createTask', afterTaskMutation, { authenticatedUser: options.authenticatedUser });

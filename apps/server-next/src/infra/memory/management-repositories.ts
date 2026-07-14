@@ -1,4 +1,4 @@
-import type { AgentInvocationRecordDto, ManagementCheckpointV1, ManagementRunDto } from '../../../../../packages/contracts/src/index.js';
+import type { AgentInvocationRecordDto, ManagementCheckpointV1 } from '../../../../../packages/contracts/src/index.js';
 import type { ManagerLeaseRecord } from '../../../../../packages/domain/src/index.js';
 import type {
   InvocationDispatchAttemptRecord,
@@ -6,6 +6,7 @@ import type {
   ManagementEventRecord,
   ManagementPolicyRecord,
   ManagementRepositories,
+  ManagementRunRecord,
   ManagementShadowDecisionRecord,
 } from '../../application/management-repositories.js';
 import { createManagementUnitOfWork, serializeManagementTransactions, type ManagementUnitOfWork } from '../../application/management-unit-of-work.js';
@@ -13,7 +14,7 @@ import { createManagementUnitOfWork, serializeManagementTransactions, type Manag
 interface ManagementMemoryState {
   policies: Map<string, ManagementPolicyRecord>;
   reservations: Map<string, ManagedRequestReservationRecord>;
-  runs: Map<string, ManagementRunDto>;
+  runs: Map<string, ManagementRunRecord>;
   leases: Map<string, ManagerLeaseRecord>;
   events: Map<string, ManagementEventRecord>;
   checkpoints: Map<string, ManagementCheckpointV1>;

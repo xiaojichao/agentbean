@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import type {
   AgentInvocationStatus,
-  ManagementRunDto,
   ManagementWorkerToolRequestV1,
   ManagementWorkerToolResultV1,
   Phase1ManagementWorkerToolName,
@@ -12,6 +11,7 @@ import type {
   Phase2TaskToolResultV2,
 } from '../../../../../packages/contracts/src/index.js';
 import type { MessageRecord, ServerNextRepositories } from '../repositories.js';
+import type { ManagementRunRecord } from '../management-repositories.js';
 import { createInvocationGateway } from './invocation-gateway.js';
 import type { createManagementKernel } from './management-kernel.js';
 import type { createTaskCoordinationKernel } from './task-coordination-kernel.js';
@@ -515,13 +515,13 @@ function isConflictDiagnostic(code: string): boolean {
     || code.includes('ALREADY_') || code.endsWith('_ACTIVE');
 }
 
-async function requireRun(repositories: ServerNextRepositories, managementRunId: string): Promise<ManagementRunDto> {
+async function requireRun(repositories: ServerNextRepositories, managementRunId: string): Promise<ManagementRunRecord> {
   const run = await repositories.management.runs.getById(managementRunId);
   if (!run) throw new Error('MANAGEMENT_RUN_NOT_FOUND');
   return run;
 }
 
-function requireRunFrozenTarget(run: ManagementRunDto): NonNullable<ManagementRunDto['frozenTarget']> {
+function requireRunFrozenTarget(run: ManagementRunRecord): NonNullable<ManagementRunRecord['frozenTarget']> {
   if (!run.frozenTarget) throw new Error('MANAGEMENT_FROZEN_TARGET_MISSING');
   return run.frozenTarget;
 }
@@ -543,7 +543,7 @@ function visibleMessage(message: MessageRecord) {
 async function waitForInvocationDelivery(input: {
   repositories: ServerNextRepositories;
   gateway: ReturnType<typeof createInvocationGateway>;
-  run: ManagementRunDto;
+  run: ManagementRunRecord;
   invocationId: string;
   timeoutAt: number;
   pollIntervalMs: number;
@@ -560,11 +560,11 @@ async function waitForInvocationDelivery(input: {
   throw new Error('MANAGEMENT_INVOCATION_WAIT_TIMEOUT');
 }
 
-async function hasAgentDelivery(repositories: ServerNextRepositories, run: ManagementRunDto, dispatchId: string | undefined): Promise<boolean> {
+async function hasAgentDelivery(repositories: ServerNextRepositories, run: ManagementRunRecord, dispatchId: string | undefined): Promise<boolean> {
   return (await findAgentDelivery(repositories, run, dispatchId)) !== null;
 }
 
-async function findAgentDelivery(repositories: ServerNextRepositories, run: ManagementRunDto,
+async function findAgentDelivery(repositories: ServerNextRepositories, run: ManagementRunRecord,
   dispatchId: string | undefined): Promise<MessageRecord | null> {
   if (!dispatchId) return null;
   const messages = await repositories.messages.listByThread({ channelId: run.channelId, threadId: run.rootMessageId, limit: 200 });
@@ -576,7 +576,7 @@ function isTerminalInvocation(status: AgentInvocationStatus): status is Extract<
   return status === 'succeeded' || status === 'failed' || status === 'cancelled' || status === 'timed_out';
 }
 
-async function messageForCommand(repositories: ServerNextRepositories, run: ManagementRunDto, commandId: string) {
+async function messageForCommand(repositories: ServerNextRepositories, run: ManagementRunRecord, commandId: string) {
   const messages = await repositories.messages.listByThread({ channelId: run.channelId, threadId: run.rootMessageId, limit: 200 });
   return messages.find((message) => message.meta?.managementCommandId === commandId) ?? null;
 }

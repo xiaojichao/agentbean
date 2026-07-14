@@ -1,8 +1,9 @@
 import type {
   AgentInvocationRecordDto,
+  ManagementBudgetDto,
   ManagementCheckpointV1,
   ManagementEventV1,
-  ManagementRunDto,
+  ManagerPlacementPolicyDto,
 } from '../../../../../packages/contracts/src/index.js';
 import type { ManagerLeaseRecord } from '../../../../../packages/domain/src/index.js';
 import type {
@@ -11,6 +12,7 @@ import type {
   ManagementEventRecord,
   ManagementPolicyRecord,
   ManagementRepositories,
+  ManagementRunRecord,
   ManagementShadowDecisionRecord,
 } from '../../application/management-repositories.js';
 import { createManagementUnitOfWork, serializeManagementTransactions, type ManagementUnitOfWork } from '../../application/management-unit-of-work.js';
@@ -45,10 +47,10 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
       },
       async upsert(record) {
         db.prepare(`INSERT INTO team_management_policies
-          (team_id, mode, placement_policy_json, updated_by, updated_at) VALUES (?, ?, ?, ?, ?)
+          (team_id, mode, max_management_phase, placement_policy_json, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?)
           ON CONFLICT(team_id) DO UPDATE SET mode=excluded.mode, placement_policy_json=excluded.placement_policy_json,
-            updated_by=excluded.updated_by, updated_at=excluded.updated_at`)
-          .run(record.teamId, record.mode, json(record.placementPolicy), record.updatedBy, record.updatedAt);
+            max_management_phase=excluded.max_management_phase, updated_by=excluded.updated_by, updated_at=excluded.updated_at`)
+          .run(record.teamId, record.mode, record.maxManagementPhase, json(record.placementPolicy), record.updatedBy, record.updatedAt);
         return record;
       },
     },
@@ -70,12 +72,13 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
         db.prepare(`INSERT INTO management_runs
           (id, team_id, channel_id, root_task_id, root_message_id, status, placement_policy_json,
            active_worker_id, checkpoint_revision, budget_json, created_at, updated_at, completed_at,
-           target_agent_id, target_kind)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+           target_agent_id, target_kind, management_phase)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(record.id, record.teamId, record.channelId, record.rootTaskId ?? null, record.rootMessageId,
             record.status, json(record.placementPolicy), record.activeWorkerId ?? null, record.checkpointRevision,
             json(record.budget), record.createdAt, record.updatedAt, record.completedAt ?? null,
-            record.frozenTarget?.agentId ?? null, record.frozenTarget?.kind ?? null);
+            record.frozenTarget?.agentId ?? null, record.frozenTarget?.kind ?? null,
+            'managementPhase' in record ? record.managementPhase : 1);
         return record;
       },
       async getById(id) {
@@ -219,9 +222,39 @@ function nullableNumber(value: unknown, key: string): number | undefined { const
 function json(value: unknown): string { return JSON.stringify(value); }
 function parseJson<T>(value: string): T { return JSON.parse(value) as T; }
 
-function mapPolicy(value: unknown): ManagementPolicyRecord | null { return value ? { teamId: text(value, 'team_id'), mode: text(value, 'mode') as ManagementPolicyRecord['mode'], placementPolicy: parseJson(text(value, 'placement_policy_json')), updatedBy: text(value, 'updated_by'), updatedAt: number(value, 'updated_at') } : null; }
+function mapPolicy(value: unknown): ManagementPolicyRecord | null { return value ? { schemaVersion: 2, teamId: text(value, 'team_id'), mode: text(value, 'mode') as ManagementPolicyRecord['mode'], maxManagementPhase: phase(value, 'max_management_phase'), placementPolicy: parseJson(text(value, 'placement_policy_json')), updatedBy: text(value, 'updated_by'), updatedAt: number(value, 'updated_at') } : null; }
 function mapReservation(value: unknown): ManagedRequestReservationRecord | null { return value ? { id: text(value, 'id'), teamId: text(value, 'team_id'), requestKey: text(value, 'request_key'), requestHash: text(value, 'request_hash'), managementRunId: text(value, 'management_run_id'), createdAt: number(value, 'created_at') } : null; }
-function mapRun(value: unknown): ManagementRunDto | null { if (!value) return null; const targetAgentId = nullableText(value, 'target_agent_id'); const targetKind = nullableText(value, 'target_kind'); return { schemaVersion: 1, id: text(value, 'id'), teamId: text(value, 'team_id'), channelId: text(value, 'channel_id'), rootTaskId: nullableText(value, 'root_task_id'), rootMessageId: text(value, 'root_message_id'), ...(targetAgentId && (targetKind === 'custom' || targetKind === 'agentos-hosted') ? { frozenTarget: { agentId: targetAgentId, kind: targetKind } } : {}), mode: 'managed', status: text(value, 'status') as ManagementRunDto['status'], placementPolicy: parseJson(text(value, 'placement_policy_json')), activeWorkerId: nullableText(value, 'active_worker_id'), checkpointRevision: number(value, 'checkpoint_revision'), budget: parseJson(text(value, 'budget_json')), createdAt: number(value, 'created_at'), updatedAt: number(value, 'updated_at'), completedAt: nullableNumber(value, 'completed_at') }; }
+function mapRun(value: unknown): ManagementRunRecord | null {
+  if (!value) return null;
+  const targetAgentId = nullableText(value, 'target_agent_id');
+  const targetKind = nullableText(value, 'target_kind');
+  const rootTaskId = nullableText(value, 'root_task_id');
+  const managementPhase = phase(value, 'management_phase');
+  const frozenTarget: ManagementRunRecord['frozenTarget'] = targetAgentId && (targetKind === 'custom' || targetKind === 'agentos-hosted')
+    ? { agentId: targetAgentId, kind: targetKind } : undefined;
+  const common = {
+    id: text(value, 'id'), teamId: text(value, 'team_id'), channelId: text(value, 'channel_id'),
+    rootMessageId: text(value, 'root_message_id'),
+    ...(frozenTarget ? { frozenTarget } : {}),
+    mode: 'managed' as const,
+    status: text(value, 'status') as ManagementRunRecord['status'],
+    placementPolicy: parseJson<ManagerPlacementPolicyDto>(text(value, 'placement_policy_json')),
+    activeWorkerId: nullableText(value, 'active_worker_id'), checkpointRevision: number(value, 'checkpoint_revision'),
+    budget: parseJson<ManagementBudgetDto>(text(value, 'budget_json')), createdAt: number(value, 'created_at'),
+    updatedAt: number(value, 'updated_at'), completedAt: nullableNumber(value, 'completed_at'),
+  };
+  if (managementPhase === 2) {
+    if (!rootTaskId) throw new Error('Phase 2 management run is missing root_task_id');
+    return { schemaVersion: 2, managementPhase: 2, ...common, rootTaskId };
+  }
+  return { schemaVersion: 1, ...common, ...(rootTaskId ? { rootTaskId } : {}) };
+}
+
+function phase(value: unknown, key: string): 1 | 2 {
+  const result = number(value, key);
+  if (result !== 1 && result !== 2) throw new Error(`Invalid ${key}`);
+  return result;
+}
 function mapLease(value: unknown): ManagerLeaseRecord | null { return value ? { managementRunId: text(value, 'management_run_id'), workerId: text(value, 'worker_id'), host: { deviceId: text(value, 'device_id'), profileId: text(value, 'profile_id') }, leaseTokenHash: text(value, 'lease_token_hash'), leaseFingerprint: text(value, 'lease_fingerprint'), fencingToken: number(value, 'fencing_token'), acquiredAt: number(value, 'acquired_at'), heartbeatAt: number(value, 'heartbeat_at'), expiresAt: number(value, 'expires_at'), releasedAt: nullableNumber(value, 'released_at') } : null; }
 function mapEvent(value: unknown): ManagementEventRecord { return { event: { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), sequence: number(value, 'sequence'), type: text(value, 'type'), actorKind: text(value, 'actor_kind'), actorId: nullableText(value, 'actor_id'), idempotencyKey: text(value, 'idempotency_key'), causationEventId: nullableText(value, 'causation_event_id'), payload: parseJson(text(value, 'payload_json')), createdAt: number(value, 'created_at') } as ManagementEventV1, payloadHash: text(value, 'payload_hash') }; }
 function mapInvocation(value: unknown): AgentInvocationRecordDto | null { return value ? { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), intent: parseJson(text(value, 'intent_json')), intentHash: text(value, 'intent_hash'), idempotencyKey: text(value, 'idempotency_key'), createdAt: number(value, 'created_at') } : null; }

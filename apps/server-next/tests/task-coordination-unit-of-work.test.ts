@@ -391,6 +391,7 @@ function legacyTeamDatabase(): DatabaseWithClose {
       tags_json TEXT NOT NULL DEFAULT '[]', sort_order REAL NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
+    CREATE TABLE team_management_policies (team_id TEXT PRIMARY KEY);
     CREATE TABLE management_runs (id TEXT PRIMARY KEY);
     CREATE TABLE agent_invocations (id TEXT PRIMARY KEY);
   `);
