@@ -4,6 +4,31 @@
 
 ## [Unreleased]
 
+## [Daily 2026-07-14] - 2026-07-14
+### Added
+- 发布包含 Phase 2 Worker runtime 的 daemon
+- 补齐 Phase 2 灰度策略与 Task DAG 界面
+- 接通 Phase 2 Invocation claim authority
+### Changed
+- 完成 Phase 2 双 Agent 垂直链路收口
+- 改名时迁移历史 @提及（旧消息跟随改名）
+- 结构化 @提及：改名后消息提及跟随显示新名（关联 agentId）
+- 实现子任务交付证据与经理验收闭环
+- 实现 Task Claim Broker 与开放认领协议
+- 记录 2026-07-13 每日更新日志
+- 实现 Phase 2 Task Coordination Kernel
+### Fixed
+- 修复生产浏览器烟测的频道状态时序
+- 修复结构化提及的身份与迁移边界
+- 让 Task DAG browser smoke 绑定默认频道
+- 统一 Dispatch 发射失败的恢复路径
+- 补齐 Phase 2 任务恢复与根汇总闭环
+- 修复 Agent 改名后频道消息仍显示旧名（#546）
+- 修复 Phase 2 Task 协调 review 问题
+- 恢复 Phase 1 Task graph 护栏
+- 实现 Phase 2 Task tools 与 Worker 恢复
+- 修复 AgentOS 托管型 Agent 改名后被扫描还原（#537）
+
 ## [Daily 2026-07-13] - 2026-07-13
 ### Added
 - 让 Device 发布物能够独立承载 Phase 1 PI runtime
