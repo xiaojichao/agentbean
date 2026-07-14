@@ -10,6 +10,7 @@ import type { ServerNextRepositories } from './application/repositories.js';
 import { createDeviceWorkerScheduler, type DeviceWorkerScheduler } from './application/management/device-worker-scheduler.js';
 import { createManagementKernel } from './application/management/management-kernel.js';
 import { createManagementToolExecutor, createPhase1ManagementToolHandlers, createPhase2InvocationToolHandlers, createPhase2ManagementToolHandlers } from './application/management/management-tool-executor.js';
+import { createSubtaskAcceptanceService } from './application/management/subtask-acceptance-service.js';
 import { createTaskCoordinationKernel } from './application/management/task-coordination-kernel.js';
 import { createManagementRouter } from './application/management/management-router.js';
 import { createTaskClaimBroker, type TaskClaimBroker } from './application/management/task-claim-broker.js';
@@ -1206,6 +1207,11 @@ function createDefaultManagementRuntime(
     clock,
     ids,
   });
+  const subtaskAcceptanceService = createSubtaskAcceptanceService({
+    unitOfWork: repositories.taskCoordinationUnitOfWork,
+    clock,
+    ids,
+  });
   const scheduler = createDeviceWorkerScheduler({
     devices: repositories.devices,
     messages: repositories.messages,
@@ -1225,7 +1231,8 @@ function createDefaultManagementRuntime(
         },
       }),
       phase2Handlers: {
-        ...createPhase2ManagementToolHandlers({ kernel: taskCoordinationKernel }),
+        ...createPhase2ManagementToolHandlers({ kernel: taskCoordinationKernel,
+          acceptanceService: subtaskAcceptanceService }),
         ...createPhase2InvocationToolHandlers({
           repositories,
           kernel,

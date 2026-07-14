@@ -1,14 +1,18 @@
 import { describe, expect, test, vi } from 'vitest';
 import { createManagementKernel } from '../src/application/management/management-kernel.js';
-import { createManagementToolExecutor, createPhase2ManagementToolHandlers } from '../src/application/management/management-tool-executor.js';
+import { createManagementToolExecutor, createPhase2InvocationToolHandlers, createPhase2ManagementToolHandlers } from '../src/application/management/management-tool-executor.js';
 import { createTaskCoordinationKernel } from '../src/application/management/task-coordination-kernel.js';
+import { createSubtaskAcceptanceService } from '../src/application/management/subtask-acceptance-service.js';
 import { createInMemoryManagementPersistence } from '../src/infra/memory/management-repositories.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
+import { createSubtaskEvidenceHarness } from './subtask-evidence-harness.js';
 
 describe('management tool executor', () => {
   test('routes agents.invoke by envelope version without overriding the frozen-target Phase 1 handler', async () => {
     const phase1 = vi.fn(async () => ({ invocationId: 'phase1-invocation', status: 'succeeded' as const }));
-    const phase2 = vi.fn(async () => ({ invocationId: 'phase2-invocation', status: 'succeeded' as const }));
+    const phase2 = vi.fn(async () => ({ invocationId: 'phase2-invocation', status: 'succeeded' as const,
+      deliveryId: 'phase2-delivery', evidenceRefs: [{ kind: 'message' as const,
+        id: 'phase2-message', snapshotHash: 'server-hash', capturedAt: 1 }] }));
     const execute = createManagementToolExecutor({
       kernel: { authorizeWrite: vi.fn() } as never,
       handlers: { 'agents.invoke': phase1 },
@@ -82,8 +86,10 @@ describe('management tool executor', () => {
     const authority = { managementRunId: 'run-1', workerId: 'worker-1', leaseToken: 'lease-token', fencingToken: 1 };
     await taskKernel.createRootCoordination({ authority, idempotencyKey: 'root-coordination',
       taskId: 'root-task', claimPolicy: 'open', requiredCapabilities: [], acceptanceCriteria: [], maxAttempts: 1 });
+    const acceptanceService = createSubtaskAcceptanceService({
+      unitOfWork: repositories.taskCoordinationUnitOfWork, clock, ids });
     const execute = createManagementToolExecutor({ kernel: managementKernel,
-      handlers: createPhase2ManagementToolHandlers({ kernel: taskKernel }) });
+      handlers: createPhase2ManagementToolHandlers({ kernel: taskKernel, acceptanceService }) });
     const envelope = { schemaVersion: 2 as const, managementPhase: 2 as const,
       managementRunId: 'run-1', workerId: 'worker-1', leaseToken: 'lease-token', fencingToken: 1 };
 
@@ -120,7 +126,8 @@ describe('management tool executor', () => {
       acceptSubtask: vi.fn(async () => ({ taskId: 'task-1', taskRevision: 3, status: 'done' })),
       reportBlocked: vi.fn(async () => ({ taskId: 'task-1', status: 'todo', reportedAt: 100 })),
     };
-    const handlers = createPhase2ManagementToolHandlers({ kernel: kernel as never });
+    const handlers = createPhase2ManagementToolHandlers({ kernel: kernel as never,
+      acceptanceService: { decide: kernel.acceptSubtask } as never });
     expect(Object.keys(handlers).sort()).toEqual([
       'tasks.accept_subtask', 'tasks.add_dependency', 'tasks.assign', 'tasks.create_subtasks',
       'tasks.publish_for_claim', 'tasks.report_blocked', 'tasks.retry', 'tasks.wait',
@@ -143,5 +150,29 @@ describe('management tool executor', () => {
     expect(kernel.assignTask).toHaveBeenCalledTimes(1);
     expect(kernel.retryTask).toHaveBeenCalledTimes(1);
     expect(kernel.reportBlocked).toHaveBeenCalledTimes(1);
+  });
+
+  test('finalizes a succeeded Phase 2 Invocation into a canonical delivery result', async () => {
+    const harness = await createSubtaskEvidenceHarness();
+    const handlers = createPhase2InvocationToolHandlers({ repositories: harness.repositories,
+      kernel: { recordInvocationTerminal: vi.fn() } as never, clock: harness.clock,
+      ids: harness.ids, onDispatchCreated: vi.fn() });
+    const result = await handlers['agents.invoke']!({ schemaVersion: 2, managementPhase: 2,
+      commandId: 'command-invoke', managementRunId: harness.run.id, workerId: 'worker-1',
+      toolCallId: 'call-invoke', toolName: 'agents.invoke', leaseToken: 'token', fencingToken: 1,
+      idempotencyKey: 'invoke-1', input: { taskId: 'task-child', expectedTaskRevision: 1,
+        taskAttempt: 1, claimLeaseId: 'claim-child', objective: '完成 child', attachmentIds: [] } });
+    expect(result).toMatchObject({ invocationId: 'invocation-1', status: 'succeeded',
+      deliveryId: expect.any(String), evidenceRefs: expect.arrayContaining([
+        expect.objectContaining({ kind: 'message', id: 'delivery-message' }),
+      ]) });
+    await expect(handlers['agents.invoke']!({ schemaVersion: 2, managementPhase: 2,
+      commandId: 'command-invoke-replay', managementRunId: harness.run.id, workerId: 'worker-1',
+      toolCallId: 'call-invoke-replay', toolName: 'agents.invoke', leaseToken: 'token', fencingToken: 1,
+      idempotencyKey: 'invoke-1', input: { taskId: 'task-child', expectedTaskRevision: 1,
+        taskAttempt: 1, claimLeaseId: 'claim-child', objective: '完成 child', attachmentIds: [] } }))
+      .resolves.toEqual(result);
+    await expect(harness.repositories.tasks.getById('task-child'))
+      .resolves.toMatchObject({ status: 'in_review' });
   });
 });

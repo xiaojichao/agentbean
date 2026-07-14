@@ -1,6 +1,6 @@
 import type { ID, UnixMs } from './common.js';
 import type { ManagementWorkerCapacityV1, ManagementWorkerSessionContextV1 } from './management-worker.js';
-import type { AcceptanceCriterionDto, SubtaskAcceptanceV1 } from './task-coordination.js';
+import type { AcceptanceCriterionDto, EvidenceRefDto, SubtaskAcceptanceV1 } from './task-coordination.js';
 
 export const PHASE_2_TASK_WORKER_TOOL_NAMES = [
   'tasks.create_subtasks',
@@ -88,7 +88,12 @@ export interface Phase2ManagementWorkerToolInputMapV1 {
 export interface Phase2ManagementWorkerToolOutputMapV1 {
   readonly 'agents.invoke': {
     readonly invocationId: ID;
-    readonly status: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
+    readonly status: 'pending' | 'running' | 'failed' | 'cancelled' | 'timed_out';
+  } | {
+    readonly invocationId: ID;
+    readonly status: 'succeeded';
+    readonly deliveryId: ID;
+    readonly evidenceRefs: readonly EvidenceRefDto[];
   };
   readonly 'tasks.create_subtasks': { readonly taskIds: readonly ID[]; readonly taskGraphRevision: number };
   readonly 'tasks.add_dependency': { readonly taskId: ID; readonly taskRevision: number; readonly taskGraphRevision: number };
@@ -263,9 +268,16 @@ function assertTaskToolInput(toolName: string, value: unknown): void {
 
 function assertTaskToolOutput(toolName: string, value: unknown): void {
   if (toolName === 'agents.invoke') {
-    assertExactKeys(value, ['invocationId', 'status'], ['invocationId', 'status']);
+    assertExactKeys(value, ['invocationId', 'status', 'deliveryId', 'evidenceRefs'], ['invocationId', 'status']);
     if (!nonEmpty(value.invocationId) || !['pending', 'running', 'succeeded', 'failed', 'cancelled',
       'timed_out'].includes(String(value.status))) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    if (value.status === 'succeeded') {
+      if (!nonEmpty(value.deliveryId) || !Array.isArray(value.evidenceRefs)
+        || value.evidenceRefs.length === 0) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+      value.evidenceRefs.forEach(assertEvidenceRef);
+    } else if (value.deliveryId !== undefined || value.evidenceRefs !== undefined) {
+      throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    }
     return;
   }
   if (toolName === 'tasks.create_subtasks') {

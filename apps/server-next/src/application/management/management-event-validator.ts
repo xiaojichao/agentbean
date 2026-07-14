@@ -26,6 +26,7 @@ export const TASK_COORDINATION_MANAGEMENT_EVENT_TYPES = [
   'task-assigned',
   'task-claimed',
   'claim-invalidated',
+  'subtask-delivered',
   'task-acceptance-decided',
 ] as const satisfies readonly ManagementEventTypeV1[];
 
@@ -52,6 +53,7 @@ const payloadKeys: Record<WritableEventType, { required: readonly string[]; opti
   'task-assigned': { required: ['taskId', 'taskRevision', 'agentId'] },
   'task-claimed': { required: ['taskId', 'taskRevision', 'agentId', 'claimLeaseId', 'attempt'] },
   'claim-invalidated': { required: ['taskId', 'previousTaskRevision', 'claimLeaseId', 'invalidatedInvocationIds', 'reasonCode'] },
+  'subtask-delivered': { required: ['deliveryId', 'taskId', 'taskRevision', 'taskAttempt', 'claimLeaseId', 'invocationId'] },
   'task-acceptance-decided': { required: ['taskId', 'acceptance'] },
 };
 
@@ -153,6 +155,11 @@ function validatePayload(type: WritableEventType, payload: Record<string, unknow
       string(payload.claimLeaseId, 'payload.claimLeaseId');
       stringArray(payload.invalidatedInvocationIds, 'payload.invalidatedInvocationIds');
       string(payload.reasonCode, 'payload.reasonCode'); return;
+    case 'subtask-delivered':
+      string(payload.deliveryId, 'payload.deliveryId'); string(payload.taskId, 'payload.taskId');
+      positiveInteger(payload.taskRevision, 'payload.taskRevision');
+      positiveInteger(payload.taskAttempt, 'payload.taskAttempt');
+      string(payload.claimLeaseId, 'payload.claimLeaseId'); string(payload.invocationId, 'payload.invocationId'); return;
     case 'task-acceptance-decided': {
       string(payload.taskId, 'payload.taskId');
       const acceptance = record(payload.acceptance, 'payload.acceptance');

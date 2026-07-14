@@ -85,6 +85,10 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         try {
           return await operation({
             tasks: repositories.tasks,
+            messages: repositories.messages,
+            artifacts: repositories.artifacts,
+            workspaceRuns: repositories.workspaceRuns,
+            dispatches: repositories.dispatches,
             coordination: taskCoordination,
             management: managementRepositories,
           });

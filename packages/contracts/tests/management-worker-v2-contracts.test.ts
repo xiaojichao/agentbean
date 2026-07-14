@@ -114,6 +114,19 @@ describe('Phase 2 management worker contracts', () => {
       .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
     expect(() => parsePhase2TaskToolResultV2({ ...value, diagnosticCode: 'should-not-exist' }))
       .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+
+    const invokeResult = { ...value, toolName: 'agents.invoke', output: {
+      invocationId: 'invocation-1', status: 'succeeded', deliveryId: 'delivery-1',
+      evidenceRefs: [{ kind: 'message', id: 'message-1', snapshotHash: 'server-hash',
+        snapshotRevision: 2, capturedAt: 20 }],
+    } };
+    expect(parsePhase2TaskToolResultV2(invokeResult)).toEqual(invokeResult);
+    expect(() => parsePhase2TaskToolResultV2({ ...invokeResult,
+      output: { invocationId: 'invocation-1', status: 'succeeded' } }))
+      .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    expect(() => parsePhase2TaskToolResultV2({ ...invokeResult,
+      output: { ...invokeResult.output, evidenceRefs: [{ ...invokeResult.output.evidenceRefs[0],
+        snapshotHash: '' }] } })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
   });
 
   test('parses dependency inputs and rejects invalid subtask policy or evidence kinds', () => {
