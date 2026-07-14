@@ -65,6 +65,16 @@ test('marks a clean draft ready for Review without requiring Codex Review', () =
   assert.match(formatReadiness(result), /此阶段不要求/);
 });
 
+test('accepts GitHub DRAFT merge state when all current checks pass', () => {
+  const result = evaluatePullRequest(fixture({
+    isDraft: true,
+    mergeStateStatus: 'DRAFT',
+    reviews: { nodes: [] },
+  }), new Date(), { stage: 'review' });
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.blockers, []);
+});
+
 test('blocks a draft from Review while its current checks are pending', () => {
   const pr = fixture({
     isDraft: true,
@@ -77,7 +87,7 @@ test('blocks a draft from Review while its current checks are pending', () => {
   const result = evaluatePullRequest(pr, new Date(), { stage: 'review' });
   assert.equal(result.ready, false);
   assert.deepEqual(result.blockers.map((item) => item.code), [
-    'MERGE_STATE_NOT_CLEAN',
+    'MERGE_STATE_NOT_REVIEWABLE',
     'CHECKS_PENDING',
   ]);
 });
