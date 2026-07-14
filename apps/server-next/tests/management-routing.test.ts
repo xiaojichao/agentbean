@@ -5,6 +5,16 @@ import { createServerNextUseCases } from '../src/application/usecases.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 
 describe('Phase 1 management routing', () => {
+  test('keeps the Team policy on Phase 1 by default and only lets owner/admin raise the ceiling', async () => {
+    const harness = await createHarness();
+    await expect(harness.router.getPolicy({ userId: 'member-1', teamId: 'team-1' }))
+      .resolves.toMatchObject({ ok: true, canManage: false, policy: { schemaVersion: 2, maxManagementPhase: 1 } });
+    await expect(harness.router.updatePolicy({ ...managedPolicy('member-1'), maxManagementPhase: 2 }))
+      .resolves.toEqual({ ok: false, error: 'FORBIDDEN' });
+    await expect(harness.router.updatePolicy({ ...managedPolicy(), maxManagementPhase: 2 }))
+      .resolves.toMatchObject({ ok: true, policy: { maxManagementPhase: 2 } });
+  });
+
   test('defaults to direct without management side effects', async () => {
     const harness = await createHarness();
     const result = await harness.router.route(request());
@@ -92,6 +102,40 @@ describe('Phase 1 management routing', () => {
     });
     expect(await harness.repositories.dispatches.listByTeam('team-1')).toHaveLength(0);
   });
+
+  test('Phase 2 requires an explicit root Task and green Phase 2 preflight before creating a Run', async () => {
+    const blocked = await createHarness({ phase2WorkerAvailable: false });
+    await blocked.router.updatePolicy({ ...managedPolicy(), maxManagementPhase: 2 });
+    await expect(blocked.router.route(request())).resolves.toMatchObject({
+      kind: 'unavailable', diagnostics: ['MANAGEMENT_PHASE_2_ROOT_TASK_REQUIRED'],
+    });
+    await expect(blocked.router.route({ ...request(), rootTaskId: 'root-task' })).resolves.toMatchObject({
+      kind: 'unavailable', diagnostics: ['MANAGEMENT_PHASE_2_PREFLIGHT_WORKERAVAILABLE_MISSING'],
+    });
+    await expect(blocked.repositories.management.reservations.getByRequestKey({
+      teamId: 'team-1', requestKey: 'team-1:user-1:client-1',
+    })).resolves.toBeNull();
+  });
+
+  test('a green explicit Phase 2 Task creates a V2 Run and bootstraps its root coordination', async () => {
+    const harness = await createHarness();
+    await harness.router.updatePolicy({ ...managedPolicy(), maxManagementPhase: 2 });
+    const result = await harness.app.sendMessage({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1',
+      body: '请协调团队完成任务', asTask: true, clientMessageId: 'phase2-usecase-1',
+      connectedAgentDeviceIds: ['device-1'], dispatchClaimDeviceIds: ['device-1'],
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      task: { id: expect.any(String) },
+      management: { kind: 'managed', managementPhase: 2, managementRunId: expect.any(String) },
+    });
+    if (!result.ok || !result.task || result.management?.kind !== 'managed') throw new Error('Phase 2 result expected');
+    await expect(harness.repositories.management.runs.getById(result.management.managementRunId))
+      .resolves.toMatchObject({ schemaVersion: 2, managementPhase: 2, rootTaskId: result.task.id });
+    await expect(harness.repositories.taskCoordination.coordinations.getByTaskId(result.task.id))
+      .resolves.toMatchObject({ nodeKind: 'root', taskRevision: 1, reviewPolicy: 'human' });
+  });
 });
 
 function request() {
@@ -115,7 +159,7 @@ function managedPolicy(userId = 'user-1') {
   };
 }
 
-async function createHarness(overrides: Partial<{ workerAvailable: boolean }> = {}) {
+async function createHarness(overrides: Partial<{ workerAvailable: boolean; phase2WorkerAvailable: boolean }> = {}) {
   const repositories = createInMemoryRepositories();
   const clock = { now: () => 10 };
   let id = 0;
@@ -131,6 +175,11 @@ async function createHarness(overrides: Partial<{ workerAvailable: boolean }> = 
   const kernel = createManagementKernel({ repositories: repositories.management, unitOfWork: repositories.managementUnitOfWork, clock, ids });
   const gateway = {
     preflight: vi.fn(async () => ({ workerAvailable: overrides.workerAvailable ?? true, credentialAvailable: true, placementAllowed: true, budgetAvailable: true, targetAvailable: true })),
+    preflightPhase2: vi.fn(async () => ({
+      preflight: { workerAvailable: overrides.phase2WorkerAvailable ?? true, credentialAvailable: true,
+        placementAllowed: true, budgetAvailable: true, targetAvailable: true },
+      profileId: 'profile-1',
+    })),
     schedule: vi.fn(async () => ({ ok: true })),
   };
   const router = createManagementRouter({ repositories, kernel, gateway, clock, ids });

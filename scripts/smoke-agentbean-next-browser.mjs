@@ -1466,6 +1466,22 @@ export async function exerciseWebUiTaskBusinessSmoke({
   await page.reload();
   await waitForWebUiTaskCard({ page, title, status: targetStatus, timeoutMs });
   await waitForWebUiTaskAbsent({ page, title: secondaryTitle, timeoutMs });
+  const openedTaskDetail = await page.evaluateJson(`
+    (() => {
+      const title = ${JSON.stringify(title)};
+      const card = Array.from(document.querySelectorAll('[data-smoke="task-card"], [data-smoke="task-row"]'))
+        .find((candidate) => candidate.dataset.taskTitle === title);
+      if (!card) return false;
+      card.click();
+      return true;
+    })()
+  `);
+  if (!openedTaskDetail) throw new Error(`Could not open WebUI smoke task "${title}"`);
+  await page.waitForFunction(
+    `document.querySelector('[data-smoke="task-dag-unmanaged"], [data-smoke="task-dag-panel"]') !== null`,
+    'task detail exposes the Task DAG surface',
+    timeoutMs,
+  );
   return { title, status: targetStatus, reordered: true, deletedTitle: secondaryTitle };
 }
 

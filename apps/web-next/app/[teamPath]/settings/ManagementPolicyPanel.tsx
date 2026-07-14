@@ -16,6 +16,7 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
   deviceIds: readonly string[];
 }) {
   const [mode, setMode] = useState<ManagementMode>('direct');
+  const [maxManagementPhase, setMaxManagementPhase] = useState<1 | 2>(1);
   const [placement, setPlacement] = useState<ManagerPlacementPolicyDto>(DEFAULT_PLACEMENT);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -30,6 +31,7 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
       if (!active) return;
       if (result.ok && result.policy) {
         setMode(result.policy.mode);
+        setMaxManagementPhase(result.policy.maxManagementPhase);
         setPlacement(result.policy.placementPolicy);
       } else {
         setMessage({ ok: false, text: result.error ?? '读取管理模式失败' });
@@ -52,7 +54,7 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
   const save = async () => {
     setSaving(true);
     setMessage(null);
-    const result = await managementPolicyEvents().update({ teamId, mode, placementPolicy: placement });
+    const result = await managementPolicyEvents().update({ teamId, mode, maxManagementPhase, placementPolicy: placement });
     setSaving(false);
     setMessage(result.ok
       ? { ok: true, text: '管理模式已保存' }
@@ -64,7 +66,7 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
   return (
     <section className="rounded-lg border border-neutral-200 p-5" data-smoke="settings-management-policy" data-team-id={teamId}>
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">PI 管理模式</h3>
-      <p className="mb-4 text-xs text-neutral-500">默认 direct；shadow 保持原路由并隔离记录旁路诊断，managed 会由选定 Device 上的 PI Manager 接管显式单 Agent 请求。</p>
+      <p className="mb-4 text-xs text-neutral-500">默认 direct；managed 默认只开放 Phase 1 单 Agent 请求。Phase 2 必须由 owner/admin 显式开启，并在请求时通过完整预检。</p>
       <label className="mb-1 block text-xs font-medium text-neutral-500">路由模式</label>
       <select
         value={mode}
@@ -77,6 +79,22 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
         <option value="shadow">shadow（旁路评估）</option>
         <option value="managed">managed（PI Manager 接管）</option>
       </select>
+      <label className="mb-1 mt-4 block text-xs font-medium text-neutral-500">最高管理阶段</label>
+      <select
+        value={maxManagementPhase}
+        onChange={(event) => setMaxManagementPhase(Number(event.target.value) as 1 | 2)}
+        disabled={loading || !canManage || mode !== 'managed'}
+        className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm disabled:bg-neutral-50"
+        data-smoke="settings-management-phase"
+      >
+        <option value={1}>Phase 1（单 Agent，默认）</option>
+        <option value={2}>Phase 2（Task DAG 与团队认领）</option>
+      </select>
+      {mode === 'managed' && maxManagementPhase === 2 && (
+        <div className="mt-2 text-xs text-amber-700" data-smoke="settings-management-phase-warning">
+          仅显式“作为任务”的请求会尝试进入 Phase 2；Worker、协议、凭证、预算和候选 Agent 任一未就绪都会拒绝创建 Run。
+        </div>
+      )}
       <div className="mt-4 space-y-2">
         <div className="text-xs font-medium text-neutral-500">允许承载的 Device</div>
         {uniqueDeviceIds.map((deviceId) => (

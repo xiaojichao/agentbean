@@ -56,6 +56,35 @@ describe.each([
 });
 
 describe('management SQLite constraints', () => {
+  test('persists Phase 2 rollout policy and immutable Run phase while existing rows default to Phase 1', async () => {
+    const db = new Database(':memory:');
+    try {
+      applyTeamMigrations(db);
+      const { repositories } = createSqliteManagementPersistence(db);
+      expect(db.prepare("SELECT id FROM schema_migrations WHERE id = 'team/0014_management_phase_2_rollout.sql'").get())
+        .toEqual({ id: 'team/0014_management_phase_2_rollout.sql' });
+      await repositories.policies.upsert({
+        schemaVersion: 2, teamId: 'team-1', mode: 'managed', maxManagementPhase: 2,
+        placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true },
+        updatedBy: 'owner-1', updatedAt: 1,
+      });
+      await expect(repositories.policies.get('team-1')).resolves.toMatchObject({ maxManagementPhase: 2 });
+      await repositories.runs.create({
+        schemaVersion: 2, managementPhase: 2, id: 'run-phase-2', teamId: 'team-1',
+        channelId: 'channel-1', rootTaskId: 'task-root', rootMessageId: 'message-1',
+        mode: 'managed', status: 'queued',
+        placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true },
+        checkpointRevision: 0, budget: { maxSubtasks: 20, maxDepth: 3, maxExternalInvocations: 20 },
+        createdAt: 1, updatedAt: 1,
+      });
+      await expect(repositories.runs.getById('run-phase-2')).resolves.toMatchObject({
+        schemaVersion: 2, managementPhase: 2, rootTaskId: 'task-root',
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   test('allows at most one active Dispatch attempt per Invocation', async () => {
     const db = new Database(':memory:');
     try {

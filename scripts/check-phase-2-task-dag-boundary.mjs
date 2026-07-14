@@ -31,6 +31,11 @@ const taskCoordinationTests = read('apps/server-next/tests/task-coordination-uni
 const taskCoordinationKernel = read('apps/server-next/src/application/management/task-coordination-kernel.ts');
 const taskCoordinationKernelTests = read('apps/server-next/tests/task-coordination-kernel.test.ts');
 const managementEventValidator = read('apps/server-next/src/application/management/management-event-validator.ts');
+const rolloutMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0014_management_phase_2_rollout.sql');
+const managementRouter = read('apps/server-next/src/application/management/management-router.ts');
+const taskDagContracts = read('packages/contracts/src/task-coordination.ts');
+const taskDagPanel = read('apps/web-next/components/TaskDagPanel.tsx');
+const taskDagRevisionGuard = read('apps/web-next/lib/task-dag.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
 
@@ -108,6 +113,20 @@ if (!coordinationCommandMarkers.every((marker) => taskCoordinationKernel.include
   || !managementEventValidator.includes('hashManagementCommandInput')
   || !coordinationTestMarkers.every((marker) => taskCoordinationKernelTests.includes(marker))) {
   violations.push('P2_COORDINATION_KERNEL_BOUNDARY_INVALID: Task coordination commands, Domain policies, exact Events, and rollback evidence are required');
+}
+
+const rolloutMarkers = [
+  'max_management_phase', 'management_phase',
+  'preflightPhase2', 'MANAGEMENT_PHASE_2_ROOT_TASK_REQUIRED', 'allowDirectFallbackBeforeBarrier: false',
+  'TaskDagViewDto', 'TaskDagPanel', 'acceptTaskDagSnapshot',
+];
+if (!rolloutMarkers.slice(0, 2).every((marker) => rolloutMigration.includes(marker))
+  || !rolloutMarkers.slice(2, 4).every((marker) => managementRouter.includes(marker))
+  || !/requestShape: 'multi-agent',[\s\S]*?allowDirectFallbackBeforeBarrier: false/.test(managementRouter)
+  || !taskDagContracts.includes(rolloutMarkers[5])
+  || !taskDagPanel.includes(rolloutMarkers[6])
+  || !taskDagRevisionGuard.includes(rolloutMarkers[7])) {
+  violations.push('P2_ROLLOUT_WEB_BOUNDARY_INVALID: Phase 2 rollout policy, fail-closed preflight, DAG contract, Web surface, and revision guard are required');
 }
 
 const scripts = packageJson.scripts ?? {};

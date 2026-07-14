@@ -45,6 +45,7 @@ export interface GetTeamManagementPolicyInput {
 export interface UpdateTeamManagementPolicyInput {
   readonly teamId: ID;
   readonly mode: ManagementMode;
+  readonly maxManagementPhase?: 1 | 2;
   readonly placementPolicy?: ManagerPlacementPolicyDto;
 }
 

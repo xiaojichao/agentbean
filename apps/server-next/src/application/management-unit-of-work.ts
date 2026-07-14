@@ -1,13 +1,14 @@
-import type { ManagementEventV1, ManagementRunDto } from '../../../../packages/contracts/src/index.js';
+import type { ManagementEventV1 } from '../../../../packages/contracts/src/index.js';
 import type {
   ManagedRequestReservationRecord,
   ManagementEventRecord,
   ManagementRepositories,
+  ManagementRunRecord,
 } from './management-repositories.js';
 
 export interface CreateManagementRunInput {
   readonly reservation: ManagedRequestReservationRecord;
-  readonly run: ManagementRunDto;
+  readonly run: ManagementRunRecord;
   readonly firstEvent: ManagementEventV1;
   readonly firstEventPayloadHash: string;
 }
@@ -16,7 +17,7 @@ export interface ManagementUnitOfWork {
   run<T>(operation: (repositories: ManagementRepositories) => Promise<T>): Promise<T>;
   createRun(input: CreateManagementRunInput): Promise<{
     reservation: ManagedRequestReservationRecord;
-    run: ManagementRunDto;
+    run: ManagementRunRecord;
     firstEvent: ManagementEventRecord;
   }>;
 }

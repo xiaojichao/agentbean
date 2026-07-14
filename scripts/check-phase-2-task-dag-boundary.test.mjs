@@ -85,3 +85,20 @@ test('fails closed when the Task coordination command boundary disappears', () =
     rmSync(fixture, { recursive: true, force: true });
   }
 });
+
+test('fails closed when the Phase 2 rollout preflight stops being fail closed', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'agentbean-phase2-rollout-boundary-'));
+  try {
+    cpSync(root, fixture, {
+      recursive: true,
+      filter: (source) => !source.split('/').includes('node_modules') && !source.split('/').includes('.git'),
+    });
+    const path = join(fixture, 'apps/server-next/src/application/management/management-router.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replace("requestShape: 'multi-agent'", "requestShape: 'single-agent'"));
+    const result = run(fixture);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /P2_ROLLOUT_WEB_BOUNDARY_INVALID/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});

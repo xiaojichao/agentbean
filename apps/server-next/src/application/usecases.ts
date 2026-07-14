@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand } from './device-invite-command.js';
@@ -112,6 +112,7 @@ export interface ServerNextUseCases {
   getMessageContext(input: GetMessageContextInput): Promise<Ack<{ targetMessageId: ID; messages: MessageDto[]; threadRootId?: ID }>>;
   convertMessageToTask(input: ConvertMessageToTaskInput): Promise<Ack<{ message: MessageDto; task: TaskDto }>>;
   listTasks(input: ListTasksInput): Promise<Ack<{ tasks: TaskDto[] }>>;
+  getTaskDag(input: { userId: string; teamId: string; rootTaskId: string }): Promise<Ack<{ dag: TaskDagViewDto }>>;
   summarizeAgentMetrics(input: { userId: string; teamId: string }): Promise<Ack<{ summaries: AgentMetricsSummary[] }>>;
   createTask(input: CreateTaskInput): Promise<Ack<{ task: TaskDto }>>;
   updateTask(input: UpdateTaskInput): Promise<Ack<{ task: TaskDto; message?: MessageDto }>>;
@@ -145,7 +146,7 @@ export interface ServerNextUseCases {
   updateMemberHuman(input: UpdateMemberHumanInput): Promise<Ack<{ human: { id: string; teamId: string; userId: string; username: string; role: string; displayName?: string; joinedAt: number } }>>;
   updateTeam(input: UpdateTeamInput): Promise<Ack<{ team: { id: string; name: string; path: string } }>>;
   getManagementPolicy(input: { userId: string; teamId: string }): Promise<Ack<{ policy: import('./management-repositories.js').ManagementPolicyRecord; canManage: boolean }>>;
-  updateManagementPolicy(input: { userId: string; teamId: string; mode: import('../../../../packages/contracts/src/index.js').ManagementMode; placementPolicy?: import('../../../../packages/contracts/src/index.js').ManagerPlacementPolicyDto }): Promise<Ack<{ policy: import('./management-repositories.js').ManagementPolicyRecord; canManage: boolean }>>;
+  updateManagementPolicy(input: { userId: string; teamId: string; mode: import('../../../../packages/contracts/src/index.js').ManagementMode; maxManagementPhase?: 1 | 2; placementPolicy?: import('../../../../packages/contracts/src/index.js').ManagerPlacementPolicyDto }): Promise<Ack<{ policy: import('./management-repositories.js').ManagementPolicyRecord; canManage: boolean }>>;
   deleteTeam(input: DeleteTeamInput): Promise<Ack<{ fallbackTeam: { id: string; name: string; path: string } | null }>>;
 }
 
@@ -2543,6 +2544,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             updatedAt: now,
           })
         : null;
+      if (task && management.kind === 'managed' && management.managementPhase === 2) {
+        await taskCoordinationKernel.bootstrapRootCoordination({
+          managementRunId: management.managementRunId,
+          taskId: task.id,
+          idempotencyKey: `bootstrap-root:${task.id}`,
+          acceptanceCriteria: [{
+            id: `root-completion:${task.id}`,
+            description: '根任务目标已完成并可供用户审核',
+            evidenceRequired: false,
+          }],
+          maxAttempts: 1,
+        });
+      }
       const message = await repositories.messages.append({
         id: messageId,
         teamId: messageInput.teamId,
@@ -2900,6 +2914,129 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           channelIds: await visibleTaskChannelIds(repositories, taskInput.teamId, taskInput.userId),
           includeGlobal: true,
         }),
+      });
+    },
+
+    async getTaskDag(taskInput) {
+      if (!(await repositories.teams.isMember(taskInput.teamId, taskInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const selectedTask = await repositories.tasks.getById(taskInput.rootTaskId);
+      if (!selectedTask || selectedTask.teamId !== taskInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Task DAG not found');
+      }
+      if (selectedTask.channelId) {
+        const channel = await ensureUserCanViewChannel(repositories, {
+          userId: taskInput.userId,
+          teamId: taskInput.teamId,
+          channelId: selectedTask.channelId,
+        });
+        if (!channel.ok) return channel;
+      }
+      const selectedCoordination = await repositories.taskCoordination.coordinations.getByTaskId(selectedTask.id);
+      const rootTaskId = selectedCoordination?.rootTaskId
+        ?? (selectedCoordination?.nodeKind === 'root' ? selectedTask.id : taskInput.rootTaskId);
+      const rootTask = rootTaskId === selectedTask.id
+        ? selectedTask
+        : await repositories.tasks.getById(rootTaskId);
+      if (!rootTask || rootTask.teamId !== taskInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Task DAG not found');
+      }
+      const run = await repositories.management.runs.getByRootTaskId(rootTask.id);
+      if (!run || !('managementPhase' in run) || run.managementPhase !== 2) {
+        return makeFailure('NOT_FOUND', 'Task DAG not found');
+      }
+      const coordinations = await repositories.taskCoordination.coordinations.listByManagementRun(run.id);
+      if (!coordinations.some((coordination) => coordination.taskId === rootTask.id)) {
+        return makeFailure('NOT_FOUND', 'Task DAG not found');
+      }
+      const events = await repositories.management.events.list(run.id);
+      const nodes = await Promise.all(coordinations.map(async (coordination) => {
+        const task = await repositories.tasks.getById(coordination.taskId);
+        if (!task || task.teamId !== taskInput.teamId) {
+          throw new Error('Task DAG references a missing task');
+        }
+        const criteria = (await repositories.taskCoordination.criteria.list(task.id))
+          .filter((criterion) => criterion.introducedRevision <= task.revision
+            && (criterion.retiredRevision === undefined || criterion.retiredRevision > task.revision));
+        const dependencyTaskIds = (await repositories.taskCoordination.dependencies.list(task.id))
+          .filter((dependency) => dependency.taskRevision === task.revision)
+          .map((dependency) => dependency.dependencyTaskId);
+        const claim = await repositories.taskCoordination.claimLeases.getLatest({
+          taskId: task.id,
+          taskRevision: task.revision,
+          taskAttempt: coordination.attempt,
+        });
+        const deliveries = await repositories.taskCoordination.deliveries.listByTask(task.id);
+        const latestDelivery = [...deliveries].reverse().find((delivery) =>
+          delivery.taskRevision === task.revision && delivery.taskAttempt === coordination.attempt);
+        const canonicalAcceptance = latestDelivery
+          ? await repositories.taskCoordination.acceptances.getCanonicalByDelivery(latestDelivery.id)
+          : null;
+        const evidenceSnapshots = latestDelivery
+          ? (await repositories.taskCoordination.evidenceSnapshots.listByTask(task.id))
+            .filter((snapshot) => snapshot.invocationId === latestDelivery.invocationId
+              && latestDelivery.evidenceRefs.some((reference) => reference.kind === snapshot.kind
+                && reference.id === snapshot.sourceId
+                && reference.snapshotHash === snapshot.snapshotHash))
+          : [];
+        const { revision: _revision, ...taskDto } = task;
+        return {
+          task: taskDto,
+          taskRevision: task.revision,
+          coordination: {
+            schemaVersion: 1 as const,
+            ...(coordination.rootTaskId ? { rootTaskId: coordination.rootTaskId } : {}),
+            ...(coordination.parentTaskId ? { parentTaskId: coordination.parentTaskId } : {}),
+            managementRunId: coordination.managementRunId,
+            nodeKind: coordination.nodeKind,
+            reviewPolicy: coordination.reviewPolicy,
+            claimPolicy: coordination.claimPolicy,
+            requiredCapabilities: coordination.requiredCapabilities,
+            acceptanceCriteria: criteria.map(({ taskId: _taskId, introducedRevision: _introducedRevision,
+              retiredRevision: _retiredRevision, position: _position, ...criterion }) => criterion),
+            dependencyTaskIds,
+            attempt: coordination.attempt,
+            maxAttempts: coordination.maxAttempts,
+          },
+          ...(claim ? { claim: {
+            agentId: claim.agentId,
+            taskRevision: claim.taskRevision,
+            taskAttempt: claim.taskAttempt,
+            status: claim.status,
+            acquiredAt: claim.acquiredAt,
+            expiresAt: claim.expiresAt,
+          } } : {}),
+          ...(latestDelivery ? { latestDelivery: {
+            id: latestDelivery.id,
+            invocationId: latestDelivery.invocationId,
+            summary: latestDelivery.summary,
+          } } : {}),
+          ...(canonicalAcceptance ? { canonicalAcceptance: {
+            decision: canonicalAcceptance.decision,
+            reason: canonicalAcceptance.reason,
+            decidedBy: canonicalAcceptance.decidedBy,
+            decidedAt: canonicalAcceptance.decidedAt,
+          } } : {}),
+          resultRefs: latestDelivery ? [
+            { kind: 'invocation' as const, id: latestDelivery.invocationId },
+            ...evidenceSnapshots.map((snapshot) => ({ kind: snapshot.kind, id: snapshot.sourceId })),
+          ] : [],
+        };
+      }));
+      return makeSuccess({
+        dag: {
+          schemaVersion: 1,
+          managementRunId: run.id,
+          rootTaskId: rootTask.id,
+          graphRevision: events.at(-1)?.event.sequence ?? 0,
+          nodes,
+          events: events.map(({ event }) => ({
+            sequence: event.sequence,
+            type: event.type,
+            createdAt: event.createdAt,
+          })),
+        },
       });
     },
 

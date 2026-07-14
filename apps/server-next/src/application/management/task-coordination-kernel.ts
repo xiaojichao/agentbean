@@ -99,6 +99,58 @@ export function createTaskCoordinationKernel(
   const { unitOfWork, clock, ids } = dependencies;
 
   return {
+    async bootstrapRootCoordination(input: {
+      managementRunId: string;
+      taskId: string;
+      idempotencyKey: string;
+      acceptanceCriteria: readonly AcceptanceCriterionDto[];
+      maxAttempts: number;
+    }) {
+      return unitOfWork.run(async (repositories) => {
+        const now = clock.now();
+        const run = await repositories.management.runs.getById(input.managementRunId);
+        if (!run) conflict('MANAGEMENT_RUN_NOT_FOUND');
+        if (!('managementPhase' in run) || run.managementPhase !== 2) {
+          conflict('MANAGEMENT_PHASE_2_REQUIRED');
+        }
+        if (run.rootTaskId !== input.taskId) conflict('TASK_ROOT_MISMATCH');
+        const commandHash = hashManagementCommandInput({
+          command: 'bootstrap-root-coordination', taskId: input.taskId,
+          acceptanceCriteria: input.acceptanceCriteria, maxAttempts: input.maxAttempts,
+        });
+        const replay = await findReplay(repositories, run.id, input.idempotencyKey, commandHash);
+        if (replay) {
+          const event = requireReplayEvent(replay, 'task-created');
+          return { taskId: event.payload.taskId, taskRevision: event.payload.taskRevision,
+            taskGraphRevision: replay.lastSequence, disposition: 'existing' as const };
+        }
+        const task = await requireTask(repositories, input.taskId);
+        if (task.teamId !== run.teamId) conflict('TASK_TEAM_MISMATCH');
+        if (await repositories.coordination.coordinations.getByTaskId(task.id)) {
+          conflict('TASK_COORDINATION_ALREADY_EXISTS');
+        }
+        validateNewCoordination({ objective: objectiveOf(task), criteria: input.acceptanceCriteria,
+          dependencyTaskIds: [], claimPolicy: 'open', assigneeId: undefined,
+          requiredCapabilities: [], maxAttempts: input.maxAttempts });
+        const coordination: TaskCoordinationRecord = {
+          schemaVersion: 1, taskId: task.id, teamId: task.teamId, managementRunId: run.id,
+          rootTaskId: task.id, nodeKind: 'root', reviewPolicy: 'human', claimPolicy: 'open',
+          requiredCapabilities: [], taskRevision: task.revision, attempt: 1,
+          maxAttempts: input.maxAttempts, createdAt: now, updatedAt: now,
+        };
+        await repositories.coordination.coordinations.create(coordination);
+        await createCriteria(repositories, task.id, task.revision, input.acceptanceCriteria);
+        await validateRunDag(repositories, run);
+        const event = await appendTaskEvent(repositories, {
+          managementRunId: run.id, type: 'task-created', actorKind: 'system', actorId: 'system',
+          idempotencyKey: input.idempotencyKey,
+          payload: { taskId: task.id, taskRevision: task.revision },
+        }, now, ids, commandHash);
+        return { taskId: task.id, taskRevision: task.revision,
+          taskGraphRevision: event.event.sequence, disposition: 'created' as const };
+      });
+    },
+
     async createRootCoordination(input: CreateRootCoordinationInput) {
       return unitOfWork.run(async (repositories) => {
         const now = clock.now();

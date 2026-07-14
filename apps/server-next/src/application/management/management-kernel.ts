@@ -17,6 +17,7 @@ import {
   type ManagerLeaseHost,
 } from '../../../../../packages/domain/src/index.js';
 import type { ManagementEventRecord, ManagementRepositories } from '../management-repositories.js';
+import type { ManagementRunRecord } from '../management-repositories.js';
 import type { ManagementUnitOfWork } from '../management-unit-of-work.js';
 import { hashManagementEventPayload, parsePhase1ManagementEvent } from './management-event-validator.js';
 
@@ -41,6 +42,7 @@ export interface CreateOrResumeManagementRunInput {
   readonly requestHash: string;
   readonly placementPolicy: ManagerPlacementPolicyDto;
   readonly budget: ManagementBudgetDto;
+  readonly managementPhase?: 1 | 2;
 }
 
 export interface LeaseAuthorityInput {
@@ -54,7 +56,7 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
   const { repositories, unitOfWork, clock, ids } = dependencies;
 
   return {
-    async createOrResumeRun(input: CreateOrResumeManagementRunInput): Promise<{ run: ManagementRunDto; disposition: 'created' | 'existing' }> {
+    async createOrResumeRun(input: CreateOrResumeManagementRunInput): Promise<{ run: ManagementRunRecord; disposition: 'created' | 'existing' }> {
       return unitOfWork.run(async (transactionRepositories) => {
         if (!input.requestKey || !input.requestHash) throw new ManagementConflictError('MANAGEMENT_REQUEST_INVALID');
         const existing = await transactionRepositories.reservations.getByRequestKey({ teamId: input.teamId, requestKey: input.requestKey });
@@ -68,22 +70,27 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
         const now = clock.now();
         const managementRunId = ids.nextId();
         const eventId = ids.nextId();
-        const run: ManagementRunDto = {
-          schemaVersion: 1,
+        if (input.managementPhase === 2 && !input.rootTaskId) {
+          throw new ManagementConflictError('MANAGEMENT_ROOT_TASK_REQUIRED');
+        }
+        const common = {
           id: managementRunId,
           teamId: input.teamId,
           channelId: input.channelId,
           rootTaskId: input.rootTaskId,
           rootMessageId: input.rootMessageId,
           frozenTarget: input.frozenTarget,
-          mode: 'managed',
-          status: 'queued',
+          mode: 'managed' as const,
+          status: 'queued' as const,
           placementPolicy: input.placementPolicy,
           checkpointRevision: 0,
           budget: input.budget,
           createdAt: now,
           updatedAt: now,
         };
+        const run: ManagementRunRecord = input.managementPhase === 2
+          ? { schemaVersion: 2, managementPhase: 2, ...common, rootTaskId: input.rootTaskId! }
+          : { schemaVersion: 1, ...common };
         const event = parsePhase1ManagementEvent({
           schemaVersion: 1,
           id: eventId,
@@ -254,7 +261,7 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
       deliveryMessageId?: string;
       actorId?: string;
       errorCode?: string;
-    }): Promise<ManagementRunDto> {
+    }): Promise<ManagementRunRecord> {
       return unitOfWork.run(async (transactionRepositories) => {
         const run = await requireRun(transactionRepositories, input.managementRunId);
         if (isTerminalRun(run)) return run;
@@ -295,7 +302,7 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
       taskId: string;
       userId: string;
       deliveryMessageId: string;
-    }): Promise<ManagementRunDto> {
+    }): Promise<ManagementRunRecord> {
       return unitOfWork.run(async (transactionRepositories) => {
         const run = await requireRun(transactionRepositories, input.managementRunId);
         if (run.rootTaskId !== input.taskId) throw new ManagementConflictError('MANAGEMENT_ROOT_TASK_MISMATCH');
@@ -383,7 +390,7 @@ async function applyRunProjection(repositories: ManagementRepositories, record: 
   if (status !== run.status) await repositories.runs.update({ ...run, status, updatedAt: now, ...(terminal && { completedAt: now }) });
 }
 
-async function requireRun(repositories: ManagementRepositories, managementRunId: string): Promise<ManagementRunDto> {
+async function requireRun(repositories: ManagementRepositories, managementRunId: string): Promise<ManagementRunRecord> {
   const run = await repositories.runs.getById(managementRunId);
   if (!run) throw new ManagementConflictError('MANAGEMENT_RUN_NOT_FOUND');
   return run;
@@ -394,5 +401,5 @@ function proof(input: LeaseAuthorityInput): ManagerLeaseAuthorizationProof {
 }
 function hashSecret(secret: string): string { return createHash('sha256').update(secret).digest('hex'); }
 function leaseError(reason: ManagerLeaseAuthorizationFailure): ManagementConflictError { return new ManagementConflictError(`LEASE_${reason.toUpperCase().replaceAll('-', '_')}`); }
-function isTerminalRun(run: ManagementRunDto): boolean { return run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled'; }
+function isTerminalRun(run: ManagementRunRecord): boolean { return run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled'; }
 function requireValue(value: string | undefined, code: string): string { if (!value) throw new ManagementConflictError(code); return value; }

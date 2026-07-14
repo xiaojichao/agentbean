@@ -1,10 +1,9 @@
 import type {
   ManagementCheckpointContextHintsV1,
   ManagementCheckpointV1,
-  ManagementRunDto,
 } from '../../../../../packages/contracts/src/index.js';
 import { evaluateManagementCheckpoint, type ManagementCheckpointFacts } from '../../../../../packages/domain/src/index.js';
-import type { ManagementRepositories } from '../management-repositories.js';
+import type { ManagementRepositories, ManagementRunRecord } from '../management-repositories.js';
 import type { TaskRepository } from '../repositories.js';
 import type { TaskCoordinationRepositories } from '../task-coordination-repositories.js';
 import type { TaskCoordinationUnitOfWork } from '../task-coordination-unit-of-work.js';
@@ -88,7 +87,7 @@ async function saveCheckpoint(
 
 export async function collectManagementCheckpointFacts(
   repositories: ManagementRepositories,
-  run: ManagementRunDto,
+  run: ManagementRunRecord,
   phase2?: {
     readonly tasks: TaskRepository;
     readonly coordination: TaskCoordinationRepositories;
@@ -195,4 +194,4 @@ export function toManagementCheckpointAuthoritative(facts: ManagementCheckpointF
 }
 function maxTaskRevision(payloads: readonly unknown[]): number { let max = 0; for (const value of payloads) { if (value && typeof value === 'object') { const revision = (value as Record<string, unknown>).taskRevision; if (Number.isSafeInteger(revision)) max = Math.max(max, revision as number); } } return max; }
 function sameSet(left: readonly string[], right: readonly string[]): boolean { return left.length === right.length && new Set(left).size === left.length && left.every((item) => right.includes(item)); }
-async function requireRun(repositories: ManagementRepositories, id: string): Promise<ManagementRunDto> { const run = await repositories.runs.getById(id); if (!run) throw new Error('MANAGEMENT_RUN_NOT_FOUND'); return run; }
+async function requireRun(repositories: ManagementRepositories, id: string): Promise<ManagementRunRecord> { const run = await repositories.runs.getById(id); if (!run) throw new Error('MANAGEMENT_RUN_NOT_FOUND'); return run; }

@@ -1,4 +1,5 @@
 import type { ID, UnixMs } from './common.js';
+import type { TaskDto } from './task.js';
 
 export type EvidenceKind = 'message' | 'artifact' | 'workspace-run' | 'invocation' | 'task';
 
@@ -64,4 +65,50 @@ export interface SubtaskAcceptanceV1 {
   readonly reason: string;
   readonly decidedBy: 'manager' | 'human';
   readonly decidedAt: UnixMs;
+}
+
+export interface TaskDagClaimViewDto {
+  readonly agentId: ID;
+  readonly taskRevision: number;
+  readonly taskAttempt: number;
+  readonly status: 'active' | 'released' | 'expired' | 'invalidated';
+  readonly acquiredAt: UnixMs;
+  readonly expiresAt: UnixMs;
+}
+
+export interface TaskDagResultRefDto {
+  readonly kind: EvidenceKind | 'invocation';
+  readonly id: ID;
+}
+
+export interface TaskDagNodeViewDto {
+  readonly task: TaskDto;
+  readonly taskRevision: number;
+  readonly coordination: TaskCoordinationDto;
+  readonly claim?: TaskDagClaimViewDto;
+  readonly latestDelivery?: {
+    readonly id: ID;
+    readonly invocationId: ID;
+    readonly summary: string;
+  };
+  readonly canonicalAcceptance?: {
+    readonly decision: SubtaskAcceptanceV1['decision'];
+    readonly reason: string;
+    readonly decidedBy: SubtaskAcceptanceV1['decidedBy'];
+    readonly decidedAt: UnixMs;
+  };
+  readonly resultRefs: readonly TaskDagResultRefDto[];
+}
+
+export interface TaskDagViewDto {
+  readonly schemaVersion: 1;
+  readonly managementRunId: ID;
+  readonly rootTaskId: ID;
+  readonly graphRevision: number;
+  readonly nodes: readonly TaskDagNodeViewDto[];
+  readonly events: readonly {
+    readonly sequence: number;
+    readonly type: string;
+    readonly createdAt: UnixMs;
+  }[];
 }
