@@ -112,7 +112,8 @@ function formatDuration(totalSeconds) {
   return minutes > 0 ? `${minutes}分${seconds}秒` : `${seconds}秒`;
 }
 
-export function evaluatePullRequest(pr, now = new Date()) {
+export function evaluatePullRequest(pr, now = new Date(), { stage = 'merge' } = {}) {
+  if (stage !== 'review' && stage !== 'merge') throw new Error(`未知门禁阶段：${stage}`);
   const commit = pr.commits?.nodes?.at(-1)?.commit;
   const headOid = pr.headRefOid ?? commit?.oid ?? null;
   const contexts = commit?.statusCheckRollup?.contexts?.nodes ?? [];
@@ -146,12 +147,18 @@ export function evaluatePullRequest(pr, now = new Date()) {
     pr.reviewRequests?.pageInfo?.hasNextPage ? 'review requests' : null,
   ].filter(Boolean);
   if (pr.state !== 'OPEN') blockers.push({ code: 'PR_NOT_OPEN', detail: `PR 状态为 ${pr.state}` });
-  if (pr.isDraft) blockers.push({ code: 'PR_DRAFT', detail: 'PR 仍是 Draft' });
+  if (stage === 'review' && !pr.isDraft) {
+    blockers.push({ code: 'PR_NOT_DRAFT', detail: 'Review 前置门禁仅适用于 Draft PR' });
+  }
+  if (stage === 'merge' && pr.isDraft) blockers.push({ code: 'PR_DRAFT', detail: 'PR 仍是 Draft' });
   if (pr.mergeable !== 'MERGEABLE') blockers.push({ code: 'PR_NOT_MERGEABLE', detail: `mergeable=${pr.mergeable}` });
-  if (pr.mergeStateStatus !== 'CLEAN') blockers.push({
-    code: 'MERGE_STATE_NOT_CLEAN',
-    detail: `mergeStateStatus=${pr.mergeStateStatus}`,
-  });
+  const expectedMergeState = stage === 'review' ? 'DRAFT' : 'CLEAN';
+  if (pr.mergeStateStatus !== expectedMergeState) {
+    blockers.push({
+      code: stage === 'review' ? 'MERGE_STATE_NOT_DRAFT' : 'MERGE_STATE_NOT_CLEAN',
+      detail: `mergeStateStatus=${pr.mergeStateStatus}，预期 ${expectedMergeState}`,
+    });
+  }
   if (!commit?.statusCheckRollup || contexts.length === 0) {
     blockers.push({ code: 'CHECKS_MISSING', detail: '最新提交尚无 CI/check 结果' });
   }
@@ -170,7 +177,7 @@ export function evaluatePullRequest(pr, now = new Date()) {
   if (pr.reviewDecision === 'CHANGES_REQUESTED') {
     blockers.push({ code: 'CHANGES_REQUESTED', detail: '存在 blocking change request' });
   }
-  if (pr.reviewDecision === 'REVIEW_REQUIRED') {
+  if (stage === 'merge' && pr.reviewDecision === 'REVIEW_REQUIRED') {
     blockers.push({ code: 'REVIEW_REQUIRED', detail: '仓库规则仍要求 Review' });
   }
   if (pendingReviewers.length > 0) blockers.push({
@@ -181,7 +188,7 @@ export function evaluatePullRequest(pr, now = new Date()) {
     code: 'THREADS_UNRESOLVED',
     detail: `仍有 ${unresolvedThreads.length} 个未解决 Review thread`,
   });
-  if (!currentCodexReview) blockers.push({
+  if (stage === 'merge' && !currentCodexReview) blockers.push({
     code: codexReviewCandidates.length > 0 ? 'CODEX_REVIEW_STALE' : 'CODEX_REVIEW_MISSING',
     detail: codexReviewCandidates.length > 0
       ? 'Codex Review 尚未覆盖最新提交'
@@ -190,6 +197,7 @@ export function evaluatePullRequest(pr, now = new Date()) {
 
   return {
     ready: blockers.length === 0,
+    stage,
     pullRequest: {
       number: pr.number,
       title: pr.title,
@@ -225,11 +233,12 @@ export function evaluatePullRequest(pr, now = new Date()) {
 }
 
 export function formatReadiness(result) {
+  const stageLabel = result.stage === 'review' ? 'Review 前置门禁' : '合并门禁';
   const lines = [
-    `${result.ready ? 'READY ✅' : 'BLOCKED ⏳'} PR #${result.pullRequest.number} ${result.pullRequest.title}`,
+    `${result.ready ? 'READY ✅' : 'BLOCKED ⏳'} [${stageLabel}] PR #${result.pullRequest.number} ${result.pullRequest.title}`,
     `最新提交：${result.head.oid?.slice(0, 10) ?? 'unknown'}`,
     `检查：${result.checks.passing}/${result.checks.total} 通过`,
-    `Codex Review：${result.review.codexCurrent ? '已覆盖最新提交' : '未覆盖最新提交'}`,
+    `Codex Review：${result.stage === 'review' ? '此阶段不要求' : result.review.codexCurrent ? '已覆盖最新提交' : '未覆盖最新提交'}`,
     `未解决线程：${result.review.unresolvedThreads}`,
     `PR 已持续：${formatDuration(result.timing.prAgeSeconds)}`,
     `最新提交到 Codex Review：${formatDuration(result.timing.headToCodexReviewSeconds)}`,
@@ -247,18 +256,25 @@ function runGh(args) {
 }
 
 function parseArgs(argv) {
-  const options = { json: false, number: null, repo: process.env.GITHUB_REPOSITORY ?? null };
+  const options = {
+    json: false,
+    number: null,
+    repo: process.env.GITHUB_REPOSITORY ?? null,
+    stage: 'merge',
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === '--json') options.json = true;
     else if (value === '--pr') options.number = Number(argv[++index]);
     else if (value === '--repo') options.repo = argv[++index];
+    else if (value === '--stage') options.stage = argv[++index];
     else if (/^\d+$/.test(value)) options.number = Number(value);
     else throw new Error(`未知参数：${value}`);
   }
   if (!Number.isInteger(options.number) || options.number <= 0) {
-    throw new Error('用法：npm run check:pr-merge-readiness -- <PR号> [--json] [--repo owner/name]');
+    throw new Error('用法：npm run check:pr-merge-readiness -- <PR号> [--stage review|merge] [--json] [--repo owner/name]');
   }
+  if (options.stage !== 'review' && options.stage !== 'merge') throw new Error(`未知门禁阶段：${options.stage}`);
   return options;
 }
 
@@ -283,7 +299,7 @@ function fetchPullRequest({ number, repo }) {
 function main() {
   try {
     const options = parseArgs(process.argv.slice(2));
-    const result = evaluatePullRequest(fetchPullRequest(options));
+    const result = evaluatePullRequest(fetchPullRequest(options), new Date(), { stage: options.stage });
     console.log(options.json ? JSON.stringify(result, null, 2) : formatReadiness(result));
     process.exitCode = result.ready ? 0 : 2;
   } catch (error) {
