@@ -19,6 +19,8 @@
 
 GitHub Issues 是默认请求入口；外部 PR 不进入同一套 triage 队列。
 
+提交 PR 后，按 [PR 合并门禁](./pr-merge-gate.md) 核对最新提交的 CI、Review 与 thread 状态，不在 CI 刚绿时直接合并。
+
 ## Skill 操作语义
 
 - “publish to the issue tracker”：创建 GitHub issue。
