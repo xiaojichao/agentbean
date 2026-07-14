@@ -164,6 +164,7 @@ export function createPhase2ManagementToolHandlers(input: {
 export function createPhase2InvocationToolHandlers(input: {
   readonly repositories: ServerNextRepositories;
   readonly kernel: ManagementKernel;
+  readonly taskCoordinationKernel?: TaskCoordinationKernel;
   readonly clock: { now(): number };
   readonly ids: { nextId(): string };
   readonly onDispatchCreated: (dispatchId: string) => Promise<void> | void;
@@ -193,8 +194,15 @@ export function createPhase2InvocationToolHandlers(input: {
         } catch {
           await gateway.completeAttempt({ dispatchId, status: 'failed',
             error: 'MANAGEMENT_DISPATCH_EMIT_FAILED', actorKind: 'system' });
-          await kernel.recordInvocationTerminal({ managementRunId: run.id, dispatchId,
-            status: 'failed', errorCode: 'MANAGEMENT_DISPATCH_EMIT_FAILED' });
+          if (input.taskCoordinationKernel) {
+            await input.taskCoordinationKernel.recordInvocationFailure({
+              managementRunId: run.id, invocationId: invoked.view.id,
+              reasonCode: 'MANAGEMENT_DISPATCH_EMIT_FAILED',
+            });
+          } else {
+            await kernel.recordInvocationTerminal({ managementRunId: run.id, dispatchId,
+              status: 'failed', errorCode: 'MANAGEMENT_DISPATCH_EMIT_FAILED' });
+          }
           throw new Error('MANAGEMENT_DISPATCH_EMIT_FAILED');
         }
       }
@@ -232,6 +240,7 @@ export function createPhase2InvocationToolHandlers(input: {
 export function createPhase1ManagementToolHandlers(input: {
   readonly repositories: ServerNextRepositories;
   readonly kernel: ManagementKernel;
+  readonly taskCoordinationKernel?: TaskCoordinationKernel;
   readonly clock: { now(): number };
   readonly ids: { nextId(): string };
   readonly onDispatchCreated: (dispatchId: string) => Promise<void> | void;
@@ -416,6 +425,20 @@ export function createPhase1ManagementToolHandlers(input: {
       if (invocationIds.length === 0 || invocationIds.length !== request.input.contributingInvocationIds.length) {
         throw new Error('MANAGEMENT_DELIVERY_INVOCATIONS_INVALID');
       }
+      const rootCoordination = await repositories.taskCoordination.coordinations.getByTaskId(task.id);
+      const coordinatedRoot = rootCoordination?.nodeKind === 'root'
+        && rootCoordination.managementRunId === run.id;
+      if (coordinatedRoot) {
+        if (!input.taskCoordinationKernel) {
+          throw new Error('MANAGEMENT_TASK_COORDINATION_KERNEL_UNAVAILABLE');
+        }
+        const readiness = await input.taskCoordinationKernel.getRootDeliveryReadiness({
+          managementRunId: run.id,
+        });
+        if (!sameIds(readiness.contributingInvocationIds, invocationIds)) {
+          throw new Error('MANAGEMENT_ROOT_DELIVERY_CONTRIBUTIONS_INCOMPLETE');
+        }
+      }
       for (const invocationId of invocationIds) {
         const invocation = await repositories.management.invocations.getById(invocationId);
         if (!invocation || invocation.managementRunId !== run.id) throw new Error('MANAGEMENT_DELIVERY_INVOCATION_FORBIDDEN');
@@ -440,6 +463,13 @@ export function createPhase1ManagementToolHandlers(input: {
           contributingInvocationIds: invocationIds,
         },
       });
+      if (coordinatedRoot) {
+        const submitted = await input.taskCoordinationKernel!.submitRootDelivery({
+          authority: authority(request), idempotencyKey: request.idempotencyKey,
+          messageId: delivery.id, contributingInvocationIds: invocationIds,
+        });
+        return { deliveryMessageId: submitted.deliveryMessageId, status: submitted.status };
+      }
       if (task.status === 'in_progress') {
         await repositories.tasks.update({ taskId: task.id, changes: { status: 'in_review', updatedAt: clock.now() } });
       } else if (task.status !== 'in_review') {
@@ -456,6 +486,10 @@ export function createPhase1ManagementToolHandlers(input: {
       return { deliveryMessageId: delivery.id, status: 'in_review' };
     },
   };
+}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  return JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
 }
 
 function authority(request: {

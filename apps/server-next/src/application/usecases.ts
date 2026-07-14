@@ -8,6 +8,7 @@ import { buildDaemonVersionInfo } from '../daemon-version.js';
 import { createInvocationGateway } from './management/invocation-gateway.js';
 import { createManagementKernel } from './management/management-kernel.js';
 import { createManagementRouter, type ManagementRoutingResult } from './management/management-router.js';
+import { createTaskCoordinationKernel } from './management/task-coordination-kernel.js';
 
 export interface ServerNextClock {
   now(): number;
@@ -797,6 +798,7 @@ export interface CreateServerNextUseCasesInput {
   artifactContentStore?: ArtifactContentStore;
   managementRouter?: ReturnType<typeof createManagementRouter>;
   managementKernel?: ReturnType<typeof createManagementKernel>;
+  taskCoordinationKernel?: ReturnType<typeof createTaskCoordinationKernel>;
 }
 
 export function createServerNextUseCases(input: CreateServerNextUseCasesInput): ServerNextUseCases {
@@ -810,6 +812,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const managementKernel = input.managementKernel ?? createManagementKernel({
     repositories: repositories.management,
     unitOfWork: repositories.managementUnitOfWork,
+    clock,
+    ids,
+  });
+  const taskCoordinationKernel = input.taskCoordinationKernel ?? createTaskCoordinationKernel({
+    unitOfWork: repositories.taskCoordinationUnitOfWork,
     clock,
     ids,
   });
@@ -2997,6 +3004,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('VALIDATION_ERROR', 'Task title is required');
       }
       let managedCompletion: { managementRunId: string; deliveryMessageId: string } | null = null;
+      if (taskInput.status === 'in_progress' && task.status === 'in_review') {
+        const managementRun = await repositories.management.runs.getByRootTaskId(task.id);
+        const coordination = await repositories.taskCoordination.coordinations.getByTaskId(task.id);
+        if (managementRun && coordination?.nodeKind === 'root'
+          && coordination.managementRunId === managementRun.id) {
+          await taskCoordinationKernel.reopenRootTaskFromHuman({
+            managementRunId: managementRun.id,
+            taskId: task.id,
+            userId: taskInput.userId,
+            expectedTaskRevision: task.revision,
+          });
+        }
+      }
       if (taskInput.status === 'done' && task.status !== 'done') {
         const managementRun = await repositories.management.runs.getByRootTaskId(task.id);
         if (managementRun) {
@@ -3315,7 +3335,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ? await markLinkedTaskTodoIfInProgress(repositories, originMessage, now)
         : null;
       if (cancelled.changed && managedAttempt) {
-        await recordManagedDispatchTerminal(repositories, managementKernel, {
+        await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, {
           dispatchId: cancelled.dispatch.id,
           status: 'cancelled',
           actorId: cancelInput.userId,
@@ -3374,7 +3394,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         const originMessage = await repositories.messages.getById(result.dispatch.messageId);
         const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
         if (managedAttempt) {
-          await recordManagedDispatchTerminal(repositories, managementKernel, {
+          await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, {
             dispatchId: result.dispatch.id,
             status: 'cancelled',
             actorId: cancelInput.userId,
@@ -3417,7 +3437,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           const originMessage = await repositories.messages.getById(timedOut.dispatch.messageId);
           const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
           if (managedAttempt) {
-            await recordManagedDispatchTerminal(repositories, managementKernel, {
+            await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, {
               dispatchId: timedOut.dispatch.id,
               status: 'timed_out',
               errorCode: 'DISPATCH_TIMEOUT',
@@ -3585,7 +3605,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ? await markLinkedTaskInReview(repositories, originMessage, now)
           : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
       if (managedAttempt) {
-        await recordManagedDispatchTerminal(repositories, managementKernel, {
+        await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, {
           dispatchId: completed.dispatch.id,
           status: resultSucceeded ? 'succeeded' : 'failed',
           deliveryMessageId: message.id,
@@ -3642,7 +3662,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const originMessage = await repositories.messages.getById(failed.dispatch.messageId);
       const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
       if (managedAttempt) {
-        await recordManagedDispatchTerminal(repositories, managementKernel, {
+        await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, {
           dispatchId: failed.dispatch.id,
           status: 'failed',
           actorId: errorInput.agentId,
@@ -5726,6 +5746,7 @@ async function markLinkedTaskTodoIfInProgress(
 async function recordManagedDispatchTerminal(
   repositories: ServerNextRepositories,
   kernel: ReturnType<typeof createManagementKernel>,
+  taskKernel: ReturnType<typeof createTaskCoordinationKernel>,
   input: {
     dispatchId: string;
     status: 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
@@ -5741,6 +5762,21 @@ async function recordManagedDispatchTerminal(
   const invocation = await repositories.management.invocations.getById(attempt.invocationId);
   if (!invocation) {
     throw new Error('MANAGEMENT_INVOCATION_NOT_FOUND');
+  }
+  const taskContext = invocation.intent.taskContext;
+  const coordination = taskContext
+    ? await repositories.taskCoordination.coordinations.getByTaskId(taskContext.taskId)
+    : null;
+  if (coordination?.nodeKind === 'subtask'
+    && coordination.managementRunId === invocation.managementRunId) {
+    if (input.status !== 'succeeded') {
+      await taskKernel.recordInvocationFailure({
+        managementRunId: invocation.managementRunId,
+        invocationId: invocation.id,
+        reasonCode: input.errorCode ?? `INVOCATION_${input.status.toUpperCase()}`,
+      });
+    }
+    return;
   }
   await kernel.recordInvocationTerminal({
     managementRunId: invocation.managementRunId,
