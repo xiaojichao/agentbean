@@ -136,8 +136,13 @@ if (scripts['test:phase2-task-dag-boundary'] !== 'node --test scripts/check-phas
   || !String(scripts['test:phase2-task-dag']).includes('test:domain')
   || !String(scripts['test:phase2-task-dag']).includes('test:server-next')
   || !String(scripts['build:phase2-task-dag']).includes('build:domain')
-  || !workflow.includes('npm run test:phase2-task-dag')
-  || !workflow.includes('npm run build:phase2-task-dag')
+  || scripts['test:ci'] !== 'npm run test:packages && npm run test:retained-boundaries'
+  || !String(scripts['test:retained-boundaries']).includes('test:phase2-task-dag-boundary')
+  || !workflow.includes('npm run test:ci')
+  || !workflow.includes('npm run build:packages')
+  || workflow.includes('run: npm run test:phase2-task-dag')
+  || workflow.includes('run: npm run test:phase2-closeout')
+  || workflow.includes('run: npm run build:phase2-task-dag')
   || !workflow.includes('check-phase-2-task-dag-boundary')) {
   violations.push('P2_ROOT_CI_GATE_INVALID: Phase 2 root scripts and ordered CI gates are required');
 }

@@ -90,6 +90,9 @@ describe('AgentBean Next readiness checker', () => {
         'test:phase0': 'npm run test:pi-management-runtime && npm run test:contracts -- --api.host 127.0.0.1 && npm run test:domain -- --api.host 127.0.0.1 && npm run test:phase0-boundary && npm run check:phase0-pi-boundary && cd apps/server-next && ../../node_modules/.bin/vitest run tests/phase-0-management-boundary.test.ts --config vitest.config.ts --api.host 127.0.0.1',
         'build:phase0': 'npm run build:contracts && npm run build:domain && npm run build:pi-management-runtime && npm run build:server-next',
         'check:pi-sea-compatibility': 'node scripts/check-pi-management-sea.mjs validate',
+        'test:packages': 'npm run test:contracts -- --api.host 127.0.0.1 && npm run test:pi-management-runtime && npm run test:domain -- --api.host 127.0.0.1 && npm run test:server-next -- --api.host 127.0.0.1 && npm run test:daemon-next -- --api.host 127.0.0.1 && npm run test:web-next -- --api.host 127.0.0.1',
+        'test:retained-boundaries': 'npm run test:phase0-boundary && npm run check:phase0-pi-boundary && npm run test:phase1-management-boundary && npm run check:phase1-management-boundary && npm run test:phase2-task-dag-boundary && npm run check:phase2-task-dag-boundary',
+        'test:ci': 'npm run test:packages && npm run test:retained-boundaries',
       },
       workflow: [
         '^agentbean-next/',
@@ -100,9 +103,8 @@ describe('AgentBean Next readiness checker', () => {
         '^\\.nvmrc$',
         'package(-lock)?\\.json',
         'pi-sea-compatibility',
-        'run: npm run test:phase1',
-        'run: npm run test:phase0',
-        'run: npm run build:phase0',
+        'run: npm run test:ci',
+        'run: npm run build:packages',
       ].join('\n'),
       seaWorkflow: [
         '- packages/contracts/**',
@@ -122,7 +124,8 @@ describe('AgentBean Next readiness checker', () => {
       { scripts: { ...valid.scripts, 'test:phase0': 'npm run test:pi-management-runtime' } },
       { scripts: { ...valid.scripts, 'build:phase0': 'npm run build:pi-management-runtime' } },
       { scripts: { ...valid.scripts, 'check:pi-sea-compatibility': 'node scripts/build-pi-management-sea.mjs' } },
-      { workflow: valid.workflow.replace('run: npm run test:phase0', '') },
+      { workflow: valid.workflow.replace('run: npm run test:ci', '') },
+      { workflow: `${valid.workflow}\nrun: npm run test:phase0` },
       { workflow: valid.workflow.replace('^\\.nvmrc$', '') },
       { workflow: valid.workflow.replace('package(-lock)?\\.json', '') },
       { seaWorkflow: valid.seaWorkflow.replace('- packages/contracts/**', '') },
@@ -138,14 +141,13 @@ describe('AgentBean Next readiness checker', () => {
       scripts: {
         'test:phase1-management': 'npm run test:phase1-management-boundary && npm run check:phase1-management-boundary && npm run test:pi-management-runtime && npm run test:phase1',
         'build:phase1-management': 'npm run build:packages',
+        'test:packages': 'npm run test:contracts -- --api.host 127.0.0.1 && npm run test:pi-management-runtime && npm run test:domain -- --api.host 127.0.0.1 && npm run test:server-next -- --api.host 127.0.0.1 && npm run test:daemon-next -- --api.host 127.0.0.1 && npm run test:web-next -- --api.host 127.0.0.1',
+        'test:retained-boundaries': 'npm run test:phase0-boundary && npm run check:phase0-pi-boundary && npm run test:phase1-management-boundary && npm run check:phase1-management-boundary && npm run test:phase2-task-dag-boundary && npm run check:phase2-task-dag-boundary',
+        'test:ci': 'npm run test:packages && npm run test:retained-boundaries',
       },
       workflow: [
         'check-phase-1-management-boundary',
-        'run: npm run test:phase1',
-        'run: npm run test:phase0',
-        'run: npm run test:phase1-management',
-        'run: npm run build:phase0',
-        'run: npm run build:phase1-management',
+        'run: npm run test:ci',
         'run: npm run build:packages',
       ].join('\n'),
     };
@@ -154,15 +156,10 @@ describe('AgentBean Next readiness checker', () => {
     for (const bypass of [
       { scripts: { ...valid.scripts, 'test:phase1-management': 'npm run test:phase1' } },
       { scripts: { ...valid.scripts, 'build:phase1-management': 'npm run build:server-next' } },
-      { workflow: valid.workflow.replace('run: npm run test:phase1-management', '') },
-      { workflow: valid.workflow.replace('run: npm run build:phase1-management', '') },
+      { workflow: valid.workflow.replace('run: npm run test:ci', '') },
+      { workflow: `${valid.workflow}\nrun: npm run test:phase1-management` },
       { workflow: valid.workflow.replace('check-phase-1-management-boundary', '') },
-      {
-        workflow: valid.workflow.replace(
-          'run: npm run test:phase0\nrun: npm run test:phase1-management',
-          'run: npm run test:phase1-management\nrun: npm run test:phase0',
-        ),
-      },
+      { workflow: valid.workflow.replace('run: npm run test:ci', 'run: npm run build:packages\nrun: npm run test:ci') },
     ]) {
       expect(hasPhase1ManagementCiGate({ ...valid, ...bypass })).toBe(false);
     }
@@ -175,21 +172,21 @@ describe('AgentBean Next readiness checker', () => {
       'test:phase2-task-dag': 'npm run test:phase2-task-dag-boundary && npm run check:phase2-task-dag-boundary && npm run test:contracts -- --api.host 127.0.0.1 && npm run test:pi-management-runtime && npm run test:domain -- --api.host 127.0.0.1 && npm run test:server-next -- --api.host 127.0.0.1',
       'test:phase2-closeout': 'cd apps/server-next && ../../node_modules/.bin/vitest run tests/phase-2-managed-team-smoke.test.ts --config vitest.config.ts --api.host 127.0.0.1',
       'build:phase2-task-dag': 'npm run build:contracts && npm run build:domain && npm run build:pi-management-runtime && npm run build:daemon-next && npm run build:server-next',
+      'test:packages': 'npm run test:contracts -- --api.host 127.0.0.1 && npm run test:pi-management-runtime && npm run test:domain -- --api.host 127.0.0.1 && npm run test:server-next -- --api.host 127.0.0.1 && npm run test:daemon-next -- --api.host 127.0.0.1 && npm run test:web-next -- --api.host 127.0.0.1',
+      'test:retained-boundaries': 'npm run test:phase0-boundary && npm run check:phase0-pi-boundary && npm run test:phase1-management-boundary && npm run check:phase1-management-boundary && npm run test:phase2-task-dag-boundary && npm run check:phase2-task-dag-boundary',
+      'test:ci': 'npm run test:packages && npm run test:retained-boundaries',
     };
     const workflow = [
       'check-phase-2-task-dag-boundary',
-      'run: npm run test:phase1-management',
-      'run: npm run test:phase2-task-dag',
-      'run: npm run test:phase2-closeout',
-      'run: npm run build:phase1-management',
-      'run: npm run build:phase2-task-dag',
+      'run: npm run test:ci',
+      'run: npm run build:packages',
     ].join('\n');
     expect(hasPhase2TaskDagCiGate({ scripts, workflow })).toBe(true);
-    expect(hasPhase2TaskDagCiGate({ scripts, workflow: workflow.replace('run: npm run test:phase2-task-dag', '') })).toBe(false);
-    expect(hasPhase2TaskDagCiGate({ scripts, workflow: workflow.replace('run: npm run test:phase2-closeout', '') })).toBe(false);
+    expect(hasPhase2TaskDagCiGate({ scripts, workflow: workflow.replace('run: npm run test:ci', '') })).toBe(false);
+    expect(hasPhase2TaskDagCiGate({ scripts, workflow: `${workflow}\nrun: npm run test:phase2-closeout` })).toBe(false);
     expect(hasPhase2TaskDagCiGate({
-      scripts: { ...scripts, 'test:phase2-task-dag': 'npm run test:pi-management-runtime' },
-      workflow,
+      scripts,
+      workflow: `${workflow}\nrun: npm run build:phase2-task-dag`,
     })).toBe(false);
   });
 

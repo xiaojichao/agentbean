@@ -107,10 +107,8 @@ export function collectAgentBeanNextReadinessChecks({
     ),
     check(
       'ci-runs-package-scoped-phase-tests',
-      packageJson.scripts?.['test:phase1'] ===
-        'npm run test:contracts -- --api.host 127.0.0.1 && npm run test:domain -- --api.host 127.0.0.1 && npm run test:server-next -- --api.host 127.0.0.1 && npm run test:daemon-next -- --api.host 127.0.0.1 && npm run test:web-next -- --api.host 127.0.0.1' &&
-        workflow.includes('run: npm run test:phase1'),
-      'AgentBean Next CI must run each package test suite through its canonical working directory and Vitest config',
+      hasDeduplicatedPackageCi({ scripts: packageJson.scripts, workflow }),
+      'AgentBean Next CI must run each package suite once, retain every Phase boundary, and build canonical packages once',
     ),
     check(
       'ci-builds-canonical-packages-before-browser-smoke',
@@ -729,8 +727,8 @@ export function collectAgentBeanNextReadinessChecks({
     ),
     check(
       'ci-runs-phase-0-gates',
-      ciRunsPhase0Gates(workflow),
-      'AgentBean Next CI must run existing product regressions before Phase 0 tests and builds',
+      ciRunsPhase0Gates(packageJson.scripts, workflow),
+      'AgentBean Next CI must retain Phase 0 boundaries while running package tests and builds once',
     ),
     check(
       'ci-detects-phase-0-changes',
@@ -830,7 +828,7 @@ export function hasPhase0ManagementBoundary(input) {
 
 export function hasPhase0CiGate({ scripts, workflow, seaWorkflow }) {
   return hasPhase0RootScripts(scripts) &&
-    ciRunsPhase0Gates(workflow) &&
+    ciRunsPhase0Gates(scripts, workflow) &&
     ciDetectsPhase0Changes(workflow) &&
     seaWorkflowConsumesRootVerdictCheck(seaWorkflow);
 }
@@ -843,21 +841,8 @@ export function hasPhase1ManagementCiGate({ scripts, workflow }) {
     return false;
   }
 
-  const orderedGates = [
-    'run: npm run test:phase1',
-    'run: npm run test:phase0',
-    'run: npm run test:phase1-management',
-    'run: npm run build:phase0',
-    'run: npm run build:phase1-management',
-    'run: npm run build:packages',
-  ];
-  let previous = -1;
-  for (const gate of orderedGates) {
-    const index = workflow.indexOf(gate);
-    if (index <= previous) return false;
-    previous = index;
-  }
-  return workflow.includes('check-phase-1-management-boundary');
+  return hasDeduplicatedPackageCi({ scripts, workflow }) &&
+    workflow.includes('check-phase-1-management-boundary');
 }
 
 export function hasPhase2TaskDagCiGate({ scripts, workflow }) {
@@ -870,20 +855,9 @@ export function hasPhase2TaskDagCiGate({ scripts, workflow }) {
     || scripts?.['build:phase2-task-dag'] !== expectedBuild) {
     return false;
   }
-  const ordered = [
-    'run: npm run test:phase1-management',
-    'run: npm run test:phase2-task-dag',
-    'run: npm run test:phase2-closeout',
-    'run: npm run build:phase1-management',
-    'run: npm run build:phase2-task-dag',
-  ];
-  let previous = -1;
-  for (const gate of ordered) {
-    const index = workflow.indexOf(gate);
-    if (index <= previous) return false;
-    previous = index;
-  }
-  return workflow.includes('check-phase-2-task-dag-boundary');
+  return hasDeduplicatedPackageCi({ scripts, workflow }) &&
+    !workflow.includes('run: npm run test:phase2-closeout') &&
+    workflow.includes('check-phase-2-task-dag-boundary');
 }
 
 export function hasNode24Toolchain({ packageJson, nvmrc, workflows, piSeaChecker, piSeaBuilder }) {
@@ -912,11 +886,32 @@ function hasPhase0RootScripts(scripts) {
     scripts?.['check:pi-sea-compatibility'] === 'node scripts/check-pi-management-sea.mjs validate';
 }
 
-function ciRunsPhase0Gates(workflow) {
-  const productTests = workflow.indexOf('run: npm run test:phase1');
-  const phase0Tests = workflow.indexOf('run: npm run test:phase0');
-  const phase0Build = workflow.indexOf('run: npm run build:phase0');
-  return productTests >= 0 && productTests < phase0Tests && phase0Tests < phase0Build;
+function ciRunsPhase0Gates(scripts, workflow) {
+  return hasDeduplicatedPackageCi({ scripts, workflow });
+}
+
+function hasDeduplicatedPackageCi({ scripts, workflow }) {
+  const expectedPackages = 'npm run test:contracts -- --api.host 127.0.0.1 && npm run test:pi-management-runtime && npm run test:domain -- --api.host 127.0.0.1 && npm run test:server-next -- --api.host 127.0.0.1 && npm run test:daemon-next -- --api.host 127.0.0.1 && npm run test:web-next -- --api.host 127.0.0.1';
+  const expectedBoundaries = 'npm run test:phase0-boundary && npm run check:phase0-pi-boundary && npm run test:phase1-management-boundary && npm run check:phase1-management-boundary && npm run test:phase2-task-dag-boundary && npm run check:phase2-task-dag-boundary';
+  const duplicateWorkflowGates = [
+    'run: npm run test:phase1',
+    'run: npm run test:phase0',
+    'run: npm run test:phase1-management',
+    'run: npm run test:phase2-task-dag',
+    'run: npm run build:phase0',
+    'run: npm run build:phase1-management',
+    'run: npm run build:phase2-task-dag',
+  ];
+  const packageTests = workflow.indexOf('run: npm run test:ci');
+  const packageBuild = workflow.indexOf('run: npm run build:packages');
+  return scripts?.['test:packages'] === expectedPackages &&
+    scripts?.['test:retained-boundaries'] === expectedBoundaries &&
+    scripts?.['test:ci'] === 'npm run test:packages && npm run test:retained-boundaries' &&
+    packageTests >= 0 &&
+    packageTests < packageBuild &&
+    workflow.match(/run: npm run test:ci/g)?.length === 1 &&
+    workflow.match(/run: npm run build:packages/g)?.length === 1 &&
+    duplicateWorkflowGates.every((gate) => !workflow.includes(gate));
 }
 
 function ciDetectsPhase0Changes(workflow) {
