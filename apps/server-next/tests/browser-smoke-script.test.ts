@@ -312,7 +312,7 @@ describe('AgentBean Next browser smoke script', () => {
           if (event === 'agent:create') return { ok: true, agent: { id: 'agent-1' } };
           if (event === 'channel:members') {
             channelMembersCount += 1;
-            return channelMembersCount >= 3
+            return channelMembersCount >= 4
               ? { ok: true, humanMemberIds: ['user-1'], agentMemberIds: ['agent-1'] }
               : { ok: true, humanMemberIds: ['user-1', 'user-2'], agentMemberIds: channelMembersCount >= 2 ? ['agent-1'] : [] };
           }
@@ -361,6 +361,7 @@ describe('AgentBean Next browser smoke script', () => {
     expect(socketCalls).toContainEqual(['auth:register', expect.objectContaining({ joinCode: 'join-1' })]);
     expect(socketCalls).toContainEqual(['agent:create', expect.objectContaining({ teamId: 'team-1', deviceId: 'device-1', runtimeId: 'runtime-1' })]);
     expect(socketCalls).toContainEqual(['channel:members', { teamId: 'team-1', channelId: 'channel-1' }]);
+    expect(channelMembersCount).toBe(4);
     expect(socketCalls).toContainEqual(['channels:subscribe', { teamId: 'team-1' }]);
     expect(daemonCalls).toContainEqual(['device:hello', expect.objectContaining({ teamId: 'team-1', ownerId: 'user-1' })]);
     const waitForFunctionCalls = calls.filter(
@@ -605,6 +606,16 @@ describe('AgentBean Next browser smoke script', () => {
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('WebUI smoke task secondary task-smoke'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('taskSortOrder'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('in_progress'))).toBe(true);
+    const channelWaitIndex = calls.findIndex(
+      (call) => call[0] === 'waitForFunction'
+        && (call[1] as { expression: string }).expression.includes("option.value === \"channel-1\""),
+    );
+    const channelSetIndex = calls.findIndex(
+      (call) => call[0] === 'setInputValue'
+        && (call[1] as { selector: string }).selector === '[data-smoke="tasks-create-channel"]',
+    );
+    expect(channelWaitIndex).toBeGreaterThan(-1);
+    expect(channelSetIndex).toBeGreaterThan(channelWaitIndex);
     const evaluateJsonCalls = calls.filter((call): call is ['evaluateJson', string] => call[0] === 'evaluateJson');
     expect(evaluateJsonCalls.some((call) => call[1].includes('task-reorder-top'))).toBe(true);
     expect(evaluateJsonCalls.some((call) => call[1].includes('task-delete'))).toBe(true);

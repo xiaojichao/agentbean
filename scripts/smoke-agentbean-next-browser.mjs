@@ -1121,12 +1121,24 @@ async function assertWebUiChannelMembersAck({
   absentHumanId,
   expectedAgentId,
 }) {
-  const ack = await emitAck(socket, WEB_EVENTS.channel.members, { teamId, channelId }, timeoutMs);
-  if (ack?.ok !== true) {
-    throw new Error(`WebUI channels smoke could not list channel members: ${formatAck(ack)}`);
+  const startedAt = Date.now();
+  let ack;
+  let humanIds = [];
+  let agentIds = [];
+  while (Date.now() - startedAt < timeoutMs) {
+    const remainingMs = Math.max(1, timeoutMs - (Date.now() - startedAt));
+    ack = await emitAck(socket, WEB_EVENTS.channel.members, { teamId, channelId }, remainingMs);
+    if (ack?.ok !== true) {
+      throw new Error(`WebUI channels smoke could not list channel members: ${formatAck(ack)}`);
+    }
+    humanIds = Array.isArray(ack.humanMemberIds) ? ack.humanMemberIds : [];
+    agentIds = Array.isArray(ack.agentMemberIds) ? ack.agentMemberIds : [];
+    const matches = (!expectedHumanId || humanIds.includes(expectedHumanId))
+      && (!absentHumanId || !humanIds.includes(absentHumanId))
+      && (!expectedAgentId || agentIds.includes(expectedAgentId));
+    if (matches) return;
+    await sleep(100);
   }
-  const humanIds = Array.isArray(ack.humanMemberIds) ? ack.humanMemberIds : [];
-  const agentIds = Array.isArray(ack.agentMemberIds) ? ack.agentMemberIds : [];
   if (expectedHumanId && !humanIds.includes(expectedHumanId)) {
     throw new Error(`WebUI channels smoke missing human member ${expectedHumanId}: ${formatAck(ack)}`);
   }
@@ -1638,6 +1650,11 @@ async function createWebUiTask({ page, title, description, channelId, timeoutMs 
   await page.waitForFunction(
     `document.querySelector('[data-smoke="tasks-create-form"]') !== null`,
     'tasks create form opens',
+    timeoutMs,
+  );
+  await page.waitForFunction(
+    `Array.from(document.querySelector('[data-smoke="tasks-create-channel"]')?.options ?? []).some((option) => option.value === ${JSON.stringify(channelId)})`,
+    `tasks create channel "${channelId}" to become selectable`,
     timeoutMs,
   );
   await page.setInputValue('[data-smoke="tasks-create-title"]', title);
