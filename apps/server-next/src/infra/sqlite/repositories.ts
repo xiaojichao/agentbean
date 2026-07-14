@@ -643,6 +643,24 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             .get(input.teamId, input.userId, input.agentId, input.agentId),
         );
       },
+      async listByTeam(teamId) {
+        return teamDb
+          .prepare(
+            `SELECT * FROM channels
+             WHERE team_id = ?
+             AND kind = 'channel'
+             AND archived_at IS NULL
+             ORDER BY created_at`,
+          )
+          .all(teamId)
+          .map((row) => {
+            const channel = mapChannel(teamDb, row);
+            if (!channel) {
+              throw new Error('SQLite channel row could not be mapped');
+            }
+            return channel;
+          });
+      },
       async listForUser(teamId, userId) {
         return teamDb
           .prepare(

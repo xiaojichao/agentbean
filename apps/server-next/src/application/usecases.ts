@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
 import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import { planMentionMigration } from './mention-migration.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand } from './device-invite-command.js';
@@ -2087,6 +2088,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
       if (!agent) {
         return makeFailure('NOT_FOUND', 'Agent not found');
+      }
+      // 改名时迁移：旧消息 body 里的 @oldName 补 meta.mentions（锁定稳定 agentId），
+      // 使历史 @提及跟随改名——渲染用 id 查当前 name。改名这一刻 oldName→agentId 确定，
+      // 不靠 name 反查。扫描该 agent 所有可见团队的非归档频道；planMentionMigration 幂等。
+      if (changes.name && managed.agent.name !== changes.name) {
+        const renameOldName = managed.agent.name;
+        for (const teamId of agent.visibleTeamIds) {
+          const teamChannels = await repositories.channels.listByTeam(teamId);
+          for (const channel of teamChannels) {
+            const messages = await repositories.messages.listByChannel(channel.id, 2000);
+            const migrations = planMentionMigration(messages, renameOldName, agent.id);
+            for (const migration of migrations) {
+              await repositories.messages.updateMeta({ messageId: migration.messageId, meta: migration.meta });
+            }
+          }
+        }
       }
       return makeSuccess({ agent: toPublicAgent(agent) });
     },

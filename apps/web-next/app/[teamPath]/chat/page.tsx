@@ -185,6 +185,7 @@ export default function ChatPage() {
   const channels = useAgentBeanStore((s) => s.channels);
   const agents = useAgentBeanStore((s) => s.agents);
   const visibleAgents = useAgentBeanStore((s) => s.visibleAgents);
+  const agentNameSignature = useAgentBeanStore((s) => Object.values(s.agents).map((a) => `${a.id}:${a.name}`).sort().join(''));
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
@@ -384,6 +385,15 @@ export default function ChatPage() {
       socket.off(WEB_EVENTS.message.pinnedUpdated, onPinnedUpdated);
     };
   }, [activeChannel, conn, currentTeamId, applyChannelHistory, applyDispatchStatus, handleMessage]);
+
+  // Agent 改名后，server 已把历史消息的 @oldName 迁移进 meta.mentions（锁定稳定 id）。
+  // 重新 join 当前频道，让 server 重推含迁移后 mentions 的 history（mergeChannelHistory
+  // 用 incoming 覆盖现有 meta），使旧消息 @提及跟随改名、且保持可点击。
+  useEffect(() => {
+    if (!activeChannel || conn !== 'open') return;
+    void channelEvents(getWebSocket()).join(currentTeamId, activeChannel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentNameSignature]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });

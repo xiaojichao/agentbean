@@ -175,6 +175,7 @@ export interface ChannelRepository {
   getById(channelId: ID): Promise<ChannelRecord | null>;
   getDefaultChannel(teamId: ID): Promise<ChannelRecord | null>;
   getDirectByAgent(input: { teamId: ID; userId: ID; agentId: ID }): Promise<ChannelRecord | null>;
+  listByTeam(teamId: ID): Promise<ChannelRecord[]>;
   listForUser(teamId: ID, userId: ID): Promise<ChannelRecord[]>;
   listDirectForUser(teamId: ID, userId: ID): Promise<ChannelRecord[]>;
   addDefaultChannelMembers(input: { teamId: ID; humanMemberIds?: ID[]; agentMemberIds?: ID[]; timestamp: UnixMs }): Promise<ChannelRecord | null>;
