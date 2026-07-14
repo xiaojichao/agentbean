@@ -371,6 +371,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           (channel.dmTargetAgentId === input.agentId || channel.agentMemberIds.includes(input.agentId))
         ) ?? null;
       },
+      async listByTeam(teamId) {
+        return Array.from(channels.values()).filter((channel) =>
+          channel.teamId === teamId &&
+          channel.kind === 'channel' &&
+          !channel.archivedAt
+        );
+      },
       async listForUser(teamId, userId) {
         return Array.from(channels.values()).filter((channel) => {
           if (channel.teamId !== teamId) {

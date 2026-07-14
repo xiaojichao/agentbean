@@ -10,6 +10,7 @@ import type {
   DispatchDto,
   ListChannelMembersCommandDto,
   MessageDto,
+  MessageMetaDto,
   RuntimeDto,
   UpdateChannelCommandDto,
   CreateJoinLinkCommandDto,
@@ -61,6 +62,7 @@ export interface SendMessageInput {
   body: string;
   artifactIds?: string[];
   clientMessageId?: string;
+  meta?: MessageMetaDto;
 }
 
 export interface SubscribeInput {

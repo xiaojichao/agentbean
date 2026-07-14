@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import { planMentionMigration } from './mention-migration.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand } from './device-invite-command.js';
@@ -413,6 +414,7 @@ export interface SendMessageInput {
   senderKind?: string;
   connectedAgentDeviceIds?: string[];
   dispatchClaimDeviceIds?: string[];
+  meta?: MessageMetaDto;
 }
 
 export interface SendMessageResult {
@@ -739,6 +741,7 @@ export interface EditMessageInput {
   teamId: string;
   messageId: string;
   body: string;
+  meta?: MessageMetaDto;
 }
 
 export interface DeleteMessageInput {
@@ -2075,6 +2078,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         }
       }
 
+      // 历史 mention 迁移必须先于改名落库：若扫描/写入中途失败，重试同一次改名仍会继续迁移；
+      // 反过来先改名会让重试失去 oldName，留下永久的半迁移状态。
+      if (changes.name && managed.agent.name !== changes.name) {
+        await migrateAgentMentionHistory(repositories, managed.agent);
+      }
+
       const agent = await repositories.agents.updateConfig({
         agentId: managed.agent.id,
         changes: {
@@ -2482,6 +2491,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const messageId = ids.nextId();
       const threadId = messageInput.threadId ?? messageId;
       const visibleAgents = await repositories.agents.listVisibleInTeam(messageInput.teamId);
+      const mentions = sanitizeMessageMentions({
+        body: messageInput.body,
+        mentions: messageInput.meta?.mentions,
+        channel,
+        visibleAgents,
+      });
       const contextOwner = messageInput.threadId
         ? await resolveRoutingContextAgentId(repositories, {
             teamId: messageInput.teamId,
@@ -2571,6 +2586,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
           ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
           ...(task ? { taskId: task.id } : {}),
+          ...(mentions.length ? { mentions } : {}),
           routeReason: toRouteReason(route),
         },
       });
@@ -3994,8 +4010,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (dispatches.some((dispatch) => isPendingDispatchStatus(dispatch.status))) {
         return makeFailure('CONFLICT', 'Message dispatch is still running');
       }
+      const previousMeta = { ...(message.meta ?? {}) };
+      delete previousMeta.mentions;
+      const mentions = sanitizeMessageMentions({
+        body: nextBody,
+        mentions: editInput.meta?.mentions,
+        channel: channelAccess.channel,
+        visibleAgents: await repositories.agents.listVisibleInTeam(editInput.teamId),
+      });
       const meta = {
-        ...(message.meta ?? {}),
+        ...previousMeta,
+        ...(mentions.length ? { mentions } : {}),
         editedAt: clock.now(),
         editedBy: editInput.userId,
       };
@@ -5220,13 +5245,103 @@ function taskIdForMessage(message: MessageRecord): string | undefined {
 }
 
 function messageMentionTargetsAgent(message: MessageRecord, agent: AgentRecord): boolean {
-  const mentionText = message.body.trimStart().match(/^@(.+)/)?.[1];
-  if (!mentionText) {
+  const leadingOffset = message.body.length - message.body.trimStart().length;
+  const hasLeadingMention = message.body.startsWith('@', leadingOffset);
+  if (!hasLeadingMention) {
     return true;
   }
+
+  // 仅首个 @ 决定 channel dispatch/coalescing；正文后续提及不能把消息并入另一 Agent。
+  const mentions = message.meta?.mentions;
+  const leadingMention = Array.isArray(mentions)
+    ? mentions.find((mention) => mention?.start === leadingOffset)
+    : undefined;
+  if (leadingMention) {
+    return leadingMention.kind === 'agent' && leadingMention.id === agent.id;
+  }
+
+  // fallback：从 body 文本 @name 匹配（旧消息/无 mentions）
+  const mentionText = message.body.trimStart().match(/^@(.+)/)?.[1];
+  if (!mentionText) return true;
   const mention = normalizeMentionName(mentionText);
   const agentName = normalizeMentionName(agent.name);
   return mention === agentName || mention.startsWith(`${agentName}-`);
+}
+
+async function migrateAgentMentionHistory(
+  repositories: ServerNextRepositories,
+  agent: AgentRecord,
+): Promise<void> {
+  const oldName = normalizeMentionName(agent.name);
+  for (const teamId of agent.visibleTeamIds) {
+    const [teamChannels, visibleAgents] = await Promise.all([
+      repositories.channels.listByTeam(teamId),
+      repositories.agents.listVisibleInTeam(teamId),
+    ]);
+    for (const channel of teamChannels) {
+      // 只迁移目标 Agent 当前仍是成员的频道。已移出频道的历史文本无法可靠判定原指向，宁可保留旧文本。
+      if (!channel.agentMemberIds.includes(agent.id)) continue;
+
+      const hasSameNamedAgent = visibleAgents.some((candidate) =>
+        candidate.id !== agent.id
+        && channel.agentMemberIds.includes(candidate.id)
+        && normalizeMentionName(candidate.name) === oldName
+      );
+      const humanMembers = await repositories.teams.listMembersByIds(teamId, channel.humanMemberIds);
+      const hasSameNamedHuman = humanMembers.some((member) =>
+        normalizeMentionName(member.username) === oldName
+        || (member.displayName ? normalizeMentionName(member.displayName) === oldName : false)
+      );
+      // 旧消息没有 id；同名时无法证明 @name 指向谁，禁止猜测并写错稳定身份。
+      if (hasSameNamedAgent || hasSameNamedHuman) continue;
+
+      const messages = await repositories.messages.listByChannel(channel.id, Number.MAX_SAFE_INTEGER);
+      const migrations = planMentionMigration(messages, agent.name, agent.id);
+      for (const migration of migrations) {
+        await repositories.messages.updateMeta({ messageId: migration.messageId, meta: migration.meta });
+      }
+    }
+  }
+}
+
+function sanitizeMessageMentions(input: {
+  body: string;
+  mentions: MessageMetaDto['mentions'];
+  channel: Pick<ChannelRecord, 'humanMemberIds' | 'agentMemberIds'>;
+  visibleAgents: AgentDto[];
+}): NonNullable<MessageMetaDto['mentions']> {
+  if (!Array.isArray(input.mentions)) return [];
+
+  const humanMemberIds = new Set(input.channel.humanMemberIds);
+  const agentNames = new Map(
+    input.visibleAgents
+      .filter((agent) => input.channel.agentMemberIds.includes(agent.id))
+      .map((agent) => [agent.id, normalizeMentionName(agent.name)]),
+  );
+  const seen = new Set<string>();
+  return input.mentions.filter((mention) => {
+    if (
+      !mention
+      || typeof mention.id !== 'string'
+      || (mention.kind !== 'human' && mention.kind !== 'agent')
+      || typeof mention.name !== 'string'
+      || !Number.isInteger(mention.start)
+      || !Number.isInteger(mention.end)
+      || mention.start < 0
+      || mention.end <= mention.start
+      || mention.end > input.body.length
+      || input.body.slice(mention.start, mention.end) !== `@${mention.name}`
+      || !/^@[\p{L}\p{N}_-]+$/u.test(input.body.slice(mention.start, mention.end))
+    ) {
+      return false;
+    }
+    if (mention.kind === 'human' && !humanMemberIds.has(mention.id)) return false;
+    if (mention.kind === 'agent' && agentNames.get(mention.id) !== normalizeMentionName(mention.name)) return false;
+    const key = `${mention.start}:${mention.end}:${mention.kind}:${mention.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function renderCoalescedDispatchPrompt(messages: MessageRecord[]): string {

@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEven
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS } from '@agentbean/contracts';
+import { WEB_EVENTS, type MessageMentionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -14,6 +14,7 @@ import { shouldHideTaskSystemMessage } from '@/lib/task-system-messages';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
+import { extractMentions, resolveMentionByName } from '@/lib/mention';
 import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
 import { displayMessageBody } from '@/lib/chat-message-text';
@@ -184,6 +185,7 @@ export default function ChatPage() {
   const channels = useAgentBeanStore((s) => s.channels);
   const agents = useAgentBeanStore((s) => s.agents);
   const visibleAgents = useAgentBeanStore((s) => s.visibleAgents);
+  const agentNameSignature = useAgentBeanStore((s) => Object.values(s.agents).map((a) => `${a.id}:${a.name}`).sort().join(''));
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
@@ -383,6 +385,15 @@ export default function ChatPage() {
       socket.off(WEB_EVENTS.message.pinnedUpdated, onPinnedUpdated);
     };
   }, [activeChannel, conn, currentTeamId, applyChannelHistory, applyDispatchStatus, handleMessage]);
+
+  // Agent 改名后，server 已把历史消息的 @oldName 迁移进 meta.mentions（锁定稳定 id）。
+  // 重新 join 当前频道，让 server 重推含迁移后 mentions 的 history（mergeChannelHistory
+  // 用 incoming 覆盖现有 meta），使旧消息 @提及跟随改名、且保持可点击。
+  useEffect(() => {
+    if (!activeChannel || conn !== 'open') return;
+    void channelEvents(getWebSocket()).join(currentTeamId, activeChannel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentNameSignature]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -880,7 +891,8 @@ export default function ChatPage() {
     const body = input.trim();
     const artifactIds = artifacts.map((a) => a.id);
     const createTask = asTask;
-    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body: body || '附件', asTask, artifactIds }, (res?: SendMessageAck) => {
+    const mentions = extractMentions(body, visibleMentionMembers);
+    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body: body || '附件', asTask, artifactIds, ...(mentions.length ? { meta: { mentions } } : {}) }, (res?: SendMessageAck) => {
       if (res?.ok) {
         appendAckMessage(res);
         if (createTask) setTimeout(() => loadTasks(), 150);
@@ -914,7 +926,8 @@ export default function ChatPage() {
     const channelId = activeChannel;
     const body = threadInput.trim() || '附件';
     const artifactIds = artifacts.map((a) => a.id);
-    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body, threadId: threadRootId, artifactIds }, (res?: SendMessageAck) => {
+    const mentions = extractMentions(body, visibleMentionMembers);
+    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body, threadId: threadRootId, artifactIds, ...(mentions.length ? { meta: { mentions } } : {}) }, (res?: SendMessageAck) => {
       if (res?.ok) {
         appendAckMessage(res);
         return;
@@ -1178,7 +1191,8 @@ export default function ChatPage() {
   };
 
   const editMessage = async (msg: ChatMessage, body: string) => {
-    const res = await messageReactionEvents().edit(msg.id, body);
+    const mentions = extractMentions(body.trim(), visibleMentionMembers);
+    const res = await messageReactionEvents().edit(msg.id, body, { mentions });
     if (res?.ok && res.message) {
       appendMessage(res.message);
       return true;
@@ -2691,7 +2705,7 @@ function TaskDetailPanel({
             </button>
           </div>
           <div className="rounded-md border border-neutral-200 bg-white px-3 py-2">
-            <MarkdownMessage body={displayMessageBody(message)} mentionMembers={mentionMembers} />
+            <MarkdownMessage body={displayMessageBody(message)} mentionMembers={mentionMembers} mentions={message.meta?.mentions as MessageMentionDto[] | undefined} />
           </div>
         </section>
 
@@ -2707,7 +2721,7 @@ function TaskDetailPanel({
                 <span>{resolveMessageSpeaker(latestAgentResult, agents, { humanProfiles, channelMembers, mentionMembers })}</span>
                 <span>{formatTime(latestAgentResult.createdAt)}</span>
               </div>
-              <MarkdownMessage body={displayMessageBody(latestAgentResult)} mentionMembers={mentionMembers} />
+              <MarkdownMessage body={displayMessageBody(latestAgentResult)} mentionMembers={mentionMembers} mentions={latestAgentResult.meta?.mentions as MessageMentionDto[] | undefined} />
             </div>
           ) : (
             <div className="rounded-md border border-dashed border-neutral-200 px-3 py-6 text-center text-sm text-neutral-400">
@@ -3696,7 +3710,7 @@ function ChatBubble({
         ) : isDeleted ? (
           <div className="mt-1 text-sm italic text-neutral-400">消息已删除</div>
         ) : (
-          <MarkdownMessage body={displayMessageBody(msg)} mentionMembers={messageMentionMembers} onOpenMention={onOpenProfile} compact={groupedWithPrevious} />
+          <MarkdownMessage body={displayMessageBody(msg)} mentionMembers={messageMentionMembers} mentions={msg.meta?.mentions as MessageMentionDto[] | undefined} onOpenMention={onOpenProfile} compact={groupedWithPrevious} />
         )}
         {!isDeleted && !editing && renderDispatchStatus()}
         {!isDeleted && !editing && msg.artifacts && msg.artifacts.length > 0 && (
@@ -3861,15 +3875,18 @@ function taskBadgeIcon(status: TaskStatus): ReactNode {
 function MarkdownMessage({
   body,
   mentionMembers = [],
+  mentions,
   onOpenMention,
   compact = false,
 }: {
   body: string;
   mentionMembers?: MentionProfileMember[];
+  mentions?: MessageMentionDto[];
   onOpenMention?: (target: ProfileTarget) => void;
   compact?: boolean;
 }) {
-  const markdownOptions = { mentionMembers, onOpenMention };
+  const agents = useAgentBeanStore((s) => s.agents);
+  const markdownOptions = { mentionMembers, mentions, agents, onOpenMention };
   return (
     <div className={`${compact ? 'mt-0' : 'mt-1'} space-y-2 break-words text-sm leading-relaxed text-neutral-700`}>
       {renderMarkdownBlocks(body, markdownOptions)}
@@ -3879,6 +3896,8 @@ function MarkdownMessage({
 
 interface MarkdownRenderOptions {
   mentionMembers?: MentionProfileMember[];
+  mentions?: MessageMentionDto[];
+  agents?: Record<string, { name?: string }>;
   onOpenMention?: (target: ProfileTarget) => void;
 }
 
@@ -4101,23 +4120,45 @@ function renderInlineMarkdown(text: string, options: MarkdownRenderOptions = {})
         </a>,
       );
     } else {
-      const target = resolveMentionTarget(token.slice(1), options.mentionMembers ?? []);
-      nodes.push(target && options.onOpenMention ? (
-        <button
-          key={`mention-${match.index}`}
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            options.onOpenMention?.(target);
-          }}
-          className="font-medium text-blue-600 underline-offset-2 hover:underline"
-          title={`查看 ${token} 资料`}
-        >
-          {token}
-        </button>
-      ) : (
-        <span key={`mention-${match.index}`} className="font-medium text-blue-600">{token}</span>
-      ));
+      const name = token.slice(1);
+      // 优先：结构化 mention（meta.mentions 锁定 id → 当前 name，跟随成员改名）
+      const resolved = options.mentions ? resolveMentionByName(name, options.mentions, options.agents ?? {}) : null;
+      if (resolved) {
+        const label = `@${resolved.displayName}`;
+        const target: ProfileTarget = { kind: resolved.kind, id: resolved.id };
+        nodes.push(options.onOpenMention ? (
+          <button
+            key={`mention-${match.index}`}
+            type="button"
+            onClick={(event) => { event.stopPropagation(); options.onOpenMention?.(target); }}
+            className="font-medium text-blue-600 underline-offset-2 hover:underline"
+            title={`查看 ${resolved.displayName} 资料`}
+          >
+            {label}
+          </button>
+        ) : (
+          <span key={`mention-${match.index}`} className="font-medium text-blue-600">{label}</span>
+        ));
+      } else {
+        // 降级：旧消息无 meta.mentions，按 name 匹配 mentionMembers（维持现状）
+        const target = resolveMentionTarget(name, options.mentionMembers ?? []);
+        nodes.push(target && options.onOpenMention ? (
+          <button
+            key={`mention-${match.index}`}
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              options.onOpenMention?.(target);
+            }}
+            className="font-medium text-blue-600 underline-offset-2 hover:underline"
+            title={`查看 ${token} 资料`}
+          >
+            {token}
+          </button>
+        ) : (
+          <span key={`mention-${match.index}`} className="font-medium text-blue-600">{token}</span>
+        ));
+      }
     }
 
     lastIndex = match.index + token.length;
