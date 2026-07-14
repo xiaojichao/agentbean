@@ -37,6 +37,7 @@ export function collectAgentBeanNextReadinessChecks({
   const serverNextFirstSliceTests = readFileSync(join(root, 'apps/server-next/tests/first-slice.test.ts'), 'utf8');
   const serverNextSocketIntegrationTests = readFileSync(join(root, 'apps/server-next/tests/socket-integration.test.ts'), 'utf8');
   const phase0ManagementBoundaryTests = readFileSync(join(root, 'apps/server-next/tests/phase-0-management-boundary.test.ts'), 'utf8');
+  const phase2CloseoutSmoke = readFileSync(join(root, 'apps/server-next/tests/phase-2-managed-team-smoke.test.ts'), 'utf8');
   const serverNextRepositories = readFileSync(join(root, 'apps/server-next/src/application/repositories.ts'), 'utf8');
   const serverNextSource = readTreeText(join(root, 'apps/server-next/src'));
   const serverNextMigrations = readTreeText(join(root, 'apps/server-next/src/infra/sqlite/migrations'));
@@ -695,6 +696,18 @@ export function collectAgentBeanNextReadinessChecks({
       'Phase 2 must expose fail-closed boundary, test, build, and ordered CI gates while retaining Phase 1',
     ),
     check(
+      'phase-2-real-two-agent-closeout-smoke',
+      phase2CloseoutSmoke.includes('createTaskClaimProtocolClient') &&
+        phase2CloseoutSmoke.includes("'agents.invoke'") &&
+        phase2CloseoutSmoke.includes("'tasks.accept_subtask'") &&
+        phase2CloseoutSmoke.includes('WEB_EVENTS.task.dag') &&
+        phase2CloseoutSmoke.includes('AGENT_EVENTS.dispatch.result') &&
+        browserSmokeScript.includes('webui-phase2-task-dag-business-flow') &&
+        browserSmokeScript.includes('supportedPhases: [1, 2]') &&
+        browserSmokeScript.includes('data-smoke="task-dag-panel"'),
+      'Phase 2 closeout must retain the real two-Agent claim/invocation/delivery/human-review smoke and browser Task DAG surface',
+    ),
+    check(
       'node-24-toolchain-contract',
       hasNode24Toolchain({
         packageJson,
@@ -844,12 +857,14 @@ export function hasPhase2TaskDagCiGate({ scripts, workflow }) {
   if (scripts?.['test:phase2-task-dag-boundary'] !== 'node --test scripts/check-phase-2-task-dag-boundary.test.mjs'
     || scripts?.['check:phase2-task-dag-boundary'] !== 'node scripts/check-phase-2-task-dag-boundary.mjs'
     || scripts?.['test:phase2-task-dag'] !== expectedTest
+    || scripts?.['test:phase2-closeout'] !== 'cd apps/server-next && ../../node_modules/.bin/vitest run tests/phase-2-managed-team-smoke.test.ts --config vitest.config.ts --api.host 127.0.0.1'
     || scripts?.['build:phase2-task-dag'] !== expectedBuild) {
     return false;
   }
   const ordered = [
     'run: npm run test:phase1-management',
     'run: npm run test:phase2-task-dag',
+    'run: npm run test:phase2-closeout',
     'run: npm run build:phase1-management',
     'run: npm run build:phase2-task-dag',
   ];

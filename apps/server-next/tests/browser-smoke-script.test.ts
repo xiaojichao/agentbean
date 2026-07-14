@@ -564,6 +564,12 @@ describe('AgentBean Next browser smoke script', () => {
       },
       suffix: 'task-smoke',
       timeoutMs: 1000,
+      phase2TaskSeeder: async () => ({
+        title: 'WebUI Phase 2 DAG task-smoke',
+        close: async () => {
+          calls.push(['phase2Close', undefined]);
+        },
+      }),
     });
 
     expect(result).toEqual({
@@ -571,7 +577,9 @@ describe('AgentBean Next browser smoke script', () => {
       status: 'in_progress',
       reordered: true,
       deletedTitle: 'WebUI smoke task secondary task-smoke',
+      phase2Title: 'WebUI Phase 2 DAG task-smoke',
     });
+    expect(calls).toContainEqual(['phase2Close', undefined]);
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/tasks']);
     expect(calls).toContainEqual(['click', '[data-smoke="tasks-create-open"]']);
     expect(calls).toContainEqual([

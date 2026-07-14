@@ -2528,15 +2528,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (management.kind === 'unavailable') {
         return makeFailure('VALIDATION_ERROR', management.diagnostics.join(','));
       }
+      const phase2ManagedRoot = management.kind === 'managed' && management.managementPhase === 2;
       const task = shouldCreateTask
         ? await repositories.tasks.create({
             id: taskId!,
             teamId: messageInput.teamId,
             title: messageInput.body.trim() || '附件',
             description: undefined,
-            status: route.kind === 'dispatch' ? 'in_progress' : 'todo',
+            status: route.kind === 'dispatch' || phase2ManagedRoot ? 'in_progress' : 'todo',
             creatorId: messageInput.userId,
-            assigneeId: route.kind === 'dispatch' ? route.agentId : undefined,
+            assigneeId: route.kind === 'dispatch' && !phase2ManagedRoot ? route.agentId : undefined,
             channelId: messageInput.channelId,
             tags: [],
             sortOrder: now,
@@ -2960,7 +2961,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           .filter((criterion) => criterion.introducedRevision <= task.revision
             && (criterion.retiredRevision === undefined || criterion.retiredRevision > task.revision));
         const dependencyTaskIds = (await repositories.taskCoordination.dependencies.list(task.id))
-          .filter((dependency) => dependency.taskRevision === task.revision)
           .map((dependency) => dependency.dependencyTaskId);
         const claim = await repositories.taskCoordination.claimLeases.getLatest({
           taskId: task.id,

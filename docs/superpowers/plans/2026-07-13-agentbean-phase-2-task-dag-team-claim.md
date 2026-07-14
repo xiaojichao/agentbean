@@ -461,6 +461,8 @@ P2-01 至 P2-18 全部 Green，且 Phase 2 默认仍关闭，才允许 Phase 2 c
 - Node 24 clean install、`better-sqlite3` load、build/runtime 与三平台 SEA。
 - 合并后 main CI/CD、Railway deploy、production business smoke URL。
 
+当前进度：Issue #556 已完成 Node 24 本地 closeout、真实双 Agent Device E2E 与真实 App Router DAG browser smoke；最终 verdict 仍以 PR 合并后的 main CI/CD、三平台 SEA、Railway deploy 和 production business smoke 为准。
+
 ## 8. PR 切片与依赖
 
 | 顺序 | PR | 内容 | 前置 |

@@ -70,6 +70,7 @@ interface AppWithCleanup {
   managementWorkerScheduler?: DeviceWorkerScheduler;
   taskClaimBroker?: TaskClaimBroker;
   bindManagementDispatchEmitter?(emit: (dispatchId: string) => Promise<void>): void;
+  bindTaskClaimEmitter?(emit: (taskId: string) => Promise<void>): void;
   reconcileDisconnectedDevicesOnStart: boolean;
   close(): Promise<void>;
 }
@@ -215,6 +216,9 @@ export async function startServerNextDevServer(
     taskClaimBroker: input.taskClaimBroker ?? appWithCleanup.taskClaimBroker,
   });
   appWithCleanup.bindManagementDispatchEmitter?.((dispatchId) => realtime.dispatchRequest(dispatchId));
+  appWithCleanup.bindTaskClaimEmitter?.(async (taskId) => {
+    await realtime.offerTaskClaims(taskId);
+  });
   const dispatchTimeoutInterval = startDispatchTimeoutScheduler(
     app,
     realtime,
@@ -1151,6 +1155,7 @@ function createDefaultApp(
       managementWorkerScheduler: management.scheduler,
       taskClaimBroker,
       bindManagementDispatchEmitter: management.bindDispatchEmitter,
+      bindTaskClaimEmitter: management.bindTaskClaimEmitter,
       reconcileDisconnectedDevicesOnStart: false,
       close: async () => undefined,
     };
@@ -1184,6 +1189,7 @@ function createDefaultApp(
     managementWorkerScheduler: management.scheduler,
     taskClaimBroker,
     bindManagementDispatchEmitter: management.bindDispatchEmitter,
+    bindTaskClaimEmitter: management.bindTaskClaimEmitter,
     reconcileDisconnectedDevicesOnStart: true,
     async close() {
       globalDb.close();
@@ -1198,6 +1204,7 @@ function createDefaultManagementRuntime(
   ids: { nextId(): string },
 ) {
   let dispatchEmitter: ((dispatchId: string) => Promise<void>) | undefined;
+  let taskClaimEmitter: ((taskId: string) => Promise<void>) | undefined;
   const kernel = createManagementKernel({
     repositories: repositories.management,
     unitOfWork: repositories.managementUnitOfWork,
@@ -1235,7 +1242,11 @@ function createDefaultManagementRuntime(
       }),
       phase2Handlers: {
         ...createPhase2ManagementToolHandlers({ kernel: taskCoordinationKernel,
-          acceptanceService: subtaskAcceptanceService }),
+          acceptanceService: subtaskAcceptanceService,
+          onTaskPublished: async (taskId) => {
+            if (!taskClaimEmitter) throw new Error('TASK_CLAIM_EMITTER_UNAVAILABLE');
+            await taskClaimEmitter(taskId);
+          } }),
         ...createPhase2InvocationToolHandlers({
           repositories,
           kernel,
@@ -1272,6 +1283,13 @@ function createDefaultManagementRuntime(
           targetAvailable: target.status !== 'offline' && device.status === 'online',
         });
       },
+      async preflightPhase2({ teamId, target, placementPolicy }) {
+        return scheduler.managementPhase2Preflight({
+          teamId,
+          placementPolicy,
+          targetAvailable: target ? target.status !== 'offline' : true,
+        });
+      },
       schedule: (input) => scheduler.scheduleManagementRun(input),
     },
   });
@@ -1282,6 +1300,9 @@ function createDefaultManagementRuntime(
     router,
     bindDispatchEmitter(emit: (dispatchId: string) => Promise<void>) {
       dispatchEmitter = emit;
+    },
+    bindTaskClaimEmitter(emit: (taskId: string) => Promise<void>) {
+      taskClaimEmitter = emit;
     },
   };
 }

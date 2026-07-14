@@ -14,6 +14,7 @@ import type {
   ManagementWorkerFailureV1,
   ManagementWorkerRegisterAckV1,
   ManagementWorkerRegisterV1,
+  ManagementWorkerRegisterV2,
   ManagementWorkerToolRequestV1,
   ManagementWorkerToolResultV1,
   Phase2TaskToolRequestV2,
@@ -32,6 +33,7 @@ type ManagementKernel = ReturnType<typeof createManagementKernel>;
 type ManagementToolRequest = ManagementWorkerToolRequestV1 | Phase2TaskToolRequestV2;
 type ManagementToolResult = ManagementWorkerToolResultV1 | Phase2TaskToolResultV2;
 type ManagementToolExecutor = (request: ManagementToolRequest) => Promise<ManagementToolResult>;
+type ManagementWorkerCapability = ManagementWorkerRegisterV1 | ManagementWorkerRegisterV2;
 
 export interface ManagementWorkerOfferTransport {
   emitLeaseOffer(payload: ManagementLeaseOfferV1, timeoutMs: number): Promise<unknown>;
@@ -54,7 +56,7 @@ export interface DeviceWorkerSchedulerDependencies {
 export interface RegisterManagementWorkerInput {
   readonly connectionId: string;
   readonly deviceId?: string;
-  readonly capability: ManagementWorkerRegisterV1;
+  readonly capability: ManagementWorkerCapability;
   readonly transport: ManagementWorkerOfferTransport;
 }
 
@@ -81,7 +83,7 @@ interface RegisteredWorker {
   readonly profileId: string;
   connectionId: string;
   connected: boolean;
-  capability: ManagementWorkerRegisterV1;
+  capability: ManagementWorkerCapability;
   transport: ManagementWorkerOfferTransport;
   readonly activeRunIds: Set<string>;
 }
@@ -177,6 +179,43 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
       };
     },
 
+    async managementPhase2Preflight(input: {
+      teamId: string;
+      placementPolicy: ManagerPlacementPolicyDto;
+      targetAvailable: boolean;
+    }): Promise<{ preflight: ManagementPreflight; profileId?: string }> {
+      const teamWorkers = [...workersById.values()].filter((worker) =>
+        worker.connected
+        && worker.teamId === input.teamId
+        && supportsManagementPhase(worker.capability, 2)
+        && effectiveActiveLeaseCount(worker) < worker.capability.capacity.maxConcurrentLeases,
+      );
+      const allowedWorkers = teamWorkers.filter((worker) =>
+        input.placementPolicy.placement !== 'managed'
+        && (!input.placementPolicy.allowedDeviceIds
+          || input.placementPolicy.allowedDeviceIds.includes(worker.deviceId)),
+      );
+      const availableWorkers: RegisteredWorker[] = [];
+      for (const worker of allowedWorkers) {
+        const device = await dependencies.devices.getById(worker.deviceId);
+        if (device?.status === 'online' && device.teamId === input.teamId
+          && device.profileId === worker.profileId) availableWorkers.push(worker);
+      }
+      availableWorkers.sort(compareWorkers);
+      const selected = availableWorkers.find((worker) =>
+        credentialReady(worker.capability, input.placementPolicy.requireLocalModelCredentials));
+      return {
+        preflight: {
+          workerAvailable: availableWorkers.length > 0,
+          credentialAvailable: Boolean(selected),
+          placementAllowed: allowedWorkers.length > 0,
+          budgetAvailable: true,
+          targetAvailable: input.targetAvailable,
+        },
+        ...(selected ? { profileId: selected.profileId } : {}),
+      };
+    },
+
     async scheduleManagementRun(input: ScheduleManagementRunInput): Promise<ScheduleManagementRunResult> {
       const run = await dependencies.management.runs.getById(input.managementRunId);
       if (!run) return failure('MANAGEMENT_RUN_NOT_FOUND', false);
@@ -200,6 +239,7 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
       const candidates: RegisteredWorker[] = [];
       for (const worker of workersById.values()) {
         if (!worker.connected || worker.teamId !== run.teamId || worker.profileId !== input.profileId) continue;
+        if (!supportsManagementPhase(worker.capability, 'managementPhase' in run ? run.managementPhase : 1)) continue;
         if (currentLease && (worker.deviceId !== currentLease.host.deviceId || worker.profileId !== currentLease.host.profileId)) continue;
         if (run.placementPolicy.allowedDeviceIds && !run.placementPolicy.allowedDeviceIds.includes(worker.deviceId)) continue;
         if (!credentialReady(worker.capability, run.placementPolicy.requireLocalModelCredentials)) continue;
@@ -478,10 +518,14 @@ function effectiveActiveLeaseCount(worker: RegisteredWorker): number {
   return Math.max(worker.capability.capacity.activeLeaseCount, worker.activeRunIds.size);
 }
 
-function credentialReady(capability: ManagementWorkerRegisterV1, requireProduction: boolean): boolean {
+function credentialReady(capability: ManagementWorkerCapability, requireProduction: boolean): boolean {
   return requireProduction
     ? capability.credentialStatus === 'production_ready'
     : capability.credentialStatus !== 'unavailable';
+}
+
+function supportsManagementPhase(capability: ManagementWorkerCapability, phase: 1 | 2): boolean {
+  return capability.supportedPhases.some((candidate) => candidate === phase);
 }
 
 function compareWorkers(left: RegisteredWorker, right: RegisteredWorker): number {

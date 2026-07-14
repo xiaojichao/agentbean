@@ -11,6 +11,10 @@ const AGENT_EVENTS = {
   device: { hello: 'device:hello', runtimes: 'device:runtimes', scanRequested: 'device:scan-requested' },
   agent: { registerBatch: 'agent:register-batch' },
   dispatch: { request: 'dispatch:request', result: 'dispatch:result' },
+  managementWorker: {
+    register: 'management-worker:register',
+    leaseOffer: 'management-worker:lease-offer',
+  },
 };
 
 const WEB_EVENTS = {
@@ -37,6 +41,7 @@ const WEB_EVENTS = {
     list: 'members:list',
   },
   message: { send: 'message:send' },
+  managementPolicy: { get: 'management-policy:get', update: 'management-policy:update' },
   team: {
     create: 'team:create',
     switch: 'team:switch',
@@ -393,7 +398,9 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
     const taskResult = await exerciseWebUiTaskBusinessSmoke({
       page,
       baseUrl: target.baseUrl,
+      webSocket: seededSession.socket,
       session: seededSession.session,
+      ioFactory,
       suffix,
       timeoutMs,
     });
@@ -402,6 +409,11 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
         'webui-task-business-flow',
         true,
         `Created task "${taskResult.title}", reordered it, moved it to ${taskResult.status}, deleted "${taskResult.deletedTitle}", and restored after refresh`,
+      ),
+      check(
+        'webui-phase2-task-dag-business-flow',
+        true,
+        `Created managed Phase 2 task "${taskResult.phase2Title}" through real Web/Agent sockets and rendered its Task DAG panel`,
       ),
     );
 
@@ -1418,9 +1430,12 @@ async function waitForWebUiTeamListMissing({ page, teamId, teamName, timeoutMs }
 export async function exerciseWebUiTaskBusinessSmoke({
   page,
   baseUrl,
+  webSocket,
   session,
+  ioFactory,
   suffix,
   timeoutMs,
+  phase2TaskSeeder = seedPhase2BrowserTask,
 }) {
   assertSession(session);
   const root = normalizeBaseUrlOrThrow(baseUrl);
@@ -1484,7 +1499,138 @@ export async function exerciseWebUiTaskBusinessSmoke({
     'task detail exposes the Task DAG surface',
     timeoutMs,
   );
-  return { title, status: targetStatus, reordered: true, deletedTitle: secondaryTitle };
+
+  const phase2 = await phase2TaskSeeder({
+    baseUrl,
+    webSocket,
+    session,
+    ioFactory,
+    suffix,
+    timeoutMs,
+  });
+  try {
+    await page.navigate(new URL(`/${teamPath}/tasks`, root).toString());
+    await waitForWebUiTaskCard({ page, title: phase2.title, status: 'in_progress', timeoutMs });
+    const openedPhase2Task = await page.evaluateJson(`
+      (() => {
+        const title = ${JSON.stringify(phase2.title)};
+        const card = Array.from(document.querySelectorAll('[data-smoke="task-card"], [data-smoke="task-row"]'))
+          .find((candidate) => candidate.dataset.taskTitle === title);
+        if (!card) return false;
+        card.click();
+        return true;
+      })()
+    `);
+    if (!openedPhase2Task) throw new Error(`Could not open Phase 2 WebUI smoke task "${phase2.title}"`);
+    await page.waitForFunction(
+      `document.querySelector('[data-smoke="task-dag-panel"]') !== null`,
+      'managed Phase 2 task renders the Task DAG panel',
+      timeoutMs,
+    );
+  } finally {
+    await phase2.close();
+  }
+  return {
+    title,
+    status: targetStatus,
+    reordered: true,
+    deletedTitle: secondaryTitle,
+    phase2Title: phase2.title,
+  };
+}
+
+async function seedPhase2BrowserTask({ baseUrl, webSocket, session, ioFactory, suffix, timeoutMs }) {
+  const daemon = await connectSmokeDaemon({
+    baseUrl,
+    ioFactory,
+    session,
+    suffix: webUiFlowSuffix(suffix, 'phase2'),
+    timeoutMs,
+  });
+  let policyChanged = false;
+  let originalPolicy;
+  const restorePolicy = async () => {
+    if (!policyChanged || !originalPolicy) return;
+    await emitAck(webSocket, WEB_EVENTS.managementPolicy.update, {
+      userId: session.user.id,
+      teamId: session.team.id,
+      mode: originalPolicy.mode,
+      maxManagementPhase: originalPolicy.maxManagementPhase,
+      placementPolicy: originalPolicy.placementPolicy,
+    }, timeoutMs).catch(() => undefined);
+    policyChanged = false;
+  };
+  daemon.socket.on(AGENT_EVENTS.managementWorker.leaseOffer, (_offer, ack) => {
+    ack?.({ ok: false, errorCode: 'UNAVAILABLE' });
+  });
+  try {
+    const workerAck = await emitAck(daemon.socket, AGENT_EVENTS.managementWorker.register, {
+      schemaVersion: 2,
+      workerInstanceId: `browser-phase2-${suffix}`,
+      profileId: 'browser-smoke',
+      runtimeVersion: '0.1.0',
+      supportedProtocolVersions: [1, 2],
+      supportedPhases: [1, 2],
+      credentialStatus: 'production_ready',
+      providerId: 'browser-smoke',
+      modelId: 'browser-smoke',
+      capacity: { maxConcurrentLeases: 1, activeLeaseCount: 0 },
+    }, timeoutMs);
+    if (workerAck?.ok !== true) {
+      throw new Error(`Phase 2 browser smoke could not register a V2 worker: ${formatAck(workerAck)}`);
+    }
+
+    const currentPolicy = await emitAck(webSocket, WEB_EVENTS.managementPolicy.get, {
+      userId: session.user.id,
+      teamId: session.team.id,
+    }, timeoutMs);
+    if (currentPolicy?.ok !== true || !currentPolicy.policy) {
+      throw new Error(`Phase 2 browser smoke could not read the current policy: ${formatAck(currentPolicy)}`);
+    }
+    originalPolicy = currentPolicy.policy;
+    const placementPolicy = {
+      placement: 'device',
+      allowedDeviceIds: [daemon.deviceId],
+      allowServerContext: false,
+      requireLocalModelCredentials: true,
+    };
+    const policyAck = await emitAck(webSocket, WEB_EVENTS.managementPolicy.update, {
+      userId: session.user.id,
+      teamId: session.team.id,
+      mode: 'managed',
+      maxManagementPhase: 2,
+      placementPolicy,
+    }, timeoutMs);
+    if (policyAck?.ok !== true) {
+      throw new Error(`Phase 2 browser smoke could not enable managed policy: ${formatAck(policyAck)}`);
+    }
+    policyChanged = true;
+
+    const title = `WebUI Phase 2 DAG ${suffix}`;
+    const sent = await emitAck(webSocket, WEB_EVENTS.message.send, {
+      userId: session.user.id,
+      teamId: session.team.id,
+      channelId: session.channel.id,
+      body: title,
+      asTask: true,
+      clientMessageId: `webui-phase2-task-dag-business-flow-${suffix}`,
+    }, timeoutMs);
+    if (sent?.ok !== true || typeof sent.task?.id !== 'string' || sent.management?.managementPhase !== 2) {
+      throw new Error(`Phase 2 browser smoke did not create a managed root task: ${formatAck(sent)}`);
+    }
+
+    return {
+      title,
+      async close() {
+        await restorePolicy();
+        daemon.socket.disconnect?.();
+      },
+    };
+  } catch (error) {
+    await restorePolicy();
+    daemon.socket.disconnect?.();
+    throw error;
+  }
 }
 
 async function createWebUiTask({ page, title, description, channelId, timeoutMs }) {

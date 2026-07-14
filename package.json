@@ -20,6 +20,7 @@
     "test:phase0": "npm run test:pi-management-runtime && npm run test:contracts -- --api.host 127.0.0.1 && npm run test:domain -- --api.host 127.0.0.1 && npm run test:phase0-boundary && npm run check:phase0-pi-boundary && cd apps/server-next && ../../node_modules/.bin/vitest run tests/phase-0-management-boundary.test.ts --config vitest.config.ts --api.host 127.0.0.1",
     "test:phase1-management": "npm run test:phase1-management-boundary && npm run check:phase1-management-boundary && npm run test:pi-management-runtime && npm run test:phase1",
     "test:phase2-task-dag": "npm run test:phase2-task-dag-boundary && npm run check:phase2-task-dag-boundary && npm run test:contracts -- --api.host 127.0.0.1 && npm run test:pi-management-runtime && npm run test:domain -- --api.host 127.0.0.1 && npm run test:server-next -- --api.host 127.0.0.1",
+    "test:phase2-closeout": "cd apps/server-next && ../../node_modules/.bin/vitest run tests/phase-2-managed-team-smoke.test.ts --config vitest.config.ts --api.host 127.0.0.1",
     "test:team-terminology": "node --test scripts/check-team-terminology.test.mjs",
     "test:phase0-boundary": "node --test scripts/check-phase-0-pi-boundary.test.mjs",
     "test:phase1-management-boundary": "node --test scripts/check-phase-1-management-boundary.test.mjs",
