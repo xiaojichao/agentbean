@@ -155,6 +155,10 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       management.unitOfWork.run((managementRepositories) =>
         operation({
           tasks: repositories.tasks,
+          messages: repositories.messages,
+          artifacts: repositories.artifacts,
+          workspaceRuns: repositories.workspaceRuns,
+          dispatches: repositories.dispatches,
           coordination: taskCoordination,
           management: managementRepositories,
         })),

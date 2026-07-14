@@ -1,9 +1,19 @@
 import type { ManagementRepositories } from './management-repositories.js';
-import type { TaskRepository } from './repositories.js';
+import type {
+  ArtifactRepository,
+  DispatchRepository,
+  MessageRepository,
+  TaskRepository,
+  WorkspaceRunRepository,
+} from './repositories.js';
 import type { TaskCoordinationRepositories } from './task-coordination-repositories.js';
 
 export interface TaskCoordinationTransactionRepositories {
   readonly tasks: TaskRepository;
+  readonly messages: MessageRepository;
+  readonly artifacts: ArtifactRepository;
+  readonly workspaceRuns: WorkspaceRunRepository;
+  readonly dispatches: DispatchRepository;
   readonly coordination: TaskCoordinationRepositories;
   readonly management: ManagementRepositories;
 }

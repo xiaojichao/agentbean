@@ -77,6 +77,17 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           throw new ManagementConflictError('MANAGEMENT_RUN_TERMINAL');
         }
 
+        const existing = await transactionRepositories.management.invocations.getByIdempotencyKey({
+          managementRunId: run.id,
+          idempotencyKey: input.idempotencyKey,
+        });
+        if (existing) {
+          assertTaskInvocationReplay(existing, input);
+          return { disposition: 'existing' as const,
+            view: await deriveInvocationView(transactionRepositories.management,
+              transactionRepositories.dispatches, existing) };
+        }
+
         const authority = await resolveTaskInvocationAuthority(transactionRepositories, run, input, now);
         const agent = await repositories.agents.getById(authority.targetAgentId);
         if (!agent || agent.deletedAt !== undefined || !agent.visibleTeamIds.includes(run.teamId)) {
@@ -103,23 +114,6 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           ...(input.deadlineAt !== undefined && { deadlineAt: input.deadlineAt }),
         };
         const intentHash = hashIntent(intent);
-        const existing = await transactionRepositories.management.invocations.getByIdempotencyKey({
-          managementRunId: run.id,
-          idempotencyKey: input.idempotencyKey,
-        });
-        const idempotency = resolveInvocationIdempotency({
-          existing: existing ? { invocationId: existing.id, managementRunId: existing.managementRunId,
-            idempotencyKey: existing.idempotencyKey, intentHash: existing.intentHash } : undefined,
-          requestedManagementRunId: run.id,
-          requestedIdempotencyKey: input.idempotencyKey,
-          requestedIntentHash: intentHash,
-        });
-        if (idempotency.kind === 'conflict') throw new InvocationGatewayError('INVOCATION_IDEMPOTENCY_CONFLICT');
-        if (idempotency.kind === 'existing') {
-          return { disposition: 'existing' as const,
-            view: await deriveInvocationView(transactionRepositories.management,
-              transactionRepositories.dispatches, existing!) };
-        }
 
         await assertNoActiveTaskAttempt(transactionRepositories, run.id, input.taskId,
           input.expectedTaskRevision, input.taskAttempt);
@@ -355,6 +349,22 @@ async function resolveTaskInvocationAuthority(
     acceptanceCriteria: criteria,
     dependencyResults,
   };
+}
+
+function assertTaskInvocationReplay(existing: AgentInvocationRecordDto,
+  input: InvokeTaskAgentInput): void {
+  const context = existing.intent.taskContext;
+  const sameAttachments = existing.intent.attachmentIds.length === input.attachmentIds.length
+    && existing.intent.attachmentIds.every((id, index) => id === input.attachmentIds[index]);
+  if (!context || context.taskId !== input.taskId
+    || context.taskRevision !== input.expectedTaskRevision
+    || context.taskAttempt !== input.taskAttempt
+    || context.claimLeaseId !== input.claimLeaseId
+    || existing.intent.objective !== input.objective.trim()
+    || existing.intent.deadlineAt !== input.deadlineAt
+    || !sameAttachments) {
+    throw new InvocationGatewayError('INVOCATION_IDEMPOTENCY_CONFLICT');
+  }
 }
 
 async function assertNoActiveTaskAttempt(

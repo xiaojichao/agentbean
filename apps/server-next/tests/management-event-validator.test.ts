@@ -45,6 +45,13 @@ describe('Task coordination management event validator', () => {
     expect(event.type).toBe('task-published-for-claim');
     expect(hashManagementCommandInput({ taskId: 'task-1', assigneeId: undefined }))
       .toBe(hashManagementCommandInput({ taskId: 'task-1' }));
+    expect(parseTaskCoordinationManagementEvent({
+      schemaVersion: 1, id: 'event-delivery', managementRunId: 'run-1', sequence: 3,
+      type: 'subtask-delivered', actorKind: 'agent', actorId: 'agent-1',
+      idempotencyKey: 'delivery-1', payload: { deliveryId: 'delivery-1', taskId: 'task-1',
+        taskRevision: 2, taskAttempt: 1, claimLeaseId: 'claim-1',
+        invocationId: 'invocation-1' }, createdAt: 20,
+    })).toMatchObject({ type: 'subtask-delivered' });
   });
 
   test('keeps Phase 1 and Task command exact sets isolated', () => {

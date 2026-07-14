@@ -15,9 +15,12 @@ import type { MessageRecord, ServerNextRepositories } from '../repositories.js';
 import { createInvocationGateway } from './invocation-gateway.js';
 import type { createManagementKernel } from './management-kernel.js';
 import type { createTaskCoordinationKernel } from './task-coordination-kernel.js';
+import type { createSubtaskAcceptanceService } from './subtask-acceptance-service.js';
+import { createSubtaskDeliveryService, deliveryOutput } from './subtask-delivery-service.js';
 
 type ManagementKernel = ReturnType<typeof createManagementKernel>;
 type TaskCoordinationKernel = ReturnType<typeof createTaskCoordinationKernel>;
+type SubtaskAcceptanceService = ReturnType<typeof createSubtaskAcceptanceService>;
 type ManagementToolRequest = ManagementWorkerToolRequestV1 | Phase2TaskToolRequestV2;
 type ManagementToolResult = ManagementWorkerToolResultV1 | Phase2TaskToolResultV2;
 type ToolHandler<K extends Phase1ManagementWorkerToolName> = (
@@ -94,6 +97,7 @@ export function createManagementToolExecutor(input: {
 
 export function createPhase2ManagementToolHandlers(input: {
   readonly kernel: TaskCoordinationKernel;
+  readonly acceptanceService: SubtaskAcceptanceService;
 }): Phase2ToolHandlers {
   const { kernel } = input;
   return {
@@ -141,7 +145,7 @@ export function createPhase2ManagementToolHandlers(input: {
       return { taskId: retried.taskId, taskRevision: retried.taskRevision, attempt: retried.attempt };
     },
     'tasks.accept_subtask': async (request) => {
-      const accepted = await kernel.acceptSubtask({
+      const accepted = await input.acceptanceService.decide({
         authority: authority(request), idempotencyKey: request.idempotencyKey,
         acceptance: request.input.acceptance,
       });
@@ -168,6 +172,9 @@ export function createPhase2InvocationToolHandlers(input: {
 }): Pick<Phase2ToolHandlers, 'agents.invoke'> {
   const { repositories, kernel, clock, ids } = input;
   const gateway = createInvocationGateway({ repositories, clock, ids });
+  const deliveryService = createSubtaskDeliveryService({
+    unitOfWork: repositories.taskCoordinationUnitOfWork, clock, ids,
+  });
   const pollIntervalMs = input.pollIntervalMs ?? 50;
   const terminalTimeoutMs = input.terminalTimeoutMs ?? 5 * 60_000;
   return {
@@ -197,7 +204,27 @@ export function createPhase2InvocationToolHandlers(input: {
           Date.now() + terminalTimeoutMs),
         pollIntervalMs,
       });
-      return { invocationId: terminal.id, status: terminal.status };
+      if (terminal.status !== 'succeeded') return { invocationId: terminal.id, status: terminal.status };
+      const dispatchId = terminal.dispatchAttempts.at(-1)?.dispatchId;
+      const message = await findAgentDelivery(repositories, run, dispatchId);
+      if (!message || !dispatchId) throw new Error('MANAGEMENT_AGENT_DELIVERY_MISSING');
+      const artifacts = (await repositories.artifacts.listByMessage(message.id))
+        .filter((artifact) => artifact.dispatchId === dispatchId)
+        .sort((left, right) => left.id.localeCompare(right.id));
+      const workspaceRuns = (await repositories.workspaceRuns.listByDispatch(dispatchId))
+        .sort((left, right) => left.id.localeCompare(right.id));
+      const delivered = await deliveryService.submit({ authority: authority(request),
+        idempotencyKey: `${request.idempotencyKey}:delivery`, taskId: request.input.taskId,
+        expectedTaskRevision: request.input.expectedTaskRevision,
+        taskAttempt: request.input.taskAttempt, claimLeaseId: request.input.claimLeaseId,
+        invocationId: terminal.id, summary: message.body,
+        locators: [{ kind: 'message', id: message.id },
+          ...artifacts.map((artifact) => ({ kind: 'artifact' as const, id: artifact.id })),
+          ...workspaceRuns.map((workspaceRun) => ({ kind: 'workspace-run' as const, id: workspaceRun.id })),
+          { kind: 'invocation', id: terminal.id }, { kind: 'task', id: request.input.taskId }],
+      });
+      return { invocationId: terminal.id, status: terminal.status,
+        ...deliveryOutput(delivered.delivery) };
     },
   };
 }
@@ -500,9 +527,15 @@ async function waitForInvocationDelivery(input: {
 }
 
 async function hasAgentDelivery(repositories: ServerNextRepositories, run: ManagementRunDto, dispatchId: string | undefined): Promise<boolean> {
-  if (!dispatchId) return false;
+  return (await findAgentDelivery(repositories, run, dispatchId)) !== null;
+}
+
+async function findAgentDelivery(repositories: ServerNextRepositories, run: ManagementRunDto,
+  dispatchId: string | undefined): Promise<MessageRecord | null> {
+  if (!dispatchId) return null;
   const messages = await repositories.messages.listByThread({ channelId: run.channelId, threadId: run.rootMessageId, limit: 200 });
-  return messages.some((message) => message.senderKind === 'agent' && message.meta?.dispatchId === dispatchId);
+  return messages.find((message) => message.senderKind === 'agent'
+    && message.meta?.dispatchId === dispatchId) ?? null;
 }
 
 function isTerminalInvocation(status: AgentInvocationStatus): status is Extract<AgentInvocationStatus, 'succeeded' | 'failed' | 'cancelled' | 'timed_out'> {
