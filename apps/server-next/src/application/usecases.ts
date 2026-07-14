@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand } from './device-invite-command.js';
@@ -413,6 +413,7 @@ export interface SendMessageInput {
   senderKind?: string;
   connectedAgentDeviceIds?: string[];
   dispatchClaimDeviceIds?: string[];
+  meta?: MessageMetaDto;
 }
 
 export interface SendMessageResult {
@@ -2570,6 +2571,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
           ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
           ...(task ? { taskId: task.id } : {}),
+          ...(messageInput.meta?.mentions?.length ? { mentions: messageInput.meta.mentions } : {}),
           routeReason: toRouteReason(route),
         },
       });
@@ -5220,6 +5222,12 @@ function taskIdForMessage(message: MessageRecord): string | undefined {
 }
 
 function messageMentionTargetsAgent(message: MessageRecord, agent: AgentRecord): boolean {
+  // 优先：结构化 mention（精确 id，改名后仍准确）
+  const mentions = message.meta?.mentions;
+  if (Array.isArray(mentions) && mentions.some((m) => m?.kind === 'agent' && m?.id === agent.id)) {
+    return true;
+  }
+  // fallback：从 body 文本 @name 匹配（旧消息/无 mentions）
   const mentionText = message.body.trimStart().match(/^@(.+)/)?.[1];
   if (!mentionText) {
     return true;
