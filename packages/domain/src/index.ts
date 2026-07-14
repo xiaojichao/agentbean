@@ -10,3 +10,4 @@ export * from './task-dag-policy.js';
 export * from './task-revision-policy.js';
 export * from './task-claim-policy.js';
 export * from './subtask-acceptance-policy.js';
+export * from './memory-policy.js';
