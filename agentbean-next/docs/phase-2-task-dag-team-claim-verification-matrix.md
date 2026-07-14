@@ -31,4 +31,4 @@
 
 当前 verdict：**Not ready**。Phase 2 仍默认关闭，Team 继续使用 Phase 1 能力。
 
-Issue #551 当前证据：`managed-multi-agent.test.ts` 覆盖失败 Invocation 的受控 attempt、max attempts 后 `waiting_for_user`、双叶子 canonical acceptance、根汇总贡献集 fail closed、根 Task `in_review` 与人类拒绝后 revision 递增且历史 acceptance 不被覆盖；`task-claim-broker.test.ts` 覆盖 claim 到期重开与 fencing 单调；既有 delivery/acceptance 与 Invocation Gateway tests 继续覆盖 stale revision/attempt/lease 隔离。Node 24 下 boundary 5、contracts 35、PI runtime 36、Domain 121、server-next 515 项测试及 `build:phase2-task-dag` 均通过。Phase 2 仍默认关闭；真实双 Agent Device 与 Web surface 尚未完成。
+Issue #551 当前证据：`managed-multi-agent.test.ts` 覆盖失败 Invocation（含 Dispatch emit failure）的受控 attempt、max attempts 后 `waiting_for_user`、双叶子 canonical acceptance、根汇总贡献集 fail closed、根 Task `in_review` 与人类拒绝后 revision 递增且历史 acceptance 不被覆盖；`task-claim-broker.test.ts` 覆盖 claim 到期重开与 fencing 单调；既有 delivery/acceptance 与 Invocation Gateway tests 继续覆盖 stale revision/attempt/lease 隔离。Node 24 下 boundary 5、contracts 35、PI runtime 36、Domain 121、server-next 516 项测试及 `build:phase2-task-dag` 均通过。Phase 2 仍默认关闭；真实双 Agent Device 与 Web surface 尚未完成。

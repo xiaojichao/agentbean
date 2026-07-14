@@ -1,12 +1,34 @@
 import { describe, expect, test } from 'vitest';
 import { createInvocationGateway } from '../src/application/management/invocation-gateway.js';
 import { createManagementKernel } from '../src/application/management/management-kernel.js';
-import { createPhase1ManagementToolHandlers } from '../src/application/management/management-tool-executor.js';
+import { createPhase1ManagementToolHandlers, createPhase2InvocationToolHandlers } from '../src/application/management/management-tool-executor.js';
 import { createTaskCoordinationKernel } from '../src/application/management/task-coordination-kernel.js';
 import { createServerNextUseCases } from '../src/application/usecases.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 
 describe('Phase 2 managed multi-agent recovery and root delivery', () => {
+  test('Dispatch emit failure uses the same controlled recovery instead of failing the whole Run', async () => {
+    const harness = await createHarness();
+    await startAttempt(harness, 'claim-a-1', 1, 'invoke-a-1');
+    const handlers = createPhase2InvocationToolHandlers({ repositories: harness.repositories,
+      kernel: harness.managementKernel, taskCoordinationKernel: harness.taskKernel,
+      clock: harness.clock, ids: harness.ids,
+      onDispatchCreated: () => { throw new Error('socket unavailable'); } });
+    await expect(handlers['agents.invoke']!({ schemaVersion: 2, managementPhase: 2,
+      commandId: 'emit-failure', managementRunId: harness.runId, workerId: 'worker-1',
+      toolCallId: 'emit-failure', toolName: 'agents.invoke', leaseToken: 'manager-token',
+      fencingToken: 1, idempotencyKey: 'emit-failure', input: { taskId: 'task-a',
+        expectedTaskRevision: 1, taskAttempt: 1, claimLeaseId: 'claim-a-1',
+        objective: '执行 A', attachmentIds: [] } }))
+      .rejects.toThrow('MANAGEMENT_DISPATCH_EMIT_FAILED');
+    await expect(harness.repositories.tasks.getById('task-a'))
+      .resolves.toMatchObject({ status: 'todo' });
+    await expect(harness.repositories.taskCoordination.coordinations.getByTaskId('task-a'))
+      .resolves.toMatchObject({ attempt: 2 });
+    await expect(harness.repositories.management.runs.getById(harness.runId))
+      .resolves.toMatchObject({ status: 'running' });
+  });
+
   test('failed Invocation advances one controlled attempt and exhausts into waiting_for_user', async () => {
     const harness = await createHarness();
     await startAttempt(harness, 'claim-a-1', 1, 'invoke-a-1');

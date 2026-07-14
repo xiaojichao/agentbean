@@ -164,6 +164,7 @@ export function createPhase2ManagementToolHandlers(input: {
 export function createPhase2InvocationToolHandlers(input: {
   readonly repositories: ServerNextRepositories;
   readonly kernel: ManagementKernel;
+  readonly taskCoordinationKernel?: TaskCoordinationKernel;
   readonly clock: { now(): number };
   readonly ids: { nextId(): string };
   readonly onDispatchCreated: (dispatchId: string) => Promise<void> | void;
@@ -193,8 +194,15 @@ export function createPhase2InvocationToolHandlers(input: {
         } catch {
           await gateway.completeAttempt({ dispatchId, status: 'failed',
             error: 'MANAGEMENT_DISPATCH_EMIT_FAILED', actorKind: 'system' });
-          await kernel.recordInvocationTerminal({ managementRunId: run.id, dispatchId,
-            status: 'failed', errorCode: 'MANAGEMENT_DISPATCH_EMIT_FAILED' });
+          if (input.taskCoordinationKernel) {
+            await input.taskCoordinationKernel.recordInvocationFailure({
+              managementRunId: run.id, invocationId: invoked.view.id,
+              reasonCode: 'MANAGEMENT_DISPATCH_EMIT_FAILED',
+            });
+          } else {
+            await kernel.recordInvocationTerminal({ managementRunId: run.id, dispatchId,
+              status: 'failed', errorCode: 'MANAGEMENT_DISPATCH_EMIT_FAILED' });
+          }
           throw new Error('MANAGEMENT_DISPATCH_EMIT_FAILED');
         }
       }

@@ -1239,6 +1239,7 @@ function createDefaultManagementRuntime(
         ...createPhase2InvocationToolHandlers({
           repositories,
           kernel,
+          taskCoordinationKernel,
           clock,
           ids,
           onDispatchCreated: async (dispatchId) => {
