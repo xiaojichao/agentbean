@@ -40,7 +40,11 @@ export function runAgentBeanNextDaemonInstallSmoke({
       packagesDir,
       ['dist/index.js', 'dist/index.d.ts'],
     );
-    const daemonTarball = packPackage(canonicalReleaseDir, packagesDir);
+    const daemonTarball = packPackage(canonicalReleaseDir, packagesDir, [
+      'dist/apps/daemon-next/src/device-service-core.js',
+      'dist/apps/daemon-next/src/management-worker-protocol.js',
+      'dist/apps/daemon-next/src/pi-manager-worker-host.js',
+    ]);
 
     writeFileSync(
       join(installDir, 'package.json'),
@@ -68,7 +72,12 @@ export function runAgentBeanNextDaemonInstallSmoke({
     run(process.execPath, [
       '--input-type=module',
       '--eval',
-      "const runtime = await import('@agentbean/pi-management-runtime'); if (typeof runtime.createManagementRuntimeFactory !== 'function' || runtime.PHASE_1_MANAGEMENT_TOOL_NAMES?.length !== 11) process.exit(1);",
+      "const runtime = await import('@agentbean/pi-management-runtime'); if (typeof runtime.createManagementRuntimeFactory !== 'function' || runtime.PHASE_1_MANAGEMENT_TOOL_NAMES?.length !== 11 || runtime.PHASE_2_MANAGEMENT_TOOL_NAMES?.length !== 19 || !runtime.PHASE_2_MANAGEMENT_TOOL_NAMES.includes('tasks.create_subtasks')) process.exit(1);",
+    ], { cwd: installDir });
+    run(process.execPath, [
+      '--input-type=module',
+      '--eval',
+      "const daemon = await import('@agentbean/daemon'); if (typeof daemon.createDeviceServiceCore !== 'function' || typeof daemon.createPiManagerWorkerHost !== 'function' || typeof daemon.createTaskClaimProtocol !== 'function') process.exit(1);",
     ], { cwd: installDir });
 
     const expectedBins = ['daemon', 'agentbean-daemon', 'agentbean-next-daemon'];
