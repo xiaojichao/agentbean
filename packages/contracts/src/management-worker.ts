@@ -408,6 +408,9 @@ const oneOf = (values: readonly unknown[]): Validator => (value, path) => {
 const text = (maxLength = 32_768): Validator => (value, path) => {
   if (typeof value !== 'string' || value.length === 0 || value.length > maxLength) invalid(path);
 };
+const textAllowEmpty = (maxLength = 32_768): Validator => (value, path) => {
+  if (typeof value !== 'string' || value.length > maxLength) invalid(path);
+};
 
 const id = text(256);
 const shortText = text(512);
@@ -527,10 +530,18 @@ const checkpointSchema = exactObject({
     waitingInvocationIds: required(arrayOf(id)),
     completedInvocationIds: required(arrayOf(id)),
     memoryCapsuleIds: required(arrayOf(id)),
+    taskSnapshots: optional(arrayOf(exactObject({
+      taskId: required(id),
+      taskRevision: required(integer(1)),
+      taskAttempt: required(integer(1)),
+      status: required(oneOf(['todo', 'in_progress', 'in_review', 'done', 'closed'])),
+      claimLeaseId: optional(id),
+    }))),
+    activeClaimLeaseIds: optional(arrayOf(id)),
   })),
   contextHints: required(exactObject({
     objective: required(text()),
-    planSummary: required(text()),
+    planSummary: required(textAllowEmpty()),
     completedInvocationSummaries: required(arrayOf(exactObject({
       invocationId: required(id),
       summary: required(text()),

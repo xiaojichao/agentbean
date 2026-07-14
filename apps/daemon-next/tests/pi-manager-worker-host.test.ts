@@ -146,4 +146,114 @@ describe('PiManagerWorkerHost', () => {
     expect(handlers()!.reserveLeaseOffer(first)).toBe(true);
     expect(handlers()!.reserveLeaseOffer(second)).toBe(false);
   });
+
+  test('Phase 1 checkpoint 遇到非零 Task graph revision 时 fail-closed', async () => {
+    const { protocol, handlers } = createProtocolHarness();
+    const baseline = await createProtocolHarness().protocol.fetchCheckpoint({
+      schemaVersion: 1, managementRunId: 'run-1', workerId: 'worker-1',
+      leaseToken: 'raw-lease-token', fencingToken: 1,
+    });
+    if (!baseline.checkpoint) throw new Error('TEST_CHECKPOINT_REQUIRED');
+    vi.mocked(protocol.fetchCheckpoint).mockResolvedValue({
+      ...baseline,
+      checkpoint: {
+        ...baseline.checkpoint,
+        authoritative: { ...baseline.checkpoint.authoritative, taskGraphRevision: 1 },
+      },
+    });
+    const runtimeFactory: ManagementRuntimeFactory = { createSession: vi.fn() };
+    const host = createPiManagerWorkerHost({
+      profileId: 'profile-1', runtimeVersion: '0.1.0', protocol,
+      credentialProvider: { resolve: async () => ({ credentialStatus: 'production_ready',
+        providerId: 'provider-1', modelId: 'model-1', apiKey: 'secret', baseUrl: 'https://model.invalid' }) },
+      createRuntimeFactory: () => runtimeFactory,
+      outbox: { enqueue: vi.fn(), remove: vi.fn(), list: vi.fn(() => []), size: vi.fn(() => 0) },
+      now: () => 100,
+    });
+    await host.start();
+    const offer = { schemaVersion: 1 as const, offerId: 'offer-1', managementRunId: 'run-1',
+      workerId: 'worker-1', offerExpiresAt: 1_000 };
+    expect(handlers()!.reserveLeaseOffer(offer)).toBe(true);
+    await handlers()!.onLeaseOffer(offer);
+
+    expect(runtimeFactory.createSession).not.toHaveBeenCalled();
+    expect(protocol.abortLease).toHaveBeenCalledWith(expect.objectContaining({
+      reasonCode: 'session-start-failed',
+    }));
+    expect(host.activeLeaseCount()).toBe(0);
+  });
+
+  test('从 authoritative DAG checkpoint 恢复 Phase 2 exact tools，重连后继续同一 Run 而不重建 DAG', async () => {
+    const { protocol, handlers } = createProtocolHarness();
+    vi.mocked(protocol.fetchCheckpoint).mockResolvedValue({
+      schemaVersion: 1, managementRunId: 'run-1', workerId: 'worker-1',
+      context: { schemaVersion: 1, teamId: 'team-1', channelId: 'channel-1',
+        rootMessageId: 'message-1', rootTaskId: 'root-task',
+        frozenTarget: { agentId: 'agent-1', kind: 'custom' },
+        visibleThread: { revision: 1, messages: [{ id: 'message-1', senderKind: 'human',
+          senderId: 'user-1', body: '继续 DAG', createdAt: 1 }] } },
+      checkpoint: { schemaVersion: 1, managementRunId: 'run-1', revision: 3,
+        authoritative: { lastEventSequence: 8, taskGraphRevision: 2,
+          openTaskIds: ['root-task', 'child-task'], waitingInvocationIds: [],
+          completedInvocationIds: [], memoryCapsuleIds: [], activeClaimLeaseIds: ['claim-1'],
+          taskSnapshots: [
+            { taskId: 'child-task', taskRevision: 2, taskAttempt: 1, status: 'in_progress', claimLeaseId: 'claim-1' },
+            { taskId: 'root-task', taskRevision: 1, taskAttempt: 1, status: 'todo' },
+          ] },
+        contextHints: { objective: '继续 DAG', planSummary: 'child active',
+          completedInvocationSummaries: [], unresolvedQuestions: [] }, updatedAt: 100 },
+    });
+    vi.mocked(protocol.executeTool).mockImplementation(async (request) => ({
+      schemaVersion: 2, managementPhase: 2, commandId: request.commandId,
+      managementRunId: request.managementRunId, workerId: request.workerId,
+      toolCallId: request.toolCallId, toolName: 'tasks.wait', ok: true,
+      output: { readyTaskIds: [], waitingTaskIds: ['child-task'] },
+    }));
+    let executeTool: Parameters<Parameters<typeof createPiManagerWorkerHost>[0]['createRuntimeFactory']>[0]['toolExecutor'] | undefined;
+    const sessions: ManagementSession[] = [];
+    const runtimeFactory: ManagementRuntimeFactory = { createSession: vi.fn(async () => {
+      const session: ManagementSession = { prompt: vi.fn(() => new Promise<void>(() => undefined)),
+        steer: vi.fn(), followUp: vi.fn(), compact: vi.fn(), abort: vi.fn(), waitForIdle: vi.fn(),
+        subscribe: vi.fn(() => () => undefined), dispose: vi.fn() };
+      sessions.push(session);
+      return session;
+    }) };
+    const host = createPiManagerWorkerHost({ profileId: 'profile-1', runtimeVersion: '0.1.0', protocol,
+      credentialProvider: { resolve: async () => ({ credentialStatus: 'production_ready',
+        providerId: 'provider-1', modelId: 'model-1', apiKey: 'secret', baseUrl: 'https://model.invalid' }) },
+      createRuntimeFactory: (input) => { executeTool = input.toolExecutor; return runtimeFactory; },
+      outbox: { enqueue: vi.fn(), remove: vi.fn(), list: vi.fn(() => []), size: vi.fn(() => 0) },
+      now: () => 100 });
+    await host.start();
+    const offer = { schemaVersion: 1 as const, offerId: 'offer-1', managementRunId: 'run-1',
+      workerId: 'worker-1', offerExpiresAt: 1_000 };
+    expect(handlers()!.reserveLeaseOffer(offer)).toBe(true);
+    await handlers()!.onLeaseOffer(offer);
+    expect(runtimeFactory.createSession).toHaveBeenLastCalledWith(expect.objectContaining({
+      context: expect.objectContaining({ schemaVersion: 2, managementPhase: 2,
+        scope: expect.objectContaining({ rootTaskId: 'root-task' }),
+        checkpoint: expect.objectContaining({ taskGraphRevision: 2,
+          openTaskIds: ['root-task', 'child-task'], activeClaimLeaseIds: ['claim-1'],
+          taskSnapshots: expect.arrayContaining([expect.objectContaining({ taskId: 'child-task',
+            taskRevision: 2, taskAttempt: 1, claimLeaseId: 'claim-1' })]) }),
+      }),
+    }));
+    await expect(executeTool!({ toolCallId: 'wait-1', name: 'tasks.wait',
+      scope: { kind: 'managed', managementRunId: 'run-1', teamId: 'team-1', channelId: 'channel-1',
+        rootMessageId: 'message-1', rootTaskId: 'root-task' }, input: { taskIds: ['child-task'] },
+      metadata: { name: 'tasks.wait', effect: 'read', phase: 2, inputSchemaVersion: 1 } }))
+      .resolves.toEqual({ text: JSON.stringify({ readyTaskIds: [], waitingTaskIds: ['child-task'] }) });
+    expect(protocol.executeTool).toHaveBeenLastCalledWith(expect.objectContaining({
+      schemaVersion: 2, managementPhase: 2, toolName: 'tasks.wait', leaseToken: 'raw-lease-token',
+    }));
+
+    await handlers()!.onDisconnect();
+    await handlers()!.onReconnect?.('worker-1');
+    const resumedOffer = { ...offer, offerId: 'offer-2' };
+    expect(handlers()!.reserveLeaseOffer(resumedOffer)).toBe(true);
+    await handlers()!.onLeaseOffer(resumedOffer);
+    expect(runtimeFactory.createSession).toHaveBeenCalledTimes(2);
+    expect(protocol.executeTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: 'tasks.create_subtasks' }));
+    expect(sessions).toHaveLength(2);
+  });
 });

@@ -2,10 +2,12 @@ import type {
   AcceptanceCriterionDto,
   ManagementEventV1,
   ManagementEventPayloadMapV1,
+  SubtaskAcceptanceV1,
   TaskStatus,
 } from '../../../../../packages/contracts/src/index.js';
 import {
   authorizeTaskRevision,
+  evaluateSubtaskAcceptance,
   evaluateTaskDag,
   evaluateTaskRevisionChange,
 } from '../../../../../packages/domain/src/index.js';
@@ -34,7 +36,8 @@ import {
 type TransactionRepositories = TaskCoordinationTransactionRepositories;
 type TaskCoordinationEventType =
   | 'task-created' | 'task-revised' | 'task-state-changed'
-  | 'task-published-for-claim' | 'task-assigned' | 'claim-invalidated';
+  | 'task-published-for-claim' | 'task-assigned' | 'claim-invalidated'
+  | 'task-acceptance-decided';
 
 interface CommandReplay {
   readonly events: readonly ManagementEventRecord[];
@@ -442,6 +445,209 @@ export function createTaskCoordinationKernel(
           disposition: 'updated' as const };
       });
     },
+
+    async waitForTasks(input: { managementRunId: string; taskIds: readonly string[] }) {
+      return unitOfWork.run(async (repositories) => {
+        const run = await repositories.management.runs.getById(input.managementRunId);
+        if (!run) conflict('MANAGEMENT_RUN_NOT_FOUND');
+        if (input.taskIds.length === 0 || new Set(input.taskIds).size !== input.taskIds.length) {
+          conflict('TASK_WAIT_SET_INVALID');
+        }
+        const readyTaskIds: string[] = [];
+        const waitingTaskIds: string[] = [];
+        for (const taskId of input.taskIds) {
+          const task = await requireTask(repositories, taskId);
+          await requireCoordinationForRun(repositories, taskId, run.id);
+          if (task.status === 'in_review' || task.status === 'done' || task.status === 'closed') {
+            readyTaskIds.push(task.id);
+          } else {
+            waitingTaskIds.push(task.id);
+          }
+        }
+        return { readyTaskIds, waitingTaskIds };
+      });
+    },
+
+    async retryTask(input: TaskCoordinationCommandInput & {
+      taskId: string; expectedTaskRevision: number; reasonCode: string;
+    }) {
+      return unitOfWork.run(async (repositories) => {
+        const now = clock.now();
+        const run = await authorizeCommand(repositories, input.authority, now);
+        const commandHash = hashManagementCommandInput({ command: 'retry-task',
+          taskId: input.taskId, expectedTaskRevision: input.expectedTaskRevision,
+          reasonCode: input.reasonCode });
+        const replay = await findReplay(repositories, run.id, input.idempotencyKey, commandHash);
+        if (replay) {
+          const event = requireReplayEvent(replay, 'task-state-changed');
+          const attempt = 1 + (await repositories.management.events.list(run.id))
+            .filter(({ event: candidate }) => candidate.sequence <= event.sequence
+              && candidate.type === 'task-state-changed'
+              && candidate.payload.taskId === event.payload.taskId
+              && candidate.payload.from === 'in_review' && candidate.payload.to === 'todo').length;
+          return { taskId: event.payload.taskId, taskRevision: event.payload.taskRevision,
+            attempt, disposition: 'existing' as const };
+        }
+        const task = await requireTask(repositories, input.taskId);
+        const coordination = await requireSubtaskCoordination(repositories, input.taskId, run.id);
+        assertExpectedRevision(task.revision, input.expectedTaskRevision);
+        if (task.status !== 'in_review') conflict('TASK_RETRY_STATE_CONFLICT');
+        if (coordination.attempt >= coordination.maxAttempts) conflict('TASK_RETRY_BUDGET_EXHAUSTED');
+        const claim = await repositories.coordination.claimLeases.getCurrent({
+          taskId: task.id, taskRevision: task.revision, taskAttempt: coordination.attempt,
+        });
+        const updatedCoordination = await repositories.coordination.coordinations.update({
+          expectedTaskRevision: task.revision,
+          record: { ...coordination, attempt: coordination.attempt + 1, updatedAt: now },
+        });
+        if (!updatedCoordination) conflict('TASK_COORDINATION_REVISION_CONFLICT');
+        const updated = await repositories.tasks.update({ taskId: task.id,
+          changes: { status: 'todo', updatedAt: now } });
+        if (!updated) conflict('TASK_NOT_FOUND');
+        const event = await appendTaskEvent(repositories, {
+          managementRunId: run.id, type: 'task-state-changed', actorKind: 'manager',
+          actorId: input.authority.workerId, idempotencyKey: input.idempotencyKey,
+          payload: { taskId: task.id, taskRevision: task.revision, from: 'in_review', to: 'todo' },
+        }, now, ids, commandHash);
+        await invalidateCapturedClaim(repositories, run.id, input.authority.workerId,
+          `${input.idempotencyKey}:claim-invalidated`, commandHash, claim,
+          input.reasonCode, now, ids);
+        return { taskId: task.id, taskRevision: task.revision,
+          attempt: updatedCoordination.attempt, disposition: 'updated' as const };
+      });
+    },
+
+    async acceptSubtask(input: TaskCoordinationCommandInput & {
+      acceptance: SubtaskAcceptanceV1;
+    }) {
+      return unitOfWork.run(async (repositories) => {
+        const now = clock.now();
+        const run = await authorizeCommand(repositories, input.authority, now);
+        const commandHash = hashManagementCommandInput({ command: 'accept-subtask',
+          acceptance: input.acceptance });
+        const replay = await findReplay(repositories, run.id, input.idempotencyKey, commandHash);
+        if (replay) {
+          const event = requireReplayEvent(replay, 'task-acceptance-decided');
+          const task = await requireTask(repositories, event.payload.taskId);
+          return { taskId: task.id, taskRevision: task.revision,
+            status: task.status === 'done' ? 'done' as const : 'in_review' as const,
+            disposition: 'existing' as const };
+        }
+        const acceptance = input.acceptance;
+        if (acceptance.decidedBy !== 'manager') conflict('TASK_ACCEPTANCE_ACTOR_MISMATCH');
+        const task = await requireTask(repositories, acceptance.taskId);
+        const coordination = await requireSubtaskCoordination(repositories, task.id, run.id);
+        assertExpectedRevision(task.revision, acceptance.expectedTaskRevision);
+        if (coordination.attempt !== acceptance.taskAttempt) conflict('TASK_ATTEMPT_CONFLICT');
+        if (task.status !== 'in_review') conflict('TASK_ACCEPTANCE_STATE_CONFLICT');
+        const delivery = await repositories.coordination.deliveries.getById(acceptance.deliveryId);
+        if (!delivery || delivery.taskId !== task.id || delivery.taskRevision !== task.revision
+          || delivery.taskAttempt !== coordination.attempt
+          || delivery.claimLeaseId !== acceptance.claimLeaseId) {
+          conflict('TASK_DELIVERY_AUTHORITY_MISMATCH');
+        }
+        const claim = await repositories.coordination.claimLeases.getById(acceptance.claimLeaseId);
+        if (!claim || claim.taskId !== task.id || claim.taskRevision !== task.revision
+          || claim.taskAttempt !== coordination.attempt) conflict('TASK_CLAIM_AUTHORITY_MISMATCH');
+        const currentClaim = await repositories.coordination.claimLeases.getCurrent({
+          taskId: task.id, taskRevision: task.revision, taskAttempt: coordination.attempt,
+        });
+        if (claim.status !== 'active' || claim.expiresAt <= now || currentClaim?.id !== claim.id) {
+          conflict('TASK_CLAIM_NOT_ACTIVE');
+        }
+        if (await repositories.coordination.acceptances.getCanonicalByDelivery(delivery.id)) {
+          conflict('TASK_ACCEPTANCE_ALREADY_DECIDED');
+        }
+        if (acceptance.decision === 'accepted') {
+          const criteria = (await repositories.coordination.criteria.list(task.id))
+            .filter((criterion) => criterion.introducedRevision <= task.revision
+              && (criterion.retiredRevision === undefined || criterion.retiredRevision > task.revision));
+          const snapshots = (await repositories.coordination.evidenceSnapshots.listByTask(task.id))
+            .filter((snapshot) => snapshot.taskRevision === task.revision
+              && snapshot.taskAttempt === coordination.attempt
+              && snapshot.invocationId === delivery.invocationId);
+          const evidenceRefs = acceptance.criteriaResults.flatMap((result) => result.evidenceRefs);
+          const evidenceFacts = snapshots.flatMap((snapshot) => {
+            const ref = evidenceRefs.find((candidate) => snapshot.kind === candidate.kind
+              && snapshot.sourceId === candidate.id && snapshot.snapshotHash === candidate.snapshotHash
+              && snapshot.snapshotRevision === candidate.snapshotRevision
+              && snapshot.capturedAt === candidate.capturedAt);
+            return ref ? [{ ref, available: true, visible: true,
+              currentSnapshotHash: snapshot.snapshotHash }] : [];
+          });
+          if (evaluateSubtaskAcceptance({ criteria, criteriaResults: acceptance.criteriaResults,
+            evidenceSnapshots: evidenceFacts, highRisk: false, conflictingEvidence: false }).kind !== 'accepted') {
+            conflict('TASK_ACCEPTANCE_POLICY_REJECTED');
+          }
+        }
+        await repositories.coordination.acceptances.create({ ...acceptance,
+          id: ids.nextId(), teamId: run.teamId, decisionVersion: 1, canonical: true });
+        const status = acceptance.decision === 'accepted' ? 'done' as const : 'in_review' as const;
+        if (status === 'done') {
+          const updated = await repositories.tasks.update({ taskId: task.id,
+            changes: { status, updatedAt: now } });
+          if (!updated) conflict('TASK_NOT_FOUND');
+        }
+        await appendTaskEvent(repositories, {
+          managementRunId: run.id, type: 'task-acceptance-decided', actorKind: 'manager',
+          actorId: input.authority.workerId, idempotencyKey: input.idempotencyKey,
+          payload: { taskId: task.id, acceptance },
+        }, now, ids, commandHash);
+        if (status === 'done') {
+          await appendTaskEvent(repositories, {
+            managementRunId: run.id, type: 'task-state-changed', actorKind: 'manager',
+            actorId: input.authority.workerId, idempotencyKey: `${input.idempotencyKey}:state`,
+            payload: { taskId: task.id, taskRevision: task.revision, from: 'in_review', to: 'done' },
+          }, now, ids, commandHash);
+        }
+        return { taskId: task.id, taskRevision: task.revision, status,
+          disposition: 'updated' as const };
+      });
+    },
+
+    async reportBlocked(input: TaskCoordinationCommandInput & {
+      taskId: string; expectedTaskRevision: number; reasonCode: string;
+    }) {
+      return unitOfWork.run(async (repositories) => {
+        const now = clock.now();
+        const run = await authorizeCommand(repositories, input.authority, now);
+        const commandHash = hashManagementCommandInput({ command: 'report-blocked',
+          taskId: input.taskId, expectedTaskRevision: input.expectedTaskRevision,
+          reasonCode: input.reasonCode });
+        const replay = await findReplay(repositories, run.id, input.idempotencyKey, commandHash);
+        if (replay) {
+          const event = requireReplayEvent(replay, 'task-state-changed');
+          return { taskId: event.payload.taskId, status: 'todo' as const,
+            reportedAt: event.createdAt, disposition: 'existing' as const };
+        }
+        const task = await requireTask(repositories, input.taskId);
+        const coordination = await requireSubtaskCoordination(repositories, task.id, run.id);
+        assertExpectedRevision(task.revision, input.expectedTaskRevision);
+        if (task.status !== 'in_progress') conflict('TASK_BLOCKED_STATE_CONFLICT');
+        const claim = await repositories.coordination.claimLeases.getCurrent({
+          taskId: task.id, taskRevision: task.revision, taskAttempt: coordination.attempt,
+        });
+        if (coordination.attempt >= coordination.maxAttempts) conflict('TASK_RETRY_BUDGET_EXHAUSTED');
+        const updatedCoordination = await repositories.coordination.coordinations.update({
+          expectedTaskRevision: task.revision,
+          record: { ...coordination, attempt: coordination.attempt + 1, updatedAt: now },
+        });
+        if (!updatedCoordination) conflict('TASK_COORDINATION_REVISION_CONFLICT');
+        const updated = await repositories.tasks.update({ taskId: task.id,
+          changes: { status: 'todo', updatedAt: now } });
+        if (!updated) conflict('TASK_NOT_FOUND');
+        const event = await appendTaskEvent(repositories, {
+          managementRunId: run.id, type: 'task-state-changed', actorKind: 'manager',
+          actorId: input.authority.workerId, idempotencyKey: input.idempotencyKey,
+          payload: { taskId: task.id, taskRevision: task.revision, from: 'in_progress', to: 'todo' },
+        }, now, ids, commandHash);
+        await invalidateCapturedClaim(repositories, run.id, input.authority.workerId,
+          `${input.idempotencyKey}:claim-invalidated`, commandHash, claim,
+          input.reasonCode, now, ids);
+        return { taskId: task.id, status: 'todo' as const,
+          reportedAt: event.event.createdAt, disposition: 'updated' as const };
+      });
+    },
   };
 }
 
@@ -492,9 +698,7 @@ function replayTaskRevisionResult(replay: CommandReplay) {
     taskGraphRevision: replay.lastSequence, disposition: 'existing' as const };
 }
 
-async function appendTaskEvent<T extends
-  | 'task-created' | 'task-revised' | 'task-state-changed'
-  | 'task-published-for-claim' | 'task-assigned' | 'claim-invalidated'>(
+async function appendTaskEvent<T extends TaskCoordinationEventType>(
   repositories: TransactionRepositories,
   input: { managementRunId: string; type: T; actorKind: 'manager'; actorId: string;
     idempotencyKey: string; payload: ManagementEventPayloadMapV1[T] },

@@ -9,7 +9,8 @@ import { createServerNextUseCases, type ArtifactContentStore } from './applicati
 import type { ServerNextRepositories } from './application/repositories.js';
 import { createDeviceWorkerScheduler, type DeviceWorkerScheduler } from './application/management/device-worker-scheduler.js';
 import { createManagementKernel } from './application/management/management-kernel.js';
-import { createManagementToolExecutor, createPhase1ManagementToolHandlers } from './application/management/management-tool-executor.js';
+import { createManagementToolExecutor, createPhase1ManagementToolHandlers, createPhase2ManagementToolHandlers } from './application/management/management-tool-executor.js';
+import { createTaskCoordinationKernel } from './application/management/task-coordination-kernel.js';
 import { createManagementRouter } from './application/management/management-router.js';
 import { createTaskClaimBroker, type TaskClaimBroker } from './application/management/task-claim-broker.js';
 import { createInMemoryRepositories } from './infra/memory/repositories.js';
@@ -1200,23 +1201,32 @@ function createDefaultManagementRuntime(
     clock,
     ids,
   });
+  const taskCoordinationKernel = createTaskCoordinationKernel({
+    unitOfWork: repositories.taskCoordinationUnitOfWork,
+    clock,
+    ids,
+  });
   const scheduler = createDeviceWorkerScheduler({
     devices: repositories.devices,
     messages: repositories.messages,
     management: repositories.management,
+    taskCoordinationUnitOfWork: repositories.taskCoordinationUnitOfWork,
     kernel,
     executeTool: createManagementToolExecutor({
       kernel,
-      handlers: createPhase1ManagementToolHandlers({
-        repositories,
-        kernel,
-        clock,
-        ids,
-        onDispatchCreated: async (dispatchId) => {
-          if (!dispatchEmitter) throw new Error('MANAGEMENT_DISPATCH_EMITTER_UNAVAILABLE');
-          await dispatchEmitter(dispatchId);
-        },
-      }),
+      handlers: {
+        ...createPhase1ManagementToolHandlers({
+          repositories,
+          kernel,
+          clock,
+          ids,
+          onDispatchCreated: async (dispatchId) => {
+            if (!dispatchEmitter) throw new Error('MANAGEMENT_DISPATCH_EMITTER_UNAVAILABLE');
+            await dispatchEmitter(dispatchId);
+          },
+        }),
+        ...createPhase2ManagementToolHandlers({ kernel: taskCoordinationKernel }),
+      },
     }),
     clock,
     ids,

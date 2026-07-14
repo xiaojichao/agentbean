@@ -223,6 +223,116 @@ describe.each([
     }
   });
 
+  test('accepted decision requires complete evidence and the current active claim', async () => {
+    const fixture = createFixture();
+    try {
+      const harness = await createGraphHarness(fixture.repositories);
+      await fixture.repositories.taskCoordination.claimLeases.create(claim());
+      await fixture.repositories.management.invocations.create(invocation());
+      await harness.kernel.transitionTaskState({ authority: harness.authority, idempotencyKey: 'start-policy',
+        taskId: 'task-a', expectedTaskRevision: 1, from: 'todo', to: 'in_progress' });
+      await harness.kernel.transitionTaskState({ authority: harness.authority, idempotencyKey: 'review-policy',
+        taskId: 'task-a', expectedTaskRevision: 1, from: 'in_progress', to: 'in_review' });
+      await fixture.repositories.taskCoordination.deliveries.create({ schemaVersion: 1, id: 'delivery-policy',
+        teamId: 'team-1', taskId: 'task-a', taskRevision: 1, taskAttempt: 1,
+        claimLeaseId: 'claim-a', invocationId: 'invocation-a', summary: 'claims success without evidence',
+        claims: [], evidenceRefs: [], idempotencyKey: 'delivery-policy-key', createdAt: 90 });
+      const acceptance = { schemaVersion: 1 as const, taskId: 'task-a', deliveryId: 'delivery-policy',
+        expectedTaskRevision: 1, taskAttempt: 1, claimLeaseId: 'claim-a', decision: 'accepted' as const,
+        criteriaResults: [{ criterionId: 'criterion-a', passed: true, evidenceRefs: [] }],
+        reason: 'accepted', decidedBy: 'manager' as const, decidedAt: 100 };
+
+      await expect(harness.kernel.acceptSubtask({ authority: harness.authority,
+        idempotencyKey: 'accept-missing-evidence', acceptance }))
+        .rejects.toMatchObject<Partial<ManagementConflictError>>({ code: 'TASK_ACCEPTANCE_POLICY_REJECTED' });
+      await expect(fixture.repositories.tasks.getById('task-a')).resolves.toMatchObject({ status: 'in_review' });
+      await expect(fixture.repositories.taskCoordination.acceptances.getCanonicalByDelivery('delivery-policy'))
+        .resolves.toBeNull();
+
+      await fixture.repositories.taskCoordination.claimLeases.update({ id: 'claim-a',
+        expectedStatus: 'active', status: 'released', heartbeatAt: 100, expiresAt: 1_000, releasedAt: 100 });
+      await expect(harness.kernel.acceptSubtask({ authority: harness.authority,
+        idempotencyKey: 'accept-released-claim', acceptance: {
+          ...acceptance, decision: 'rejected',
+          criteriaResults: [{ criterionId: 'criterion-a', passed: false, evidenceRefs: [] }],
+        } })).rejects.toMatchObject<Partial<ManagementConflictError>>({ code: 'TASK_CLAIM_NOT_ACTIVE' });
+    } finally {
+      fixture.close();
+    }
+  });
+
+  test('persists manager acceptance, retries with a new attempt, and reports blocked work back to todo', async () => {
+    const fixture = createFixture();
+    try {
+      const harness = await createGraphHarness(fixture.repositories);
+      await fixture.repositories.taskCoordination.claimLeases.create(claim());
+      await fixture.repositories.management.invocations.create(invocation());
+      await harness.kernel.transitionTaskState({ authority: harness.authority, idempotencyKey: 'start-a',
+        taskId: 'task-a', expectedTaskRevision: 1, from: 'todo', to: 'in_progress' });
+      await harness.kernel.transitionTaskState({ authority: harness.authority, idempotencyKey: 'review-a',
+        taskId: 'task-a', expectedTaskRevision: 1, from: 'in_progress', to: 'in_review' });
+      await fixture.repositories.taskCoordination.deliveries.create({ schemaVersion: 1, id: 'delivery-a',
+        teamId: 'team-1', taskId: 'task-a', taskRevision: 1, taskAttempt: 1,
+        claimLeaseId: 'claim-a', invocationId: 'invocation-a', summary: 'needs retry', claims: [],
+        evidenceRefs: [], idempotencyKey: 'delivery-key', createdAt: 90 });
+      const acceptance = { schemaVersion: 1 as const, taskId: 'task-a', deliveryId: 'delivery-a',
+        expectedTaskRevision: 1, taskAttempt: 1, claimLeaseId: 'claim-a', decision: 'rejected' as const,
+        criteriaResults: [{ criterionId: 'criterion-a', passed: false, evidenceRefs: [] }],
+        reason: 'criterion failed', decidedBy: 'manager' as const, decidedAt: 100 };
+      const decided = await harness.kernel.acceptSubtask({ authority: harness.authority,
+        idempotencyKey: 'accept-a', acceptance });
+      await expect(harness.kernel.acceptSubtask({ authority: harness.authority,
+        idempotencyKey: 'accept-a', acceptance })).resolves.toEqual({ ...decided, disposition: 'existing' });
+      expect(decided).toMatchObject({ status: 'in_review', taskRevision: 1 });
+      await expect(fixture.repositories.taskCoordination.acceptances.getCanonicalByDelivery('delivery-a'))
+        .resolves.toMatchObject({ decision: 'rejected', canonical: true });
+
+      const retried = await harness.kernel.retryTask({ authority: harness.authority,
+        idempotencyKey: 'retry-a', taskId: 'task-a', expectedTaskRevision: 1, reasonCode: 'FAILED_CRITERION' });
+      expect(retried).toMatchObject({ taskRevision: 1, attempt: 2 });
+      await expect(fixture.repositories.tasks.getById('task-a')).resolves.toMatchObject({ status: 'todo' });
+      await expect(fixture.repositories.taskCoordination.claimLeases.getById('claim-a'))
+        .resolves.toMatchObject({ status: 'invalidated' });
+
+      await harness.kernel.transitionTaskState({ authority: harness.authority, idempotencyKey: 'start-b',
+        taskId: 'task-b', expectedTaskRevision: 1, from: 'todo', to: 'in_progress' });
+      const blocked = await harness.kernel.reportBlocked({ authority: harness.authority,
+        idempotencyKey: 'blocked-b', taskId: 'task-b', expectedTaskRevision: 1,
+        reasonCode: 'DEPENDENCY_UNAVAILABLE' });
+      expect(blocked).toMatchObject({ status: 'todo', reportedAt: 100 });
+      await expect(fixture.repositories.tasks.getById('task-b')).resolves.toMatchObject({ status: 'todo' });
+      await expect(fixture.repositories.taskCoordination.coordinations.getByTaskId('task-b'))
+        .resolves.toMatchObject({ attempt: 2 });
+
+      await fixture.repositories.taskCoordination.claimLeases.create({ ...claim(), id: 'claim-b',
+        taskId: 'task-b', taskAttempt: 2, agentId: 'agent-2' });
+      await fixture.repositories.management.invocations.create({ ...invocation(), id: 'invocation-b',
+        idempotencyKey: 'invocation-b-key', intentHash: 'invocation-b-hash',
+        intent: { ...invocation().intent, targetAgentId: 'agent-2', taskContext: {
+          taskId: 'task-b', rootTaskId: 'root-task', taskRevision: 1,
+          taskAttempt: 2, claimLeaseId: 'claim-b' } } });
+      await harness.kernel.transitionTaskState({ authority: harness.authority, idempotencyKey: 'restart-b',
+        taskId: 'task-b', expectedTaskRevision: 1, from: 'todo', to: 'in_progress' });
+      await harness.kernel.transitionTaskState({ authority: harness.authority, idempotencyKey: 'review-b',
+        taskId: 'task-b', expectedTaskRevision: 1, from: 'in_progress', to: 'in_review' });
+      await fixture.repositories.taskCoordination.deliveries.create({ schemaVersion: 1, id: 'delivery-b',
+        teamId: 'team-1', taskId: 'task-b', taskRevision: 1, taskAttempt: 2,
+        claimLeaseId: 'claim-b', invocationId: 'invocation-b', summary: 'done', claims: [],
+        evidenceRefs: [], idempotencyKey: 'delivery-b-key', createdAt: 100 });
+      await expect(harness.kernel.acceptSubtask({ authority: harness.authority, idempotencyKey: 'accept-b',
+        acceptance: { schemaVersion: 1, taskId: 'task-b', deliveryId: 'delivery-b',
+          expectedTaskRevision: 1, taskAttempt: 2, claimLeaseId: 'claim-b', decision: 'accepted',
+          criteriaResults: [{ criterionId: 'criterion-b', passed: true, evidenceRefs: [] }],
+          reason: 'accepted', decidedBy: 'manager', decidedAt: 100 } }))
+        .resolves.toMatchObject({ status: 'done' });
+      await expect(fixture.repositories.tasks.getById('task-b')).resolves.toMatchObject({ status: 'done' });
+      expect((await fixture.repositories.management.events.list('run-1')).slice(-2)
+        .map(({ event }) => event.type)).toEqual(['task-acceptance-decided', 'task-state-changed']);
+    } finally {
+      fixture.close();
+    }
+  });
+
   test('rolls back an over-budget batch and a failed Event append', async () => {
     const fixture = createFixture();
     try {

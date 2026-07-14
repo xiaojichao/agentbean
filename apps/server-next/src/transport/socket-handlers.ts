@@ -2,11 +2,13 @@ import {
   AGENT_EVENTS,
   WEB_EVENTS,
   makeFailure,
+  parsePhase2TaskToolRequestV2,
   safeParseManagementWorkerPayload,
   safeParseTaskClaimPayload,
   type DispatchRequestDto,
   type ManagementWorkerPayloadKind,
   type ManagementWorkerPayloadMapV1,
+  type Phase2TaskToolRequestV2,
   type TaskClaimAcquireV1,
   type TaskClaimReleaseV1,
   type TaskClaimRenewV1,
@@ -134,7 +136,7 @@ export interface ManagementWorkerSocketHandlers {
   leaseRenew(payload: ManagementWorkerPayloadMapV1['lease-renew']): Promise<unknown>;
   leaseRelease(payload: ManagementWorkerPayloadMapV1['lease-release']): Promise<unknown>;
   abort(payload: ManagementWorkerPayloadMapV1['abort']): Promise<unknown>;
-  toolRequest(payload: ManagementWorkerPayloadMapV1['tool-request']): Promise<unknown>;
+  toolRequest(payload: ManagementWorkerPayloadMapV1['tool-request'] | Phase2TaskToolRequestV2): Promise<unknown>;
   checkpointFetch(payload: ManagementWorkerPayloadMapV1['checkpoint-fetch']): Promise<unknown>;
   outboxReplay(payload: ManagementWorkerPayloadMapV1['outbox-replay']): Promise<unknown>;
 }
@@ -565,7 +567,7 @@ export function registerAgentSocketHandlers(
     bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.leaseRenew, 'lease-renew', options.managementWorker.leaseRenew);
     bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.leaseRelease, 'lease-release', options.managementWorker.leaseRelease);
     bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.abort, 'abort', options.managementWorker.abort);
-    bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.toolRequest, 'tool-request', options.managementWorker.toolRequest);
+    bindManagementWorkerToolRequest(socket, AGENT_EVENTS.managementWorker.toolRequest, options.managementWorker.toolRequest);
     bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.checkpointFetch, 'checkpoint-fetch', options.managementWorker.checkpointFetch);
     bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.outboxReplay, 'outbox-replay', options.managementWorker.outboxReplay);
   }
@@ -591,6 +593,30 @@ function bindTaskClaimPayload<K extends 'acquire' | 'renew' | 'release'>(
     }
     try {
       ack?.(await handler(parsed.value as never));
+    } catch (error) {
+      ack?.(socketErrorAck(error, event));
+    }
+  });
+}
+
+function bindManagementWorkerToolRequest(
+  socket: SocketLike,
+  event: string,
+  handler: (payload: ManagementWorkerPayloadMapV1['tool-request'] | Phase2TaskToolRequestV2) => Promise<unknown>,
+): void {
+  socket.on(event, async (payload, ack) => {
+    try {
+      if (payload && typeof payload === 'object' && (payload as { schemaVersion?: unknown }).schemaVersion === 2) {
+        ack?.(await handler(parsePhase2TaskToolRequestV2(payload)));
+        return;
+      }
+      const parsed = safeParseManagementWorkerPayload('tool-request', payload);
+      if (!parsed.ok) {
+        ack?.({ schemaVersion: 1, ok: false, errorCode: 'INVALID_REQUEST',
+          diagnosticCode: `${parsed.error.code}:${parsed.error.path}`, retryable: false });
+        return;
+      }
+      ack?.(await handler(parsed.value));
     } catch (error) {
       ack?.(socketErrorAck(error, event));
     }

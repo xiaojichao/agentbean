@@ -11,6 +11,8 @@ export interface ManagementCheckpointFacts {
   readonly waitingInvocationIds: readonly string[];
   readonly completedInvocationIds: readonly string[];
   readonly validMemoryCapsuleIds: readonly string[];
+  readonly taskSnapshots?: NonNullable<ManagementCheckpointV1['authoritative']['taskSnapshots']>;
+  readonly activeClaimLeaseIds?: readonly string[];
 }
 
 export interface EvaluateManagementCheckpointInput {
@@ -68,9 +70,21 @@ export function evaluateManagementCheckpoint(
   if (authoritative.memoryCapsuleIds.some((id) => !validMemoryCapsuleIds.has(id))) {
     reasons.add('invalid-memory-capsule');
   }
+  if ((authoritative.taskSnapshots !== undefined || input.facts.taskSnapshots !== undefined)
+    && JSON.stringify(authoritative.taskSnapshots ?? []) !== JSON.stringify(input.facts.taskSnapshots ?? [])) {
+    reasons.add('task-graph-revision-mismatch');
+  }
+  if ((authoritative.activeClaimLeaseIds !== undefined || input.facts.activeClaimLeaseIds !== undefined)
+    && !sameSet(authoritative.activeClaimLeaseIds ?? [], input.facts.activeClaimLeaseIds ?? [])) {
+    reasons.add('task-graph-revision-mismatch');
+  }
 
   if (reasons.size > 0) {
     return { kind: 'rebuild_required', reasons: [...reasons] };
   }
   return { kind: 'usable', contextHints: input.checkpoint.contextHints };
+}
+
+function sameSet(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value) => right.includes(value));
 }

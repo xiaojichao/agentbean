@@ -5,6 +5,7 @@ import {
   parseManagementWorkerRegisterV2,
   parseManagementWorkerSessionContextV2,
   parsePhase2TaskToolRequestV2,
+  parsePhase2TaskToolResultV2,
 } from '../src/index.js';
 
 describe('Phase 2 management worker contracts', () => {
@@ -79,6 +80,25 @@ describe('Phase 2 management worker contracts', () => {
         .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
     }
     expect(() => parsePhase2TaskToolRequestV2({ ...value, input: { taskIds: ['task-1'], prompt: 'forbidden' } }))
+      .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+  });
+
+  test('parses exact Phase 2 Task tool results and rejects envelope drift', () => {
+    const value = {
+      schemaVersion: 2, managementPhase: 2, commandId: 'command-1',
+      managementRunId: 'run-1', workerId: 'worker-1', toolCallId: 'call-1',
+      toolName: 'tasks.wait', ok: true,
+      output: { readyTaskIds: ['task-ready'], waitingTaskIds: ['task-waiting'] },
+    };
+    expect(parsePhase2TaskToolResultV2(value)).toEqual(value);
+    expect(() => parsePhase2TaskToolResultV2({ ...value, managementPhase: 1 }))
+      .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    expect(() => parsePhase2TaskToolResultV2({ ...value, providerSecret: 'forbidden' }))
+      .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    expect(() => parsePhase2TaskToolResultV2({ ...value,
+      output: { ...value.output, localGuess: true } }))
+      .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    expect(() => parsePhase2TaskToolResultV2({ ...value, diagnosticCode: 'should-not-exist' }))
       .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
   });
 

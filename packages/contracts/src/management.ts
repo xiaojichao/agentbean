@@ -110,6 +110,15 @@ export interface ManagementCheckpointAuthoritativeV1 {
   readonly waitingInvocationIds: readonly ID[];
   readonly completedInvocationIds: readonly ID[];
   readonly memoryCapsuleIds: readonly ID[];
+  /** Phase 2 adds these fields without changing the frozen Phase 1 fixture shape. */
+  readonly taskSnapshots?: readonly {
+    readonly taskId: ID;
+    readonly taskRevision: number;
+    readonly taskAttempt: number;
+    readonly status: 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
+    readonly claimLeaseId?: ID;
+  }[];
+  readonly activeClaimLeaseIds?: readonly ID[];
 }
 
 export interface ManagementCheckpointContextHintsV1 {
