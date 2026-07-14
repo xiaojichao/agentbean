@@ -49,9 +49,11 @@ describe('management worker protocol', () => {
 
     const registerPayload = harness.emitWithAck.mock.calls[0]?.[1];
     expect(registerPayload).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       workerInstanceId: 'instance-1',
       profileId: 'profile-1',
+      supportedProtocolVersions: [1, 2],
+      supportedPhases: [1, 2],
       credentialStatus: 'production_ready',
       providerId: 'provider-1',
       modelId: 'model-1',
@@ -96,7 +98,9 @@ describe('management worker protocol', () => {
           commandId: request.commandId, managementRunId: request.managementRunId,
           workerId: request.workerId, toolCallId: request.toolCallId,
           toolName: 'tasks.wait', ok: true,
-          output: { readyTaskIds: ['task-1'], waitingTaskIds: [] } };
+          output: { readyTaskIds: ['task-1'], waitingTaskIds: [], taskSnapshots: [
+            { taskId: 'task-1', taskRevision: 1, taskAttempt: 1, status: 'done' },
+          ] } };
       }
       return { schemaVersion: 1, ok: true, workerId: 'worker-1', protocolVersion: 1 };
     });

@@ -207,7 +207,10 @@ describe('PiManagerWorkerHost', () => {
       schemaVersion: 2, managementPhase: 2, commandId: request.commandId,
       managementRunId: request.managementRunId, workerId: request.workerId,
       toolCallId: request.toolCallId, toolName: 'tasks.wait', ok: true,
-      output: { readyTaskIds: [], waitingTaskIds: ['child-task'] },
+      output: { readyTaskIds: [], waitingTaskIds: ['child-task'], taskSnapshots: [
+        { taskId: 'child-task', taskRevision: 2, taskAttempt: 1,
+          status: 'in_progress', claimLeaseId: 'claim-1', claimedAgentId: 'agent-1' },
+      ] },
     }));
     let executeTool: Parameters<Parameters<typeof createPiManagerWorkerHost>[0]['createRuntimeFactory']>[0]['toolExecutor'] | undefined;
     const sessions: ManagementSession[] = [];
@@ -242,7 +245,9 @@ describe('PiManagerWorkerHost', () => {
       scope: { kind: 'managed', managementRunId: 'run-1', teamId: 'team-1', channelId: 'channel-1',
         rootMessageId: 'message-1', rootTaskId: 'root-task' }, input: { taskIds: ['child-task'] },
       metadata: { name: 'tasks.wait', effect: 'read', phase: 2, inputSchemaVersion: 1 } }))
-      .resolves.toEqual({ text: JSON.stringify({ readyTaskIds: [], waitingTaskIds: ['child-task'] }) });
+      .resolves.toEqual({ text: JSON.stringify({ readyTaskIds: [], waitingTaskIds: ['child-task'],
+        taskSnapshots: [{ taskId: 'child-task', taskRevision: 2, taskAttempt: 1,
+          status: 'in_progress', claimLeaseId: 'claim-1', claimedAgentId: 'agent-1' }] }) });
     expect(protocol.executeTool).toHaveBeenLastCalledWith(expect.objectContaining({
       schemaVersion: 2, managementPhase: 2, toolName: 'tasks.wait', leaseToken: 'raw-lease-token',
     }));

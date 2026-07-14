@@ -2,12 +2,14 @@ import {
   AGENT_EVENTS,
   WEB_EVENTS,
   makeFailure,
+  parseManagementWorkerRegisterV2,
   parsePhase2TaskToolRequestV2,
   safeParseManagementWorkerPayload,
   safeParseTaskClaimPayload,
   type DispatchRequestDto,
   type ManagementWorkerPayloadKind,
   type ManagementWorkerPayloadMapV1,
+  type ManagementWorkerRegisterV2,
   type Phase2TaskToolRequestV2,
   type TaskClaimAcquireV1,
   type TaskClaimReleaseV1,
@@ -131,7 +133,7 @@ export interface AgentSocketHandlerOptions {
 }
 
 export interface ManagementWorkerSocketHandlers {
-  register(payload: ManagementWorkerPayloadMapV1['register']): Promise<unknown>;
+  register(payload: ManagementWorkerPayloadMapV1['register'] | ManagementWorkerRegisterV2): Promise<unknown>;
   leaseAcquire(payload: ManagementWorkerPayloadMapV1['lease-acquire']): Promise<unknown>;
   leaseRenew(payload: ManagementWorkerPayloadMapV1['lease-renew']): Promise<unknown>;
   leaseRelease(payload: ManagementWorkerPayloadMapV1['lease-release']): Promise<unknown>;
@@ -563,7 +565,7 @@ export function registerAgentSocketHandlers(
   bind(socket, AGENT_EVENTS.dispatch.result, app, 'receiveDispatchResult', afterDispatchCompletion);
   bind(socket, AGENT_EVENTS.dispatch.error, app, 'receiveDispatchError', afterDispatchCompletion);
   if (options.managementWorker) {
-    bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.register, 'register', options.managementWorker.register);
+    bindManagementWorkerRegister(socket, AGENT_EVENTS.managementWorker.register, options.managementWorker.register);
     bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.leaseAcquire, 'lease-acquire', options.managementWorker.leaseAcquire);
     bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.leaseRenew, 'lease-renew', options.managementWorker.leaseRenew);
     bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.leaseRelease, 'lease-release', options.managementWorker.leaseRelease);
@@ -577,6 +579,39 @@ export function registerAgentSocketHandlers(
     bindTaskClaimPayload(socket, AGENT_EVENTS.taskClaim.renew, 'renew', options.taskClaim.renew);
     bindTaskClaimPayload(socket, AGENT_EVENTS.taskClaim.release, 'release', options.taskClaim.release);
   }
+}
+
+function bindManagementWorkerRegister(
+  socket: SocketLike,
+  event: string,
+  handler: (payload: ManagementWorkerPayloadMapV1['register'] | ManagementWorkerRegisterV2) => Promise<unknown>,
+): void {
+  socket.on(event, async (payload, ack) => {
+    try {
+      if (payload && typeof payload === 'object'
+        && (payload as { schemaVersion?: unknown }).schemaVersion === 2) {
+        let parsed: ManagementWorkerRegisterV2;
+        try {
+          parsed = parseManagementWorkerRegisterV2(payload);
+        } catch {
+          ack?.({ schemaVersion: 1, ok: false, errorCode: 'INVALID_REQUEST',
+            diagnosticCode: 'MANAGEMENT_WORKER_V2_PAYLOAD_INVALID', retryable: false });
+          return;
+        }
+        ack?.(await handler(parsed));
+        return;
+      }
+      const parsed = safeParseManagementWorkerPayload('register', payload);
+      if (!parsed.ok) {
+        ack?.({ schemaVersion: 1, ok: false, errorCode: 'INVALID_REQUEST',
+          diagnosticCode: `${parsed.error.code}:${parsed.error.path}`, retryable: false });
+        return;
+      }
+      ack?.(await handler(parsed.value));
+    } catch (error) {
+      ack?.(socketErrorAck(error, event));
+    }
+  });
 }
 
 function bindTaskClaimPayload<K extends 'acquire' | 'renew' | 'release'>(

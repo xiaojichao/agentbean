@@ -127,7 +127,7 @@ describe('Phase 1 management routing', () => {
     });
     expect(result).toMatchObject({
       ok: true,
-      task: { id: expect.any(String) },
+      task: { id: expect.any(String), status: 'in_progress', assigneeId: undefined },
       management: { kind: 'managed', managementPhase: 2, managementRunId: expect.any(String) },
     });
     if (!result.ok || !result.task || result.management?.kind !== 'managed') throw new Error('Phase 2 result expected');

@@ -11,6 +11,7 @@ import type {
   ManagementOutboxReplayV1,
   ManagementWorkerAbortV1,
   ManagementWorkerRegisterV1,
+  ManagementWorkerRegisterV2,
   ManagementWorkerToolRequestV1,
   ManagementWorkerToolResultV1,
   Phase2TaskToolRequestV2,
@@ -180,13 +181,13 @@ export function createManagementWorkerProtocol(
 
   async function register(): Promise<string> {
     if (!capability) throw new Error('MANAGEMENT_WORKER_CAPABILITY_MISSING');
-    const payload: ManagementWorkerRegisterV1 = {
-      schemaVersion: 1,
+    const payload: ManagementWorkerRegisterV2 = {
+      schemaVersion: 2,
       workerInstanceId: input.workerInstanceId,
       profileId: input.profileId,
       runtimeVersion: input.runtimeVersion,
-      supportedProtocolVersions: [1],
-      supportedPhases: [1],
+      supportedProtocolVersions: [1, 2],
+      supportedPhases: [1, 2],
       ...capability,
     };
     const ack = parseManagementWorkerPayload(

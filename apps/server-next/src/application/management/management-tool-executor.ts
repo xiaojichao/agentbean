@@ -98,6 +98,7 @@ export function createManagementToolExecutor(input: {
 export function createPhase2ManagementToolHandlers(input: {
   readonly kernel: TaskCoordinationKernel;
   readonly acceptanceService: SubtaskAcceptanceService;
+  readonly onTaskPublished?: (taskId: string) => Promise<void> | void;
 }): Phase2ToolHandlers {
   const { kernel } = input;
   return {
@@ -125,6 +126,7 @@ export function createPhase2ManagementToolHandlers(input: {
         authority: authority(request), idempotencyKey: request.idempotencyKey,
         ...request.input,
       });
+      await input.onTaskPublished?.(published.taskId);
       return { taskId: published.taskId, taskRevision: published.taskRevision, status: 'todo' };
     },
     'tasks.assign': async (request) => {

@@ -3,6 +3,7 @@ import {
   AGENT_EVENTS,
   type ManagementLeaseOfferV1,
   type ManagementWorkerRegisterV1,
+  type ManagementWorkerRegisterV2,
 } from '../../../packages/contracts/src/index.js';
 import { createManagementKernel } from '../src/application/management/management-kernel.js';
 import { createManagementToolExecutor } from '../src/application/management/management-tool-executor.js';
@@ -233,6 +234,51 @@ describe('management worker socket integration', () => {
     expect(disconnectDevice).toHaveBeenCalledWith('device-1');
     expect(reconnectDevice).toHaveBeenCalledWith('device-1');
   });
+
+  test('Phase 2 preflight 与调度只选择声明 V2 capability 的真实 Device worker', async () => {
+    const harness = await createHarness({
+      devices: [device('device-v1', 'profile-1'), device('device-v2', 'profile-1')],
+      allowedDeviceIds: ['device-v1', 'device-v2'],
+    });
+    const legacy = harness.connect('device-v1');
+    const phase2 = harness.connect('device-v2');
+    await legacy.trigger(AGENT_EVENTS.device.hello, { deviceId: 'device-v1' });
+    await phase2.trigger(AGENT_EVENTS.device.hello, { deviceId: 'device-v2' });
+    await expect(legacy.trigger(AGENT_EVENTS.managementWorker.register, workerRegistration()))
+      .resolves.toMatchObject({ ok: true });
+
+    await expect(harness.scheduler.managementPhase2Preflight({
+      teamId: 'team-1',
+      placementPolicy: { placement: 'device', allowedDeviceIds: ['device-v1', 'device-v2'],
+        allowServerContext: false, requireLocalModelCredentials: true },
+      targetAvailable: true,
+    })).resolves.toMatchObject({
+      preflight: { workerAvailable: false, credentialAvailable: false },
+    });
+
+    await expect(phase2.trigger(AGENT_EVENTS.managementWorker.register, {
+      ...phase2WorkerRegistration(), supportedPhases: [1],
+    })).resolves.toMatchObject({
+      ok: false, errorCode: 'INVALID_REQUEST', diagnosticCode: 'MANAGEMENT_WORKER_V2_PAYLOAD_INVALID',
+    });
+    await expect(phase2.trigger(AGENT_EVENTS.managementWorker.register, phase2WorkerRegistration()))
+      .resolves.toMatchObject({ ok: true });
+    await expect(harness.scheduler.managementPhase2Preflight({
+      teamId: 'team-1',
+      placementPolicy: { placement: 'device', allowedDeviceIds: ['device-v1', 'device-v2'],
+        allowServerContext: false, requireLocalModelCredentials: true },
+      targetAvailable: true,
+    })).resolves.toMatchObject({
+      preflight: { workerAvailable: true, credentialAvailable: true, placementAllowed: true },
+      profileId: 'profile-1',
+    });
+
+    const runId = await harness.createPhase2Run();
+    await expect(harness.realtime.scheduleManagementRun({ managementRunId: runId, profileId: 'profile-1' }))
+      .resolves.toMatchObject({ ok: true, deviceId: 'device-v2' });
+    expect(legacy.outbound(AGENT_EVENTS.managementWorker.leaseOffer)).toHaveLength(0);
+    expect(phase2.outbound(AGENT_EVENTS.managementWorker.leaseOffer)).toHaveLength(1);
+  });
 });
 
 function workerRegistration(overrides: Partial<ManagementWorkerRegisterV1> = {}): ManagementWorkerRegisterV1 {
@@ -260,6 +306,21 @@ function unavailableWorkerRegistration(): ManagementWorkerRegisterV1 {
     supportedProtocolVersions: [1],
     supportedPhases: [1],
     credentialStatus: 'unavailable',
+    capacity: { maxConcurrentLeases: 2, activeLeaseCount: 0 },
+  };
+}
+
+function phase2WorkerRegistration(): ManagementWorkerRegisterV2 {
+  return {
+    schemaVersion: 2,
+    workerInstanceId: 'worker-instance-v2',
+    profileId: 'profile-1',
+    runtimeVersion: '0.1.0',
+    supportedProtocolVersions: [1, 2],
+    supportedPhases: [1, 2],
+    credentialStatus: 'production_ready',
+    providerId: 'test-provider',
+    modelId: 'test-model',
     capacity: { maxConcurrentLeases: 2, activeLeaseCount: 0 },
   };
 }
@@ -368,9 +429,20 @@ async function createHarness(input: { devices: ReturnType<typeof device>[]; allo
     repositories,
     clock,
     realtime,
+    scheduler,
     runId: run.run.id,
     toolHandler,
     createRun,
+    async createPhase2Run() {
+      const created = await kernel.createOrResumeRun({
+        teamId: 'team-1', channelId: 'channel-1', rootMessageId: 'message-1', rootTaskId: 'root-task',
+        requestKey: 'phase2-run-request', requestHash: 'phase2-run-hash', managementPhase: 2,
+        placementPolicy: { placement: 'device', allowedDeviceIds: input.allowedDeviceIds,
+          allowServerContext: false, requireLocalModelCredentials: true },
+        budget: { maxSubtasks: 4, maxDepth: 2, maxExternalInvocations: 4 },
+      });
+      return created.run.id;
+    },
     connect(deviceId: string) {
       const socket = new FakeSocket();
       socket.deviceId = deviceId;

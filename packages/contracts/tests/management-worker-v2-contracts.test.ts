@@ -102,7 +102,11 @@ describe('Phase 2 management worker contracts', () => {
       schemaVersion: 2, managementPhase: 2, commandId: 'command-1',
       managementRunId: 'run-1', workerId: 'worker-1', toolCallId: 'call-1',
       toolName: 'tasks.wait', ok: true,
-      output: { readyTaskIds: ['task-ready'], waitingTaskIds: ['task-waiting'] },
+      output: { readyTaskIds: ['task-ready'], waitingTaskIds: ['task-waiting'], taskSnapshots: [
+        { taskId: 'task-ready', taskRevision: 1, taskAttempt: 1, status: 'done' },
+        { taskId: 'task-waiting', taskRevision: 2, taskAttempt: 1,
+          status: 'in_progress', claimLeaseId: 'claim-1', claimedAgentId: 'agent-1' },
+      ] },
     };
     expect(parsePhase2TaskToolResultV2(value)).toEqual(value);
     expect(() => parsePhase2TaskToolResultV2({ ...value, managementPhase: 1 }))

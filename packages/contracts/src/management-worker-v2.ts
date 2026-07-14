@@ -99,7 +99,18 @@ export interface Phase2ManagementWorkerToolOutputMapV1 {
   readonly 'tasks.add_dependency': { readonly taskId: ID; readonly taskRevision: number; readonly taskGraphRevision: number };
   readonly 'tasks.publish_for_claim': { readonly taskId: ID; readonly taskRevision: number; readonly status: 'todo' };
   readonly 'tasks.assign': { readonly taskId: ID; readonly taskRevision: number; readonly agentId: ID };
-  readonly 'tasks.wait': { readonly readyTaskIds: readonly ID[]; readonly waitingTaskIds: readonly ID[] };
+  readonly 'tasks.wait': {
+    readonly readyTaskIds: readonly ID[];
+    readonly waitingTaskIds: readonly ID[];
+    readonly taskSnapshots: readonly {
+      readonly taskId: ID;
+      readonly taskRevision: number;
+      readonly taskAttempt: number;
+      readonly status: 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
+      readonly claimLeaseId?: ID;
+      readonly claimedAgentId?: ID;
+    }[];
+  };
   readonly 'tasks.retry': { readonly taskId: ID; readonly taskRevision: number; readonly attempt: number };
   readonly 'tasks.accept_subtask': { readonly taskId: ID; readonly taskRevision: number; readonly status: 'done' | 'in_review' };
   readonly 'tasks.report_blocked': { readonly taskId: ID; readonly status: 'todo'; readonly reportedAt: UnixMs };
@@ -304,12 +315,33 @@ function assertTaskToolOutput(toolName: string, value: unknown): void {
     assertInteger(value.taskRevision, 1); return;
   }
   if (toolName === 'tasks.wait') {
-    assertExactKeys(value, ['readyTaskIds', 'waitingTaskIds'], ['readyTaskIds', 'waitingTaskIds']);
+    assertExactKeys(value, ['readyTaskIds', 'waitingTaskIds', 'taskSnapshots'],
+      ['readyTaskIds', 'waitingTaskIds', 'taskSnapshots']);
     assertStringArray(value.readyTaskIds); assertStringArray(value.waitingTaskIds);
     const ready = value.readyTaskIds as readonly string[];
     const waiting = value.waitingTaskIds as readonly string[];
     if (new Set(ready).size !== ready.length || new Set(waiting).size !== waiting.length
       || ready.some((id) => waiting.includes(id))) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    if (!Array.isArray(value.taskSnapshots) || value.taskSnapshots.length !== ready.length + waiting.length) {
+      throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    }
+    for (const snapshot of value.taskSnapshots) {
+      assertExactKeys(snapshot, ['taskId', 'taskRevision', 'taskAttempt', 'status', 'claimLeaseId', 'claimedAgentId'],
+        ['taskId', 'taskRevision', 'taskAttempt', 'status']);
+      if (!nonEmpty(snapshot.taskId)
+        || !['todo', 'in_progress', 'in_review', 'done', 'closed'].includes(String(snapshot.status))
+        || (snapshot.claimLeaseId !== undefined && !nonEmpty(snapshot.claimLeaseId))
+        || (snapshot.claimedAgentId !== undefined && !nonEmpty(snapshot.claimedAgentId))
+        || ((snapshot.claimLeaseId === undefined) !== (snapshot.claimedAgentId === undefined))) {
+        throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+      }
+      assertInteger(snapshot.taskRevision, 1); assertInteger(snapshot.taskAttempt, 1);
+    }
+    const snapshotIds = value.taskSnapshots.map((snapshot: { taskId: string }) => snapshot.taskId);
+    if (new Set(snapshotIds).size !== snapshotIds.length
+      || [...ready, ...waiting].some((id) => !snapshotIds.includes(id))) {
+      throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    }
     return;
   }
   if (toolName === 'tasks.retry') {

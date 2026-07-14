@@ -121,7 +121,9 @@ describe('management tool executor', () => {
       addDependency: vi.fn(async () => ({ taskId: 'task-1', taskRevision: 2, taskGraphRevision: 3 })),
       publishForClaim: vi.fn(async () => ({ taskId: 'task-1', taskRevision: 2, status: 'todo' })),
       assignTask: vi.fn(async () => ({ taskId: 'task-1', taskRevision: 3, agentId: 'agent-1' })),
-      waitForTasks: vi.fn(async () => ({ readyTaskIds: [], waitingTaskIds: ['task-1'] })),
+      waitForTasks: vi.fn(async () => ({ readyTaskIds: [], waitingTaskIds: ['task-1'], taskSnapshots: [
+        { taskId: 'task-1', taskRevision: 1, taskAttempt: 1, status: 'todo' as const },
+      ] })),
       retryTask: vi.fn(async () => ({ taskId: 'task-1', taskRevision: 3, attempt: 2 })),
       acceptSubtask: vi.fn(async () => ({ taskId: 'task-1', taskRevision: 3, status: 'done' })),
       reportBlocked: vi.fn(async () => ({ taskId: 'task-1', status: 'todo', reportedAt: 100 })),

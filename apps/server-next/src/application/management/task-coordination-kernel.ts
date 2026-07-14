@@ -509,16 +509,38 @@ export function createTaskCoordinationKernel(
         }
         const readyTaskIds: string[] = [];
         const waitingTaskIds: string[] = [];
+        const taskSnapshots: Array<{
+          taskId: string;
+          taskRevision: number;
+          taskAttempt: number;
+          status: 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
+          claimLeaseId?: string;
+          claimedAgentId?: string;
+        }> = [];
         for (const taskId of input.taskIds) {
           const task = await requireTask(repositories, taskId);
-          await requireCoordinationForRun(repositories, taskId, run.id);
+          const coordination = await requireCoordinationForRun(repositories, taskId, run.id);
+          const claim = await repositories.coordination.claimLeases.getCurrent({
+            taskId: task.id,
+            taskRevision: task.revision,
+            taskAttempt: coordination.attempt,
+          });
           if (task.status === 'in_review' || task.status === 'done' || task.status === 'closed') {
             readyTaskIds.push(task.id);
           } else {
             waitingTaskIds.push(task.id);
           }
+          taskSnapshots.push({
+            taskId: task.id,
+            taskRevision: task.revision,
+            taskAttempt: coordination.attempt,
+            status: task.status,
+            ...(claim?.status === 'active'
+              ? { claimLeaseId: claim.id, claimedAgentId: claim.agentId }
+              : {}),
+          });
         }
-        return { readyTaskIds, waitingTaskIds };
+        return { readyTaskIds, waitingTaskIds, taskSnapshots };
       });
     },
 
