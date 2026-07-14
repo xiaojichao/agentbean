@@ -128,8 +128,16 @@ function preferAgentSnapshot(candidate: AgentSnapshot, current: AgentSnapshot): 
   return (candidate.lastSeenAt ?? 0) > (current.lastSeenAt ?? 0) ? candidate : current;
 }
 
-function dedupeAgents(list: AgentSnapshot[], teamId: string): AgentSnapshot[] {
-  const result: AgentSnapshot[] = [];
+// 去重产出两份视图：
+//  - visibleAgents：去重赢家数组（供成员列表/选择器遍历，不重复）
+//  - agents：别名 map，每个输入 id → 其所属去重组的赢家（输家 id 也指向赢家）
+// agents 别名 map 保证：消息 senderId 即使命中被去重丢弃的输家 id，也能解析到赢家
+// 的最新 name（同一物理 agent 改名后，输家发的旧消息也应显示新名）。
+function buildAgentMaps(list: AgentSnapshot[], teamId: string): {
+  agents: Record<string, AgentSnapshot>;
+  visibleAgents: AgentSnapshot[];
+} {
+  const winners: AgentSnapshot[] = [];
   const indexByKey = new Map<string, number>();
   for (const agent of list) {
     const keys = visibleAgentLogicalKeys(agent, teamId);
@@ -137,28 +145,38 @@ function dedupeAgents(list: AgentSnapshot[], teamId: string): AgentSnapshot[] {
       .map((key) => indexByKey.get(key))
       .find((index): index is number => index !== undefined);
     if (existingIndex === undefined) {
-      for (const key of keys) indexByKey.set(key, result.length);
-      result.push(agent);
+      for (const key of keys) indexByKey.set(key, winners.length);
+      winners.push(agent);
       continue;
     }
-    result[existingIndex] = preferAgentSnapshot(agent, result[existingIndex]!);
-    for (const key of visibleAgentLogicalKeys(result[existingIndex]!, teamId)) {
+    winners[existingIndex] = preferAgentSnapshot(agent, winners[existingIndex]!);
+    for (const key of visibleAgentLogicalKeys(winners[existingIndex]!, teamId)) {
       indexByKey.set(key, existingIndex);
     }
     for (const key of keys) indexByKey.set(key, existingIndex);
   }
-  return result;
+  const agents: Record<string, AgentSnapshot> = {};
+  for (const agent of list) {
+    const keys = visibleAgentLogicalKeys(agent, teamId);
+    const winnerIndex = keys
+      .map((key) => indexByKey.get(key))
+      .find((index): index is number => index !== undefined);
+    agents[agent.id] = winnerIndex !== undefined ? winners[winnerIndex]! : agent;
+  }
+  return { agents, visibleAgents: winners };
 }
 
-function agentListToMap(list: AgentSnapshot[], teamId: string): Record<string, AgentSnapshot> {
-  const map: Record<string, AgentSnapshot> = {};
-  for (const agent of dedupeAgents(list, teamId)) map[agent.id] = agent;
-  return map;
+function indexAgentsById(list: AgentSnapshot[]): Record<string, AgentSnapshot> {
+  const records: Record<string, AgentSnapshot> = {};
+  for (const agent of list) records[agent.id] = agent;
+  return records;
 }
 
 interface State {
   conn: ConnState;
   agents: Record<string, AgentSnapshot>;
+  agentRecords: Record<string, AgentSnapshot>;
+  visibleAgents: AgentSnapshot[];
   channels: ChannelSummary[];
   dms: DmChannel[];
   messagesByChannel: Record<string, ChatMessage[]>;
@@ -261,6 +279,8 @@ export function mergeActivityMessages(
 export const useAgentBeanStore = create<State>((set) => ({
   conn: 'connecting',
   agents: {},
+  agentRecords: {},
+  visibleAgents: [],
   channels: [],
   dms: [],
   messagesByChannel: {},
@@ -278,29 +298,39 @@ export const useAgentBeanStore = create<State>((set) => ({
   humans: [],
   setConn(conn) { set({ conn }); },
   applyAgentsSnapshot(list) {
-    set((s) => ({ agents: agentListToMap(list, s.currentTeamId) }));
+    set((s) => {
+      const records = indexAgentsById(list);
+      const { agents, visibleAgents } = buildAgentMaps(list, s.currentTeamId);
+      return { agentRecords: records, agents, visibleAgents };
+    });
   },
   applyAgentStatus(snap) {
     set((s) => {
+      const records = { ...s.agentRecords };
       if (!agentVisibleInTeam(snap, s.currentTeamId)) {
-        if (!s.agents[snap.id]) return s;
-        const next = { ...s.agents };
-        delete next[snap.id];
-        return { agents: next };
+        if (!records[snap.id]) return s;
+        delete records[snap.id];
+      } else {
+        records[snap.id] = { ...records[snap.id], ...snap };
       }
-      const merged = { ...s.agents[snap.id], ...snap };
-      const others = Object.values(s.agents).filter((agent) => agent.id !== snap.id);
-      return { agents: agentListToMap([...others, merged], s.currentTeamId) };
+      const { agents, visibleAgents } = buildAgentMaps(Object.values(records), s.currentTeamId);
+      return { agentRecords: records, agents, visibleAgents };
     });
   },
   addAgent(agent) {
-    set((s) => ({ agents: { ...s.agents, [agent.id]: agent } }));
+    set((s) => {
+      const records = { ...s.agentRecords, [agent.id]: agent };
+      const { agents, visibleAgents } = buildAgentMaps(Object.values(records), s.currentTeamId);
+      return { agentRecords: records, agents, visibleAgents };
+    });
   },
   updateAgent(id, patch) {
     set((s) => {
-      const cur = s.agents[id];
+      const cur = s.agentRecords[id];
       if (!cur) return s;
-      return { agents: { ...s.agents, [id]: { ...cur, ...patch } } };
+      const records = { ...s.agentRecords, [id]: { ...cur, ...patch } };
+      const { agents, visibleAgents } = buildAgentMaps(Object.values(records), s.currentTeamId);
+      return { agentRecords: records, agents, visibleAgents };
     });
   },
   applyChannelsSnapshot(list) { set({ channels: list }); },
@@ -374,6 +404,8 @@ export const useAgentBeanStore = create<State>((set) => ({
       return {
         currentTeamId: id,
         agents: {},
+        agentRecords: {},
+        visibleAgents: [],
         channels: [],
         dms: [],
         messagesByChannel: {},

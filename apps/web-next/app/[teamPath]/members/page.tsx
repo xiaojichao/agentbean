@@ -47,7 +47,6 @@ export default function MembersPage() {
   const np = useCurrentTeamPath();
   const conn = useAgentBeanStore((s) => s.conn);
   const devices = useAgentBeanStore((s) => s.devices);
-  const agents = useAgentBeanStore((s) => s.agents);
   const teams = useAgentBeanStore((s) => s.teams);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
@@ -83,7 +82,7 @@ export default function MembersPage() {
     return () => { unsubDevices(); unsubDeviceStatus(); unsubStatus(); };
   }, [conn, memberTeamId, applyDevicesSnapshot, applyDeviceStatus, applyAgentsSnapshot, applyAgentStatus, applyHumansSnapshot]);
 
-  const agentList = useMemo(() => Object.values(agents), [agents]);
+  const agentList = useAgentBeanStore((s) => s.visibleAgents);
 
   useEffect(() => {
     if (routeAgentId) {

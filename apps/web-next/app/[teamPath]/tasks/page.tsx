@@ -81,6 +81,7 @@ export default function TasksPage() {
   const channels = useAgentBeanStore((s) => s.channels);
   const dms = useAgentBeanStore((s) => s.dms);
   const agents = useAgentBeanStore((s) => s.agents);
+  const visibleAgents = useAgentBeanStore((s) => s.visibleAgents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
@@ -206,7 +207,7 @@ export default function TasksPage() {
     const map = new Map<string, Participant>();
     if (currentUser) map.set(currentUser.id, { id: currentUser.id, name: currentUser.username, kind: 'human' });
     for (const human of humans) map.set(human.id, human);
-    for (const agent of Object.values(agents)) {
+    for (const agent of visibleAgents) {
       map.set(agent.id, { id: agent.id, name: agent.name, kind: 'agent' });
     }
     for (const task of tasks) {
@@ -214,7 +215,7 @@ export default function TasksPage() {
       if (task.assigneeId && !map.has(task.assigneeId)) map.set(task.assigneeId, { id: task.assigneeId, name: 'Agent', kind: 'agent' });
     }
     return [...map.values()].sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
-  }, [agents, currentUser, humans, tasks]);
+  }, [currentUser, humans, tasks, visibleAgents]);
 
   const channelOptions = useMemo<FilterOption[]>(() => channels.map((channel) => ({
     id: channel.id,

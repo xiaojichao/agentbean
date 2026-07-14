@@ -183,6 +183,7 @@ export default function ChatPage() {
   const conn = useAgentBeanStore((s) => s.conn);
   const channels = useAgentBeanStore((s) => s.channels);
   const agents = useAgentBeanStore((s) => s.agents);
+  const visibleAgents = useAgentBeanStore((s) => s.visibleAgents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
@@ -566,7 +567,7 @@ export default function ChatPage() {
     ? channelMembers.map((member) => ({ id: member.id, name: member.name, kind: member.kind }))
     : [
         ...(currentUser ? [{ id: currentUser.id, name: `${currentUser.username}（你）`, kind: 'human' as const }] : []),
-        ...Object.values(agents).map((agent) => ({ id: agent.id, name: agent.name, kind: 'agent' as const })),
+        ...visibleAgents.map((agent) => ({ id: agent.id, name: agent.name, kind: 'agent' as const })),
       ];
   const visibleMentionMembers = channelMembers.map((member) => ({ id: member.id, name: member.name.replace(/（你）$/, ''), kind: member.kind }));
   const channelMemberCount = isDm ? 2 : channelMembers.length;
