@@ -111,39 +111,11 @@ jobs:
           npm run test:team-terminology
           npm run check:team-terminology
 
-      - name: Run AgentBean Next phase tests
+      - name: Run package tests and retained phase boundaries once
         if: steps.changes.outputs.should_validate == 'true'
-        run: npm run test:phase1
+        run: npm run test:ci
 
-      - name: Run Phase 0 PI gates
-        if: steps.changes.outputs.should_validate == 'true'
-        run: npm run test:phase0
-
-      - name: Run Phase 1 management gates
-        if: steps.changes.outputs.should_validate == 'true'
-        run: npm run test:phase1-management
-
-      - name: Run Phase 2 Task DAG gates
-        if: steps.changes.outputs.should_validate == 'true'
-        run: npm run test:phase2-task-dag
-
-      - name: Run Phase 2 real two-Agent closeout smoke
-        if: steps.changes.outputs.should_validate == 'true'
-        run: npm run test:phase2-closeout
-
-      - name: Build Phase 0 packages
-        if: steps.changes.outputs.should_validate == 'true'
-        run: npm run build:phase0
-
-      - name: Build Phase 1 management packages
-        if: steps.changes.outputs.should_validate == 'true'
-        run: npm run build:phase1-management
-
-      - name: Build Phase 2 Task DAG packages
-        if: steps.changes.outputs.should_validate == 'true'
-        run: npm run build:phase2-task-dag
-
-      - name: Build AgentBean Next packages
+      - name: Build AgentBean Next packages once
         if: steps.changes.outputs.should_validate == 'true'
         run: npm run build:packages
 
