@@ -112,7 +112,7 @@ function formatDuration(totalSeconds) {
   return minutes > 0 ? `${minutes}分${seconds}秒` : `${seconds}秒`;
 }
 
-export function evaluatePullRequest(pr, now = new Date()) {
+function collectCheckState(pr) {
   const commit = pr.commits?.nodes?.at(-1)?.commit;
   const headOid = pr.headRefOid ?? commit?.oid ?? null;
   const contexts = commit?.statusCheckRollup?.contexts?.nodes ?? [];
@@ -122,6 +122,56 @@ export function evaluatePullRequest(pr, now = new Date()) {
   }));
   const pendingChecks = checks.filter((item) => item.state === 'pending');
   const failingChecks = checks.filter((item) => item.state === 'failing');
+  return { commit, headOid, contexts, checks, pendingChecks, failingChecks };
+}
+
+export function evaluateDraftReviewReadiness(pr) {
+  const { commit, headOid, contexts, checks, pendingChecks, failingChecks } = collectCheckState(pr);
+  const blockers = [];
+  if (pr.state !== 'OPEN') blockers.push({ code: 'PR_NOT_OPEN', detail: `PR 状态为 ${pr.state}` });
+  if (!pr.isDraft) blockers.push({ code: 'PR_NOT_DRAFT', detail: 'PR 已经是 Ready，仅 Draft PR 可通过该前置门禁' });
+  if (!commit?.statusCheckRollup || contexts.length === 0) {
+    blockers.push({ code: 'CHECKS_MISSING', detail: '最新提交尚无 CI/check 结果' });
+  }
+  if (commit?.statusCheckRollup?.contexts?.pageInfo?.hasNextPage) blockers.push({
+    code: 'RESULTS_TRUNCATED',
+    detail: 'GitHub checks 查询超过 100 项，无法证明门禁完整',
+  });
+  if (pendingChecks.length > 0) blockers.push({
+    code: 'CHECKS_PENDING',
+    detail: `仍有 ${pendingChecks.length} 个检查运行中：${pendingChecks.map((item) => item.name).join('、')}`,
+  });
+  if (failingChecks.length > 0) blockers.push({
+    code: 'CHECKS_FAILED',
+    detail: `有 ${failingChecks.length} 个检查失败：${failingChecks.map((item) => item.name).join('、')}`,
+  });
+
+  return {
+    stage: 'draft-review',
+    ready: blockers.length === 0,
+    pullRequest: {
+      number: pr.number,
+      title: pr.title,
+      url: pr.url,
+      state: pr.state,
+      isDraft: Boolean(pr.isDraft),
+    },
+    head: {
+      oid: headOid,
+      committedAt: commit?.committedDate ?? null,
+    },
+    checks: {
+      total: checks.length,
+      passing: checks.filter((item) => item.state === 'passing').length,
+      pending: pendingChecks.map((item) => item.name),
+      failing: failingChecks.map((item) => item.name),
+    },
+    blockers,
+  };
+}
+
+export function evaluatePullRequest(pr, now = new Date()) {
+  const { commit, headOid, contexts, checks, pendingChecks, failingChecks } = collectCheckState(pr);
   const unresolvedThreads = (pr.reviewThreads?.nodes ?? []).filter((thread) => !thread.isResolved);
   const pendingReviewers = (pr.reviewRequests?.nodes ?? []).map((request) =>
     request.requestedReviewer?.login ?? request.requestedReviewer?.slug ?? 'unknown',
@@ -240,6 +290,20 @@ export function formatReadiness(result) {
   return lines.join('\n');
 }
 
+export function formatDraftReviewReadiness(result) {
+  const lines = [
+    `${result.ready ? 'REVIEW_READY ✅' : 'BLOCKED ⏳'} PR #${result.pullRequest.number} ${result.pullRequest.title}`,
+    `最新提交：${result.head.oid?.slice(0, 10) ?? 'unknown'}`,
+    `Draft：${result.pullRequest.isDraft ? '是' : '否'}`,
+    `检查：${result.checks.passing}/${result.checks.total} 通过`,
+    'Codex Review：Draft 前置阶段不要求',
+  ];
+  if (result.blockers.length > 0) {
+    lines.push('阻塞项：', ...result.blockers.map((blocker) => `- [${blocker.code}] ${blocker.detail}`));
+  }
+  return lines.join('\n');
+}
+
 function runGh(args) {
   const result = spawnSync('gh', args, { encoding: 'utf8' });
   if (result.status !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || 'gh 执行失败');
@@ -247,17 +311,18 @@ function runGh(args) {
 }
 
 function parseArgs(argv) {
-  const options = { json: false, number: null, repo: process.env.GITHUB_REPOSITORY ?? null };
+  const options = { json: false, mode: 'merge', number: null, repo: process.env.GITHUB_REPOSITORY ?? null };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === '--json') options.json = true;
+    else if (value === '--draft-review') options.mode = 'draft-review';
     else if (value === '--pr') options.number = Number(argv[++index]);
     else if (value === '--repo') options.repo = argv[++index];
     else if (/^\d+$/.test(value)) options.number = Number(value);
     else throw new Error(`未知参数：${value}`);
   }
   if (!Number.isInteger(options.number) || options.number <= 0) {
-    throw new Error('用法：npm run check:pr-merge-readiness -- <PR号> [--json] [--repo owner/name]');
+    throw new Error('用法：npm run check:pr-merge-readiness -- <PR号> [--json] [--repo owner/name]，或 npm run check:pr-draft-review-readiness -- <PR号> [--json] [--repo owner/name]');
   }
   return options;
 }
@@ -283,8 +348,14 @@ function fetchPullRequest({ number, repo }) {
 function main() {
   try {
     const options = parseArgs(process.argv.slice(2));
-    const result = evaluatePullRequest(fetchPullRequest(options));
-    console.log(options.json ? JSON.stringify(result, null, 2) : formatReadiness(result));
+    const pr = fetchPullRequest(options);
+    const result = options.mode === 'draft-review'
+      ? evaluateDraftReviewReadiness(pr)
+      : evaluatePullRequest(pr);
+    const formatted = options.mode === 'draft-review'
+      ? formatDraftReviewReadiness(result)
+      : formatReadiness(result);
+    console.log(options.json ? JSON.stringify(result, null, 2) : formatted);
     process.exitCode = result.ready ? 0 : 2;
   } catch (error) {
     console.error(`PR_READINESS_ERROR: ${error.message}`);

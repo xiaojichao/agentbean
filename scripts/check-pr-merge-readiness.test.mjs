@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { evaluatePullRequest, formatReadiness } from './check-pr-merge-readiness.mjs';
+import {
+  evaluateDraftReviewReadiness,
+  evaluatePullRequest,
+  formatDraftReviewReadiness,
+  formatReadiness,
+} from './check-pr-merge-readiness.mjs';
 
 const head = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
@@ -51,6 +56,51 @@ test('marks a clean PR ready only after Codex reviewed the head commit', () => {
   assert.equal(result.ready, true);
   assert.equal(result.timing.headToCodexReviewSeconds, 300);
   assert.match(formatReadiness(result), /READY/);
+});
+
+test('marks a Draft PR review-ready when current Head checks are complete without requiring Codex Review', () => {
+  const result = evaluateDraftReviewReadiness(fixture({
+    isDraft: true,
+    reviews: { nodes: [] },
+    comments: { nodes: [] },
+  }));
+  assert.equal(result.ready, true);
+  assert.equal(result.stage, 'draft-review');
+  assert.match(formatDraftReviewReadiness(result), /REVIEW_READY/);
+  assert.match(formatDraftReviewReadiness(result), /Draft 前置阶段不要求/);
+});
+
+test('blocks the Draft review gate after a PR becomes Ready', () => {
+  const result = evaluateDraftReviewReadiness(fixture());
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.blockers.map((item) => item.code), ['PR_NOT_DRAFT']);
+});
+
+test('Draft review gate fails closed for missing, pending, and failed checks', () => {
+  const missing = fixture({ isDraft: true });
+  missing.commits.nodes[0].commit.statusCheckRollup = null;
+  assert.deepEqual(
+    evaluateDraftReviewReadiness(missing).blockers.map((item) => item.code),
+    ['CHECKS_MISSING'],
+  );
+
+  const incomplete = fixture({ isDraft: true });
+  incomplete.commits.nodes[0].commit.statusCheckRollup.contexts.nodes = [
+    { __typename: 'CheckRun', name: 'CI', status: 'IN_PROGRESS', conclusion: null },
+    { __typename: 'StatusContext', context: 'Vercel', state: 'FAILURE' },
+  ];
+  assert.deepEqual(
+    evaluateDraftReviewReadiness(incomplete).blockers.map((item) => item.code),
+    ['CHECKS_PENDING', 'CHECKS_FAILED'],
+  );
+});
+
+test('Draft review gate fails closed when GitHub truncates check results', () => {
+  const pr = fixture({ isDraft: true });
+  pr.commits.nodes[0].commit.statusCheckRollup.contexts.pageInfo = { hasNextPage: true };
+  const result = evaluateDraftReviewReadiness(pr);
+  assert.equal(result.ready, false);
+  assert.equal(result.blockers[0].code, 'RESULTS_TRUNCATED');
 });
 
 test('accepts a clean Codex comment that names the current short SHA', () => {

@@ -112,8 +112,10 @@ export function collectAgentBeanNextReadinessChecks({
     ),
     check(
       'ci-detects-pr-merge-readiness-changes',
-      workflow.includes('check-pr-merge-readiness(\\.test)?'),
-      'CI change detection must run validation when the PR merge-readiness checker or its tests change',
+      workflow.includes('check-pr-merge-readiness(\\.test)?') &&
+        packageJson.scripts?.['check:pr-draft-review-readiness'] ===
+          'node scripts/check-pr-merge-readiness.mjs --draft-review',
+      'CI change detection and root scripts must retain both Draft review and final merge readiness gates',
     ),
     check(
       'ci-builds-canonical-packages-before-browser-smoke',
