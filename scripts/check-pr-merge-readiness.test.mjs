@@ -88,6 +88,15 @@ test('blocks the Review preflight after a PR has already left Draft', () => {
   assert.deepEqual(result.blockers.map((item) => item.code), ['PR_NOT_DRAFT']);
 });
 
+test('allows a fixed draft to request a new Review despite a stale change request', () => {
+  const result = evaluatePullRequest(fixture({
+    isDraft: true,
+    reviewDecision: 'CHANGES_REQUESTED',
+  }), new Date(), { stage: 'review' });
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.blockers, []);
+});
+
 test('keeps the merge gate blocked when Codex Review is missing', () => {
   const result = evaluatePullRequest(fixture({ reviews: { nodes: [] } }));
   assert.equal(result.ready, false);

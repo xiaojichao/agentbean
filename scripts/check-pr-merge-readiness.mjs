@@ -173,7 +173,7 @@ export function evaluatePullRequest(pr, now = new Date(), { stage = 'merge' } = 
     code: 'CHECKS_FAILED',
     detail: `有 ${failingChecks.length} 个检查失败：${failingChecks.map((item) => item.name).join('、')}`,
   });
-  if (pr.reviewDecision === 'CHANGES_REQUESTED') {
+  if (stage === 'merge' && pr.reviewDecision === 'CHANGES_REQUESTED') {
     blockers.push({ code: 'CHANGES_REQUESTED', detail: '存在 blocking change request' });
   }
   if (stage === 'merge' && pr.reviewDecision === 'REVIEW_REQUIRED') {
