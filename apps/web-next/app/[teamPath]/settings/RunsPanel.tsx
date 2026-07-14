@@ -86,6 +86,7 @@ export function RunsPanel() {
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const teams = useAgentBeanStore((s) => s.teams);
   const agents = useAgentBeanStore((s) => s.agents);
+  const visibleAgents = useAgentBeanStore((s) => s.visibleAgents);
   const devices = useAgentBeanStore((s) => s.devices);
   const channels = useAgentBeanStore((s) => s.channels);
   const dms = useAgentBeanStore((s) => s.dms);
@@ -392,7 +393,7 @@ export function RunsPanel() {
             data-smoke="workspace-runs-filter-agent"
           >
             <option value="">全部</option>
-            {Object.values(agents).map((agent) => (
+            {visibleAgents.map((agent) => (
               <option key={agent.id} value={agent.id}>
                 {agent.name}
               </option>

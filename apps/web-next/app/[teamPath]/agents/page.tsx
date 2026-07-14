@@ -12,7 +12,7 @@ import { useAgentBeanStore } from '@/lib/store';
 
 export default function AgentsPage() {
   const params = useParams();
-  const agents = useAgentBeanStore((s) => Object.values(s.agents));
+  const agents = useAgentBeanStore((s) => s.visibleAgents);
   const teams = useAgentBeanStore((s) => s.teams);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : '';

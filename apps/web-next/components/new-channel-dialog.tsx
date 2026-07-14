@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { Globe, Lock, ChevronRight } from 'lucide-react';
 
 export function NewChannelDialog({ onClose, teamId, teamPath }: { onClose: () => void; teamId?: string; teamPath?: string }) {
-  const agents = useAgentBeanStore((s) => Object.values(s.agents));
+  const agents = useAgentBeanStore((s) => s.visibleAgents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const currentTeamPath = useCurrentTeamPath();

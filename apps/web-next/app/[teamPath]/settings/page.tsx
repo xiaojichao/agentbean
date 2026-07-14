@@ -399,7 +399,7 @@ function ServerPanel() {
   const params = useParams();
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const teams = useAgentBeanStore((s) => s.teams);
-  const agents = useAgentBeanStore((s) => s.agents);
+  const visibleAgents = useAgentBeanStore((s) => s.visibleAgents);
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const setCurrentTeamId = useAgentBeanStore((s) => s.setCurrentTeamId);
   const router = useRouter();
@@ -438,7 +438,7 @@ function ServerPanel() {
     setShowDeleteConfirm(false);
   }, [settingsTeamId]);
 
-  const agentList = Object.values(agents);
+  const agentList = visibleAgents;
   const managementDeviceIds = agentList.flatMap((agent) => agent.deviceId ? [agent.deviceId] : []);
   const canManagePolicy = settingsTeam?.currentUserRole === 'owner' || settingsTeam?.currentUserRole === 'admin';
 

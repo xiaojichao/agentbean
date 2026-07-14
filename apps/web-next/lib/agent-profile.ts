@@ -1,4 +1,5 @@
 import type { AgentSnapshot } from './schema';
+import { uniqueAgents } from './agent-list';
 
 export interface AgentProfileMemberHint {
   id: string;
@@ -62,7 +63,7 @@ function profileNameHints(targetId: string, sources: AgentProfileTitleSources): 
 }
 
 function findAgentByName(agents: Record<string, AgentSnapshot>, names: string[]): AgentSnapshot | null {
-  const currentAgents = Object.values(agents);
+  const currentAgents = uniqueAgents(Object.values(agents));
   for (const name of names) {
     const exact = currentAgents.find((agent) => agent.name === name);
     if (exact) return exact;
@@ -73,7 +74,7 @@ function findAgentByName(agents: Record<string, AgentSnapshot>, names: string[])
 
 function findAgentByGatewayHint(agents: Record<string, AgentSnapshot>, hint: GatewayProfileHint | null): AgentSnapshot | null {
   if (!hint) return null;
-  const candidates = Object.values(agents).filter((agent) => agent.adapterKind === hint.adapterKind);
+  const candidates = uniqueAgents(Object.values(agents)).filter((agent) => agent.adapterKind === hint.adapterKind);
   if (candidates.length === 0) return null;
 
   const sameDevice = hint.deviceId

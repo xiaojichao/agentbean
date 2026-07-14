@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
     currentTeamId: 'stale-team',
     teams: [{ id: 'stale-team', name: 'Stale Team', path: 'stale-team' }],
     agents: {},
+    visibleAgents: [],
     currentUser: { id: 'user-1', username: 'alice' },
     setCurrentTeamId: vi.fn(),
   },
