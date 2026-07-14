@@ -404,6 +404,8 @@ export const useAgentBeanStore = create<State>((set) => ({
       return {
         currentTeamId: id,
         agents: {},
+        agentRecords: {},
+        visibleAgents: [],
         channels: [],
         dms: [],
         messagesByChannel: {},

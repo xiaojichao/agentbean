@@ -107,4 +107,16 @@ describe('agent rename across dedupe-merged records', () => {
     expect(state.agents['a1']).toBeUndefined();
     expect(state.visibleAgents.find((a) => a.id === 'a1')).toBeUndefined();
   });
+
+  test('switching teams clears both raw records and derived agent views', () => {
+    const s = useAgentBeanStore.getState();
+    s.applyAgentsSnapshot([mk({ id: 'team-1-agent' })]);
+
+    s.setCurrentTeamId('t2');
+
+    const state = useAgentBeanStore.getState();
+    expect(state.agentRecords).toEqual({});
+    expect(state.agents).toEqual({});
+    expect(state.visibleAgents).toEqual([]);
+  });
 });

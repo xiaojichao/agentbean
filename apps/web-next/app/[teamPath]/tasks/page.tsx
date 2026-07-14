@@ -215,7 +215,7 @@ export default function TasksPage() {
       if (task.assigneeId && !map.has(task.assigneeId)) map.set(task.assigneeId, { id: task.assigneeId, name: 'Agent', kind: 'agent' });
     }
     return [...map.values()].sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
-  }, [agents, currentUser, humans, tasks]);
+  }, [currentUser, humans, tasks, visibleAgents]);
 
   const channelOptions = useMemo<FilterOption[]>(() => channels.map((channel) => ({
     id: channel.id,
