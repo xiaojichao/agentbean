@@ -405,7 +405,11 @@ export async function replayManagementOutboxForLease(input: {
 
 function runtimeContext(restored: ManagementCheckpointResultV1): ManagementSessionContextV1 | ManagementSessionContextV2 {
   const context = restored.context;
-  if (isPhase2Checkpoint(restored)) {
+  const phase2Checkpoint = isPhase2Checkpoint(restored);
+  if (!phase2Checkpoint && restored.checkpoint && restored.checkpoint.authoritative.taskGraphRevision !== 0) {
+    throw new Error('P1_TASK_GRAPH_REVISION_UNSUPPORTED');
+  }
+  if (phase2Checkpoint) {
     if (!context.rootTaskId) throw new Error('P2_ROOT_TASK_REQUIRED');
     return {
       schemaVersion: 2,

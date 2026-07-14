@@ -147,6 +147,42 @@ describe('PiManagerWorkerHost', () => {
     expect(handlers()!.reserveLeaseOffer(second)).toBe(false);
   });
 
+  test('Phase 1 checkpoint 遇到非零 Task graph revision 时 fail-closed', async () => {
+    const { protocol, handlers } = createProtocolHarness();
+    const baseline = await createProtocolHarness().protocol.fetchCheckpoint({
+      schemaVersion: 1, managementRunId: 'run-1', workerId: 'worker-1',
+      leaseToken: 'raw-lease-token', fencingToken: 1,
+    });
+    if (!baseline.checkpoint) throw new Error('TEST_CHECKPOINT_REQUIRED');
+    vi.mocked(protocol.fetchCheckpoint).mockResolvedValue({
+      ...baseline,
+      checkpoint: {
+        ...baseline.checkpoint,
+        authoritative: { ...baseline.checkpoint.authoritative, taskGraphRevision: 1 },
+      },
+    });
+    const runtimeFactory: ManagementRuntimeFactory = { createSession: vi.fn() };
+    const host = createPiManagerWorkerHost({
+      profileId: 'profile-1', runtimeVersion: '0.1.0', protocol,
+      credentialProvider: { resolve: async () => ({ credentialStatus: 'production_ready',
+        providerId: 'provider-1', modelId: 'model-1', apiKey: 'secret', baseUrl: 'https://model.invalid' }) },
+      createRuntimeFactory: () => runtimeFactory,
+      outbox: { enqueue: vi.fn(), remove: vi.fn(), list: vi.fn(() => []), size: vi.fn(() => 0) },
+      now: () => 100,
+    });
+    await host.start();
+    const offer = { schemaVersion: 1 as const, offerId: 'offer-1', managementRunId: 'run-1',
+      workerId: 'worker-1', offerExpiresAt: 1_000 };
+    expect(handlers()!.reserveLeaseOffer(offer)).toBe(true);
+    await handlers()!.onLeaseOffer(offer);
+
+    expect(runtimeFactory.createSession).not.toHaveBeenCalled();
+    expect(protocol.abortLease).toHaveBeenCalledWith(expect.objectContaining({
+      reasonCode: 'session-start-failed',
+    }));
+    expect(host.activeLeaseCount()).toBe(0);
+  });
+
   test('从 authoritative DAG checkpoint 恢复 Phase 2 exact tools，重连后继续同一 Run 而不重建 DAG', async () => {
     const { protocol, handlers } = createProtocolHarness();
     vi.mocked(protocol.fetchCheckpoint).mockResolvedValue({
