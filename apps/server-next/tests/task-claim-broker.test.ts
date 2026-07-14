@@ -80,6 +80,29 @@ describe('Task Claim Broker', () => {
     );
   });
 
+  test('blocked invalidates the old claim, advances attempt, and allows a fresh claim', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    const first = await claimFirst(harness);
+
+    await harness.coordination.reportBlocked({ authority: harness.authority,
+      idempotencyKey: 'blocked-a', taskId: 'task-a', expectedTaskRevision: 1,
+      reasonCode: 'DEPENDENCY_UNAVAILABLE' });
+    await expect(harness.repositories.taskCoordination.claimLeases.getById(first.lease.claimLeaseId))
+      .resolves.toMatchObject({ status: 'invalidated', taskAttempt: 1 });
+    await expect(harness.repositories.taskCoordination.coordinations.getByTaskId('task-a'))
+      .resolves.toMatchObject({ attempt: 2 });
+
+    const [offer] = await harness.broker.prepareOffers('task-a');
+    expect(offer).toMatchObject({ taskAttempt: 2 });
+    await expect(harness.broker.acquire({ schemaVersion: 1,
+      offerId: offer!.offerId, agentId: offer!.agentId })).resolves.toMatchObject({
+      ok: true, lease: { taskAttempt: 2, fencingToken: 1 },
+    });
+  });
+
   test('renew/release/expire/disconnect/reconnect 在 fake clock 下可复现且 fencing 单调', async () => {
     const harness = await createHarness();
     await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
@@ -159,7 +182,7 @@ async function createHarness() {
   const broker = createTaskClaimBroker({ repositories, clock: { now: () => clock.value },
     ids: { nextId: () => `broker-${++brokerId}` },
     leaseTokens: { nextToken: () => `raw-token-${++tokenId}` }, offerTtlMs: 20, leaseTtlMs: 100 });
-  return { repositories, clock, broker };
+  return { repositories, clock, broker, coordination, authority };
 }
 
 async function seedAgent(

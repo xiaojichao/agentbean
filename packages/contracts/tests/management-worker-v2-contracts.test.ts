@@ -98,6 +98,8 @@ describe('Phase 2 management worker contracts', () => {
     expect(() => parsePhase2TaskToolResultV2({ ...value,
       output: { ...value.output, localGuess: true } }))
       .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    expect(() => parsePhase2TaskToolResultV2({ ...value, diagnosticCode: 'should-not-exist' }))
+      .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
   });
 
   test('parses dependency inputs and rejects invalid subtask policy or evidence kinds', () => {

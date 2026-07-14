@@ -117,6 +117,21 @@ export interface ManagementVisibleCheckpointV1 {
   readonly nextAction?: string;
 }
 
+export interface ManagementVisibleCheckpointV2 extends ManagementVisibleCheckpointV1 {
+  readonly taskGraphRevision: number;
+  readonly openTaskIds: readonly string[];
+  readonly waitingInvocationIds: readonly string[];
+  readonly completedInvocationIds: readonly string[];
+  readonly taskSnapshots: readonly {
+    readonly taskId: string;
+    readonly taskRevision: number;
+    readonly taskAttempt: number;
+    readonly status: 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
+    readonly claimLeaseId?: string;
+  }[];
+  readonly activeClaimLeaseIds: readonly string[];
+}
+
 export interface ManagementSessionContextV1 {
   readonly schemaVersion: 1;
   readonly scope: ManagementSessionScopeV1;
@@ -139,7 +154,7 @@ export interface ManagementSessionContextV2 {
   };
   readonly frozenTarget?: ManagementSessionContextV1['frozenTarget'];
   readonly visibleThread: ManagementSessionContextV1['visibleThread'];
-  readonly checkpoint?: ManagementVisibleCheckpointV1;
+  readonly checkpoint?: ManagementVisibleCheckpointV2;
 }
 
 export type ManagementSessionContext = ManagementSessionContextV1 | ManagementSessionContextV2;

@@ -361,7 +361,8 @@ export function parsePhase2TaskToolResultV2(value: unknown): Phase2TaskToolResul
     throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
   }
   if (value.ok) {
-    if (value.output === undefined || value.errorCode !== undefined || value.retryable !== undefined) {
+    if (value.output === undefined || value.errorCode !== undefined || value.retryable !== undefined
+      || value.diagnosticCode !== undefined) {
       throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
     }
     assertTaskToolOutput(String(value.toolName), value.output);

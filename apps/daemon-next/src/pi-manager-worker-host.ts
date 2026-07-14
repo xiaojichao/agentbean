@@ -421,7 +421,7 @@ function runtimeContext(restored: ManagementCheckpointResultV1): ManagementSessi
       },
       ...(context.frozenTarget ? { frozenTarget: structuredClone(context.frozenTarget) } : {}),
       visibleThread: structuredClone(context.visibleThread),
-      ...(restored.checkpoint ? { checkpoint: visibleCheckpoint(restored.checkpoint) } : {}),
+      ...(restored.checkpoint ? { checkpoint: visiblePhase2Checkpoint(restored.checkpoint) } : {}),
     };
   }
   return {
@@ -453,6 +453,18 @@ function visibleCheckpoint(checkpoint: NonNullable<ManagementCheckpointResultV1[
     objective: checkpoint.contextHints.objective,
     planSummary: checkpoint.contextHints.planSummary,
     ...(checkpoint.contextHints.nextAction ? { nextAction: checkpoint.contextHints.nextAction } : {}),
+  };
+}
+
+function visiblePhase2Checkpoint(checkpoint: NonNullable<ManagementCheckpointResultV1['checkpoint']>) {
+  return {
+    ...visibleCheckpoint(checkpoint),
+    taskGraphRevision: checkpoint.authoritative.taskGraphRevision,
+    openTaskIds: [...checkpoint.authoritative.openTaskIds],
+    waitingInvocationIds: [...checkpoint.authoritative.waitingInvocationIds],
+    completedInvocationIds: [...checkpoint.authoritative.completedInvocationIds],
+    taskSnapshots: structuredClone(checkpoint.authoritative.taskSnapshots ?? []),
+    activeClaimLeaseIds: [...(checkpoint.authoritative.activeClaimLeaseIds ?? [])],
   };
 }
 

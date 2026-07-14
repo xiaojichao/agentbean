@@ -231,7 +231,12 @@ describe('PiManagerWorkerHost', () => {
     await handlers()!.onLeaseOffer(offer);
     expect(runtimeFactory.createSession).toHaveBeenLastCalledWith(expect.objectContaining({
       context: expect.objectContaining({ schemaVersion: 2, managementPhase: 2,
-        scope: expect.objectContaining({ rootTaskId: 'root-task' }) }),
+        scope: expect.objectContaining({ rootTaskId: 'root-task' }),
+        checkpoint: expect.objectContaining({ taskGraphRevision: 2,
+          openTaskIds: ['root-task', 'child-task'], activeClaimLeaseIds: ['claim-1'],
+          taskSnapshots: expect.arrayContaining([expect.objectContaining({ taskId: 'child-task',
+            taskRevision: 2, taskAttempt: 1, claimLeaseId: 'claim-1' })]) }),
+      }),
     }));
     await expect(executeTool!({ toolCallId: 'wait-1', name: 'tasks.wait',
       scope: { kind: 'managed', managementRunId: 'run-1', teamId: 'team-1', channelId: 'channel-1',

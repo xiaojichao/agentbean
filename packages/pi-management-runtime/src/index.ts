@@ -35,6 +35,7 @@ export type {
   ManagementToolPhase,
   ManagementToolResult,
   ManagementVisibleCheckpointV1,
+  ManagementVisibleCheckpointV2,
   ManagementVisibleMessageV1,
   VersionedManagementPrompt,
 } from './types.js';

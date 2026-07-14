@@ -70,11 +70,12 @@ export function evaluateManagementCheckpoint(
   if (authoritative.memoryCapsuleIds.some((id) => !validMemoryCapsuleIds.has(id))) {
     reasons.add('invalid-memory-capsule');
   }
-  if (authoritative.taskSnapshots && JSON.stringify(authoritative.taskSnapshots) !== JSON.stringify(input.facts.taskSnapshots ?? [])) {
+  if ((authoritative.taskSnapshots !== undefined || input.facts.taskSnapshots !== undefined)
+    && JSON.stringify(authoritative.taskSnapshots ?? []) !== JSON.stringify(input.facts.taskSnapshots ?? [])) {
     reasons.add('task-graph-revision-mismatch');
   }
-  if (authoritative.activeClaimLeaseIds
-    && !sameSet(authoritative.activeClaimLeaseIds, input.facts.activeClaimLeaseIds ?? [])) {
+  if ((authoritative.activeClaimLeaseIds !== undefined || input.facts.activeClaimLeaseIds !== undefined)
+    && !sameSet(authoritative.activeClaimLeaseIds ?? [], input.facts.activeClaimLeaseIds ?? [])) {
     reasons.add('task-graph-revision-mismatch');
   }
 

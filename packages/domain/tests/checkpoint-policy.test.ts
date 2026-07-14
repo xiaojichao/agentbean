@@ -64,4 +64,16 @@ describe('Phase 0 checkpoint policy', () => {
     expect(result).toMatchObject({ kind: 'rebuild_required', reasons: expect.arrayContaining([reason]) });
     expect(result).not.toHaveProperty('contextHints');
   });
+
+  test('requires rebuild when current facts introduce Phase 2 DAG or claim fields absent from an old checkpoint', () => {
+    const phase2Facts = {
+      ...facts,
+      taskSnapshots: [{ taskId: 'task-open', taskRevision: 2, taskAttempt: 1,
+        status: 'in_progress' as const, claimLeaseId: 'claim-1' }],
+      activeClaimLeaseIds: ['claim-1'],
+    };
+    expect(evaluateManagementCheckpoint({ checkpoint, facts: phase2Facts })).toMatchObject({
+      kind: 'rebuild_required', reasons: ['task-graph-revision-mismatch'],
+    });
+  });
 });

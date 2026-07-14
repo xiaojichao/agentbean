@@ -7,6 +7,7 @@ import type {
 } from '../../../../../packages/contracts/src/index.js';
 import {
   authorizeTaskRevision,
+  evaluateSubtaskAcceptance,
   evaluateTaskDag,
   evaluateTaskRevisionChange,
 } from '../../../../../packages/domain/src/index.js';
@@ -548,8 +549,36 @@ export function createTaskCoordinationKernel(
         const claim = await repositories.coordination.claimLeases.getById(acceptance.claimLeaseId);
         if (!claim || claim.taskId !== task.id || claim.taskRevision !== task.revision
           || claim.taskAttempt !== coordination.attempt) conflict('TASK_CLAIM_AUTHORITY_MISMATCH');
+        const currentClaim = await repositories.coordination.claimLeases.getCurrent({
+          taskId: task.id, taskRevision: task.revision, taskAttempt: coordination.attempt,
+        });
+        if (claim.status !== 'active' || claim.expiresAt <= now || currentClaim?.id !== claim.id) {
+          conflict('TASK_CLAIM_NOT_ACTIVE');
+        }
         if (await repositories.coordination.acceptances.getCanonicalByDelivery(delivery.id)) {
           conflict('TASK_ACCEPTANCE_ALREADY_DECIDED');
+        }
+        if (acceptance.decision === 'accepted') {
+          const criteria = (await repositories.coordination.criteria.list(task.id))
+            .filter((criterion) => criterion.introducedRevision <= task.revision
+              && (criterion.retiredRevision === undefined || criterion.retiredRevision > task.revision));
+          const snapshots = (await repositories.coordination.evidenceSnapshots.listByTask(task.id))
+            .filter((snapshot) => snapshot.taskRevision === task.revision
+              && snapshot.taskAttempt === coordination.attempt
+              && snapshot.invocationId === delivery.invocationId);
+          const evidenceRefs = acceptance.criteriaResults.flatMap((result) => result.evidenceRefs);
+          const evidenceFacts = snapshots.flatMap((snapshot) => {
+            const ref = evidenceRefs.find((candidate) => snapshot.kind === candidate.kind
+              && snapshot.sourceId === candidate.id && snapshot.snapshotHash === candidate.snapshotHash
+              && snapshot.snapshotRevision === candidate.snapshotRevision
+              && snapshot.capturedAt === candidate.capturedAt);
+            return ref ? [{ ref, available: true, visible: true,
+              currentSnapshotHash: snapshot.snapshotHash }] : [];
+          });
+          if (evaluateSubtaskAcceptance({ criteria, criteriaResults: acceptance.criteriaResults,
+            evidenceSnapshots: evidenceFacts, highRisk: false, conflictingEvidence: false }).kind !== 'accepted') {
+            conflict('TASK_ACCEPTANCE_POLICY_REJECTED');
+          }
         }
         await repositories.coordination.acceptances.create({ ...acceptance,
           id: ids.nextId(), teamId: run.teamId, decisionVersion: 1, canonical: true });
@@ -598,6 +627,12 @@ export function createTaskCoordinationKernel(
         const claim = await repositories.coordination.claimLeases.getCurrent({
           taskId: task.id, taskRevision: task.revision, taskAttempt: coordination.attempt,
         });
+        if (coordination.attempt >= coordination.maxAttempts) conflict('TASK_RETRY_BUDGET_EXHAUSTED');
+        const updatedCoordination = await repositories.coordination.coordinations.update({
+          expectedTaskRevision: task.revision,
+          record: { ...coordination, attempt: coordination.attempt + 1, updatedAt: now },
+        });
+        if (!updatedCoordination) conflict('TASK_COORDINATION_REVISION_CONFLICT');
         const updated = await repositories.tasks.update({ taskId: task.id,
           changes: { status: 'todo', updatedAt: now } });
         if (!updated) conflict('TASK_NOT_FOUND');
