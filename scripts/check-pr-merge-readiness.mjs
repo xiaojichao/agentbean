@@ -26,6 +26,7 @@ query($owner: String!, $name: String!, $number: Int!) {
             committedDate
             statusCheckRollup {
               contexts(first: 100) {
+                pageInfo { hasNextPage }
                 nodes {
                   __typename
                   ... on CheckRun {
@@ -51,12 +52,14 @@ query($owner: String!, $name: String!, $number: Int!) {
         }
       }
       reviewThreads(first: 100) {
+        pageInfo { hasNextPage }
         nodes {
           id
           isResolved
         }
       }
       reviewRequests(first: 100) {
+        pageInfo { hasNextPage }
         nodes {
           requestedReviewer {
             __typename
@@ -137,6 +140,11 @@ export function evaluatePullRequest(pr, now = new Date()) {
     .sort((left, right) => new Date(right.at) - new Date(left.at))[0] ?? null;
 
   const blockers = [];
+  const truncatedConnections = [
+    commit?.statusCheckRollup?.contexts?.pageInfo?.hasNextPage ? 'checks' : null,
+    pr.reviewThreads?.pageInfo?.hasNextPage ? 'review threads' : null,
+    pr.reviewRequests?.pageInfo?.hasNextPage ? 'review requests' : null,
+  ].filter(Boolean);
   if (pr.state !== 'OPEN') blockers.push({ code: 'PR_NOT_OPEN', detail: `PR 状态为 ${pr.state}` });
   if (pr.isDraft) blockers.push({ code: 'PR_DRAFT', detail: 'PR 仍是 Draft' });
   if (pr.mergeable !== 'MERGEABLE') blockers.push({ code: 'PR_NOT_MERGEABLE', detail: `mergeable=${pr.mergeable}` });
@@ -147,6 +155,10 @@ export function evaluatePullRequest(pr, now = new Date()) {
   if (!commit?.statusCheckRollup || contexts.length === 0) {
     blockers.push({ code: 'CHECKS_MISSING', detail: '最新提交尚无 CI/check 结果' });
   }
+  if (truncatedConnections.length > 0) blockers.push({
+    code: 'RESULTS_TRUNCATED',
+    detail: `GitHub 查询超过 100 项，无法证明门禁完整：${truncatedConnections.join('、')}`,
+  });
   if (pendingChecks.length > 0) blockers.push({
     code: 'CHECKS_PENDING',
     detail: `仍有 ${pendingChecks.length} 个检查运行中：${pendingChecks.map((item) => item.name).join('、')}`,

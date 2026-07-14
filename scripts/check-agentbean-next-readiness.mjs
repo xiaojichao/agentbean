@@ -111,6 +111,11 @@ export function collectAgentBeanNextReadinessChecks({
       'AgentBean Next CI must run each package suite once, retain every Phase boundary, and build canonical packages once',
     ),
     check(
+      'ci-detects-pr-merge-readiness-changes',
+      workflow.includes('check-pr-merge-readiness(\\.test)?'),
+      'CI change detection must run validation when the PR merge-readiness checker or its tests change',
+    ),
+    check(
       'ci-builds-canonical-packages-before-browser-smoke',
       workflow.includes('run: npm run build:packages') &&
         workflow.indexOf('run: npm run build:packages') <

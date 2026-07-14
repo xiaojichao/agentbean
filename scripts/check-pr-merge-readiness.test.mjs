@@ -95,6 +95,17 @@ test('blocks pending and failed checks with their names', () => {
   assert.deepEqual(result.checks.failing, ['Vercel']);
 });
 
+test('fails closed when a paginated gate exceeds the first 100 results', () => {
+  const pr = fixture();
+  pr.commits.nodes[0].commit.statusCheckRollup.contexts.pageInfo = { hasNextPage: true };
+  pr.reviewThreads.pageInfo = { hasNextPage: true };
+  pr.reviewRequests.pageInfo = { hasNextPage: true };
+  const result = evaluatePullRequest(pr);
+  assert.equal(result.ready, false);
+  assert.equal(result.blockers[0].code, 'RESULTS_TRUNCATED');
+  assert.match(result.blockers[0].detail, /checks、review threads、review requests/);
+});
+
 test('blocks unresolved threads and pending requested reviewers', () => {
   const result = evaluatePullRequest(fixture({
     reviewThreads: { nodes: [{ id: 'thread-1', isResolved: false, isOutdated: true }] },
