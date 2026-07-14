@@ -74,7 +74,7 @@ jobs:
 
           git fetch origin "${{ github.base_ref }}" --depth=1
           changed_files="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
-          next_changed_files="$(printf '%s\n' "$changed_files" | grep -E '^agentbean-next/|^packages/|^apps/(server-next|daemon-next|web-next)/|^scripts/(check-agentbean-next-readiness|check-agentbean-next-railway-preflight|check-team-terminology(\.test)?|check-phase-0-pi-boundary(\.test)?|check-phase-1-management-boundary(\.test)?|check-phase-2-task-dag-boundary(\.test)?|check-pi-management-sea(\.test)?|build-pi-management-sea(\.test)?|audit-agentbean-next-cutover|prepare-agentbean-next-daemon-release|smoke-agentbean-next-.*)\.mjs$|^docs/superpowers/specs/|^README\.md$|^\.nvmrc$|^package(-lock)?\.json$|^railway\.json$|^\.github/workflows/(ci-cd|daily-changelog|pi-sea-compatibility)\.yml$' || true)"
+          next_changed_files="$(printf '%s\n' "$changed_files" | grep -E '^agentbean-next/|^packages/|^apps/(server-next|daemon-next|web-next)/|^scripts/(check-agentbean-next-readiness|check-agentbean-next-railway-preflight|check-pr-merge-readiness(\.test)?|check-team-terminology(\.test)?|check-phase-0-pi-boundary(\.test)?|check-phase-1-management-boundary(\.test)?|check-phase-2-task-dag-boundary(\.test)?|check-pi-management-sea(\.test)?|build-pi-management-sea(\.test)?|audit-agentbean-next-cutover|prepare-agentbean-next-daemon-release|smoke-agentbean-next-.*)\.mjs$|^docs/superpowers/specs/|^README\.md$|^\.nvmrc$|^package(-lock)?\.json$|^railway\.json$|^\.github/workflows/(ci-cd|daily-changelog|pi-sea-compatibility)\.yml$' || true)"
 
           if [ -n "$next_changed_files" ]; then
             echo "should_validate=true" >> "$GITHUB_OUTPUT"

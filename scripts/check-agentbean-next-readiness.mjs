@@ -111,6 +111,11 @@ export function collectAgentBeanNextReadinessChecks({
       'AgentBean Next CI must run each package suite once, retain every Phase boundary, and build canonical packages once',
     ),
     check(
+      'ci-detects-pr-merge-readiness-changes',
+      workflow.includes('check-pr-merge-readiness(\\.test)?'),
+      'CI change detection must run validation when the PR merge-readiness checker or its tests change',
+    ),
+    check(
       'ci-builds-canonical-packages-before-browser-smoke',
       workflow.includes('run: npm run build:packages') &&
         workflow.indexOf('run: npm run build:packages') <
@@ -893,7 +898,7 @@ function ciRunsPhase0Gates(scripts, workflow) {
 function hasDeduplicatedPackageCi({ scripts, workflow }) {
   const expectedPackages = 'npm run test:contracts -- --api.host 127.0.0.1 && npm run test:pi-management-runtime && npm run test:domain -- --api.host 127.0.0.1 && npm run test:server-next-ci && npm run test:daemon-next -- --api.host 127.0.0.1 && npm run test:web-next -- --api.host 127.0.0.1';
   const expectedServerCi = 'cd apps/server-next && ../../node_modules/.bin/vitest run tests --config vitest.config.ts --api.host 127.0.0.1 --exclude tests/phase-2-managed-team-smoke.test.ts';
-  const expectedBoundaries = 'npm run test:phase0-boundary && npm run check:phase0-pi-boundary && npm run test:phase1-management-boundary && npm run check:phase1-management-boundary && npm run test:phase2-task-dag-boundary && npm run check:phase2-task-dag-boundary && npm run test:phase2-closeout';
+  const expectedBoundaries = 'npm run test:pr-merge-readiness && npm run test:phase0-boundary && npm run check:phase0-pi-boundary && npm run test:phase1-management-boundary && npm run check:phase1-management-boundary && npm run test:phase2-task-dag-boundary && npm run check:phase2-task-dag-boundary && npm run test:phase2-closeout';
   const expectedBuild = 'npm run build:contracts && npm run build:domain && npm run build:pi-management-runtime && npm run build:server-next && npm run build:daemon-next && npm run build:web-next';
   const duplicateWorkflowScripts = [
     'test:phase1',

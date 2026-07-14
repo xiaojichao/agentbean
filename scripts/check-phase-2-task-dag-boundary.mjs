@@ -151,6 +151,7 @@ if (scripts['test:phase2-task-dag-boundary'] !== 'node --test scripts/check-phas
   || scripts['test:server-next-ci'] !== 'cd apps/server-next && ../../node_modules/.bin/vitest run tests --config vitest.config.ts --api.host 127.0.0.1 --exclude tests/phase-2-managed-team-smoke.test.ts'
   || scripts['build:packages'] !== expectedPackageBuild
   || scripts['test:ci'] !== 'npm run test:packages && npm run test:retained-boundaries'
+  || !String(scripts['test:retained-boundaries']).includes('test:pr-merge-readiness')
   || !String(scripts['test:retained-boundaries']).includes('test:phase2-task-dag-boundary')
   || !String(scripts['test:retained-boundaries']).includes('test:phase2-closeout')
   || !workflow.includes('npm run test:ci')
