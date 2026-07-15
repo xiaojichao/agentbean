@@ -56,7 +56,13 @@ interface SeedMemoryInput {
   readonly scopeRef?: string;
   readonly content?: string;
   readonly summary?: string;
-  readonly sources?: ReadonlyArray<Pick<MemorySourceRecord, 'sourceKind' | 'sourceId'> & { readonly snapshotHash?: string }>;
+  readonly validUntil?: number;
+  readonly sources?: ReadonlyArray<Pick<MemorySourceRecord, 'sourceKind' | 'sourceId'> & {
+    readonly snapshotHash?: string;
+    readonly sourceScopeType?: MemorySourceRecord['sourceScopeType'];
+    readonly sourceScopeRef?: string;
+    readonly sourceVisibility?: MemorySourceRecord['sourceVisibility'];
+  }>;
 }
 
 async function seedMemory(repositories: ServerNextRepositories, input: SeedMemoryInput): Promise<void> {
@@ -75,6 +81,7 @@ async function seedMemory(repositories: ServerNextRepositories, input: SeedMemor
       createdByUserId: 'user-1',
       approvedByUserId: 'user-1',
       validFrom: 1,
+      validUntil: input.validUntil,
       createdAt: 1,
       updatedAt: 1,
     };
@@ -86,9 +93,9 @@ async function seedMemory(repositories: ServerNextRepositories, input: SeedMemor
         sourceKind: source.sourceKind,
         sourceId: source.sourceId,
         snapshotHash: source.snapshotHash ?? `sha256:${source.sourceId}`,
-        sourceScopeType: item.scopeType,
-        sourceScopeRef: item.scopeRef,
-        sourceVisibility: 'team',
+        sourceScopeType: source.sourceScopeType ?? item.scopeType,
+        sourceScopeRef: source.sourceScopeRef ?? item.scopeRef,
+        sourceVisibility: source.sourceVisibility ?? 'team',
         createdAt: 1,
       });
     }
@@ -142,11 +149,19 @@ describe.each([
       const audit = await harness.repositories.memory.auditEvents.listBySubject({
         teamId: 'team-1', subjectKind: 'capsule', subjectId: capsule.id,
       });
-      expect(audit.map((event) => event.eventType)).toContain('capsule-created');
-      expect(audit[0].actorKind).toBe('system');
-      expect(audit[0].targetAgentId).toBe('agent-1');
+      expect(audit).toHaveLength(capsule.items.length);
+      const itemAudit = audit.find((event) => event.decisionId === item.authorization.decisionId)!;
+      expect(itemAudit.eventType).toBe('capsule-created');
+      expect(itemAudit.actorKind).toBe('system');
+      expect(itemAudit.targetAgentId).toBe('agent-1');
+      expect(itemAudit.scopeType).toBe(item.scopeType);
+      expect(itemAudit.scopeRef).toBe(item.scopeRef);
+      expect(itemAudit.sourceRefs).toEqual(item.sourceRefs);
+      expect(itemAudit.sourceRefsHash).toBe(item.authorization.sourceRefsHash);
+      expect(itemAudit.contentHash).toBe(item.authorization.contentHash);
+      expect(itemAudit.redactionLevel).toBe(item.redactionLevel);
       // 审计同样不携带敏感正文。
-      expect(audit[0]).not.toHaveProperty('content');
+      expect(itemAudit).not.toHaveProperty('content');
     } finally {
       harness.close();
     }
@@ -169,7 +184,7 @@ describe.each([
     }
   });
 
-  test('keeps only scope-policy matches and drops explicit-grant ones', async () => {
+  test('filters explicit-grant matches before applying the Capsule limit', async () => {
     // dm scope 在最小 Capsule 里要求 explicit-grant，本片只打包 scope-policy。
     const searchPermissions: MemorySearchPermissions = {
       async canSearchTeam() { return true; },
@@ -200,10 +215,58 @@ describe.each([
 
     const capsule: MemoryCapsuleDto = await capsuleService.createCapsule({
       teamId: 'team-1', requesterUserId: 'user-1', managementRunId: 'run-1',
-      targetAgentId: 'agent-1', prompt: 'x', limit: 10, now: 5_000, currentPolicyVersion: 1,
+      targetAgentId: 'agent-1', prompt: 'dm secret', limit: 1, now: 5_000, currentPolicyVersion: 1,
     });
     expect(capsule.items.map((item) => item.memoryId)).toEqual(['mem-team']);
     expect(capsule.items.every((item) => item.authorization.mode === 'scope-policy')).toBe(true);
+  });
+
+  test('fails closed for DM scope and non-team source visibility without an explicit grant', async () => {
+    const harness = createHarness();
+    try {
+      await seedMemory(harness.repositories, {
+        memoryId: 'mem-private-source', scopeType: 'task', scopeRef: 'task-1',
+        sources: [{
+          sourceKind: 'message', sourceId: 'private-message', sourceScopeType: 'channel',
+          sourceScopeRef: 'private-channel', sourceVisibility: 'private',
+        }],
+      });
+      await seedMemory(harness.repositories, {
+        memoryId: 'mem-dm-scope', scopeType: 'dm', scopeRef: 'dm-1',
+        sources: [{
+          sourceKind: 'message', sourceId: 'dm-message', sourceScopeType: 'dm',
+          sourceScopeRef: 'dm-1', sourceVisibility: 'team',
+        }],
+      });
+
+      const capsule = await harness.capsuleService.createCapsule({
+        teamId: 'team-1', requesterUserId: 'user-1', managementRunId: 'run-1', taskId: 'task-1',
+        channelId: 'dm-1', targetAgentId: 'agent-1', prompt: 'decision', limit: 10,
+        now: 5_000, currentPolicyVersion: 1,
+      });
+      expect(capsule.items).toEqual([]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  test('caps Capsule and item authorization expiry at the earliest Memory validity', async () => {
+    const harness = createHarness();
+    try {
+      await seedMemory(harness.repositories, { memoryId: 'mem-short', validUntil: 6_000 });
+      await seedMemory(harness.repositories, { memoryId: 'mem-long', validUntil: 20_000 });
+
+      const capsule = await harness.capsuleService.createCapsule({
+        teamId: 'team-1', requesterUserId: 'user-1', managementRunId: 'run-1',
+        targetAgentId: 'agent-1', prompt: 'decision', limit: 10, now: 5_000,
+        currentPolicyVersion: 1, ttlMs: 30_000,
+      });
+      expect(capsule.expiresAt).toBe(6_000);
+      expect(capsule.items.every((item) => item.expiresAt === 6_000)).toBe(true);
+      expect(capsule.items.every((item) => item.authorization.expiresAt === 6_000)).toBe(true);
+    } finally {
+      harness.close();
+    }
   });
 
   test('respects the limit after ranking', async () => {

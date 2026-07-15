@@ -10,7 +10,11 @@ import type {
   MemorySourceRefDto,
   UnixMs,
 } from '../../../../packages/contracts/src/index.js';
-import type { MemoryAuditActorKind, MemorySourceRecord } from './memory-repositories.js';
+import type {
+  MemoryAuditActorKind,
+  MemoryAuditEventRecord,
+  MemorySourceRecord,
+} from './memory-repositories.js';
 import type { MemoryUnitOfWork } from './memory-unit-of-work.js';
 import type {
   CollaborativeMemorySearchMatch,
@@ -79,13 +83,18 @@ export function createMemoryCapsuleService(deps: MemoryCapsuleServiceDeps): Memo
         prompt: input.prompt,
         now: input.now,
         limit: input.limit,
+        accessMode: 'scope-policy',
       });
-      // 最小 Capsule：只冻结 scope-policy 决策的 item。
-      const scopePolicyMatches = searchResult.matches.filter((match) => match.accessMode === 'scope-policy');
+      // 最小 Capsule：只冻结普通 team-visible 的 scope-policy 决策；DM/private 来源必须显式授权。
+      const scopePolicyMatches = searchResult.matches.filter(isSafeScopePolicyMatch);
 
       const capsuleId = ids.nextId();
       const issuedAt = input.now;
-      const expiresAt = input.now + (input.ttlMs ?? DEFAULT_CAPSULE_TTL_MS);
+      const ttlExpiresAt = input.now + (input.ttlMs ?? DEFAULT_CAPSULE_TTL_MS);
+      const expiresAt = scopePolicyMatches.reduce(
+        (earliest, match) => Math.min(earliest, match.item.validUntil ?? earliest),
+        ttlExpiresAt,
+      );
       const items = scopePolicyMatches.map((match) => buildScopePolicyItem(
         match, ids.nextId(), input, issuedAt, expiresAt,
       ));
@@ -103,22 +112,68 @@ export function createMemoryCapsuleService(deps: MemoryCapsuleServiceDeps): Memo
       };
 
       await unitOfWork.run(async (memory) => {
-        await memory.auditEvents.append({
-          id: ids.nextId(),
-          teamId: input.teamId,
-          subjectKind: 'capsule',
-          subjectId: capsuleId,
-          eventType: 'capsule-created',
-          actorKind: ACTOR_SYSTEM,
-          actorId: input.requesterUserId,
-          targetAgentId: input.targetAgentId,
-          sourceRefs: [],
-          createdAt: clock.now(),
-        });
+        const createdAt = clock.now();
+        const auditRecords = items.length === 0
+          ? [emptyCapsuleAudit(ids.nextId(), input, capsuleId, createdAt)]
+          : items.map((item) => capsuleItemAudit(ids.nextId(), input, capsuleId, item, createdAt));
+        for (const record of auditRecords) await memory.auditEvents.append(record);
       });
 
       return capsule;
     },
+  };
+}
+
+function isSafeScopePolicyMatch(match: CollaborativeMemorySearchMatch): boolean {
+  return match.accessMode === 'scope-policy'
+    && match.item.scopeType !== 'dm'
+    && match.sources.every((source) => source.sourceVisibility === 'team');
+}
+
+function emptyCapsuleAudit(
+  id: ID,
+  input: CreateCapsuleInput,
+  capsuleId: ID,
+  createdAt: UnixMs,
+): MemoryAuditEventRecord {
+  return {
+    id,
+    teamId: input.teamId,
+    subjectKind: 'capsule',
+    subjectId: capsuleId,
+    eventType: 'capsule-created',
+    actorKind: ACTOR_SYSTEM,
+    actorId: input.requesterUserId,
+    targetAgentId: input.targetAgentId,
+    sourceRefs: [],
+    createdAt,
+  };
+}
+
+function capsuleItemAudit(
+  id: ID,
+  input: CreateCapsuleInput,
+  capsuleId: ID,
+  item: MemoryCapsuleItemDto,
+  createdAt: UnixMs,
+): MemoryAuditEventRecord {
+  return {
+    id,
+    teamId: input.teamId,
+    subjectKind: 'capsule',
+    subjectId: capsuleId,
+    eventType: 'capsule-created',
+    actorKind: ACTOR_SYSTEM,
+    actorId: input.requesterUserId,
+    decisionId: item.authorization.decisionId,
+    targetAgentId: input.targetAgentId,
+    scopeType: item.authorization.sourceScopeType,
+    scopeRef: item.authorization.sourceScopeRef,
+    sourceRefs: item.sourceRefs,
+    sourceRefsHash: item.authorization.sourceRefsHash,
+    contentHash: item.authorization.contentHash,
+    redactionLevel: item.redactionLevel,
+    createdAt,
   };
 }
 
