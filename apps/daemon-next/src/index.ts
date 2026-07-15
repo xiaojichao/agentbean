@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { AGENT_EVENTS, type AgentCategory, type ArtifactPathKind, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, type AgentCategory, type ArtifactPathKind, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
 import {
@@ -138,6 +138,8 @@ export interface DispatchRequestPayload {
   agentId: string;
   deviceId?: string;
   requestId: string;
+  managementInvocationId?: string;
+  managementContext?: DispatchManagementContextDto;
   prompt: string;
   history?: DispatchHistoryMessageDto[];
   attachments?: DispatchAttachment[];
@@ -384,6 +386,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 exitCode: result.workspaceRun.exitCode,
                 artifactIds,
                 artifacts,
+                ...(result.collaborationProposals?.length
+                  ? { collaborationProposals: result.collaborationProposals }
+                  : {}),
                 files: collectedProductArtifacts.map((c) => ({
                   relativePath: c.relativePath,
                   sha256: c.sha256,
@@ -467,6 +472,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           body: run.body,
           ...(run.artifactIds && run.artifactIds.length > 0 ? { artifactIds: run.artifactIds } : {}),
           ...(run.artifacts && run.artifacts.length > 0 ? { artifacts: run.artifacts } : {}),
+          ...(run.collaborationProposals && run.collaborationProposals.length > 0
+            ? { collaborationProposals: run.collaborationProposals }
+            : {}),
           workspaceRun: run.workspaceRun,
         };
         outbox.sendOrEnqueue(AGENT_EVENTS.dispatch.result, payload, {

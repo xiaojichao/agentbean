@@ -303,6 +303,7 @@ export function createPhase1ManagementToolHandlers(input: {
 }): ToolHandlers {
   const { repositories, kernel, clock, ids } = input;
   const gateway = createInvocationGateway({ repositories, clock, ids });
+  const collaborationService = createCollaborationService({ repositories, clock, ids });
   const pollIntervalMs = input.pollIntervalMs ?? 50;
   const terminalTimeoutMs = input.terminalTimeoutMs ?? 5 * 60_000;
 
@@ -440,17 +441,23 @@ export function createPhase1ManagementToolHandlers(input: {
       if (!invocation || invocation.managementRunId !== request.managementRunId) throw new Error('INVOCATION_NOT_FOUND');
       let view = await gateway.getView(invocation.id);
       if (view.activeDispatchId) {
+        const handoff = await repositories.management.handoffs.getByInvocationId(invocation.id);
         await gateway.completeAttempt({
           dispatchId: view.activeDispatchId,
           status: 'cancelled',
           actorKind: 'system',
         });
-        await kernel.recordInvocationTerminal({
-          managementRunId: request.managementRunId,
-          dispatchId: view.activeDispatchId,
-          status: 'cancelled',
-          errorCode: request.input.reasonCode,
-        });
+        if (handoff) {
+          await collaborationService.recordTerminal({ dispatchId: view.activeDispatchId,
+            status: 'cancelled', artifactIds: [] });
+        } else {
+          await kernel.recordInvocationTerminal({
+            managementRunId: request.managementRunId,
+            dispatchId: view.activeDispatchId,
+            status: 'cancelled',
+            errorCode: request.input.reasonCode,
+          });
+        }
         view = await gateway.getView(invocation.id);
       }
       if (!isTerminalInvocation(view.status)) throw new Error('INVOCATION_ACTIVE_ATTEMPT');

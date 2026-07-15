@@ -43,14 +43,18 @@ export function createCollaborationService(input: {
       if (!channel || channel.teamId !== run.teamId || channel.archivedAt) throw new Error('HANDOFF_CHANNEL_FORBIDDEN');
       const query = request.capabilityQuery?.trim().toLowerCase();
       return (await repositories.agents.listVisibleInTeam(run.teamId))
-        .filter((agent) => agent.deletedAt === undefined
-          && (channel.dmTargetAgentId === agent.id || channel.agentMemberIds.includes(agent.id))
-          && (request.includeBusy || agent.status !== 'busy')
-          && (!query || (agent.skills ?? []).some((skill) => skill.name.toLowerCase().includes(query))))
-        .map((agent) => ({ agentId: agent.id, name: agent.name,
-          kind: agent.category === 'agentos-hosted' ? 'agentos-hosted' as const : 'custom' as const,
-          status: normalizeStatus(agent.status), capabilities: ['dispatch'],
-          skills: (agent.skills ?? []).map((skill) => skill.name), channelMember: true }));
+        .flatMap((agent) => {
+          const capabilities = ['dispatch'];
+          const skills = (agent.skills ?? []).map((skill) => skill.name);
+          if (agent.deletedAt !== undefined
+            || (channel.dmTargetAgentId !== agent.id && !channel.agentMemberIds.includes(agent.id))
+            || (!request.includeBusy && agent.status === 'busy')
+            || (query && !capabilities.some((capability) => capability.includes(query))
+              && !skills.some((skill) => skill.toLowerCase().includes(query)))) return [];
+          return [{ agentId: agent.id, name: agent.name,
+            kind: agent.category === 'agentos-hosted' ? 'agentos-hosted' as const : 'custom' as const,
+            status: normalizeStatus(agent.status), capabilities, skills, channelMember: true }];
+        });
     },
 
     async recordProposals(request: {
@@ -275,7 +279,7 @@ async function updateFromDispatch(
   if (!invocation) throw new Error('HANDOFF_INVOCATION_NOT_FOUND');
   const now = clock.now();
   const taskFenceCurrent = !invocation.intent.taskContext
-    || await isTaskFenceCurrent(repositories, initialRun.id, invocation.intent.taskContext, now);
+    || await isTaskRevisionFenceCurrent(repositories, initialRun.id, invocation.intent.taskContext);
   return repositories.managementUnitOfWork.run(async (management) => {
     const handoff = await management.handoffs.getById(initialHandoff.id);
     const run = await management.runs.getById(initialRun.id);
@@ -376,6 +380,22 @@ async function isTaskFenceCurrent(
     && coordination.attempt === context.taskAttempt && claim.taskId === context.taskId
     && claim.taskRevision === context.taskRevision && claim.taskAttempt === context.taskAttempt
     && claim.status === 'active' && claim.expiresAt > now);
+}
+
+async function isTaskRevisionFenceCurrent(
+  repositories: ServerNextRepositories,
+  managementRunId: string,
+  context: NonNullable<AgentCollaborationProposalV1['sourceTaskContext']>,
+) {
+  const [task, coordination] = await Promise.all([
+    repositories.tasks.getById(context.taskId),
+    repositories.taskCoordination.coordinations.getByTaskId(context.taskId),
+  ]);
+  return Boolean(task && coordination
+    && coordination.managementRunId === managementRunId
+    && task.revision === context.taskRevision
+    && coordination.taskRevision === context.taskRevision
+    && coordination.attempt === context.taskAttempt);
 }
 
 function sameTaskContext(

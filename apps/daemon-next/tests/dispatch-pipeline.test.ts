@@ -107,6 +107,12 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
         body: 'done',
         artifacts: [{ id: 'workspace-log-x', filename: 'workspace-run.log', mimeType: 'text/plain', contentBase64: 'bG9n' }],
         workspaceRun: { status: 'succeeded', cwd, exitCode: 0, startedAt: 1000, completedAt: 2000 },
+        collaborationProposals: [{
+          schemaVersion: 1, sourceInvocationId: 'invocation-live', sourceAgentId: 'agent-1',
+          toAgentId: 'agent-2', kind: 'consult', objective: '请复核结果', reason: '需要第二视角',
+          contextRefs: [], dependencyResults: [], acceptanceCriteria: [], attachmentIds: [],
+          returnMode: 'return_to_manager',
+        }],
       }),
     });
     await client.start();
@@ -137,6 +143,9 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     expect(manifest.files.some((f: { filename: string }) => f.filename === 'result.png')).toBe(true);
     expect(manifest.artifacts.map((artifact: { id: string }) => artifact.id)).toEqual(['workspace-log-x']);
+    expect(manifest.collaborationProposals).toMatchObject([
+      { sourceInvocationId: 'invocation-live', toAgentId: 'agent-2', kind: 'consult' },
+    ]);
   });
 
   test('still reports dispatch result when no customAgent.cwd (no workspace, no scan)', async () => {
@@ -288,6 +297,20 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
       completedAt: 2000,
       artifactIds: ['srv-art-1'],
       artifacts: [{ id: 'workspace-log-x', filename: 'workspace-run.log', mimeType: 'text/plain', contentBase64: 'bG9n' }],
+      collaborationProposals: [{
+        schemaVersion: 1,
+        sourceInvocationId: 'invocation-1',
+        sourceAgentId: 'agent-1',
+        toAgentId: 'agent-2',
+        kind: 'consult',
+        objective: '请复核结果',
+        reason: '需要第二视角',
+        contextRefs: [],
+        dependencyResults: [],
+        acceptanceCriteria: [],
+        attachmentIds: [],
+        returnMode: 'return_to_manager',
+      }],
       files: [],
     });
 
@@ -330,6 +353,11 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
       body: 'recovered reply',
       artifactIds: ['srv-art-1'],
       artifacts: [{ id: 'workspace-log-x', filename: 'workspace-run.log', mimeType: 'text/plain', contentBase64: 'bG9n' }],
+      collaborationProposals: [{
+        sourceInvocationId: 'invocation-1',
+        toAgentId: 'agent-2',
+        kind: 'consult',
+      }],
       workspaceRun: {
         status: 'succeeded',
         cwd,

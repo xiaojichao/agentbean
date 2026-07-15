@@ -1,5 +1,9 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  parseAgentCollaborationProposalV1,
+  type AgentCollaborationProposalV1,
+} from '../../../packages/contracts/src/index.js';
 
 export interface WorkspaceRunDir {
   cwd: string;
@@ -44,6 +48,7 @@ export interface WorkspaceRunManifest {
   exitCode?: number;
   artifactIds?: string[];
   artifacts?: WorkspaceRunManifestArtifact[];
+  collaborationProposals?: readonly AgentCollaborationProposalV1[];
   reportedAt?: number;
   files: WorkspaceRunManifestFile[];
 }
@@ -66,6 +71,7 @@ export interface RecoverableWorkspaceRun {
   };
   artifactIds?: string[];
   artifacts?: WorkspaceRunManifestArtifact[];
+  collaborationProposals?: readonly AgentCollaborationProposalV1[];
 }
 
 export function workspaceRunPath(cwd: string, runId: string): string {
@@ -148,6 +154,15 @@ export function discoverRecoverableWorkspaceRuns(cwds: string[]): RecoverableWor
       const artifacts = Array.isArray(manifest.artifacts)
         ? manifest.artifacts.filter(isWorkspaceRunManifestArtifact)
         : [];
+      const collaborationProposals = Array.isArray(manifest.collaborationProposals)
+        ? manifest.collaborationProposals.flatMap((proposal) => {
+            try {
+              return [parseAgentCollaborationProposalV1(proposal)];
+            } catch {
+              return [];
+            }
+          })
+        : [];
       runs.push({
         runId: manifest.runId || entry.name,
         agentId: manifest.agentId,
@@ -166,6 +181,7 @@ export function discoverRecoverableWorkspaceRuns(cwds: string[]): RecoverableWor
         },
         ...(artifactIds.length > 0 ? { artifactIds } : {}),
         ...(artifacts.length > 0 ? { artifacts } : {}),
+        ...(collaborationProposals.length > 0 ? { collaborationProposals } : {}),
       });
     }
   }

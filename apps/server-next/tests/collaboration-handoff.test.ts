@@ -178,6 +178,107 @@ describe('serial collaboration handoff', () => {
     await expect(harness.repositories.management.runs.getById(harness.runId))
       .resolves.toMatchObject({ status: 'running', activeAgentId: 'agent-a' });
   });
+
+  test('matches declared capabilities as well as skill names', async () => {
+    const harness = await createHarness();
+
+    await expect(harness.service.listAvailableAgents({ managementRunId: harness.runId,
+      capabilityQuery: 'dispatch' })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ agentId: 'agent-a', capabilities: ['dispatch'] }),
+      expect.objectContaining({ agentId: 'agent-b', capabilities: ['dispatch'] }),
+    ]));
+  });
+
+  test('keeps continuation owner transitions valid after the source claim expires', async () => {
+    const harness = await createHarness();
+    const [proposal] = await harness.service.recordProposals({ dispatchId: 'dispatch-a',
+      agentId: 'agent-a', proposals: [{
+        schemaVersion: 1, sourceInvocationId: 'invocation-a', sourceAgentId: 'agent-a',
+        sourceTaskContext: { taskId: 'task-root', rootTaskId: 'task-root', taskRevision: 1,
+          taskAttempt: 1, claimLeaseId: 'claim-a' },
+        toAgentId: 'agent-b', kind: 'continuation', objective: '由 B 收尾', reason: '能力匹配',
+        contextRefs: [], dependencyResults: [], acceptanceCriteria: [], attachmentIds: [],
+        returnMode: 'deliver_to_root',
+      }] });
+    const requested = await harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-expired-claim', sourceProposalId: proposal!.id,
+      sourceInvocationId: 'invocation-a', toAgentId: 'agent-b', kind: 'continuation',
+      objective: '由 B 收尾', reason: '能力匹配', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'deliver_to_root' });
+    await harness.repositories.taskCoordination.claimLeases.update({ id: 'claim-a',
+      expectedStatus: 'active', status: 'released', heartbeatAt: 20, expiresAt: 1_000,
+      releasedAt: 20 });
+
+    const dispatchId = requested.view.activeDispatchId!;
+    await harness.repositories.dispatches.markAccepted({ dispatchId, agentId: 'agent-b',
+      expectedUpdatedAt: 20, prompt: '由 B 收尾', acceptedAt: 21 });
+    await harness.service.recordAccepted({ dispatchId });
+    await expect(harness.repositories.management.runs.getById(harness.runId))
+      .resolves.toMatchObject({ activeAgentId: 'agent-b' });
+    await harness.service.recordTerminal({ dispatchId, status: 'failed', artifactIds: [] });
+    await expect(harness.repositories.management.runs.getById(harness.runId))
+      .resolves.toMatchObject({ activeAgentId: 'agent-a' });
+  });
+
+  test('routes handoff cancellation through collaboration state without terminating the run', async () => {
+    const harness = await createHarness();
+    const [proposal] = await recordConsultProposal(harness);
+    const requested = await harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-cancel', sourceProposalId: proposal!.id,
+      sourceInvocationId: 'invocation-a', toAgentId: 'agent-b', kind: 'consult',
+      objective: '咨询 B', reason: '需要信息', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'return_to_manager' });
+    const handler = createPhase1ManagementToolHandlers({ repositories: harness.repositories,
+      kernel: harness.kernel, clock: harness.clock, ids: harness.ids,
+      onDispatchCreated() {} })['agents.cancel_invocation']!;
+
+    await expect(handler({ schemaVersion: 1, commandId: 'cancel-handoff',
+      managementRunId: harness.runId, workerId: 'worker-1', leaseToken: 'token', fencingToken: 1,
+      idempotencyKey: 'cancel-handoff', toolCallId: 'cancel-handoff',
+      toolName: 'agents.cancel_invocation', input: { invocationId: requested.invocation.id,
+        reasonCode: 'manager_cancelled' } })).resolves.toMatchObject({ status: 'cancelled' });
+    await expect(harness.repositories.management.handoffs.getById(requested.handoff.id))
+      .resolves.toMatchObject({ status: 'cancelled' });
+    await expect(harness.repositories.management.runs.getById(harness.runId))
+      .resolves.toMatchObject({ status: 'running', activeAgentId: 'agent-a' });
+  });
+
+  test('delivers the invocation source and selected handoff context to the target executor', async () => {
+    const harness = await createHarness();
+    const criterion = { id: 'criterion-1', description: '给出可验证结果', evidenceRequired: true };
+    const contextRef = { kind: 'message' as const, id: 'message-root', snapshotHash: 'sha256:context',
+      capturedAt: 10 };
+    const [proposal] = await harness.service.recordProposals({ dispatchId: 'dispatch-a',
+      agentId: 'agent-a', proposals: [{
+        schemaVersion: 1, sourceInvocationId: 'invocation-a', sourceAgentId: 'agent-a',
+        sourceTaskContext: { taskId: 'task-root', rootTaskId: 'task-root', taskRevision: 1,
+          taskAttempt: 1, claimLeaseId: 'claim-a' },
+        toAgentId: 'agent-b', kind: 'consult', objective: '咨询 B', reason: '需要信息',
+        contextRefs: [contextRef], dependencyResults: [], acceptanceCriteria: [criterion],
+        attachmentIds: [], returnMode: 'return_to_manager',
+      }] });
+    const requested = await harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-context', sourceProposalId: proposal!.id,
+      sourceInvocationId: 'invocation-a', toAgentId: 'agent-b', kind: 'consult',
+      objective: '咨询 B', reason: '需要信息', contextRefIds: ['message-root'],
+      dependencyInvocationIds: [], attachmentIds: [], acceptanceCriteria: [criterion],
+      returnMode: 'return_to_manager' });
+    const app = createServerNextUseCases({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids, managementKernel: harness.kernel });
+
+    await expect(app.getDispatchRequest({ dispatchId: requested.view.activeDispatchId! }))
+      .resolves.toMatchObject({ ok: true, request: {
+        managementInvocationId: requested.invocation.id,
+        managementContext: {
+          invocationId: requested.invocation.id,
+          taskContext: { taskId: 'task-root', taskRevision: 1, taskAttempt: 1,
+            claimLeaseId: 'claim-a' },
+          contextRefs: [contextRef],
+          dependencyResults: [],
+          acceptanceCriteria: [criterion],
+        },
+      } });
+  });
 });
 
 async function recordConsultProposal(harness: Awaited<ReturnType<typeof createHarness>>) {

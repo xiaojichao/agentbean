@@ -5275,6 +5275,12 @@ async function buildDispatchRequest(
     attachments.push(...await repositories.artifacts.listByMessage(messageId));
   }
   const managementAttempt = await repositories.management.dispatchAttempts.getByDispatchId(dispatch.id);
+  const managementInvocation = managementAttempt
+    ? await repositories.management.invocations.getById(managementAttempt.invocationId)
+    : null;
+  const managementHandoff = managementInvocation
+    ? await repositories.management.handoffs.getByInvocationId(managementInvocation.id)
+    : null;
 
   return {
     id: dispatch.id,
@@ -5286,6 +5292,15 @@ async function buildDispatchRequest(
     deviceId: agent.deviceId,
     requestId: dispatch.requestId,
     ...(managementAttempt ? { managementInvocationId: managementAttempt.invocationId } : {}),
+    ...(managementInvocation ? { managementContext: {
+      invocationId: managementInvocation.id,
+      ...(managementInvocation.intent.taskContext
+        ? { taskContext: managementInvocation.intent.taskContext }
+        : {}),
+      contextRefs: managementHandoff?.intent.contextRefs ?? [],
+      dependencyResults: managementInvocation.intent.dependencyResults,
+      acceptanceCriteria: managementInvocation.intent.acceptanceCriteria,
+    } } : {}),
     prompt: requestPrompt,
     history: dispatchHistory.map(toDispatchHistoryMessageDto),
     ...(attachments.length > 0 ? { attachments: attachments.map(toDispatchAttachmentDto) } : {}),

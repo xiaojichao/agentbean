@@ -1,6 +1,8 @@
 import type { ID, UnixMs } from './common.js';
 import type { AdapterKind } from './agent.js';
 import type { SenderKind } from './message.js';
+import type { AgentInvocationTaskContextV1, DependencyResultRefDto } from './invocation.js';
+import type { AcceptanceCriterionDto, EvidenceRefDto } from './task-coordination.js';
 
 export type DispatchStatus =
   | 'queued'
@@ -34,6 +36,14 @@ export interface DispatchCustomAgentDto {
   envRef?: AgentEnvRefDto;
 }
 
+export interface DispatchManagementContextDto {
+  invocationId: ID;
+  taskContext?: AgentInvocationTaskContextV1;
+  contextRefs: readonly EvidenceRefDto[];
+  dependencyResults: readonly DependencyResultRefDto[];
+  acceptanceCriteria: readonly AcceptanceCriterionDto[];
+}
+
 export interface DispatchRequestDto {
   claimRequired?: boolean;
   teamId: ID;
@@ -44,6 +54,7 @@ export interface DispatchRequestDto {
   deviceId?: ID;
   requestId: string;
   managementInvocationId?: ID;
+  managementContext?: DispatchManagementContextDto;
   prompt: string;
   history?: DispatchHistoryMessageDto[];
   attachments?: DispatchAttachmentDto[];
