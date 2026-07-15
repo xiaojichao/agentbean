@@ -1,10 +1,13 @@
-import { lstat, opendir, readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, open, opendir, type FileHandle } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import type { LocalMemoryStore } from './local-memory-store.js';
 import { containsSensitiveMemoryText } from './sensitive-memory.js';
 import type { AutoAccumulatedMemorySummary, LocalMemoryItem, LocalMemoryUpsertInput } from './types.js';
 import { workspaceCwdHash } from './workspace-identity.js';
+
+const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
 
 export interface ScanWorkspaceMemoryInput {
   readonly store: LocalMemoryStore;
@@ -64,17 +67,30 @@ function workspaceInput(
 }
 
 async function readPackageJson(path: string): Promise<Record<string, unknown> | undefined> {
+  let handle: FileHandle | undefined;
   try {
-    const metadata = await lstat(path);
-    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 1024 * 1024) return undefined;
-    const raw = await readFile(path, 'utf8');
-    if (Buffer.byteLength(raw) > 1024 * 1024) return undefined;
+    const noFollow = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0;
+    handle = await open(path, constants.O_RDONLY | noFollow);
+    const metadata = await handle.stat();
+    if (!metadata.isFile() || metadata.size > MAX_PACKAGE_JSON_BYTES) return undefined;
+    const buffer = Buffer.alloc(MAX_PACKAGE_JSON_BYTES + 1);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    const finalMetadata = await handle.stat();
+    if (offset > MAX_PACKAGE_JSON_BYTES || finalMetadata.size > MAX_PACKAGE_JSON_BYTES) return undefined;
+    const raw = buffer.subarray(0, offset).toString('utf8');
     const parsed = JSON.parse(raw) as unknown;
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? parsed as Record<string, unknown>
       : undefined;
   } catch {
     return undefined;
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
 }
 

@@ -11,6 +11,13 @@ describe('automatic local Memory sensitive boundary', () => {
     'AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE',
     'AKIAIOSFODNN7EXAMPLE',
     'AIzaSyA12345678901234567890123456789012',
+    '//registry.npmjs.org/:_authToken=npm_abcdefghijklmnopqrstuvwxyz1234567890',
+    '//registry.example.com/:_password=c2VjcmV0LXZhbHVl',
+    'authToken: super-secret-value',
+    '_clientSecret super-secret-value',
+    'npm_abcdefghijklmnopqrstuvwxyz1234567890',
+    'NPM_TOKEN super-secret-value',
+    'AWS_SECRET_ACCESS_KEY super-secret-value',
   ])('拒绝自动持久化 %s', (value) => {
     expect(containsSensitiveMemoryText(value)).toBe(true);
   });

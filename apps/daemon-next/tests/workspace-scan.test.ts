@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -57,5 +57,18 @@ describe('scanWorkspaceMemory', () => {
     expect(store.list().find((item) => item.dedupeKey === 'scan:scripts')).toBeUndefined();
     const layout = store.list().find((item) => item.dedupeKey === 'scan:layout');
     expect(layout?.structured?.paths?.length).toBeLessThanOrEqual(30);
+  });
+
+  test('package.json 为 symlink 时 O_NOFOLLOW 拒绝读取', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'agentbean-workspace-package-symlink-'));
+    const outside = join(mkdtempSync(join(tmpdir(), 'agentbean-package-outside-')), 'package.json');
+    writeFileSync(outside, JSON.stringify({ scripts: { leaked: 'npm run private' }, dependencies: { react: '19' } }));
+    symlinkSync(outside, join(cwd, 'package.json'));
+    const store = await createLocalMemoryStore({ profileId: 'p', cwd, baseDir: join(cwd, '.home') });
+
+    await scanWorkspaceMemory({ store, cwd });
+
+    expect(store.list().find((item) => item.dedupeKey === 'scan:scripts')).toBeUndefined();
+    expect(store.list().find((item) => item.dedupeKey === 'scan:tech-stack')).toBeUndefined();
   });
 });

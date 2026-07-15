@@ -113,6 +113,57 @@ describe('LocalMemoryStore', () => {
     expect(readdirSync(outside)).toEqual([]);
   });
 
+  test('拒绝 profileTarget 任一目录段的 symlink 逃逸', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentbean-memory-profile-symlink-'));
+    const baseDir = join(root, 'home');
+    const outside = mkdtempSync(join(tmpdir(), 'agentbean-memory-profile-outside-'));
+    mkdirSync(baseDir);
+    symlinkSync(outside, join(baseDir, 'teams'));
+
+    await expect(createLocalMemoryStore({ profileId: 'p', baseDir }))
+      .rejects.toThrow('LOCAL_MEMORY_PATH_ESCAPE');
+    expect(readdirSync(outside)).toEqual([]);
+  });
+
+  test('load 按 FileTarget 严格拒绝 workspace scope/canonical cwd/hash 错配', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'agentbean-memory-target-workspace-'));
+    const baseDir = join(cwd, 'home');
+    const store = await createLocalMemoryStore({ profileId: 'p', cwd, baseDir });
+    await store.upsert(workspaceInput(cwd));
+    const file = workspaceMemoryFile(cwd, 'p');
+    const original = JSON.parse(readFileSync(file, 'utf8')) as { items: Array<Record<string, unknown>> };
+    const mismatches: Array<(item: Record<string, unknown>) => void> = [
+      (item) => { item.scopeType = 'local-profile'; },
+      (item) => { item.cwd = join(cwd, '..', 'other'); },
+      (item) => { item.cwdHash = 'forged-canonical-hash'; },
+    ];
+
+    for (const mutate of mismatches) {
+      const snapshot = structuredClone(original);
+      mutate(snapshot.items[0]!);
+      writeFileSync(file, JSON.stringify(snapshot), 'utf8');
+      await expect(createLocalMemoryStore({ profileId: 'p', cwd, baseDir }))
+        .rejects.toThrow('LOCAL_MEMORY_FILE_INVALID');
+    }
+  });
+
+  test('load 拒绝 profile 文件混入 local-workspace scope', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'agentbean-memory-target-profile-'));
+    const baseDir = join(cwd, 'home');
+    const store = await createLocalMemoryStore({ profileId: 'p', cwd, baseDir });
+    await store.upsert({ kind: 'preference', scopeType: 'local-profile', sourceKind: 'manual',
+      content: 'profile memory' });
+    const file = profileMemoryFile('p', baseDir);
+    const snapshot = JSON.parse(readFileSync(file, 'utf8')) as { items: Array<Record<string, unknown>> };
+    Object.assign(snapshot.items[0]!, {
+      scopeType: 'local-workspace', cwd, cwdHash: workspaceCwdHash(cwd), dedupeKey: 'manual:wrong-file',
+    });
+    writeFileSync(file, JSON.stringify(snapshot), 'utf8');
+
+    await expect(createLocalMemoryStore({ profileId: 'p', cwd, baseDir }))
+      .rejects.toThrow('LOCAL_MEMORY_FILE_INVALID');
+  });
+
   test('损坏或 schema 不合法的文件 fail closed，后续写入不得覆盖', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'agentbean-memory-invalid-'));
     const file = workspaceMemoryFile(cwd, 'p');
@@ -217,6 +268,21 @@ describe('LocalMemoryStore', () => {
     await expect(store.upsert({ kind: 'preference', scopeType: 'local-profile', sourceKind: 'manual',
       content: 'x'.repeat(2_000) })).rejects.toThrow('LOCAL_MEMORY_CAPACITY_EXCEEDED');
     expect(existsSync(profileMemoryFile('p', baseDir))).toBe(false);
+  });
+
+  test('压缩按与 save 相同的 pretty serializer 实际字节淘汰终态', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'agentbean-memory-pretty-cap-'));
+    const baseDir = join(cwd, 'home');
+    const store = await createLocalMemoryStore({ profileId: 'p', cwd, baseDir,
+      maxTotalItems: 10, maxTerminalItems: 10, maxFileBytes: 1_024, nextId: sequenceIds() });
+    const terminal = await store.upsert({ kind: 'preference', scopeType: 'local-profile',
+      sourceKind: 'manual', content: `old-${'x'.repeat(220)}` });
+    await store.setStatus(terminal.item.id, 'expired');
+
+    await expect(store.upsert({ kind: 'preference', scopeType: 'local-profile',
+      sourceKind: 'manual', content: `new-${'y'.repeat(220)}` })).resolves.toMatchObject({ action: 'created' });
+    expect(store.list().map((item) => item.content)).toEqual([`new-${'y'.repeat(220)}`]);
+    expect(Buffer.byteLength(readFileSync(profileMemoryFile('p', baseDir)))).toBeLessThanOrEqual(1_024);
   });
 });
 

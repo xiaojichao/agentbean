@@ -9,12 +9,12 @@ import {
   rename,
   rm,
   stat,
-  type FileHandle,
 } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { MEMORY_KINDS } from '../../../../packages/contracts/src/index.js';
-import { profileRoot, sanitizeProfileId } from '../profile-paths.js';
+import { agentBeanHome, profileRoot, sanitizeProfileId } from '../profile-paths.js';
+import { withLocalMemoryFileLock } from './file-lock.js';
 import {
   containsSensitiveMemoryText,
   containsSensitiveMemoryValue,
@@ -40,10 +40,25 @@ interface StoreLimits {
   readonly maxFileBytes: number;
 }
 
-interface FileTarget {
+interface WorkspaceFileTarget {
+  readonly kind: 'workspace';
   readonly file: string;
-  readonly workspaceCwd?: string;
+  readonly profileId: string;
+  readonly safetyRoot: string;
+  readonly directories: readonly string[];
+  readonly workspaceCwd: string;
+  readonly workspaceCwdHash: string;
 }
+
+interface ProfileFileTarget {
+  readonly kind: 'profile';
+  readonly file: string;
+  readonly profileId: string;
+  readonly safetyRoot: string;
+  readonly directories: readonly string[];
+}
+
+type FileTarget = WorkspaceFileTarget | ProfileFileTarget;
 
 export interface LocalMemoryStore {
   upsert(input: LocalMemoryUpsertInput): Promise<LocalMemoryMutationResult>;
@@ -79,18 +94,19 @@ export async function createLocalMemoryStore(
   if (!input.profileId.trim()) throw new Error('LOCAL_MEMORY_PROFILE_REQUIRED');
   const profileId = sanitizeProfileId(input.profileId);
   const canonicalCwd = input.cwd ? await canonicalWorkspace(input.cwd) : undefined;
-  const workspaceTarget: FileTarget | undefined = canonicalCwd
-    ? { file: workspaceMemoryFile(canonicalCwd, profileId), workspaceCwd: canonicalCwd }
+  const workspaceTarget: WorkspaceFileTarget | undefined = canonicalCwd
+    ? workspaceFileTarget(canonicalCwd, profileId)
     : undefined;
-  const profileTarget: FileTarget = { file: profileMemoryFile(profileId, input.baseDir) };
+  const profileTarget = profileFileTarget(profileId, input.baseDir);
   const now = input.now ?? Date.now;
   const nextId = input.nextId ?? randomUUID;
   const limits = normalizeLimits(input);
-  if (workspaceTarget) await assertSafeWorkspaceTarget(workspaceTarget, false);
+  if (workspaceTarget) await assertSafeTarget(workspaceTarget, false);
+  await assertSafeTarget(profileTarget, false);
   let workspaceItems = workspaceTarget
-    ? await loadItems(workspaceTarget.file, profileId, limits)
+    ? await loadItems(workspaceTarget, limits)
     : [];
-  let profileItems = await loadItems(profileTarget.file, profileId, limits);
+  let profileItems = await loadItems(profileTarget, limits);
   let mutationTail = Promise.resolve();
 
   function mutate<T>(operation: () => Promise<T>): Promise<T> {
@@ -104,7 +120,7 @@ export async function createLocalMemoryStore(
   }
 
   function replaceCached(target: FileTarget, items: LocalMemoryItem[]): void {
-    if (target.workspaceCwd) workspaceItems = items;
+    if (target.kind === 'workspace') workspaceItems = items;
     else profileItems = items;
   }
 
@@ -115,8 +131,8 @@ export async function createLocalMemoryStore(
         const normalized = await normalizeUpsertInput(itemInput, canonicalCwd, timestamp);
         const target = normalized.scopeType === 'local-workspace' ? workspaceTarget : profileTarget;
         if (!target) throw new Error('LOCAL_MEMORY_CWD_REQUIRED');
-        return withFileLock(target, async () => {
-          const current = await loadItems(target.file, profileId, limits);
+        return withTargetLock(target, async () => {
+          const current = await loadItems(target, limits);
           const existingIndex = dedupeIndex(current, normalized);
           const existing = existingIndex >= 0 ? current[existingIndex] : undefined;
           const item: LocalMemoryItem = existing
@@ -137,7 +153,7 @@ export async function createLocalMemoryStore(
           const next = existing
             ? current.map((candidate, index) => index === existingIndex ? item : candidate)
             : [...current, item];
-          const expired = target.workspaceCwd
+          const expired = target.kind === 'workspace'
             ? expireOverflow(next, item.cwdHash, limits.maxAutoWorkspaceItems, timestamp)
             : [];
           const withExpiry = expired.length > 0
@@ -163,8 +179,8 @@ export async function createLocalMemoryStore(
         assertStatus(status);
         for (const target of [workspaceTarget, profileTarget]) {
           if (!target) continue;
-          const result = await withFileLock(target, async () => {
-            const current = await loadItems(target.file, profileId, limits);
+          const result = await withTargetLock(target, async () => {
+            const current = await loadItems(target, limits);
             const index = current.findIndex((item) => item.id === id);
             if (index < 0) return { item: null, items: current };
             const item = { ...current[index]!, status, updatedAt: now() };
@@ -336,7 +352,7 @@ function compactItems(items: readonly LocalMemoryItem[], limits: StoreLimits): L
     .map((item) => item.id));
   let removed = terminalIds();
   let next = items.filter((item) => !removed.has(item.id));
-  while (next.length > limits.maxTotalItems || snapshotBytes(next) > limits.maxFileBytes) {
+  while (next.length > limits.maxTotalItems || serializedSnapshotBytes(next) > limits.maxFileBytes) {
     const oldestTerminal = next
       .filter((item) => item.status !== 'active')
       .sort((left, right) => left.updatedAt - right.updatedAt || left.id.localeCompare(right.id))[0];
@@ -373,10 +389,35 @@ async function canonicalWorkspace(cwd: string): Promise<string> {
   }
 }
 
-async function loadItems(file: string, profileId: string, limits: StoreLimits): Promise<LocalMemoryItem[]> {
+function workspaceFileTarget(cwd: string, profileId: string): WorkspaceFileTarget {
+  const memoryRoot = join(cwd, '.agentbean', 'memory');
+  return {
+    kind: 'workspace',
+    file: workspaceMemoryFile(cwd, profileId),
+    profileId,
+    safetyRoot: cwd,
+    directories: [join(cwd, '.agentbean'), memoryRoot],
+    workspaceCwd: cwd,
+    workspaceCwdHash: workspaceCwdHash(cwd),
+  };
+}
+
+function profileFileTarget(profileId: string, baseDir?: string): ProfileFileTarget {
+  const safetyRoot = resolve(agentBeanHome(baseDir));
+  const root = profileRoot(profileId, safetyRoot);
+  return {
+    kind: 'profile',
+    file: join(root, 'memory', 'items.json'),
+    profileId,
+    safetyRoot,
+    directories: [safetyRoot, join(safetyRoot, 'teams'), root, join(root, 'memory')],
+  };
+}
+
+async function loadItems(target: FileTarget, limits: StoreLimits): Promise<LocalMemoryItem[]> {
   let metadata;
   try {
-    metadata = await lstat(file);
+    metadata = await lstat(target.file);
   } catch (error) {
     if (errorCode(error) === 'ENOENT') return [];
     throw new Error('LOCAL_MEMORY_FILE_READ_FAILED');
@@ -386,7 +427,7 @@ async function loadItems(file: string, profileId: string, limits: StoreLimits): 
   }
   let raw: string;
   try {
-    raw = await readFile(file, 'utf8');
+    raw = await readFile(target.file, 'utf8');
   } catch {
     throw new Error('LOCAL_MEMORY_FILE_READ_FAILED');
   }
@@ -399,58 +440,51 @@ async function loadItems(file: string, profileId: string, limits: StoreLimits): 
   }
   if (!isSnapshot(parsed)
     || parsed.items.length > limits.maxTotalItems
-    || parsed.items.some((item) => item.profileId !== profileId)) {
+    || parsed.items.some((item) => !itemMatchesTarget(item, target))) {
     throw new Error('LOCAL_MEMORY_FILE_INVALID');
   }
   return parsed.items.map((item) => structuredClone(item));
 }
 
-async function withFileLock<T>(target: FileTarget, operation: () => Promise<T>): Promise<T> {
+function itemMatchesTarget(item: LocalMemoryItem, target: FileTarget): boolean {
+  if (item.profileId !== target.profileId) return false;
+  if (target.kind === 'workspace') {
+    return item.scopeType === 'local-workspace'
+      && item.cwd === target.workspaceCwd
+      && item.cwdHash === target.workspaceCwdHash;
+  }
+  return item.scopeType === 'local-profile' || item.scopeType === 'local-agent';
+}
+
+async function withTargetLock<T>(target: FileTarget, operation: () => Promise<T>): Promise<T> {
   await ensureSafeParent(target);
-  const lockFile = `${target.file}.lock`;
-  const deadline = Date.now() + 3_000;
-  let lockHandle: FileHandle | undefined;
-  while (!lockHandle) {
-    try {
-      const candidate = await open(lockFile, 'wx', 0o600);
-      try {
-        await candidate.writeFile(`${process.pid}\n`, 'utf8');
-        await candidate.sync();
-        lockHandle = candidate;
-      } catch {
-        await candidate.close().catch(() => undefined);
-        await rm(lockFile, { force: true }).catch(() => undefined);
-        throw new Error('LOCAL_MEMORY_LOCK_FAILED');
-      }
-    } catch (error) {
-      if (errorCode(error) !== 'EEXIST') throw new Error('LOCAL_MEMORY_LOCK_FAILED');
-      if (await staleLock(lockFile)) await rm(lockFile, { force: true });
-      else if (Date.now() >= deadline) throw new Error('LOCAL_MEMORY_LOCK_TIMEOUT');
-      else await delay(10);
-    }
-  }
-  try {
-    if (target.workspaceCwd) await assertSafeWorkspaceTarget(target, true);
+  return withLocalMemoryFileLock(`${target.file}.lock`, async () => {
+    await assertSafeTarget(target, true);
     return await operation();
-  } finally {
-    await lockHandle.close().catch(() => undefined);
-    await rm(lockFile, { force: true }).catch(() => undefined);
-  }
+  });
 }
 
 async function ensureSafeParent(target: FileTarget): Promise<void> {
-  if (target.workspaceCwd) await assertSafeWorkspaceTarget(target, false);
-  await mkdir(dirname(target.file), { recursive: true, mode: 0o700 });
-  if (target.workspaceCwd) await assertSafeWorkspaceTarget(target, true);
+  await assertSafeTarget(target, false);
+  for (const directory of target.directories) {
+    try {
+      await mkdir(directory, { mode: 0o700 });
+    } catch (error) {
+      if (errorCode(error) !== 'EEXIST') throw new Error('LOCAL_MEMORY_PATH_CHECK_FAILED');
+    }
+    await assertSafeDirectory(directory);
+  }
+  await assertSafeTarget(target, true);
 }
 
-async function assertSafeWorkspaceTarget(target: FileTarget, parentMustExist: boolean): Promise<void> {
-  const cwd = target.workspaceCwd!;
-  const memoryRoot = join(cwd, '.agentbean', 'memory');
-  if (!pathInside(cwd, target.file) || dirname(target.file) !== memoryRoot) {
+async function assertSafeTarget(target: FileTarget, parentMustExist: boolean): Promise<void> {
+  const expectedParent = target.directories[target.directories.length - 1];
+  if (!expectedParent
+    || !pathInside(target.safetyRoot, target.file)
+    || dirname(target.file) !== expectedParent) {
     throw new Error('LOCAL_MEMORY_PATH_ESCAPE');
   }
-  for (const path of [join(cwd, '.agentbean'), memoryRoot, target.file]) {
+  for (const path of [...target.directories, target.file]) {
     try {
       const metadata = await lstat(path);
       if (metadata.isSymbolicLink()) throw new Error('LOCAL_MEMORY_PATH_ESCAPE');
@@ -463,14 +497,29 @@ async function assertSafeWorkspaceTarget(target: FileTarget, parentMustExist: bo
     }
   }
   if (parentMustExist) {
-    const canonicalParent = await realpath(memoryRoot);
-    if (!pathInside(cwd, canonicalParent)) throw new Error('LOCAL_MEMORY_PATH_ESCAPE');
+    const [canonicalRoot, canonicalParent] = await Promise.all([
+      realpath(target.safetyRoot),
+      realpath(expectedParent),
+    ]);
+    if (!pathInside(canonicalRoot, canonicalParent)) throw new Error('LOCAL_MEMORY_PATH_ESCAPE');
+  }
+}
+
+async function assertSafeDirectory(path: string): Promise<void> {
+  try {
+    const metadata = await lstat(path);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+      throw new Error('LOCAL_MEMORY_PATH_ESCAPE');
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === 'LOCAL_MEMORY_PATH_ESCAPE') throw error;
+    throw new Error('LOCAL_MEMORY_PATH_CHECK_FAILED');
   }
 }
 
 async function saveItems(target: FileTarget, items: readonly LocalMemoryItem[], maxFileBytes: number): Promise<void> {
-  if (target.workspaceCwd) await assertSafeWorkspaceTarget(target, true);
-  const serialized = `${JSON.stringify({ schemaVersion: 1, items }, null, 2)}\n`;
+  await assertSafeTarget(target, true);
+  const serialized = serializeSnapshot(items);
   if (Buffer.byteLength(serialized) > maxFileBytes) throw new Error('LOCAL_MEMORY_CAPACITY_EXCEEDED');
   const temporary = `${target.file}.tmp-${process.pid}-${randomUUID()}`;
   const handle = await open(temporary, 'wx', 0o600);
@@ -482,7 +531,7 @@ async function saveItems(target: FileTarget, items: readonly LocalMemoryItem[], 
   }
   await chmod(temporary, 0o600);
   try {
-    if (target.workspaceCwd) await assertSafeWorkspaceTarget(target, true);
+    await assertSafeTarget(target, true);
     await rename(temporary, target.file);
     await chmod(target.file, 0o600);
     try {
@@ -500,26 +549,18 @@ async function saveItems(target: FileTarget, items: readonly LocalMemoryItem[], 
   }
 }
 
-async function staleLock(file: string): Promise<boolean> {
-  try {
-    return Date.now() - (await stat(file)).mtimeMs > 30_000;
-  } catch {
-    return false;
-  }
+function serializeSnapshot(items: readonly LocalMemoryItem[]): string {
+  return `${JSON.stringify({ schemaVersion: 1, items }, null, 2)}\n`;
 }
 
-function snapshotBytes(items: readonly LocalMemoryItem[]): number {
-  return Buffer.byteLength(JSON.stringify({ schemaVersion: 1, items }));
+function serializedSnapshotBytes(items: readonly LocalMemoryItem[]): number {
+  return Buffer.byteLength(serializeSnapshot(items));
 }
 
 function pathInside(parent: string, candidate: string): boolean {
   const path = relative(parent, candidate);
   return path === '' || (path !== '..' && !path.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)
     && !isAbsolute(path));
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 }
 
 function errorCode(error: unknown): string | undefined {
