@@ -195,15 +195,17 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
     handoffs: {
       async create(record) {
         db.prepare(`INSERT INTO agent_handoffs
-          (id, management_run_id, intent_json, intent_hash, idempotency_key, invocation_id, status, accepted_at, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(record.id, record.managementRunId,
+          (id, management_run_id, intent_json, intent_hash, idempotency_key, invocation_id, status, result_json, accepted_at, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(record.id, record.managementRunId,
           json(record.intent), record.intentHash, record.idempotencyKey, record.invocationId ?? null,
-          record.status, record.acceptedAt ?? null, record.createdAt, record.updatedAt);
+          record.status, record.result ? json(record.result) : null,
+          record.acceptedAt ?? null, record.createdAt, record.updatedAt);
         return record;
       },
       async update(record) {
-        const result = db.prepare(`UPDATE agent_handoffs SET invocation_id = ?, status = ?, accepted_at = ?, updated_at = ? WHERE id = ?`)
-          .run(record.invocationId ?? null, record.status, record.acceptedAt ?? null, record.updatedAt, record.id);
+        const result = db.prepare(`UPDATE agent_handoffs SET invocation_id = ?, status = ?, result_json = ?, accepted_at = ?, updated_at = ? WHERE id = ?`)
+          .run(record.invocationId ?? null, record.status, record.result ? json(record.result) : null,
+            record.acceptedAt ?? null, record.updatedAt, record.id);
         if ((result as { changes?: number }).changes === 0) throw new Error('handoff does not exist');
         return record;
       },
@@ -302,6 +304,6 @@ function mapLease(value: unknown): ManagerLeaseRecord | null { return value ? { 
 function mapEvent(value: unknown): ManagementEventRecord { return { event: { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), sequence: number(value, 'sequence'), type: text(value, 'type'), actorKind: text(value, 'actor_kind'), actorId: nullableText(value, 'actor_id'), idempotencyKey: text(value, 'idempotency_key'), causationEventId: nullableText(value, 'causation_event_id'), payload: parseJson(text(value, 'payload_json')), createdAt: number(value, 'created_at') } as ManagementEventV1, payloadHash: text(value, 'payload_hash') }; }
 function mapInvocation(value: unknown): AgentInvocationRecordDto | null { return value ? { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), intent: parseJson(text(value, 'intent_json')), intentHash: text(value, 'intent_hash'), idempotencyKey: text(value, 'idempotency_key'), createdAt: number(value, 'created_at') } : null; }
 function mapProposal(value: unknown): AgentCollaborationProposalRecordDto | null { return value ? { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), proposal: parseJson(text(value, 'proposal_json')), proposalHash: text(value, 'proposal_hash'), idempotencyKey: text(value, 'idempotency_key'), createdAt: number(value, 'created_at') } : null; }
-function mapHandoff(value: unknown): AgentHandoffRecordDto | null { return value ? { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), intent: parseJson(text(value, 'intent_json')), intentHash: text(value, 'intent_hash'), idempotencyKey: text(value, 'idempotency_key'), invocationId: nullableText(value, 'invocation_id'), status: text(value, 'status') as AgentHandoffRecordDto['status'], acceptedAt: nullableNumber(value, 'accepted_at'), createdAt: number(value, 'created_at'), updatedAt: number(value, 'updated_at') } : null; }
+function mapHandoff(value: unknown): AgentHandoffRecordDto | null { const resultJson = value ? nullableText(value, 'result_json') : undefined; return value ? { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), intent: parseJson(text(value, 'intent_json')), intentHash: text(value, 'intent_hash'), idempotencyKey: text(value, 'idempotency_key'), invocationId: nullableText(value, 'invocation_id'), status: text(value, 'status') as AgentHandoffRecordDto['status'], ...(resultJson ? { result: parseJson(resultJson) } : {}), acceptedAt: nullableNumber(value, 'accepted_at'), createdAt: number(value, 'created_at'), updatedAt: number(value, 'updated_at') } : null; }
 function mapAttempt(value: unknown): InvocationDispatchAttemptRecord { return { id: text(value, 'id'), invocationId: text(value, 'invocation_id'), dispatchId: text(value, 'dispatch_id'), attemptNumber: number(value, 'attempt_number'), status: text(value, 'status') as InvocationDispatchAttemptRecord['status'], startedAt: number(value, 'started_at'), completedAt: nullableNumber(value, 'completed_at') }; }
 function mapShadowDecision(value: unknown): ManagementShadowDecisionRecord { return { id: text(value, 'id'), shadowRequestKey: text(value, 'shadow_request_key'), inputHash: text(value, 'input_hash'), objectiveHash: text(value, 'objective_hash'), argumentHash: text(value, 'argument_hash'), target: parseJson(text(value, 'target_json')), toolSequence: parseJson(text(value, 'tool_sequence_json')), diagnostics: parseJson(text(value, 'diagnostics_json')), createdAt: number(value, 'created_at') }; }

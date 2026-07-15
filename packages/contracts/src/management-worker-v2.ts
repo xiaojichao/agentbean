@@ -2,6 +2,8 @@ import type { ID, UnixMs } from './common.js';
 import type { ManagementWorkerCapacityV1, ManagementWorkerSessionContextV1 } from './management-worker.js';
 import type { AcceptanceCriterionDto, EvidenceRefDto, SubtaskAcceptanceV1 } from './task-coordination.js';
 import type { AgentHandoffReturnMode, AgentHandoffStatus, SerialAgentHandoffKind } from './collaboration.js';
+import { parseAgentCollaborationProposalV1 } from './collaboration.js';
+import type { AgentInvocationResultDto } from './invocation.js';
 
 export const PHASE_2_TASK_WORKER_TOOL_NAMES = [
   'tasks.create_subtasks',
@@ -148,6 +150,7 @@ export interface Phase2ManagementWorkerToolOutputMapV1 {
     readonly handoffId: ID;
     readonly invocationId: ID;
     readonly status: AgentHandoffStatus;
+    readonly result?: AgentInvocationResultDto;
   };
   readonly 'tasks.create_subtasks': { readonly taskIds: readonly ID[]; readonly taskGraphRevision: number };
   readonly 'tasks.add_dependency': { readonly taskId: ID; readonly taskRevision: number; readonly taskGraphRevision: number };
@@ -396,10 +399,12 @@ function assertTaskToolOutput(toolName: string, value: unknown): void {
     return;
   }
   if (toolName === 'handoffs.request' || toolName === 'handoffs.await_result') {
-    assertExactKeys(value, ['handoffId', 'invocationId', 'status'], ['handoffId', 'invocationId', 'status']);
+    assertExactKeys(value, ['handoffId', 'invocationId', 'status', 'result'],
+      ['handoffId', 'invocationId', 'status']);
     if (!nonEmpty(value.handoffId) || !nonEmpty(value.invocationId)
       || !['requested', 'accepted', 'running', 'returned', 'rejected', 'failed', 'cancelled', 'timed_out']
         .includes(String(value.status))) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    if (value.result !== undefined) assertInvocationResult(value.result);
     return;
   }
   if (toolName === 'tasks.create_subtasks') {
@@ -470,6 +475,27 @@ function assertTaskToolOutput(toolName: string, value: unknown): void {
   assertExactKeys(value, ['taskId', 'status', 'reportedAt'], ['taskId', 'status', 'reportedAt']);
   if (!nonEmpty(value.taskId) || value.status !== 'todo') throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
   assertInteger(value.reportedAt, 0);
+}
+
+function assertInvocationResult(value: unknown): asserts value is AgentInvocationResultDto {
+  assertExactKeys(value, ['schemaVersion', 'invocationId', 'taskId', 'agentId', 'status', 'body',
+    'artifactIds', 'workspaceRunId', 'memoryCandidateIds', 'collaborationProposals', 'startedAt',
+    'completedAt', 'error'], ['schemaVersion', 'invocationId', 'agentId', 'status', 'artifactIds',
+    'memoryCandidateIds', 'startedAt', 'completedAt']);
+  if (value.schemaVersion !== 1 || !nonEmpty(value.invocationId) || !nonEmpty(value.agentId)
+    || !['succeeded', 'failed', 'cancelled', 'timed_out'].includes(String(value.status))
+    || (value.taskId !== undefined && !nonEmpty(value.taskId))
+    || (value.workspaceRunId !== undefined && !nonEmpty(value.workspaceRunId))
+    || (value.body !== undefined && typeof value.body !== 'string')
+    || (value.error !== undefined && typeof value.error !== 'string')) {
+    throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+  }
+  assertStringArray(value.artifactIds); assertStringArray(value.memoryCandidateIds);
+  assertInteger(value.startedAt, 0); assertInteger(value.completedAt, 0);
+  if (value.collaborationProposals !== undefined) {
+    if (!Array.isArray(value.collaborationProposals)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    value.collaborationProposals.forEach(parseAgentCollaborationProposalV1);
+  }
 }
 
 export function parsePhase2TaskToolInputV1<K extends keyof Phase2ManagementWorkerToolInputMapV1>(

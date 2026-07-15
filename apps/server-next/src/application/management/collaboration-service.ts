@@ -4,6 +4,7 @@ import type {
   AgentCollaborationProposalV1,
   AgentHandoffRecordDto,
   AgentHandoffStatus,
+  AgentInvocationResultDto,
   ManagementEventPayloadMapV1,
   Phase2ManagementWorkerToolInputMapV1,
 } from '../../../../../packages/contracts/src/index.js';
@@ -285,9 +286,11 @@ export function createCollaborationService(input: {
       dispatchId: string;
       status: 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
       artifactIds: readonly string[];
+      result?: AgentInvocationResultDto;
     }) {
       return updateFromDispatch(repositories, clock, ids, request.dispatchId,
-        request.status === 'succeeded' ? 'returned' : request.status, request.artifactIds);
+        request.status === 'succeeded' ? 'returned' : request.status, request.artifactIds,
+        request.result);
     },
 
     async getHandoff(handoffId: string) {
@@ -345,6 +348,7 @@ async function updateFromDispatch(
   dispatchId: string,
   status: 'accepted' | TerminalStatus,
   artifactIds: readonly string[],
+  result?: AgentInvocationResultDto,
 ) {
   const attempt = await repositories.management.dispatchAttempts.getByDispatchId(dispatchId);
   if (!attempt) return null;
@@ -364,6 +368,7 @@ async function updateFromDispatch(
     if (handoff.status === status || (status === 'accepted' && handoff.status === 'running')
       || isTerminalHandoffStatus(handoff.status)) return handoff;
     const updated: AgentHandoffRecordDto = { ...handoff, status,
+      ...(result ? { result } : {}),
       ...(status === 'accepted' ? { acceptedAt: now } : {}), updatedAt: now };
     const transition = handoff.intent.kind === 'continuation'
       ? evaluateContinuationOwnerTransition({ currentAgentId: run.activeAgentId,

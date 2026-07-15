@@ -1,5 +1,5 @@
 import type { ID, UnixMs } from './common.js';
-import type { AgentInvocationTaskContextV1, DependencyResultRefDto } from './invocation.js';
+import type { AgentInvocationResultDto, AgentInvocationTaskContextV1, DependencyResultRefDto } from './invocation.js';
 import type { AcceptanceCriterionDto, EvidenceRefDto } from './task-coordination.js';
 
 export type AgentHandoffKind = 'delegate' | 'consult' | 'review' | 'template_request' | 'continuation';
@@ -71,6 +71,7 @@ export interface AgentHandoffRecordDto {
   readonly idempotencyKey: string;
   readonly invocationId?: ID;
   readonly status: AgentHandoffStatus;
+  readonly result?: AgentInvocationResultDto;
   readonly acceptedAt?: UnixMs;
   readonly createdAt: UnixMs;
   readonly updatedAt: UnixMs;

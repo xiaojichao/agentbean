@@ -162,6 +162,16 @@ describe('Phase 2 management worker contracts', () => {
       ok: true,
       output: { handoffId: 'handoff-1', invocationId: 'invocation-b', status: 'requested' },
     })).toMatchObject({ toolName: 'handoffs.request', output: { status: 'requested' } });
+    expect(parsePhase2TaskToolResultV2({
+      schemaVersion: 2, managementPhase: 2, commandId: envelope.commandId,
+      managementRunId: envelope.managementRunId, workerId: envelope.workerId,
+      toolCallId: envelope.toolCallId, toolName: 'handoffs.await_result', ok: true,
+      output: { handoffId: 'handoff-1', invocationId: 'invocation-b', status: 'returned',
+        result: { schemaVersion: 1, invocationId: 'invocation-b', agentId: 'agent-b',
+          status: 'succeeded', body: '内部结果', artifactIds: [], memoryCandidateIds: [],
+          startedAt: 1, completedAt: 2 } },
+    })).toMatchObject({ toolName: 'handoffs.await_result',
+      output: { result: { body: '内部结果' } } });
     expect(() => parsePhase2TaskToolRequestV2({
       ...envelope,
       toolName: 'handoffs.request',

@@ -21,6 +21,7 @@ CREATE TABLE agent_handoffs (
   idempotency_key TEXT NOT NULL,
   invocation_id TEXT REFERENCES agent_invocations(id) ON DELETE SET NULL,
   status TEXT NOT NULL CHECK (status IN ('requested', 'accepted', 'running', 'returned', 'rejected', 'failed', 'cancelled', 'timed_out')),
+  result_json TEXT,
   accepted_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,

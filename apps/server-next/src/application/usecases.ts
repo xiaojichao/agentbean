@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
@@ -3752,6 +3752,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         }
       });
       const managedAttempt = await repositories.management.dispatchAttempts.getByDispatchId(resultInput.dispatchId);
+      const managedInvocation = managedAttempt
+        ? await repositories.management.invocations.getById(managedAttempt.invocationId)
+        : null;
       const managedHandoff = managedAttempt
         ? await repositories.management.handoffs.getByInvocationId(managedAttempt.invocationId)
         : null;
@@ -3897,10 +3900,21 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             collaborationProposalDiagnostics.push(diagnostic);
           }
         }
+        const invocationResult: AgentInvocationResultDto = { schemaVersion: 1,
+          invocationId: managedAttempt.invocationId,
+          ...(managedInvocation?.intent.taskContext?.taskId
+            ? { taskId: managedInvocation.intent.taskContext.taskId } : {}),
+          agentId: resultInput.agentId, status: resultSucceeded ? 'succeeded' : 'failed',
+          body: resultInput.body, artifactIds: artifacts.map((artifact) => artifact.id),
+          ...(workspaceRun ? { workspaceRunId: workspaceRun.id } : {}), memoryCandidateIds: [],
+          ...(collaborationProposals.length > 0 ? { collaborationProposals } : {}),
+          startedAt: managedAttempt.startedAt, completedAt: now,
+          ...(!resultSucceeded ? { error: workspaceRunFailureError(resultInput.workspaceRun) } : {}) };
         await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, collaborationService, {
           dispatchId: completed.dispatch.id,
           status: resultSucceeded ? 'succeeded' : 'failed',
           artifactIds: artifacts.map((artifact) => artifact.id),
+          result: invocationResult,
           ...(message ? { deliveryMessageId: message.id } : {}),
           actorId: resultInput.agentId,
           ...(!resultSucceeded ? { errorCode: workspaceRunFailureError(resultInput.workspaceRun) } : {}),
@@ -6202,6 +6216,7 @@ async function recordManagedDispatchTerminal(
     actorId?: string;
     errorCode?: string;
     artifactIds?: readonly string[];
+    result?: AgentInvocationResultDto;
   },
 ): Promise<void> {
   const attempt = await repositories.management.dispatchAttempts.getByDispatchId(input.dispatchId);
@@ -6214,7 +6229,8 @@ async function recordManagedDispatchTerminal(
   }
   const handoff = await repositories.management.handoffs.getByInvocationId(invocation.id);
   await collaborationService.recordTerminal({ dispatchId: input.dispatchId,
-    status: input.status, artifactIds: input.artifactIds ?? [] });
+    status: input.status, artifactIds: input.artifactIds ?? [],
+    ...(input.result ? { result: input.result } : {}) });
   if (handoff) {
     return;
   }

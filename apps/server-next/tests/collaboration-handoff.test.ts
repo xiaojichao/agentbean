@@ -359,7 +359,15 @@ describe('serial collaboration handoff', () => {
     await expect(harness.repositories.messages.listByThread({ channelId: 'channel-1',
       threadId: 'message-root', limit: 20 })).resolves.toHaveLength(1);
     await expect(harness.repositories.management.handoffs.getById(requested.handoff.id))
-      .resolves.toMatchObject({ status: 'returned' });
+      .resolves.toMatchObject({ status: 'returned', result: { body: '仅返回 Manager',
+        invocationId: requested.invocation.id, agentId: 'agent-b', status: 'succeeded' } });
+    const awaitResult = createPhase2CollaborationToolHandlers({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids, onDispatchCreated() {} })['handoffs.await_result'];
+    await expect(awaitResult({ schemaVersion: 2, managementPhase: 2, commandId: 'await-private',
+      managementRunId: harness.runId, workerId: 'worker-1', leaseToken: 'token', fencingToken: 1,
+      idempotencyKey: 'await-private', toolCallId: 'await-private', toolName: 'handoffs.await_result',
+      input: { handoffId: requested.handoff.id } })).resolves.toMatchObject({ status: 'returned',
+        result: { body: '仅返回 Manager', invocationId: requested.invocation.id } });
   });
 
   test('rejects an already expired handoff deadline before persisting or dispatching', async () => {

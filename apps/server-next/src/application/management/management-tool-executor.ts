@@ -145,7 +145,8 @@ export function createPhase2CollaborationToolHandlers(input: {
         }
         if (['returned', 'rejected', 'failed', 'cancelled', 'timed_out'].includes(handoff.status)
         ) {
-          return { handoffId: handoff.id, invocationId: handoff.invocationId, status: handoff.status };
+          return { handoffId: handoff.id, invocationId: handoff.invocationId, status: handoff.status,
+            ...(handoff.result ? { result: handoff.result } : {}) };
         }
         if (request.input.timeoutAt !== undefined && input.clock.now() >= request.input.timeoutAt) {
           const view = await gateway.getView(handoff.invocationId);
@@ -156,11 +157,13 @@ export function createPhase2CollaborationToolHandlers(input: {
             const timedOut = await service.recordTerminal({ dispatchId,
               status: 'timed_out', artifactIds: [] });
             return { handoffId: handoff.id, invocationId: handoff.invocationId,
-              status: timedOut?.status ?? 'timed_out' };
+              status: timedOut?.status ?? 'timed_out',
+              ...(timedOut?.result ? { result: timedOut.result } : {}) };
           }
           const reconciled = await service.reconcileInvocation(handoff.invocationId);
           return { handoffId: handoff.id, invocationId: handoff.invocationId,
-            status: reconciled?.status ?? handoff.status };
+            status: reconciled?.status ?? handoff.status,
+            ...(reconciled?.result ? { result: reconciled.result } : {}) };
         }
         await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
       }
