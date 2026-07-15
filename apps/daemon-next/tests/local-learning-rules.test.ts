@@ -55,6 +55,9 @@ describe('local learning rules', () => {
     await expect(recordWorkspaceRunLearning({ store, cwd, runId: 'secret',
       workspaceRun: { status: 'succeeded', command: 'tool --password=super-secret-value', exitCode: 0 } }))
       .resolves.toEqual([]);
+    await expect(recordWorkspaceRunLearning({ store, cwd, runId: 'spaced-secret',
+      workspaceRun: { status: 'succeeded', command: 'tool --token super-secret-value', exitCode: 0 } }))
+      .resolves.toEqual([]);
     expect(store.list()).toEqual([]);
   });
 });

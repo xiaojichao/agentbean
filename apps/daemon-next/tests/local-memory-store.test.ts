@@ -1,4 +1,13 @@
-import { mkdtempSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -14,6 +23,7 @@ describe('LocalMemoryStore', () => {
   test('按 workspace/profile 分文件持久化，并在重启后恢复', async () => {
     const root = mkdtempSync(join(tmpdir(), 'agentbean-local-memory-'));
     const cwd = join(root, 'workspace');
+    mkdirSync(cwd);
     const baseDir = join(root, 'home');
     const store = await createLocalMemoryStore({ profileId: 'Team A', cwd, baseDir,
       now: () => 10, nextId: sequenceIds() });
@@ -24,7 +34,7 @@ describe('LocalMemoryStore', () => {
     const reloaded = await createLocalMemoryStore({ profileId: 'Team A', cwd, baseDir });
 
     expect(reloaded.list()).toHaveLength(2);
-    expect(statSync(workspaceMemoryFile(cwd)).mode & 0o777).toBe(0o600);
+    expect(statSync(workspaceMemoryFile(cwd, 'Team A')).mode & 0o777).toBe(0o600);
     expect(statSync(profileMemoryFile('Team A', baseDir)).mode & 0o777).toBe(0o600);
   });
 
@@ -50,6 +60,80 @@ describe('LocalMemoryStore', () => {
     expect(store.list()).toHaveLength(1);
   });
 
+  test('同一 cwd 的不同 profile 使用独立文件，重启不会互相抹除', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'agentbean-memory-profiles-'));
+    const baseDir = join(cwd, 'home');
+    const first = await createLocalMemoryStore({ profileId: 'team-a', cwd, baseDir });
+    const second = await createLocalMemoryStore({ profileId: 'team-b', cwd, baseDir });
+
+    await first.upsert(workspaceInput(cwd, { content: 'team-a memory', dedupeKey: 'scan:a' }));
+    await second.upsert(workspaceInput(cwd, { content: 'team-b memory', dedupeKey: 'scan:b' }));
+
+    const firstReloaded = await createLocalMemoryStore({ profileId: 'team-a', cwd, baseDir });
+    const secondReloaded = await createLocalMemoryStore({ profileId: 'team-b', cwd, baseDir });
+    expect(firstReloaded.list().map((item) => item.content)).toEqual(['team-a memory']);
+    expect(secondReloaded.list().map((item) => item.content)).toEqual(['team-b memory']);
+    expect(workspaceMemoryFile(cwd, 'team-a')).not.toBe(workspaceMemoryFile(cwd, 'team-b'));
+  });
+
+  test('两个 Store 并发写同一文件时在锁内 reload/merge，不丢更新或残留临时文件', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'agentbean-memory-concurrent-'));
+    const baseDir = join(cwd, 'home');
+    const first = await createLocalMemoryStore({ profileId: 'p', cwd, baseDir });
+    const second = await createLocalMemoryStore({ profileId: 'p', cwd, baseDir });
+
+    await Promise.all([
+      first.upsert(workspaceInput(cwd, { content: 'first', dedupeKey: 'scan:first' })),
+      second.upsert(workspaceInput(cwd, { content: 'second', dedupeKey: 'scan:second' })),
+    ]);
+    const third = await createLocalMemoryStore({ profileId: 'p', cwd, baseDir });
+    const fourth = await createLocalMemoryStore({ profileId: 'p', cwd, baseDir });
+    await Promise.all([
+      third.upsert(workspaceInput(cwd, { content: 'shared', dedupeKey: 'run-ok:shared',
+        sourceKind: 'workspace_run', structured: { sourceRunIds: ['run-a'] } })),
+      fourth.upsert(workspaceInput(cwd, { content: 'shared', dedupeKey: 'run-ok:shared',
+        sourceKind: 'workspace_run', structured: { sourceRunIds: ['run-b'] } })),
+    ]);
+
+    const reloaded = await createLocalMemoryStore({ profileId: 'p', cwd, baseDir });
+    expect(reloaded.list().map((item) => item.content).sort()).toEqual(['first', 'second', 'shared']);
+    expect([...(reloaded.list().find((item) => item.dedupeKey === 'run-ok:shared')
+      ?.structured?.sourceRunIds ?? [])].sort()).toEqual(['run-a', 'run-b']);
+    expect(readdirSync(join(cwd, '.agentbean', 'memory')).some((name) => name.includes('.tmp-') || name.endsWith('.lock')))
+      .toBe(false);
+  });
+
+  test('拒绝 workspace .agentbean/memory symlink 逃逸', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'agentbean-memory-symlink-'));
+    const outside = mkdtempSync(join(tmpdir(), 'agentbean-memory-outside-'));
+    symlinkSync(outside, join(cwd, '.agentbean'));
+
+    await expect(createLocalMemoryStore({ profileId: 'p', cwd, baseDir: join(cwd, 'home') }))
+      .rejects.toThrow('LOCAL_MEMORY_PATH_ESCAPE');
+    expect(readdirSync(outside)).toEqual([]);
+  });
+
+  test('损坏或 schema 不合法的文件 fail closed，后续写入不得覆盖', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'agentbean-memory-invalid-'));
+    const file = workspaceMemoryFile(cwd, 'p');
+    mkdirSync(join(cwd, '.agentbean', 'memory'), { recursive: true });
+    const invalidSchema = '{"schemaVersion":1,"items":[{"bad":true}]}';
+    writeFileSync(file, invalidSchema, 'utf8');
+
+    await expect(createLocalMemoryStore({ profileId: 'p', cwd, baseDir: join(cwd, 'home') }))
+      .rejects.toThrow('LOCAL_MEMORY_FILE_INVALID');
+    expect(readFileSync(file, 'utf8')).toBe(invalidSchema);
+
+    const liveCwd = mkdtempSync(join(tmpdir(), 'agentbean-memory-corrupt-after-load-'));
+    const live = await createLocalMemoryStore({ profileId: 'p', cwd: liveCwd, baseDir: join(liveCwd, 'home') });
+    await live.upsert(workspaceInput(liveCwd));
+    const liveFile = workspaceMemoryFile(liveCwd, 'p');
+    writeFileSync(liveFile, '{corrupted-after-load', 'utf8');
+    await expect(live.upsert(workspaceInput(liveCwd, { dedupeKey: 'scan:second' })))
+      .rejects.toThrow('LOCAL_MEMORY_FILE_INVALID');
+    expect(readFileSync(liveFile, 'utf8')).toBe('{corrupted-after-load');
+  });
+
   test('排除过期与非 active 条目，并拒绝自动积累敏感内容', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'agentbean-memory-expiry-'));
     const store = await createLocalMemoryStore({ profileId: 'p', cwd, baseDir: join(cwd, 'home'),
@@ -69,6 +153,8 @@ describe('LocalMemoryStore', () => {
       dedupeKey: 'run-ok:structured-secret', sourceKind: 'workspace_run',
       structured: { commands: ['TOKEN=super-secret-value tool run'] },
     }))).rejects.toThrow('LOCAL_MEMORY_SENSITIVE_CONTENT');
+    await expect(store.upsert({ ...workspaceInput(cwd), profileId: 'other', apiKey: 'secret' } as never))
+      .rejects.toThrow('LOCAL_MEMORY_ITEM_INVALID');
   });
 
   test('超过 workspace 自动条目上限时优先过期最旧 run，manual 不被淘汰', async () => {
@@ -89,6 +175,48 @@ describe('LocalMemoryStore', () => {
     expect(overflow.expired.map((item) => item.id)).toContain(oldest.item.id);
     expect(store.getById(oldest.item.id)?.status).toBe('expired');
     expect(store.list().find((item) => item.sourceKind === 'manual')?.status).toBe('active');
+  });
+
+  test('压缩终态记录并对无法淘汰的 active 数据执行总量硬限制', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'agentbean-memory-retention-'));
+    const baseDir = join(cwd, 'home');
+    const store = await createLocalMemoryStore({ profileId: 'p', cwd, baseDir,
+      maxTotalItems: 3, maxTerminalItems: 1, maxFileBytes: 8_192, nextId: sequenceIds() });
+    const first = await store.upsert({ kind: 'preference', scopeType: 'local-profile', sourceKind: 'manual', content: 'one' });
+    const second = await store.upsert({ kind: 'preference', scopeType: 'local-profile', sourceKind: 'manual', content: 'two' });
+    await store.upsert({ kind: 'preference', scopeType: 'local-profile', sourceKind: 'manual', content: 'three' });
+    await store.setStatus(first.item.id, 'expired');
+    await store.setStatus(second.item.id, 'deleted');
+
+    expect(store.list().filter((item) => item.status !== 'active')).toHaveLength(1);
+    await store.upsert({ kind: 'preference', scopeType: 'local-profile', sourceKind: 'manual', content: 'four' });
+    await store.upsert({ kind: 'preference', scopeType: 'local-profile', sourceKind: 'manual', content: 'five' });
+    await expect(store.upsert({ kind: 'preference', scopeType: 'local-profile', sourceKind: 'manual', content: 'six' }))
+      .rejects.toThrow('LOCAL_MEMORY_CAPACITY_EXCEEDED');
+    expect((await createLocalMemoryStore({ profileId: 'p', cwd, baseDir,
+      maxTotalItems: 3, maxTerminalItems: 1, maxFileBytes: 8_192 })).list()).toHaveLength(3);
+  });
+
+  test('Store 以内 canonical cwd 派生 hash，拒绝 caller 伪造 cwdHash', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'agentbean-memory-hash-'));
+    const store = await createLocalMemoryStore({ profileId: 'p', cwd, baseDir: join(cwd, 'home') });
+
+    await expect(store.upsert(workspaceInput(cwd, { cwdHash: 'forged' })))
+      .rejects.toThrow('LOCAL_MEMORY_CWD_HASH_INVALID');
+    const created = await store.upsert({ ...workspaceInput(cwd), cwdHash: undefined });
+    expect(created.item.cwdHash).toBe(workspaceCwdHash(cwd));
+    expect(existsSync(workspaceMemoryFile(cwd, 'p'))).toBe(true);
+  });
+
+  test('文件大小达到硬上限且没有可淘汰终态时拒绝写入', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'agentbean-memory-file-cap-'));
+    const baseDir = join(cwd, 'home');
+    const store = await createLocalMemoryStore({ profileId: 'p', cwd, baseDir,
+      maxTotalItems: 10, maxTerminalItems: 2, maxFileBytes: 1_024 });
+
+    await expect(store.upsert({ kind: 'preference', scopeType: 'local-profile', sourceKind: 'manual',
+      content: 'x'.repeat(2_000) })).rejects.toThrow('LOCAL_MEMORY_CAPACITY_EXCEEDED');
+    expect(existsSync(profileMemoryFile('p', baseDir))).toBe(false);
   });
 });
 

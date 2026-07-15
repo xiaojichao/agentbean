@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { lstat, opendir, readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 
 import type { LocalMemoryStore } from './local-memory-store.js';
 import { containsSensitiveMemoryText } from './sensitive-memory.js';
@@ -17,10 +17,10 @@ export async function scanWorkspaceMemory(
 ): Promise<AutoAccumulatedMemorySummary[]> {
   const cwd = resolve(input.cwd);
   const cwdHash = workspaceCwdHash(cwd);
-  const packageJson = readPackageJson(join(cwd, 'package.json'));
-  const techStack = detectTechStack(cwd, packageJson);
+  const packageJson = await readPackageJson(join(cwd, 'package.json'));
+  const techStack = await detectTechStack(cwd, packageJson);
   const scripts = safePackageScripts(packageJson);
-  const layout = topLevelLayout(cwd);
+  const layout = await topLevelLayout(cwd);
   const candidates: LocalMemoryUpsertInput[] = [];
 
   if (techStack.length > 0) {
@@ -63,9 +63,13 @@ function workspaceInput(
   return { ...input, scopeType: 'local-workspace', sourceKind: 'scan' };
 }
 
-function readPackageJson(path: string): Record<string, unknown> | undefined {
+async function readPackageJson(path: string): Promise<Record<string, unknown> | undefined> {
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    const metadata = await lstat(path);
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 1024 * 1024) return undefined;
+    const raw = await readFile(path, 'utf8');
+    if (Buffer.byteLength(raw) > 1024 * 1024) return undefined;
+    const parsed = JSON.parse(raw) as unknown;
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? parsed as Record<string, unknown>
       : undefined;
@@ -74,7 +78,10 @@ function readPackageJson(path: string): Record<string, unknown> | undefined {
   }
 }
 
-function detectTechStack(cwd: string, packageJson: Record<string, unknown> | undefined): string[] {
+async function detectTechStack(
+  cwd: string,
+  packageJson: Record<string, unknown> | undefined,
+): Promise<string[]> {
   const values = new Set<string>();
   if (packageJson) {
     values.add('Node.js');
@@ -82,18 +89,20 @@ function detectTechStack(cwd: string, packageJson: Record<string, unknown> | und
       ...asRecord(packageJson.dependencies),
       ...asRecord(packageJson.devDependencies),
     };
-    if ('typescript' in dependencies || existsSync(join(cwd, 'tsconfig.json'))) values.add('TypeScript');
+    if ('typescript' in dependencies || await regularFileExists(join(cwd, 'tsconfig.json'))) values.add('TypeScript');
     if ('react' in dependencies) values.add('React');
     if ('next' in dependencies) values.add('Next.js');
     if ('vitest' in dependencies) values.add('Vitest');
   }
-  if (existsSync(join(cwd, 'package-lock.json'))) values.add('npm');
-  else if (existsSync(join(cwd, 'pnpm-lock.yaml'))) values.add('pnpm');
-  else if (existsSync(join(cwd, 'yarn.lock'))) values.add('Yarn');
-  else if (existsSync(join(cwd, 'bun.lock')) || existsSync(join(cwd, 'bun.lockb'))) values.add('Bun');
-  if (existsSync(join(cwd, 'Cargo.toml'))) values.add('Rust');
-  if (existsSync(join(cwd, 'go.mod'))) values.add('Go');
-  if (existsSync(join(cwd, 'pyproject.toml')) || existsSync(join(cwd, 'requirements.txt'))) values.add('Python');
+  if (await regularFileExists(join(cwd, 'package-lock.json'))) values.add('npm');
+  else if (await regularFileExists(join(cwd, 'pnpm-lock.yaml'))) values.add('pnpm');
+  else if (await regularFileExists(join(cwd, 'yarn.lock'))) values.add('Yarn');
+  else if (await regularFileExists(join(cwd, 'bun.lock'))
+    || await regularFileExists(join(cwd, 'bun.lockb'))) values.add('Bun');
+  if (await regularFileExists(join(cwd, 'Cargo.toml'))) values.add('Rust');
+  if (await regularFileExists(join(cwd, 'go.mod'))) values.add('Go');
+  if (await regularFileExists(join(cwd, 'pyproject.toml'))
+    || await regularFileExists(join(cwd, 'requirements.txt'))) values.add('Python');
   return [...values];
 }
 
@@ -106,17 +115,30 @@ function safePackageScripts(packageJson: Record<string, unknown> | undefined): s
     .slice(0, 20);
 }
 
-function topLevelLayout(cwd: string): string[] {
+async function topLevelLayout(cwd: string): Promise<string[]> {
   try {
-    return readdirSync(cwd, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory()
-        && !entry.name.startsWith('.')
-        && entry.name !== 'node_modules')
-      .map((entry) => basename(entry.name))
-      .sort()
-      .slice(0, 30);
+    const directory = await opendir(cwd);
+    const entries: string[] = [];
+    let visited = 0;
+    for await (const entry of directory) {
+      visited += 1;
+      if (visited > 200) break;
+      if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+        entries.push(entry.name);
+      }
+    }
+    return entries.sort().slice(0, 30);
   } catch {
     return [];
+  }
+}
+
+async function regularFileExists(path: string): Promise<boolean> {
+  try {
+    const metadata = await lstat(path);
+    return metadata.isFile() && !metadata.isSymbolicLink();
+  } catch {
+    return false;
   }
 }
 

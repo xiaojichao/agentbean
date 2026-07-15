@@ -1,9 +1,14 @@
 const SENSITIVE_PATTERNS = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/i,
   /\b(?:sk|ghp|github_pat|xox[baprs])-[-_a-z0-9]{12,}\b/i,
-  /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|password|passwd|secret|cookie)\s*(?:=|:)\s*[^\s,;]+/i,
+  /\b(?:api[_-]?key|(?:aws[_-]?)?access[_-]?key(?:[_-]?id)?|access[_-]?token|auth[_-]?token|token|password|passwd|client[_-]?secret|secret|cookie)\s*(?:=|:)\s*[^\s,;]+/i,
+  /--(?:api[_-]?key|token|password|passwd|secret|cookie)(?:=|\s+)['"]?[^\s'"]+/i,
   /\b(?:bearer|basic)\s+[a-z0-9._~+/=-]{12,}\b/i,
   /(?:^|\s)[A-Z][A-Z0-9_]{1,63}=\S+/,
+  /https?:\/\/[^\s/:@]+:[^\s/@]+@/i,
+  /\beyJ[a-z0-9_-]{5,}\.eyJ[a-z0-9_-]{5,}\.[a-z0-9_-]{8,}\b/i,
+  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/,
+  /\bAIza[a-z0-9_-]{35}\b/i,
 ] as const;
 
 /** Automatic local learning fails closed instead of persisting a guessed redaction. */

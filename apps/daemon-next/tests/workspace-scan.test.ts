@@ -43,4 +43,19 @@ describe('scanWorkspaceMemory', () => {
     await expect(scanWorkspaceMemory({ store, cwd })).resolves.toEqual([]);
     expect(store.list()).toEqual([]);
   });
+
+  test('跳过超大 package.json，并限制目录扫描与输出规模', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'agentbean-workspace-bounded-'));
+    writeFileSync(join(cwd, 'package.json'), JSON.stringify({
+      scripts: { secret: `tool --token ${'x'.repeat(1024 * 1024)}` },
+    }));
+    for (let index = 0; index < 250; index += 1) mkdirSync(join(cwd, `dir-${String(index).padStart(3, '0')}`));
+    const store = await createLocalMemoryStore({ profileId: 'p', cwd, baseDir: join(cwd, '.home') });
+
+    await scanWorkspaceMemory({ store, cwd });
+
+    expect(store.list().find((item) => item.dedupeKey === 'scan:scripts')).toBeUndefined();
+    const layout = store.list().find((item) => item.dedupeKey === 'scan:layout');
+    expect(layout?.structured?.paths?.length).toBeLessThanOrEqual(30);
+  });
 });
