@@ -20,7 +20,7 @@
 
 1. 用户点名 `Agent A`，系统确认这是一个需要外部 Agent 处理的任务。
 2. `Agent A` 基于自己在频道和任务中的上下文，可以直接总结并输出结果。
-3. 如果 `Agent A` 需要 `Agent B` 的信息、格式、审核或后续执行，它可以把任务的一部分或后续接管权结构化交给 `Agent B`。
+3. 如果 `Agent A` 需要 `Agent B` 的信息、格式、审核或后续执行，它可以在自己的执行结果里返回结构化协作建议，由 Manager / Server 校验后把任务的一部分或后续接管权交给 `Agent B`。
 4. `Agent B` 在权限允许的频道上下文内执行，并把结果、证据和产物回传。
 5. `Agent A` 可以基于 `Agent B` 的结果继续完成最终输出；如果交接类型是接管，`Agent B` 可以成为后续任务 owner。
 6. 最终交付进入同一个任务线程，贡献 Agent、交接原因、证据和状态都可追溯。
@@ -29,7 +29,7 @@
 
 本文档不是替代既有 PI 管理 Agent 设计，而是补齐它之后的下一层：从“可靠调用一个外部 Agent”推进到“在同一个 `ManagementRun` 内可靠调用多个 Agent，并保存结构化交接”。
 
-用户也可以显式拆开这件事：先 `@Agent B` 让它给出日报格式，再 `@Agent A` 说“你看一下这个格式，出一下今天的日报”。这属于人类手动编排，不要求系统自动推断跨消息 handoff。本文档要解决的是更强的能力：任一 Agent 在执行过程中，可以把任务交给另一个 Agent 接管或继续处理，Server 能保存这个交接事实并维持恢复、权限和追踪。
+用户也可以显式拆开这件事：先 `@Agent B` 让它给出日报格式，再 `@Agent A` 说“你看一下这个格式，出一下今天的日报”。这属于人类手动编排，不要求系统自动推断跨消息 handoff。本文档要解决的是更强的能力：任一 Agent 在执行过程中，可以提出让另一个 Agent 接管或继续处理的结构化建议，Server / Manager 能把该建议转成可恢复、可授权、可追踪的交接事实。
 
 ## 2. 当前实现事实
 
@@ -101,7 +101,7 @@
 - 上游 Agent 的“给下一个 Agent 的信息”无法被权限过滤、摘要、裁剪和审计。
 - 最终交付无法证明哪些结果来自哪个 Agent。
 
-所以卡点不是 `@Agent B` 无法被识别，而是缺少“协作运行中的结构化交接协议”。
+所以卡点不是 `@Agent B` 无法被识别，而是缺少“外部 Agent 结构化提出协作建议，Manager / Server 再授权执行”的交接协议。
 
 ## 3. 外部架构参考
 
@@ -168,6 +168,8 @@ OpenAI Agents SDK 把多 Agent 设计归为两个常见模式：manager 把 Agen
 - Server 才能分配 invocation、dispatch attempt、timeout 和 cancel。
 - Server 才能在 Worker 崩溃后恢复。
 
+因此外部 Agent 不调用内部 Management Tool，也不持有 `handoffs.request` 的写权限。它只能在自己的 invocation result 中返回结构化 `collaborationProposal`，由 Server 绑定 `sourceInvocationId`、当前 Task revision 和 claim lease 后持久化；PI Manager 恢复或继续运行时读取该 proposal，再用自己的 management lease 调用 `handoffs.request`。Server 对 `handoffs.request` 重新校验 proposal 来源、Team / Channel 权限、目标 Agent 可见性、预算、循环限制、Task revision 和 claim fencing。proposal 不是系统事实写入权限，只是待校验输入。
+
 ### 4.4 上下文要裁剪，不能默认全量透传
 
 Agent B 只需要日报格式时，不应该拿到 Agent A 的完整执行日志、用户所有附件或本地 workspace 内容。上下文传递应按引用和 capsule 进行：
@@ -184,7 +186,7 @@ Agent B 只需要日报格式时，不应该拿到 Agent A 的完整执行日志
 
 - `Agent A` 可以是用户点名的起手 Agent，也可以是已经积累了大量上下文的当前 owner。
 - `Agent B` 可以作为被咨询的专家，也可以成为新的 active owner，继续处理后续任务。
-- PI Manager 或 Server-side Collaboration Kernel 负责记录 handoff、创建 invocation、更新 active owner、等待结果和恢复。
+- PI Manager 或 Server-side Collaboration Kernel 负责记录 handoff、创建 invocation、在接收方确认后更新 active owner、等待结果和恢复。
 - 最终交付可以由 `Agent A`、`Agent B` 或 Manager 汇总后进入 root task review，但交付必须引用贡献来源。
 
 ## 5. 推荐架构
@@ -197,14 +199,17 @@ flowchart TB
     Channel --> Server["AgentBean Server"]
     Server --> Run["ManagementRun\nroot task / event log"]
     Run --> Manager["PI Manager Worker\n协作编排"]
+    Manager --> InvokeAgentA["AgentInvocation\nAgent A"]
+    InvokeAgentA --> Proposal["collaborationProposal\nsourceInvocationId + task fence"]
+    Proposal --> Server
     Manager --> ToolHandoff["handoffs.request\n结构化交接工具"]
     ToolHandoff --> Kernel["Collaboration Kernel\n权限/预算/循环/上下文裁剪"]
     Kernel --> InvokeAgentB["AgentInvocation\nAgent B"]
     InvokeAgentB --> DispatchAgentB["Dispatch / Device or AgentOS"]
     DispatchAgentB --> ResultAgentB["InvocationResult\n格式/交付/证据/Artifact"]
     ResultAgentB --> Manager
-    Manager --> InvokeAgentA["AgentInvocation\nAgent A 可继续汇总"]
-    InvokeAgentA --> Delivery["management-delivery\nroot task in_review"]
+    Manager --> InvokeAgentAFinal["AgentInvocation\nAgent A 可继续汇总"]
+    InvokeAgentAFinal --> Delivery["management-delivery\nroot task in_review"]
     Delivery --> Human
 ```
 
@@ -216,6 +221,7 @@ flowchart TB
 | `ManagementRouter` | 判断是否进入 managed；把用户点名 Agent 冻结为 root target 或 main agent |
 | `ManagementRun` | 一次用户请求的协作事实源，保存状态、预算、根消息、根任务、事件和 checkpoint |
 | `PI Manager Worker` | 理解任务、选择协作策略、调用管理工具，不直接越权调用 Agent |
+| `AgentCollaborationProposal` | 外部 Agent 在 invocation result 中返回的协作建议，不能直接写 handoff 或改变 owner |
 | `Collaboration Kernel` | 管理 handoff、Task DAG、Invocation、依赖、权限、预算、循环检测和恢复 |
 | `AgentInvocationGateway` | 创建逻辑调用与 Dispatch attempt；继续作为外部 Agent 执行桥 |
 | `Context Capsule` | 为每个下游调用提供裁剪后的临时上下文，不默认透传完整线程和本地内容，也不写长期 Memory |
@@ -223,7 +229,66 @@ flowchart TB
 
 ## 6. 核心数据模型增量
 
-### 6.1 `AgentHandoffIntentV1`
+### 6.1 `AgentCollaborationProposalV1`
+
+外部 Agent 不能直接调用 `handoffs.request`。当 `Agent A` 判断需要咨询或接管时，它在自己的 `AgentInvocationResultDto` 中返回协作建议：
+
+```ts
+export interface AgentInvocationResultDto {
+  readonly schemaVersion: 1;
+  readonly invocationId: ID;
+  readonly taskId?: ID;
+  readonly agentId: ID;
+  readonly status: Extract<AgentInvocationStatus, 'succeeded' | 'failed' | 'cancelled' | 'timed_out'>;
+  readonly body?: string;
+  readonly artifactIds: readonly ID[];
+  readonly workspaceRunId?: ID;
+  readonly memoryCandidateIds: readonly ID[];
+  readonly collaborationProposals?: readonly AgentCollaborationProposalV1[];
+  readonly startedAt: UnixMs;
+  readonly completedAt: UnixMs;
+  readonly error?: string;
+}
+```
+
+proposal 必须绑定来源 invocation 和当前 Task fence：
+
+```ts
+export interface AgentCollaborationProposalV1 {
+  readonly schemaVersion: 1;
+  readonly sourceInvocationId: ID;
+  readonly sourceAgentId: ID;
+  readonly sourceTaskContext?: {
+    readonly taskId: ID;
+    readonly rootTaskId?: ID;
+    readonly taskRevision: number;
+    readonly taskAttempt: number;
+    readonly claimLeaseId: ID;
+  };
+  readonly toAgentId: ID;
+  readonly kind: Extract<AgentHandoffKind, 'consult' | 'template_request' | 'continuation'>;
+  readonly objective: string;
+  readonly reason: string;
+  readonly contextRefs: readonly EvidenceRefDto[];
+  readonly dependencyResults: readonly DependencyResultRefDto[];
+  readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];
+  readonly attachmentIds: readonly ID[];
+  readonly returnMode: AgentHandoffReturnMode;
+  readonly deadlineAt?: UnixMs;
+}
+```
+
+Server 接收 proposal 时只做事实归档和可恢复索引，不能立即改变 owner 或直接 dispatch：
+
+1. 校验 `sourceInvocationId` 属于当前 `ManagementRun`，`sourceAgentId` 与 invocation target / result agent 一致。
+2. 如果存在 `sourceTaskContext`，校验 task revision、attempt、claim lease 与当前 Task coordination 一致，且 lease 未过期、未释放、未 invalidated。
+3. 校验 `toAgentId` 在同一 Team + Channel / DM 权限边界内可见。
+4. 对 proposal 计算 `proposalHash` 和 idempotency key，重复同 hash 返回已有 proposal，不同 hash 返回 conflict。
+5. 追加 `handoff-proposed` ManagementEvent，只保存 hash、source / target id、kind 和 task fence，不复制敏感正文。
+
+PI Manager 从 `context.get_management_state` 或 dedicated read tool 读取 proposal 后，才可以用持 lease 的 `handoffs.request` 将 proposal 转成正式 `AgentHandoffRecord`。这条边界继承 PI 总纲“外部 Agent 不能直接调用内部 Management Tool”的安全规则。
+
+### 6.2 `AgentHandoffIntentV1`
 
 新增 contracts DTO：
 
@@ -243,6 +308,8 @@ export type AgentHandoffReturnMode =
 export interface AgentHandoffIntentV1 {
   readonly schemaVersion: 1;
   readonly managementRunId: ID;
+  readonly sourceProposalId?: ID;
+  readonly sourceInvocationId?: ID;
   readonly fromAgentId?: ID;
   readonly toAgentId: ID;
   readonly kind: AgentHandoffKind;
@@ -261,12 +328,13 @@ export interface AgentHandoffIntentV1 {
 说明：
 
 - `fromAgentId` 可以为空，表示由 Manager 发起。
+- `sourceProposalId` / `sourceInvocationId` 记录该 handoff 是否来自外部 Agent 的结构化建议；如果来自 proposal，Server 必须校验 proposal 仍匹配当前 Task revision 和 claim fence。
 - `consult` 表示只询问资料或建议，例如“向 Agent B 询问日报格式”。
 - `delegate` 表示下游 Agent 负责完成一个独立子任务。
 - `continuation` 表示当前 owner 转移，后续用户补充默认进入新 owner，这是“交给另一个 Agent 接管”的主路径。
 - `returnMode` 明确结果回到哪里，避免下游 Agent 私自决定是否直接交付用户。
 
-### 6.2 `AgentHandoffRecordDto`
+### 6.3 `AgentHandoffRecordDto`
 
 ```ts
 export type AgentHandoffStatus =
@@ -301,13 +369,27 @@ Handoff 1 -> Invocation 1 -> Dispatch attempt 1..N
 
 如果只是 Manager 直接调用某个 Agent，不需要先创建 Handoff；只有需要表达“一个 Agent/Manager 将一部分工作交给另一个 Agent”时才创建 Handoff。
 
-### 6.3 ManagementEvent 增量
+### 6.4 ManagementEvent 增量
 
 新增 typed events：
 
 ```ts
+readonly 'handoff-proposed': {
+  readonly proposalId: ID;
+  readonly sourceInvocationId: ID;
+  readonly sourceAgentId: ID;
+  readonly toAgentId: ID;
+  readonly kind: AgentHandoffKind;
+  readonly taskId?: ID;
+  readonly taskRevision?: number;
+  readonly claimLeaseId?: ID;
+  readonly proposalHash: string;
+};
+
 readonly 'handoff-requested': {
   readonly handoffId: ID;
+  readonly sourceProposalId?: ID;
+  readonly sourceInvocationId?: ID;
   readonly fromAgentId?: ID;
   readonly toAgentId: ID;
   readonly kind: AgentHandoffKind;
@@ -337,7 +419,15 @@ readonly 'active-agent-changed': {
 
 `active-agent-changed` 用于 `continuation` 或后续用户补充默认归属变化。普通 `consult` 不改变 active owner；`delegate` 只改变子任务 owner，不改变根任务 owner。
 
-### 6.4 `ManagementRun` 增量
+`active-agent-changed` 不能和 `handoff-requested` / `handoff-dispatched` 在同一事务里提前写入。只有目标 Agent 已经接受执行权后才能切换：
+
+- targeted claim 成功并获得新的 `claimLeaseId`；或
+- Dispatch claim / wake 已 accepted，`AgentInvocationView` 已进入 `running`；或
+- 对应 runtime 没有显式 accepted 事件时，Server 已得到等价的 durable running 事实。
+
+如果 `continuation` 在 accepted 前被 `rejected`、dispatch emit 失败或超时，`activeAgentId` 保持 `fromAgentId ?? mainAgentId`。如果 accepted 后执行失败或超时，Server 写 handoff 终态，并默认回滚 `activeAgentId` 到 `fromAgentId ?? mainAgentId`；PI Manager 可以随后改派、重新交接或请求用户处理。
+
+### 6.5 `ManagementRun` 增量
 
 `ManagementRunDto` 增加：
 
@@ -388,6 +478,8 @@ Server 只返回当前 Team / Channel 可见、未删除、权限允许的 Agent
 
 ```ts
 readonly 'handoffs.request': {
+  readonly sourceProposalId?: ID;
+  readonly sourceInvocationId?: ID;
   readonly toAgentId: ID;
   readonly kind: AgentHandoffKind;
   readonly objective: string;
@@ -403,13 +495,15 @@ readonly 'handoffs.request': {
 
 行为：
 
-1. 校验 lease、Team、Channel、Agent 可见性。
-2. 校验预算：`maxSubtasks`、`maxDepth`、`maxExternalInvocations`。
-3. 做循环检测：同一 run 中 `fromAgentId -> toAgentId -> fromAgentId` 的连续 `continuation` 默认拒绝；`consult` 可允许但有限次。
-4. 创建 `AgentHandoffRecord` 和 `handoff-requested` event。
-5. 生成裁剪上下文或 context capsule。
-6. 创建 `AgentInvocation`，把 `dependencyResults` 和 `contextCapsuleId` 写入 intent。
-7. 返回 `{ handoffId, invocationId, status }`。
+1. 校验 Manager lease、fencing token、Team、Channel、Agent 可见性。
+2. 如果携带 `sourceProposalId`，校验 proposal 与 `sourceInvocationId`、`sourceAgentId`、Task revision、attempt、claim lease 仍匹配；stale proposal 返回 conflict。
+3. 校验预算：`maxSubtasks`、`maxDepth`、`maxExternalInvocations`。
+4. 做循环检测：同一 run 中 `fromAgentId -> toAgentId -> fromAgentId` 的连续 `continuation` 默认拒绝；`consult` 可允许但有限次。
+5. 创建 `AgentHandoffRecord` 和 `handoff-requested` event。
+6. 生成裁剪上下文或 context capsule。
+7. 创建 `AgentInvocation`，把 `dependencyResults`、`contextCapsuleId` 和当前 Task fence 写入不可变 intent。
+8. 发起 Dispatch / targeted claim，并在 durable accepted / running 事实出现后才允许 `continuation` 写 `active-agent-changed`。
+9. 返回 `{ handoffId, invocationId, status }`。
 
 ### 7.3 `handoffs.await_result`
 
@@ -491,17 +585,21 @@ Server 生成 `contextCapsuleId`，写入可审计事件。它是 dispatch-time 
 
 当 Agent A 已经做了大量前置工作并积累上下文，但判断后续应由 Agent B 继续时：
 
-1. Agent A 通过管理工具提出 `handoffs.request`：
+1. Agent A 完成当前 invocation 时，在 `AgentInvocationResultDto.collaborationProposals` 返回 `continuation` 建议：
+   - `sourceInvocationId = Agent A 当前 invocation`
+   - `sourceTaskContext = 当前 taskId / taskRevision / taskAttempt / claimLeaseId`
    - `toAgentId = Agent B`
    - `kind = continuation`
    - `returnMode = deliver_to_root` 或 `return_to_manager`
    - `objective = 继续完成剩余任务`
    - `contextRefs = Agent A 已产出的消息、artifact、workspace run 摘要`
-2. Server 校验同频道权限、预算和循环限制。
-3. Server 创建 `handoff-requested`、`handoff-dispatched` 和 `active-agent-changed`。
-4. `activeAgentId` 从 Agent A 变为 Agent B。
-5. 后续用户在线程里的补充默认进入 Agent B，而不是重新回到 Agent A。
-6. Agent B 完成后直接交付 root task，或把结果返回 Manager 汇总。
+2. Server 归档 proposal，校验来源 invocation、当前 Task revision、claim lease、同频道权限和目标 Agent 可见性；此时不改变 `activeAgentId`。
+3. PI Manager 读取 proposal 后，用自己的 management lease 调用 `handoffs.request`。
+4. Server 再次校验 proposal 未 stale、预算和循环限制，创建 `handoff-requested`、`handoff-dispatched`、新的 `AgentInvocation` 和 Dispatch / targeted claim。
+5. 只有 Agent B accepted / running 后，Server 才写 `active-agent-changed`，`activeAgentId` 从 Agent A 变为 Agent B。
+6. 后续用户在线程里的补充默认进入 Agent B，而不是重新回到 Agent A。
+7. Agent B 完成后直接交付 root task，或把结果返回 Manager 汇总。
+8. 如果 Agent B 在 accepted 前拒绝、dispatch emit 失败或超时，`activeAgentId` 保持 Agent A；如果 accepted 后失败或超时，Server 写失败终态并默认回滚到 Agent A / `mainAgentId`。
 
 这是本文档的核心能力：Agent 之间不仅能互相咨询，还能进行可恢复、可审计的任务接管。
 
@@ -509,21 +607,26 @@ Server 生成 `contextCapsuleId`，写入可审计事件。它是 dispatch-time 
 
 当用户在同一线程补充“再把昨天的工作也加进去”：
 
-- 如果 run 仍 `running`，补充进入 PI Manager 的 steer/follow-up。
+- 如果 run 仍 `running`，补充进入 PI Manager 的 steer/follow-up；但只要补充改变目标、验收标准、依赖、目标 Agent、接管语义或上下文边界，就必须创建新的 Task revision。
+- 新 Task revision 必须创建新的不可变 `AgentInvocation` intent。旧 revision 下的 claim lease、delivery、acceptance、handoff proposal 和 handoff record 都变为 stale，不能满足新任务。
+- 如果底层 Runtime 支持 steer，可以复用同一个底层 session 传递补充说明；但逻辑层仍必须有新的 Invocation、task fence 和 idempotency key。
 - 如果 run `in_review`，补充创建 root task revision，run 回到 `running`。
 - 如果最近一次 handoff 是 `continuation` 且 `activeAgentId = Agent B`，补充默认指向 Agent B；否则默认回到 `mainAgentId` 或 Manager。
+- 如果旧 invocation、旧 proposal 或旧 handoff 的 late result 在新 revision 后返回，只作为审计证据保存，不能自动进入 `dependencyResults`、不能触发 `active-agent-changed`，也不能让新 revision 进入 `in_review` 或 `done`。
 
 ### 8.5 错误与恢复
 
 | 场景 | 行为 |
 |---|---|
 | 下游 Agent 不在线 | `handoffs.request` 返回 `UNAVAILABLE`，Manager 可改派、等待或请求用户 |
-| 下游超时 | Invocation `timed_out`，handoff `timed_out`，run 保持可恢复 |
+| 下游 accepted 前拒绝或超时 | Handoff `rejected` / `timed_out`，不写 `active-agent-changed`，owner 保持 source / main Agent |
+| 下游 accepted 后失败或超时 | Invocation `failed` / `timed_out`，handoff 写终态并默认回滚 `activeAgentId` 到 source / main Agent，run 保持可恢复 |
+| Dispatch emit 失败 | 不切 owner，handoff 进入 `failed` 或等待重试；重复 emit 由 invocation / dispatch idempotency 保护 |
 | Worker 崩溃 | Lease 过期，run `recovering`，新 Worker 从 events、handoffs、invocations、checkpoint 重建 |
-| 下游 late result | 作为 invocation 终态证据保存；如果 task revision 已变化，不能自动满足新 revision |
+| 下游 late result | 作为 invocation 终态证据保存；如果 task revision 已变化，不能自动满足新 revision，也不能触发 owner 切换 |
 | 交接循环 | Collaboration Kernel 拒绝或要求用户确认 |
 | 下游产物不可见 | fail closed，不把 artifact 注入上游 |
-| 上游 Agent 试图越权点名私有频道 Agent | `handoffs.request` 在 Server 权限检查失败 |
+| 上游 Agent 试图越权点名私有频道 Agent | proposal 归档或 `handoffs.request` 在 Server 权限检查失败 |
 
 ## 9. UI 与产品表现
 
@@ -549,13 +652,15 @@ Server 生成 `contextCapsuleId`，写入可审计事件。它是 dispatch-time 
 
 ## 11. 分阶段实施
 
-### Phase 2A：管理层多目标调用
+本文的落地计划是 PI 总纲 `Phase 2：Task DAG 与团队认领` 之上的 Handoff 子计划，不重新定义总纲 Phase 编号。所有切片都依赖 Phase 2 的 Task coordination、Task revision、claim lease、Invocation Gateway、delivery / acceptance 和 typed ManagementEvent 已经可用。
+
+### Handoff A：管理层多目标调用
 
 目标：让 managed run 可以调用同一频道内除 frozen target 以外的 Agent，但仍由 Manager 串行控制。
 
 - `agents.list_available`
 - `agents.invoke` 支持 `targetAgentId`，并由 Server 校验 allowed target
-- `ManagementRun.mainAgentId` / `activeAgentId`
+- `ManagementRun.mainAgentId` / `activeAgentId` 只作为默认补充路由事实，不替代 Task claim owner
 - 单 run 多 invocation 测试
 
 验收：
@@ -564,14 +669,16 @@ Server 生成 `contextCapsuleId`，写入可审计事件。它是 dispatch-time 
 - Agent B 结果作为 Agent A invocation 的 `dependencyResults`。
 - 最终交付只出现一次，root task 进入 `in_review`。
 
-Phase 2A 可以先不新增 `AgentHandoffRecord`。它的价值是先拆掉 Phase 1 “只能调用 frozen target”这个技术限制，验证同一 `ManagementRun` 内多 invocation、依赖结果和最终交付是否能跑通。
+Handoff A 可以先不新增 `AgentHandoffRecord`。它的价值是先拆掉 Phase 1 “只能调用 frozen target”这个技术限制，验证同一 `ManagementRun` 内多 invocation、依赖结果和最终交付是否能跑通。
 
-### Phase 2B：结构化 Handoff
+### Handoff B：Agent Proposal 与结构化 Handoff
 
 目标：把“问另一个 Agent”或“交给另一个 Agent 接管”从普通多调用升级为可审计交接。
 
+- `AgentCollaborationProposalV1`
 - `AgentHandoffIntentV1`
 - `AgentHandoffRecordDto`
+- `handoff-proposed`
 - `handoff-requested` / `handoff-dispatched` / `handoff-returned`
 - `active-agent-changed`
 - `handoffs.request`
@@ -581,11 +688,14 @@ Phase 2A 可以先不新增 `AgentHandoffRecord`。它的价值是先拆掉 Phas
 验收：
 
 - UI / API 能看到 Agent A -> Agent B 的交接记录。
-- `continuation` 会把 `activeAgentId` 从 Agent A 更新为 Agent B。
+- 外部 Agent 不能直接调用 `handoffs.request`；只能返回绑定 `sourceInvocationId` 的 proposal。
+- `handoffs.request` 必须校验 proposal 仍匹配当前 Task revision、attempt、claim lease 和 source invocation。
+- `continuation` 只有在目标 Agent accepted / running 后才把 `activeAgentId` 从 Agent A 更新为 Agent B。
+- accepted 前拒绝、dispatch emit 失败或超时不会切 owner；accepted 后失败或超时会回滚到 source / main Agent。
 - Worker 重启后能从 handoff + invocation 恢复等待。
 - 重复 tool call 不产生重复 dispatch。
 
-### Phase 2C：Context Capsule
+### Handoff C：Context Capsule
 
 目标：让下游 Agent 拿到最小必要上下文，而不是完整线程。
 
@@ -600,28 +710,29 @@ Phase 2A 可以先不新增 `AgentHandoffRecord`。它的价值是先拆掉 Phas
 - 私有附件不会因为 handoff 泄漏。
 - Capsule 在 workspace run detail 中可解释。
 
-### Phase 2D：接管增强
+### Handoff D：接管增强
 
 目标：在第一版串行 `continuation` 已经跑通后，补齐更复杂的接管治理能力。
 
 - 长链接管的最大深度和人工确认策略
 - source Agent / target Agent 的双向退回机制
-- 接管后的 revision 归属和验收标准继承
+- 接管后的 revision 归属、验收标准继承和 stale late-result 处理
 - 后续有限并行咨询的聚合策略
 
 验收：
 
 - 长链和预算超限都能 fail closed。
 - 接管后退回 source Agent 时，`activeAgentId` 和事件日志保持一致。
+- follow-up 语义变化时新 Task revision 会让旧 claim、Invocation、delivery、acceptance 和 handoff proposal stale。
 - 并行咨询只能在用户或策略明确允许时启用，不影响第一版串行路径。
 
 ## 12. 测试矩阵
 
 | 层级 | 测试 |
 |---|---|
-| contracts | Handoff DTO schema、ManagementEvent schema、Worker tool request/output schema |
-| domain | handoff idempotency、循环检测、active owner policy、context visibility policy |
-| server usecases | managed run 多 invocation、handoff 创建、恢复、取消、超时、late result |
+| contracts | Proposal / Handoff DTO schema、ManagementEvent schema、Worker tool request/output schema |
+| domain | proposal idempotency、handoff idempotency、循环检测、active owner accepted-gate policy、context visibility policy、Task revision stale policy |
+| server usecases | managed run 多 invocation、proposal -> handoff 创建、accepted 后切 owner、accepted 前失败不切 owner、accepted 后失败回滚、恢复、取消、超时、late result |
 | sqlite repositories | handoff 表、event sequence、invocation/dispatch 外键、唯一约束 |
 | socket integration | Device/AgentOS 收到下游 dispatch，结果回到同一 run |
 | web-next | 频道协作轨迹、run detail、任务 `in_review`、贡献 Agent 展示 |
@@ -646,11 +757,13 @@ TypeScript 改动必须遵守本仓库 Local Verification Contract：
 
 1. `@Agent` 只决定起手 Agent，不等于完整协作路由。
 2. 多 Agent 协作默认进入 `ManagementRun`，不走 direct dispatch 串联。
-3. Agent 可以提出 handoff，但 Server 记录和执行 handoff。
+3. 外部 Agent 可以提出 `AgentCollaborationProposal`，但只有持 lease 的 Manager / Server 可以创建和执行 handoff。
 4. Handoff 必须支持两类主路径：`consult` 获取信息后回到原 Agent，`continuation` 把任务交给下一个 Agent 接管。
-5. `AgentInvocation` 继续复用 `Dispatch`，不创建第二套执行事实源。
-6. Context 以 capsule/ref 传递，不默认全量透传。
-7. 第一版不做跨频道 handoff，不把下游结果自动沉淀为 Memory，不开放并行多 Agent 咨询。
+5. `continuation` 只能在目标 accepted / running 后切 owner；accepted 前失败不切，accepted 后失败默认回滚 source / main Agent。
+6. Task revision、claim lease 和 Invocation intent 是交接正确性的 fence；旧 revision 的 proposal / handoff / late result 不能满足新任务。
+7. `AgentInvocation` 继续复用 `Dispatch`，不创建第二套执行事实源。
+8. Context 以 capsule/ref 传递，不默认全量透传。
+9. 第一版不做跨频道 handoff，不把下游结果自动沉淀为 Memory，不开放并行多 Agent 咨询。
 
 ## 15. 已收敛约束
 
@@ -661,13 +774,15 @@ TypeScript 改动必须遵守本仓库 Local Verification Contract：
 
 ## 16. 推荐第一切片
 
-最小可交付切片是 Phase 2A + Phase 2B 的串行 `consult` / `continuation` 子集：
+最小可交付切片是 Handoff A + Handoff B 的串行 `consult` / `continuation` 子集：
 
 1. 扩展 `agents.invoke` 支持 Manager 调用频道内任一 eligible Agent。
-2. 新增 `AgentHandoffRecord` 和 `handoffs.request`，先支持 `consult` / `template_request` / `continuation`。
-3. `continuation` 必须更新 `activeAgentId`，让后续线程补充默认交给接管方。
-4. UI 只展示折叠协作轨迹，不重做频道消息模型。
-5. 用 `Agent A -> Agent B -> Agent A final delivery` 和 `Agent A -> Agent B continuation -> Agent B final delivery` 两条端到端测试覆盖咨询和接管。
+2. 新增 `AgentCollaborationProposal`，允许外部 Agent 返回绑定 `sourceInvocationId` 和 Task fence 的协作建议。
+3. 新增 `AgentHandoffRecord` 和 `handoffs.request`，先支持 `consult` / `template_request` / `continuation`，且只能由 Manager / Server 持 lease 执行。
+4. `continuation` 必须等目标 Agent accepted / running 后才更新 `activeAgentId`，让后续线程补充默认交给接管方。
+5. 用户补充改变语义时必须创建新 Task revision，并让旧 proposal / handoff / invocation / delivery / acceptance stale。
+6. UI 只展示折叠协作轨迹，不重做频道消息模型。
+7. 用 `Agent A -> Agent B -> Agent A final delivery` 和 `Agent A -> proposal -> Agent B continuation -> Agent B final delivery` 两条端到端测试覆盖咨询和接管。
 
 这能直接验证用户想要的“一个 Agent 获取另一个 Agent 的信息并继续完成任务”，同时不把系统推入不可控 swarm。
 
