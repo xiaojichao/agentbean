@@ -83,6 +83,7 @@ export interface DaemonDispatchResult {
   artifactIds?: string[];
   artifacts?: DaemonDispatchArtifactResult[];
   workspaceRun?: DaemonWorkspaceRunResult;
+  collaborationProposals?: readonly import('../../../packages/contracts/src/index.js').AgentCollaborationProposalV1[];
 }
 
 export type StubExecutor = (request: DispatchRequestPayload) => Promise<string | DaemonDispatchResult>;
@@ -406,6 +407,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             ...(artifactIds.length > 0 ? { artifactIds } : {}),
             ...(artifacts.length > 0 ? { artifacts } : {}),
             ...(result.workspaceRun ? { workspaceRun: result.workspaceRun } : {}),
+            ...(result.collaborationProposals?.length
+              ? { collaborationProposals: result.collaborationProposals }
+              : {}),
           }, {
             isDeliveredAck: isDispatchResultDeliveredAck,
             ...(reportedManifestPath

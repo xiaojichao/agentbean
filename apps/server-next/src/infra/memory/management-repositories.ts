@@ -1,4 +1,4 @@
-import type { AgentInvocationRecordDto, ManagementCheckpointV1 } from '../../../../../packages/contracts/src/index.js';
+import type { AgentCollaborationProposalRecordDto, AgentHandoffRecordDto, AgentInvocationRecordDto, ManagementCheckpointV1 } from '../../../../../packages/contracts/src/index.js';
 import type { ManagerLeaseRecord } from '../../../../../packages/domain/src/index.js';
 import type {
   InvocationDispatchAttemptRecord,
@@ -19,6 +19,8 @@ interface ManagementMemoryState {
   events: Map<string, ManagementEventRecord>;
   checkpoints: Map<string, ManagementCheckpointV1>;
   invocations: Map<string, AgentInvocationRecordDto>;
+  collaborationProposals: Map<string, AgentCollaborationProposalRecordDto>;
+  handoffs: Map<string, AgentHandoffRecordDto>;
   attempts: Map<string, InvocationDispatchAttemptRecord>;
   shadowDecisions: Map<string, ManagementShadowDecisionRecord>;
 }
@@ -89,6 +91,26 @@ function createRepositories(state: ManagementMemoryState): ManagementRepositorie
       async getByIdempotencyKey(input) { return [...state.invocations.values()].find((item) => item.managementRunId === input.managementRunId && item.idempotencyKey === input.idempotencyKey) ?? null; },
       async listByRun(managementRunId) { return [...state.invocations.values()].filter((item) => item.managementRunId === managementRunId).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)); },
     },
+    collaborationProposals: {
+      async create(record) {
+        if ([...state.collaborationProposals.values()].some((item) => item.managementRunId === record.managementRunId && item.idempotencyKey === record.idempotencyKey)) throw new Error('collaboration proposal idempotency key already exists');
+        state.collaborationProposals.set(record.id, record); return record;
+      },
+      async getById(id) { return state.collaborationProposals.get(id) ?? null; },
+      async getByIdempotencyKey(input) { return [...state.collaborationProposals.values()].find((item) => item.managementRunId === input.managementRunId && item.idempotencyKey === input.idempotencyKey) ?? null; },
+      async listByRun(managementRunId) { return [...state.collaborationProposals.values()].filter((item) => item.managementRunId === managementRunId).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)); },
+    },
+    handoffs: {
+      async create(record) {
+        if ([...state.handoffs.values()].some((item) => item.managementRunId === record.managementRunId && item.idempotencyKey === record.idempotencyKey)) throw new Error('handoff idempotency key already exists');
+        state.handoffs.set(record.id, record); return record;
+      },
+      async update(record) { if (!state.handoffs.has(record.id)) throw new Error('handoff does not exist'); state.handoffs.set(record.id, record); return record; },
+      async getById(id) { return state.handoffs.get(id) ?? null; },
+      async getByInvocationId(invocationId) { return [...state.handoffs.values()].find((item) => item.invocationId === invocationId) ?? null; },
+      async getByIdempotencyKey(input) { return [...state.handoffs.values()].find((item) => item.managementRunId === input.managementRunId && item.idempotencyKey === input.idempotencyKey) ?? null; },
+      async listByRun(managementRunId) { return [...state.handoffs.values()].filter((item) => item.managementRunId === managementRunId).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)); },
+    },
     dispatchAttempts: {
       async create(record) {
         const attempts = [...state.attempts.values()];
@@ -113,6 +135,6 @@ function createRepositories(state: ManagementMemoryState): ManagementRepositorie
 function isActive(status: string): boolean {
   return status === 'queued' || status === 'sent' || status === 'accepted' || status === 'running';
 }
-function emptyState(): ManagementMemoryState { return { policies: new Map(), reservations: new Map(), runs: new Map(), leases: new Map(), events: new Map(), checkpoints: new Map(), invocations: new Map(), attempts: new Map(), shadowDecisions: new Map() }; }
-function cloneState(state: ManagementMemoryState): ManagementMemoryState { return { policies: new Map(state.policies), reservations: new Map(state.reservations), runs: new Map(state.runs), leases: new Map(state.leases), events: new Map(state.events), checkpoints: new Map(state.checkpoints), invocations: new Map(state.invocations), attempts: new Map(state.attempts), shadowDecisions: new Map(state.shadowDecisions) }; }
+function emptyState(): ManagementMemoryState { return { policies: new Map(), reservations: new Map(), runs: new Map(), leases: new Map(), events: new Map(), checkpoints: new Map(), invocations: new Map(), collaborationProposals: new Map(), handoffs: new Map(), attempts: new Map(), shadowDecisions: new Map() }; }
+function cloneState(state: ManagementMemoryState): ManagementMemoryState { return { policies: new Map(state.policies), reservations: new Map(state.reservations), runs: new Map(state.runs), leases: new Map(state.leases), events: new Map(state.events), checkpoints: new Map(state.checkpoints), invocations: new Map(state.invocations), collaborationProposals: new Map(state.collaborationProposals), handoffs: new Map(state.handoffs), attempts: new Map(state.attempts), shadowDecisions: new Map(state.shadowDecisions) }; }
 function restoreState(target: ManagementMemoryState, source: ManagementMemoryState): void { for (const key of Object.keys(source) as (keyof ManagementMemoryState)[]) { target[key].clear(); for (const [id, value] of source[key]) target[key].set(id, value as never); } }

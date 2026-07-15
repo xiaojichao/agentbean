@@ -1,12 +1,13 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { makeFailure, makeSuccess, type Ack, type AdapterKind, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
 import { createInvocationGateway } from './management/invocation-gateway.js';
+import { createCollaborationService } from './management/collaboration-service.js';
 import { createManagementKernel } from './management/management-kernel.js';
 import { createManagementRouter, type ManagementRoutingResult } from './management/management-router.js';
 import { createTaskCoordinationKernel } from './management/task-coordination-kernel.js';
@@ -684,12 +685,14 @@ export interface ReceiveDispatchResultInput {
   artifactIds?: string[];
   artifacts?: ReceiveDispatchArtifactInput[];
   workspaceRun?: ReceiveDispatchWorkspaceRunInput;
+  collaborationProposals?: readonly AgentCollaborationProposalV1[];
 }
 
 export interface ReceiveDispatchResultResult {
   dispatch: DispatchDto;
   message: MessageDto;
   task?: TaskDto;
+  collaborationProposalDiagnostics?: readonly string[];
 }
 
 export interface ReceiveDispatchErrorInput {
@@ -814,6 +817,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const artifactContentStore = input.artifactContentStore;
   const dispatchCoalescingLocks = new Map<string, Promise<void>>();
   const invocationGateway = createInvocationGateway({ repositories, clock, ids });
+  const collaborationService = createCollaborationService({ repositories, clock, ids });
   const managementKernel = input.managementKernel ?? createManagementKernel({
     repositories: repositories.management,
     unitOfWork: repositories.managementUnitOfWork,
@@ -2802,6 +2806,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         const retryAfterMs = Math.max(1, accepted.dispatch.updatedAt + Math.max(0, acceptInput.quietWindowMs) - now);
         return makeSuccess({ ready: false, retryAfterMs });
       }
+      await collaborationService.recordAccepted({ dispatchId: accepted.dispatch.id });
       return makeSuccess({
         ready: true,
         dispatch: toDispatchDto(accepted.dispatch),
@@ -3051,6 +3056,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('NOT_FOUND', 'Task DAG not found');
       }
       const events = await repositories.management.events.list(run.id);
+      const handoffs = await repositories.management.handoffs.listByRun(run.id);
       const nodes = await Promise.all(coordinations.map(async (coordination) => {
         const task = await repositories.tasks.getById(coordination.taskId);
         if (!task || task.teamId !== taskInput.teamId) {
@@ -3130,6 +3136,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           rootTaskId: rootTask.id,
           graphRevision: events.at(-1)?.event.sequence ?? 0,
           nodes,
+          handoffs: handoffs.map((handoff) => ({ id: handoff.id,
+            ...(handoff.intent.fromAgentId ? { fromAgentId: handoff.intent.fromAgentId } : {}),
+            toAgentId: handoff.intent.toAgentId, kind: handoff.intent.kind,
+            objective: handoff.intent.objective, status: handoff.status,
+            ...(handoff.invocationId ? { invocationId: handoff.invocationId } : {}),
+            createdAt: handoff.createdAt, updatedAt: handoff.updatedAt })),
           events: events.map(({ event }) => ({
             sequence: event.sequence,
             type: event.type,
@@ -3584,7 +3596,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ? await markLinkedTaskTodoIfInProgress(repositories, originMessage, now)
         : null;
       if (cancelled.changed && managedAttempt) {
-        await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, {
+        await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, collaborationService, {
           dispatchId: cancelled.dispatch.id,
           status: 'cancelled',
           actorId: cancelInput.userId,
@@ -3643,7 +3655,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         const originMessage = await repositories.messages.getById(result.dispatch.messageId);
         const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
         if (managedAttempt) {
-          await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, {
+          await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, collaborationService, {
             dispatchId: result.dispatch.id,
             status: 'cancelled',
             actorId: cancelInput.userId,
@@ -3686,7 +3698,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           const originMessage = await repositories.messages.getById(timedOut.dispatch.messageId);
           const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
           if (managedAttempt) {
-            await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, {
+            await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, collaborationService, {
               dispatchId: timedOut.dispatch.id,
               status: 'timed_out',
               errorCode: 'DISPATCH_TIMEOUT',
@@ -3722,6 +3734,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
       const now = clock.now();
       const resultSucceeded = isSuccessfulDispatchResult(resultInput.workspaceRun);
+      const collaborationProposalDiagnostics: string[] = [];
+      const collaborationProposals = (resultInput.collaborationProposals ?? []).flatMap((proposal) => {
+        try {
+          return [parseAgentCollaborationProposalV1(proposal)];
+        } catch {
+          collaborationProposalDiagnostics.push('AGENT_COLLABORATION_PROPOSAL_INVALID');
+          return [];
+        }
+      });
       const managedAttempt = await repositories.management.dispatchAttempts.getByDispatchId(resultInput.dispatchId);
       const completed = managedAttempt
         ? await invocationGateway.completeAttempt({
@@ -3854,9 +3875,20 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ? await markLinkedTaskInReview(repositories, originMessage, now)
           : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
       if (managedAttempt) {
-        await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, {
+        if (collaborationProposals.length) {
+          try {
+            await collaborationService.recordProposals({ dispatchId: completed.dispatch.id,
+              agentId: resultInput.agentId, proposals: collaborationProposals });
+          } catch (error) {
+            const diagnostic = collaborationProposalDiagnostic(error);
+            if (!diagnostic) throw error;
+            collaborationProposalDiagnostics.push(diagnostic);
+          }
+        }
+        await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, collaborationService, {
           dispatchId: completed.dispatch.id,
           status: resultSucceeded ? 'succeeded' : 'failed',
+          artifactIds: artifacts.map((artifact) => artifact.id),
           deliveryMessageId: message.id,
           actorId: resultInput.agentId,
           ...(!resultSucceeded ? { errorCode: workspaceRunFailureError(resultInput.workspaceRun) } : {}),
@@ -3872,6 +3904,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         dispatch: toDispatchDto(completed.dispatch),
         message: messageWithArtifacts,
         ...(completedTask ? { task: completedTask } : {}),
+        ...(collaborationProposalDiagnostics.length > 0
+          ? { collaborationProposalDiagnostics: [...new Set(collaborationProposalDiagnostics)] }
+          : {}),
       });
     },
 
@@ -3911,7 +3946,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const originMessage = await repositories.messages.getById(failed.dispatch.messageId);
       const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
       if (managedAttempt) {
-        await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, {
+        await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, collaborationService, {
           dispatchId: failed.dispatch.id,
           status: 'failed',
           actorId: errorInput.agentId,
@@ -5239,6 +5274,7 @@ async function buildDispatchRequest(
   for (const messageId of attachmentMessageIds) {
     attachments.push(...await repositories.artifacts.listByMessage(messageId));
   }
+  const managementAttempt = await repositories.management.dispatchAttempts.getByDispatchId(dispatch.id);
 
   return {
     id: dispatch.id,
@@ -5249,6 +5285,7 @@ async function buildDispatchRequest(
     agentId: dispatch.agentId,
     deviceId: agent.deviceId,
     requestId: dispatch.requestId,
+    ...(managementAttempt ? { managementInvocationId: managementAttempt.invocationId } : {}),
     prompt: requestPrompt,
     history: dispatchHistory.map(toDispatchHistoryMessageDto),
     ...(attachments.length > 0 ? { attachments: attachments.map(toDispatchAttachmentDto) } : {}),
@@ -6098,12 +6135,14 @@ async function recordManagedDispatchTerminal(
   repositories: ServerNextRepositories,
   kernel: ReturnType<typeof createManagementKernel>,
   taskKernel: ReturnType<typeof createTaskCoordinationKernel>,
+  collaborationService: ReturnType<typeof createCollaborationService>,
   input: {
     dispatchId: string;
     status: 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
     deliveryMessageId?: string;
     actorId?: string;
     errorCode?: string;
+    artifactIds?: readonly string[];
   },
 ): Promise<void> {
   const attempt = await repositories.management.dispatchAttempts.getByDispatchId(input.dispatchId);
@@ -6114,6 +6153,8 @@ async function recordManagedDispatchTerminal(
   if (!invocation) {
     throw new Error('MANAGEMENT_INVOCATION_NOT_FOUND');
   }
+  await collaborationService.recordTerminal({ dispatchId: input.dispatchId,
+    status: input.status, artifactIds: input.artifactIds ?? [] });
   const taskContext = invocation.intent.taskContext;
   const coordination = taskContext
     ? await repositories.taskCoordination.coordinations.getByTaskId(taskContext.taskId)
@@ -6137,6 +6178,11 @@ async function recordManagedDispatchTerminal(
     ...(input.actorId ? { actorId: input.actorId } : {}),
     ...(input.errorCode ? { errorCode: input.errorCode } : {}),
   });
+}
+
+function collaborationProposalDiagnostic(error: unknown): string | null {
+  if (!(error instanceof Error) || !/^HANDOFF_[A-Z0-9_]{1,72}$/.test(error.message)) return null;
+  return error.message;
 }
 
 async function allHumanMembersBelongToTeam(

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 
 import {
   PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES,
+  parseAgentCollaborationProposalV1,
   parseManagementWorkerRegisterV2,
   parseManagementWorkerSessionContextV2,
   parsePhase2TaskToolRequestV2,
@@ -9,10 +10,24 @@ import {
 } from '../src/index.js';
 
 describe('Phase 2 management worker contracts', () => {
-  test('freezes Phase 1 plus eight Task tools without Memory tools', () => {
-    expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toHaveLength(19);
+  test('parses exact external collaboration proposals and rejects hidden fields', () => {
+    const proposal = { schemaVersion: 1, sourceInvocationId: 'invocation-a', sourceAgentId: 'agent-a',
+      sourceTaskContext: { taskId: 'task-1', taskRevision: 2, taskAttempt: 1, claimLeaseId: 'claim-a' },
+      toAgentId: 'agent-b', kind: 'consult', objective: '请 B 复核', reason: '需要第二视角',
+      contextRefs: [], dependencyResults: [], acceptanceCriteria: [], attachmentIds: [],
+      returnMode: 'return_to_manager' };
+    expect(parseAgentCollaborationProposalV1(proposal)).toEqual(proposal);
+    expect(() => parseAgentCollaborationProposalV1({ ...proposal, providerSecret: 'forbidden' }))
+      .toThrow('AGENT_COLLABORATION_PROPOSAL_INVALID');
+  });
+
+  test('freezes Phase 1 plus Task and serial handoff tools without Memory tools', () => {
+    expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toHaveLength(22);
     expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toContain('tasks.create_subtasks');
     expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toContain('tasks.report_blocked');
+    expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toContain('agents.list_available');
+    expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toContain('handoffs.request');
+    expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toContain('handoffs.await_result');
     expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).not.toContain('memory.search' as never);
   });
 
@@ -79,22 +94,83 @@ describe('Phase 2 management worker contracts', () => {
         objective: '完成子任务', attachmentIds: ['artifact-1'], deadlineAt: 1_000,
       },
     })).toMatchObject({ schemaVersion: 2, managementPhase: 2, toolName: 'agents.invoke' });
-    expect(() => parsePhase2TaskToolRequestV2({
+    expect(parsePhase2TaskToolRequestV2({
       ...value,
       toolName: 'agents.invoke',
       input: {
         taskId: 'task-1', expectedTaskRevision: 3, taskAttempt: 2, claimLeaseId: 'claim-1',
         targetAgentId: 'agent-local-guess', objective: '完成子任务', attachmentIds: [],
       },
-    })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    })).toMatchObject({ toolName: 'agents.invoke', input: { targetAgentId: 'agent-local-guess' } });
     expect(() => parsePhase2TaskToolRequestV2({ ...value, leaseToken: '' }))
       .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    expect(() => parsePhase2TaskToolRequestV2({
+      ...value,
+      toolName: 'context.get_root_task',
+      input: {},
+    })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
     for (const field of ['commandId', 'workerId', 'toolCallId', 'idempotencyKey'] as const) {
       expect(() => parsePhase2TaskToolRequestV2({ ...value, [field]: '' }))
         .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
     }
     expect(() => parsePhase2TaskToolRequestV2({ ...value, input: { taskIds: ['task-1'], prompt: 'forbidden' } }))
       .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+  });
+
+  test('parses serial handoff requests and results with exact proposal fences', () => {
+    const envelope = {
+      schemaVersion: 2,
+      managementPhase: 2,
+      commandId: 'command-handoff',
+      managementRunId: 'run-1',
+      workerId: 'worker-1',
+      toolCallId: 'tool-handoff',
+      leaseToken: 'lease-token',
+      fencingToken: 1,
+      idempotencyKey: 'handoff-1',
+    };
+    expect(parsePhase2TaskToolRequestV2({
+      ...envelope,
+      toolName: 'agents.list_available',
+      input: { includeBusy: false },
+    })).toMatchObject({ toolName: 'agents.list_available' });
+    expect(parsePhase2TaskToolRequestV2({
+      ...envelope,
+      toolName: 'handoffs.request',
+      input: {
+        sourceProposalId: 'proposal-1',
+        sourceInvocationId: 'invocation-a',
+        toAgentId: 'agent-b',
+        kind: 'continuation',
+        objective: '继续完成剩余工作',
+        reason: 'Agent B 更适合收尾',
+        contextRefIds: ['message-1'],
+        dependencyInvocationIds: ['invocation-a'],
+        attachmentIds: [],
+        acceptanceCriteria: [],
+        returnMode: 'deliver_to_root',
+      },
+    })).toMatchObject({ toolName: 'handoffs.request', input: { kind: 'continuation' } });
+    expect(parsePhase2TaskToolResultV2({
+      schemaVersion: 2,
+      managementPhase: 2,
+      commandId: envelope.commandId,
+      managementRunId: envelope.managementRunId,
+      workerId: envelope.workerId,
+      toolCallId: envelope.toolCallId,
+      toolName: 'handoffs.request',
+      ok: true,
+      output: { handoffId: 'handoff-1', invocationId: 'invocation-b', status: 'requested' },
+    })).toMatchObject({ toolName: 'handoffs.request', output: { status: 'requested' } });
+    expect(() => parsePhase2TaskToolRequestV2({
+      ...envelope,
+      toolName: 'handoffs.request',
+      input: {
+        toAgentId: 'agent-b', kind: 'delegate', objective: '并行做', reason: 'no',
+        contextRefIds: [], dependencyInvocationIds: [], attachmentIds: [],
+        acceptanceCriteria: [], returnMode: 'return_to_manager',
+      },
+    })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
   });
 
   test('parses exact Phase 2 Task tool results and rejects envelope drift', () => {

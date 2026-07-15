@@ -1,5 +1,7 @@
 import type {
   AgentInvocationRecordDto,
+  AgentCollaborationProposalRecordDto,
+  AgentHandoffRecordDto,
   DispatchStatus,
   ID,
   ManagementCheckpointV1,
@@ -83,6 +85,20 @@ export interface ManagementRepositories {
     getById(id: ID): Promise<AgentInvocationRecordDto | null>;
     getByIdempotencyKey(input: { managementRunId: ID; idempotencyKey: string }): Promise<AgentInvocationRecordDto | null>;
     listByRun(managementRunId: ID): Promise<AgentInvocationRecordDto[]>;
+  };
+  collaborationProposals: {
+    create(record: AgentCollaborationProposalRecordDto): Promise<AgentCollaborationProposalRecordDto>;
+    getById(id: ID): Promise<AgentCollaborationProposalRecordDto | null>;
+    getByIdempotencyKey(input: { managementRunId: ID; idempotencyKey: string }): Promise<AgentCollaborationProposalRecordDto | null>;
+    listByRun(managementRunId: ID): Promise<AgentCollaborationProposalRecordDto[]>;
+  };
+  handoffs: {
+    create(record: AgentHandoffRecordDto): Promise<AgentHandoffRecordDto>;
+    update(record: AgentHandoffRecordDto): Promise<AgentHandoffRecordDto>;
+    getById(id: ID): Promise<AgentHandoffRecordDto | null>;
+    getByInvocationId(invocationId: ID): Promise<AgentHandoffRecordDto | null>;
+    getByIdempotencyKey(input: { managementRunId: ID; idempotencyKey: string }): Promise<AgentHandoffRecordDto | null>;
+    listByRun(managementRunId: ID): Promise<AgentHandoffRecordDto[]>;
   };
   dispatchAttempts: {
     create(record: InvocationDispatchAttemptRecord): Promise<InvocationDispatchAttemptRecord>;

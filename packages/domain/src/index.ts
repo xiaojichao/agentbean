@@ -4,6 +4,7 @@ export * from './channel.js';
 export * from './search.js';
 export * from './management-policy.js';
 export * from './invocation-policy.js';
+export * from './collaboration-policy.js';
 export * from './checkpoint-policy.js';
 export * from './manager-lease-policy.js';
 export * from './task-dag-policy.js';

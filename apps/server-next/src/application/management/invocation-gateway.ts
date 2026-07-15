@@ -53,6 +53,7 @@ export interface InvokeTaskAgentInput {
   readonly expectedTaskRevision: number;
   readonly taskAttempt: number;
   readonly claimLeaseId: string;
+  readonly targetAgentId?: string;
   readonly objective: string;
   readonly attachmentIds: readonly string[];
   readonly deadlineAt?: number;
@@ -88,6 +89,9 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
         }
 
         const authority = await resolveTaskInvocationAuthority(transactionRepositories, run, input, now);
+        if (input.targetAgentId !== undefined && input.targetAgentId !== authority.targetAgentId) {
+          throw new InvocationGatewayError('INVOCATION_TARGET_CLAIM_MISMATCH');
+        }
         const agent = await repositories.agents.getById(authority.targetAgentId);
         if (!agent || agent.deletedAt !== undefined || !agent.visibleTeamIds.includes(run.teamId)) {
           throw new InvocationGatewayError('INVOCATION_TARGET_FORBIDDEN');
@@ -359,6 +363,7 @@ function assertTaskInvocationReplay(existing: AgentInvocationRecordDto,
     || context.taskRevision !== input.expectedTaskRevision
     || context.taskAttempt !== input.taskAttempt
     || context.claimLeaseId !== input.claimLeaseId
+    || (input.targetAgentId !== undefined && existing.intent.targetAgentId !== input.targetAgentId)
     || existing.intent.objective !== input.objective.trim()
     || existing.intent.deadlineAt !== input.deadlineAt
     || !sameAttachments) {

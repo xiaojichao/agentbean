@@ -28,6 +28,25 @@ export function TaskDagPanel({ dag, teamPath }: { dag: TaskDagViewDto; teamPath:
           <TaskDagNode key={node.task.id} node={node} teamPath={teamPath} />
         ))}
       </div>
+      {(dag.handoffs?.length ?? 0) > 0 && (
+        <details className="mt-3 border-t border-violet-100 pt-2" data-smoke="task-dag-handoffs">
+          <summary className="cursor-pointer text-[11px] font-medium text-violet-700">
+            协作轨迹（默认折叠，{dag.handoffs!.length}）
+          </summary>
+          <div className="mt-2 space-y-1.5 text-[10px] text-neutral-600">
+            {dag.handoffs!.map((handoff) => (
+              <div key={handoff.id} className="rounded border border-violet-100 bg-white px-2 py-1.5">
+                <div className="font-medium text-neutral-700">
+                  {handoff.fromAgentId ?? 'Manager'} → {handoff.toAgentId}
+                </div>
+                <div className="mt-0.5 text-neutral-500">
+                  {handoff.kind} · {handoff.status} · {handoff.objective}
+                </div>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
       <details className="mt-3 border-t border-violet-100 pt-2" data-smoke="task-dag-events">
         <summary className="cursor-pointer text-[11px] font-medium text-violet-700">管理事件（默认折叠，{dag.events.length}）</summary>
         <div className="mt-2 space-y-1 text-[10px] text-neutral-500">

@@ -1,5 +1,7 @@
 import type {
   AgentInvocationRecordDto,
+  AgentCollaborationProposalRecordDto,
+  AgentHandoffRecordDto,
   ManagementBudgetDto,
   ManagementCheckpointV1,
   ManagementEventV1,
@@ -72,13 +74,16 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
         db.prepare(`INSERT INTO management_runs
           (id, team_id, channel_id, root_task_id, root_message_id, status, placement_policy_json,
            active_worker_id, checkpoint_revision, budget_json, created_at, updated_at, completed_at,
-           target_agent_id, target_kind, management_phase)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+           target_agent_id, target_kind, management_phase, main_agent_id, active_agent_id, collaboration_mode)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(record.id, record.teamId, record.channelId, record.rootTaskId ?? null, record.rootMessageId,
             record.status, json(record.placementPolicy), record.activeWorkerId ?? null, record.checkpointRevision,
             json(record.budget), record.createdAt, record.updatedAt, record.completedAt ?? null,
             record.frozenTarget?.agentId ?? null, record.frozenTarget?.kind ?? null,
-            'managementPhase' in record ? record.managementPhase : 1);
+            'managementPhase' in record ? record.managementPhase : 1,
+            'mainAgentId' in record ? record.mainAgentId ?? null : null,
+            'activeAgentId' in record ? record.activeAgentId ?? null : null,
+            'collaborationMode' in record ? record.collaborationMode ?? 'single-agent' : 'single-agent');
         return record;
       },
       async getById(id) {
@@ -89,9 +94,13 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
       },
       async update(record) {
         const result = db.prepare(`UPDATE management_runs SET status = ?, placement_policy_json = ?,
-          active_worker_id = ?, checkpoint_revision = ?, budget_json = ?, updated_at = ?, completed_at = ?
-          WHERE id = ?`).run(record.status, json(record.placementPolicy), record.activeWorkerId ?? null,
-          record.checkpointRevision, json(record.budget), record.updatedAt, record.completedAt ?? null, record.id);
+          active_worker_id = ?, checkpoint_revision = ?, budget_json = ?, updated_at = ?, completed_at = ?,
+          main_agent_id = ?, active_agent_id = ?, collaboration_mode = ? WHERE id = ?`)
+          .run(record.status, json(record.placementPolicy), record.activeWorkerId ?? null,
+            record.checkpointRevision, json(record.budget), record.updatedAt, record.completedAt ?? null,
+            'mainAgentId' in record ? record.mainAgentId ?? null : null,
+            'activeAgentId' in record ? record.activeAgentId ?? null : null,
+            'collaborationMode' in record ? record.collaborationMode ?? 'single-agent' : 'single-agent', record.id);
         if ((result as { changes?: number }).changes === 0) throw new Error('management run does not exist');
         return record;
       },
@@ -171,6 +180,38 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
           });
       },
     },
+    collaborationProposals: {
+      async create(record) {
+        db.prepare(`INSERT INTO agent_collaboration_proposals
+          (id, management_run_id, proposal_json, proposal_hash, idempotency_key, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)`).run(record.id, record.managementRunId, json(record.proposal),
+          record.proposalHash, record.idempotencyKey, record.createdAt);
+        return record;
+      },
+      async getById(id) { return mapProposal(db.prepare('SELECT * FROM agent_collaboration_proposals WHERE id = ?').get(id)); },
+      async getByIdempotencyKey(input) { return mapProposal(db.prepare('SELECT * FROM agent_collaboration_proposals WHERE management_run_id = ? AND idempotency_key = ?').get(input.managementRunId, input.idempotencyKey)); },
+      async listByRun(managementRunId) { return db.prepare('SELECT * FROM agent_collaboration_proposals WHERE management_run_id = ? ORDER BY created_at, id').all(managementRunId).map((value) => mapProposal(value)!); },
+    },
+    handoffs: {
+      async create(record) {
+        db.prepare(`INSERT INTO agent_handoffs
+          (id, management_run_id, intent_json, intent_hash, idempotency_key, invocation_id, status, accepted_at, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(record.id, record.managementRunId,
+          json(record.intent), record.intentHash, record.idempotencyKey, record.invocationId ?? null,
+          record.status, record.acceptedAt ?? null, record.createdAt, record.updatedAt);
+        return record;
+      },
+      async update(record) {
+        const result = db.prepare(`UPDATE agent_handoffs SET invocation_id = ?, status = ?, accepted_at = ?, updated_at = ? WHERE id = ?`)
+          .run(record.invocationId ?? null, record.status, record.acceptedAt ?? null, record.updatedAt, record.id);
+        if ((result as { changes?: number }).changes === 0) throw new Error('handoff does not exist');
+        return record;
+      },
+      async getById(id) { return mapHandoff(db.prepare('SELECT * FROM agent_handoffs WHERE id = ?').get(id)); },
+      async getByInvocationId(invocationId) { return mapHandoff(db.prepare('SELECT * FROM agent_handoffs WHERE invocation_id = ?').get(invocationId)); },
+      async getByIdempotencyKey(input) { return mapHandoff(db.prepare('SELECT * FROM agent_handoffs WHERE management_run_id = ? AND idempotency_key = ?').get(input.managementRunId, input.idempotencyKey)); },
+      async listByRun(managementRunId) { return db.prepare('SELECT * FROM agent_handoffs WHERE management_run_id = ? ORDER BY created_at, id').all(managementRunId).map((value) => mapHandoff(value)!); },
+    },
     dispatchAttempts: {
       async create(record) {
         db.prepare(`INSERT INTO invocation_dispatch_attempts
@@ -236,6 +277,8 @@ function mapRun(value: unknown): ManagementRunRecord | null {
     id: text(value, 'id'), teamId: text(value, 'team_id'), channelId: text(value, 'channel_id'),
     rootMessageId: text(value, 'root_message_id'),
     ...(frozenTarget ? { frozenTarget } : {}),
+    mainAgentId: nullableText(value, 'main_agent_id'), activeAgentId: nullableText(value, 'active_agent_id'),
+    collaborationMode: text(value, 'collaboration_mode') as 'single-agent' | 'manager-orchestrated' | 'handoff',
     mode: 'managed' as const,
     status: text(value, 'status') as ManagementRunRecord['status'],
     placementPolicy: parseJson<ManagerPlacementPolicyDto>(text(value, 'placement_policy_json')),
@@ -258,5 +301,7 @@ function phase(value: unknown, key: string): 1 | 2 {
 function mapLease(value: unknown): ManagerLeaseRecord | null { return value ? { managementRunId: text(value, 'management_run_id'), workerId: text(value, 'worker_id'), host: { deviceId: text(value, 'device_id'), profileId: text(value, 'profile_id') }, leaseTokenHash: text(value, 'lease_token_hash'), leaseFingerprint: text(value, 'lease_fingerprint'), fencingToken: number(value, 'fencing_token'), acquiredAt: number(value, 'acquired_at'), heartbeatAt: number(value, 'heartbeat_at'), expiresAt: number(value, 'expires_at'), releasedAt: nullableNumber(value, 'released_at') } : null; }
 function mapEvent(value: unknown): ManagementEventRecord { return { event: { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), sequence: number(value, 'sequence'), type: text(value, 'type'), actorKind: text(value, 'actor_kind'), actorId: nullableText(value, 'actor_id'), idempotencyKey: text(value, 'idempotency_key'), causationEventId: nullableText(value, 'causation_event_id'), payload: parseJson(text(value, 'payload_json')), createdAt: number(value, 'created_at') } as ManagementEventV1, payloadHash: text(value, 'payload_hash') }; }
 function mapInvocation(value: unknown): AgentInvocationRecordDto | null { return value ? { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), intent: parseJson(text(value, 'intent_json')), intentHash: text(value, 'intent_hash'), idempotencyKey: text(value, 'idempotency_key'), createdAt: number(value, 'created_at') } : null; }
+function mapProposal(value: unknown): AgentCollaborationProposalRecordDto | null { return value ? { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), proposal: parseJson(text(value, 'proposal_json')), proposalHash: text(value, 'proposal_hash'), idempotencyKey: text(value, 'idempotency_key'), createdAt: number(value, 'created_at') } : null; }
+function mapHandoff(value: unknown): AgentHandoffRecordDto | null { return value ? { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), intent: parseJson(text(value, 'intent_json')), intentHash: text(value, 'intent_hash'), idempotencyKey: text(value, 'idempotency_key'), invocationId: nullableText(value, 'invocation_id'), status: text(value, 'status') as AgentHandoffRecordDto['status'], acceptedAt: nullableNumber(value, 'accepted_at'), createdAt: number(value, 'created_at'), updatedAt: number(value, 'updated_at') } : null; }
 function mapAttempt(value: unknown): InvocationDispatchAttemptRecord { return { id: text(value, 'id'), invocationId: text(value, 'invocation_id'), dispatchId: text(value, 'dispatch_id'), attemptNumber: number(value, 'attempt_number'), status: text(value, 'status') as InvocationDispatchAttemptRecord['status'], startedAt: number(value, 'started_at'), completedAt: nullableNumber(value, 'completed_at') }; }
 function mapShadowDecision(value: unknown): ManagementShadowDecisionRecord { return { id: text(value, 'id'), shadowRequestKey: text(value, 'shadow_request_key'), inputHash: text(value, 'input_hash'), objectiveHash: text(value, 'objective_hash'), argumentHash: text(value, 'argument_hash'), target: parseJson(text(value, 'target_json')), toolSequence: parseJson(text(value, 'tool_sequence_json')), diagnostics: parseJson(text(value, 'diagnostics_json')), createdAt: number(value, 'created_at') }; }

@@ -271,6 +271,9 @@ export const MANAGEMENT_TOOL_NAMES = [
   'tasks.retry',
   'tasks.accept_subtask',
   'tasks.report_blocked',
+  'agents.list_available',
+  'handoffs.request',
+  'handoffs.await_result',
   'memory.search',
   'memory.create_capsule',
   'memory.propose_candidate',
@@ -304,6 +307,9 @@ export const PHASE_2_MANAGEMENT_TOOL_NAMES = [
   'tasks.retry',
   'tasks.accept_subtask',
   'tasks.report_blocked',
+  'agents.list_available',
+  'handoffs.request',
+  'handoffs.await_result',
 ] as const satisfies readonly ManagementToolName[];
 
 export type ManagementToolName = (typeof MANAGEMENT_TOOL_NAMES)[number];

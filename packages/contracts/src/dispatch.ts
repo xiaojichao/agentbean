@@ -43,6 +43,7 @@ export interface DispatchRequestDto {
   agentId: ID;
   deviceId?: ID;
   requestId: string;
+  managementInvocationId?: ID;
   prompt: string;
   history?: DispatchHistoryMessageDto[];
   attachments?: DispatchAttachmentDto[];

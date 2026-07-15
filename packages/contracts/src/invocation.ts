@@ -1,6 +1,7 @@
 import type { ID, UnixMs } from './common.js';
 import type { DispatchStatus } from './dispatch.js';
 import type { AcceptanceCriterionDto } from './task-coordination.js';
+import type { AgentCollaborationProposalV1 } from './collaboration.js';
 
 export type AgentInvocationTargetKind = 'custom' | 'agentos-hosted';
 
@@ -74,6 +75,7 @@ export interface AgentInvocationResultDto {
   readonly artifactIds: readonly ID[];
   readonly workspaceRunId?: ID;
   readonly memoryCandidateIds: readonly ID[];
+  readonly collaborationProposals?: readonly AgentCollaborationProposalV1[];
   readonly startedAt: UnixMs;
   readonly completedAt: UnixMs;
   readonly error?: string;

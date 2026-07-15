@@ -1,6 +1,7 @@
 import type { ID, UnixMs } from './common.js';
 import type { ManagementWorkerCapacityV1, ManagementWorkerSessionContextV1 } from './management-worker.js';
 import type { AcceptanceCriterionDto, EvidenceRefDto, SubtaskAcceptanceV1 } from './task-coordination.js';
+import type { AgentHandoffReturnMode, AgentHandoffStatus, SerialAgentHandoffKind } from './collaboration.js';
 
 export const PHASE_2_TASK_WORKER_TOOL_NAMES = [
   'tasks.create_subtasks',
@@ -26,6 +27,15 @@ export const PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES = [
   'user.request_input',
   'review.submit_root_delivery',
   ...PHASE_2_TASK_WORKER_TOOL_NAMES,
+  'agents.list_available',
+  'handoffs.request',
+  'handoffs.await_result',
+] as const;
+
+const PHASE_2_COLLABORATION_WORKER_TOOL_NAMES = [
+  'agents.list_available',
+  'handoffs.request',
+  'handoffs.await_result',
 ] as const;
 
 export type Phase2ManagementWorkerToolName = (typeof PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES)[number];
@@ -71,9 +81,32 @@ export interface Phase2ManagementWorkerToolInputMapV1 {
     readonly expectedTaskRevision: number;
     readonly taskAttempt: number;
     readonly claimLeaseId: ID;
+    readonly targetAgentId?: ID;
     readonly objective: string;
     readonly attachmentIds: readonly ID[];
     readonly deadlineAt?: UnixMs;
+  };
+  readonly 'agents.list_available': {
+    readonly capabilityQuery?: string;
+    readonly includeBusy?: boolean;
+  };
+  readonly 'handoffs.request': {
+    readonly sourceProposalId?: ID;
+    readonly sourceInvocationId?: ID;
+    readonly toAgentId: ID;
+    readonly kind: SerialAgentHandoffKind;
+    readonly objective: string;
+    readonly reason: string;
+    readonly contextRefIds: readonly ID[];
+    readonly dependencyInvocationIds: readonly ID[];
+    readonly attachmentIds: readonly ID[];
+    readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];
+    readonly returnMode: AgentHandoffReturnMode;
+    readonly deadlineAt?: UnixMs;
+  };
+  readonly 'handoffs.await_result': {
+    readonly handoffId: ID;
+    readonly timeoutAt?: UnixMs;
   };
   readonly 'tasks.create_subtasks': { readonly parentTaskId: ID; readonly subtasks: readonly Phase2SubtaskDraftV1[] };
   readonly 'tasks.add_dependency': { readonly taskId: ID; readonly dependencyTaskId: ID; readonly expectedTaskRevision: number };
@@ -94,6 +127,27 @@ export interface Phase2ManagementWorkerToolOutputMapV1 {
     readonly status: 'succeeded';
     readonly deliveryId: ID;
     readonly evidenceRefs: readonly EvidenceRefDto[];
+  };
+  readonly 'agents.list_available': {
+    readonly agents: readonly {
+      readonly agentId: ID;
+      readonly name: string;
+      readonly kind: 'custom' | 'agentos-hosted';
+      readonly status: 'online' | 'busy' | 'offline' | 'unknown';
+      readonly capabilities: readonly string[];
+      readonly skills: readonly string[];
+      readonly channelMember: boolean;
+    }[];
+  };
+  readonly 'handoffs.request': {
+    readonly handoffId: ID;
+    readonly invocationId: ID;
+    readonly status: AgentHandoffStatus;
+  };
+  readonly 'handoffs.await_result': {
+    readonly handoffId: ID;
+    readonly invocationId: ID;
+    readonly status: AgentHandoffStatus;
   };
   readonly 'tasks.create_subtasks': { readonly taskIds: readonly ID[]; readonly taskGraphRevision: number };
   readonly 'tasks.add_dependency': { readonly taskId: ID; readonly taskRevision: number; readonly taskGraphRevision: number };
@@ -205,15 +259,51 @@ function assertCriterion(value: unknown): void {
 function assertTaskToolInput(toolName: string, value: unknown): void {
   if (toolName === 'agents.invoke') {
     assertExactKeys(value, ['taskId', 'expectedTaskRevision', 'taskAttempt', 'claimLeaseId',
-      'objective', 'attachmentIds', 'deadlineAt'], ['taskId', 'expectedTaskRevision', 'taskAttempt',
+      'targetAgentId', 'objective', 'attachmentIds', 'deadlineAt'], ['taskId', 'expectedTaskRevision', 'taskAttempt',
       'claimLeaseId', 'objective', 'attachmentIds']);
     if (!nonEmpty(value.taskId) || !nonEmpty(value.claimLeaseId) || !nonEmpty(value.objective)) {
       throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
     }
+    if (value.targetAgentId !== undefined && !nonEmpty(value.targetAgentId)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
     assertInteger(value.expectedTaskRevision, 1);
     assertInteger(value.taskAttempt, 1);
     assertStringArray(value.attachmentIds);
     if (value.deadlineAt !== undefined) assertInteger(value.deadlineAt, 0);
+    return;
+  }
+  if (toolName === 'agents.list_available') {
+    assertExactKeys(value, ['capabilityQuery', 'includeBusy'], []);
+    if (value.capabilityQuery !== undefined && !nonEmpty(value.capabilityQuery)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    if (value.includeBusy !== undefined && typeof value.includeBusy !== 'boolean') throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    return;
+  }
+  if (toolName === 'handoffs.request') {
+    const optional = ['sourceProposalId', 'sourceInvocationId', 'deadlineAt'];
+    const required = ['toAgentId', 'kind', 'objective', 'reason', 'contextRefIds',
+      'dependencyInvocationIds', 'attachmentIds', 'acceptanceCriteria', 'returnMode'];
+    assertExactKeys(value, [...optional, ...required], required);
+    if ((value.sourceProposalId !== undefined && !nonEmpty(value.sourceProposalId))
+      || (value.sourceInvocationId !== undefined && !nonEmpty(value.sourceInvocationId))
+      || !nonEmpty(value.toAgentId) || !['consult', 'template_request', 'continuation'].includes(String(value.kind))
+      || !nonEmpty(value.objective) || !nonEmpty(value.reason)
+      || !['return_to_manager', 'return_to_source_agent', 'deliver_to_root'].includes(String(value.returnMode))) {
+      throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    }
+    if ((value.sourceProposalId === undefined) !== (value.sourceInvocationId === undefined)) {
+      throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    }
+    assertStringArray(value.contextRefIds);
+    assertStringArray(value.dependencyInvocationIds);
+    assertStringArray(value.attachmentIds);
+    if (!Array.isArray(value.acceptanceCriteria)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    value.acceptanceCriteria.forEach(assertCriterion);
+    if (value.deadlineAt !== undefined) assertInteger(value.deadlineAt, 0);
+    return;
+  }
+  if (toolName === 'handoffs.await_result') {
+    assertExactKeys(value, ['handoffId', 'timeoutAt'], ['handoffId']);
+    if (!nonEmpty(value.handoffId)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    if (value.timeoutAt !== undefined) assertInteger(value.timeoutAt, 0);
     return;
   }
   if (toolName === 'tasks.create_subtasks') {
@@ -289,6 +379,27 @@ function assertTaskToolOutput(toolName: string, value: unknown): void {
     } else if (value.deliveryId !== undefined || value.evidenceRefs !== undefined) {
       throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
     }
+    return;
+  }
+  if (toolName === 'agents.list_available') {
+    assertExactKeys(value, ['agents'], ['agents']);
+    if (!Array.isArray(value.agents)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    for (const agent of value.agents) {
+      assertExactKeys(agent, ['agentId', 'name', 'kind', 'status', 'capabilities', 'skills', 'channelMember'],
+        ['agentId', 'name', 'kind', 'status', 'capabilities', 'skills', 'channelMember']);
+      if (!nonEmpty(agent.agentId) || !nonEmpty(agent.name)
+        || !['custom', 'agentos-hosted'].includes(String(agent.kind))
+        || !['online', 'busy', 'offline', 'unknown'].includes(String(agent.status))
+        || typeof agent.channelMember !== 'boolean') throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+      assertStringArray(agent.capabilities); assertStringArray(agent.skills);
+    }
+    return;
+  }
+  if (toolName === 'handoffs.request' || toolName === 'handoffs.await_result') {
+    assertExactKeys(value, ['handoffId', 'invocationId', 'status'], ['handoffId', 'invocationId', 'status']);
+    if (!nonEmpty(value.handoffId) || !nonEmpty(value.invocationId)
+      || !['requested', 'accepted', 'running', 'returned', 'rejected', 'failed', 'cancelled', 'timed_out']
+        .includes(String(value.status))) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
     return;
   }
   if (toolName === 'tasks.create_subtasks') {
@@ -417,7 +528,7 @@ export function parseManagementWorkerSessionContextV2(value: unknown): Managemen
 export function parsePhase2TaskToolRequestV2(value: unknown): Phase2TaskToolRequestV2 {
   assertExactKeys(value, taskRequestKeys, taskRequestKeys);
   if (value.schemaVersion !== 2 || value.managementPhase !== 2
-    || !(value.toolName === 'agents.invoke' || PHASE_2_TASK_WORKER_TOOL_NAMES.includes(value.toolName as never))
+    || !isPhase2WorkerToolName(value.toolName)
     || !nonEmpty(value.commandId) || !nonEmpty(value.managementRunId) || !nonEmpty(value.workerId)
     || !nonEmpty(value.toolCallId) || !nonEmpty(value.leaseToken) || !nonEmpty(value.idempotencyKey)
     || !Number.isSafeInteger(value.fencingToken) || Number(value.fencingToken) < 1) {
@@ -430,7 +541,7 @@ export function parsePhase2TaskToolRequestV2(value: unknown): Phase2TaskToolRequ
 export function parsePhase2TaskToolResultV2(value: unknown): Phase2TaskToolResultV2 {
   assertExactKeys(value, taskResultKeys, ['schemaVersion', 'managementPhase', 'commandId', 'managementRunId', 'workerId', 'toolCallId', 'toolName', 'ok']);
   if (value.schemaVersion !== 2 || value.managementPhase !== 2
-    || !(value.toolName === 'agents.invoke' || PHASE_2_TASK_WORKER_TOOL_NAMES.includes(value.toolName as never))
+    || !isPhase2WorkerToolName(value.toolName)
     || !nonEmpty(value.commandId) || !nonEmpty(value.managementRunId)
     || !nonEmpty(value.workerId) || !nonEmpty(value.toolCallId)
     || typeof value.ok !== 'boolean') {
@@ -448,4 +559,10 @@ export function parsePhase2TaskToolResultV2(value: unknown): Phase2TaskToolResul
     throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
   }
   return structuredClone(value) as unknown as Phase2TaskToolResultV2;
+}
+
+function isPhase2WorkerToolName(value: unknown): value is keyof Phase2ManagementWorkerToolInputMapV1 {
+  return value === 'agents.invoke'
+    || PHASE_2_TASK_WORKER_TOOL_NAMES.includes(value as never)
+    || PHASE_2_COLLABORATION_WORKER_TOOL_NAMES.includes(value as never);
 }

@@ -75,9 +75,9 @@ interface ActiveLease {
 }
 
 const DEFAULT_SYSTEM_PROMPT: VersionedManagementPrompt = {
-  id: 'agentbean-phase-1-device-manager',
-  version: 1,
-  content: '你是 AgentBean 的 PI 管理运行时。只使用已提供的管理工具处理 frozen target；不得访问本地 cwd、源码或任意 coding tools。',
+  id: 'agentbean-managed-runtime',
+  version: 2,
+  content: '你是 AgentBean 的 PI 管理运行时。只使用已提供的管理工具；Phase 1 仅处理 frozen target，Phase 2 可按任务契约调用可见 Agent 或发起 handoff。不得访问本地 cwd、源码或任意 coding tools。',
 };
 
 const WRITE_TOOL_NAMES = new Set<Phase2ManagementWorkerToolName>([
@@ -93,6 +93,7 @@ const WRITE_TOOL_NAMES = new Set<Phase2ManagementWorkerToolName>([
   'tasks.retry',
   'tasks.accept_subtask',
   'tasks.report_blocked',
+  'handoffs.request',
 ]);
 
 export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput): PiManagerWorkerHost {
