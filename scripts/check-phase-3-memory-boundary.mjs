@@ -29,6 +29,9 @@ const memorySourceInvalidationTests = read('apps/server-next/tests/memory-source
 const serverNextUsecases = read('apps/server-next/src/application/usecases.ts');
 const memoryCapsuleService = read('apps/server-next/src/application/memory-capsule-service.ts');
 const memoryCapsuleTests = read('apps/server-next/tests/memory-capsule-service.test.ts');
+const capsuleInjectionValidator = read('apps/server-next/src/application/capsule-injection-validator.ts');
+const capsuleInjectionTests = read('apps/server-next/tests/capsule-injection-validator.test.ts');
+const domainMemoryHashing = read('packages/domain/src/memory-hashing.ts');
 const runtimeTypes = read('packages/pi-management-runtime/src/types.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
@@ -135,7 +138,25 @@ if (!capsuleMarkers.every((marker) => memoryCapsuleService.includes(marker))
   || !memoryCapsuleTests.includes('describe.each')
   || !memoryCapsuleTests.includes('createSqliteRepositories')
   || !memoryCapsuleTests.includes('scope-policy')) {
-  violations.push('P3_CAPSULE_CREATION_INVALID: minimal Capsule creation with scope-policy authorization, frozen hashes and dual-backend parity tests is required');
+  violations.push('P3_CAPSULE_CREATION_INVALID: minimal Capsule creation with scope-policy authorization, frozen hashes and dual-backend parity tests are required');
+}
+
+const injectionMarkers = [
+  'createCapsuleInjectionValidator', 'validateCapsuleForInjection',
+  'evaluateMemoryInjection', 'evaluateMemoryCapsuleAuthorization', 'CAPSULE_EXPLICIT_GRANT_REQUIRED',
+];
+// hash 必须共享 domain 单一源：creation 与复验跨包复制必漂移。
+const hashSharedFromDomain = domainMemoryHashing.includes('export function hashMemoryContent')
+  && domainMemoryHashing.includes('export function hashSourceRefs')
+  && memoryCapsuleService.includes('hashMemoryContent, hashSourceRefs')
+  && !memoryCapsuleService.includes('function hashMemoryContent');
+if (!injectionMarkers.every((marker) => capsuleInjectionValidator.includes(marker))
+  || !hashSharedFromDomain
+  || !capsuleInjectionTests.includes('describe.each')
+  || !capsuleInjectionTests.includes('createSqliteRepositories')
+  || !capsuleInjectionTests.includes('CAPSULE_CONTENT_HASH_MISMATCH')
+  || !capsuleInjectionTests.includes('CAPSULE_POLICY_VERSION_STALE')) {
+  violations.push('P3_CAPSULE_INJECTION_INVALID: two-check Capsule injection revalidation with shared domain hashing and dual-backend parity tests is required');
 }
 
 const phase1Tools = runtimeTypes.match(
