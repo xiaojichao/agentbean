@@ -14,6 +14,14 @@ const matrix = read('agentbean-next/docs/phase-3-cross-agent-memory-verification
 const plan = read('docs/superpowers/plans/2026-07-15-agentbean-phase-3-cross-agent-memory.md');
 const contracts = read('packages/contracts/src/management-memory.ts');
 const domain = read('packages/domain/src/memory-policy.ts');
+const memoryRepositories = read('apps/server-next/src/application/memory-repositories.ts');
+const memoryUnitOfWork = read('apps/server-next/src/application/memory-unit-of-work.ts');
+const memoryMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0015_management_phase_3_memory.sql');
+const memoryBackends = [
+  read('apps/server-next/src/infra/memory/memory-repositories.ts'),
+  read('apps/server-next/src/infra/sqlite/memory-repositories.ts'),
+];
+const memoryPersistenceTests = read('apps/server-next/tests/memory-unit-of-work.test.ts');
 const runtimeTypes = read('packages/pi-management-runtime/src/types.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
@@ -22,6 +30,7 @@ const hasChecklist = [...Array(18)].every((_, index) =>
   matrix.includes(`| P3-${String(index + 1).padStart(2, '0')} |`));
 if (!hasChecklist
   || !/^> 当前 verdict：\*\*Not ready\*\*/m.test(matrix)
+  || !matrix.includes('| P3-03 | Green |')
   || !matrix.includes('Phase 3 runtime 必须保持关闭')
   || !plan.includes('Phase 3 未完成前')) {
   violations.push('P3_MATRIX_INVALID: P3-01..P3-18, Not ready, and fail-closed rollout are required');
@@ -50,6 +59,28 @@ if (!domainMarkers.every((marker) => domain.includes(marker))) {
   violations.push('P3_DOMAIN_POLICY_INVALID: injection and Capsule authorization must fail closed');
 }
 
+const persistenceMarkers = [
+  'memory_items', 'memory_sources', 'snapshot_hash', 'memory_tags',
+  'memory_grants', 'memory_audit_events', 'DEFERRABLE INITIALLY DEFERRED',
+];
+const repositoryMarkers = [
+  'MemoryRepositories', 'MemoryItemRecord', 'MemorySourceRecord',
+  'MemoryGrantRecord', 'MemoryAuditEventRecord',
+];
+const memoryItemSchema = memoryMigration.match(
+  /CREATE TABLE memory_items[\s\S]*?CREATE TABLE memory_sources/,
+)?.[0] ?? '';
+if (!persistenceMarkers.every((marker) => memoryMigration.includes(marker))
+  || memoryItemSchema.includes('local-workspace')
+  || !repositoryMarkers.every((marker) => memoryRepositories.includes(marker))
+  || !memoryUnitOfWork.includes('MemoryUnitOfWork')
+  || !memoryBackends.every((backend) => backend.includes('assertMemorySourceRecord')
+    && backend.includes('assertMemoryGrantTransition'))
+  || !memoryPersistenceTests.includes('rolls back every Memory table')
+  || !memoryPersistenceTests.includes('rolls back all Memory schema')) {
+  violations.push('P3_PERSISTENCE_BOUNDARY_INVALID: Team-isolated Memory schema, repositories, and rollback evidence are required');
+}
+
 const phase1Tools = runtimeTypes.match(
   /export const PHASE_1_MANAGEMENT_TOOL_NAMES\s*=\s*\[([\s\S]*?)\]\s+as const/,
 )?.[1] ?? '';
@@ -65,8 +96,11 @@ if (scripts['test:phase3-memory-boundary'] !== 'node --test scripts/check-phase-
   || scripts['check:phase3-memory-boundary'] !== 'node scripts/check-phase-3-memory-boundary.mjs'
   || !String(scripts['test:phase3-memory']).includes('test:contracts')
   || !String(scripts['test:phase3-memory']).includes('test:domain')
+  || !String(scripts['test:phase3-memory']).includes('test:phase3-memory-persistence')
+  || !String(scripts['test:phase3-memory-persistence']).includes('memory-unit-of-work.test.ts')
   || !String(scripts['build:phase3-memory']).includes('build:contracts')
   || !String(scripts['build:phase3-memory']).includes('build:domain')
+  || !String(scripts['build:phase3-memory']).includes('build:server-next')
   || !String(scripts['test:retained-boundaries']).includes('test:phase3-memory-boundary')
   || !String(scripts['test:retained-boundaries']).includes('check:phase3-memory-boundary')
   || !workflow.includes('npm run test:ci')
@@ -83,4 +117,4 @@ if (violations.length > 0) {
   process.exit(1);
 }
 
-console.log('P3_MEMORY_BOUNDARY_READY: contracts, Domain policies, Phase 2 isolation, Node 24, and CI gates are present');
+console.log('P3_MEMORY_BOUNDARY_READY: contracts, Domain policies, persistence, Phase 2 isolation, Node 24, and CI gates are present');

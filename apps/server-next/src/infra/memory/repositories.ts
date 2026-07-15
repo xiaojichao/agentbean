@@ -25,11 +25,20 @@ import {
   restoreTaskCoordinationMemoryState,
 } from './task-coordination-repositories.js';
 import { createTaskCoordinationUnitOfWork } from '../../application/task-coordination-unit-of-work.js';
+import { createMemoryUnitOfWork } from '../../application/memory-unit-of-work.js';
+import {
+  cloneMemoryRepositoryMemoryState,
+  createInMemoryMemoryRepositories,
+  createMemoryRepositoryMemoryState,
+  restoreMemoryRepositoryMemoryState,
+} from './memory-repositories.js';
 
 export function createInMemoryRepositories(): ServerNextRepositories {
   const management = createInMemoryManagementPersistence();
   const taskCoordinationState = createTaskCoordinationMemoryState();
   const taskCoordination = createInMemoryTaskCoordinationRepositories(taskCoordinationState);
+  const memoryState = createMemoryRepositoryMemoryState();
+  const memory = createInMemoryMemoryRepositories(memoryState);
   const users = new Map<string, UserRecord>();
   const teams = new Map<string, TeamRecord>();
   const members = new Map<string, TeamMemberRecord>();
@@ -100,6 +109,17 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         }
       }),
     ),
+    memory,
+    memoryUnitOfWork: createMemoryUnitOfWork((operation) =>
+      management.unitOfWork.run(async () => {
+        const snapshot = cloneMemoryRepositoryMemoryState(memoryState);
+        try {
+          return await operation(memory);
+        } catch (error) {
+          restoreMemoryRepositoryMemoryState(memoryState, snapshot);
+          throw error;
+        }
+      })),
     users: {
       async create(input) {
         users.set(input.id, input);

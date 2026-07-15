@@ -47,7 +47,19 @@ Phase 3 交付的是可撤销投影，不建立第二套事实源。Message、Ta
 - `evaluateMemoryCapsuleAuthorization()` 固定目标、scope、hash、内容类型、脱敏级别、policy/grant version 与 expiry 复验。
 - Phase 3 boundary checker 固定矩阵、合同、Domain、Node 24、Phase 2 不暴露 Memory 以及 CI gate。
 
-## 5. 验证命令
+## 5. Task 2 范围
+
+Task 2 只建立 Server 持久化地基，不开放 CRUD Socket/usecase、Capsule 或 Phase 3 Worker：
+
+- 新增 `memory_items`、`memory_sources`、`memory_tags`、`memory_grants`、`memory_audit_events` Team SQLite schema。
+- Server Memory item/source/grant 的 scope 仅允许 `team/channel/dm/task/agent/user`；`local-only` source 不得写入 Server。
+- source ref 绑定 immutable `snapshotHash`，同一 Memory 不能用漂移后的 hash 静默覆盖相同来源。
+- grant 采用顺序版本，最新版本才是当前授权/撤销真相。
+- audit 只保存 subject、actor、scope、source refs/hash、content hash 和 redaction，不保存正文、prompt 或 before/after content。
+- in-memory 与 SQLite repositories 保持行为一致；Memory Unit of Work 复用现有 Team DB 事务串行器，任一步失败全部回滚。
+- migration SQL 与 migration ledger 同事务，ledger 写入失败不留下半完成 schema。
+
+## 6. 验证命令
 
 ```bash
 PATH=/opt/homebrew/opt/node@24/bin:$PATH npm ci
