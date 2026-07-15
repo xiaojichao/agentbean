@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-
 import type {
   ID,
   MemoryCapsuleAuthorizationDto,
@@ -10,6 +8,7 @@ import type {
   MemorySourceRefDto,
   UnixMs,
 } from '../../../../packages/contracts/src/index.js';
+import { hashMemoryContent, hashSourceRefs } from '../../../../packages/domain/src/index.js';
 import type {
   MemoryAuditActorKind,
   MemoryAuditEventRecord,
@@ -237,16 +236,4 @@ function toSourceRefDto(record: Pick<MemorySourceRecord, 'sourceKind' | 'sourceI
     sourceId: record.sourceId,
     snapshotHash: record.snapshotHash,
   };
-}
-
-function hashMemoryContent(content: string): string {
-  return `sha256:${createHash('sha256').update(content).digest('hex')}`;
-}
-
-function hashSourceRefs(refs: readonly MemorySourceRefDto[]): string {
-  const canonical = [...refs]
-    .map((ref) => `${ref.sourceKind}:${ref.sourceId}:${ref.snapshotHash}`)
-    .sort()
-    .join('|');
-  return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
 }

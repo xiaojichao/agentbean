@@ -1,8 +1,8 @@
-import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
 
-import type { MemoryCapsuleDto, MemorySourceRefDto } from '../src/index.js';
+import type { MemoryCapsuleDto } from '../src/index.js';
+import { hashMemoryContent as hashContent, hashSourceRefs } from '../../../packages/domain/src/index.js';
 import type { MemoryItemRecord, MemorySourceRecord, ServerNextRepositories } from '../src/index.js';
 import { createMemoryCapsuleService } from '../src/application/memory-capsule-service.js';
 import {
@@ -101,12 +101,6 @@ async function seedMemory(repositories: ServerNextRepositories, input: SeedMemor
     }
   });
 }
-
-const hashContent = (content: string) => `sha256:${createHash('sha256').update(content).digest('hex')}`;
-const hashSourceRefs = (refs: readonly MemorySourceRefDto[]) =>
-  `sha256:${createHash('sha256').update(
-    [...refs].map((ref) => `${ref.sourceKind}:${ref.sourceId}:${ref.snapshotHash}`).sort().join('|'),
-  ).digest('hex')}`;
 
 describe.each([
   ['memory', () => ({ ...makeHarness(createInMemoryRepositories()), close() {} })],

@@ -2,7 +2,7 @@
 
 > 更新日期：2026-07-15
 > 当前 verdict：**Not ready**
-> 原因：合同、Domain 安全边界、Server 持久化、协作 Memory 用例层（CRUD/状态机/显式共享）、权限优先检索排序、最小 Capsule 创建与事实源失效处理已完成；Capsule inject 复验/explicit-grant、Candidate、Web 治理面、socket wiring 与真实跨 Agent 验证尚未完成。Phase 3 runtime 必须保持关闭。
+> 原因：合同、Domain 安全边界、Server 持久化、协作 Memory 用例层（CRUD/状态机/显式共享）、权限优先检索排序、最小 Capsule 创建、事实源失效处理与 Capsule 注入复验已完成；explicit-grant Capsule、实际 inject 接线、Candidate、Device 本地 Memory 注入合并、Web 治理面、socket wiring 与真实跨 Agent 验证尚未完成。Phase 3 runtime 必须保持关闭。
 
 状态定义：`Green` 已有自动化或真实证据；`Yellow` 已实现但证据未收口；`Red` 尚未实现或缺关键证据。
 
@@ -14,7 +14,7 @@
 | P3-04 | Green | 协作 Memory CRUD、显式共享、替代与删除 | `apps/server-next/src/application/collaborative-memory-service.ts`（PR#579 09437c9 已合并）：createMemory/updateMemory/activateCandidate/rejectCandidate/expireMemory/supersedeMemory/deleteMemory + issueGrant/revokeGrant；状态机、去重、乐观并发、跨 Team fail-closed、正文-free 审计；in-memory/sqlite parity（32 用例） |
 | P3-05 | Green | task scope 检索、权限先行与可解释排序 | `collaborative-memory-search-service.ts` + `packages/domain/src/memory-ranking.ts`（`scoreMemoryRelevance`/`rankMemories`）（PR#591 de51e82 已合并）；权限先行硬门、可解释排序理由、双后端 parity |
 | P3-06 | Yellow | 最小 Capsule 创建、内容脱敏与访问审计 | `memory-capsule-service.ts`：createCapsule 复用 #591 检索→冻结 scope-policy 最小集（脱敏 none + 逐项 authorization：sourceScope/hash/kind/policyVersion/grant 决策 + binding managementRunId/task/target/expiry + capsule-created system 审计）；投影不持久化；双后端 parity 10 用例。待补：explicit-grant item（多 grant→单 authorization 映射，与 P3-07 协同）、脱敏分级与 inject 接线 |
-| P3-07 | Red | 每次 inject 复验成员、scope、hash、policy/grant 与 expiry | 仅有 Domain 规则，Server 接线未实现 |
+| P3-07 | Yellow | 每次 inject 复验成员、scope、hash、policy/grant 与 expiry | `capsule-injection-validator.ts`：validateCapsuleForInjection 两检查合取——`evaluateMemoryInjection`（fresh status + 全来源可用）+ `evaluateMemoryCapsuleAuthorization`（当前事实源与冻结投影双重 hash、policyVersion/grant/expiry）+ Team/当前 Memory scope/逐来源 scope 复验；capsule 过期全拒并逐 item 写 capsule-denied 审计；双后端 parity 30 用例。待补：实际 inject 接线（P3-13）、explicit-grant item |
 | P3-08 | Red | Capsule 与 immutable Invocation intent/checkpoint 绑定 | 仅有既有引用字段，未形成端到端链路 |
 | P3-09 | Red | V3 Worker capability/preflight 与四个 Memory tools | 工具元数据存在，但 Phase 3 runtime 未开放 |
 | P3-10 | Red | 外部 Agent 结果进入 Candidate 生命周期 | 仅有合同，未实现持久化与用例 |

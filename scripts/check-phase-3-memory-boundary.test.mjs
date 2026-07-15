@@ -118,3 +118,12 @@ test('fails closed when minimal Memory Capsule creation disappears', () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /P3_CAPSULE_CREATION_INVALID/);
 });
+
+test('fails closed when Capsule injection revalidation disappears', () => {
+  const result = withFixture('agentbean-phase3-injection-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/capsule-injection-validator.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('validateCapsuleForInjection', 'removedValidate'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPSULE_INJECTION_INVALID/);
+});
