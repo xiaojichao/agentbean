@@ -127,6 +127,7 @@ export interface MemoryRepositories {
   readonly grants: {
     create(record: MemoryGrantRecord): Promise<MemoryGrantRecord>;
     getCurrent(input: { teamId: ID; id: ID }): Promise<MemoryGrantRecord | null>;
+    listCurrentForTarget(input: { teamId: ID; targetAgentId: ID }): Promise<MemoryGrantRecord[]>;
     listVersions(input: { teamId: ID; id: ID }): Promise<MemoryGrantRecord[]>;
   };
   readonly auditEvents: {

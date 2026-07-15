@@ -130,6 +130,20 @@ export function createSqliteMemoryRepositories(db: SqliteDatabase): MemoryReposi
           WHERE team_id = ? AND id = ? ORDER BY version DESC LIMIT 1`)
           .get(input.teamId, input.id));
       },
+      async listCurrentForTarget(input) {
+        return db.prepare(`SELECT grant_row.* FROM memory_grants AS grant_row
+          INNER JOIN (
+            SELECT id, MAX(version) AS version
+            FROM memory_grants
+            WHERE team_id = ? AND target_agent_id = ?
+            GROUP BY id
+          ) AS current
+            ON current.id = grant_row.id AND current.version = grant_row.version
+          WHERE grant_row.team_id = ? AND grant_row.target_agent_id = ?
+          ORDER BY grant_row.source_scope_type, grant_row.source_scope_ref, grant_row.id`)
+          .all(input.teamId, input.targetAgentId, input.teamId, input.targetAgentId)
+          .map(mapGrantRequired);
+      },
       async listVersions(input) {
         return db.prepare(`SELECT * FROM memory_grants
           WHERE team_id = ? AND id = ? ORDER BY version`)

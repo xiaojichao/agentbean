@@ -139,6 +139,15 @@ export function createInMemoryMemoryRepositories(
       async getCurrent(input) {
         return grantVersions(state, input.teamId, input.id).at(-1) ?? null;
       },
+      async listCurrentForTarget(input) {
+        const ids = new Set([...state.grants.values()]
+          .filter((record) => record.teamId === input.teamId && record.targetAgentId === input.targetAgentId)
+          .map((record) => record.id));
+        return [...ids]
+          .map((id) => grantVersions(state, input.teamId, id).at(-1))
+          .filter((record): record is MemoryGrantRecord => record !== undefined)
+          .sort(compareGrantScope);
+      },
       async listVersions(input) {
         return grantVersions(state, input.teamId, input.id);
       },
@@ -196,4 +205,10 @@ function compareSource(left: MemorySourceRecord, right: MemorySourceRecord): num
     || left.sourceKind.localeCompare(right.sourceKind)
     || left.sourceId.localeCompare(right.sourceId)
     || left.memoryId.localeCompare(right.memoryId);
+}
+
+function compareGrantScope(left: MemoryGrantRecord, right: MemoryGrantRecord): number {
+  return left.sourceScopeType.localeCompare(right.sourceScopeType)
+    || left.sourceScopeRef.localeCompare(right.sourceScopeRef)
+    || left.id.localeCompare(right.id);
 }
