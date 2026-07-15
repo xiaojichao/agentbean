@@ -100,7 +100,8 @@ if (!usecaseMarkers.every((marker) => collaborativeMemoryService.includes(marker
 }
 
 const invalidationMarkers = [
-  'createMemorySourceInvalidationService', 'invalidateSources', 'memory-expired', 'ACTOR_SYSTEM',
+  'createMemorySourceInvalidationService', 'invalidateSources', 'isSourceAvailable',
+  'memory-expired', 'ACTOR_SYSTEM',
 ];
 if (!invalidationMarkers.every((marker) => memorySourceInvalidationService.includes(marker))
   || !memorySourceInvalidationTests.includes('describe.each')
@@ -108,6 +109,7 @@ if (!invalidationMarkers.every((marker) => memorySourceInvalidationService.inclu
   || !memorySourceInvalidationTests.includes('fails closed across Team boundaries')
   // 删除路径必须 best-effort 触发来源失效，且不得阻塞删除主路径。
   || !serverNextUsecases.includes('invalidateSourcesAfterDeletion')
+  || !serverNextUsecases.includes('messages.listByChannel')
   || !serverNextUsecases.includes("sourceKind: 'message'")
   || !serverNextUsecases.includes("sourceKind: 'task'")) {
   violations.push('P3_SOURCE_INVALIDATION_INVALID: reactive Memory source invalidation on deletion with dual-backend parity tests is required');

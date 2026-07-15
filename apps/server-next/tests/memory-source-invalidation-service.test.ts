@@ -8,6 +8,7 @@ import type {
   ServerNextRepositories,
 } from '../src/index.js';
 import { createMemorySourceInvalidationService } from '../src/application/memory-source-invalidation-service.js';
+import { createServerNextUseCases } from '../src/application/usecases.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 import {
   applyTeamMigrations,
@@ -22,17 +23,25 @@ const Database = createRequire(import.meta.url)('better-sqlite3') as DatabaseCon
 interface Harness {
   readonly repositories: ServerNextRepositories;
   readonly service: ReturnType<typeof createMemorySourceInvalidationService>;
+  readonly markSourceUnavailable: (sourceKind: MemorySourceKind, sourceId: string) => void;
   readonly close(): void;
 }
 
 function makeHarness(repositories: ServerNextRepositories): Harness {
   let tick = 1_000;
   let counter = 0;
+  const unavailableSources = new Set<string>();
   const clock = { now: () => (tick += 1_000) };
   const ids = { nextId: () => `audit-${++counter}` };
   return {
     repositories,
-    service: createMemorySourceInvalidationService({ unitOfWork: repositories.memoryUnitOfWork, clock, ids }),
+    service: createMemorySourceInvalidationService({
+      unitOfWork: repositories.memoryUnitOfWork,
+      clock,
+      ids,
+      isSourceAvailable: async (source) => !unavailableSources.has(`${source.sourceKind}:${source.sourceId}`),
+    }),
+    markSourceUnavailable: (sourceKind, sourceId) => unavailableSources.add(`${sourceKind}:${sourceId}`),
     close() {},
   };
 }
@@ -139,21 +148,21 @@ describe.each([
     }
   });
 
-  test('keeps a multi-source memory on partial invalidation, expires only when the whole batch clears it', async () => {
+  test('expires a multi-source memory when separate deletions remove its last available source', async () => {
     const harness = createHarness();
     try {
       await seedMemory(harness.repositories, {
         memoryId: 'mem-3',
         sources: [{ sourceKind: 'message', sourceId: 'msg-1' }, { sourceKind: 'message', sourceId: 'msg-2' }],
       });
-      // 仅失效一个来源：还剩 msg-2，保留（读取侧懒检查兜底 msg-1 不可用）。
+      harness.markSourceUnavailable('message', 'msg-1');
       await harness.service.invalidateSources({
         teamId: 'team-1', sourceKind: 'message', sourceIds: ['msg-1'],
       });
       expect(await getStatus(harness.repositories, 'team-1', 'mem-3')).toBe('active');
-      // 整批失效全部来源才主动过期。
+      harness.markSourceUnavailable('message', 'msg-2');
       const result = await harness.service.invalidateSources({
-        teamId: 'team-1', sourceKind: 'message', sourceIds: ['msg-1', 'msg-2'],
+        teamId: 'team-1', sourceKind: 'message', sourceIds: ['msg-2'],
       });
       expect(result.expiredMemoryIds).toEqual(['mem-3']);
       expect(await getStatus(harness.repositories, 'team-1', 'mem-3')).toBe('expired');
@@ -237,5 +246,69 @@ describe.each([
     } finally {
       harness.close();
     }
+  });
+});
+
+describe('Phase 3 Memory Source Invalidation usecase wiring', () => {
+  test('rechecks prior soft-deleted messages when sources are deleted separately', async () => {
+    const repositories = createInMemoryRepositories();
+    let counter = 0;
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 1_000 + counter },
+      ids: { nextId: () => `id-${++counter}` },
+    });
+    const registered = await app.registerUser({ username: 'alice', password: 'secret', teamName: 'Team' });
+    if (!registered.ok) throw new Error(`register failed: ${registered.error}`);
+    const userId = registered.user.id;
+    const teamId = registered.currentTeam.id;
+    const channelId = registered.defaultChannel.id;
+    const first = await app.sendMessage({ userId, teamId, channelId, body: 'first source' });
+    const second = await app.sendMessage({ userId, teamId, channelId, body: 'second source' });
+    if (!first.ok || !second.ok) throw new Error('message setup failed');
+    await seedMemory(repositories, {
+      teamId,
+      memoryId: 'mem-separate-delete',
+      sources: [
+        { sourceKind: 'message', sourceId: first.message.id },
+        { sourceKind: 'message', sourceId: second.message.id },
+      ],
+    });
+
+    await app.deleteMessage({ userId, teamId, messageId: first.message.id });
+    expect(await getStatus(repositories, teamId, 'mem-separate-delete')).toBe('active');
+    await app.deleteMessage({ userId, teamId, messageId: second.message.id });
+    expect(await getStatus(repositories, teamId, 'mem-separate-delete')).toBe('expired');
+  });
+
+  test('invalidates message sources removed by channel deletion', async () => {
+    const repositories = createInMemoryRepositories();
+    let counter = 0;
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 2_000 + counter },
+      ids: { nextId: () => `id-${++counter}` },
+    });
+    const registered = await app.registerUser({ username: 'bob', password: 'secret', teamName: 'Team' });
+    if (!registered.ok) throw new Error(`register failed: ${registered.error}`);
+    const userId = registered.user.id;
+    const teamId = registered.currentTeam.id;
+    const created = await app.createChannel({ userId, teamId, name: 'temporary', visibility: 'public' });
+    if (!created.ok) throw new Error(`channel setup failed: ${created.error}`);
+    const sent = await app.sendMessage({
+      userId,
+      teamId,
+      channelId: created.channel.id,
+      body: 'channel source',
+    });
+    if (!sent.ok) throw new Error(`message setup failed: ${sent.error}`);
+    await seedMemory(repositories, {
+      teamId,
+      memoryId: 'mem-channel-delete',
+      sources: [{ sourceKind: 'message', sourceId: sent.message.id }],
+    });
+
+    await app.deleteChannel({ userId, teamId, channelId: created.channel.id });
+    expect(await getStatus(repositories, teamId, 'mem-channel-delete')).toBe('expired');
   });
 });

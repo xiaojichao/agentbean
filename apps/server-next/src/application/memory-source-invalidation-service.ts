@@ -14,9 +14,9 @@ import type { MemoryUnitOfWork } from './memory-unit-of-work.js';
  * - 这是删除级联，不是用户直接写入，因此不做 per-memory 权限重检（删除本身已校验
  *   isMember / 作者）；`teamId` 天然隔离，无跨 Team 泄漏。
  * - `memory_sources` 行是不可变的 provenance 记录（PR#577 冻结，无 delete），不反映"当前
- *   可用性"。故本服务只能在**本批失效了某 memory 的全部来源**时主动过期；跨多次调用的
- *   部分失效不主动过期，交给读取侧懒检查（`evaluateMemoryInjection` 的 allSourcesAvailable，
- *   P3-05/13）兜底——那才是 §16.4「没有任何可用 source 则不得注入」的真正闸门。
+ *   可用性"。本批来源直接视为不可用，其余来源通过 `isSourceAvailable` 回查当前事实源，保证
+ *   跨多次删除后最后一个可用来源消失时也能主动过期。读取侧仍须用 `evaluateMemoryInjection`
+ *   的 allSourcesAvailable 做最终 fail-closed 闸门。
  */
 
 const ACTOR_SYSTEM: MemoryAuditActorKind = 'system';
@@ -37,6 +37,11 @@ export interface MemorySourceInvalidationDeps {
   readonly unitOfWork: MemoryUnitOfWork;
   readonly clock: { now(): UnixMs };
   readonly ids: { nextId(): ID };
+  readonly isSourceAvailable: (input: {
+    readonly teamId: ID;
+    readonly sourceKind: MemorySourceKind;
+    readonly sourceId: ID;
+  }) => Promise<boolean>;
 }
 
 export interface MemorySourceInvalidationService {
@@ -46,7 +51,7 @@ export interface MemorySourceInvalidationService {
 export function createMemorySourceInvalidationService(
   deps: MemorySourceInvalidationDeps,
 ): MemorySourceInvalidationService {
-  const { unitOfWork, clock, ids } = deps;
+  const { unitOfWork, clock, ids, isSourceAvailable } = deps;
 
   return {
     async invalidateSources(input) {
@@ -69,11 +74,17 @@ export function createMemorySourceInvalidationService(
 
           const sources = await memory.sources.listByMemory({ teamId: input.teamId, memoryId });
           if (sources.length === 0) continue;
-          // 仅当本批失效了该 memory 的全部来源时才主动过期；还有任何来源（含跨 kind）则保留。
-          const allCleared = sources.every(
-            (source) => source.sourceKind === input.sourceKind && invalidated.has(source.sourceId),
-          );
-          if (!allCleared) continue;
+          // 本批来源已经失效；其余来源回查事实源，避免分次删除后旧 provenance 行永久挡住过期。
+          const availability = await Promise.all(sources.map((source) =>
+            source.sourceKind === input.sourceKind && invalidated.has(source.sourceId)
+              ? false
+              : isSourceAvailable({
+                  teamId: input.teamId,
+                  sourceKind: source.sourceKind,
+                  sourceId: source.sourceId,
+                }),
+          ));
+          if (availability.some(Boolean)) continue;
 
           const updatedAt = Math.max(clock.now(), item.updatedAt + 1);
           const updated = await memory.items.update({

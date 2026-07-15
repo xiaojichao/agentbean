@@ -22,7 +22,7 @@
 | P3-12 | Red | Device LocalMemoryStore、workspace scan 与 outcome observer | 未实现 |
 | P3-13 | Red | server Capsule + 当前 cwd local Memory 的 runtime 注入 | 未实现 |
 | P3-14 | Red | Web Memory/Candidate/冲突/来源/执行详情治理 | 未实现 |
-| P3-15 | Yellow | grant 撤销、来源失效、expire/delete 与审计闭环 | revokeGrant 版本链 + expireMemory/deleteMemory 审计（PR#579）；message/task 来源失效反应式级联 `memory-source-invalidation-service.ts`（删除 best-effort 触发，整批清空才主动 expired + system audit，读取侧懒检查兜底，14 用例双后端 parity）。待补：artifact/workspace-run/invocation 失效挂钩与完整 E2E 闭环 |
+| P3-15 | Yellow | grant 撤销、来源失效、expire/delete 与审计闭环 | revokeGrant 版本链 + expireMemory/deleteMemory 审计（PR#579）；message/task 来源失效反应式级联 `memory-source-invalidation-service.ts`（删除 best-effort 触发，本批失效 + 其余事实源可用性复查，无可用来源时主动 expired + system audit；覆盖分次删除与频道级联删除，双后端 parity）。待补：artifact/workspace-run/invocation 失效挂钩与完整 E2E 闭环 |
 | P3-16 | Red | checkpoint/recovery 不恢复无效 Capsule/Candidate | 未实现 |
 | P3-17 | Red | 两个真实外部 Agent 跨 Task Memory 正负 smoke | 未执行 |
 | P3-18 | Red | Node 24 root gates、main CI/CD、SEA、Railway/Vercel、生产浏览器收口 | 未执行 |

@@ -835,6 +835,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     unitOfWork: repositories.memoryUnitOfWork,
     clock,
     ids,
+    async isSourceAvailable(source) {
+      if (source.sourceKind === 'message') {
+        const message = await repositories.messages.getById(source.sourceId);
+        return Boolean(message && message.teamId === source.teamId && !isDeletedMessage(message));
+      }
+      if (source.sourceKind === 'task') {
+        const task = await repositories.tasks.getById(source.sourceId);
+        return Boolean(task && task.teamId === source.teamId);
+      }
+      // 其他 source kind 的删除入口尚未接线；在对应事实源可验证前不得误判为已失效。
+      return true;
+    },
   });
   // 来源失效是删除之后的反应式级联：best-effort，绝不阻塞或回滚已成功的删除。
   // 失败时由读取侧懒检查（evaluateMemoryInjection 的 allSourcesAvailable）兜底。
@@ -2409,9 +2421,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!canApplyChannelUpdate(channel, deleteInput.userId, {})) {
         return makeFailure('FORBIDDEN', 'Only channel creator can delete');
       }
+      const deletedMessages = await repositories.messages.listByChannel(channel.id, Number.MAX_SAFE_INTEGER);
       // Cascade: artifacts → messages → channel
       await repositories.artifacts.deleteByChannel(channel.id);
       await repositories.messages.deleteByChannel(channel.id);
+      await invalidateSourcesAfterDeletion({
+        teamId: deleteInput.teamId,
+        sourceKind: 'message',
+        sourceIds: deletedMessages.map((message) => message.id),
+        actorId: deleteInput.userId,
+      });
       const deleted = await repositories.channels.delete({ channelId: channel.id });
       if (!deleted) {
         return makeFailure('NOT_FOUND', 'Channel not found');
