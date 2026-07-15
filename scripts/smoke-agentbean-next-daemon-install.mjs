@@ -72,7 +72,7 @@ export function runAgentBeanNextDaemonInstallSmoke({
     run(process.execPath, [
       '--input-type=module',
       '--eval',
-      "const runtime = await import('@agentbean/pi-management-runtime'); if (typeof runtime.createManagementRuntimeFactory !== 'function' || runtime.PHASE_1_MANAGEMENT_TOOL_NAMES?.length !== 11 || runtime.PHASE_2_MANAGEMENT_TOOL_NAMES?.length !== 19 || !runtime.PHASE_2_MANAGEMENT_TOOL_NAMES.includes('tasks.create_subtasks')) process.exit(1);",
+      "const runtime = await import('@agentbean/pi-management-runtime'); if (typeof runtime.createManagementRuntimeFactory !== 'function' || runtime.PHASE_1_MANAGEMENT_TOOL_NAMES?.length !== 11 || runtime.PHASE_2_MANAGEMENT_TOOL_NAMES?.length !== 22 || !runtime.PHASE_2_MANAGEMENT_TOOL_NAMES.includes('tasks.create_subtasks') || !runtime.PHASE_2_MANAGEMENT_TOOL_NAMES.includes('agents.list_available') || !runtime.PHASE_2_MANAGEMENT_TOOL_NAMES.includes('handoffs.request') || !runtime.PHASE_2_MANAGEMENT_TOOL_NAMES.includes('handoffs.await_result')) process.exit(1);",
     ], { cwd: installDir });
     run(process.execPath, [
       '--input-type=module',
