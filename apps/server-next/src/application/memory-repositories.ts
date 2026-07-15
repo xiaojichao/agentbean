@@ -1,7 +1,7 @@
 import type {
   ID,
-  MemoryCapsuleScopeType,
   MemoryCandidateStatus,
+  MemoryCapsuleScopeType,
   MemoryContentKind,
   MemoryRecordDto,
   MemoryRedactionLevel,
@@ -112,20 +112,40 @@ export interface MemoryCapsuleRefRecord {
 }
 
 export interface MemoryCandidateRecord {
+  readonly schemaVersion: 1;
   readonly id: ID;
   readonly teamId: ID;
   readonly managementRunId: ID;
   readonly taskId?: ID;
   readonly sourceAgentId: ID;
   readonly sourceInvocationId: ID;
-  readonly sourceRefs: readonly MemorySourceRefDto[];
+  readonly targetAgentId: ID;
+  readonly scopeType: MemoryScopeType;
+  readonly scopeRef: ID;
   readonly contentKind: MemoryContentKind;
   readonly proposedContent: string;
+  readonly proposedSummary?: string;
   readonly projectionHash: string;
   readonly status: MemoryCandidateStatus;
   readonly conflictMemoryIds: readonly ID[];
-  readonly createdAt: UnixMs;
   readonly decidedAt?: UnixMs;
+  readonly decidedBy?: ID;
+  readonly acceptedMemoryId?: ID;
+  readonly mergedIntoMemoryId?: ID;
+  readonly createdAt: UnixMs;
+  readonly updatedAt: UnixMs;
+}
+
+export interface MemoryCandidateSourceRecord {
+  readonly candidateId: ID;
+  readonly teamId: ID;
+  readonly sourceKind: MemorySourceKind;
+  readonly sourceId: ID;
+  readonly snapshotHash: string;
+  readonly sourceScopeType: MemoryScopeType;
+  readonly sourceScopeRef: ID;
+  readonly sourceVisibility: Exclude<MemorySourceVisibility, 'local-only'>;
+  readonly createdAt: UnixMs;
 }
 
 export interface MemoryRepositories {
@@ -179,7 +199,17 @@ export interface MemoryRepositories {
   readonly candidates: {
     create(record: MemoryCandidateRecord): Promise<MemoryCandidateRecord>;
     getById(input: { teamId: ID; id: ID }): Promise<MemoryCandidateRecord | null>;
-    getByProjectionHash(input: { teamId: ID; projectionHash: string }): Promise<MemoryCandidateRecord | null>;
-    listByRun(input: { teamId: ID; managementRunId: ID }): Promise<MemoryCandidateRecord[]>;
+    findByProjectionHash(input: {
+      teamId: ID;
+      projectionHash: string;
+    }): Promise<MemoryCandidateRecord | null>;
+    update(input: {
+      record: MemoryCandidateRecord;
+      expectedUpdatedAt: UnixMs;
+    }): Promise<MemoryCandidateRecord | null>;
+  };
+  readonly candidateSources: {
+    create(record: MemoryCandidateSourceRecord): Promise<MemoryCandidateSourceRecord>;
+    listByCandidate(input: { teamId: ID; candidateId: ID }): Promise<MemoryCandidateSourceRecord[]>;
   };
 }

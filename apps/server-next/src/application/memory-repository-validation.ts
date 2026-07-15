@@ -9,10 +9,12 @@ import type {
   MemoryAuditEventRecord,
   MemoryCapsuleRefRecord,
   MemoryCandidateRecord,
+  MemoryCandidateSourceRecord,
   MemoryGrantRecord,
   MemoryItemRecord,
   MemorySourceRecord,
 } from './memory-repositories.js';
+import { evaluateCandidateTransition } from '../../../../packages/domain/src/index.js';
 
 const SERVER_SCOPE_TYPES = new Set<string>(MEMORY_SCOPE_TYPES);
 const MEMORY_KIND_VALUES = new Set<string>(MEMORY_KINDS);
@@ -24,9 +26,7 @@ const SOURCE_VISIBILITY_VALUES = new Set<string>(['team', 'private', 'dm-partici
 const CONTENT_KIND_VALUES = new Set<string>(['summary', 'fact', 'decision', 'preference', 'procedure']);
 const REDACTION_LEVEL_VALUES = new Set<string>(['none', 'summary-only', 'sensitive-removed']);
 const GRANT_STATUS_VALUES = new Set<string>(['active', 'revoked', 'expired']);
-const CANDIDATE_STATUS_VALUES = new Set<string>([
-  'candidate', 'accepted', 'rejected', 'merged', 'conflict',
-]);
+const CANDIDATE_STATUS_VALUES = new Set<string>(['candidate', 'accepted', 'rejected', 'merged', 'conflict']);
 const AUDIT_SUBJECT_VALUES = new Set<string>(['memory', 'grant', 'capsule', 'candidate']);
 const AUDIT_ACTOR_VALUES = new Set<string>(['system', 'user', 'agent', 'manager']);
 const AUDIT_EVENT_VALUES = new Set<string>([
@@ -137,6 +137,65 @@ export function assertMemoryGrantTransition(
   if (next.issuedAt < current.issuedAt) throw new Error('memory grant issue time moved backwards');
 }
 
+export function assertMemoryCandidateRecord(record: MemoryCandidateRecord): void {
+  assertServerMemoryScope(record.scopeType, record.scopeRef);
+  if (!CANDIDATE_STATUS_VALUES.has(record.status) || !CONTENT_KIND_VALUES.has(record.contentKind)) {
+    throw new Error('memory candidate status or content kind is invalid');
+  }
+  if (record.proposedContent.length === 0) throw new Error('memory candidate proposed content is required');
+  if (record.projectionHash.trim().length === 0) throw new Error('memory candidate projection hash is required');
+  if (record.sourceInvocationId.trim().length === 0) {
+    throw new Error('memory candidate source invocation is required');
+  }
+  if (record.sourceAgentId.trim().length === 0) throw new Error('memory candidate source agent is required');
+  if (record.targetAgentId.trim().length === 0) throw new Error('memory candidate target agent is required');
+  if (record.managementRunId.trim().length === 0) throw new Error('memory candidate management run is required');
+  if (record.updatedAt < record.createdAt) throw new Error('memory candidate update time precedes creation');
+  const isDecided = record.status !== 'candidate' && record.status !== 'conflict';
+  if (isDecided !== (record.decidedAt !== undefined && record.decidedBy !== undefined)) {
+    throw new Error('memory candidate decision fields must match a terminal status');
+  }
+}
+
+export function assertMemoryCandidateSourceRecord(record: MemoryCandidateSourceRecord): void {
+  assertServerMemoryScope(record.sourceScopeType, record.sourceScopeRef);
+  if (!SOURCE_KIND_VALUES.has(record.sourceKind) || !SOURCE_VISIBILITY_VALUES.has(record.sourceVisibility)) {
+    throw new Error('memory candidate source kind or visibility is invalid');
+  }
+  if (record.snapshotHash.trim().length === 0) {
+    throw new Error('memory candidate source snapshot hash is required');
+  }
+  if ((record.sourceVisibility as string) === 'local-only') {
+    throw new Error('local-only memory candidate source must stay on Device');
+  }
+}
+
+export function assertMemoryCandidateUpdate(
+  current: MemoryCandidateRecord,
+  next: MemoryCandidateRecord,
+): void {
+  if (current.id !== next.id || current.teamId !== next.teamId
+    || current.createdAt !== next.createdAt
+    || current.managementRunId !== next.managementRunId
+    || current.taskId !== next.taskId
+    || current.sourceInvocationId !== next.sourceInvocationId
+    || current.sourceAgentId !== next.sourceAgentId
+    || current.targetAgentId !== next.targetAgentId
+    || current.scopeType !== next.scopeType
+    || current.scopeRef !== next.scopeRef
+    || current.contentKind !== next.contentKind
+    || current.projectionHash !== next.projectionHash
+    || current.proposedContent !== next.proposedContent
+    || current.proposedSummary !== next.proposedSummary) {
+    throw new Error('memory candidate immutable identity changed');
+  }
+  if (next.updatedAt <= current.updatedAt) {
+    throw new Error('memory candidate update time must advance');
+  }
+  const transition = evaluateCandidateTransition(current.status, next.status);
+  if (!transition.ok) throw new Error('memory candidate transition is invalid');
+}
+
 export function assertMemoryAuditEventRecord(record: MemoryAuditEventRecord): void {
   const unsafe = record as unknown as Record<string, unknown>;
   for (const key of ['content', 'body', 'prompt', 'before', 'after']) {
@@ -190,34 +249,5 @@ export function assertMemoryCapsuleRefDenial(
   if (current.deniedAt !== undefined) throw new Error('memory capsule ref is already denied');
   if (deniedAt < current.issuedAt || deniedAt > current.expiresAt) {
     throw new Error('memory capsule ref denial time is outside its validity window');
-  }
-}
-
-export function assertMemoryCandidateRecord(record: MemoryCandidateRecord): void {
-  if (record.sourceAgentId.trim().length === 0) throw new Error('memory candidate source agent is required');
-  if (record.sourceInvocationId.trim().length === 0) {
-    throw new Error('memory candidate source invocation is required');
-  }
-  if (record.managementRunId.trim().length === 0) throw new Error('memory candidate management run is required');
-  if (!CONTENT_KIND_VALUES.has(record.contentKind)) {
-    throw new Error('memory candidate content kind is invalid');
-  }
-  if (!CANDIDATE_STATUS_VALUES.has(record.status)) throw new Error('memory candidate status is invalid');
-  if (record.proposedContent.length === 0) throw new Error('memory candidate proposed content is required');
-  if (record.projectionHash.trim().length === 0) throw new Error('memory candidate projection hash is required');
-  for (const sourceRef of record.sourceRefs) {
-    if (sourceRef.schemaVersion !== 1 || !SOURCE_KIND_VALUES.has(sourceRef.sourceKind)
-      || sourceRef.sourceId.trim().length === 0 || sourceRef.snapshotHash.trim().length === 0) {
-      throw new Error('memory candidate source ref is invalid');
-    }
-  }
-  const isDecided = record.status === 'accepted'
-    || record.status === 'rejected'
-    || record.status === 'merged';
-  if (isDecided !== (record.decidedAt !== undefined)) {
-    throw new Error('memory candidate decision time must match a terminal status');
-  }
-  if (record.decidedAt !== undefined && record.decidedAt < record.createdAt) {
-    throw new Error('memory candidate decision time precedes creation');
   }
 }

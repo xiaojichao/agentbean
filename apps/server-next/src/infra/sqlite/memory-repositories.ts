@@ -1,7 +1,8 @@
 import type {
   MemoryAuditEventRecord,
-  MemoryCapsuleRefRecord,
   MemoryCandidateRecord,
+  MemoryCandidateSourceRecord,
+  MemoryCapsuleRefRecord,
   MemoryGrantRecord,
   MemoryItemRecord,
   MemoryRepositories,
@@ -13,6 +14,8 @@ import {
   assertMemoryCapsuleRefDenial,
   assertMemoryCapsuleRefRecord,
   assertMemoryCandidateRecord,
+  assertMemoryCandidateSourceRecord,
+  assertMemoryCandidateUpdate,
   assertMemoryGrantRecord,
   assertMemoryGrantTransition,
   assertMemoryItemRecord,
@@ -214,40 +217,66 @@ export function createSqliteMemoryRepositories(db: SqliteDatabase): MemoryReposi
     candidates: {
       async create(record) {
         assertMemoryCandidateRecord(record);
-        const byId = db.prepare(`SELECT id FROM memory_candidates WHERE team_id = ? AND id = ?`)
-          .get(record.teamId, record.id);
-        if (byId) throw new Error('memory candidate already exists');
-        try {
-          db.prepare(`INSERT INTO memory_candidates
-            (id, team_id, management_run_id, task_id, source_agent_id, source_invocation_id,
-             source_refs_json, content_kind, proposed_content, projection_hash, status,
-             conflict_memory_ids_json, created_at, decided_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .run(record.id, record.teamId, record.managementRunId, record.taskId ?? null,
-              record.sourceAgentId, record.sourceInvocationId,
-              JSON.stringify(record.sourceRefs), record.contentKind, record.proposedContent,
-              record.projectionHash, record.status, JSON.stringify(record.conflictMemoryIds),
-              record.createdAt, record.decidedAt ?? null);
-        } catch (error) {
-          if (String(error).includes('UNIQUE')) {
-            throw new Error('memory candidate projection hash already exists');
-          }
-          throw error;
-        }
+        db.prepare(`INSERT INTO memory_candidates
+          (id, team_id, management_run_id, task_id, source_agent_id, source_invocation_id, target_agent_id,
+           scope_type, scope_ref, content_kind, proposed_content, proposed_summary, projection_hash, status,
+           conflict_memory_ids_json, decided_at, decided_by, accepted_memory_id, merged_into_memory_id,
+           created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(record.id, record.teamId, record.managementRunId, record.taskId ?? null,
+            record.sourceAgentId, record.sourceInvocationId, record.targetAgentId,
+            record.scopeType, record.scopeRef,
+            record.contentKind, record.proposedContent, record.proposedSummary ?? null,
+            record.projectionHash, record.status,
+            JSON.stringify(record.conflictMemoryIds), record.decidedAt ?? null, record.decidedBy ?? null,
+            record.acceptedMemoryId ?? null, record.mergedIntoMemoryId ?? null,
+            record.createdAt, record.updatedAt);
         return record;
       },
       async getById(input) {
-        return mapCandidate(db.prepare(`SELECT * FROM memory_candidates
-          WHERE team_id = ? AND id = ?`).get(input.teamId, input.id));
+        return mapCandidate(db.prepare('SELECT * FROM memory_candidates WHERE team_id = ? AND id = ?')
+          .get(input.teamId, input.id));
       },
-      async getByProjectionHash(input) {
+      async findByProjectionHash(input) {
         return mapCandidate(db.prepare(`SELECT * FROM memory_candidates
-          WHERE team_id = ? AND projection_hash = ?`).get(input.teamId, input.projectionHash));
+          WHERE team_id = ? AND projection_hash = ? AND status IN ('candidate', 'conflict')
+          ORDER BY updated_at DESC, id LIMIT 1`)
+          .get(input.teamId, input.projectionHash));
       },
-      async listByRun(input) {
-        return db.prepare(`SELECT * FROM memory_candidates
-          WHERE team_id = ? AND management_run_id = ? ORDER BY created_at, id`)
-          .all(input.teamId, input.managementRunId).map(mapCandidateRequired);
+      async update(input) {
+        assertMemoryCandidateRecord(input.record);
+        const record = input.record;
+        const current = mapCandidate(db.prepare('SELECT * FROM memory_candidates WHERE team_id = ? AND id = ?')
+          .get(record.teamId, record.id));
+        if (!current || current.updatedAt !== input.expectedUpdatedAt) return null;
+        assertMemoryCandidateUpdate(current, record);
+        const result = db.prepare(`UPDATE memory_candidates SET
+          status = ?, conflict_memory_ids_json = ?, decided_at = ?, decided_by = ?,
+          accepted_memory_id = ?, merged_into_memory_id = ?, updated_at = ?
+          WHERE id = ? AND team_id = ? AND updated_at = ?`)
+          .run(record.status, JSON.stringify(record.conflictMemoryIds), record.decidedAt ?? null,
+            record.decidedBy ?? null, record.acceptedMemoryId ?? null, record.mergedIntoMemoryId ?? null,
+            record.updatedAt, record.id, record.teamId, input.expectedUpdatedAt);
+        return changes(result) === 0 ? null : record;
+      },
+    },
+    candidateSources: {
+      async create(record) {
+        assertMemoryCandidateSourceRecord(record);
+        db.prepare(`INSERT INTO memory_candidate_sources
+          (memory_candidate_id, team_id, source_kind, source_id, snapshot_hash,
+           source_scope_type, source_scope_ref, source_visibility, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(record.candidateId, record.teamId, record.sourceKind, record.sourceId,
+            record.snapshotHash, record.sourceScopeType, record.sourceScopeRef,
+            record.sourceVisibility, record.createdAt);
+        return record;
+      },
+      async listByCandidate(input) {
+        return db.prepare(`SELECT * FROM memory_candidate_sources
+          WHERE team_id = ? AND memory_candidate_id = ?
+          ORDER BY created_at, source_kind, source_id`)
+          .all(input.teamId, input.candidateId).map(mapCandidateSourceRequired);
       },
     },
   };
@@ -366,24 +395,45 @@ function mapCapsuleRef(value: unknown): MemoryCapsuleRefRecord | null {
 
 function mapCandidate(value: unknown): MemoryCandidateRecord | null {
   if (!value) return null;
-  const record: MemoryCandidateRecord = {
+  return {
+    schemaVersion: 1,
     id: text(value, 'id'),
     teamId: text(value, 'team_id'),
     managementRunId: text(value, 'management_run_id'),
     taskId: optionalText(value, 'task_id'),
     sourceAgentId: text(value, 'source_agent_id'),
     sourceInvocationId: text(value, 'source_invocation_id'),
-    sourceRefs: parseSourceRefs(text(value, 'source_refs_json')),
+    targetAgentId: text(value, 'target_agent_id'),
+    scopeType: text(value, 'scope_type') as MemoryCandidateRecord['scopeType'],
+    scopeRef: text(value, 'scope_ref'),
     contentKind: text(value, 'content_kind') as MemoryCandidateRecord['contentKind'],
     proposedContent: text(value, 'proposed_content'),
+    proposedSummary: optionalText(value, 'proposed_summary'),
     projectionHash: text(value, 'projection_hash'),
     status: text(value, 'status') as MemoryCandidateRecord['status'],
-    conflictMemoryIds: parseMemoryIds(text(value, 'conflict_memory_ids_json')),
-    createdAt: number(value, 'created_at'),
+    conflictMemoryIds: JSON.parse(text(value, 'conflict_memory_ids_json')) as MemoryCandidateRecord['conflictMemoryIds'],
     decidedAt: optionalNumber(value, 'decided_at'),
+    decidedBy: optionalText(value, 'decided_by'),
+    acceptedMemoryId: optionalText(value, 'accepted_memory_id'),
+    mergedIntoMemoryId: optionalText(value, 'merged_into_memory_id'),
+    createdAt: number(value, 'created_at'),
+    updatedAt: number(value, 'updated_at'),
   };
-  assertMemoryCandidateRecord(record);
-  return record;
+}
+
+function mapCandidateSource(value: unknown): MemoryCandidateSourceRecord | null {
+  if (!value) return null;
+  return {
+    candidateId: text(value, 'memory_candidate_id'),
+    teamId: text(value, 'team_id'),
+    sourceKind: text(value, 'source_kind') as MemoryCandidateSourceRecord['sourceKind'],
+    sourceId: text(value, 'source_id'),
+    snapshotHash: text(value, 'snapshot_hash'),
+    sourceScopeType: text(value, 'source_scope_type') as MemoryCandidateSourceRecord['sourceScopeType'],
+    sourceScopeRef: text(value, 'source_scope_ref'),
+    sourceVisibility: text(value, 'source_visibility') as MemoryCandidateSourceRecord['sourceVisibility'],
+    createdAt: number(value, 'created_at'),
+  };
 }
 
 function mapItemRequired(value: unknown): MemoryItemRecord {
@@ -425,6 +475,12 @@ function mapCapsuleRefRequired(value: unknown): MemoryCapsuleRefRecord {
 function mapCandidateRequired(value: unknown): MemoryCandidateRecord {
   const record = mapCandidate(value);
   if (!record) throw new Error('SQLite memory candidate row could not be mapped');
+  return record;
+}
+
+function mapCandidateSourceRequired(value: unknown): MemoryCandidateSourceRecord {
+  const record = mapCandidateSource(value);
+  if (!record) throw new Error('SQLite memory candidate source row could not be mapped');
   return record;
 }
 
@@ -476,14 +532,5 @@ function parseSourceRefs(value: string): readonly MemorySourceRefDto[] {
       throw new Error('Invalid memory source ref');
     }
     return candidate as unknown as MemorySourceRefDto;
-  });
-}
-
-function parseMemoryIds(value: string): readonly string[] {
-  const parsed = JSON.parse(value) as unknown;
-  if (!Array.isArray(parsed)) throw new Error('Invalid memory ids JSON');
-  return parsed.map((item) => {
-    if (typeof item !== 'string') throw new Error('Invalid memory id');
-    return item;
   });
 }
