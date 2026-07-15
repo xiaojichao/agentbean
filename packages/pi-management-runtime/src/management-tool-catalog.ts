@@ -35,6 +35,9 @@ const toolPolicy: Record<ManagementToolName, {
   'tasks.retry': { effect: 'write', phase: 2 },
   'tasks.accept_subtask': { effect: 'write', phase: 2 },
   'tasks.report_blocked': { effect: 'write', phase: 2 },
+  'agents.list_available': { effect: 'read', phase: 2 },
+  'handoffs.request': { effect: 'write', phase: 2 },
+  'handoffs.await_result': { effect: 'read', phase: 2 },
   'memory.search': { effect: 'read', phase: 3 },
   'memory.create_capsule': { effect: 'write', phase: 3 },
   'memory.propose_candidate': { effect: 'write', phase: 3 },
@@ -72,16 +75,31 @@ type Phase2TaskToolName = keyof Phase2ManagementWorkerToolInputMapV1;
 function phase2TaskSchemaFor(name: Phase2TaskToolName) {
   const id = () => Type.String({ minLength: 1 });
   const revision = () => Type.Integer({ minimum: 1 });
+  const criterion = Type.Object({
+    id: id(), description: id(), evidenceRequired: Type.Boolean(),
+    allowedEvidenceKinds: Type.Optional(Type.Array(Type.Union([
+      Type.Literal('message'), Type.Literal('artifact'), Type.Literal('workspace-run'),
+      Type.Literal('invocation'), Type.Literal('task'),
+    ]))),
+  }, { additionalProperties: false });
+  if (name === 'agents.list_available') return Type.Object({
+    capabilityQuery: Type.Optional(id()), includeBusy: Type.Optional(Type.Boolean()),
+  }, { additionalProperties: false });
+  if (name === 'handoffs.await_result') return Type.Object({
+    handoffId: id(), timeoutAt: Type.Optional(Type.Integer({ minimum: 0 })),
+  }, { additionalProperties: false });
+  if (name === 'handoffs.request') return Type.Object({
+    sourceProposalId: Type.Optional(id()), sourceInvocationId: Type.Optional(id()),
+    toAgentId: id(),
+    kind: Type.Union([Type.Literal('consult'), Type.Literal('template_request'), Type.Literal('continuation')]),
+    objective: id(), reason: id(), contextRefIds: Type.Array(id()),
+    dependencyInvocationIds: Type.Array(id()), attachmentIds: Type.Array(id()),
+    acceptanceCriteria: Type.Array(criterion),
+    returnMode: Type.Union([Type.Literal('return_to_manager'),
+      Type.Literal('return_to_source_agent'), Type.Literal('deliver_to_root')]),
+    deadlineAt: Type.Optional(Type.Integer({ minimum: 0 })),
+  }, { additionalProperties: false });
   if (name === 'tasks.create_subtasks') {
-    const criterion = Type.Object({
-      id: id(),
-      description: id(),
-      evidenceRequired: Type.Boolean(),
-      allowedEvidenceKinds: Type.Optional(Type.Array(Type.Union([
-        Type.Literal('message'), Type.Literal('artifact'), Type.Literal('workspace-run'),
-        Type.Literal('invocation'), Type.Literal('task'),
-      ]))),
-    }, { additionalProperties: false });
     return Type.Object({
       parentTaskId: id(),
       subtasks: Type.Array(Type.Object({

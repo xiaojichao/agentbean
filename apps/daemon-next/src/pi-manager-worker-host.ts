@@ -75,9 +75,9 @@ interface ActiveLease {
 }
 
 const DEFAULT_SYSTEM_PROMPT: VersionedManagementPrompt = {
-  id: 'agentbean-phase-1-device-manager',
-  version: 1,
-  content: '你是 AgentBean 的 PI 管理运行时。只使用已提供的管理工具处理 frozen target；不得访问本地 cwd、源码或任意 coding tools。',
+  id: 'agentbean-managed-runtime',
+  version: 2,
+  content: '你是 AgentBean 的 PI 管理运行时。只使用已提供的管理工具；Phase 1 仅处理 frozen target，Phase 2 可按任务契约调用可见 Agent 或发起 handoff。不得访问本地 cwd、源码或任意 coding tools。',
 };
 
 const WRITE_TOOL_NAMES = new Set<Phase2ManagementWorkerToolName>([
@@ -93,6 +93,7 @@ const WRITE_TOOL_NAMES = new Set<Phase2ManagementWorkerToolName>([
   'tasks.retry',
   'tasks.accept_subtask',
   'tasks.report_blocked',
+  'handoffs.request',
 ]);
 
 export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput): PiManagerWorkerHost {
@@ -425,6 +426,7 @@ function runtimeContext(restored: ManagementCheckpointResultV1): ManagementSessi
       ...(restored.checkpoint ? { checkpoint: visiblePhase2Checkpoint(restored.checkpoint) } : {}),
     };
   }
+  if (!context.frozenTarget) throw new Error('P1_FROZEN_TARGET_REQUIRED');
   return {
     schemaVersion: 1,
     scope: {
@@ -444,7 +446,8 @@ function runtimeContext(restored: ManagementCheckpointResultV1): ManagementSessi
 }
 
 function isPhase2Checkpoint(restored: ManagementCheckpointResultV1): boolean {
-  return Boolean(restored.context.rootTaskId && restored.checkpoint?.authoritative.taskSnapshots?.length);
+  return Boolean(restored.context.rootTaskId && (!restored.context.frozenTarget
+    || restored.checkpoint?.authoritative.taskSnapshots?.length));
 }
 
 function visibleCheckpoint(checkpoint: NonNullable<ManagementCheckpointResultV1['checkpoint']>) {

@@ -717,7 +717,10 @@ export function collectAgentBeanNextReadinessChecks({
         daemonInstallSmokeScript.includes(
           'dist/apps/daemon-next/src/management-worker-protocol.js',
         ) &&
-        daemonInstallSmokeScript.includes('PHASE_2_MANAGEMENT_TOOL_NAMES?.length !== 19') &&
+        daemonInstallSmokeScript.includes('PHASE_2_MANAGEMENT_TOOL_NAMES?.length !== 22') &&
+        daemonInstallSmokeScript.includes("includes('agents.list_available')") &&
+        daemonInstallSmokeScript.includes("includes('handoffs.request')") &&
+        daemonInstallSmokeScript.includes("includes('handoffs.await_result')") &&
         daemonInstallSmokeScript.includes('createPiManagerWorkerHost'),
       'Phase 2 closeout must retain the real two-Agent claim/invocation/delivery/human-review smoke, browser Task DAG surface, and canonical published daemon Worker runtime',
     ),

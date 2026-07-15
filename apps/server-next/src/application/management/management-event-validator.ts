@@ -31,7 +31,16 @@ export const TASK_COORDINATION_MANAGEMENT_EVENT_TYPES = [
 ] as const satisfies readonly ManagementEventTypeV1[];
 
 type TaskCoordinationEventType = (typeof TASK_COORDINATION_MANAGEMENT_EVENT_TYPES)[number];
-type WritableEventType = Phase1WritableEventType | TaskCoordinationEventType;
+export const COLLABORATION_MANAGEMENT_EVENT_TYPES = [
+  'handoff-proposed',
+  'handoff-requested',
+  'handoff-dispatched',
+  'handoff-returned',
+  'active-agent-changed',
+] as const satisfies readonly ManagementEventTypeV1[];
+
+type CollaborationEventType = (typeof COLLABORATION_MANAGEMENT_EVENT_TYPES)[number];
+type WritableEventType = Phase1WritableEventType | TaskCoordinationEventType | CollaborationEventType;
 
 const payloadKeys: Record<WritableEventType, { required: readonly string[]; optional?: readonly string[] }> = {
   'run-started': { required: ['rootMessageId', 'mode'], optional: ['rootTaskId'] },
@@ -55,6 +64,11 @@ const payloadKeys: Record<WritableEventType, { required: readonly string[]; opti
   'claim-invalidated': { required: ['taskId', 'previousTaskRevision', 'claimLeaseId', 'invalidatedInvocationIds', 'reasonCode'] },
   'subtask-delivered': { required: ['deliveryId', 'taskId', 'taskRevision', 'taskAttempt', 'claimLeaseId', 'invocationId'] },
   'task-acceptance-decided': { required: ['taskId', 'acceptance'] },
+  'handoff-proposed': { required: ['proposalId', 'sourceInvocationId', 'sourceAgentId', 'toAgentId', 'kind', 'proposalHash'], optional: ['taskId', 'taskRevision', 'claimLeaseId'] },
+  'handoff-requested': { required: ['handoffId', 'toAgentId', 'kind', 'objectiveHash'], optional: ['sourceProposalId', 'sourceInvocationId', 'fromAgentId'] },
+  'handoff-dispatched': { required: ['handoffId', 'invocationId'] },
+  'handoff-returned': { required: ['handoffId', 'invocationId', 'status', 'resultRevision', 'artifactIds'] },
+  'active-agent-changed': { required: ['reasonCode'], optional: ['previousAgentId', 'nextAgentId', 'handoffId'] },
 };
 
 export function parsePhase1ManagementEvent(input: unknown): ManagementEventV1 {
@@ -63,6 +77,10 @@ export function parsePhase1ManagementEvent(input: unknown): ManagementEventV1 {
 
 export function parseTaskCoordinationManagementEvent(input: unknown): ManagementEventV1 {
   return parseManagementEvent(input, TASK_COORDINATION_MANAGEMENT_EVENT_TYPES);
+}
+
+export function parseCollaborationManagementEvent(input: unknown): ManagementEventV1 {
+  return parseManagementEvent(input, COLLABORATION_MANAGEMENT_EVENT_TYPES);
 }
 
 function parseManagementEvent(input: unknown, allowedTypes: readonly WritableEventType[]): ManagementEventV1 {
@@ -182,6 +200,26 @@ function validatePayload(type: WritableEventType, payload: Record<string, unknow
       nonNegativeInteger(acceptance.decidedAt, 'payload.acceptance.decidedAt');
       return;
     }
+    case 'handoff-proposed':
+      string(payload.proposalId, 'payload.proposalId'); string(payload.sourceInvocationId, 'payload.sourceInvocationId');
+      string(payload.sourceAgentId, 'payload.sourceAgentId'); string(payload.toAgentId, 'payload.toAgentId');
+      handoffKind(payload.kind, 'payload.kind'); optionalString(payload.taskId, 'payload.taskId');
+      optionalPositiveInteger(payload.taskRevision, 'payload.taskRevision'); optionalString(payload.claimLeaseId, 'payload.claimLeaseId');
+      string(payload.proposalHash, 'payload.proposalHash'); return;
+    case 'handoff-requested':
+      string(payload.handoffId, 'payload.handoffId'); optionalString(payload.sourceProposalId, 'payload.sourceProposalId');
+      optionalString(payload.sourceInvocationId, 'payload.sourceInvocationId'); optionalString(payload.fromAgentId, 'payload.fromAgentId');
+      string(payload.toAgentId, 'payload.toAgentId'); handoffKind(payload.kind, 'payload.kind');
+      string(payload.objectiveHash, 'payload.objectiveHash'); return;
+    case 'handoff-dispatched':
+      string(payload.handoffId, 'payload.handoffId'); string(payload.invocationId, 'payload.invocationId'); return;
+    case 'handoff-returned':
+      string(payload.handoffId, 'payload.handoffId'); string(payload.invocationId, 'payload.invocationId');
+      if (!['cancelled', 'succeeded', 'failed', 'timed_out'].includes(string(payload.status, 'payload.status'))) fail('payload.status');
+      positiveInteger(payload.resultRevision, 'payload.resultRevision'); stringArray(payload.artifactIds, 'payload.artifactIds'); return;
+    case 'active-agent-changed':
+      optionalString(payload.previousAgentId, 'payload.previousAgentId'); optionalString(payload.nextAgentId, 'payload.nextAgentId');
+      optionalString(payload.handoffId, 'payload.handoffId'); string(payload.reasonCode, 'payload.reasonCode'); return;
   }
 }
 
@@ -209,5 +247,10 @@ function taskStatus(value: unknown, path: string): string {
   const status = string(value, path);
   if (!['todo', 'in_progress', 'in_review', 'done', 'closed'].includes(status)) fail(path);
   return status;
+}
+function handoffKind(value: unknown, path: string): string {
+  const kind = string(value, path);
+  if (!['delegate', 'consult', 'review', 'template_request', 'continuation'].includes(kind)) fail(path);
+  return kind;
 }
 function fail(path: string): never { throw new Error(`INVALID_MANAGEMENT_EVENT:${path}`); }

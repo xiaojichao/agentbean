@@ -120,13 +120,38 @@ describe('management SQLite constraints', () => {
     }
   });
 
+  test('records migration 0017 and exposes the handoff persistence boundary', () => {
+    const db = new Database(':memory:');
+    try {
+      applyTeamMigrations(db);
+      expect(db.prepare("SELECT id FROM schema_migrations WHERE id = 'team/0018_management_handoff.sql'").get())
+        .toEqual({ id: 'team/0018_management_handoff.sql' });
+      const names = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .all().map((item) => (item as { name: string }).name);
+      expect(names).toEqual(expect.arrayContaining([
+        'agent_collaboration_proposals',
+        'agent_handoffs',
+      ]));
+      const runColumns = db.prepare('PRAGMA table_info(management_runs)').all()
+        .map((item) => (item as { name: string }).name);
+      expect(runColumns).toEqual(expect.arrayContaining([
+        'main_agent_id',
+        'active_agent_id',
+        'collaboration_mode',
+      ]));
+    } finally {
+      db.close();
+    }
+  });
+
   test('rolls back schema when recording the 0010 migration ledger fails', () => {
     const db = new Database(':memory:');
-    const phase2Tables = ['subtask_acceptance_evidence_refs', 'subtask_acceptance_criterion_results', 'subtask_acceptances', 'subtask_delivery_evidence_refs', 'subtask_deliveries', 'evidence_snapshots', 'task_claim_leases', 'task_dependencies', 'task_acceptance_criteria', 'task_coordinations'];
+    const phase2Tables = ['agent_handoffs', 'agent_collaboration_proposals', 'subtask_acceptance_evidence_refs', 'subtask_acceptance_criterion_results', 'subtask_acceptances', 'subtask_delivery_evidence_refs', 'subtask_deliveries', 'evidence_snapshots', 'task_claim_leases', 'task_dependencies', 'task_acceptance_criteria', 'task_coordinations'];
     const tables = ['management_shadow_decisions', 'invocation_dispatch_attempts', 'agent_invocations', 'management_checkpoints', 'management_events', 'manager_leases', 'management_runs', 'managed_request_reservations', 'team_management_policies'];
     try {
       applyTeamMigrations(db);
       db.prepare("DELETE FROM schema_migrations WHERE id = 'team/0010_management_phase_1.sql'").run();
+      db.prepare("DELETE FROM schema_migrations WHERE id = 'team/0018_management_handoff.sql'").run();
       for (const table of phase2Tables) db.exec(`DROP TABLE ${table};`);
       for (const table of tables) db.exec(`DROP TABLE ${table};`);
       db.exec(`CREATE TRIGGER reject_0010_ledger BEFORE INSERT ON schema_migrations

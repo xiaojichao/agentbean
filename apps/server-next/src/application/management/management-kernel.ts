@@ -89,7 +89,12 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
           updatedAt: now,
         };
         const run: ManagementRunRecord = input.managementPhase === 2
-          ? { schemaVersion: 2, managementPhase: 2, ...common, rootTaskId: input.rootTaskId! }
+          ? { schemaVersion: 2, managementPhase: 2, ...common, rootTaskId: input.rootTaskId!,
+              ...(input.frozenTarget ? {
+                mainAgentId: input.frozenTarget.agentId,
+                activeAgentId: input.frozenTarget.agentId,
+              } : {}),
+              collaborationMode: input.frozenTarget ? 'single-agent' : 'manager-orchestrated' }
           : { schemaVersion: 1, ...common };
         const event = parsePhase1ManagementEvent({
           schemaVersion: 1,

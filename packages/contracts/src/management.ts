@@ -88,6 +88,9 @@ interface ManagementRunV2BaseDto {
   readonly channelId: ID;
   readonly rootMessageId: ID;
   readonly frozenTarget?: ManagementRunDto['frozenTarget'];
+  readonly mainAgentId?: ID;
+  readonly activeAgentId?: ID;
+  readonly collaborationMode?: 'single-agent' | 'manager-orchestrated' | 'handoff';
   readonly mode: 'managed';
   readonly status: ManagementRunStatus;
   readonly placementPolicy: ManagerPlacementPolicyDto;

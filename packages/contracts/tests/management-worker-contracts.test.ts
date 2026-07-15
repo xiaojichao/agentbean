@@ -249,6 +249,23 @@ describe('Phase 1 management Worker contracts', () => {
     });
   });
 
+  test('parses the optional Phase 2 collaboration state on the shared management-state read', () => {
+    const result = structuredClone(validPayloads['tool-result']) as Record<string, unknown>;
+    result.toolName = 'context.get_management_state';
+    result.output = {
+      status: 'running', checkpointRevision: 1, lastEventSequence: 4,
+      mainAgentId: 'agent-a', activeAgentId: 'agent-b', collaborationMode: 'handoff',
+      collaborationProposals: [{ proposalId: 'proposal-1', sourceInvocationId: 'invocation-a',
+        sourceAgentId: 'agent-a', toAgentId: 'agent-b', kind: 'continuation',
+        objective: '继续收尾', reason: 'B 更适合', contextRefIds: ['message-1'],
+        dependencyInvocationIds: [], attachmentIds: [], acceptanceCriteria: [],
+        returnMode: 'deliver_to_root' }],
+      handoffs: [{ handoffId: 'handoff-1', invocationId: 'invocation-b', fromAgentId: 'agent-a',
+        toAgentId: 'agent-b', kind: 'continuation', status: 'accepted' }],
+    };
+    expect(parseManagementWorkerPayload('tool-result', result)).toEqual(result);
+  });
+
   test('parses every Phase 1 tool shape and rejects nested argument drift', () => {
     for (const toolName of PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES) {
       const request = validToolRequest(toolName);

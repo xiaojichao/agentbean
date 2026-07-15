@@ -1,6 +1,7 @@
 import type { ID, UnixMs } from './common.js';
 import type { AgentInvocationResultDto } from './invocation.js';
 import type { SubtaskAcceptanceV1 } from './task-coordination.js';
+import type { AgentHandoffKind } from './collaboration.js';
 
 export interface ManagementEventPayloadMapV1 {
   readonly 'run-started': {
@@ -91,6 +92,43 @@ export interface ManagementEventPayloadMapV1 {
     readonly dispatchId: ID;
     readonly attemptNumber: number;
     readonly status: AgentInvocationResultDto['status'];
+  };
+  readonly 'handoff-proposed': {
+    readonly proposalId: ID;
+    readonly sourceInvocationId: ID;
+    readonly sourceAgentId: ID;
+    readonly toAgentId: ID;
+    readonly kind: AgentHandoffKind;
+    readonly taskId?: ID;
+    readonly taskRevision?: number;
+    readonly claimLeaseId?: ID;
+    readonly proposalHash: string;
+  };
+  readonly 'handoff-requested': {
+    readonly handoffId: ID;
+    readonly sourceProposalId?: ID;
+    readonly sourceInvocationId?: ID;
+    readonly fromAgentId?: ID;
+    readonly toAgentId: ID;
+    readonly kind: AgentHandoffKind;
+    readonly objectiveHash: string;
+  };
+  readonly 'handoff-dispatched': {
+    readonly handoffId: ID;
+    readonly invocationId: ID;
+  };
+  readonly 'handoff-returned': {
+    readonly handoffId: ID;
+    readonly invocationId: ID;
+    readonly status: AgentInvocationResultDto['status'];
+    readonly resultRevision: number;
+    readonly artifactIds: readonly ID[];
+  };
+  readonly 'active-agent-changed': {
+    readonly previousAgentId?: ID;
+    readonly nextAgentId?: ID;
+    readonly handoffId?: ID;
+    readonly reasonCode: string;
   };
   readonly 'waiting-for-user': {
     readonly reasonCode: string;

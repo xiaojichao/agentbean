@@ -9,7 +9,7 @@ import { createServerNextUseCases, type ArtifactContentStore } from './applicati
 import type { ServerNextRepositories } from './application/repositories.js';
 import { createDeviceWorkerScheduler, type DeviceWorkerScheduler } from './application/management/device-worker-scheduler.js';
 import { createManagementKernel } from './application/management/management-kernel.js';
-import { createManagementToolExecutor, createPhase1ManagementToolHandlers, createPhase2InvocationToolHandlers, createPhase2ManagementToolHandlers } from './application/management/management-tool-executor.js';
+import { createManagementToolExecutor, createPhase1ManagementToolHandlers, createPhase2CollaborationToolHandlers, createPhase2InvocationToolHandlers, createPhase2ManagementToolHandlers } from './application/management/management-tool-executor.js';
 import { createSubtaskAcceptanceService } from './application/management/subtask-acceptance-service.js';
 import { createTaskCoordinationKernel } from './application/management/task-coordination-kernel.js';
 import { createManagementRouter } from './application/management/management-router.js';
@@ -1251,6 +1251,15 @@ function createDefaultManagementRuntime(
           repositories,
           kernel,
           taskCoordinationKernel,
+          clock,
+          ids,
+          onDispatchCreated: async (dispatchId) => {
+            if (!dispatchEmitter) throw new Error('MANAGEMENT_DISPATCH_EMITTER_UNAVAILABLE');
+            await dispatchEmitter(dispatchId);
+          },
+        }),
+        ...createPhase2CollaborationToolHandlers({
+          repositories,
           clock,
           ids,
           onDispatchCreated: async (dispatchId) => {

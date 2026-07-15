@@ -3,6 +3,8 @@ import type { AgentInvocationStatus, AgentInvocationTargetKind } from './invocat
 import type { ManagementCheckpointV1, ManagementRunStatus } from './management.js';
 import type { SenderKind } from './message.js';
 import type { TaskStatus } from './task.js';
+import type { AcceptanceCriterionDto } from './task-coordination.js';
+import type { AgentHandoffKind, AgentHandoffReturnMode, AgentHandoffStatus } from './collaboration.js';
 
 export const PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES = [
   'context.get_root_message',
@@ -196,6 +198,32 @@ export interface Phase1ManagementWorkerToolOutputMapV1 {
     readonly status: ManagementRunStatus;
     readonly checkpointRevision: number;
     readonly lastEventSequence: number;
+    readonly mainAgentId?: ID;
+    readonly activeAgentId?: ID;
+    readonly collaborationMode?: 'single-agent' | 'manager-orchestrated' | 'handoff';
+    readonly collaborationProposals?: readonly {
+      readonly proposalId: ID;
+      readonly sourceInvocationId: ID;
+      readonly sourceAgentId: ID;
+      readonly toAgentId: ID;
+      readonly kind: Extract<AgentHandoffKind, 'consult' | 'template_request' | 'continuation'>;
+      readonly objective: string;
+      readonly reason: string;
+      readonly contextRefIds: readonly ID[];
+      readonly dependencyInvocationIds: readonly ID[];
+      readonly attachmentIds: readonly ID[];
+      readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];
+      readonly returnMode: AgentHandoffReturnMode;
+      readonly deadlineAt?: UnixMs;
+    }[];
+    readonly handoffs?: readonly {
+      readonly handoffId: ID;
+      readonly invocationId?: ID;
+      readonly fromAgentId?: ID;
+      readonly toAgentId: ID;
+      readonly kind: AgentHandoffKind;
+      readonly status: AgentHandoffStatus;
+    }[];
   };
   readonly 'agents.list_capabilities': {
     readonly agentId: ID;
@@ -281,7 +309,9 @@ export interface ManagementCheckpointResultV1 {
   readonly schemaVersion: 1;
   readonly managementRunId: ID;
   readonly workerId: ID;
-  readonly context: ManagementWorkerSessionContextV1;
+  readonly context: Omit<ManagementWorkerSessionContextV1, 'frozenTarget'> & {
+    readonly frozenTarget?: ManagementWorkerSessionContextV1['frozenTarget'];
+  };
   readonly checkpoint?: ManagementCheckpointV1;
 }
 
@@ -519,6 +549,16 @@ const sessionContextSchema = exactObject({
   visibleThread: required(visibleThreadSchema),
 });
 
+const checkpointSessionContextSchema = exactObject({
+  schemaVersion: required(literal(1)),
+  teamId: required(id),
+  channelId: required(id),
+  rootMessageId: required(id),
+  rootTaskId: optional(id),
+  frozenTarget: optional(frozenTargetSchema),
+  visibleThread: required(visibleThreadSchema),
+});
+
 const checkpointSchema = exactObject({
   schemaVersion: required(literal(1)),
   managementRunId: required(id),
@@ -599,6 +639,42 @@ const taskSchema = nullable(exactObject({
   revision: required(integer(0)),
 }));
 
+const acceptanceCriterionSchema = exactObject({
+  id: required(id),
+  description: required(text()),
+  evidenceRequired: required(booleanValue),
+  allowedEvidenceKinds: optional(arrayOf(oneOf([
+    'message', 'artifact', 'workspace-run', 'invocation', 'task',
+  ]))),
+});
+
+const collaborationProposalSummarySchema = exactObject({
+  proposalId: required(id),
+  sourceInvocationId: required(id),
+  sourceAgentId: required(id),
+  toAgentId: required(id),
+  kind: required(oneOf(['consult', 'template_request', 'continuation'])),
+  objective: required(text()),
+  reason: required(text()),
+  contextRefIds: required(arrayOf(id)),
+  dependencyInvocationIds: required(arrayOf(id)),
+  attachmentIds: required(arrayOf(id)),
+  acceptanceCriteria: required(arrayOf(acceptanceCriterionSchema)),
+  returnMode: required(oneOf(['return_to_manager', 'return_to_source_agent', 'deliver_to_root'])),
+  deadlineAt: optional(integer(0)),
+});
+
+const handoffSummarySchema = exactObject({
+  handoffId: required(id),
+  invocationId: optional(id),
+  fromAgentId: optional(id),
+  toAgentId: required(id),
+  kind: required(oneOf(['delegate', 'consult', 'review', 'template_request', 'continuation'])),
+  status: required(oneOf([
+    'requested', 'accepted', 'running', 'returned', 'rejected', 'failed', 'cancelled', 'timed_out',
+  ])),
+});
+
 const toolOutputSchemas: Record<Phase1ManagementWorkerToolName, Validator> = {
   'context.get_root_message': exactObject({ message: required(visibleMessageSchema) }),
   'context.get_root_task': exactObject({ task: required(taskSchema) }),
@@ -610,6 +686,11 @@ const toolOutputSchemas: Record<Phase1ManagementWorkerToolName, Validator> = {
     ])),
     checkpointRevision: required(integer(0)),
     lastEventSequence: required(integer(0)),
+    mainAgentId: optional(id),
+    activeAgentId: optional(id),
+    collaborationMode: optional(oneOf(['single-agent', 'manager-orchestrated', 'handoff'])),
+    collaborationProposals: optional(arrayOf(collaborationProposalSummarySchema)),
+    handoffs: optional(arrayOf(handoffSummarySchema)),
   }),
   'agents.list_capabilities': exactObject({
     agentId: required(id),
@@ -800,7 +881,7 @@ const schemas: { readonly [K in ManagementWorkerPayloadKind]: Validator } = {
     schemaVersion: required(literal(1)),
     managementRunId: required(id),
     workerId: required(id),
-    context: required(sessionContextSchema),
+    context: required(checkpointSessionContextSchema),
     checkpoint: optional(checkpointSchema),
   }),
   'outbox-replay': exactObject({

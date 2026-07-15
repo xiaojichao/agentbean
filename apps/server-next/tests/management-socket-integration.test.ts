@@ -128,6 +128,19 @@ describe('management worker socket integration', () => {
       idempotencyKey: 'missing-command',
       requestHash: 'request-hash',
     })).resolves.toMatchObject({ disposition: 'rejected' });
+    const handoffIntent = { schemaVersion: 1 as const, managementRunId: harness.runId,
+      fromAgentId: 'agent-1', toAgentId: 'agent-2', kind: 'consult' as const,
+      objective: '咨询 Agent 2', reason: '需要复核', contextRefs: [], dependencyResults: [],
+      acceptanceCriteria: [], attachmentIds: [], returnMode: 'return_to_manager' as const };
+    await harness.repositories.management.handoffs.create({ schemaVersion: 1, id: 'handoff-1',
+      managementRunId: harness.runId, intent: handoffIntent, intentHash: 'handoff-hash',
+      idempotencyKey: 'handoff-command', status: 'requested', createdAt: 20, updatedAt: 20 });
+    await expect(socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
+      ...authority,
+      commandId: 'handoff-command',
+      idempotencyKey: 'handoff-command',
+      requestHash: 'handoff-request-hash',
+    })).resolves.toMatchObject({ disposition: 'existing', resultReferenceId: 'handoff-1' });
     await expect(socket.trigger(AGENT_EVENTS.managementWorker.leaseRelease, {
       ...authority,
       idempotencyKey: 'release-1',
@@ -261,8 +274,9 @@ describe('management worker socket integration', () => {
     })).resolves.toMatchObject({
       ok: false, errorCode: 'INVALID_REQUEST', diagnosticCode: 'MANAGEMENT_WORKER_V2_PAYLOAD_INVALID',
     });
-    await expect(phase2.trigger(AGENT_EVENTS.managementWorker.register, phase2WorkerRegistration()))
-      .resolves.toMatchObject({ ok: true });
+    const phase2Registration = await phase2.trigger(AGENT_EVENTS.managementWorker.register,
+      phase2WorkerRegistration());
+    expect(phase2Registration).toMatchObject({ ok: true });
     await expect(harness.scheduler.managementPhase2Preflight({
       teamId: 'team-1',
       placementPolicy: { placement: 'device', allowedDeviceIds: ['device-v1', 'device-v2'],
@@ -278,6 +292,17 @@ describe('management worker socket integration', () => {
       .resolves.toMatchObject({ ok: true, deviceId: 'device-v2' });
     expect(legacy.outbound(AGENT_EVENTS.managementWorker.leaseOffer)).toHaveLength(0);
     expect(phase2.outbound(AGENT_EVENTS.managementWorker.leaseOffer)).toHaveLength(1);
+    const offer = phase2.outbound(AGENT_EVENTS.managementWorker.leaseOffer)[0]?.payload as ManagementLeaseOfferV1;
+    const acquired = await phase2.trigger(AGENT_EVENTS.managementWorker.leaseAcquire, {
+      schemaVersion: 1, offerId: offer.offerId, workerInstanceId: 'worker-instance-v2',
+    });
+    expect(acquired).toMatchObject({ ok: true, leaseToken: expect.any(String), fencingToken: 1 });
+    await expect(phase2.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
+      schemaVersion: 1, managementRunId: runId,
+      workerId: (phase2Registration as { workerId: string }).workerId,
+      leaseToken: (acquired as { leaseToken: string }).leaseToken, fencingToken: 1,
+    })).resolves.toMatchObject({ managementRunId: runId,
+      context: { rootTaskId: 'root-task', visibleThread: { messages: expect.any(Array) } } });
   });
 });
 

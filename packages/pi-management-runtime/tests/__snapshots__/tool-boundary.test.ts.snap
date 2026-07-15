@@ -101,6 +101,24 @@ exports[`management tool boundary > freezes effect, earliest phase, and schema v
   {
     "effect": "read",
     "inputSchemaVersion": 1,
+    "name": "agents.list_available",
+    "phase": 2,
+  },
+  {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "handoffs.request",
+    "phase": 2,
+  },
+  {
+    "effect": "read",
+    "inputSchemaVersion": 1,
+    "name": "handoffs.await_result",
+    "phase": 2,
+  },
+  {
+    "effect": "read",
+    "inputSchemaVersion": 1,
     "name": "memory.search",
     "phase": 3,
   },

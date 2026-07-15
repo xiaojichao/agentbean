@@ -166,7 +166,7 @@ describe('management tool boundary', () => {
     await session.prompt({ text: 'decompose' });
     await session.waitForIdle();
 
-    expect(PHASE_2_MANAGEMENT_TOOL_NAMES).toHaveLength(19);
+    expect(PHASE_2_MANAGEMENT_TOOL_NAMES).toHaveLength(22);
     expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([...PHASE_2_MANAGEMENT_TOOL_NAMES]);
     expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain('memory.search');
     expect(requests[0]?.tools.find((tool) => tool.name === 'tasks.assign')?.inputSchema).toMatchObject({
@@ -297,6 +297,9 @@ describe('management tool boundary', () => {
       'tasks.retry',
       'tasks.accept_subtask',
       'tasks.report_blocked',
+      'agents.list_available',
+      'handoffs.request',
+      'handoffs.await_result',
       'memory.search',
       'memory.create_capsule',
       'memory.propose_candidate',

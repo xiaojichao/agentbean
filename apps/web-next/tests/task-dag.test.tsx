@@ -29,6 +29,8 @@ describe('Task DAG Web surface', () => {
     expect(screen.getByText(/验收：accepted/)).toBeTruthy();
     expect(screen.getByRole('link', { name: '原始回复' }).getAttribute('href'))
       .toBe('/team/channel/channel-1?message=channel-1%3Amessage-result');
+    expect(screen.getByText(/协作轨迹（默认折叠，1）/).closest('details')?.hasAttribute('open')).toBe(false);
+    expect(screen.getByText(/agent-1 → agent-2/)).toBeTruthy();
     expect(screen.getByText(/管理事件（默认折叠/).closest('details')?.hasAttribute('open')).toBe(false);
   });
 });
@@ -48,6 +50,9 @@ function snapshot(graphRevision: number, taskRevision: number, updatedAt: number
       canonicalAcceptance: { decision: 'accepted', reason: '证据完整', decidedBy: 'manager', decidedAt: 4 },
       resultRefs: [{ kind: 'invocation', id: 'invocation-1' }, { kind: 'message', id: 'message-result' }],
     }],
+    handoffs: [{ id: 'handoff-1', fromAgentId: 'agent-1', toAgentId: 'agent-2',
+      kind: 'continuation', objective: '继续收尾', status: 'accepted',
+      invocationId: 'invocation-2', createdAt: 3, updatedAt: 4 }],
     events: [{ sequence: graphRevision, type: 'task-acceptance-decided', createdAt: 4 }],
   };
 }

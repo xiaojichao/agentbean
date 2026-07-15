@@ -1,5 +1,6 @@
 import type { ID, UnixMs } from './common.js';
 import type { TaskDto } from './task.js';
+import type { AgentHandoffTraceDto } from './collaboration.js';
 
 export type EvidenceKind = 'message' | 'artifact' | 'workspace-run' | 'invocation' | 'task';
 
@@ -106,6 +107,7 @@ export interface TaskDagViewDto {
   readonly rootTaskId: ID;
   readonly graphRevision: number;
   readonly nodes: readonly TaskDagNodeViewDto[];
+  readonly handoffs?: readonly AgentHandoffTraceDto[];
   readonly events: readonly {
     readonly sequence: number;
     readonly type: string;

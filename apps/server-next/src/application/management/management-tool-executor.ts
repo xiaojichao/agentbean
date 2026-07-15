@@ -17,6 +17,7 @@ import type { createManagementKernel } from './management-kernel.js';
 import type { createTaskCoordinationKernel } from './task-coordination-kernel.js';
 import type { createSubtaskAcceptanceService } from './subtask-acceptance-service.js';
 import { createSubtaskDeliveryService, deliveryOutput } from './subtask-delivery-service.js';
+import { createCollaborationService } from './collaboration-service.js';
 
 type ManagementKernel = ReturnType<typeof createManagementKernel>;
 type TaskCoordinationKernel = ReturnType<typeof createTaskCoordinationKernel>;
@@ -87,11 +88,86 @@ export function createManagementToolExecutor(input: {
       return {
         ...base,
         ok: false,
-        errorCode: unauthorized ? 'NOT_AUTHORIZED' : isConflictDiagnostic(diagnosticCode) ? 'CONFLICT' : 'INVALID_REQUEST',
+        errorCode: unauthorized ? 'NOT_AUTHORIZED'
+          : diagnosticCode.endsWith('_UNAVAILABLE') ? 'UNAVAILABLE'
+          : isConflictDiagnostic(diagnosticCode) ? 'CONFLICT' : 'INVALID_REQUEST',
         diagnosticCode,
         retryable: false,
       } as ManagementToolResult;
     }
+  };
+}
+
+export function createPhase2CollaborationToolHandlers(input: {
+  readonly repositories: ServerNextRepositories;
+  readonly clock: { now(): number };
+  readonly ids: { nextId(): string };
+  readonly onDispatchCreated: (dispatchId: string) => Promise<void> | void;
+  readonly pollIntervalMs?: number;
+}): Pick<Phase2ToolHandlers, 'agents.list_available' | 'handoffs.request' | 'handoffs.await_result'> {
+  const service = createCollaborationService(input);
+  const gateway = createInvocationGateway(input);
+  const pollIntervalMs = input.pollIntervalMs ?? 50;
+  const emittedDispatchIds = new Set<string>();
+  return {
+    'agents.list_available': async (request) => ({ agents: await service.listAvailableAgents({
+      managementRunId: request.managementRunId,
+      ...request.input,
+    }) }),
+    'handoffs.request': async (request) => {
+      const requested = await service.requestHandoff({ authority: authority(request),
+        idempotencyKey: request.idempotencyKey, ...request.input });
+      const activeDispatchId = requested.view.activeDispatchId;
+      const activeDispatch = activeDispatchId
+        ? await input.repositories.dispatches.getById(activeDispatchId)
+        : null;
+      if (activeDispatchId && requested.handoff.status === 'requested'
+        && activeDispatch?.status === 'queued' && !emittedDispatchIds.has(activeDispatchId)) {
+        try {
+          await input.onDispatchCreated(activeDispatchId);
+          emittedDispatchIds.add(activeDispatchId);
+        } catch {
+          await gateway.completeAttempt({ dispatchId: activeDispatchId,
+            status: 'failed', error: 'MANAGEMENT_DISPATCH_EMIT_FAILED', actorKind: 'system' });
+          await service.recordTerminal({ dispatchId: activeDispatchId,
+            status: 'failed', artifactIds: [] });
+          throw new Error('MANAGEMENT_DISPATCH_EMIT_FAILED');
+        }
+      }
+      return { handoffId: requested.handoff.id, invocationId: requested.invocation.id,
+        status: requested.handoff.status };
+    },
+    'handoffs.await_result': async (request) => {
+      for (;;) {
+        const handoff = await service.getHandoff(request.input.handoffId);
+        if (!handoff || handoff.managementRunId !== request.managementRunId || !handoff.invocationId) {
+          throw new Error('HANDOFF_NOT_FOUND');
+        }
+        if (['returned', 'rejected', 'failed', 'cancelled', 'timed_out'].includes(handoff.status)
+        ) {
+          return { handoffId: handoff.id, invocationId: handoff.invocationId, status: handoff.status,
+            ...(handoff.result ? { result: handoff.result } : {}) };
+        }
+        if (request.input.timeoutAt !== undefined && input.clock.now() >= request.input.timeoutAt) {
+          const view = await gateway.getView(handoff.invocationId);
+          const dispatchId = view.activeDispatchId;
+          if (dispatchId) {
+            await gateway.completeAttempt({ dispatchId, status: 'timed_out',
+              error: 'HANDOFF_TIMEOUT', actorKind: 'system' });
+            const timedOut = await service.recordTerminal({ dispatchId,
+              status: 'timed_out', artifactIds: [] });
+            return { handoffId: handoff.id, invocationId: handoff.invocationId,
+              status: timedOut?.status ?? 'timed_out',
+              ...(timedOut?.result ? { result: timedOut.result } : {}) };
+          }
+          const reconciled = await service.reconcileInvocation(handoff.invocationId);
+          return { handoffId: handoff.id, invocationId: handoff.invocationId,
+            status: reconciled?.status ?? handoff.status,
+            ...(reconciled?.result ? { result: reconciled.result } : {}) };
+        }
+        await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+      }
+    },
   };
 }
 
@@ -251,6 +327,7 @@ export function createPhase1ManagementToolHandlers(input: {
 }): ToolHandlers {
   const { repositories, kernel, clock, ids } = input;
   const gateway = createInvocationGateway({ repositories, clock, ids });
+  const collaborationService = createCollaborationService({ repositories, clock, ids });
   const pollIntervalMs = input.pollIntervalMs ?? 50;
   const terminalTimeoutMs = input.terminalTimeoutMs ?? 5 * 60_000;
 
@@ -280,7 +357,34 @@ export function createPhase1ManagementToolHandlers(input: {
     'context.get_management_state': async (request) => {
       const run = await requireRun(repositories, request.managementRunId);
       const events = await repositories.management.events.list(run.id);
-      return { status: run.status, checkpointRevision: run.checkpointRevision, lastEventSequence: events.at(-1)?.event.sequence ?? 0 };
+      if (run.schemaVersion !== 2) {
+        return { status: run.status, checkpointRevision: run.checkpointRevision,
+          lastEventSequence: events.at(-1)?.event.sequence ?? 0 };
+      }
+      const [proposals, handoffs] = await Promise.all([
+        repositories.management.collaborationProposals.listByRun(run.id),
+        repositories.management.handoffs.listByRun(run.id),
+      ]);
+      return { status: run.status, checkpointRevision: run.checkpointRevision,
+        lastEventSequence: events.at(-1)?.event.sequence ?? 0,
+        ...(run.mainAgentId ? { mainAgentId: run.mainAgentId } : {}),
+        ...(run.activeAgentId ? { activeAgentId: run.activeAgentId } : {}),
+        ...(run.collaborationMode ? { collaborationMode: run.collaborationMode } : {}),
+        collaborationProposals: proposals.map(({ id: proposalId, proposal }) => ({
+          proposalId, sourceInvocationId: proposal.sourceInvocationId,
+          sourceAgentId: proposal.sourceAgentId, toAgentId: proposal.toAgentId,
+          kind: proposal.kind, objective: proposal.objective, reason: proposal.reason,
+          contextRefIds: proposal.contextRefs.map((ref) => ref.id),
+          dependencyInvocationIds: proposal.dependencyResults.map((ref) => ref.invocationId),
+          attachmentIds: [...proposal.attachmentIds],
+          acceptanceCriteria: [...proposal.acceptanceCriteria], returnMode: proposal.returnMode,
+          ...(proposal.deadlineAt !== undefined ? { deadlineAt: proposal.deadlineAt } : {}),
+        })),
+        handoffs: handoffs.map((handoff) => ({ handoffId: handoff.id,
+          ...(handoff.invocationId ? { invocationId: handoff.invocationId } : {}),
+          ...(handoff.intent.fromAgentId ? { fromAgentId: handoff.intent.fromAgentId } : {}),
+          toAgentId: handoff.intent.toAgentId, kind: handoff.intent.kind, status: handoff.status })),
+      };
     },
     'agents.list_capabilities': async (request) => {
       const target = await requireFrozenTarget(repositories, request.managementRunId);
@@ -361,17 +465,23 @@ export function createPhase1ManagementToolHandlers(input: {
       if (!invocation || invocation.managementRunId !== request.managementRunId) throw new Error('INVOCATION_NOT_FOUND');
       let view = await gateway.getView(invocation.id);
       if (view.activeDispatchId) {
+        const handoff = await repositories.management.handoffs.getByInvocationId(invocation.id);
         await gateway.completeAttempt({
           dispatchId: view.activeDispatchId,
           status: 'cancelled',
           actorKind: 'system',
         });
-        await kernel.recordInvocationTerminal({
-          managementRunId: request.managementRunId,
-          dispatchId: view.activeDispatchId,
-          status: 'cancelled',
-          errorCode: request.input.reasonCode,
-        });
+        if (handoff) {
+          await collaborationService.recordTerminal({ dispatchId: view.activeDispatchId,
+            status: 'cancelled', artifactIds: [] });
+        } else {
+          await kernel.recordInvocationTerminal({
+            managementRunId: request.managementRunId,
+            dispatchId: view.activeDispatchId,
+            status: 'cancelled',
+            errorCode: request.input.reasonCode,
+          });
+        }
         view = await gateway.getView(invocation.id);
       }
       if (!isTerminalInvocation(view.status)) throw new Error('INVOCATION_ACTIVE_ATTEMPT');
