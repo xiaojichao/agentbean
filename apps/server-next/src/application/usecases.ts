@@ -10,6 +10,7 @@ import { createInvocationGateway } from './management/invocation-gateway.js';
 import { createManagementKernel } from './management/management-kernel.js';
 import { createManagementRouter, type ManagementRoutingResult } from './management/management-router.js';
 import { createTaskCoordinationKernel } from './management/task-coordination-kernel.js';
+import { createMemorySourceInvalidationService } from './memory-source-invalidation-service.js';
 
 export interface ServerNextClock {
   now(): number;
@@ -830,6 +831,37 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     clock,
     ids,
   });
+  const memorySourceInvalidation = createMemorySourceInvalidationService({
+    unitOfWork: repositories.memoryUnitOfWork,
+    clock,
+    ids,
+    async isSourceAvailable(source) {
+      if (source.sourceKind === 'message') {
+        const message = await repositories.messages.getById(source.sourceId);
+        return Boolean(message && message.teamId === source.teamId && !isDeletedMessage(message));
+      }
+      if (source.sourceKind === 'task') {
+        const task = await repositories.tasks.getById(source.sourceId);
+        return Boolean(task && task.teamId === source.teamId);
+      }
+      // 其他 source kind 的删除入口尚未接线；在对应事实源可验证前不得误判为已失效。
+      return true;
+    },
+  });
+  // 来源失效是删除之后的反应式级联：best-effort，绝不阻塞或回滚已成功的删除。
+  // 失败时由读取侧懒检查（evaluateMemoryInjection 的 allSourcesAvailable）兜底。
+  const invalidateSourcesAfterDeletion = async (input: {
+    readonly teamId: string;
+    readonly sourceKind: Parameters<typeof memorySourceInvalidation.invalidateSources>[0]['sourceKind'];
+    readonly sourceIds: readonly string[];
+    readonly actorId?: string;
+  }): Promise<void> => {
+    try {
+      await memorySourceInvalidation.invalidateSources(input);
+    } catch {
+      // 来源失效是 best-effort；任何异常都不得影响删除主路径。
+    }
+  };
 
   return {
     async registerUser(registerInput) {
@@ -2389,9 +2421,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!canApplyChannelUpdate(channel, deleteInput.userId, {})) {
         return makeFailure('FORBIDDEN', 'Only channel creator can delete');
       }
+      const deletedMessages = await repositories.messages.listByChannel(channel.id, Number.MAX_SAFE_INTEGER);
       // Cascade: artifacts → messages → channel
       await repositories.artifacts.deleteByChannel(channel.id);
       await repositories.messages.deleteByChannel(channel.id);
+      await invalidateSourcesAfterDeletion({
+        teamId: deleteInput.teamId,
+        sourceKind: 'message',
+        sourceIds: deletedMessages.map((message) => message.id),
+        actorId: deleteInput.userId,
+      });
       const deleted = await repositories.channels.delete({ channelId: channel.id });
       if (!deleted) {
         return makeFailure('NOT_FOUND', 'Channel not found');
@@ -3245,6 +3284,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!deleted) {
         return makeFailure('NOT_FOUND', 'Task not found');
       }
+      await invalidateSourcesAfterDeletion({
+        teamId: taskInput.teamId, sourceKind: 'task', sourceIds: [task.id], actorId: taskInput.userId,
+      });
       return makeSuccess({ task: deleted });
     },
 
@@ -4080,6 +4122,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('NOT_FOUND', 'Message not found');
       }
       const [enrichedMessage] = await enrichMessagesWithArtifacts(repositories, [deleted]);
+      await invalidateSourcesAfterDeletion({
+        teamId: deleteInput.teamId, sourceKind: 'message', sourceIds: [message.id], actorId: deleteInput.userId,
+      });
       return makeSuccess({ message: enrichedMessage ?? deleted });
     },
 

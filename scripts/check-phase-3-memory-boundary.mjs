@@ -24,6 +24,9 @@ const memoryBackends = [
 const memoryPersistenceTests = read('apps/server-next/tests/memory-unit-of-work.test.ts');
 const collaborativeMemoryService = read('apps/server-next/src/application/collaborative-memory-service.ts');
 const collaborativeMemoryTests = read('apps/server-next/tests/collaborative-memory-service.test.ts');
+const memorySourceInvalidationService = read('apps/server-next/src/application/memory-source-invalidation-service.ts');
+const memorySourceInvalidationTests = read('apps/server-next/tests/memory-source-invalidation-service.test.ts');
+const serverNextUsecases = read('apps/server-next/src/application/usecases.ts');
 const runtimeTypes = read('packages/pi-management-runtime/src/types.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
@@ -94,6 +97,22 @@ if (!usecaseMarkers.every((marker) => collaborativeMemoryService.includes(marker
   || !collaborativeMemoryTests.includes('MEMORY_INVALID_TRANSITION')
   || !collaborativeMemoryTests.includes('MEMORY_DUPLICATE_CONTENT')) {
   violations.push('P3_COLLABORATIVE_MEMORY_USECASE_INVALID: collaborative Memory service with status machine, grants, dedup and dual-backend parity tests are required');
+}
+
+const invalidationMarkers = [
+  'createMemorySourceInvalidationService', 'invalidateSources', 'isSourceAvailable',
+  'memory-expired', 'ACTOR_SYSTEM',
+];
+if (!invalidationMarkers.every((marker) => memorySourceInvalidationService.includes(marker))
+  || !memorySourceInvalidationTests.includes('describe.each')
+  || !memorySourceInvalidationTests.includes('createSqliteRepositories')
+  || !memorySourceInvalidationTests.includes('fails closed across Team boundaries')
+  // 删除路径必须 best-effort 触发来源失效，且不得阻塞删除主路径。
+  || !serverNextUsecases.includes('invalidateSourcesAfterDeletion')
+  || !serverNextUsecases.includes('messages.listByChannel')
+  || !serverNextUsecases.includes("sourceKind: 'message'")
+  || !serverNextUsecases.includes("sourceKind: 'task'")) {
+  violations.push('P3_SOURCE_INVALIDATION_INVALID: reactive Memory source invalidation on deletion with dual-backend parity tests is required');
 }
 
 const phase1Tools = runtimeTypes.match(
