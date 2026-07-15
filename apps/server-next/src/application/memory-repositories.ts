@@ -1,6 +1,7 @@
 import type {
   ID,
   MemoryCapsuleScopeType,
+  MemoryCandidateStatus,
   MemoryContentKind,
   MemoryRecordDto,
   MemoryRedactionLevel,
@@ -110,6 +111,23 @@ export interface MemoryCapsuleRefRecord {
   readonly createdAt: UnixMs;
 }
 
+export interface MemoryCandidateRecord {
+  readonly id: ID;
+  readonly teamId: ID;
+  readonly managementRunId: ID;
+  readonly taskId?: ID;
+  readonly sourceAgentId: ID;
+  readonly sourceInvocationId: ID;
+  readonly sourceRefs: readonly MemorySourceRefDto[];
+  readonly contentKind: MemoryContentKind;
+  readonly proposedContent: string;
+  readonly projectionHash: string;
+  readonly status: MemoryCandidateStatus;
+  readonly conflictMemoryIds: readonly ID[];
+  readonly createdAt: UnixMs;
+  readonly decidedAt?: UnixMs;
+}
+
 export interface MemoryRepositories {
   readonly items: {
     create(record: MemoryItemRecord): Promise<MemoryItemRecord>;
@@ -157,5 +175,11 @@ export interface MemoryRepositories {
     getById(input: { teamId: ID; id: ID }): Promise<MemoryCapsuleRefRecord | null>;
     listByRun(input: { teamId: ID; managementRunId: ID }): Promise<MemoryCapsuleRefRecord[]>;
     markDenied(input: { teamId: ID; id: ID; deniedAt: UnixMs }): Promise<MemoryCapsuleRefRecord | null>;
+  };
+  readonly candidates: {
+    create(record: MemoryCandidateRecord): Promise<MemoryCandidateRecord>;
+    getById(input: { teamId: ID; id: ID }): Promise<MemoryCandidateRecord | null>;
+    getByProjectionHash(input: { teamId: ID; projectionHash: string }): Promise<MemoryCandidateRecord | null>;
+    listByRun(input: { teamId: ID; managementRunId: ID }): Promise<MemoryCandidateRecord[]>;
   };
 }

@@ -2,7 +2,7 @@
 
 > 更新日期：2026-07-15
 > 当前 verdict：**Not ready**
-> 原因：合同、Domain 安全边界、Server 持久化、协作 Memory 用例层、权限优先检索排序、最小 Capsule 创建、事实源失效处理、Capsule 注入复验与 Capsule ref 持久化地基已完成；explicit-grant Capsule、Invocation/checkpoint 绑定接线、实际 inject 接线、Candidate、Device 本地 Memory 注入合并、Web 治理面、socket wiring 与真实跨 Agent 验证尚未完成。Phase 3 runtime 必须保持关闭。
+> 原因：合同、Domain 安全边界、Server 持久化、协作 Memory 用例层、权限优先检索排序、最小 Capsule 创建、事实源失效处理、Capsule 注入复验、Capsule ref 持久化地基与 Candidate 持久化地基已完成；explicit-grant Capsule、Invocation/checkpoint 绑定接线、实际 inject 接线、Candidate lifecycle service、Device 本地 Memory 注入合并、Web 治理面、socket wiring 与真实跨 Agent 验证尚未完成。Phase 3 runtime 必须保持关闭。
 
 状态定义：`Green` 已有自动化或真实证据；`Yellow` 已实现但证据未收口；`Red` 尚未实现或缺关键证据。
 
@@ -17,7 +17,7 @@
 | P3-07 | Yellow | 每次 inject 复验成员、scope、hash、policy/grant 与 expiry | `capsule-injection-validator.ts`：validateCapsuleForInjection 两检查合取——`evaluateMemoryInjection`（fresh status + 全来源可用）+ `evaluateMemoryCapsuleAuthorization`（当前事实源与冻结投影双重 hash、policyVersion/grant/expiry）+ Team/当前 Memory scope/逐来源 scope 复验；capsule 过期全拒并逐 item 写 capsule-denied 审计；双后端 parity 30 用例。待补：实际 inject 接线（P3-13）、explicit-grant item |
 | P3-08 | Yellow | Capsule 与 immutable Invocation intent/checkpoint 绑定 | slice 1 持久化地基：migration 0016 `memory_capsule_refs` 表 + `MemoryCapsuleRefRecord` repo（create/getById/listByRun/markDenied，双后端）+ assert 校验（identity/expiresAt>issuedAt/deniedAt 窗口）+ 静态注册 + 双后端 parity（Team 隔离/denied 窗口/run scope）。待补 slice 2 接线：createCapsule 写 ref + invokeTask 透传 intent.memoryCapsuleId + collectManagementCheckpointFacts 填 validMemoryCapsuleIds（替空占位，含 P3-07 复验） |
 | P3-09 | Red | V3 Worker capability/preflight 与四个 Memory tools | 工具元数据存在，但 Phase 3 runtime 未开放 |
-| P3-10 | Red | 外部 Agent 结果进入 Candidate 生命周期 | 仅有合同，未实现持久化与用例 |
+| P3-10 | Yellow | 外部 Agent 结果进入 Candidate 生命周期 | slice 1 持久化地基：migration 0017 `memory_candidates` 表（UNIQUE team_id+projection_hash 去重闸门）+ `MemoryCandidateRecord` repo（create/getById/getByProjectionHash/listByRun，双后端）+ assert 校验（status/contentKind/projectionHash/sourceRefs/decidedAt）+ 静态注册 + 双后端 parity（projection-hash 去重/Team 隔离/run scope）。待补 slice 2 lifecycle service：proposeCandidate（去重+冲突识别）+ decideCandidate（accept/reject/merge → 进 active memory） |
 | P3-11 | Red | 来源关联、projection hash 去重与冲突识别 | 未实现 |
 | P3-12 | Red | Device LocalMemoryStore、workspace scan 与 outcome observer | 未实现 |
 | P3-13 | Red | server Capsule + 当前 cwd local Memory 的 runtime 注入 | 未实现 |

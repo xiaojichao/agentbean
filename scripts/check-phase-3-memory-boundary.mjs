@@ -18,6 +18,7 @@ const memoryRepositories = read('apps/server-next/src/application/memory-reposit
 const memoryUnitOfWork = read('apps/server-next/src/application/memory-unit-of-work.ts');
 const memoryMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0015_management_phase_3_memory.sql');
 const capsuleRefMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0016_management_phase_3_capsule_refs.sql');
+const candidateMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0017_management_phase_3_candidates.sql');
 const sqliteRepositories = read('apps/server-next/src/infra/sqlite/repositories.ts');
 const memoryBackends = [
   read('apps/server-next/src/infra/memory/memory-repositories.ts'),
@@ -100,6 +101,15 @@ if (!capsuleRefMigrationMarkers.every((marker) => capsuleRefMigration.includes(m
   || !memoryRepositories.includes('capsuleRefs')
   || !memoryPersistenceTests.includes('Capsule refs with Team isolation')) {
   violations.push('P3_CAPSULE_REF_PERSISTENCE_INVALID: Team-isolated Capsule ref schema (0016), repository, static migration registration and parity tests are required');
+}
+
+const candidateMigrationMarkers = ['memory_candidates', 'projection_hash', 'UNIQUE (team_id, projection_hash)'];
+if (!candidateMigrationMarkers.every((marker) => candidateMigration.includes(marker))
+  || !sqliteRepositories.includes("'team/0017_management_phase_3_candidates.sql'")
+  || !memoryRepositories.includes('MemoryCandidateRecord')
+  || !memoryRepositories.includes('getByProjectionHash')
+  || !memoryPersistenceTests.includes('projection-hash dedup')) {
+  violations.push('P3_CANDIDATE_PERSISTENCE_INVALID: Team-isolated Candidate schema (0017) with projection-hash dedup, repository, static migration registration and parity tests are required');
 }
 
 const usecaseMarkers = [
