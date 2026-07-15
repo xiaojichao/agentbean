@@ -116,7 +116,8 @@ export function createPhase2CollaborationToolHandlers(input: {
     'handoffs.request': async (request) => {
       const requested = await service.requestHandoff({ authority: authority(request),
         idempotencyKey: request.idempotencyKey, ...request.input });
-      if (requested.view.activeDispatchId && requested.handoff.status === 'requested') {
+      if (requested.disposition === 'created'
+        && requested.view.activeDispatchId && requested.handoff.status === 'requested') {
         try {
           await input.onDispatchCreated(requested.view.activeDispatchId);
         } catch {

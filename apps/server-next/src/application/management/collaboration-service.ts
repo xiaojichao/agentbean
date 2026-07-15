@@ -115,7 +115,6 @@ export function createCollaborationService(input: {
       await authorizeManagementWrite(repositories.management, request.authority, now);
       const run = await requireRun(repositories, request.authority.managementRunId);
       if (run.schemaVersion !== 2) throw new Error('HANDOFF_PHASE_2_REQUIRED');
-      const target = await requireEligibleTarget(repositories, run, request.toAgentId, true);
       const proposal = request.sourceProposalId
         ? await repositories.management.collaborationProposals.getById(request.sourceProposalId)
         : null;
@@ -132,24 +131,10 @@ export function createCollaborationService(input: {
           !== hashManagementCommandInput(request.acceptanceCriteria))) {
         throw new Error('HANDOFF_PROPOSAL_MISMATCH');
       }
-      if (proposal?.proposal.sourceTaskContext
-        && !(await isTaskFenceCurrent(repositories, run.id, proposal.proposal.sourceTaskContext, now))) {
-        throw new Error('HANDOFF_PROPOSAL_STALE');
-      }
-      const invocations = await repositories.management.invocations.listByRun(run.id);
-      if (invocations.length >= run.budget.maxExternalInvocations) throw new Error('HANDOFF_BUDGET_CONFLICT');
-      const prior = await repositories.management.handoffs.listByRun(run.id);
-      if (prior.length >= run.budget.maxSubtasks
-        || (request.kind === 'continuation'
-          && prior.filter((item) => item.intent.kind === 'continuation').length >= run.budget.maxDepth)) {
-        throw new Error('HANDOFF_BUDGET_CONFLICT');
-      }
-      const fromAgentId = proposal?.proposal.sourceAgentId ?? run.activeAgentId ?? run.mainAgentId;
-      if (request.kind === 'continuation' && wouldCreateContinuationLoop({ fromAgentId,
-        toAgentId: request.toAgentId, priorEdges: prior.map((item) => ({
-          fromAgentId: item.intent.fromAgentId, toAgentId: item.intent.toAgentId,
-          kind: item.intent.kind === 'continuation' ? 'continuation' : 'consult',
-        })) })) throw new Error('HANDOFF_LOOP_CONFLICT');
+      const existing = await repositories.management.handoffs.getByIdempotencyKey({
+        managementRunId: run.id, idempotencyKey: request.idempotencyKey });
+      const fromAgentId = existing?.intent.fromAgentId
+        ?? proposal?.proposal.sourceAgentId ?? run.activeAgentId ?? run.mainAgentId;
       const contextRefs = proposal ? proposal.proposal.contextRefs
         .filter((ref) => request.contextRefIds.includes(ref.id)) : [];
       const dependencyResults = proposal ? proposal.proposal.dependencyResults
@@ -169,10 +154,8 @@ export function createCollaborationService(input: {
         kind: request.kind, objective: request.objective.trim(), reason: request.reason.trim(),
         contextRefs, dependencyResults, acceptanceCriteria: [...request.acceptanceCriteria],
         attachmentIds: [...request.attachmentIds], returnMode: request.returnMode,
-        ...(request.deadlineAt ? { deadlineAt: request.deadlineAt } : {}) };
+        ...(request.deadlineAt !== undefined ? { deadlineAt: request.deadlineAt } : {}) };
       const intentHash = hashManagementCommandInput(intent);
-      const existing = await repositories.management.handoffs.getByIdempotencyKey({
-        managementRunId: run.id, idempotencyKey: request.idempotencyKey });
       const decision = resolveCollaborationIdempotency({ existing: existing ? {
         id: existing.id, managementRunId: existing.managementRunId,
         idempotencyKey: existing.idempotencyKey, payloadHash: existing.intentHash,
@@ -182,11 +165,31 @@ export function createCollaborationService(input: {
       if (decision.kind === 'existing' && existing?.invocationId) {
         const invocation = await repositories.management.invocations.getById(existing.invocationId);
         if (!invocation) throw new Error('HANDOFF_INVOCATION_NOT_FOUND');
-        return { handoff: existing, invocation, view: await gateway.getView(invocation.id) };
+        return { handoff: existing, invocation, view: await gateway.getView(invocation.id),
+          disposition: 'existing' as const };
       }
       if (decision.kind === 'existing' && existing?.status !== 'requested') {
         throw new Error('HANDOFF_RECOVERY_CONFLICT');
       }
+      const target = await requireEligibleTarget(repositories, run, request.toAgentId, true);
+      if (proposal?.proposal.sourceTaskContext
+        && !(await isTaskFenceCurrent(repositories, run.id, proposal.proposal.sourceTaskContext, now))) {
+        throw new Error('HANDOFF_PROPOSAL_STALE');
+      }
+      const invocations = await repositories.management.invocations.listByRun(run.id);
+      if (invocations.length >= run.budget.maxExternalInvocations) throw new Error('HANDOFF_BUDGET_CONFLICT');
+      const prior = (await repositories.management.handoffs.listByRun(run.id))
+        .filter((item) => item.id !== existing?.id);
+      if (prior.length >= run.budget.maxSubtasks
+        || (request.kind === 'continuation'
+          && prior.filter((item) => item.intent.kind === 'continuation').length >= run.budget.maxDepth)) {
+        throw new Error('HANDOFF_BUDGET_CONFLICT');
+      }
+      if (request.kind === 'continuation' && wouldCreateContinuationLoop({ fromAgentId,
+        toAgentId: request.toAgentId, priorEdges: prior.map((item) => ({
+          fromAgentId: item.intent.fromAgentId, toAgentId: item.intent.toAgentId,
+          kind: item.intent.kind === 'continuation' ? 'continuation' : 'consult',
+        })) })) throw new Error('HANDOFF_LOOP_CONFLICT');
       let handoff: AgentHandoffRecordDto = existing ?? { schemaVersion: 1, id: ids.nextId(),
         managementRunId: run.id, intent, intentHash, idempotencyKey: request.idempotencyKey,
         status: 'requested', createdAt: now, updatedAt: now };
@@ -214,7 +217,8 @@ export function createCollaborationService(input: {
             objective: intent.objective,
             ...(proposal?.proposal.sourceTaskContext ? { taskContext: proposal.proposal.sourceTaskContext } : {}),
             acceptanceCriteria: intent.acceptanceCriteria, dependencyResults: intent.dependencyResults,
-            attachmentIds: intent.attachmentIds, ...(intent.deadlineAt ? { deadlineAt: intent.deadlineAt } : {}),
+            attachmentIds: intent.attachmentIds,
+            ...(intent.deadlineAt !== undefined ? { deadlineAt: intent.deadlineAt } : {}),
           } });
       } catch (error) {
         await repositories.management.handoffs.update({ ...handoff, status: 'failed', updatedAt: clock.now() });
@@ -231,7 +235,7 @@ export function createCollaborationService(input: {
       });
       const invocation = await repositories.management.invocations.getById(invoked.view.id);
       if (!invocation) throw new Error('HANDOFF_INVOCATION_NOT_FOUND');
-      return { handoff, invocation, view: invoked.view };
+      return { handoff, invocation, view: invoked.view, disposition: invoked.disposition };
     },
 
     async recordAccepted(request: { dispatchId: string }) {
@@ -263,24 +267,28 @@ async function updateFromDispatch(
 ) {
   const attempt = await repositories.management.dispatchAttempts.getByDispatchId(dispatchId);
   if (!attempt) return null;
-  const handoff = await repositories.management.handoffs.getByInvocationId(attempt.invocationId);
-  if (!handoff) return null;
-  if (handoff.status === status || (status === 'accepted' && handoff.status === 'running')) return handoff;
-  const run = await requireRun(repositories, handoff.managementRunId);
-  if (run.schemaVersion !== 2) return handoff;
+  const initialHandoff = await repositories.management.handoffs.getByInvocationId(attempt.invocationId);
+  if (!initialHandoff) return null;
+  const initialRun = await requireRun(repositories, initialHandoff.managementRunId);
+  if (initialRun.schemaVersion !== 2) return initialHandoff;
   const invocation = await repositories.management.invocations.getById(attempt.invocationId);
   if (!invocation) throw new Error('HANDOFF_INVOCATION_NOT_FOUND');
   const now = clock.now();
-  const updated: AgentHandoffRecordDto = { ...handoff, status,
-    ...(status === 'accepted' ? { acceptedAt: now } : {}), updatedAt: now };
   const taskFenceCurrent = !invocation.intent.taskContext
-    || await isTaskFenceCurrent(repositories, run.id, invocation.intent.taskContext, now);
-  const transition = handoff.intent.kind === 'continuation'
-    ? evaluateContinuationOwnerTransition({ currentAgentId: run.activeAgentId,
-      sourceAgentId: handoff.intent.fromAgentId ?? run.mainAgentId,
-      targetAgentId: handoff.intent.toAgentId, status, taskFenceCurrent })
-    : { kind: 'unchanged' as const };
-  await repositories.managementUnitOfWork.run(async (management) => {
+    || await isTaskFenceCurrent(repositories, initialRun.id, invocation.intent.taskContext, now);
+  return repositories.managementUnitOfWork.run(async (management) => {
+    const handoff = await management.handoffs.getById(initialHandoff.id);
+    const run = await management.runs.getById(initialRun.id);
+    if (!handoff || !run || run.schemaVersion !== 2) return handoff;
+    if (handoff.status === status || (status === 'accepted' && handoff.status === 'running')
+      || isTerminalHandoffStatus(handoff.status)) return handoff;
+    const updated: AgentHandoffRecordDto = { ...handoff, status,
+      ...(status === 'accepted' ? { acceptedAt: now } : {}), updatedAt: now };
+    const transition = handoff.intent.kind === 'continuation'
+      ? evaluateContinuationOwnerTransition({ currentAgentId: run.activeAgentId,
+        sourceAgentId: handoff.intent.fromAgentId ?? run.mainAgentId,
+        targetAgentId: handoff.intent.toAgentId, status, taskFenceCurrent })
+      : { kind: 'unchanged' as const };
     await management.handoffs.update(updated);
     if (status !== 'accepted') {
       await appendCollaborationEvent(management, { managementRunId: run.id,
@@ -302,8 +310,8 @@ async function updateFromDispatch(
           handoffId: handoff.id, reasonCode: transition.reasonCode,
         } }, now, ids);
     }
+    return updated;
   });
-  return updated;
 }
 
 type CollaborationEventType = 'handoff-proposed' | 'handoff-requested' | 'handoff-dispatched'
@@ -388,4 +396,9 @@ function normalizeStatus(status: string): 'online' | 'busy' | 'offline' | 'unkno
 
 function sha256(value: string) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function isTerminalHandoffStatus(status: AgentHandoffStatus) {
+  return status === 'returned' || status === 'rejected' || status === 'failed'
+    || status === 'cancelled' || status === 'timed_out';
 }

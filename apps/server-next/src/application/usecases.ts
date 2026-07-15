@@ -6153,8 +6153,12 @@ async function recordManagedDispatchTerminal(
   if (!invocation) {
     throw new Error('MANAGEMENT_INVOCATION_NOT_FOUND');
   }
+  const handoff = await repositories.management.handoffs.getByInvocationId(invocation.id);
   await collaborationService.recordTerminal({ dispatchId: input.dispatchId,
     status: input.status, artifactIds: input.artifactIds ?? [] });
+  if (handoff) {
+    return;
+  }
   const taskContext = invocation.intent.taskContext;
   const coordination = taskContext
     ? await repositories.taskCoordination.coordinations.getByTaskId(taskContext.taskId)

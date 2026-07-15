@@ -1,9 +1,13 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import { createCollaborationService } from '../src/application/management/collaboration-service.js';
 import { hashManagementCommandInput } from '../src/application/management/management-event-validator.js';
 import { createManagementKernel } from '../src/application/management/management-kernel.js';
-import { createPhase1ManagementToolHandlers } from '../src/application/management/management-tool-executor.js';
+import {
+  createPhase1ManagementToolHandlers,
+  createPhase2CollaborationToolHandlers,
+} from '../src/application/management/management-tool-executor.js';
+import { createServerNextUseCases } from '../src/application/usecases.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 
 describe('serial collaboration handoff', () => {
@@ -68,7 +72,10 @@ describe('serial collaboration handoff', () => {
     await expect(harness.repositories.management.runs.getById(harness.runId))
       .resolves.toMatchObject({ activeAgentId: 'agent-b', collaborationMode: 'handoff' });
 
-    await harness.service.recordTerminal({ dispatchId, status: 'failed', artifactIds: [] });
+    await expect(harness.service.recordTerminal({ dispatchId, status: 'failed', artifactIds: [] }))
+      .resolves.toMatchObject({ status: 'failed' });
+    await expect(harness.service.recordAccepted({ dispatchId }))
+      .resolves.toMatchObject({ status: 'failed' });
     await expect(harness.repositories.management.runs.getById(harness.runId))
       .resolves.toMatchObject({ activeAgentId: 'agent-a' });
     expect((await harness.repositories.management.events.list(harness.runId))
@@ -130,7 +137,74 @@ describe('serial collaboration handoff', () => {
     await expect(harness.repositories.management.handoffs.listByRun(harness.runId))
       .resolves.toHaveLength(1);
   });
+
+  test('replays an existing handoff without re-emitting its Dispatch after live limits drift', async () => {
+    const harness = await createHarness();
+    const [proposal] = await recordConsultProposal(harness);
+    const onDispatchCreated = vi.fn();
+    const handler = createPhase2CollaborationToolHandlers({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids, onDispatchCreated })['handoffs.request'];
+    const request = handoffToolRequest(harness, proposal!.id, 'handoff-replay');
+
+    const first = await handler(request);
+    const run = await harness.repositories.management.runs.getById(harness.runId);
+    await harness.repositories.management.runs.update({ ...run!,
+      budget: { maxSubtasks: 1, maxDepth: 1, maxExternalInvocations: 2 } });
+    const target = await harness.repositories.agents.getById('agent-b');
+    await harness.repositories.agents.upsert({ ...target!, status: 'offline' });
+
+    await expect(handler({ ...request, commandId: 'handoff-replay-2',
+      toolCallId: 'handoff-replay-2' })).resolves.toEqual(first);
+    expect(onDispatchCreated).toHaveBeenCalledTimes(1);
+    await expect(harness.repositories.management.handoffs.listByRun(harness.runId))
+      .resolves.toHaveLength(1);
+  });
+
+  test('keeps the ManagementRun alive when a handoff Invocation fails', async () => {
+    const harness = await createHarness();
+    const [proposal] = await recordConsultProposal(harness);
+    const requested = await harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-failure', sourceProposalId: proposal!.id,
+      sourceInvocationId: 'invocation-a', toAgentId: 'agent-b', kind: 'consult',
+      objective: '咨询 B', reason: '需要信息', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'return_to_manager' });
+    const app = createServerNextUseCases({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids, managementKernel: harness.kernel });
+
+    await expect(app.receiveDispatchError({ dispatchId: requested.view.activeDispatchId!,
+      agentId: 'agent-b', error: 'handoff failed' })).resolves.toMatchObject({ ok: true });
+    await expect(harness.repositories.management.handoffs.getById(requested.handoff.id))
+      .resolves.toMatchObject({ status: 'failed' });
+    await expect(harness.repositories.management.runs.getById(harness.runId))
+      .resolves.toMatchObject({ status: 'running', activeAgentId: 'agent-a' });
+  });
 });
+
+async function recordConsultProposal(harness: Awaited<ReturnType<typeof createHarness>>) {
+  return harness.service.recordProposals({ dispatchId: 'dispatch-a', agentId: 'agent-a', proposals: [{
+    schemaVersion: 1, sourceInvocationId: 'invocation-a', sourceAgentId: 'agent-a',
+    sourceTaskContext: { taskId: 'task-root', rootTaskId: 'task-root', taskRevision: 1,
+      taskAttempt: 1, claimLeaseId: 'claim-a' },
+    toAgentId: 'agent-b', kind: 'consult', objective: '咨询 B', reason: '需要信息',
+    contextRefs: [], dependencyResults: [], acceptanceCriteria: [], attachmentIds: [],
+    returnMode: 'return_to_manager',
+  }] });
+}
+
+function handoffToolRequest(
+  harness: Awaited<ReturnType<typeof createHarness>>,
+  proposalId: string,
+  idempotencyKey: string,
+) {
+  return { schemaVersion: 2 as const, managementPhase: 2 as const,
+    commandId: idempotencyKey, managementRunId: harness.runId, workerId: 'worker-1',
+    toolCallId: idempotencyKey, toolName: 'handoffs.request' as const,
+    leaseToken: 'token', fencingToken: 1, idempotencyKey,
+    input: { sourceProposalId: proposalId, sourceInvocationId: 'invocation-a',
+      toAgentId: 'agent-b', kind: 'consult' as const, objective: '咨询 B', reason: '需要信息',
+      contextRefIds: [], dependencyInvocationIds: [], attachmentIds: [], acceptanceCriteria: [],
+      returnMode: 'return_to_manager' as const } };
+}
 
 async function createHarness() {
   const repositories = createInMemoryRepositories();

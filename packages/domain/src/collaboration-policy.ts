@@ -61,7 +61,20 @@ export function wouldCreateContinuationLoop(input: {
   }[];
 }): boolean {
   if (!input.fromAgentId || input.fromAgentId === input.toAgentId) return input.fromAgentId === input.toAgentId;
-  return input.priorEdges.some((edge) => edge.kind === 'continuation'
-    && edge.fromAgentId === input.toAgentId
-    && edge.toAgentId === input.fromAgentId);
+  const continuationTargets = new Map<string, string[]>();
+  for (const edge of input.priorEdges) {
+    if (edge.kind !== 'continuation' || !edge.fromAgentId) continue;
+    continuationTargets.set(edge.fromAgentId,
+      [...(continuationTargets.get(edge.fromAgentId) ?? []), edge.toAgentId]);
+  }
+  const pending = [input.toAgentId];
+  const visited = new Set<string>();
+  while (pending.length > 0) {
+    const agentId = pending.pop()!;
+    if (agentId === input.fromAgentId) return true;
+    if (visited.has(agentId)) continue;
+    visited.add(agentId);
+    pending.push(...(continuationTargets.get(agentId) ?? []));
+  }
+  return false;
 }

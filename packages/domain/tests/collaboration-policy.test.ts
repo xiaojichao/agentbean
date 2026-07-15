@@ -33,12 +33,16 @@ describe('serial collaboration policy', () => {
       .toEqual({ kind: 'unchanged' });
   });
 
-  test('rejects an immediate continuation cycle while allowing consult return paths', () => {
+  test('rejects direct and transitive continuation cycles while allowing consult return paths', () => {
     expect(wouldCreateContinuationLoop({ fromAgentId: 'agent-b', toAgentId: 'agent-a', priorEdges: [
       { fromAgentId: 'agent-a', toAgentId: 'agent-b', kind: 'continuation' },
     ] })).toBe(true);
     expect(wouldCreateContinuationLoop({ fromAgentId: 'agent-b', toAgentId: 'agent-a', priorEdges: [
       { fromAgentId: 'agent-a', toAgentId: 'agent-b', kind: 'consult' },
     ] })).toBe(false);
+    expect(wouldCreateContinuationLoop({ fromAgentId: 'agent-c', toAgentId: 'agent-a', priorEdges: [
+      { fromAgentId: 'agent-a', toAgentId: 'agent-b', kind: 'continuation' },
+      { fromAgentId: 'agent-b', toAgentId: 'agent-c', kind: 'continuation' },
+    ] })).toBe(true);
   });
 });
