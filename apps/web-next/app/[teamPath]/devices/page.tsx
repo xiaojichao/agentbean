@@ -667,6 +667,9 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
             {device.connectCommand && (
               <div className="space-y-2">
                 <p className="text-xs text-neutral-500">首次接入命令（历史参考，invite code 可能已失效）：</p>
+                {daemonVersion.updateAvailable && (
+                  <p className="text-xs font-medium text-amber-700">旧命令无法升级 Daemon，请生成并运行新的连接命令。</p>
+                )}
                 <div className="flex items-center gap-2">
                   <code className="flex-1 overflow-x-auto whitespace-nowrap rounded-md bg-neutral-900 px-3 py-2 text-xs text-emerald-400">{device.connectCommand}</code>
                   <button onClick={() => { navigator.clipboard.writeText(device.connectCommand ?? ''); setCopied(true); setTimeout(() => setCopied(false), 2000); }} className="shrink-0 rounded-md border border-neutral-300 px-3 py-2 text-xs hover:bg-neutral-50 flex items-center gap-1">
@@ -677,7 +680,9 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
             )}
             <div className={device.connectCommand ? 'mt-3' : ''}>
               <button onClick={generateConnect} className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-50">
-                {device.connectCommand ? '生成新连接命令' : '生成连接命令'}
+                {daemonVersion.updateAvailable
+                  ? device.connectCommand ? '生成新连接命令进行升级' : '生成连接命令进行升级'
+                  : device.connectCommand ? '生成新连接命令' : '生成连接命令'}
               </button>
               {inviteCommand && (
                 <div className="mt-3 space-y-1">
