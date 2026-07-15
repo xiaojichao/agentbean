@@ -3,9 +3,11 @@ import {
   MEMORY_SCOPE_TYPES,
   MEMORY_STATUSES,
   type MemoryScopeType,
+  type UnixMs,
 } from '../../../../packages/contracts/src/index.js';
 import type {
   MemoryAuditEventRecord,
+  MemoryCapsuleRefRecord,
   MemoryGrantRecord,
   MemoryItemRecord,
   MemorySourceRecord,
@@ -159,5 +161,30 @@ export function assertMemoryAuditEventRecord(record: MemoryAuditEventRecord): vo
     } else {
       assertServerMemoryScope(record.scopeType, record.scopeRef);
     }
+  }
+}
+
+export function assertMemoryCapsuleRefRecord(record: MemoryCapsuleRefRecord): void {
+  if (record.contentHash.trim().length === 0) throw new Error('memory capsule ref content hash is required');
+  if (record.authorizationDecisionId.trim().length === 0) {
+    throw new Error('memory capsule ref authorization decision is required');
+  }
+  if (record.targetAgentId.trim().length === 0) throw new Error('memory capsule ref target agent is required');
+  if (record.managementRunId.trim().length === 0) throw new Error('memory capsule ref management run is required');
+  if (record.expiresAt <= record.issuedAt) throw new Error('memory capsule ref expiry must follow issue time');
+  if (record.deniedAt !== undefined
+    && (record.deniedAt < record.issuedAt || record.deniedAt > record.expiresAt)) {
+    throw new Error('memory capsule ref denial time is outside its validity window');
+  }
+  if (record.createdAt < record.issuedAt) throw new Error('memory capsule ref creation precedes issue time');
+}
+
+export function assertMemoryCapsuleRefDenial(
+  current: MemoryCapsuleRefRecord,
+  deniedAt: UnixMs,
+): void {
+  if (current.deniedAt !== undefined) throw new Error('memory capsule ref is already denied');
+  if (deniedAt < current.issuedAt || deniedAt > current.expiresAt) {
+    throw new Error('memory capsule ref denial time is outside its validity window');
   }
 }

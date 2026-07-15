@@ -1,5 +1,6 @@
 import type {
   MemoryAuditEventRecord,
+  MemoryCapsuleRefRecord,
   MemoryGrantRecord,
   MemoryItemRecord,
   MemoryRepositories,
@@ -8,6 +9,8 @@ import type {
 } from '../../application/memory-repositories.js';
 import {
   assertMemoryAuditEventRecord,
+  assertMemoryCapsuleRefDenial,
+  assertMemoryCapsuleRefRecord,
   assertMemoryGrantRecord,
   assertMemoryGrantTransition,
   assertMemoryItemRecord,
@@ -22,6 +25,7 @@ export interface MemoryRepositoryMemoryState {
   readonly tags: Map<string, MemoryTagRecord>;
   readonly grants: Map<string, MemoryGrantRecord>;
   readonly auditEvents: Map<string, MemoryAuditEventRecord>;
+  readonly capsuleRefs: Map<string, MemoryCapsuleRefRecord>;
 }
 
 export function createMemoryRepositoryMemoryState(): MemoryRepositoryMemoryState {
@@ -31,6 +35,7 @@ export function createMemoryRepositoryMemoryState(): MemoryRepositoryMemoryState
     tags: new Map(),
     grants: new Map(),
     auditEvents: new Map(),
+    capsuleRefs: new Map(),
   };
 }
 
@@ -43,6 +48,7 @@ export function cloneMemoryRepositoryMemoryState(
     tags: new Map(state.tags),
     grants: new Map(state.grants),
     auditEvents: new Map(state.auditEvents),
+    capsuleRefs: new Map(state.capsuleRefs),
   };
 }
 
@@ -164,6 +170,32 @@ export function createInMemoryMemoryRepositories(
           .filter((record) => record.teamId === input.teamId
             && record.subjectKind === input.subjectKind && record.subjectId === input.subjectId)
           .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+      },
+    },
+    capsuleRefs: {
+      async create(record) {
+        assertMemoryCapsuleRefRecord(record);
+        const key = `${record.teamId}:${record.id}`;
+        if (state.capsuleRefs.has(key)) throw new Error('memory capsule ref already exists');
+        state.capsuleRefs.set(key, record);
+        return record;
+      },
+      async getById(input) {
+        return state.capsuleRefs.get(`${input.teamId}:${input.id}`) ?? null;
+      },
+      async listByRun(input) {
+        return [...state.capsuleRefs.values()]
+          .filter((record) => record.teamId === input.teamId && record.managementRunId === input.managementRunId)
+          .sort((left, right) => left.id.localeCompare(right.id));
+      },
+      async markDenied(input) {
+        const key = `${input.teamId}:${input.id}`;
+        const current = state.capsuleRefs.get(key);
+        if (!current) return null;
+        assertMemoryCapsuleRefDenial(current, input.deniedAt);
+        const denied = { ...current, deniedAt: input.deniedAt };
+        state.capsuleRefs.set(key, denied);
+        return denied;
       },
     },
   };
