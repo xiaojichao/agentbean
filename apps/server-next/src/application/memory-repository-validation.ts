@@ -211,6 +211,12 @@ export function assertMemoryCandidateRecord(record: MemoryCandidateRecord): void
       throw new Error('memory candidate source ref is invalid');
     }
   }
+  const isDecided = record.status === 'accepted'
+    || record.status === 'rejected'
+    || record.status === 'merged';
+  if (isDecided !== (record.decidedAt !== undefined)) {
+    throw new Error('memory candidate decision time must match a terminal status');
+  }
   if (record.decidedAt !== undefined && record.decidedAt < record.createdAt) {
     throw new Error('memory candidate decision time precedes creation');
   }

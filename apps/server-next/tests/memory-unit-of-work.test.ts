@@ -253,9 +253,30 @@ describe.each([
       await fixture.repositories.memoryUnitOfWork.run(async (memory) => {
         await memory.candidates.create(candidate('cand-3', 'run-1', 'sha256:proj-b'));
       });
+      await expect(fixture.repositories.memoryUnitOfWork.run(async (memory) => {
+        await memory.candidates.create({
+          ...candidate('cand-decided-without-time', 'run-1', 'sha256:proj-c'),
+          status: 'accepted',
+        });
+      })).rejects.toThrow(/decision time must match a terminal status/i);
+      await expect(fixture.repositories.memoryUnitOfWork.run(async (memory) => {
+        await memory.candidates.create({
+          ...candidate('cand-pending-with-time', 'run-1', 'sha256:proj-d'),
+          decidedAt: 1_001,
+        });
+      })).rejects.toThrow(/decision time must match a terminal status/i);
+      await fixture.repositories.memoryUnitOfWork.run(async (memory) => {
+        await memory.candidates.create({
+          ...candidate('cand-decided', 'run-decided', 'sha256:proj-e'),
+          status: 'accepted',
+          decidedAt: 1_001,
+        });
+      });
 
       await expect(fixture.repositories.memory.candidates.getById({ teamId: 'team-1', id: 'cand-1' }))
         .resolves.toMatchObject({ id: 'cand-1', status: 'candidate', proposedContent: 'Use Node 24' });
+      await expect(fixture.repositories.memory.candidates.getById({ teamId: 'team-1', id: 'cand-decided' }))
+        .resolves.toMatchObject({ status: 'accepted', decidedAt: 1_001 });
       await expect(fixture.repositories.memory.candidates.getById({ teamId: 'team-2', id: 'cand-1' }))
         .resolves.toBeNull();
       await expect(fixture.repositories.memory.candidates.getByProjectionHash({

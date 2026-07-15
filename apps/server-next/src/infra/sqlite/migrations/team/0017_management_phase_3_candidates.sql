@@ -24,6 +24,8 @@ CREATE TABLE memory_candidates (
   decided_at INTEGER,
   PRIMARY KEY (id, team_id),
   UNIQUE (team_id, projection_hash),
+  CHECK ((status IN ('accepted', 'rejected', 'merged') AND decided_at IS NOT NULL)
+    OR (status IN ('candidate', 'conflict') AND decided_at IS NULL)),
   CHECK (decided_at IS NULL OR decided_at >= created_at)
 );
 
