@@ -81,7 +81,6 @@ export interface EvaluateMemoryCapsuleAuthorizationInput {
 }
 
 function requiresExplicitGrant(input: EvaluateMemoryCapsuleAuthorizationInput): boolean {
-  if (input.delivery === 'device-only') return false;
   return input.sourceScopeType === 'dm'
     || input.sourceVisibility === 'private'
     || input.sourceVisibility === 'dm-participants'
@@ -124,7 +123,10 @@ export function evaluateMemoryCapsuleAuthorization(
   if (authorization.policyVersion !== input.currentPolicyVersion) {
     return { allowed: false, reason: 'CAPSULE_POLICY_VERSION_STALE' };
   }
-  if (input.sourceVisibility === 'local-only' && input.delivery === 'server-hosted') {
+  if (
+    input.delivery === 'server-hosted'
+    && (input.sourceScopeType === 'local-workspace' || input.sourceVisibility === 'local-only')
+  ) {
     return { allowed: false, reason: 'CAPSULE_LOCAL_ONLY_SERVER_FORBIDDEN' };
   }
 

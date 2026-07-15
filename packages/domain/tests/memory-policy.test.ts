@@ -129,7 +129,18 @@ describe('Phase 3 Memory policy', () => {
     })).toEqual({ allowed: false, reason: 'CAPSULE_GRANT_REVOKED' });
   });
 
-  test('never puts local-only content into a Server-hosted Capsule', () => {
+  test('does not let device-only delivery bypass private-source grants', () => {
+    expect(evaluateMemoryCapsuleAuthorization({
+      ...baseInput,
+      delivery: 'device-only',
+      sourceScopeType: 'dm',
+      sourceScopeRef: 'dm-1',
+      sourceVisibility: 'dm-participants',
+      authorization: { ...authorization, sourceScopeType: 'dm', sourceScopeRef: 'dm-1' },
+    })).toEqual({ allowed: false, reason: 'CAPSULE_EXPLICIT_GRANT_REQUIRED' });
+  });
+
+  test('never puts local Workspace content into a Server-hosted Capsule', () => {
     const localInput: EvaluateMemoryCapsuleAuthorizationInput = {
       ...baseInput,
       sourceScopeType: 'local-workspace',
@@ -146,7 +157,23 @@ describe('Phase 3 Memory policy', () => {
       allowed: false,
       reason: 'CAPSULE_LOCAL_ONLY_SERVER_FORBIDDEN',
     });
-    expect(evaluateMemoryCapsuleAuthorization({ ...localInput, delivery: 'device-only' })).toEqual({
+
+    const explicitLocalInput: EvaluateMemoryCapsuleAuthorizationInput = {
+      ...localInput,
+      sourceVisibility: 'team',
+      authorization: {
+        ...localInput.authorization,
+        mode: 'explicit-grant',
+        grantId: 'grant-local',
+        grantVersion: 1,
+      },
+      currentGrant: { id: 'grant-local', version: 1, revoked: false },
+    };
+    expect(evaluateMemoryCapsuleAuthorization(explicitLocalInput)).toEqual({
+      allowed: false,
+      reason: 'CAPSULE_LOCAL_ONLY_SERVER_FORBIDDEN',
+    });
+    expect(evaluateMemoryCapsuleAuthorization({ ...explicitLocalInput, delivery: 'device-only' })).toEqual({
       allowed: true,
       decisionId: 'decision-1',
     });

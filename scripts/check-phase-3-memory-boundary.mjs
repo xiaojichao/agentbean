@@ -32,8 +32,11 @@ const contractMarkers = [
   'MemoryCapsuleDto', 'MemoryCapsuleAuthorizationDto', 'sourceRefsHash', 'contentHash',
   'MemoryCandidateDto', 'sourceInvocationId', 'projectionHash',
 ];
+const serverMemoryScopes = contracts.match(/export const MEMORY_SCOPE_TYPES\s*=\s*\[([^\]]*)\]/s)?.[1] ?? '';
+const hasDeviceLocalServerScope = ['local-workspace', 'local-agent', 'local-profile']
+  .some((scope) => new RegExp(`['"]${scope}['"]`).test(serverMemoryScopes));
 if (!contractMarkers.every((marker) => contracts.includes(marker))
-  || /export const MEMORY_SCOPE_TYPES\s*=\s*\[[^\]]*local-workspace/s.test(contracts)) {
+  || hasDeviceLocalServerScope) {
   violations.push('P3_CONTRACT_BOUNDARY_INVALID: server/local scopes, Capsule authorization, and Candidate contracts are required');
 }
 
@@ -47,7 +50,13 @@ if (!domainMarkers.every((marker) => domain.includes(marker))) {
   violations.push('P3_DOMAIN_POLICY_INVALID: injection and Capsule authorization must fail closed');
 }
 
-if (runtimeTypes.match(/PHASE_2_MANAGEMENT_TOOL_NAMES[\s\S]*?memory\.search/)) {
+const phase1Tools = runtimeTypes.match(
+  /export const PHASE_1_MANAGEMENT_TOOL_NAMES\s*=\s*\[([\s\S]*?)\]\s+as const/,
+)?.[1] ?? '';
+const phase2Tools = runtimeTypes.match(
+  /export const PHASE_2_MANAGEMENT_TOOL_NAMES\s*=\s*\[([\s\S]*?)\]\s+as const/,
+)?.[1] ?? '';
+if (/['"]memory\.[^'"]+['"]/.test(`${phase1Tools}\n${phase2Tools}`)) {
   violations.push('P3_PHASE2_ISOLATION_INVALID: Phase 2 exact tool surface must not expose Memory');
 }
 
