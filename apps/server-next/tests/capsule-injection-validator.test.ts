@@ -272,6 +272,28 @@ describe.each([
     }
   });
 
+  test('denies when the current Memory scope drifted (CAPSULE_SCOPE_MISMATCH)', async () => {
+    const harness = createHarness();
+    try {
+      await seedMemory(harness.repositories, 'mem-1');
+      const capsule = await harness.capsuleService.createCapsule({
+        teamId: 'team-1', requesterUserId: 'user-1', managementRunId: 'run-1',
+        targetAgentId: 'agent-1', prompt: 'x', limit: 10, now: 5_000, currentPolicyVersion: BASE_POLICY_VERSION,
+      });
+      await mutateMemory(harness.repositories, 'mem-1', (item) => ({
+        ...item,
+        scopeType: 'dm',
+        scopeRef: 'dm-1',
+      }));
+      const result = await harness.validator.validateCapsuleForInjection({
+        capsule, requesterUserId: 'user-1', now: 6_000, currentPolicyVersion: BASE_POLICY_VERSION,
+      });
+      expect(result.decisions.some((d) => d.reason === 'CAPSULE_SCOPE_MISMATCH')).toBe(true);
+    } finally {
+      harness.close();
+    }
+  });
+
   test('denies when a source now requires an explicit grant (CAPSULE_EXPLICIT_GRANT_REQUIRED)', async () => {
     const harness = createHarness();
     try {
@@ -344,6 +366,7 @@ describe.each([
         teamId: 'team-1', subjectKind: 'capsule', subjectId: capsule.id,
       });
       expect(audit.map((event) => event.eventType)).toContain('capsule-expired');
+      expect(audit.filter((event) => event.eventType === 'capsule-denied')).toHaveLength(capsule.items.length);
     } finally {
       harness.close();
     }

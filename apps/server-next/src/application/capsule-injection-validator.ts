@@ -78,6 +78,9 @@ export function createCapsuleInjectionValidator(
 
         if (capsule.expiresAt <= now) {
           await memory.auditEvents.append(capsuleLevelAudit(ids.nextId(), capsule, 'capsule-expired', input));
+          for (const item of capsule.items) {
+            await memory.auditEvents.append(itemDenialAudit(ids.nextId(), capsule, item, input));
+          }
           return {
             capsuleExpired: true,
             decisions: capsule.items.map((item) => deny(item, 'CAPSULE_EXPIRED')),
@@ -131,12 +134,16 @@ export function createCapsuleInjectionValidator(
     // 2. fresh scope 可见性：不信冻结的 'team'，重新查。hidden→不可见；explicit-grant→scope-policy item 失效。
     const visibility = await permissions.evaluateScopeVisibility({
       teamId, requesterUserId, targetAgentId,
-      memoryId: item.memoryId, scopeType: item.scopeType, scopeRef: item.scopeRef,
+      memoryId: item.memoryId, scopeType: memoryItem.scopeType, scopeRef: memoryItem.scopeRef,
     });
     if (visibility === 'hidden') return deny(item, 'MEMORY_SCOPE_NOT_VISIBLE');
     if (visibility === 'explicit-grant' && item.authorization.mode !== 'explicit-grant') {
       return deny(item, 'CAPSULE_EXPLICIT_GRANT_REQUIRED');
     }
+    if (
+      memoryItem.scopeType !== item.authorization.sourceScopeType
+      || memoryItem.scopeRef !== item.authorization.sourceScopeRef
+    ) return deny(item, 'CAPSULE_SCOPE_MISMATCH');
 
     // 3. fresh 来源可用性 + fresh 状态（active / 未 validUntil 过期）。
     const sources = await memory.sources.listByMemory({ teamId, memoryId: item.memoryId });
