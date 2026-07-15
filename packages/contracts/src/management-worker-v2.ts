@@ -262,6 +262,37 @@ export type Phase2TaskToolRequestV2 = {
   };
 }[keyof Phase2ManagementWorkerToolInputMapV1];
 
+export type Phase3MemoryToolRequestV3 = {
+  readonly [K in keyof Phase3ManagementWorkerToolInputMapV1]: {
+    readonly schemaVersion: 2;
+    readonly managementPhase: 3;
+    readonly commandId: ID;
+    readonly managementRunId: ID;
+    readonly workerId: ID;
+    readonly toolCallId: ID;
+    readonly toolName: K;
+    readonly leaseToken: string;
+    readonly fencingToken: number;
+    readonly idempotencyKey: string;
+    readonly input: Phase3ManagementWorkerToolInputMapV1[K];
+  };
+}[keyof Phase3ManagementWorkerToolInputMapV1];
+
+export type Phase3MemoryToolResultV3 = {
+  readonly schemaVersion: 2;
+  readonly managementPhase: 3;
+  readonly commandId: ID;
+  readonly managementRunId: ID;
+  readonly workerId: ID;
+  readonly toolCallId: ID;
+  readonly toolName: keyof Phase3ManagementWorkerToolInputMapV1;
+  readonly ok: boolean;
+  readonly output?: Phase3ManagementWorkerToolOutputMapV1[keyof Phase3ManagementWorkerToolOutputMapV1];
+  readonly errorCode?: string;
+  readonly diagnosticCode?: string;
+  readonly retryable: boolean;
+};
+
 const registerKeys = ['schemaVersion', 'workerInstanceId', 'profileId', 'runtimeVersion', 'supportedProtocolVersions', 'supportedPhases', 'credentialStatus', 'providerId', 'modelId', 'capacity'];
 const contextKeys = ['schemaVersion', 'managementPhase', 'teamId', 'channelId', 'rootMessageId', 'rootTaskId', 'frozenTarget', 'visibleThread'];
 const taskRequestKeys = ['schemaVersion', 'managementPhase', 'commandId', 'managementRunId', 'workerId', 'toolCallId', 'toolName', 'leaseToken', 'fencingToken', 'idempotencyKey', 'input'];
@@ -745,4 +776,46 @@ function isPhase2WorkerToolName(value: unknown): value is keyof Phase2Management
   return value === 'agents.invoke'
     || PHASE_2_TASK_WORKER_TOOL_NAMES.includes(value as never)
     || PHASE_2_COLLABORATION_WORKER_TOOL_NAMES.includes(value as never);
+}
+
+const PHASE_3_MEMORY_WORKER_TOOL_NAMES = [
+  'memory.search', 'memory.create_capsule', 'memory.propose_candidate', 'memory.link_sources',
+] as const;
+
+function isPhase3WorkerToolName(value: unknown): value is keyof Phase3ManagementWorkerToolInputMapV1 {
+  return PHASE_3_MEMORY_WORKER_TOOL_NAMES.includes(value as never);
+}
+
+export function parsePhase3MemoryToolRequestV3(value: unknown): Phase3MemoryToolRequestV3 {
+  assertExactKeys(value, taskRequestKeys, taskRequestKeys);
+  if (value.schemaVersion !== 2 || value.managementPhase !== 3
+    || !isPhase3WorkerToolName(value.toolName)
+    || !nonEmpty(value.commandId) || !nonEmpty(value.managementRunId) || !nonEmpty(value.workerId)
+    || !nonEmpty(value.toolCallId) || !nonEmpty(value.leaseToken) || !nonEmpty(value.idempotencyKey)
+    || !Number.isSafeInteger(value.fencingToken) || Number(value.fencingToken) < 1) {
+    throw new Error('MANAGEMENT_WORKER_V3_PAYLOAD_INVALID');
+  }
+  parsePhase3MemoryToolInputV1(value.toolName, value.input);
+  return structuredClone(value) as unknown as Phase3MemoryToolRequestV3;
+}
+
+export function parsePhase3MemoryToolResultV3(value: unknown): Phase3MemoryToolResultV3 {
+  assertExactKeys(value, taskResultKeys, ['schemaVersion', 'managementPhase', 'commandId', 'managementRunId', 'workerId', 'toolCallId', 'toolName', 'ok']);
+  if (value.schemaVersion !== 2 || value.managementPhase !== 3
+    || !isPhase3WorkerToolName(value.toolName)
+    || !nonEmpty(value.commandId) || !nonEmpty(value.managementRunId)
+    || !nonEmpty(value.workerId) || !nonEmpty(value.toolCallId)
+    || typeof value.ok !== 'boolean') {
+    throw new Error('MANAGEMENT_WORKER_V3_PAYLOAD_INVALID');
+  }
+  if (value.ok) {
+    if (value.errorCode !== undefined || value.retryable !== undefined
+      || value.diagnosticCode !== undefined) {
+      throw new Error('MANAGEMENT_WORKER_V3_PAYLOAD_INVALID');
+    }
+  } else if (!['INVALID_REQUEST', 'NOT_AUTHORIZED', 'CONFLICT', 'UNAVAILABLE'].includes(String(value.errorCode))
+    || typeof value.retryable !== 'boolean' || (value.diagnosticCode !== undefined && !nonEmpty(value.diagnosticCode))) {
+    throw new Error('MANAGEMENT_WORKER_V3_PAYLOAD_INVALID');
+  }
+  return structuredClone(value) as unknown as Phase3MemoryToolResultV3;
 }
