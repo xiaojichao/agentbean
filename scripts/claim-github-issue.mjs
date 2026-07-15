@@ -5,7 +5,9 @@ const CLAIM_MARKER_PREFIX = 'agentbean-codex-claim:v1';
 
 const query = `
 query($owner: String!, $name: String!, $number: Int!) {
+  viewer { login }
   repository(owner: $owner, name: $name) {
+    defaultBranchRef { name }
     issue(number: $number) {
       number
       title
@@ -22,6 +24,7 @@ query($owner: String!, $name: String!, $number: Int!) {
           url
           body
           createdAt
+          author { login }
         }
       }
       timelineItems(last: 100, itemTypes: [CROSS_REFERENCED_EVENT]) {
@@ -36,6 +39,7 @@ query($owner: String!, $name: String!, $number: Int!) {
                 state
                 url
                 body
+                baseRefName
               }
             }
           }
@@ -60,9 +64,10 @@ function parseMarker(body) {
   };
 }
 
-export function activeClaims(comments = []) {
+export function activeClaims(comments = [], trustedAuthor = null) {
   const active = new Map();
   const ordered = comments
+    .filter((comment) => !trustedAuthor || comment.author?.login === trustedAuthor)
     .map((comment, index) => ({ comment, index, marker: parseMarker(comment.body) }))
     .filter((item) => item.marker)
     .sort((left, right) => {
@@ -90,7 +95,7 @@ export function activeClaims(comments = []) {
 function closesIssue(body, issueNumber) {
   if (!body) return false;
   const keyword = '(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)';
-  return new RegExp(`${keyword}\\s+(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#${issueNumber}\\b`, 'i').test(body);
+  return new RegExp(`${keyword}\\s*:?\\s+(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#${issueNumber}\\b`, 'i').test(body);
 }
 
 export function openClosingPullRequests(issue) {
@@ -98,6 +103,7 @@ export function openClosingPullRequests(issue) {
   for (const event of issue.timelineItems?.nodes ?? []) {
     const source = event?.source;
     if (source?.__typename !== 'PullRequest' || source.state !== 'OPEN') continue;
+    if (source.baseRefName !== issue.defaultBranchName) continue;
     if (!closesIssue(source.body, issue.number)) continue;
     byNumber.set(source.number, { number: source.number, url: source.url });
   }
@@ -105,7 +111,7 @@ export function openClosingPullRequests(issue) {
 }
 
 export function evaluateIssueClaim(issue, sessionId, { requireOwned = true } = {}) {
-  const claims = activeClaims(issue.comments?.nodes);
+  const claims = activeClaims(issue.comments?.nodes, issue.trustedClaimAuthor);
   const winner = claims[0] ?? null;
   const linkedPullRequests = openClosingPullRequests(issue);
   const blockers = [];
@@ -116,6 +122,14 @@ export function evaluateIssueClaim(issue, sessionId, { requireOwned = true } = {
   ].filter(Boolean);
 
   if (issue.state !== 'OPEN') blockers.push({ code: 'ISSUE_NOT_OPEN', detail: `Issue 状态为 ${issue.state}` });
+  if (!issue.trustedClaimAuthor) blockers.push({
+    code: 'CLAIM_AUTHOR_UNKNOWN',
+    detail: '无法确认当前 GitHub 登录账号，拒绝信任 Claim marker',
+  });
+  if (!issue.defaultBranchName) blockers.push({
+    code: 'DEFAULT_BRANCH_UNKNOWN',
+    detail: '无法确认仓库默认分支，拒绝判断 closing PR',
+  });
   if (truncated.length > 0) blockers.push({
     code: 'RESULTS_TRUNCATED',
     detail: `GitHub 查询被截断，无法证明认领唯一：${truncated.join('、')}`,
@@ -234,7 +248,11 @@ function fetchIssue(options, repo) {
   if (payload.errors?.length) throw new Error(payload.errors.map((error) => error.message).join('; '));
   const issue = payload.data?.repository?.issue;
   if (!issue) throw new Error(`找不到 Issue #${options.issue}`);
-  return issue;
+  return {
+    ...issue,
+    trustedClaimAuthor: payload.data?.viewer?.login ?? null,
+    defaultBranchName: payload.data?.repository?.defaultBranchRef?.name ?? null,
+  };
 }
 
 function print(result, json) {

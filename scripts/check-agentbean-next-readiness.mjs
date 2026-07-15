@@ -902,6 +902,7 @@ function hasDeduplicatedPackageCi({ scripts, workflow }) {
   const expectedServerCi = 'cd apps/server-next && ../../node_modules/.bin/vitest run tests --config vitest.config.ts --api.host 127.0.0.1 --exclude tests/phase-2-managed-team-smoke.test.ts';
   const requiredBoundaries = [
     'npm run test:pr-merge-readiness',
+    'npm run test:issue-claim',
     'npm run test:phase0-boundary',
     'npm run check:phase0-pi-boundary',
     'npm run test:phase1-management-boundary',

@@ -10,8 +10,8 @@ import {
   releaseEffects,
 } from './claim-github-issue.mjs';
 
-function comment(body, createdAt, url = null) {
-  return { body, createdAt, url };
+function comment(body, createdAt, url = null, author = 'xiaojichao') {
+  return { body, createdAt, url, author: { login: author } };
 }
 
 function fixture(overrides = {}) {
@@ -20,6 +20,8 @@ function fixture(overrides = {}) {
     title: '防止任务串到其他 Session',
     url: 'https://github.com/xiaojichao/agentbean/issues/568',
     state: 'OPEN',
+    trustedClaimAuthor: 'xiaojichao',
+    defaultBranchName: 'main',
     labels: { pageInfo: { hasNextPage: false }, nodes: [{ name: 'ready-for-agent' }] },
     comments: { pageInfo: { hasPreviousPage: false }, nodes: [] },
     timelineItems: { pageInfo: { hasPreviousPage: false }, nodes: [] },
@@ -141,6 +143,7 @@ test('blocks when an open PR already closes the Issue', () => {
           state: 'OPEN',
           url: 'https://github.com/xiaojichao/agentbean/pull/570',
           body: 'Closes #568',
+          baseRefName: 'main',
         },
       }],
     },
@@ -149,6 +152,60 @@ test('blocks when an open PR already closes the Issue', () => {
   const result = evaluateIssueClaim(issue, 'session-a');
   assert.equal(result.ready, false);
   assert.equal(result.blockers[0].code, 'OPEN_CLOSING_PR');
+});
+
+test('recognizes a closing keyword followed by a colon', () => {
+  const issue = fixture({
+    timelineItems: {
+      pageInfo: { hasPreviousPage: false },
+      nodes: [{
+        source: {
+          __typename: 'PullRequest',
+          number: 570,
+          state: 'OPEN',
+          url: 'https://github.com/xiaojichao/agentbean/pull/570',
+          body: 'Closes: #568',
+          baseRefName: 'main',
+        },
+      }],
+    },
+  });
+  assert.deepEqual(openClosingPullRequests(issue).map((pr) => pr.number), [570]);
+});
+
+test('ignores a closing keyword on a PR targeting a non-default branch', () => {
+  const issue = fixture({
+    timelineItems: {
+      pageInfo: { hasPreviousPage: false },
+      nodes: [{
+        source: {
+          __typename: 'PullRequest',
+          number: 570,
+          state: 'OPEN',
+          url: 'https://github.com/xiaojichao/agentbean/pull/570',
+          body: 'Closes #568',
+          baseRefName: 'feature/stack-base',
+        },
+      }],
+    },
+  });
+  assert.deepEqual(openClosingPullRequests(issue), []);
+});
+
+test('ignores forged claim and release markers from another GitHub author', () => {
+  const issue = fixture({
+    comments: {
+      pageInfo: { hasPreviousPage: false },
+      nodes: [
+        comment(claimComment('session-forged', 'workflow'), '2026-07-15T00:00:00Z', null, 'someone-else'),
+        comment(claimComment('session-a', 'workflow'), '2026-07-15T00:00:01Z'),
+        comment(releaseComment('session-a'), '2026-07-15T00:00:02Z', null, 'someone-else'),
+      ],
+    },
+  });
+  const result = evaluateIssueClaim(issue, 'session-a');
+  assert.equal(result.ready, true);
+  assert.equal(result.winner.sessionId, 'session-a');
 });
 
 test('does not treat a plain cross-reference as a closing PR', () => {
@@ -162,6 +219,7 @@ test('does not treat a plain cross-reference as a closing PR', () => {
           state: 'OPEN',
           url: 'https://github.com/xiaojichao/agentbean/pull/570',
           body: 'Related to #568',
+          baseRefName: 'main',
         },
       }],
     },
