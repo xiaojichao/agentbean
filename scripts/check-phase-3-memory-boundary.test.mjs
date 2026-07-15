@@ -91,3 +91,12 @@ test('fails closed when the atomic Memory schema disappears', () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /P3_PERSISTENCE_BOUNDARY_INVALID/);
 });
+
+test('fails closed when the collaborative Memory grant lifecycle disappears', () => {
+  const result = withFixture('agentbean-phase3-usecase-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/collaborative-memory-service.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('revokeGrant', 'removedRevokeGrant'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_COLLABORATIVE_MEMORY_USECASE_INVALID/);
+});

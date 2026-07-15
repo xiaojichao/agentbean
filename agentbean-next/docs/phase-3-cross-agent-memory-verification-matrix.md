@@ -2,7 +2,7 @@
 
 > 更新日期：2026-07-15
 > 当前 verdict：**Not ready**
-> 原因：合同、Domain 安全边界与 Server 持久化已完成；CRUD、Capsule、Candidate、Device 本地 Memory、Web 和真实跨 Agent 验证尚未完成。Phase 3 runtime 必须保持关闭。
+> 原因：合同、Domain 安全边界、Server 持久化与协作 Memory 用例层已完成；Capsule、Candidate、来源失效处理、Device 本地 Memory、Web 治理面、socket wiring 与真实跨 Agent 验证尚未完成。Phase 3 runtime 必须保持关闭。
 
 状态定义：`Green` 已有自动化或真实证据；`Yellow` 已实现但证据未收口；`Red` 尚未实现或缺关键证据。
 
@@ -11,7 +11,7 @@
 | P3-01 | Green | Memory/Capsule/Candidate 合同与 server/local scope 隔离 | `packages/contracts/src/management-memory.ts`；contracts tests |
 | P3-02 | Green | 注入资格与 Capsule 授权复验 fail closed | `packages/domain/src/memory-policy.ts`；Domain table tests |
 | P3-03 | Green | Server SQLite schema、repository 与原子事务 | `0015_management_phase_3_memory.sql`；memory/SQLite parity 与 rollback tests |
-| P3-04 | Red | 协作 Memory CRUD、显式共享、替代与删除 | 未实现 |
+| P3-04 | Yellow | 协作 Memory CRUD、显式共享、替代与删除 | `apps/server-next/src/application/collaborative-memory-service.ts`：createMemory/updateMemory/activateCandidate/rejectCandidate/expireMemory/supersedeMemory/deleteMemory + issueGrant/revokeGrant；状态机、去重、乐观并发、跨 Team fail-closed、正文-free 审计；in-memory/sqlite parity（24 用例）。待合并证据与 socket wiring |
 | P3-05 | Red | task scope 检索、权限先行与可解释排序 | 未实现 |
 | P3-06 | Red | 最小 Capsule 创建、内容脱敏与访问审计 | 未实现 |
 | P3-07 | Red | 每次 inject 复验成员、scope、hash、policy/grant 与 expiry | 仅有 Domain 规则，Server 接线未实现 |
