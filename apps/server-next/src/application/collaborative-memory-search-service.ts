@@ -1,4 +1,9 @@
-import type { ID, MemoryScopeType, UnixMs } from '../../../../packages/contracts/src/index.js';
+import type {
+  ID,
+  MemoryContentKind,
+  MemoryScopeType,
+  UnixMs,
+} from '../../../../packages/contracts/src/index.js';
 import {
   evaluateMemoryInjection,
   rankMemories,
@@ -16,10 +21,12 @@ export type MemoryScopeVisibility = 'visible' | 'explicit-grant' | 'hidden';
 export interface MemorySearchPermissions {
   canSearchTeam(input: {
     readonly teamId: ID;
+    readonly requesterUserId: ID;
     readonly targetAgentId: ID;
   }): Promise<boolean>;
   evaluateScopeVisibility(input: {
     readonly teamId: ID;
+    readonly requesterUserId: ID;
     readonly targetAgentId: ID;
     readonly memoryId: ID;
     readonly scopeType: MemoryScopeType;
@@ -28,6 +35,7 @@ export interface MemorySearchPermissions {
   }): Promise<MemoryScopeVisibility>;
   isSourceAvailable(input: {
     readonly teamId: ID;
+    readonly requesterUserId: ID;
     readonly targetAgentId: ID;
     readonly source: MemorySourceRecord;
   }): Promise<boolean>;
@@ -40,6 +48,7 @@ export interface CollaborativeMemorySearchServiceDeps {
 
 export interface SearchCollaborativeMemoriesInput {
   readonly teamId: ID;
+  readonly requesterUserId: ID;
   readonly targetAgentId: ID;
   readonly taskId?: ID;
   readonly channelId?: ID;
@@ -53,10 +62,7 @@ export interface SearchCollaborativeMemoriesInput {
 export type MemorySearchExclusionReason =
   | 'MEMORY_NOT_ACTIVE'
   | 'MEMORY_EXPIRED'
-  | 'MEMORY_SCOPE_NOT_VISIBLE'
-  | 'MEMORY_SOURCE_UNAVAILABLE'
-  | 'MEMORY_GRANT_UNAVAILABLE'
-  | 'MEMORY_GRANT_VERSION_STALE';
+  | 'MEMORY_SOURCE_UNAVAILABLE';
 
 export interface CollaborativeMemorySearchMatch {
   readonly item: MemoryItemRecord;
@@ -75,7 +81,7 @@ export interface CollaborativeMemorySearchResult {
 
 type AccessDecision =
   | { readonly allowed: true; readonly grant?: MemoryGrantRecord }
-  | { readonly allowed: false; readonly reason: MemorySearchExclusionReason };
+  | { readonly allowed: false };
 
 /** Hard authorization/source gates complete before any relevance score is calculated. */
 export function createCollaborativeMemorySearchService(deps: CollaborativeMemorySearchServiceDeps) {
@@ -83,6 +89,7 @@ export function createCollaborativeMemorySearchService(deps: CollaborativeMemory
     async search(input: SearchCollaborativeMemoriesInput): Promise<CollaborativeMemorySearchResult> {
       if (!await deps.permissions.canSearchTeam({
         teamId: input.teamId,
+        requesterUserId: input.requesterUserId,
         targetAgentId: input.targetAgentId,
       })) return { matches: [], excluded: [] };
 
@@ -90,7 +97,9 @@ export function createCollaborativeMemorySearchService(deps: CollaborativeMemory
         teamId: input.teamId,
         targetAgentId: input.targetAgentId,
       });
-      const scopes = queryScopes(input, currentGrants);
+      const liveGrants = currentGrants.filter((grant) => grant.status === 'active'
+        && grant.issuedAt <= input.now && grant.expiresAt > input.now);
+      const scopes = queryScopes(input, liveGrants);
       const itemLists = await Promise.all(scopes.map((scope) => deps.repositories.items.listByScope({
         teamId: input.teamId,
         ...scope,
@@ -101,6 +110,39 @@ export function createCollaborativeMemorySearchService(deps: CollaborativeMemory
       const excluded: Array<{ memoryId: ID; reason: MemorySearchExclusionReason }> = [];
 
       for (const item of candidates) {
+        const itemAccess = await resolveAccess(deps, input, item, item.scopeType, item.scopeRef, liveGrants);
+        if (!itemAccess.allowed) continue;
+
+        const sources = await deps.repositories.sources.listByMemory({ teamId: input.teamId, memoryId: item.id });
+        const grants: MemoryGrantRecord[] = itemAccess.grant ? [itemAccess.grant] : [];
+        let authorized = true;
+        let sourceUnavailable = false;
+        for (const source of sources) {
+          const access = await resolveAccess(
+            deps, input, item, source.sourceScopeType, source.sourceScopeRef, liveGrants, source,
+          );
+          if (!access.allowed) {
+            authorized = false;
+            break;
+          }
+          if (!await deps.permissions.isSourceAvailable({
+            teamId: input.teamId,
+            requesterUserId: input.requesterUserId,
+            targetAgentId: input.targetAgentId,
+            source,
+          })) {
+            sourceUnavailable = true;
+            break;
+          }
+          const accessGrant = access.grant;
+          if (accessGrant && !grants.some((grant) => grant.id === accessGrant.id)) grants.push(accessGrant);
+        }
+        if (!authorized) continue;
+        if (sourceUnavailable) {
+          excluded.push({ memoryId: item.id, reason: 'MEMORY_SOURCE_UNAVAILABLE' });
+          continue;
+        }
+
         const baseDecision = evaluateMemoryInjection({
           status: item.status,
           validUntil: item.validUntil,
@@ -109,44 +151,17 @@ export function createCollaborativeMemorySearchService(deps: CollaborativeMemory
           allSourcesAvailable: true,
         });
         if (!baseDecision.allowed) {
-          excluded.push({ memoryId: item.id, reason: baseDecision.reason });
+          const reason = statusExclusionReason(baseDecision.reason);
+          if (reason) excluded.push({ memoryId: item.id, reason });
           continue;
         }
 
-        const itemAccess = await resolveAccess(deps, input, item, item.scopeType, item.scopeRef, currentGrants);
-        if (!itemAccess.allowed) {
-          excluded.push({ memoryId: item.id, reason: itemAccess.reason });
-          continue;
-        }
-
-        const sources = await deps.repositories.sources.listByMemory({ teamId: input.teamId, memoryId: item.id });
-        const grants: MemoryGrantRecord[] = itemAccess.grant ? [itemAccess.grant] : [];
-        let sourceFailure: MemorySearchExclusionReason | undefined;
-        for (const source of sources) {
-          if (!await deps.permissions.isSourceAvailable({
-            teamId: input.teamId, targetAgentId: input.targetAgentId, source,
-          })) {
-            sourceFailure = 'MEMORY_SOURCE_UNAVAILABLE';
-            break;
-          }
-          const access = await resolveAccess(
-            deps, input, item, source.sourceScopeType, source.sourceScopeRef, currentGrants, source,
-          );
-          if (!access.allowed) {
-            sourceFailure = access.reason;
-            break;
-          }
-          const accessGrant = access.grant;
-          if (accessGrant && !grants.some((grant) => grant.id === accessGrant.id)) grants.push(accessGrant);
-        }
-        if (sourceFailure) {
-          excluded.push({ memoryId: item.id, reason: sourceFailure });
-          continue;
-        }
+        const projectedItem = projectAuthorizedItem(item, grants);
+        if (!projectedItem) continue;
 
         const tags = await deps.repositories.tags.listByMemory({ teamId: input.teamId, memoryId: item.id });
         eligible.push({
-          item,
+          item: projectedItem,
           sources,
           tags: tags.map((tag) => tag.tag),
           accessMode: grants.length > 0 ? 'explicit-grant' : 'scope-policy',
@@ -179,6 +194,7 @@ async function resolveAccess(
 ): Promise<AccessDecision> {
   const visibility = await deps.permissions.evaluateScopeVisibility({
     teamId: input.teamId,
+    requesterUserId: input.requesterUserId,
     targetAgentId: input.targetAgentId,
     memoryId: item.id,
     scopeType,
@@ -186,19 +202,45 @@ async function resolveAccess(
     source,
   });
   if (visibility === 'visible') return { allowed: true };
-  if (visibility === 'hidden') return { allowed: false, reason: 'MEMORY_SCOPE_NOT_VISIBLE' };
+  if (visibility === 'hidden') return { allowed: false };
 
   const matching = currentGrants.filter((grant) => grant.sourceScopeType === scopeType
-    && grant.sourceScopeRef === scopeRef && grant.status === 'active' && grant.expiresAt > input.now);
-  if (matching.length === 0) return { allowed: false, reason: 'MEMORY_GRANT_UNAVAILABLE' };
+    && grant.sourceScopeRef === scopeRef);
+  if (matching.length === 0) return { allowed: false };
   const expected = input.expectedGrantVersions === undefined
     ? undefined
     : new Map(input.expectedGrantVersions.map((grant) => [grant.id, grant.version]));
   const grant = expected === undefined
     ? matching[0]
     : matching.find((candidate) => expected.get(candidate.id) === candidate.version);
-  if (!grant) return { allowed: false, reason: 'MEMORY_GRANT_VERSION_STALE' };
+  if (!grant) return { allowed: false };
   return { allowed: true, grant };
+}
+
+function projectAuthorizedItem(
+  item: MemoryItemRecord,
+  grants: readonly MemoryGrantRecord[],
+): MemoryItemRecord | null {
+  if (grants.length === 0) return item;
+  if (grants.some((grant) => grant.authorizedRedactionLevel === 'sensitive-removed')) return null;
+
+  const contentKind = memoryContentKind(item);
+  if (grants.some((grant) => grant.authorizedContentKind !== 'summary'
+    && grant.authorizedContentKind !== contentKind)) return null;
+  const summaryOnly = grants.some((grant) => grant.authorizedContentKind === 'summary'
+    || grant.authorizedRedactionLevel === 'summary-only');
+  if (!summaryOnly) return item;
+
+  const summary = item.summary?.trim();
+  return summary ? { ...item, content: summary, summary } : null;
+}
+
+function memoryContentKind(item: MemoryItemRecord): MemoryContentKind {
+  if (item.kind === 'decision') return 'decision';
+  if (item.kind === 'preference') return 'preference';
+  if (item.kind === 'procedural') return 'procedure';
+  if (item.kind === 'artifact-summary') return 'summary';
+  return 'fact';
 }
 
 function queryScopes(
@@ -224,4 +266,9 @@ function queryScopes(
 function normalizeLimit(limit: number): number {
   if (!Number.isFinite(limit) || limit <= 0) return 0;
   return Math.min(Math.floor(limit), 100);
+}
+
+function statusExclusionReason(reason: string): MemorySearchExclusionReason | undefined {
+  if (reason === 'MEMORY_NOT_ACTIVE' || reason === 'MEMORY_EXPIRED') return reason;
+  return undefined;
 }

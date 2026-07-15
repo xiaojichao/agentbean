@@ -18,15 +18,23 @@ type DatabaseConstructor = new (filename: string) => DatabaseWithClose;
 const Database = createRequire(import.meta.url)('better-sqlite3') as DatabaseConstructor;
 
 const permissions: MemorySearchPermissions = {
-  canSearchTeam: async (input) => input.teamId === 'team-1',
+  canSearchTeam: async (input) => input.teamId === 'team-1'
+    && input.requesterUserId === 'user-1'
+    && (input.targetAgentId === 'agent-1' || input.targetAgentId === 'agent-2'),
   evaluateScopeVisibility: async (input) => {
+    if (input.requesterUserId !== 'user-1' || input.targetAgentId !== 'agent-1') return 'hidden';
     if (input.memoryId === 'hidden') return 'hidden';
     if (input.source?.sourceVisibility === 'private'
       || input.source?.sourceVisibility === 'dm-participants') return 'explicit-grant';
     if (input.scopeType === 'dm') return 'explicit-grant';
+    if (input.scopeType === 'task' && input.scopeRef !== 'task-1') return 'hidden';
+    if (input.scopeType === 'channel' && input.scopeRef !== 'channel-1') return 'hidden';
+    if (input.scopeType === 'user' && input.scopeRef !== input.requesterUserId) return 'hidden';
+    if (input.scopeType === 'agent' && input.scopeRef !== input.targetAgentId) return 'hidden';
     return 'visible';
   },
-  isSourceAvailable: async (input) => input.source.sourceId !== 'source-invalid',
+  isSourceAvailable: async (input) => input.requesterUserId === 'user-1'
+    && input.targetAgentId === 'agent-1' && input.source.sourceId !== 'source-invalid',
 };
 
 describe.each([
@@ -61,7 +69,7 @@ describe.each([
         permissions,
       });
       const result = await service.search({
-        teamId: 'team-1', targetAgentId: 'agent-1', taskId: 'task-1',
+        teamId: 'team-1', requesterUserId: 'user-1', targetAgentId: 'agent-1', taskId: 'task-1',
         channelId: 'channel-1', prompt: 'node runtime', now: 1_000, limit: 10,
       });
 
@@ -70,9 +78,9 @@ describe.each([
       expect(result.excluded).toEqual(expect.arrayContaining([
         { memoryId: 'candidate', reason: 'MEMORY_NOT_ACTIVE' },
         { memoryId: 'expired', reason: 'MEMORY_EXPIRED' },
-        { memoryId: 'hidden', reason: 'MEMORY_SCOPE_NOT_VISIBLE' },
         { memoryId: 'invalid-source', reason: 'MEMORY_SOURCE_UNAVAILABLE' },
       ]));
+      expect(result.excluded).not.toContainEqual(expect.objectContaining({ memoryId: 'hidden' }));
     } finally {
       fixture.close();
     }
@@ -91,13 +99,13 @@ describe.each([
 
       await expect(service.search(query())).resolves.toMatchObject({
         matches: [{
-          item: { id: 'private' }, accessMode: 'explicit-grant',
+          item: { id: 'private', content: 'Safe summary' }, accessMode: 'explicit-grant',
           grants: [{ id: 'grant-1', version: 2 }],
         }],
       });
       await expect(service.search({ ...query(), expectedGrantVersions: [{ id: 'grant-1', version: 1 }] }))
         .resolves.toMatchObject({
-          matches: [], excluded: [{ memoryId: 'private', reason: 'MEMORY_GRANT_VERSION_STALE' }],
+          matches: [], excluded: [],
         });
     } finally {
       fixture.close();
@@ -117,7 +125,7 @@ describe.each([
       });
 
       await expect(service.search({ ...query(), taskId: 'task-1' })).resolves.toMatchObject({
-        matches: [], excluded: [{ memoryId: 'private-source', reason: 'MEMORY_GRANT_UNAVAILABLE' }],
+        matches: [], excluded: [],
       });
     } finally {
       fixture.close();
@@ -128,19 +136,92 @@ describe.each([
     for (const status of ['revoked', 'expired'] as const) {
       const fixture = createFixture();
       try {
-        await fixture.repositories.memory.items.create(item('private', 'dm', 'dm-1'));
-        await fixture.repositories.memory.grants.create(grant(1));
-        await fixture.repositories.memory.grants.create(grant(2, status));
+        await fixture.repositories.memory.items.create(item('private', 'dm', 'private-dm'));
+        await fixture.repositories.memory.grants.create(grant(1, 'active', { sourceScopeRef: 'private-dm' }));
+        await fixture.repositories.memory.grants.create(grant(2, status, { sourceScopeRef: 'private-dm' }));
         const service = createCollaborativeMemorySearchService({
           repositories: fixture.repositories.memory,
           permissions,
         });
         const result = await service.search(query());
         expect(result.matches).toEqual([]);
-        expect(result.excluded).toEqual([{ memoryId: 'private', reason: 'MEMORY_GRANT_UNAVAILABLE' }]);
+        expect(result.excluded).toEqual([]);
       } finally {
         fixture.close();
       }
+    }
+  });
+
+  test('does not activate a future grant or leak the private Memory id', async () => {
+    const fixture = createFixture();
+    try {
+      await fixture.repositories.memory.items.create(item('future-private', 'dm', 'future-dm'));
+      await fixture.repositories.memory.grants.create(grant(1, 'active', {
+        sourceScopeRef: 'future-dm', issuedAt: 1_500, expiresAt: 2_000,
+      }));
+      const service = createCollaborativeMemorySearchService({
+        repositories: fixture.repositories.memory,
+        permissions,
+      });
+
+      await expect(service.search(query())).resolves.toEqual({ matches: [], excluded: [] });
+    } finally {
+      fixture.close();
+    }
+  });
+
+  test('fails closed when sensitive-removed projection is not available', async () => {
+    const fixture = createFixture();
+    try {
+      await fixture.repositories.memory.items.create(item('redacted-private', 'dm', 'redacted-dm'));
+      await fixture.repositories.memory.grants.create(grant(1, 'active', {
+        sourceScopeRef: 'redacted-dm', authorizedRedactionLevel: 'sensitive-removed',
+      }));
+      const service = createCollaborativeMemorySearchService({
+        repositories: fixture.repositories.memory,
+        permissions,
+      });
+
+      await expect(service.search(query())).resolves.toEqual({ matches: [], excluded: [] });
+    } finally {
+      fixture.close();
+    }
+  });
+
+  test('requires both requester and target Agent visibility', async () => {
+    const fixture = createFixture();
+    try {
+      await fixture.repositories.memory.items.create(item('task-visible', 'task', 'task-1'));
+      const service = createCollaborativeMemorySearchService({
+        repositories: fixture.repositories.memory,
+        permissions,
+      });
+
+      await expect(service.search({ ...query(), taskId: 'task-1', requesterUserId: 'user-2' }))
+        .resolves.toEqual({ matches: [], excluded: [] });
+      await expect(service.search({ ...query(), taskId: 'task-1', targetAgentId: 'agent-2' }))
+        .resolves.toEqual({ matches: [], excluded: [] });
+    } finally {
+      fixture.close();
+    }
+  });
+
+  test('does not trust caller-supplied Task, Channel or User scope ids', async () => {
+    const fixture = createFixture();
+    try {
+      await fixture.repositories.memory.items.create(item('other-task', 'task', 'task-2'));
+      await fixture.repositories.memory.items.create(item('other-channel', 'channel', 'channel-2'));
+      await fixture.repositories.memory.items.create(item('other-user', 'user', 'user-2'));
+      const service = createCollaborativeMemorySearchService({
+        repositories: fixture.repositories.memory,
+        permissions,
+      });
+
+      await expect(service.search({
+        ...query(), taskId: 'task-2', channelId: 'channel-2', userId: 'user-2',
+      })).resolves.toEqual({ matches: [], excluded: [] });
+    } finally {
+      fixture.close();
     }
   });
 
@@ -159,7 +240,7 @@ describe.each([
 
 function query() {
   return {
-    teamId: 'team-1', targetAgentId: 'agent-1', channelId: 'dm-1',
+    teamId: 'team-1', requesterUserId: 'user-1', targetAgentId: 'agent-1', channelId: 'dm-1',
     prompt: '', now: 1_000, limit: 10,
   } as const;
 }
@@ -172,7 +253,7 @@ function item(
 ): MemoryItemRecord {
   return {
     schemaVersion: 1, id, teamId: 'team-1', kind: 'decision', status: 'active',
-    scopeType, scopeRef, content: 'Use Node 24 runtime', createdAt: 10, updatedAt: 10,
+    scopeType, scopeRef, content: 'raw secret content', summary: 'Safe summary', createdAt: 10, updatedAt: 10,
     ...overrides,
   };
 }
@@ -190,12 +271,17 @@ function source(
   };
 }
 
-function grant(version: number, status: MemoryGrantRecord['status'] = 'active'): MemoryGrantRecord {
+function grant(
+  version: number,
+  status: MemoryGrantRecord['status'] = 'active',
+  overrides: Partial<MemoryGrantRecord> = {},
+): MemoryGrantRecord {
   return {
     id: 'grant-1', version, teamId: 'team-1', sourceScopeType: 'dm', sourceScopeRef: 'dm-1',
     targetAgentId: 'agent-1', authorizedContentKind: 'summary',
     authorizedRedactionLevel: 'summary-only', status, issuedByUserId: 'user-1',
     issuedAt: version, expiresAt: status === 'expired' ? 900 : 2_000,
     ...(status === 'revoked' ? { revokedAt: 500 } : {}),
+    ...overrides,
   };
 }
