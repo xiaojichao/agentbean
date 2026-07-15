@@ -82,3 +82,12 @@ test('fails closed when Phase 1 exposes a Memory tool inherited by Phase 2', () 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /P3_PHASE2_ISOLATION_INVALID/);
 });
+
+test('fails closed when the atomic Memory schema disappears', () => {
+  const result = withFixture('agentbean-phase3-persistence-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/infra/sqlite/migrations/team/0015_management_phase_3_memory.sql');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('memory_audit_events', 'removed_audit_events'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_PERSISTENCE_BOUNDARY_INVALID/);
+});

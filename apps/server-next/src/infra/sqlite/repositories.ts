@@ -24,6 +24,8 @@ import type { SkillDto } from '../../../../../packages/contracts/src/index.js';
 import { createSqliteManagementPersistence } from './management-repositories.js';
 import { createSqliteTaskCoordinationRepositories } from './task-coordination-repositories.js';
 import { createTaskCoordinationUnitOfWork } from '../../application/task-coordination-unit-of-work.js';
+import { createMemoryUnitOfWork } from '../../application/memory-unit-of-work.js';
+import { createSqliteMemoryRepositories } from './memory-repositories.js';
 
 export interface SqliteStatement {
   run(...params: unknown[]): unknown;
@@ -74,6 +76,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0012_management_frozen_target.sql');
   applyMigration(db, 'team/0013_management_phase_2_task_dag.sql');
   applyMigration(db, 'team/0014_management_phase_2_rollout.sql');
+  applyMigration(db, 'team/0015_management_phase_3_memory.sql');
 }
 
 // 清理 channel_agent_members 中指向已删 agent 的孤儿行（PRD §6）。
@@ -139,6 +142,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
   const { globalDb, teamDb } = input;
   const management = createSqliteManagementPersistence(teamDb);
   const taskCoordination = createSqliteTaskCoordinationRepositories(teamDb);
+  const memory = createSqliteMemoryRepositories(teamDb);
 
   let repositories!: ServerNextRepositories;
   repositories = {
@@ -164,6 +168,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           management: managementRepositories,
         })),
     ),
+    memory,
+    memoryUnitOfWork: createMemoryUnitOfWork((operation) =>
+      management.unitOfWork.run(() => operation(memory))),
     users: {
       async create(user) {
         globalDb
