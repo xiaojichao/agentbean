@@ -79,6 +79,25 @@ describe('local Memory cross-process file lock', () => {
     })).resolves.toBe('next');
   });
 
+  test.each([
+    ['heartbeat 缺失', 'hold-no-heartbeat'],
+    ['heartbeat stale', 'hold-stalled-heartbeat'],
+  ] as const)('alive owner 的 %s 不得触发抢锁', async (_label, mode) => {
+    const lockFile = join(mkdtempSync(join(tmpdir(), 'agentbean-lock-alive-')), 'items.lock');
+    const child = startChild(lockFile, mode, 250);
+    await child.ready;
+    await delay(80);
+
+    await expect(withLocalMemoryFileLock(lockFile, async () => undefined, {
+      timeoutMs: 60, pollMs: 5, heartbeatMs: 10, staleHeartbeatMs: 40,
+      malformedGraceMs: 40,
+    })).rejects.toThrow('LOCAL_MEMORY_LOCK_TIMEOUT');
+    await expect(child.exited).resolves.toBe(0);
+    await expect(withLocalMemoryFileLock(lockFile, async () => 'next', {
+      timeoutMs: 200, pollMs: 5, heartbeatMs: 10, staleHeartbeatMs: 50,
+    })).resolves.toBe('next');
+  });
+
   test('finally 只删除自己的 token/inode，不删除已被替换的新 owner 锁', async () => {
     const lockFile = join(mkdtempSync(join(tmpdir(), 'agentbean-lock-owner-')), 'items.lock');
     const replacement = {
@@ -98,7 +117,8 @@ describe('local Memory cross-process file lock', () => {
 
 function startChild(
   lockFile: string,
-  mode: 'crash' | 'hold' | 'partial-create' | 'partial-heartbeat' | 'malformed-lock',
+  mode: 'crash' | 'hold' | 'partial-create' | 'partial-heartbeat' | 'malformed-lock'
+    | 'hold-no-heartbeat' | 'hold-stalled-heartbeat',
   holdMs = 250,
 ): {
   readonly process: ChildProcessWithoutNullStreams;

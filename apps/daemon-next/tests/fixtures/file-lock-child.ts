@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import { withLocalMemoryFileLock } from '../../src/memory/file-lock.js';
 
@@ -33,6 +33,18 @@ await withLocalMemoryFileLock(lockFile, async () => {
     });
     await delay(20);
     process.exit(19);
+  }
+  if (mode === 'hold-no-heartbeat') {
+    const owner = JSON.parse(readFileSync(lockFile, 'utf8')) as { ownerToken: string };
+    const heartbeatFile = `${lockFile}.heartbeat-${owner.ownerToken}`;
+    rmSync(heartbeatFile);
+    mkdirSync(heartbeatFile);
+    await delay(holdMs);
+    return;
+  }
+  if (mode === 'hold-stalled-heartbeat') {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, holdMs);
+    return;
   }
   await delay(holdMs);
 }, {

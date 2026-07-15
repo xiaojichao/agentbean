@@ -23,7 +23,6 @@ interface ValidOwnerState {
   readonly identity: FileIdentity;
   readonly metadata: Stats;
   readonly owner: LockOwnerV2;
-  readonly legacyHeartbeatAt?: number;
 }
 
 interface MalformedOwnerState {
@@ -89,7 +88,7 @@ export async function withLocalMemoryFileLock<T>(
       acquired = await createLock(lockFile);
     } catch (error) {
       if (errorCode(error) !== 'EEXIST') throw new Error('LOCAL_MEMORY_LOCK_FAILED');
-      if (await reclaimAbandonedLock(lockFile, staleHeartbeatMs, malformedGraceMs, pollMs)) continue;
+      if (await reclaimAbandonedLock(lockFile, malformedGraceMs, pollMs)) continue;
       if (Date.now() >= deadline) throw new Error('LOCAL_MEMORY_LOCK_TIMEOUT');
       await delay(pollMs);
     }
@@ -150,7 +149,6 @@ function startHeartbeat(acquired: AcquiredLock, heartbeatMs: number): LockHeartb
 
 async function reclaimAbandonedLock(
   lockFile: string,
-  staleHeartbeatMs: number,
   malformedGraceMs: number,
   stabilityCheckMs: number,
 ): Promise<boolean> {
@@ -163,13 +161,8 @@ async function reclaimAbandonedLock(
 
   const pidState = inspectPid(state.owner.pid);
   if (pidState === 'dead') return removeValidOwner(lockFile, state);
-  const heartbeatAt = await readHeartbeatAt(lockFile, state);
-  if (heartbeatAt !== undefined && Date.now() - heartbeatAt > staleHeartbeatMs) {
-    return removeValidOwner(lockFile, state);
-  }
-  if (heartbeatAt === undefined && Date.now() - state.metadata.mtimeMs > malformedGraceMs) {
-    return removeValidOwnerIfStable(lockFile, state, stabilityCheckMs);
-  }
+  // Without operation-level fencing, reclaiming a live or unverifiable owner
+  // could let two writers commit. Heartbeat is therefore diagnostic only.
   return false;
 }
 
@@ -179,22 +172,6 @@ async function removeValidOwner(lockFile: string, state: ValidOwnerState): Promi
     await rm(lockHeartbeatFile(lockFile, state.owner.ownerToken), { force: true }).catch(() => undefined);
   }
   return removed;
-}
-
-async function removeValidOwnerIfStable(
-  lockFile: string,
-  expected: ValidOwnerState,
-  stabilityCheckMs: number,
-): Promise<boolean> {
-  await delay(stabilityCheckMs);
-  const current = await readOwnerState(lockFile);
-  if (current.kind !== 'valid'
-    || current.owner.ownerToken !== expected.owner.ownerToken
-    || !sameIdentity(current.identity, expected.identity)
-    || current.metadata.mtimeMs !== expected.metadata.mtimeMs) {
-    return false;
-  }
-  return removeValidOwner(lockFile, current);
 }
 
 async function removeMalformedIfStable(
@@ -268,10 +245,7 @@ async function inspectOversizedMalformedLock(lockFile: string): Promise<OwnerSta
   }
 }
 
-function parseOwner(value: unknown): {
-  readonly owner: LockOwnerV2;
-  readonly legacyHeartbeatAt?: number;
-} | undefined {
+function parseOwner(value: unknown): { readonly owner: LockOwnerV2 } | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const record = value as Record<string, unknown>;
   const common = typeof record.ownerToken === 'string'
@@ -294,33 +268,9 @@ function parseOwner(value: unknown): {
         pid: Number(record.pid),
         createdAt: Number(record.createdAt),
       },
-      legacyHeartbeatAt: Number(record.heartbeatAt),
     };
   }
   return undefined;
-}
-
-async function readHeartbeatAt(lockFile: string, state: ValidOwnerState): Promise<number | undefined> {
-  if (state.legacyHeartbeatAt !== undefined) return state.legacyHeartbeatAt;
-  try {
-    const snapshot = await readRegularFileNoFollow(
-      lockHeartbeatFile(lockFile, state.owner.ownerToken),
-      MAX_LOCK_BYTES,
-    );
-    const parsed = JSON.parse(snapshot.data.toString('utf8')) as unknown;
-    return isHeartbeat(parsed, state.owner.ownerToken) ? parsed.heartbeatAt : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function isHeartbeat(value: unknown, ownerToken: string): value is LockHeartbeatV1 {
-  if (!value || typeof value !== 'object') return false;
-  const heartbeat = value as Partial<LockHeartbeatV1>;
-  return Object.keys(heartbeat).length === 3
-    && heartbeat.schemaVersion === 1
-    && heartbeat.ownerToken === ownerToken
-    && Number.isSafeInteger(heartbeat.heartbeatAt);
 }
 
 function serializeHeartbeat(owner: LockOwnerV2, heartbeatAt: number): string {
