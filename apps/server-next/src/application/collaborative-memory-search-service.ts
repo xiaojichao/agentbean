@@ -56,8 +56,12 @@ export interface SearchCollaborativeMemoriesInput {
   readonly prompt: string;
   readonly now: UnixMs;
   readonly limit: number;
+  /** Optional hard gate applied before relevance ranking and limit truncation. */
+  readonly accessMode?: CollaborativeMemoryAccessMode;
   readonly expectedGrantVersions?: readonly { readonly id: ID; readonly version: number }[];
 }
+
+export type CollaborativeMemoryAccessMode = 'scope-policy' | 'explicit-grant';
 
 export type MemorySearchExclusionReason =
   | 'MEMORY_NOT_ACTIVE'
@@ -68,7 +72,7 @@ export interface CollaborativeMemorySearchMatch {
   readonly item: MemoryItemRecord;
   readonly sources: readonly MemorySourceRecord[];
   readonly tags: readonly string[];
-  readonly accessMode: 'scope-policy' | 'explicit-grant';
+  readonly accessMode: CollaborativeMemoryAccessMode;
   readonly grants: readonly MemoryGrantRecord[];
   readonly score: number;
   readonly reasons: readonly MemoryRankingReason[];
@@ -169,8 +173,11 @@ export function createCollaborativeMemorySearchService(deps: CollaborativeMemory
         });
       }
 
-      const ranked = rankMemories(eligible.map((entry) => entry.item), input);
-      const byId = new Map(eligible.map((entry) => [entry.item.id, entry]));
+      const rankable = input.accessMode === undefined
+        ? eligible
+        : eligible.filter((entry) => entry.accessMode === input.accessMode);
+      const ranked = rankMemories(rankable.map((entry) => entry.item), input);
+      const byId = new Map(rankable.map((entry) => [entry.item.id, entry]));
       return {
         matches: ranked.slice(0, normalizeLimit(input.limit)).map((rankedItem) => ({
           ...byId.get(rankedItem.candidate.id)!,
