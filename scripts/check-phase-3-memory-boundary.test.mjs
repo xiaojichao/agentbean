@@ -173,3 +173,23 @@ test('fails closed when Capsule denial stops updating the authoritative ref', ()
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /P3_CAPSULE_INVOCATION_BINDING_INVALID/);
 });
+
+test('fails closed when Phase 2 agents.invoke drops the Capsule ref wire contract', () => {
+  const result = withFixture('agentbean-phase3-capsule-wire-', (fixture) => {
+    const path = join(fixture, 'packages/contracts/src/management-worker-v2.ts');
+    writeFileSync(path, readFileSync(path, 'utf8')
+      .replaceAll('memoryCapsuleRef?: MemoryCapsuleRefDto', 'removedMemoryCapsuleRef?: never'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPSULE_INVOCATION_BINDING_INVALID/);
+});
+
+test('fails closed when Phase 2 agents.invoke drops the Capsule ref model schema', () => {
+  const result = withFixture('agentbean-phase3-capsule-schema-', (fixture) => {
+    const path = join(fixture, 'packages/pi-management-runtime/src/management-tool-catalog.ts');
+    writeFileSync(path, readFileSync(path, 'utf8')
+      .replaceAll('memoryCapsuleRef: Type.Optional(Type.Object', 'removedMemoryCapsuleRef: Type.Optional(Type.Object'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPSULE_INVOCATION_BINDING_INVALID/);
+});

@@ -82,6 +82,16 @@ function phase2TaskSchemaFor(name: Phase2TaskToolName) {
       Type.Literal('invocation'), Type.Literal('task'),
     ]))),
   }, { additionalProperties: false });
+  if (name === 'agents.invoke') return Type.Object({
+    taskId: id(), expectedTaskRevision: revision(), taskAttempt: revision(), claimLeaseId: id(),
+    targetAgentId: Type.Optional(id()), objective: id(), attachmentIds: Type.Array(id()),
+    memoryCapsuleRef: Type.Optional(Type.Object({
+      schemaVersion: Type.Literal(1), id: id(), teamId: id(), managementRunId: id(),
+      taskId: Type.Optional(id()), targetAgentId: id(), contentHash: id(),
+      authorizationDecisionId: id(), expiresAt: Type.Integer({ minimum: 0 }),
+    }, { additionalProperties: false })),
+    deadlineAt: Type.Optional(Type.Integer({ minimum: 0 })),
+  }, { additionalProperties: false });
   if (name === 'agents.list_available') return Type.Object({
     capabilityQuery: Type.Optional(id()), includeBusy: Type.Optional(Type.Boolean()),
   }, { additionalProperties: false });
@@ -146,7 +156,8 @@ function phase2TaskSchemaFor(name: Phase2TaskToolName) {
 }
 
 function schemaFor(name: ManagementToolName, context: ManagementSessionContext) {
-  if (context.schemaVersion === 2 && getManagementToolMetadata(name).phase === 2) {
+  if (context.schemaVersion === 2
+    && (getManagementToolMetadata(name).phase === 2 || name === 'agents.invoke')) {
     return phase2TaskSchemaFor(name as Phase2TaskToolName);
   }
   return Type.Object({}, { additionalProperties: true });

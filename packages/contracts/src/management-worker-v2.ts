@@ -4,6 +4,7 @@ import type { AcceptanceCriterionDto, EvidenceRefDto, SubtaskAcceptanceV1 } from
 import type { AgentHandoffReturnMode, AgentHandoffStatus, SerialAgentHandoffKind } from './collaboration.js';
 import { parseAgentCollaborationProposalV1 } from './collaboration.js';
 import type { AgentInvocationResultDto } from './invocation.js';
+import type { MemoryCapsuleRefDto } from './management-memory.js';
 
 export const PHASE_2_TASK_WORKER_TOOL_NAMES = [
   'tasks.create_subtasks',
@@ -86,6 +87,7 @@ export interface Phase2ManagementWorkerToolInputMapV1 {
     readonly targetAgentId?: ID;
     readonly objective: string;
     readonly attachmentIds: readonly ID[];
+    readonly memoryCapsuleRef?: MemoryCapsuleRefDto;
     readonly deadlineAt?: UnixMs;
   };
   readonly 'agents.list_available': {
@@ -236,6 +238,23 @@ function assertStringArray(value: unknown): void {
   if (!Array.isArray(value) || value.some((entry) => !nonEmpty(entry))) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
 }
 
+function assertMemoryCapsuleRef(value: unknown): void {
+  assertExactKeys(value, [
+    'schemaVersion', 'id', 'teamId', 'managementRunId', 'taskId', 'targetAgentId',
+    'contentHash', 'authorizationDecisionId', 'expiresAt',
+  ], [
+    'schemaVersion', 'id', 'teamId', 'managementRunId', 'targetAgentId',
+    'contentHash', 'authorizationDecisionId', 'expiresAt',
+  ]);
+  if (value.schemaVersion !== 1 || !nonEmpty(value.id) || !nonEmpty(value.teamId)
+    || !nonEmpty(value.managementRunId) || !nonEmpty(value.targetAgentId)
+    || !nonEmpty(value.contentHash) || !nonEmpty(value.authorizationDecisionId)
+    || (value.taskId !== undefined && !nonEmpty(value.taskId))) {
+    throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+  }
+  assertInteger(value.expiresAt, 0);
+}
+
 function assertEvidenceRef(value: unknown): void {
   assertExactKeys(value, ['kind', 'id', 'snapshotHash', 'snapshotRevision', 'capturedAt'], ['kind', 'id', 'snapshotHash', 'capturedAt']);
   if (!['message', 'artifact', 'workspace-run', 'invocation', 'task'].includes(String(value.kind))
@@ -262,7 +281,7 @@ function assertCriterion(value: unknown): void {
 function assertTaskToolInput(toolName: string, value: unknown): void {
   if (toolName === 'agents.invoke') {
     assertExactKeys(value, ['taskId', 'expectedTaskRevision', 'taskAttempt', 'claimLeaseId',
-      'targetAgentId', 'objective', 'attachmentIds', 'deadlineAt'], ['taskId', 'expectedTaskRevision', 'taskAttempt',
+      'targetAgentId', 'objective', 'attachmentIds', 'memoryCapsuleRef', 'deadlineAt'], ['taskId', 'expectedTaskRevision', 'taskAttempt',
       'claimLeaseId', 'objective', 'attachmentIds']);
     if (!nonEmpty(value.taskId) || !nonEmpty(value.claimLeaseId) || !nonEmpty(value.objective)) {
       throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
@@ -271,6 +290,7 @@ function assertTaskToolInput(toolName: string, value: unknown): void {
     assertInteger(value.expectedTaskRevision, 1);
     assertInteger(value.taskAttempt, 1);
     assertStringArray(value.attachmentIds);
+    if (value.memoryCapsuleRef !== undefined) assertMemoryCapsuleRef(value.memoryCapsuleRef);
     if (value.deadlineAt !== undefined) assertInteger(value.deadlineAt, 0);
     return;
   }

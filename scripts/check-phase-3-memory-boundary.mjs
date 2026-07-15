@@ -39,8 +39,10 @@ const memoryCandidateTests = read('apps/server-next/tests/memory-candidate-servi
 const memoryCandidatePolicy = read('packages/domain/src/memory-candidate-policy.ts');
 const memoryCandidateMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0019_management_phase_3_candidate_lifecycle.sql');
 const invocationContract = read('packages/contracts/src/invocation.ts');
+const managementWorkerV2 = read('packages/contracts/src/management-worker-v2.ts');
 const invocationGateway = read('apps/server-next/src/application/management/invocation-gateway.ts');
 const managementCheckpoint = read('apps/server-next/src/application/management/management-checkpoint.ts');
+const managementToolCatalog = read('packages/pi-management-runtime/src/management-tool-catalog.ts');
 const runtimeTypes = read('packages/pi-management-runtime/src/types.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
@@ -207,9 +209,11 @@ if (!domainMemoryHashing.includes('hashCapsuleItems')
   || !memoryCapsuleService.includes('capsuleRefs.create')
   || !invocationContract.includes('memoryCapsuleRef?: MemoryCapsuleRefDto')
   || invocationContract.includes('memoryCapsuleId?:')
+  || !managementWorkerV2.includes('memoryCapsuleRef?: MemoryCapsuleRefDto')
   || !invocationGateway.includes('sameMemoryCapsuleRef')
   || !invocationGateway.includes('INVOCATION_MEMORY_CAPSULE_REF_INVALID')
   || !capsuleInjectionValidator.includes('capsuleRefs.markDenied')
+  || !managementToolCatalog.includes('memoryCapsuleRef: Type.Optional(Type.Object')
   || !managementCheckpoint.includes('capsuleRefs.listByRun')
   || !managementCheckpoint.includes('ref.deniedAt === undefined && ref.expiresAt > now')) {
   violations.push('P3_CAPSULE_INVOCATION_BINDING_INVALID: Capsule ref 固化进 intent + checkpoint 查权威 capsule_refs 表接线 is required');

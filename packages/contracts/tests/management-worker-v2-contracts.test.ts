@@ -91,9 +91,16 @@ describe('Phase 2 management worker contracts', () => {
       toolName: 'agents.invoke',
       input: {
         taskId: 'task-1', expectedTaskRevision: 3, taskAttempt: 2, claimLeaseId: 'claim-1',
-        objective: '完成子任务', attachmentIds: ['artifact-1'], deadlineAt: 1_000,
+        objective: '完成子任务', attachmentIds: ['artifact-1'],
+        memoryCapsuleRef: {
+          schemaVersion: 1, id: 'capsule-1', teamId: 'team-1', managementRunId: 'run-1',
+          taskId: 'task-1', targetAgentId: 'agent-1', contentHash: 'sha256:capsule',
+          authorizationDecisionId: 'decision-1', expiresAt: 900,
+        },
+        deadlineAt: 1_000,
       },
-    })).toMatchObject({ schemaVersion: 2, managementPhase: 2, toolName: 'agents.invoke' });
+    })).toMatchObject({ schemaVersion: 2, managementPhase: 2, toolName: 'agents.invoke',
+      input: { memoryCapsuleRef: { id: 'capsule-1' } } });
     expect(parsePhase2TaskToolRequestV2({
       ...value,
       toolName: 'agents.invoke',
@@ -102,6 +109,15 @@ describe('Phase 2 management worker contracts', () => {
         targetAgentId: 'agent-local-guess', objective: '完成子任务', attachmentIds: [],
       },
     })).toMatchObject({ toolName: 'agents.invoke', input: { targetAgentId: 'agent-local-guess' } });
+    expect(() => parsePhase2TaskToolRequestV2({
+      ...value,
+      toolName: 'agents.invoke',
+      input: {
+        taskId: 'task-1', expectedTaskRevision: 3, taskAttempt: 2, claimLeaseId: 'claim-1',
+        objective: '完成子任务', attachmentIds: [],
+        memoryCapsuleRef: { schemaVersion: 1, id: 'capsule-1' },
+      },
+    })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
     expect(() => parsePhase2TaskToolRequestV2({ ...value, leaseToken: '' }))
       .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
     expect(() => parsePhase2TaskToolRequestV2({
