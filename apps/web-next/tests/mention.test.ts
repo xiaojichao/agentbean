@@ -55,6 +55,20 @@ describe('mention composer draft', () => {
       caret: 25,
     });
   });
+
+  test('inserts multi-word member names as token-safe structured mentions', () => {
+    const replacement = replaceActiveMention('请 @Ren', 6, 'Renamed Codex');
+    expect(replacement).toEqual({ value: '请 @Renamed-Codex ', caret: 17 });
+    const mentions = extractMentions(replacement!.value, [
+      { id: 'a1', name: 'Renamed Codex', kind: 'agent' },
+    ]);
+    expect(mentions).toEqual([
+      { id: 'a1', kind: 'agent', name: 'Renamed-Codex', start: 2, end: 16 },
+    ]);
+    expect(resolveMentionByName('Renamed-Codex', mentions, {
+      a1: { name: 'Renamed Codex' },
+    })).toEqual({ id: 'a1', kind: 'agent', displayName: 'Renamed Codex' });
+  });
 });
 
 describe('resolveMentionByName (render: follow rename via locked id)', () => {

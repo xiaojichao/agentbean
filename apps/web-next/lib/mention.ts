@@ -18,7 +18,11 @@ export interface MentionDraft {
 }
 
 function normalizeMentionName(name: string): string {
-  return name.trim().toLowerCase();
+  return name.trim().toLowerCase().replace(/[\s_]+/gu, '-').replace(/-+/gu, '-');
+}
+
+function mentionToken(name: string): string {
+  return name.trim().replace(/\s+/gu, '-');
 }
 
 /** 返回光标前仍在编辑的 @token；已被空白结束的 mention 不再视为候选查询。 */
@@ -43,7 +47,7 @@ export function replaceActiveMention(
   if (!draft) return null;
   const suffix = body.slice(draft.end);
   const separator = /^\s/u.test(suffix) ? '' : ' ';
-  const mention = `@${memberName}`;
+  const mention = `@${mentionToken(memberName)}`;
   return {
     value: body.slice(0, draft.start) + mention + separator + suffix,
     caret: draft.start + mention.length + 1,
