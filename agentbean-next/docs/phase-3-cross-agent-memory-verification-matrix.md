@@ -2,7 +2,7 @@
 
 > 更新日期：2026-07-15
 > 当前 verdict：**Not ready**
-> 原因：合同、Domain 安全边界、Server 持久化与协作 Memory 用例层已完成；Capsule、Candidate、来源失效处理、Device 本地 Memory、Web 治理面、socket wiring 与真实跨 Agent 验证尚未完成。Phase 3 runtime 必须保持关闭。
+> 原因：合同、Domain 安全边界、Server 持久化、协作 Memory 用例层（CRUD/状态机/显式共享）与 message/task 来源失效处理已完成；Capsule、Candidate、artifact/workspace-run 来源失效、Device 本地 Memory、Web 治理面、socket wiring 与真实跨 Agent 验证尚未完成。Phase 3 runtime 必须保持关闭。
 
 状态定义：`Green` 已有自动化或真实证据；`Yellow` 已实现但证据未收口；`Red` 尚未实现或缺关键证据。
 
@@ -11,7 +11,7 @@
 | P3-01 | Green | Memory/Capsule/Candidate 合同与 server/local scope 隔离 | `packages/contracts/src/management-memory.ts`；contracts tests |
 | P3-02 | Green | 注入资格与 Capsule 授权复验 fail closed | `packages/domain/src/memory-policy.ts`；Domain table tests |
 | P3-03 | Green | Server SQLite schema、repository 与原子事务 | `0015_management_phase_3_memory.sql`；memory/SQLite parity 与 rollback tests |
-| P3-04 | Yellow | 协作 Memory CRUD、显式共享、替代与删除 | `apps/server-next/src/application/collaborative-memory-service.ts`：createMemory/updateMemory/activateCandidate/rejectCandidate/expireMemory/supersedeMemory/deleteMemory + issueGrant/revokeGrant；状态机、去重、乐观并发、跨 Team fail-closed、正文-free 审计；in-memory/sqlite parity（32 用例）。待合并证据与 socket wiring |
+| P3-04 | Green | 协作 Memory CRUD、显式共享、替代与删除 | `apps/server-next/src/application/collaborative-memory-service.ts`（PR#579 09437c9 已合并）：createMemory/updateMemory/activateCandidate/rejectCandidate/expireMemory/supersedeMemory/deleteMemory + issueGrant/revokeGrant；状态机、去重、乐观并发、跨 Team fail-closed、正文-free 审计；in-memory/sqlite parity（32 用例） |
 | P3-05 | Red | task scope 检索、权限先行与可解释排序 | 未实现 |
 | P3-06 | Red | 最小 Capsule 创建、内容脱敏与访问审计 | 未实现 |
 | P3-07 | Red | 每次 inject 复验成员、scope、hash、policy/grant 与 expiry | 仅有 Domain 规则，Server 接线未实现 |
@@ -22,7 +22,7 @@
 | P3-12 | Red | Device LocalMemoryStore、workspace scan 与 outcome observer | 未实现 |
 | P3-13 | Red | server Capsule + 当前 cwd local Memory 的 runtime 注入 | 未实现 |
 | P3-14 | Red | Web Memory/Candidate/冲突/来源/执行详情治理 | 未实现 |
-| P3-15 | Red | grant 撤销、来源失效、expire/delete 与审计闭环 | grant 版本与无正文 audit 已持久化；生命周期用例尚未实现 |
+| P3-15 | Yellow | grant 撤销、来源失效、expire/delete 与审计闭环 | revokeGrant 版本链 + expireMemory/deleteMemory 审计（PR#579）；message/task 来源失效反应式级联 `memory-source-invalidation-service.ts`（删除 best-effort 触发，整批清空才主动 expired + system audit，读取侧懒检查兜底，14 用例双后端 parity）。待补：artifact/workspace-run/invocation 失效挂钩与完整 E2E 闭环 |
 | P3-16 | Red | checkpoint/recovery 不恢复无效 Capsule/Candidate | 未实现 |
 | P3-17 | Red | 两个真实外部 Agent 跨 Task Memory 正负 smoke | 未执行 |
 | P3-18 | Red | Node 24 root gates、main CI/CD、SEA、Railway/Vercel、生产浏览器收口 | 未执行 |

@@ -10,6 +10,7 @@ import { createInvocationGateway } from './management/invocation-gateway.js';
 import { createManagementKernel } from './management/management-kernel.js';
 import { createManagementRouter, type ManagementRoutingResult } from './management/management-router.js';
 import { createTaskCoordinationKernel } from './management/task-coordination-kernel.js';
+import { createMemorySourceInvalidationService } from './memory-source-invalidation-service.js';
 
 export interface ServerNextClock {
   now(): number;
@@ -830,6 +831,25 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     clock,
     ids,
   });
+  const memorySourceInvalidation = createMemorySourceInvalidationService({
+    unitOfWork: repositories.memoryUnitOfWork,
+    clock,
+    ids,
+  });
+  // 来源失效是删除之后的反应式级联：best-effort，绝不阻塞或回滚已成功的删除。
+  // 失败时由读取侧懒检查（evaluateMemoryInjection 的 allSourcesAvailable）兜底。
+  const invalidateSourcesAfterDeletion = async (input: {
+    readonly teamId: string;
+    readonly sourceKind: Parameters<typeof memorySourceInvalidation.invalidateSources>[0]['sourceKind'];
+    readonly sourceIds: readonly string[];
+    readonly actorId?: string;
+  }): Promise<void> => {
+    try {
+      await memorySourceInvalidation.invalidateSources(input);
+    } catch {
+      // 来源失效是 best-effort；任何异常都不得影响删除主路径。
+    }
+  };
 
   return {
     async registerUser(registerInput) {
@@ -3245,6 +3265,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!deleted) {
         return makeFailure('NOT_FOUND', 'Task not found');
       }
+      await invalidateSourcesAfterDeletion({
+        teamId: taskInput.teamId, sourceKind: 'task', sourceIds: [task.id], actorId: taskInput.userId,
+      });
       return makeSuccess({ task: deleted });
     },
 
@@ -4080,6 +4103,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('NOT_FOUND', 'Message not found');
       }
       const [enrichedMessage] = await enrichMessagesWithArtifacts(repositories, [deleted]);
+      await invalidateSourcesAfterDeletion({
+        teamId: deleteInput.teamId, sourceKind: 'message', sourceIds: [message.id], actorId: deleteInput.userId,
+      });
       return makeSuccess({ message: enrichedMessage ?? deleted });
     },
 

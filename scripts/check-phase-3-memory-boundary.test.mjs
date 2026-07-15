@@ -100,3 +100,12 @@ test('fails closed when the collaborative Memory grant lifecycle disappears', ()
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /P3_COLLABORATIVE_MEMORY_USECASE_INVALID/);
 });
+
+test('fails closed when reactive Memory source invalidation disappears', () => {
+  const result = withFixture('agentbean-phase3-invalidation-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/memory-source-invalidation-service.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('invalidateSources', 'removedInvalidateSources'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_SOURCE_INVALIDATION_INVALID/);
+});
