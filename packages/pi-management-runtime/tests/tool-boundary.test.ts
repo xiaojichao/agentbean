@@ -174,6 +174,18 @@ describe('management tool boundary', () => {
       additionalProperties: false,
       required: ['taskId', 'agentId', 'expectedTaskRevision'],
     });
+    expect(requests[0]?.tools.find((tool) => tool.name === 'agents.invoke')?.inputSchema).toMatchObject({
+      type: 'object',
+      additionalProperties: false,
+      required: ['taskId', 'expectedTaskRevision', 'taskAttempt', 'claimLeaseId', 'objective', 'attachmentIds'],
+      properties: {
+        memoryCapsuleRef: {
+          type: 'object', additionalProperties: false,
+          required: ['schemaVersion', 'id', 'teamId', 'managementRunId', 'targetAgentId',
+            'contentHash', 'authorizationDecisionId', 'expiresAt'],
+        },
+      },
+    });
     expect(requests[0]?.sessionContext).toMatchObject({ schemaVersion: 2, managementPhase: 2 });
     await session.dispose();
   });

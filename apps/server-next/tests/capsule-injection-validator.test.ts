@@ -147,6 +147,9 @@ describe.each([
       });
       expect(result.decisions.every((decision) => !decision.allowed)).toBe(true);
       expect(result.decisions.some((decision) => decision.reason === 'CAPSULE_CONTENT_HASH_MISMATCH')).toBe(true);
+      await expect(harness.repositories.memory.capsuleRefs.getById({
+        teamId: capsule.teamId, id: capsule.id,
+      })).resolves.toMatchObject({ deniedAt: 6_000 });
     } finally {
       harness.close();
     }
@@ -326,6 +329,9 @@ describe.each([
       });
       expect(result.decisions).toHaveLength(capsule.items.length);
       expect(result.decisions.every((d) => d.reason === 'MEMORY_SCOPE_NOT_VISIBLE')).toBe(true);
+      await expect(harness.repositories.memory.capsuleRefs.getById({
+        teamId: capsule.teamId, id: capsule.id,
+      })).resolves.toMatchObject({ deniedAt: 6_000 });
     } finally {
       harness.close();
     }

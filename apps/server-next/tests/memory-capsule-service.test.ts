@@ -4,7 +4,7 @@ import { describe, expect, test } from 'vitest';
 import type { MemoryCapsuleDto } from '../src/index.js';
 import { hashMemoryContent as hashContent, hashSourceRefs } from '../../../packages/domain/src/index.js';
 import type { MemoryItemRecord, MemorySourceRecord, ServerNextRepositories } from '../src/index.js';
-import { createMemoryCapsuleService } from '../src/application/memory-capsule-service.js';
+import { createMemoryCapsuleService, toMemoryCapsuleRef } from '../src/application/memory-capsule-service.js';
 import {
   createCollaborativeMemorySearchService,
   type MemorySearchPermissions,
@@ -156,6 +156,12 @@ describe.each([
       expect(itemAudit.redactionLevel).toBe(item.redactionLevel);
       // 审计同样不携带敏感正文。
       expect(itemAudit).not.toHaveProperty('content');
+
+      // P3-08：createCapsule 持久化权威 capsuleRef（recovery 据此判有效）。
+      const ref = await harness.repositories.memory.capsuleRefs.getById({ teamId: 'team-1', id: capsule.id });
+      expect(ref).toMatchObject({ id: capsule.id, managementRunId: 'run-1' });
+      expect(ref?.deniedAt).toBeUndefined();
+      expect(ref?.contentHash).toBe(toMemoryCapsuleRef(capsule).contentHash);
     } finally {
       harness.close();
     }

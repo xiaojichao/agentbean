@@ -145,3 +145,51 @@ test('fails closed when Candidate lifecycle disappears', () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /P3_CANDIDATE_LIFECYCLE_INVALID/);
 });
+
+test('fails closed when Capsule↔Invocation/checkpoint binding disappears', () => {
+  const result = withFixture('agentbean-phase3-binding-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/management/management-checkpoint.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('capsuleRefs.listByRun', 'removedListByRun'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPSULE_INVOCATION_BINDING_INVALID/);
+});
+
+test('fails closed when Invocation accepts an untrusted Capsule ref', () => {
+  const result = withFixture('agentbean-phase3-capsule-authority-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/management/invocation-gateway.ts');
+    writeFileSync(path, readFileSync(path, 'utf8')
+      .replaceAll('INVOCATION_MEMORY_CAPSULE_REF_INVALID', 'REMOVED_CAPSULE_REF_VALIDATION'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPSULE_INVOCATION_BINDING_INVALID/);
+});
+
+test('fails closed when Capsule denial stops updating the authoritative ref', () => {
+  const result = withFixture('agentbean-phase3-capsule-denial-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/capsule-injection-validator.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('capsuleRefs.markDenied', 'removedMarkDenied'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPSULE_INVOCATION_BINDING_INVALID/);
+});
+
+test('fails closed when Phase 2 agents.invoke drops the Capsule ref wire contract', () => {
+  const result = withFixture('agentbean-phase3-capsule-wire-', (fixture) => {
+    const path = join(fixture, 'packages/contracts/src/management-worker-v2.ts');
+    writeFileSync(path, readFileSync(path, 'utf8')
+      .replaceAll('memoryCapsuleRef?: MemoryCapsuleRefDto', 'removedMemoryCapsuleRef?: never'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPSULE_INVOCATION_BINDING_INVALID/);
+});
+
+test('fails closed when Phase 2 agents.invoke drops the Capsule ref model schema', () => {
+  const result = withFixture('agentbean-phase3-capsule-schema-', (fixture) => {
+    const path = join(fixture, 'packages/pi-management-runtime/src/management-tool-catalog.ts');
+    writeFileSync(path, readFileSync(path, 'utf8')
+      .replaceAll('memoryCapsuleRef: Type.Optional(Type.Object', 'removedMemoryCapsuleRef: Type.Optional(Type.Object'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPSULE_INVOCATION_BINDING_INVALID/);
+});

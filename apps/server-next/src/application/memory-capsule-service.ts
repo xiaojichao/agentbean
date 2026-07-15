@@ -3,15 +3,17 @@ import type {
   MemoryCapsuleAuthorizationDto,
   MemoryCapsuleDto,
   MemoryCapsuleItemDto,
+  MemoryCapsuleRefDto,
   MemoryContentKind,
   MemoryKind,
   MemorySourceRefDto,
   UnixMs,
 } from '../../../../packages/contracts/src/index.js';
-import { hashMemoryContent, hashSourceRefs } from '../../../../packages/domain/src/index.js';
+import { hashCapsuleItems, hashMemoryContent, hashSourceRefs } from '../../../../packages/domain/src/index.js';
 import type {
   MemoryAuditActorKind,
   MemoryAuditEventRecord,
+  MemoryCapsuleRefRecord,
   MemorySourceRecord,
 } from './memory-repositories.js';
 import type { MemoryUnitOfWork } from './memory-unit-of-work.js';
@@ -112,6 +114,9 @@ export function createMemoryCapsuleService(deps: MemoryCapsuleServiceDeps): Memo
 
       await unitOfWork.run(async (memory) => {
         const createdAt = clock.now();
+        // 持久化权威 capsuleRef（P3-08）：checkpoint/recovery 据此判 capsule 是否仍有效
+        // （存在 + 未过期 + 未 deny），不扫 invocation intent（management-checkpoint.ts:141 注释）。
+        await memory.capsuleRefs.create(toCapsuleRefRecord(capsule));
         const auditRecords = items.length === 0
           ? [emptyCapsuleAudit(ids.nextId(), input, capsuleId, createdAt)]
           : items.map((item) => capsuleItemAudit(ids.nextId(), input, capsuleId, item, createdAt));
@@ -120,6 +125,43 @@ export function createMemoryCapsuleService(deps: MemoryCapsuleServiceDeps): Memo
 
       return capsule;
     },
+  };
+}
+
+/**
+ * 派生冻结的 Capsule ref（进 invocation intent，intentHash 天然冻结）。
+ * contentHash=hashCapsuleItems（domain 单一源），与持久化的 MemoryCapsuleRefRecord 同源，
+ * 保证 recovery 比对一致。空 capsule 的 authorizationDecisionId 回退 capsule.id。
+ */
+export function toMemoryCapsuleRef(capsule: MemoryCapsuleDto): MemoryCapsuleRefDto {
+  return {
+    schemaVersion: 1,
+    id: capsule.id,
+    teamId: capsule.teamId,
+    managementRunId: capsule.managementRunId,
+    taskId: capsule.taskId,
+    targetAgentId: capsule.targetAgentId,
+    contentHash: hashCapsuleItems(capsule.items),
+    authorizationDecisionId: capsule.items[0]?.authorization.decisionId ?? capsule.id,
+    expiresAt: capsule.expiresAt,
+  };
+}
+
+function toCapsuleRefRecord(capsule: MemoryCapsuleDto): MemoryCapsuleRefRecord {
+  const ref = toMemoryCapsuleRef(capsule);
+  // ref 与 capsule 同生：issuedAt=createdAt=capsule.createdAt（input.now），不引入独立时钟，
+  // 避免外部队列的 clock tick 落后于 capsule 创建时间触发 "creation precedes issue time"。
+  return {
+    id: ref.id,
+    teamId: ref.teamId,
+    managementRunId: ref.managementRunId,
+    taskId: ref.taskId,
+    targetAgentId: ref.targetAgentId,
+    contentHash: ref.contentHash,
+    authorizationDecisionId: ref.authorizationDecisionId,
+    issuedAt: capsule.createdAt,
+    expiresAt: ref.expiresAt,
+    createdAt: capsule.createdAt,
   };
 }
 

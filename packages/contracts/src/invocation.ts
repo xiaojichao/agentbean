@@ -2,6 +2,7 @@ import type { ID, UnixMs } from './common.js';
 import type { DispatchStatus } from './dispatch.js';
 import type { AcceptanceCriterionDto } from './task-coordination.js';
 import type { AgentCollaborationProposalV1 } from './collaboration.js';
+import type { MemoryCapsuleRefDto } from './management-memory.js';
 
 export type AgentInvocationTargetKind = 'custom' | 'agentos-hosted';
 
@@ -38,7 +39,8 @@ export interface AgentInvocationIntentV1 {
   readonly taskContext?: AgentInvocationTaskContextV1;
   readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];
   readonly dependencyResults: readonly DependencyResultRefDto[];
-  readonly memoryCapsuleId?: ID;
+  /** 冻结的 Capsule ref（intentHash 天然含此字段）；recovery 据此判 capsule 是否仍有效。 */
+  readonly memoryCapsuleRef?: MemoryCapsuleRefDto;
   readonly attachmentIds: readonly ID[];
   readonly deadlineAt?: UnixMs;
 }
