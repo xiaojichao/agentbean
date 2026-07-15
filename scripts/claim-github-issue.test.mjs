@@ -8,6 +8,8 @@ import {
   openClosingPullRequests,
   releaseComment,
   releaseEffects,
+  releaseIntentComment,
+  releaseOwnedClaim,
 } from './claim-github-issue.mjs';
 
 function comment(body, createdAt, url = null, author = 'xiaojichao') {
@@ -20,9 +22,11 @@ function fixture(overrides = {}) {
     title: '防止任务串到其他 Session',
     url: 'https://github.com/xiaojichao/agentbean/issues/568',
     state: 'OPEN',
-    trustedClaimAuthor: 'xiaojichao',
+    viewerLogin: 'xiaojichao',
+    trustedClaimAuthors: ['xiaojichao'],
     defaultBranchName: 'main',
     labels: { pageInfo: { hasNextPage: false }, nodes: [{ name: 'ready-for-agent' }] },
+    assignees: { pageInfo: { hasNextPage: false }, nodes: [{ login: 'xiaojichao' }] },
     comments: { pageInfo: { hasPreviousPage: false }, nodes: [] },
     timelineItems: { pageInfo: { hasPreviousPage: false }, nodes: [] },
     ...overrides,
@@ -46,6 +50,51 @@ test('release removes only the matching Session claim', () => {
   assert.deepEqual(activeClaims(comments).map((claim) => claim.sessionId), ['session-b']);
 });
 
+test('release intent keeps the Session claim active until cleanup completes', () => {
+  const comments = [
+    comment(claimComment('session-a', 'workflow'), '2026-07-15T00:00:01Z'),
+    comment(releaseIntentComment('session-a'), '2026-07-15T00:00:02Z'),
+  ];
+  assert.deepEqual(activeClaims(comments).map((claim) => claim.sessionId), ['session-a']);
+  comments.push(comment(releaseComment('session-a'), '2026-07-15T00:00:03Z'));
+  assert.deepEqual(activeClaims(comments), []);
+});
+
+test('release cleanup remains retryable when the final marker write fails', () => {
+  const issue = fixture({
+    comments: {
+      pageInfo: { hasPreviousPage: false },
+      nodes: [comment(claimComment('session-a', 'workflow', true), '2026-07-15T00:00:01Z')],
+    },
+  });
+  const options = { issue: 568, sessionId: 'session-a' };
+  const repo = { nameWithOwner: 'xiaojichao/agentbean' };
+  const commands = [];
+  let failFinalMarker = true;
+  const execute = (args) => {
+    commands.push(args);
+    if (failFinalMarker && args.at(-1) === releaseComment('session-a')) {
+      throw new Error('simulated GitHub failure');
+    }
+  };
+  const dependencies = { execute, reload: () => issue };
+
+  assert.throws(
+    () => releaseOwnedClaim(issue, options, repo, dependencies),
+    /simulated GitHub failure/,
+  );
+  assert.match(commands[0].at(-1), /action=releasing/);
+  assert.deepEqual(commands[1].slice(0, 3), ['issue', 'edit', '568']);
+  assert.match(commands[2].at(-1), /action=release /);
+
+  failFinalMarker = false;
+  const retry = releaseOwnedClaim(issue, options, repo, dependencies);
+  assert.equal(retry.released, true);
+  assert.match(commands[3].at(-1), /action=releasing/);
+  assert.deepEqual(commands[4].slice(0, 3), ['issue', 'edit', '568']);
+  assert.match(commands[5].at(-1), /action=release /);
+});
+
 test('removing the final global winner clears assignee and restores the global queue', () => {
   const [claim] = activeClaims([
     comment(claimComment('session-a', 'business', true), '2026-07-15T00:00:01Z'),
@@ -67,10 +116,24 @@ test('releasing a non-winner never changes the shared GitHub assignee or queue',
   ]);
   assert.deepEqual(releaseEffects(claim, {
     wasWinner: false,
-    nextWinner: { sessionId: 'session-a' },
+    nextWinner: { sessionId: 'session-a', authorLogin: 'xiaojichao' },
     issueState: 'OPEN',
   }), {
     removeAssignee: false,
+    restoreReadyForAgent: false,
+  });
+});
+
+test('releasing a claim from another account removes only that account assignee', () => {
+  const [claim] = activeClaims([
+    comment(claimComment('session-b', 'business', true), '2026-07-15T00:00:01Z', null, 'other-user'),
+  ]);
+  assert.deepEqual(releaseEffects(claim, {
+    wasWinner: false,
+    nextWinner: { sessionId: 'session-a', authorLogin: 'xiaojichao' },
+    issueState: 'OPEN',
+  }), {
+    removeAssignee: true,
     restoreReadyForAgent: false,
   });
 });
@@ -173,6 +236,25 @@ test('recognizes a closing keyword followed by a colon', () => {
   assert.deepEqual(openClosingPullRequests(issue).map((pr) => pr.number), [570]);
 });
 
+test('recognizes a closing keyword followed by a full GitHub Issue URL', () => {
+  const issue = fixture({
+    timelineItems: {
+      pageInfo: { hasPreviousPage: false },
+      nodes: [{
+        source: {
+          __typename: 'PullRequest',
+          number: 570,
+          state: 'OPEN',
+          url: 'https://github.com/xiaojichao/agentbean/pull/570',
+          body: 'Closes https://github.com/xiaojichao/agentbean/issues/568',
+          baseRefName: 'main',
+        },
+      }],
+    },
+  });
+  assert.deepEqual(openClosingPullRequests(issue).map((pr) => pr.number), [570]);
+});
+
 test('ignores a closing keyword on a PR targeting a non-default branch', () => {
   const issue = fixture({
     timelineItems: {
@@ -206,6 +288,24 @@ test('ignores forged claim and release markers from another GitHub author', () =
   const result = evaluateIssueClaim(issue, 'session-a');
   assert.equal(result.ready, true);
   assert.equal(result.winner.sessionId, 'session-a');
+});
+
+test('blocks a valid claim from another assigned GitHub account', () => {
+  const issue = fixture({
+    trustedClaimAuthors: ['xiaojichao', 'other-user'],
+    assignees: {
+      pageInfo: { hasNextPage: false },
+      nodes: [{ login: 'xiaojichao' }, { login: 'other-user' }],
+    },
+    comments: {
+      pageInfo: { hasPreviousPage: false },
+      nodes: [comment(claimComment('session-other', 'workflow'), '2026-07-15T00:00:01Z', null, 'other-user')],
+    },
+  });
+  const result = evaluateIssueClaim(issue, 'session-a');
+  assert.equal(result.ready, false);
+  assert.equal(result.winner.authorLogin, 'other-user');
+  assert.equal(result.blockers[0].code, 'CLAIMED_BY_OTHER_SESSION');
 });
 
 test('does not treat a plain cross-reference as a closing PR', () => {
