@@ -144,8 +144,23 @@ export function createPhase2CollaborationToolHandlers(input: {
           throw new Error('HANDOFF_NOT_FOUND');
         }
         if (['returned', 'rejected', 'failed', 'cancelled', 'timed_out'].includes(handoff.status)
-          || (request.input.timeoutAt !== undefined && input.clock.now() >= request.input.timeoutAt)) {
+        ) {
           return { handoffId: handoff.id, invocationId: handoff.invocationId, status: handoff.status };
+        }
+        if (request.input.timeoutAt !== undefined && input.clock.now() >= request.input.timeoutAt) {
+          const view = await gateway.getView(handoff.invocationId);
+          const dispatchId = view.activeDispatchId;
+          if (dispatchId) {
+            await gateway.completeAttempt({ dispatchId, status: 'timed_out',
+              error: 'HANDOFF_TIMEOUT', actorKind: 'system' });
+            const timedOut = await service.recordTerminal({ dispatchId,
+              status: 'timed_out', artifactIds: [] });
+            return { handoffId: handoff.id, invocationId: handoff.invocationId,
+              status: timedOut?.status ?? 'timed_out' };
+          }
+          const reconciled = await service.reconcileInvocation(handoff.invocationId);
+          return { handoffId: handoff.id, invocationId: handoff.invocationId,
+            status: reconciled?.status ?? handoff.status };
         }
         await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
       }

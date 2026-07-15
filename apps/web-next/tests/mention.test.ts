@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'vitest';
-import { extractMentions, resolveMentionByName, type MentionMember } from '../lib/mention';
+import {
+  activeMentionDraft,
+  extractMentions,
+  replaceActiveMention,
+  resolveMentionByName,
+  structuredMentionPattern,
+  type MentionMember,
+} from '../lib/mention';
 
 // 真实症状：Agent 改名后，频道消息 body 里的 @旧名 应显示为新名。
 // 根因：@提及只是 body 文本字符串，无 agentId 关联。修复：发送时 meta.mentions 锁定 id，
@@ -36,6 +43,59 @@ describe('extractMentions (send time: lock id by name)', () => {
   });
 });
 
+describe('mention composer draft', () => {
+  test('detects the active @ query at the caret, including Chinese names', () => {
+    expect(activeMentionDraft('请 @Hermes 处理', 9)).toEqual({ query: 'Hermes', start: 2, end: 9 });
+    expect(activeMentionDraft('请 @小助', 5)).toEqual({ query: '小助', start: 2, end: 5 });
+  });
+
+  test('ignores completed mentions and replaces only the token at the caret', () => {
+    expect(activeMentionDraft('请 @Hermes 处理', 12)).toBeNull();
+    expect(replaceActiveMention('先 @Alice，再 @Her 后续', 15, 'Hermes-Agent')).toEqual({
+      value: '先 @Alice，再 @Hermes-Agent 后续',
+      caret: 25,
+    });
+  });
+
+  test('preserves multi-word member names in structured mentions', () => {
+    const replacement = replaceActiveMention('请 @Ren', 6, 'Renamed Codex');
+    expect(replacement).toEqual({ value: '请 @Renamed Codex ', caret: 17 });
+    const mentions = extractMentions(replacement!.value, [
+      { id: 'a1', name: 'Renamed Codex', kind: 'agent' },
+    ]);
+    expect(mentions).toEqual([
+      { id: 'a1', kind: 'agent', name: 'Renamed Codex', start: 2, end: 16 },
+    ]);
+    expect(resolveMentionByName('Renamed Codex', mentions, {
+      a1: { name: 'Renamed Codex' },
+    })).toEqual({ id: 'a1', kind: 'agent', displayName: 'Renamed Codex' });
+  });
+
+  test('matches the exact selected token before normalized-name collisions', () => {
+    const members: MentionMember[] = [
+      { id: 'a1', name: 'Renamed Codex', kind: 'agent' },
+      { id: 'u1', name: 'renamed_codex', kind: 'human' },
+    ];
+    expect(extractMentions('@renamed_codex 请处理', members)).toEqual([
+      { id: 'u1', kind: 'human', name: 'renamed_codex', start: 0, end: 14 },
+    ]);
+  });
+
+  test('supports punctuation in selected member names without changing human display text', () => {
+    const replacement = replaceActiveMention('@Cl', 3, 'Claude 3.5');
+    expect(replacement).toEqual({ value: '@Claude 3.5 ', caret: 12 });
+    const mentions = extractMentions(replacement!.value, [
+      { id: 'u1', name: 'Claude 3.5', kind: 'human' },
+    ]);
+    expect(mentions).toEqual([
+      { id: 'u1', kind: 'human', name: 'Claude 3.5', start: 0, end: 11 },
+    ]);
+    expect(resolveMentionByName('Claude 3.5', mentions, {})).toEqual({
+      id: 'u1', kind: 'human', displayName: 'Claude 3.5',
+    });
+  });
+});
+
 describe('resolveMentionByName (render: follow rename via locked id)', () => {
   test('REGRESSION: body @oldname resolves to current name after rename', () => {
     // 发送时 name=codex 锁定 id=a1；之后 agent 改名为 NEW。body 仍是 @codex。
@@ -64,5 +124,14 @@ describe('resolveMentionByName (render: follow rename via locked id)', () => {
   test('human mention keeps snapshot name', () => {
     const mentions = [{ id: 'u1', kind: 'human' as const, name: 'alice', start: 0, end: 6 }];
     expect(resolveMentionByName('alice', mentions, {})?.displayName).toBe('alice');
+  });
+});
+
+describe('structuredMentionPattern', () => {
+  test('does not match a structured name when it is only a longer mention prefix', () => {
+    const pattern = new RegExp(structuredMentionPattern('Claude 3.5'), 'u');
+    expect('@Claude 3.5 请处理'.match(pattern)?.[0]).toBe('@Claude 3.5');
+    expect(pattern.test('@Claude 3.5-beta')).toBe(false);
+    expect(pattern.test('@Claude 3.50')).toBe(false);
   });
 });

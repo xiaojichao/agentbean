@@ -426,6 +426,7 @@ function runtimeContext(restored: ManagementCheckpointResultV1): ManagementSessi
       ...(restored.checkpoint ? { checkpoint: visiblePhase2Checkpoint(restored.checkpoint) } : {}),
     };
   }
+  if (!context.frozenTarget) throw new Error('P1_FROZEN_TARGET_REQUIRED');
   return {
     schemaVersion: 1,
     scope: {
@@ -445,7 +446,8 @@ function runtimeContext(restored: ManagementCheckpointResultV1): ManagementSessi
 }
 
 function isPhase2Checkpoint(restored: ManagementCheckpointResultV1): boolean {
-  return Boolean(restored.context.rootTaskId && restored.checkpoint?.authoritative.taskSnapshots?.length);
+  return Boolean(restored.context.rootTaskId && (!restored.context.frozenTarget
+    || restored.checkpoint?.authoritative.taskSnapshots?.length));
 }
 
 function visibleCheckpoint(checkpoint: NonNullable<ManagementCheckpointResultV1['checkpoint']>) {

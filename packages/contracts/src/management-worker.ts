@@ -309,7 +309,9 @@ export interface ManagementCheckpointResultV1 {
   readonly schemaVersion: 1;
   readonly managementRunId: ID;
   readonly workerId: ID;
-  readonly context: ManagementWorkerSessionContextV1;
+  readonly context: Omit<ManagementWorkerSessionContextV1, 'frozenTarget'> & {
+    readonly frozenTarget?: ManagementWorkerSessionContextV1['frozenTarget'];
+  };
   readonly checkpoint?: ManagementCheckpointV1;
 }
 
@@ -544,6 +546,16 @@ const sessionContextSchema = exactObject({
   rootMessageId: required(id),
   rootTaskId: optional(id),
   frozenTarget: required(frozenTargetSchema),
+  visibleThread: required(visibleThreadSchema),
+});
+
+const checkpointSessionContextSchema = exactObject({
+  schemaVersion: required(literal(1)),
+  teamId: required(id),
+  channelId: required(id),
+  rootMessageId: required(id),
+  rootTaskId: optional(id),
+  frozenTarget: optional(frozenTargetSchema),
   visibleThread: required(visibleThreadSchema),
 });
 
@@ -869,7 +881,7 @@ const schemas: { readonly [K in ManagementWorkerPayloadKind]: Validator } = {
     schemaVersion: required(literal(1)),
     managementRunId: required(id),
     workerId: required(id),
-    context: required(sessionContextSchema),
+    context: required(checkpointSessionContextSchema),
     checkpoint: optional(checkpointSchema),
   }),
   'outbox-replay': exactObject({

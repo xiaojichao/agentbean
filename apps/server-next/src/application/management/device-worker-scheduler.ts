@@ -368,7 +368,6 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
       await dependencies.kernel.authorizeWrite(input);
       const run = await dependencies.management.runs.getById(input.managementRunId);
       if (!run || run.teamId !== worker.teamId) throw new ManagementConflictError('MANAGEMENT_RUN_NOT_FOUND');
-      if (!run.frozenTarget) throw new ManagementConflictError('MANAGEMENT_FROZEN_TARGET_MISSING');
       if (!dependencies.messages) throw new ManagementConflictError('MANAGEMENT_CONTEXT_REPOSITORY_UNAVAILABLE');
       const rootMessage = await dependencies.messages.getById(run.rootMessageId);
       if (!rootMessage || rootMessage.teamId !== run.teamId || rootMessage.channelId !== run.channelId) {
@@ -419,7 +418,7 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
           channelId: run.channelId,
           rootMessageId: run.rootMessageId,
           ...(run.rootTaskId ? { rootTaskId: run.rootTaskId } : {}),
-          frozenTarget: run.frozenTarget,
+          ...(run.frozenTarget ? { frozenTarget: run.frozenTarget } : {}),
           visibleThread: {
             revision: messages.at(-1)?.updatedAt ?? messages.at(-1)?.createdAt ?? 0,
             messages: messages.map((message) => ({

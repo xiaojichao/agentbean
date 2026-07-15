@@ -1,6 +1,7 @@
 import type {
   MemoryAuditEventRecord,
   MemoryCapsuleRefRecord,
+  MemoryCandidateRecord,
   MemoryGrantRecord,
   MemoryItemRecord,
   MemoryRepositories,
@@ -11,6 +12,7 @@ import {
   assertMemoryAuditEventRecord,
   assertMemoryCapsuleRefDenial,
   assertMemoryCapsuleRefRecord,
+  assertMemoryCandidateRecord,
   assertMemoryGrantRecord,
   assertMemoryGrantTransition,
   assertMemoryItemRecord,
@@ -209,6 +211,45 @@ export function createSqliteMemoryRepositories(db: SqliteDatabase): MemoryReposi
         return { ...current, deniedAt: input.deniedAt };
       },
     },
+    candidates: {
+      async create(record) {
+        assertMemoryCandidateRecord(record);
+        const byId = db.prepare(`SELECT id FROM memory_candidates WHERE team_id = ? AND id = ?`)
+          .get(record.teamId, record.id);
+        if (byId) throw new Error('memory candidate already exists');
+        try {
+          db.prepare(`INSERT INTO memory_candidates
+            (id, team_id, management_run_id, task_id, source_agent_id, source_invocation_id,
+             source_refs_json, content_kind, proposed_content, projection_hash, status,
+             conflict_memory_ids_json, created_at, decided_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .run(record.id, record.teamId, record.managementRunId, record.taskId ?? null,
+              record.sourceAgentId, record.sourceInvocationId,
+              JSON.stringify(record.sourceRefs), record.contentKind, record.proposedContent,
+              record.projectionHash, record.status, JSON.stringify(record.conflictMemoryIds),
+              record.createdAt, record.decidedAt ?? null);
+        } catch (error) {
+          if (String(error).includes('UNIQUE')) {
+            throw new Error('memory candidate projection hash already exists');
+          }
+          throw error;
+        }
+        return record;
+      },
+      async getById(input) {
+        return mapCandidate(db.prepare(`SELECT * FROM memory_candidates
+          WHERE team_id = ? AND id = ?`).get(input.teamId, input.id));
+      },
+      async getByProjectionHash(input) {
+        return mapCandidate(db.prepare(`SELECT * FROM memory_candidates
+          WHERE team_id = ? AND projection_hash = ?`).get(input.teamId, input.projectionHash));
+      },
+      async listByRun(input) {
+        return db.prepare(`SELECT * FROM memory_candidates
+          WHERE team_id = ? AND management_run_id = ? ORDER BY created_at, id`)
+          .all(input.teamId, input.managementRunId).map(mapCandidateRequired);
+      },
+    },
   };
 }
 
@@ -323,6 +364,28 @@ function mapCapsuleRef(value: unknown): MemoryCapsuleRefRecord | null {
   return record;
 }
 
+function mapCandidate(value: unknown): MemoryCandidateRecord | null {
+  if (!value) return null;
+  const record: MemoryCandidateRecord = {
+    id: text(value, 'id'),
+    teamId: text(value, 'team_id'),
+    managementRunId: text(value, 'management_run_id'),
+    taskId: optionalText(value, 'task_id'),
+    sourceAgentId: text(value, 'source_agent_id'),
+    sourceInvocationId: text(value, 'source_invocation_id'),
+    sourceRefs: parseSourceRefs(text(value, 'source_refs_json')),
+    contentKind: text(value, 'content_kind') as MemoryCandidateRecord['contentKind'],
+    proposedContent: text(value, 'proposed_content'),
+    projectionHash: text(value, 'projection_hash'),
+    status: text(value, 'status') as MemoryCandidateRecord['status'],
+    conflictMemoryIds: parseMemoryIds(text(value, 'conflict_memory_ids_json')),
+    createdAt: number(value, 'created_at'),
+    decidedAt: optionalNumber(value, 'decided_at'),
+  };
+  assertMemoryCandidateRecord(record);
+  return record;
+}
+
 function mapItemRequired(value: unknown): MemoryItemRecord {
   const record = mapItem(value);
   if (!record) throw new Error('SQLite memory item row could not be mapped');
@@ -356,6 +419,12 @@ function mapAuditRequired(value: unknown): MemoryAuditEventRecord {
 function mapCapsuleRefRequired(value: unknown): MemoryCapsuleRefRecord {
   const record = mapCapsuleRef(value);
   if (!record) throw new Error('SQLite memory capsule ref row could not be mapped');
+  return record;
+}
+
+function mapCandidateRequired(value: unknown): MemoryCandidateRecord {
+  const record = mapCandidate(value);
+  if (!record) throw new Error('SQLite memory candidate row could not be mapped');
   return record;
 }
 
@@ -407,5 +476,14 @@ function parseSourceRefs(value: string): readonly MemorySourceRefDto[] {
       throw new Error('Invalid memory source ref');
     }
     return candidate as unknown as MemorySourceRefDto;
+  });
+}
+
+function parseMemoryIds(value: string): readonly string[] {
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed)) throw new Error('Invalid memory ids JSON');
+  return parsed.map((item) => {
+    if (typeof item !== 'string') throw new Error('Invalid memory id');
+    return item;
   });
 }

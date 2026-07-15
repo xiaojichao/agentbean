@@ -1,6 +1,7 @@
 import type {
   MemoryAuditEventRecord,
   MemoryCapsuleRefRecord,
+  MemoryCandidateRecord,
   MemoryGrantRecord,
   MemoryItemRecord,
   MemoryRepositories,
@@ -11,6 +12,7 @@ import {
   assertMemoryAuditEventRecord,
   assertMemoryCapsuleRefDenial,
   assertMemoryCapsuleRefRecord,
+  assertMemoryCandidateRecord,
   assertMemoryGrantRecord,
   assertMemoryGrantTransition,
   assertMemoryItemRecord,
@@ -26,6 +28,7 @@ export interface MemoryRepositoryMemoryState {
   readonly grants: Map<string, MemoryGrantRecord>;
   readonly auditEvents: Map<string, MemoryAuditEventRecord>;
   readonly capsuleRefs: Map<string, MemoryCapsuleRefRecord>;
+  readonly candidates: Map<string, MemoryCandidateRecord>;
 }
 
 export function createMemoryRepositoryMemoryState(): MemoryRepositoryMemoryState {
@@ -36,6 +39,7 @@ export function createMemoryRepositoryMemoryState(): MemoryRepositoryMemoryState
     grants: new Map(),
     auditEvents: new Map(),
     capsuleRefs: new Map(),
+    candidates: new Map(),
   };
 }
 
@@ -49,6 +53,7 @@ export function cloneMemoryRepositoryMemoryState(
     grants: new Map(state.grants),
     auditEvents: new Map(state.auditEvents),
     capsuleRefs: new Map(state.capsuleRefs),
+    candidates: new Map(state.candidates),
   };
 }
 
@@ -196,6 +201,34 @@ export function createInMemoryMemoryRepositories(
         const denied = { ...current, deniedAt: input.deniedAt };
         state.capsuleRefs.set(key, denied);
         return denied;
+      },
+    },
+    candidates: {
+      async create(record) {
+        assertMemoryCandidateRecord(record);
+        const key = `${record.teamId}:${record.id}`;
+        if (state.candidates.has(key)) throw new Error('memory candidate already exists');
+        const projectionKey = `${record.teamId}:${record.projectionHash}`;
+        for (const existing of state.candidates.values()) {
+          if (`${existing.teamId}:${existing.projectionHash}` === projectionKey) {
+            throw new Error('memory candidate projection hash already exists');
+          }
+        }
+        state.candidates.set(key, record);
+        return record;
+      },
+      async getById(input) {
+        return state.candidates.get(`${input.teamId}:${input.id}`) ?? null;
+      },
+      async getByProjectionHash(input) {
+        return [...state.candidates.values()]
+          .find((record) => record.teamId === input.teamId && record.projectionHash === input.projectionHash)
+          ?? null;
+      },
+      async listByRun(input) {
+        return [...state.candidates.values()]
+          .filter((record) => record.teamId === input.teamId && record.managementRunId === input.managementRunId)
+          .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
       },
     },
   };

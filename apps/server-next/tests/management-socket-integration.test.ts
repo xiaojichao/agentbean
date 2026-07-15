@@ -274,8 +274,9 @@ describe('management worker socket integration', () => {
     })).resolves.toMatchObject({
       ok: false, errorCode: 'INVALID_REQUEST', diagnosticCode: 'MANAGEMENT_WORKER_V2_PAYLOAD_INVALID',
     });
-    await expect(phase2.trigger(AGENT_EVENTS.managementWorker.register, phase2WorkerRegistration()))
-      .resolves.toMatchObject({ ok: true });
+    const phase2Registration = await phase2.trigger(AGENT_EVENTS.managementWorker.register,
+      phase2WorkerRegistration());
+    expect(phase2Registration).toMatchObject({ ok: true });
     await expect(harness.scheduler.managementPhase2Preflight({
       teamId: 'team-1',
       placementPolicy: { placement: 'device', allowedDeviceIds: ['device-v1', 'device-v2'],
@@ -291,6 +292,17 @@ describe('management worker socket integration', () => {
       .resolves.toMatchObject({ ok: true, deviceId: 'device-v2' });
     expect(legacy.outbound(AGENT_EVENTS.managementWorker.leaseOffer)).toHaveLength(0);
     expect(phase2.outbound(AGENT_EVENTS.managementWorker.leaseOffer)).toHaveLength(1);
+    const offer = phase2.outbound(AGENT_EVENTS.managementWorker.leaseOffer)[0]?.payload as ManagementLeaseOfferV1;
+    const acquired = await phase2.trigger(AGENT_EVENTS.managementWorker.leaseAcquire, {
+      schemaVersion: 1, offerId: offer.offerId, workerInstanceId: 'worker-instance-v2',
+    });
+    expect(acquired).toMatchObject({ ok: true, leaseToken: expect.any(String), fencingToken: 1 });
+    await expect(phase2.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
+      schemaVersion: 1, managementRunId: runId,
+      workerId: (phase2Registration as { workerId: string }).workerId,
+      leaseToken: (acquired as { leaseToken: string }).leaseToken, fencingToken: 1,
+    })).resolves.toMatchObject({ managementRunId: runId,
+      context: { rootTaskId: 'root-task', visibleThread: { messages: expect.any(Array) } } });
   });
 });
 

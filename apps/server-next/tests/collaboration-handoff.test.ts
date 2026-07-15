@@ -270,6 +270,98 @@ describe('serial collaboration handoff', () => {
       .rejects.toThrow('HANDOFF_SERIAL_CONFLICT');
   });
 
+  test('fences a direct continuation and ignores an acceptance after the Task revision changes', async () => {
+    const harness = await createHarness();
+    const requested = await harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-direct-fence', toAgentId: 'agent-b', kind: 'continuation',
+      objective: '由 B 继续', reason: '直接交接', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'deliver_to_root' });
+    expect(requested.invocation.intent.taskContext).toMatchObject({ taskId: 'task-root',
+      rootTaskId: 'task-root', taskRevision: 1, taskAttempt: 1,
+      claimLeaseId: `management:${harness.runId}` });
+    await harness.repositories.tasks.update({ taskId: 'task-root',
+      changes: { revision: 2, updatedAt: 22 } });
+    const dispatchId = requested.view.activeDispatchId!;
+    await harness.repositories.dispatches.markAccepted({ dispatchId, agentId: 'agent-b',
+      expectedUpdatedAt: 20, prompt: '由 B 继续', acceptedAt: 21 });
+    await harness.service.recordAccepted({ dispatchId });
+    await expect(harness.repositories.management.runs.getById(harness.runId))
+      .resolves.toMatchObject({ activeAgentId: 'agent-a' });
+  });
+
+  test('reconciles a replayed handoff from the canonical Dispatch lifecycle', async () => {
+    const harness = await createHarness();
+    const [proposal] = await recordConsultProposal(harness);
+    const request = { authority: harness.authority, idempotencyKey: 'handoff-reconcile',
+      sourceProposalId: proposal!.id, sourceInvocationId: 'invocation-a', toAgentId: 'agent-b',
+      kind: 'consult' as const, objective: '咨询 B', reason: '需要信息', contextRefIds: [],
+      dependencyInvocationIds: [], attachmentIds: [], acceptanceCriteria: [],
+      returnMode: 'return_to_manager' as const };
+    const requested = await harness.service.requestHandoff(request);
+    const dispatchId = requested.view.activeDispatchId!;
+    await harness.repositories.dispatches.markAccepted({ dispatchId, agentId: 'agent-b',
+      expectedUpdatedAt: 20, prompt: '咨询 B', acceptedAt: 21 });
+    await expect(harness.service.requestHandoff(request))
+      .resolves.toMatchObject({ handoff: { status: 'accepted' }, disposition: 'existing' });
+    await createInvocationGateway({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids }).completeAttempt({ dispatchId,
+      status: 'succeeded', actorKind: 'agent', actorId: 'agent-b' });
+    await expect(harness.service.requestHandoff(request))
+      .resolves.toMatchObject({ handoff: { status: 'returned' }, disposition: 'existing' });
+  });
+
+  test('times out an active handoff and rolls continuation ownership back', async () => {
+    const harness = await createHarness();
+    const [proposal] = await harness.service.recordProposals({ dispatchId: 'dispatch-a',
+      agentId: 'agent-a', proposals: [{ schemaVersion: 1, sourceInvocationId: 'invocation-a',
+        sourceAgentId: 'agent-a', sourceTaskContext: { taskId: 'task-root', rootTaskId: 'task-root',
+          taskRevision: 1, taskAttempt: 1, claimLeaseId: 'claim-a' }, toAgentId: 'agent-b',
+        kind: 'continuation', objective: '由 B 收尾', reason: '能力匹配', contextRefs: [],
+        dependencyResults: [], acceptanceCriteria: [], attachmentIds: [],
+        returnMode: 'deliver_to_root' }] });
+    const requested = await harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-timeout', sourceProposalId: proposal!.id,
+      sourceInvocationId: 'invocation-a', toAgentId: 'agent-b', kind: 'continuation',
+      objective: '由 B 收尾', reason: '能力匹配', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'deliver_to_root' });
+    const dispatchId = requested.view.activeDispatchId!;
+    await harness.repositories.dispatches.markAccepted({ dispatchId, agentId: 'agent-b',
+      expectedUpdatedAt: 20, prompt: '由 B 收尾', acceptedAt: 20 });
+    await harness.service.recordAccepted({ dispatchId });
+    const awaitResult = createPhase2CollaborationToolHandlers({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids, onDispatchCreated() {} })['handoffs.await_result'];
+    await expect(awaitResult({ schemaVersion: 2, managementPhase: 2, commandId: 'await-timeout',
+      managementRunId: harness.runId, workerId: 'worker-1', leaseToken: 'token', fencingToken: 1,
+      idempotencyKey: 'await-timeout', toolCallId: 'await-timeout', toolName: 'handoffs.await_result',
+      input: { handoffId: requested.handoff.id, timeoutAt: 20 } }))
+      .resolves.toMatchObject({ status: 'timed_out' });
+    await expect(harness.repositories.management.runs.getById(harness.runId))
+      .resolves.toMatchObject({ activeAgentId: 'agent-a' });
+  });
+
+  test('keeps return-to-manager results out of the public thread', async () => {
+    const harness = await createHarness();
+    const [proposal] = await recordConsultProposal(harness);
+    const requested = await harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-private-result', sourceProposalId: proposal!.id,
+      sourceInvocationId: 'invocation-a', toAgentId: 'agent-b', kind: 'consult',
+      objective: '咨询 B', reason: '需要信息', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'return_to_manager' });
+    const app = createServerNextUseCases({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids, managementKernel: harness.kernel });
+    const delivered = await app.receiveDispatchResult({ dispatchId: requested.view.activeDispatchId!,
+      agentId: 'agent-b', body: '仅返回 Manager' });
+    expect(delivered).toMatchObject({ ok: true, dispatch: { status: 'succeeded' } });
+    expect(delivered).not.toHaveProperty('message');
+    const result = await app.receiveDispatchResult({ dispatchId: requested.view.activeDispatchId!,
+      agentId: 'agent-b', body: '重复' });
+    expect(result).toMatchObject({ ok: false, error: 'CONFLICT' });
+    await expect(harness.repositories.messages.listByThread({ channelId: 'channel-1',
+      threadId: 'message-root', limit: 20 })).resolves.toHaveLength(1);
+    await expect(harness.repositories.management.handoffs.getById(requested.handoff.id))
+      .resolves.toMatchObject({ status: 'returned' });
+  });
+
   test('rejects an already expired handoff deadline before persisting or dispatching', async () => {
     const harness = await createHarness();
 

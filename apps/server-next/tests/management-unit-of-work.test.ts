@@ -124,8 +124,8 @@ describe('management SQLite constraints', () => {
     const db = new Database(':memory:');
     try {
       applyTeamMigrations(db);
-      expect(db.prepare("SELECT id FROM schema_migrations WHERE id = 'team/0017_management_handoff.sql'").get())
-        .toEqual({ id: 'team/0017_management_handoff.sql' });
+      expect(db.prepare("SELECT id FROM schema_migrations WHERE id = 'team/0018_management_handoff.sql'").get())
+        .toEqual({ id: 'team/0018_management_handoff.sql' });
       const names = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
         .all().map((item) => (item as { name: string }).name);
       expect(names).toEqual(expect.arrayContaining([
@@ -151,7 +151,7 @@ describe('management SQLite constraints', () => {
     try {
       applyTeamMigrations(db);
       db.prepare("DELETE FROM schema_migrations WHERE id = 'team/0010_management_phase_1.sql'").run();
-      db.prepare("DELETE FROM schema_migrations WHERE id = 'team/0017_management_handoff.sql'").run();
+      db.prepare("DELETE FROM schema_migrations WHERE id = 'team/0018_management_handoff.sql'").run();
       for (const table of phase2Tables) db.exec(`DROP TABLE ${table};`);
       for (const table of tables) db.exec(`DROP TABLE ${table};`);
       db.exec(`CREATE TRIGGER reject_0010_ledger BEFORE INSERT ON schema_migrations

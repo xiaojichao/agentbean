@@ -690,7 +690,7 @@ export interface ReceiveDispatchResultInput {
 
 export interface ReceiveDispatchResultResult {
   dispatch: DispatchDto;
-  message: MessageDto;
+  message?: MessageDto;
   task?: TaskDto;
   collaborationProposalDiagnostics?: readonly string[];
 }
@@ -2596,6 +2596,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         visibleAgents,
         teamId: messageInput.teamId,
         body: messageInput.body,
+        mentions,
         contextOwner,
         connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
         dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
@@ -2949,11 +2950,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const now = clock.now();
       const title = message.body.trim() || '附件';
       const visibleAgents = await repositories.agents.listVisibleInTeam(convertInput.teamId);
+      const mentions = sanitizeMessageMentions({
+        body: message.body,
+        mentions: message.meta?.mentions,
+        channel: channelAccess.channel,
+        visibleAgents,
+      });
       const route = routeMessageForChannel({
         channel: channelAccess.channel,
         visibleAgents,
         teamId: convertInput.teamId,
         body: message.body,
+        mentions,
       });
       const taskId = ids.nextId();
       const task = await repositories.tasks.create({
@@ -3744,6 +3752,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         }
       });
       const managedAttempt = await repositories.management.dispatchAttempts.getByDispatchId(resultInput.dispatchId);
+      const managedHandoff = managedAttempt
+        ? await repositories.management.handoffs.getByInvocationId(managedAttempt.invocationId)
+        : null;
+      const publishResult = !managedHandoff || managedHandoff.intent.returnMode === 'deliver_to_root';
       const completed = managedAttempt
         ? await invocationGateway.completeAttempt({
             dispatchId: resultInput.dispatchId,
@@ -3770,7 +3782,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ? resultInput.workspaceRun.id ?? ids.nextId()
         : undefined;
       const nestReplyInThread = shouldNestDispatchReplyInThread(originMessage);
-      const message = await repositories.messages.append({
+      const message = publishResult ? await repositories.messages.append({
         id: ids.nextId(),
         teamId: completed.dispatch.teamId,
         channelId: completed.dispatch.channelId,
@@ -3790,13 +3802,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ...(reportedArtifactIds.length > 0 ? { artifactIds: reportedArtifactIds } : {}),
           ...(workspaceRunId ? { workspaceRunId } : {}),
         },
-      });
+      }) : null;
       const workspaceRun = resultInput.workspaceRun
         ? await repositories.workspaceRuns.create({
             id: workspaceRunId!,
             teamId: completed.dispatch.teamId,
             channelId: completed.dispatch.channelId,
-            messageId: message.id,
+            ...(message ? { messageId: message.id } : {}),
             dispatchId: completed.dispatch.id,
             agentId: resultInput.agentId,
             deviceId: agent.deviceId,
@@ -3826,7 +3838,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         }
         const linkedArtifact = await repositories.artifacts.create({
           ...uploadedArtifact,
-          messageId: message.id,
+          ...(message ? { messageId: message.id } : {}),
           dispatchId: completed.dispatch.id,
           workspaceRunId: workspaceRun?.id,
           pathKind: 'generated',
@@ -3845,7 +3857,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           id: artifactInput.id,
           teamId: completed.dispatch.teamId,
           channelId: completed.dispatch.channelId,
-          messageId: message.id,
+          ...(message ? { messageId: message.id } : {}),
           dispatchId: completed.dispatch.id,
           workspaceRunId: workspaceRun?.id,
           uploaderId: resultInput.agentId,
@@ -3864,11 +3876,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       // workspace-run.log must be stripped here too — matching enrichMessagesWithArtifacts. The log
       // stays persisted (created above) and is served by the workspace-run detail endpoint.
       const chatArtifacts = artifacts.filter((artifact) => !isWorkspaceRunLogArtifact(artifact));
-      const messageWithArtifacts: MessageDto = {
+      const messageWithArtifacts: MessageDto | null = message ? {
         ...message,
         ...(chatArtifacts.length > 0 ? { artifacts: chatArtifacts } : {}),
         ...(workspaceRun ? { workspaceRun } : {}),
-      };
+      } : null;
       const completedTask = managedAttempt
         ? null
         : resultSucceeded
@@ -3889,7 +3901,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           dispatchId: completed.dispatch.id,
           status: resultSucceeded ? 'succeeded' : 'failed',
           artifactIds: artifacts.map((artifact) => artifact.id),
-          deliveryMessageId: message.id,
+          ...(message ? { deliveryMessageId: message.id } : {}),
           actorId: resultInput.agentId,
           ...(!resultSucceeded ? { errorCode: workspaceRunFailureError(resultInput.workspaceRun) } : {}),
         });
@@ -3902,7 +3914,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
       return makeSuccess({
         dispatch: toDispatchDto(completed.dispatch),
-        message: messageWithArtifacts,
+        ...(messageWithArtifacts ? { message: messageWithArtifacts } : {}),
         ...(completedTask ? { task: completedTask } : {}),
         ...(collaborationProposalDiagnostics.length > 0
           ? { collaborationProposalDiagnostics: [...new Set(collaborationProposalDiagnostics)] }
@@ -5489,7 +5501,6 @@ function sanitizeMessageMentions(input: {
       || mention.end <= mention.start
       || mention.end > input.body.length
       || input.body.slice(mention.start, mention.end) !== `@${mention.name}`
-      || !/^@[\p{L}\p{N}_-]+$/u.test(input.body.slice(mention.start, mention.end))
     ) {
       return false;
     }
@@ -5511,6 +5522,7 @@ function routeMessageForChannel(input: {
   visibleAgents: AgentDto[];
   teamId: string;
   body: string;
+  mentions?: NonNullable<MessageMetaDto['mentions']>;
   contextOwner?: RoutingContextOwner;
   connectedAgentDeviceIds?: string[];
   dispatchClaimDeviceIds?: string[];
@@ -5536,6 +5548,23 @@ function routeMessageForChannel(input: {
     );
     return targetAgent
       ? { kind: 'dispatch', agentId: targetAgent.id, reason: 'direct' }
+      : { kind: 'no-dispatch', reason: 'no-online-agent' };
+  }
+  const bodyStart = input.body.length - input.body.trimStart().length;
+  const structuredLeadingMention = input.mentions?.find((mention) => mention.start === bodyStart);
+  if (structuredLeadingMention?.kind === 'human') {
+    return { kind: 'no-dispatch', reason: 'human-mention' };
+  }
+  if (structuredLeadingMention?.kind === 'agent') {
+    const targetAgent = input.visibleAgents.find((agent) => agent.id === structuredLeadingMention.id);
+    const isEligible = targetAgent
+      && targetAgent.visibleTeamIds.includes(input.teamId)
+      && (targetAgent.status === 'online' || canQueueForBusyAgent(targetAgent));
+    if (!targetAgent || !isEligible) {
+      return { kind: 'no-dispatch', reason: 'unknown-mention' };
+    }
+    return isSocketReachable(targetAgent)
+      ? { kind: 'dispatch', agentId: targetAgent.id, reason: 'mention' }
       : { kind: 'no-dispatch', reason: 'no-online-agent' };
   }
   const hasLeadingMention = /^@(.+)/.test(input.body.trimStart());

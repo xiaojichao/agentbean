@@ -169,7 +169,9 @@ export function createCollaborationService(input: {
       if (decision.kind === 'existing' && existing?.invocationId) {
         const invocation = await repositories.management.invocations.getById(existing.invocationId);
         if (!invocation) throw new Error('HANDOFF_INVOCATION_NOT_FOUND');
-        return { handoff: existing, invocation, view: await gateway.getView(invocation.id),
+        const view = await gateway.getView(invocation.id);
+        const handoff = await reconcileInvocationView(repositories, clock, ids, existing, view);
+        return { handoff, invocation, view,
           disposition: 'existing' as const };
       }
       if (decision.kind === 'existing' && existing?.status !== 'requested') {
@@ -190,8 +192,10 @@ export function createCollaborationService(input: {
                 handoffId: existing.id, invocationId: recoveredInvocation.id,
               } }, now, ids);
           });
-          return { handoff: recoveredHandoff, invocation: recoveredInvocation,
-            view: await gateway.getView(recoveredInvocation.id), disposition: 'existing' as const };
+          const view = await gateway.getView(recoveredInvocation.id);
+          const handoff = await reconcileInvocationView(repositories, clock, ids, recoveredHandoff, view);
+          return { handoff, invocation: recoveredInvocation,
+            view, disposition: 'existing' as const };
         }
       }
       if (intent.deadlineAt !== undefined && intent.deadlineAt <= now) {
@@ -221,6 +225,10 @@ export function createCollaborationService(input: {
           fromAgentId: item.intent.fromAgentId, toAgentId: item.intent.toAgentId,
           kind: item.intent.kind === 'continuation' ? 'continuation' : 'consult',
         })) })) throw new Error('HANDOFF_LOOP_CONFLICT');
+      const taskContext = proposal?.proposal.sourceTaskContext
+        ?? (request.kind === 'continuation'
+          ? await deriveContinuationTaskContext(repositories, run)
+          : undefined);
       let handoff: AgentHandoffRecordDto = existing ?? { schemaVersion: 1, id: ids.nextId(),
         managementRunId: run.id, intent, intentHash, idempotencyKey: request.idempotencyKey,
         status: 'requested', createdAt: now, updatedAt: now };
@@ -246,7 +254,7 @@ export function createCollaborationService(input: {
             targetAgentId: request.toAgentId,
             targetKind: target.category === 'agentos-hosted' ? 'agentos-hosted' : 'custom',
             objective: intent.objective,
-            ...(proposal?.proposal.sourceTaskContext ? { taskContext: proposal.proposal.sourceTaskContext } : {}),
+            ...(taskContext ? { taskContext } : {}),
             acceptanceCriteria: intent.acceptanceCriteria, dependencyResults: intent.dependencyResults,
             attachmentIds: intent.attachmentIds,
             ...(intent.deadlineAt !== undefined ? { deadlineAt: intent.deadlineAt } : {}),
@@ -285,7 +293,49 @@ export function createCollaborationService(input: {
     async getHandoff(handoffId: string) {
       return repositories.management.handoffs.getById(handoffId);
     },
+
+    async reconcileInvocation(invocationId: string) {
+      const handoff = await repositories.management.handoffs.getByInvocationId(invocationId);
+      if (!handoff) return null;
+      const view = await gateway.getView(invocationId);
+      return reconcileInvocationView(repositories, clock, ids, handoff, view);
+    },
   };
+}
+
+async function deriveContinuationTaskContext(
+  repositories: ServerNextRepositories,
+  run: Awaited<ReturnType<typeof requireRun>>,
+) {
+  if (!run.rootTaskId) throw new Error('HANDOFF_TASK_FENCE_REQUIRED');
+  const [task, coordination] = await Promise.all([
+    repositories.tasks.getById(run.rootTaskId),
+    repositories.taskCoordination.coordinations.getByTaskId(run.rootTaskId),
+  ]);
+  if (!task || !coordination || coordination.managementRunId !== run.id
+    || task.revision !== coordination.taskRevision) {
+    throw new Error('HANDOFF_TASK_FENCE_REQUIRED');
+  }
+  return { taskId: task.id, rootTaskId: run.rootTaskId,
+    taskRevision: task.revision, taskAttempt: coordination.attempt,
+    claimLeaseId: `management:${run.id}` };
+}
+
+async function reconcileInvocationView(
+  repositories: ServerNextRepositories,
+  clock: { now(): number },
+  ids: { nextId(): string },
+  handoff: AgentHandoffRecordDto,
+  view: Awaited<ReturnType<ReturnType<typeof createInvocationGateway>['getView']>>,
+) {
+  const latest = view.dispatchAttempts.at(-1);
+  if (!latest) return handoff;
+  const status = view.status === 'running' ? 'accepted'
+    : view.status === 'succeeded' ? 'returned'
+      : view.status === 'failed' || view.status === 'cancelled' || view.status === 'timed_out'
+        ? view.status : null;
+  if (!status) return handoff;
+  return await updateFromDispatch(repositories, clock, ids, latest.dispatchId, status, []) ?? handoff;
 }
 
 async function updateFromDispatch(
