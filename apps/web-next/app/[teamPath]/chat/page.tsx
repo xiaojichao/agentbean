@@ -14,7 +14,7 @@ import { shouldHideTaskSystemMessage } from '@/lib/task-system-messages';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
-import { extractMentions, resolveMentionByName } from '@/lib/mention';
+import { activeMentionDraft, extractMentions, replaceActiveMention, resolveMentionByName } from '@/lib/mention';
 import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
 import { displayMessageBody } from '@/lib/chat-message-text';
@@ -775,11 +775,10 @@ export default function ChatPage() {
     const val = e.target.value;
     setInput(val);
     const cursor = e.target.selectionStart ?? val.length;
-    const before = val.slice(0, cursor);
-    const atMatch = before.match(/@([\w-]*)$/);
-    if (atMatch) {
+    const draft = activeMentionDraft(val, cursor);
+    if (draft) {
       setShowMention(true);
-      setMentionQuery(atMatch[1].toLowerCase());
+      setMentionQuery(draft.query.toLowerCase());
       setMentionIndex(0);
     } else {
       setShowMention(false);
@@ -791,24 +790,23 @@ export default function ChatPage() {
     ? visibleMentionMembers.find((m) => m.id === activeDm.dmTargetId)
     : null;
 
-  const filteredMentionMembers = isDm
+  const composerMentionMembers = isDm
     ? (dmTargetMember ? [dmTargetMember] : [])
-    : (mentionQuery
-        ? visibleMentionMembers.filter((m) => m.name.toLowerCase().includes(mentionQuery))
-        : visibleMentionMembers);
+    : visibleMentionMembers;
+  const filteredMentionMembers = mentionQuery
+    ? composerMentionMembers.filter((m) => m.name.toLowerCase().includes(mentionQuery))
+    : composerMentionMembers;
 
   const selectMention = (member: { id: string; name: string; kind: 'human' | 'agent' }) => {
     const cursor = textareaRef.current?.selectionStart ?? input.length;
-    const before = input.slice(0, cursor);
-    const after = input.slice(cursor);
-    const newBefore = before.replace(/@[\w-]*$/, `@${member.name} `);
-    setInput(newBefore + after);
+    const replacement = replaceActiveMention(input, cursor, member.name);
+    if (!replacement) return;
+    setInput(replacement.value);
     setShowMention(false);
     setTimeout(() => {
       if (textareaRef.current) {
-        const pos = newBefore.length;
         textareaRef.current.focus();
-        textareaRef.current.setSelectionRange(pos, pos);
+        textareaRef.current.setSelectionRange(replacement.caret, replacement.caret);
       }
     }, 0);
   };
@@ -1790,6 +1788,7 @@ export default function ChatPage() {
           activeDmAgent={activeDmAgent}
           channelMembers={channelMembers}
           mentionMembers={mentionMembers}
+          mentionCandidates={composerMentionMembers}
           chatTaskMenuTarget={chatTaskMenuTarget}
           selectedMessageId={selectedMessageId}
           onInput={setThreadInput}
@@ -2916,6 +2915,7 @@ function ThreadPanel({
   activeDmAgent,
   channelMembers,
   mentionMembers,
+  mentionCandidates,
   chatTaskMenuTarget,
   selectedMessageId,
   onInput,
@@ -2960,6 +2960,7 @@ function ThreadPanel({
   activeDmAgent?: AgentSnapshot;
   channelMembers: ChannelMemberEntry[];
   mentionMembers: MentionProfileMember[];
+  mentionCandidates: MentionProfileMember[];
   chatTaskMenuTarget: ChatTaskMenuTarget;
   selectedMessageId: string | null;
   onInput: (value: string) => void;
@@ -2989,9 +2990,83 @@ function ThreadPanel({
   const rootTaskId = metaTaskId(root);
   const rootTask = rootTaskId ? tasks.find((task) => task.id === rootTaskId) ?? null : null;
   const currentUser = useAgentBeanStore((s) => s.currentUser);
+  const threadTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const [showThreadMention, setShowThreadMention] = useState(false);
+  const [threadMentionQuery, setThreadMentionQuery] = useState('');
+  const [threadMentionIndex, setThreadMentionIndex] = useState(0);
+  const threadMentionMembers = (threadMentionQuery
+    ? mentionCandidates.filter((member) => member.name.toLowerCase().includes(threadMentionQuery))
+    : mentionCandidates
+  );
   const subtitle = rootTask
     ? `#${taskNumbers.get(rootTask.id) ?? '任务'} ${rootTask.title}`
     : resolveMessageSpeaker(root, agents, { currentUser, humanProfiles, channelMembers });
+
+  useEffect(() => {
+    setShowThreadMention(false);
+    setThreadMentionQuery('');
+    setThreadMentionIndex(0);
+  }, [root.id]);
+
+  useEffect(() => {
+    if (!input) setShowThreadMention(false);
+  }, [input]);
+
+  const handleThreadInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = event.target.value;
+    onInput(value);
+    const draft = activeMentionDraft(value, event.target.selectionStart ?? value.length);
+    if (!draft) {
+      setShowThreadMention(false);
+      return;
+    }
+    setShowThreadMention(true);
+    setThreadMentionQuery(draft.query.toLowerCase());
+    setThreadMentionIndex(0);
+  };
+
+  const selectThreadMention = (member: MentionProfileMember) => {
+    const caret = threadTextareaRef.current?.selectionStart ?? input.length;
+    const replacement = replaceActiveMention(input, caret, member.name);
+    if (!replacement) return;
+    onInput(replacement.value);
+    setShowThreadMention(false);
+    setTimeout(() => {
+      threadTextareaRef.current?.focus();
+      threadTextareaRef.current?.setSelectionRange(replacement.caret, replacement.caret);
+    }, 0);
+  };
+
+  const handleThreadInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (showThreadMention && threadMentionMembers.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setThreadMentionIndex((index) => (index + 1) % threadMentionMembers.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setThreadMentionIndex((index) => (index - 1 + threadMentionMembers.length) % threadMentionMembers.length);
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const member = threadMentionMembers[threadMentionIndex];
+        if (member) selectThreadMention(member);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowThreadMention(false);
+        return;
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      onSend();
+    }
+  };
+
   const renderThreadBubble = (msg: ChatMessage, replyCount = 0) => {
     const taskId = metaTaskId(msg);
     const task = taskId ? tasks.find((item) => item.id === taskId) ?? null : null;
@@ -3061,18 +3136,35 @@ function ThreadPanel({
         {replies.map((msg) => renderThreadBubble(msg))}
       </div>
       <div className="border-t border-neutral-200 p-3">
-        <div className="rounded-lg border border-neutral-300 bg-white">
+        <div className="relative rounded-lg border border-neutral-300 bg-white">
+          {showThreadMention && threadMentionMembers.length > 0 && (
+            <div className="absolute bottom-full left-0 z-10 mb-1 max-h-48 w-64 overflow-y-auto rounded-lg border border-neutral-200 bg-white shadow-lg">
+              {threadMentionMembers.map((member, index) => (
+                <button
+                  key={`${member.kind}:${member.id}`}
+                  type="button"
+                  onClick={() => selectThreadMention(member)}
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${index === threadMentionIndex ? 'bg-blue-50 text-blue-700' : 'hover:bg-neutral-50'}`}
+                  data-smoke="thread-mention-candidate"
+                  data-member-kind={member.kind}
+                  data-member-id={member.id}
+                  data-member-name={member.name}
+                >
+                  <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold ${member.kind === 'agent' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'}`}>{member.kind === 'agent' ? 'A' : 'H'}</span>
+                  <span className="truncate">{member.name}</span>
+                  <span className="ml-auto text-[10px] text-neutral-400">{member.kind === 'agent' ? 'Agent' : '人类'}</span>
+                </button>
+              ))}
+            </div>
+          )}
           <textarea
+            ref={threadTextareaRef}
             value={input}
-            onChange={(e) => onInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                onSend();
-              }
-            }}
+            onChange={handleThreadInputChange}
+            onKeyDown={handleThreadInputKeyDown}
             rows={2}
-            placeholder="回复讨论串"
+            placeholder="回复讨论串（输入 @ 提及本频道成员）"
+            data-smoke="thread-message-input"
             className="w-full resize-none px-3 pt-2.5 pb-1 text-sm outline-none placeholder:text-neutral-400"
           />
           {attachments.length > 0 && <AttachmentStrip attachments={attachments} onRemove={onRemoveAttachment} />}

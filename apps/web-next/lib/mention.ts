@@ -9,9 +9,45 @@ export interface MentionMember {
 
 /** body 里的 @token 正则（与 renderInlineMarkdown 的提及匹配保持一致）。 */
 const MENTION_RE = /@[\p{L}\p{N}_-]+/gu;
+const ACTIVE_MENTION_RE = /@([\p{L}\p{N}_-]*)$/u;
+
+export interface MentionDraft {
+  query: string;
+  start: number;
+  end: number;
+}
 
 function normalizeMentionName(name: string): string {
   return name.trim().toLowerCase();
+}
+
+/** 返回光标前仍在编辑的 @token；已被空白结束的 mention 不再视为候选查询。 */
+export function activeMentionDraft(body: string, caret: number): MentionDraft | null {
+  const boundedCaret = Math.max(0, Math.min(caret, body.length));
+  const match = body.slice(0, boundedCaret).match(ACTIVE_MENTION_RE);
+  if (!match) return null;
+  return {
+    query: match[1] ?? '',
+    start: boundedCaret - match[0].length,
+    end: boundedCaret,
+  };
+}
+
+/** 用选中的成员名替换当前 @token，并把光标放到 mention 后的分隔空格之后。 */
+export function replaceActiveMention(
+  body: string,
+  caret: number,
+  memberName: string,
+): { value: string; caret: number } | null {
+  const draft = activeMentionDraft(body, caret);
+  if (!draft) return null;
+  const suffix = body.slice(draft.end);
+  const separator = /^\s/u.test(suffix) ? '' : ' ';
+  const mention = `@${memberName}`;
+  return {
+    value: body.slice(0, draft.start) + mention + separator + suffix,
+    caret: draft.start + mention.length + 1,
+  };
 }
 
 /**

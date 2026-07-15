@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'vitest';
-import { extractMentions, resolveMentionByName, type MentionMember } from '../lib/mention';
+import {
+  activeMentionDraft,
+  extractMentions,
+  replaceActiveMention,
+  resolveMentionByName,
+  type MentionMember,
+} from '../lib/mention';
 
 // 真实症状：Agent 改名后，频道消息 body 里的 @旧名 应显示为新名。
 // 根因：@提及只是 body 文本字符串，无 agentId 关联。修复：发送时 meta.mentions 锁定 id，
@@ -33,6 +39,21 @@ describe('extractMentions (send time: lock id by name)', () => {
 
   test('empty body or no match → []', () => {
     expect(extractMentions('普通消息', [{ id: 'a1', name: 'codex', kind: 'agent' }])).toEqual([]);
+  });
+});
+
+describe('mention composer draft', () => {
+  test('detects the active @ query at the caret, including Chinese names', () => {
+    expect(activeMentionDraft('请 @Hermes 处理', 9)).toEqual({ query: 'Hermes', start: 2, end: 9 });
+    expect(activeMentionDraft('请 @小助', 5)).toEqual({ query: '小助', start: 2, end: 5 });
+  });
+
+  test('ignores completed mentions and replaces only the token at the caret', () => {
+    expect(activeMentionDraft('请 @Hermes 处理', 12)).toBeNull();
+    expect(replaceActiveMention('先 @Alice，再 @Her 后续', 15, 'Hermes-Agent')).toEqual({
+      value: '先 @Alice，再 @Hermes-Agent 后续',
+      caret: 25,
+    });
   });
 });
 
