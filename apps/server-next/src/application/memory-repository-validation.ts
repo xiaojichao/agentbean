@@ -8,6 +8,7 @@ import {
 import type {
   MemoryAuditEventRecord,
   MemoryCapsuleRefRecord,
+  MemoryCandidateRecord,
   MemoryGrantRecord,
   MemoryItemRecord,
   MemorySourceRecord,
@@ -23,6 +24,9 @@ const SOURCE_VISIBILITY_VALUES = new Set<string>(['team', 'private', 'dm-partici
 const CONTENT_KIND_VALUES = new Set<string>(['summary', 'fact', 'decision', 'preference', 'procedure']);
 const REDACTION_LEVEL_VALUES = new Set<string>(['none', 'summary-only', 'sensitive-removed']);
 const GRANT_STATUS_VALUES = new Set<string>(['active', 'revoked', 'expired']);
+const CANDIDATE_STATUS_VALUES = new Set<string>([
+  'candidate', 'accepted', 'rejected', 'merged', 'conflict',
+]);
 const AUDIT_SUBJECT_VALUES = new Set<string>(['memory', 'grant', 'capsule', 'candidate']);
 const AUDIT_ACTOR_VALUES = new Set<string>(['system', 'user', 'agent', 'manager']);
 const AUDIT_EVENT_VALUES = new Set<string>([
@@ -186,5 +190,28 @@ export function assertMemoryCapsuleRefDenial(
   if (current.deniedAt !== undefined) throw new Error('memory capsule ref is already denied');
   if (deniedAt < current.issuedAt || deniedAt > current.expiresAt) {
     throw new Error('memory capsule ref denial time is outside its validity window');
+  }
+}
+
+export function assertMemoryCandidateRecord(record: MemoryCandidateRecord): void {
+  if (record.sourceAgentId.trim().length === 0) throw new Error('memory candidate source agent is required');
+  if (record.sourceInvocationId.trim().length === 0) {
+    throw new Error('memory candidate source invocation is required');
+  }
+  if (record.managementRunId.trim().length === 0) throw new Error('memory candidate management run is required');
+  if (!CONTENT_KIND_VALUES.has(record.contentKind)) {
+    throw new Error('memory candidate content kind is invalid');
+  }
+  if (!CANDIDATE_STATUS_VALUES.has(record.status)) throw new Error('memory candidate status is invalid');
+  if (record.proposedContent.length === 0) throw new Error('memory candidate proposed content is required');
+  if (record.projectionHash.trim().length === 0) throw new Error('memory candidate projection hash is required');
+  for (const sourceRef of record.sourceRefs) {
+    if (sourceRef.schemaVersion !== 1 || !SOURCE_KIND_VALUES.has(sourceRef.sourceKind)
+      || sourceRef.sourceId.trim().length === 0 || sourceRef.snapshotHash.trim().length === 0) {
+      throw new Error('memory candidate source ref is invalid');
+    }
+  }
+  if (record.decidedAt !== undefined && record.decidedAt < record.createdAt) {
+    throw new Error('memory candidate decision time precedes creation');
   }
 }

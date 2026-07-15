@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 
 import type {
   MemoryAuditEventRecord,
+  MemoryCandidateRecord,
   MemoryCapsuleRefRecord,
   MemoryGrantRecord,
   MemoryItemRecord,
@@ -233,10 +234,48 @@ describe.each([
       fixture.close();
     }
   });
+
+  test('persists Candidates with projection-hash dedup, Team isolation and run scoping', async () => {
+    const fixture = createFixture();
+    try {
+      await fixture.repositories.memoryUnitOfWork.run(async (memory) => {
+        await memory.candidates.create(candidate('cand-1', 'run-1', 'sha256:proj-a'));
+      });
+      // 同 projectionHash 重复（去重闸门）—— 不同 id 也拒。
+      await expect(fixture.repositories.memoryUnitOfWork.run(async (memory) => {
+        await memory.candidates.create(candidate('cand-2', 'run-1', 'sha256:proj-a'));
+      })).rejects.toThrow(/projection hash already exists/i);
+      // 同 id 重复也拒。
+      await expect(fixture.repositories.memoryUnitOfWork.run(async (memory) => {
+        await memory.candidates.create(candidate('cand-1', 'run-1', 'sha256:proj-a'));
+      })).rejects.toThrow(/already exists/i);
+      // projectionHash 不同 → 允许。
+      await fixture.repositories.memoryUnitOfWork.run(async (memory) => {
+        await memory.candidates.create(candidate('cand-3', 'run-1', 'sha256:proj-b'));
+      });
+
+      await expect(fixture.repositories.memory.candidates.getById({ teamId: 'team-1', id: 'cand-1' }))
+        .resolves.toMatchObject({ id: 'cand-1', status: 'candidate', proposedContent: 'Use Node 24' });
+      await expect(fixture.repositories.memory.candidates.getById({ teamId: 'team-2', id: 'cand-1' }))
+        .resolves.toBeNull();
+      await expect(fixture.repositories.memory.candidates.getByProjectionHash({
+        teamId: 'team-1', projectionHash: 'sha256:proj-a',
+      })).resolves.toMatchObject({ id: 'cand-1' });
+      await expect(fixture.repositories.memory.candidates.getByProjectionHash({
+        teamId: 'team-1', projectionHash: 'sha256:missing',
+      })).resolves.toBeNull();
+      await expect(fixture.repositories.memory.candidates.listByRun({ teamId: 'team-1', managementRunId: 'run-1' }))
+        .resolves.toMatchObject([{ id: 'cand-1' }, { id: 'cand-3' }]);
+      await expect(fixture.repositories.memory.candidates.listByRun({ teamId: 'team-1', managementRunId: 'run-2' }))
+        .resolves.toEqual([]);
+    } finally {
+      fixture.close();
+    }
+  });
 });
 
 describe('Phase 3 Memory migration', () => {
-  test('applies 0015 and 0016 once with Team/scope constraints and no content in audit', () => {
+  test('applies 0015, 0016 and 0017 once with Team/scope constraints and no content in audit', () => {
     const db = new Database(':memory:');
     try {
       db.exec('PRAGMA foreign_keys = ON;');
@@ -247,10 +286,12 @@ describe('Phase 3 Memory migration', () => {
         WHERE id = 'team/0015_management_phase_3_memory.sql'`).get()).toEqual({ count: 1 });
       expect(db.prepare(`SELECT COUNT(*) AS count FROM schema_migrations
         WHERE id = 'team/0016_management_phase_3_capsule_refs.sql'`).get()).toEqual({ count: 1 });
+      expect(db.prepare(`SELECT COUNT(*) AS count FROM schema_migrations
+        WHERE id = 'team/0017_management_phase_3_candidates.sql'`).get()).toEqual({ count: 1 });
       const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'
         AND name LIKE 'memory_%' ORDER BY name`).all().map((value) => (value as { name: string }).name);
       expect(tables).toEqual([
-        'memory_audit_events', 'memory_capsule_refs', 'memory_grants',
+        'memory_audit_events', 'memory_candidates', 'memory_capsule_refs', 'memory_grants',
         'memory_items', 'memory_sources', 'memory_tags',
       ]);
       const auditColumns = db.prepare("SELECT name FROM pragma_table_info('memory_audit_events')")
@@ -367,6 +408,28 @@ function capsuleRef(id = 'cap-1', managementRunId = 'run-1'): MemoryCapsuleRefRe
     authorizationDecisionId: 'decision-1',
     issuedAt: 1_000,
     expiresAt: 10_000,
+    createdAt: 1_000,
+  };
+}
+
+function candidate(id = 'cand-1', managementRunId = 'run-1', projectionHash = 'sha256:proj-a'): MemoryCandidateRecord {
+  return {
+    id,
+    teamId: 'team-1',
+    managementRunId,
+    sourceAgentId: 'agent-1',
+    sourceInvocationId: 'invocation-1',
+    sourceRefs: [{
+      schemaVersion: 1,
+      sourceKind: 'invocation',
+      sourceId: 'invocation-1',
+      snapshotHash: 'sha256:invocation-1',
+    }],
+    contentKind: 'decision',
+    proposedContent: 'Use Node 24',
+    projectionHash,
+    status: 'candidate',
+    conflictMemoryIds: [],
     createdAt: 1_000,
   };
 }
