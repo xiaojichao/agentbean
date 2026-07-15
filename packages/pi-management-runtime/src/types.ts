@@ -312,6 +312,18 @@ export const PHASE_2_MANAGEMENT_TOOL_NAMES = [
   'handoffs.await_result',
 ] as const satisfies readonly ManagementToolName[];
 
+/**
+ * Phase 3 在 Phase 2 之上叠加四个 Memory 工具（P3-09）。仅 maxManagementPhase>=3 的 Team 开放，
+ * 且需 V3 capability/preflight 接线（slice 2）才真正注入 Agent；本常量只定义工具面。
+ */
+export const PHASE_3_MANAGEMENT_TOOL_NAMES = [
+  ...PHASE_2_MANAGEMENT_TOOL_NAMES,
+  'memory.search',
+  'memory.create_capsule',
+  'memory.propose_candidate',
+  'memory.link_sources',
+] as const satisfies readonly ManagementToolName[];
+
 export type ManagementToolName = (typeof MANAGEMENT_TOOL_NAMES)[number];
 export type ManagementToolEffect = 'read' | 'write';
 export type ManagementToolPhase = 1 | 2 | 3 | 4;

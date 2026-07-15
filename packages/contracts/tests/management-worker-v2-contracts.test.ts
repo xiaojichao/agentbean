@@ -7,6 +7,7 @@ import {
   parseManagementWorkerSessionContextV2,
   parsePhase2TaskToolRequestV2,
   parsePhase2TaskToolResultV2,
+  parsePhase3MemoryToolInputV1,
 } from '../src/index.js';
 
 describe('Phase 2 management worker contracts', () => {
@@ -273,5 +274,48 @@ describe('Phase 2 management worker contracts', () => {
         subtasks: [{ ...draft, acceptanceCriteria: [{ ...draft.acceptanceCriteria[0], allowedEvidenceKinds: ['provider-secret'] }] }],
       },
     })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+  });
+
+  test('parses exact Phase 3 Memory tool inputs and rejects contract drift', () => {
+    const sourceRef = {
+      schemaVersion: 1 as const,
+      sourceKind: 'invocation' as const,
+      sourceId: 'invocation-1',
+      snapshotHash: 'sha256:source-1',
+    };
+    expect(parsePhase3MemoryToolInputV1('memory.search', {
+      query: 'deployment result', taskId: 'task-1', limit: 10,
+    })).toEqual({ query: 'deployment result', taskId: 'task-1', limit: 10 });
+    expect(parsePhase3MemoryToolInputV1('memory.create_capsule', {
+      targetAgentId: 'agent-1', prompt: 'continue the task', channelId: 'channel-1', limit: 5,
+    })).toMatchObject({ targetAgentId: 'agent-1', limit: 5 });
+    expect(parsePhase3MemoryToolInputV1('memory.propose_candidate', {
+      contentKind: 'decision', proposedContent: 'Use Node 24', sourceRefs: [sourceRef], taskId: 'task-1',
+    })).toMatchObject({ contentKind: 'decision', sourceRefs: [sourceRef] });
+    expect(parsePhase3MemoryToolInputV1('memory.link_sources', {
+      memoryId: 'memory-1', sourceRefs: [sourceRef],
+    })).toEqual({ memoryId: 'memory-1', sourceRefs: [sourceRef] });
+
+    const invalidCases: Array<() => unknown> = [
+      () => parsePhase3MemoryToolInputV1('memory.search', { query: 'q', limit: 1, secret: 'forbidden' }),
+      () => parsePhase3MemoryToolInputV1('memory.search', { query: '', limit: 1 }),
+      () => parsePhase3MemoryToolInputV1('memory.search', { query: 'q', limit: 101 }),
+      () => parsePhase3MemoryToolInputV1('memory.create_capsule', {
+        targetAgentId: '', prompt: 'p', limit: 1,
+      }),
+      () => parsePhase3MemoryToolInputV1('memory.propose_candidate', {
+        contentKind: 'credential', proposedContent: 'x', sourceRefs: [sourceRef],
+      } as never),
+      () => parsePhase3MemoryToolInputV1('memory.propose_candidate', {
+        contentKind: 'fact', proposedContent: 'x', sourceRefs: [],
+      }),
+      () => parsePhase3MemoryToolInputV1('memory.link_sources', {
+        memoryId: 'memory-1', sourceRefs: [{ ...sourceRef, snapshotHash: '' }],
+      }),
+      () => parsePhase3MemoryToolInputV1('memory.link_sources', {
+        memoryId: 'memory-1', sourceRefs: [{ ...sourceRef, sourceKind: 'device-local' }],
+      } as never),
+    ];
+    for (const invalid of invalidCases) expect(invalid).toThrow('MEMORY_TOOL_INPUT_INVALID');
   });
 });

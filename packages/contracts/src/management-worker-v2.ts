@@ -4,7 +4,7 @@ import type { AcceptanceCriterionDto, EvidenceRefDto, SubtaskAcceptanceV1 } from
 import type { AgentHandoffReturnMode, AgentHandoffStatus, SerialAgentHandoffKind } from './collaboration.js';
 import { parseAgentCollaborationProposalV1 } from './collaboration.js';
 import type { AgentInvocationResultDto } from './invocation.js';
-import type { MemoryCapsuleRefDto } from './management-memory.js';
+import type { MemoryCapsuleRefDto, MemoryContentKind, MemorySourceRefDto } from './management-memory.js';
 
 export const PHASE_2_TASK_WORKER_TOOL_NAMES = [
   'tasks.create_subtasks',
@@ -120,6 +120,55 @@ export interface Phase2ManagementWorkerToolInputMapV1 {
   readonly 'tasks.retry': { readonly taskId: ID; readonly expectedTaskRevision: number; readonly reasonCode: string };
   readonly 'tasks.accept_subtask': { readonly acceptance: SubtaskAcceptanceV1 };
   readonly 'tasks.report_blocked': { readonly taskId: ID; readonly expectedTaskRevision: number; readonly reasonCode: string };
+}
+
+/**
+ * Phase 3 Memory 工具输入（P3-09）。teamId / managementRunId / requesterUserId 来自 session
+ * context，不由 Agent 传入。这四个工具是「外部 Agent 只能 propose、不能直写 active Memory」
+ * 不变量的 Agent 侧入口（search 只读；create_capsule 投影；propose_candidate 进 review 队列；
+ * link_sources 补来源）。
+ */
+export interface Phase3ManagementWorkerToolInputMapV1 {
+  readonly 'memory.search': {
+    readonly query: string;
+    readonly taskId?: ID;
+    readonly channelId?: ID;
+    readonly userId?: ID;
+    readonly limit: number;
+  };
+  readonly 'memory.create_capsule': {
+    readonly targetAgentId: ID;
+    readonly prompt: string;
+    readonly limit: number;
+    readonly taskId?: ID;
+    readonly channelId?: ID;
+    readonly userId?: ID;
+  };
+  readonly 'memory.propose_candidate': {
+    readonly contentKind: MemoryContentKind;
+    readonly proposedContent: string;
+    readonly sourceRefs: readonly MemorySourceRefDto[];
+    readonly taskId?: ID;
+  };
+  readonly 'memory.link_sources': {
+    readonly memoryId: ID;
+    readonly sourceRefs: readonly MemorySourceRefDto[];
+  };
+}
+
+export interface MemorySearchToolMatchV1 {
+  readonly memoryId: ID;
+  readonly content: string;
+  readonly summary?: string;
+  readonly score: number;
+  readonly reasons: readonly string[];
+}
+
+export interface Phase3ManagementWorkerToolOutputMapV1 {
+  readonly 'memory.search': { readonly matches: readonly MemorySearchToolMatchV1[] };
+  readonly 'memory.create_capsule': { readonly capsuleRef: MemoryCapsuleRefDto };
+  readonly 'memory.propose_candidate': { readonly candidateId: ID; readonly status: 'candidate' | 'conflict' };
+  readonly 'memory.link_sources': { readonly memoryId: ID };
 }
 
 export interface Phase2ManagementWorkerToolOutputMapV1 {
@@ -524,6 +573,91 @@ export function parsePhase2TaskToolInputV1<K extends keyof Phase2ManagementWorke
 ): Phase2ManagementWorkerToolInputMapV1[K] {
   assertTaskToolInput(toolName, value);
   return structuredClone(value) as Phase2ManagementWorkerToolInputMapV1[K];
+}
+
+export function parsePhase3MemoryToolInputV1<K extends keyof Phase3ManagementWorkerToolInputMapV1>(
+  toolName: K,
+  value: unknown,
+): Phase3ManagementWorkerToolInputMapV1[K] {
+  assertMemoryToolInput(toolName, value);
+  return structuredClone(value) as Phase3ManagementWorkerToolInputMapV1[K];
+}
+
+const MEMORY_SOURCE_KINDS = [
+  'message', 'task', 'artifact', 'workspace-run', 'invocation', 'memory', 'manual', 'local-summary',
+] as const;
+const MEMORY_CONTENT_KINDS = ['summary', 'fact', 'decision', 'preference', 'procedure'] as const;
+
+function assertExactMemoryKeys(
+  value: unknown,
+  allowed: readonly string[],
+  required: readonly string[],
+): asserts value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('MEMORY_TOOL_INPUT_INVALID');
+  const keys = Object.keys(value);
+  if (keys.some((key) => !allowed.includes(key)) || required.some((key) => !keys.includes(key))) {
+    throw new Error('MEMORY_TOOL_INPUT_INVALID');
+  }
+}
+
+function assertMemoryLimit(value: unknown): void {
+  if (!Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > 100) {
+    throw new Error('MEMORY_TOOL_INPUT_INVALID');
+  }
+}
+
+function assertMemorySourceRef(value: unknown): void {
+  assertExactMemoryKeys(value, ['schemaVersion', 'sourceKind', 'sourceId', 'snapshotHash'],
+    ['schemaVersion', 'sourceKind', 'sourceId', 'snapshotHash']);
+  if (value.schemaVersion !== 1
+    || !MEMORY_SOURCE_KINDS.includes(value.sourceKind as typeof MEMORY_SOURCE_KINDS[number])
+    || !nonEmpty(value.sourceId)
+    || !nonEmpty(value.snapshotHash)) {
+    throw new Error('MEMORY_TOOL_INPUT_INVALID');
+  }
+}
+
+function assertMemorySourceRefs(value: unknown): void {
+  if (!Array.isArray(value) || value.length === 0) throw new Error('MEMORY_TOOL_INPUT_INVALID');
+  value.forEach(assertMemorySourceRef);
+}
+
+function assertOptionalMemoryScopeIds(value: Record<string, unknown>): void {
+  for (const key of ['taskId', 'channelId', 'userId']) {
+    if (value[key] !== undefined && !nonEmpty(value[key])) throw new Error('MEMORY_TOOL_INPUT_INVALID');
+  }
+}
+
+function assertMemoryToolInput(toolName: keyof Phase3ManagementWorkerToolInputMapV1, value: unknown): void {
+  if (toolName === 'memory.search') {
+    assertExactMemoryKeys(value, ['query', 'taskId', 'channelId', 'userId', 'limit'], ['query', 'limit']);
+    if (!nonEmpty(value.query)) throw new Error('MEMORY_TOOL_INPUT_INVALID');
+    assertMemoryLimit(value.limit);
+    assertOptionalMemoryScopeIds(value);
+    return;
+  }
+  if (toolName === 'memory.create_capsule') {
+    assertExactMemoryKeys(value, ['targetAgentId', 'prompt', 'limit', 'taskId', 'channelId', 'userId'],
+      ['targetAgentId', 'prompt', 'limit']);
+    if (!nonEmpty(value.targetAgentId) || !nonEmpty(value.prompt)) throw new Error('MEMORY_TOOL_INPUT_INVALID');
+    assertMemoryLimit(value.limit);
+    assertOptionalMemoryScopeIds(value);
+    return;
+  }
+  if (toolName === 'memory.propose_candidate') {
+    assertExactMemoryKeys(value, ['contentKind', 'proposedContent', 'sourceRefs', 'taskId'],
+      ['contentKind', 'proposedContent', 'sourceRefs']);
+    if (!MEMORY_CONTENT_KINDS.includes(value.contentKind as typeof MEMORY_CONTENT_KINDS[number])
+      || !nonEmpty(value.proposedContent)
+      || (value.taskId !== undefined && !nonEmpty(value.taskId))) {
+      throw new Error('MEMORY_TOOL_INPUT_INVALID');
+    }
+    assertMemorySourceRefs(value.sourceRefs);
+    return;
+  }
+  assertExactMemoryKeys(value, ['memoryId', 'sourceRefs'], ['memoryId', 'sourceRefs']);
+  if (!nonEmpty(value.memoryId)) throw new Error('MEMORY_TOOL_INPUT_INVALID');
+  assertMemorySourceRefs(value.sourceRefs);
 }
 
 export function parseManagementWorkerRegisterV2(value: unknown): ManagementWorkerRegisterV2 {

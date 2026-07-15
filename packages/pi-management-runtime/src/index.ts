@@ -1,5 +1,5 @@
 export { createManagementRuntimeFactory } from './pi-session-adapter.js';
-export { MANAGEMENT_TOOL_NAMES, PHASE_1_MANAGEMENT_TOOL_NAMES, PHASE_2_MANAGEMENT_TOOL_NAMES } from './types.js';
+export { MANAGEMENT_TOOL_NAMES, PHASE_1_MANAGEMENT_TOOL_NAMES, PHASE_2_MANAGEMENT_TOOL_NAMES, PHASE_3_MANAGEMENT_TOOL_NAMES } from './types.js';
 export type {
   CreateManagementRuntimeFactoryInput,
   CreateManagementSessionInput,

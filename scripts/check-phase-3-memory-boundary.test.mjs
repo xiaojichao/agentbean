@@ -193,3 +193,33 @@ test('fails closed when Phase 2 agents.invoke drops the Capsule ref model schema
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /P3_CAPSULE_INVOCATION_BINDING_INVALID/);
 });
+
+test('fails closed when Phase 3 Memory tool definitions disappear', () => {
+  const result = withFixture('agentbean-phase3-definitions-', (fixture) => {
+    const path = join(fixture, 'packages/pi-management-runtime/src/types.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('PHASE_3_MANAGEMENT_TOOL_NAMES', 'REMOVED_PHASE_3_TOOL_NAMES'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_DEFINITIONS_INVALID/);
+});
+
+test('fails closed when the Phase 3 Memory parser stops enforcing exact keys', () => {
+  const result = withFixture('agentbean-phase3-exact-parser-', (fixture) => {
+    const path = join(fixture, 'packages/contracts/src/management-worker-v2.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('assertExactMemoryKeys', 'allowUnknownMemoryKeys'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_DEFINITIONS_INVALID/);
+});
+
+test('fails closed when the Phase 3 tool list drops a Memory tool', () => {
+  const result = withFixture('agentbean-phase3-tool-list-', (fixture) => {
+    const path = join(fixture, 'packages/pi-management-runtime/src/types.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replace(
+      "  'memory.link_sources',\n] as const satisfies readonly ManagementToolName[];",
+      '] as const satisfies readonly ManagementToolName[];',
+    ));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_DEFINITIONS_INVALID/);
+});

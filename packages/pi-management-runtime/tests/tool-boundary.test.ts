@@ -4,12 +4,14 @@ import {
   MANAGEMENT_TOOL_NAMES,
   PHASE_1_MANAGEMENT_TOOL_NAMES,
   PHASE_2_MANAGEMENT_TOOL_NAMES,
+  PHASE_3_MANAGEMENT_TOOL_NAMES,
   createManagementRuntimeFactory,
   type ManagementModelRequest,
   type ManagementToolName,
 } from '../src/index.js';
 import {
   assertExactManagementToolAllowlist,
+  createManagementToolCatalog,
   getManagementToolMetadata,
 } from '../src/management-tool-catalog.js';
 import { PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES } from '../../contracts/src/index.js';
@@ -502,5 +504,78 @@ describe('management tool boundary', () => {
       expect.objectContaining({ type: 'tool', phase: 'end', toolCallId: 'call-2', name: 'agents.invoke', isError: false }),
     ]));
     await session.dispose();
+  });
+});
+
+describe('Phase 3 Memory tool definitions', () => {
+  const MEMORY_TOOLS = ['memory.search', 'memory.create_capsule', 'memory.propose_candidate', 'memory.link_sources'] as const;
+
+  it('PHASE_3 extends PHASE_2 with the four Memory tools and keeps them out of Phase 1/2', () => {
+    expect(PHASE_3_MANAGEMENT_TOOL_NAMES).toHaveLength(PHASE_2_MANAGEMENT_TOOL_NAMES.length + MEMORY_TOOLS.length);
+    expect(PHASE_3_MANAGEMENT_TOOL_NAMES.slice(0, PHASE_2_MANAGEMENT_TOOL_NAMES.length))
+      .toEqual([...PHASE_2_MANAGEMENT_TOOL_NAMES]);
+    for (const tool of MEMORY_TOOLS) {
+      expect(PHASE_3_MANAGEMENT_TOOL_NAMES).toContain(tool);
+      expect(PHASE_2_MANAGEMENT_TOOL_NAMES).not.toContain(tool);
+      expect(PHASE_1_MANAGEMENT_TOOL_NAMES).not.toContain(tool);
+      expect(getManagementToolMetadata(tool).phase).toBe(3);
+    }
+  });
+
+  it('every Memory tool is part of the full MANAGEMENT_TOOL_NAMES surface', () => {
+    for (const tool of MEMORY_TOOLS) {
+      expect(MANAGEMENT_TOOL_NAMES).toContain(tool);
+    }
+  });
+
+  it('publishes exact schemas for every Phase 3 Memory tool', () => {
+    const definitions = createManagementToolCatalog({
+      executor: async () => ({ text: 'unused' }),
+      toolNames: MEMORY_TOOLS,
+      mode: 'managed',
+      sessionContext: phase2SessionInput('phase-3-schema').context,
+    });
+    const schemas = new Map(definitions.map((definition) => [definition.name,
+      JSON.parse(JSON.stringify(definition.parameters)) as {
+        additionalProperties: boolean;
+        properties: Record<string, unknown>;
+        required: string[];
+      }]));
+    const expectedKeys = new Map([
+      ['memory.search', ['query', 'limit', 'taskId', 'channelId', 'userId']],
+      ['memory.create_capsule', ['targetAgentId', 'prompt', 'limit', 'taskId', 'channelId', 'userId']],
+      ['memory.propose_candidate', ['contentKind', 'proposedContent', 'sourceRefs', 'taskId']],
+      ['memory.link_sources', ['memoryId', 'sourceRefs']],
+    ]);
+    const expectedRequired = new Map([
+      ['memory.search', ['query', 'limit']],
+      ['memory.create_capsule', ['targetAgentId', 'prompt', 'limit']],
+      ['memory.propose_candidate', ['contentKind', 'proposedContent', 'sourceRefs']],
+      ['memory.link_sources', ['memoryId', 'sourceRefs']],
+    ]);
+    for (const name of MEMORY_TOOLS) {
+      const schema = schemas.get(name);
+      expect(schema?.additionalProperties).toBe(false);
+      expect(Object.keys(schema?.properties ?? {})).toEqual(expectedKeys.get(name));
+      expect(schema?.required).toEqual(expectedRequired.get(name));
+    }
+  });
+
+  it('applies the exact-key parser before invoking the Phase 3 executor', async () => {
+    const executorCalls: unknown[] = [];
+    const [search] = createManagementToolCatalog({
+      executor: async (call) => {
+        executorCalls.push(call);
+        return { text: 'must-not-run' };
+      },
+      toolNames: ['memory.search'],
+      mode: 'managed',
+      sessionContext: phase2SessionInput('phase-3-parser').context,
+    });
+    expect(search).toBeDefined();
+    await expect(search!.execute('call-1', {
+      query: 'q', limit: 1, providerSecret: 'forbidden',
+    }, undefined, undefined, undefined as never)).rejects.toThrow('MEMORY_TOOL_INPUT_INVALID');
+    expect(executorCalls).toHaveLength(0);
   });
 });
