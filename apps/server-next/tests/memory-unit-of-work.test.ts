@@ -236,7 +236,7 @@ describe.each([
 });
 
 describe('Phase 3 Memory migration', () => {
-  test('applies 0015 and 0016 once with Team/scope constraints and no content in audit', () => {
+  test('applies Phase 3 Memory migrations once with Team/scope constraints and no content in audit', () => {
     const db = new Database(':memory:');
     try {
       db.exec('PRAGMA foreign_keys = ON;');
@@ -249,6 +249,8 @@ describe('Phase 3 Memory migration', () => {
         WHERE id = 'team/0016_management_phase_3_capsule_refs.sql'`).get()).toEqual({ count: 1 });
       expect(db.prepare(`SELECT COUNT(*) AS count FROM schema_migrations
         WHERE id = 'team/0017_management_phase_3_candidates.sql'`).get()).toEqual({ count: 1 });
+      expect(db.prepare(`SELECT COUNT(*) AS count FROM schema_migrations
+        WHERE id = 'team/0019_management_phase_3_candidate_lifecycle.sql'`).get()).toEqual({ count: 1 });
       const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'
         AND name LIKE 'memory_%' ORDER BY name`).all().map((value) => (value as { name: string }).name);
       expect(tables).toEqual([
@@ -259,6 +261,30 @@ describe('Phase 3 Memory migration', () => {
       const auditColumns = db.prepare("SELECT name FROM pragma_table_info('memory_audit_events')")
         .all().map((value) => (value as { name: string }).name);
       expect(auditColumns).not.toEqual(expect.arrayContaining(['content', 'body', 'prompt', 'before_json', 'after_json']));
+    } finally {
+      db.close();
+    }
+  });
+
+  test('0018 fails closed without deleting unexpected legacy candidate rows', () => {
+    const db = new Database(':memory:');
+    try {
+      db.exec('PRAGMA foreign_keys = ON;');
+      applyTeamMigrations(db);
+      db.exec(`
+        DROP TABLE memory_candidate_sources;
+        DROP TABLE memory_candidates;
+        DELETE FROM schema_migrations
+          WHERE id = 'team/0019_management_phase_3_candidate_lifecycle.sql';
+        CREATE TABLE memory_candidates (id TEXT PRIMARY KEY);
+        INSERT INTO memory_candidates(id) VALUES ('legacy-candidate');
+      `);
+
+      expect(() => applyTeamMigrations(db)).toThrow(/CHECK constraint failed/);
+      expect(db.prepare("SELECT id FROM memory_candidates WHERE id = 'legacy-candidate'").get())
+        .toEqual({ id: 'legacy-candidate' });
+      expect(db.prepare(`SELECT id FROM schema_migrations
+        WHERE id = 'team/0019_management_phase_3_candidate_lifecycle.sql'`).get()).toBeUndefined();
     } finally {
       db.close();
     }

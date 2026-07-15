@@ -54,6 +54,7 @@ describe('Phase 3 Memory Candidate policy', () => {
       sourceRefs: [ref('m1')],
       scopeType: 'task' as const,
       scopeRef: 'task-1',
+      targetAgentId: 'target-agent-1',
       contentKind: 'decision' as const,
     };
 
@@ -87,6 +88,9 @@ describe('Phase 3 Memory Candidate policy', () => {
       );
       expect(computeProjectionHash(base)).not.toBe(
         computeProjectionHash({ ...base, contentKind: 'fact' as const }),
+      );
+      expect(computeProjectionHash(base)).not.toBe(
+        computeProjectionHash({ ...base, targetAgentId: 'target-agent-2' }),
       );
     });
   });

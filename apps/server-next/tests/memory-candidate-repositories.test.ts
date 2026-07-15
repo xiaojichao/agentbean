@@ -24,6 +24,7 @@ function candidateRecord(overrides: Partial<MemoryCandidateRecord> = {}): Memory
     managementRunId: 'run-1',
     sourceAgentId: 'agent-1',
     sourceInvocationId: 'inv-1',
+    targetAgentId: 'target-agent-1',
     scopeType: 'task',
     scopeRef: 'task-1',
     contentKind: 'decision',
@@ -72,7 +73,9 @@ describe.each([
   test('create + getById round-trips a candidate with conflict ids', async () => {
     const { repos, close } = createRepos();
     try {
-      const record = candidateRecord({ conflictMemoryIds: ['mem-1', 'mem-2'] });
+      const record = candidateRecord({
+        proposedSummary: '运行时方案', conflictMemoryIds: ['mem-1', 'mem-2'],
+      });
       await repos.candidates.create(record);
       const found = await repos.candidates.getById({ teamId: 'team-1', id: 'cand-1' });
       expect(found).toEqual(record);
@@ -87,6 +90,17 @@ describe.each([
       await repos.candidates.create(candidateRecord());
       const found = await repos.candidates.getById({ teamId: 'team-2', id: 'cand-1' });
       expect(found).toBeNull();
+    } finally {
+      close();
+    }
+  });
+
+  test('candidate ids are globally unique across Teams', async () => {
+    const { repos, close } = createRepos();
+    try {
+      await repos.candidates.create(candidateRecord());
+      await expect(repos.candidates.create(candidateRecord({ teamId: 'team-2' })))
+        .rejects.toThrow(/already exists|unique constraint/i);
     } finally {
       close();
     }
@@ -110,7 +124,7 @@ describe.each([
     const { repos, close } = createRepos();
     try {
       await repos.candidates.create(candidateRecord({
-        id: 'cand-1', status: 'accepted', decidedAt: 2000, updatedAt: 2000,
+        id: 'cand-1', status: 'accepted', decidedAt: 2000, decidedBy: 'user-1', updatedAt: 2000,
       }));
       const found = await repos.candidates.findByProjectionHash({
         teamId: 'team-1',
@@ -143,12 +157,27 @@ describe.each([
     const { repos, close } = createRepos();
     try {
       await repos.candidates.create(candidateRecord({
-        id: 'cand-1', status: 'accepted', decidedAt: 2000, updatedAt: 2000,
+        id: 'cand-1', status: 'accepted', decidedAt: 2000, decidedBy: 'user-1', updatedAt: 2000,
       }));
       await expect(repos.candidates.update({
-        record: candidateRecord({ id: 'cand-1', status: 'rejected', decidedAt: 3000, updatedAt: 3000 }),
+        record: candidateRecord({
+          id: 'cand-1', status: 'rejected', decidedAt: 3000, decidedBy: 'user-1', updatedAt: 3000,
+        }),
         expectedUpdatedAt: 2000,
       })).rejects.toThrow(/transition is invalid/);
+    } finally {
+      close();
+    }
+  });
+
+  test('update rejects changes to immutable candidate projection fields', async () => {
+    const { repos, close } = createRepos();
+    try {
+      await repos.candidates.create(candidateRecord());
+      await expect(repos.candidates.update({
+        record: candidateRecord({ scopeRef: 'task-2', updatedAt: 2000, status: 'conflict' }),
+        expectedUpdatedAt: 1000,
+      })).rejects.toThrow(/immutable identity changed/);
     } finally {
       close();
     }

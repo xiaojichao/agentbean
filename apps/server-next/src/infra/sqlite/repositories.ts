@@ -80,6 +80,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0016_management_phase_3_capsule_refs.sql');
   applyMigration(db, 'team/0017_management_phase_3_candidates.sql');
   applyMigration(db, 'team/0018_management_handoff.sql');
+  applyMigration(db, 'team/0019_management_phase_3_candidate_lifecycle.sql');
 }
 
 // 清理 channel_agent_members 中指向已删 agent 的孤儿行（PRD §6）。

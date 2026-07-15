@@ -148,9 +148,12 @@ export function assertMemoryCandidateRecord(record: MemoryCandidateRecord): void
     throw new Error('memory candidate source invocation is required');
   }
   if (record.sourceAgentId.trim().length === 0) throw new Error('memory candidate source agent is required');
+  if (record.targetAgentId.trim().length === 0) throw new Error('memory candidate target agent is required');
+  if (record.managementRunId.trim().length === 0) throw new Error('memory candidate management run is required');
   if (record.updatedAt < record.createdAt) throw new Error('memory candidate update time precedes creation');
-  if (record.status !== 'candidate' && record.status !== 'conflict' && record.decidedAt === undefined) {
-    throw new Error('decided memory candidate must record decidedAt');
+  const isDecided = record.status !== 'candidate' && record.status !== 'conflict';
+  if (isDecided !== (record.decidedAt !== undefined && record.decidedBy !== undefined)) {
+    throw new Error('memory candidate decision fields must match a terminal status');
   }
 }
 
@@ -173,10 +176,17 @@ export function assertMemoryCandidateUpdate(
 ): void {
   if (current.id !== next.id || current.teamId !== next.teamId
     || current.createdAt !== next.createdAt
+    || current.managementRunId !== next.managementRunId
+    || current.taskId !== next.taskId
     || current.sourceInvocationId !== next.sourceInvocationId
     || current.sourceAgentId !== next.sourceAgentId
+    || current.targetAgentId !== next.targetAgentId
+    || current.scopeType !== next.scopeType
+    || current.scopeRef !== next.scopeRef
+    || current.contentKind !== next.contentKind
     || current.projectionHash !== next.projectionHash
-    || current.proposedContent !== next.proposedContent) {
+    || current.proposedContent !== next.proposedContent
+    || current.proposedSummary !== next.proposedSummary) {
     throw new Error('memory candidate immutable identity changed');
   }
   if (next.updatedAt <= current.updatedAt) {

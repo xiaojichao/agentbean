@@ -119,10 +119,12 @@ export interface MemoryCandidateRecord {
   readonly taskId?: ID;
   readonly sourceAgentId: ID;
   readonly sourceInvocationId: ID;
+  readonly targetAgentId: ID;
   readonly scopeType: MemoryScopeType;
   readonly scopeRef: ID;
   readonly contentKind: MemoryContentKind;
   readonly proposedContent: string;
+  readonly proposedSummary?: string;
   readonly projectionHash: string;
   readonly status: MemoryCandidateStatus;
   readonly conflictMemoryIds: readonly ID[];

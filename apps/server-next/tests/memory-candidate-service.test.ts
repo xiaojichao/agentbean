@@ -7,7 +7,11 @@ import {
   createMemoryCandidateService,
 } from '../src/application/memory-candidate-service.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
-import type { MemoryRepositories, MemoryUnitOfWork } from '../src/application/memory-repositories.js';
+import type {
+  MemoryItemRecord,
+  MemoryRepositories,
+  MemoryUnitOfWork,
+} from '../src/application/memory-repositories.js';
 import {
   applyTeamMigrations,
   createSqliteRepositories,
@@ -71,11 +75,13 @@ async function seedActiveMemory(
   teamId: string,
   memoryId: string,
   sourceId: string,
+  overrides: Partial<MemoryItemRecord> = {},
 ): Promise<void> {
   await memory.items.create({
     schemaVersion: 1, id: memoryId, teamId, kind: 'decision', status: 'active',
     scopeType: 'task', scopeRef: 'task-1', content: 'old conclusion',
     createdAt: 500, updatedAt: 500,
+    ...overrides,
   });
   await memory.sources.create({
     memoryId, teamId, sourceKind: 'message', sourceId, snapshotHash: 'sha256:old',
@@ -98,7 +104,7 @@ describe.each([
     const { service, memory, close } = createHarness(permissivePermissions());
     try {
       const view = await service.proposeCandidate({
-        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', managementRunId: 'run-1',
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
         scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
         proposedContent: 'use node-pty', sourceRefs: [sourceRef()],
       });
@@ -108,6 +114,7 @@ describe.each([
       });
       expect(audit[0]).not.toHaveProperty('proposedContent');
       expect(audit[0]).not.toHaveProperty('content');
+      expect(audit[0]?.targetAgentId).toBe('target-agent-1');
     } finally {
       close();
     }
@@ -117,12 +124,12 @@ describe.each([
     const { service, close } = createHarness(permissivePermissions());
     try {
       const first = await service.proposeCandidate({
-        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', managementRunId: 'run-1',
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
         scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
         proposedContent: 'use node-pty', sourceRefs: [sourceRef()],
       });
       const second = await service.proposeCandidate({
-        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-2', managementRunId: 'run-1',
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-2', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
         scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
         proposedContent: 'use node-pty', sourceRefs: [sourceRef()],
       });
@@ -137,7 +144,7 @@ describe.each([
     try {
       await seedActiveMemory(memory, 'team-1', 'mem-1', 'msg-1');
       const view = await service.proposeCandidate({
-        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', managementRunId: 'run-1',
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
         scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
         proposedContent: 'new conclusion', sourceRefs: [sourceRef('msg-1')],
       });
@@ -148,11 +155,29 @@ describe.each([
     }
   });
 
+  test('proposeCandidate validates source authority before exposing conflicts', async () => {
+    const permissions = {
+      ...permissivePermissions(),
+      assertSourceAuthority: async () => { throw new Error('CANDIDATE_SOURCE_NOT_AUTHORIZED'); },
+    };
+    const { service, memory, close } = createHarness(permissions);
+    try {
+      await seedActiveMemory(memory, 'team-1', 'mem-secret', 'msg-1');
+      await expect(service.proposeCandidate({
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
+        scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
+        proposedContent: 'new conclusion', sourceRefs: [sourceRef('msg-1')],
+      })).rejects.toThrow(/CANDIDATE_SOURCE_NOT_AUTHORIZED/);
+    } finally {
+      close();
+    }
+  });
+
   test('acceptCandidate creates an active Memory and links acceptedMemoryId', async () => {
     const { service, memory, close } = createHarness(permissivePermissions());
     try {
       const proposed = await service.proposeCandidate({
-        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', managementRunId: 'run-1',
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
         scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
         proposedContent: 'use node-pty', sourceRefs: [sourceRef()],
       });
@@ -176,7 +201,7 @@ describe.each([
     try {
       await seedActiveMemory(memory, 'team-1', 'mem-1', 'msg-1');
       const proposed = await service.proposeCandidate({
-        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', managementRunId: 'run-1',
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
         scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
         proposedContent: 'new conclusion', sourceRefs: [sourceRef('msg-1')],
       });
@@ -189,17 +214,36 @@ describe.each([
   });
 
   test('acceptCandidate throws when a source is no longer available', async () => {
-    const denying = { ...permissivePermissions(), isSourceAvailable: async () => false };
+    let available = true;
+    const denying = { ...permissivePermissions(), isSourceAvailable: async () => available };
     const { service, close } = createHarness(denying);
     try {
       const proposed = await service.proposeCandidate({
-        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', managementRunId: 'run-1',
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
         scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
         proposedContent: 'use node-pty', sourceRefs: [sourceRef()],
       });
+      available = false;
       await expect(service.acceptCandidate({
         teamId: 'team-1', actorId: 'user-1', candidateId: proposed.candidate.id, kind: 'decision',
       })).rejects.toThrow(/CANDIDATE_SOURCE_UNAVAILABLE/);
+    } finally {
+      close();
+    }
+  });
+
+  test('acceptCandidate rejects normalized duplicate active content', async () => {
+    const { service, memory, close } = createHarness(permissivePermissions());
+    try {
+      await seedActiveMemory(memory, 'team-1', 'mem-1', 'msg-other', { content: 'Use   Node-PTY' });
+      const proposed = await service.proposeCandidate({
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
+        scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
+        proposedContent: ' use node-pty ', sourceRefs: [sourceRef('msg-1')],
+      });
+      await expect(service.acceptCandidate({
+        teamId: 'team-1', actorId: 'user-1', candidateId: proposed.candidate.id, kind: 'decision',
+      })).rejects.toThrow(/MEMORY_DUPLICATE_CONTENT/);
     } finally {
       close();
     }
@@ -209,7 +253,7 @@ describe.each([
     const { service, close } = createHarness(permissivePermissions());
     try {
       const proposed = await service.proposeCandidate({
-        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', managementRunId: 'run-1',
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
         scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
         proposedContent: 'use node-pty', sourceRefs: [sourceRef()],
       });
@@ -225,11 +269,16 @@ describe.each([
   test('mergeCandidate supersedes the conflicting Memory and links mergedIntoMemoryId', async () => {
     const { service, memory, close } = createHarness(permissivePermissions());
     try {
-      await seedActiveMemory(memory, 'team-1', 'mem-1', 'msg-1');
+      await seedActiveMemory(memory, 'team-1', 'mem-1', 'msg-1', {
+        summary: '旧摘要', updatedAt: 10_000,
+      });
+      await memory.tags.create({
+        memoryId: 'mem-1', teamId: 'team-1', tag: 'runtime', createdAt: 500,
+      });
       const proposed = await service.proposeCandidate({
-        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', managementRunId: 'run-1',
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
         scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
-        proposedContent: 'new conclusion', sourceRefs: [sourceRef('msg-1')],
+        proposedContent: 'new conclusion', proposedSummary: '新摘要', sourceRefs: [sourceRef('msg-1')],
       });
       const merged = await service.mergeCandidate({
         teamId: 'team-1', actorId: 'user-1', candidateId: proposed.candidate.id, conflictMemoryId: 'mem-1',
@@ -239,6 +288,16 @@ describe.each([
       const old = await memory.items.getById({ teamId: 'team-1', id: 'mem-1' });
       expect(old?.status).toBe('superseded');
       expect(old?.supersededById).toBe(merged.candidate.mergedIntoMemoryId);
+      expect(old?.updatedAt).toBeGreaterThan(10_000);
+      const created = await memory.items.getById({
+        teamId: 'team-1', id: merged.candidate.mergedIntoMemoryId!,
+      });
+      expect(created?.summary).toBe('新摘要');
+      await expect(memory.tags.listByMemory({ teamId: 'team-1', memoryId: created!.id }))
+        .resolves.toMatchObject([{ tag: 'runtime' }]);
+      await expect(memory.auditEvents.listBySubject({
+        teamId: 'team-1', subjectKind: 'memory', subjectId: 'mem-1',
+      })).resolves.toMatchObject([{ eventType: 'memory-superseded' }]);
     } finally {
       close();
     }
@@ -249,7 +308,7 @@ describe.each([
     try {
       await seedActiveMemory(memory, 'team-1', 'mem-1', 'msg-1');
       const proposed = await service.proposeCandidate({
-        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', managementRunId: 'run-1',
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
         scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
         proposedContent: 'new conclusion', sourceRefs: [sourceRef('msg-1')],
       });
@@ -261,11 +320,65 @@ describe.each([
     }
   });
 
+  test('mergeCandidate revalidates source availability and the current conflict set', async () => {
+    let available = true;
+    const permissions = {
+      ...permissivePermissions(),
+      isSourceAvailable: async () => available,
+    };
+    const { service, memory, close } = createHarness(permissions);
+    try {
+      await seedActiveMemory(memory, 'team-1', 'mem-1', 'msg-1');
+      const proposed = await service.proposeCandidate({
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
+        scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
+        proposedContent: 'new conclusion', sourceRefs: [sourceRef('msg-1')],
+      });
+      available = false;
+      await expect(service.mergeCandidate({
+        teamId: 'team-1', actorId: 'user-1', candidateId: proposed.candidate.id, conflictMemoryId: 'mem-1',
+      })).rejects.toThrow(/CANDIDATE_SOURCE_UNAVAILABLE/);
+
+      available = true;
+      await seedActiveMemory(memory, 'team-1', 'mem-2', 'msg-1');
+      await expect(service.mergeCandidate({
+        teamId: 'team-1', actorId: 'user-1', candidateId: proposed.candidate.id, conflictMemoryId: 'mem-1',
+      })).rejects.toThrow(/CANDIDATE_CONFLICT_SET_CHANGED/);
+    } finally {
+      close();
+    }
+  });
+
+  test('mergeCandidate requires write authority for the superseded Memory scope', async () => {
+    const permissions = {
+      ...permissivePermissions(),
+      assertWriteAuthority: async (input: Parameters<MemoryCandidatePermissions['assertWriteAuthority']>[0]) => {
+        if (input.scopeRef === 'channel-secret') throw new Error('MEMORY_WRITE_NOT_AUTHORIZED');
+      },
+    };
+    const { service, memory, close } = createHarness(permissions);
+    try {
+      await seedActiveMemory(memory, 'team-1', 'mem-1', 'msg-1', {
+        scopeType: 'channel', scopeRef: 'channel-secret',
+      });
+      const proposed = await service.proposeCandidate({
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
+        scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
+        proposedContent: 'new conclusion', sourceRefs: [sourceRef('msg-1')],
+      });
+      await expect(service.mergeCandidate({
+        teamId: 'team-1', actorId: 'user-1', candidateId: proposed.candidate.id, conflictMemoryId: 'mem-1',
+      })).rejects.toThrow(/MEMORY_WRITE_NOT_AUTHORIZED/);
+    } finally {
+      close();
+    }
+  });
+
   test('decide authority denies an external Agent (acceptance #5)', async () => {
     const { service, close } = createHarness(denyingDecidePermissions());
     try {
       const proposed = await service.proposeCandidate({
-        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', managementRunId: 'run-1',
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
         scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
         proposedContent: 'use node-pty', sourceRefs: [sourceRef()],
       });

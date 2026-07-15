@@ -28,6 +28,7 @@ export interface ComputeProjectionHashInput {
   readonly sourceRefs: readonly MemorySourceRefDto[];
   readonly scopeType: MemoryScopeType;
   readonly scopeRef: string;
+  readonly targetAgentId: string;
   readonly contentKind: MemoryContentKind;
 }
 
@@ -45,6 +46,7 @@ export function computeProjectionHash(input: ComputeProjectionHashInput): string
     hashSourceRefs(input.sourceRefs),
     input.scopeType,
     input.scopeRef,
+    input.targetAgentId,
     input.contentKind,
   ];
   return `sha256:${createHash('sha256').update(parts.join('|')).digest('hex')}`;

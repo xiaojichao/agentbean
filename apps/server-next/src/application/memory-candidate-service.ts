@@ -81,6 +81,7 @@ export interface ProposeCandidateInput {
   readonly teamId: ID;
   readonly sourceAgentId: ID;
   readonly sourceInvocationId: ID;
+  readonly targetAgentId: ID;
   readonly managementRunId: ID;
   readonly taskId?: ID;
   readonly scopeType: MemoryScopeType;
@@ -137,7 +138,9 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
     return Math.max(now, currentUpdatedAt + 1);
   }
 
-  function sourceRefDto(record: MemoryCandidateSourceRecord): MemorySourceRefDto {
+  function sourceRefDto(
+    record: Pick<MemoryCandidateSourceRecord, 'sourceKind' | 'sourceId' | 'snapshotHash'>,
+  ): MemorySourceRefDto {
     return { schemaVersion: 1, sourceKind: record.sourceKind, sourceId: record.sourceId, snapshotHash: record.snapshotHash };
   }
 
@@ -177,7 +180,54 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
         if (item?.status === 'active') conflicts.add(item.id);
       }
     }
-    return [...conflicts];
+    return [...conflicts].sort();
+  }
+
+  async function assertSourcesAvailable(
+    candidateSources: readonly MemoryCandidateSourceRecord[],
+    teamId: ID,
+  ): Promise<void> {
+    for (const ref of candidateSources) {
+      if (!(await permissions.isSourceAvailable({
+        teamId, sourceKind: ref.sourceKind, sourceId: ref.sourceId,
+      }))) throw new Error('CANDIDATE_SOURCE_UNAVAILABLE');
+    }
+  }
+
+  async function assertSourceAuthorities(
+    candidateSources: readonly MemoryCandidateSourceRecord[],
+    input: {
+      readonly teamId: ID;
+      readonly actorId: ID;
+      readonly targetScopeType: MemoryScopeType;
+      readonly targetScopeRef: ID;
+    },
+  ): Promise<void> {
+    for (const ref of candidateSources) {
+      await permissions.assertSourceAuthority({
+        teamId: input.teamId, actorId: input.actorId,
+        sourceScopeType: ref.sourceScopeType, sourceScopeRef: ref.sourceScopeRef,
+        sourceVisibility: ref.sourceVisibility,
+        targetScopeType: input.targetScopeType, targetScopeRef: input.targetScopeRef,
+      });
+    }
+  }
+
+  async function assertNotDuplicate(
+    memory: MemoryRepositories,
+    input: Pick<MemoryItemRecord, 'teamId' | 'scopeType' | 'scopeRef' | 'kind' | 'content'>,
+    excludedMemoryId?: ID,
+  ): Promise<void> {
+    const normalized = input.content.trim().replace(/\s+/g, ' ').toLowerCase();
+    const existing = await memory.items.listByScope({
+      teamId: input.teamId, scopeType: input.scopeType, scopeRef: input.scopeRef,
+    });
+    const clash = existing.some((item) =>
+      item.id !== excludedMemoryId
+      && (item.status === 'active' || item.status === 'candidate')
+      && item.kind === input.kind
+      && item.content.trim().replace(/\s+/g, ' ').toLowerCase() === normalized);
+    if (clash) throw new Error('MEMORY_DUPLICATE_CONTENT');
   }
 
   /** 从 candidate 创建一条 active Memory（items + sources + tags + memory-created audit）。 */
@@ -192,6 +242,7 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
       readonly tags?: readonly string[];
       readonly validUntil?: UnixMs;
       readonly now: UnixMs;
+      readonly excludedMemoryId?: ID;
     },
   ): Promise<MemoryItemRecord> {
     const id = ids.nextId();
@@ -212,6 +263,7 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
       createdAt: details.now,
       updatedAt: details.now,
     };
+    await assertNotDuplicate(memory, created, details.excludedMemoryId);
     await memory.items.create(created);
     for (const ref of candidateSources) {
       const source: MemorySourceRecord = {
@@ -271,9 +323,21 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
           teamId: input.teamId, actorId: input.sourceAgentId,
           scopeType: input.scopeType, scopeRef: input.scopeRef,
         });
+        for (const ref of input.sourceRefs) {
+          await permissions.assertSourceAuthority({
+            teamId: input.teamId, actorId: input.sourceAgentId,
+            sourceScopeType: ref.sourceScopeType, sourceScopeRef: ref.sourceScopeRef,
+            sourceVisibility: ref.sourceVisibility,
+            targetScopeType: input.scopeType, targetScopeRef: input.scopeRef,
+          });
+          if (!(await permissions.isSourceAvailable({
+            teamId: input.teamId, sourceKind: ref.sourceKind, sourceId: ref.sourceId,
+          }))) throw new Error('CANDIDATE_SOURCE_UNAVAILABLE');
+        }
         const projectionHash = computeProjectionHash({
           proposedContent: input.proposedContent, sourceRefs: input.sourceRefs,
-          scopeType: input.scopeType, scopeRef: input.scopeRef, contentKind: input.contentKind,
+          scopeType: input.scopeType, scopeRef: input.scopeRef,
+          targetAgentId: input.targetAgentId, contentKind: input.contentKind,
         });
         // 验收 #2：完全重复幂等返回已有 candidate，不产生重复 active Memory。
         const existing = await memory.candidates.findByProjectionHash({ teamId: input.teamId, projectionHash });
@@ -296,10 +360,12 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
           taskId: input.taskId,
           sourceAgentId: input.sourceAgentId,
           sourceInvocationId: input.sourceInvocationId,
+          targetAgentId: input.targetAgentId,
           scopeType: input.scopeType,
           scopeRef: input.scopeRef,
           contentKind: input.contentKind,
           proposedContent: input.proposedContent,
+          proposedSummary: input.proposedSummary,
           projectionHash,
           status,
           conflictMemoryIds,
@@ -311,6 +377,7 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
         await appendAudit(memory, {
           teamId: input.teamId, subjectKind: 'candidate', subjectId: candidateId, eventType: 'candidate-created',
           actorKind: ACTOR_SYSTEM, actorId: input.sourceAgentId, scopeType: candidate.scopeType, scopeRef: candidate.scopeRef,
+          targetAgentId: candidate.targetAgentId,
           sourceRefs: candidateSources.map(sourceRefDto), createdAt: now,
         });
         return loadView(memory, candidate);
@@ -325,40 +392,35 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
           teamId: input.teamId, candidateId: candidate.id,
         });
         // 防来源失效后 accept：每个来源须仍可用。
-        for (const ref of candidateSources) {
-          if (!(await permissions.isSourceAvailable({
-            teamId: input.teamId, sourceKind: ref.sourceKind, sourceId: ref.sourceId,
-          }))) throw new Error('CANDIDATE_SOURCE_UNAVAILABLE');
-        }
+        await assertSourcesAvailable(candidateSources, input.teamId);
         // 防来源冲突被静默接受：accept 只用于无冲突场景。
         const conflicts = await detectConflicts(memory, candidateSources, input.teamId);
         if (conflicts.length > 0) throw new Error('CANDIDATE_HAS_CONFLICT');
         const transition = evaluateCandidateTransition(candidate.status, 'accepted');
         if (!transition.ok) throw new Error('CANDIDATE_INVALID_TRANSITION');
+        if (input.kind !== candidate.contentKind) throw new Error('CANDIDATE_CONTENT_KIND_MISMATCH');
 
         await permissions.assertWriteAuthority({
           teamId: input.teamId, actorId: input.actorId,
           scopeType: candidate.scopeType, scopeRef: candidate.scopeRef,
         });
-        for (const ref of candidateSources) {
-          await permissions.assertSourceAuthority({
-            teamId: input.teamId, actorId: input.actorId,
-            sourceScopeType: ref.sourceScopeType, sourceScopeRef: ref.sourceScopeRef,
-            sourceVisibility: ref.sourceVisibility,
-            targetScopeType: candidate.scopeType, targetScopeRef: candidate.scopeRef,
-          });
-        }
+        await assertSourceAuthorities(candidateSources, {
+          teamId: input.teamId, actorId: input.actorId,
+          targetScopeType: candidate.scopeType, targetScopeRef: candidate.scopeRef,
+        });
 
-        const now = clock.now();
+        const now = nextUpdatedAt(clock.now(), candidate.updatedAt);
         const created = await createActiveFromCandidate(memory, candidate, candidateSources, {
-          actorId: input.actorId, kind: input.kind, summary: input.summary,
+          actorId: input.actorId, kind: input.kind, summary: input.summary ?? candidate.proposedSummary,
           tags: input.tags, validUntil: input.validUntil, now,
         });
         const decided = advanceCandidate(candidate, 'accepted', input.actorId, now, created.id, undefined);
-        await memory.candidates.update({ record: decided, expectedUpdatedAt: candidate.updatedAt });
+        const updated = await memory.candidates.update({ record: decided, expectedUpdatedAt: candidate.updatedAt });
+        if (!updated) throw new Error('CANDIDATE_UPDATE_CONFLICT');
         await appendAudit(memory, {
           teamId: input.teamId, subjectKind: 'candidate', subjectId: candidate.id, eventType: 'candidate-decided',
           actorKind: ACTOR_USER, actorId: input.actorId, scopeType: candidate.scopeType, scopeRef: candidate.scopeRef,
+          targetAgentId: candidate.targetAgentId,
           sourceRefs: candidateSources.map(sourceRefDto), createdAt: now,
         });
         return loadView(memory, decided);
@@ -371,15 +433,17 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
         const candidate = await loadCandidate(memory, input.teamId, input.candidateId);
         const transition = evaluateCandidateTransition(candidate.status, 'rejected');
         if (!transition.ok) throw new Error('CANDIDATE_INVALID_TRANSITION');
-        const now = clock.now();
+        const now = nextUpdatedAt(clock.now(), candidate.updatedAt);
         const candidateSources = await memory.candidateSources.listByCandidate({
           teamId: input.teamId, candidateId: candidate.id,
         });
         const decided = advanceCandidate(candidate, 'rejected', input.actorId, now, undefined, undefined);
-        await memory.candidates.update({ record: decided, expectedUpdatedAt: candidate.updatedAt });
+        const updated = await memory.candidates.update({ record: decided, expectedUpdatedAt: candidate.updatedAt });
+        if (!updated) throw new Error('CANDIDATE_UPDATE_CONFLICT');
         await appendAudit(memory, {
           teamId: input.teamId, subjectKind: 'candidate', subjectId: candidate.id, eventType: 'candidate-decided',
           actorKind: ACTOR_USER, actorId: input.actorId, scopeType: candidate.scopeType, scopeRef: candidate.scopeRef,
+          targetAgentId: candidate.targetAgentId,
           sourceRefs: candidateSources.map(sourceRefDto), createdAt: now,
         });
         return loadView(memory, decided);
@@ -390,7 +454,7 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
       return unitOfWork.run(async (memory) => {
         await permissions.assertDecideAuthority(input);
         const candidate = await loadCandidate(memory, input.teamId, input.candidateId);
-        // 防越权：merge 目标必须在该 candidate 的冲突集合内。
+        // 防越权：merge 目标必须在该 candidate 的原始冲突集合内。
         if (!candidate.conflictMemoryIds.includes(input.conflictMemoryId)) {
           throw new Error('CANDIDATE_CONFLICT_TARGET_INVALID');
         }
@@ -399,25 +463,35 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
         const candidateSources = await memory.candidateSources.listByCandidate({
           teamId: input.teamId, candidateId: candidate.id,
         });
+        await assertSourcesAvailable(candidateSources, input.teamId);
+        const currentConflicts = await detectConflicts(memory, candidateSources, input.teamId);
+        if (currentConflicts.length !== 1 || currentConflicts[0] !== input.conflictMemoryId) {
+          throw new Error('CANDIDATE_CONFLICT_SET_CHANGED');
+        }
 
         const old = await memory.items.getById({ teamId: input.teamId, id: input.conflictMemoryId });
         if (!old || old.status !== 'active') throw new Error('MEMORY_INVALID_TRANSITION');
+        if (old.kind !== candidate.contentKind) throw new Error('CANDIDATE_CONTENT_KIND_MISMATCH');
         await permissions.assertWriteAuthority({
           teamId: input.teamId, actorId: input.actorId,
           scopeType: candidate.scopeType, scopeRef: candidate.scopeRef,
         });
-        for (const ref of candidateSources) {
-          await permissions.assertSourceAuthority({
-            teamId: input.teamId, actorId: input.actorId,
-            sourceScopeType: ref.sourceScopeType, sourceScopeRef: ref.sourceScopeRef,
-            sourceVisibility: ref.sourceVisibility,
-            targetScopeType: candidate.scopeType, targetScopeRef: candidate.scopeRef,
-          });
-        }
+        await permissions.assertWriteAuthority({
+          teamId: input.teamId, actorId: input.actorId,
+          scopeType: old.scopeType, scopeRef: old.scopeRef,
+        });
+        await assertSourceAuthorities(candidateSources, {
+          teamId: input.teamId, actorId: input.actorId,
+          targetScopeType: candidate.scopeType, targetScopeRef: candidate.scopeRef,
+        });
 
-        const now = clock.now();
+        const now = Math.max(clock.now(), candidate.updatedAt + 1, old.updatedAt + 1);
+        const oldTags = await memory.tags.listByMemory({ teamId: input.teamId, memoryId: old.id });
         const created = await createActiveFromCandidate(memory, candidate, candidateSources, {
-          actorId: input.actorId, kind: old.kind, summary: old.summary, tags: [], validUntil: old.validUntil, now,
+          actorId: input.actorId, kind: old.kind,
+          summary: candidate.proposedSummary ?? old.summary,
+          tags: oldTags.map((tag) => tag.tag), validUntil: old.validUntil, now,
+          excludedMemoryId: old.id,
         });
         // 取代旧 active：旧→superseded + 反向引用（对标 supersedeMemory 双写）。
         const superseded = await memory.items.update({
@@ -425,12 +499,24 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
           expectedUpdatedAt: old.updatedAt,
         });
         if (!superseded) throw new Error('MEMORY_UPDATE_CONFLICT');
+        const supersededSourceRefs = (await memory.sources.listByMemory({
+          teamId: input.teamId, memoryId: superseded.id,
+        })).map(sourceRefDto);
+        await appendAudit(memory, {
+          teamId: input.teamId, subjectKind: 'memory', subjectId: superseded.id,
+          eventType: 'memory-superseded', actorKind: ACTOR_USER, actorId: input.actorId,
+          scopeType: superseded.scopeType, scopeRef: superseded.scopeRef,
+          sourceRefs: supersededSourceRefs, sourceRefsHash: hashSourceRefs(supersededSourceRefs),
+          createdAt: now,
+        });
 
         const decided = advanceCandidate(candidate, 'merged', input.actorId, now, undefined, created.id);
-        await memory.candidates.update({ record: decided, expectedUpdatedAt: candidate.updatedAt });
+        const updated = await memory.candidates.update({ record: decided, expectedUpdatedAt: candidate.updatedAt });
+        if (!updated) throw new Error('CANDIDATE_UPDATE_CONFLICT');
         await appendAudit(memory, {
           teamId: input.teamId, subjectKind: 'candidate', subjectId: candidate.id, eventType: 'candidate-decided',
           actorKind: ACTOR_USER, actorId: input.actorId, scopeType: candidate.scopeType, scopeRef: candidate.scopeRef,
+          targetAgentId: candidate.targetAgentId,
           sourceRefs: candidateSources.map(sourceRefDto), createdAt: now,
         });
         return loadView(memory, decided);

@@ -218,14 +218,16 @@ export function createSqliteMemoryRepositories(db: SqliteDatabase): MemoryReposi
       async create(record) {
         assertMemoryCandidateRecord(record);
         db.prepare(`INSERT INTO memory_candidates
-          (id, team_id, management_run_id, task_id, source_agent_id, source_invocation_id,
-           scope_type, scope_ref, content_kind, proposed_content, projection_hash, status,
+          (id, team_id, management_run_id, task_id, source_agent_id, source_invocation_id, target_agent_id,
+           scope_type, scope_ref, content_kind, proposed_content, proposed_summary, projection_hash, status,
            conflict_memory_ids_json, decided_at, decided_by, accepted_memory_id, merged_into_memory_id,
            created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(record.id, record.teamId, record.managementRunId, record.taskId ?? null,
-            record.sourceAgentId, record.sourceInvocationId, record.scopeType, record.scopeRef,
-            record.contentKind, record.proposedContent, record.projectionHash, record.status,
+            record.sourceAgentId, record.sourceInvocationId, record.targetAgentId,
+            record.scopeType, record.scopeRef,
+            record.contentKind, record.proposedContent, record.proposedSummary ?? null,
+            record.projectionHash, record.status,
             JSON.stringify(record.conflictMemoryIds), record.decidedAt ?? null, record.decidedBy ?? null,
             record.acceptedMemoryId ?? null, record.mergedIntoMemoryId ?? null,
             record.createdAt, record.updatedAt);
@@ -401,10 +403,12 @@ function mapCandidate(value: unknown): MemoryCandidateRecord | null {
     taskId: optionalText(value, 'task_id'),
     sourceAgentId: text(value, 'source_agent_id'),
     sourceInvocationId: text(value, 'source_invocation_id'),
+    targetAgentId: text(value, 'target_agent_id'),
     scopeType: text(value, 'scope_type') as MemoryCandidateRecord['scopeType'],
     scopeRef: text(value, 'scope_ref'),
     contentKind: text(value, 'content_kind') as MemoryCandidateRecord['contentKind'],
     proposedContent: text(value, 'proposed_content'),
+    proposedSummary: optionalText(value, 'proposed_summary'),
     projectionHash: text(value, 'projection_hash'),
     status: text(value, 'status') as MemoryCandidateRecord['status'],
     conflictMemoryIds: JSON.parse(text(value, 'conflict_memory_ids_json')) as MemoryCandidateRecord['conflictMemoryIds'],

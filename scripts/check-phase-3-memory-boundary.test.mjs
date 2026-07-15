@@ -139,7 +139,7 @@ test('fails closed when Capsule ref persistence disappears', () => {
 
 test('fails closed when Candidate lifecycle disappears', () => {
   const result = withFixture('agentbean-phase3-candidate-', (fixture) => {
-    const path = join(fixture, 'apps/server-next/src/infra/sqlite/migrations/team/0017_management_phase_3_candidates.sql');
+    const path = join(fixture, 'apps/server-next/src/infra/sqlite/migrations/team/0019_management_phase_3_candidate_lifecycle.sql');
     writeFileSync(path, readFileSync(path, 'utf8').replaceAll('memory_candidates', 'removed_candidates'));
   });
   assert.notEqual(result.status, 0);
