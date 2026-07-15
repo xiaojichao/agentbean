@@ -24,7 +24,7 @@ npm run issue:claim -- <issue> --session <thread-id> --scope business
 # 创建 worktree 前、创建 PR 前各复查一次；非最早有效 Claim 或已有关闭型 PR 时失败
 npm run issue:claim-check -- <issue> --session <thread-id>
 
-# 放弃任务但不关闭 Issue 时显式释放
+# 放弃任务时显式释放；移除 assignee，并在适用时恢复全局队列
 npm run issue:claim-release -- <issue> --session <thread-id>
 ```
 
@@ -34,6 +34,7 @@ npm run issue:claim-release -- <issue> --session <thread-id>
 - Claim 使用 Issue comment 中的机器可读 `thread/session ID`；同一 GitHub 账号的 assignee 不能代替 Session Claim。
 - 并发 Claim 时，以最早仍未释放的 Claim 为唯一 winner；其他 Session 必须停止。
 - Claim 成功后立即移除 `ready-for-agent`，避免长运行 Session 再次扫描到已领取任务。
+- winner 释放后必须移除自己的 assignee；如果它原本来自全局队列且 Issue 仍为 Open，同时恢复 `ready-for-agent`。非 winner 释放不得改动共享 assignee 或队列。
 - 门禁发现其他 Session Claim、Issue 非 Open、历史查询被截断，或已有活动 PR 通过 closing keyword 关闭同一 Issue 时，一律 fail closed。
 - 创建 worktree 与创建 PR 是两个独立检查点；不能因为第一次检查通过就跳过第二次检查。
 

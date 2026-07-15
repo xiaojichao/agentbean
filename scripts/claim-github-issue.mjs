@@ -56,6 +56,7 @@ function parseMarker(body) {
     action: attributes.action,
     sessionId: attributes.session,
     scope: attributes.scope ?? 'unspecified',
+    queue: attributes.queue === 'global' ? 'global' : 'session',
   };
 }
 
@@ -77,6 +78,7 @@ export function activeClaims(comments = []) {
       active.set(marker.sessionId, {
         sessionId: marker.sessionId,
         scope: marker.scope,
+        queue: marker.queue,
         createdAt: comment.createdAt,
         url: comment.url ?? null,
       });
@@ -143,9 +145,9 @@ export function evaluateIssueClaim(issue, sessionId, { requireOwned = true } = {
   };
 }
 
-export function claimComment(sessionId, scope) {
+export function claimComment(sessionId, scope, globallyQueued = false) {
   return [
-    `<!-- ${CLAIM_MARKER_PREFIX} action=claim session=${sessionId} scope=${scope} -->`,
+    `<!-- ${CLAIM_MARKER_PREFIX} action=claim session=${sessionId} scope=${scope} queue=${globallyQueued ? 'global' : 'session'} -->`,
     `🔒 已由 Codex Session \`${sessionId}\` 认领（scope: \`${scope}\`）。其他 Session 在该 Claim 释放前不得创建 worktree 或 PR。`,
   ].join('\n');
 }
@@ -155,6 +157,14 @@ export function releaseComment(sessionId) {
     `<!-- ${CLAIM_MARKER_PREFIX} action=release session=${sessionId} -->`,
     `🔓 Codex Session \`${sessionId}\` 已释放认领。`,
   ].join('\n');
+}
+
+export function releaseEffects(claim, { wasWinner, nextWinner, issueState }) {
+  const clearsOwnership = Boolean(claim && wasWinner && !nextWinner);
+  return {
+    removeAssignee: clearsOwnership,
+    restoreReadyForAgent: clearsOwnership && issueState === 'OPEN' && claim.queue === 'global',
+  };
 }
 
 function formatResult(result) {
@@ -239,12 +249,26 @@ function main() {
 
     if (options.command === 'release') {
       const before = evaluateIssueClaim(issue, options.sessionId);
-      if (!before.activeClaims.some((claim) => claim.sessionId === options.sessionId)) {
+      const ownClaim = before.activeClaims.find((claim) => claim.sessionId === options.sessionId);
+      if (!ownClaim) {
         print(before, options.json);
         process.exitCode = 2;
         return;
       }
+      const wasWinner = before.winner?.sessionId === options.sessionId;
       runGh(['issue', 'comment', String(options.issue), '--repo', repo.nameWithOwner, '--body', releaseComment(options.sessionId)]);
+      issue = fetchIssue(options, repo);
+      const after = evaluateIssueClaim(issue, options.sessionId, { requireOwned: false });
+      const effects = releaseEffects(ownClaim, {
+        wasWinner,
+        nextWinner: after.winner,
+        issueState: issue.state,
+      });
+      if (effects.removeAssignee) {
+        const editArgs = ['issue', 'edit', String(options.issue), '--repo', repo.nameWithOwner, '--remove-assignee', '@me'];
+        if (effects.restoreReadyForAgent) editArgs.push('--add-label', 'ready-for-agent');
+        runGh(editArgs);
+      }
       console.log(`RELEASED 🔓 Issue #${options.issue} / Session ${options.sessionId}`);
       return;
     }
@@ -258,7 +282,10 @@ function main() {
       }
       const createdClaim = !before.winner;
       if (!before.winner) {
-        runGh(['issue', 'comment', String(options.issue), '--repo', repo.nameWithOwner, '--body', claimComment(options.sessionId, options.scope)]);
+        runGh([
+          'issue', 'comment', String(options.issue), '--repo', repo.nameWithOwner,
+          '--body', claimComment(options.sessionId, options.scope, before.globallyQueued),
+        ]);
       }
       const editArgs = ['issue', 'edit', String(options.issue), '--repo', repo.nameWithOwner, '--add-assignee', '@me'];
       if (before.globallyQueued) editArgs.push('--remove-label', 'ready-for-agent');

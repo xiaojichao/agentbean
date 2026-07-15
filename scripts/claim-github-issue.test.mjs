@@ -7,6 +7,7 @@ import {
   evaluateIssueClaim,
   openClosingPullRequests,
   releaseComment,
+  releaseEffects,
 } from './claim-github-issue.mjs';
 
 function comment(body, createdAt, url = null) {
@@ -41,6 +42,49 @@ test('release removes only the matching Session claim', () => {
     comment(releaseComment('session-a'), '2026-07-15T00:00:03Z'),
   ];
   assert.deepEqual(activeClaims(comments).map((claim) => claim.sessionId), ['session-b']);
+});
+
+test('removing the final global winner clears assignee and restores the global queue', () => {
+  const [claim] = activeClaims([
+    comment(claimComment('session-a', 'business', true), '2026-07-15T00:00:01Z'),
+  ]);
+  assert.equal(claim.queue, 'global');
+  assert.deepEqual(releaseEffects(claim, {
+    wasWinner: true,
+    nextWinner: null,
+    issueState: 'OPEN',
+  }), {
+    removeAssignee: true,
+    restoreReadyForAgent: true,
+  });
+});
+
+test('releasing a non-winner never changes the shared GitHub assignee or queue', () => {
+  const [claim] = activeClaims([
+    comment(claimComment('session-b', 'business', true), '2026-07-15T00:00:01Z'),
+  ]);
+  assert.deepEqual(releaseEffects(claim, {
+    wasWinner: false,
+    nextWinner: { sessionId: 'session-a' },
+    issueState: 'OPEN',
+  }), {
+    removeAssignee: false,
+    restoreReadyForAgent: false,
+  });
+});
+
+test('releasing a closed Issue clears assignee without restoring ready-for-agent', () => {
+  const [claim] = activeClaims([
+    comment(claimComment('session-a', 'business', true), '2026-07-15T00:00:01Z'),
+  ]);
+  assert.deepEqual(releaseEffects(claim, {
+    wasWinner: true,
+    nextWinner: null,
+    issueState: 'CLOSED',
+  }), {
+    removeAssignee: true,
+    restoreReadyForAgent: false,
+  });
 });
 
 test('a losing concurrent Session can release its own non-winning claim', () => {
