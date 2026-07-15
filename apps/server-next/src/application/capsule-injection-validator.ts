@@ -97,6 +97,7 @@ export function createCapsuleInjectionValidator(
           for (const item of capsule.items) {
             await memory.auditEvents.append(itemDenialAudit(ids.nextId(), capsule, item, input));
           }
+          await markCapsuleRefDenied(memory, capsule, now);
           return { capsuleExpired: false, decisions };
         }
 
@@ -107,6 +108,9 @@ export function createCapsuleInjectionValidator(
           if (!decision.allowed) {
             await memory.auditEvents.append(itemDenialAudit(ids.nextId(), capsule, item, input));
           }
+        }
+        if (decisions.some((decision) => !decision.allowed)) {
+          await markCapsuleRefDenied(memory, capsule, now);
         }
         return { capsuleExpired: false, decisions };
       });
@@ -204,6 +208,16 @@ export function createCapsuleInjectionValidator(
 
     return { memoryId: item.memoryId, allowed: true, item };
   }
+}
+
+async function markCapsuleRefDenied(
+  memory: MemoryRepositories,
+  capsule: MemoryCapsuleDto,
+  deniedAt: UnixMs,
+): Promise<void> {
+  const ref = await memory.capsuleRefs.getById({ teamId: capsule.teamId, id: capsule.id });
+  if (!ref || ref.deniedAt !== undefined || deniedAt < ref.issuedAt || deniedAt > ref.expiresAt) return;
+  await memory.capsuleRefs.markDenied({ teamId: capsule.teamId, id: capsule.id, deniedAt });
 }
 
 function deny(item: MemoryCapsuleItemDto, reason: CapsuleInjectionDenialReason): CapsuleItemInjectionDecision {

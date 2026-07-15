@@ -14,6 +14,7 @@ import {
   resolveInvocationIdempotency,
 } from '../../../../../packages/domain/src/index.js';
 import type { InvocationDispatchAttemptRecord, ManagementRepositories, ManagementRunRecord } from '../management-repositories.js';
+import type { MemoryRepositories } from '../memory-repositories.js';
 import type {
   DispatchMutationResult,
   DispatchRepository,
@@ -123,7 +124,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
 
         await assertNoActiveTaskAttempt(transactionRepositories, run.id, input.taskId,
           input.expectedTaskRevision, input.taskAttempt);
-        await validateAuthoritativeTarget(repositories, intent, run);
+        await validateAuthoritativeTarget(repositories, intent, run, now);
         const invocation: AgentInvocationRecordDto = {
           schemaVersion: 1, id: ids.nextId(), managementRunId: run.id, intent, intentHash,
           idempotencyKey: input.idempotencyKey, createdAt: now,
@@ -182,7 +183,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           throw new ManagementConflictError('MANAGEMENT_RUN_TERMINAL');
         }
 
-        await validateAuthoritativeTarget(repositories, input.intent, run);
+        await validateAuthoritativeTarget(repositories, input.intent, run, now);
         const invocation: AgentInvocationRecordDto = {
           schemaVersion: 1,
           id: ids.nextId(),
@@ -227,7 +228,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
         if (!latestDispatch) throw new InvocationGatewayError('INVOCATION_DISPATCH_NOT_FOUND');
         if (isActive(latestDispatch.status)) throw new InvocationGatewayError('INVOCATION_ACTIVE_ATTEMPT');
 
-        await validateAuthoritativeTarget(repositories, invocation.intent, run);
+        await validateAuthoritativeTarget(repositories, invocation.intent, run, now);
         const attempt = await createAttempt(transactionRepositories.management, transactionRepositories.dispatches, invocation, latest.attemptNumber + 1, now, ids);
         await appendAttemptStartedEvent(transactionRepositories.management, invocation, attempt, input.authority.workerId, now, ids);
         return deriveInvocationView(transactionRepositories.management, transactionRepositories.dispatches, invocation);
@@ -381,7 +382,11 @@ function sameMemoryCapsuleRef(
 ): boolean {
   if (existing === undefined && requested === undefined) return true;
   if (existing === undefined || requested === undefined) return false;
-  return existing.id === requested.id
+  return existing.schemaVersion === requested.schemaVersion
+    && existing.id === requested.id
+    && existing.teamId === requested.teamId
+    && existing.managementRunId === requested.managementRunId
+    && existing.taskId === requested.taskId
     && existing.contentHash === requested.contentHash
     && existing.authorizationDecisionId === requested.authorizationDecisionId
     && existing.expiresAt === requested.expiresAt
@@ -405,7 +410,12 @@ async function assertNoActiveTaskAttempt(
   }
 }
 
-async function validateAuthoritativeTarget(repositories: ServerNextRepositories, intent: AgentInvocationIntentV1, run: ManagementRunRecord): Promise<void> {
+async function validateAuthoritativeTarget(
+  repositories: ServerNextRepositories,
+  intent: AgentInvocationIntentV1,
+  run: ManagementRunRecord,
+  now: number,
+): Promise<void> {
   const team = await repositories.teams.getById(intent.teamId);
   if (!team) throw new InvocationGatewayError('INVOCATION_TEAM_NOT_FOUND');
   const channel = await repositories.channels.getById(intent.channelId);
@@ -417,6 +427,14 @@ async function validateAuthoritativeTarget(repositories: ServerNextRepositories,
   if (!agent || agent.deletedAt !== undefined || !agent.visibleTeamIds.includes(intent.teamId)) throw new InvocationGatewayError('INVOCATION_TARGET_FORBIDDEN');
   const actualKind = agent.category === 'agentos-hosted' ? 'agentos-hosted' : 'custom';
   if (actualKind !== intent.targetKind) throw new InvocationGatewayError('INVOCATION_TARGET_KIND_MISMATCH');
+  await validateMemoryCapsuleRef(
+    repositories.memory,
+    intent.memoryCapsuleRef,
+    run,
+    intent.taskContext?.taskId,
+    intent.targetAgentId,
+    now,
+  );
   for (const artifactId of intent.attachmentIds) {
     const artifact = await repositories.artifacts.getForTeam({ teamId: intent.teamId, artifactId });
     if (!artifact || artifact.channelId !== intent.channelId) throw new InvocationGatewayError('INVOCATION_ATTACHMENT_FORBIDDEN');
@@ -425,6 +443,34 @@ async function validateAuthoritativeTarget(repositories: ServerNextRepositories,
     const task = await repositories.tasks.getById(intent.taskContext.taskId);
     if (!task || task.teamId !== intent.teamId || task.channelId !== intent.channelId) throw new InvocationGatewayError('INVOCATION_TASK_FORBIDDEN');
     if (run.rootTaskId && intent.taskContext.rootTaskId !== run.rootTaskId) throw new InvocationGatewayError('INVOCATION_ROOT_TASK_MISMATCH');
+  }
+}
+
+async function validateMemoryCapsuleRef(
+  memory: MemoryRepositories,
+  requested: MemoryCapsuleRefDto | undefined,
+  run: ManagementRunRecord,
+  taskId: string | undefined,
+  targetAgentId: string,
+  now: number,
+): Promise<void> {
+  if (!requested) return;
+  const stored = await memory.capsuleRefs.getById({ teamId: run.teamId, id: requested.id });
+  if (!stored
+    || requested.schemaVersion !== 1
+    || stored.deniedAt !== undefined
+    || stored.expiresAt <= now
+    || requested.teamId !== run.teamId
+    || requested.managementRunId !== run.id
+    || requested.taskId !== taskId
+    || requested.targetAgentId !== targetAgentId
+    || stored.managementRunId !== requested.managementRunId
+    || stored.taskId !== requested.taskId
+    || stored.targetAgentId !== requested.targetAgentId
+    || stored.contentHash !== requested.contentHash
+    || stored.authorizationDecisionId !== requested.authorizationDecisionId
+    || stored.expiresAt !== requested.expiresAt) {
+    throw new InvocationGatewayError('INVOCATION_MEMORY_CAPSULE_REF_INVALID');
   }
 }
 

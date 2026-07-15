@@ -208,6 +208,8 @@ if (!domainMemoryHashing.includes('hashCapsuleItems')
   || !invocationContract.includes('memoryCapsuleRef?: MemoryCapsuleRefDto')
   || invocationContract.includes('memoryCapsuleId?:')
   || !invocationGateway.includes('sameMemoryCapsuleRef')
+  || !invocationGateway.includes('INVOCATION_MEMORY_CAPSULE_REF_INVALID')
+  || !capsuleInjectionValidator.includes('capsuleRefs.markDenied')
   || !managementCheckpoint.includes('capsuleRefs.listByRun')
   || !managementCheckpoint.includes('ref.deniedAt === undefined && ref.expiresAt > now')) {
   violations.push('P3_CAPSULE_INVOCATION_BINDING_INVALID: Capsule ref 固化进 intent + checkpoint 查权威 capsule_refs 表接线 is required');

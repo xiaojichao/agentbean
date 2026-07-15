@@ -199,6 +199,56 @@ describe('Phase 2 claim-bound Invocation Gateway', () => {
       teamDb.close();
     }
   });
+
+  test('only freezes a live authoritative Capsule ref and compares the complete ref on replay', async () => {
+    const harness = await createPhase2Harness();
+    const ref = phase2CapsuleRef(harness.authority.managementRunId);
+    await harness.repositories.memory.capsuleRefs.create({ ...ref, issuedAt: 1, createdAt: 1 });
+
+    const mismatches = [
+      { ...ref, teamId: 'team-2' },
+      { ...ref, managementRunId: 'run-other' },
+      { ...ref, taskId: 'task-other' },
+      { ...ref, targetAgentId: 'agent-2' },
+      { ...ref, contentHash: 'sha256:other' },
+      { ...ref, authorizationDecisionId: 'decision-other' },
+      { ...ref, expiresAt: 101 },
+    ];
+    for (const memoryCapsuleRef of mismatches) {
+      await expect(harness.gateway.invokeTask({
+        ...phase2InvokeInput(harness.authority),
+        memoryCapsuleRef,
+      })).rejects.toMatchObject({ code: 'INVOCATION_MEMORY_CAPSULE_REF_INVALID' });
+    }
+
+    const created = await harness.gateway.invokeTask({
+      ...phase2InvokeInput(harness.authority),
+      memoryCapsuleRef: ref,
+    });
+    expect(created.view.intent.memoryCapsuleRef).toEqual(ref);
+    for (const memoryCapsuleRef of mismatches) {
+      await expect(harness.gateway.invokeTask({
+        ...phase2InvokeInput(harness.authority),
+        memoryCapsuleRef,
+      })).rejects.toMatchObject({ code: 'INVOCATION_IDEMPOTENCY_CONFLICT' });
+    }
+
+    const unavailable = await createPhase2Harness();
+    const expiredRef = { ...phase2CapsuleRef(unavailable.authority.managementRunId), id: 'capsule-expired', expiresAt: 10 };
+    await unavailable.repositories.memory.capsuleRefs.create({ ...expiredRef, issuedAt: 1, createdAt: 1 });
+    await expect(unavailable.gateway.invokeTask({
+      ...phase2InvokeInput(unavailable.authority), memoryCapsuleRef: expiredRef,
+    })).rejects.toMatchObject({ code: 'INVOCATION_MEMORY_CAPSULE_REF_INVALID' });
+
+    const deniedRef = { ...phase2CapsuleRef(unavailable.authority.managementRunId), id: 'capsule-denied' };
+    await unavailable.repositories.memory.capsuleRefs.create({ ...deniedRef, issuedAt: 1, createdAt: 1 });
+    await unavailable.repositories.memory.capsuleRefs.markDenied({
+      teamId: deniedRef.teamId, id: deniedRef.id, deniedAt: 10,
+    });
+    await expect(unavailable.gateway.invokeTask({
+      ...phase2InvokeInput(unavailable.authority), memoryCapsuleRef: deniedRef,
+    })).rejects.toMatchObject({ code: 'INVOCATION_MEMORY_CAPSULE_REF_INVALID' });
+  });
 });
 
 async function createHarness() {
@@ -272,4 +322,18 @@ async function createPhase2Harness(
 function phase2InvokeInput(authority: { managementRunId: string; workerId: string; leaseToken: string; fencingToken: number }) {
   return { authority, idempotencyKey: 'invoke-child', taskId: 'task-child', expectedTaskRevision: 1,
     taskAttempt: 1, claimLeaseId: 'claim-child', objective: '执行 child', attachmentIds: ['artifact-1'] };
+}
+
+function phase2CapsuleRef(managementRunId: string) {
+  return {
+    schemaVersion: 1 as const,
+    id: 'capsule-1',
+    teamId: 'team-1',
+    managementRunId,
+    taskId: 'task-child',
+    targetAgentId: 'agent-1',
+    contentHash: 'sha256:capsule-content',
+    authorizationDecisionId: 'decision-1',
+    expiresAt: 100,
+  };
 }

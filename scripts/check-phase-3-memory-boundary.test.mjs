@@ -154,3 +154,22 @@ test('fails closed when Capsule↔Invocation/checkpoint binding disappears', () 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /P3_CAPSULE_INVOCATION_BINDING_INVALID/);
 });
+
+test('fails closed when Invocation accepts an untrusted Capsule ref', () => {
+  const result = withFixture('agentbean-phase3-capsule-authority-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/management/invocation-gateway.ts');
+    writeFileSync(path, readFileSync(path, 'utf8')
+      .replaceAll('INVOCATION_MEMORY_CAPSULE_REF_INVALID', 'REMOVED_CAPSULE_REF_VALIDATION'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPSULE_INVOCATION_BINDING_INVALID/);
+});
+
+test('fails closed when Capsule denial stops updating the authoritative ref', () => {
+  const result = withFixture('agentbean-phase3-capsule-denial-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/capsule-injection-validator.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('capsuleRefs.markDenied', 'removedMarkDenied'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPSULE_INVOCATION_BINDING_INVALID/);
+});
