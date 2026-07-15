@@ -28,6 +28,9 @@ describe('serial collaboration policy', () => {
     expect(evaluateContinuationOwnerTransition({ currentAgentId: 'agent-b', sourceAgentId: 'agent-a',
       targetAgentId: 'agent-b', status: 'failed', taskFenceCurrent: true }))
       .toEqual({ kind: 'changed', nextAgentId: 'agent-a', reasonCode: 'HANDOFF_FAILED_ROLLBACK' });
+    expect(evaluateContinuationOwnerTransition({ currentAgentId: 'agent-b', sourceAgentId: 'agent-a',
+      targetAgentId: 'agent-b', status: 'cancelled', taskFenceCurrent: true }))
+      .toEqual({ kind: 'changed', nextAgentId: 'agent-a', reasonCode: 'HANDOFF_CANCELLED_ROLLBACK' });
     expect(evaluateContinuationOwnerTransition({ currentAgentId: 'agent-a', sourceAgentId: 'agent-a',
       targetAgentId: 'agent-b', status: 'accepted', taskFenceCurrent: false }))
       .toEqual({ kind: 'unchanged' });

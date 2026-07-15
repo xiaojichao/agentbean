@@ -125,6 +125,9 @@ describe('serial collaboration handoff', () => {
       id: 'handoff-recovery', managementRunId: harness.runId, intent,
       intentHash: hashManagementCommandInput(intent), idempotencyKey: 'handoff-recovery-key',
       status: 'requested', createdAt: 20, updatedAt: 20 });
+    await harness.repositories.taskCoordination.claimLeases.update({ id: 'claim-a',
+      expectedStatus: 'active', status: 'released', heartbeatAt: 20, expiresAt: 1_000,
+      releasedAt: 20 });
 
     const recovered = await harness.service.requestHandoff({ authority: harness.authority,
       idempotencyKey: 'handoff-recovery-key', sourceProposalId: proposal!.id,
@@ -215,9 +218,35 @@ describe('serial collaboration handoff', () => {
     await harness.service.recordAccepted({ dispatchId });
     await expect(harness.repositories.management.runs.getById(harness.runId))
       .resolves.toMatchObject({ activeAgentId: 'agent-b' });
-    await harness.service.recordTerminal({ dispatchId, status: 'failed', artifactIds: [] });
+    await harness.service.recordTerminal({ dispatchId, status: 'cancelled', artifactIds: [] });
     await expect(harness.repositories.management.runs.getById(harness.runId))
       .resolves.toMatchObject({ activeAgentId: 'agent-a' });
+  });
+
+  test('rejects a second active handoff until the serial handoff finishes', async () => {
+    const harness = await createHarness();
+    await harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-serial-1', toAgentId: 'agent-b', kind: 'continuation',
+      objective: '第一段交接', reason: '串行执行', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'deliver_to_root' });
+
+    await expect(harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-serial-2', toAgentId: 'agent-b', kind: 'continuation',
+      objective: '第二段交接', reason: '串行执行', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'deliver_to_root' }))
+      .rejects.toThrow('HANDOFF_SERIAL_CONFLICT');
+  });
+
+  test('rejects an already expired handoff deadline before persisting or dispatching', async () => {
+    const harness = await createHarness();
+
+    await expect(harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-expired-deadline', toAgentId: 'agent-b', kind: 'consult',
+      objective: '过期工作', reason: '旧请求', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'return_to_manager', deadlineAt: 19 }))
+      .rejects.toThrow('HANDOFF_DEADLINE_EXPIRED');
+    await expect(harness.repositories.management.handoffs.listByRun(harness.runId))
+      .resolves.toHaveLength(0);
   });
 
   test('routes handoff cancellation through collaboration state without terminating the run', async () => {

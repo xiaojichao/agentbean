@@ -175,15 +175,23 @@ export function createCollaborationService(input: {
       if (decision.kind === 'existing' && existing?.status !== 'requested') {
         throw new Error('HANDOFF_RECOVERY_CONFLICT');
       }
+      if (intent.deadlineAt !== undefined && intent.deadlineAt <= now) {
+        throw new Error('HANDOFF_DEADLINE_EXPIRED');
+      }
       const target = await requireEligibleTarget(repositories, run, request.toAgentId, true);
       if (proposal?.proposal.sourceTaskContext
-        && !(await isTaskFenceCurrent(repositories, run.id, proposal.proposal.sourceTaskContext, now))) {
+        && !(await (existing
+          ? isTaskRevisionFenceCurrent(repositories, run.id, proposal.proposal.sourceTaskContext)
+          : isTaskFenceCurrent(repositories, run.id, proposal.proposal.sourceTaskContext, now)))) {
         throw new Error('HANDOFF_PROPOSAL_STALE');
       }
       const invocations = await repositories.management.invocations.listByRun(run.id);
       if (invocations.length >= run.budget.maxExternalInvocations) throw new Error('HANDOFF_BUDGET_CONFLICT');
       const prior = (await repositories.management.handoffs.listByRun(run.id))
         .filter((item) => item.id !== existing?.id);
+      if (prior.some((item) => !isTerminalHandoffStatus(item.status))) {
+        throw new Error('HANDOFF_SERIAL_CONFLICT');
+      }
       if (prior.length >= run.budget.maxSubtasks
         || (request.kind === 'continuation'
           && prior.filter((item) => item.intent.kind === 'continuation').length >= run.budget.maxDepth)) {

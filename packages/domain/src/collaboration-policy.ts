@@ -41,7 +41,8 @@ export function evaluateContinuationOwnerTransition(input: {
     if (input.currentAgentId === input.targetAgentId) return { kind: 'unchanged' };
     return { kind: 'changed', nextAgentId: input.targetAgentId, reasonCode: 'HANDOFF_ACCEPTED' };
   }
-  if (input.status === 'failed' || input.status === 'timed_out' || input.status === 'rejected') {
+  if (input.status === 'failed' || input.status === 'cancelled'
+    || input.status === 'timed_out' || input.status === 'rejected') {
     if (input.currentAgentId !== input.targetAgentId || input.currentAgentId === input.sourceAgentId) {
       return { kind: 'unchanged' };
     }
