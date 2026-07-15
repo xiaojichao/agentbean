@@ -579,20 +579,85 @@ export function parsePhase3MemoryToolInputV1<K extends keyof Phase3ManagementWor
   toolName: K,
   value: unknown,
 ): Phase3ManagementWorkerToolInputMapV1[K] {
-  if (!value || typeof value !== 'object') throw new Error('MEMORY_TOOL_INPUT_INVALID');
-  const record = value as Record<string, unknown>;
-  // 结构校验由 catalog 的 typebox schema（defineTool parameters）在 pi-coding-agent 层完成；
-  // 这里只做关键字段非空校验防明显错配，深校验留给 service 层（P3-09 slice 2 handler）。
-  const requiredTopLevel: Record<keyof Phase3ManagementWorkerToolInputMapV1, readonly string[]> = {
-    'memory.search': ['query', 'limit'],
-    'memory.create_capsule': ['targetAgentId', 'prompt', 'limit'],
-    'memory.propose_candidate': ['contentKind', 'proposedContent', 'sourceRefs'],
-    'memory.link_sources': ['memoryId', 'sourceRefs'],
-  };
-  for (const key of requiredTopLevel[toolName]) {
-    if (!(key in record)) throw new Error('MEMORY_TOOL_INPUT_INVALID');
-  }
+  assertMemoryToolInput(toolName, value);
   return structuredClone(value) as Phase3ManagementWorkerToolInputMapV1[K];
+}
+
+const MEMORY_SOURCE_KINDS = [
+  'message', 'task', 'artifact', 'workspace-run', 'invocation', 'memory', 'manual', 'local-summary',
+] as const;
+const MEMORY_CONTENT_KINDS = ['summary', 'fact', 'decision', 'preference', 'procedure'] as const;
+
+function assertExactMemoryKeys(
+  value: unknown,
+  allowed: readonly string[],
+  required: readonly string[],
+): asserts value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('MEMORY_TOOL_INPUT_INVALID');
+  const keys = Object.keys(value);
+  if (keys.some((key) => !allowed.includes(key)) || required.some((key) => !keys.includes(key))) {
+    throw new Error('MEMORY_TOOL_INPUT_INVALID');
+  }
+}
+
+function assertMemoryLimit(value: unknown): void {
+  if (!Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > 100) {
+    throw new Error('MEMORY_TOOL_INPUT_INVALID');
+  }
+}
+
+function assertMemorySourceRef(value: unknown): void {
+  assertExactMemoryKeys(value, ['schemaVersion', 'sourceKind', 'sourceId', 'snapshotHash'],
+    ['schemaVersion', 'sourceKind', 'sourceId', 'snapshotHash']);
+  if (value.schemaVersion !== 1
+    || !MEMORY_SOURCE_KINDS.includes(value.sourceKind as typeof MEMORY_SOURCE_KINDS[number])
+    || !nonEmpty(value.sourceId)
+    || !nonEmpty(value.snapshotHash)) {
+    throw new Error('MEMORY_TOOL_INPUT_INVALID');
+  }
+}
+
+function assertMemorySourceRefs(value: unknown): void {
+  if (!Array.isArray(value) || value.length === 0) throw new Error('MEMORY_TOOL_INPUT_INVALID');
+  value.forEach(assertMemorySourceRef);
+}
+
+function assertOptionalMemoryScopeIds(value: Record<string, unknown>): void {
+  for (const key of ['taskId', 'channelId', 'userId']) {
+    if (value[key] !== undefined && !nonEmpty(value[key])) throw new Error('MEMORY_TOOL_INPUT_INVALID');
+  }
+}
+
+function assertMemoryToolInput(toolName: keyof Phase3ManagementWorkerToolInputMapV1, value: unknown): void {
+  if (toolName === 'memory.search') {
+    assertExactMemoryKeys(value, ['query', 'taskId', 'channelId', 'userId', 'limit'], ['query', 'limit']);
+    if (!nonEmpty(value.query)) throw new Error('MEMORY_TOOL_INPUT_INVALID');
+    assertMemoryLimit(value.limit);
+    assertOptionalMemoryScopeIds(value);
+    return;
+  }
+  if (toolName === 'memory.create_capsule') {
+    assertExactMemoryKeys(value, ['targetAgentId', 'prompt', 'limit', 'taskId', 'channelId', 'userId'],
+      ['targetAgentId', 'prompt', 'limit']);
+    if (!nonEmpty(value.targetAgentId) || !nonEmpty(value.prompt)) throw new Error('MEMORY_TOOL_INPUT_INVALID');
+    assertMemoryLimit(value.limit);
+    assertOptionalMemoryScopeIds(value);
+    return;
+  }
+  if (toolName === 'memory.propose_candidate') {
+    assertExactMemoryKeys(value, ['contentKind', 'proposedContent', 'sourceRefs', 'taskId'],
+      ['contentKind', 'proposedContent', 'sourceRefs']);
+    if (!MEMORY_CONTENT_KINDS.includes(value.contentKind as typeof MEMORY_CONTENT_KINDS[number])
+      || !nonEmpty(value.proposedContent)
+      || (value.taskId !== undefined && !nonEmpty(value.taskId))) {
+      throw new Error('MEMORY_TOOL_INPUT_INVALID');
+    }
+    assertMemorySourceRefs(value.sourceRefs);
+    return;
+  }
+  assertExactMemoryKeys(value, ['memoryId', 'sourceRefs'], ['memoryId', 'sourceRefs']);
+  if (!nonEmpty(value.memoryId)) throw new Error('MEMORY_TOOL_INPUT_INVALID');
+  assertMemorySourceRefs(value.sourceRefs);
 }
 
 export function parseManagementWorkerRegisterV2(value: unknown): ManagementWorkerRegisterV2 {

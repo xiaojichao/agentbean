@@ -11,6 +11,7 @@ import {
 } from '../src/index.js';
 import {
   assertExactManagementToolAllowlist,
+  createManagementToolCatalog,
   getManagementToolMetadata,
 } from '../src/management-tool-catalog.js';
 import { PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES } from '../../contracts/src/index.js';
@@ -525,5 +526,56 @@ describe('Phase 3 Memory tool definitions', () => {
     for (const tool of MEMORY_TOOLS) {
       expect(MANAGEMENT_TOOL_NAMES).toContain(tool);
     }
+  });
+
+  it('publishes exact schemas for every Phase 3 Memory tool', () => {
+    const definitions = createManagementToolCatalog({
+      executor: async () => ({ text: 'unused' }),
+      toolNames: MEMORY_TOOLS,
+      mode: 'managed',
+      sessionContext: phase2SessionInput('phase-3-schema').context,
+    });
+    const schemas = new Map(definitions.map((definition) => [definition.name,
+      JSON.parse(JSON.stringify(definition.parameters)) as {
+        additionalProperties: boolean;
+        properties: Record<string, unknown>;
+        required: string[];
+      }]));
+    const expectedKeys = new Map([
+      ['memory.search', ['query', 'limit', 'taskId', 'channelId', 'userId']],
+      ['memory.create_capsule', ['targetAgentId', 'prompt', 'limit', 'taskId', 'channelId', 'userId']],
+      ['memory.propose_candidate', ['contentKind', 'proposedContent', 'sourceRefs', 'taskId']],
+      ['memory.link_sources', ['memoryId', 'sourceRefs']],
+    ]);
+    const expectedRequired = new Map([
+      ['memory.search', ['query', 'limit']],
+      ['memory.create_capsule', ['targetAgentId', 'prompt', 'limit']],
+      ['memory.propose_candidate', ['contentKind', 'proposedContent', 'sourceRefs']],
+      ['memory.link_sources', ['memoryId', 'sourceRefs']],
+    ]);
+    for (const name of MEMORY_TOOLS) {
+      const schema = schemas.get(name);
+      expect(schema?.additionalProperties).toBe(false);
+      expect(Object.keys(schema?.properties ?? {})).toEqual(expectedKeys.get(name));
+      expect(schema?.required).toEqual(expectedRequired.get(name));
+    }
+  });
+
+  it('applies the exact-key parser before invoking the Phase 3 executor', async () => {
+    const executorCalls: unknown[] = [];
+    const [search] = createManagementToolCatalog({
+      executor: async (call) => {
+        executorCalls.push(call);
+        return { text: 'must-not-run' };
+      },
+      toolNames: ['memory.search'],
+      mode: 'managed',
+      sessionContext: phase2SessionInput('phase-3-parser').context,
+    });
+    expect(search).toBeDefined();
+    await expect(search!.execute('call-1', {
+      query: 'q', limit: 1, providerSecret: 'forbidden',
+    }, undefined, undefined, undefined as never)).rejects.toThrow('MEMORY_TOOL_INPUT_INVALID');
+    expect(executorCalls).toHaveLength(0);
   });
 });

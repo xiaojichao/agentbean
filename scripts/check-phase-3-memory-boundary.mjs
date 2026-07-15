@@ -220,12 +220,19 @@ if (!domainMemoryHashing.includes('hashCapsuleItems')
 }
 
 // P3-09 slice 1：Memory 工具定义地基（Phase3 输入 map + parser + catalog schema + PHASE_3 tool 名单）。
+const phase3Tools = runtimeTypes.match(
+  /export const PHASE_3_MANAGEMENT_TOOL_NAMES\s*=\s*\[([\s\S]*?)\]\s+as const/,
+)?.[1] ?? '';
+const phase3MemoryTools = [
+  'memory.search', 'memory.create_capsule', 'memory.propose_candidate', 'memory.link_sources',
+];
 if (!managementWorkerV2.includes('Phase3ManagementWorkerToolInputMapV1')
   || !managementWorkerV2.includes('parsePhase3MemoryToolInputV1')
+  || !managementWorkerV2.includes('assertExactMemoryKeys')
   || !managementToolCatalog.includes('phase3MemorySchemaFor')
   || !managementToolCatalog.includes('Phase3MemoryToolName')
-  || !runtimeTypes.includes('PHASE_3_MANAGEMENT_TOOL_NAMES')) {
-  violations.push('P3_CAPABILITY_DEFINITIONS_INVALID: Phase 3 Memory 工具定义（Phase3 输入 map + parser + catalog schema + PHASE_3 tool 名单）is required');
+  || !phase3MemoryTools.every((tool) => phase3Tools.includes(`'${tool}'`))) {
+  violations.push('P3_CAPABILITY_DEFINITIONS_INVALID: Phase 3 Memory 工具定义（Phase3 输入 map + exact-key parser + catalog schema + PHASE_3 tool 名单）is required');
 }
 
 const phase1Tools = runtimeTypes.match(
