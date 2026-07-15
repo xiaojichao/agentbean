@@ -24,7 +24,12 @@ interface Harness {
   readonly repositories: ServerNextRepositories;
   readonly capsuleService: ReturnType<typeof createMemoryCapsuleService>;
   readonly validator: ReturnType<typeof createCapsuleInjectionValidator>;
-  readonly permissions: { scopeVisibility: MemoryScopeVisibility; sourceAvailable: boolean };
+  readonly permissions: {
+    teamSearchAllowed: boolean;
+    scopeVisibility: MemoryScopeVisibility;
+    sourceScopeVisibility: MemoryScopeVisibility;
+    sourceAvailable: boolean;
+  };
   readonly close(): void;
 }
 
@@ -34,10 +39,17 @@ function makeHarness(repositories: ServerNextRepositories): Harness {
   const clock = { now: () => (tick += 1_000) };
   const ids = { nextId: () => `id-${++counter}` };
   // 可翻转的权限：默认全可见 + 来源可用；测试改 scopeVisibility/sourceAvailable 触发 deny。
-  const permissionsState = { scopeVisibility: 'visible' as MemoryScopeVisibility, sourceAvailable: true };
+  const permissionsState = {
+    teamSearchAllowed: true,
+    scopeVisibility: 'visible' as MemoryScopeVisibility,
+    sourceScopeVisibility: 'visible' as MemoryScopeVisibility,
+    sourceAvailable: true,
+  };
   const permissions: MemorySearchPermissions = {
-    async canSearchTeam() { return true; },
-    async evaluateScopeVisibility() { return permissionsState.scopeVisibility; },
+    async canSearchTeam() { return permissionsState.teamSearchAllowed; },
+    async evaluateScopeVisibility(input) {
+      return input.source ? permissionsState.sourceScopeVisibility : permissionsState.scopeVisibility;
+    },
     async isSourceAvailable() { return permissionsState.sourceAvailable; },
   };
   const searchService = createCollaborativeMemorySearchService({ repositories: repositories.memory, permissions });
@@ -140,6 +152,29 @@ describe.each([
     }
   });
 
+  test('denies when the frozen Capsule content was tampered (CAPSULE_CONTENT_HASH_MISMATCH)', async () => {
+    const harness = createHarness();
+    try {
+      await seedMemory(harness.repositories, 'mem-1');
+      const capsule = await harness.capsuleService.createCapsule({
+        teamId: 'team-1', requesterUserId: 'user-1', managementRunId: 'run-1',
+        targetAgentId: 'agent-1', prompt: 'x', limit: 10, now: 5_000, currentPolicyVersion: BASE_POLICY_VERSION,
+      });
+      const item = capsule.items[0]!;
+      const tamperedCapsule: MemoryCapsuleDto = {
+        ...capsule,
+        items: [{ ...item, content: 'tampered Capsule projection' }],
+      };
+      const result = await harness.validator.validateCapsuleForInjection({
+        capsule: tamperedCapsule, requesterUserId: 'user-1', now: 6_000, currentPolicyVersion: BASE_POLICY_VERSION,
+      });
+      expect(result.decisions.every((decision) => !decision.allowed)).toBe(true);
+      expect(result.decisions.some((decision) => decision.reason === 'CAPSULE_CONTENT_HASH_MISMATCH')).toBe(true);
+    } finally {
+      harness.close();
+    }
+  });
+
   test('denies when sources drifted (CAPSULE_SOURCE_REFS_HASH_MISMATCH)', async () => {
     const harness = createHarness();
     try {
@@ -152,6 +187,30 @@ describe.each([
       const result = await harness.validator.validateCapsuleForInjection({
         capsule, requesterUserId: 'user-1', now: 6_000, currentPolicyVersion: BASE_POLICY_VERSION,
       });
+      expect(result.decisions.some((decision) => decision.reason === 'CAPSULE_SOURCE_REFS_HASH_MISMATCH')).toBe(true);
+    } finally {
+      harness.close();
+    }
+  });
+
+  test('denies when the frozen Capsule source refs were tampered (CAPSULE_SOURCE_REFS_HASH_MISMATCH)', async () => {
+    const harness = createHarness();
+    try {
+      await seedMemory(harness.repositories, 'mem-1');
+      const capsule = await harness.capsuleService.createCapsule({
+        teamId: 'team-1', requesterUserId: 'user-1', managementRunId: 'run-1',
+        targetAgentId: 'agent-1', prompt: 'x', limit: 10, now: 5_000, currentPolicyVersion: BASE_POLICY_VERSION,
+      });
+      const item = capsule.items[0]!;
+      const source = item.sourceRefs[0]!;
+      const tamperedCapsule: MemoryCapsuleDto = {
+        ...capsule,
+        items: [{ ...item, sourceRefs: [{ ...source, snapshotHash: 'sha256:tampered' }] }],
+      };
+      const result = await harness.validator.validateCapsuleForInjection({
+        capsule: tamperedCapsule, requesterUserId: 'user-1', now: 6_000, currentPolicyVersion: BASE_POLICY_VERSION,
+      });
+      expect(result.decisions.every((decision) => !decision.allowed)).toBe(true);
       expect(result.decisions.some((decision) => decision.reason === 'CAPSULE_SOURCE_REFS_HASH_MISMATCH')).toBe(true);
     } finally {
       harness.close();
@@ -208,6 +267,43 @@ describe.each([
         capsule, requesterUserId: 'user-1', now: 6_000, currentPolicyVersion: BASE_POLICY_VERSION,
       });
       expect(result.decisions.some((d) => d.reason === 'CAPSULE_EXPLICIT_GRANT_REQUIRED')).toBe(true);
+    } finally {
+      harness.close();
+    }
+  });
+
+  test('denies when a source now requires an explicit grant (CAPSULE_EXPLICIT_GRANT_REQUIRED)', async () => {
+    const harness = createHarness();
+    try {
+      await seedMemory(harness.repositories, 'mem-1');
+      const capsule = await harness.capsuleService.createCapsule({
+        teamId: 'team-1', requesterUserId: 'user-1', managementRunId: 'run-1',
+        targetAgentId: 'agent-1', prompt: 'x', limit: 10, now: 5_000, currentPolicyVersion: BASE_POLICY_VERSION,
+      });
+      harness.permissions.sourceScopeVisibility = 'explicit-grant';
+      const result = await harness.validator.validateCapsuleForInjection({
+        capsule, requesterUserId: 'user-1', now: 6_000, currentPolicyVersion: BASE_POLICY_VERSION,
+      });
+      expect(result.decisions.some((d) => d.reason === 'CAPSULE_EXPLICIT_GRANT_REQUIRED')).toBe(true);
+    } finally {
+      harness.close();
+    }
+  });
+
+  test('denies every item when Team access was revoked (MEMORY_SCOPE_NOT_VISIBLE)', async () => {
+    const harness = createHarness();
+    try {
+      await seedMemory(harness.repositories, 'mem-1');
+      const capsule = await harness.capsuleService.createCapsule({
+        teamId: 'team-1', requesterUserId: 'user-1', managementRunId: 'run-1',
+        targetAgentId: 'agent-1', prompt: 'x', limit: 10, now: 5_000, currentPolicyVersion: BASE_POLICY_VERSION,
+      });
+      harness.permissions.teamSearchAllowed = false;
+      const result = await harness.validator.validateCapsuleForInjection({
+        capsule, requesterUserId: 'user-1', now: 6_000, currentPolicyVersion: BASE_POLICY_VERSION,
+      });
+      expect(result.decisions).toHaveLength(capsule.items.length);
+      expect(result.decisions.every((d) => d.reason === 'MEMORY_SCOPE_NOT_VISIBLE')).toBe(true);
     } finally {
       harness.close();
     }

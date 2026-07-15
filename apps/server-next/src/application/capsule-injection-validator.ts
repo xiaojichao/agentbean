@@ -84,6 +84,19 @@ export function createCapsuleInjectionValidator(
           };
         }
 
+        const canSearchTeam = await permissions.canSearchTeam({
+          teamId: capsule.teamId,
+          requesterUserId: input.requesterUserId,
+          targetAgentId: capsule.targetAgentId,
+        });
+        if (!canSearchTeam) {
+          const decisions = capsule.items.map((item) => deny(item, 'MEMORY_SCOPE_NOT_VISIBLE'));
+          for (const item of capsule.items) {
+            await memory.auditEvents.append(itemDenialAudit(ids.nextId(), capsule, item, input));
+          }
+          return { capsuleExpired: false, decisions };
+        }
+
         const decisions: CapsuleItemInjectionDecision[] = [];
         for (const item of capsule.items) {
           const decision = await validateItem(memory, capsule, item, input);
@@ -121,22 +134,47 @@ export function createCapsuleInjectionValidator(
       memoryId: item.memoryId, scopeType: item.scopeType, scopeRef: item.scopeRef,
     });
     if (visibility === 'hidden') return deny(item, 'MEMORY_SCOPE_NOT_VISIBLE');
-    if (visibility === 'explicit-grant') return deny(item, 'CAPSULE_EXPLICIT_GRANT_REQUIRED');
+    if (visibility === 'explicit-grant' && item.authorization.mode !== 'explicit-grant') {
+      return deny(item, 'CAPSULE_EXPLICIT_GRANT_REQUIRED');
+    }
 
     // 3. fresh 来源可用性 + fresh 状态（active / 未 validUntil 过期）。
     const sources = await memory.sources.listByMemory({ teamId, memoryId: item.memoryId });
-    const allSourcesAvailable = await everySourceAvailable(permissions, teamId, requesterUserId, targetAgentId, sources);
+    for (const source of sources) {
+      const sourceVisibility = await permissions.evaluateScopeVisibility({
+        teamId,
+        requesterUserId,
+        targetAgentId,
+        memoryId: item.memoryId,
+        scopeType: source.sourceScopeType,
+        scopeRef: source.sourceScopeRef,
+        source,
+      });
+      if (sourceVisibility === 'hidden') return deny(item, 'MEMORY_SCOPE_NOT_VISIBLE');
+      if (sourceVisibility === 'explicit-grant' && item.authorization.mode !== 'explicit-grant') {
+        return deny(item, 'CAPSULE_EXPLICIT_GRANT_REQUIRED');
+      }
+      if (!await permissions.isSourceAvailable({ teamId, requesterUserId, targetAgentId, source })) {
+        return deny(item, 'MEMORY_SOURCE_UNAVAILABLE');
+      }
+    }
     const injection = evaluateMemoryInjection({
       status: memoryItem.status,
       validUntil: memoryItem.validUntil,
       now,
       scopeVisible: true,
-      allSourcesAvailable,
+      allSourcesAvailable: true,
     });
     if (!injection.allowed) return deny(item, injection.reason);
 
-    // 4. 冻结字段一致性：用 domain 单一源从当前内容/来源重算 hash，与冻结值比对。
+    // 4. 当前事实源与冻结授权必须一致；随后 Domain 再校验即将交付的 Capsule 投影本身。
     const sourceRefs = sources.map(toSourceRefDto);
+    if (hashSourceRefs(sourceRefs) !== item.authorization.sourceRefsHash) {
+      return deny(item, 'CAPSULE_SOURCE_REFS_HASH_MISMATCH');
+    }
+    if (hashMemoryContent(memoryItem.content) !== item.authorization.contentHash) {
+      return deny(item, 'CAPSULE_CONTENT_HASH_MISMATCH');
+    }
     const currentGrant = item.authorization.mode === 'explicit-grant' && item.authorization.grantId
       ? await loadCurrentGrant(memory, teamId, item.authorization.grantId)
       : undefined;
@@ -145,9 +183,9 @@ export function createCapsuleInjectionValidator(
       targetAgentId,
       sourceScopeType: item.scopeType,
       sourceScopeRef: item.scopeRef,
-      sourceVisibility: 'team',
-      sourceRefsHash: hashSourceRefs(sourceRefs),
-      contentHash: hashMemoryContent(memoryItem.content),
+      sourceVisibility: item.sourceVisibility,
+      sourceRefsHash: hashSourceRefs(item.sourceRefs),
+      contentHash: hashMemoryContent(item.content),
       contentKind: item.contentKind,
       redactionLevel: item.redactionLevel,
       currentPolicyVersion,
@@ -163,20 +201,6 @@ export function createCapsuleInjectionValidator(
 
 function deny(item: MemoryCapsuleItemDto, reason: CapsuleInjectionDenialReason): CapsuleItemInjectionDecision {
   return { memoryId: item.memoryId, allowed: false, reason };
-}
-
-async function everySourceAvailable(
-  permissions: MemorySearchPermissions,
-  teamId: ID,
-  requesterUserId: ID,
-  targetAgentId: ID,
-  sources: readonly MemorySourceRecord[],
-): Promise<boolean> {
-  for (const source of sources) {
-    const available = await permissions.isSourceAvailable({ teamId, requesterUserId, targetAgentId, source });
-    if (!available) return false;
-  }
-  return true;
 }
 
 async function loadCurrentGrant(
