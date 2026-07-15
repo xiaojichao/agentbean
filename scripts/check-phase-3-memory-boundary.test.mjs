@@ -109,3 +109,12 @@ test('fails closed when reactive Memory source invalidation disappears', () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /P3_SOURCE_INVALIDATION_INVALID/);
 });
+
+test('fails closed when minimal Memory Capsule creation disappears', () => {
+  const result = withFixture('agentbean-phase3-capsule-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/memory-capsule-service.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('createCapsule', 'removedCreateCapsule'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPSULE_CREATION_INVALID/);
+});

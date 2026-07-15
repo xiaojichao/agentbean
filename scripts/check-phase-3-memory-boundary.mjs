@@ -27,6 +27,8 @@ const collaborativeMemoryTests = read('apps/server-next/tests/collaborative-memo
 const memorySourceInvalidationService = read('apps/server-next/src/application/memory-source-invalidation-service.ts');
 const memorySourceInvalidationTests = read('apps/server-next/tests/memory-source-invalidation-service.test.ts');
 const serverNextUsecases = read('apps/server-next/src/application/usecases.ts');
+const memoryCapsuleService = read('apps/server-next/src/application/memory-capsule-service.ts');
+const memoryCapsuleTests = read('apps/server-next/tests/memory-capsule-service.test.ts');
 const runtimeTypes = read('packages/pi-management-runtime/src/types.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
@@ -113,6 +115,17 @@ if (!invalidationMarkers.every((marker) => memorySourceInvalidationService.inclu
   || !serverNextUsecases.includes("sourceKind: 'message'")
   || !serverNextUsecases.includes("sourceKind: 'task'")) {
   violations.push('P3_SOURCE_INVALIDATION_INVALID: reactive Memory source invalidation on deletion with dual-backend parity tests is required');
+}
+
+const capsuleMarkers = [
+  'createMemoryCapsuleService', 'createCapsule', "mode: 'scope-policy'",
+  'capsule-created', 'currentPolicyVersion', 'MemoryCapsuleAuthorizationDto',
+];
+if (!capsuleMarkers.every((marker) => memoryCapsuleService.includes(marker))
+  || !memoryCapsuleTests.includes('describe.each')
+  || !memoryCapsuleTests.includes('createSqliteRepositories')
+  || !memoryCapsuleTests.includes('scope-policy')) {
+  violations.push('P3_CAPSULE_CREATION_INVALID: minimal Capsule creation with scope-policy authorization, frozen hashes and dual-backend parity tests is required');
 }
 
 const phase1Tools = runtimeTypes.match(
