@@ -1,5 +1,6 @@
 import type {
   MemoryAuditEventRecord,
+  MemoryCapsuleRefRecord,
   MemoryGrantRecord,
   MemoryItemRecord,
   MemoryRepositories,
@@ -8,6 +9,8 @@ import type {
 } from '../../application/memory-repositories.js';
 import {
   assertMemoryAuditEventRecord,
+  assertMemoryCapsuleRefDenial,
+  assertMemoryCapsuleRefRecord,
   assertMemoryGrantRecord,
   assertMemoryGrantTransition,
   assertMemoryItemRecord,
@@ -172,6 +175,40 @@ export function createSqliteMemoryRepositories(db: SqliteDatabase): MemoryReposi
           .all(input.teamId, input.subjectKind, input.subjectId).map(mapAuditRequired);
       },
     },
+    capsuleRefs: {
+      async create(record) {
+        assertMemoryCapsuleRefRecord(record);
+        const existing = db.prepare(`SELECT id FROM memory_capsule_refs
+          WHERE team_id = ? AND id = ?`).get(record.teamId, record.id);
+        if (existing) throw new Error('memory capsule ref already exists');
+        db.prepare(`INSERT INTO memory_capsule_refs
+          (id, team_id, management_run_id, task_id, target_agent_id, content_hash,
+           authorization_decision_id, issued_at, expires_at, denied_at, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(record.id, record.teamId, record.managementRunId, record.taskId ?? null,
+            record.targetAgentId, record.contentHash, record.authorizationDecisionId,
+            record.issuedAt, record.expiresAt, record.deniedAt ?? null, record.createdAt);
+        return record;
+      },
+      async getById(input) {
+        return mapCapsuleRef(db.prepare(`SELECT * FROM memory_capsule_refs
+          WHERE team_id = ? AND id = ?`).get(input.teamId, input.id));
+      },
+      async listByRun(input) {
+        return db.prepare(`SELECT * FROM memory_capsule_refs
+          WHERE team_id = ? AND management_run_id = ? ORDER BY id`)
+          .all(input.teamId, input.managementRunId).map(mapCapsuleRefRequired);
+      },
+      async markDenied(input) {
+        const current = mapCapsuleRef(db.prepare(`SELECT * FROM memory_capsule_refs
+          WHERE team_id = ? AND id = ?`).get(input.teamId, input.id));
+        if (!current) return null;
+        assertMemoryCapsuleRefDenial(current, input.deniedAt);
+        db.prepare(`UPDATE memory_capsule_refs SET denied_at = ? WHERE team_id = ? AND id = ?`)
+          .run(input.deniedAt, input.teamId, input.id);
+        return { ...current, deniedAt: input.deniedAt };
+      },
+    },
   };
 }
 
@@ -267,6 +304,25 @@ function mapAudit(value: unknown): MemoryAuditEventRecord | null {
   return record;
 }
 
+function mapCapsuleRef(value: unknown): MemoryCapsuleRefRecord | null {
+  if (!value) return null;
+  const record: MemoryCapsuleRefRecord = {
+    id: text(value, 'id'),
+    teamId: text(value, 'team_id'),
+    managementRunId: text(value, 'management_run_id'),
+    taskId: optionalText(value, 'task_id'),
+    targetAgentId: text(value, 'target_agent_id'),
+    contentHash: text(value, 'content_hash'),
+    authorizationDecisionId: text(value, 'authorization_decision_id'),
+    issuedAt: number(value, 'issued_at'),
+    expiresAt: number(value, 'expires_at'),
+    deniedAt: optionalNumber(value, 'denied_at'),
+    createdAt: number(value, 'created_at'),
+  };
+  assertMemoryCapsuleRefRecord(record);
+  return record;
+}
+
 function mapItemRequired(value: unknown): MemoryItemRecord {
   const record = mapItem(value);
   if (!record) throw new Error('SQLite memory item row could not be mapped');
@@ -294,6 +350,12 @@ function mapGrantRequired(value: unknown): MemoryGrantRecord {
 function mapAuditRequired(value: unknown): MemoryAuditEventRecord {
   const record = mapAudit(value);
   if (!record) throw new Error('SQLite memory audit row could not be mapped');
+  return record;
+}
+
+function mapCapsuleRefRequired(value: unknown): MemoryCapsuleRefRecord {
+  const record = mapCapsuleRef(value);
+  if (!record) throw new Error('SQLite memory capsule ref row could not be mapped');
   return record;
 }
 

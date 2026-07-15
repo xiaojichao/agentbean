@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 
 import type {
   MemoryAuditEventRecord,
+  MemoryCapsuleRefRecord,
   MemoryGrantRecord,
   MemoryItemRecord,
   MemorySourceRecord,
@@ -189,10 +190,53 @@ describe.each([
       fixture.close();
     }
   });
+
+  test('persists Capsule refs with Team isolation, denial window and run scoping', async () => {
+    const fixture = createFixture();
+    try {
+      await fixture.repositories.memoryUnitOfWork.run(async (memory) => {
+        await memory.capsuleRefs.create(capsuleRef('cap-1', 'run-1'));
+      });
+      await expect(fixture.repositories.memoryUnitOfWork.run(async (memory) => {
+        await memory.capsuleRefs.create(capsuleRef('cap-1', 'run-1'));
+      })).rejects.toThrow(/already exists/i);
+      await expect(fixture.repositories.memoryUnitOfWork.run(async (memory) => {
+        await memory.capsuleRefs.create({ ...capsuleRef('cap-bad', 'run-1'), expiresAt: 1 });
+          // expiresAt <= issuedAt 校验应失败。
+      })).rejects.toThrow(/expiry must follow issue time/i);
+
+      const loaded = await fixture.repositories.memory.capsuleRefs.getById({ teamId: 'team-1', id: 'cap-1' });
+      expect(loaded).toMatchObject({ id: 'cap-1', targetAgentId: 'agent-1' });
+      expect(loaded?.deniedAt).toBeUndefined();
+      await expect(fixture.repositories.memory.capsuleRefs.getById({ teamId: 'team-2', id: 'cap-1' }))
+        .resolves.toBeNull();
+      await expect(fixture.repositories.memory.capsuleRefs.listByRun({ teamId: 'team-1', managementRunId: 'run-1' }))
+        .resolves.toMatchObject([{ id: 'cap-1' }]);
+      await expect(fixture.repositories.memory.capsuleRefs.listByRun({ teamId: 'team-1', managementRunId: 'run-2' }))
+        .resolves.toEqual([]);
+
+      // deniedAt 必须落在 [issuedAt, expiresAt] 内且不可重复 deny。
+      await expect(fixture.repositories.memory.capsuleRefs.markDenied({
+        teamId: 'team-1', id: 'cap-1', deniedAt: 99_999,
+      })).rejects.toThrow(/validity window/i);
+      const denied = await fixture.repositories.memory.capsuleRefs.markDenied({
+        teamId: 'team-1', id: 'cap-1', deniedAt: 5_000,
+      });
+      expect(denied).toMatchObject({ deniedAt: 5_000 });
+      await expect(fixture.repositories.memory.capsuleRefs.markDenied({
+        teamId: 'team-1', id: 'cap-1', deniedAt: 6_000,
+      })).rejects.toThrow(/already denied/i);
+      await expect(fixture.repositories.memory.capsuleRefs.markDenied({
+        teamId: 'team-1', id: 'missing', deniedAt: 5_000,
+      })).resolves.toBeNull();
+    } finally {
+      fixture.close();
+    }
+  });
 });
 
 describe('Phase 3 Memory migration', () => {
-  test('applies 0015 once with Team/scope constraints and no content in audit', () => {
+  test('applies 0015 and 0016 once with Team/scope constraints and no content in audit', () => {
     const db = new Database(':memory:');
     try {
       db.exec('PRAGMA foreign_keys = ON;');
@@ -201,10 +245,13 @@ describe('Phase 3 Memory migration', () => {
 
       expect(db.prepare(`SELECT COUNT(*) AS count FROM schema_migrations
         WHERE id = 'team/0015_management_phase_3_memory.sql'`).get()).toEqual({ count: 1 });
+      expect(db.prepare(`SELECT COUNT(*) AS count FROM schema_migrations
+        WHERE id = 'team/0016_management_phase_3_capsule_refs.sql'`).get()).toEqual({ count: 1 });
       const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'
         AND name LIKE 'memory_%' ORDER BY name`).all().map((value) => (value as { name: string }).name);
       expect(tables).toEqual([
-        'memory_audit_events', 'memory_grants', 'memory_items', 'memory_sources', 'memory_tags',
+        'memory_audit_events', 'memory_capsule_refs', 'memory_grants',
+        'memory_items', 'memory_sources', 'memory_tags',
       ]);
       const auditColumns = db.prepare("SELECT name FROM pragma_table_info('memory_audit_events')")
         .all().map((value) => (value as { name: string }).name);
@@ -307,6 +354,20 @@ function audit(subjectId = 'memory-1', id = 'audit-1'): MemoryAuditEventRecord {
     contentHash: 'sha256:content',
     redactionLevel: 'summary-only',
     createdAt: 1,
+  };
+}
+
+function capsuleRef(id = 'cap-1', managementRunId = 'run-1'): MemoryCapsuleRefRecord {
+  return {
+    id,
+    teamId: 'team-1',
+    managementRunId,
+    targetAgentId: 'agent-1',
+    contentHash: 'sha256:capsule-content',
+    authorizationDecisionId: 'decision-1',
+    issuedAt: 1_000,
+    expiresAt: 10_000,
+    createdAt: 1_000,
   };
 }
 

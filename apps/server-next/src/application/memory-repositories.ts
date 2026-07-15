@@ -96,6 +96,20 @@ export interface MemoryAuditEventRecord {
   readonly createdAt: UnixMs;
 }
 
+export interface MemoryCapsuleRefRecord {
+  readonly id: ID;
+  readonly teamId: ID;
+  readonly managementRunId: ID;
+  readonly taskId?: ID;
+  readonly targetAgentId: ID;
+  readonly contentHash: string;
+  readonly authorizationDecisionId: ID;
+  readonly issuedAt: UnixMs;
+  readonly expiresAt: UnixMs;
+  readonly deniedAt?: UnixMs;
+  readonly createdAt: UnixMs;
+}
+
 export interface MemoryRepositories {
   readonly items: {
     create(record: MemoryItemRecord): Promise<MemoryItemRecord>;
@@ -137,5 +151,11 @@ export interface MemoryRepositories {
       subjectKind: MemoryAuditSubjectKind;
       subjectId: ID;
     }): Promise<MemoryAuditEventRecord[]>;
+  };
+  readonly capsuleRefs: {
+    create(record: MemoryCapsuleRefRecord): Promise<MemoryCapsuleRefRecord>;
+    getById(input: { teamId: ID; id: ID }): Promise<MemoryCapsuleRefRecord | null>;
+    listByRun(input: { teamId: ID; managementRunId: ID }): Promise<MemoryCapsuleRefRecord[]>;
+    markDenied(input: { teamId: ID; id: ID; deniedAt: UnixMs }): Promise<MemoryCapsuleRefRecord | null>;
   };
 }

@@ -127,3 +127,12 @@ test('fails closed when Capsule injection revalidation disappears', () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /P3_CAPSULE_INJECTION_INVALID/);
 });
+
+test('fails closed when Capsule ref persistence disappears', () => {
+  const result = withFixture('agentbean-phase3-capsuleref-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/infra/sqlite/migrations/team/0016_management_phase_3_capsule_refs.sql');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('memory_capsule_refs', 'removed_capsule_refs'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPSULE_REF_PERSISTENCE_INVALID/);
+});

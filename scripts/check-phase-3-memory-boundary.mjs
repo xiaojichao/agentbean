@@ -17,6 +17,8 @@ const domain = read('packages/domain/src/memory-policy.ts');
 const memoryRepositories = read('apps/server-next/src/application/memory-repositories.ts');
 const memoryUnitOfWork = read('apps/server-next/src/application/memory-unit-of-work.ts');
 const memoryMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0015_management_phase_3_memory.sql');
+const capsuleRefMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0016_management_phase_3_capsule_refs.sql');
+const sqliteRepositories = read('apps/server-next/src/infra/sqlite/repositories.ts');
 const memoryBackends = [
   read('apps/server-next/src/infra/memory/memory-repositories.ts'),
   read('apps/server-next/src/infra/sqlite/memory-repositories.ts'),
@@ -89,6 +91,15 @@ if (!persistenceMarkers.every((marker) => memoryMigration.includes(marker))
   || !memoryPersistenceTests.includes('rolls back every Memory table')
   || !memoryPersistenceTests.includes('rolls back all Memory schema')) {
   violations.push('P3_PERSISTENCE_BOUNDARY_INVALID: Team-isolated Memory schema, repositories, and rollback evidence are required');
+}
+
+const capsuleRefMigrationMarkers = ['memory_capsule_refs', 'expires_at > issued_at', 'denied_at'];
+if (!capsuleRefMigrationMarkers.every((marker) => capsuleRefMigration.includes(marker))
+  || !sqliteRepositories.includes("'team/0016_management_phase_3_capsule_refs.sql'")
+  || !memoryRepositories.includes('MemoryCapsuleRefRecord')
+  || !memoryRepositories.includes('capsuleRefs')
+  || !memoryPersistenceTests.includes('Capsule refs with Team isolation')) {
+  violations.push('P3_CAPSULE_REF_PERSISTENCE_INVALID: Team-isolated Capsule ref schema (0016), repository, static migration registration and parity tests are required');
 }
 
 const usecaseMarkers = [
