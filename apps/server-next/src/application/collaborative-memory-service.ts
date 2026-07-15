@@ -7,6 +7,7 @@ import type {
   MemoryRedactionLevel,
   MemoryScopeType,
   MemorySourceRefDto,
+  MemorySourceVisibility,
   UnixMs,
 } from '../../../../packages/contracts/src/index.js';
 import type {
@@ -30,12 +31,30 @@ import type { MemoryUnitOfWork } from './memory-unit-of-work.js';
  */
 
 export interface MemoryPermissions {
-  /** 校验 actor 能否向该 server scope 写入协作 Memory 或签发/撤销显式共享。失败须 throw。 */
+  /** 校验 actor 能否向该 server scope 写入协作 Memory。失败须 throw。 */
   assertWriteAuthority(input: {
     readonly teamId: ID;
     readonly actorId: ID;
     readonly scopeType: MemoryScopeType;
     readonly scopeRef: ID;
+  }): Promise<void>;
+  /** 校验来源真实可见性允许写入目标 Memory scope。 */
+  assertSourceAuthority(input: {
+    readonly teamId: ID;
+    readonly actorId: ID;
+    readonly sourceScopeType: MemoryScopeType;
+    readonly sourceScopeRef: ID;
+    readonly sourceVisibility: Exclude<MemorySourceVisibility, 'local-only'>;
+    readonly targetScopeType: MemoryScopeType;
+    readonly targetScopeRef: ID;
+  }): Promise<void>;
+  /** 校验 actor 可以把来源 scope 显式授权给目标 Agent。 */
+  assertGrantAuthority(input: {
+    readonly teamId: ID;
+    readonly actorId: ID;
+    readonly sourceScopeType: MemoryScopeType;
+    readonly sourceScopeRef: ID;
+    readonly targetAgentId: ID;
   }): Promise<void>;
 }
 
@@ -50,6 +69,12 @@ export interface MemoryView {
   readonly item: MemoryItemRecord;
   readonly tags: readonly string[];
   readonly sources: readonly MemorySourceRefDto[];
+}
+
+export interface CollaborativeMemorySourceInput extends MemorySourceRefDto {
+  readonly sourceScopeType: MemoryScopeType;
+  readonly sourceScopeRef: ID;
+  readonly sourceVisibility: Exclude<MemorySourceVisibility, 'local-only'>;
 }
 
 export interface CollaborativeMemoryService {
@@ -73,7 +98,7 @@ export interface CreateMemoryInput {
   readonly content: string;
   readonly summary?: string;
   readonly tags?: readonly string[];
-  readonly sourceRefs?: readonly MemorySourceRefDto[];
+  readonly sourceRefs?: readonly CollaborativeMemorySourceInput[];
   readonly validUntil?: UnixMs;
   /** 高影响/强规则/敏感摘要默认进入 candidate，等待人工确认。 */
   readonly asCandidate?: boolean;
@@ -104,7 +129,7 @@ export interface SupersedeMemoryInput {
   readonly content: string;
   readonly summary?: string;
   readonly tags?: readonly string[];
-  readonly sourceRefs?: readonly MemorySourceRefDto[];
+  readonly sourceRefs?: readonly CollaborativeMemorySourceInput[];
 }
 
 export interface IssueGrantInput {
@@ -170,11 +195,12 @@ export function createCollaborativeMemoryService(
 
   return {
     async createMemory(input) {
-      await permissions.assertWriteAuthority({
-        teamId: input.teamId, actorId: input.actorId,
-        scopeType: input.scopeType, scopeRef: input.scopeRef,
-      });
       return unitOfWork.run(async (memory) => {
+        await permissions.assertWriteAuthority({
+          teamId: input.teamId, actorId: input.actorId,
+          scopeType: input.scopeType, scopeRef: input.scopeRef,
+        });
+        await assertSourceAuthorities(input);
         const now = clock.now();
         if (input.validUntil !== undefined && input.validUntil <= now) {
           throw new Error('MEMORY_INVALID_VALIDITY');
@@ -200,14 +226,15 @@ export function createCollaborativeMemoryService(
         };
         await memory.items.create(item);
 
-        const sourceRefs = input.sourceRefs ?? [];
-        for (const ref of sourceRefs) {
-          await memory.sources.create(toSourceRecord(input.teamId, item.id, input.scopeType, input.scopeRef, ref, now));
+        const sourceInputs = input.sourceRefs ?? [];
+        for (const ref of sourceInputs) {
+          await memory.sources.create(toSourceRecord(input.teamId, item.id, ref, now));
         }
         for (const tag of input.tags ?? []) {
           await memory.tags.create({ memoryId: item.id, teamId: input.teamId, tag, createdAt: now });
         }
 
+        const sourceRefs = sourceInputs.map(toSourceRefDto);
         await appendAudit(memory, {
           teamId: input.teamId,
           subjectKind: 'memory',
@@ -228,12 +255,12 @@ export function createCollaborativeMemoryService(
 
     async updateMemory(input) {
       return unitOfWork.run(async (memory) => {
-        const now = clock.now();
         const current = await loadItem(memory, input.teamId, input.memoryId);
         await permissions.assertWriteAuthority({
           teamId: input.teamId, actorId: input.actorId,
           scopeType: current.scopeType, scopeRef: current.scopeRef,
         });
+        const now = nextUpdatedAt(clock.now(), current.updatedAt);
         if (current.status !== 'active' && current.status !== 'candidate') {
           throw new Error('MEMORY_INVALID_TRANSITION');
         }
@@ -248,6 +275,7 @@ export function createCollaborativeMemoryService(
           validUntil: input.validUntil ?? current.validUntil,
           updatedAt: now,
         };
+        await assertNotDuplicate(memory, next, current.id);
         const updated = await memory.items.update({ record: next, expectedUpdatedAt: input.expectedUpdatedAt });
         if (!updated) throw new Error('MEMORY_UPDATE_CONFLICT');
 
@@ -298,12 +326,17 @@ export function createCollaborativeMemoryService(
 
     async supersedeMemory(input) {
       return unitOfWork.run(async (memory) => {
-        const now = clock.now();
         const old = await loadItem(memory, input.teamId, input.memoryId);
         await permissions.assertWriteAuthority({
           teamId: input.teamId, actorId: input.actorId,
           scopeType: old.scopeType, scopeRef: old.scopeRef,
         });
+        await assertSourceAuthorities({
+          ...input,
+          scopeType: old.scopeType,
+          scopeRef: old.scopeRef,
+        });
+        const now = nextUpdatedAt(clock.now(), old.updatedAt);
         if (old.status !== 'active') throw new Error('MEMORY_INVALID_TRANSITION');
 
         const created: MemoryItemRecord = {
@@ -322,6 +355,7 @@ export function createCollaborativeMemoryService(
           createdAt: now,
           updatedAt: now,
         };
+        await assertNotDuplicate(memory, created, old.id);
         await memory.items.create(created);
 
         const superseded = await memory.items.update({
@@ -330,14 +364,15 @@ export function createCollaborativeMemoryService(
         });
         if (!superseded) throw new Error('MEMORY_UPDATE_CONFLICT');
 
-        const sourceRefs = input.sourceRefs ?? [];
-        for (const ref of sourceRefs) {
-          await memory.sources.create(toSourceRecord(input.teamId, created.id, created.scopeType, created.scopeRef, ref, now));
+        const sourceInputs = input.sourceRefs ?? [];
+        for (const ref of sourceInputs) {
+          await memory.sources.create(toSourceRecord(input.teamId, created.id, ref, now));
         }
         for (const tag of input.tags ?? []) {
           await memory.tags.create({ memoryId: created.id, teamId: input.teamId, tag, createdAt: now });
         }
 
+        const sourceRefs = sourceInputs.map(toSourceRefDto);
         await appendAudit(memory, {
           teamId: input.teamId, subjectKind: 'memory', subjectId: created.id,
           eventType: 'memory-created', actorId: input.actorId,
@@ -358,11 +393,12 @@ export function createCollaborativeMemoryService(
     },
 
     async issueGrant(input) {
-      await permissions.assertWriteAuthority({
-        teamId: input.teamId, actorId: input.issuedByUserId,
-        scopeType: input.sourceScopeType, scopeRef: input.sourceScopeRef,
-      });
       return unitOfWork.run(async (memory) => {
+        await permissions.assertGrantAuthority({
+          teamId: input.teamId, actorId: input.issuedByUserId,
+          sourceScopeType: input.sourceScopeType, sourceScopeRef: input.sourceScopeRef,
+          targetAgentId: input.targetAgentId,
+        });
         const now = clock.now();
         const grantId = input.grantId ?? ids.nextId();
         const current = await memory.grants.getCurrent({ teamId: input.teamId, id: grantId });
@@ -442,12 +478,12 @@ export function createCollaborativeMemoryService(
     apply: (current: MemoryItemRecord, now: UnixMs) => Promise<MemoryItemRecord> | MemoryItemRecord,
   ) {
     return async (memory: MemoryRepositories, input: MemoryTargetInput): Promise<MemoryView> => {
-      const now = clock.now();
       const current = await loadItem(memory, input.teamId, input.memoryId);
       await permissions.assertWriteAuthority({
         teamId: input.teamId, actorId: input.actorId,
         scopeType: current.scopeType, scopeRef: current.scopeRef,
       });
+      const now = nextUpdatedAt(clock.now(), current.updatedAt);
       if (current.status !== from) throw new Error('MEMORY_INVALID_TRANSITION');
 
       const next = await apply(current, now);
@@ -467,12 +503,12 @@ export function createCollaborativeMemoryService(
 
   function memoryDeletionTransition(input: MemoryTargetInput) {
     return async (memory: MemoryRepositories): Promise<MemoryView> => {
-      const now = clock.now();
       const current = await loadItem(memory, input.teamId, input.memoryId);
       await permissions.assertWriteAuthority({
         teamId: input.teamId, actorId: input.actorId,
         scopeType: current.scopeType, scopeRef: current.scopeRef,
       });
+      const now = nextUpdatedAt(clock.now(), current.updatedAt);
       if (current.status !== 'active' && current.status !== 'candidate') {
         throw new Error('MEMORY_INVALID_TRANSITION');
       }
@@ -499,16 +535,41 @@ export function createCollaborativeMemoryService(
     return (input: MemoryTargetInput) => unitOfWork.run((memory) => run(memory, input));
   }
 
-  async function assertNotDuplicate(memory: MemoryRepositories, input: CreateMemoryInput): Promise<void> {
+  async function assertNotDuplicate(
+    memory: MemoryRepositories,
+    input: Pick<MemoryItemRecord, 'teamId' | 'scopeType' | 'scopeRef' | 'kind' | 'content'>,
+    excludedMemoryId?: ID,
+  ): Promise<void> {
     const normalized = normalizeMemoryContent(input.content);
     const existing = await memory.items.listByScope({
       teamId: input.teamId, scopeType: input.scopeType, scopeRef: input.scopeRef,
     });
     const clash = existing.some((candidate) =>
-      (candidate.status === 'active' || candidate.status === 'candidate')
+      candidate.id !== excludedMemoryId
+      && (candidate.status === 'active' || candidate.status === 'candidate')
       && candidate.kind === input.kind
       && normalizeMemoryContent(candidate.content) === normalized);
     if (clash) throw new Error('MEMORY_DUPLICATE_CONTENT');
+  }
+
+  async function assertSourceAuthorities(input: {
+    readonly teamId: ID;
+    readonly actorId: ID;
+    readonly scopeType: MemoryScopeType;
+    readonly scopeRef: ID;
+    readonly sourceRefs?: readonly CollaborativeMemorySourceInput[];
+  }): Promise<void> {
+    for (const source of input.sourceRefs ?? []) {
+      await permissions.assertSourceAuthority({
+        teamId: input.teamId,
+        actorId: input.actorId,
+        sourceScopeType: source.sourceScopeType,
+        sourceScopeRef: source.sourceScopeRef,
+        sourceVisibility: source.sourceVisibility,
+        targetScopeType: input.scopeType,
+        targetScopeRef: input.scopeRef,
+      });
+    }
   }
 
   async function replaceTags(
@@ -547,7 +608,9 @@ export function createCollaborativeMemoryService(
   }
 }
 
-function toSourceRefDto(record: MemorySourceRecord): MemorySourceRefDto {
+function toSourceRefDto(
+  record: Pick<MemorySourceRecord, 'sourceKind' | 'sourceId' | 'snapshotHash'>,
+): MemorySourceRefDto {
   return {
     schemaVersion: 1,
     sourceKind: record.sourceKind,
@@ -559,9 +622,7 @@ function toSourceRefDto(record: MemorySourceRecord): MemorySourceRefDto {
 function toSourceRecord(
   teamId: ID,
   memoryId: ID,
-  scopeType: MemoryScopeType,
-  scopeRef: ID,
-  ref: MemorySourceRefDto,
+  ref: CollaborativeMemorySourceInput,
   createdAt: UnixMs,
 ): MemorySourceRecord {
   return {
@@ -570,16 +631,19 @@ function toSourceRecord(
     sourceKind: ref.sourceKind,
     sourceId: ref.sourceId,
     snapshotHash: ref.snapshotHash,
-    sourceScopeType: scopeType,
-    sourceScopeRef: scopeRef,
-    // 协作 Memory 默认继承其 scope 的 team 可见性；private/dm 提升由 grant 控制。
-    sourceVisibility: 'team',
+    sourceScopeType: ref.sourceScopeType,
+    sourceScopeRef: ref.sourceScopeRef,
+    sourceVisibility: ref.sourceVisibility,
     createdAt,
   };
 }
 
 function normalizeMemoryContent(content: string): string {
   return content.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function nextUpdatedAt(now: UnixMs, currentUpdatedAt: UnixMs): UnixMs {
+  return Math.max(now, currentUpdatedAt + 1);
 }
 
 function hashMemoryContent(content: string): string {

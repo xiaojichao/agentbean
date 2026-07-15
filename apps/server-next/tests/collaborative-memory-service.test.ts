@@ -1,8 +1,12 @@
 import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
 
-import type { MemorySourceRefDto, ServerNextRepositories } from '../src/index.js';
-import { createCollaborativeMemoryService, type MemoryPermissions } from '../src/application/collaborative-memory-service.js';
+import type { ServerNextRepositories } from '../src/index.js';
+import {
+  type CollaborativeMemorySourceInput,
+  createCollaborativeMemoryService,
+  type MemoryPermissions,
+} from '../src/application/collaborative-memory-service.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 import {
   applyTeamMigrations,
@@ -16,11 +20,18 @@ const Database = createRequire(import.meta.url)('better-sqlite3') as DatabaseCon
 
 /** 默认放行的权限 collaborator；测试可覆盖 assertWriteAuthority 模拟拒绝。 */
 function permissivePermissions(): MemoryPermissions {
-  return { assertWriteAuthority: async () => undefined };
+  return {
+    assertWriteAuthority: async () => undefined,
+    assertSourceAuthority: async () => undefined,
+    assertGrantAuthority: async () => undefined,
+  };
 }
 
 function denyingPermissions(): MemoryPermissions {
-  return { assertWriteAuthority: async () => { throw new Error('MEMORY_SCOPE_NOT_AUTHORIZED'); } };
+  return {
+    ...permissivePermissions(),
+    assertWriteAuthority: async () => { throw new Error('MEMORY_SCOPE_NOT_AUTHORIZED'); },
+  };
 }
 
 interface Harness {
@@ -32,10 +43,11 @@ interface Harness {
 function makeHarness(
   repositories: ServerNextRepositories,
   permissions: MemoryPermissions = permissivePermissions(),
+  now?: () => number,
 ): Harness {
   let tick = 1_000;
   let counter = 0;
-  const clock = { now: () => (tick += 1_000) };
+  const clock = { now: now ?? (() => (tick += 1_000)) };
   const ids = { nextId: () => `id-${++counter}` };
   const service = createCollaborativeMemoryService({
     unitOfWork: repositories.memoryUnitOfWork,
@@ -46,20 +58,28 @@ function makeHarness(
   return { repositories, service, close() {} };
 }
 
-const sourceRef = (id = 'message-1'): MemorySourceRefDto => ({
+const sourceRef = (id = 'message-1'): CollaborativeMemorySourceInput => ({
   schemaVersion: 1,
   sourceKind: 'message',
   sourceId: id,
   snapshotHash: 'sha256:source-1',
+  sourceScopeType: 'dm',
+  sourceScopeRef: 'dm-1',
+  sourceVisibility: 'dm-participants',
 });
 
 describe.each([
-  ['memory', (permissions?: MemoryPermissions) => ({ ...makeHarness(createInMemoryRepositories(), permissions), close() {} })],
-  ['sqlite', (permissions?: MemoryPermissions) => {
+  ['memory', (permissions?: MemoryPermissions, now?: () => number) => ({
+    ...makeHarness(createInMemoryRepositories(), permissions, now), close() {},
+  })],
+  ['sqlite', (permissions?: MemoryPermissions, now?: () => number) => {
     const db = new Database(':memory:');
     db.exec('PRAGMA foreign_keys = ON;');
     applyTeamMigrations(db);
-    return { ...makeHarness(createSqliteRepositories({ globalDb: db, teamDb: db }), permissions), close: () => db.close() };
+    return {
+      ...makeHarness(createSqliteRepositories({ globalDb: db, teamDb: db }), permissions, now),
+      close: () => db.close(),
+    };
   }],
 ] as const)('Phase 3 Collaborative Memory Service (%s)', (_name, createHarness) => {
   test('createMemory creates an active item with sources, tags and body-free audit', async () => {
@@ -82,6 +102,20 @@ describe.each([
       expect(view.item.approvedByUserId).toBe('user-1');
       expect([...view.tags].sort()).toEqual(['node-runtime', 'release-policy']);
       expect(view.sources).toHaveLength(1);
+      expect(view.sources[0]).toEqual({
+        schemaVersion: 1,
+        sourceKind: 'message',
+        sourceId: 'message-1',
+        snapshotHash: 'sha256:source-1',
+      });
+      const storedSources = await harness.repositories.memory.sources.listByMemory({
+        teamId: 'team-1', memoryId: view.item.id,
+      });
+      expect(storedSources[0]).toMatchObject({
+        sourceScopeType: 'dm',
+        sourceScopeRef: 'dm-1',
+        sourceVisibility: 'dm-participants',
+      });
 
       const audit = await harness.repositories.memory.auditEvents.listBySubject({
         teamId: 'team-1', subjectKind: 'memory', subjectId: view.item.id,
@@ -159,6 +193,26 @@ describe.each([
     }
   });
 
+  test('createMemory rejects source promotion when source authority fails', async () => {
+    const denied = createHarness({
+      ...permissivePermissions(),
+      assertSourceAuthority: async () => { throw new Error('MEMORY_SOURCE_NOT_AUTHORIZED'); },
+    });
+    try {
+      await expect(denied.service.createMemory({
+        teamId: 'team-1', actorId: 'user-1', kind: 'decision',
+        scopeType: 'team', scopeRef: 'team-1', content: 'denied source promotion',
+        sourceRefs: [sourceRef()],
+      })).rejects.toThrow(/MEMORY_SOURCE_NOT_AUTHORIZED/);
+      const items = await denied.repositories.memory.items.listByScope({
+        teamId: 'team-1', scopeType: 'team', scopeRef: 'team-1',
+      });
+      expect(items).toHaveLength(0);
+    } finally {
+      denied.close();
+    }
+  });
+
   test('updateMemory edits content and tags with optimistic concurrency', async () => {
     const harness = createHarness();
     try {
@@ -187,6 +241,57 @@ describe.each([
       expect(audit.map((event) => event.eventType)).toContain('memory-updated');
       expect(audit.map((event) => event.eventType)).toContain('tag-unlinked');
       expect(audit.map((event) => event.eventType)).toContain('tag-linked');
+    } finally {
+      harness.close();
+    }
+  });
+
+  test('same-tick writes advance the optimistic timestamp', async () => {
+    const harness = createHarness(undefined, () => 10_000);
+    try {
+      const created = await harness.service.createMemory({
+        teamId: 'team-1', actorId: 'user-1', kind: 'semantic',
+        scopeType: 'team', scopeRef: 'team-1', content: 'same tick update',
+      });
+      const updated = await harness.service.updateMemory({
+        teamId: 'team-1', actorId: 'user-1', memoryId: created.item.id,
+        expectedUpdatedAt: created.item.updatedAt, content: 'updated in the same tick',
+      });
+      expect(updated.item.updatedAt).toBe(created.item.updatedAt + 1);
+
+      const candidate = await harness.service.createMemory({
+        teamId: 'team-1', actorId: 'user-1', kind: 'decision',
+        scopeType: 'team', scopeRef: 'team-1', content: 'same tick candidate', asCandidate: true,
+      });
+      const activated = await harness.service.activateCandidate({
+        teamId: 'team-1', actorId: 'user-1', memoryId: candidate.item.id,
+      });
+      expect(activated.item.updatedAt).toBe(candidate.item.updatedAt + 1);
+    } finally {
+      harness.close();
+    }
+  });
+
+  test('updateMemory cannot create normalized duplicate content', async () => {
+    const harness = createHarness();
+    try {
+      await harness.service.createMemory({
+        teamId: 'team-1', actorId: 'user-1', kind: 'semantic',
+        scopeType: 'team', scopeRef: 'team-1', content: 'canonical memory',
+      });
+      const editable = await harness.service.createMemory({
+        teamId: 'team-1', actorId: 'user-1', kind: 'semantic',
+        scopeType: 'team', scopeRef: 'team-1', content: 'other memory',
+      });
+
+      await expect(harness.service.updateMemory({
+        teamId: 'team-1', actorId: 'user-1', memoryId: editable.item.id,
+        expectedUpdatedAt: editable.item.updatedAt, content: '  CANONICAL   MEMORY ',
+      })).rejects.toThrow(/MEMORY_DUPLICATE_CONTENT/);
+      const unchanged = await harness.repositories.memory.items.getById({
+        teamId: 'team-1', id: editable.item.id,
+      });
+      expect(unchanged?.content).toBe('other memory');
     } finally {
       harness.close();
     }
@@ -357,6 +462,26 @@ describe.each([
     }
   });
 
+  test('issueGrant rejects a target Agent outside the source visibility', async () => {
+    const denied = createHarness({
+      ...permissivePermissions(),
+      assertGrantAuthority: async () => { throw new Error('MEMORY_GRANT_TARGET_NOT_AUTHORIZED'); },
+    });
+    try {
+      await expect(denied.service.issueGrant({
+        teamId: 'team-1', issuedByUserId: 'user-1', grantId: 'grant-denied',
+        sourceScopeType: 'dm', sourceScopeRef: 'dm-1', targetAgentId: 'agent-outsider',
+        authorizedContentKind: 'decision', authorizedRedactionLevel: 'summary-only',
+        expiresAt: 100_000,
+      })).rejects.toThrow(/MEMORY_GRANT_TARGET_NOT_AUTHORIZED/);
+      await expect(denied.repositories.memory.grants.getCurrent({
+        teamId: 'team-1', id: 'grant-denied',
+      })).resolves.toBeNull();
+    } finally {
+      denied.close();
+    }
+  });
+
   test('operations fail closed across Team boundaries', async () => {
     const harness = createHarness();
     try {
@@ -380,5 +505,47 @@ describe.each([
     } finally {
       harness.close();
     }
+  });
+});
+
+test('createMemory and issueGrant authorize inside the Memory unit of work', async () => {
+  const repositories = createInMemoryRepositories();
+  let insideUnitOfWork = false;
+  let counter = 0;
+  const service = createCollaborativeMemoryService({
+    unitOfWork: {
+      async run(operation) {
+        insideUnitOfWork = true;
+        try {
+          return await repositories.memoryUnitOfWork.run(operation);
+        } finally {
+          insideUnitOfWork = false;
+        }
+      },
+    },
+    permissions: {
+      assertWriteAuthority: async () => {
+        expect(insideUnitOfWork).toBe(true);
+      },
+      assertSourceAuthority: async () => {
+        expect(insideUnitOfWork).toBe(true);
+      },
+      assertGrantAuthority: async () => {
+        expect(insideUnitOfWork).toBe(true);
+      },
+    },
+    clock: { now: () => 10_000 },
+    ids: { nextId: () => `transaction-id-${++counter}` },
+  });
+
+  await service.createMemory({
+    teamId: 'team-1', actorId: 'user-1', kind: 'semantic',
+    scopeType: 'team', scopeRef: 'team-1', content: 'transactional authorization',
+    sourceRefs: [sourceRef()],
+  });
+  await service.issueGrant({
+    teamId: 'team-1', issuedByUserId: 'user-1', sourceScopeType: 'team',
+    sourceScopeRef: 'team-1', targetAgentId: 'agent-1', authorizedContentKind: 'summary',
+    authorizedRedactionLevel: 'summary-only', expiresAt: 20_000,
   });
 });
