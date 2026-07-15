@@ -69,11 +69,14 @@ const taskTools = [
   'tasks.create_subtasks', 'tasks.add_dependency', 'tasks.publish_for_claim', 'tasks.assign',
   'tasks.wait', 'tasks.retry', 'tasks.accept_subtask', 'tasks.report_blocked',
 ];
+// 只在 PHASE_2 数组块内查 memory.search；非贪婪到首个 `] as const`，避免跨到紧跟其后的
+// PHASE_3（合法含 memory.search）误判。
+const phase2ToolBlock = runtimeTypes.match(/PHASE_2_MANAGEMENT_TOOL_NAMES\s*=\s*\[[\s\S]*?\]\s+as const/)?.[0] ?? '';
 if (!runtimeTypes.includes('PHASE_2_MANAGEMENT_TOOL_NAMES')
   || !runtimeTypes.includes('ManagementSessionContextV2')
   || !taskTools.every((tool) => runtimeTypes.includes(tool))
   || !runtimeAdapter.includes('input.context.schemaVersion === 2')
-  || runtimeTypes.match(/PHASE_2_MANAGEMENT_TOOL_NAMES[\s\S]*?memory\.search/)) {
+  || phase2ToolBlock.includes('memory.search')) {
   violations.push('P2_RUNTIME_BOUNDARY_INVALID: Phase 2 exact runtime tool boundary is incomplete or exposes Memory');
 }
 

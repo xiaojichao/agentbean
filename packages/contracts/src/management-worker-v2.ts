@@ -4,7 +4,7 @@ import type { AcceptanceCriterionDto, EvidenceRefDto, SubtaskAcceptanceV1 } from
 import type { AgentHandoffReturnMode, AgentHandoffStatus, SerialAgentHandoffKind } from './collaboration.js';
 import { parseAgentCollaborationProposalV1 } from './collaboration.js';
 import type { AgentInvocationResultDto } from './invocation.js';
-import type { MemoryCapsuleRefDto } from './management-memory.js';
+import type { MemoryCapsuleRefDto, MemoryContentKind, MemorySourceRefDto } from './management-memory.js';
 
 export const PHASE_2_TASK_WORKER_TOOL_NAMES = [
   'tasks.create_subtasks',
@@ -120,6 +120,55 @@ export interface Phase2ManagementWorkerToolInputMapV1 {
   readonly 'tasks.retry': { readonly taskId: ID; readonly expectedTaskRevision: number; readonly reasonCode: string };
   readonly 'tasks.accept_subtask': { readonly acceptance: SubtaskAcceptanceV1 };
   readonly 'tasks.report_blocked': { readonly taskId: ID; readonly expectedTaskRevision: number; readonly reasonCode: string };
+}
+
+/**
+ * Phase 3 Memory 工具输入（P3-09）。teamId / managementRunId / requesterUserId 来自 session
+ * context，不由 Agent 传入。这四个工具是「外部 Agent 只能 propose、不能直写 active Memory」
+ * 不变量的 Agent 侧入口（search 只读；create_capsule 投影；propose_candidate 进 review 队列；
+ * link_sources 补来源）。
+ */
+export interface Phase3ManagementWorkerToolInputMapV1 {
+  readonly 'memory.search': {
+    readonly query: string;
+    readonly taskId?: ID;
+    readonly channelId?: ID;
+    readonly userId?: ID;
+    readonly limit: number;
+  };
+  readonly 'memory.create_capsule': {
+    readonly targetAgentId: ID;
+    readonly prompt: string;
+    readonly limit: number;
+    readonly taskId?: ID;
+    readonly channelId?: ID;
+    readonly userId?: ID;
+  };
+  readonly 'memory.propose_candidate': {
+    readonly contentKind: MemoryContentKind;
+    readonly proposedContent: string;
+    readonly sourceRefs: readonly MemorySourceRefDto[];
+    readonly taskId?: ID;
+  };
+  readonly 'memory.link_sources': {
+    readonly memoryId: ID;
+    readonly sourceRefs: readonly MemorySourceRefDto[];
+  };
+}
+
+export interface MemorySearchToolMatchV1 {
+  readonly memoryId: ID;
+  readonly content: string;
+  readonly summary?: string;
+  readonly score: number;
+  readonly reasons: readonly string[];
+}
+
+export interface Phase3ManagementWorkerToolOutputMapV1 {
+  readonly 'memory.search': { readonly matches: readonly MemorySearchToolMatchV1[] };
+  readonly 'memory.create_capsule': { readonly capsuleRef: MemoryCapsuleRefDto };
+  readonly 'memory.propose_candidate': { readonly candidateId: ID; readonly status: 'candidate' | 'conflict' };
+  readonly 'memory.link_sources': { readonly memoryId: ID };
 }
 
 export interface Phase2ManagementWorkerToolOutputMapV1 {
@@ -524,6 +573,26 @@ export function parsePhase2TaskToolInputV1<K extends keyof Phase2ManagementWorke
 ): Phase2ManagementWorkerToolInputMapV1[K] {
   assertTaskToolInput(toolName, value);
   return structuredClone(value) as Phase2ManagementWorkerToolInputMapV1[K];
+}
+
+export function parsePhase3MemoryToolInputV1<K extends keyof Phase3ManagementWorkerToolInputMapV1>(
+  toolName: K,
+  value: unknown,
+): Phase3ManagementWorkerToolInputMapV1[K] {
+  if (!value || typeof value !== 'object') throw new Error('MEMORY_TOOL_INPUT_INVALID');
+  const record = value as Record<string, unknown>;
+  // 结构校验由 catalog 的 typebox schema（defineTool parameters）在 pi-coding-agent 层完成；
+  // 这里只做关键字段非空校验防明显错配，深校验留给 service 层（P3-09 slice 2 handler）。
+  const requiredTopLevel: Record<keyof Phase3ManagementWorkerToolInputMapV1, readonly string[]> = {
+    'memory.search': ['query', 'limit'],
+    'memory.create_capsule': ['targetAgentId', 'prompt', 'limit'],
+    'memory.propose_candidate': ['contentKind', 'proposedContent', 'sourceRefs'],
+    'memory.link_sources': ['memoryId', 'sourceRefs'],
+  };
+  for (const key of requiredTopLevel[toolName]) {
+    if (!(key in record)) throw new Error('MEMORY_TOOL_INPUT_INVALID');
+  }
+  return structuredClone(value) as Phase3ManagementWorkerToolInputMapV1[K];
 }
 
 export function parseManagementWorkerRegisterV2(value: unknown): ManagementWorkerRegisterV2 {

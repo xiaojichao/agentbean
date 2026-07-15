@@ -219,6 +219,15 @@ if (!domainMemoryHashing.includes('hashCapsuleItems')
   violations.push('P3_CAPSULE_INVOCATION_BINDING_INVALID: Capsule ref 固化进 intent + checkpoint 查权威 capsule_refs 表接线 is required');
 }
 
+// P3-09 slice 1：Memory 工具定义地基（Phase3 输入 map + parser + catalog schema + PHASE_3 tool 名单）。
+if (!managementWorkerV2.includes('Phase3ManagementWorkerToolInputMapV1')
+  || !managementWorkerV2.includes('parsePhase3MemoryToolInputV1')
+  || !managementToolCatalog.includes('phase3MemorySchemaFor')
+  || !managementToolCatalog.includes('Phase3MemoryToolName')
+  || !runtimeTypes.includes('PHASE_3_MANAGEMENT_TOOL_NAMES')) {
+  violations.push('P3_CAPABILITY_DEFINITIONS_INVALID: Phase 3 Memory 工具定义（Phase3 输入 map + parser + catalog schema + PHASE_3 tool 名单）is required');
+}
+
 const phase1Tools = runtimeTypes.match(
   /export const PHASE_1_MANAGEMENT_TOOL_NAMES\s*=\s*\[([\s\S]*?)\]\s+as const/,
 )?.[1] ?? '';

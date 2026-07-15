@@ -1,7 +1,12 @@
 import { createHash } from 'node:crypto';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
-import { parsePhase2TaskToolInputV1, type Phase2ManagementWorkerToolInputMapV1 } from '@agentbean/contracts';
+import {
+  parsePhase2TaskToolInputV1,
+  parsePhase3MemoryToolInputV1,
+  type Phase2ManagementWorkerToolInputMapV1,
+  type Phase3ManagementWorkerToolInputMapV1,
+} from '@agentbean/contracts';
 
 import {
   MANAGEMENT_TOOL_NAMES,
@@ -71,6 +76,43 @@ export function assertExactManagementToolAllowlist(
 }
 
 type Phase2TaskToolName = keyof Phase2ManagementWorkerToolInputMapV1;
+type Phase3MemoryToolName = keyof Phase3ManagementWorkerToolInputMapV1;
+
+function phase3MemorySchemaFor(name: Phase3MemoryToolName) {
+  const id = () => Type.String({ minLength: 1 });
+  const sourceRef = Type.Object({
+    schemaVersion: Type.Literal(1),
+    sourceKind: Type.Union([
+      Type.Literal('message'), Type.Literal('task'), Type.Literal('artifact'),
+      Type.Literal('workspace-run'), Type.Literal('invocation'), Type.Literal('memory'),
+      Type.Literal('manual'), Type.Literal('local-summary'),
+    ]),
+    sourceId: id(),
+    snapshotHash: id(),
+  }, { additionalProperties: false });
+  const limit = () => Type.Integer({ minimum: 1, maximum: 100 });
+  if (name === 'memory.search') return Type.Object({
+    query: id(), limit: limit(),
+    taskId: Type.Optional(id()), channelId: Type.Optional(id()), userId: Type.Optional(id()),
+  }, { additionalProperties: false });
+  if (name === 'memory.create_capsule') return Type.Object({
+    targetAgentId: id(), prompt: id(), limit: limit(),
+    taskId: Type.Optional(id()), channelId: Type.Optional(id()), userId: Type.Optional(id()),
+  }, { additionalProperties: false });
+  if (name === 'memory.propose_candidate') return Type.Object({
+    contentKind: Type.Union([
+      Type.Literal('summary'), Type.Literal('fact'), Type.Literal('decision'),
+      Type.Literal('preference'), Type.Literal('procedure'),
+    ]),
+    proposedContent: id(),
+    sourceRefs: Type.Array(sourceRef, { minItems: 1 }),
+    taskId: Type.Optional(id()),
+  }, { additionalProperties: false });
+  return Type.Object({
+    memoryId: id(),
+    sourceRefs: Type.Array(sourceRef, { minItems: 1 }),
+  }, { additionalProperties: false });
+}
 
 function phase2TaskSchemaFor(name: Phase2TaskToolName) {
   const id = () => Type.String({ minLength: 1 });
@@ -160,6 +202,10 @@ function schemaFor(name: ManagementToolName, context: ManagementSessionContext) 
     && (getManagementToolMetadata(name).phase === 2 || name === 'agents.invoke')) {
     return phase2TaskSchemaFor(name as Phase2TaskToolName);
   }
+  // Phase 3 Memory 工具：调用方已按 session phase 过滤工具面，此处直接给输入 schema。
+  if (getManagementToolMetadata(name).phase === 3) {
+    return phase3MemorySchemaFor(name as Phase3MemoryToolName);
+  }
   return Type.Object({}, { additionalProperties: true });
 }
 
@@ -212,7 +258,9 @@ export function createManagementToolCatalog(options: CreateManagementToolCatalog
         }
         const validatedInput = options.sessionContext.schemaVersion === 2 && metadata.phase === 2
           ? parsePhase2TaskToolInputV1(name as Phase2TaskToolName, toolInput)
-          : toolInput;
+          : metadata.phase === 3
+            ? parsePhase3MemoryToolInputV1(name as Phase3MemoryToolName, toolInput)
+            : toolInput;
         const result = await options.executor({
           toolCallId,
           name,
