@@ -4177,8 +4177,23 @@ function renderParagraphLines(lines: string[], options: MarkdownRenderOptions = 
   });
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function renderInlineMarkdown(text: string, options: MarkdownRenderOptions = {}): ReactNode[] {
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\)|https?:\/\/[^\s)]+|@[\p{L}\p{N}_-]+)/gu;
+  const structuredMentionPatterns = [...new Set(
+    (options.mentions ?? [])
+      .map((mention) => `@${mention.name}`)
+      .filter((token) => token.length > 1),
+  )]
+    .sort((left, right) => right.length - left.length)
+    .map(escapeRegExp);
+  const mentionPattern = [...structuredMentionPatterns, '@[\\p{L}\\p{N}_-]+'].join('|');
+  const pattern = new RegExp(
+    '(`[^`]+`|\\*\\*[^*]+\\*\\*|\\[[^\\]]+\\]\\([^)]+\\)|https?:\\/\\/[^\\s)]+|' + mentionPattern + ')',
+    'gu',
+  );
   const nodes: ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;

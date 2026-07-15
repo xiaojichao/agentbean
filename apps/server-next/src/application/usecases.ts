@@ -5430,7 +5430,6 @@ function sanitizeMessageMentions(input: {
       || mention.end <= mention.start
       || mention.end > input.body.length
       || input.body.slice(mention.start, mention.end) !== `@${mention.name}`
-      || !/^@[\p{L}\p{N}_-]+$/u.test(input.body.slice(mention.start, mention.end))
     ) {
       return false;
     }

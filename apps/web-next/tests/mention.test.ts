@@ -56,18 +56,42 @@ describe('mention composer draft', () => {
     });
   });
 
-  test('inserts multi-word member names as token-safe structured mentions', () => {
+  test('preserves multi-word member names in structured mentions', () => {
     const replacement = replaceActiveMention('请 @Ren', 6, 'Renamed Codex');
-    expect(replacement).toEqual({ value: '请 @Renamed-Codex ', caret: 17 });
+    expect(replacement).toEqual({ value: '请 @Renamed Codex ', caret: 17 });
     const mentions = extractMentions(replacement!.value, [
       { id: 'a1', name: 'Renamed Codex', kind: 'agent' },
     ]);
     expect(mentions).toEqual([
-      { id: 'a1', kind: 'agent', name: 'Renamed-Codex', start: 2, end: 16 },
+      { id: 'a1', kind: 'agent', name: 'Renamed Codex', start: 2, end: 16 },
     ]);
-    expect(resolveMentionByName('Renamed-Codex', mentions, {
+    expect(resolveMentionByName('Renamed Codex', mentions, {
       a1: { name: 'Renamed Codex' },
     })).toEqual({ id: 'a1', kind: 'agent', displayName: 'Renamed Codex' });
+  });
+
+  test('matches the exact selected token before normalized-name collisions', () => {
+    const members: MentionMember[] = [
+      { id: 'a1', name: 'Renamed Codex', kind: 'agent' },
+      { id: 'u1', name: 'renamed_codex', kind: 'human' },
+    ];
+    expect(extractMentions('@renamed_codex 请处理', members)).toEqual([
+      { id: 'u1', kind: 'human', name: 'renamed_codex', start: 0, end: 14 },
+    ]);
+  });
+
+  test('supports punctuation in selected member names without changing human display text', () => {
+    const replacement = replaceActiveMention('@Cl', 3, 'Claude 3.5');
+    expect(replacement).toEqual({ value: '@Claude 3.5 ', caret: 12 });
+    const mentions = extractMentions(replacement!.value, [
+      { id: 'u1', name: 'Claude 3.5', kind: 'human' },
+    ]);
+    expect(mentions).toEqual([
+      { id: 'u1', kind: 'human', name: 'Claude 3.5', start: 0, end: 11 },
+    ]);
+    expect(resolveMentionByName('Claude 3.5', mentions, {})).toEqual({
+      id: 'u1', kind: 'human', displayName: 'Claude 3.5',
+    });
   });
 });
 
