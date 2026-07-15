@@ -22,6 +22,8 @@ const memoryBackends = [
   read('apps/server-next/src/infra/sqlite/memory-repositories.ts'),
 ];
 const memoryPersistenceTests = read('apps/server-next/tests/memory-unit-of-work.test.ts');
+const collaborativeMemoryService = read('apps/server-next/src/application/collaborative-memory-service.ts');
+const collaborativeMemoryTests = read('apps/server-next/tests/collaborative-memory-service.test.ts');
 const runtimeTypes = read('packages/pi-management-runtime/src/types.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
@@ -79,6 +81,19 @@ if (!persistenceMarkers.every((marker) => memoryMigration.includes(marker))
   || !memoryPersistenceTests.includes('rolls back every Memory table')
   || !memoryPersistenceTests.includes('rolls back all Memory schema')) {
   violations.push('P3_PERSISTENCE_BOUNDARY_INVALID: Team-isolated Memory schema, repositories, and rollback evidence are required');
+}
+
+const usecaseMarkers = [
+  'createCollaborativeMemoryService', 'MemoryPermissions', 'createMemory',
+  'updateMemory', 'supersedeMemory', 'deleteMemory', 'issueGrant', 'revokeGrant',
+];
+if (!usecaseMarkers.every((marker) => collaborativeMemoryService.includes(marker))
+  || !collaborativeMemoryTests.includes('describe.each')
+  || !collaborativeMemoryTests.includes('createInMemoryRepositories')
+  || !collaborativeMemoryTests.includes('createSqliteRepositories')
+  || !collaborativeMemoryTests.includes('MEMORY_INVALID_TRANSITION')
+  || !collaborativeMemoryTests.includes('MEMORY_DUPLICATE_CONTENT')) {
+  violations.push('P3_COLLABORATIVE_MEMORY_USECASE_INVALID: collaborative Memory service with status machine, grants, dedup and dual-backend parity tests are required');
 }
 
 const phase1Tools = runtimeTypes.match(
