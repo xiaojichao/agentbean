@@ -4,6 +4,7 @@ import {
   extractMentions,
   replaceActiveMention,
   resolveMentionByName,
+  structuredMentionPattern,
   type MentionMember,
 } from '../lib/mention';
 
@@ -123,5 +124,14 @@ describe('resolveMentionByName (render: follow rename via locked id)', () => {
   test('human mention keeps snapshot name', () => {
     const mentions = [{ id: 'u1', kind: 'human' as const, name: 'alice', start: 0, end: 6 }];
     expect(resolveMentionByName('alice', mentions, {})?.displayName).toBe('alice');
+  });
+});
+
+describe('structuredMentionPattern', () => {
+  test('does not match a structured name when it is only a longer mention prefix', () => {
+    const pattern = new RegExp(structuredMentionPattern('Claude 3.5'), 'u');
+    expect('@Claude 3.5 请处理'.match(pattern)?.[0]).toBe('@Claude 3.5');
+    expect(pattern.test('@Claude 3.5-beta')).toBe(false);
+    expect(pattern.test('@Claude 3.50')).toBe(false);
   });
 });

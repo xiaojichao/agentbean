@@ -9,6 +9,7 @@ export interface MentionMember {
 
 const ACTIVE_MENTION_RE = /@([\p{L}\p{N}_-]*)$/u;
 const MENTION_CONTINUATION_RE = /[\p{L}\p{N}_-]/u;
+const MENTION_CONTINUATION_PATTERN = '[\\p{L}\\p{N}_-]';
 
 export interface MentionDraft {
   query: string;
@@ -18,6 +19,15 @@ export interface MentionDraft {
 
 function normalizeMentionName(name: string): string {
   return name.trim().toLowerCase();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** 构造结构化提及的渲染正则，并阻止把更长 token 的前缀误标为同一成员。 */
+export function structuredMentionPattern(name: string): string {
+  return `${escapeRegExp(`@${name}`)}(?!${MENTION_CONTINUATION_PATTERN})`;
 }
 
 /** 返回光标前仍在编辑的 @token；已被空白结束的 mention 不再视为候选查询。 */

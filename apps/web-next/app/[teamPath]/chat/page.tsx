@@ -14,7 +14,7 @@ import { shouldHideTaskSystemMessage } from '@/lib/task-system-messages';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
-import { activeMentionDraft, extractMentions, replaceActiveMention, resolveMentionByName } from '@/lib/mention';
+import { activeMentionDraft, extractMentions, replaceActiveMention, resolveMentionByName, structuredMentionPattern } from '@/lib/mention';
 import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
 import { displayMessageBody } from '@/lib/chat-message-text';
@@ -4177,10 +4177,6 @@ function renderParagraphLines(lines: string[], options: MarkdownRenderOptions = 
   });
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function renderInlineMarkdown(text: string, options: MarkdownRenderOptions = {}): ReactNode[] {
   const structuredMentionPatterns = [...new Set(
     (options.mentions ?? [])
@@ -4188,7 +4184,7 @@ function renderInlineMarkdown(text: string, options: MarkdownRenderOptions = {})
       .filter((token) => token.length > 1),
   )]
     .sort((left, right) => right.length - left.length)
-    .map(escapeRegExp);
+    .map((token) => structuredMentionPattern(token.slice(1)));
   const mentionPattern = [...structuredMentionPatterns, '@[\\p{L}\\p{N}_-]+'].join('|');
   const pattern = new RegExp(
     '(`[^`]+`|\\*\\*[^*]+\\*\\*|\\[[^\\]]+\\]\\([^)]+\\)|https?:\\/\\/[^\\s)]+|' + mentionPattern + ')',
