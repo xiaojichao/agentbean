@@ -2,7 +2,7 @@
 
 > 更新日期：2026-07-15
 > 当前 verdict：**Not ready**
-> 原因：合同、Domain 安全边界、Server 持久化、协作 Memory 用例层（CRUD/状态机/显式共享）、message/task 来源失效处理、权限优先检索排序与最小 Capsule 创建已完成；Capsule inject 复验/explicit-grant、Candidate、artifact/workspace-run 来源失效、Device 本地 Memory、Web 治理面、socket wiring 与真实跨 Agent 验证尚未完成。Phase 3 runtime 必须保持关闭。
+> 原因：合同、Domain 安全边界、Server 持久化、协作 Memory 用例层（CRUD/状态机/显式共享）、权限优先检索排序、最小 Capsule 创建与事实源失效处理已完成；Capsule inject 复验/explicit-grant、Candidate、Web 治理面、socket wiring 与真实跨 Agent 验证尚未完成。Phase 3 runtime 必须保持关闭。
 
 状态定义：`Green` 已有自动化或真实证据；`Yellow` 已实现但证据未收口；`Red` 尚未实现或缺关键证据。
 
@@ -22,7 +22,7 @@
 | P3-12 | Red | Device LocalMemoryStore、workspace scan 与 outcome observer | 未实现 |
 | P3-13 | Red | server Capsule + 当前 cwd local Memory 的 runtime 注入 | 未实现 |
 | P3-14 | Red | Web Memory/Candidate/冲突/来源/执行详情治理 | 未实现 |
-| P3-15 | Yellow | grant 撤销、来源失效、expire/delete 与审计闭环 | revokeGrant 版本链 + expireMemory/deleteMemory 审计（PR#579）；message/task 来源失效反应式级联 `memory-source-invalidation-service.ts`（删除 best-effort 触发，本批失效 + 其余事实源可用性复查，无可用来源时主动 expired + system audit；覆盖分次删除与频道级联删除，双后端 parity）。待补：artifact/workspace-run/invocation 失效挂钩与完整 E2E 闭环 |
+| P3-15 | Yellow | grant 撤销、来源失效、expire/delete 与审计闭环 | revokeGrant 版本链 + expireMemory/deleteMemory 审计（PR#579）；message/task/artifact/workspace-run/invocation 来源失效反应式级联 `memory-source-invalidation-service.ts`（删除 best-effort 触发，本批失效 + 其余事实源可用性复查，无可用来源时主动 expired + system audit；覆盖分次删除、Task 与频道级联删除，双后端 parity）。待补：完整 E2E 闭环 |
 | P3-16 | Red | checkpoint/recovery 不恢复无效 Capsule/Candidate | 未实现 |
 | P3-17 | Red | 两个真实外部 Agent 跨 Task Memory 正负 smoke | 未执行 |
 | P3-18 | Red | Node 24 root gates、main CI/CD、SEA、Railway/Vercel、生产浏览器收口 | 未执行 |

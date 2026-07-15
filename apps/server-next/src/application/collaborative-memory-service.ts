@@ -400,6 +400,7 @@ export function createCollaborativeMemoryService(
           targetAgentId: input.targetAgentId,
         });
         const now = clock.now();
+        if (input.expiresAt <= now) throw new Error('MEMORY_GRANT_INVALID_EXPIRY');
         const grantId = input.grantId ?? ids.nextId();
         const current = await memory.grants.getCurrent({ teamId: input.teamId, id: grantId });
         if (current) throw new Error('MEMORY_GRANT_EXISTS');

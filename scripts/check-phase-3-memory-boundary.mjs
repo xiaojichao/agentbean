@@ -97,7 +97,9 @@ if (!usecaseMarkers.every((marker) => collaborativeMemoryService.includes(marker
   || !collaborativeMemoryTests.includes('createInMemoryRepositories')
   || !collaborativeMemoryTests.includes('createSqliteRepositories')
   || !collaborativeMemoryTests.includes('MEMORY_INVALID_TRANSITION')
-  || !collaborativeMemoryTests.includes('MEMORY_DUPLICATE_CONTENT')) {
+  || !collaborativeMemoryTests.includes('MEMORY_DUPLICATE_CONTENT')
+  || !collaborativeMemoryService.includes('MEMORY_GRANT_INVALID_EXPIRY')
+  || !collaborativeMemoryTests.includes('MEMORY_GRANT_INVALID_EXPIRY')) {
   violations.push('P3_COLLABORATIVE_MEMORY_USECASE_INVALID: collaborative Memory service with status machine, grants, dedup and dual-backend parity tests are required');
 }
 
@@ -113,7 +115,15 @@ if (!invalidationMarkers.every((marker) => memorySourceInvalidationService.inclu
   || !serverNextUsecases.includes('invalidateSourcesAfterDeletion')
   || !serverNextUsecases.includes('messages.listByChannel')
   || !serverNextUsecases.includes("sourceKind: 'message'")
-  || !serverNextUsecases.includes("sourceKind: 'task'")) {
+  || !serverNextUsecases.includes("sourceKind: 'task'")
+  || !serverNextUsecases.includes("sourceKind === 'artifact'")
+  || !serverNextUsecases.includes("sourceKind === 'workspace-run'")
+  || !serverNextUsecases.includes("sourceKind === 'invocation'")
+  || !serverNextUsecases.includes("['artifact', deletedArtifactIds]")
+  || !serverNextUsecases.includes("['workspace-run', deletedWorkspaceRunIds]")
+  || !serverNextUsecases.includes("['invocation', deletedInvocationIds]")
+  || !memorySourceInvalidationTests.includes('invalidates artifact, workspace-run, and invocation sources')
+  || !memorySourceInvalidationTests.includes('invalidates invocation sources bound to a deleted task')) {
   violations.push('P3_SOURCE_INVALIDATION_INVALID: reactive Memory source invalidation on deletion with dual-backend parity tests is required');
 }
 

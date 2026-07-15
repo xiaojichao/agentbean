@@ -1064,11 +1064,14 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           && artifact.channelId === input.channelId);
       },
       async deleteByChannel(channelId) {
+        const deletedIds: string[] = [];
         for (const [id, artifact] of artifacts) {
           if (artifact.channelId === channelId) {
+            deletedIds.push(id);
             artifacts.delete(id);
           }
         }
+        return deletedIds.sort();
       },
     },
     workspaceRuns: {
