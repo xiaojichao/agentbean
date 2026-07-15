@@ -2,6 +2,54 @@
 import type { Release } from './changelog';
 export const releases: Release[] = [
   {
+    "version": "Daily 2026-07-15",
+    "date": "2026-07-15",
+    "sections": [
+      {
+        "type": "Added",
+        "items": [
+          "支持在讨论串中继续提及频道成员",
+          "Phase 3：补齐剩余 Memory 来源失效入口",
+          "实现 Phase 3 Server 持久化",
+          "增加 PR 最新 Review 合并门禁"
+        ]
+      },
+      {
+        "type": "Changed",
+        "items": [
+          "Phase 3：完成 Capsule 与 Invocation/checkpoint 绑定（#602）",
+          "Phase 3：实现并加固 Memory Candidate 生命周期（#583）",
+          "实现串行多 Agent 协作与结构化交接",
+          "Phase 3：建立 Candidate 持久化地基并收紧决策状态约束（#600）",
+          "Phase 3：Capsule ref 持久化地基（P3-08 slice 1）",
+          "Phase 3：实现 Capsule 注入复验并共享哈希源（P3-07）",
+          "Phase 3：实现最小 Capsule 创建并收紧授权边界",
+          "Phase 3：实现来源失效处理，收尾 Task 3",
+          "Phase 3：实现协作 Memory 用例层（CRUD、状态机与显式共享）",
+          "增加 Codex Session 级 Issue 认领门禁",
+          "增加 Draft 稳定 Head Review 门禁",
+          "记录 2026-07-14 每日更新日志",
+          "冻结 Phase 2 最终 Green 验收",
+          "将 Phase CI 收敛为单轮测试与构建"
+        ]
+      },
+      {
+        "type": "Fixed",
+        "items": [
+          "修复 Daemon 升级时的连接命令引导"
+        ]
+      },
+      {
+        "type": "Security",
+        "items": [
+          "Phase 3：实现 Device 本地 Memory 安全积累核心",
+          "Phase 3：实现权限优先的 Memory 检索与排序",
+          "Phase 3：冻结跨 Agent Memory 合同与权限边界"
+        ]
+      }
+    ]
+  },
+  {
     "version": "Daily 2026-07-14",
     "date": "2026-07-14",
     "sections": [
