@@ -844,7 +844,33 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         const task = await repositories.tasks.getById(source.sourceId);
         return Boolean(task && task.teamId === source.teamId);
       }
-      // 其他 source kind 的删除入口尚未接线；在对应事实源可验证前不得误判为已失效。
+      if (source.sourceKind === 'artifact') {
+        const artifact = await repositories.artifacts.getForTeam({
+          teamId: source.teamId, artifactId: source.sourceId,
+        });
+        if (!artifact) return false;
+        const channel = await repositories.channels.getById(artifact.channelId);
+        return Boolean(channel && channel.teamId === source.teamId);
+      }
+      if (source.sourceKind === 'workspace-run') {
+        const workspaceRun = await repositories.workspaceRuns.getForTeam({
+          teamId: source.teamId, runId: source.sourceId,
+        });
+        if (!workspaceRun) return false;
+        const channel = await repositories.channels.getById(workspaceRun.channelId);
+        return Boolean(channel && channel.teamId === source.teamId);
+      }
+      if (source.sourceKind === 'invocation') {
+        const invocation = await repositories.management.invocations.getById(source.sourceId);
+        if (!invocation || invocation.intent.teamId !== source.teamId) return false;
+        const channel = await repositories.channels.getById(invocation.intent.channelId);
+        if (!channel || channel.teamId !== source.teamId) return false;
+        const taskId = invocation.intent.taskContext?.taskId;
+        if (!taskId) return true;
+        const task = await repositories.tasks.getById(taskId);
+        return Boolean(task && task.teamId === source.teamId);
+      }
+      // memory/manual/local-summary 没有本切片的 server 删除入口；保持可用，避免越界误判。
       return true;
     },
   });
@@ -2422,18 +2448,36 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('FORBIDDEN', 'Only channel creator can delete');
       }
       const deletedMessages = await repositories.messages.listByChannel(channel.id, Number.MAX_SAFE_INTEGER);
-      // Cascade: artifacts → messages → channel
-      await repositories.artifacts.deleteByChannel(channel.id);
+      const deletedWorkspaceRunIds = (await repositories.workspaceRuns.listByTeam({
+        teamId: deleteInput.teamId,
+        limit: Number.MAX_SAFE_INTEGER,
+      })).filter((run) => run.channelId === channel.id).map((run) => run.id);
+      const channelDispatches = (await repositories.dispatches.listByTeam(deleteInput.teamId))
+        .filter((dispatch) => dispatch.channelId === channel.id);
+      const deletedInvocationIds = [...new Set((await Promise.all(channelDispatches.map((dispatch) =>
+        repositories.management.dispatchAttempts.getByDispatchId(dispatch.id),
+      ))).flatMap((attempt) => attempt ? [attempt.invocationId] : []))];
+      // 先完成事实源级联，再触发 Memory 失效；跨 source kind 复查必须能看到 Channel 已不存在。
+      const deletedArtifactIds = await repositories.artifacts.deleteByChannel(channel.id);
       await repositories.messages.deleteByChannel(channel.id);
+      const deleted = await repositories.channels.delete({ channelId: channel.id });
+      if (!deleted) {
+        return makeFailure('NOT_FOUND', 'Channel not found');
+      }
       await invalidateSourcesAfterDeletion({
         teamId: deleteInput.teamId,
         sourceKind: 'message',
         sourceIds: deletedMessages.map((message) => message.id),
         actorId: deleteInput.userId,
       });
-      const deleted = await repositories.channels.delete({ channelId: channel.id });
-      if (!deleted) {
-        return makeFailure('NOT_FOUND', 'Channel not found');
+      for (const [sourceKind, sourceIds] of [
+        ['artifact', deletedArtifactIds],
+        ['workspace-run', deletedWorkspaceRunIds],
+        ['invocation', deletedInvocationIds],
+      ] as const) {
+        await invalidateSourcesAfterDeletion({
+          teamId: deleteInput.teamId, sourceKind, sourceIds, actorId: deleteInput.userId,
+        });
       }
       return makeSuccess({ channel: deleted });
     },
@@ -3280,12 +3324,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!task || task.teamId !== taskInput.teamId) {
         return makeFailure('NOT_FOUND', 'Task not found');
       }
+      const coordination = await repositories.taskCoordination.coordinations.getByTaskId(task.id);
+      const deletedInvocationIds = coordination
+        ? (await repositories.management.invocations.listByRun(coordination.managementRunId))
+          .filter((invocation) => invocation.intent.taskContext?.taskId === task.id)
+          .map((invocation) => invocation.id)
+        : [];
       const deleted = await repositories.tasks.delete({ taskId: task.id });
       if (!deleted) {
         return makeFailure('NOT_FOUND', 'Task not found');
       }
       await invalidateSourcesAfterDeletion({
         teamId: taskInput.teamId, sourceKind: 'task', sourceIds: [task.id], actorId: taskInput.userId,
+      });
+      await invalidateSourcesAfterDeletion({
+        teamId: taskInput.teamId, sourceKind: 'invocation', sourceIds: deletedInvocationIds,
+        actorId: taskInput.userId,
       });
       return makeSuccess({ task: deleted });
     },

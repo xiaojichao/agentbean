@@ -1687,7 +1687,12 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           });
       },
       async deleteByChannel(channelId) {
+        const deletedIds = teamDb
+          .prepare('SELECT id FROM artifacts WHERE channel_id = ? ORDER BY id')
+          .all(channelId)
+          .map((row) => sqliteText(row, 'id'));
         teamDb.prepare('DELETE FROM artifacts WHERE channel_id = ?').run(channelId);
+        return deletedIds;
       },
     },
     workspaceRuns: {

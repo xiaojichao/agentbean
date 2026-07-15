@@ -462,6 +462,23 @@ describe.each([
     }
   });
 
+  test('issueGrant rejects an expiry that is not in the future', async () => {
+    const harness = createHarness(permissivePermissions(), () => 5_000);
+    try {
+      await expect(harness.service.issueGrant({
+        teamId: 'team-1', issuedByUserId: 'user-1', grantId: 'grant-expired',
+        sourceScopeType: 'dm', sourceScopeRef: 'dm-1', targetAgentId: 'agent-1',
+        authorizedContentKind: 'decision', authorizedRedactionLevel: 'summary-only',
+        expiresAt: 5_000,
+      })).rejects.toThrow(/MEMORY_GRANT_INVALID_EXPIRY/);
+      await expect(harness.repositories.memory.grants.getCurrent({
+        teamId: 'team-1', id: 'grant-expired',
+      })).resolves.toBeNull();
+    } finally {
+      harness.close();
+    }
+  });
+
   test('issueGrant rejects a target Agent outside the source visibility', async () => {
     const denied = createHarness({
       ...permissivePermissions(),

@@ -288,7 +288,7 @@ export interface ArtifactRepository {
   getForTeam(input: { teamId: ID; artifactId: ID }): Promise<ArtifactRecord | null>;
   listByMessage(messageId: ID): Promise<ArtifactRecord[]>;
   listByWorkspaceRunForChannel(input: { teamId: ID; channelId: ID; runId: ID }): Promise<ArtifactRecord[]>;
-  deleteByChannel(channelId: ID): Promise<void>;
+  deleteByChannel(channelId: ID): Promise<ID[]>;
 }
 
 export interface WorkspaceRunRepository {

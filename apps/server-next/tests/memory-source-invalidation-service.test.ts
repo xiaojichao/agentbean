@@ -11,6 +11,7 @@ import { createMemorySourceInvalidationService } from '../src/application/memory
 import { createServerNextUseCases } from '../src/application/usecases.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 import {
+  applyGlobalMigrations,
   applyTeamMigrations,
   createSqliteRepositories,
   type SqliteDatabase,
@@ -26,6 +27,25 @@ interface Harness {
   readonly markSourceUnavailable: (sourceKind: MemorySourceKind, sourceId: string) => void;
   readonly close(): void;
 }
+
+const usecaseBackends = [
+  ['memory', () => ({ repositories: createInMemoryRepositories(), close() {} })],
+  ['sqlite', () => {
+    const globalDb = new Database(':memory:');
+    const teamDb = new Database(':memory:');
+    globalDb.exec('PRAGMA foreign_keys = ON;');
+    teamDb.exec('PRAGMA foreign_keys = ON;');
+    applyGlobalMigrations(globalDb);
+    applyTeamMigrations(teamDb);
+    return {
+      repositories: createSqliteRepositories({ globalDb, teamDb }),
+      close: () => {
+        globalDb.close();
+        teamDb.close();
+      },
+    };
+  }],
+] as const;
 
 function makeHarness(repositories: ServerNextRepositories): Harness {
   let tick = 1_000;
@@ -310,5 +330,141 @@ describe('Phase 3 Memory Source Invalidation usecase wiring', () => {
 
     await app.deleteChannel({ userId, teamId, channelId: created.channel.id });
     expect(await getStatus(repositories, teamId, 'mem-channel-delete')).toBe('expired');
+  });
+
+  test.each(usecaseBackends)('invalidates artifact, workspace-run, and invocation sources when their channel is deleted (%s)', async (_backend, createBackend) => {
+    const { repositories, close } = createBackend();
+    try {
+    let counter = 0;
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 3_000 + counter },
+      ids: { nextId: () => `id-${++counter}` },
+    });
+    const registered = await app.registerUser({ username: 'carol', password: 'secret', teamName: 'Team' });
+    if (!registered.ok) throw new Error(`register failed: ${registered.error}`);
+    const userId = registered.user.id;
+    const teamId = registered.currentTeam.id;
+    const created = await app.createChannel({ userId, teamId, name: 'temporary', visibility: 'public' });
+    if (!created.ok) throw new Error(`channel setup failed: ${created.error}`);
+    const channelId = created.channel.id;
+
+    await repositories.artifacts.create({
+      id: 'artifact-channel-delete', teamId, channelId, uploaderId: userId,
+      filename: 'result.md', mimeType: 'text/markdown', sizeBytes: 10, createdAt: 1,
+    });
+    await repositories.workspaceRuns.create({
+      id: 'workspace-run-channel-delete', teamId, channelId, dispatchId: 'dispatch-channel-delete',
+      agentId: 'agent-1', status: 'succeeded', createdAt: 1, updatedAt: 1, artifactIds: [],
+    });
+    await repositories.management.runs.create({
+      schemaVersion: 1, id: 'management-run-channel-delete', teamId, channelId,
+      rootMessageId: 'root-message', mode: 'managed', status: 'running',
+      placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true },
+      checkpointRevision: 0, budget: { maxSubtasks: 20, maxDepth: 3, maxExternalInvocations: 20 },
+      createdAt: 1, updatedAt: 1,
+    });
+    await repositories.management.invocations.create({
+      schemaVersion: 1,
+      id: 'invocation-channel-delete',
+      managementRunId: 'management-run-channel-delete',
+      intent: {
+        schemaVersion: 1, teamId, channelId, targetAgentId: 'agent-1', targetKind: 'custom',
+        objective: 'produce result', acceptanceCriteria: [], dependencyResults: [], attachmentIds: [],
+      },
+      intentHash: 'sha256:invocation-channel-delete',
+      idempotencyKey: 'invocation-channel-delete',
+      createdAt: 1,
+    });
+    await repositories.dispatches.create({
+      id: 'dispatch-channel-delete', teamId, channelId, messageId: 'message-channel-delete',
+      agentId: 'agent-1', status: 'succeeded', requestId: 'request-channel-delete',
+      prompt: 'produce result', createdAt: 1, updatedAt: 2, completedAt: 2,
+    });
+    await repositories.management.dispatchAttempts.create({
+      id: 'attempt-channel-delete', invocationId: 'invocation-channel-delete',
+      dispatchId: 'dispatch-channel-delete', attemptNumber: 1, status: 'succeeded',
+      startedAt: 1, completedAt: 2,
+    });
+    await seedMemory(repositories, {
+      teamId, memoryId: 'mem-channel-artifact',
+      sources: [{ sourceKind: 'artifact', sourceId: 'artifact-channel-delete' }],
+    });
+    await seedMemory(repositories, {
+      teamId, memoryId: 'mem-channel-workspace-run',
+      sources: [{ sourceKind: 'workspace-run', sourceId: 'workspace-run-channel-delete' }],
+    });
+    await seedMemory(repositories, {
+      teamId, memoryId: 'mem-channel-invocation',
+      sources: [{ sourceKind: 'invocation', sourceId: 'invocation-channel-delete' }],
+    });
+
+    await app.deleteChannel({ userId, teamId, channelId });
+    await expect(Promise.all([
+      getStatus(repositories, teamId, 'mem-channel-artifact'),
+      getStatus(repositories, teamId, 'mem-channel-workspace-run'),
+      getStatus(repositories, teamId, 'mem-channel-invocation'),
+    ])).resolves.toEqual(['expired', 'expired', 'expired']);
+    } finally {
+      close();
+    }
+  });
+
+  test.each(usecaseBackends)('invalidates invocation sources bound to a deleted task (%s)', async (_backend, createBackend) => {
+    const { repositories, close } = createBackend();
+    try {
+    let counter = 0;
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 4_000 + counter },
+      ids: { nextId: () => `id-${++counter}` },
+    });
+    const registered = await app.registerUser({ username: 'dave', password: 'secret', teamName: 'Team' });
+    if (!registered.ok) throw new Error(`register failed: ${registered.error}`);
+    const userId = registered.user.id;
+    const teamId = registered.currentTeam.id;
+    const channelId = registered.defaultChannel.id;
+    const created = await app.createTask({ userId, teamId, channelId, title: 'temporary task' });
+    if (!created.ok) throw new Error(`task setup failed: ${created.error}`);
+    const taskId = created.task.id;
+
+    await repositories.management.runs.create({
+      schemaVersion: 2, managementPhase: 2, id: 'management-run-task-delete', teamId, channelId,
+      rootTaskId: taskId, rootMessageId: 'root-message', mode: 'managed', status: 'running',
+      placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true },
+      checkpointRevision: 0, budget: { maxSubtasks: 20, maxDepth: 3, maxExternalInvocations: 20 },
+      createdAt: 1, updatedAt: 1,
+    });
+    await repositories.taskCoordination.coordinations.create({
+      schemaVersion: 1, taskId, teamId, managementRunId: 'management-run-task-delete',
+      rootTaskId: taskId, nodeKind: 'root', reviewPolicy: 'human', claimPolicy: 'open',
+      requiredCapabilities: [], taskRevision: 1, attempt: 1, maxAttempts: 1,
+      createdAt: 1, updatedAt: 1,
+    });
+    await repositories.management.invocations.create({
+      schemaVersion: 1,
+      id: 'invocation-task-delete',
+      managementRunId: 'management-run-task-delete',
+      intent: {
+        schemaVersion: 1, teamId, channelId, targetAgentId: 'agent-1', targetKind: 'custom',
+        objective: 'complete task',
+        taskContext: { taskId, rootTaskId: taskId, taskRevision: 1, taskAttempt: 1, claimLeaseId: 'claim-1' },
+        acceptanceCriteria: [], dependencyResults: [], attachmentIds: [],
+      },
+      intentHash: 'sha256:invocation-task-delete',
+      idempotencyKey: 'invocation-task-delete',
+      createdAt: 1,
+    });
+    await seedMemory(repositories, {
+      teamId,
+      memoryId: 'mem-task-invocation',
+      sources: [{ sourceKind: 'invocation', sourceId: 'invocation-task-delete' }],
+    });
+
+    await app.deleteTask({ userId, teamId, taskId });
+    expect(await getStatus(repositories, teamId, 'mem-task-invocation')).toBe('expired');
+    } finally {
+      close();
+    }
   });
 });
