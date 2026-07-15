@@ -2408,6 +2408,94 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('keeps structured mentions for member names with spaces and punctuation', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 25_000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Claude 3.5',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'offline',
+      lastSeenAt: 25_000,
+    });
+
+    const result = await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Claude 3.5 请处理',
+      meta: {
+        mentions: [{ id: 'agent-1', kind: 'agent', name: 'Claude 3.5', start: 0, end: 11 }],
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      message: {
+        meta: {
+          mentions: [{ id: 'agent-1', kind: 'agent', name: 'Claude 3.5', start: 0, end: 11 }],
+        },
+      },
+    });
+  });
+
+  test('uses a leading structured human mention instead of dispatching to a colliding agent name', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 25_000,
+      ids: createIds([
+        'user-1', 'team-1', 'channel-1', 'join-1',
+        'user-2', 'team-2', 'channel-2', 'message-1',
+      ]),
+      joinCodes: createIds(['code-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
+    await app.registerUser({
+      username: 'renamed_codex',
+      password: 'secret',
+      teamName: 'AgentBean',
+      joinCode: 'code-1',
+    });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Renamed Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 25_000,
+    });
+
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@renamed_codex 请处理',
+      meta: {
+        mentions: [{ id: 'user-2', kind: 'human', name: 'renamed_codex', start: 0, end: 14 }],
+      },
+    })).resolves.toMatchObject({
+      ok: true,
+      route: { kind: 'no-dispatch', reason: 'human-mention' },
+      dispatches: [],
+      message: {
+        meta: {
+          mentions: [{ id: 'user-2', kind: 'human', name: 'renamed_codex', start: 0, end: 14 }],
+        },
+      },
+    });
+  });
+
   test('queues direct-message follow-ups that arrive after the active dispatch was accepted', async () => {
     let now = 10_000;
     const app = createInMemoryServerNext({

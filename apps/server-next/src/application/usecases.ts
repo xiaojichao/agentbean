@@ -2592,6 +2592,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         visibleAgents,
         teamId: messageInput.teamId,
         body: messageInput.body,
+        mentions,
         contextOwner,
         connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
         dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
@@ -2944,11 +2945,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const now = clock.now();
       const title = message.body.trim() || '附件';
       const visibleAgents = await repositories.agents.listVisibleInTeam(convertInput.teamId);
+      const mentions = sanitizeMessageMentions({
+        body: message.body,
+        mentions: message.meta?.mentions,
+        channel: channelAccess.channel,
+        visibleAgents,
+      });
       const route = routeMessageForChannel({
         channel: channelAccess.channel,
         visibleAgents,
         teamId: convertInput.teamId,
         body: message.body,
+        mentions,
       });
       const taskId = ids.nextId();
       const task = await repositories.tasks.create({
@@ -5430,7 +5438,6 @@ function sanitizeMessageMentions(input: {
       || mention.end <= mention.start
       || mention.end > input.body.length
       || input.body.slice(mention.start, mention.end) !== `@${mention.name}`
-      || !/^@[\p{L}\p{N}_-]+$/u.test(input.body.slice(mention.start, mention.end))
     ) {
       return false;
     }
@@ -5452,6 +5459,7 @@ function routeMessageForChannel(input: {
   visibleAgents: AgentDto[];
   teamId: string;
   body: string;
+  mentions?: NonNullable<MessageMetaDto['mentions']>;
   contextOwner?: RoutingContextOwner;
   connectedAgentDeviceIds?: string[];
   dispatchClaimDeviceIds?: string[];
@@ -5477,6 +5485,23 @@ function routeMessageForChannel(input: {
     );
     return targetAgent
       ? { kind: 'dispatch', agentId: targetAgent.id, reason: 'direct' }
+      : { kind: 'no-dispatch', reason: 'no-online-agent' };
+  }
+  const bodyStart = input.body.length - input.body.trimStart().length;
+  const structuredLeadingMention = input.mentions?.find((mention) => mention.start === bodyStart);
+  if (structuredLeadingMention?.kind === 'human') {
+    return { kind: 'no-dispatch', reason: 'human-mention' };
+  }
+  if (structuredLeadingMention?.kind === 'agent') {
+    const targetAgent = input.visibleAgents.find((agent) => agent.id === structuredLeadingMention.id);
+    const isEligible = targetAgent
+      && targetAgent.visibleTeamIds.includes(input.teamId)
+      && (targetAgent.status === 'online' || canQueueForBusyAgent(targetAgent));
+    if (!targetAgent || !isEligible) {
+      return { kind: 'no-dispatch', reason: 'unknown-mention' };
+    }
+    return isSocketReachable(targetAgent)
+      ? { kind: 'dispatch', agentId: targetAgent.id, reason: 'mention' }
       : { kind: 'no-dispatch', reason: 'no-online-agent' };
   }
   const hasLeadingMention = /^@(.+)/.test(input.body.trimStart());
