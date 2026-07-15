@@ -382,13 +382,13 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
       const snapshot = dependencies.taskCoordinationUnitOfWork
         ? await dependencies.taskCoordinationUnitOfWork.run(async (repositories) => ({
             latest: await repositories.management.checkpoints.getLatest(run.id),
-            facts: await collectManagementCheckpointFacts(repositories.management, run, {
+            facts: await collectManagementCheckpointFacts(repositories.management, run, dependencies.clock.now(), {
               tasks: repositories.tasks, coordination: repositories.coordination,
             }),
           }))
         : {
             latest: await dependencies.management.checkpoints.getLatest(run.id),
-            facts: await collectManagementCheckpointFacts(dependencies.management, run),
+            facts: await collectManagementCheckpointFacts(dependencies.management, run, dependencies.clock.now()),
           };
       const latest = snapshot.latest;
       const checkpoint = latest

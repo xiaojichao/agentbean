@@ -17,7 +17,7 @@ describe('management checkpoint', () => {
       openTaskIds: ['task-1'],
       waitingInvocationIds: ['invocation-waiting'],
       completedInvocationIds: ['invocation-completed'],
-      memoryCapsuleIds: [],
+      memoryCapsuleIds: ['capsule-1'],
       lastEventSequence: 3,
     });
     expect(new Set([...checkpoint.authoritative.waitingInvocationIds, ...checkpoint.authoritative.completedInvocationIds]).size).toBe(2);
@@ -29,7 +29,7 @@ describe('management checkpoint', () => {
     const harness = await createHarness();
     const run = await harness.repositories.runs.getById(harness.authority.managementRunId);
     if (!run) throw new Error('missing run');
-    const facts = await collectManagementCheckpointFacts(harness.repositories, run);
+    const facts = await collectManagementCheckpointFacts(harness.repositories, run, 10);
     const stale = {
       schemaVersion: 1 as const, managementRunId: run.id, revision: 1,
       authoritative: { lastEventSequence: facts.lastEventSequence, taskGraphRevision: facts.taskGraphRevision, openTaskIds: ['task-1', 'ghost-task'], waitingInvocationIds: [], completedInvocationIds: [], memoryCapsuleIds: [] },
@@ -40,6 +40,41 @@ describe('management checkpoint', () => {
     expect(result.kind).toBe('rebuilt');
     expect(result.checkpoint.contextHints).toEqual({ objective: 'authoritative objective', planSummary: '', completedInvocationSummaries: [], unresolvedQuestions: [] });
     expect(JSON.stringify(result.checkpoint.contextHints)).not.toContain('stale');
+  });
+
+  test('keeps only non-expired Capsule refs in validMemoryCapsuleIds and rebuilds to drop stale ones', async () => {
+    const harness = await createHarness();
+    const run = await harness.repositories.runs.getById(harness.authority.managementRunId);
+    if (!run) throw new Error('missing run');
+    const capsuleRef = (id: string, expiresAt: number) => ({
+      schemaVersion: 1 as const, id, teamId: 'team-1', managementRunId: run.id,
+      targetAgentId: 'agent-1', contentHash: `sha256:${id}`, authorizationDecisionId: `d-${id}`, expiresAt,
+    });
+    const createInvocation = (invId: string, ref: ReturnType<typeof capsuleRef>) =>
+      harness.repositories.invocations.create({
+        schemaVersion: 1, id: invId, managementRunId: run.id, intentHash: `h-${invId}`,
+        idempotencyKey: `k-${invId}`, createdAt: 1,
+        intent: { schemaVersion: 1, teamId: 'team-1', channelId: 'channel-1', targetAgentId: 'agent-1',
+          targetKind: 'custom', objective: invId, acceptanceCriteria: [], dependencyResults: [],
+          memoryCapsuleRef: ref, attachmentIds: [] },
+      });
+    await createInvocation('inv-fresh', capsuleRef('cap-fresh', 200));
+    await createInvocation('inv-stale', capsuleRef('cap-stale', 50));
+    // now=100: cap-fresh(expiresAt 200)有效、cap-stale(expiresAt 50)过期
+    const facts = await collectManagementCheckpointFacts(harness.repositories, run, 100);
+    expect(facts.validMemoryCapsuleIds).toEqual(['cap-fresh']);
+    // 冻结了 stale capsule 的 checkpoint → rebuild 剔除过期引用（fail closed）
+    const stale = {
+      schemaVersion: 1 as const, managementRunId: run.id, revision: 1,
+      authoritative: { lastEventSequence: facts.lastEventSequence, taskGraphRevision: facts.taskGraphRevision,
+        openTaskIds: [], waitingInvocationIds: [], completedInvocationIds: [],
+        memoryCapsuleIds: ['cap-fresh', 'cap-stale'] },
+      contextHints: { objective: 'o', planSummary: '', completedInvocationSummaries: [], unresolvedQuestions: [] },
+      updatedAt: 1,
+    };
+    const result = restoreOrRebuildManagementCheckpoint({ checkpoint: stale, facts, objective: 'o', now: 100 });
+    expect(result.kind).toBe('rebuilt');
+    expect(result.checkpoint.authoritative.memoryCapsuleIds).toEqual(['cap-fresh']);
   });
 
   test('captures the complete Phase 2 DAG, revisions, active claims and Invocation sets from one authoritative snapshot', async () => {
@@ -78,7 +113,7 @@ describe('management checkpoint', () => {
     const run = await repositories.management.runs.getById('run-p2');
     if (!run) throw new Error('missing run');
     const facts = await repositories.taskCoordinationUnitOfWork.run((snapshot) =>
-      collectManagementCheckpointFacts(snapshot.management, run, {
+      collectManagementCheckpointFacts(snapshot.management, run, 100, {
         tasks: snapshot.tasks, coordination: snapshot.coordination,
       }));
     expect(facts).toMatchObject({ taskGraphRevision: 1,
@@ -117,6 +152,15 @@ async function createHarness() {
 function invocation(id: string, memoryCapsuleId: string | undefined, createdAt: number) {
   return {
     schemaVersion: 1 as const, id, managementRunId: 'id-1', intentHash: `${id}-hash`, idempotencyKey: `${id}-key`, createdAt,
-    intent: { schemaVersion: 1 as const, teamId: 'team-1', channelId: 'channel-1', targetAgentId: 'agent-1', targetKind: 'custom' as const, objective: id, acceptanceCriteria: [], dependencyResults: [], ...(memoryCapsuleId && { memoryCapsuleId }), attachmentIds: [] },
+    intent: {
+      schemaVersion: 1 as const, teamId: 'team-1', channelId: 'channel-1', targetAgentId: 'agent-1', targetKind: 'custom' as const, objective: id, acceptanceCriteria: [], dependencyResults: [],
+      ...(memoryCapsuleId && {
+        memoryCapsuleRef: {
+          schemaVersion: 1 as const, id: memoryCapsuleId, teamId: 'team-1', managementRunId: 'id-1', targetAgentId: 'agent-1',
+          contentHash: `sha256:${memoryCapsuleId}`, authorizationDecisionId: `decision-${memoryCapsuleId}`, expiresAt: 100,
+        },
+      }),
+      attachmentIds: [],
+    },
   };
 }

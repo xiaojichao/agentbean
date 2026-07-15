@@ -3,12 +3,13 @@ import type {
   MemoryCapsuleAuthorizationDto,
   MemoryCapsuleDto,
   MemoryCapsuleItemDto,
+  MemoryCapsuleRefDto,
   MemoryContentKind,
   MemoryKind,
   MemorySourceRefDto,
   UnixMs,
 } from '../../../../packages/contracts/src/index.js';
-import { hashMemoryContent, hashSourceRefs } from '../../../../packages/domain/src/index.js';
+import { hashCapsuleItems, hashMemoryContent, hashSourceRefs } from '../../../../packages/domain/src/index.js';
 import type {
   MemoryAuditActorKind,
   MemoryAuditEventRecord,
@@ -235,5 +236,27 @@ function toSourceRefDto(record: Pick<MemorySourceRecord, 'sourceKind' | 'sourceI
     sourceKind: record.sourceKind,
     sourceId: record.sourceId,
     snapshotHash: record.snapshotHash,
+  };
+}
+
+/**
+ * 从 Capsule 投影派生冻结引用 `MemoryCapsuleRefDto`,供固化进 immutable Invocation intent（Task 6）。
+ *
+ * `contentHash` 用 `hashCapsuleItems` 聚合全部 item 的内容+来源指纹（单一哈希源,与创建侧共享,
+ * 任一 item 漂移即变);`authorizationDecisionId` 取首项 decision 作代表（空 Capsule 回退 capsule id）。
+ * Recovery（Task 6）只用 `expiresAt` 判有效性,这两个字段作冻结指纹防篡改。Capsule 本身不持久化,
+ * Ref 嵌入 intent 后由 intentHash 保护,recovery 从 invocation intent 取回此 Ref。
+ */
+export function toMemoryCapsuleRef(capsule: MemoryCapsuleDto): MemoryCapsuleRefDto {
+  return {
+    schemaVersion: 1,
+    id: capsule.id,
+    teamId: capsule.teamId,
+    managementRunId: capsule.managementRunId,
+    taskId: capsule.taskId,
+    targetAgentId: capsule.targetAgentId,
+    contentHash: hashCapsuleItems(capsule.items),
+    authorizationDecisionId: capsule.items[0]?.authorization.decisionId ?? capsule.id,
+    expiresAt: capsule.expiresAt,
   };
 }

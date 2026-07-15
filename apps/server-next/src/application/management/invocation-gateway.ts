@@ -7,6 +7,7 @@ import type {
   AcceptanceCriterionDto,
   DependencyResultRefDto,
   DispatchStatus,
+  MemoryCapsuleRefDto,
 } from '../../../../../packages/contracts/src/index.js';
 import {
   canonicalizeAgentInvocationIntent,
@@ -56,6 +57,8 @@ export interface InvokeTaskAgentInput {
   readonly objective: string;
   readonly attachmentIds: readonly string[];
   readonly deadlineAt?: number;
+  /** 已授权 Capsule 的冻结引用,固化进 immutable intent；重放须逐字段一致（Task 6）。 */
+  readonly memoryCapsuleRef?: MemoryCapsuleRefDto;
 }
 
 export function createInvocationGateway(dependencies: InvocationGatewayDependencies) {
@@ -109,6 +112,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           },
           acceptanceCriteria: authority.acceptanceCriteria,
           dependencyResults: authority.dependencyResults,
+          ...(input.memoryCapsuleRef && { memoryCapsuleRef: input.memoryCapsuleRef }),
           attachmentIds: [...input.attachmentIds],
           ...(input.deadlineAt !== undefined && { deadlineAt: input.deadlineAt }),
         };
@@ -355,15 +359,33 @@ function assertTaskInvocationReplay(existing: AgentInvocationRecordDto,
   const context = existing.intent.taskContext;
   const sameAttachments = existing.intent.attachmentIds.length === input.attachmentIds.length
     && existing.intent.attachmentIds.every((id, index) => id === input.attachmentIds[index]);
+  const sameCapsuleRef = sameMemoryCapsuleRef(existing.intent.memoryCapsuleRef, input.memoryCapsuleRef);
   if (!context || context.taskId !== input.taskId
     || context.taskRevision !== input.expectedTaskRevision
     || context.taskAttempt !== input.taskAttempt
     || context.claimLeaseId !== input.claimLeaseId
     || existing.intent.objective !== input.objective.trim()
     || existing.intent.deadlineAt !== input.deadlineAt
-    || !sameAttachments) {
+    || !sameAttachments
+    || !sameCapsuleRef) {
     throw new InvocationGatewayError('INVOCATION_IDEMPOTENCY_CONFLICT');
   }
+}
+
+function sameMemoryCapsuleRef(
+  existing: MemoryCapsuleRefDto | undefined,
+  requested: MemoryCapsuleRefDto | undefined,
+): boolean {
+  if (!existing && !requested) return true;
+  if (!existing || !requested) return false;
+  return existing.id === requested.id
+    && existing.teamId === requested.teamId
+    && existing.managementRunId === requested.managementRunId
+    && existing.taskId === requested.taskId
+    && existing.targetAgentId === requested.targetAgentId
+    && existing.contentHash === requested.contentHash
+    && existing.authorizationDecisionId === requested.authorizationDecisionId
+    && existing.expiresAt === requested.expiresAt;
 }
 
 async function assertNoActiveTaskAttempt(

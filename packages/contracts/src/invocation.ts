@@ -1,4 +1,5 @@
 import type { ID, UnixMs } from './common.js';
+import type { MemoryCapsuleRefDto } from './management-memory.js';
 import type { DispatchStatus } from './dispatch.js';
 import type { AcceptanceCriterionDto } from './task-coordination.js';
 
@@ -37,7 +38,7 @@ export interface AgentInvocationIntentV1 {
   readonly taskContext?: AgentInvocationTaskContextV1;
   readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];
   readonly dependencyResults: readonly DependencyResultRefDto[];
-  readonly memoryCapsuleId?: ID;
+  readonly memoryCapsuleRef?: MemoryCapsuleRefDto;
   readonly attachmentIds: readonly ID[];
   readonly deadlineAt?: UnixMs;
 }

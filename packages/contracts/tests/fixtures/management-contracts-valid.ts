@@ -109,7 +109,16 @@ const intent: AgentInvocationIntentV1 = {
   },
   acceptanceCriteria: coordination.acceptanceCriteria,
   dependencyResults: [],
-  memoryCapsuleId: 'capsule-1',
+  memoryCapsuleRef: {
+    schemaVersion: 1,
+    id: 'capsule-1',
+    teamId: run.teamId,
+    managementRunId: run.id,
+    targetAgentId: 'agent-1',
+    contentHash: 'sha256:capsule-1',
+    authorizationDecisionId: 'decision-1',
+    expiresAt: 100,
+  },
   attachmentIds: [],
 };
 

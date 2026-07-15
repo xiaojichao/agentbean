@@ -76,7 +76,7 @@ async function saveCheckpoint(
   if (existingAfterReplay && existingAfterReplay.revision >= checkpointEvent.event.payload.checkpointRevision) {
     return existingAfterReplay;
   }
-  const facts = await collectManagementCheckpointFacts(repositories, run, phase2);
+  const facts = await collectManagementCheckpointFacts(repositories, run, now, phase2);
   const checkpoint: ManagementCheckpointV1 = { schemaVersion: 1, managementRunId: run.id,
     revision, authoritative: toManagementCheckpointAuthoritative(facts),
     contextHints: input.contextHints, updatedAt: now };
@@ -88,6 +88,7 @@ async function saveCheckpoint(
 export async function collectManagementCheckpointFacts(
   repositories: ManagementRepositories,
   run: ManagementRunRecord,
+  now: number,
   phase2?: {
     readonly tasks: TaskRepository;
     readonly coordination: TaskCoordinationRepositories;
@@ -129,6 +130,14 @@ export async function collectManagementCheckpointFacts(
   const openTaskIds = phase2 && taskSnapshots.length > 0
     ? taskSnapshots.filter((task) => !['done', 'closed'].includes(task.status)).map((task) => task.taskId)
     : !terminalRun && run.rootTaskId ? [run.rootTaskId] : [];
+  // 轻量有效性过滤（Task 6）：Capsule 不持久化,recovery 从 immutable intent 取冻结 Ref,
+  // 仅判未过期（ref.expiresAt > now）。来源失效/hash 漂移的逐项复验留给 P3-13 inject
+  // （CapsuleInjectionValidator）——recovery 决定"引用值不值得保留",inject 决定"内容能不能真注入"。
+  const validMemoryCapsuleIds: string[] = [];
+  for (const invocation of invocations) {
+    const ref = invocation.intent.memoryCapsuleRef;
+    if (ref !== undefined && ref.expiresAt > now) validMemoryCapsuleIds.push(ref.id);
+  }
   return {
     managementRunId: run.id,
     lastEventSequence: events.at(-1)?.event.sequence ?? 0,
@@ -138,9 +147,7 @@ export async function collectManagementCheckpointFacts(
     openTaskIds: terminalRun ? [] : openTaskIds,
     waitingInvocationIds,
     completedInvocationIds,
-    // Phase 1 has no authoritative Memory repository yet. Fail closed instead
-    // of treating an Invocation intent reference as proof that a capsule exists.
-    validMemoryCapsuleIds: [],
+    validMemoryCapsuleIds,
     ...(phase2 && taskSnapshots.length > 0 ? { taskSnapshots, activeClaimLeaseIds } : {}),
   };
 }

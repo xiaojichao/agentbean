@@ -31,7 +31,16 @@ const intent: AgentInvocationIntentV1 = {
     resultRevision: 1,
     artifactIds: ['artifact-1'],
   }],
-  memoryCapsuleId: 'capsule-1',
+  memoryCapsuleRef: {
+    schemaVersion: 1,
+    id: 'capsule-1',
+    teamId: 'team-1',
+    managementRunId: 'run-1',
+    targetAgentId: 'agent-1',
+    contentHash: 'sha256:capsule-1',
+    authorizationDecisionId: 'decision-1',
+    expiresAt: 100,
+  },
   attachmentIds: ['attachment-1'],
   deadlineAt: 100,
 };
@@ -41,7 +50,7 @@ describe('Phase 0 Invocation policy', () => {
     const reordered = {
       deadlineAt: intent.deadlineAt,
       attachmentIds: intent.attachmentIds,
-      memoryCapsuleId: intent.memoryCapsuleId,
+      memoryCapsuleRef: intent.memoryCapsuleRef,
       dependencyResults: intent.dependencyResults,
       acceptanceCriteria: intent.acceptanceCriteria,
       taskContext: intent.taskContext,

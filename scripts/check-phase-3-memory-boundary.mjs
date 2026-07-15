@@ -33,6 +33,10 @@ const capsuleInjectionValidator = read('apps/server-next/src/application/capsule
 const capsuleInjectionTests = read('apps/server-next/tests/capsule-injection-validator.test.ts');
 const domainMemoryHashing = read('packages/domain/src/memory-hashing.ts');
 const runtimeTypes = read('packages/pi-management-runtime/src/types.ts');
+const invocationContract = read('packages/contracts/src/invocation.ts');
+const invocationGateway = read('apps/server-next/src/application/management/invocation-gateway.ts');
+const managementCheckpoint = read('apps/server-next/src/application/management/management-checkpoint.ts');
+const checkpointPolicy = read('packages/domain/src/checkpoint-policy.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
 
@@ -157,6 +161,17 @@ if (!injectionMarkers.every((marker) => capsuleInjectionValidator.includes(marke
   || !capsuleInjectionTests.includes('CAPSULE_CONTENT_HASH_MISMATCH')
   || !capsuleInjectionTests.includes('CAPSULE_POLICY_VERSION_STALE')) {
   violations.push('P3_CAPSULE_INJECTION_INVALID: two-check Capsule injection revalidation with shared domain hashing and dual-backend parity tests is required');
+}
+
+// Task 6（P3-08）：Capsule Ref 固化进 immutable Invocation intent + recovery 轻量过滤过期引用（fail closed）。
+const invocationBindingChecks =
+  invocationContract.includes('memoryCapsuleRef?: MemoryCapsuleRefDto')
+  && invocationGateway.includes('memoryCapsuleRef')
+  && invocationGateway.includes('sameMemoryCapsuleRef')
+  && managementCheckpoint.includes('expiresAt > now')
+  && checkpointPolicy.includes('invalid-memory-capsule');
+if (!invocationBindingChecks) {
+  violations.push('P3_INVOCATION_CAPSULE_BINDING_INVALID: Capsule Ref frozen into immutable intent, replay check, recovery expiry filtering, and checkpoint fail-closed are required');
 }
 
 const phase1Tools = runtimeTypes.match(
