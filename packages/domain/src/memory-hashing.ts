@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
 
-import type { MemoryContentKind, MemoryScopeType, MemorySourceRefDto } from '@agentbean/contracts';
+import type {
+  MemoryCapsuleItemDto,
+  MemoryContentKind,
+  MemoryScopeType,
+  MemorySourceRefDto,
+} from '@agentbean/contracts';
 
 /**
  * Capsule 内容与来源指纹的**单一哈希源**。
@@ -50,4 +55,17 @@ export function computeProjectionHash(input: ComputeProjectionHashInput): string
     input.contentKind,
   ];
   return `sha256:${createHash('sha256').update(parts.join('|')).digest('hex')}`;
+}
+
+/**
+ * Capsule 级聚合哈希（P3-08）：冻结进 `MemoryCapsuleRefDto.contentHash`，让 checkpoint/recovery
+ * 能权威判定一个 capsule 的整体内容是否漂移。聚合每项的 `contentHash`+`sourceRefsHash`（已是
+ * 冻结值），升序 join，与 item 顺序无关；空 capsule 退化为固定常量。
+ */
+export function hashCapsuleItems(items: readonly MemoryCapsuleItemDto[]): string {
+  const canonical = items
+    .map((item) => `${item.authorization.contentHash}:${item.authorization.sourceRefsHash}`)
+    .sort()
+    .join('|');
+  return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
 }

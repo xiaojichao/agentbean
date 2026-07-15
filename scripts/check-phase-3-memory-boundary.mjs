@@ -38,6 +38,9 @@ const memoryCandidateService = read('apps/server-next/src/application/memory-can
 const memoryCandidateTests = read('apps/server-next/tests/memory-candidate-service.test.ts');
 const memoryCandidatePolicy = read('packages/domain/src/memory-candidate-policy.ts');
 const memoryCandidateMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0019_management_phase_3_candidate_lifecycle.sql');
+const invocationContract = read('packages/contracts/src/invocation.ts');
+const invocationGateway = read('apps/server-next/src/application/management/invocation-gateway.ts');
+const managementCheckpoint = read('apps/server-next/src/application/management/management-checkpoint.ts');
 const runtimeTypes = read('packages/pi-management-runtime/src/types.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
@@ -196,6 +199,18 @@ if (!candidateServiceMarkers.every((marker) => memoryCandidateService.includes(m
   || !memoryCandidateTests.includes('CANDIDATE_NOT_FOUND')
   || !memoryCandidateTests.includes('CANDIDATE_HAS_CONFLICT')) {
   violations.push('P3_CANDIDATE_LIFECYCLE_INVALID: Memory Candidate lifecycle (state machine, projection-hash dedup via shared domain hashing, source conflict, dual-backend assert parity, fail-closed decide boundary) with parity tests is required');
+}
+
+// P3-08 slice 2：Capsule↔Invocation intent 固化 + checkpoint 查权威 capsule_refs 表接线。
+if (!domainMemoryHashing.includes('hashCapsuleItems')
+  || !memoryCapsuleService.includes('toMemoryCapsuleRef')
+  || !memoryCapsuleService.includes('capsuleRefs.create')
+  || !invocationContract.includes('memoryCapsuleRef?: MemoryCapsuleRefDto')
+  || invocationContract.includes('memoryCapsuleId?:')
+  || !invocationGateway.includes('sameMemoryCapsuleRef')
+  || !managementCheckpoint.includes('capsuleRefs.listByRun')
+  || !managementCheckpoint.includes('ref.deniedAt === undefined && ref.expiresAt > now')) {
+  violations.push('P3_CAPSULE_INVOCATION_BINDING_INVALID: Capsule ref 固化进 intent + checkpoint 查权威 capsule_refs 表接线 is required');
 }
 
 const phase1Tools = runtimeTypes.match(

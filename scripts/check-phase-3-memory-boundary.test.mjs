@@ -145,3 +145,12 @@ test('fails closed when Candidate lifecycle disappears', () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /P3_CANDIDATE_LIFECYCLE_INVALID/);
 });
+
+test('fails closed when Capsule↔Invocation/checkpoint binding disappears', () => {
+  const result = withFixture('agentbean-phase3-binding-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/management/management-checkpoint.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('capsuleRefs.listByRun', 'removedListByRun'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPSULE_INVOCATION_BINDING_INVALID/);
+});

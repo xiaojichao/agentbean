@@ -7,6 +7,7 @@ import type {
   AcceptanceCriterionDto,
   DependencyResultRefDto,
   DispatchStatus,
+  MemoryCapsuleRefDto,
 } from '../../../../../packages/contracts/src/index.js';
 import {
   canonicalizeAgentInvocationIntent,
@@ -56,6 +57,7 @@ export interface InvokeTaskAgentInput {
   readonly targetAgentId?: string;
   readonly objective: string;
   readonly attachmentIds: readonly string[];
+  readonly memoryCapsuleRef?: MemoryCapsuleRefDto;
   readonly deadlineAt?: number;
 }
 
@@ -114,6 +116,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           acceptanceCriteria: authority.acceptanceCriteria,
           dependencyResults: authority.dependencyResults,
           attachmentIds: [...input.attachmentIds],
+          ...(input.memoryCapsuleRef && { memoryCapsuleRef: input.memoryCapsuleRef }),
           ...(input.deadlineAt !== undefined && { deadlineAt: input.deadlineAt }),
         };
         const intentHash = hashIntent(intent);
@@ -366,9 +369,23 @@ function assertTaskInvocationReplay(existing: AgentInvocationRecordDto,
     || (input.targetAgentId !== undefined && existing.intent.targetAgentId !== input.targetAgentId)
     || existing.intent.objective !== input.objective.trim()
     || existing.intent.deadlineAt !== input.deadlineAt
+    || !sameMemoryCapsuleRef(existing.intent.memoryCapsuleRef, input.memoryCapsuleRef)
     || !sameAttachments) {
     throw new InvocationGatewayError('INVOCATION_IDEMPOTENCY_CONFLICT');
   }
+}
+
+function sameMemoryCapsuleRef(
+  existing: MemoryCapsuleRefDto | undefined,
+  requested: MemoryCapsuleRefDto | undefined,
+): boolean {
+  if (existing === undefined && requested === undefined) return true;
+  if (existing === undefined || requested === undefined) return false;
+  return existing.id === requested.id
+    && existing.contentHash === requested.contentHash
+    && existing.authorizationDecisionId === requested.authorizationDecisionId
+    && existing.expiresAt === requested.expiresAt
+    && existing.targetAgentId === requested.targetAgentId;
 }
 
 async function assertNoActiveTaskAttempt(

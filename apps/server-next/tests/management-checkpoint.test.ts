@@ -99,6 +99,31 @@ describe('management checkpoint', () => {
       taskSnapshots: facts.taskSnapshots,
     });
   });
+
+  test('reads validMemoryCapsuleIds from authoritative capsule_refs (exists + not expired + not denied)', async () => {
+    const harness = await createHarness();
+    const memory = createInMemoryRepositories().memory;
+    const run = await harness.repositories.runs.getById(harness.authority.managementRunId);
+    if (!run) throw new Error('run not found');
+    const now = 5_000;
+    // 三条 capsule ref：有效 / 已过期 / 已 deny → 只有有效的进 validMemoryCapsuleIds。
+    await memory.capsuleRefs.create({ id: 'cap-valid', teamId: run.teamId, managementRunId: run.id,
+      targetAgentId: 'agent-1', contentHash: 'sha256:a', authorizationDecisionId: 'dec-a',
+      issuedAt: 1_000, expiresAt: 10_000, createdAt: 1_000 });
+    await memory.capsuleRefs.create({ id: 'cap-expired', teamId: run.teamId, managementRunId: run.id,
+      targetAgentId: 'agent-1', contentHash: 'sha256:b', authorizationDecisionId: 'dec-b',
+      issuedAt: 1_000, expiresAt: 2_000, createdAt: 1_000 });
+    await memory.capsuleRefs.create({ id: 'cap-denied', teamId: run.teamId, managementRunId: run.id,
+      targetAgentId: 'agent-1', contentHash: 'sha256:c', authorizationDecisionId: 'dec-c',
+      issuedAt: 1_000, expiresAt: 10_000, deniedAt: 3_000, createdAt: 1_000 });
+
+    const facts = await collectManagementCheckpointFacts(harness.repositories, run, undefined, memory, now);
+    expect(facts.validMemoryCapsuleIds).toEqual(['cap-valid']);
+
+    // 不注入 memory 仓库 → fail-closed 空数组（Phase 1 占位，向后兼容）。
+    const closedFacts = await collectManagementCheckpointFacts(harness.repositories, run, undefined, undefined, now);
+    expect(closedFacts.validMemoryCapsuleIds).toEqual([]);
+  });
 });
 
 async function createHarness() {
@@ -117,6 +142,15 @@ async function createHarness() {
 function invocation(id: string, memoryCapsuleId: string | undefined, createdAt: number) {
   return {
     schemaVersion: 1 as const, id, managementRunId: 'id-1', intentHash: `${id}-hash`, idempotencyKey: `${id}-key`, createdAt,
-    intent: { schemaVersion: 1 as const, teamId: 'team-1', channelId: 'channel-1', targetAgentId: 'agent-1', targetKind: 'custom' as const, objective: id, acceptanceCriteria: [], dependencyResults: [], ...(memoryCapsuleId && { memoryCapsuleId }), attachmentIds: [] },
+    intent: {
+      schemaVersion: 1 as const, teamId: 'team-1', channelId: 'channel-1', targetAgentId: 'agent-1', targetKind: 'custom' as const, objective: id, acceptanceCriteria: [], dependencyResults: [],
+      ...(memoryCapsuleId && {
+        memoryCapsuleRef: {
+          schemaVersion: 1 as const, id: memoryCapsuleId, teamId: 'team-1', managementRunId: 'id-1',
+          targetAgentId: 'agent-1', contentHash: `sha256:${memoryCapsuleId}`, authorizationDecisionId: 'decision-1', expiresAt: 100,
+        },
+      }),
+      attachmentIds: [],
+    },
   };
 }
