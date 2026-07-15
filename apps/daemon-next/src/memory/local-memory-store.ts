@@ -4,7 +4,6 @@ import {
   lstat,
   mkdir,
   open,
-  readFile,
   realpath,
   rename,
   rm,
@@ -15,6 +14,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { MEMORY_KINDS } from '../../../../packages/contracts/src/index.js';
 import { agentBeanHome, profileRoot, sanitizeProfileId } from '../profile-paths.js';
 import { withLocalMemoryFileLock } from './file-lock.js';
+import { readRegularFileNoFollow, SafeFileReadError } from './safe-file-read.js';
 import {
   containsSensitiveMemoryText,
   containsSensitiveMemoryValue,
@@ -415,23 +415,15 @@ function profileFileTarget(profileId: string, baseDir?: string): ProfileFileTarg
 }
 
 async function loadItems(target: FileTarget, limits: StoreLimits): Promise<LocalMemoryItem[]> {
-  let metadata;
-  try {
-    metadata = await lstat(target.file);
-  } catch (error) {
-    if (errorCode(error) === 'ENOENT') return [];
-    throw new Error('LOCAL_MEMORY_FILE_READ_FAILED');
-  }
-  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > limits.maxFileBytes) {
-    throw new Error('LOCAL_MEMORY_FILE_INVALID');
-  }
   let raw: string;
   try {
-    raw = await readFile(target.file, 'utf8');
-  } catch {
+    const snapshot = await readRegularFileNoFollow(target.file, limits.maxFileBytes);
+    raw = snapshot.data.toString('utf8');
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return [];
+    if (error instanceof SafeFileReadError) throw new Error('LOCAL_MEMORY_FILE_INVALID');
     throw new Error('LOCAL_MEMORY_FILE_READ_FAILED');
   }
-  if (Buffer.byteLength(raw) > limits.maxFileBytes) throw new Error('LOCAL_MEMORY_FILE_INVALID');
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw) as unknown;

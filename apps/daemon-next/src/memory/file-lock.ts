@@ -1,13 +1,55 @@
 import { randomUUID } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
-import { open, rm, type FileHandle } from 'node:fs/promises';
+import { link, lstat, open, rename, rm, type FileHandle } from 'node:fs/promises';
+import { dirname } from 'node:path';
 
-interface LockOwnerV1 {
-  readonly schemaVersion: 1;
+import { readRegularFileNoFollow, SafeFileReadError } from './safe-file-read.js';
+
+interface LockOwnerV2 {
+  readonly schemaVersion: 2;
   readonly ownerToken: string;
   readonly pid: number;
   readonly createdAt: number;
+}
+
+interface LockHeartbeatV1 {
+  readonly schemaVersion: 1;
+  readonly ownerToken: string;
   readonly heartbeatAt: number;
+}
+
+interface ValidOwnerState {
+  readonly kind: 'valid';
+  readonly identity: FileIdentity;
+  readonly metadata: Stats;
+  readonly owner: LockOwnerV2;
+  readonly legacyHeartbeatAt?: number;
+}
+
+interface MalformedOwnerState {
+  readonly kind: 'malformed';
+  readonly identity: FileIdentity;
+  readonly metadata: Stats;
+}
+
+type OwnerState = { readonly kind: 'missing' }
+  | { readonly kind: 'unsafe' }
+  | ValidOwnerState
+  | MalformedOwnerState;
+
+interface FileIdentity {
+  readonly dev: number;
+  readonly ino: number;
+}
+
+interface AcquiredLock {
+  readonly identity: FileIdentity;
+  readonly owner: LockOwnerV2;
+  readonly heartbeatFile: string;
+}
+
+interface LockHeartbeat {
+  stop(): Promise<void>;
 }
 
 export interface LocalMemoryFileLockOptions {
@@ -15,27 +57,19 @@ export interface LocalMemoryFileLockOptions {
   readonly pollMs?: number;
   readonly heartbeatMs?: number;
   readonly staleHeartbeatMs?: number;
-}
-
-interface AcquiredLock {
-  readonly handle: FileHandle;
-  readonly identity: Pick<Stats, 'dev' | 'ino'>;
-  readonly owner: LockOwnerV1;
-}
-
-interface LockHeartbeat {
-  stop(): Promise<void>;
+  readonly malformedGraceMs?: number;
 }
 
 const DEFAULT_TIMEOUT_MS = 3_000;
 const DEFAULT_POLL_MS = 10;
 const DEFAULT_HEARTBEAT_MS = 5_000;
 const DEFAULT_STALE_HEARTBEAT_MS = 30_000;
+const DEFAULT_MALFORMED_GRACE_MS = 30_000;
 const MAX_LOCK_BYTES = 4_096;
 
 /**
- * Cross-process lock with explicit ownership. A lock is reclaimed only when its
- * heartbeat is stale and its PID is no longer alive; mtime alone is never used.
+ * Cross-process lock with immutable owner identity and atomically replaced,
+ * token-specific heartbeats. ESRCH owners are reclaimed immediately.
  */
 export async function withLocalMemoryFileLock<T>(
   lockFile: string,
@@ -46,6 +80,7 @@ export async function withLocalMemoryFileLock<T>(
   const pollMs = positiveInteger(options.pollMs ?? DEFAULT_POLL_MS);
   const heartbeatMs = positiveInteger(options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS);
   const staleHeartbeatMs = positiveInteger(options.staleHeartbeatMs ?? DEFAULT_STALE_HEARTBEAT_MS);
+  const malformedGraceMs = positiveInteger(options.malformedGraceMs ?? DEFAULT_MALFORMED_GRACE_MS);
   if (heartbeatMs >= staleHeartbeatMs) throw new Error('LOCAL_MEMORY_LOCK_OPTIONS_INVALID');
   const deadline = Date.now() + timeoutMs;
   let acquired: AcquiredLock | undefined;
@@ -54,7 +89,7 @@ export async function withLocalMemoryFileLock<T>(
       acquired = await createLock(lockFile);
     } catch (error) {
       if (errorCode(error) !== 'EEXIST') throw new Error('LOCAL_MEMORY_LOCK_FAILED');
-      if (await reclaimAbandonedLock(lockFile, staleHeartbeatMs)) continue;
+      if (await reclaimAbandonedLock(lockFile, staleHeartbeatMs, malformedGraceMs, pollMs)) continue;
       if (Date.now() >= deadline) throw new Error('LOCAL_MEMORY_LOCK_TIMEOUT');
       await delay(pollMs);
     }
@@ -65,37 +100,44 @@ export async function withLocalMemoryFileLock<T>(
     return await operation();
   } finally {
     await heartbeat.stop();
-    await acquired.handle.close().catch(() => undefined);
     await removeLockIfOwner(lockFile, acquired).catch(() => undefined);
+    await rm(acquired.heartbeatFile, { force: true }).catch(() => undefined);
   }
 }
 
 async function createLock(lockFile: string): Promise<AcquiredLock> {
-  const handle = await open(lockFile, constants.O_CREAT | constants.O_EXCL | constants.O_RDWR, 0o600);
   const timestamp = Date.now();
-  const owner: LockOwnerV1 = {
-    schemaVersion: 1,
+  const owner: LockOwnerV2 = {
+    schemaVersion: 2,
     ownerToken: randomUUID(),
     pid: process.pid,
     createdAt: timestamp,
-    heartbeatAt: timestamp,
   };
+  const heartbeatFile = lockHeartbeatFile(lockFile, owner.ownerToken);
+  const ownerTemporary = `${lockFile}.owner-tmp-${process.pid}-${randomUUID()}`;
   try {
-    await writeOwner(handle, owner);
-    const metadata = await handle.stat();
-    return { handle, identity: fileIdentity(metadata), owner };
+    await atomicReplace(heartbeatFile, serializeHeartbeat(owner, timestamp));
+    const identity = await writeSyncedExclusive(ownerTemporary, `${JSON.stringify(owner)}\n`);
+    await link(ownerTemporary, lockFile);
+    await syncDirectory(dirname(lockFile));
+    return { identity, owner, heartbeatFile };
   } catch (error) {
-    await handle.close().catch(() => undefined);
-    await removeLockIfToken(lockFile, owner.ownerToken).catch(() => undefined);
+    await rm(heartbeatFile, { force: true }).catch(() => undefined);
     throw error;
+  } finally {
+    await rm(ownerTemporary, { force: true }).catch(() => undefined);
   }
 }
 
 function startHeartbeat(acquired: AcquiredLock, heartbeatMs: number): LockHeartbeat {
   let pending = Promise.resolve();
   const timer = setInterval(() => {
-    const owner: LockOwnerV1 = { ...acquired.owner, heartbeatAt: Date.now() };
-    pending = pending.then(() => writeOwner(acquired.handle, owner)).catch(() => undefined);
+    pending = pending
+      .then(() => atomicReplace(
+        acquired.heartbeatFile,
+        serializeHeartbeat(acquired.owner, Date.now()),
+      ))
+      .catch(() => undefined);
   }, heartbeatMs);
   timer.unref();
   return {
@@ -106,38 +148,85 @@ function startHeartbeat(acquired: AcquiredLock, heartbeatMs: number): LockHeartb
   };
 }
 
-async function writeOwner(handle: FileHandle, owner: LockOwnerV1): Promise<void> {
-  const serialized = Buffer.from(`${JSON.stringify(owner)}\n`, 'utf8');
-  let offset = 0;
-  while (offset < serialized.length) {
-    const { bytesWritten } = await handle.write(
-      serialized,
-      offset,
-      serialized.length - offset,
-      offset,
-    );
-    if (bytesWritten <= 0) throw new Error('LOCAL_MEMORY_LOCK_WRITE_FAILED');
-    offset += bytesWritten;
+async function reclaimAbandonedLock(
+  lockFile: string,
+  staleHeartbeatMs: number,
+  malformedGraceMs: number,
+  stabilityCheckMs: number,
+): Promise<boolean> {
+  const state = await readOwnerState(lockFile);
+  if (state.kind === 'missing' || state.kind === 'unsafe') return false;
+  if (state.kind === 'malformed') {
+    if (Date.now() - state.metadata.mtimeMs <= malformedGraceMs) return false;
+    return removeMalformedIfStable(lockFile, state, stabilityCheckMs);
   }
-  await handle.truncate(serialized.length);
-  await handle.sync();
+
+  const pidState = inspectPid(state.owner.pid);
+  if (pidState === 'dead') return removeValidOwner(lockFile, state);
+  const heartbeatAt = await readHeartbeatAt(lockFile, state);
+  if (heartbeatAt !== undefined && Date.now() - heartbeatAt > staleHeartbeatMs) {
+    return removeValidOwner(lockFile, state);
+  }
+  if (heartbeatAt === undefined && Date.now() - state.metadata.mtimeMs > malformedGraceMs) {
+    return removeValidOwnerIfStable(lockFile, state, stabilityCheckMs);
+  }
+  return false;
 }
 
-async function reclaimAbandonedLock(lockFile: string, staleHeartbeatMs: number): Promise<boolean> {
-  const snapshot = await readLock(lockFile);
-  if (!snapshot) return false;
-  if (Date.now() - snapshot.owner.heartbeatAt <= staleHeartbeatMs || isPidAlive(snapshot.owner.pid)) {
+async function removeValidOwner(lockFile: string, state: ValidOwnerState): Promise<boolean> {
+  const removed = await removeLockIfOwner(lockFile, state);
+  if (removed) {
+    await rm(lockHeartbeatFile(lockFile, state.owner.ownerToken), { force: true }).catch(() => undefined);
+  }
+  return removed;
+}
+
+async function removeValidOwnerIfStable(
+  lockFile: string,
+  expected: ValidOwnerState,
+  stabilityCheckMs: number,
+): Promise<boolean> {
+  await delay(stabilityCheckMs);
+  const current = await readOwnerState(lockFile);
+  if (current.kind !== 'valid'
+    || current.owner.ownerToken !== expected.owner.ownerToken
+    || !sameIdentity(current.identity, expected.identity)
+    || current.metadata.mtimeMs !== expected.metadata.mtimeMs) {
     return false;
   }
-  return removeLockIfOwner(lockFile, snapshot);
+  return removeValidOwner(lockFile, current);
+}
+
+async function removeMalformedIfStable(
+  lockFile: string,
+  expected: MalformedOwnerState,
+  stabilityCheckMs: number,
+): Promise<boolean> {
+  await delay(stabilityCheckMs);
+  const current = await readOwnerState(lockFile);
+  if (current.kind !== 'malformed'
+    || !sameIdentity(current.identity, expected.identity)
+    || current.metadata.size !== expected.metadata.size
+    || current.metadata.mtimeMs !== expected.metadata.mtimeMs) {
+    return false;
+  }
+  const finalMetadata = await lstat(lockFile).catch(() => undefined);
+  if (!finalMetadata
+    || finalMetadata.isSymbolicLink()
+    || !finalMetadata.isFile()
+    || !sameIdentity(fileIdentity(finalMetadata), expected.identity)) {
+    return false;
+  }
+  await rm(lockFile);
+  return true;
 }
 
 async function removeLockIfOwner(
   lockFile: string,
   expected: Pick<AcquiredLock, 'identity' | 'owner'>,
 ): Promise<boolean> {
-  const current = await readLock(lockFile);
-  if (!current
+  const current = await readOwnerState(lockFile);
+  if (current.kind !== 'valid'
     || current.owner.ownerToken !== expected.owner.ownerToken
     || !sameIdentity(current.identity, expected.identity)) {
     return false;
@@ -146,78 +235,169 @@ async function removeLockIfOwner(
   return true;
 }
 
-async function removeLockIfToken(lockFile: string, ownerToken: string): Promise<boolean> {
-  const current = await readLock(lockFile);
-  if (!current || current.owner.ownerToken !== ownerToken) return false;
-  await rm(lockFile);
-  return true;
+async function readOwnerState(lockFile: string): Promise<OwnerState> {
+  try {
+    const snapshot = await readRegularFileNoFollow(lockFile, MAX_LOCK_BYTES);
+    const identity = fileIdentity(snapshot.metadata);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(snapshot.data.toString('utf8')) as unknown;
+    } catch {
+      return { kind: 'malformed', identity, metadata: snapshot.metadata };
+    }
+    const owner = parseOwner(parsed);
+    return owner
+      ? { kind: 'valid', identity, metadata: snapshot.metadata, ...owner }
+      : { kind: 'malformed', identity, metadata: snapshot.metadata };
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return { kind: 'missing' };
+    if (error instanceof SafeFileReadError) return inspectOversizedMalformedLock(lockFile);
+    return { kind: 'unsafe' };
+  }
 }
 
-async function readLock(lockFile: string): Promise<AcquiredLock | undefined> {
-  let handle: FileHandle;
+async function inspectOversizedMalformedLock(lockFile: string): Promise<OwnerState> {
   try {
-    handle = await open(lockFile, constants.O_RDONLY | noFollowFlag());
+    const metadata = await lstat(lockFile);
+    if (!metadata.isFile()
+      || metadata.isSymbolicLink()
+      || metadata.size <= MAX_LOCK_BYTES) return { kind: 'unsafe' };
+    return { kind: 'malformed', identity: fileIdentity(metadata), metadata };
   } catch (error) {
-    if (errorCode(error) === 'ENOENT') return undefined;
-    return undefined;
+    return errorCode(error) === 'ENOENT' ? { kind: 'missing' } : { kind: 'unsafe' };
   }
+}
+
+function parseOwner(value: unknown): {
+  readonly owner: LockOwnerV2;
+  readonly legacyHeartbeatAt?: number;
+} | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  const common = typeof record.ownerToken === 'string'
+    && record.ownerToken.length > 0
+    && Number.isSafeInteger(record.pid)
+    && Number(record.pid) > 0
+    && Number.isSafeInteger(record.createdAt);
+  if (!common) return undefined;
+  if (record.schemaVersion === 2 && Object.keys(record).length === 4) {
+    return { owner: record as unknown as LockOwnerV2 };
+  }
+  if (record.schemaVersion === 1
+    && Object.keys(record).length === 5
+    && Number.isSafeInteger(record.heartbeatAt)
+    && Number(record.heartbeatAt) >= Number(record.createdAt)) {
+    return {
+      owner: {
+        schemaVersion: 2,
+        ownerToken: String(record.ownerToken),
+        pid: Number(record.pid),
+        createdAt: Number(record.createdAt),
+      },
+      legacyHeartbeatAt: Number(record.heartbeatAt),
+    };
+  }
+  return undefined;
+}
+
+async function readHeartbeatAt(lockFile: string, state: ValidOwnerState): Promise<number | undefined> {
+  if (state.legacyHeartbeatAt !== undefined) return state.legacyHeartbeatAt;
   try {
-    const metadata = await handle.stat();
-    if (!metadata.isFile() || metadata.size <= 0 || metadata.size > MAX_LOCK_BYTES) return undefined;
-    const buffer = Buffer.alloc(Number(metadata.size));
-    let offset = 0;
-    while (offset < buffer.length) {
-      const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
-      if (bytesRead === 0) break;
-      offset += bytesRead;
-    }
-    if (offset !== buffer.length) return undefined;
-    const parsed = JSON.parse(buffer.toString('utf8')) as unknown;
-    if (!isLockOwner(parsed)) return undefined;
-    return { handle, identity: fileIdentity(metadata), owner: parsed };
+    const snapshot = await readRegularFileNoFollow(
+      lockHeartbeatFile(lockFile, state.owner.ownerToken),
+      MAX_LOCK_BYTES,
+    );
+    const parsed = JSON.parse(snapshot.data.toString('utf8')) as unknown;
+    return isHeartbeat(parsed, state.owner.ownerToken) ? parsed.heartbeatAt : undefined;
   } catch {
     return undefined;
-  } finally {
-    await handle.close().catch(() => undefined);
   }
 }
 
-function isLockOwner(value: unknown): value is LockOwnerV1 {
+function isHeartbeat(value: unknown, ownerToken: string): value is LockHeartbeatV1 {
   if (!value || typeof value !== 'object') return false;
-  const owner = value as Partial<LockOwnerV1>;
-  return Object.keys(owner).length === 5
-    && owner.schemaVersion === 1
-    && typeof owner.ownerToken === 'string'
-    && owner.ownerToken.length > 0
-    && Number.isSafeInteger(owner.pid)
-    && Number(owner.pid) > 0
-    && Number.isSafeInteger(owner.createdAt)
-    && Number.isSafeInteger(owner.heartbeatAt)
-    && Number(owner.heartbeatAt) >= Number(owner.createdAt);
+  const heartbeat = value as Partial<LockHeartbeatV1>;
+  return Object.keys(heartbeat).length === 3
+    && heartbeat.schemaVersion === 1
+    && heartbeat.ownerToken === ownerToken
+    && Number.isSafeInteger(heartbeat.heartbeatAt);
 }
 
-function isPidAlive(pid: number): boolean {
+function serializeHeartbeat(owner: LockOwnerV2, heartbeatAt: number): string {
+  const heartbeat: LockHeartbeatV1 = {
+    schemaVersion: 1,
+    ownerToken: owner.ownerToken,
+    heartbeatAt,
+  };
+  return `${JSON.stringify(heartbeat)}\n`;
+}
+
+async function atomicReplace(file: string, content: string): Promise<void> {
+  const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`;
+  try {
+    await writeSyncedExclusive(temporary, content);
+    await rename(temporary, file);
+    await syncDirectory(dirname(file));
+  } finally {
+    await rm(temporary, { force: true }).catch(() => undefined);
+  }
+}
+
+async function writeSyncedExclusive(file: string, content: string): Promise<FileIdentity> {
+  const handle = await open(file, constants.O_CREAT | constants.O_EXCL | constants.O_RDWR, 0o600);
+  try {
+    await writeAll(handle, Buffer.from(content, 'utf8'));
+    await handle.sync();
+    return fileIdentity(await handle.stat());
+  } finally {
+    await handle.close();
+  }
+}
+
+async function writeAll(handle: FileHandle, content: Buffer): Promise<void> {
+  let offset = 0;
+  while (offset < content.length) {
+    const { bytesWritten } = await handle.write(content, offset, content.length - offset, offset);
+    if (bytesWritten <= 0) throw new Error('LOCAL_MEMORY_LOCK_WRITE_FAILED');
+    offset += bytesWritten;
+  }
+  await handle.truncate(content.length);
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  try {
+    const directory = await open(path, constants.O_RDONLY);
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
+  } catch {
+    // Some target platforms do not support directory fsync; the file fsync remains mandatory.
+  }
+}
+
+function lockHeartbeatFile(lockFile: string, ownerToken: string): string {
+  return `${lockFile}.heartbeat-${ownerToken}`;
+}
+
+function inspectPid(pid: number): 'alive' | 'dead' | 'unknown' {
   try {
     process.kill(pid, 0);
-    return true;
+    return 'alive';
   } catch (error) {
-    return errorCode(error) === 'EPERM';
+    if (errorCode(error) === 'ESRCH') return 'dead';
+    if (errorCode(error) === 'EPERM') return 'alive';
+    return 'unknown';
   }
 }
 
-function fileIdentity(metadata: Stats): Pick<Stats, 'dev' | 'ino'> {
+function fileIdentity(metadata: Pick<Stats, 'dev' | 'ino'>): FileIdentity {
   return { dev: metadata.dev, ino: metadata.ino };
 }
 
-function sameIdentity(
-  left: Pick<Stats, 'dev' | 'ino'>,
-  right: Pick<Stats, 'dev' | 'ino'>,
-): boolean {
+function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return left.dev === right.dev && left.ino === right.ino;
-}
-
-function noFollowFlag(): number {
-  return typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0;
 }
 
 function positiveInteger(value: number): number {

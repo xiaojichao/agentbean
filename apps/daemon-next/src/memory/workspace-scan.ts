@@ -1,9 +1,9 @@
-import { constants } from 'node:fs';
-import { lstat, open, opendir, type FileHandle } from 'node:fs/promises';
+import { lstat, opendir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import type { LocalMemoryStore } from './local-memory-store.js';
 import { containsSensitiveMemoryText } from './sensitive-memory.js';
+import { readRegularFileNoFollow } from './safe-file-read.js';
 import type { AutoAccumulatedMemorySummary, LocalMemoryItem, LocalMemoryUpsertInput } from './types.js';
 import { workspaceCwdHash } from './workspace-identity.js';
 
@@ -67,30 +67,15 @@ function workspaceInput(
 }
 
 async function readPackageJson(path: string): Promise<Record<string, unknown> | undefined> {
-  let handle: FileHandle | undefined;
   try {
-    const noFollow = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0;
-    handle = await open(path, constants.O_RDONLY | noFollow);
-    const metadata = await handle.stat();
-    if (!metadata.isFile() || metadata.size > MAX_PACKAGE_JSON_BYTES) return undefined;
-    const buffer = Buffer.alloc(MAX_PACKAGE_JSON_BYTES + 1);
-    let offset = 0;
-    while (offset < buffer.length) {
-      const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
-      if (bytesRead === 0) break;
-      offset += bytesRead;
-    }
-    const finalMetadata = await handle.stat();
-    if (offset > MAX_PACKAGE_JSON_BYTES || finalMetadata.size > MAX_PACKAGE_JSON_BYTES) return undefined;
-    const raw = buffer.subarray(0, offset).toString('utf8');
+    const snapshot = await readRegularFileNoFollow(path, MAX_PACKAGE_JSON_BYTES);
+    const raw = snapshot.data.toString('utf8');
     const parsed = JSON.parse(raw) as unknown;
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? parsed as Record<string, unknown>
       : undefined;
   } catch {
     return undefined;
-  } finally {
-    await handle?.close().catch(() => undefined);
   }
 }
 

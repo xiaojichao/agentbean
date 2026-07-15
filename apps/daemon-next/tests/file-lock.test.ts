@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -10,19 +10,56 @@ import { withLocalMemoryFileLock } from '../src/memory/file-lock';
 const childFixture = fileURLToPath(new URL('./fixtures/file-lock-child.ts', import.meta.url));
 
 describe('local Memory cross-process file lock', () => {
-  test('child process 崩溃后按 owner PID 与 heartbeat 回收并重启获取锁', async () => {
+  test('child process 崩溃后 ESRCH 立即按 token/inode 回收，不等待 heartbeat stale', async () => {
     const lockFile = join(mkdtempSync(join(tmpdir(), 'agentbean-lock-crash-')), 'items.lock');
     const child = startChild(lockFile, 'crash');
     await child.ready;
     await expect(child.exited).resolves.toBe(17);
-    await delay(70);
 
     let acquired = false;
     await withLocalMemoryFileLock(lockFile, async () => {
       acquired = true;
-    }, { timeoutMs: 500, pollMs: 5, heartbeatMs: 10, staleHeartbeatMs: 50 });
+    }, { timeoutMs: 500, pollMs: 5, heartbeatMs: 10, staleHeartbeatMs: 60_000 });
 
     expect(acquired).toBe(true);
+  });
+
+  test('create 原子发布前崩溃只留下 partial temp，不阻塞立即重启', async () => {
+    const lockFile = join(mkdtempSync(join(tmpdir(), 'agentbean-lock-partial-create-')), 'items.lock');
+    const child = startChild(lockFile, 'partial-create');
+    await child.ready;
+    await expect(child.exited).resolves.toBe(18);
+
+    expect(existsSync(lockFile)).toBe(false);
+    await expect(withLocalMemoryFileLock(lockFile, async () => 'restarted', {
+      timeoutMs: 200, pollMs: 5, heartbeatMs: 10, staleHeartbeatMs: 100,
+    })).resolves.toBe('restarted');
+  });
+
+  test('历史 malformed lock 经 grace 与稳定 inode 复验后可恢复', async () => {
+    const lockFile = join(mkdtempSync(join(tmpdir(), 'agentbean-lock-malformed-')), 'items.lock');
+    const child = startChild(lockFile, 'malformed-lock');
+    await child.ready;
+    await expect(child.exited).resolves.toBe(20);
+
+    await expect(withLocalMemoryFileLock(lockFile, async () => 'restarted', {
+      timeoutMs: 500, pollMs: 5, heartbeatMs: 10, staleHeartbeatMs: 100,
+      malformedGraceMs: 40,
+    })).resolves.toBe('restarted');
+  });
+
+  test('heartbeat 中途崩溃只留下 partial temp，已发布 heartbeat 保持完整且可立即恢复', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentbean-lock-partial-heartbeat-'));
+    const lockFile = join(root, 'items.lock');
+    const child = startChild(lockFile, 'partial-heartbeat');
+    await child.ready;
+    await expect(child.exited).resolves.toBe(19);
+    expect(lockHeartbeat(lockFile)).toBeGreaterThan(0);
+    expect(readdirSync(root).some((name) => name.includes('.tmp-crash-'))).toBe(true);
+
+    await expect(withLocalMemoryFileLock(lockFile, async () => 'restarted', {
+      timeoutMs: 500, pollMs: 5, heartbeatMs: 10, staleHeartbeatMs: 60_000,
+    })).resolves.toBe('restarted');
   });
 
   test('slow owner 持续 heartbeat 时不可被抢锁，释放后下一进程可获取', async () => {
@@ -45,8 +82,7 @@ describe('local Memory cross-process file lock', () => {
   test('finally 只删除自己的 token/inode，不删除已被替换的新 owner 锁', async () => {
     const lockFile = join(mkdtempSync(join(tmpdir(), 'agentbean-lock-owner-')), 'items.lock');
     const replacement = {
-      schemaVersion: 1, ownerToken: 'replacement-owner', pid: process.pid,
-      createdAt: Date.now(), heartbeatAt: Date.now(),
+      schemaVersion: 2, ownerToken: 'replacement-owner', pid: process.pid, createdAt: Date.now(),
     };
 
     await withLocalMemoryFileLock(lockFile, async () => {
@@ -60,7 +96,11 @@ describe('local Memory cross-process file lock', () => {
   });
 });
 
-function startChild(lockFile: string, mode: 'crash' | 'hold', holdMs = 250): {
+function startChild(
+  lockFile: string,
+  mode: 'crash' | 'hold' | 'partial-create' | 'partial-heartbeat' | 'malformed-lock',
+  holdMs = 250,
+): {
   readonly process: ChildProcessWithoutNullStreams;
   readonly ready: Promise<void>;
   readonly exited: Promise<number | null>;
@@ -95,7 +135,11 @@ function startChild(lockFile: string, mode: 'crash' | 'hold', holdMs = 250): {
 }
 
 function lockHeartbeat(lockFile: string): number {
-  return Number((JSON.parse(readFileSync(lockFile, 'utf8')) as { heartbeatAt: unknown }).heartbeatAt);
+  const owner = JSON.parse(readFileSync(lockFile, 'utf8')) as { ownerToken: string };
+  const heartbeat = JSON.parse(
+    readFileSync(`${lockFile}.heartbeat-${owner.ownerToken}`, 'utf8'),
+  ) as { heartbeatAt: unknown };
+  return Number(heartbeat.heartbeatAt);
 }
 
 function delay(milliseconds: number): Promise<void> {
