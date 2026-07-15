@@ -128,6 +128,19 @@ describe('management worker socket integration', () => {
       idempotencyKey: 'missing-command',
       requestHash: 'request-hash',
     })).resolves.toMatchObject({ disposition: 'rejected' });
+    const handoffIntent = { schemaVersion: 1 as const, managementRunId: harness.runId,
+      fromAgentId: 'agent-1', toAgentId: 'agent-2', kind: 'consult' as const,
+      objective: '咨询 Agent 2', reason: '需要复核', contextRefs: [], dependencyResults: [],
+      acceptanceCriteria: [], attachmentIds: [], returnMode: 'return_to_manager' as const };
+    await harness.repositories.management.handoffs.create({ schemaVersion: 1, id: 'handoff-1',
+      managementRunId: harness.runId, intent: handoffIntent, intentHash: 'handoff-hash',
+      idempotencyKey: 'handoff-command', status: 'requested', createdAt: 20, updatedAt: 20 });
+    await expect(socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
+      ...authority,
+      commandId: 'handoff-command',
+      idempotencyKey: 'handoff-command',
+      requestHash: 'handoff-request-hash',
+    })).resolves.toMatchObject({ disposition: 'existing', resultReferenceId: 'handoff-1' });
     await expect(socket.trigger(AGENT_EVENTS.managementWorker.leaseRelease, {
       ...authority,
       idempotencyKey: 'release-1',

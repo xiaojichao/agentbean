@@ -175,6 +175,25 @@ export function createCollaborationService(input: {
       if (decision.kind === 'existing' && existing?.status !== 'requested') {
         throw new Error('HANDOFF_RECOVERY_CONFLICT');
       }
+      if (existing) {
+        const recoveredInvocation = await repositories.management.invocations.getByIdempotencyKey({
+          managementRunId: run.id,
+          idempotencyKey: `${request.idempotencyKey}:invocation`,
+        });
+        if (recoveredInvocation) {
+          const recoveredHandoff = { ...existing, invocationId: recoveredInvocation.id, updatedAt: now };
+          await repositories.managementUnitOfWork.run(async (management) => {
+            await management.handoffs.update(recoveredHandoff);
+            await appendCollaborationEvent(management, { managementRunId: run.id,
+              type: 'handoff-dispatched', actorKind: 'manager', actorId: request.authority.workerId,
+              idempotencyKey: `handoff-dispatched:${existing.id}`, payload: {
+                handoffId: existing.id, invocationId: recoveredInvocation.id,
+              } }, now, ids);
+          });
+          return { handoff: recoveredHandoff, invocation: recoveredInvocation,
+            view: await gateway.getView(recoveredInvocation.id), disposition: 'existing' as const };
+        }
+      }
       if (intent.deadlineAt !== undefined && intent.deadlineAt <= now) {
         throw new Error('HANDOFF_DEADLINE_EXPIRED');
       }

@@ -108,6 +108,7 @@ export function createPhase2CollaborationToolHandlers(input: {
   const service = createCollaborationService(input);
   const gateway = createInvocationGateway(input);
   const pollIntervalMs = input.pollIntervalMs ?? 50;
+  const emittedDispatchIds = new Set<string>();
   return {
     'agents.list_available': async (request) => ({ agents: await service.listAvailableAgents({
       managementRunId: request.managementRunId,
@@ -116,14 +117,19 @@ export function createPhase2CollaborationToolHandlers(input: {
     'handoffs.request': async (request) => {
       const requested = await service.requestHandoff({ authority: authority(request),
         idempotencyKey: request.idempotencyKey, ...request.input });
-      if (requested.disposition === 'created'
-        && requested.view.activeDispatchId && requested.handoff.status === 'requested') {
+      const activeDispatchId = requested.view.activeDispatchId;
+      const activeDispatch = activeDispatchId
+        ? await input.repositories.dispatches.getById(activeDispatchId)
+        : null;
+      if (activeDispatchId && requested.handoff.status === 'requested'
+        && activeDispatch?.status === 'queued' && !emittedDispatchIds.has(activeDispatchId)) {
         try {
-          await input.onDispatchCreated(requested.view.activeDispatchId);
+          await input.onDispatchCreated(activeDispatchId);
+          emittedDispatchIds.add(activeDispatchId);
         } catch {
-          await gateway.completeAttempt({ dispatchId: requested.view.activeDispatchId,
+          await gateway.completeAttempt({ dispatchId: activeDispatchId,
             status: 'failed', error: 'MANAGEMENT_DISPATCH_EMIT_FAILED', actorKind: 'system' });
-          await service.recordTerminal({ dispatchId: requested.view.activeDispatchId,
+          await service.recordTerminal({ dispatchId: activeDispatchId,
             status: 'failed', artifactIds: [] });
           throw new Error('MANAGEMENT_DISPATCH_EMIT_FAILED');
         }

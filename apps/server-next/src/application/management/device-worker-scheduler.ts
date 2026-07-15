@@ -454,6 +454,11 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
         idempotencyKey: input.idempotencyKey,
       });
       if (invocation) return { ...base, disposition: 'existing', resultReferenceId: invocation.id };
+      const handoff = await dependencies.management.handoffs.getByIdempotencyKey({
+        managementRunId: input.managementRunId,
+        idempotencyKey: input.idempotencyKey,
+      });
+      if (handoff) return { ...base, disposition: 'existing', resultReferenceId: handoff.id };
       const event = (await dependencies.management.events.list(input.managementRunId))
         .find((record) => record.event.idempotencyKey === input.idempotencyKey);
       return event

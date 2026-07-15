@@ -5249,6 +5249,13 @@ async function buildDispatchRequest(
     ? await repositories.agents.getExecutionConfig(agent.id)
     : null;
   const originMessage = await repositories.messages.getById(dispatch.messageId);
+  const managementAttempt = await repositories.management.dispatchAttempts.getByDispatchId(dispatch.id);
+  const managementInvocation = managementAttempt
+    ? await repositories.management.invocations.getById(managementAttempt.invocationId)
+    : null;
+  const managementHandoff = managementInvocation
+    ? await repositories.management.handoffs.getByInvocationId(managementInvocation.id)
+    : null;
   const history = originMessage?.threadId
     ? await repositories.messages.listThreadBefore({
         channelId: dispatch.channelId,
@@ -5258,29 +5265,29 @@ async function buildDispatchRequest(
       })
     : [];
   const dispatchHistory = history.filter((message) => !isTaskClaimAcknowledgementMessage(message));
-  const promptMessages = originMessage
+  const promptMessages = !managementHandoff && originMessage
     ? await collectCoalescedDispatchPromptMessages(repositories, {
         originMessage,
         agent,
       })
     : [];
-  const requestPrompt = promptMessages.length > 0
+  const requestPrompt = managementHandoff ? managementInvocation!.intent.objective : (promptMessages.length > 0
     ? renderCoalescedDispatchPrompt(promptMessages)
-    : dispatch.prompt;
-  const attachmentMessageIds = promptMessages.length > 0
-    ? promptMessages.map((message) => message.id)
-    : [dispatch.messageId];
+    : dispatch.prompt);
   const attachments: ArtifactRecord[] = [];
-  for (const messageId of attachmentMessageIds) {
-    attachments.push(...await repositories.artifacts.listByMessage(messageId));
+  if (managementInvocation) {
+    for (const artifactId of uniqueIds([...managementInvocation.intent.attachmentIds])) {
+      const artifact = await repositories.artifacts.getForTeam({ teamId: dispatch.teamId, artifactId });
+      if (artifact?.channelId === dispatch.channelId) attachments.push(artifact);
+    }
+  } else {
+    const attachmentMessageIds = promptMessages.length > 0
+      ? promptMessages.map((message) => message.id)
+      : [dispatch.messageId];
+    for (const messageId of attachmentMessageIds) {
+      attachments.push(...await repositories.artifacts.listByMessage(messageId));
+    }
   }
-  const managementAttempt = await repositories.management.dispatchAttempts.getByDispatchId(dispatch.id);
-  const managementInvocation = managementAttempt
-    ? await repositories.management.invocations.getById(managementAttempt.invocationId)
-    : null;
-  const managementHandoff = managementInvocation
-    ? await repositories.management.handoffs.getByInvocationId(managementInvocation.id)
-    : null;
 
   return {
     id: dispatch.id,
@@ -5576,6 +5583,14 @@ async function resolveRoutingContextAgentId(
   const root = await repositories.messages.getById(input.threadId);
   if (!root || root.teamId !== input.teamId || root.channelId !== input.channel.id) {
     return undefined;
+  }
+
+  const rootTaskId = typeof root.meta?.taskId === 'string' ? root.meta.taskId : undefined;
+  if (rootTaskId) {
+    const run = await repositories.management.runs.getByRootTaskId(rootTaskId);
+    if (run?.schemaVersion === 2 && run.status === 'running' && run.activeAgentId) {
+      return { kind: 'agent', agentId: run.activeAgentId };
+    }
   }
 
   const rootTaskAssignee = await taskAssigneeOwner(repositories, input.teamId, root);

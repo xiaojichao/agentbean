@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { createCollaborationService } from '../src/application/management/collaboration-service.js';
 import { hashManagementCommandInput } from '../src/application/management/management-event-validator.js';
 import { createManagementKernel } from '../src/application/management/management-kernel.js';
+import { createInvocationGateway } from '../src/application/management/invocation-gateway.js';
 import {
   createPhase1ManagementToolHandlers,
   createPhase2CollaborationToolHandlers,
@@ -125,6 +126,17 @@ describe('serial collaboration handoff', () => {
       id: 'handoff-recovery', managementRunId: harness.runId, intent,
       intentHash: hashManagementCommandInput(intent), idempotencyKey: 'handoff-recovery-key',
       status: 'requested', createdAt: 20, updatedAt: 20 });
+    const recoveredInvocation = await createInvocationGateway({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids }).invoke({ authority: harness.authority,
+      frozenTargetAgentId: 'agent-b', allowedTargetAgentIds: ['agent-b'],
+      idempotencyKey: 'handoff-recovery-key:invocation', intent: {
+        schemaVersion: 1, teamId: 'team-1', channelId: 'channel-1', targetAgentId: 'agent-b',
+        targetKind: 'custom', objective: '咨询 B', taskContext: proposal!.proposal.sourceTaskContext,
+        acceptanceCriteria: [], dependencyResults: [], attachmentIds: [],
+      } });
+    const run = await harness.repositories.management.runs.getById(harness.runId);
+    await harness.repositories.management.runs.update({ ...run!,
+      budget: { ...run!.budget, maxExternalInvocations: 2 } });
     await harness.repositories.taskCoordination.claimLeases.update({ id: 'claim-a',
       expectedStatus: 'active', status: 'released', heartbeatAt: 20, expiresAt: 1_000,
       releasedAt: 20 });
@@ -136,7 +148,8 @@ describe('serial collaboration handoff', () => {
       attachmentIds: [], acceptanceCriteria: [], returnMode: 'return_to_manager' });
 
     expect(recovered.handoff).toMatchObject({ id: 'handoff-recovery', status: 'requested',
-      invocationId: recovered.invocation.id });
+      invocationId: recoveredInvocation.view.id });
+    expect(recovered.invocation.id).toBe(recoveredInvocation.view.id);
     await expect(harness.repositories.management.handoffs.listByRun(harness.runId))
       .resolves.toHaveLength(1);
   });
@@ -161,6 +174,26 @@ describe('serial collaboration handoff', () => {
     expect(onDispatchCreated).toHaveBeenCalledTimes(1);
     await expect(harness.repositories.management.handoffs.listByRun(harness.runId))
       .resolves.toHaveLength(1);
+  });
+
+  test('re-emits an existing queued handoff after the handler process restarts', async () => {
+    const harness = await createHarness();
+    const [proposal] = await recordConsultProposal(harness);
+    const requested = await harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-rewake', sourceProposalId: proposal!.id,
+      sourceInvocationId: 'invocation-a', toAgentId: 'agent-b', kind: 'consult',
+      objective: '咨询 B', reason: '需要信息', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'return_to_manager' });
+    const onDispatchCreated = vi.fn();
+    const restartedHandler = createPhase2CollaborationToolHandlers({
+      repositories: harness.repositories, clock: harness.clock, ids: harness.ids,
+      onDispatchCreated,
+    })['handoffs.request'];
+
+    await expect(restartedHandler(handoffToolRequest(harness, proposal!.id, 'handoff-rewake')))
+      .resolves.toMatchObject({ invocationId: requested.invocation.id, status: 'requested' });
+    expect(onDispatchCreated).toHaveBeenCalledOnce();
+    expect(onDispatchCreated).toHaveBeenCalledWith(requested.view.activeDispatchId);
   });
 
   test('keeps the ManagementRun alive when a handoff Invocation fails', async () => {
@@ -277,6 +310,9 @@ describe('serial collaboration handoff', () => {
     const criterion = { id: 'criterion-1', description: '给出可验证结果', evidenceRequired: true };
     const contextRef = { kind: 'message' as const, id: 'message-root', snapshotHash: 'sha256:context',
       capturedAt: 10 };
+    await harness.repositories.artifacts.create({ id: 'artifact-1', teamId: 'team-1',
+      channelId: 'channel-1', uploaderId: 'user-1', filename: 'brief.md',
+      mimeType: 'text/markdown', sizeBytes: 10, createdAt: 10 });
     const [proposal] = await harness.service.recordProposals({ dispatchId: 'dispatch-a',
       agentId: 'agent-a', proposals: [{
         schemaVersion: 1, sourceInvocationId: 'invocation-a', sourceAgentId: 'agent-a',
@@ -284,19 +320,21 @@ describe('serial collaboration handoff', () => {
           taskAttempt: 1, claimLeaseId: 'claim-a' },
         toAgentId: 'agent-b', kind: 'consult', objective: '咨询 B', reason: '需要信息',
         contextRefs: [contextRef], dependencyResults: [], acceptanceCriteria: [criterion],
-        attachmentIds: [], returnMode: 'return_to_manager',
+        attachmentIds: ['artifact-1'], returnMode: 'return_to_manager',
       }] });
     const requested = await harness.service.requestHandoff({ authority: harness.authority,
       idempotencyKey: 'handoff-context', sourceProposalId: proposal!.id,
       sourceInvocationId: 'invocation-a', toAgentId: 'agent-b', kind: 'consult',
       objective: '咨询 B', reason: '需要信息', contextRefIds: ['message-root'],
-      dependencyInvocationIds: [], attachmentIds: [], acceptanceCriteria: [criterion],
+      dependencyInvocationIds: [], attachmentIds: ['artifact-1'], acceptanceCriteria: [criterion],
       returnMode: 'return_to_manager' });
     const app = createServerNextUseCases({ repositories: harness.repositories,
       clock: harness.clock, ids: harness.ids, managementKernel: harness.kernel });
 
     await expect(app.getDispatchRequest({ dispatchId: requested.view.activeDispatchId! }))
       .resolves.toMatchObject({ ok: true, request: {
+        prompt: '咨询 B',
+        attachments: [{ id: 'artifact-1', name: 'brief.md', mimeType: 'text/markdown' }],
         managementInvocationId: requested.invocation.id,
         managementContext: {
           invocationId: requested.invocation.id,
@@ -307,6 +345,31 @@ describe('serial collaboration handoff', () => {
           acceptanceCriteria: [criterion],
         },
       } });
+  });
+
+  test('routes follow-up thread messages to the accepted continuation owner', async () => {
+    const harness = await createHarness();
+    const [proposal] = await harness.service.recordProposals({ dispatchId: 'dispatch-a',
+      agentId: 'agent-a', proposals: [{
+        schemaVersion: 1, sourceInvocationId: 'invocation-a', sourceAgentId: 'agent-a',
+        sourceTaskContext: { taskId: 'task-root', rootTaskId: 'task-root', taskRevision: 1,
+          taskAttempt: 1, claimLeaseId: 'claim-a' },
+        toAgentId: 'agent-b', kind: 'continuation', objective: '由 B 收尾', reason: '能力匹配',
+        contextRefs: [], dependencyResults: [], acceptanceCriteria: [], attachmentIds: [],
+        returnMode: 'deliver_to_root',
+      }] });
+    const requested = await harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-follow-up', sourceProposalId: proposal!.id,
+      sourceInvocationId: 'invocation-a', toAgentId: 'agent-b', kind: 'continuation',
+      objective: '由 B 收尾', reason: '能力匹配', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'deliver_to_root' });
+    await harness.service.recordAccepted({ dispatchId: requested.view.activeDispatchId! });
+    const app = createServerNextUseCases({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids, managementKernel: harness.kernel });
+
+    await expect(app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1',
+      threadId: 'message-root', body: '补充一个要求' }))
+      .resolves.toMatchObject({ ok: true, route: { kind: 'dispatch', agentId: 'agent-b' } });
   });
 });
 
@@ -345,6 +408,8 @@ async function createHarness() {
     passwordHash: 'unused', primaryTeamId: 'team-1', createdAt: 1, updatedAt: 1 });
   await repositories.teams.create({ id: 'team-1', name: 'Team', path: 'team', visibility: 'private',
     ownerId: 'user-1', createdAt: 1 });
+  await repositories.teams.addMember({ teamId: 'team-1', userId: 'user-1', username: 'user',
+    role: 'owner', joinedAt: 1 });
   await repositories.channels.create({ id: 'channel-1', teamId: 'team-1', kind: 'channel',
     name: 'general', visibility: 'public', humanMemberIds: ['user-1'],
     agentMemberIds: ['agent-a', 'agent-b'], createdAt: 1 });
