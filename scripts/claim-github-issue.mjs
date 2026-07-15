@@ -7,6 +7,7 @@ const query = `
 query($owner: String!, $name: String!, $number: Int!) {
   viewer { login }
   repository(owner: $owner, name: $name) {
+    nameWithOwner
     defaultBranchRef { name }
     issue(number: $number) {
       number
@@ -29,6 +30,7 @@ query($owner: String!, $name: String!, $number: Int!) {
           body
           createdAt
           author { login }
+          authorAssociation
         }
       }
       timelineItems(last: 100, itemTypes: [CROSS_REFERENCED_EVENT]) {
@@ -57,24 +59,27 @@ function parseMarker(body) {
   const match = body?.match(/<!--\s*agentbean-codex-claim:v1\s+([^>]+?)\s*-->/);
   if (!match) return null;
   const attributes = Object.fromEntries(
-    [...match[1].matchAll(/([a-z]+)=([^\s]+)/g)].map((item) => [item[1], item[2]]),
+    [...match[1].matchAll(/([a-z_]+)=([^\s]+)/g)].map((item) => [item[1], item[2]]),
   );
-  if (!['claim', 'releasing', 'release'].includes(attributes.action) || !attributes.session) return null;
+  if (!['claim', 'releasing', 'release', 'released'].includes(attributes.action) || !attributes.session) return null;
   return {
     action: attributes.action,
     sessionId: attributes.session,
     scope: attributes.scope ?? 'unspecified',
     queue: attributes.queue === 'global' ? 'global' : 'session',
+    removeAssignee: attributes.remove_assignee === '1',
+    restoreReadyForAgent: attributes.restore_ready === '1',
+    cleanupSpecified: attributes.remove_assignee !== undefined || attributes.restore_ready !== undefined,
   };
 }
 
-export function activeClaims(comments = [], trustedAuthors = null) {
-  const active = new Map();
-  const trusted = trustedAuthors === null ? null : new Set(trustedAuthors);
+const TRUSTED_AUTHOR_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+
+export function claimStates(comments = []) {
+  const states = new Map();
   const ordered = comments
-    .filter((comment) => !trusted || trusted.has(comment.author?.login))
     .map((comment, index) => ({ comment, index, marker: parseMarker(comment.body) }))
-    .filter((item) => item.marker)
+    .filter((item) => item.marker && TRUSTED_AUTHOR_ASSOCIATIONS.has(item.comment.authorAssociation))
     .sort((left, right) => {
       const timeOrder = new Date(left.comment.createdAt) - new Date(right.comment.createdAt);
       return timeOrder || left.index - right.index;
@@ -82,27 +87,48 @@ export function activeClaims(comments = [], trustedAuthors = null) {
 
   for (const item of ordered) {
     const { marker, comment } = item;
-    if (marker.action === 'release') {
-      active.delete(marker.sessionId);
-    } else if (!active.has(marker.sessionId)) {
-      active.set(marker.sessionId, {
+    const existing = states.get(marker.sessionId);
+    if (marker.action === 'claim' && (!existing || existing.status === 'released')) {
+      states.set(marker.sessionId, {
         sessionId: marker.sessionId,
         scope: marker.scope,
         queue: marker.queue,
         authorLogin: comment.author?.login ?? null,
         createdAt: comment.createdAt,
         url: comment.url ?? null,
+        status: 'active',
+        removeAssignee: false,
+        restoreReadyForAgent: false,
       });
+    } else if (existing && existing.authorLogin === comment.author?.login) {
+      if (marker.action === 'releasing' && existing.status === 'active') {
+        existing.status = 'releasing';
+      } else if (marker.action === 'release' && ['active', 'releasing'].includes(existing.status)) {
+        existing.status = marker.cleanupSpecified ? 'release_pending' : 'released';
+        existing.removeAssignee = marker.cleanupSpecified && marker.removeAssignee;
+        existing.restoreReadyForAgent = marker.cleanupSpecified && marker.restoreReadyForAgent;
+      } else if (marker.action === 'released' && existing.status === 'release_pending') {
+        existing.status = 'released';
+      }
     }
   }
-  return [...active.values()].sort((left, right) => new Date(left.createdAt) - new Date(right.createdAt));
+  return [...states.values()].sort((left, right) => new Date(left.createdAt) - new Date(right.createdAt));
 }
 
-function closesIssue(body, issueNumber) {
+export function activeClaims(comments = []) {
+  return claimStates(comments).filter((claim) => claim.status !== 'released');
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function closesIssue(body, issue) {
   if (!body) return false;
   const keyword = '(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)';
-  const shortReference = `(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#${issueNumber}\\b`;
-  const urlReference = `https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/${issueNumber}\\b`;
+  const repository = escapeRegExp(issue.repositoryNameWithOwner ?? '');
+  const shortReference = `(?:${repository})?#${issue.number}\\b`;
+  const urlReference = `https://github\\.com/${repository}/issues/${issue.number}\\b`;
   return new RegExp(`${keyword}\\s*:?\\s+(?:${shortReference}|${urlReference})`, 'i').test(body);
 }
 
@@ -112,14 +138,14 @@ export function openClosingPullRequests(issue) {
     const source = event?.source;
     if (source?.__typename !== 'PullRequest' || source.state !== 'OPEN') continue;
     if (source.baseRefName !== issue.defaultBranchName) continue;
-    if (!closesIssue(source.body, issue.number)) continue;
+    if (!closesIssue(source.body, issue)) continue;
     byNumber.set(source.number, { number: source.number, url: source.url });
   }
   return [...byNumber.values()].sort((left, right) => left.number - right.number);
 }
 
-export function evaluateIssueClaim(issue, sessionId, { requireOwned = true } = {}) {
-  const claims = activeClaims(issue.comments?.nodes, issue.trustedClaimAuthors);
+export function evaluateIssueClaim(issue, sessionId, { requireOwned = true, rejectForeignAssignees = false } = {}) {
+  const claims = activeClaims(issue.comments?.nodes);
   const winner = claims[0] ?? null;
   const linkedPullRequests = openClosingPullRequests(issue);
   const blockers = [];
@@ -139,6 +165,10 @@ export function evaluateIssueClaim(issue, sessionId, { requireOwned = true } = {
     code: 'DEFAULT_BRANCH_UNKNOWN',
     detail: '无法确认仓库默认分支，拒绝判断 closing PR',
   });
+  if (!issue.repositoryNameWithOwner) blockers.push({
+    code: 'REPOSITORY_UNKNOWN',
+    detail: '无法确认当前仓库，拒绝判断 closing PR',
+  });
   if (truncated.length > 0) blockers.push({
     code: 'RESULTS_TRUNCATED',
     detail: `GitHub 查询被截断，无法证明认领唯一：${truncated.join('、')}`,
@@ -146,6 +176,13 @@ export function evaluateIssueClaim(issue, sessionId, { requireOwned = true } = {
   if (linkedPullRequests.length > 0) blockers.push({
     code: 'OPEN_CLOSING_PR',
     detail: `已有活动 PR 将关闭该 Issue：${linkedPullRequests.map((pr) => `#${pr.number}`).join('、')}`,
+  });
+  const foreignAssignees = (issue.assignees?.nodes ?? [])
+    .map((assignee) => assignee.login)
+    .filter((login) => login !== issue.viewerLogin);
+  if (rejectForeignAssignees && foreignAssignees.length > 0) blockers.push({
+    code: 'ASSIGNED_TO_OTHER_ACCOUNT',
+    detail: `Issue 已分配给其他账号：${foreignAssignees.join('、')}`,
   });
   if (winner && winner.sessionId !== sessionId) blockers.push({
     code: 'CLAIMED_BY_OTHER_SESSION',
@@ -175,10 +212,15 @@ export function claimComment(sessionId, scope, globallyQueued = false) {
   ].join('\n');
 }
 
-export function releaseComment(sessionId) {
+export function releaseComment(sessionId, effects = null) {
+  const cleanup = effects
+    ? ` remove_assignee=${effects.removeAssignee ? '1' : '0'} restore_ready=${effects.restoreReadyForAgent ? '1' : '0'}`
+    : '';
   return [
-    `<!-- ${CLAIM_MARKER_PREFIX} action=release session=${sessionId} -->`,
-    `🔓 Codex Session \`${sessionId}\` 已释放认领。`,
+    `<!-- ${CLAIM_MARKER_PREFIX} action=release session=${sessionId}${cleanup} -->`,
+    effects
+      ? `🔓 Codex Session \`${sessionId}\` 已进入释放清理阶段；完成前该 Claim 继续有效。`
+      : `🔓 Codex Session \`${sessionId}\` 已释放认领。`,
   ].join('\n');
 }
 
@@ -186,6 +228,13 @@ export function releaseIntentComment(sessionId) {
   return [
     `<!-- ${CLAIM_MARKER_PREFIX} action=releasing session=${sessionId} -->`,
     `🔓 Codex Session \`${sessionId}\` 正在释放认领；清理完成前该 Claim 继续有效。`,
+  ].join('\n');
+}
+
+export function releasedComment(sessionId) {
+  return [
+    `<!-- ${CLAIM_MARKER_PREFIX} action=released session=${sessionId} -->`,
+    `✅ Codex Session \`${sessionId}\` 已完成认领释放与清理。`,
   ].join('\n');
 }
 
@@ -267,7 +316,7 @@ function fetchIssue(options, repo) {
   return {
     ...issue,
     viewerLogin: payload.data?.viewer?.login ?? null,
-    trustedClaimAuthors: (issue.assignees?.nodes ?? []).map((assignee) => assignee.login),
+    repositoryNameWithOwner: payload.data?.repository?.nameWithOwner ?? null,
     defaultBranchName: payload.data?.repository?.defaultBranchRef?.name ?? null,
   };
 }
@@ -279,33 +328,74 @@ function print(result, json) {
 export function releaseOwnedClaim(issue, options, repo, dependencies = {}) {
   const execute = dependencies.execute ?? runGh;
   const reload = dependencies.reload ?? fetchIssue;
-  const before = evaluateIssueClaim(issue, options.sessionId);
-  const ownClaim = before.activeClaims.find((claim) => claim.sessionId === options.sessionId);
-  if (!ownClaim) return { released: false, issue, result: before, effects: null };
-  if (ownClaim.authorLogin !== issue.viewerLogin) {
-    throw new Error(`Session Claim 属于 ${ownClaim.authorLogin}，当前账号 ${issue.viewerLogin} 无权释放`);
+  let currentIssue = issue;
+  let result = evaluateIssueClaim(currentIssue, options.sessionId, { requireOwned: false });
+  if (result.blockers.some((blocker) => blocker.code === 'RESULTS_TRUNCATED')) {
+    throw new Error('Issue 历史查询被截断，禁止执行释放副作用');
+  }
+  let ownState = claimStates(currentIssue.comments?.nodes)
+    .find((claim) => claim.sessionId === options.sessionId);
+  if (!ownState) return { released: false, issue: currentIssue, result, effects: null };
+  if (ownState.authorLogin !== currentIssue.viewerLogin) {
+    throw new Error(`Session Claim 属于 ${ownState.authorLogin}，当前账号 ${currentIssue.viewerLogin} 无权释放`);
+  }
+  if (ownState.status === 'released') {
+    return { released: true, issue: currentIssue, result, effects: null };
   }
 
-  execute(['issue', 'comment', String(options.issue), '--repo', repo.nameWithOwner, '--body', releaseIntentComment(options.sessionId)]);
-  const refreshedIssue = reload(options, repo);
-  const releasing = evaluateIssueClaim(refreshedIssue, options.sessionId, { requireOwned: false });
-  const releasingClaim = releasing.activeClaims.find((claim) => claim.sessionId === options.sessionId);
-  if (!releasingClaim || releasingClaim.authorLogin !== refreshedIssue.viewerLogin) {
-    throw new Error('释放意图写入后无法重新确认当前 Session Claim');
+  if (ownState.status === 'active') {
+    execute(['issue', 'comment', String(options.issue), '--repo', repo.nameWithOwner, '--body', releaseIntentComment(options.sessionId)]);
+    currentIssue = reload(options, repo);
+    result = evaluateIssueClaim(currentIssue, options.sessionId, { requireOwned: false });
+    if (result.blockers.some((blocker) => blocker.code === 'RESULTS_TRUNCATED')) {
+      throw new Error('释放意图写入后历史查询被截断，禁止执行释放副作用');
+    }
+    ownState = claimStates(currentIssue.comments?.nodes)
+      .find((claim) => claim.sessionId === options.sessionId);
   }
-  const nextWinner = releasing.activeClaims.find((claim) => claim.sessionId !== options.sessionId) ?? null;
-  const effects = releaseEffects(releasingClaim, {
-    wasWinner: releasing.winner?.sessionId === options.sessionId,
-    nextWinner,
-    issueState: refreshedIssue.state,
-  });
-  if (effects.removeAssignee) {
-    const editArgs = ['issue', 'edit', String(options.issue), '--repo', repo.nameWithOwner, '--remove-assignee', '@me'];
-    if (effects.restoreReadyForAgent) editArgs.push('--add-label', 'ready-for-agent');
+
+  let effects;
+  if (ownState?.status === 'releasing') {
+    const nextWinner = result.activeClaims.find((claim) => claim.sessionId !== options.sessionId) ?? null;
+    effects = releaseEffects(ownState, {
+      wasWinner: result.winner?.sessionId === options.sessionId,
+      nextWinner,
+      issueState: currentIssue.state,
+    });
+    execute([
+      'issue', 'comment', String(options.issue), '--repo', repo.nameWithOwner,
+      '--body', releaseComment(options.sessionId, effects),
+    ]);
+    currentIssue = reload(options, repo);
+    result = evaluateIssueClaim(currentIssue, options.sessionId, { requireOwned: false });
+    if (result.blockers.some((blocker) => blocker.code === 'RESULTS_TRUNCATED')) {
+      throw new Error('释放清理标记写入后历史查询被截断，禁止执行释放副作用');
+    }
+    ownState = claimStates(currentIssue.comments?.nodes)
+      .find((claim) => claim.sessionId === options.sessionId);
+  }
+
+  if (ownState?.status !== 'release_pending') {
+    throw new Error('无法确认当前 Session 已进入可重试的释放清理阶段');
+  }
+  effects ??= {
+    removeAssignee: ownState.removeAssignee,
+    restoreReadyForAgent: ownState.restoreReadyForAgent,
+  };
+  const assignedToViewer = (currentIssue.assignees?.nodes ?? [])
+    .some((assignee) => assignee.login === currentIssue.viewerLogin);
+  const globallyQueued = (currentIssue.labels?.nodes ?? [])
+    .some((label) => label.name === 'ready-for-agent');
+  const needsAssigneeRemoval = effects.removeAssignee && assignedToViewer;
+  const needsQueueRestore = effects.restoreReadyForAgent && !globallyQueued;
+  if (needsAssigneeRemoval || needsQueueRestore) {
+    const editArgs = ['issue', 'edit', String(options.issue), '--repo', repo.nameWithOwner];
+    if (needsAssigneeRemoval) editArgs.push('--remove-assignee', '@me');
+    if (needsQueueRestore) editArgs.push('--add-label', 'ready-for-agent');
     execute(editArgs);
   }
-  execute(['issue', 'comment', String(options.issue), '--repo', repo.nameWithOwner, '--body', releaseComment(options.sessionId)]);
-  return { released: true, issue: refreshedIssue, result: releasing, effects };
+  execute(['issue', 'comment', String(options.issue), '--repo', repo.nameWithOwner, '--body', releasedComment(options.sessionId)]);
+  return { released: true, issue: currentIssue, result, effects };
 }
 
 function main() {
@@ -326,7 +416,10 @@ function main() {
     }
 
     if (options.command === 'claim') {
-      const before = evaluateIssueClaim(issue, options.sessionId, { requireOwned: false });
+      const before = evaluateIssueClaim(issue, options.sessionId, {
+        requireOwned: false,
+        rejectForeignAssignees: true,
+      });
       if (!before.ready) {
         print(before, options.json);
         process.exitCode = 2;
