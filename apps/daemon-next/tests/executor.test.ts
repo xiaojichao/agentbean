@@ -5,7 +5,7 @@ import { describe, expect, test } from 'vitest';
 import { buildChildEnv, createCommandExecutor } from '../src/executor';
 
 describe('daemon-next command executor', () => {
-  test('runs a custom agent command with prompt stdin, args, cwd, and dispatch-only env', async () => {
+  test('runs a custom agent command with unified Memory prompt stdin, args, cwd, and dispatch-only env', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
     const scriptPath = join(cwd, 'echo-agent.mjs');
     writeFileSync(
@@ -32,6 +32,11 @@ describe('daemon-next command executor', () => {
       agentId: 'agent-1',
       requestId: 'request-1',
       prompt: 'hello custom agent',
+      memoryContext: [{
+        schemaVersion: 1, id: 'memory-1', kind: 'decision', scopeType: 'team',
+        content: 'Use the verified runtime.', selectionReason: 'invocation-bound-capsule-currently-authorized',
+        provenance: { origin: 'server', capsuleId: 'capsule-1', authorizationDecisionId: 'decision-1', sourceRefs: [] },
+      }],
       customAgent: {
         adapterKind: 'gemini',
         command: process.execPath,
@@ -46,7 +51,7 @@ describe('daemon-next command executor', () => {
       throw new Error('expected structured command result');
     }
     expect(JSON.parse(output.body)).toEqual({
-      input: 'hello custom agent',
+      input: expect.stringMatching(/Server 协作记忆[\s\S]*Use the verified runtime\.[\s\S]*当前用户输入[\s\S]*hello custom agent/),
       args: ['--model', 'gpt-5.4'],
       cwd,
       tokenPresent: true,
@@ -60,6 +65,7 @@ describe('daemon-next command executor', () => {
       completedAt: 1010,
       logExcerpt: expect.stringContaining('SECRET_TOKEN=[redacted]'),
     });
+    expect(output.workspaceRun?.command).not.toContain('Use the verified runtime.');
     expect(output.workspaceRun?.logExcerpt).not.toContain('secret-value');
     expect(output.artifacts).toEqual([
       expect.objectContaining({
@@ -330,6 +336,11 @@ describe('daemon-next command executor', () => {
       agentId: 'agent-1',
       requestId: 'request-1',
       prompt: 'collect top 20 AI tweets',
+      memoryContext: [{
+        schemaVersion: 1, id: 'server-memory', kind: 'decision', scopeType: 'team',
+        content: 'Prefer primary sources.', selectionReason: 'invocation-bound-capsule-currently-authorized',
+        provenance: { origin: 'server', capsuleId: 'capsule-1', authorizationDecisionId: 'decision-1', sourceRefs: [] },
+      }],
       history: [
         { messageId: 'm-prev-user', senderKind: 'human' as const, senderId: 'u1', body: 'what is trending?', createdAt: 1 },
         { messageId: 'm-prev-agent', senderKind: 'agent' as const, senderId: 'a1', body: 'let me check.', createdAt: 2 },
@@ -353,6 +364,7 @@ describe('daemon-next command executor', () => {
     expect(output.body).toContain('collect top 20 AI tweets');
     expect(output.body).toContain('what is trending?');
     expect(output.body).toContain('let me check.');
+    expect(output.body).toContain('Prefer primary sources.');
     // The command line uses hermes' non-interactive oneshot mode (-z auto-bypasses tool
     // approvals, so the agent can actually run tools in an async channel with no stdin).
     expect(output.workspaceRun?.command).toContain('-z');
@@ -361,6 +373,7 @@ describe('daemon-next command executor', () => {
     expect(output.workspaceRun?.command).not.toContain('collect top 20 AI tweets');
     expect(output.workspaceRun?.command).not.toContain('what is trending?');
     expect(output.workspaceRun?.command).not.toContain('let me check.');
+    expect(output.workspaceRun?.command).not.toContain('Prefer primary sources.');
     // The prompt is NOT piped through stdin for hermes.
     expect(readFileSync(stdinLogPath, 'utf8')).toBe('(empty)');
     expect(output.workspaceRun?.status).toBe('succeeded');
@@ -825,6 +838,11 @@ describe('daemon-next command executor', () => {
       agentId: 'agent-1',
       requestId: 'request-1',
       prompt: 'explain closures',
+      memoryContext: [{
+        schemaVersion: 1, id: 'local-memory', kind: 'procedural', scopeType: 'local-workspace',
+        content: 'Use a small example.', selectionReason: 'current-device-profile-cwd',
+        provenance: { origin: 'local', sourceKind: 'manual' },
+      }],
       history: [
         { messageId: 'm-prev-user', senderKind: 'human' as const, senderId: 'u1', body: 'what is a callback?', createdAt: 1 },
         { messageId: 'm-prev-agent', senderKind: 'agent' as const, senderId: 'a1', body: 'a function passed as an argument.', createdAt: 2 },
@@ -845,10 +863,12 @@ describe('daemon-next command executor', () => {
     expect(output.body).toContain('explain closures');
     expect(output.body).toContain('what is a callback?');
     expect(output.body).toContain('a function passed as an argument.');
+    expect(output.body).toContain('Use a small example.');
     // The command line carries -p but never the prompt (it travels on stdin, not argv).
     expect(output.workspaceRun?.command).toContain('-p');
     expect(output.workspaceRun?.command).not.toContain('explain closures');
     expect(output.workspaceRun?.command).not.toContain('what is a callback?');
+    expect(output.workspaceRun?.command).not.toContain('Use a small example.');
     expect(output.workspaceRun?.status).toBe('succeeded');
     expect(output.workspaceRun?.exitCode).toBe(0);
   });

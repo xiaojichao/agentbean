@@ -174,6 +174,26 @@ test('fails closed when Capsule denial stops updating the authoritative ref', ()
   assert.match(result.stderr, /P3_CAPSULE_INVOCATION_BINDING_INVALID/);
 });
 
+test('fails closed when runtime Capsule revalidation is bypassed', () => {
+  const result = withFixture('agentbean-phase3-runtime-context-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/server-capsule-runtime-context-service.ts');
+    writeFileSync(path, readFileSync(path, 'utf8')
+      .replaceAll('validateCapsuleForInjection', 'removedRuntimeRevalidation'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_RUNTIME_CONTEXT_INVALID/);
+});
+
+test('fails closed when production runtime Capsule wiring is removed', () => {
+  const result = withFixture('agentbean-phase3-runtime-wiring-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/dev-server.ts');
+    writeFileSync(path, readFileSync(path, 'utf8')
+      .replaceAll('createDefaultServerCapsuleRuntimeContextResolver', 'removedRuntimeResolver'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_RUNTIME_CONTEXT_INVALID/);
+});
+
 test('fails closed when Phase 2 agents.invoke drops the Capsule ref wire contract', () => {
   const result = withFixture('agentbean-phase3-capsule-wire-', (fixture) => {
     const path = join(fixture, 'packages/contracts/src/management-worker-v2.ts');

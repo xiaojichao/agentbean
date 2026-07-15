@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { AGENT_EVENTS, type AgentCategory, type ArtifactPathKind, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, type AgentCategory, type ArtifactPathKind, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
 import {
@@ -49,6 +49,7 @@ export { createTaskClaimProtocol } from './management-worker-protocol.js';
 export type { TaskClaimProtocol, TaskClaimProtocolHandlers } from './management-worker-protocol.js';
 import { createRescanController, type RescanController } from './rescan.js';
 import { createDispatchOutbox, type DispatchOutbox } from './outbox.js';
+import { prepareDispatchRuntimeMemory } from './memory/runtime-memory-context.js';
 
 export interface DaemonProtocolSocket {
   readonly connected: boolean;
@@ -140,6 +141,7 @@ export interface DispatchRequestPayload {
   requestId: string;
   managementInvocationId?: string;
   managementContext?: DispatchManagementContextDto;
+  memoryContext?: readonly DispatchMemoryContextItemDto[];
   prompt: string;
   history?: DispatchHistoryMessageDto[];
   attachments?: DispatchAttachment[];
@@ -340,6 +342,11 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           if (cancelledDispatchIds.delete(request.id)) {
             return;
           }
+          request = await prepareDispatchRuntimeMemory({
+            request,
+            profileId: device.profileId,
+            baseDir: home,
+          });
           const result = normalizeDispatchResult(await executor(request));
           if (cancelledDispatchIds.delete(request.id)) {
             return;

@@ -18,6 +18,7 @@ const memoryRepositories = read('apps/server-next/src/application/memory-reposit
 const memoryUnitOfWork = read('apps/server-next/src/application/memory-unit-of-work.ts');
 const memoryMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0015_management_phase_3_memory.sql');
 const capsuleRefMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0016_management_phase_3_capsule_refs.sql');
+const capsuleManifestMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0020_management_phase_3_capsule_item_manifests.sql');
 const sqliteRepositories = read('apps/server-next/src/infra/sqlite/repositories.ts');
 const memoryBackends = [
   read('apps/server-next/src/infra/memory/memory-repositories.ts'),
@@ -42,6 +43,16 @@ const invocationContract = read('packages/contracts/src/invocation.ts');
 const managementWorkerV2 = read('packages/contracts/src/management-worker-v2.ts');
 const invocationGateway = read('apps/server-next/src/application/management/invocation-gateway.ts');
 const managementCheckpoint = read('apps/server-next/src/application/management/management-checkpoint.ts');
+const dispatchContract = read('packages/contracts/src/dispatch.ts');
+const serverCapsuleRuntime = read('apps/server-next/src/application/server-capsule-runtime-context-service.ts');
+const serverCapsuleRuntimeTests = read('apps/server-next/tests/server-capsule-runtime-context-service.test.ts');
+const serverMemoryPermissions = read('apps/server-next/src/application/server-memory-permissions.ts');
+const serverMemoryPermissionTests = read('apps/server-next/tests/server-memory-permissions.test.ts');
+const serverDevRuntime = read('apps/server-next/src/dev-server.ts');
+const daemonRuntimeMemory = read('apps/daemon-next/src/memory/runtime-memory-context.ts');
+const daemonRuntimeMemoryTests = read('apps/daemon-next/tests/runtime-memory-context.test.ts');
+const daemonExecutor = read('apps/daemon-next/src/executor.ts');
+const daemonProtocol = read('apps/daemon-next/src/index.ts');
 const managementToolCatalog = read('packages/pi-management-runtime/src/management-tool-catalog.ts');
 const runtimeTypes = read('packages/pi-management-runtime/src/types.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
@@ -235,6 +246,43 @@ if (!managementWorkerV2.includes('Phase3ManagementWorkerToolInputMapV1')
   violations.push('P3_CAPABILITY_DEFINITIONS_INVALID: Phase 3 Memory 工具定义（Phase3 输入 map + exact-key parser + catalog schema + PHASE_3 tool 名单）is required');
 }
 
+const runtimeContractMarkers = [
+  'DispatchMemoryContextItemDto', 'selectionReason', "origin: 'server'", "origin: 'local'",
+];
+const runtimeServerMarkers = [
+  'createServerCapsuleRuntimeContextService', 'capsuleItems.listByCapsule',
+  'validateCapsuleForInjection', 'hashCapsuleItems', 'capsule-injected',
+  'SERVER_CAPSULE_REVALIDATION_FAILED',
+];
+const runtimeDaemonMarkers = [
+  'prepareDispatchRuntimeMemory', 'createLocalMemoryStore', 'listLocalMemoriesForDispatch',
+  'serverMemoryOnly', 'containsSensitiveMemoryValue', 'mergeRuntimeMemoryContext', 'buildRuntimePrompt',
+];
+if (!runtimeContractMarkers.every((marker) => dispatchContract.includes(marker))
+  || !capsuleManifestMigration.includes('memory_capsule_item_manifests')
+  || capsuleManifestMigration.includes(' content TEXT')
+  || !sqliteRepositories.includes("'team/0020_management_phase_3_capsule_item_manifests.sql'")
+  || !runtimeServerMarkers.every((marker) => serverCapsuleRuntime.includes(marker))
+  || !serverMemoryPermissions.includes('createServerMemorySearchPermissions')
+  || !serverMemoryPermissions.includes('CURRENT_MEMORY_POLICY_VERSION')
+  || !serverMemoryPermissions.includes("sourceVisibility === 'local-only'")
+  || !serverMemoryPermissionTests.includes('production Server Memory permissions')
+  || !serverDevRuntime.includes('createDefaultServerCapsuleRuntimeContextResolver')
+  || !serverDevRuntime.includes('serverCapsuleRuntimeContextResolver,')
+  || !serverNextUsecases.includes('serverCapsuleRuntimeContextResolver')
+  || !serverNextUsecases.includes('memoryContext.length > 0')
+  || !serverCapsuleRuntimeTests.includes('describe.each')
+  || !serverCapsuleRuntimeTests.includes('after service restart')
+  || !serverCapsuleRuntimeTests.includes('body-free audit')
+  || !runtimeDaemonMarkers.every((marker) => daemonRuntimeMemory.includes(marker))
+  || !daemonExecutor.includes('buildRuntimePrompt(request)')
+  || !daemonProtocol.includes('prepareDispatchRuntimeMemory')
+  || !daemonRuntimeMemoryTests.includes("test.each(['direct', 'shadow']")
+  || !daemonRuntimeMemoryTests.includes('restart/reconnect')
+  || !daemonRuntimeMemoryTests.includes('current-device-profile-cwd')) {
+  violations.push('P3_RUNTIME_CONTEXT_INVALID: Invocation-bound Server Capsule + current Device/profile/cwd local Memory must be revalidated, merged, provenance-tagged and rendered through every executor path');
+}
+
 const phase1Tools = runtimeTypes.match(
   /export const PHASE_1_MANAGEMENT_TOOL_NAMES\s*=\s*\[([\s\S]*?)\]\s+as const/,
 )?.[1] ?? '';
@@ -254,9 +302,14 @@ if (scripts['test:phase3-memory-boundary'] !== 'node --test scripts/check-phase-
   || !String(scripts['test:phase3-memory-persistence']).includes('memory-unit-of-work.test.ts')
   || !String(scripts['test:phase3-memory-persistence']).includes('memory-candidate-repositories.test.ts')
   || !String(scripts['test:phase3-memory-persistence']).includes('memory-candidate-service.test.ts')
+  || !String(scripts['test:phase3-memory-persistence']).includes('server-capsule-runtime-context-service.test.ts')
+  || !String(scripts['test:phase3-memory-persistence']).includes('server-memory-permissions.test.ts')
+  || !String(scripts['test:phase3-memory']).includes('test:phase3-memory-daemon')
+  || !String(scripts['test:phase3-memory-daemon']).includes('runtime-memory-context.test.ts')
   || !String(scripts['build:phase3-memory']).includes('build:contracts')
   || !String(scripts['build:phase3-memory']).includes('build:domain')
   || !String(scripts['build:phase3-memory']).includes('build:server-next')
+  || !String(scripts['build:phase3-memory']).includes('build:daemon-next')
   || !String(scripts['test:retained-boundaries']).includes('test:phase3-memory-boundary')
   || !String(scripts['test:retained-boundaries']).includes('check:phase3-memory-boundary')
   || !workflow.includes('npm run test:ci')

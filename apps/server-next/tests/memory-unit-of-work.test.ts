@@ -4,6 +4,7 @@ import { describe, expect, test } from 'vitest';
 import type {
   MemoryAuditEventRecord,
   MemoryCapsuleRefRecord,
+  MemoryCapsuleItemManifestRecord,
   MemoryGrantRecord,
   MemoryItemRecord,
   MemorySourceRecord,
@@ -195,7 +196,9 @@ describe.each([
     const fixture = createFixture();
     try {
       await fixture.repositories.memoryUnitOfWork.run(async (memory) => {
+        await memory.items.create(item());
         await memory.capsuleRefs.create(capsuleRef('cap-1', 'run-1'));
+        await memory.capsuleItems.create(capsuleItemManifest());
       });
       await expect(fixture.repositories.memoryUnitOfWork.run(async (memory) => {
         await memory.capsuleRefs.create(capsuleRef('cap-1', 'run-1'));
@@ -214,6 +217,10 @@ describe.each([
         .resolves.toMatchObject([{ id: 'cap-1' }]);
       await expect(fixture.repositories.memory.capsuleRefs.listByRun({ teamId: 'team-1', managementRunId: 'run-2' }))
         .resolves.toEqual([]);
+      await expect(fixture.repositories.memory.capsuleItems.listByCapsule({ teamId: 'team-1', capsuleId: 'cap-1' }))
+        .resolves.toMatchObject([{ memoryId: 'memory-1', requesterUserId: 'user-1', contentField: 'content' }]);
+      await expect(fixture.repositories.memory.capsuleItems.listByCapsule({ teamId: 'team-2', capsuleId: 'cap-1' }))
+        .resolves.toEqual([]);
 
       // deniedAt 必须落在 [issuedAt, expiresAt] 内且不可重复 deny。
       await expect(fixture.repositories.memory.capsuleRefs.markDenied({
@@ -229,6 +236,24 @@ describe.each([
       await expect(fixture.repositories.memory.capsuleRefs.markDenied({
         teamId: 'team-1', id: 'missing', deniedAt: 5_000,
       })).resolves.toBeNull();
+    } finally {
+      fixture.close();
+    }
+  });
+
+  test('rejects a tampered body-free Capsule manifest authorization mode', async () => {
+    const fixture = createFixture();
+    try {
+      await fixture.repositories.memoryUnitOfWork.run(async (memory) => {
+        await memory.items.create(item());
+        await memory.capsuleRefs.create(capsuleRef('cap-invalid', 'run-1'));
+      });
+      const manifest = capsuleItemManifest();
+      await expect(fixture.repositories.memory.capsuleItems.create({
+        ...manifest,
+        capsuleId: 'cap-invalid',
+        authorization: { ...manifest.authorization, mode: 'tampered' },
+      } as unknown as MemoryCapsuleItemManifestRecord)).rejects.toThrow(/authorization is invalid/i);
     } finally {
       fixture.close();
     }
@@ -251,11 +276,13 @@ describe('Phase 3 Memory migration', () => {
         WHERE id = 'team/0017_management_phase_3_candidates.sql'`).get()).toEqual({ count: 1 });
       expect(db.prepare(`SELECT COUNT(*) AS count FROM schema_migrations
         WHERE id = 'team/0019_management_phase_3_candidate_lifecycle.sql'`).get()).toEqual({ count: 1 });
+      expect(db.prepare(`SELECT COUNT(*) AS count FROM schema_migrations
+        WHERE id = 'team/0020_management_phase_3_capsule_item_manifests.sql'`).get()).toEqual({ count: 1 });
       const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'
         AND name LIKE 'memory_%' ORDER BY name`).all().map((value) => (value as { name: string }).name);
       expect(tables).toEqual([
         'memory_audit_events', 'memory_candidate_sources', 'memory_candidates',
-        'memory_capsule_refs', 'memory_grants',
+        'memory_capsule_item_manifests', 'memory_capsule_refs', 'memory_grants',
         'memory_items', 'memory_sources', 'memory_tags',
       ]);
       const auditColumns = db.prepare("SELECT name FROM pragma_table_info('memory_audit_events')")
@@ -396,6 +423,22 @@ function capsuleRef(id = 'cap-1', managementRunId = 'run-1'): MemoryCapsuleRefRe
     authorizationDecisionId: 'decision-1',
     issuedAt: 1_000,
     expiresAt: 10_000,
+    createdAt: 1_000,
+  };
+}
+
+function capsuleItemManifest(): MemoryCapsuleItemManifestRecord {
+  return {
+    capsuleId: 'cap-1', teamId: 'team-1', requesterUserId: 'user-1', memoryId: 'memory-1',
+    position: 0, scopeType: 'task', scopeRef: 'task-1', sourceVisibility: 'team',
+    contentKind: 'decision', redactionLevel: 'none', contentField: 'content',
+    authorization: {
+      schemaVersion: 1, decisionId: 'decision-1', mode: 'scope-policy', policyVersion: 1,
+      targetAgentId: 'agent-1', sourceScopeType: 'task', sourceScopeRef: 'task-1',
+      sourceRefsHash: 'sha256:refs', contentHash: 'sha256:content',
+      authorizedContentKind: 'decision', authorizedRedactionLevel: 'none',
+      issuedAt: 1_000, expiresAt: 10_000,
+    },
     createdAt: 1_000,
   };
 }

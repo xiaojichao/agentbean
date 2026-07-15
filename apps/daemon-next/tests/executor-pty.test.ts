@@ -91,6 +91,11 @@ describe('daemon-next codex PTY executor', () => {
       const output = await executor({
         id: 'dispatch-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
         agentId: 'agent-1', requestId: 'request-1', prompt: 'write a function',
+        memoryContext: [{
+          schemaVersion: 1, id: 'memory-1', kind: 'procedural', scopeType: 'local-workspace',
+          content: 'Run the matching build.', selectionReason: 'current-device-profile-cwd',
+          provenance: { origin: 'local', sourceKind: 'scan' },
+        }],
         customAgent: { adapterKind: 'codex', command: 'codex', args: [], cwd },
       });
 
@@ -99,11 +104,14 @@ describe('daemon-next codex PTY executor', () => {
       expect(capturedCommand).toBe('codex');
       expect(capturedArgs).toEqual(expect.arrayContaining(['exec', '--skip-git-repo-check', '--output-last-message', '--json']));
       // The joined prompt travels as the trailing positional argument.
-      expect(capturedArgs?.[capturedArgs.length - 1]).toBe('# user\nwrite a function');
+      expect(capturedArgs?.[capturedArgs.length - 1]).toMatch(
+        /# user\n## AgentBean 运行时记忆[\s\S]*当前 Device 本地记忆[\s\S]*Run the matching build\.[\s\S]*write a function/,
+      );
       // The reply is read from the --output-last-message file.
       expect(output.body).toBe('Hello from codex');
       // The prompt is redacted from the persisted run command.
       expect(output.workspaceRun?.command).not.toContain('write a function');
+      expect(output.workspaceRun?.command).not.toContain('Run the matching build.');
       expect(output.workspaceRun?.status).toBe('succeeded');
       expect(output.workspaceRun?.exitCode).toBe(0);
     });

@@ -7,6 +7,7 @@ import {
 } from '../../../../packages/contracts/src/index.js';
 import type {
   MemoryAuditEventRecord,
+  MemoryCapsuleItemManifestRecord,
   MemoryCapsuleRefRecord,
   MemoryCandidateRecord,
   MemoryCandidateSourceRecord,
@@ -240,6 +241,56 @@ export function assertMemoryCapsuleRefRecord(record: MemoryCapsuleRefRecord): vo
     throw new Error('memory capsule ref denial time is outside its validity window');
   }
   if (record.createdAt < record.issuedAt) throw new Error('memory capsule ref creation precedes issue time');
+}
+
+export function assertMemoryCapsuleItemManifestRecord(record: MemoryCapsuleItemManifestRecord): void {
+  if (!Number.isSafeInteger(record.position) || record.position < 0) {
+    throw new Error('memory capsule item position is invalid');
+  }
+  if (!record.capsuleId.trim() || !record.teamId.trim() || !record.requesterUserId.trim()
+    || !record.memoryId.trim() || !record.scopeRef.trim()) {
+    throw new Error('memory capsule item identity is required');
+  }
+  assertServerMemoryScope(record.scopeType, record.scopeRef);
+  if (!SOURCE_VISIBILITY_VALUES.has(record.sourceVisibility)) {
+    throw new Error('memory capsule item source visibility is invalid');
+  }
+  if (!CONTENT_KIND_VALUES.has(record.contentKind) || !REDACTION_LEVEL_VALUES.has(record.redactionLevel)) {
+    throw new Error('memory capsule item projection is invalid');
+  }
+  if (record.contentField !== 'content' && record.contentField !== 'summary') {
+    throw new Error('memory capsule item content field is invalid');
+  }
+  const authorization = record.authorization;
+  if (authorization.schemaVersion !== 1
+    || (authorization.mode !== 'scope-policy' && authorization.mode !== 'explicit-grant')
+    || authorization.targetAgentId.trim().length === 0
+    || authorization.decisionId.trim().length === 0
+    || authorization.sourceRefsHash.trim().length === 0
+    || authorization.contentHash.trim().length === 0
+    || !Number.isSafeInteger(authorization.policyVersion)
+    || authorization.policyVersion < 1
+    || authorization.expiresAt <= authorization.issuedAt) {
+    throw new Error('memory capsule item authorization is invalid');
+  }
+  if (authorization.mode === 'scope-policy'
+    ? authorization.grantId !== undefined || authorization.grantVersion !== undefined
+    : !authorization.grantId?.trim() || !Number.isSafeInteger(authorization.grantVersion)
+      || authorization.grantVersion! < 1) {
+    throw new Error('memory capsule item grant authorization is invalid');
+  }
+  if (authorization.sourceScopeType !== record.scopeType
+    || authorization.sourceScopeRef !== record.scopeRef
+    || authorization.authorizedContentKind !== record.contentKind
+    || authorization.authorizedRedactionLevel !== record.redactionLevel) {
+    throw new Error('memory capsule item authorization projection mismatch');
+  }
+  if (record.expiresAt !== undefined && record.expiresAt > authorization.expiresAt) {
+    throw new Error('memory capsule item expiry exceeds authorization');
+  }
+  if (record.createdAt < authorization.issuedAt) {
+    throw new Error('memory capsule item creation precedes authorization');
+  }
 }
 
 export function assertMemoryCapsuleRefDenial(

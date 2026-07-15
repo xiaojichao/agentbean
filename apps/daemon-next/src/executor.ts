@@ -4,6 +4,7 @@ import type { DaemonDispatchResult, DispatchRequestPayload, StubExecutor } from 
 import { buildChildEnv, buildLogArtifactContent, buildLogExcerpt, formatCommand } from './executor-helpers.js';
 import { PTY_ADAPTERS, defaultPtySpawnLoader, runPtyAgentCommand } from './executor-pty.js';
 import type { PtySpawnFn } from './executor-pty.js';
+import { buildRuntimePrompt } from './memory/runtime-memory-context.js';
 
 export { buildChildEnv };
 
@@ -38,10 +39,11 @@ export function createCommandExecutor(options: CommandExecutorOptions = {}): Stu
   const ptySpawnLoader = options.ptySpawnLoader ?? defaultPtySpawnLoader;
 
   return async (request) => {
-    if (!request.customAgent?.command) {
-      return `${fallbackPrefix}${request.prompt}`;
+    const runtimeRequest = { ...request, prompt: buildRuntimePrompt(request) };
+    if (!runtimeRequest.customAgent?.command) {
+      return `${fallbackPrefix}${runtimeRequest.prompt}`;
     }
-    return runCustomAgentCommand(request, { timeoutMs, killGraceMs, maxAccumulatedBytes, clock, ptySpawnLoader });
+    return runCustomAgentCommand(runtimeRequest, { timeoutMs, killGraceMs, maxAccumulatedBytes, clock, ptySpawnLoader });
   };
 }
 
