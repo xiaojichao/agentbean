@@ -1,7 +1,8 @@
 import type {
   MemoryAuditEventRecord,
-  MemoryCapsuleRefRecord,
   MemoryCandidateRecord,
+  MemoryCandidateSourceRecord,
+  MemoryCapsuleRefRecord,
   MemoryGrantRecord,
   MemoryItemRecord,
   MemoryRepositories,
@@ -13,6 +14,8 @@ import {
   assertMemoryCapsuleRefDenial,
   assertMemoryCapsuleRefRecord,
   assertMemoryCandidateRecord,
+  assertMemoryCandidateSourceRecord,
+  assertMemoryCandidateUpdate,
   assertMemoryGrantRecord,
   assertMemoryGrantTransition,
   assertMemoryItemRecord,
@@ -29,6 +32,7 @@ export interface MemoryRepositoryMemoryState {
   readonly auditEvents: Map<string, MemoryAuditEventRecord>;
   readonly capsuleRefs: Map<string, MemoryCapsuleRefRecord>;
   readonly candidates: Map<string, MemoryCandidateRecord>;
+  readonly candidateSources: Map<string, MemoryCandidateSourceRecord>;
 }
 
 export function createMemoryRepositoryMemoryState(): MemoryRepositoryMemoryState {
@@ -40,6 +44,7 @@ export function createMemoryRepositoryMemoryState(): MemoryRepositoryMemoryState
     auditEvents: new Map(),
     capsuleRefs: new Map(),
     candidates: new Map(),
+    candidateSources: new Map(),
   };
 }
 
@@ -54,6 +59,7 @@ export function cloneMemoryRepositoryMemoryState(
     auditEvents: new Map(state.auditEvents),
     capsuleRefs: new Map(state.capsuleRefs),
     candidates: new Map(state.candidates),
+    candidateSources: new Map(state.candidateSources),
   };
 }
 
@@ -206,29 +212,44 @@ export function createInMemoryMemoryRepositories(
     candidates: {
       async create(record) {
         assertMemoryCandidateRecord(record);
-        const key = `${record.teamId}:${record.id}`;
-        if (state.candidates.has(key)) throw new Error('memory candidate already exists');
-        const projectionKey = `${record.teamId}:${record.projectionHash}`;
-        for (const existing of state.candidates.values()) {
-          if (`${existing.teamId}:${existing.projectionHash}` === projectionKey) {
-            throw new Error('memory candidate projection hash already exists');
-          }
-        }
-        state.candidates.set(key, record);
+        if (state.candidates.has(record.id)) throw new Error('memory candidate already exists');
+        state.candidates.set(record.id, record);
         return record;
       },
       async getById(input) {
-        return state.candidates.get(`${input.teamId}:${input.id}`) ?? null;
+        const record = state.candidates.get(input.id);
+        return record?.teamId === input.teamId ? record : null;
       },
-      async getByProjectionHash(input) {
+      async findByProjectionHash(input) {
         return [...state.candidates.values()]
-          .find((record) => record.teamId === input.teamId && record.projectionHash === input.projectionHash)
-          ?? null;
+          .filter((record) => record.teamId === input.teamId
+            && record.projectionHash === input.projectionHash
+            && (record.status === 'candidate' || record.status === 'conflict'))
+          .sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id))[0] ?? null;
       },
-      async listByRun(input) {
-        return [...state.candidates.values()]
-          .filter((record) => record.teamId === input.teamId && record.managementRunId === input.managementRunId)
-          .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+      async update(input) {
+        assertMemoryCandidateRecord(input.record);
+        const current = state.candidates.get(input.record.id);
+        if (!current || current.teamId !== input.record.teamId
+          || current.updatedAt !== input.expectedUpdatedAt) return null;
+        assertMemoryCandidateUpdate(current, input.record);
+        state.candidates.set(input.record.id, input.record);
+        return input.record;
+      },
+    },
+    candidateSources: {
+      async create(record) {
+        assertMemoryCandidateSourceRecord(record);
+        requireCandidate(state, record.teamId, record.candidateId);
+        const key = candidateSourceKey(record);
+        if (state.candidateSources.has(key)) throw new Error('memory candidate source already exists');
+        state.candidateSources.set(key, record);
+        return record;
+      },
+      async listByCandidate(input) {
+        return [...state.candidateSources.values()]
+          .filter((record) => record.teamId === input.teamId && record.candidateId === input.candidateId)
+          .sort(compareCandidateSource);
       },
     },
   };
@@ -276,4 +297,22 @@ function compareGrantScope(left: MemoryGrantRecord, right: MemoryGrantRecord): n
   return left.sourceScopeType.localeCompare(right.sourceScopeType)
     || left.sourceScopeRef.localeCompare(right.sourceScopeRef)
     || left.id.localeCompare(right.id);
+}
+
+function requireCandidate(state: MemoryRepositoryMemoryState, teamId: string, candidateId: string): void {
+  const candidate = state.candidates.get(candidateId);
+  if (!candidate || candidate.teamId !== teamId) throw new Error('memory candidate does not belong to Team');
+}
+
+function candidateSourceKey(
+  record: Pick<MemoryCandidateSourceRecord, 'teamId' | 'candidateId' | 'sourceKind' | 'sourceId'>,
+): string {
+  return `${record.teamId}:${record.candidateId}:${record.sourceKind}:${record.sourceId}`;
+}
+
+function compareCandidateSource(left: MemoryCandidateSourceRecord, right: MemoryCandidateSourceRecord): number {
+  return left.createdAt - right.createdAt
+    || left.sourceKind.localeCompare(right.sourceKind)
+    || left.sourceId.localeCompare(right.sourceId)
+    || left.candidateId.localeCompare(right.candidateId);
 }

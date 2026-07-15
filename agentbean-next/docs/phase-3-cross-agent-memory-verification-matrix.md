@@ -2,7 +2,7 @@
 
 > 更新日期：2026-07-15
 > 当前 verdict：**Not ready**
-> 原因：合同、Domain 安全边界、Server 持久化、协作 Memory 用例层、权限优先检索排序、最小 Capsule 创建、事实源失效处理、Capsule 注入复验、Capsule ref 持久化地基与 Candidate 持久化地基已完成；explicit-grant Capsule、Invocation/checkpoint 绑定接线、实际 inject 接线、Candidate lifecycle service、Device 本地 Memory 注入合并、Web 治理面、socket wiring 与真实跨 Agent 验证尚未完成。Phase 3 runtime 必须保持关闭。
+> 原因：合同、Domain 安全边界、Server 持久化、协作 Memory 用例层（CRUD/状态机/显式共享）、权限优先检索排序、最小 Capsule 创建、事实源失效处理、Capsule 注入复验、Capsule ref 持久化地基与 Memory Candidate 生命周期（提交 / projection-hash 去重 / 来源冲突 / 接受-拒绝-合并）已完成；explicit-grant Capsule、Invocation/checkpoint 绑定接线、实际 inject 接线、Candidate 的 worker/checkpoint 接线、Device 本地 Memory 注入合并、Web 治理面、socket wiring 与真实跨 Agent 验证尚未完成。Phase 3 runtime 必须保持关闭。
 
 状态定义：`Green` 已有自动化或真实证据；`Yellow` 已实现但证据未收口；`Red` 尚未实现或缺关键证据。
 
@@ -17,8 +17,8 @@
 | P3-07 | Yellow | 每次 inject 复验成员、scope、hash、policy/grant 与 expiry | `capsule-injection-validator.ts`：validateCapsuleForInjection 两检查合取——`evaluateMemoryInjection`（fresh status + 全来源可用）+ `evaluateMemoryCapsuleAuthorization`（当前事实源与冻结投影双重 hash、policyVersion/grant/expiry）+ Team/当前 Memory scope/逐来源 scope 复验；capsule 过期全拒并逐 item 写 capsule-denied 审计；双后端 parity 30 用例。待补：实际 inject 接线（P3-13）、explicit-grant item |
 | P3-08 | Yellow | Capsule 与 immutable Invocation intent/checkpoint 绑定 | slice 1 持久化地基：migration 0016 `memory_capsule_refs` 表 + `MemoryCapsuleRefRecord` repo（create/getById/listByRun/markDenied，双后端）+ assert 校验（identity/expiresAt>issuedAt/deniedAt 窗口）+ 静态注册 + 双后端 parity（Team 隔离/denied 窗口/run scope）。待补 slice 2 接线：createCapsule 写 ref + invokeTask 透传 intent.memoryCapsuleId + collectManagementCheckpointFacts 填 validMemoryCapsuleIds（替空占位，含 P3-07 复验） |
 | P3-09 | Red | V3 Worker capability/preflight 与四个 Memory tools | 工具元数据存在，但 Phase 3 runtime 未开放 |
-| P3-10 | Yellow | 外部 Agent 结果进入 Candidate 生命周期 | slice 1 持久化地基：migration 0017 `memory_candidates` 表（UNIQUE team_id+projection_hash 去重闸门）+ `MemoryCandidateRecord` repo（create/getById/getByProjectionHash/listByRun，双后端）+ assert 校验（status/contentKind/projectionHash/sourceRefs/decidedAt）+ 静态注册 + 双后端 parity（projection-hash 去重/Team 隔离/run scope）。待补 slice 2 lifecycle service：proposeCandidate（去重+冲突识别）+ decideCandidate（accept/reject/merge → 进 active memory） |
-| P3-11 | Red | 来源关联、projection hash 去重与冲突识别 | 未实现 |
+| P3-10 | Green | 外部 Agent 结果进入 Candidate 生命周期 | domain 状态机 `evaluateCandidateTransition`（`packages/domain/src/memory-candidate-policy.ts`，5 态 candidate→accepted/rejected/merged/conflict，终态/自迁/conflict→candidate 非法）+ 独立表 `memory_candidates`/`memory_candidate_sources`（`0016_memory_candidates.sql`，scope 仅 server 6 态、source_visibility 无 local-only，schema 级 fail-closed）+ `MemoryRepositories.candidates` 子接口（create/getById/findByProjectionHash/update）+ `memory-candidate-service.ts` proposeCandidate/acceptCandidate/rejectCandidate/mergeCandidate（unitOfWork 原子、`assertDecideAuthority` 仅用户/系统、外部 Agent 只能 propose、无正文 audit candidate-created/candidate-decided）；双后端 parity 测试 + boundary gate `P3_CANDIDATE_LIFECYCLE_INVALID`。待补：worker `memory.propose_candidate` 接线（P3-09）、checkpoint `validMemoryCapsuleIds` 接真实查询（P3-08） |
+| P3-11 | Green | 来源关联、projection hash 去重与冲突识别 | `projectionHash` 复用 domain `memory-hashing.ts` 单一源 `computeProjectionHash`（proposedContent + sourceRefs + scope + contentKind，故意不 normalize，严格字节去重）；幂等：`findByProjectionHash` 查未决 candidate 命中即返回、不新建 active Memory；来源冲突：candidate 来源经 `sources.listBySource` 命中 active Memory 且 projectionHash 不同 → `conflict` 态（conflictMemoryIds），accept 遇冲突 throw `CANDIDATE_HAS_CONFLICT` 引导 merge，merge 在 unitOfWork 内复用 supersede 范式取代冲突项；双后端 parity 覆盖幂等/冲突/跨 Team fail-closed（`CANDIDATE_NOT_FOUND` 不泄漏存在性）。待补：内容相似度启发式（设计决议留 follow-up，初版只做精确来源冲突） |
 | P3-12 | Red | Device LocalMemoryStore、workspace scan 与 outcome observer | 未实现 |
 | P3-13 | Red | server Capsule + 当前 cwd local Memory 的 runtime 注入 | 未实现 |
 | P3-14 | Red | Web Memory/Candidate/冲突/来源/执行详情治理 | 未实现 |

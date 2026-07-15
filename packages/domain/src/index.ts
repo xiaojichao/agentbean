@@ -14,3 +14,4 @@ export * from './subtask-acceptance-policy.js';
 export * from './memory-policy.js';
 export * from './memory-ranking.js';
 export * from './memory-hashing.js';
+export * from './memory-candidate-policy.js';

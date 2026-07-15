@@ -137,11 +137,11 @@ test('fails closed when Capsule ref persistence disappears', () => {
   assert.match(result.stderr, /P3_CAPSULE_REF_PERSISTENCE_INVALID/);
 });
 
-test('fails closed when Candidate persistence disappears', () => {
+test('fails closed when Candidate lifecycle disappears', () => {
   const result = withFixture('agentbean-phase3-candidate-', (fixture) => {
     const path = join(fixture, 'apps/server-next/src/infra/sqlite/migrations/team/0017_management_phase_3_candidates.sql');
     writeFileSync(path, readFileSync(path, 'utf8').replaceAll('memory_candidates', 'removed_candidates'));
   });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /P3_CANDIDATE_PERSISTENCE_INVALID/);
+  assert.match(result.stderr, /P3_CANDIDATE_LIFECYCLE_INVALID/);
 });

@@ -18,7 +18,6 @@ const memoryRepositories = read('apps/server-next/src/application/memory-reposit
 const memoryUnitOfWork = read('apps/server-next/src/application/memory-unit-of-work.ts');
 const memoryMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0015_management_phase_3_memory.sql');
 const capsuleRefMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0016_management_phase_3_capsule_refs.sql');
-const candidateMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0017_management_phase_3_candidates.sql');
 const sqliteRepositories = read('apps/server-next/src/infra/sqlite/repositories.ts');
 const memoryBackends = [
   read('apps/server-next/src/infra/memory/memory-repositories.ts'),
@@ -35,6 +34,10 @@ const memoryCapsuleTests = read('apps/server-next/tests/memory-capsule-service.t
 const capsuleInjectionValidator = read('apps/server-next/src/application/capsule-injection-validator.ts');
 const capsuleInjectionTests = read('apps/server-next/tests/capsule-injection-validator.test.ts');
 const domainMemoryHashing = read('packages/domain/src/memory-hashing.ts');
+const memoryCandidateService = read('apps/server-next/src/application/memory-candidate-service.ts');
+const memoryCandidateTests = read('apps/server-next/tests/memory-candidate-service.test.ts');
+const memoryCandidatePolicy = read('packages/domain/src/memory-candidate-policy.ts');
+const memoryCandidateMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0017_management_phase_3_candidates.sql');
 const runtimeTypes = read('packages/pi-management-runtime/src/types.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
@@ -101,15 +104,6 @@ if (!capsuleRefMigrationMarkers.every((marker) => capsuleRefMigration.includes(m
   || !memoryRepositories.includes('capsuleRefs')
   || !memoryPersistenceTests.includes('Capsule refs with Team isolation')) {
   violations.push('P3_CAPSULE_REF_PERSISTENCE_INVALID: Team-isolated Capsule ref schema (0016), repository, static migration registration and parity tests are required');
-}
-
-const candidateMigrationMarkers = ['memory_candidates', 'projection_hash', 'UNIQUE (team_id, projection_hash)'];
-if (!candidateMigrationMarkers.every((marker) => candidateMigration.includes(marker))
-  || !sqliteRepositories.includes("'team/0017_management_phase_3_candidates.sql'")
-  || !memoryRepositories.includes('MemoryCandidateRecord')
-  || !memoryRepositories.includes('getByProjectionHash')
-  || !memoryPersistenceTests.includes('projection-hash dedup')) {
-  violations.push('P3_CANDIDATE_PERSISTENCE_INVALID: Team-isolated Candidate schema (0017) with projection-hash dedup, repository, static migration registration and parity tests are required');
 }
 
 const usecaseMarkers = [
@@ -180,6 +174,30 @@ if (!injectionMarkers.every((marker) => capsuleInjectionValidator.includes(marke
   violations.push('P3_CAPSULE_INJECTION_INVALID: two-check Capsule injection revalidation with shared domain hashing and dual-backend parity tests is required');
 }
 
+const candidateServiceMarkers = [
+  'createMemoryCandidateService', 'proposeCandidate', 'acceptCandidate',
+  'rejectCandidate', 'mergeCandidate', 'MemoryCandidatePermissions',
+  'assertDecideAuthority', 'detectConflicts',
+];
+const candidatePolicyMarkers = ['evaluateCandidateTransition', 'CANDIDATE_INVALID_TRANSITION'];
+// projectionHash 必须复用 domain hash 单一源（接 P3-07），service 不得自写一份。
+const candidateHashSharedFromDomain = domainMemoryHashing.includes('export function computeProjectionHash')
+  && memoryCandidateService.includes('computeProjectionHash')
+  && !memoryCandidateService.includes('function computeProjectionHash');
+if (!candidateServiceMarkers.every((marker) => memoryCandidateService.includes(marker))
+  || !candidatePolicyMarkers.every((marker) => memoryCandidatePolicy.includes(marker))
+  || !candidateHashSharedFromDomain
+  || !memoryCandidateMigration.includes('memory_candidates')
+  || !memoryCandidateMigration.includes('projection_hash')
+  || !memoryRepositories.includes('candidates')
+  || !memoryBackends.every((backend) => backend.includes('assertMemoryCandidateRecord'))
+  || !memoryCandidateTests.includes('describe.each')
+  || !memoryCandidateTests.includes('createSqliteRepositories')
+  || !memoryCandidateTests.includes('CANDIDATE_NOT_FOUND')
+  || !memoryCandidateTests.includes('CANDIDATE_HAS_CONFLICT')) {
+  violations.push('P3_CANDIDATE_LIFECYCLE_INVALID: Memory Candidate lifecycle (state machine, projection-hash dedup via shared domain hashing, source conflict, dual-backend assert parity, fail-closed decide boundary) with parity tests is required');
+}
+
 const phase1Tools = runtimeTypes.match(
   /export const PHASE_1_MANAGEMENT_TOOL_NAMES\s*=\s*\[([\s\S]*?)\]\s+as const/,
 )?.[1] ?? '';
@@ -197,6 +215,8 @@ if (scripts['test:phase3-memory-boundary'] !== 'node --test scripts/check-phase-
   || !String(scripts['test:phase3-memory']).includes('test:domain')
   || !String(scripts['test:phase3-memory']).includes('test:phase3-memory-persistence')
   || !String(scripts['test:phase3-memory-persistence']).includes('memory-unit-of-work.test.ts')
+  || !String(scripts['test:phase3-memory-persistence']).includes('memory-candidate-repositories.test.ts')
+  || !String(scripts['test:phase3-memory-persistence']).includes('memory-candidate-service.test.ts')
   || !String(scripts['build:phase3-memory']).includes('build:contracts')
   || !String(scripts['build:phase3-memory']).includes('build:domain')
   || !String(scripts['build:phase3-memory']).includes('build:server-next')
