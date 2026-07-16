@@ -157,6 +157,24 @@ describe('Phase 4 Server Worker Pool', () => {
     }]);
   });
 
+  test('keeps the old connection identity pinned after a reconnect takes over the Worker', () => {
+    const harness = createHarness();
+    harness.pool.registerWorker({ connectionId: 'connection-1', capability: capability() });
+    harness.pool.registerWorker({ connectionId: 'connection-2', capability: capability() });
+
+    expect(harness.pool.registerWorker({
+      connectionId: 'connection-1',
+      capability: capability({ workerInstanceId: 'server-instance-other' }),
+    })).toMatchObject({
+      ok: false,
+      errorCode: 'CONFLICT',
+      diagnosticCode: 'SERVER_WORKER_CONNECTION_ALREADY_REGISTERED',
+    });
+    expect(harness.pool.snapshot().workers).toMatchObject([{
+      workerInstanceId: 'server-instance-1', connected: true,
+    }]);
+  });
+
   test('queues capacity overflow visibly and assigns it after a fixed slot is released', () => {
     const harness = createHarness();
     const registration = harness.pool.registerWorker({

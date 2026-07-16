@@ -45,6 +45,7 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
   const workersById = new Map<string, RegisteredServerWorker>();
   const workersByIdentity = new Map<string, RegisteredServerWorker>();
   const workerIdByConnection = new Map<string, string>();
+  const workerIdentityByConnection = new Map<string, string>();
   const workerIdByManagementRun = new Map<string, string>();
   const staleWorkerIdByManagementRun = new Map<string, string>();
   const capacityRequestByManagementRun = new Map<string, Omit<QueuedCapacityRequest, 'enqueuedAt' | 'reasonCode'>>();
@@ -71,13 +72,11 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
       return failure('INVALID_REQUEST', 'SERVER_WORKER_CAPACITY_INVALID', false);
     }
 
-    const connectionWorkerId = workerIdByConnection.get(input.connectionId);
-    const connectionWorker = connectionWorkerId ? workersById.get(connectionWorkerId) : undefined;
-    if (connectionWorker && (connectionWorker.workerInstanceId !== capability.workerInstanceId
-      || connectionWorker.profileId !== capability.profileId)) {
+    const identity = JSON.stringify([dependencies.workerPoolId, capability.profileId, capability.workerInstanceId]);
+    const connectionIdentity = workerIdentityByConnection.get(input.connectionId);
+    if (connectionIdentity && connectionIdentity !== identity) {
       return failure('CONFLICT', 'SERVER_WORKER_CONNECTION_ALREADY_REGISTERED', false);
     }
-    const identity = JSON.stringify([dependencies.workerPoolId, capability.profileId, capability.workerInstanceId]);
     const existing = workersByIdentity.get(identity);
     if (existing
       && existing.capability.capacity.maxConcurrentLeases !== capability.capacity.maxConcurrentLeases) {
@@ -107,6 +106,7 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
     workersById.set(worker.workerId, worker);
     workersByIdentity.set(identity, worker);
     workerIdByConnection.set(input.connectionId, worker.workerId);
+    workerIdentityByConnection.set(input.connectionId, identity);
     return { schemaVersion: 1 as const, ok: true as const, workerId: worker.workerId, protocolVersion: 1 as const };
   }
 
@@ -140,6 +140,7 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
   }
 
   function disconnect(connectionId: string): { readonly workerId?: string; readonly activeManagementRunIds: readonly string[] } {
+    workerIdentityByConnection.delete(connectionId);
     const workerId = workerIdByConnection.get(connectionId);
     if (!workerId) return { activeManagementRunIds: [] };
     workerIdByConnection.delete(connectionId);
