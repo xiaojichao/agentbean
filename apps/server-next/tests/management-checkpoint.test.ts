@@ -124,6 +124,47 @@ describe('management checkpoint', () => {
     const closedFacts = await collectManagementCheckpointFacts(harness.repositories, run, undefined, undefined, now);
     expect(closedFacts.validMemoryCapsuleIds).toEqual([]);
   });
+
+  test('rebuild drops invalid capsules from authoritative (P3-16: recovery 不恢复无效 Capsule)', async () => {
+    const harness = await createHarness();
+    const memory = createInMemoryRepositories().memory;
+    const run = await harness.repositories.runs.getById(harness.authority.managementRunId);
+    if (!run) throw new Error('run not found');
+    const now = 5_000;
+    // 三条 capsule ref：有效 / 已过期 / 已 deny。
+    await memory.capsuleRefs.create({ id: 'cap-valid', teamId: run.teamId, managementRunId: run.id,
+      targetAgentId: 'agent-1', contentHash: 'sha256:a', authorizationDecisionId: 'dec-a',
+      issuedAt: 1_000, expiresAt: 10_000, createdAt: 1_000 });
+    await memory.capsuleRefs.create({ id: 'cap-expired', teamId: run.teamId, managementRunId: run.id,
+      targetAgentId: 'agent-1', contentHash: 'sha256:b', authorizationDecisionId: 'dec-b',
+      issuedAt: 1_000, expiresAt: 2_000, createdAt: 1_000 });
+    await memory.capsuleRefs.create({ id: 'cap-denied', teamId: run.teamId, managementRunId: run.id,
+      targetAgentId: 'agent-1', contentHash: 'sha256:c', authorizationDecisionId: 'dec-c',
+      issuedAt: 1_000, expiresAt: 10_000, deniedAt: 3_000, createdAt: 1_000 });
+
+    const facts = await collectManagementCheckpointFacts(harness.repositories, run, undefined, memory, now);
+    expect(facts.validMemoryCapsuleIds).toEqual(['cap-valid']);
+
+    // authoritative 引用了全部三个 capsule（含已失效的 expired/denied）→ 与 facts 不一致 → rebuild。
+    const stale = {
+      schemaVersion: 1 as const, managementRunId: run.id, revision: 1,
+      authoritative: {
+        lastEventSequence: facts.lastEventSequence, taskGraphRevision: facts.taskGraphRevision,
+        openTaskIds: facts.openTaskIds, waitingInvocationIds: facts.waitingInvocationIds,
+        completedInvocationIds: facts.completedInvocationIds,
+        memoryCapsuleIds: ['cap-valid', 'cap-expired', 'cap-denied'],
+      },
+      contextHints: { objective: 'stale objective', planSummary: '', completedInvocationSummaries: [], unresolvedQuestions: [] },
+      updatedAt: 1,
+    };
+    const result = restoreOrRebuildManagementCheckpoint({ checkpoint: stale, facts, objective: 'rebuilt objective', now });
+    expect(result.kind).toBe('rebuilt');
+    // rebuild 后 authoritative 只保留有效 capsule（不恢复失效的 expired/denied）。
+    expect(result.checkpoint.authoritative.memoryCapsuleIds).toEqual(['cap-valid']);
+    if (result.kind === 'rebuilt') {
+      expect(result.reasons).toContain('invalid-memory-capsule');
+    }
+  });
 });
 
 async function createHarness() {
