@@ -148,7 +148,7 @@ test('fails closed when the Phase 2 rollout preflight stops being fail closed', 
       filter: (source) => !source.split('/').includes('node_modules') && !source.split('/').includes('.git'),
     });
     const path = join(fixture, 'apps/server-next/src/application/management/management-router.ts');
-    writeFileSync(path, readFileSync(path, 'utf8').replace("requestShape: 'multi-agent'", "requestShape: 'single-agent'"));
+    writeFileSync(path, readFileSync(path, 'utf8').replace(/requestShape: 'multi-agent'/g, "requestShape: 'single-agent'"));
     const result = run(fixture);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /P2_ROLLOUT_WEB_BOUNDARY_INVALID/);

@@ -288,16 +288,16 @@ function mapRun(value: unknown): ManagementRunRecord | null {
     budget: parseJson<ManagementBudgetDto>(text(value, 'budget_json')), createdAt: number(value, 'created_at'),
     updatedAt: number(value, 'updated_at'), completedAt: nullableNumber(value, 'completed_at'),
   };
-  if (managementPhase === 2) {
-    if (!rootTaskId) throw new Error('Phase 2 management run is missing root_task_id');
-    return { schemaVersion: 2, managementPhase: 2, ...common, rootTaskId };
+  if (managementPhase === 2 || managementPhase === 3) {
+    if (!rootTaskId) throw new Error(`Phase ${managementPhase} management run is missing root_task_id`);
+    return { schemaVersion: 2, managementPhase, ...common, rootTaskId };
   }
   return { schemaVersion: 1, ...common, ...(rootTaskId ? { rootTaskId } : {}) };
 }
 
-function phase(value: unknown, key: string): 1 | 2 {
+function phase(value: unknown, key: string): 1 | 2 | 3 {
   const result = number(value, key);
-  if (result !== 1 && result !== 2) throw new Error(`Invalid ${key}`);
+  if (result !== 1 && result !== 2 && result !== 3) throw new Error(`Invalid ${key}`);
   return result;
 }
 function mapLease(value: unknown): ManagerLeaseRecord | null { return value ? { managementRunId: text(value, 'management_run_id'), workerId: text(value, 'worker_id'), host: { deviceId: text(value, 'device_id'), profileId: text(value, 'profile_id') }, leaseTokenHash: text(value, 'lease_token_hash'), leaseFingerprint: text(value, 'lease_fingerprint'), fencingToken: number(value, 'fencing_token'), acquiredAt: number(value, 'acquired_at'), heartbeatAt: number(value, 'heartbeat_at'), expiresAt: number(value, 'expires_at'), releasedAt: nullableNumber(value, 'released_at') } : null; }

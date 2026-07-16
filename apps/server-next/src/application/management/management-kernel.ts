@@ -42,7 +42,7 @@ export interface CreateOrResumeManagementRunInput {
   readonly requestHash: string;
   readonly placementPolicy: ManagerPlacementPolicyDto;
   readonly budget: ManagementBudgetDto;
-  readonly managementPhase?: 1 | 2;
+  readonly managementPhase?: 1 | 2 | 3;
 }
 
 export interface LeaseAuthorityInput {
@@ -70,7 +70,7 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
         const now = clock.now();
         const managementRunId = ids.nextId();
         const eventId = ids.nextId();
-        if (input.managementPhase === 2 && !input.rootTaskId) {
+        if ((input.managementPhase === 2 || input.managementPhase === 3) && !input.rootTaskId) {
           throw new ManagementConflictError('MANAGEMENT_ROOT_TASK_REQUIRED');
         }
         const common = {
@@ -90,6 +90,13 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
         };
         const run: ManagementRunRecord = input.managementPhase === 2
           ? { schemaVersion: 2, managementPhase: 2, ...common, rootTaskId: input.rootTaskId!,
+              ...(input.frozenTarget ? {
+                mainAgentId: input.frozenTarget.agentId,
+                activeAgentId: input.frozenTarget.agentId,
+              } : {}),
+              collaborationMode: input.frozenTarget ? 'single-agent' : 'manager-orchestrated' }
+          : input.managementPhase === 3
+          ? { schemaVersion: 2, managementPhase: 3, ...common, rootTaskId: input.rootTaskId!,
               ...(input.frozenTarget ? {
                 mainAgentId: input.frozenTarget.agentId,
                 activeAgentId: input.frozenTarget.agentId,

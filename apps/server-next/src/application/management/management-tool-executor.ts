@@ -13,6 +13,10 @@ import type {
   Phase3ManagementWorkerToolOutputMapV1,
   Phase3MemoryToolRequestV3,
   Phase3MemoryToolResultV3,
+  ID,
+  MemoryScopeType,
+  MemorySourceRefDto,
+  MemorySourceVisibility,
 } from '../../../../../packages/contracts/src/index.js';
 import type { MessageRecord, ServerNextRepositories } from '../repositories.js';
 import type { ManagementRunRecord } from '../management-repositories.js';
@@ -22,6 +26,12 @@ import type { createTaskCoordinationKernel } from './task-coordination-kernel.js
 import type { createSubtaskAcceptanceService } from './subtask-acceptance-service.js';
 import { createSubtaskDeliveryService, deliveryOutput } from './subtask-delivery-service.js';
 import { createCollaborationService } from './collaboration-service.js';
+import { hashManagementCommandInput } from './management-event-validator.js';
+import type { CollaborativeMemoryService, CollaborativeMemorySourceInput } from '../collaborative-memory-service.js';
+import type { CollaborativeMemorySearchResult, SearchCollaborativeMemoriesInput } from '../collaborative-memory-search-service.js';
+import type { MemoryCandidateService, MemoryCandidateSourceInput } from '../memory-candidate-service.js';
+import type { MemoryCapsuleService } from '../memory-capsule-service.js';
+import { toMemoryCapsuleRef } from '../memory-capsule-service.js';
 
 type ManagementKernel = ReturnType<typeof createManagementKernel>;
 type TaskCoordinationKernel = ReturnType<typeof createTaskCoordinationKernel>;
@@ -331,6 +341,212 @@ export function createPhase2InvocationToolHandlers(input: {
         ...deliveryOutput(delivered.delivery) };
     },
   };
+}
+
+export function createPhase3ManagementToolHandlers(input: {
+  readonly repositories: ServerNextRepositories;
+  readonly searchService: {
+    search(request: SearchCollaborativeMemoriesInput): Promise<CollaborativeMemorySearchResult>;
+  };
+  readonly capsuleService: MemoryCapsuleService;
+  readonly candidateService: MemoryCandidateService;
+  readonly collaborativeService: CollaborativeMemoryService;
+  readonly clock: { now(): number };
+  readonly currentPolicyVersion: number;
+}): Phase3ToolHandlers {
+  const { repositories, searchService, capsuleService, candidateService, collaborativeService, clock, currentPolicyVersion } = input;
+
+  // Source 解析层：worker 传入的 MemorySourceRefDto 仅含 sourceKind/sourceId/snapshotHash，
+  // 喂给 candidate/collaborative service 需补 sourceScopeType/sourceScopeRef/sourceVisibility。
+  // 渐进方案：message/task 按来源 record 实际属性派生；其余 sourceKind fail-closed（后续 slice 补）。
+  // 安全关键：visibility 必须反映来源真实可见性，否则 assertSourceAuthority 的可见性收紧被绕过。
+  type ResolvedSourceScope = {
+    readonly sourceScopeType: MemoryScopeType;
+    readonly sourceScopeRef: ID;
+    readonly sourceVisibility: Exclude<MemorySourceVisibility, 'local-only'>;
+  };
+
+  async function resolveSourceScope(teamId: ID, ref: MemorySourceRefDto): Promise<ResolvedSourceScope> {
+    if (ref.sourceKind === 'message') {
+      const message = await repositories.messages.getById(ref.sourceId);
+      if (!message || message.teamId !== teamId) throw new Error('MEMORY_SOURCE_UNAVAILABLE');
+      const snapshot = compactSnapshot({
+        kind: 'message', id: message.id, teamId: message.teamId, channelId: message.channelId,
+        threadId: message.threadId, senderKind: message.senderKind, senderId: message.senderId,
+        body: message.body, dispatchId: message.meta?.dispatchId,
+        createdAt: message.createdAt, updatedAt: message.updatedAt,
+      });
+      if (hashManagementCommandInput(snapshot) !== ref.snapshotHash) throw new Error('MEMORY_SOURCE_SNAPSHOT_STALE');
+      const channel = await repositories.channels.getById(message.channelId);
+      if (!channel || channel.teamId !== teamId) throw new Error('MEMORY_SOURCE_UNAVAILABLE');
+      if (channel.kind === 'direct') {
+        return { sourceScopeType: 'dm', sourceScopeRef: channel.id, sourceVisibility: 'dm-participants' };
+      }
+      return {
+        sourceScopeType: 'channel',
+        sourceScopeRef: channel.id,
+        sourceVisibility: channel.visibility === 'public' ? 'team' : 'private',
+      };
+    }
+    if (ref.sourceKind === 'task') {
+      const task = await repositories.tasks.getById(ref.sourceId);
+      if (!task || task.teamId !== teamId) throw new Error('MEMORY_SOURCE_UNAVAILABLE');
+      const snapshot = compactSnapshot({
+        kind: 'task', id: task.id, teamId: task.teamId, channelId: task.channelId,
+        title: task.title, description: task.description, assigneeId: task.assigneeId,
+        revision: task.revision,
+      });
+      if (hashManagementCommandInput(snapshot) !== ref.snapshotHash) throw new Error('MEMORY_SOURCE_SNAPSHOT_STALE');
+      if (task.channelId) {
+        const channel = await repositories.channels.getById(task.channelId);
+        if (!channel || channel.teamId !== teamId) throw new Error('MEMORY_SOURCE_UNAVAILABLE');
+        return {
+          sourceScopeType: 'task', sourceScopeRef: task.id,
+          sourceVisibility: channel.kind === 'direct'
+            ? 'dm-participants'
+            : channel.visibility === 'public' ? 'team' : 'private',
+        };
+      }
+      return { sourceScopeType: 'task', sourceScopeRef: task.id, sourceVisibility: 'team' };
+    }
+    // artifact/workspace-run/invocation/memory/manual/local-summary：渐进方案暂不支持，fail-closed。
+    throw new Error('MEMORY_SOURCE_KIND_UNSUPPORTED');
+  }
+
+  async function resolveCandidateSources(
+    teamId: ID,
+    sourceRefs: readonly MemorySourceRefDto[],
+  ): Promise<readonly MemoryCandidateSourceInput[]> {
+    return Promise.all(sourceRefs.map(async (ref) => ({ ...ref, ...(await resolveSourceScope(teamId, ref)) })));
+  }
+
+  async function resolveCollaborativeSources(
+    teamId: ID,
+    sourceRefs: readonly MemorySourceRefDto[],
+  ): Promise<readonly CollaborativeMemorySourceInput[]> {
+    return Promise.all(sourceRefs.map(async (ref) => ({ ...ref, ...(await resolveSourceScope(teamId, ref)) })));
+  }
+
+  async function resolveSourceInvocation(managementRunId: ID, sourceRefs: readonly MemorySourceRefDto[]) {
+    const invocations = await repositories.management.invocations.listByRun(managementRunId);
+    const matching = [];
+    for (const invocation of invocations) {
+      let matches = true;
+      for (const ref of sourceRefs) {
+        if (ref.sourceKind === 'task') {
+          if (invocation.intent.taskContext?.taskId !== ref.sourceId) matches = false;
+          continue;
+        }
+        if (ref.sourceKind === 'message') {
+          const message = await repositories.messages.getById(ref.sourceId);
+          const attempts = await repositories.management.dispatchAttempts.list(invocation.id);
+          if (!message || message.senderKind !== 'agent'
+            || message.senderId !== invocation.intent.targetAgentId
+            || !message.meta?.dispatchId
+            || !attempts.some((attempt) => attempt.dispatchId === message.meta?.dispatchId)) matches = false;
+          continue;
+        }
+        matches = false;
+      }
+      if (matches) matching.push(invocation);
+    }
+    if (matching.length !== 1) throw new Error('MEMORY_INVOKE_CONTEXT_UNAVAILABLE');
+    return matching[0]!;
+  }
+
+  async function resolveRequesterUserId(run: ManagementRunRecord): Promise<ID> {
+    const rootMessage = await repositories.messages.getById(run.rootMessageId);
+    if (!rootMessage || rootMessage.teamId !== run.teamId || rootMessage.channelId !== run.channelId
+      || rootMessage.senderKind !== 'human'
+      || !await repositories.teams.isMember(run.teamId, rootMessage.senderId)) {
+      throw new Error('MEMORY_REQUESTER_CONTEXT_UNAVAILABLE');
+    }
+    return rootMessage.senderId;
+  }
+
+  return {
+    'memory.search': async (request) => {
+      const run = await requireRun(repositories, request.managementRunId);
+      const requesterUserId = await resolveRequesterUserId(run);
+      const result = await searchService.search({
+        teamId: run.teamId,
+        requesterUserId,
+        targetAgentId: request.input.targetAgentId,
+        taskId: request.input.taskId,
+        channelId: request.input.channelId,
+        userId: request.input.userId,
+        prompt: request.input.query,
+        now: clock.now(),
+        limit: request.input.limit,
+      });
+      return {
+        matches: result.matches.map((match) => ({
+          memoryId: match.item.id,
+          content: match.item.content,
+          ...(match.item.summary ? { summary: match.item.summary } : {}),
+          score: match.score,
+          reasons: match.reasons.map((reason) => reason.code),
+        })),
+      };
+    },
+
+    'memory.create_capsule': async (request) => {
+      const run = await requireRun(repositories, request.managementRunId);
+      const requesterUserId = await resolveRequesterUserId(run);
+      const capsule = await capsuleService.createCapsule({
+        teamId: run.teamId,
+        requesterUserId,
+        managementRunId: request.managementRunId,
+        targetAgentId: request.input.targetAgentId,
+        taskId: request.input.taskId,
+        channelId: request.input.channelId,
+        userId: request.input.userId,
+        prompt: request.input.prompt,
+        limit: request.input.limit,
+        now: clock.now(),
+        currentPolicyVersion,
+      });
+      return { capsuleRef: toMemoryCapsuleRef(capsule) };
+    },
+
+    'memory.propose_candidate': async (request) => {
+      const run = await requireRun(repositories, request.managementRunId);
+      const sourceRefs = await resolveCandidateSources(run.teamId, request.input.sourceRefs);
+      const sourceInvocation = await resolveSourceInvocation(request.managementRunId, request.input.sourceRefs);
+      const result = await candidateService.proposeCandidate({
+        teamId: run.teamId,
+        sourceAgentId: sourceInvocation.intent.targetAgentId,
+        sourceInvocationId: sourceInvocation.id,
+        targetAgentId: request.input.targetAgentId,
+        managementRunId: request.managementRunId,
+        taskId: request.input.taskId,
+        scopeType: request.input.scopeType,
+        scopeRef: request.input.scopeRef,
+        contentKind: request.input.contentKind,
+        proposedContent: request.input.proposedContent,
+        ...(request.input.proposedSummary ? { proposedSummary: request.input.proposedSummary } : {}),
+        sourceRefs,
+      });
+      return { candidateId: result.candidate.id, status: result.candidate.status as 'candidate' | 'conflict' };
+    },
+
+    'memory.link_sources': async (request) => {
+      const run = await requireRun(repositories, request.managementRunId);
+      const requesterUserId = await resolveRequesterUserId(run);
+      const sourceRefs = await resolveCollaborativeSources(run.teamId, request.input.sourceRefs);
+      await collaborativeService.linkSources({
+        teamId: run.teamId,
+        actorId: requesterUserId,
+        memoryId: request.input.memoryId,
+        sourceRefs,
+      });
+      return { memoryId: request.input.memoryId };
+    },
+  };
+}
+
+function compactSnapshot(input: Record<string, unknown>): Readonly<Record<string, unknown>> {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
 }
 
 export function createPhase1ManagementToolHandlers(input: {

@@ -11,14 +11,20 @@ import { createCapsuleInjectionValidator } from './application/capsule-injection
 import { createServerCapsuleRuntimeContextService } from './application/server-capsule-runtime-context-service.js';
 import {
   createServerMemorySearchPermissions,
+  createServerMemoryWritePermissions,
+  createServerMemoryCandidatePermissions,
   CURRENT_MEMORY_POLICY_VERSION,
 } from './application/server-memory-permissions.js';
 import { createDeviceWorkerScheduler, type DeviceWorkerScheduler } from './application/management/device-worker-scheduler.js';
 import { createManagementKernel } from './application/management/management-kernel.js';
-import { createManagementToolExecutor, createPhase1ManagementToolHandlers, createPhase2CollaborationToolHandlers, createPhase2InvocationToolHandlers, createPhase2ManagementToolHandlers } from './application/management/management-tool-executor.js';
+import { createManagementToolExecutor, createPhase1ManagementToolHandlers, createPhase2CollaborationToolHandlers, createPhase2InvocationToolHandlers, createPhase2ManagementToolHandlers, createPhase3ManagementToolHandlers } from './application/management/management-tool-executor.js';
 import { createSubtaskAcceptanceService } from './application/management/subtask-acceptance-service.js';
 import { createTaskCoordinationKernel } from './application/management/task-coordination-kernel.js';
 import { createManagementRouter } from './application/management/management-router.js';
+import { createCollaborativeMemorySearchService } from './application/collaborative-memory-search-service.js';
+import { createMemoryCapsuleService } from './application/memory-capsule-service.js';
+import { createMemoryCandidateService } from './application/memory-candidate-service.js';
+import { createCollaborativeMemoryService } from './application/collaborative-memory-service.js';
 import { createTaskClaimBroker, type TaskClaimBroker } from './application/management/task-claim-broker.js';
 import { createInMemoryRepositories } from './infra/memory/repositories.js';
 import {
@@ -1252,6 +1258,28 @@ function createDefaultManagementRuntime(
     clock,
     ids,
   });
+  const memorySearchService = createCollaborativeMemorySearchService({
+    repositories: repositories.memory,
+    permissions: createServerMemorySearchPermissions(repositories),
+  });
+  const memoryCapsuleService = createMemoryCapsuleService({
+    searchService: memorySearchService,
+    unitOfWork: repositories.memoryUnitOfWork,
+    clock,
+    ids,
+  });
+  const memoryCandidateService = createMemoryCandidateService({
+    unitOfWork: repositories.memoryUnitOfWork,
+    permissions: createServerMemoryCandidatePermissions(repositories),
+    clock,
+    ids,
+  });
+  const collaborativeMemoryService = createCollaborativeMemoryService({
+    unitOfWork: repositories.memoryUnitOfWork,
+    permissions: createServerMemoryWritePermissions(repositories),
+    clock,
+    ids,
+  });
   const scheduler = createDeviceWorkerScheduler({
     devices: repositories.devices,
     messages: repositories.messages,
@@ -1299,6 +1327,15 @@ function createDefaultManagementRuntime(
           },
         }),
       },
+      phase3Handlers: createPhase3ManagementToolHandlers({
+        repositories,
+        searchService: memorySearchService,
+        capsuleService: memoryCapsuleService,
+        candidateService: memoryCandidateService,
+        collaborativeService: collaborativeMemoryService,
+        clock,
+        currentPolicyVersion: CURRENT_MEMORY_POLICY_VERSION,
+      }),
     }),
     clock,
     ids,
@@ -1325,6 +1362,13 @@ function createDefaultManagementRuntime(
       },
       async preflightPhase2({ teamId, target, placementPolicy }) {
         return scheduler.managementPhase2Preflight({
+          teamId,
+          placementPolicy,
+          targetAvailable: target ? target.status !== 'offline' : true,
+        });
+      },
+      async preflightPhase3({ teamId, target, placementPolicy }) {
+        return scheduler.managementPhase3Preflight({
           teamId,
           placementPolicy,
           targetAvailable: target ? target.status !== 'offline' : true,

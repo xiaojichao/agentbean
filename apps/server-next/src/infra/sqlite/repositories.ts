@@ -82,6 +82,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0018_management_handoff.sql');
   applyMigration(db, 'team/0019_management_phase_3_candidate_lifecycle.sql');
   applyMigration(db, 'team/0020_management_phase_3_capsule_item_manifests.sql');
+  applyMigration(db, 'team/0021_management_phase_3_rollout.sql', { disableForeignKeys: true });
 }
 
 // 清理 channel_agent_members 中指向已删 agent 的孤儿行（PRD §6）。
@@ -2056,7 +2057,11 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
   return repositories;
 }
 
-function applyMigration(db: SqliteDatabase, relativePath: string): void {
+function applyMigration(
+  db: SqliteDatabase,
+  relativePath: string,
+  options: { readonly disableForeignKeys?: boolean } = {},
+): void {
   db.exec(
     `CREATE TABLE IF NOT EXISTS schema_migrations (
       id TEXT PRIMARY KEY,
@@ -2067,9 +2072,15 @@ function applyMigration(db: SqliteDatabase, relativePath: string): void {
   if (existing) {
     return;
   }
+  const foreignKeysEnabled = options.disableForeignKeys
+    && Number((db.prepare('PRAGMA foreign_keys').get() as { foreign_keys?: unknown } | undefined)?.foreign_keys) === 1;
+  if (foreignKeysEnabled) db.exec('PRAGMA foreign_keys = OFF;');
   try {
     db.exec('BEGIN IMMEDIATE;');
     db.exec(readFileSync(resolveMigrationPath(relativePath), 'utf8'));
+    if (options.disableForeignKeys && db.prepare('PRAGMA foreign_key_check').get()) {
+      throw new Error(`SQLite migration introduced a foreign key violation: ${relativePath}`);
+    }
     db.prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)').run(relativePath, Date.now());
     db.exec('COMMIT;');
   } catch (error) {
@@ -2079,6 +2090,8 @@ function applyMigration(db: SqliteDatabase, relativePath: string): void {
       // The transaction may already be closed by SQLite after a fatal error.
     }
     throw error;
+  } finally {
+    if (foreignKeysEnabled) db.exec('PRAGMA foreign_keys = ON;');
   }
 }
 

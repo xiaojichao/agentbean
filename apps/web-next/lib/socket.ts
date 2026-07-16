@@ -313,7 +313,7 @@ export function teamEvents(socket: Socket = getWebSocket()): TeamEvents {
 
 export interface ManagementPolicyEvents {
   get(teamId: string): Promise<{ ok: boolean; policy?: TeamManagementPolicyV2Dto; canManage?: boolean; error?: string }>;
-  update(payload: { teamId: string; mode: ManagementMode; maxManagementPhase: 1 | 2; placementPolicy: ManagerPlacementPolicyDto }): Promise<{ ok: boolean; policy?: TeamManagementPolicyV2Dto; canManage?: boolean; error?: string }>;
+  update(payload: { teamId: string; mode: ManagementMode; maxManagementPhase: 1 | 2 | 3; placementPolicy: ManagerPlacementPolicyDto }): Promise<{ ok: boolean; policy?: TeamManagementPolicyV2Dto; canManage?: boolean; error?: string }>;
 }
 
 export function managementPolicyEvents(socket: Socket = getWebSocket()): ManagementPolicyEvents {
