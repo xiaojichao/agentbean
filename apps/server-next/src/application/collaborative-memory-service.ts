@@ -87,6 +87,7 @@ export interface CollaborativeMemoryService {
   deleteMemory(input: MemoryTargetInput): Promise<MemoryView>;
   issueGrant(input: IssueGrantInput): Promise<MemoryGrantRecord>;
   revokeGrant(input: RevokeGrantInput): Promise<MemoryGrantRecord>;
+  linkSources(input: LinkSourcesInput): Promise<MemoryView>;
 }
 
 export interface CreateMemoryInput {
@@ -148,6 +149,13 @@ export interface RevokeGrantInput {
   readonly teamId: ID;
   readonly actorId: ID;
   readonly grantId: ID;
+}
+
+export interface LinkSourcesInput {
+  readonly teamId: ID;
+  readonly actorId: ID;
+  readonly memoryId: ID;
+  readonly sourceRefs: readonly CollaborativeMemorySourceInput[];
 }
 
 const ACTOR_USER: MemoryAuditActorKind = 'user';
@@ -464,6 +472,28 @@ export function createCollaborativeMemoryService(
           createdAt: now,
         });
         return revoked;
+      });
+    },
+    async linkSources(input) {
+      return unitOfWork.run(async (memory) => {
+        const item = await loadItem(memory, input.teamId, input.memoryId);
+        await permissions.assertWriteAuthority({
+          teamId: input.teamId, actorId: input.actorId,
+          scopeType: item.scopeType, scopeRef: item.scopeRef,
+        });
+        const now = clock.now();
+        for (const ref of input.sourceRefs) {
+          await memory.sources.create(toSourceRecord(input.teamId, item.id, ref, now));
+        }
+        const sourceRefs = input.sourceRefs.map(toSourceRefDto);
+        await appendAudit(memory, {
+          teamId: input.teamId, subjectKind: 'memory', subjectId: item.id,
+          eventType: 'source-linked', actorId: input.actorId,
+          scopeType: item.scopeType, scopeRef: item.scopeRef,
+          sourceRefs, sourceRefsHash: hashSourceRefs(sourceRefs),
+          createdAt: now,
+        });
+        return loadView(memory, input.teamId, item);
       });
     },
   };

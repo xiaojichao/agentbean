@@ -92,7 +92,7 @@ function phase3MemorySchemaFor(name: Phase3MemoryToolName) {
   }, { additionalProperties: false });
   const limit = () => Type.Integer({ minimum: 1, maximum: 100 });
   if (name === 'memory.search') return Type.Object({
-    query: id(), limit: limit(),
+    targetAgentId: id(), query: id(), limit: limit(),
     taskId: Type.Optional(id()), channelId: Type.Optional(id()), userId: Type.Optional(id()),
   }, { additionalProperties: false });
   if (name === 'memory.create_capsule') return Type.Object({

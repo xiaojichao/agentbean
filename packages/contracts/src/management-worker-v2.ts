@@ -130,6 +130,7 @@ export interface Phase2ManagementWorkerToolInputMapV1 {
  */
 export interface Phase3ManagementWorkerToolInputMapV1 {
   readonly 'memory.search': {
+    readonly targetAgentId: ID;
     readonly query: string;
     readonly taskId?: ID;
     readonly channelId?: ID;
@@ -682,8 +683,9 @@ function assertOptionalMemoryScopeIds(value: Record<string, unknown>): void {
 
 function assertMemoryToolInput(toolName: keyof Phase3ManagementWorkerToolInputMapV1, value: unknown): void {
   if (toolName === 'memory.search') {
-    assertExactMemoryKeys(value, ['query', 'taskId', 'channelId', 'userId', 'limit'], ['query', 'limit']);
-    if (!nonEmpty(value.query)) throw new Error('MEMORY_TOOL_INPUT_INVALID');
+    assertExactMemoryKeys(value, ['targetAgentId', 'query', 'taskId', 'channelId', 'userId', 'limit'],
+      ['targetAgentId', 'query', 'limit']);
+    if (!nonEmpty(value.targetAgentId) || !nonEmpty(value.query)) throw new Error('MEMORY_TOOL_INPUT_INVALID');
     assertMemoryLimit(value.limit);
     assertOptionalMemoryScopeIds(value);
     return;

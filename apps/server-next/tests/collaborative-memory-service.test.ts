@@ -523,6 +523,29 @@ describe.each([
       harness.close();
     }
   });
+
+  test('linkSources attaches additional sources and audits source-linked', async () => {
+    const harness = createHarness();
+    try {
+      await harness.service.createMemory({
+        teamId: 'team-1', actorId: 'user-1', kind: 'decision',
+        scopeType: 'task', scopeRef: 'task-1', content: 'original decision',
+        sourceRefs: [sourceRef('msg-1')],
+      });
+      const linked = await harness.service.linkSources({
+        teamId: 'team-1', actorId: 'user-1', memoryId: 'id-1',
+        sourceRefs: [sourceRef('msg-2'), sourceRef('msg-3')],
+      });
+      expect(linked.sources.map((source) => source.sourceId).sort()).toEqual(['msg-1', 'msg-2', 'msg-3']);
+      const audit = await harness.repositories.memory.auditEvents.listBySubject({
+        teamId: 'team-1', subjectKind: 'memory', subjectId: 'id-1',
+      });
+      expect(audit.map((event) => event.eventType)).toContain('source-linked');
+      expect(audit.find((event) => event.eventType === 'source-linked')).not.toHaveProperty('content');
+    } finally {
+      harness.close();
+    }
+  });
 });
 
 test('createMemory and issueGrant authorize inside the Memory unit of work', async () => {
