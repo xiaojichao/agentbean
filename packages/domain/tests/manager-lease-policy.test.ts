@@ -11,7 +11,7 @@ import {
   type ManagerLeaseRecord,
 } from '../src/index.js';
 
-const host = { deviceId: 'device-1', profileId: 'profile-1' };
+const host = { kind: 'device' as const, deviceId: 'device-1', profileId: 'profile-1' };
 
 function acquireInput(
   current: ManagerLeaseRecord | undefined = undefined,
@@ -86,6 +86,15 @@ describe('Phase 1 Manager lease policy', () => {
     }))).toEqual({ kind: 'rejected', reason: 'active-lease-held' });
   });
 
+  test('legacy Device host input is accepted and normalized', () => {
+    expect(evaluateManagerLeaseAcquire(acquireInput(undefined, {
+      host: { deviceId: 'legacy-device', profileId: 'profile-1' },
+    }))).toMatchObject({
+      kind: 'granted',
+      lease: { host: { kind: 'device', deviceId: 'legacy-device', profileId: 'profile-1' } },
+    });
+  });
+
   test('same host/profile can reacquire at expiry and increments fencing', () => {
     const current = granted();
     expect(evaluateManagerLeaseAcquire(acquireInput(current, {
@@ -110,20 +119,40 @@ describe('Phase 1 Manager lease policy', () => {
     });
   });
 
-  test('Phase 1 rejects cross-host recovery even after expiry', () => {
+  test('expired leases allow cross-host recovery with a new fencing token', () => {
     const current = granted();
-    for (const otherHost of [
-      { deviceId: 'device-2', profileId: 'profile-1' },
-      { deviceId: 'device-1', profileId: 'profile-2' },
-    ]) {
-      expect(evaluateManagerLeaseAcquire(acquireInput(current, {
-        workerId: 'worker-other',
-        host: otherHost,
+    expect(evaluateManagerLeaseAcquire(acquireInput(current, {
+      workerId: 'server-worker-1',
+      host: { kind: 'server', workerPoolId: 'pool-1', profileId: 'profile-1' },
+      leaseTokenHash: 'hash-other',
+      leaseFingerprint: 'fingerprint-other',
+      now: 160,
+    }))).toEqual({
+      kind: 'granted',
+      reason: 'expired-cross-host',
+      lease: {
+        managementRunId: 'run-1',
+        workerId: 'server-worker-1',
+        host: { kind: 'server', workerPoolId: 'pool-1', profileId: 'profile-1' },
         leaseTokenHash: 'hash-other',
         leaseFingerprint: 'fingerprint-other',
-        now: 161,
-      }))).toEqual({ kind: 'rejected', reason: 'cross-host-recovery-not-supported' });
-    }
+        fencingToken: 2,
+        acquiredAt: 160,
+        heartbeatAt: 160,
+        expiresAt: 220,
+      },
+    });
+  });
+
+  test('active leases still reject a different host', () => {
+    const current = granted();
+    expect(evaluateManagerLeaseAcquire(acquireInput(current, {
+      workerId: 'server-worker-1',
+      host: { kind: 'server', workerPoolId: 'pool-1', profileId: 'profile-1' },
+      leaseTokenHash: 'hash-other',
+      leaseFingerprint: 'fingerprint-other',
+      now: 159,
+    }))).toEqual({ kind: 'rejected', reason: 'active-lease-held' });
   });
 
   test('renew uses now plus TTL without changing fencing or acquiredAt', () => {

@@ -88,6 +88,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0019_management_phase_3_candidate_lifecycle.sql');
   applyMigration(db, 'team/0020_management_phase_3_capsule_item_manifests.sql');
   applyMigration(db, 'team/0021_management_phase_3_rollout.sql', { disableForeignKeys: true });
+  applyMigration(db, 'team/0022_management_phase_4_worker_host.sql', { disableForeignKeys: true });
 }
 
 // 清理 channel_agent_members 中指向已删 agent 的孤儿行（PRD §6）。

@@ -291,7 +291,10 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
       for (const worker of workersById.values()) {
         if (!worker.connected || worker.teamId !== run.teamId || worker.profileId !== input.profileId) continue;
         if (!supportsManagementPhase(worker.capability, 'managementPhase' in run ? run.managementPhase : 1)) continue;
-        if (currentLease && (worker.deviceId !== currentLease.host.deviceId || worker.profileId !== currentLease.host.profileId)) continue;
+        if (currentLease && (('workerPoolId' in currentLease.host)
+          || !('deviceId' in currentLease.host)
+          || worker.deviceId !== currentLease.host.deviceId
+          || worker.profileId !== currentLease.host.profileId)) continue;
         if (run.placementPolicy.allowedDeviceIds && !run.placementPolicy.allowedDeviceIds.includes(worker.deviceId)) continue;
         if (!credentialReady(worker.capability, run.placementPolicy.requireLocalModelCredentials)) continue;
         if (run.placementPolicy.preferredProvider && worker.capability.providerId !== run.placementPolicy.preferredProvider) continue;
@@ -358,7 +361,7 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
         const acquired = await dependencies.kernel.acquireLease({
           managementRunId: offer.managementRunId,
           workerId: worker.workerId,
-          host: { deviceId: worker.deviceId, profileId: worker.profileId },
+          host: { kind: 'device', deviceId: worker.deviceId, profileId: worker.profileId },
           leaseToken,
           ttlMs: leaseTtlMs,
         });
