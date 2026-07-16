@@ -69,14 +69,15 @@ const runtimeTypes = read('packages/pi-management-runtime/src/types.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
 
-const hasChecklist = [...Array(18)].every((_, index) =>
-  matrix.includes(`| P3-${String(index + 1).padStart(2, '0')} |`));
-if (!hasChecklist
-  || !/^> 当前 verdict：\*\*Not ready\*\*/m.test(matrix)
-  || !matrix.includes('| P3-03 | Green |')
+const hasGreenChecklist = [...Array(18)].every((_, index) =>
+  matrix.includes(`| P3-${String(index + 1).padStart(2, '0')} | Green |`));
+if (!hasGreenChecklist
+  || !/^> 当前 verdict：\*\*Green \/ Ready\*\*/m.test(matrix)
+  || !matrix.includes('| P3-18 | Green |')
   || !matrix.includes('Phase 3 默认仍保持关闭')
+  || !matrix.includes('Team 默认保持 `maxManagementPhase=1`')
   || !plan.includes('Phase 3 未完成前')) {
-  violations.push('P3_MATRIX_INVALID: P3-01..P3-18, Not ready, and fail-closed rollout are required');
+  violations.push('P3_MATRIX_INVALID: P3-01..P3-18 Green, Ready verdict, and default-closed rollout are required');
 }
 
 const contractMarkers = [
