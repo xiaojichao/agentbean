@@ -24,7 +24,7 @@ interface RegisteredServerWorker {
   connectionId: string;
   connected: boolean;
   capability: ManagementWorkerCapability;
-  reportedActiveLeaseCount: number;
+  untrackedActiveLeaseCount: number;
   lastHeartbeatAt: number;
   readonly activeManagementRunIds: Set<string>;
 }
@@ -46,6 +46,7 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
   const workersByIdentity = new Map<string, RegisteredServerWorker>();
   const workerIdByConnection = new Map<string, string>();
   const workerIdByManagementRun = new Map<string, string>();
+  const capacityRequestByManagementRun = new Map<string, Omit<QueuedCapacityRequest, 'enqueuedAt' | 'reasonCode'>>();
   const queueByManagementRun = new Map<string, QueuedCapacityRequest>();
 
   function registerWorker(input: { readonly connectionId: string; readonly capability: ManagementWorkerCapability }) {
@@ -69,7 +70,7 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
       return failure('INVALID_REQUEST', 'SERVER_WORKER_CAPACITY_INVALID', false);
     }
 
-    const identity = `${dependencies.workerPoolId}|${capability.profileId}|${capability.workerInstanceId}`;
+    const identity = JSON.stringify([dependencies.workerPoolId, capability.profileId, capability.workerInstanceId]);
     const existing = workersByIdentity.get(identity);
     if (existing
       && existing.capability.capacity.maxConcurrentLeases !== capability.capacity.maxConcurrentLeases) {
@@ -83,7 +84,7 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
       connectionId: input.connectionId,
       connected: true,
       capability,
-      reportedActiveLeaseCount: capability.capacity.activeLeaseCount,
+      untrackedActiveLeaseCount: capability.capacity.activeLeaseCount,
       lastHeartbeatAt: dependencies.clock.now(),
       activeManagementRunIds: new Set(),
     };
@@ -91,7 +92,10 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
     worker.connectionId = input.connectionId;
     worker.connected = true;
     worker.capability = capability;
-    worker.reportedActiveLeaseCount = capability.capacity.activeLeaseCount;
+    worker.untrackedActiveLeaseCount = Math.max(
+      0,
+      capability.capacity.activeLeaseCount - worker.activeManagementRunIds.size,
+    );
     worker.lastHeartbeatAt = dependencies.clock.now();
     workersById.set(worker.workerId, worker);
     workersByIdentity.set(identity, worker);
@@ -116,7 +120,7 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
       || input.activeLeaseCount > worker.capability.capacity.maxConcurrentLeases) {
       return failure('INVALID_REQUEST', 'SERVER_WORKER_CAPACITY_INVALID', false);
     }
-    worker.reportedActiveLeaseCount = input.activeLeaseCount;
+    worker.untrackedActiveLeaseCount = Math.max(0, input.activeLeaseCount - worker.activeManagementRunIds.size);
     worker.lastHeartbeatAt = dependencies.clock.now();
     return {
       schemaVersion: 1 as const,
@@ -146,6 +150,8 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
     expireStaleWorkers();
     const assignedWorkerId = workerIdByManagementRun.get(input.managementRunId);
     if (assignedWorkerId) return assignment(input.managementRunId, requireWorker(assignedWorkerId));
+    const capacityRequest = capacityRequestByManagementRun.get(input.managementRunId) ?? input;
+    capacityRequestByManagementRun.set(input.managementRunId, capacityRequest);
     const candidates = [...workersById.values()].filter((worker) =>
       worker.connected
       && worker.profileId === input.profileId
@@ -159,7 +165,7 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
     const worker = candidates[0];
     if (!worker) {
       const queued = queueByManagementRun.get(input.managementRunId) ?? {
-        ...input,
+        ...capacityRequest,
         enqueuedAt: dependencies.clock.now(),
         reasonCode: 'SERVER_WORKER_CAPACITY_EXHAUSTED' as const,
       };
@@ -176,6 +182,7 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
     if (workerIdByManagementRun.get(input.managementRunId) !== input.workerId) return { released: false as const };
     workerIdByManagementRun.delete(input.managementRunId);
     workersById.get(input.workerId)?.activeManagementRunIds.delete(input.managementRunId);
+    capacityRequestByManagementRun.delete(input.managementRunId);
     return { released: true as const };
   }
 
@@ -213,6 +220,18 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
       if (workerIdByConnection.get(worker.connectionId) === worker.workerId) {
         workerIdByConnection.delete(worker.connectionId);
       }
+      for (const managementRunId of worker.activeManagementRunIds) {
+        workerIdByManagementRun.delete(managementRunId);
+        const capacityRequest = capacityRequestByManagementRun.get(managementRunId);
+        if (capacityRequest) {
+          queueByManagementRun.set(managementRunId, {
+            ...capacityRequest,
+            enqueuedAt: now,
+            reasonCode: 'SERVER_WORKER_CAPACITY_EXHAUSTED',
+          });
+        }
+      }
+      worker.activeManagementRunIds.clear();
       expiredWorkerIds.push(worker.workerId);
     }
     return expiredWorkerIds;
@@ -238,7 +257,7 @@ function parseCapability(value: ManagementWorkerCapability): ManagementWorkerCap
 }
 
 function effectiveActiveLeaseCount(worker: RegisteredServerWorker): number {
-  return Math.max(worker.reportedActiveLeaseCount, worker.activeManagementRunIds.size);
+  return worker.untrackedActiveLeaseCount + worker.activeManagementRunIds.size;
 }
 
 function assignment(managementRunId: string, worker: RegisteredServerWorker) {

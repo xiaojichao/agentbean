@@ -789,7 +789,8 @@ export function parseManagementWorkerRegisterV2(value: unknown): ManagementWorke
   if (value.host !== undefined) {
     assertExactKeys(value.host, ['kind', 'workerPoolId'], ['kind']);
     if (value.host.kind === 'server') {
-      if (!nonEmpty(value.host.workerPoolId) || !nonEmpty(value.providerCredentialRef)) {
+      if (!nonEmpty(value.host.workerPoolId) || value.host.workerPoolId.length > 256
+        || !nonEmpty(value.providerCredentialRef) || value.providerCredentialRef.length > 512) {
         throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
       }
     } else if (value.host.kind !== 'device' || value.host.workerPoolId !== undefined

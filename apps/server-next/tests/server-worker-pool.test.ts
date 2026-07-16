@@ -68,6 +68,60 @@ describe('Phase 4 Server Worker Pool', () => {
     expect(harness.pool.snapshot().workers).toMatchObject([{ connected: false }]);
   });
 
+  test('requeues reservations when their Worker heartbeat expires', () => {
+    const harness = createHarness();
+    const registered = harness.pool.registerWorker({ connectionId: 'connection-1', capability: capability() });
+    const workerId = (registered as { workerId: string }).workerId;
+    expect(harness.pool.requestCapacity({
+      managementRunId: 'run-expired', teamId: 'team-1', profileId: 'profile-1',
+    })).toMatchObject({ kind: 'assigned', workerId });
+    harness.clock.now = 41;
+
+    expect(harness.pool.expireStaleWorkers()).toEqual([workerId]);
+    expect(harness.pool.snapshot().queue).toEqual([{
+      managementRunId: 'run-expired', teamId: 'team-1', profileId: 'profile-1',
+      enqueuedAt: 41, reasonCode: 'SERVER_WORKER_CAPACITY_EXHAUSTED',
+    }]);
+    expect(harness.pool.requestCapacity({
+      managementRunId: 'run-expired', teamId: 'team-1', profileId: 'profile-1',
+    })).toMatchObject({ kind: 'queued', managementRunId: 'run-expired' });
+  });
+
+  test('adds reported remote load to new local reservations', () => {
+    const harness = createHarness();
+    harness.pool.registerWorker({
+      connectionId: 'connection-1',
+      capability: capability({ capacity: { maxConcurrentLeases: 2, activeLeaseCount: 1 } }),
+    });
+
+    expect(harness.pool.requestCapacity({
+      managementRunId: 'run-1', teamId: 'team-1', profileId: 'profile-1',
+    })).toMatchObject({ kind: 'assigned' });
+    expect(harness.pool.requestCapacity({
+      managementRunId: 'run-2', teamId: 'team-1', profileId: 'profile-1',
+    })).toMatchObject({ kind: 'queued', reasonCode: 'SERVER_WORKER_CAPACITY_EXHAUSTED' });
+    expect(harness.pool.snapshot().workers).toMatchObject([{
+      capacity: { maxConcurrentLeases: 2, activeLeaseCount: 2 },
+    }]);
+  });
+
+  test('keeps delimiter-containing Worker identities distinct', () => {
+    const harness = createHarness();
+    const first = harness.pool.registerWorker({
+      connectionId: 'connection-1',
+      capability: capability({ profileId: 'a', workerInstanceId: 'b|c' }),
+    });
+    const second = harness.pool.registerWorker({
+      connectionId: 'connection-2',
+      capability: capability({ profileId: 'a|b', workerInstanceId: 'c' }),
+    });
+
+    expect(first).toMatchObject({ ok: true, workerId: expect.any(String) });
+    expect(second).toMatchObject({ ok: true, workerId: expect.any(String) });
+    expect((second as { workerId: string }).workerId).not.toBe((first as { workerId: string }).workerId);
+    expect(harness.pool.snapshot().workers).toHaveLength(2);
+  });
+
   test('queues capacity overflow visibly and assigns it after a fixed slot is released', () => {
     const harness = createHarness();
     const registration = harness.pool.registerWorker({
