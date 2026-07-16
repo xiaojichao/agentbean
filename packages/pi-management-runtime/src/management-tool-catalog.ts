@@ -100,11 +100,20 @@ function phase3MemorySchemaFor(name: Phase3MemoryToolName) {
     taskId: Type.Optional(id()), channelId: Type.Optional(id()), userId: Type.Optional(id()),
   }, { additionalProperties: false });
   if (name === 'memory.propose_candidate') return Type.Object({
+    sourceAgentId: id(),
+    sourceInvocationId: id(),
+    targetAgentId: id(),
+    scopeType: Type.Union([
+      Type.Literal('team'), Type.Literal('channel'), Type.Literal('dm'),
+      Type.Literal('task'), Type.Literal('agent'), Type.Literal('user'),
+    ]),
+    scopeRef: id(),
     contentKind: Type.Union([
       Type.Literal('summary'), Type.Literal('fact'), Type.Literal('decision'),
       Type.Literal('preference'), Type.Literal('procedure'),
     ]),
     proposedContent: id(),
+    proposedSummary: Type.Optional(id()),
     sourceRefs: Type.Array(sourceRef, { minItems: 1 }),
     taskId: Type.Optional(id()),
   }, { additionalProperties: false });

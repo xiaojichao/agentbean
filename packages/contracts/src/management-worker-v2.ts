@@ -4,7 +4,8 @@ import type { AcceptanceCriterionDto, EvidenceRefDto, SubtaskAcceptanceV1 } from
 import type { AgentHandoffReturnMode, AgentHandoffStatus, SerialAgentHandoffKind } from './collaboration.js';
 import { parseAgentCollaborationProposalV1 } from './collaboration.js';
 import type { AgentInvocationResultDto } from './invocation.js';
-import type { MemoryCapsuleRefDto, MemoryContentKind, MemorySourceRefDto } from './management-memory.js';
+import type { MemoryCapsuleRefDto, MemoryContentKind, MemoryScopeType, MemorySourceRefDto } from './management-memory.js';
+import { MEMORY_SCOPE_TYPES } from './management-memory.js';
 
 export const PHASE_2_TASK_WORKER_TOOL_NAMES = [
   'tasks.create_subtasks',
@@ -146,8 +147,14 @@ export interface Phase3ManagementWorkerToolInputMapV1 {
     readonly userId?: ID;
   };
   readonly 'memory.propose_candidate': {
+    readonly sourceAgentId: ID;
+    readonly sourceInvocationId: ID;
+    readonly targetAgentId: ID;
+    readonly scopeType: MemoryScopeType;
+    readonly scopeRef: ID;
     readonly contentKind: MemoryContentKind;
     readonly proposedContent: string;
+    readonly proposedSummary?: string;
     readonly sourceRefs: readonly MemorySourceRefDto[];
     readonly taskId?: ID;
   };
@@ -699,11 +706,18 @@ function assertMemoryToolInput(toolName: keyof Phase3ManagementWorkerToolInputMa
     return;
   }
   if (toolName === 'memory.propose_candidate') {
-    assertExactMemoryKeys(value, ['contentKind', 'proposedContent', 'sourceRefs', 'taskId'],
-      ['contentKind', 'proposedContent', 'sourceRefs']);
+    assertExactMemoryKeys(value,
+      ['sourceAgentId', 'sourceInvocationId', 'targetAgentId', 'scopeType', 'scopeRef',
+        'contentKind', 'proposedContent', 'proposedSummary', 'sourceRefs', 'taskId'],
+      ['sourceAgentId', 'sourceInvocationId', 'targetAgentId', 'scopeType', 'scopeRef',
+        'contentKind', 'proposedContent', 'sourceRefs']);
     if (!MEMORY_CONTENT_KINDS.includes(value.contentKind as typeof MEMORY_CONTENT_KINDS[number])
+      || !MEMORY_SCOPE_TYPES.includes(value.scopeType as typeof MEMORY_SCOPE_TYPES[number])
+      || !nonEmpty(value.sourceAgentId) || !nonEmpty(value.sourceInvocationId)
+      || !nonEmpty(value.targetAgentId) || !nonEmpty(value.scopeRef)
       || !nonEmpty(value.proposedContent)
-      || (value.taskId !== undefined && !nonEmpty(value.taskId))) {
+      || (value.taskId !== undefined && !nonEmpty(value.taskId))
+      || (value.proposedSummary !== undefined && !nonEmpty(value.proposedSummary))) {
       throw new Error('MEMORY_TOOL_INPUT_INVALID');
     }
     assertMemorySourceRefs(value.sourceRefs);
