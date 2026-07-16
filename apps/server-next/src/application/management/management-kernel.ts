@@ -215,7 +215,7 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
         });
         if (decision.kind === 'rejected') throw new ManagementConflictError(`LEASE_${decision.reason.toUpperCase().replaceAll('-', '_')}`);
         if (decision.kind === 'existing') return { lease: decision.lease, disposition: 'existing' as const };
-        if (decision.reason === 'expired-same-host' && currentLease) {
+        if ((decision.reason === 'expired-same-host' || decision.reason === 'expired-cross-host') && currentLease) {
           await appendManagementEventInTransaction(transactionRepositories, {
             managementRunId: input.managementRunId,
             type: 'worker-lost',

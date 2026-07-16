@@ -282,6 +282,31 @@ describe('management worker socket integration', () => {
     ]);
   });
 
+  test('offers an expired Server lease to an eligible Device worker', async () => {
+    const harness = await createHarness({ devices: [device('device-1', 'profile-1')] });
+    await harness.repositories.management.leases.put({
+      managementRunId: harness.runId,
+      workerId: 'server-worker-1',
+      host: { kind: 'server', workerPoolId: 'pool-1', profileId: 'profile-1' },
+      leaseTokenHash: 'server-token-hash',
+      leaseFingerprint: 'server-token-fingerprint',
+      fencingToken: 1,
+      acquiredAt: 1,
+      heartbeatAt: 1,
+      expiresAt: 10,
+    });
+    const deviceWorker = harness.connect('device-1');
+    await deviceWorker.trigger(AGENT_EVENTS.device.hello, { deviceId: 'device-1' });
+    await expect(deviceWorker.trigger(AGENT_EVENTS.managementWorker.register, workerRegistration()))
+      .resolves.toMatchObject({ ok: true });
+
+    await expect(harness.realtime.scheduleManagementRun({
+      managementRunId: harness.runId,
+      profileId: 'profile-1',
+    })).resolves.toMatchObject({ ok: true, deviceId: 'device-1' });
+    expect(deviceWorker.outbound(AGENT_EVENTS.managementWorker.leaseOffer)).toHaveLength(1);
+  });
+
   test('Task claim offer/ack 与 acquire/renew/release/expire 走独立 transport', async () => {
     const fakeServer = new FakeServer();
     const acquire = vi.fn(async () => ({ schemaVersion: 1, ok: false, errorCode: 'CONFLICT',

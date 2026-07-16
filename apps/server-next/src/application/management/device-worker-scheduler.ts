@@ -291,7 +291,7 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
       for (const worker of workersById.values()) {
         if (!worker.connected || worker.teamId !== run.teamId || worker.profileId !== input.profileId) continue;
         if (!supportsManagementPhase(worker.capability, 'managementPhase' in run ? run.managementPhase : 1)) continue;
-        if (currentLease && (('workerPoolId' in currentLease.host)
+        if (leaseStatus.kind === 'released' && currentLease && (('workerPoolId' in currentLease.host)
           || !('deviceId' in currentLease.host)
           || worker.deviceId !== currentLease.host.deviceId
           || worker.profileId !== currentLease.host.profileId)) continue;
