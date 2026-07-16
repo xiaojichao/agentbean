@@ -55,4 +55,33 @@ describe('Memory governance snapshot', () => {
     await expect(service.getSnapshot({ teamId: 'team-1', userId: 'user-2' }))
       .rejects.toThrow('MEMORY_PERMISSION_DENIED');
   });
+
+  test('does not leak unrelated Invocation metadata from a visible management run', async () => {
+    await repositories.memory.candidates.create({
+      schemaVersion: 1, id: 'candidate-visible', teamId: 'team-1', managementRunId: 'run-1',
+      sourceAgentId: 'agent-source', sourceInvocationId: 'invocation-visible', targetAgentId: 'agent-target',
+      scopeType: 'team', scopeRef: 'team-1', contentKind: 'fact', proposedContent: 'Visible candidate',
+      projectionHash: 'sha256:visible', status: 'candidate', conflictMemoryIds: [], createdAt: 10, updatedAt: 10,
+    });
+    await repositories.management.invocations.create({
+      schemaVersion: 1, id: 'invocation-visible', managementRunId: 'run-1', intent: {
+        schemaVersion: 1, teamId: 'team-1', channelId: 'channel-visible', targetAgentId: 'agent-visible',
+        targetKind: 'custom', objective: 'Visible objective', acceptanceCriteria: [], dependencyResults: [], attachmentIds: [],
+      }, intentHash: 'hash-visible', idempotencyKey: 'key-visible', createdAt: 11,
+    });
+    await repositories.management.invocations.create({
+      schemaVersion: 1, id: 'invocation-hidden', managementRunId: 'run-1', intent: {
+        schemaVersion: 1, teamId: 'team-1', channelId: 'channel-hidden', targetAgentId: 'agent-hidden',
+        targetKind: 'custom', objective: 'Hidden objective',
+        taskContext: { taskId: 'task-hidden', taskRevision: 1, taskAttempt: 1, claimLeaseId: 'claim-hidden' },
+        acceptanceCriteria: [], dependencyResults: [], attachmentIds: [],
+      }, intentHash: 'hash-hidden', idempotencyKey: 'key-hidden', createdAt: 12,
+    });
+
+    const snapshot = await createMemoryGovernanceService({ repositories, clock: { now: () => 100 } })
+      .getSnapshot({ teamId: 'team-1', userId: 'user-2' });
+
+    expect(snapshot.invocations.map((invocation) => invocation.id)).toEqual(['invocation-visible']);
+    expect(JSON.stringify(snapshot.invocations)).not.toContain('agent-hidden');
+  });
 });

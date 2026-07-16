@@ -38,4 +38,25 @@ describe('Device local Memory governance summaries', () => {
       profileId: 'profile-a', teamId: 'team-1', cwds: [cwd], baseDir,
     })).resolves.toEqual([]);
   });
+
+  test('skips a stale workspace while preserving profile and valid workspace summaries', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'agentbean-local-governance-valid-'));
+    const baseDir = join(cwd, '.home');
+    const profileStore = await createLocalMemoryStore({ profileId: 'profile-a', baseDir, now: () => 100 });
+    await profileStore.upsert({
+      teamId: 'team-1', kind: 'preference', scopeType: 'local-profile', sourceKind: 'manual',
+      content: 'profile body', summary: 'Profile summary',
+    });
+    const workspaceStore = await createLocalMemoryStore({ profileId: 'profile-a', cwd, baseDir, now: () => 101 });
+    await workspaceStore.upsert({
+      teamId: 'team-1', cwd, kind: 'procedural', scopeType: 'local-workspace', sourceKind: 'manual',
+      content: 'workspace body', summary: 'Workspace summary',
+    });
+
+    const summaries = await listLocalMemoryGovernanceSummaries({
+      profileId: 'profile-a', teamId: 'team-1', cwds: [join(cwd, 'deleted-workspace'), cwd], baseDir,
+    });
+
+    expect(summaries.map((summary) => summary.summary).sort()).toEqual(['Profile summary', 'Workspace summary']);
+  });
 });

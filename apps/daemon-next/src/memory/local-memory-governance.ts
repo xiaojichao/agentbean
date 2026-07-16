@@ -9,14 +9,20 @@ export async function listLocalMemoryGovernanceSummaries(input: {
   cwds: readonly string[];
   baseDir?: string;
 }): Promise<readonly LocalMemoryGovernanceSummaryDto[]> {
-  const stores = await Promise.all([
-    createLocalMemoryStore({ profileId: input.profileId, ...(input.baseDir ? { baseDir: input.baseDir } : {}) }),
-    ...Array.from(new Set(input.cwds.filter(Boolean))).map((cwd) => createLocalMemoryStore({
-      profileId: input.profileId,
-      cwd,
-      ...(input.baseDir ? { baseDir: input.baseDir } : {}),
-    })),
-  ]);
+  const stores = [
+    await createLocalMemoryStore({ profileId: input.profileId, ...(input.baseDir ? { baseDir: input.baseDir } : {}) }),
+  ];
+  for (const cwd of new Set(input.cwds.filter(Boolean))) {
+    try {
+      stores.push(await createLocalMemoryStore({
+        profileId: input.profileId,
+        cwd,
+        ...(input.baseDir ? { baseDir: input.baseDir } : {}),
+      }));
+    } catch {
+      // Stale or inaccessible agent workspaces must not hide profile-level or other valid summaries.
+    }
+  }
   const summaries = new Map<string, LocalMemoryGovernanceSummaryDto>();
   for (const store of stores) {
     for (const item of store.list()) {

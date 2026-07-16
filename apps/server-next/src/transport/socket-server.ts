@@ -172,7 +172,7 @@ export function attachServerNextNamespaces(
       try {
         const identity = await authenticatedUser();
         const teamId = payloadTeamId(payload);
-        if (!identity.userId || !identity.currentDeviceId || !teamId) {
+        if (!identity.hasToken || !identity.userId || !identity.currentDeviceId || !teamId) {
           ack?.({ ok: false, error: 'PERMISSION_DENIED' });
           return;
         }
@@ -181,11 +181,12 @@ export function attachServerNextNamespaces(
           userId: identity.userId,
           currentDeviceId: identity.currentDeviceId,
         });
-        if (!devices.ok || !devices.devices.some((device) => device.id === identity.currentDeviceId && device.isLocal)) {
+        const localDevice = devices.ok ? devices.devices.find((device) => device.isLocal) : undefined;
+        if (!localDevice) {
           ack?.({ ok: false, error: 'PERMISSION_DENIED' });
           return;
         }
-        const deviceSocket = agentSocketsByDeviceId.get(identity.currentDeviceId);
+        const deviceSocket = agentSocketsByDeviceId.get(localDevice.id);
         const ackSocket = deviceSocket?.timeout?.(DEVICE_MEMORY_SUMMARY_TIMEOUT_MS) ?? deviceSocket;
         if (!ackSocket?.emitWithAck) {
           ack?.({ ok: false, error: 'DEVICE_OFFLINE' });

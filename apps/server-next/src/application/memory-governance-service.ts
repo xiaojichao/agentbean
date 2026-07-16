@@ -133,15 +133,30 @@ export function createMemoryGovernanceService(input: {
         ...visibleCandidates.map((candidate) => candidate.managementRunId),
         ...capsules.map((capsule) => capsule.managementRunId),
       ]);
+      const visibleCapsuleIds = new Set(capsules.map((capsule) => capsule.id));
+      const visibleCandidateInvocationIds = new Set(
+        visibleCandidates.map((candidate) => candidate.sourceInvocationId).filter(Boolean),
+      );
       const invocations = [] as MemoryGovernanceInvocationDto[];
       for (const runId of runIds) {
         const records = await repositories.management.invocations.listByRun(runId);
         for (const invocation of records) {
           if (invocation.intent.teamId !== request.teamId) continue;
+          const taskId = invocation.intent.taskContext?.taskId;
+          const taskVisible = taskId ? await canReadMemoryScope(repositories, {
+            teamId: request.teamId,
+            requesterUserId: request.userId,
+            scopeType: 'task',
+            scopeRef: taskId,
+          }) : false;
+          const capsuleVisible = invocation.intent.memoryCapsuleRef
+            ? visibleCapsuleIds.has(invocation.intent.memoryCapsuleRef.id)
+            : false;
+          if (!taskVisible && !capsuleVisible && !visibleCandidateInvocationIds.has(invocation.id)) continue;
           invocations.push({
             id: invocation.id,
             managementRunId: invocation.managementRunId,
-            taskId: invocation.intent.taskContext?.taskId,
+            taskId,
             targetAgentId: invocation.intent.targetAgentId,
             capsuleRef: invocation.intent.memoryCapsuleRef,
             createdAt: invocation.createdAt,
