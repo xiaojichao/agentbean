@@ -117,6 +117,8 @@ export interface WebSocketHandlerOptions {
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterTeamMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterTaskMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  afterMemberMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  afterMemoryMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
 
 export interface AgentSocketHandlerOptions {
@@ -450,11 +452,22 @@ export function registerWebSocketHandlers(
     await options.afterTaskMutation?.(payload, result);
     await options.afterMessageSend?.(payload, result);
   }, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.member.updateRole, app, 'updateMemberRole', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.member.remove, app, 'removeMember', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.member.transferOwner, app, 'transferOwner', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.member.updateRole, app, 'updateMemberRole', (payload, result) => options.afterMemberMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.member.remove, app, 'removeMember', (payload, result) => options.afterMemberMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.member.transferOwner, app, 'transferOwner', (payload, result) => options.afterMemberMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.member.list, app, 'listMembers', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.member.updateHuman, app, 'updateMemberHuman', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.memory.snapshot, app, 'getMemoryGovernanceSnapshot', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.memory.create, app, 'createCollaborativeMemory', (payload, result) => options.afterMemoryMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.memory.update, app, 'updateCollaborativeMemory', (payload, result) => options.afterMemoryMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.memory.expire, app, 'expireCollaborativeMemory', (payload, result) => options.afterMemoryMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.memory.supersede, app, 'supersedeCollaborativeMemory', (payload, result) => options.afterMemoryMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.memory.delete, app, 'deleteCollaborativeMemory', (payload, result) => options.afterMemoryMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.memory.grantIssue, app, 'issueMemoryGrant', (payload, result) => options.afterMemoryMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.memory.grantRevoke, app, 'revokeMemoryGrant', (payload, result) => options.afterMemoryMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.memory.candidateAccept, app, 'acceptMemoryCandidate', (payload, result) => options.afterMemoryMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.memory.candidateReject, app, 'rejectMemoryCandidate', (payload, result) => options.afterMemoryMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.memory.candidateMerge, app, 'mergeMemoryCandidate', (payload, result) => options.afterMemoryMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.dispatch.cancel, app, 'cancelDispatch', async (_payload, result) => {
     if (!isDispatchAck(result)) {
       return;

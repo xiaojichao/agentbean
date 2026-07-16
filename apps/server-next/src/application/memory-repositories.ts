@@ -171,6 +171,7 @@ export interface MemoryRepositories {
   readonly items: {
     create(record: MemoryItemRecord): Promise<MemoryItemRecord>;
     getById(input: { teamId: ID; id: ID }): Promise<MemoryItemRecord | null>;
+    listByTeam(input: { teamId: ID }): Promise<MemoryItemRecord[]>;
     listByScope(input: {
       teamId: ID;
       scopeType: MemoryScopeType;
@@ -198,6 +199,7 @@ export interface MemoryRepositories {
   readonly grants: {
     create(record: MemoryGrantRecord): Promise<MemoryGrantRecord>;
     getCurrent(input: { teamId: ID; id: ID }): Promise<MemoryGrantRecord | null>;
+    listCurrentByTeam(input: { teamId: ID }): Promise<MemoryGrantRecord[]>;
     listCurrentForTarget(input: { teamId: ID; targetAgentId: ID }): Promise<MemoryGrantRecord[]>;
     listVersions(input: { teamId: ID; id: ID }): Promise<MemoryGrantRecord[]>;
   };
@@ -212,6 +214,7 @@ export interface MemoryRepositories {
   readonly capsuleRefs: {
     create(record: MemoryCapsuleRefRecord): Promise<MemoryCapsuleRefRecord>;
     getById(input: { teamId: ID; id: ID }): Promise<MemoryCapsuleRefRecord | null>;
+    listByTeam(input: { teamId: ID }): Promise<MemoryCapsuleRefRecord[]>;
     listByRun(input: { teamId: ID; managementRunId: ID }): Promise<MemoryCapsuleRefRecord[]>;
     markDenied(input: { teamId: ID; id: ID; deniedAt: UnixMs }): Promise<MemoryCapsuleRefRecord | null>;
   };
@@ -222,6 +225,7 @@ export interface MemoryRepositories {
   readonly candidates: {
     create(record: MemoryCandidateRecord): Promise<MemoryCandidateRecord>;
     getById(input: { teamId: ID; id: ID }): Promise<MemoryCandidateRecord | null>;
+    listByTeam(input: { teamId: ID }): Promise<MemoryCandidateRecord[]>;
     findByProjectionHash(input: {
       teamId: ID;
       projectionHash: string;

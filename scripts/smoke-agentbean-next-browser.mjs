@@ -482,6 +482,21 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       ),
     );
 
+    const memoryResult = await exerciseWebUiMemoryBusinessSmoke({
+      page,
+      baseUrl: target.baseUrl,
+      session: seededSession.session,
+      suffix,
+      timeoutMs,
+    });
+    checks.push(
+      check(
+        'webui-memory-governance-flow',
+        true,
+        `Created collaborative Memory "${memoryResult.content}", restored it after refresh, and rendered governance status`,
+      ),
+    );
+
     const agentsResult = await exerciseWebUiAgentsBusinessSmoke({
       page,
       baseUrl: target.baseUrl,
@@ -2615,6 +2630,35 @@ export async function exerciseWebUiSettingsBusinessSmoke({
     timeoutMs,
   );
   return { teamName, joinCode, username: session.user.username, browserPreferencesReset: true };
+}
+
+export async function exerciseWebUiMemoryBusinessSmoke({ page, baseUrl, session, suffix, timeoutMs }) {
+  assertSession(session);
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  const teamPath = session.team.path ?? session.team.id;
+  const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-24);
+  const content = `WebUI Memory smoke ${safeSuffix}`;
+  await page.navigate(new URL(`/${teamPath}/settings?tab=memory`, root).toString());
+  await page.waitForFunction(
+    `Boolean(document.querySelector('[data-smoke="memory-governance-panel"]'))`,
+    'Memory governance panel to render',
+    timeoutMs,
+  );
+  await page.click('[data-smoke="memory-create-toggle"]');
+  await page.setInputValue('[data-smoke="memory-create-content"]', content);
+  await page.click('[data-smoke="memory-create-submit"]');
+  await page.waitForFunction(
+    `document.querySelector('[data-smoke="memory-governance-panel"]')?.textContent.includes(${JSON.stringify(content)})`,
+    `Memory governance panel to render "${content}"`,
+    timeoutMs,
+  );
+  await page.reload();
+  await page.waitForFunction(
+    `document.querySelector('[data-smoke="memory-governance-panel"]')?.textContent.includes(${JSON.stringify(content)})`,
+    `Memory governance panel to restore "${content}" after refresh`,
+    timeoutMs,
+  );
+  return { content };
 }
 
 async function openWebUiSettingsTab({ page, tab, timeoutMs }) {

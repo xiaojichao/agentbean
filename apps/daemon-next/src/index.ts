@@ -50,6 +50,7 @@ export type { TaskClaimProtocol, TaskClaimProtocolHandlers } from './management-
 import { createRescanController, type RescanController } from './rescan.js';
 import { createDispatchOutbox, type DispatchOutbox } from './outbox.js';
 import { prepareDispatchRuntimeMemory } from './memory/runtime-memory-context.js';
+import { listLocalMemoryGovernanceSummaries } from './memory/local-memory-governance.js';
 
 export interface DaemonProtocolSocket {
   readonly connected: boolean;
@@ -266,6 +267,24 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           // 前端据此渲染友好提示；只有非结构化错误才退回 message。
           const code = (err as { code?: unknown })?.code;
           ack?.({ ok: false, error: typeof code === 'string' ? code : err instanceof Error ? err.message : 'directory picker failed' });
+        }
+      });
+
+      socket.on(AGENT_EVENTS.memory.governanceSummaryRequested, async (payload: unknown, ack?: (result: unknown) => void) => {
+        const teamId = (payload as { teamId?: unknown } | null)?.teamId;
+        if (typeof teamId !== 'string' || teamId !== device.teamId || !device.profileId) {
+          ack?.({ ok: false, error: 'PERMISSION_DENIED' });
+          return;
+        }
+        try {
+          const summaries = await listLocalMemoryGovernanceSummaries({
+            profileId: device.profileId,
+            teamId,
+            cwds: latestSnapshot.agents.flatMap((agent) => agent.cwd ? [agent.cwd] : []),
+          });
+          ack?.({ ok: true, summaries });
+        } catch {
+          ack?.({ ok: false, error: 'LOCAL_MEMORY_UNAVAILABLE' });
         }
       });
 

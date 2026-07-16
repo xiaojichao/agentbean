@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type JoinLinkDto, type MessageMetaDto, type TeamDto, type ManagementMode, type ManagerPlacementPolicyDto, type TaskDagViewDto, type TeamManagementPolicyV2Dto } from '@agentbean/contracts';
+import { WEB_EVENTS, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type TeamDto, type ManagementMode, type ManagerPlacementPolicyDto, type TaskDagViewDto, type TeamManagementPolicyV2Dto } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
@@ -600,6 +600,43 @@ export function memberEvents(socket: Socket = getWebSocket()): MemberEvents {
     },
     transferOwner(payload) {
       return emitWithTimeout(socket, WEB_EVENTS.member.transferOwner, payload);
+    },
+  };
+}
+
+export interface MemoryEvents {
+  snapshot(teamId: string): Promise<{ ok: boolean; snapshot?: MemoryGovernanceSnapshotDto; error?: string; message?: string }>;
+  create(payload: { teamId: string; kind: MemoryKind; scopeType: MemoryScopeType; scopeRef: string; content: string; summary?: string; tags?: readonly string[]; validUntil?: number; asCandidate?: boolean }): Promise<{ ok: boolean; error?: string; message?: string }>;
+  update(payload: { teamId: string; memoryId: string; expectedUpdatedAt: number; content?: string; summary?: string; tags?: readonly string[]; validUntil?: number }): Promise<{ ok: boolean; error?: string; message?: string }>;
+  expire(teamId: string, memoryId: string): Promise<{ ok: boolean; error?: string; message?: string }>;
+  supersede(payload: { teamId: string; memoryId: string; content: string; summary?: string; tags?: readonly string[] }): Promise<{ ok: boolean; error?: string; message?: string }>;
+  delete(teamId: string, memoryId: string): Promise<{ ok: boolean; error?: string; message?: string }>;
+  issueGrant(payload: { teamId: string; grantId?: string; sourceScopeType: MemoryScopeType; sourceScopeRef: string; targetAgentId: string; authorizedContentKind: MemoryContentKind; authorizedRedactionLevel: MemoryRedactionLevel; expiresAt: number }): Promise<{ ok: boolean; error?: string; message?: string }>;
+  revokeGrant(teamId: string, grantId: string): Promise<{ ok: boolean; error?: string; message?: string }>;
+  acceptCandidate(payload: { teamId: string; candidateId: string; kind: MemoryKind; summary?: string; tags?: readonly string[]; validUntil?: number }): Promise<{ ok: boolean; error?: string; message?: string }>;
+  rejectCandidate(teamId: string, candidateId: string): Promise<{ ok: boolean; error?: string; message?: string }>;
+  mergeCandidate(teamId: string, candidateId: string, conflictMemoryId: string): Promise<{ ok: boolean; error?: string; message?: string }>;
+  localSummaries(teamId: string): Promise<{ ok: boolean; summaries?: readonly LocalMemoryGovernanceSummaryDto[]; error?: string }>;
+  onChanged(handler: (payload: { teamId: string }) => void): () => void;
+}
+
+export function memoryEvents(socket: Socket = getWebSocket()): MemoryEvents {
+  return {
+    snapshot(teamId) { return emitWithTimeout(socket, WEB_EVENTS.memory.snapshot, { teamId }); },
+    create(payload) { return emitWithTimeout(socket, WEB_EVENTS.memory.create, payload); },
+    update(payload) { return emitWithTimeout(socket, WEB_EVENTS.memory.update, payload); },
+    expire(teamId, memoryId) { return emitWithTimeout(socket, WEB_EVENTS.memory.expire, { teamId, memoryId }); },
+    supersede(payload) { return emitWithTimeout(socket, WEB_EVENTS.memory.supersede, payload); },
+    delete(teamId, memoryId) { return emitWithTimeout(socket, WEB_EVENTS.memory.delete, { teamId, memoryId }); },
+    issueGrant(payload) { return emitWithTimeout(socket, WEB_EVENTS.memory.grantIssue, payload); },
+    revokeGrant(teamId, grantId) { return emitWithTimeout(socket, WEB_EVENTS.memory.grantRevoke, { teamId, grantId }); },
+    acceptCandidate(payload) { return emitWithTimeout(socket, WEB_EVENTS.memory.candidateAccept, payload); },
+    rejectCandidate(teamId, candidateId) { return emitWithTimeout(socket, WEB_EVENTS.memory.candidateReject, { teamId, candidateId }); },
+    mergeCandidate(teamId, candidateId, conflictMemoryId) { return emitWithTimeout(socket, WEB_EVENTS.memory.candidateMerge, { teamId, candidateId, conflictMemoryId }); },
+    localSummaries(teamId) { return emitWithTimeout(socket, WEB_EVENTS.memory.localSummary, { teamId }); },
+    onChanged(handler) {
+      socket.on(WEB_EVENTS.memory.changed, handler);
+      return () => { socket.off(WEB_EVENTS.memory.changed, handler); };
     },
   };
 }

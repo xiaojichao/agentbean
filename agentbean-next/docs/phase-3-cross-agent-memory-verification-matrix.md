@@ -2,7 +2,7 @@
 
 > 更新日期：2026-07-16
 > 当前 verdict：**Not ready**
-> 原因：合同、Domain 安全边界、Server 持久化、协作 Memory 用例层、权限优先检索排序、最小 Capsule 创建、事实源失效处理、Capsule 注入复验、Capsule↔Invocation/checkpoint 绑定、Memory Candidate 生命周期、Phase 3 Memory 工具定义地基，以及 Device 本地 Memory 与实际 runtime 注入合并已完成；V3 capability/preflight 接线 + handler、explicit-grant Capsule、Candidate 的 worker/checkpoint 接线、Web 治理面、socket wiring 与真实跨 Agent 验证尚未完成。Phase 3 runtime 必须保持关闭。
+> 原因：合同、Domain 安全边界、Server 持久化、协作 Memory 用例层、权限优先检索排序、最小 Capsule 创建、事实源失效处理、Capsule 注入复验、Capsule↔Invocation/checkpoint 绑定、Memory Candidate 生命周期、Phase 3 Memory 工具定义地基、Device 本地 Memory 与实际 runtime 注入合并，以及 Web 治理面已完成；V3 capability/preflight 接线 + handler、explicit-grant Capsule、Candidate 的 worker/checkpoint 接线与真实跨 Agent 验证尚未完成。Phase 3 runtime 必须保持关闭。
 
 状态定义：`Green` 已有自动化或真实证据；`Yellow` 已实现但证据未收口；`Red` 尚未实现或缺关键证据。
 
@@ -21,7 +21,7 @@
 | P3-11 | Green | 来源关联、projection hash 去重与冲突识别 | `projectionHash` 复用 domain `memory-hashing.ts` 单一源 `computeProjectionHash`（proposedContent + sourceRefs + scope + contentKind，故意不 normalize，严格字节去重）；幂等：`findByProjectionHash` 查未决 candidate 命中即返回、不新建 active Memory；来源冲突：candidate 来源经 `sources.listBySource` 命中 active Memory 且 projectionHash 不同 → `conflict` 态（conflictMemoryIds），accept 遇冲突 throw `CANDIDATE_HAS_CONFLICT` 引导 merge，merge 在 unitOfWork 内复用 supersede 范式取代冲突项；双后端 parity 覆盖幂等/冲突/跨 Team fail-closed（`CANDIDATE_NOT_FOUND` 不泄漏存在性）。待补：内容相似度启发式（设计决议留 follow-up，初版只做精确来源冲突） |
 | P3-12 | Yellow | Device LocalMemoryStore、workspace scan 与 outcome observer | PR #592 已完成核心：`apps/daemon-next/src/memory/` 提供按 profile/cwd/agent 隔离的可恢复 store、安全 workspace scan、确定性 outcome observer、敏感信息 fail-closed 与 Node 24 定向证据；dispatch 完成后的自动 observer 接线与脱敏摘要回传仍待后续切片。 |
 | P3-13 | Green | server Capsule + 当前 cwd local Memory 的 runtime 注入 | `memory_capsule_item_manifests` 只持久化无正文重建清单；`server-capsule-runtime-context-service.ts` 从 Invocation-bound ref 和当前事实源重建、逐项复验、整体 hash fail-closed 并写 body-free read/injected audit；daemon `runtime-memory-context.ts` 每次执行重新读取当前 profile/cwd/agent 本地 Memory，Server 优先确定性去重并保留 provenance/selectionReason；`buildRuntimePrompt()` 在 executor 公共入口覆盖 generic stdin、argv、promptOnStdin 与 Codex PTY。双后端 6 项 + Device/direct/managed/shadow/restart/reconnect/损坏态与 executor 30 项定向测试通过。 |
-| P3-14 | Red | Web Memory/Candidate/冲突/来源/执行详情治理 | 未实现 |
+| P3-14 | Green | Web Memory/Candidate/冲突/来源/执行详情治理 | Settings 新增 Memory 治理面：协作 Memory 查看/创建/编辑/停用/替代/软删除、grant 签发/撤销、Candidate 接受/拒绝/合并、来源失效和授权状态；Capsule/Invocation 展示 policy/grant version、期限与 deny 状态，Workspace Run 详情可反查 Invocation/Capsule。Server snapshot 每次按 Team/Channel/DM/Task 当前权限过滤，权限变化通过 `memory:changed` + reconnect 重新取数并 fail closed；当前 Device 仅按次 RPC 返回脱敏治理摘要，正文和完整路径不回传 Server。contracts/server/daemon/web 定向测试与 build 覆盖。 |
 | P3-15 | Yellow | grant 撤销、来源失效、expire/delete 与审计闭环 | revokeGrant 版本链 + expireMemory/deleteMemory 审计（PR#579）；message/task/artifact/workspace-run/invocation 来源失效反应式级联 `memory-source-invalidation-service.ts`（删除 best-effort 触发，本批失效 + 其余事实源可用性复查，无可用来源时主动 expired + system audit；覆盖分次删除、Task 与频道级联删除，双后端 parity）。待补：完整 E2E 闭环 |
 | P3-16 | Red | checkpoint/recovery 不恢复无效 Capsule/Candidate | 未实现 |
 | P3-17 | Red | 两个真实外部 Agent 跨 Task Memory 正负 smoke | 未执行 |

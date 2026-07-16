@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
@@ -12,6 +12,11 @@ import { createManagementKernel } from './management/management-kernel.js';
 import { createManagementRouter, type ManagementRoutingResult } from './management/management-router.js';
 import { createTaskCoordinationKernel } from './management/task-coordination-kernel.js';
 import { createMemorySourceInvalidationService } from './memory-source-invalidation-service.js';
+import { createCollaborativeMemoryService, type MemoryView } from './collaborative-memory-service.js';
+import { createMemoryCandidateService, type MemoryCandidateView } from './memory-candidate-service.js';
+import { createMemoryGovernanceService } from './memory-governance-service.js';
+import { createServerMemoryCandidatePermissions, createServerMemoryWritePermissions } from './server-memory-permissions.js';
+import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
 
 export interface ServerNextClock {
@@ -154,6 +159,17 @@ export interface ServerNextUseCases {
   updateTeam(input: UpdateTeamInput): Promise<Ack<{ team: { id: string; name: string; path: string } }>>;
   getManagementPolicy(input: { userId: string; teamId: string }): Promise<Ack<{ policy: import('./management-repositories.js').ManagementPolicyRecord; canManage: boolean }>>;
   updateManagementPolicy(input: { userId: string; teamId: string; mode: import('../../../../packages/contracts/src/index.js').ManagementMode; maxManagementPhase?: 1 | 2; placementPolicy?: import('../../../../packages/contracts/src/index.js').ManagerPlacementPolicyDto }): Promise<Ack<{ policy: import('./management-repositories.js').ManagementPolicyRecord; canManage: boolean }>>;
+  getMemoryGovernanceSnapshot(input: { userId: string; teamId: string }): Promise<Ack<{ snapshot: MemoryGovernanceSnapshotDto }>>;
+  createCollaborativeMemory(input: { userId: string; teamId: string; kind: MemoryKind; scopeType: MemoryScopeType; scopeRef: string; content: string; summary?: string; tags?: readonly string[]; validUntil?: number; asCandidate?: boolean }): Promise<Ack<{ memory: MemoryView }>>;
+  updateCollaborativeMemory(input: { userId: string; teamId: string; memoryId: string; expectedUpdatedAt: number; content?: string; summary?: string; tags?: readonly string[]; validUntil?: number }): Promise<Ack<{ memory: MemoryView }>>;
+  expireCollaborativeMemory(input: { userId: string; teamId: string; memoryId: string }): Promise<Ack<{ memory: MemoryView }>>;
+  supersedeCollaborativeMemory(input: { userId: string; teamId: string; memoryId: string; content: string; summary?: string; tags?: readonly string[] }): Promise<Ack<{ memory: MemoryView }>>;
+  deleteCollaborativeMemory(input: { userId: string; teamId: string; memoryId: string }): Promise<Ack<{ memory: MemoryView }>>;
+  issueMemoryGrant(input: { userId: string; teamId: string; grantId?: string; sourceScopeType: MemoryScopeType; sourceScopeRef: string; targetAgentId: string; authorizedContentKind: MemoryContentKind; authorizedRedactionLevel: MemoryRedactionLevel; expiresAt: number }): Promise<Ack<{ grant: MemoryGrantRecord }>>;
+  revokeMemoryGrant(input: { userId: string; teamId: string; grantId: string }): Promise<Ack<{ grant: MemoryGrantRecord }>>;
+  acceptMemoryCandidate(input: { userId: string; teamId: string; candidateId: string; kind: MemoryKind; summary?: string; tags?: readonly string[]; validUntil?: number }): Promise<Ack<{ candidate: MemoryCandidateView }>>;
+  rejectMemoryCandidate(input: { userId: string; teamId: string; candidateId: string }): Promise<Ack<{ candidate: MemoryCandidateView }>>;
+  mergeMemoryCandidate(input: { userId: string; teamId: string; candidateId: string; conflictMemoryId: string }): Promise<Ack<{ candidate: MemoryCandidateView }>>;
   deleteTeam(input: DeleteTeamInput): Promise<Ack<{ fallbackTeam: { id: string; name: string; path: string } | null }>>;
 }
 
@@ -883,6 +899,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return true;
     },
   });
+  const collaborativeMemory = createCollaborativeMemoryService({
+    unitOfWork: repositories.memoryUnitOfWork,
+    permissions: createServerMemoryWritePermissions(repositories),
+    clock,
+    ids,
+  });
+  const memoryCandidates = createMemoryCandidateService({
+    unitOfWork: repositories.memoryUnitOfWork,
+    permissions: createServerMemoryCandidatePermissions(repositories),
+    clock,
+    ids,
+  });
+  const memoryGovernance = createMemoryGovernanceService({ repositories, clock });
   // 来源失效是删除之后的反应式级联：best-effort，绝不阻塞或回滚已成功的删除。
   // 失败时由读取侧懒检查（evaluateMemoryInjection 的 allSourcesAvailable）兜底。
   const invalidateSourcesAfterDeletion = async (input: {
@@ -4482,6 +4511,61 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         : makeFailure(result.error === 'FORBIDDEN' ? 'FORBIDDEN' : 'VALIDATION_ERROR', 'Management policy update rejected');
     },
 
+    async getMemoryGovernanceSnapshot(memoryInput) {
+      return makeSuccess({ snapshot: await memoryGovernance.getSnapshot(memoryInput) });
+    },
+
+    async createCollaborativeMemory(memoryInput) {
+      const { userId, ...payload } = memoryInput;
+      return makeSuccess({ memory: await collaborativeMemory.createMemory({ ...payload, actorId: userId }) });
+    },
+
+    async updateCollaborativeMemory(memoryInput) {
+      const { userId, ...payload } = memoryInput;
+      return makeSuccess({ memory: await collaborativeMemory.updateMemory({ ...payload, actorId: userId }) });
+    },
+
+    async expireCollaborativeMemory(memoryInput) {
+      const { userId, ...payload } = memoryInput;
+      return makeSuccess({ memory: await collaborativeMemory.expireMemory({ ...payload, actorId: userId }) });
+    },
+
+    async supersedeCollaborativeMemory(memoryInput) {
+      const { userId, ...payload } = memoryInput;
+      const result = await collaborativeMemory.supersedeMemory({ ...payload, actorId: userId });
+      return makeSuccess({ memory: result.created });
+    },
+
+    async deleteCollaborativeMemory(memoryInput) {
+      const { userId, ...payload } = memoryInput;
+      return makeSuccess({ memory: await collaborativeMemory.deleteMemory({ ...payload, actorId: userId }) });
+    },
+
+    async issueMemoryGrant(memoryInput) {
+      const { userId, ...payload } = memoryInput;
+      return makeSuccess({ grant: await collaborativeMemory.issueGrant({ ...payload, issuedByUserId: userId }) });
+    },
+
+    async revokeMemoryGrant(memoryInput) {
+      const { userId, ...payload } = memoryInput;
+      return makeSuccess({ grant: await collaborativeMemory.revokeGrant({ ...payload, actorId: userId }) });
+    },
+
+    async acceptMemoryCandidate(memoryInput) {
+      const { userId, ...payload } = memoryInput;
+      return makeSuccess({ candidate: await memoryCandidates.acceptCandidate({ ...payload, actorId: userId }) });
+    },
+
+    async rejectMemoryCandidate(memoryInput) {
+      const { userId, ...payload } = memoryInput;
+      return makeSuccess({ candidate: await memoryCandidates.rejectCandidate({ ...payload, actorId: userId }) });
+    },
+
+    async mergeMemoryCandidate(memoryInput) {
+      const { userId, ...payload } = memoryInput;
+      return makeSuccess({ candidate: await memoryCandidates.mergeCandidate({ ...payload, actorId: userId }) });
+    },
+
     async deleteTeam(deleteInput) {
       const actorRole = await repositories.teams.getMemberRole(deleteInput.teamId, deleteInput.userId);
       if (actorRole !== 'owner') {
@@ -5074,12 +5158,13 @@ async function toWorkspaceRunDto(
   run: WorkspaceRunRecord,
 ): Promise<WorkspaceRunDto> {
   const dispatch = await repositories.dispatches.getById(run.dispatchId);
-  if (!dispatch?.messageId || dispatch.messageId === run.messageId) {
-    return run;
-  }
+  const attempt = await repositories.management.dispatchAttempts.getByDispatchId(run.dispatchId);
+  const invocation = attempt ? await repositories.management.invocations.getById(attempt.invocationId) : null;
   return {
     ...run,
-    sourceMessageId: dispatch.messageId,
+    ...(dispatch?.messageId && dispatch.messageId !== run.messageId ? { sourceMessageId: dispatch.messageId } : {}),
+    ...(invocation ? { managementInvocationId: invocation.id } : {}),
+    ...(invocation?.intent.memoryCapsuleRef ? { memoryCapsuleRef: invocation.intent.memoryCapsuleRef } : {}),
   };
 }
 

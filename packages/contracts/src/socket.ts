@@ -135,6 +135,21 @@ export const WEB_EVENTS = {
     snapshot: 'tasks:snapshot',
     updated: 'task:updated',
   },
+  memory: {
+    snapshot: 'memory:snapshot',
+    changed: 'memory:changed',
+    create: 'memory:create',
+    update: 'memory:update',
+    expire: 'memory:expire',
+    supersede: 'memory:supersede',
+    delete: 'memory:delete',
+    grantIssue: 'memory:grant-issue',
+    grantRevoke: 'memory:grant-revoke',
+    candidateAccept: 'memory:candidate-accept',
+    candidateReject: 'memory:candidate-reject',
+    candidateMerge: 'memory:candidate-merge',
+    localSummary: 'memory:local-summary',
+  },
 } as const;
 
 export const AGENT_EVENTS = {
@@ -180,6 +195,9 @@ export const AGENT_EVENTS = {
     renew: 'task-claim:renew',
     release: 'task-claim:release',
     expired: 'task-claim:expired',
+  },
+  memory: {
+    governanceSummaryRequested: 'memory:governance-summary-requested',
   },
 } as const;
 

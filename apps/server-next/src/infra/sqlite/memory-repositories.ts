@@ -49,6 +49,11 @@ export function createSqliteMemoryRepositories(db: SqliteDatabase): MemoryReposi
         return mapItem(db.prepare('SELECT * FROM memory_items WHERE team_id = ? AND id = ?')
           .get(input.teamId, input.id));
       },
+      async listByTeam(input) {
+        return db.prepare(`SELECT * FROM memory_items
+          WHERE team_id = ? ORDER BY updated_at DESC, id`)
+          .all(input.teamId).map(mapItemRequired);
+      },
       async listByScope(input) {
         return db.prepare(`SELECT * FROM memory_items
           WHERE team_id = ? AND scope_type = ? AND scope_ref = ?
@@ -140,6 +145,16 @@ export function createSqliteMemoryRepositories(db: SqliteDatabase): MemoryReposi
           WHERE team_id = ? AND id = ? ORDER BY version DESC LIMIT 1`)
           .get(input.teamId, input.id));
       },
+      async listCurrentByTeam(input) {
+        return db.prepare(`SELECT grant_row.* FROM memory_grants AS grant_row
+          INNER JOIN (
+            SELECT id, MAX(version) AS version
+            FROM memory_grants WHERE team_id = ? GROUP BY id
+          ) AS current ON current.id = grant_row.id AND current.version = grant_row.version
+          WHERE grant_row.team_id = ?
+          ORDER BY grant_row.source_scope_type, grant_row.source_scope_ref, grant_row.id`)
+          .all(input.teamId, input.teamId).map(mapGrantRequired);
+      },
       async listCurrentForTarget(input) {
         return db.prepare(`SELECT grant_row.* FROM memory_grants AS grant_row
           INNER JOIN (
@@ -201,6 +216,11 @@ export function createSqliteMemoryRepositories(db: SqliteDatabase): MemoryReposi
         return mapCapsuleRef(db.prepare(`SELECT * FROM memory_capsule_refs
           WHERE team_id = ? AND id = ?`).get(input.teamId, input.id));
       },
+      async listByTeam(input) {
+        return db.prepare(`SELECT * FROM memory_capsule_refs
+          WHERE team_id = ? ORDER BY created_at DESC, id`)
+          .all(input.teamId).map(mapCapsuleRefRequired);
+      },
       async listByRun(input) {
         return db.prepare(`SELECT * FROM memory_capsule_refs
           WHERE team_id = ? AND management_run_id = ? ORDER BY id`)
@@ -259,6 +279,11 @@ export function createSqliteMemoryRepositories(db: SqliteDatabase): MemoryReposi
       async getById(input) {
         return mapCandidate(db.prepare('SELECT * FROM memory_candidates WHERE team_id = ? AND id = ?')
           .get(input.teamId, input.id));
+      },
+      async listByTeam(input) {
+        return db.prepare(`SELECT * FROM memory_candidates
+          WHERE team_id = ? ORDER BY updated_at DESC, id`)
+          .all(input.teamId).map(mapCandidateRequired);
       },
       async findByProjectionHash(input) {
         return mapCandidate(db.prepare(`SELECT * FROM memory_candidates
