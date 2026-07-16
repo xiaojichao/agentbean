@@ -63,6 +63,22 @@ describe('management worker recovery', () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
+  test('Memory outbox 回放异常时保留 entry 并阻断新 Session', async () => {
+    const item: ManagementDurableOutboxItem = {
+      schemaVersion: 1, managementRunId: 'run-1', commandId: 'command-memory',
+      idempotencyKey: 'memory-1', requestHash: 'request-hash-memory',
+      toolName: 'memory.create_capsule', createdAt: 1,
+    };
+    const remove = vi.fn(async () => undefined);
+    await expect(replayManagementOutboxForLease({
+      authority: { managementRunId: 'run-1', workerId: 'worker-new',
+        leaseToken: 'current-lease-token', fencingToken: 2 },
+      protocol: { replayOutbox: vi.fn(async () => { throw new Error('ack timeout'); }) } as never,
+      outbox: { list: () => [item], remove } as never,
+    })).resolves.toEqual({ unresolvedMemoryWriteCount: 1 });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
   test('daemon 与 server 对 undefined 可选键使用相同 canonical request hash', () => {
     expect(hashManagementToolRequest('memory.create_capsule', {
       targetAgentId: 'agent-1', prompt: '目标', limit: 3, taskId: undefined,

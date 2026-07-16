@@ -177,6 +177,21 @@ describe('management worker socket integration', () => {
       ...authority, commandId: 'memory-command', idempotencyKey: 'memory-command',
       requestHash: 'changed-request-hash',
     })).resolves.toMatchObject({ disposition: 'conflict' });
+    await harness.repositories.management.events.append({
+      event: {
+        schemaVersion: 1, id: 'legacy-memory-receipt', managementRunId: harness.runId, sequence: 99,
+        type: 'memory-tool-completed', actorKind: 'manager', actorId: authority.workerId,
+        idempotencyKey: 'legacy-memory-command', payload: {
+          toolName: 'memory.create_capsule', resultReferenceId: 'capsule-legacy',
+          requestHash: 'legacy-memory-request-hash',
+        }, createdAt: 20,
+      },
+      payloadHash: 'legacy-memory-payload-hash',
+    });
+    await expect(socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
+      ...authority, commandId: 'legacy-memory-command', idempotencyKey: 'legacy-memory-command',
+      requestHash: 'legacy-memory-request-hash',
+    })).resolves.toMatchObject({ disposition: 'rejected' });
     await expect(socket.trigger(AGENT_EVENTS.managementWorker.leaseRelease, {
       ...authority,
       idempotencyKey: 'release-1',

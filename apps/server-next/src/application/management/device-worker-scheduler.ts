@@ -520,9 +520,12 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
       const event = (await dependencies.management.events.list(input.managementRunId))
         .find((record) => record.event.idempotencyKey === input.idempotencyKey);
       if (event?.event.type === 'memory-tool-completed') {
-        return event.event.payload.requestHash === input.requestHash
+        if (event.event.payload.requestHash !== input.requestHash) {
+          return { ...base, disposition: 'conflict' };
+        }
+        return event.event.payload.output
           ? { ...base, disposition: 'committed', resultReferenceId: event.event.payload.resultReferenceId }
-          : { ...base, disposition: 'conflict' };
+          : { ...base, disposition: 'rejected' };
       }
       return event
         ? { ...base, disposition: 'existing', resultReferenceId: event.event.id }

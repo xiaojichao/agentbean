@@ -263,6 +263,9 @@ if (!managementWorkerV2.includes('Phase3ManagementWorkerToolInputMapV1')
 const memoryReceiptRecordBody = managementKernel.match(
   /async recordMemoryToolReceipt[\s\S]*?async recordInvocationTerminal/,
 )?.[0] ?? '';
+const outboxReplayBody = daemonWorkerHost.match(
+  /export async function replayManagementOutboxForLease[\s\S]*?function runtimeContext/,
+)?.[0] ?? '';
 if (!managementToolExecutor.includes('Phase3ToolHandlers')
   || !managementToolExecutor.includes('request.managementPhase === 3')
   || managementToolExecutor.includes('managementPhase: 2 as const')
@@ -276,14 +279,15 @@ if (!managementToolExecutor.includes('Phase3ToolHandlers')
   || !daemonWorkerHost.includes('checkpointManagementPhase')
   || !daemonWorkerHost.includes('PHASE_3_MANAGEMENT_TOOL_NAMES')
   || !daemonWorkerHost.includes('includeMemoryCapsules')
-  || !daemonWorkerHost.includes('PHASE_3_MEMORY_WRITE_TOOL_NAMES.has(item.toolName)')
+  || (outboxReplayBody.match(/PHASE_3_MEMORY_WRITE_TOOL_NAMES\.has\(item\.toolName\)/g)?.length ?? 0) < 2
   || !daemonWorkerHost.includes('replay.unresolvedMemoryWriteCount > 0')
   || !daemonWorkerHost.includes('.filter(([, nested]) => nested !== undefined)')
   || !runtimeTypes.includes('memoryCapsuleIds?: readonly string[]')
   || !deviceWorkerScheduler.includes('managementPhase:')
   || !deviceWorkerScheduler.includes('legacyPhase2Context')
   || !deviceWorkerScheduler.includes('event?.event.type === \'memory-tool-completed\'')
-  || !deviceWorkerScheduler.includes('event.event.payload.requestHash === input.requestHash')
+  || !deviceWorkerScheduler.includes('event.event.payload.requestHash !== input.requestHash')
+  || !deviceWorkerScheduler.includes('event.event.payload.output')
   || !deviceWorkerScheduler.includes('dependencies.memory, dependencies.clock.now()')
   || !serverNextUsecases.includes('managementPhase >= 2')
   || !serverNextUsecases.includes('run.managementPhase < 2')

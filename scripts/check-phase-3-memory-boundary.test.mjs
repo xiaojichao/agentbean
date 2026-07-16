@@ -332,6 +332,27 @@ test('fails closed when rejected Memory outbox entries are discarded', () => {
   assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
 });
 
+test('fails closed when replay errors no longer block Session recovery for Memory writes', () => {
+  const result = withFixture('agentbean-phase3-memory-outbox-replay-error-', (fixture) => {
+    const path = join(fixture, 'apps/daemon-next/src/pi-manager-worker-host.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replace(
+      'if (PHASE_3_MEMORY_WRITE_TOOL_NAMES.has(item.toolName)) unresolvedMemoryWriteCount += 1;',
+      '',
+    ));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
+test('fails closed when replay treats legacy Memory receipts without output as committed', () => {
+  const result = withFixture('agentbean-phase3-memory-legacy-receipt-replay-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/management/device-worker-scheduler.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replace('event.event.payload.output', 'true'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
 test('fails closed when unresolved Memory outbox no longer blocks Session recovery', () => {
   const result = withFixture('agentbean-phase3-memory-outbox-session-gate-', (fixture) => {
     const path = join(fixture, 'apps/daemon-next/src/pi-manager-worker-host.ts');

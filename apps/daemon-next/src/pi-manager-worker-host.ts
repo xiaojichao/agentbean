@@ -433,7 +433,9 @@ export async function replayManagementOutboxForLease(input: {
         await input.outbox.remove(item);
       }
     } catch {
-      // Keep the durable entry for the next reconnect/reacquire attempt.
+      // Keep the durable entry for the next reconnect/reacquire attempt. A Memory write
+      // without an authoritative replay verdict must also block starting a new Session.
+      if (PHASE_3_MEMORY_WRITE_TOOL_NAMES.has(item.toolName)) unresolvedMemoryWriteCount += 1;
     }
   }
   return { unresolvedMemoryWriteCount };
