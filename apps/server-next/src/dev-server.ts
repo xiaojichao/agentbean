@@ -7,6 +7,12 @@ import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { createServerNextUseCases, type ArtifactContentStore } from './application/usecases.js';
 import type { ServerNextRepositories } from './application/repositories.js';
+import { createCapsuleInjectionValidator } from './application/capsule-injection-validator.js';
+import { createServerCapsuleRuntimeContextService } from './application/server-capsule-runtime-context-service.js';
+import {
+  createServerMemorySearchPermissions,
+  CURRENT_MEMORY_POLICY_VERSION,
+} from './application/server-memory-permissions.js';
 import { createDeviceWorkerScheduler, type DeviceWorkerScheduler } from './application/management/device-worker-scheduler.js';
 import { createManagementKernel } from './application/management/management-kernel.js';
 import { createManagementToolExecutor, createPhase1ManagementToolHandlers, createPhase2CollaborationToolHandlers, createPhase2InvocationToolHandlers, createPhase2ManagementToolHandlers } from './application/management/management-tool-executor.js';
@@ -1141,6 +1147,9 @@ function createDefaultApp(
     const ids = { nextId: () => randomUUID() };
     const management = createDefaultManagementRuntime(repositories, clock, ids);
     const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
+    const serverCapsuleRuntimeContextResolver = createDefaultServerCapsuleRuntimeContextResolver(
+      repositories, ids,
+    );
     return {
       app: createServerNextUseCases({
         repositories,
@@ -1151,6 +1160,7 @@ function createDefaultApp(
         managementRouter: management.router,
         managementKernel: management.kernel,
         taskCoordinationKernel: management.taskCoordinationKernel,
+        serverCapsuleRuntimeContextResolver,
       }),
       managementWorkerScheduler: management.scheduler,
       taskClaimBroker,
@@ -1175,6 +1185,9 @@ function createDefaultApp(
   const ids = { nextId: () => randomUUID() };
   const management = createDefaultManagementRuntime(repositories, clock, ids);
   const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
+  const serverCapsuleRuntimeContextResolver = createDefaultServerCapsuleRuntimeContextResolver(
+    repositories, ids,
+  );
   return {
     app: createServerNextUseCases({
       repositories,
@@ -1185,6 +1198,7 @@ function createDefaultApp(
       managementRouter: management.router,
       managementKernel: management.kernel,
       taskCoordinationKernel: management.taskCoordinationKernel,
+      serverCapsuleRuntimeContextResolver,
     }),
     managementWorkerScheduler: management.scheduler,
     taskClaimBroker,
@@ -1196,6 +1210,23 @@ function createDefaultApp(
       teamDb.close();
     },
   };
+}
+
+function createDefaultServerCapsuleRuntimeContextResolver(
+  repositories: ServerNextRepositories,
+  ids: { nextId(): string },
+) {
+  const validator = createCapsuleInjectionValidator({
+    unitOfWork: repositories.memoryUnitOfWork,
+    permissions: createServerMemorySearchPermissions(repositories),
+    ids,
+  });
+  return createServerCapsuleRuntimeContextService({
+    unitOfWork: repositories.memoryUnitOfWork,
+    validator,
+    ids,
+    currentPolicyVersion: () => CURRENT_MEMORY_POLICY_VERSION,
+  });
 }
 
 function createDefaultManagementRuntime(

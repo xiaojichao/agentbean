@@ -12,6 +12,7 @@ import { createManagementKernel } from './management/management-kernel.js';
 import { createManagementRouter, type ManagementRoutingResult } from './management/management-router.js';
 import { createTaskCoordinationKernel } from './management/task-coordination-kernel.js';
 import { createMemorySourceInvalidationService } from './memory-source-invalidation-service.js';
+import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
 
 export interface ServerNextClock {
   now(): number;
@@ -106,7 +107,10 @@ export interface ServerNextUseCases {
   snapshotDirectMessage(input: SnapshotDirectMessageInput): Promise<Ack<{ dm: DmChannelDto; messages: MessageDto[] }>>;
   registerAgent(input: AgentDto): Promise<Ack<{ agent: AgentDto }>>;
   sendMessage(input: SendMessageInput): Promise<Ack<SendMessageResult>>;
-  getDispatchRequest(input: { dispatchId: string }): Promise<Ack<{ request: DispatchRequestDto & { id: string } }>>;
+  getDispatchRequest(input: {
+    dispatchId: string;
+    purpose?: 'execute' | 'route';
+  }): Promise<Ack<{ request: DispatchRequestDto & { id: string } }>>;
   acceptDispatch(input: AcceptDispatchInput): Promise<Ack<AcceptDispatchResult>>;
   cancelDispatch(input: CancelDispatchInput): Promise<Ack<{ dispatch: DispatchDto; task?: TaskDto }>>;
   cancelChannelDispatches(input: CancelChannelDispatchesInput): Promise<Ack<{ dispatches: DispatchDto[]; tasks?: TaskDto[] }>>;
@@ -807,6 +811,7 @@ export interface CreateServerNextUseCasesInput {
   managementRouter?: ReturnType<typeof createManagementRouter>;
   managementKernel?: ReturnType<typeof createManagementKernel>;
   taskCoordinationKernel?: ReturnType<typeof createTaskCoordinationKernel>;
+  serverCapsuleRuntimeContextResolver?: ServerCapsuleRuntimeContextResolver;
 }
 
 export function createServerNextUseCases(input: CreateServerNextUseCasesInput): ServerNextUseCases {
@@ -2764,7 +2769,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
       return makeSuccess({
-        request: await buildDispatchRequest(repositories, dispatch, agent),
+        request: await buildDispatchRequest(
+          repositories,
+          dispatch,
+          agent,
+          clock.now(),
+          requestInput.purpose !== 'route',
+          input.serverCapsuleRuntimeContextResolver,
+        ),
       });
     },
 
@@ -2792,7 +2804,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeSuccess({ ready: false, retryAfterMs: readyAt - now });
       }
 
-      const request = await buildDispatchRequest(repositories, dispatch, agent);
+      const request = await buildDispatchRequest(
+        repositories, dispatch, agent, now, true, input.serverCapsuleRuntimeContextResolver,
+      );
       const accepted = await repositories.dispatches.markAccepted({
         dispatchId: dispatch.id,
         agentId: agent.id,
@@ -5270,6 +5284,9 @@ async function buildDispatchRequest(
   repositories: ServerNextRepositories,
   dispatch: DispatchRecord,
   agent: AgentRecord,
+  now: UnixMs,
+  includeRuntimeMemory: boolean,
+  serverCapsuleRuntimeContextResolver?: ServerCapsuleRuntimeContextResolver,
 ): Promise<DispatchRequestDto & { id: string }> {
   const executionConfig = agent.source === 'custom' || (agent.source === 'scanned' && agent.command)
     ? await repositories.agents.getExecutionConfig(agent.id)
@@ -5314,6 +5331,20 @@ async function buildDispatchRequest(
       attachments.push(...await repositories.artifacts.listByMessage(messageId));
     }
   }
+  const capsuleRef = managementInvocation?.intent.memoryCapsuleRef;
+  if (includeRuntimeMemory && capsuleRef && !serverCapsuleRuntimeContextResolver) {
+    throw new Error('SERVER_CAPSULE_RUNTIME_CONTEXT_UNAVAILABLE');
+  }
+  const memoryContext = includeRuntimeMemory && capsuleRef
+    ? await serverCapsuleRuntimeContextResolver!.resolve({
+        teamId: managementInvocation!.intent.teamId,
+        managementRunId: managementInvocation!.managementRunId,
+        taskId: managementInvocation!.intent.taskContext?.taskId,
+        targetAgentId: managementInvocation!.intent.targetAgentId,
+        memoryCapsuleRef: capsuleRef,
+        now,
+      })
+    : [];
 
   return {
     id: dispatch.id,
@@ -5334,6 +5365,7 @@ async function buildDispatchRequest(
       dependencyResults: managementInvocation.intent.dependencyResults,
       acceptanceCriteria: managementInvocation.intent.acceptanceCriteria,
     } } : {}),
+    ...(memoryContext.length > 0 ? { memoryContext } : {}),
     prompt: requestPrompt,
     history: dispatchHistory.map(toDispatchHistoryMessageDto),
     ...(attachments.length > 0 ? { attachments: attachments.map(toDispatchAttachmentDto) } : {}),

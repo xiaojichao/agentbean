@@ -1,6 +1,7 @@
 import type {
   ID,
   MemoryCandidateStatus,
+  MemoryCapsuleAuthorizationDto,
   MemoryCapsuleScopeType,
   MemoryContentKind,
   MemoryRecordDto,
@@ -111,6 +112,24 @@ export interface MemoryCapsuleRefRecord {
   readonly createdAt: UnixMs;
 }
 
+/** Immutable, body-free reconstruction manifest for restart/recovery-time Capsule revalidation. */
+export interface MemoryCapsuleItemManifestRecord {
+  readonly capsuleId: ID;
+  readonly teamId: ID;
+  readonly requesterUserId: ID;
+  readonly memoryId: ID;
+  readonly position: number;
+  readonly scopeType: MemoryScopeType;
+  readonly scopeRef: ID;
+  readonly sourceVisibility: Exclude<MemorySourceVisibility, 'local-only'>;
+  readonly contentKind: MemoryContentKind;
+  readonly redactionLevel: MemoryRedactionLevel;
+  readonly contentField: 'content' | 'summary';
+  readonly authorization: MemoryCapsuleAuthorizationDto;
+  readonly expiresAt?: UnixMs;
+  readonly createdAt: UnixMs;
+}
+
 export interface MemoryCandidateRecord {
   readonly schemaVersion: 1;
   readonly id: ID;
@@ -195,6 +214,10 @@ export interface MemoryRepositories {
     getById(input: { teamId: ID; id: ID }): Promise<MemoryCapsuleRefRecord | null>;
     listByRun(input: { teamId: ID; managementRunId: ID }): Promise<MemoryCapsuleRefRecord[]>;
     markDenied(input: { teamId: ID; id: ID; deniedAt: UnixMs }): Promise<MemoryCapsuleRefRecord | null>;
+  };
+  readonly capsuleItems: {
+    create(record: MemoryCapsuleItemManifestRecord): Promise<MemoryCapsuleItemManifestRecord>;
+    listByCapsule(input: { teamId: ID; capsuleId: ID }): Promise<MemoryCapsuleItemManifestRecord[]>;
   };
   readonly candidates: {
     create(record: MemoryCandidateRecord): Promise<MemoryCandidateRecord>;

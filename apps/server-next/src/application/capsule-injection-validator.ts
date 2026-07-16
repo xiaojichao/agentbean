@@ -165,7 +165,7 @@ export function createCapsuleInjectionValidator(
       if (sourceVisibility === 'explicit-grant' && item.authorization.mode !== 'explicit-grant') {
         return deny(item, 'CAPSULE_EXPLICIT_GRANT_REQUIRED');
       }
-      if (!await permissions.isSourceAvailable({ teamId, requesterUserId, targetAgentId, source })) {
+      if (!await permissions.isSourceAvailable({ teamId, requesterUserId, targetAgentId, now, source })) {
         return deny(item, 'MEMORY_SOURCE_UNAVAILABLE');
       }
     }

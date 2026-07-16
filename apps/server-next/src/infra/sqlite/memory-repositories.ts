@@ -3,6 +3,7 @@ import type {
   MemoryCandidateRecord,
   MemoryCandidateSourceRecord,
   MemoryCapsuleRefRecord,
+  MemoryCapsuleItemManifestRecord,
   MemoryGrantRecord,
   MemoryItemRecord,
   MemoryRepositories,
@@ -13,6 +14,7 @@ import {
   assertMemoryAuditEventRecord,
   assertMemoryCapsuleRefDenial,
   assertMemoryCapsuleRefRecord,
+  assertMemoryCapsuleItemManifestRecord,
   assertMemoryCandidateRecord,
   assertMemoryCandidateSourceRecord,
   assertMemoryCandidateUpdate,
@@ -23,7 +25,7 @@ import {
   assertMemorySourceRecord,
   assertMemoryTag,
 } from '../../application/memory-repository-validation.js';
-import type { MemorySourceRefDto } from '../../../../../packages/contracts/src/index.js';
+import type { MemoryCapsuleAuthorizationDto, MemorySourceRefDto } from '../../../../../packages/contracts/src/index.js';
 import type { SqliteDatabase } from './repositories.js';
 
 export function createSqliteMemoryRepositories(db: SqliteDatabase): MemoryRepositories {
@@ -214,6 +216,27 @@ export function createSqliteMemoryRepositories(db: SqliteDatabase): MemoryReposi
         return { ...current, deniedAt: input.deniedAt };
       },
     },
+    capsuleItems: {
+      async create(record) {
+        assertMemoryCapsuleItemManifestRecord(record);
+        db.prepare(`INSERT INTO memory_capsule_item_manifests
+          (capsule_id, team_id, requester_user_id, memory_id, position, scope_type, scope_ref,
+           source_visibility, content_kind, redaction_level, content_field, authorization_json,
+           expires_at, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+          record.capsuleId, record.teamId, record.requesterUserId, record.memoryId, record.position,
+          record.scopeType, record.scopeRef, record.sourceVisibility, record.contentKind,
+          record.redactionLevel, record.contentField, JSON.stringify(record.authorization),
+          record.expiresAt ?? null, record.createdAt,
+        );
+        return record;
+      },
+      async listByCapsule(input) {
+        return db.prepare(`SELECT * FROM memory_capsule_item_manifests
+          WHERE team_id = ? AND capsule_id = ? ORDER BY position, memory_id`)
+          .all(input.teamId, input.capsuleId).map(mapCapsuleItemManifestRequired);
+      },
+    },
     candidates: {
       async create(record) {
         assertMemoryCandidateRecord(record);
@@ -393,6 +416,29 @@ function mapCapsuleRef(value: unknown): MemoryCapsuleRefRecord | null {
   return record;
 }
 
+function mapCapsuleItemManifest(value: unknown): MemoryCapsuleItemManifestRecord | null {
+  if (!value) return null;
+  const authorization = JSON.parse(text(value, 'authorization_json')) as MemoryCapsuleAuthorizationDto;
+  const record: MemoryCapsuleItemManifestRecord = {
+    capsuleId: text(value, 'capsule_id'),
+    teamId: text(value, 'team_id'),
+    requesterUserId: text(value, 'requester_user_id'),
+    memoryId: text(value, 'memory_id'),
+    position: number(value, 'position'),
+    scopeType: text(value, 'scope_type') as MemoryCapsuleItemManifestRecord['scopeType'],
+    scopeRef: text(value, 'scope_ref'),
+    sourceVisibility: text(value, 'source_visibility') as MemoryCapsuleItemManifestRecord['sourceVisibility'],
+    contentKind: text(value, 'content_kind') as MemoryCapsuleItemManifestRecord['contentKind'],
+    redactionLevel: text(value, 'redaction_level') as MemoryCapsuleItemManifestRecord['redactionLevel'],
+    contentField: text(value, 'content_field') as MemoryCapsuleItemManifestRecord['contentField'],
+    authorization,
+    expiresAt: optionalNumber(value, 'expires_at'),
+    createdAt: number(value, 'created_at'),
+  };
+  assertMemoryCapsuleItemManifestRecord(record);
+  return record;
+}
+
 function mapCandidate(value: unknown): MemoryCandidateRecord | null {
   if (!value) return null;
   return {
@@ -469,6 +515,12 @@ function mapAuditRequired(value: unknown): MemoryAuditEventRecord {
 function mapCapsuleRefRequired(value: unknown): MemoryCapsuleRefRecord {
   const record = mapCapsuleRef(value);
   if (!record) throw new Error('SQLite memory capsule ref row could not be mapped');
+  return record;
+}
+
+function mapCapsuleItemManifestRequired(value: unknown): MemoryCapsuleItemManifestRecord {
+  const record = mapCapsuleItemManifest(value);
+  if (!record) throw new Error('SQLite memory capsule item manifest row could not be mapped');
   return record;
 }
 

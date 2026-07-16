@@ -464,7 +464,7 @@ export function registerWebSocketHandlers(
     if (!options.dispatchCancel) {
       return;
     }
-    const request = await app.getDispatchRequest({ dispatchId: result.dispatch.id });
+    const request = await app.getDispatchRequest({ dispatchId: result.dispatch.id, purpose: 'route' });
     if (request.ok) {
       options.dispatchCancel(request.request);
     }
@@ -481,7 +481,7 @@ export function registerWebSocketHandlers(
       if (!options.dispatchCancel) {
         continue;
       }
-      const request = await app.getDispatchRequest({ dispatchId: dispatch.id });
+      const request = await app.getDispatchRequest({ dispatchId: dispatch.id, purpose: 'route' });
       if (request.ok) {
         options.dispatchCancel(request.request);
       }
@@ -922,7 +922,7 @@ async function emitDispatchClaimWakeIfSupported(
   if (!options.dispatch || !options.shouldUseDispatchClaim) {
     return;
   }
-  const result = await app.getDispatchRequest({ dispatchId: pending.dispatchId });
+  const result = await app.getDispatchRequest({ dispatchId: pending.dispatchId, purpose: 'route' });
   if (!result.ok || !options.shouldUseDispatchClaim(result.request)) {
     return;
   }

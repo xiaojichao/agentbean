@@ -13,6 +13,7 @@ import { hashCapsuleItems, hashMemoryContent, hashSourceRefs } from '../../../..
 import type {
   MemoryAuditActorKind,
   MemoryAuditEventRecord,
+  MemoryCapsuleItemManifestRecord,
   MemoryCapsuleRefRecord,
   MemorySourceRecord,
 } from './memory-repositories.js';
@@ -21,6 +22,7 @@ import type {
   CollaborativeMemorySearchMatch,
   SearchCollaborativeMemoriesInput,
 } from './collaborative-memory-search-service.js';
+import { assertServerMemoryScope } from './memory-repository-validation.js';
 
 /**
  * 最小 Capsule 创建（spec §4.1/§11/§16，P3-06）。把当前 management run 对目标 Agent 有权看到的
@@ -31,8 +33,8 @@ import type {
  * explicit-grant 的记忆），脱敏级别 none。explicit-grant（dm/private 经 grant 共享）的 item 需要
  * 把多个 grant 映射成单一 authorization，留待与 P3-07 复验协同的后续切片。
  *
- * Capsule 是投影不持久化（spec §4.1「记忆是投影，不是事实源」）；只持久化 capsule-created 审计。
- * 权限过滤、脱敏与排序复用 #591 的 CollaborativeMemorySearchService，本层只做「打包 + 冻结 + 审计」。
+ * Capsule 正文不重复持久化；只保存可用于 restart/recovery 重建的无正文 item manifest、权威 ref
+ * 与 capsule-created 审计。权限过滤、脱敏与排序复用 CollaborativeMemorySearchService。
  */
 
 const ACTOR_SYSTEM: MemoryAuditActorKind = 'system';
@@ -117,6 +119,15 @@ export function createMemoryCapsuleService(deps: MemoryCapsuleServiceDeps): Memo
         // 持久化权威 capsuleRef（P3-08）：checkpoint/recovery 据此判 capsule 是否仍有效
         // （存在 + 未过期 + 未 deny），不扫 invocation intent（management-checkpoint.ts:141 注释）。
         await memory.capsuleRefs.create(toCapsuleRefRecord(capsule));
+        for (const [position, item] of items.entries()) {
+          await memory.capsuleItems.create(toCapsuleItemManifest(
+            capsule,
+            item,
+            input.requesterUserId,
+            position,
+            capsule.createdAt,
+          ));
+        }
         const auditRecords = items.length === 0
           ? [emptyCapsuleAudit(ids.nextId(), input, capsuleId, createdAt)]
           : items.map((item) => capsuleItemAudit(ids.nextId(), input, capsuleId, item, createdAt));
@@ -125,6 +136,37 @@ export function createMemoryCapsuleService(deps: MemoryCapsuleServiceDeps): Memo
 
       return capsule;
     },
+  };
+}
+
+function toCapsuleItemManifest(
+  capsule: MemoryCapsuleDto,
+  item: MemoryCapsuleItemDto,
+  requesterUserId: ID,
+  position: number,
+  createdAt: UnixMs,
+): MemoryCapsuleItemManifestRecord {
+  const scopeType = item.scopeType;
+  const sourceVisibility = item.sourceVisibility;
+  assertServerMemoryScope(scopeType, item.scopeRef);
+  if (sourceVisibility === 'local-only') {
+    throw new Error('server Capsule manifest cannot contain local Memory');
+  }
+  return {
+    capsuleId: capsule.id,
+    teamId: capsule.teamId,
+    requesterUserId,
+    memoryId: item.memoryId,
+    position,
+    scopeType,
+    scopeRef: item.scopeRef,
+    sourceVisibility,
+    contentKind: item.contentKind,
+    redactionLevel: item.redactionLevel,
+    contentField: item.redactionLevel === 'summary-only' ? 'summary' : 'content',
+    authorization: item.authorization,
+    expiresAt: item.expiresAt,
+    createdAt,
   };
 }
 

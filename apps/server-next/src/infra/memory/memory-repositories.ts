@@ -3,6 +3,7 @@ import type {
   MemoryCandidateRecord,
   MemoryCandidateSourceRecord,
   MemoryCapsuleRefRecord,
+  MemoryCapsuleItemManifestRecord,
   MemoryGrantRecord,
   MemoryItemRecord,
   MemoryRepositories,
@@ -13,6 +14,7 @@ import {
   assertMemoryAuditEventRecord,
   assertMemoryCapsuleRefDenial,
   assertMemoryCapsuleRefRecord,
+  assertMemoryCapsuleItemManifestRecord,
   assertMemoryCandidateRecord,
   assertMemoryCandidateSourceRecord,
   assertMemoryCandidateUpdate,
@@ -31,6 +33,7 @@ export interface MemoryRepositoryMemoryState {
   readonly grants: Map<string, MemoryGrantRecord>;
   readonly auditEvents: Map<string, MemoryAuditEventRecord>;
   readonly capsuleRefs: Map<string, MemoryCapsuleRefRecord>;
+  readonly capsuleItems: Map<string, MemoryCapsuleItemManifestRecord>;
   readonly candidates: Map<string, MemoryCandidateRecord>;
   readonly candidateSources: Map<string, MemoryCandidateSourceRecord>;
 }
@@ -43,6 +46,7 @@ export function createMemoryRepositoryMemoryState(): MemoryRepositoryMemoryState
     grants: new Map(),
     auditEvents: new Map(),
     capsuleRefs: new Map(),
+    capsuleItems: new Map(),
     candidates: new Map(),
     candidateSources: new Map(),
   };
@@ -58,6 +62,7 @@ export function cloneMemoryRepositoryMemoryState(
     grants: new Map(state.grants),
     auditEvents: new Map(state.auditEvents),
     capsuleRefs: new Map(state.capsuleRefs),
+    capsuleItems: new Map(state.capsuleItems),
     candidates: new Map(state.candidates),
     candidateSources: new Map(state.candidateSources),
   };
@@ -207,6 +212,24 @@ export function createInMemoryMemoryRepositories(
         const denied = { ...current, deniedAt: input.deniedAt };
         state.capsuleRefs.set(key, denied);
         return denied;
+      },
+    },
+    capsuleItems: {
+      async create(record) {
+        assertMemoryCapsuleItemManifestRecord(record);
+        if (!state.capsuleRefs.has(`${record.teamId}:${record.capsuleId}`)) {
+          throw new Error('memory capsule ref does not exist');
+        }
+        requireMemory(state, record.teamId, record.memoryId);
+        const key = `${record.teamId}:${record.capsuleId}:${record.memoryId}`;
+        if (state.capsuleItems.has(key)) throw new Error('memory capsule item already exists');
+        state.capsuleItems.set(key, record);
+        return record;
+      },
+      async listByCapsule(input) {
+        return [...state.capsuleItems.values()]
+          .filter((record) => record.teamId === input.teamId && record.capsuleId === input.capsuleId)
+          .sort((left, right) => left.position - right.position || left.memoryId.localeCompare(right.memoryId));
       },
     },
     candidates: {
