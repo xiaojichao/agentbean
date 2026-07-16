@@ -423,11 +423,6 @@ describe('management worker socket integration', () => {
     });
 
     const runId = await harness.createPhase3Run();
-    await harness.repositories.memory.capsuleRefs.create({
-      id: 'cap-valid', teamId: 'team-1', managementRunId: runId, taskId: 'root-task',
-      targetAgentId: 'agent-1', contentHash: 'sha256:cap', authorizationDecisionId: 'decision-1',
-      issuedAt: 1, expiresAt: 1_000, createdAt: 1,
-    });
     await expect(harness.realtime.scheduleManagementRun({ managementRunId: runId, profileId: 'profile-1' }))
       .resolves.toMatchObject({ ok: true, deviceId: 'device-v3' });
     const offer = phase3.outbound(AGENT_EVENTS.managementWorker.leaseOffer)[0]?.payload as ManagementLeaseOfferV1;
@@ -441,7 +436,10 @@ describe('management worker socket integration', () => {
     })).resolves.toMatchObject({
       managementRunId: runId,
       context: { managementPhase: 3, rootTaskId: 'root-task' },
-      checkpoint: { authoritative: { memoryCapsuleIds: ['cap-valid'] } },
+      checkpoint: { authoritative: { memoryCapsuleIds: ['capsule-current'] } },
+    });
+    expect(harness.memoryCapsules.listValidMemoryCapsuleIds).toHaveBeenCalledWith({
+      teamId: 'team-1', managementRunId: runId, now: 10,
     });
   });
 });
