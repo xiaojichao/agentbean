@@ -207,6 +207,20 @@ test('fails closed when the Phase 3 build omits pi-management-runtime before dae
   assert.match(result.stderr, /P3_ROOT_CI_GATE_INVALID/);
 });
 
+test('fails closed when Phase 3 test entrypoints omit the pi runtime build prerequisite', () => {
+  for (const scriptName of ['test:phase3-memory-persistence', 'test:phase3-memory-daemon']) {
+    const result = withFixture('agentbean-phase3-runtime-test-build-', (fixture) => {
+      const path = join(fixture, 'package.json');
+      const packageJson = JSON.parse(readFileSync(path, 'utf8'));
+      packageJson.scripts[scriptName] = packageJson.scripts[scriptName]
+        .replace('npm run build:pi-management-runtime && ', '');
+      writeFileSync(path, `${JSON.stringify(packageJson, null, 2)}\n`);
+    });
+    assert.notEqual(result.status, 0, scriptName);
+    assert.match(result.stderr, /P3_ROOT_CI_GATE_INVALID/, scriptName);
+  }
+});
+
 test('fails closed when the Phase 3 persistence gate omits source invalidation E2E', () => {
   const result = withFixture('agentbean-phase3-source-invalidation-e2e-', (fixture) => {
     const path = join(fixture, 'package.json');
