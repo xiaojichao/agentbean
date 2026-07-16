@@ -212,6 +212,26 @@ test('fails closed when the Phase 3 Memory parser stops enforcing exact keys', (
   assert.match(result.stderr, /P3_CAPABILITY_DEFINITIONS_INVALID/);
 });
 
+test('fails closed when the Phase 3 Memory result parser disappears', () => {
+  const result = withFixture('agentbean-phase3-result-parser-', (fixture) => {
+    const path = join(fixture, 'packages/contracts/src/management-worker-v2.ts');
+    writeFileSync(path, readFileSync(path, 'utf8')
+      .replaceAll('parsePhase3MemoryToolResultV3', 'removedPhase3MemoryToolResultV3'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_DEFINITIONS_INVALID/);
+});
+
+test('fails closed when the Phase 3 Memory result output validator disappears', () => {
+  const result = withFixture('agentbean-phase3-result-output-', (fixture) => {
+    const path = join(fixture, 'packages/contracts/src/management-worker-v2.ts');
+    writeFileSync(path, readFileSync(path, 'utf8')
+      .replaceAll('assertPhase3MemoryToolOutput', 'removedPhase3MemoryToolOutput'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_DEFINITIONS_INVALID/);
+});
+
 test('fails closed when the Phase 3 tool list drops a Memory tool', () => {
   const result = withFixture('agentbean-phase3-tool-list-', (fixture) => {
     const path = join(fixture, 'packages/pi-management-runtime/src/types.ts');
