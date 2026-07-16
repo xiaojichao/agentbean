@@ -128,19 +128,21 @@ describe('management worker socket integration', () => {
       errorCode: 'NOT_AUTHORIZED',
       diagnosticCode: 'MANAGEMENT_WORKER_PHASE_MISMATCH',
     });
-    await expect(socket.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
+    const phase1Checkpoint = await socket.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
       schemaVersion: 1,
       managementRunId: harness.runId,
       workerId: authority.workerId,
       leaseToken: 'lease-secret-1',
       fencingToken: 1,
-    })).resolves.toMatchObject({
+    });
+    expect(phase1Checkpoint).toMatchObject({
       managementRunId: harness.runId,
       context: {
         frozenTarget: { agentId: 'agent-1', kind: 'custom' },
         visibleThread: { messages: [{ id: 'message-1', body: '执行目标' }] },
       },
     });
+    expect((phase1Checkpoint as { context: object }).context).not.toHaveProperty('managementPhase');
     await expect(socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
       ...authority,
       commandId: 'missing-command',
@@ -160,6 +162,62 @@ describe('management worker socket integration', () => {
       idempotencyKey: 'handoff-command',
       requestHash: 'handoff-request-hash',
     })).resolves.toMatchObject({ disposition: 'existing', resultReferenceId: 'handoff-1' });
+    let markTransactionStarted!: () => void;
+    let releaseTransaction!: () => void;
+    const transactionStarted = new Promise<void>((resolve) => { markTransactionStarted = resolve; });
+    const transactionRelease = new Promise<void>((resolve) => { releaseTransaction = resolve; });
+    const inFlightMemoryWrite = harness.repositories.managementMemoryUnitOfWork.run(async ({ management }) => {
+      markTransactionStarted();
+      await transactionRelease;
+      await harness.kernel.recordMemoryToolReceiptInTransaction(management, {
+        authority, idempotencyKey: 'racing-memory-command', toolName: 'memory.create_capsule',
+        resultReferenceId: 'capsule-racing', requestHash: 'racing-memory-request-hash',
+        output: { capsuleRef: { schemaVersion: 1, id: 'capsule-racing', teamId: 'team-1',
+          managementRunId: harness.runId, targetAgentId: 'agent-1', contentHash: 'sha256:racing',
+          authorizationDecisionId: 'decision-racing', expiresAt: 100 } },
+      });
+    });
+    await transactionStarted;
+    const racingReplay = socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
+      ...authority, commandId: 'racing-memory-command', idempotencyKey: 'racing-memory-command',
+      requestHash: 'racing-memory-request-hash', toolName: 'memory.create_capsule',
+    });
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    releaseTransaction();
+    await inFlightMemoryWrite;
+    await expect(racingReplay).resolves.toMatchObject({
+      disposition: 'committed', resultReferenceId: 'capsule-racing',
+    });
+    await harness.kernel.recordMemoryToolReceipt({
+      authority, idempotencyKey: 'memory-command', toolName: 'memory.create_capsule',
+      resultReferenceId: 'capsule-1', requestHash: 'memory-request-hash',
+      output: { capsuleRef: { schemaVersion: 1, id: 'capsule-1', teamId: 'team-1',
+        managementRunId: harness.runId, targetAgentId: 'agent-1', contentHash: 'sha256:content',
+        authorizationDecisionId: 'decision-1', expiresAt: 100 } },
+    });
+    await expect(socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
+      ...authority, commandId: 'memory-command', idempotencyKey: 'memory-command',
+      requestHash: 'memory-request-hash', toolName: 'memory.create_capsule',
+    })).resolves.toMatchObject({ disposition: 'committed', resultReferenceId: 'capsule-1' });
+    await expect(socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
+      ...authority, commandId: 'memory-command', idempotencyKey: 'memory-command',
+      requestHash: 'changed-request-hash', toolName: 'memory.create_capsule',
+    })).resolves.toMatchObject({ disposition: 'conflict' });
+    await harness.repositories.management.events.append({
+      event: {
+        schemaVersion: 1, id: 'legacy-memory-receipt', managementRunId: harness.runId, sequence: 99,
+        type: 'memory-tool-completed', actorKind: 'manager', actorId: authority.workerId,
+        idempotencyKey: 'legacy-memory-command', payload: {
+          toolName: 'memory.create_capsule', resultReferenceId: 'capsule-legacy',
+          requestHash: 'legacy-memory-request-hash',
+        }, createdAt: 20,
+      },
+      payloadHash: 'legacy-memory-payload-hash',
+    });
+    await expect(socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
+      ...authority, commandId: 'legacy-memory-command', idempotencyKey: 'legacy-memory-command',
+      requestHash: 'legacy-memory-request-hash', toolName: 'memory.create_capsule',
+    })).resolves.toMatchObject({ disposition: 'rejected' });
     await expect(socket.trigger(AGENT_EVENTS.managementWorker.leaseRelease, {
       ...authority,
       idempotencyKey: 'release-1',
@@ -316,12 +374,15 @@ describe('management worker socket integration', () => {
       schemaVersion: 1, offerId: offer.offerId, workerInstanceId: 'worker-instance-v2',
     });
     expect(acquired).toMatchObject({ ok: true, leaseToken: expect.any(String), fencingToken: 1 });
-    await expect(phase2.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
+    const phase2Checkpoint = await phase2.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
       schemaVersion: 1, managementRunId: runId,
       workerId: (phase2Registration as { workerId: string }).workerId,
       leaseToken: (acquired as { leaseToken: string }).leaseToken, fencingToken: 1,
-    })).resolves.toMatchObject({ managementRunId: runId,
+    });
+    expect(phase2Checkpoint).toMatchObject({ managementRunId: runId,
       context: { rootTaskId: 'root-task', visibleThread: { messages: expect.any(Array) } } });
+    expect((phase2Checkpoint as { context: object }).context).not.toHaveProperty('managementPhase');
+    expect((phase2Checkpoint as { context: object }).context).not.toHaveProperty('frozenTarget');
   });
 
   test('Phase 3 preflight 只选择明确声明 V3 capability 的真实 Device worker', async () => {
@@ -355,6 +416,28 @@ describe('management worker socket integration', () => {
     })).resolves.toMatchObject({
       preflight: { workerAvailable: true, credentialAvailable: true, placementAllowed: true },
       profileId: 'profile-1',
+    });
+
+    const runId = await harness.createPhase3Run();
+    await harness.repositories.memory.capsuleRefs.create({
+      id: 'cap-valid', teamId: 'team-1', managementRunId: runId, taskId: 'root-task',
+      targetAgentId: 'agent-1', contentHash: 'sha256:cap', authorizationDecisionId: 'decision-1',
+      issuedAt: 1, expiresAt: 1_000, createdAt: 1,
+    });
+    await expect(harness.realtime.scheduleManagementRun({ managementRunId: runId, profileId: 'profile-1' }))
+      .resolves.toMatchObject({ ok: true, deviceId: 'device-v3' });
+    const offer = phase3.outbound(AGENT_EVENTS.managementWorker.leaseOffer)[0]?.payload as ManagementLeaseOfferV1;
+    const acquired = await phase3.trigger(AGENT_EVENTS.managementWorker.leaseAcquire, {
+      schemaVersion: 1, offerId: offer.offerId, workerInstanceId: 'worker-instance-v3',
+    });
+    await expect(phase3.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
+      schemaVersion: 1, managementRunId: runId,
+      workerId: (await phase3.trigger(AGENT_EVENTS.managementWorker.register, phase3WorkerRegistration()) as { workerId: string }).workerId,
+      leaseToken: (acquired as { leaseToken: string }).leaseToken, fencingToken: 1,
+    })).resolves.toMatchObject({
+      managementRunId: runId,
+      context: { managementPhase: 3, rootTaskId: 'root-task' },
+      checkpoint: { authoritative: { memoryCapsuleIds: ['cap-valid'] } },
     });
   });
 });
@@ -438,6 +521,7 @@ async function createHarness(input: { devices: ReturnType<typeof device>[]; allo
   const toolHandler = vi.fn(async () => ({ status: 'running' as const, checkpointRevision: 0, lastEventSequence: 2 }));
   const executeTool = createManagementToolExecutor({
     kernel,
+    managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
     handlers: { 'context.get_management_state': toolHandler },
   });
   let schedulerId = 0;
@@ -446,8 +530,10 @@ async function createHarness(input: { devices: ReturnType<typeof device>[]; allo
     devices: repositories.devices,
     messages: repositories.messages,
     management: repositories.management,
+    managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
     kernel,
     executeTool,
+    memory: repositories.memory,
     clock: { now: () => clock.now },
     ids: { nextId: () => `scheduler-${++schedulerId}` },
     leaseTokens: { nextToken: () => `lease-secret-${++leaseId}` },
@@ -516,6 +602,7 @@ async function createHarness(input: { devices: ReturnType<typeof device>[]; allo
     clock,
     realtime,
     scheduler,
+    kernel,
     runId: run.run.id,
     toolHandler,
     createRun,
@@ -523,6 +610,16 @@ async function createHarness(input: { devices: ReturnType<typeof device>[]; allo
       const created = await kernel.createOrResumeRun({
         teamId: 'team-1', channelId: 'channel-1', rootMessageId: 'message-1', rootTaskId: 'root-task',
         requestKey: 'phase2-run-request', requestHash: 'phase2-run-hash', managementPhase: 2,
+        placementPolicy: { placement: 'device', allowedDeviceIds: input.allowedDeviceIds,
+          allowServerContext: false, requireLocalModelCredentials: true },
+        budget: { maxSubtasks: 4, maxDepth: 2, maxExternalInvocations: 4 },
+      });
+      return created.run.id;
+    },
+    async createPhase3Run() {
+      const created = await kernel.createOrResumeRun({
+        teamId: 'team-1', channelId: 'channel-1', rootMessageId: 'message-1', rootTaskId: 'root-task',
+        requestKey: 'phase3-run-request', requestHash: 'phase3-run-hash', managementPhase: 3,
         placementPolicy: { placement: 'device', allowedDeviceIds: input.allowedDeviceIds,
           allowServerContext: false, requireLocalModelCredentials: true },
         budget: { maxSubtasks: 4, maxDepth: 2, maxExternalInvocations: 4 },

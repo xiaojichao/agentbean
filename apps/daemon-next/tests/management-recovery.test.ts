@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import { replayManagementOutboxForLease } from '../src/pi-manager-worker-host';
+import { hashManagementToolRequest, replayManagementOutboxForLease } from '../src/pi-manager-worker-host';
 import type { ManagementDurableOutboxItem } from '../src/management-durable-outbox';
 
 describe('management worker recovery', () => {
@@ -23,14 +23,14 @@ describe('management worker recovery', () => {
       resultReferenceId: 'invocation-1',
     }));
 
-    await replayManagementOutboxForLease({
+    await expect(replayManagementOutboxForLease({
       authority: {
         managementRunId: 'run-1', workerId: 'worker-new',
         leaseToken: 'current-lease-token', fencingToken: 2,
       },
       protocol: { replayOutbox } as never,
       outbox: { list: () => [item], remove } as never,
-    });
+    })).resolves.toEqual({ unresolvedMemoryWriteCount: 0 });
 
     expect(replayOutbox).toHaveBeenCalledWith({
       schemaVersion: 1,
@@ -41,7 +41,50 @@ describe('management worker recovery', () => {
       idempotencyKey: 'invoke-1',
       commandId: 'command-1',
       requestHash: 'request-hash-1',
+      toolName: 'agents.invoke',
     });
     expect(remove).toHaveBeenCalledWith(item);
+  });
+
+  test('服务端权威 rejected Memory replay 时删除已确定失败的 outbox', async () => {
+    const item: ManagementDurableOutboxItem = {
+      schemaVersion: 1, managementRunId: 'run-1', commandId: 'command-memory',
+      idempotencyKey: 'memory-1', requestHash: 'request-hash-memory',
+      toolName: 'memory.create_capsule', createdAt: 1,
+    };
+    const remove = vi.fn(async () => undefined);
+    await expect(replayManagementOutboxForLease({
+      authority: { managementRunId: 'run-1', workerId: 'worker-new',
+        leaseToken: 'current-lease-token', fencingToken: 2 },
+      protocol: { replayOutbox: vi.fn(async (payload) => ({ schemaVersion: 1 as const,
+        commandId: payload.commandId, managementRunId: payload.managementRunId,
+        idempotencyKey: payload.idempotencyKey, disposition: 'rejected' as const })) } as never,
+      outbox: { list: () => [item], remove } as never,
+    })).resolves.toEqual({ unresolvedMemoryWriteCount: 0 });
+    expect(remove).toHaveBeenCalledWith(item);
+  });
+
+  test('Memory outbox 回放异常时保留 entry 并阻断新 Session', async () => {
+    const item: ManagementDurableOutboxItem = {
+      schemaVersion: 1, managementRunId: 'run-1', commandId: 'command-memory',
+      idempotencyKey: 'memory-1', requestHash: 'request-hash-memory',
+      toolName: 'memory.create_capsule', createdAt: 1,
+    };
+    const remove = vi.fn(async () => undefined);
+    await expect(replayManagementOutboxForLease({
+      authority: { managementRunId: 'run-1', workerId: 'worker-new',
+        leaseToken: 'current-lease-token', fencingToken: 2 },
+      protocol: { replayOutbox: vi.fn(async () => { throw new Error('ack timeout'); }) } as never,
+      outbox: { list: () => [item], remove } as never,
+    })).resolves.toEqual({ unresolvedMemoryWriteCount: 1 });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  test('daemon 与 server 对 undefined 可选键使用相同 canonical request hash', () => {
+    expect(hashManagementToolRequest('memory.create_capsule', {
+      targetAgentId: 'agent-1', prompt: '目标', limit: 3, taskId: undefined,
+    })).toBe(hashManagementToolRequest('memory.create_capsule', {
+      targetAgentId: 'agent-1', prompt: '目标', limit: 3,
+    }));
   });
 });

@@ -2,6 +2,7 @@ import type { ID, UnixMs } from './common.js';
 import type { AgentInvocationResultDto } from './invocation.js';
 import type { SubtaskAcceptanceV1 } from './task-coordination.js';
 import type { AgentHandoffKind } from './collaboration.js';
+import type { Phase3ManagementWorkerToolOutputMapV1 } from './management-worker-v2.js';
 
 export interface ManagementEventPayloadMapV1 {
   readonly 'run-started': {
@@ -22,6 +23,16 @@ export interface ManagementEventPayloadMapV1 {
   readonly 'checkpoint-updated': {
     readonly checkpointRevision: number;
     readonly lastEventSequence: number;
+  };
+  readonly 'memory-tool-completed': {
+    readonly toolName: 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources';
+    readonly resultReferenceId: ID;
+    readonly requestHash: string;
+    /** Body-free tool output required to short-circuit an idempotent replay. */
+    readonly output?:
+      | Phase3ManagementWorkerToolOutputMapV1['memory.create_capsule']
+      | Phase3ManagementWorkerToolOutputMapV1['memory.propose_candidate']
+      | Phase3ManagementWorkerToolOutputMapV1['memory.link_sources'];
   };
   readonly 'task-created': {
     readonly taskId: ID;

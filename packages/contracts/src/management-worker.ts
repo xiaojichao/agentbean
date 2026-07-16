@@ -310,6 +310,11 @@ export interface ManagementCheckpointResultV1 {
   readonly managementRunId: ID;
   readonly workerId: ID;
   readonly context: Omit<ManagementWorkerSessionContextV1, 'frozenTarget'> & {
+    /**
+     * V2/V3 workers use the explicit phase to restore the exact tool surface. Older
+     * servers omit it, so the daemon retains the legacy Phase 1/2 inference fallback.
+     */
+    readonly managementPhase?: 1 | 2 | 3;
     readonly frozenTarget?: ManagementWorkerSessionContextV1['frozenTarget'];
   };
   readonly checkpoint?: ManagementCheckpointV1;
@@ -319,6 +324,8 @@ export interface ManagementOutboxReplayV1 extends ManagementWorkerAuthorityV1 {
   readonly schemaVersion: 1;
   readonly commandId: ID;
   readonly requestHash: string;
+  /** Added compatibly so the server can serialize Phase 3 Memory verdict checks. */
+  readonly toolName?: string;
 }
 
 export interface ManagementOutboxReplayAckV1 {
@@ -551,6 +558,7 @@ const sessionContextSchema = exactObject({
 
 const checkpointSessionContextSchema = exactObject({
   schemaVersion: required(literal(1)),
+  managementPhase: optional(oneOf([1, 2, 3])),
   teamId: required(id),
   channelId: required(id),
   rootMessageId: required(id),
@@ -888,6 +896,7 @@ const schemas: { readonly [K in ManagementWorkerPayloadKind]: Validator } = {
     schemaVersion: required(literal(1)),
     commandId: required(id),
     requestHash: required(hash),
+    toolName: optional(text(128)),
     ...authorityFields,
   }),
   'outbox-replay-ack': exactObject({

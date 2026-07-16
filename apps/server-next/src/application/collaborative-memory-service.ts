@@ -490,10 +490,25 @@ export function createCollaborativeMemoryService(
           scopeRef: item.scopeRef,
         });
         const now = clock.now();
+        const existingSources = await memory.sources.listByMemory({ teamId: input.teamId, memoryId: item.id });
+        const newRefs: CollaborativeMemorySourceInput[] = [];
         for (const ref of input.sourceRefs) {
+          const existing = existingSources.find((source) =>
+            source.sourceKind === ref.sourceKind && source.sourceId === ref.sourceId);
+          if (existing) {
+            if (existing.snapshotHash !== ref.snapshotHash
+              || existing.sourceScopeType !== ref.sourceScopeType
+              || existing.sourceScopeRef !== ref.sourceScopeRef
+              || existing.sourceVisibility !== ref.sourceVisibility) {
+              throw new Error('MEMORY_SOURCE_CONFLICT');
+            }
+            continue;
+          }
           await memory.sources.create(toSourceRecord(input.teamId, item.id, ref, now));
+          newRefs.push(ref);
         }
-        const sourceRefs = input.sourceRefs.map(toSourceRefDto);
+        if (newRefs.length === 0) return loadView(memory, input.teamId, item);
+        const sourceRefs = newRefs.map(toSourceRefDto);
         await appendAudit(memory, {
           teamId: input.teamId, subjectKind: 'memory', subjectId: item.id,
           eventType: 'source-linked', actorId: input.actorId,

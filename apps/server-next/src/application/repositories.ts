@@ -5,6 +5,7 @@ import type { TaskCoordinationRepositories } from './task-coordination-repositor
 import type { TaskCoordinationUnitOfWork } from './task-coordination-unit-of-work.js';
 import type { MemoryRepositories } from './memory-repositories.js';
 import type { MemoryUnitOfWork } from './memory-unit-of-work.js';
+import type { ManagementMemoryUnitOfWork } from './management-memory-unit-of-work.js';
 
 export interface UserRecord extends UserDto {
   passwordHash: string;
@@ -321,6 +322,7 @@ export interface ServerNextRepositories {
   taskCoordinationUnitOfWork: TaskCoordinationUnitOfWork;
   memory: MemoryRepositories;
   memoryUnitOfWork: MemoryUnitOfWork;
+  managementMemoryUnitOfWork: ManagementMemoryUnitOfWork;
   users: UserRepository;
   teams: TeamRepository;
   joinLinks: JoinLinkRepository;

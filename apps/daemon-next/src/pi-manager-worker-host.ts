@@ -9,6 +9,7 @@ import type {
   ManagementToolResult,
   VersionedManagementPrompt,
 } from '@agentbean/pi-management-runtime';
+import { PHASE_3_MANAGEMENT_TOOL_NAMES, type ManagementToolName } from '@agentbean/pi-management-runtime';
 import type {
   ManagementCheckpointResultV1,
   ManagementLeaseAcquireAckV1,
@@ -17,8 +18,8 @@ import type {
   ManagementWorkerLeaseProofV1,
   ManagementWorkerToolRequestV1,
   Phase1ManagementWorkerToolName,
-  Phase2ManagementWorkerToolName,
   Phase2TaskToolRequestV2,
+  Phase3MemoryToolRequestV3,
 } from '../../../packages/contracts/src/index.js';
 import { PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES, PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES } from '../../../packages/contracts/src/index.js';
 import type {
@@ -71,7 +72,7 @@ interface ActiveLease {
   session?: ManagementSession;
   renewTimer?: ReturnType<typeof setTimeout>;
   disposing: boolean;
-  managementPhase: 1 | 2;
+  managementPhase: 1 | 2 | 3;
 }
 
 const DEFAULT_SYSTEM_PROMPT: VersionedManagementPrompt = {
@@ -80,7 +81,7 @@ const DEFAULT_SYSTEM_PROMPT: VersionedManagementPrompt = {
   content: '你是 AgentBean 的 PI 管理运行时。只使用已提供的管理工具；Phase 1 仅处理 frozen target，Phase 2 可按任务契约调用可见 Agent 或发起 handoff。不得访问本地 cwd、源码或任意 coding tools。',
 };
 
-const WRITE_TOOL_NAMES = new Set<Phase2ManagementWorkerToolName>([
+const WRITE_TOOL_NAMES = new Set<ManagementToolName>([
   'agents.invoke',
   'agents.cancel_invocation',
   'channel.post_management_status',
@@ -94,6 +95,22 @@ const WRITE_TOOL_NAMES = new Set<Phase2ManagementWorkerToolName>([
   'tasks.accept_subtask',
   'tasks.report_blocked',
   'handoffs.request',
+  'memory.create_capsule',
+  'memory.propose_candidate',
+  'memory.link_sources',
+]);
+
+const PHASE_3_MEMORY_TOOL_NAMES = new Set<ManagementToolName>([
+  'memory.search',
+  'memory.create_capsule',
+  'memory.propose_candidate',
+  'memory.link_sources',
+]);
+
+const PHASE_3_MEMORY_WRITE_TOOL_NAMES = new Set<ManagementToolName>([
+  'memory.create_capsule',
+  'memory.propose_candidate',
+  'memory.link_sources',
 ]);
 
 export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput): PiManagerWorkerHost {
@@ -196,7 +213,12 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
     activeLeases.set(lease.managementRunId, lease);
 
     try {
-      await replayManagementOutboxForLease({ authority: lease, protocol: input.protocol, outbox: input.outbox });
+      const replay = await replayManagementOutboxForLease({
+        authority: lease, protocol: input.protocol, outbox: input.outbox,
+      });
+      if (replay.unresolvedMemoryWriteCount > 0) {
+        throw new Error('MANAGEMENT_MEMORY_OUTBOX_UNRESOLVED');
+      }
       const restored = await input.protocol.fetchCheckpoint({
         schemaVersion: 1,
         managementRunId: lease.managementRunId,
@@ -207,7 +229,7 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
       if (restored.managementRunId !== lease.managementRunId || restored.workerId !== lease.workerId) {
         throw new Error('MANAGEMENT_CHECKPOINT_AUTHORITY_MISMATCH');
       }
-      lease.managementPhase = isPhase2Checkpoint(restored) ? 2 : 1;
+      lease.managementPhase = checkpointManagementPhase(restored);
       const session = await runtimeFactory!.createSession({
         systemPrompt: input.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
         mode: 'managed',
@@ -226,22 +248,25 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
   async function executeManagementTool(call: ManagementToolCall): Promise<ManagementToolResult> {
     if (call.scope.kind !== 'managed') return toolError('MANAGEMENT_SHADOW_TOOL_UNSUPPORTED');
     const allowedTools = leasePhaseTools(call.scope.managementRunId);
-    if (!allowedTools.includes(call.name as Phase2ManagementWorkerToolName)) {
+    if (!allowedTools.includes(call.name)) {
       return toolError('MANAGEMENT_TOOL_PHASE_UNSUPPORTED');
     }
-    const toolName = call.name as Phase2ManagementWorkerToolName;
+    const toolName = call.name;
     const lease = activeLeases.get(call.scope.managementRunId);
     if (!lease || lease.disposing || lease.fencingToken < 1) return toolError('MANAGEMENT_LEASE_UNAVAILABLE');
 
     const commandId = `${lease.managementRunId}:${call.toolCallId}`;
     const write = WRITE_TOOL_NAMES.has(toolName);
     const idempotencyKey = commandId;
-    const phase2Task = lease.managementPhase === 2
+    const phase3Memory = lease.managementPhase === 3 && PHASE_3_MEMORY_TOOL_NAMES.has(toolName);
+    const phase2Task = lease.managementPhase >= 2 && !phase3Memory
       && (toolName === 'agents.invoke'
         || !PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES.includes(toolName as Phase1ManagementWorkerToolName));
     const base = {
-      schemaVersion: phase2Task ? 2 as const : 1 as const,
-      ...(phase2Task ? { managementPhase: 2 as const } : {}),
+      schemaVersion: phase2Task || phase3Memory ? 2 as const : 1 as const,
+      ...(phase3Memory
+        ? { managementPhase: 3 as const }
+        : phase2Task ? { managementPhase: 2 as const } : {}),
       commandId,
       managementRunId: lease.managementRunId,
       workerId: lease.workerId,
@@ -249,12 +274,12 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
       toolName,
       input: structuredClone(call.input),
     };
-    const request = (write || phase2Task ? {
+    const request = (write || phase2Task || phase3Memory ? {
       ...base,
       leaseToken: lease.leaseToken,
       fencingToken: lease.fencingToken,
       idempotencyKey,
-    } : base) as ManagementWorkerToolRequestV1 | Phase2TaskToolRequestV2;
+    } : base) as ManagementWorkerToolRequestV1 | Phase2TaskToolRequestV2 | Phase3MemoryToolRequestV3;
     let outboxItem: ManagementDurableOutboxItem | undefined;
     if (write) {
       const item: ManagementDurableOutboxItem = {
@@ -262,7 +287,7 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
         managementRunId: lease.managementRunId,
         commandId,
         idempotencyKey,
-        requestHash: hashRequest(toolName, call.input),
+        requestHash: hashManagementToolRequest(toolName, call.input),
         toolName,
         createdAt: now(),
       };
@@ -285,10 +310,11 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
     }
   }
 
-  function leasePhaseTools(managementRunId: string): readonly Phase2ManagementWorkerToolName[] {
-    return activeLeases.get(managementRunId)?.managementPhase === 2
-      ? PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES
-      : PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES;
+  function leasePhaseTools(managementRunId: string): readonly ManagementToolName[] {
+    const phase = activeLeases.get(managementRunId)?.managementPhase;
+    if (phase === 3) return PHASE_3_MANAGEMENT_TOOL_NAMES;
+    if (phase === 2) return PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES;
+    return PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES;
   }
 
   function scheduleRenew(lease: ActiveLease): void {
@@ -383,7 +409,8 @@ export async function replayManagementOutboxForLease(input: {
   readonly authority: ManagementWorkerLeaseProofV1;
   readonly protocol: Pick<PiManagerWorkerProtocol, 'replayOutbox'>;
   readonly outbox: Pick<ManagementDurableOutbox, 'list' | 'remove'>;
-}): Promise<void> {
+}): Promise<{ unresolvedMemoryWriteCount: number }> {
+  let unresolvedMemoryWriteCount = 0;
   for (const item of input.outbox.list()) {
     if (item.managementRunId !== input.authority.managementRunId) continue;
     const payload: ManagementOutboxReplayV1 = {
@@ -392,6 +419,7 @@ export async function replayManagementOutboxForLease(input: {
       idempotencyKey: item.idempotencyKey,
       commandId: item.commandId,
       requestHash: item.requestHash,
+      toolName: item.toolName,
     };
     try {
       const result = await input.protocol.replayOutbox(payload);
@@ -400,22 +428,25 @@ export async function replayManagementOutboxForLease(input: {
         await input.outbox.remove(item);
       }
     } catch {
-      // Keep the durable entry for the next reconnect/reacquire attempt.
+      // Keep the durable entry for the next reconnect/reacquire attempt. A Memory write
+      // without an authoritative replay verdict must also block starting a new Session.
+      if (PHASE_3_MEMORY_WRITE_TOOL_NAMES.has(item.toolName)) unresolvedMemoryWriteCount += 1;
     }
   }
+  return { unresolvedMemoryWriteCount };
 }
 
 function runtimeContext(restored: ManagementCheckpointResultV1): ManagementSessionContextV1 | ManagementSessionContextV2 {
   const context = restored.context;
-  const phase2Checkpoint = isPhase2Checkpoint(restored);
-  if (!phase2Checkpoint && restored.checkpoint && restored.checkpoint.authoritative.taskGraphRevision !== 0) {
+  const managementPhase = checkpointManagementPhase(restored);
+  if (managementPhase === 1 && restored.checkpoint && restored.checkpoint.authoritative.taskGraphRevision !== 0) {
     throw new Error('P1_TASK_GRAPH_REVISION_UNSUPPORTED');
   }
-  if (phase2Checkpoint) {
-    if (!context.rootTaskId) throw new Error('P2_ROOT_TASK_REQUIRED');
+  if (managementPhase === 2 || managementPhase === 3) {
+    if (!context.rootTaskId) throw new Error(`P${managementPhase}_ROOT_TASK_REQUIRED`);
     return {
       schemaVersion: 2,
-      managementPhase: 2,
+      managementPhase,
       scope: {
         kind: 'managed', managementRunId: restored.managementRunId,
         teamId: context.teamId, channelId: context.channelId,
@@ -423,7 +454,9 @@ function runtimeContext(restored: ManagementCheckpointResultV1): ManagementSessi
       },
       ...(context.frozenTarget ? { frozenTarget: structuredClone(context.frozenTarget) } : {}),
       visibleThread: structuredClone(context.visibleThread),
-      ...(restored.checkpoint ? { checkpoint: visiblePhase2Checkpoint(restored.checkpoint) } : {}),
+      ...(restored.checkpoint ? {
+        checkpoint: visiblePhase2Checkpoint(restored.checkpoint, managementPhase === 3),
+      } : {}),
     };
   }
   if (!context.frozenTarget) throw new Error('P1_FROZEN_TARGET_REQUIRED');
@@ -445,9 +478,12 @@ function runtimeContext(restored: ManagementCheckpointResultV1): ManagementSessi
   };
 }
 
-function isPhase2Checkpoint(restored: ManagementCheckpointResultV1): boolean {
-  return Boolean(restored.context.rootTaskId && (!restored.context.frozenTarget
-    || restored.checkpoint?.authoritative.taskSnapshots?.length));
+export function checkpointManagementPhase(restored: ManagementCheckpointResultV1): 1 | 2 | 3 {
+  if (restored.context.managementPhase !== undefined) return restored.context.managementPhase;
+  return restored.context.rootTaskId && (!restored.context.frozenTarget
+    || restored.checkpoint?.authoritative.taskSnapshots?.length)
+    ? 2
+    : 1;
 }
 
 function visibleCheckpoint(checkpoint: NonNullable<ManagementCheckpointResultV1['checkpoint']>) {
@@ -460,7 +496,10 @@ function visibleCheckpoint(checkpoint: NonNullable<ManagementCheckpointResultV1[
   };
 }
 
-function visiblePhase2Checkpoint(checkpoint: NonNullable<ManagementCheckpointResultV1['checkpoint']>) {
+function visiblePhase2Checkpoint(
+  checkpoint: NonNullable<ManagementCheckpointResultV1['checkpoint']>,
+  includeMemoryCapsules: boolean,
+) {
   return {
     ...visibleCheckpoint(checkpoint),
     taskGraphRevision: checkpoint.authoritative.taskGraphRevision,
@@ -469,6 +508,7 @@ function visiblePhase2Checkpoint(checkpoint: NonNullable<ManagementCheckpointRes
     completedInvocationIds: [...checkpoint.authoritative.completedInvocationIds],
     taskSnapshots: structuredClone(checkpoint.authoritative.taskSnapshots ?? []),
     activeClaimLeaseIds: [...(checkpoint.authoritative.activeClaimLeaseIds ?? [])],
+    ...(includeMemoryCapsules ? { memoryCapsuleIds: [...checkpoint.authoritative.memoryCapsuleIds] } : {}),
   };
 }
 
@@ -480,7 +520,7 @@ function restoreObjective(restored: ManagementCheckpointResultV1): string {
     ?? '继续当前管理任务。';
 }
 
-function hashRequest(toolName: string, input: Record<string, unknown>): string {
+export function hashManagementToolRequest(toolName: string, input: Record<string, unknown>): string {
   return createHash('sha256').update(canonicalJson({ toolName, input })).digest('hex');
 }
 
@@ -488,6 +528,7 @@ function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   if (value && typeof value === 'object') {
     return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, nested]) => nested !== undefined)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`)
       .join(',')}}`;

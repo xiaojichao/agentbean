@@ -2,9 +2,36 @@ import { describe, expect, test } from 'vitest';
 import {
   hashManagementCommandInput,
   hashManagementEventPayload,
+  parseMemoryToolManagementEvent,
   parsePhase1ManagementEvent,
   parseTaskCoordinationManagementEvent,
 } from '../src/application/management/management-event-validator.js';
+
+describe('Phase 3 Memory tool receipt validator', () => {
+  test('accepts an exact body-free receipt and rejects payload drift', () => {
+    const event = {
+      schemaVersion: 1, id: 'event-memory', managementRunId: 'run-1', sequence: 2,
+      type: 'memory-tool-completed', actorKind: 'manager', actorId: 'worker-1',
+      idempotencyKey: 'memory-command', payload: {
+        toolName: 'memory.create_capsule', resultReferenceId: 'capsule-1', requestHash: 'sha256:request',
+        output: { capsuleRef: { schemaVersion: 1, id: 'capsule-1', teamId: 'team-1',
+          managementRunId: 'run-1', targetAgentId: 'agent-1', contentHash: 'sha256:content',
+          authorizationDecisionId: 'decision-1', expiresAt: 100 } },
+      }, createdAt: 10,
+    } as const;
+    expect(parseMemoryToolManagementEvent(event)).toEqual(event);
+    expect(parseMemoryToolManagementEvent({ ...event, payload: {
+      toolName: event.payload.toolName,
+      resultReferenceId: event.payload.resultReferenceId,
+      requestHash: event.payload.requestHash,
+    } })).toMatchObject({ payload: { resultReferenceId: 'capsule-1' } });
+    expect(() => parseMemoryToolManagementEvent({ ...event,
+      payload: { ...event.payload, prompt: 'must-not-persist' } })).toThrow(/INVALID_MANAGEMENT_EVENT/);
+    expect(() => parseMemoryToolManagementEvent({ ...event,
+      payload: { ...event.payload, output: { ...event.payload.output, content: 'must-not-persist' } } }))
+      .toThrow(/INVALID_MANAGEMENT_EVENT/);
+  });
+});
 
 describe('Phase 1 management event validator', () => {
   test('accepts the writable Phase 1 subset and produces a stable canonical hash', () => {

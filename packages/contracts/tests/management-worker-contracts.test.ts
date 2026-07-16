@@ -171,6 +171,7 @@ const validPayloads: { [K in keyof ManagementWorkerPayloadMapV1]: ManagementWork
     schemaVersion: 1,
     commandId: 'command-1',
     requestHash: 'sha256:request-1',
+    toolName: 'memory.create_capsule',
     ...authority,
   },
   'outbox-replay-ack': {
@@ -225,6 +226,19 @@ describe('Phase 1 management Worker contracts', () => {
     for (const kind of MANAGEMENT_WORKER_PAYLOAD_KINDS) {
       expect(parseManagementWorkerPayload(kind, validPayloads[kind])).toEqual(validPayloads[kind]);
     }
+  });
+
+  test('checkpoint context carries an explicit management phase and rejects drift', () => {
+    const phase3 = structuredClone(validPayloads['checkpoint-result']) as Record<string, unknown>;
+    phase3.context = { ...(phase3.context as Record<string, unknown>), managementPhase: 3 };
+    expect(parseManagementWorkerPayload('checkpoint-result', phase3)).toEqual(phase3);
+
+    const invalid = structuredClone(phase3) as Record<string, unknown>;
+    invalid.context = { ...(invalid.context as Record<string, unknown>), managementPhase: 4 };
+    expect(safeParseManagementWorkerPayload('checkpoint-result', invalid)).toEqual({
+      ok: false,
+      error: { code: 'MANAGEMENT_WORKER_PAYLOAD_INVALID', path: '$.context.managementPhase' },
+    });
   });
 
   test('freezes the eleven Phase 1 tools and rejects later-phase tools', () => {

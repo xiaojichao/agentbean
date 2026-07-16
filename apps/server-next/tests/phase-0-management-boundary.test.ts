@@ -181,11 +181,13 @@ describe('Phase 0 existing execution fact boundary', () => {
       'management',
       'managementUnitOfWork',
       'managementDispatchUnitOfWork',
+      'managementMemoryUnitOfWork',
     ]);
 
     const repositorySource = readFileSync(join(serverRoot, 'application/repositories.ts'), 'utf8');
     expect(repositorySource).toContain('management: ManagementRepositories');
     expect(repositorySource).toContain('managementUnitOfWork: ManagementUnitOfWork');
+    expect(repositorySource).toContain('managementMemoryUnitOfWork: ManagementMemoryUnitOfWork');
     expect(repositorySource).toContain('managementDispatchUnitOfWork: ManagementDispatchUnitOfWork');
 
     const migrationSql = readTreeText(join(serverRoot, 'infra/sqlite/migrations'));

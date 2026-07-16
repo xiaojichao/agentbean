@@ -27,7 +27,9 @@ import type { ManagementPreflight } from '../../../../../packages/domain/src/ind
 import type { ManagerPlacementPolicyDto } from '../../../../../packages/contracts/src/index.js';
 import type { DeviceRepository, MessageRepository } from '../repositories.js';
 import type { ManagementRepositories } from '../management-repositories.js';
+import type { MemoryRepositories } from '../memory-repositories.js';
 import type { TaskCoordinationUnitOfWork } from '../task-coordination-unit-of-work.js';
+import type { ManagementMemoryUnitOfWork } from '../management-memory-unit-of-work.js';
 import { ManagementConflictError, type createManagementKernel } from './management-kernel.js';
 import { collectManagementCheckpointFacts, restoreOrRebuildManagementCheckpoint, toManagementCheckpointAuthoritative } from './management-checkpoint.js';
 
@@ -45,7 +47,9 @@ export interface DeviceWorkerSchedulerDependencies {
   readonly devices: DeviceRepository;
   readonly messages?: MessageRepository;
   readonly management: ManagementRepositories;
+  readonly memory?: MemoryRepositories;
   readonly taskCoordinationUnitOfWork?: TaskCoordinationUnitOfWork;
+  readonly managementMemoryUnitOfWork: ManagementMemoryUnitOfWork;
   readonly kernel: ManagementKernel;
   readonly executeTool: ManagementToolExecutor;
   readonly clock: { now(): number };
@@ -101,6 +105,9 @@ interface PendingOffer {
 
 const DEFAULT_LEASE_TTL_MS = 5 * 60_000;
 const DEFAULT_OFFER_TIMEOUT_MS = 10_000;
+const PHASE_3_MEMORY_WRITE_TOOL_NAMES = new Set([
+  'memory.create_capsule', 'memory.propose_candidate', 'memory.link_sources',
+]);
 
 export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerDependencies) {
   const leaseTtlMs = dependencies.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
@@ -429,11 +436,13 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
             latest: await repositories.management.checkpoints.getLatest(run.id),
             facts: await collectManagementCheckpointFacts(repositories.management, run, {
               tasks: repositories.tasks, coordination: repositories.coordination,
-            }),
+            }, dependencies.memory, dependencies.clock.now()),
           }))
         : {
             latest: await dependencies.management.checkpoints.getLatest(run.id),
-            facts: await collectManagementCheckpointFacts(dependencies.management, run),
+            facts: await collectManagementCheckpointFacts(
+              dependencies.management, run, undefined, dependencies.memory, dependencies.clock.now(),
+            ),
           };
       const latest = snapshot.latest;
       const checkpoint = latest
@@ -454,17 +463,26 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
             },
             updatedAt: dependencies.clock.now(),
           };
+      const runPhase = 'managementPhase' in run ? run.managementPhase : 1;
+      // V2 workers predate the explicit context phase. Preserve their exact-key protocol while
+      // keeping the established Phase 2 discriminator: rootTaskId present, frozenTarget absent.
+      const legacyPhase2Context = runPhase === 2
+        && supportsManagementPhase(worker.capability, 2)
+        && !supportsManagementPhase(worker.capability, 3);
       return {
         schemaVersion: 1,
         managementRunId: run.id,
         workerId: worker.workerId,
         context: {
           schemaVersion: 1,
+          ...(supportsManagementPhase(worker.capability, 3)
+            ? { managementPhase: runPhase }
+            : {}),
           teamId: run.teamId,
           channelId: run.channelId,
           rootMessageId: run.rootMessageId,
           ...(run.rootTaskId ? { rootTaskId: run.rootTaskId } : {}),
-          ...(run.frozenTarget ? { frozenTarget: run.frozenTarget } : {}),
+          ...(run.frozenTarget && !legacyPhase2Context ? { frozenTarget: run.frozenTarget } : {}),
           visibleThread: {
             revision: messages.at(-1)?.updatedAt ?? messages.at(-1)?.createdAt ?? 0,
             messages: messages.map((message) => ({
@@ -494,6 +512,19 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
       } catch {
         return { ...base, disposition: 'rejected' };
       }
+      if (input.toolName && PHASE_3_MEMORY_WRITE_TOOL_NAMES.has(input.toolName)) {
+        return dependencies.managementMemoryUnitOfWork.run(async ({ management }) => {
+          const event = (await management.events.list(input.managementRunId))
+            .find((record) => record.event.idempotencyKey === input.idempotencyKey);
+          if (event?.event.type !== 'memory-tool-completed') return { ...base, disposition: 'rejected' };
+          if (event.event.payload.requestHash !== input.requestHash) {
+            return { ...base, disposition: 'conflict' };
+          }
+          return event.event.payload.output
+            ? { ...base, disposition: 'committed', resultReferenceId: event.event.payload.resultReferenceId }
+            : { ...base, disposition: 'rejected' };
+        });
+      }
       const invocation = await dependencies.management.invocations.getByIdempotencyKey({
         managementRunId: input.managementRunId,
         idempotencyKey: input.idempotencyKey,
@@ -506,6 +537,14 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
       if (handoff) return { ...base, disposition: 'existing', resultReferenceId: handoff.id };
       const event = (await dependencies.management.events.list(input.managementRunId))
         .find((record) => record.event.idempotencyKey === input.idempotencyKey);
+      if (event?.event.type === 'memory-tool-completed') {
+        if (event.event.payload.requestHash !== input.requestHash) {
+          return { ...base, disposition: 'conflict' };
+        }
+        return event.event.payload.output
+          ? { ...base, disposition: 'committed', resultReferenceId: event.event.payload.resultReferenceId }
+          : { ...base, disposition: 'rejected' };
+      }
       return event
         ? { ...base, disposition: 'existing', resultReferenceId: event.event.id }
         : { ...base, disposition: 'rejected' };

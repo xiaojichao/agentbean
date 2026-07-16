@@ -110,8 +110,8 @@ export function createTaskCoordinationKernel(
         const now = clock.now();
         const run = await repositories.management.runs.getById(input.managementRunId);
         if (!run) conflict('MANAGEMENT_RUN_NOT_FOUND');
-        if (!('managementPhase' in run) || run.managementPhase !== 2) {
-          conflict('MANAGEMENT_PHASE_2_REQUIRED');
+        if (!('managementPhase' in run) || (run.managementPhase !== 2 && run.managementPhase !== 3)) {
+          conflict('MANAGEMENT_PHASE_2_OR_3_REQUIRED');
         }
         if (run.rootTaskId !== input.taskId) conflict('TASK_ROOT_MISMATCH');
         const commandHash = hashManagementCommandInput({

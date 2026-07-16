@@ -31,6 +31,26 @@ describe('ManagementDurableOutbox', () => {
     expect(statSync(managementOutboxFile('team-a', baseDir)).mode & 0o777).toBe(0o600);
   });
 
+  test('Phase 3 Memory write command uses the same durable replay boundary', async () => {
+    let snapshot: unknown = { schemaVersion: 1, items: [] };
+    const outbox = await createManagementDurableOutbox({
+      storage: {
+        load: async () => snapshot,
+        save: async (next) => { snapshot = structuredClone(next); },
+      },
+    });
+    const phase3Item: ManagementDurableOutboxItem = {
+      ...ITEM,
+      commandId: 'command-memory-1',
+      idempotencyKey: 'capsule-1',
+      toolName: 'memory.create_capsule',
+    };
+
+    await outbox.enqueue(phase3Item);
+
+    expect(outbox.list()).toEqual([phase3Item]);
+  });
+
   test('crash-before-write：持久化失败时不把未落盘项加入内存队列', async () => {
     let snapshot: unknown = { schemaVersion: 1, items: [] };
     const storage: ManagementOutboxStorage = {

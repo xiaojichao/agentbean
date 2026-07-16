@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
-import type { ManagementEventTypeV1, ManagementEventV1 } from '../../../../../packages/contracts/src/index.js';
+import {
+  assertPhase3MemoryToolOutput,
+  type ManagementEventTypeV1,
+  type ManagementEventV1,
+} from '../../../../../packages/contracts/src/index.js';
 
 export const PHASE_1_WRITABLE_MANAGEMENT_EVENT_TYPES = [
   'run-started',
@@ -40,13 +44,16 @@ export const COLLABORATION_MANAGEMENT_EVENT_TYPES = [
 ] as const satisfies readonly ManagementEventTypeV1[];
 
 type CollaborationEventType = (typeof COLLABORATION_MANAGEMENT_EVENT_TYPES)[number];
-type WritableEventType = Phase1WritableEventType | TaskCoordinationEventType | CollaborationEventType;
+export const MEMORY_TOOL_MANAGEMENT_EVENT_TYPES = ['memory-tool-completed'] as const satisfies readonly ManagementEventTypeV1[];
+type MemoryToolEventType = (typeof MEMORY_TOOL_MANAGEMENT_EVENT_TYPES)[number];
+type WritableEventType = Phase1WritableEventType | TaskCoordinationEventType | CollaborationEventType | MemoryToolEventType;
 
 const payloadKeys: Record<WritableEventType, { required: readonly string[]; optional?: readonly string[] }> = {
   'run-started': { required: ['rootMessageId', 'mode'], optional: ['rootTaskId'] },
   'worker-leased': { required: ['workerId', 'leaseFingerprint', 'expiresAt'] },
   'worker-lost': { required: ['workerId', 'lastHeartbeatAt', 'reasonCode'] },
   'checkpoint-updated': { required: ['checkpointRevision', 'lastEventSequence'] },
+  'memory-tool-completed': { required: ['toolName', 'resultReferenceId', 'requestHash'], optional: ['output'] },
   'invocation-created': { required: ['invocationId', 'intentHash'], optional: ['taskRevision'] },
   'dispatch-attempt-started': { required: ['invocationId', 'dispatchId', 'attemptNumber'] },
   'dispatch-attempt-completed': { required: ['invocationId', 'dispatchId', 'attemptNumber', 'status'] },
@@ -81,6 +88,10 @@ export function parseTaskCoordinationManagementEvent(input: unknown): Management
 
 export function parseCollaborationManagementEvent(input: unknown): ManagementEventV1 {
   return parseManagementEvent(input, COLLABORATION_MANAGEMENT_EVENT_TYPES);
+}
+
+export function parseMemoryToolManagementEvent(input: unknown): ManagementEventV1 {
+  return parseManagementEvent(input, MEMORY_TOOL_MANAGEMENT_EVENT_TYPES);
 }
 
 function parseManagementEvent(input: unknown, allowedTypes: readonly WritableEventType[]): ManagementEventV1 {
@@ -126,6 +137,20 @@ function validatePayload(type: WritableEventType, payload: Record<string, unknow
       string(payload.workerId, 'payload.workerId'); nonNegativeInteger(payload.lastHeartbeatAt, 'payload.lastHeartbeatAt'); string(payload.reasonCode, 'payload.reasonCode'); return;
     case 'checkpoint-updated':
       positiveInteger(payload.checkpointRevision, 'payload.checkpointRevision'); nonNegativeInteger(payload.lastEventSequence, 'payload.lastEventSequence'); return;
+    case 'memory-tool-completed':
+      if (!['memory.create_capsule', 'memory.propose_candidate', 'memory.link_sources']
+        .includes(string(payload.toolName, 'payload.toolName'))) fail('payload.toolName');
+      string(payload.resultReferenceId, 'payload.resultReferenceId');
+      string(payload.requestHash, 'payload.requestHash');
+      if (payload.output !== undefined) {
+        try {
+          assertPhase3MemoryToolOutput(payload.toolName as
+            'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources', payload.output);
+        } catch {
+          fail('payload.output');
+        }
+      }
+      return;
     case 'invocation-created':
       string(payload.invocationId, 'payload.invocationId'); string(payload.intentHash, 'payload.intentHash'); optionalPositiveInteger(payload.taskRevision, 'payload.taskRevision'); return;
     case 'dispatch-attempt-started':

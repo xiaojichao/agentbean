@@ -1,6 +1,9 @@
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { Phase2ManagementWorkerToolName } from '../../../packages/contracts/src/index.js';
+import type {
+  Phase2ManagementWorkerToolName,
+  Phase3ManagementWorkerToolInputMapV1,
+} from '../../../packages/contracts/src/index.js';
 import { managementOutboxFile } from './profile-paths.js';
 
 export interface ManagementDurableOutboxItem {
@@ -9,7 +12,7 @@ export interface ManagementDurableOutboxItem {
   readonly commandId: string;
   readonly idempotencyKey: string;
   readonly requestHash: string;
-  readonly toolName: Phase2ManagementWorkerToolName;
+  readonly toolName: Phase2ManagementWorkerToolName | keyof Phase3ManagementWorkerToolInputMapV1;
   readonly createdAt: number;
 }
 

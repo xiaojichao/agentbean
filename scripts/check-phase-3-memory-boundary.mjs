@@ -20,6 +20,8 @@ const memoryMigration = read('apps/server-next/src/infra/sqlite/migrations/team/
 const capsuleRefMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0016_management_phase_3_capsule_refs.sql');
 const capsuleManifestMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0020_management_phase_3_capsule_item_manifests.sql');
 const sqliteRepositories = read('apps/server-next/src/infra/sqlite/repositories.ts');
+const inMemoryRepositories = read('apps/server-next/src/infra/memory/repositories.ts');
+const managementMemoryUnitOfWork = read('apps/server-next/src/application/management-memory-unit-of-work.ts');
 const memoryBackends = [
   read('apps/server-next/src/infra/memory/memory-repositories.ts'),
   read('apps/server-next/src/infra/sqlite/memory-repositories.ts'),
@@ -40,10 +42,14 @@ const memoryCandidateTests = read('apps/server-next/tests/memory-candidate-servi
 const memoryCandidatePolicy = read('packages/domain/src/memory-candidate-policy.ts');
 const memoryCandidateMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0019_management_phase_3_candidate_lifecycle.sql');
 const invocationContract = read('packages/contracts/src/invocation.ts');
+const managementWorkerV1 = read('packages/contracts/src/management-worker.ts');
 const managementWorkerV2 = read('packages/contracts/src/management-worker-v2.ts');
+const managementEventContract = read('packages/contracts/src/management-event.ts');
 const invocationGateway = read('apps/server-next/src/application/management/invocation-gateway.ts');
 const managementCheckpoint = read('apps/server-next/src/application/management/management-checkpoint.ts');
 const managementToolExecutor = read('apps/server-next/src/application/management/management-tool-executor.ts');
+const managementKernel = read('apps/server-next/src/application/management/management-kernel.ts');
+const managementEventValidator = read('apps/server-next/src/application/management/management-event-validator.ts');
 const deviceWorkerScheduler = read('apps/server-next/src/application/management/device-worker-scheduler.ts');
 const piSessionAdapter = read('packages/pi-management-runtime/src/pi-session-adapter.ts');
 const dispatchContract = read('packages/contracts/src/dispatch.ts');
@@ -56,6 +62,8 @@ const daemonRuntimeMemory = read('apps/daemon-next/src/memory/runtime-memory-con
 const daemonRuntimeMemoryTests = read('apps/daemon-next/tests/runtime-memory-context.test.ts');
 const daemonExecutor = read('apps/daemon-next/src/executor.ts');
 const daemonProtocol = read('apps/daemon-next/src/index.ts');
+const daemonWorkerProtocol = read('apps/daemon-next/src/management-worker-protocol.ts');
+const daemonWorkerHost = read('apps/daemon-next/src/pi-manager-worker-host.ts');
 const managementToolCatalog = read('packages/pi-management-runtime/src/management-tool-catalog.ts');
 const runtimeTypes = read('packages/pi-management-runtime/src/types.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
@@ -66,7 +74,7 @@ const hasChecklist = [...Array(18)].every((_, index) =>
 if (!hasChecklist
   || !/^> 当前 verdict：\*\*Not ready\*\*/m.test(matrix)
   || !matrix.includes('| P3-03 | Green |')
-  || !matrix.includes('Phase 3 runtime 必须保持关闭')
+  || !matrix.includes('Phase 3 默认仍保持关闭')
   || !plan.includes('Phase 3 未完成前')) {
   violations.push('P3_MATRIX_INVALID: P3-01..P3-18, Not ready, and fail-closed rollout are required');
 }
@@ -255,14 +263,61 @@ if (!managementWorkerV2.includes('Phase3ManagementWorkerToolInputMapV1')
 }
 
 // P3-09 slice 2b：V3 capability 门禁接线（executor 按 phase 值分发 + scheduler preflight + adapter 路由）。
+const memoryReceiptRecordBody = managementKernel.match(
+  /async function recordMemoryToolReceiptInTransaction[\s\S]*?\n  return \{/,
+)?.[0] ?? '';
+const outboxReplayBody = daemonWorkerHost.match(
+  /export async function replayManagementOutboxForLease[\s\S]*?function runtimeContext/,
+)?.[0] ?? '';
 if (!managementToolExecutor.includes('Phase3ToolHandlers')
   || !managementToolExecutor.includes('request.managementPhase === 3')
   || managementToolExecutor.includes('managementPhase: 2 as const')
   || !deviceWorkerScheduler.includes('managementPhase3Preflight')
   || !deviceWorkerScheduler.includes('supportsManagementPhase(worker.capability, 3)')
   || !piSessionAdapter.includes('PHASE_3_MANAGEMENT_TOOL_NAMES')
-  || !managementWorkerV2.includes('managementPhase: 2 | 3')) {
-  violations.push('P3_CAPABILITY_GATE_INVALID: V3 capability 门禁接线（executor phase3 分支 + scheduler phase3Preflight + adapter PHASE_3 路由 + context 2|3）is required');
+  || !managementWorkerV2.includes('managementPhase: 2 | 3')
+  || !daemonWorkerProtocol.includes('supportedPhases: [1, 2, 3]')
+  || !daemonWorkerProtocol.includes('parsePhase3MemoryToolResultV3')
+  || !daemonWorkerHost.includes('managementPhase: 1 | 2 | 3')
+  || !daemonWorkerHost.includes('checkpointManagementPhase')
+  || !daemonWorkerHost.includes('PHASE_3_MANAGEMENT_TOOL_NAMES')
+  || !daemonWorkerHost.includes('includeMemoryCapsules')
+  || !daemonWorkerHost.includes('toolName: item.toolName')
+  || daemonWorkerHost.includes("result.disposition === 'rejected' && PHASE_3_MEMORY_WRITE_TOOL_NAMES")
+  || (outboxReplayBody.match(/PHASE_3_MEMORY_WRITE_TOOL_NAMES\.has\(item\.toolName\)/g)?.length ?? 0) < 1
+  || !daemonWorkerHost.includes('replay.unresolvedMemoryWriteCount > 0')
+  || !daemonWorkerHost.includes('.filter(([, nested]) => nested !== undefined)')
+  || !runtimeTypes.includes('memoryCapsuleIds?: readonly string[]')
+  || !deviceWorkerScheduler.includes('managementPhase:')
+  || !deviceWorkerScheduler.includes('legacyPhase2Context')
+  || !deviceWorkerScheduler.includes('event?.event.type === \'memory-tool-completed\'')
+  || !deviceWorkerScheduler.includes('event.event.payload.requestHash !== input.requestHash')
+  || !deviceWorkerScheduler.includes('event.event.payload.output')
+  || !deviceWorkerScheduler.includes('return dependencies.managementMemoryUnitOfWork.run')
+  || !deviceWorkerScheduler.includes('dependencies.memory, dependencies.clock.now()')
+  || !serverNextUsecases.includes('managementPhase >= 2')
+  || !serverNextUsecases.includes('run.managementPhase < 2')
+  || !managementToolExecutor.includes('sourceRequesterUserId')
+  || !managementToolExecutor.includes("isPhase3 && request.toolName === 'memory.search'")
+  || !managementToolExecutor.includes("result.candidate.status === 'conflict' ? 'conflict' : 'candidate'")
+  || !managementToolExecutor.includes('inspectMemoryToolReceiptInTransaction')
+  || !managementToolExecutor.includes('managementMemoryUnitOfWork.run')
+  || managementToolExecutor.includes('managementMemoryUnitOfWork?:')
+  || !managementToolExecutor.includes('recordMemoryToolReceiptInTransaction')
+  || !managementToolExecutor.includes("receipt.disposition === 'existing'")
+  || !managementMemoryUnitOfWork.includes('ManagementMemoryTransactionRepositories')
+  || (serverDevRuntime.match(/managementMemoryUnitOfWork: repositories\.managementMemoryUnitOfWork/g)?.length ?? 0) < 2
+  || !managementWorkerV1.includes('readonly toolName?: string')
+  || !managementWorkerV1.includes('toolName: optional(text(128))')
+  || !inMemoryRepositories.includes('AsyncLocalStorage<ManagementMemoryTransactionRepositories>')
+  || !sqliteRepositories.includes('AsyncLocalStorage<ManagementMemoryTransactionRepositories>')
+  || !managementKernel.includes("type: 'memory-tool-completed'")
+  || !managementKernel.includes('MEMORY_TOOL_RECEIPT_OUTPUT_UNAVAILABLE')
+  || !managementKernel.includes('assertMemoryToolRunWritable(run)')
+  || !memoryReceiptRecordBody.includes('assertMemoryToolRunWritable(run)')
+  || !managementEventContract.includes('readonly output?:')
+  || !managementEventValidator.includes('assertPhase3MemoryToolOutput')) {
+  violations.push('P3_CAPABILITY_GATE_INVALID: V3 capability 门禁接线（server preflight/DAG/checkpoint/receipt + daemon register/parser/host/recovery + requester authority）is required');
 }
 
 const runtimeContractMarkers = [

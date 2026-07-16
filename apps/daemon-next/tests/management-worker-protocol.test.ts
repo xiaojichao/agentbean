@@ -53,7 +53,7 @@ describe('management worker protocol', () => {
       workerInstanceId: 'instance-1',
       profileId: 'profile-1',
       supportedProtocolVersions: [1, 2],
-      supportedPhases: [1, 2],
+      supportedPhases: [1, 2, 3],
       credentialStatus: 'production_ready',
       providerId: 'provider-1',
       modelId: 'model-1',
@@ -112,5 +112,27 @@ describe('management worker protocol', () => {
       idempotencyKey: 'wait-1', input: { taskIds: ['task-1'] } });
     expect(result).toMatchObject({ schemaVersion: 2, managementPhase: 2, ok: true,
       output: { readyTaskIds: ['task-1'] } });
+  });
+
+  test('Phase 3 Memory request 使用 V3 exact result parser', async () => {
+    const harness = createSocketHarness();
+    harness.emitWithAck.mockImplementation(async (event, payload) => {
+      if (event === AGENT_EVENTS.managementWorker.toolRequest) {
+        const request = payload as { commandId: string; managementRunId: string; workerId: string; toolCallId: string };
+        return { schemaVersion: 2, managementPhase: 3,
+          commandId: request.commandId, managementRunId: request.managementRunId,
+          workerId: request.workerId, toolCallId: request.toolCallId,
+          toolName: 'memory.search', ok: true, output: { matches: [] } };
+      }
+      return { schemaVersion: 1, ok: true, workerId: 'worker-1', protocolVersion: 1 };
+    });
+    const protocol = createManagementWorkerProtocol({ socket: harness.socket,
+      workerInstanceId: 'instance-1', profileId: 'profile-1', runtimeVersion: '0.1.0' });
+    const result = await protocol.executeTool({ schemaVersion: 2, managementPhase: 3,
+      commandId: 'command-3', managementRunId: 'run-1', workerId: 'worker-1',
+      toolCallId: 'call-3', toolName: 'memory.search', leaseToken: 'token', fencingToken: 1,
+      idempotencyKey: 'search-1', input: { targetAgentId: 'agent-1', query: 'q', limit: 5 } });
+    expect(result).toEqual(expect.objectContaining({ schemaVersion: 2, managementPhase: 3,
+      toolName: 'memory.search', ok: true, output: { matches: [] } }));
   });
 });

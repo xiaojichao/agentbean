@@ -14,12 +14,15 @@ import type {
   Phase3MemoryToolRequestV3,
   Phase3MemoryToolResultV3,
   ID,
+  MemoryCapsuleRefDto,
   MemoryScopeType,
   MemorySourceRefDto,
   MemorySourceVisibility,
 } from '../../../../../packages/contracts/src/index.js';
 import type { MessageRecord, ServerNextRepositories } from '../repositories.js';
 import type { ManagementRunRecord } from '../management-repositories.js';
+import type { MemoryCapsuleRefRecord } from '../memory-repositories.js';
+import type { ManagementMemoryUnitOfWork } from '../management-memory-unit-of-work.js';
 import { createInvocationGateway } from './invocation-gateway.js';
 import type { createManagementKernel } from './management-kernel.js';
 import type { createTaskCoordinationKernel } from './task-coordination-kernel.js';
@@ -68,9 +71,13 @@ const readTools = new Set<string>([
   'tasks.wait',
   'memory.search',
 ]);
+const PHASE_3_MEMORY_WRITE_TOOLS = new Set<string>([
+  'memory.create_capsule', 'memory.propose_candidate', 'memory.link_sources',
+] as const);
 
 export function createManagementToolExecutor(input: {
   readonly kernel: ManagementKernel;
+  readonly managementMemoryUnitOfWork: ManagementMemoryUnitOfWork;
   readonly handlers: AnyToolHandlers;
   readonly phase2Handlers?: Phase2ToolHandlers;
   readonly phase3Handlers?: Phase3ToolHandlers;
@@ -88,7 +95,9 @@ export function createManagementToolExecutor(input: {
       toolName: request.toolName,
     };
     try {
-      if (!readTools.has(request.toolName)) {
+      const requiresLeaseProof = !readTools.has(request.toolName)
+        || (isPhase3 && request.toolName === 'memory.search');
+      if (requiresLeaseProof) {
         if (!('leaseToken' in request) || !('fencingToken' in request)) throw new Error('MISSING_WRITE_AUTHORITY');
         await input.kernel.authorizeWrite({
           managementRunId: request.managementRunId,
@@ -107,7 +116,29 @@ export function createManagementToolExecutor(input: {
       if (!handler) {
         return { ...base, ok: false, errorCode: 'UNAVAILABLE', diagnosticCode: 'TOOL_NOT_WIRED', retryable: false } as ManagementToolResult;
       }
-      const output = await handler(request);
+      const memoryWrite = isPhase3 && PHASE_3_MEMORY_WRITE_TOOLS.has(request.toolName);
+      const requestHash = memoryWrite
+        ? hashManagementCommandInput({ toolName: request.toolName, input: request.input })
+        : undefined;
+      const output = memoryWrite
+        ? await input.managementMemoryUnitOfWork.run(async ({ management }) => {
+          const receiptInput = {
+            authority: authority(request), idempotencyKey: request.idempotencyKey,
+            toolName: request.toolName as 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources',
+            requestHash: requestHash!,
+          };
+          const receipt = await input.kernel.inspectMemoryToolReceiptInTransaction(management, receiptInput);
+          if (receipt.disposition === 'existing') return receipt.output;
+          const atomicOutput = await handler(request);
+          await input.kernel.recordMemoryToolReceiptInTransaction(management, {
+            ...receiptInput, resultReferenceId: memoryToolResultReference(request.toolName, atomicOutput),
+            output: atomicOutput as Phase3ManagementWorkerToolOutputMapV1[
+              'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources'
+            ],
+          });
+          return atomicOutput;
+        })
+        : await handler(request);
       return { ...base, ok: true, output } as ManagementToolResult;
     } catch (error) {
       const code = error instanceof Error ? error.message : 'UNKNOWN';
@@ -493,7 +524,18 @@ export function createPhase3ManagementToolHandlers(input: {
     'memory.create_capsule': async (request) => {
       const run = await requireRun(repositories, request.managementRunId);
       const requesterUserId = await resolveRequesterUserId(run);
+      const capsuleId = deterministicMemoryResourceId('capsule', run.id, request.idempotencyKey);
+      const existing = await repositories.memory.capsuleRefs.getById({ teamId: run.teamId, id: capsuleId });
+      if (existing) {
+        if (existing.managementRunId !== run.id
+          || existing.targetAgentId !== request.input.targetAgentId
+          || existing.taskId !== request.input.taskId) {
+          throw new Error('MEMORY_TOOL_IDEMPOTENCY_CONFLICT');
+        }
+        return { capsuleRef: capsuleRefRecordDto(existing) };
+      }
       const capsule = await capsuleService.createCapsule({
+        capsuleId,
         teamId: run.teamId,
         requesterUserId,
         managementRunId: request.managementRunId,
@@ -511,11 +553,13 @@ export function createPhase3ManagementToolHandlers(input: {
 
     'memory.propose_candidate': async (request) => {
       const run = await requireRun(repositories, request.managementRunId);
+      const sourceRequesterUserId = await resolveRequesterUserId(run);
       const sourceRefs = await resolveCandidateSources(run.teamId, request.input.sourceRefs);
       const sourceInvocation = await resolveSourceInvocation(request.managementRunId, request.input.sourceRefs);
       const result = await candidateService.proposeCandidate({
         teamId: run.teamId,
         sourceAgentId: sourceInvocation.intent.targetAgentId,
+        sourceRequesterUserId,
         sourceInvocationId: sourceInvocation.id,
         targetAgentId: request.input.targetAgentId,
         managementRunId: request.managementRunId,
@@ -527,7 +571,8 @@ export function createPhase3ManagementToolHandlers(input: {
         ...(request.input.proposedSummary ? { proposedSummary: request.input.proposedSummary } : {}),
         sourceRefs,
       });
-      return { candidateId: result.candidate.id, status: result.candidate.status as 'candidate' | 'conflict' };
+      const status = result.candidate.status === 'conflict' ? 'conflict' : 'candidate';
+      return { candidateId: result.candidate.id, status };
     },
 
     'memory.link_sources': async (request) => {
@@ -856,9 +901,39 @@ function deterministicTaskId(managementRunId: string, parentTaskId: string, clie
   return `task-${createHash('sha256').update(`${managementRunId}\u0000${parentTaskId}\u0000${clientKey}`).digest('hex').slice(0, 24)}`;
 }
 
+function deterministicMemoryResourceId(prefix: string, managementRunId: string, idempotencyKey: string): string {
+  return `${prefix}-${createHash('sha256').update(`${managementRunId}\u0000${idempotencyKey}`).digest('hex').slice(0, 24)}`;
+}
+
+function memoryToolResultReference(toolName: string, output: unknown): string {
+  if (!output || typeof output !== 'object') throw new Error('MEMORY_TOOL_RESULT_REFERENCE_MISSING');
+  const record = output as Record<string, unknown>;
+  const candidate = toolName === 'memory.create_capsule'
+    ? (record.capsuleRef as Record<string, unknown> | undefined)?.id
+    : toolName === 'memory.propose_candidate' ? record.candidateId : record.memoryId;
+  if (typeof candidate !== 'string' || candidate.length === 0) {
+    throw new Error('MEMORY_TOOL_RESULT_REFERENCE_MISSING');
+  }
+  return candidate;
+}
+
+function capsuleRefRecordDto(record: MemoryCapsuleRefRecord): MemoryCapsuleRefDto {
+  return {
+    schemaVersion: 1,
+    id: record.id,
+    teamId: record.teamId,
+    managementRunId: record.managementRunId,
+    ...(record.taskId ? { taskId: record.taskId } : {}),
+    targetAgentId: record.targetAgentId,
+    contentHash: record.contentHash,
+    authorizationDecisionId: record.authorizationDecisionId,
+    expiresAt: record.expiresAt,
+  };
+}
+
 function isConflictDiagnostic(code: string): boolean {
   return code.includes('CONFLICT') || code.includes('STALE') || code.includes('FUTURE')
-    || code.includes('ALREADY_') || code.endsWith('_ACTIVE');
+    || code.includes('ALREADY_') || code.endsWith('_ACTIVE') || code.endsWith('_TERMINAL');
 }
 
 async function requireRun(repositories: ServerNextRepositories, managementRunId: string): Promise<ManagementRunRecord> {

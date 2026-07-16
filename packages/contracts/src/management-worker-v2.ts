@@ -726,7 +726,7 @@ function assertMemoryToolInput(toolName: keyof Phase3ManagementWorkerToolInputMa
   assertMemorySourceRefs(value.sourceRefs);
 }
 
-function assertPhase3MemoryToolOutput(
+export function assertPhase3MemoryToolOutput(
   toolName: keyof Phase3ManagementWorkerToolOutputMapV1,
   value: unknown,
 ): void {

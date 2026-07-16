@@ -1284,10 +1284,13 @@ function createDefaultManagementRuntime(
     devices: repositories.devices,
     messages: repositories.messages,
     management: repositories.management,
+    memory: repositories.memory,
     taskCoordinationUnitOfWork: repositories.taskCoordinationUnitOfWork,
+    managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
     kernel,
     executeTool: createManagementToolExecutor({
       kernel,
+      managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
       handlers: createPhase1ManagementToolHandlers({
         repositories,
         kernel,

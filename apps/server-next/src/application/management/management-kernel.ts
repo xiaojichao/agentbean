@@ -19,7 +19,11 @@ import {
 import type { ManagementEventRecord, ManagementRepositories } from '../management-repositories.js';
 import type { ManagementRunRecord } from '../management-repositories.js';
 import type { ManagementUnitOfWork } from '../management-unit-of-work.js';
-import { hashManagementEventPayload, parsePhase1ManagementEvent } from './management-event-validator.js';
+import {
+  hashManagementEventPayload,
+  parseMemoryToolManagementEvent,
+  parsePhase1ManagementEvent,
+} from './management-event-validator.js';
 
 export class ManagementConflictError extends Error {
   constructor(readonly code: string) { super(code); }
@@ -52,8 +56,78 @@ export interface LeaseAuthorityInput {
   readonly fencingToken: number;
 }
 
+export interface RecordMemoryToolReceiptInput {
+  readonly authority: LeaseAuthorityInput;
+  readonly idempotencyKey: string;
+  readonly toolName: 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources';
+  readonly resultReferenceId: string;
+  readonly requestHash: string;
+  readonly output: NonNullable<ManagementEventPayloadMapV1['memory-tool-completed']['output']>;
+}
+
+export interface InspectMemoryToolReceiptInput {
+  readonly authority: LeaseAuthorityInput;
+  readonly idempotencyKey: string;
+  readonly toolName: 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources';
+  readonly requestHash: string;
+}
+
+export type InspectMemoryToolReceiptResult = { readonly disposition: 'new' } | {
+  readonly disposition: 'existing';
+  readonly resultReferenceId: string;
+  readonly output: NonNullable<ManagementEventPayloadMapV1['memory-tool-completed']['output']>;
+};
+
 export function createManagementKernel(dependencies: ManagementKernelDependencies) {
   const { repositories, unitOfWork, clock, ids } = dependencies;
+
+  async function inspectMemoryToolReceiptInTransaction(
+    transactionRepositories: ManagementRepositories,
+    input: InspectMemoryToolReceiptInput,
+  ): Promise<InspectMemoryToolReceiptResult> {
+    await authorizeManagementWrite(transactionRepositories, input.authority, clock.now());
+    const existing = (await transactionRepositories.events.list(input.authority.managementRunId))
+      .find(({ event }) => event.idempotencyKey === input.idempotencyKey);
+    if (existing) {
+      if (existing.event.type !== 'memory-tool-completed'
+        || existing.event.payload.toolName !== input.toolName
+        || existing.event.payload.requestHash !== input.requestHash) {
+        throw new ManagementConflictError('MANAGEMENT_EVENT_IDEMPOTENCY_CONFLICT');
+      }
+      if (existing.event.payload.output === undefined) {
+        throw new ManagementConflictError('MEMORY_TOOL_RECEIPT_OUTPUT_UNAVAILABLE');
+      }
+      return { disposition: 'existing', resultReferenceId: existing.event.payload.resultReferenceId,
+        output: structuredClone(existing.event.payload.output) };
+    }
+    const run = await requireRun(transactionRepositories, input.authority.managementRunId);
+    assertMemoryToolRunWritable(run);
+    return { disposition: 'new' };
+  }
+
+  async function recordMemoryToolReceiptInTransaction(
+    transactionRepositories: ManagementRepositories,
+    input: RecordMemoryToolReceiptInput,
+  ): Promise<ManagementEventRecord> {
+    const now = clock.now();
+    await authorizeManagementWrite(transactionRepositories, input.authority, now);
+    const payload = { toolName: input.toolName, resultReferenceId: input.resultReferenceId,
+      requestHash: input.requestHash, output: structuredClone(input.output) } as const;
+    const payloadHash = hashManagementEventPayload({ type: 'memory-tool-completed', payload });
+    const existing = (await transactionRepositories.events.list(input.authority.managementRunId))
+      .find(({ event }) => event.idempotencyKey === input.idempotencyKey);
+    if (existing) {
+      if (existing.event.type === 'memory-tool-completed' && existing.payloadHash === payloadHash) return existing;
+      throw new ManagementConflictError('MANAGEMENT_EVENT_IDEMPOTENCY_CONFLICT');
+    }
+    const run = await requireRun(transactionRepositories, input.authority.managementRunId);
+    assertMemoryToolRunWritable(run);
+    return appendValidatedManagementEventInTransaction(transactionRepositories, {
+      managementRunId: input.authority.managementRunId,
+      type: 'memory-tool-completed', actorKind: 'manager', actorId: input.authority.workerId,
+      idempotencyKey: input.idempotencyKey, payload,
+    }, now, ids, { payloadHash, parseEvent: parseMemoryToolManagementEvent });
+  }
 
   return {
     async createOrResumeRun(input: CreateOrResumeManagementRunInput): Promise<{ run: ManagementRunRecord; disposition: 'created' | 'existing' }> {
@@ -266,6 +340,30 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
       await authorizeManagementWrite(repositories, authority, clock.now());
     },
 
+    async inspectMemoryToolReceipt(input: InspectMemoryToolReceiptInput): Promise<InspectMemoryToolReceiptResult> {
+      return unitOfWork.run((transactionRepositories) =>
+        inspectMemoryToolReceiptInTransaction(transactionRepositories, input));
+    },
+
+    async inspectMemoryToolReceiptInTransaction(
+      transactionRepositories: ManagementRepositories,
+      input: InspectMemoryToolReceiptInput,
+    ): Promise<InspectMemoryToolReceiptResult> {
+      return inspectMemoryToolReceiptInTransaction(transactionRepositories, input);
+    },
+
+    async recordMemoryToolReceipt(input: RecordMemoryToolReceiptInput): Promise<ManagementEventRecord> {
+      return unitOfWork.run((transactionRepositories) =>
+        recordMemoryToolReceiptInTransaction(transactionRepositories, input));
+    },
+
+    async recordMemoryToolReceiptInTransaction(
+      transactionRepositories: ManagementRepositories,
+      input: RecordMemoryToolReceiptInput,
+    ): Promise<ManagementEventRecord> {
+      return recordMemoryToolReceiptInTransaction(transactionRepositories, input);
+    },
+
     async recordInvocationTerminal(input: {
       managementRunId: string;
       dispatchId: string;
@@ -414,4 +512,8 @@ function proof(input: LeaseAuthorityInput): ManagerLeaseAuthorizationProof {
 function hashSecret(secret: string): string { return createHash('sha256').update(secret).digest('hex'); }
 function leaseError(reason: ManagerLeaseAuthorizationFailure): ManagementConflictError { return new ManagementConflictError(`LEASE_${reason.toUpperCase().replaceAll('-', '_')}`); }
 function isTerminalRun(run: ManagementRunRecord): boolean { return run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled'; }
+
+function assertMemoryToolRunWritable(run: ManagementRunRecord): void {
+  if (isTerminalRun(run)) throw new ManagementConflictError('MANAGEMENT_RUN_TERMINAL');
+}
 function requireValue(value: string | undefined, code: string): string { if (!value) throw new ManagementConflictError(code); return value; }

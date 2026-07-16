@@ -135,6 +135,30 @@ describe('Phase 1 management routing', () => {
       .resolves.toMatchObject({ schemaVersion: 2, managementPhase: 2, rootTaskId: result.task.id });
     await expect(harness.repositories.taskCoordination.coordinations.getByTaskId(result.task.id))
       .resolves.toMatchObject({ nodeKind: 'root', taskRevision: 1, reviewPolicy: 'human' });
+    await expect(harness.app.getTaskDag({ userId: 'user-1', teamId: 'team-1', rootTaskId: result.task.id }))
+      .resolves.toMatchObject({ ok: true, dag: { rootTaskId: result.task.id } });
+  });
+
+  test('a green explicit Phase 3 Task creates a V3 Run with the same root coordination barrier', async () => {
+    const harness = await createHarness();
+    await harness.router.updatePolicy({ ...managedPolicy(), maxManagementPhase: 3 });
+    const result = await harness.app.sendMessage({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1',
+      body: '请协调团队并使用 Memory 完成任务', asTask: true, clientMessageId: 'phase3-usecase-1',
+      connectedAgentDeviceIds: ['device-1'], dispatchClaimDeviceIds: ['device-1'],
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      task: { id: expect.any(String), status: 'in_progress', assigneeId: undefined },
+      management: { kind: 'managed', managementPhase: 3, managementRunId: expect.any(String) },
+    });
+    if (!result.ok || !result.task || result.management?.kind !== 'managed') throw new Error('Phase 3 result expected');
+    await expect(harness.repositories.management.runs.getById(result.management.managementRunId))
+      .resolves.toMatchObject({ schemaVersion: 2, managementPhase: 3, rootTaskId: result.task.id });
+    await expect(harness.repositories.taskCoordination.coordinations.getByTaskId(result.task.id))
+      .resolves.toMatchObject({ nodeKind: 'root', taskRevision: 1, reviewPolicy: 'human' });
+    await expect(harness.app.getTaskDag({ userId: 'user-1', teamId: 'team-1', rootTaskId: result.task.id }))
+      .resolves.toMatchObject({ ok: true, dag: { rootTaskId: result.task.id } });
   });
 });
 
@@ -159,7 +183,11 @@ function managedPolicy(userId = 'user-1') {
   };
 }
 
-async function createHarness(overrides: Partial<{ workerAvailable: boolean; phase2WorkerAvailable: boolean }> = {}) {
+async function createHarness(overrides: Partial<{
+  workerAvailable: boolean;
+  phase2WorkerAvailable: boolean;
+  phase3WorkerAvailable: boolean;
+}> = {}) {
   const repositories = createInMemoryRepositories();
   const clock = { now: () => 10 };
   let id = 0;
@@ -177,6 +205,11 @@ async function createHarness(overrides: Partial<{ workerAvailable: boolean; phas
     preflight: vi.fn(async () => ({ workerAvailable: overrides.workerAvailable ?? true, credentialAvailable: true, placementAllowed: true, budgetAvailable: true, targetAvailable: true })),
     preflightPhase2: vi.fn(async () => ({
       preflight: { workerAvailable: overrides.phase2WorkerAvailable ?? true, credentialAvailable: true,
+        placementAllowed: true, budgetAvailable: true, targetAvailable: true },
+      profileId: 'profile-1',
+    })),
+    preflightPhase3: vi.fn(async () => ({
+      preflight: { workerAvailable: overrides.phase3WorkerAvailable ?? true, credentialAvailable: true,
         placementAllowed: true, budgetAvailable: true, targetAvailable: true },
       profileId: 'profile-1',
     })),
