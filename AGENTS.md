@@ -19,6 +19,25 @@ When using the GitHub publish/yeet workflow, the PR title must be a natural Chin
 - 根因分析（修复类 PR 必填）
 - 验证结果
 
+## Pull Request Review 节制契约
+
+避免「每次 push → 全量 review → 再改 → 再 push」的高往返（实测单 PR 可达
+6–9 轮、占周期 65%–96%）。Codex **自动触发**的 review 按以下规则节制；
+`@codex` 显式召唤时做完整深度 review，不受此限。
+
+**自动触发 review（`pull_request` synchronize 事件唤起，非 @ 召唤）**：
+
+- **Draft 或未标 `ready-for-review`**：不输出逐行长报告，最多一行摘要
+  （如「已扫描 N 文件 / +X / −Y；待 ready 时详评」）。仅 P0 阻塞级问题单列。
+- **已 `ready-for-review`**：可逐行 review，但按优先级收敛——
+  - P0（错误/安全/CI 红）/ P1（明显缺陷）：逐条列，标阻塞。
+  - P2（风格/可读性/可选）：合并成一条总结，明确标「可选、不阻塞合并」。
+- **增量 review**：上次 review 后的新 commit 仅小修（message 含 fix/address/
+  follow-up）时，只核对相关点是否解决，不重开全量。
+
+**禁止**：不在连续 push 上重复粘贴未变化的旧建议；不把 P2 风格项升级为阻塞项。
+目的是让作者能快速分辨「必须改」与「可合后处理」。
+
 ## Worktree 协作约定
 
 多个 agent/会话并行工作时**不要共用主 worktree（`/Users/shaw/AgentBean`）**，各自用独立 worktree 目录。共用主 worktree 会导致互相切换对方的 HEAD、把 commit 落到错的分支（实际事故：一个会话的 commit 被切到另一个会话正在用的分支；rebase/test 中途工作区文件被换成别的分支的内容）。
