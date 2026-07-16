@@ -3122,7 +3122,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('NOT_FOUND', 'Task DAG not found');
       }
       const run = await repositories.management.runs.getByRootTaskId(rootTask.id);
-      if (!run || !('managementPhase' in run) || run.managementPhase !== 2) {
+      if (!run || !('managementPhase' in run) || run.managementPhase < 2) {
         return makeFailure('NOT_FOUND', 'Task DAG not found');
       }
       const coordinations = await repositories.taskCoordination.coordinations.listByManagementRun(run.id);

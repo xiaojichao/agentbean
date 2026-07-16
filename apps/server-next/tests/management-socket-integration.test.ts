@@ -128,19 +128,21 @@ describe('management worker socket integration', () => {
       errorCode: 'NOT_AUTHORIZED',
       diagnosticCode: 'MANAGEMENT_WORKER_PHASE_MISMATCH',
     });
-    await expect(socket.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
+    const phase1Checkpoint = await socket.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
       schemaVersion: 1,
       managementRunId: harness.runId,
       workerId: authority.workerId,
       leaseToken: 'lease-secret-1',
       fencingToken: 1,
-    })).resolves.toMatchObject({
+    });
+    expect(phase1Checkpoint).toMatchObject({
       managementRunId: harness.runId,
       context: {
         frozenTarget: { agentId: 'agent-1', kind: 'custom' },
         visibleThread: { messages: [{ id: 'message-1', body: '执行目标' }] },
       },
     });
+    expect((phase1Checkpoint as { context: object }).context).not.toHaveProperty('managementPhase');
     await expect(socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
       ...authority,
       commandId: 'missing-command',
@@ -160,6 +162,18 @@ describe('management worker socket integration', () => {
       idempotencyKey: 'handoff-command',
       requestHash: 'handoff-request-hash',
     })).resolves.toMatchObject({ disposition: 'existing', resultReferenceId: 'handoff-1' });
+    await harness.kernel.recordMemoryToolReceipt({
+      authority, idempotencyKey: 'memory-command', toolName: 'memory.create_capsule',
+      resultReferenceId: 'capsule-1', requestHash: 'memory-request-hash',
+    });
+    await expect(socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
+      ...authority, commandId: 'memory-command', idempotencyKey: 'memory-command',
+      requestHash: 'memory-request-hash',
+    })).resolves.toMatchObject({ disposition: 'committed', resultReferenceId: 'capsule-1' });
+    await expect(socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
+      ...authority, commandId: 'memory-command', idempotencyKey: 'memory-command',
+      requestHash: 'changed-request-hash',
+    })).resolves.toMatchObject({ disposition: 'conflict' });
     await expect(socket.trigger(AGENT_EVENTS.managementWorker.leaseRelease, {
       ...authority,
       idempotencyKey: 'release-1',
@@ -539,6 +553,7 @@ async function createHarness(input: { devices: ReturnType<typeof device>[]; allo
     clock,
     realtime,
     scheduler,
+    kernel,
     runId: run.run.id,
     toolHandler,
     createRun,

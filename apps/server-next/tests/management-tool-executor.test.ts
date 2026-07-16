@@ -82,6 +82,49 @@ describe('management tool executor', () => {
     });
   });
 
+  test('records Phase 3 Memory write receipts and rejects changed idempotent requests before side effects', async () => {
+    const persistence = createInMemoryManagementPersistence();
+    let id = 0;
+    const kernel = createManagementKernel({ ...persistence, clock: { now: () => 10 },
+      ids: { nextId: () => `id-${++id}` } });
+    const { run } = await kernel.createOrResumeRun({
+      teamId: 'team-1', channelId: 'channel-1', rootTaskId: 'root-task', rootMessageId: 'message-1',
+      requestKey: 'phase3-request', requestHash: 'phase3-hash', managementPhase: 3,
+      placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true },
+      budget: { maxSubtasks: 2, maxDepth: 1, maxExternalInvocations: 2 },
+    });
+    await kernel.acquireLease({ managementRunId: run.id, workerId: 'worker-1',
+      host: { deviceId: 'device-1', profileId: 'profile-1' }, leaseToken: 'token', ttlMs: 100 });
+    const createCapsule = vi.fn(async () => ({ capsuleRef: {
+      schemaVersion: 1 as const, id: 'capsule-1', teamId: 'team-1', managementRunId: run.id,
+      targetAgentId: 'agent-1', contentHash: 'sha256:content',
+      authorizationDecisionId: 'decision-1', expiresAt: 100,
+    } }));
+    const execute = createManagementToolExecutor({ kernel, handlers: {},
+      phase3Handlers: { 'memory.create_capsule': createCapsule } });
+    const request = {
+      schemaVersion: 2 as const, managementPhase: 3 as const, commandId: 'command-memory',
+      managementRunId: run.id, workerId: 'worker-1', toolCallId: 'call-memory',
+      toolName: 'memory.create_capsule' as const, leaseToken: 'token', fencingToken: 1,
+      idempotencyKey: 'memory-command',
+      input: { targetAgentId: 'agent-1', prompt: 'original prompt', limit: 3 },
+    };
+
+    await expect(execute(request)).resolves.toMatchObject({ ok: true,
+      output: { capsuleRef: { id: 'capsule-1' } } });
+    await expect(execute(request)).resolves.toMatchObject({ ok: true });
+    await expect(execute({ ...request, input: { ...request.input, prompt: 'changed prompt' } }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'CONFLICT',
+        diagnosticCode: 'MANAGEMENT_EVENT_IDEMPOTENCY_CONFLICT' });
+    expect(createCapsule).toHaveBeenCalledTimes(2);
+    await expect(persistence.repositories.events.list(run.id)).resolves.toMatchObject([
+      { event: { type: 'run-started' } },
+      { event: { type: 'worker-leased' } },
+      { event: { type: 'memory-tool-completed', idempotencyKey: 'memory-command',
+        payload: { resultReferenceId: 'capsule-1' } } },
+    ]);
+  });
+
   test('does not echo arbitrary handler errors through client diagnostics', async () => {
     const persistence = createInMemoryManagementPersistence();
     const kernel = createManagementKernel({ ...persistence, clock: { now: () => 10 }, ids: { nextId: () => 'unused' } });

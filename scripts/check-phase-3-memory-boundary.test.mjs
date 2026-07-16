@@ -262,6 +262,24 @@ test('fails closed when daemon checkpoint phase restoration disappears', () => {
   assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
 });
 
+test('fails closed when Phase 3 Memory write receipts disappear', () => {
+  const result = withFixture('agentbean-phase3-memory-receipt-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/management/management-tool-executor.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('recordMemoryToolReceipt', 'removedMemoryToolReceipt'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
+test('fails closed when restored V3 sessions lose Capsule IDs', () => {
+  const result = withFixture('agentbean-phase3-capsule-recovery-', (fixture) => {
+    const path = join(fixture, 'apps/daemon-next/src/pi-manager-worker-host.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('includeMemoryCapsules', 'omitMemoryCapsules'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
 test('fails closed when the Phase 3 Memory parser stops enforcing exact keys', () => {
   const result = withFixture('agentbean-phase3-exact-parser-', (fixture) => {
     const path = join(fixture, 'packages/contracts/src/management-worker-v2.ts');

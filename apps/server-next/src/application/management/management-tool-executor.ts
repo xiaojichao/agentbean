@@ -70,6 +70,9 @@ const readTools = new Set<string>([
   'tasks.wait',
   'memory.search',
 ]);
+const PHASE_3_MEMORY_WRITE_TOOLS = new Set<string>([
+  'memory.create_capsule', 'memory.propose_candidate', 'memory.link_sources',
+] as const);
 
 export function createManagementToolExecutor(input: {
   readonly kernel: ManagementKernel;
@@ -109,7 +112,25 @@ export function createManagementToolExecutor(input: {
       if (!handler) {
         return { ...base, ok: false, errorCode: 'UNAVAILABLE', diagnosticCode: 'TOOL_NOT_WIRED', retryable: false } as ManagementToolResult;
       }
+      const memoryWrite = isPhase3 && PHASE_3_MEMORY_WRITE_TOOLS.has(request.toolName);
+      const requestHash = memoryWrite
+        ? hashManagementCommandInput({ toolName: request.toolName, input: request.input })
+        : undefined;
+      if (memoryWrite) {
+        await input.kernel.inspectMemoryToolReceipt({
+          authority: authority(request), idempotencyKey: request.idempotencyKey,
+          toolName: request.toolName as 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources',
+          requestHash: requestHash!,
+        });
+      }
       const output = await handler(request);
+      if (memoryWrite) {
+        await input.kernel.recordMemoryToolReceipt({
+          authority: authority(request), idempotencyKey: request.idempotencyKey,
+          toolName: request.toolName as 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources',
+          resultReferenceId: memoryToolResultReference(request.toolName, output), requestHash: requestHash!,
+        });
+      }
       return { ...base, ok: true, output } as ManagementToolResult;
     } catch (error) {
       const code = error instanceof Error ? error.message : 'UNKNOWN';
@@ -873,6 +894,18 @@ function deterministicTaskId(managementRunId: string, parentTaskId: string, clie
 
 function deterministicMemoryResourceId(prefix: string, managementRunId: string, idempotencyKey: string): string {
   return `${prefix}-${createHash('sha256').update(`${managementRunId}\u0000${idempotencyKey}`).digest('hex').slice(0, 24)}`;
+}
+
+function memoryToolResultReference(toolName: string, output: unknown): string {
+  if (!output || typeof output !== 'object') throw new Error('MEMORY_TOOL_RESULT_REFERENCE_MISSING');
+  const record = output as Record<string, unknown>;
+  const candidate = toolName === 'memory.create_capsule'
+    ? (record.capsuleRef as Record<string, unknown> | undefined)?.id
+    : toolName === 'memory.propose_candidate' ? record.candidateId : record.memoryId;
+  if (typeof candidate !== 'string' || candidate.length === 0) {
+    throw new Error('MEMORY_TOOL_RESULT_REFERENCE_MISSING');
+  }
+  return candidate;
 }
 
 function capsuleRefRecordDto(record: MemoryCapsuleRefRecord): MemoryCapsuleRefDto {

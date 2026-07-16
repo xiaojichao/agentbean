@@ -23,6 +23,11 @@ export interface ManagementEventPayloadMapV1 {
     readonly checkpointRevision: number;
     readonly lastEventSequence: number;
   };
+  readonly 'memory-tool-completed': {
+    readonly toolName: 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources';
+    readonly resultReferenceId: ID;
+    readonly requestHash: string;
+  };
   readonly 'task-created': {
     readonly taskId: ID;
     readonly parentTaskId?: ID;

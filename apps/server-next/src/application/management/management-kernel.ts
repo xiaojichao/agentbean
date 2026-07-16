@@ -19,7 +19,11 @@ import {
 import type { ManagementEventRecord, ManagementRepositories } from '../management-repositories.js';
 import type { ManagementRunRecord } from '../management-repositories.js';
 import type { ManagementUnitOfWork } from '../management-unit-of-work.js';
-import { hashManagementEventPayload, parsePhase1ManagementEvent } from './management-event-validator.js';
+import {
+  hashManagementEventPayload,
+  parseMemoryToolManagementEvent,
+  parsePhase1ManagementEvent,
+} from './management-event-validator.js';
 
 export class ManagementConflictError extends Error {
   constructor(readonly code: string) { super(code); }
@@ -264,6 +268,48 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
 
     async authorizeWrite(authority: LeaseAuthorityInput): Promise<void> {
       await authorizeManagementWrite(repositories, authority, clock.now());
+    },
+
+    async inspectMemoryToolReceipt(input: {
+      authority: LeaseAuthorityInput;
+      idempotencyKey: string;
+      toolName: 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources';
+      requestHash: string;
+    }): Promise<{ disposition: 'new' } | { disposition: 'existing'; resultReferenceId: string }> {
+      return unitOfWork.run(async (transactionRepositories) => {
+        await authorizeManagementWrite(transactionRepositories, input.authority, clock.now());
+        const existing = (await transactionRepositories.events.list(input.authority.managementRunId))
+          .find(({ event }) => event.idempotencyKey === input.idempotencyKey);
+        if (!existing) return { disposition: 'new' as const };
+        if (existing.event.type !== 'memory-tool-completed'
+          || existing.event.payload.toolName !== input.toolName
+          || existing.event.payload.requestHash !== input.requestHash) {
+          throw new ManagementConflictError('MANAGEMENT_EVENT_IDEMPOTENCY_CONFLICT');
+        }
+        return { disposition: 'existing' as const,
+          resultReferenceId: existing.event.payload.resultReferenceId };
+      });
+    },
+
+    async recordMemoryToolReceipt(input: {
+      authority: LeaseAuthorityInput;
+      idempotencyKey: string;
+      toolName: 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources';
+      resultReferenceId: string;
+      requestHash: string;
+    }): Promise<ManagementEventRecord> {
+      return unitOfWork.run(async (transactionRepositories) => {
+        const now = clock.now();
+        await authorizeManagementWrite(transactionRepositories, input.authority, now);
+        const payload = { toolName: input.toolName, resultReferenceId: input.resultReferenceId,
+          requestHash: input.requestHash } as const;
+        const payloadHash = hashManagementEventPayload({ type: 'memory-tool-completed', payload });
+        return appendValidatedManagementEventInTransaction(transactionRepositories, {
+          managementRunId: input.authority.managementRunId,
+          type: 'memory-tool-completed', actorKind: 'manager', actorId: input.authority.workerId,
+          idempotencyKey: input.idempotencyKey, payload,
+        }, now, ids, { payloadHash, parseEvent: parseMemoryToolManagementEvent });
+      });
     },
 
     async recordInvocationTerminal(input: {

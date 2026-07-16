@@ -135,6 +135,8 @@ describe('Phase 1 management routing', () => {
       .resolves.toMatchObject({ schemaVersion: 2, managementPhase: 2, rootTaskId: result.task.id });
     await expect(harness.repositories.taskCoordination.coordinations.getByTaskId(result.task.id))
       .resolves.toMatchObject({ nodeKind: 'root', taskRevision: 1, reviewPolicy: 'human' });
+    await expect(harness.app.getTaskDag({ userId: 'user-1', teamId: 'team-1', rootTaskId: result.task.id }))
+      .resolves.toMatchObject({ ok: true, dag: { rootTaskId: result.task.id } });
   });
 
   test('a green explicit Phase 3 Task creates a V3 Run with the same root coordination barrier', async () => {
@@ -155,6 +157,8 @@ describe('Phase 1 management routing', () => {
       .resolves.toMatchObject({ schemaVersion: 2, managementPhase: 3, rootTaskId: result.task.id });
     await expect(harness.repositories.taskCoordination.coordinations.getByTaskId(result.task.id))
       .resolves.toMatchObject({ nodeKind: 'root', taskRevision: 1, reviewPolicy: 'human' });
+    await expect(harness.app.getTaskDag({ userId: 'user-1', teamId: 'team-1', rootTaskId: result.task.id }))
+      .resolves.toMatchObject({ ok: true, dag: { rootTaskId: result.task.id } });
   });
 });
 

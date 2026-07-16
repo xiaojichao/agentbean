@@ -438,7 +438,9 @@ function runtimeContext(restored: ManagementCheckpointResultV1): ManagementSessi
       },
       ...(context.frozenTarget ? { frozenTarget: structuredClone(context.frozenTarget) } : {}),
       visibleThread: structuredClone(context.visibleThread),
-      ...(restored.checkpoint ? { checkpoint: visiblePhase2Checkpoint(restored.checkpoint) } : {}),
+      ...(restored.checkpoint ? {
+        checkpoint: visiblePhase2Checkpoint(restored.checkpoint, managementPhase === 3),
+      } : {}),
     };
   }
   if (!context.frozenTarget) throw new Error('P1_FROZEN_TARGET_REQUIRED');
@@ -478,7 +480,10 @@ function visibleCheckpoint(checkpoint: NonNullable<ManagementCheckpointResultV1[
   };
 }
 
-function visiblePhase2Checkpoint(checkpoint: NonNullable<ManagementCheckpointResultV1['checkpoint']>) {
+function visiblePhase2Checkpoint(
+  checkpoint: NonNullable<ManagementCheckpointResultV1['checkpoint']>,
+  includeMemoryCapsules: boolean,
+) {
   return {
     ...visibleCheckpoint(checkpoint),
     taskGraphRevision: checkpoint.authoritative.taskGraphRevision,
@@ -487,6 +492,7 @@ function visiblePhase2Checkpoint(checkpoint: NonNullable<ManagementCheckpointRes
     completedInvocationIds: [...checkpoint.authoritative.completedInvocationIds],
     taskSnapshots: structuredClone(checkpoint.authoritative.taskSnapshots ?? []),
     activeClaimLeaseIds: [...(checkpoint.authoritative.activeClaimLeaseIds ?? [])],
+    ...(includeMemoryCapsules ? { memoryCapsuleIds: [...checkpoint.authoritative.memoryCapsuleIds] } : {}),
   };
 }
 

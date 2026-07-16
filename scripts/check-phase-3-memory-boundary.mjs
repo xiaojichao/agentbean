@@ -44,6 +44,8 @@ const managementWorkerV2 = read('packages/contracts/src/management-worker-v2.ts'
 const invocationGateway = read('apps/server-next/src/application/management/invocation-gateway.ts');
 const managementCheckpoint = read('apps/server-next/src/application/management/management-checkpoint.ts');
 const managementToolExecutor = read('apps/server-next/src/application/management/management-tool-executor.ts');
+const managementKernel = read('apps/server-next/src/application/management/management-kernel.ts');
+const managementEventValidator = read('apps/server-next/src/application/management/management-event-validator.ts');
 const deviceWorkerScheduler = read('apps/server-next/src/application/management/device-worker-scheduler.ts');
 const piSessionAdapter = read('packages/pi-management-runtime/src/pi-session-adapter.ts');
 const dispatchContract = read('packages/contracts/src/dispatch.ts');
@@ -269,11 +271,20 @@ if (!managementToolExecutor.includes('Phase3ToolHandlers')
   || !daemonWorkerHost.includes('managementPhase: 1 | 2 | 3')
   || !daemonWorkerHost.includes('checkpointManagementPhase')
   || !daemonWorkerHost.includes('PHASE_3_MANAGEMENT_TOOL_NAMES')
+  || !daemonWorkerHost.includes('includeMemoryCapsules')
+  || !runtimeTypes.includes('memoryCapsuleIds?: readonly string[]')
   || !deviceWorkerScheduler.includes('managementPhase:')
+  || !deviceWorkerScheduler.includes('event?.event.type === \'memory-tool-completed\'')
+  || !deviceWorkerScheduler.includes('event.event.payload.requestHash === input.requestHash')
   || !deviceWorkerScheduler.includes('dependencies.memory, dependencies.clock.now()')
   || !serverNextUsecases.includes('managementPhase >= 2')
-  || !managementToolExecutor.includes('sourceRequesterUserId')) {
-  violations.push('P3_CAPABILITY_GATE_INVALID: V3 capability 门禁接线（server preflight/coordination/checkpoint + daemon register/parser/host + requester authority）is required');
+  || !serverNextUsecases.includes('run.managementPhase < 2')
+  || !managementToolExecutor.includes('sourceRequesterUserId')
+  || !managementToolExecutor.includes('inspectMemoryToolReceipt')
+  || !managementToolExecutor.includes('recordMemoryToolReceipt')
+  || !managementKernel.includes("type: 'memory-tool-completed'")
+  || !managementEventValidator.includes('parseMemoryToolManagementEvent')) {
+  violations.push('P3_CAPABILITY_GATE_INVALID: V3 capability 门禁接线（server preflight/DAG/checkpoint/receipt + daemon register/parser/host/recovery + requester authority）is required');
 }
 
 const runtimeContractMarkers = [

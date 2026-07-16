@@ -464,7 +464,9 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
         workerId: worker.workerId,
         context: {
           schemaVersion: 1,
-          managementPhase: 'managementPhase' in run ? run.managementPhase : 1,
+          ...(supportsManagementPhase(worker.capability, 3)
+            ? { managementPhase: 'managementPhase' in run ? run.managementPhase : 1 }
+            : {}),
           teamId: run.teamId,
           channelId: run.channelId,
           rootMessageId: run.rootMessageId,
@@ -511,6 +513,11 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
       if (handoff) return { ...base, disposition: 'existing', resultReferenceId: handoff.id };
       const event = (await dependencies.management.events.list(input.managementRunId))
         .find((record) => record.event.idempotencyKey === input.idempotencyKey);
+      if (event?.event.type === 'memory-tool-completed') {
+        return event.event.payload.requestHash === input.requestHash
+          ? { ...base, disposition: 'committed', resultReferenceId: event.event.payload.resultReferenceId }
+          : { ...base, disposition: 'conflict' };
+      }
       return event
         ? { ...base, disposition: 'existing', resultReferenceId: event.event.id }
         : { ...base, disposition: 'rejected' };

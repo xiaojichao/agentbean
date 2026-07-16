@@ -2,9 +2,25 @@ import { describe, expect, test } from 'vitest';
 import {
   hashManagementCommandInput,
   hashManagementEventPayload,
+  parseMemoryToolManagementEvent,
   parsePhase1ManagementEvent,
   parseTaskCoordinationManagementEvent,
 } from '../src/application/management/management-event-validator.js';
+
+describe('Phase 3 Memory tool receipt validator', () => {
+  test('accepts an exact body-free receipt and rejects payload drift', () => {
+    const event = {
+      schemaVersion: 1, id: 'event-memory', managementRunId: 'run-1', sequence: 2,
+      type: 'memory-tool-completed', actorKind: 'manager', actorId: 'worker-1',
+      idempotencyKey: 'memory-command', payload: {
+        toolName: 'memory.create_capsule', resultReferenceId: 'capsule-1', requestHash: 'sha256:request',
+      }, createdAt: 10,
+    } as const;
+    expect(parseMemoryToolManagementEvent(event)).toEqual(event);
+    expect(() => parseMemoryToolManagementEvent({ ...event,
+      payload: { ...event.payload, prompt: 'must-not-persist' } })).toThrow(/INVALID_MANAGEMENT_EVENT/);
+  });
+});
 
 describe('Phase 1 management event validator', () => {
   test('accepts the writable Phase 1 subset and produces a stable canonical hash', () => {

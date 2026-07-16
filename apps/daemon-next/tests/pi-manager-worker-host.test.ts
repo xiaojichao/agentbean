@@ -288,7 +288,7 @@ describe('PiManagerWorkerHost', () => {
       context: { ...baseline.context, managementPhase: 3, rootTaskId: 'root-task' },
       checkpoint: baseline.checkpoint ? { ...baseline.checkpoint,
         authoritative: { ...baseline.checkpoint.authoritative, taskGraphRevision: 1,
-          openTaskIds: ['root-task'], taskSnapshots: [
+          openTaskIds: ['root-task'], memoryCapsuleIds: ['capsule-1'], taskSnapshots: [
             { taskId: 'root-task', taskRevision: 1, taskAttempt: 1, status: 'todo' },
           ] } } : undefined,
     });
@@ -314,7 +314,8 @@ describe('PiManagerWorkerHost', () => {
     expect(handlers()!.reserveLeaseOffer(offer)).toBe(true);
     await handlers()!.onLeaseOffer(offer);
     expect(runtimeFactory.createSession).toHaveBeenCalledWith(expect.objectContaining({
-      context: expect.objectContaining({ schemaVersion: 2, managementPhase: 3 }),
+      context: expect.objectContaining({ schemaVersion: 2, managementPhase: 3,
+        checkpoint: expect.objectContaining({ memoryCapsuleIds: ['capsule-1'] }) }),
     }));
 
     await expect(executeTool!({ toolCallId: 'search-1', name: 'memory.search',

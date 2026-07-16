@@ -130,6 +130,8 @@ export interface ManagementVisibleCheckpointV2 extends ManagementVisibleCheckpoi
     readonly claimLeaseId?: string;
   }[];
   readonly activeClaimLeaseIds: readonly string[];
+  /** Present for restored Phase 3 sessions; omitted for Phase 2 compatibility. */
+  readonly memoryCapsuleIds?: readonly string[];
 }
 
 export interface ManagementSessionContextV1 {
