@@ -179,6 +179,8 @@ export interface CreateDaemonProtocolClientInput {
   homeDir?: string;
   /** Device-local Memory base directory override for isolated embedding/tests. */
   localMemoryBaseDir?: string;
+  /** Injectable local Memory observer for embedding/tests. */
+  outcomeObserver?: typeof observeDispatchOutcome;
   onScanChanged?: (snapshot: DaemonScanSnapshot) => Promise<void> | void;
   onCredentialsChanged?: (credentials: DaemonDeviceCredentialsUpdate) => Promise<void> | void;
   /**
@@ -205,6 +207,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   let rescan: RescanController | undefined;
   let latestSnapshot: DaemonScanSnapshot = { runtimes, agents };
   const localMemoryStores = new Map<string, Promise<LocalMemoryStore>>();
+  const localMemoryObservationTails = new Map<string, Promise<void>>();
+  const outcomeObserver = input.outcomeObserver ?? observeDispatchOutcome;
   const observeOutcomeBestEffort = async (
     request: Pick<DispatchRequestPayload, 'id' | 'agentId' | 'customAgent'>,
     result: ObserveDispatchOutcomeInput['result'],
@@ -217,7 +221,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         store = createLocalMemoryStore({ profileId: device.profileId, cwd, baseDir: input.localMemoryBaseDir });
         localMemoryStores.set(cwd, store);
       }
-      await observeDispatchOutcome({
+      await outcomeObserver({
         store: await store,
         request: {
           id: request.id,
@@ -234,6 +238,19 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       localMemoryStores.delete(cwd);
       console.warn(`daemon observe dispatch ${request.id} failed (non-blocking): ${readErrorMessage(error)}`);
     }
+  };
+  const scheduleOutcomeObservation = (
+    request: Pick<DispatchRequestPayload, 'id' | 'agentId' | 'customAgent'>,
+    result: ObserveDispatchOutcomeInput['result'],
+  ) => {
+    const cwd = result.workspaceRun?.cwd ?? request.customAgent?.cwd;
+    if (!device.profileId || !result.workspaceRun || !cwd) return;
+    const previous = localMemoryObservationTails.get(cwd) ?? Promise.resolve();
+    const current = previous.then(() => observeOutcomeBestEffort(request, result));
+    localMemoryObservationTails.set(cwd, current);
+    void current.finally(() => {
+      if (localMemoryObservationTails.get(cwd) === current) localMemoryObservationTails.delete(cwd);
+    });
   };
 
   return {
@@ -316,6 +333,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             profileId: device.profileId,
             teamId,
             cwds: Array.from(knownRecoveryCwds),
+            baseDir: input.localMemoryBaseDir,
           });
           ack?.({ ok: true, summaries });
         } catch {
@@ -465,8 +483,6 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             }
           }
 
-          await observeOutcomeBestEffort(request, result);
-
           outbox.sendOrEnqueue(AGENT_EVENTS.dispatch.result, {
             dispatchId: request.id,
             agentId: request.agentId,
@@ -483,6 +499,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               ? { onDelivered: () => markWorkspaceRunManifestReported(reportedManifestPath, Date.now()) }
               : {}),
           });
+          scheduleOutcomeObservation(request, result);
         } catch (error) {
           if (cancelledDispatchIds.delete(request.id)) {
             return;
@@ -539,14 +556,14 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             : {}),
           workspaceRun: run.workspaceRun,
         };
-        await observeOutcomeBestEffort({
-          id: run.runId,
-          agentId: run.agentId,
-        }, { workspaceRun: run.workspaceRun });
         outbox.sendOrEnqueue(AGENT_EVENTS.dispatch.result, payload, {
           isDeliveredAck: isDispatchResultDeliveredAck,
           onDelivered: () => markWorkspaceRunReported(run, Date.now()),
         });
+        scheduleOutcomeObservation({
+          id: run.runId,
+          agentId: run.agentId,
+        }, { workspaceRun: run.workspaceRun });
       } catch (error) {
         console.warn(`daemon recover workspace run ${run.runId} failed: ${error instanceof Error ? error.message : String(error)}`);
       }

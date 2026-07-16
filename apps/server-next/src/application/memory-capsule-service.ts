@@ -20,6 +20,7 @@ import type {
 } from './memory-repositories.js';
 import type { MemoryUnitOfWork } from './memory-unit-of-work.js';
 import type {
+  CollaborativeMemorySearchCandidate,
   CollaborativeMemorySearchMatch,
   SearchCollaborativeMemoriesInput,
 } from './collaborative-memory-search-service.js';
@@ -87,7 +88,8 @@ export function createMemoryCapsuleService(deps: MemoryCapsuleServiceDeps): Memo
         userId: input.userId,
         prompt: input.prompt,
         now: input.now,
-        // 先完成授权/来源 hard gate 与全量排序，再在可安全表达为单一 authorization 的投影上截断。
+        // Capsule 安全表达能力同样属于 hard gate，必须在排序与 limit 截断前完成。
+        matchFilter: isSafeCapsuleMatch,
         limit: 100,
       });
       const matches = searchResult.matches.filter(isSafeCapsuleMatch).slice(0, normalizeLimit(input.limit));
@@ -168,7 +170,10 @@ function toCapsuleItemManifest(
     sourceVisibility,
     contentKind: item.contentKind,
     redactionLevel: item.redactionLevel,
-    contentField: item.redactionLevel === 'summary-only' ? 'summary' : 'content',
+    contentField: item.redactionLevel === 'summary-only'
+      || (item.authorization.mode === 'explicit-grant' && item.contentKind === 'summary')
+      ? 'summary'
+      : 'content',
     authorization: item.authorization,
     expiresAt: item.expiresAt,
     createdAt,
@@ -212,13 +217,13 @@ function toCapsuleRefRecord(capsule: MemoryCapsuleDto): MemoryCapsuleRefRecord {
   };
 }
 
-function isSafeScopePolicyMatch(match: CollaborativeMemorySearchMatch): boolean {
+function isSafeScopePolicyMatch(match: CollaborativeMemorySearchCandidate): boolean {
   return match.accessMode === 'scope-policy'
     && match.item.scopeType !== 'dm'
     && match.sources.every((source) => source.sourceVisibility === 'team');
 }
 
-function isSafeCapsuleMatch(match: CollaborativeMemorySearchMatch): boolean {
+function isSafeCapsuleMatch(match: CollaborativeMemorySearchCandidate): boolean {
   if (isSafeScopePolicyMatch(match)) return true;
   return match.accessMode === 'explicit-grant'
     && match.grants.length === 1

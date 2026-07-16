@@ -233,6 +233,68 @@ describe.each([
     expect(JSON.stringify(capsule)).not.toContain('dm secret original body');
   });
 
+  test('persists a summary grant whose private source scope differs from the Memory scope', async () => {
+    const harness = createHarness();
+    try {
+      const searchPermissions: MemorySearchPermissions = {
+        async canSearchTeam() { return true; },
+        async evaluateScopeVisibility(input) {
+          return input.source?.sourceVisibility === 'private' ? 'explicit-grant' : 'visible';
+        },
+        async isSourceAvailable() { return true; },
+      };
+      const searchService = createCollaborativeMemorySearchService({
+        repositories: harness.repositories.memory,
+        permissions: searchPermissions,
+      });
+      let counter = 0;
+      const capsuleService = createMemoryCapsuleService({
+        searchService,
+        unitOfWork: harness.repositories.memoryUnitOfWork,
+        clock: { now: () => 5_000 },
+        ids: { nextId: () => `private-source-${++counter}` },
+      });
+      await seedMemory(harness.repositories, {
+        memoryId: 'mem-private-source-grant', scopeType: 'task', scopeRef: 'task-1',
+        content: 'private source original body', summary: 'approved private source summary',
+        sources: [{
+          sourceKind: 'message', sourceId: 'private-message', sourceScopeType: 'channel',
+          sourceScopeRef: 'private-channel', sourceVisibility: 'private',
+        }],
+      });
+      await harness.repositories.memoryUnitOfWork.run(async (memory) => {
+        await memory.grants.create({
+          id: 'grant-private-source', version: 1, teamId: 'team-1', sourceScopeType: 'channel',
+          sourceScopeRef: 'private-channel', targetAgentId: 'agent-1', authorizedContentKind: 'summary',
+          authorizedRedactionLevel: 'none', status: 'active', issuedByUserId: 'user-1',
+          issuedAt: 1, expiresAt: 1_000_000,
+        });
+      });
+
+      const capsule = await capsuleService.createCapsule({
+        teamId: 'team-1', requesterUserId: 'user-1', managementRunId: 'run-private-source',
+        taskId: 'task-1', targetAgentId: 'agent-1', prompt: 'approved private source summary',
+        limit: 1, now: 5_000, currentPolicyVersion: 1,
+      });
+      expect(capsule.items).toMatchObject([{
+        memoryId: 'mem-private-source-grant', scopeType: 'task', scopeRef: 'task-1',
+        content: 'approved private source summary', contentKind: 'summary', redactionLevel: 'none',
+        authorization: {
+          mode: 'explicit-grant', sourceScopeType: 'channel', sourceScopeRef: 'private-channel',
+        },
+      }]);
+      expect(JSON.stringify(capsule)).not.toContain('private source original body');
+      await expect(harness.repositories.memory.capsuleItems.listByCapsule({
+        teamId: 'team-1', capsuleId: capsule.id,
+      })).resolves.toMatchObject([{
+        scopeType: 'task', scopeRef: 'task-1', contentField: 'summary',
+        authorization: { sourceScopeType: 'channel', sourceScopeRef: 'private-channel' },
+      }]);
+    } finally {
+      harness.close();
+    }
+  });
+
   test('fails closed when one item requires multiple grants', async () => {
     const searchPermissions: MemorySearchPermissions = {
       async canSearchTeam() { return true; },

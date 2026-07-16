@@ -214,13 +214,52 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
       customAgent: { adapterKind: 'codex', command: 'codex', cwd },
     });
 
-    const store = await createLocalMemoryStore({ profileId: 'profile-a', cwd, baseDir: localMemoryBaseDir });
-    expect(store.list()).toMatchObject([{
-      agentId: 'agent-1', sourceKind: 'workspace_run', summary: '已确认失败（测试失败）：npm test',
-      structured: { sourceRunIds: ['disp-observe'] },
-    }]);
-    expect(JSON.stringify(store.list())).not.toContain('must-not-leak');
+    await vi.waitFor(async () => {
+      const persisted = await createLocalMemoryStore({ profileId: 'profile-a', cwd, baseDir: localMemoryBaseDir });
+      expect(persisted.list()).toMatchObject([{
+        agentId: 'agent-1', sourceKind: 'workspace_run', summary: '已确认失败（测试失败）：npm test',
+        structured: { sourceRunIds: ['disp-observe'] },
+      }]);
+    });
+    const persisted = await createLocalMemoryStore({ profileId: 'profile-a', cwd, baseDir: localMemoryBaseDir });
+    expect(JSON.stringify(persisted.list())).not.toContain('must-not-leak');
     expect(harness.emits.some((event) => event.event === AGENT_EVENTS.dispatch.result)).toBe(true);
+  });
+
+  test('reports dispatch result without waiting for local Memory observation', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-observer-nonblocking-')));
+    const localMemoryBaseDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-observer-nonblocking-home-')));
+    const harness = createFakeSocket();
+    let markObservationStarted!: () => void;
+    let releaseObservation!: () => void;
+    const observationStarted = new Promise<void>((resolve) => { markObservationStarted = resolve; });
+    const observationGate = new Promise<void>((resolve) => { releaseObservation = resolve; });
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', profileId: 'profile-a' },
+      runtimes: [], agents: [], serverUrl: 'http://server.test', localMemoryBaseDir,
+      executor: async () => ({
+        body: 'done',
+        workspaceRun: { status: 'succeeded', cwd, startedAt: 1_000, completedAt: 2_000 },
+      }),
+      outcomeObserver: async () => {
+        markObservationStarted();
+        await observationGate;
+        return [];
+      },
+    });
+    await client.start();
+
+    const delivery = harness.deliver(AGENT_EVENTS.dispatch.request, {
+      id: 'disp-observe-nonblocking', teamId: 'team-1', channelId: 'chan-1', messageId: 'msg-1',
+      agentId: 'agent-1', requestId: 'disp-observe-nonblocking', prompt: 'run',
+      customAgent: { adapterKind: 'codex', command: 'codex', cwd },
+    });
+    await observationStarted;
+    expect(harness.emits.some((event) => event.event === AGENT_EVENTS.dispatch.result)).toBe(true);
+    await delivery;
+    releaseObservation();
+    await observationGate;
   });
 
   test('still reports dispatch result when no customAgent.cwd (no workspace, no scan)', async () => {
@@ -446,11 +485,13 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     });
     const reportedManifest = JSON.parse(readFileSync(workspace.manifestPath, 'utf8'));
     expect(typeof reportedManifest.reportedAt).toBe('number');
-    const store = await createLocalMemoryStore({ profileId: 'profile-a', cwd, baseDir: localMemoryBaseDir });
-    expect(store.list()).toMatchObject([{
-      sourceKind: 'workspace_run', summary: '已验证成功：npm run build:daemon-next',
-      structured: { sourceRunIds: ['disp-recover'] },
-    }]);
+    await vi.waitFor(async () => {
+      const persisted = await createLocalMemoryStore({ profileId: 'profile-a', cwd, baseDir: localMemoryBaseDir });
+      expect(persisted.list()).toMatchObject([{
+        sourceKind: 'workspace_run', summary: '已验证成功：npm run build:daemon-next',
+        structured: { sourceRunIds: ['disp-recover'] },
+      }]);
+    });
   });
 
   test('recovery keeps unaccepted ACK runs unreported and retries them on reconnect', async () => {
@@ -557,38 +598,31 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
 
   test('scanRequested custom agent cwd is included in local Memory governance summaries', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-custom-memory-')));
-    const agentBeanHome = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-custom-memory-home-')));
-    const previousAgentBeanHome = process.env.AGENTBEAN_HOME;
-    process.env.AGENTBEAN_HOME = agentBeanHome;
-    try {
-      const store = await createLocalMemoryStore({ profileId: 'profile-a', cwd, baseDir: agentBeanHome });
-      await store.upsert({
-        teamId: 'team-1', cwd, kind: 'procedural', scopeType: 'local-workspace', sourceKind: 'manual',
-        content: 'custom workspace body', summary: 'Custom workspace summary',
-      });
-      const harness = createFakeSocket();
-      const client = createDaemonProtocolClient({
-        socket: harness.socket,
-        device: { teamId: 'team-1', ownerId: 'owner-1', profileId: 'profile-a' },
-        runtimes: [], agents: [], serverUrl: 'http://server.test',
-        fetch: async () => new Response('{}', { status: 200 }),
-        executor: async () => ({ body: 'should not run' }),
-      });
-      await client.start();
-      await harness.deliver(AGENT_EVENTS.device.scanRequested, {
-        requestId: 'scan-memory', deviceId: 'dev-1',
-        customAgents: [{ id: 'custom-agent-1', adapterKind: 'codex', cwd }],
-      });
+    const localMemoryBaseDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-custom-memory-home-')));
+    const store = await createLocalMemoryStore({ profileId: 'profile-a', cwd, baseDir: localMemoryBaseDir });
+    await store.upsert({
+      teamId: 'team-1', cwd, kind: 'procedural', scopeType: 'local-workspace', sourceKind: 'manual',
+      content: 'custom workspace body', summary: 'Custom workspace summary',
+    });
+    const harness = createFakeSocket();
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', profileId: 'profile-a' },
+      runtimes: [], agents: [], serverUrl: 'http://server.test', localMemoryBaseDir,
+      fetch: async () => new Response('{}', { status: 200 }),
+      executor: async () => ({ body: 'should not run' }),
+    });
+    await client.start();
+    await harness.deliver(AGENT_EVENTS.device.scanRequested, {
+      requestId: 'scan-memory', deviceId: 'dev-1',
+      customAgents: [{ id: 'custom-agent-1', adapterKind: 'codex', cwd }],
+    });
 
-      const ack = await harness.deliverWithAck(AGENT_EVENTS.memory.governanceSummaryRequested, { teamId: 'team-1' });
-      expect(ack).toMatchObject({
-        ok: true,
-        summaries: [expect.objectContaining({ summary: 'Custom workspace summary' })],
-      });
-    } finally {
-      if (previousAgentBeanHome === undefined) delete process.env.AGENTBEAN_HOME;
-      else process.env.AGENTBEAN_HOME = previousAgentBeanHome;
-    }
+    const ack = await harness.deliverWithAck(AGENT_EVENTS.memory.governanceSummaryRequested, { teamId: 'team-1' });
+    expect(ack).toMatchObject({
+      ok: true,
+      summaries: [expect.objectContaining({ summary: 'Custom workspace summary' })],
+    });
   });
 
   test('scanRequested 在 snapshot 上报 emit 失败时不抛', async () => {
