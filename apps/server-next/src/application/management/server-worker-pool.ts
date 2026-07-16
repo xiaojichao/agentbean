@@ -71,6 +71,12 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
       return failure('INVALID_REQUEST', 'SERVER_WORKER_CAPACITY_INVALID', false);
     }
 
+    const connectionWorkerId = workerIdByConnection.get(input.connectionId);
+    const connectionWorker = connectionWorkerId ? workersById.get(connectionWorkerId) : undefined;
+    if (connectionWorker && (connectionWorker.workerInstanceId !== capability.workerInstanceId
+      || connectionWorker.profileId !== capability.profileId)) {
+      return failure('CONFLICT', 'SERVER_WORKER_CONNECTION_ALREADY_REGISTERED', false);
+    }
     const identity = JSON.stringify([dependencies.workerPoolId, capability.profileId, capability.workerInstanceId]);
     const existing = workersByIdentity.get(identity);
     if (existing
