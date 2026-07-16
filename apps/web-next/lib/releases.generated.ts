@@ -2,6 +2,55 @@
 import type { Release } from './changelog';
 export const releases: Release[] = [
   {
+    "version": "Daily 2026-07-16",
+    "date": "2026-07-16",
+    "sections": [
+      {
+        "type": "Added",
+        "items": [
+          "发布：补发 V3 Worker 与 Memory tools npm 包",
+          "Phase 3：补齐 P3-15 来源失效 E2E 闭环测试（spec §16.4）",
+          "Phase 3：补齐 V3 capability 与工具协议门禁（P3-09 slice 2b）"
+        ]
+      },
+      {
+        "type": "Changed",
+        "items": [
+          "Phase 4：扩展 Manager lease 的 Device 与 Server Host 合同",
+          "完成 Phase 3 生产验收证据收口",
+          "docs：AGENTS.md 加 Codex PR review 节制契约",
+          "docs：checklist 补 daemon --team-id（实战踩坑）",
+          "收口 Phase 3 跨 Agent Memory 真实验收",
+          "docs：Phase 3 环境验证 checklist（P3-17 真实 Agent + P3-18 生产 smoke）",
+          "docs：归档 PR review/merge 周期分析（#607–#616）",
+          "Phase 3：P3-17 跨 Agent Memory smoke 脚本（代码链路验证）",
+          "交付协作与本地 Memory Web 治理面",
+          "Phase 3：补全 propose_candidate 工具 run context（P3-09 slice 2c-step2 prep）",
+          "Phase 3：闭合 handler 接线缺口并收紧来源授权（#609）",
+          "优化 PR 快速收口并清理 OMX 文案",
+          "合并 Server Capsule 与 Device 本地 Memory 运行时上下文",
+          "Phase 3：Phase 3 Memory 工具请求合同层（P3-09 slice 2a）",
+          "记录 2026-07-15 每日更新日志",
+          "Phase 3：建立 Memory 工具定义与严格输入边界（#603）"
+        ]
+      },
+      {
+        "type": "Fixed",
+        "items": [
+          "Phase 3：接通 Capsule checkpoint 恢复校验并保留 Candidate 缺口",
+          "修复：贯通 V3 Worker 与 Memory tools（#614）"
+        ]
+      },
+      {
+        "type": "Security",
+        "items": [
+          "Phase 3：贯通 worker Memory handler 与安全配置层",
+          "修复 Memory 治理合并后的权限边界"
+        ]
+      }
+    ]
+  },
+  {
     "version": "Daily 2026-07-15",
     "date": "2026-07-15",
     "sections": [
