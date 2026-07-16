@@ -345,7 +345,6 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           request = await prepareDispatchRuntimeMemory({
             request,
             profileId: device.profileId,
-            baseDir: home,
           });
           const result = normalizeDispatchResult(await executor(request));
           if (cancelledDispatchIds.delete(request.id)) {

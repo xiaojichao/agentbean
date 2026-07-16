@@ -37,6 +37,8 @@ export async function prepareDispatchRuntimeMemory(
       prompt: input.request.prompt,
       ...(input.now !== undefined ? { now: input.now } : {}),
     })
+      // Unscoped entries intentionally follow the Device-local profile/cwd/agent visibility model;
+      // an explicit teamId narrows that local entry but is not required by the local Memory contract.
       .filter((item) => item.teamId === undefined || item.teamId === input.request.teamId)
       // Automatic learning already fails closed on secrets. Repeat the check here because manual
       // and legacy records can predate that guard.
@@ -95,13 +97,41 @@ export function buildRuntimePrompt(request: Pick<DispatchRequestPayload, 'prompt
   return sections.join('\n\n');
 }
 
+const DEVICE_LOCAL_MEMORY_REDACTION = '[Device-local Memory redacted]';
+
+/** Removes Device-local Memory entries from any executor output that can be sent upstream. */
+export function redactDeviceLocalMemory(
+  value: string,
+  memoryContext: readonly DispatchMemoryContextItemDto[] | undefined,
+): string {
+  const localItems = (memoryContext ?? []).filter((item) => item.provenance.origin === 'local');
+  const privateValues = localItems.flatMap((item) => [renderItem(item), item.content])
+    .filter((candidate) => candidate.trim().length > 0)
+    .sort((left, right) => right.length - left.length);
+  return privateValues.reduce(
+    (redacted, privateValue) => redacted.replace(flexibleWhitespacePattern(privateValue), DEVICE_LOCAL_MEMORY_REDACTION),
+    value,
+  );
+}
+
 function renderSection(title: string, items: readonly DispatchMemoryContextItemDto[]): string {
-  return [`### ${title}`, ...items.map((item) => {
-    const source = item.provenance.origin === 'server'
-      ? `capsule:${item.provenance.capsuleId}`
-      : `local:${item.provenance.sourceKind}`;
-    return `- [${item.provenance.origin}:${item.id}] (${item.kind}, ${item.scopeType}; ${item.selectionReason}; ${source}) ${item.content}`;
-  })].join('\n');
+  return [`### ${title}`, ...items.map(renderItem)].join('\n');
+}
+
+function renderItem(item: DispatchMemoryContextItemDto): string {
+  const source = item.provenance.origin === 'server'
+    ? `capsule:${item.provenance.capsuleId}`
+    : `local:${item.provenance.sourceKind}`;
+  return `- [${item.provenance.origin}:${item.id}] (${item.kind}, ${item.scopeType}; ${item.selectionReason}; ${source}) ${item.content}`;
+}
+
+function flexibleWhitespacePattern(value: string): RegExp {
+  const pattern = value.trim().split(/\s+/u).map(escapeRegExp).join('\\s+');
+  return new RegExp(pattern, 'gu');
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function serverMemoryOnly(

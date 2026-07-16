@@ -4,7 +4,7 @@ import type { DaemonDispatchResult, DispatchRequestPayload, StubExecutor } from 
 import { buildChildEnv, buildLogArtifactContent, buildLogExcerpt, formatCommand } from './executor-helpers.js';
 import { PTY_ADAPTERS, defaultPtySpawnLoader, runPtyAgentCommand } from './executor-pty.js';
 import type { PtySpawnFn } from './executor-pty.js';
-import { buildRuntimePrompt } from './memory/runtime-memory-context.js';
+import { buildRuntimePrompt, redactDeviceLocalMemory } from './memory/runtime-memory-context.js';
 
 export { buildChildEnv };
 
@@ -41,9 +41,45 @@ export function createCommandExecutor(options: CommandExecutorOptions = {}): Stu
   return async (request) => {
     const runtimeRequest = { ...request, prompt: buildRuntimePrompt(request) };
     if (!runtimeRequest.customAgent?.command) {
-      return `${fallbackPrefix}${runtimeRequest.prompt}`;
+      return redactDeviceLocalMemory(`${fallbackPrefix}${runtimeRequest.prompt}`, request.memoryContext);
     }
-    return runCustomAgentCommand(runtimeRequest, { timeoutMs, killGraceMs, maxAccumulatedBytes, clock, ptySpawnLoader });
+    const result = await runCustomAgentCommand(
+      runtimeRequest,
+      { timeoutMs, killGraceMs, maxAccumulatedBytes, clock, ptySpawnLoader },
+    );
+    return sanitizeDeviceLocalMemoryResult(result, request.memoryContext);
+  };
+}
+
+function sanitizeDeviceLocalMemoryResult(
+  result: DaemonDispatchResult,
+  memoryContext: DispatchRequestPayload['memoryContext'],
+): DaemonDispatchResult {
+  const redact = (value: string | undefined) => value === undefined
+    ? undefined
+    : redactDeviceLocalMemory(value, memoryContext);
+  return {
+    ...result,
+    body: redactDeviceLocalMemory(result.body, memoryContext),
+    ...(result.artifacts ? { artifacts: result.artifacts.map((artifact) => {
+      if (artifact.filename !== 'workspace-run.log' || artifact.contentBase64 === undefined) return artifact;
+      const content = Buffer.from(artifact.contentBase64, 'base64').toString('utf8');
+      return {
+        ...artifact,
+        contentBase64: Buffer.from(redactDeviceLocalMemory(content, memoryContext), 'utf8').toString('base64'),
+      };
+    }) } : {}),
+    ...(result.workspaceRun ? {
+      workspaceRun: {
+        ...result.workspaceRun,
+        ...(redact(result.workspaceRun.command) !== undefined
+          ? { command: redact(result.workspaceRun.command) }
+          : {}),
+        ...(redact(result.workspaceRun.logExcerpt) !== undefined
+          ? { logExcerpt: redact(result.workspaceRun.logExcerpt) }
+          : {}),
+      },
+    } : {}),
   };
 }
 

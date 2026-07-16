@@ -308,6 +308,7 @@ if (scripts['test:phase3-memory-boundary'] !== 'node --test scripts/check-phase-
   || !String(scripts['test:phase3-memory-daemon']).includes('runtime-memory-context.test.ts')
   || !String(scripts['build:phase3-memory']).includes('build:contracts')
   || !String(scripts['build:phase3-memory']).includes('build:domain')
+  || !String(scripts['build:phase3-memory']).includes('build:pi-management-runtime')
   || !String(scripts['build:phase3-memory']).includes('build:server-next')
   || !String(scripts['build:phase3-memory']).includes('build:daemon-next')
   || !String(scripts['test:retained-boundaries']).includes('test:phase3-memory-boundary')

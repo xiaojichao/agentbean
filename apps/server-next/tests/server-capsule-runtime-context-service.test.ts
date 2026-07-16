@@ -191,6 +191,26 @@ describe('Server Capsule dispatch wiring', () => {
     await expect(app.getDispatchRequest({ dispatchId: 'dispatch-1' }))
       .rejects.toThrow('SERVER_CAPSULE_RUNTIME_CONTEXT_UNAVAILABLE');
   });
+
+  test('builds a route-only request without resolving or auditing Capsule runtime context', async () => {
+    const repositories = createInMemoryRepositories();
+    await seedManagedDispatch(repositories);
+    let resolutions = 0;
+    const app = createServerNextUseCases({
+      repositories, clock: { now: () => 20_000 }, ids: { nextId: () => 'usecase-id' },
+      sessionSecret: 'test-secret',
+      serverCapsuleRuntimeContextResolver: {
+        async resolve() {
+          resolutions += 1;
+          throw new Error('expired Capsule must not block routing');
+        },
+      },
+    });
+
+    await expect(app.getDispatchRequest({ dispatchId: 'dispatch-1', purpose: 'route' }))
+      .resolves.toMatchObject({ ok: true, request: { id: 'dispatch-1', deviceId: undefined } });
+    expect(resolutions).toBe(0);
+  });
 });
 
 async function seedManagedDispatch(repositories: ServerNextRepositories) {

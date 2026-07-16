@@ -5,6 +5,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS } from '../../../packages/contracts/src/index.js';
 import { createDaemonProtocolClient } from '../src/index';
 import type { DaemonProtocolSocket } from '../src/index';
+import { createLocalMemoryStore } from '../src/memory/local-memory-store';
 import { persistWorkspaceRunManifest, persistWorkspaceRunResponse, prepareWorkspaceRun } from '../src/workspace-run';
 
 async function touchFile(path: string, mtimeMs: number): Promise<void> {
@@ -77,6 +78,40 @@ function createFakeSocket(): FakeHarness {
 }
 
 describe('dispatch pipeline (attachments + product artifacts)', () => {
+  test('reads profile Memory from AGENTBEAN_HOME instead of the scanner homeDir', async () => {
+    const agentBeanHome = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-agentbean-home-')));
+    const scannerHome = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-scanner-home-')));
+    const previousAgentBeanHome = process.env.AGENTBEAN_HOME;
+    process.env.AGENTBEAN_HOME = agentBeanHome;
+    try {
+      const store = await createLocalMemoryStore({ profileId: 'profile-a', baseDir: agentBeanHome });
+      await store.upsert({
+        teamId: 'team-1', kind: 'preference', scopeType: 'local-profile', sourceKind: 'manual',
+        content: 'Use the profile-local runtime preference.',
+      });
+      const harness = createFakeSocket();
+      let executedMemory: unknown;
+      const client = createDaemonProtocolClient({
+        socket: harness.socket,
+        device: { teamId: 'team-1', ownerId: 'owner-1', profileId: 'profile-a' },
+        runtimes: [], agents: [], serverUrl: 'http://server.test', homeDir: scannerHome,
+        executor: async (request) => {
+          executedMemory = request.memoryContext;
+          return { body: 'done' };
+        },
+      });
+      await client.start();
+      await harness.deliver(AGENT_EVENTS.dispatch.request, {
+        id: 'disp-profile-memory', teamId: 'team-1', channelId: 'chan-1', messageId: 'msg-1',
+        agentId: 'agent-1', requestId: 'disp-profile-memory', prompt: 'do work',
+      });
+      expect(executedMemory).toMatchObject([{ content: 'Use the profile-local runtime preference.' }]);
+    } finally {
+      if (previousAgentBeanHome === undefined) delete process.env.AGENTBEAN_HOME;
+      else process.env.AGENTBEAN_HOME = previousAgentBeanHome;
+    }
+  });
+
   test('downloads attachments, runs command, scans outputs, uploads, and reports artifact ids', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-')));
     const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-home-')));

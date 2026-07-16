@@ -37,6 +37,7 @@ export interface MemorySearchPermissions {
     readonly teamId: ID;
     readonly requesterUserId: ID;
     readonly targetAgentId: ID;
+    readonly now: UnixMs;
     readonly source: MemorySourceRecord;
   }): Promise<boolean>;
 }
@@ -133,6 +134,7 @@ export function createCollaborativeMemorySearchService(deps: CollaborativeMemory
             teamId: input.teamId,
             requesterUserId: input.requesterUserId,
             targetAgentId: input.targetAgentId,
+            now: input.now,
             source,
           })) {
             sourceUnavailable = true;

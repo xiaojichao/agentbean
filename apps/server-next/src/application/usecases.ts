@@ -107,7 +107,10 @@ export interface ServerNextUseCases {
   snapshotDirectMessage(input: SnapshotDirectMessageInput): Promise<Ack<{ dm: DmChannelDto; messages: MessageDto[] }>>;
   registerAgent(input: AgentDto): Promise<Ack<{ agent: AgentDto }>>;
   sendMessage(input: SendMessageInput): Promise<Ack<SendMessageResult>>;
-  getDispatchRequest(input: { dispatchId: string }): Promise<Ack<{ request: DispatchRequestDto & { id: string } }>>;
+  getDispatchRequest(input: {
+    dispatchId: string;
+    purpose?: 'execute' | 'route';
+  }): Promise<Ack<{ request: DispatchRequestDto & { id: string } }>>;
   acceptDispatch(input: AcceptDispatchInput): Promise<Ack<AcceptDispatchResult>>;
   cancelDispatch(input: CancelDispatchInput): Promise<Ack<{ dispatch: DispatchDto; task?: TaskDto }>>;
   cancelChannelDispatches(input: CancelChannelDispatchesInput): Promise<Ack<{ dispatches: DispatchDto[]; tasks?: TaskDto[] }>>;
@@ -2767,7 +2770,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       return makeSuccess({
         request: await buildDispatchRequest(
-          repositories, dispatch, agent, clock.now(), input.serverCapsuleRuntimeContextResolver,
+          repositories,
+          dispatch,
+          agent,
+          clock.now(),
+          requestInput.purpose !== 'route',
+          input.serverCapsuleRuntimeContextResolver,
         ),
       });
     },
@@ -2797,7 +2805,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
 
       const request = await buildDispatchRequest(
-        repositories, dispatch, agent, now, input.serverCapsuleRuntimeContextResolver,
+        repositories, dispatch, agent, now, true, input.serverCapsuleRuntimeContextResolver,
       );
       const accepted = await repositories.dispatches.markAccepted({
         dispatchId: dispatch.id,
@@ -5277,6 +5285,7 @@ async function buildDispatchRequest(
   dispatch: DispatchRecord,
   agent: AgentRecord,
   now: UnixMs,
+  includeRuntimeMemory: boolean,
   serverCapsuleRuntimeContextResolver?: ServerCapsuleRuntimeContextResolver,
 ): Promise<DispatchRequestDto & { id: string }> {
   const executionConfig = agent.source === 'custom' || (agent.source === 'scanned' && agent.command)
@@ -5323,10 +5332,10 @@ async function buildDispatchRequest(
     }
   }
   const capsuleRef = managementInvocation?.intent.memoryCapsuleRef;
-  if (capsuleRef && !serverCapsuleRuntimeContextResolver) {
+  if (includeRuntimeMemory && capsuleRef && !serverCapsuleRuntimeContextResolver) {
     throw new Error('SERVER_CAPSULE_RUNTIME_CONTEXT_UNAVAILABLE');
   }
-  const memoryContext = capsuleRef
+  const memoryContext = includeRuntimeMemory && capsuleRef
     ? await serverCapsuleRuntimeContextResolver!.resolve({
         teamId: managementInvocation!.intent.teamId,
         managementRunId: managementInvocation!.managementRunId,

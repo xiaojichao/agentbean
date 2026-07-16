@@ -43,7 +43,7 @@ export function createServerMemorySearchPermissions(
     },
 
     async isSourceAvailable(input) {
-      return isSourceAvailable(repositories, input.teamId, input.source);
+      return isSourceAvailable(repositories, input.teamId, input.source, input.now);
     },
   };
 }
@@ -92,6 +92,7 @@ async function isSourceAvailable(
   repositories: ServerMemoryPermissionRepositories,
   teamId: ID,
   source: MemorySourceRecord,
+  now: number,
 ): Promise<boolean> {
   switch (source.sourceKind) {
     case 'message': {
@@ -112,7 +113,8 @@ async function isSourceAvailable(
     }
     case 'memory': {
       const memory = await repositories.memory.items.getById({ teamId, id: source.sourceId });
-      return memory?.status === 'active';
+      return memory?.status === 'active'
+        && (memory.validUntil === undefined || memory.validUntil > now);
     }
     case 'manual':
     case 'local-summary':

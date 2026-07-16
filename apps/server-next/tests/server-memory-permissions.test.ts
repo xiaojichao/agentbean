@@ -75,10 +75,24 @@ describe('production Server Memory permissions', () => {
     await expect(permissions.isSourceAvailable({ ...base(), source: source('manual', 'manual-1') }))
       .resolves.toBe(true);
   });
+
+  test('treats an expired Memory provenance source as unavailable', async () => {
+    const permissions = createServerMemorySearchPermissions(repositories);
+    await repositories.memory.items.create({
+      schemaVersion: 1, id: 'source-memory', teamId: 'team-1', kind: 'semantic', status: 'active',
+      scopeType: 'team', scopeRef: 'team-1', content: 'source', validUntil: 100,
+      createdByUserId: 'user-1', createdAt: 1, updatedAt: 1,
+    });
+    const memorySource = source('memory', 'source-memory');
+    await expect(permissions.isSourceAvailable({ ...base(), now: 99, source: memorySource }))
+      .resolves.toBe(true);
+    await expect(permissions.isSourceAvailable({ ...base(), now: 100, source: memorySource }))
+      .resolves.toBe(false);
+  });
 });
 
 function base() {
-  return { teamId: 'team-1', requesterUserId: 'user-1', targetAgentId: 'agent-1' } as const;
+  return { teamId: 'team-1', requesterUserId: 'user-1', targetAgentId: 'agent-1', now: 50 } as const;
 }
 
 function scope(scopeType: MemorySourceRecord['sourceScopeType'], scopeRef: string) {

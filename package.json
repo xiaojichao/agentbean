@@ -69,7 +69,7 @@
     "build:phase0": "npm run build:contracts && npm run build:domain && npm run build:pi-management-runtime && npm run build:server-next",
     "build:phase1-management": "npm run build:packages",
     "build:phase2-task-dag": "npm run build:contracts && npm run build:domain && npm run build:pi-management-runtime && npm run build:daemon-next && npm run build:server-next",
-    "build:phase3-memory": "npm run build:contracts && npm run build:domain && npm run build:server-next && npm run build:daemon-next",
+    "build:phase3-memory": "npm run build:contracts && npm run build:domain && npm run build:pi-management-runtime && npm run build:server-next && npm run build:daemon-next",
     "build:server-next": "tsc -p apps/server-next/tsconfig.json",
     "build:daemon-next": "tsc -p apps/daemon-next/tsconfig.json",
     "build:web-next": "cd apps/web-next && npm run build",

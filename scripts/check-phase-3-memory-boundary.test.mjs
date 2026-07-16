@@ -194,6 +194,18 @@ test('fails closed when production runtime Capsule wiring is removed', () => {
   assert.match(result.stderr, /P3_RUNTIME_CONTEXT_INVALID/);
 });
 
+test('fails closed when the Phase 3 build omits pi-management-runtime before daemon-next', () => {
+  const result = withFixture('agentbean-phase3-runtime-build-', (fixture) => {
+    const path = join(fixture, 'package.json');
+    const packageJson = JSON.parse(readFileSync(path, 'utf8'));
+    packageJson.scripts['build:phase3-memory'] = packageJson.scripts['build:phase3-memory']
+      .replace('npm run build:pi-management-runtime && ', '');
+    writeFileSync(path, `${JSON.stringify(packageJson, null, 2)}\n`);
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_ROOT_CI_GATE_INVALID/);
+});
+
 test('fails closed when Phase 2 agents.invoke drops the Capsule ref wire contract', () => {
   const result = withFixture('agentbean-phase3-capsule-wire-', (fixture) => {
     const path = join(fixture, 'packages/contracts/src/management-worker-v2.ts');

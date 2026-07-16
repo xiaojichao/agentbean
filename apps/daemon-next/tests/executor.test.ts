@@ -36,6 +36,10 @@ describe('daemon-next command executor', () => {
         schemaVersion: 1, id: 'memory-1', kind: 'decision', scopeType: 'team',
         content: 'Use the verified runtime.', selectionReason: 'invocation-bound-capsule-currently-authorized',
         provenance: { origin: 'server', capsuleId: 'capsule-1', authorizationDecisionId: 'decision-1', sourceRefs: [] },
+      }, {
+        schemaVersion: 1, id: 'local-memory-1', kind: 'preference', scopeType: 'local-profile',
+        content: 'Device-private preference must stay local.', selectionReason: 'current-device-profile',
+        provenance: { origin: 'local', sourceKind: 'manual' },
       }],
       customAgent: {
         adapterKind: 'gemini',
@@ -51,11 +55,12 @@ describe('daemon-next command executor', () => {
       throw new Error('expected structured command result');
     }
     expect(JSON.parse(output.body)).toEqual({
-      input: expect.stringMatching(/Server 协作记忆[\s\S]*Use the verified runtime\.[\s\S]*当前用户输入[\s\S]*hello custom agent/),
+      input: expect.stringMatching(/Server 协作记忆[\s\S]*Use the verified runtime\.[\s\S]*\[Device-local Memory redacted\][\s\S]*当前用户输入[\s\S]*hello custom agent/),
       args: ['--model', 'gpt-5.4'],
       cwd,
       tokenPresent: true,
     });
+    expect(output.body).not.toContain('Device-private preference must stay local.');
     expect(output.workspaceRun).toMatchObject({
       cwd,
       command: `${process.execPath} ${scriptPath} --model gpt-5.4`,
@@ -80,6 +85,8 @@ describe('daemon-next command executor', () => {
     const logContent = Buffer.from(output.artifacts?.[0]?.contentBase64 ?? '', 'base64').toString('utf8');
     expect(logContent).toContain('SECRET_TOKEN=[redacted]');
     expect(logContent).not.toContain('secret-value');
+    expect(logContent).not.toContain('Device-private preference must stay local.');
+    expect(output.workspaceRun?.logExcerpt).not.toContain('Device-private preference must stay local.');
   });
 
   test('returns failed workspace run metadata when a custom agent command exits non-zero', async () => {
@@ -190,8 +197,13 @@ describe('daemon-next command executor', () => {
         agentId: 'agent-1',
         requestId: 'request-1',
         prompt: 'hello',
+        memoryContext: [{
+          schemaVersion: 1, id: 'local-memory-1', kind: 'preference', scopeType: 'local-profile',
+          content: 'Device-private fallback context.', selectionReason: 'current-device-profile',
+          provenance: { origin: 'local', sourceKind: 'manual' },
+        }],
       }),
-    ).resolves.toBe('daemon-next:hello');
+    ).resolves.toMatch(/daemon-next:[\s\S]*\[Device-local Memory redacted\][\s\S]*hello/);
   });
 
   test('forwards only safe host env keys plus custom agent env to the child process', () => {
@@ -863,7 +875,8 @@ describe('daemon-next command executor', () => {
     expect(output.body).toContain('explain closures');
     expect(output.body).toContain('what is a callback?');
     expect(output.body).toContain('a function passed as an argument.');
-    expect(output.body).toContain('Use a small example.');
+    expect(output.body).toContain('[Device-local Memory redacted]');
+    expect(output.body).not.toContain('Use a small example.');
     // The command line carries -p but never the prompt (it travels on stdin, not argv).
     expect(output.workspaceRun?.command).toContain('-p');
     expect(output.workspaceRun?.command).not.toContain('explain closures');
