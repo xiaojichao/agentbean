@@ -1,5 +1,7 @@
 import type { ID, MemoryScopeType } from '../../../../packages/contracts/src/index.js';
 import type { MemorySearchPermissions, MemoryScopeVisibility } from './collaborative-memory-search-service.js';
+import type { MemoryPermissions } from './collaborative-memory-service.js';
+import type { MemoryCandidatePermissions } from './memory-candidate-service.js';
 import type { MemorySourceRecord } from './memory-repositories.js';
 import type { ServerNextRepositories } from './repositories.js';
 
@@ -43,8 +45,141 @@ export function createServerMemorySearchPermissions(
     },
 
     async isSourceAvailable(input) {
-      return isSourceAvailable(repositories, input.teamId, input.source, input.now);
+      return isServerMemorySourceAvailable(repositories, input.teamId, input.source, input.now);
     },
+  };
+}
+
+export function createServerMemoryWritePermissions(
+  repositories: ServerMemoryPermissionRepositories,
+): MemoryPermissions {
+  return {
+    async assertWriteAuthority(input) {
+      if (!await canReadMemoryScope(repositories, {
+        teamId: input.teamId,
+        requesterUserId: input.actorId,
+        scopeType: input.scopeType,
+        scopeRef: input.scopeRef,
+      })) throw new Error('MEMORY_PERMISSION_DENIED');
+    },
+    async assertSourceAuthority(input) {
+      if (!await canReadMemoryScope(repositories, {
+        teamId: input.teamId,
+        requesterUserId: input.actorId,
+        scopeType: input.sourceScopeType,
+        scopeRef: input.sourceScopeRef,
+      })) throw new Error('MEMORY_SOURCE_PERMISSION_DENIED');
+      if ((input.sourceVisibility === 'private' || input.sourceVisibility === 'dm-participants')
+        && (input.sourceScopeType !== input.targetScopeType || input.sourceScopeRef !== input.targetScopeRef)) {
+        throw new Error('MEMORY_SOURCE_PERMISSION_DENIED');
+      }
+      if (!await canReadMemoryScope(repositories, {
+        teamId: input.teamId,
+        requesterUserId: input.actorId,
+        scopeType: input.targetScopeType,
+        scopeRef: input.targetScopeRef,
+      })) throw new Error('MEMORY_PERMISSION_DENIED');
+    },
+    async assertGrantAuthority(input) {
+      if (!await canReadMemoryScope(repositories, {
+        teamId: input.teamId,
+        requesterUserId: input.actorId,
+        scopeType: input.sourceScopeType,
+        scopeRef: input.sourceScopeRef,
+      })) throw new Error('MEMORY_PERMISSION_DENIED');
+      const agent = await repositories.agents.getById(input.targetAgentId);
+      if (!agent || agent.deletedAt !== undefined || !agent.visibleTeamIds.includes(input.teamId)) {
+        throw new Error('MEMORY_PERMISSION_DENIED');
+      }
+    },
+  };
+}
+
+export function createServerMemoryCandidatePermissions(
+  repositories: ServerMemoryPermissionRepositories,
+): MemoryCandidatePermissions {
+  const writes = createServerMemoryWritePermissions(repositories);
+  return {
+    async assertProposeAuthority(input) {
+      const agent = await repositories.agents.getById(input.actorId);
+      if (!agent || agent.deletedAt !== undefined || !agent.visibleTeamIds.includes(input.teamId)) {
+        throw new Error('MEMORY_PERMISSION_DENIED');
+      }
+    },
+    async assertDecideAuthority(input) {
+      const candidate = await repositories.memory.candidates.getById({ teamId: input.teamId, id: input.candidateId });
+      if (!candidate || !await canReadMemoryScope(repositories, {
+        teamId: input.teamId,
+        requesterUserId: input.actorId,
+        scopeType: candidate.scopeType,
+        scopeRef: candidate.scopeRef,
+      })) throw new Error('MEMORY_PERMISSION_DENIED');
+    },
+    assertWriteAuthority: writes.assertWriteAuthority,
+    assertSourceAuthority: writes.assertSourceAuthority,
+    async isSourceAvailable(input) {
+      const source = await sourceRecordForAvailability(repositories, input);
+      return source ? isServerMemorySourceAvailable(repositories, input.teamId, source, Date.now()) : false;
+    },
+  };
+}
+
+export async function canReadMemoryScope(
+  repositories: ServerMemoryPermissionRepositories,
+  input: {
+    readonly teamId: ID;
+    readonly requesterUserId: ID;
+    readonly scopeType: MemoryScopeType;
+    readonly scopeRef: ID;
+  },
+): Promise<boolean> {
+  if (!await repositories.teams.isMember(input.teamId, input.requesterUserId)) return false;
+  switch (input.scopeType) {
+    case 'team':
+      return input.scopeRef === input.teamId;
+    case 'user':
+      return input.scopeRef === input.requesterUserId;
+    case 'agent': {
+      const agent = await repositories.agents.getById(input.scopeRef);
+      return Boolean(agent && agent.deletedAt === undefined && agent.visibleTeamIds.includes(input.teamId));
+    }
+    case 'task': {
+      const task = await repositories.tasks.getById(input.scopeRef);
+      if (!task || task.teamId !== input.teamId) return false;
+      if (!task.channelId) return true;
+      const channel = await repositories.channels.getById(task.channelId);
+      return Boolean(channel && channel.teamId === input.teamId
+        && (channel.visibility === 'public' || channel.humanMemberIds.includes(input.requesterUserId)));
+    }
+    case 'channel':
+    case 'dm': {
+      const channel = await repositories.channels.getById(input.scopeRef);
+      if (!channel || channel.teamId !== input.teamId) return false;
+      if (input.scopeType === 'dm') {
+        return channel.kind === 'direct' && channel.humanMemberIds.includes(input.requesterUserId);
+      }
+      return channel.kind === 'channel'
+        && (channel.visibility === 'public' || channel.humanMemberIds.includes(input.requesterUserId));
+    }
+  }
+}
+
+async function sourceRecordForAvailability(
+  repositories: ServerMemoryPermissionRepositories,
+  input: { readonly teamId: ID; readonly sourceKind: MemorySourceRecord['sourceKind']; readonly sourceId: ID },
+): Promise<MemorySourceRecord | null> {
+  const linked = await repositories.memory.sources.listBySource(input);
+  if (linked[0]) return linked[0];
+  return {
+    memoryId: 'candidate-source-probe',
+    teamId: input.teamId,
+    sourceKind: input.sourceKind,
+    sourceId: input.sourceId,
+    snapshotHash: 'candidate-source-probe',
+    sourceScopeType: 'team',
+    sourceScopeRef: input.teamId,
+    sourceVisibility: 'team',
+    createdAt: 0,
   };
 }
 
@@ -88,7 +223,7 @@ async function evaluateScope(
   }
 }
 
-async function isSourceAvailable(
+export async function isServerMemorySourceAvailable(
   repositories: ServerMemoryPermissionRepositories,
   teamId: ID,
   source: MemorySourceRecord,

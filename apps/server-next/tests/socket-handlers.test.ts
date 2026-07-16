@@ -88,6 +88,17 @@ describe('server-next socket handlers', () => {
       updateTeam: vi.fn(async (payload) => makeSuccess({ payload })),
       getManagementPolicy: vi.fn(async (payload) => makeSuccess({ payload })),
       updateManagementPolicy: vi.fn(async (payload) => makeSuccess({ payload })),
+      getMemoryGovernanceSnapshot: vi.fn(async (payload) => makeSuccess({ payload })),
+      createCollaborativeMemory: vi.fn(async (payload) => makeSuccess({ payload })),
+      updateCollaborativeMemory: vi.fn(async (payload) => makeSuccess({ payload })),
+      expireCollaborativeMemory: vi.fn(async (payload) => makeSuccess({ payload })),
+      supersedeCollaborativeMemory: vi.fn(async (payload) => makeSuccess({ payload })),
+      deleteCollaborativeMemory: vi.fn(async (payload) => makeSuccess({ payload })),
+      issueMemoryGrant: vi.fn(async (payload) => makeSuccess({ payload })),
+      revokeMemoryGrant: vi.fn(async (payload) => makeSuccess({ payload })),
+      acceptMemoryCandidate: vi.fn(async (payload) => makeSuccess({ payload })),
+      rejectMemoryCandidate: vi.fn(async (payload) => makeSuccess({ payload })),
+      mergeMemoryCandidate: vi.fn(async (payload) => makeSuccess({ payload })),
       deleteTeam: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
 
@@ -159,6 +170,17 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.member.transferOwner,
       WEB_EVENTS.member.list,
       WEB_EVENTS.member.updateHuman,
+      WEB_EVENTS.memory.snapshot,
+      WEB_EVENTS.memory.create,
+      WEB_EVENTS.memory.update,
+      WEB_EVENTS.memory.expire,
+      WEB_EVENTS.memory.supersede,
+      WEB_EVENTS.memory.delete,
+      WEB_EVENTS.memory.grantIssue,
+      WEB_EVENTS.memory.grantRevoke,
+      WEB_EVENTS.memory.candidateAccept,
+      WEB_EVENTS.memory.candidateReject,
+      WEB_EVENTS.memory.candidateMerge,
       WEB_EVENTS.dispatch.cancel,
       WEB_EVENTS.dispatch.cancelChannel,
       WEB_EVENTS.task.list,
@@ -875,6 +897,65 @@ describe('server-next socket handlers', () => {
       newPassword: 'new-password',
       currentDeviceId: null,
     });
+  });
+
+  test('Memory governance events require authentication and ignore a spoofed payload userId', async () => {
+    const unauthenticatedSocket = new FakeSocket();
+    const getMemoryGovernanceSnapshot = vi.fn(async (payload) => makeSuccess({ payload }));
+    const app = { getMemoryGovernanceSnapshot } as unknown as ServerNextUseCases;
+    registerWebSocketHandlers(unauthenticatedSocket, app, {
+      authenticatedUser: async () => ({
+        hasToken: false, userId: null, currentTeamId: null, currentDeviceId: null,
+      }),
+    });
+
+    await expect(unauthenticatedSocket.trigger(WEB_EVENTS.memory.snapshot, {
+      teamId: 'team-client', userId: 'user-spoofed',
+    })).resolves.toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
+    expect(getMemoryGovernanceSnapshot).not.toHaveBeenCalled();
+
+    const authenticatedSocket = new FakeSocket();
+    registerWebSocketHandlers(authenticatedSocket, app, {
+      authenticatedUser: async () => ({
+        hasToken: true, userId: 'user-session', currentTeamId: 'team-session', currentDeviceId: 'device-local',
+      }),
+    });
+    await authenticatedSocket.trigger(WEB_EVENTS.memory.snapshot, {
+      teamId: 'team-client', userId: 'user-spoofed',
+    });
+    expect(getMemoryGovernanceSnapshot).toHaveBeenCalledWith({
+      teamId: 'team-client', userId: 'user-session', currentDeviceId: 'device-local',
+    });
+  });
+
+  test('maps Memory permission exceptions to a fail-closed FORBIDDEN ack', async () => {
+    const socket = new FakeSocket();
+    const app = {
+      getMemoryGovernanceSnapshot: vi.fn(async () => { throw new Error('MEMORY_PERMISSION_DENIED'); }),
+    } as unknown as ServerNextUseCases;
+    registerWebSocketHandlers(socket, app, {
+      authenticatedUser: async () => ({
+        hasToken: true, userId: 'user-session', currentTeamId: 'team-session', currentDeviceId: null,
+      }),
+    });
+
+    await expect(socket.trigger(WEB_EVENTS.memory.snapshot, { teamId: 'team-session' }))
+      .resolves.toEqual({ ok: false, error: 'FORBIDDEN', message: 'Memory access denied' });
+  });
+
+  test('refreshes Memory subscribers after a successful message deletion', async () => {
+    const socket = new FakeSocket();
+    const deletedAck = makeSuccess({ message: { id: 'message-1', teamId: 'team-1', body: '[deleted]' } });
+    const afterMemoryMutation = vi.fn();
+    const app = { deleteMessage: vi.fn(async () => deletedAck) } as unknown as ServerNextUseCases;
+    registerWebSocketHandlers(socket, app, { afterMemoryMutation });
+
+    await expect(socket.trigger(WEB_EVENTS.message.delete, {
+      teamId: 'team-1', userId: 'user-1', messageId: 'message-1',
+    })).resolves.toEqual(deletedAck);
+    expect(afterMemoryMutation).toHaveBeenCalledWith({
+      teamId: 'team-1', userId: 'user-1', messageId: 'message-1',
+    }, deletedAck);
   });
 
   test('does not expose internal socket exception messages in failure acks', async () => {

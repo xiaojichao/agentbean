@@ -154,3 +154,89 @@ export interface MemoryCandidateRefDto {
   readonly projectionHash: string;
   readonly createdAt: UnixMs;
 }
+
+export type MemoryGovernanceSourceState = 'valid' | 'source-invalid';
+export type MemoryGovernanceCapsuleState = 'active' | 'expired' | 'revoked';
+
+export interface MemoryGovernanceItemDto extends MemoryRecordDto {
+  readonly sourceState: MemoryGovernanceSourceState;
+}
+
+export interface MemoryGovernanceGrantDto {
+  readonly id: ID;
+  readonly version: number;
+  readonly teamId: ID;
+  readonly sourceScopeType: MemoryScopeType;
+  readonly sourceScopeRef: ID;
+  readonly targetAgentId: ID;
+  readonly authorizedContentKind: MemoryContentKind;
+  readonly authorizedRedactionLevel: MemoryRedactionLevel;
+  readonly status: 'active' | 'revoked' | 'expired';
+  readonly issuedByUserId: ID;
+  readonly issuedAt: UnixMs;
+  readonly expiresAt: UnixMs;
+  readonly revokedAt?: UnixMs;
+}
+
+export interface MemoryGovernanceCandidateDto extends MemoryCandidateDto {
+  readonly targetAgentId: ID;
+  readonly scopeType: MemoryScopeType;
+  readonly scopeRef: ID;
+  readonly proposedSummary?: string;
+  readonly acceptedMemoryId?: ID;
+  readonly mergedIntoMemoryId?: ID;
+  readonly updatedAt: UnixMs;
+  readonly sourceState: MemoryGovernanceSourceState;
+}
+
+export interface MemoryGovernanceCapsuleItemDto {
+  readonly memoryId: ID;
+  readonly position: number;
+  readonly scopeType: MemoryScopeType;
+  readonly scopeRef: ID;
+  readonly contentKind: MemoryContentKind;
+  readonly redactionLevel: MemoryRedactionLevel;
+  readonly authorization: MemoryCapsuleAuthorizationDto;
+  readonly expiresAt?: UnixMs;
+}
+
+export interface MemoryGovernanceCapsuleDto extends MemoryCapsuleRefDto {
+  readonly state: MemoryGovernanceCapsuleState;
+  readonly deniedAt?: UnixMs;
+  readonly items: readonly MemoryGovernanceCapsuleItemDto[];
+}
+
+export interface MemoryGovernanceInvocationDto {
+  readonly id: ID;
+  readonly managementRunId: ID;
+  readonly taskId?: ID;
+  readonly targetAgentId: ID;
+  readonly capsuleRef?: MemoryCapsuleRefDto;
+  readonly createdAt: UnixMs;
+}
+
+export interface MemoryGovernanceSnapshotDto {
+  readonly schemaVersion: 1;
+  readonly teamId: ID;
+  readonly canManage: boolean;
+  readonly memories: readonly MemoryGovernanceItemDto[];
+  readonly grants: readonly MemoryGovernanceGrantDto[];
+  readonly candidates: readonly MemoryGovernanceCandidateDto[];
+  readonly capsules: readonly MemoryGovernanceCapsuleDto[];
+  readonly invocations: readonly MemoryGovernanceInvocationDto[];
+  readonly refreshedAt: UnixMs;
+}
+
+export interface LocalMemoryGovernanceSummaryDto {
+  readonly schemaVersion: 1;
+  readonly id: ID;
+  readonly kind: MemoryKind;
+  readonly scopeType: LocalMemoryScopeType;
+  readonly status: 'active' | 'expired' | 'superseded' | 'deleted';
+  readonly sourceKind: 'scan' | 'workspace_run' | 'manual' | 'local_file';
+  readonly summary: string;
+  readonly workspaceLabel?: string;
+  readonly createdAt: UnixMs;
+  readonly updatedAt: UnixMs;
+  readonly validUntil?: UnixMs;
+}

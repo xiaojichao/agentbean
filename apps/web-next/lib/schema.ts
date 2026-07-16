@@ -249,6 +249,8 @@ export interface WorkspaceRunDetail {
   createdAt: number;
   updatedAt: number;
   artifactIds: string[];
+  managementInvocationId?: string;
+  memoryCapsuleRef?: import('@agentbean/contracts').MemoryCapsuleRefDto;
 }
 
 export interface WorkspaceArtifact {

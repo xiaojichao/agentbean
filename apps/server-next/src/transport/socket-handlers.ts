@@ -117,6 +117,8 @@ export interface WebSocketHandlerOptions {
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterTeamMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterTaskMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  afterMemberMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  afterMemoryMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
 
 export interface AgentSocketHandlerOptions {
@@ -445,16 +447,29 @@ export function registerWebSocketHandlers(
   }, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.delete, app, 'deleteMessage', async (payload, result) => {
     await options.afterMessageSend?.(payload, result);
+    await options.afterMemoryMutation?.(payload, result);
   }, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.convertToTask, app, 'convertMessageToTask', async (payload, result) => {
     await options.afterTaskMutation?.(payload, result);
     await options.afterMessageSend?.(payload, result);
   }, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.member.updateRole, app, 'updateMemberRole', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.member.remove, app, 'removeMember', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.member.transferOwner, app, 'transferOwner', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.member.updateRole, app, 'updateMemberRole', (payload, result) => options.afterMemberMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.member.remove, app, 'removeMember', (payload, result) => options.afterMemberMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.member.transferOwner, app, 'transferOwner', (payload, result) => options.afterMemberMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.member.list, app, 'listMembers', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.member.updateHuman, app, 'updateMemberHuman', undefined, { authenticatedUser: options.authenticatedUser });
+  const memoryBindOptions = { authenticatedUser: options.authenticatedUser, requireAuthenticatedUser: true };
+  bind(socket, WEB_EVENTS.memory.snapshot, app, 'getMemoryGovernanceSnapshot', undefined, memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.create, app, 'createCollaborativeMemory', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.update, app, 'updateCollaborativeMemory', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.expire, app, 'expireCollaborativeMemory', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.supersede, app, 'supersedeCollaborativeMemory', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.delete, app, 'deleteCollaborativeMemory', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.grantIssue, app, 'issueMemoryGrant', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.grantRevoke, app, 'revokeMemoryGrant', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.candidateAccept, app, 'acceptMemoryCandidate', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.candidateReject, app, 'rejectMemoryCandidate', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.candidateMerge, app, 'mergeMemoryCandidate', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
   bind(socket, WEB_EVENTS.dispatch.cancel, app, 'cancelDispatch', async (_payload, result) => {
     if (!isDispatchAck(result)) {
       return;
@@ -758,6 +773,10 @@ function socketErrorAck(error: unknown, event?: string) {
   if (error instanceof UnauthenticatedSocketError) {
     return makeFailure('UNAUTHENTICATED', 'Invalid session token');
   }
+  const memoryFailure = memoryErrorAck(error);
+  if (memoryFailure) {
+    return memoryFailure;
+  }
   // 记录完整异常堆栈，避免 INTERNAL_ERROR 的真实原因被吞掉
   // （曾因 join_links 表缺失仅回 INTERNAL_ERROR、无任何日志，导致问题难以定位）
   console.error(
@@ -765,6 +784,37 @@ function socketErrorAck(error: unknown, event?: string) {
     error instanceof Error ? error.stack ?? error.message : error,
   );
   return makeFailure('INTERNAL_ERROR', INTERNAL_SOCKET_ERROR_MESSAGE);
+}
+
+function memoryErrorAck(error: unknown) {
+  if (!(error instanceof Error)) return null;
+  switch (error.message) {
+    case 'MEMORY_PERMISSION_DENIED':
+    case 'MEMORY_SOURCE_PERMISSION_DENIED':
+      return makeFailure('FORBIDDEN', 'Memory access denied');
+    case 'MEMORY_NOT_FOUND':
+    case 'MEMORY_GRANT_NOT_FOUND':
+    case 'CANDIDATE_NOT_FOUND':
+      return makeFailure('NOT_FOUND', 'Memory record not found');
+    case 'MEMORY_INVALID_VALIDITY':
+    case 'MEMORY_GRANT_INVALID_EXPIRY':
+    case 'CANDIDATE_CONTENT_KIND_MISMATCH':
+      return makeFailure('VALIDATION_ERROR', 'Memory request is invalid');
+    case 'MEMORY_INVALID_TRANSITION':
+    case 'MEMORY_UPDATE_CONFLICT':
+    case 'MEMORY_DUPLICATE_CONTENT':
+    case 'MEMORY_GRANT_EXISTS':
+    case 'MEMORY_GRANT_NOT_ACTIVE':
+    case 'CANDIDATE_SOURCE_UNAVAILABLE':
+    case 'CANDIDATE_HAS_CONFLICT':
+    case 'CANDIDATE_INVALID_TRANSITION':
+    case 'CANDIDATE_UPDATE_CONFLICT':
+    case 'CANDIDATE_CONFLICT_TARGET_INVALID':
+    case 'CANDIDATE_CONFLICT_SET_CHANGED':
+      return makeFailure('CONFLICT', 'Memory state changed; refresh and retry');
+    default:
+      return null;
+  }
 }
 
 async function requireAuthenticatedSocketUser(

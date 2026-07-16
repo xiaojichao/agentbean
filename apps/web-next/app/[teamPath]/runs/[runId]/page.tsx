@@ -573,6 +573,20 @@ export default function RunDetailPage() {
         </div>
       </div>
 
+      {(run.managementInvocationId || run.memoryCapsuleRef) && (
+        <section className="rounded-lg border border-blue-100 bg-blue-50 p-4" data-smoke="workspace-run-memory-provenance">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold text-blue-900">Memory provenance</h2>
+            <Link href={`/${np}/settings?tab=memory`} className="text-xs font-medium text-blue-700 hover:underline">打开 Memory 治理</Link>
+          </div>
+          {run.managementInvocationId && <p className="mt-2 text-xs text-blue-800">Invocation：<span className="font-mono">{run.managementInvocationId}</span></p>}
+          {run.memoryCapsuleRef && <div className="mt-2 text-xs text-blue-800">
+            <p>Capsule：<span className="font-mono">{run.memoryCapsuleRef.id}</span></p>
+            <p className="mt-1">授权决策：{run.memoryCapsuleRef.authorizationDecisionId} · 到期 {new Date(run.memoryCapsuleRef.expiresAt).toLocaleString()}</p>
+          </div>}
+        </section>
+      )}
+
       {/* Artifacts */}
       <div>
         <h2 className="text-sm font-semibold text-neutral-700 mb-3 flex items-center gap-2">

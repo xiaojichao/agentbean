@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from 'vitest';
 
 import type { MemorySourceRecord, ServerNextRepositories } from '../src/index.js';
-import { createServerMemorySearchPermissions } from '../src/application/server-memory-permissions.js';
+import { canReadMemoryScope, createServerMemorySearchPermissions } from '../src/application/server-memory-permissions.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 
 describe('production Server Memory permissions', () => {
@@ -88,6 +88,21 @@ describe('production Server Memory permissions', () => {
       .resolves.toBe(true);
     await expect(permissions.isSourceAvailable({ ...base(), now: 100, source: memorySource }))
       .resolves.toBe(false);
+  });
+
+  test('allows Team members to govern public channel and task scopes without explicit channel membership', async () => {
+    await repositories.teams.addMember({
+      teamId: 'team-1', userId: 'user-2', username: 'member', role: 'member', joinedAt: 2,
+    });
+    await expect(canReadMemoryScope(repositories, {
+      teamId: 'team-1', requesterUserId: 'user-2', scopeType: 'channel', scopeRef: 'public-1',
+    })).resolves.toBe(true);
+    await expect(canReadMemoryScope(repositories, {
+      teamId: 'team-1', requesterUserId: 'user-2', scopeType: 'task', scopeRef: 'task-1',
+    })).resolves.toBe(true);
+    await expect(canReadMemoryScope(repositories, {
+      teamId: 'team-1', requesterUserId: 'user-2', scopeType: 'channel', scopeRef: 'private-1',
+    })).resolves.toBe(false);
   });
 });
 

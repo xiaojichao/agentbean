@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2, Bell, Volume2, Keyboard, PanelRight, RotateCcw, Terminal } from 'lucide-react';
+import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2, Bell, Volume2, Keyboard, PanelRight, RotateCcw, Terminal, Database } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { authEvents, getWebSocket, joinEvents, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
@@ -19,20 +19,22 @@ import { releases } from '@/lib/releases.generated';
 import { formatReleaseVersion, type Release, type ChangeType } from '@/lib/changelog';
 import { RunsPanel } from './RunsPanel';
 import { ManagementPolicyPanel } from './ManagementPolicyPanel';
+import { MemoryGovernancePanel } from './MemoryGovernancePanel';
 
-type Tab = 'account' | 'browser' | 'server' | 'runs' | 'releases';
+type Tab = 'account' | 'browser' | 'server' | 'memory' | 'runs' | 'releases';
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'account', label: '账号', icon: <User size={16} /> },
   { id: 'browser', label: '浏览器', icon: <Globe size={16} /> },
   { id: 'server', label: '团队', icon: <Server size={16} /> },
+  { id: 'memory', label: 'Memory 治理', icon: <Database size={16} /> },
   { id: 'runs', label: '执行记录诊断', icon: <Terminal size={16} /> },
   { id: 'releases', label: '更新日志', icon: <FileText size={16} /> },
 ];
 const JOIN_INTERNAL_ERROR_MESSAGE = '创建失败，请稍后重试';
 
 function normalizeSettingsTab(value: string | null): Tab | null {
-  if (value === 'account' || value === 'browser' || value === 'server' || value === 'runs' || value === 'releases') {
+  if (value === 'account' || value === 'browser' || value === 'server' || value === 'memory' || value === 'runs' || value === 'releases') {
     return value;
   }
   return null;
@@ -77,6 +79,7 @@ export default function SettingsPage() {
         {tab === 'account' && <AccountPanel />}
         {tab === 'browser' && <BrowserPanel />}
         {tab === 'server' && <ServerPanel />}
+        {tab === 'memory' && <MemoryGovernancePanel />}
         {tab === 'runs' && <RunsPanel />}
         {tab === 'releases' && <ReleasesPanel />}
         </div>

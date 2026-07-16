@@ -1,4 +1,5 @@
 import type { ID, UnixMs } from './common.js';
+import type { MemoryCapsuleRefDto } from './management-memory.js';
 
 export type ArtifactPathKind = 'upload' | 'workspace' | 'generated';
 export type WorkspaceRunStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
@@ -40,4 +41,6 @@ export interface WorkspaceRunDto {
   createdAt: UnixMs;
   updatedAt: UnixMs;
   artifactIds: ID[];
+  managementInvocationId?: ID;
+  memoryCapsuleRef?: MemoryCapsuleRefDto;
 }

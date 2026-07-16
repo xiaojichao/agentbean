@@ -398,7 +398,9 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
         if (conflicts.length > 0) throw new Error('CANDIDATE_HAS_CONFLICT');
         const transition = evaluateCandidateTransition(candidate.status, 'accepted');
         if (!transition.ok) throw new Error('CANDIDATE_INVALID_TRANSITION');
-        if (input.kind !== candidate.contentKind) throw new Error('CANDIDATE_CONTENT_KIND_MISMATCH');
+        if (!memoryKindMatchesContentKind(input.kind, candidate.contentKind)) {
+          throw new Error('CANDIDATE_CONTENT_KIND_MISMATCH');
+        }
 
         await permissions.assertWriteAuthority({
           teamId: input.teamId, actorId: input.actorId,
@@ -471,7 +473,9 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
 
         const old = await memory.items.getById({ teamId: input.teamId, id: input.conflictMemoryId });
         if (!old || old.status !== 'active') throw new Error('MEMORY_INVALID_TRANSITION');
-        if (old.kind !== candidate.contentKind) throw new Error('CANDIDATE_CONTENT_KIND_MISMATCH');
+        if (!memoryKindMatchesContentKind(old.kind, candidate.contentKind)) {
+          throw new Error('CANDIDATE_CONTENT_KIND_MISMATCH');
+        }
         await permissions.assertWriteAuthority({
           teamId: input.teamId, actorId: input.actorId,
           scopeType: candidate.scopeType, scopeRef: candidate.scopeRef,
@@ -523,4 +527,11 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
       });
     },
   };
+}
+
+function memoryKindMatchesContentKind(kind: MemoryKind, contentKind: MemoryContentKind): boolean {
+  if (contentKind === 'fact') return kind === 'semantic';
+  if (contentKind === 'summary') return kind === 'episodic' || kind === 'artifact-summary';
+  if (contentKind === 'procedure') return kind === 'procedural';
+  return kind === contentKind;
 }

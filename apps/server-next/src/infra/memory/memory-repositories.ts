@@ -93,6 +93,11 @@ export function createInMemoryMemoryRepositories(
         const record = state.items.get(input.id);
         return record?.teamId === input.teamId ? record : null;
       },
+      async listByTeam(input) {
+        return [...state.items.values()]
+          .filter((record) => record.teamId === input.teamId)
+          .sort(compareUpdatedDesc);
+      },
       async listByScope(input) {
         return [...state.items.values()]
           .filter((record) => record.teamId === input.teamId
@@ -161,6 +166,15 @@ export function createInMemoryMemoryRepositories(
       async getCurrent(input) {
         return grantVersions(state, input.teamId, input.id).at(-1) ?? null;
       },
+      async listCurrentByTeam(input) {
+        const ids = new Set([...state.grants.values()]
+          .filter((record) => record.teamId === input.teamId)
+          .map((record) => record.id));
+        return [...ids]
+          .map((id) => grantVersions(state, input.teamId, id).at(-1))
+          .filter((record): record is MemoryGrantRecord => record !== undefined)
+          .sort(compareGrantScope);
+      },
       async listCurrentForTarget(input) {
         const ids = new Set([...state.grants.values()]
           .filter((record) => record.teamId === input.teamId && record.targetAgentId === input.targetAgentId)
@@ -198,6 +212,11 @@ export function createInMemoryMemoryRepositories(
       },
       async getById(input) {
         return state.capsuleRefs.get(`${input.teamId}:${input.id}`) ?? null;
+      },
+      async listByTeam(input) {
+        return [...state.capsuleRefs.values()]
+          .filter((record) => record.teamId === input.teamId)
+          .sort((left, right) => right.createdAt - left.createdAt || left.id.localeCompare(right.id));
       },
       async listByRun(input) {
         return [...state.capsuleRefs.values()]
@@ -242,6 +261,11 @@ export function createInMemoryMemoryRepositories(
       async getById(input) {
         const record = state.candidates.get(input.id);
         return record?.teamId === input.teamId ? record : null;
+      },
+      async listByTeam(input) {
+        return [...state.candidates.values()]
+          .filter((record) => record.teamId === input.teamId)
+          .sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id));
       },
       async findByProjectionHash(input) {
         return [...state.candidates.values()]

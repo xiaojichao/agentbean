@@ -51,6 +51,7 @@ interface ChannelSubscription {
 type AgentSubscription = ChannelSubscription;
 const INTERNAL_SOCKET_ERROR_MESSAGE = 'Internal server error';
 const DEVICE_SELECT_DIRECTORY_TIMEOUT_MS = 125_000;
+const DEVICE_MEMORY_SUMMARY_TIMEOUT_MS = 10_000;
 
 interface WebSocketSubscription {
   socket: SocketLike;
@@ -165,6 +166,37 @@ export function attachServerNextNamespaces(
         }
       } catch (error) {
         ack?.(subscriptionErrorAck(error, WEB_EVENTS.device.list));
+      }
+    });
+    socket.on(WEB_EVENTS.memory.localSummary, async (payload, ack) => {
+      try {
+        const identity = await authenticatedUser();
+        const teamId = payloadTeamId(payload);
+        if (!identity.hasToken || !identity.userId || !identity.currentDeviceId || !teamId) {
+          ack?.({ ok: false, error: 'PERMISSION_DENIED' });
+          return;
+        }
+        const devices = await app.listDevices({
+          teamId,
+          userId: identity.userId,
+          currentDeviceId: identity.currentDeviceId,
+        });
+        const localDevice = devices.ok
+          ? devices.devices.find((device) => device.isLocal && device.ownerId === identity.userId)
+          : undefined;
+        if (!localDevice) {
+          ack?.({ ok: false, error: 'PERMISSION_DENIED' });
+          return;
+        }
+        const deviceSocket = agentSocketsByDeviceId.get(localDevice.id);
+        const ackSocket = deviceSocket?.timeout?.(DEVICE_MEMORY_SUMMARY_TIMEOUT_MS) ?? deviceSocket;
+        if (!ackSocket?.emitWithAck) {
+          ack?.({ ok: false, error: 'DEVICE_OFFLINE' });
+          return;
+        }
+        ack?.(await ackSocket.emitWithAck(AGENT_EVENTS.memory.governanceSummaryRequested, { teamId }));
+      } catch {
+        ack?.({ ok: false, error: 'DEVICE_MEMORY_TIMEOUT' });
       }
     });
     registerWebSocketHandlers(socket, app, {
@@ -282,6 +314,7 @@ export function attachServerNextNamespaces(
           return;
         }
         await refreshChannelSubscribers(webSubscribers, app, teamId);
+        emitMemoryChanged(webSubscribers, teamId);
       },
       async afterAgentMutation(payload, result) {
         if (!isSuccessAck(result)) {
@@ -296,16 +329,19 @@ export function attachServerNextNamespaces(
         ]);
         for (const teamId of agentTeamIds) {
           await refreshAgentSubscribers(webSubscribers, app, teamId);
+          emitMemoryChanged(webSubscribers, teamId);
         }
         for (const teamId of payloadTeamIds(payload, 'channelTeamIds')) {
           await refreshChannelSubscribers(webSubscribers, app, teamId);
         }
       },
-      async afterTeamMutation(_payload, result) {
+      async afterTeamMutation(payload, result) {
         if (!isSuccessAck(result)) {
           return;
         }
         await refreshTeamSubscribers(webSubscribers, app);
+        const teamId = payloadTeamId(payload);
+        if (teamId) emitMemoryChanged(webSubscribers, teamId);
       },
       async afterTaskMutation(_payload, result) {
         if (!isSuccessAck(result)) {
@@ -319,7 +355,18 @@ export function attachServerNextNamespaces(
             await emitChannelMessageSubscribers(webSubscribers, app, teamId, result);
           }
           await refreshTaskSubscribers(webSubscribers, app, task);
+          if (teamId) emitMemoryChanged(webSubscribers, teamId);
         }
+      },
+      afterMemberMutation(payload, result) {
+        if (!isSuccessAck(result)) return;
+        const teamId = payloadTeamId(payload);
+        if (teamId) emitMemoryChanged(webSubscribers, teamId);
+      },
+      afterMemoryMutation(payload, result) {
+        if (!isSuccessAck(result)) return;
+        const teamId = payloadTeamId(payload);
+        if (teamId) emitMemoryChanged(webSubscribers, teamId);
       },
     });
     socket.on(WEB_EVENTS.dm.start, async (payload, ack) => {
@@ -980,6 +1027,14 @@ function emitDispatchStatus(subscribers: Set<WebSocketSubscription>, dispatch: u
       continue;
     }
     subscriber.socket.emit?.(WEB_EVENTS.message.dispatchStatus, dispatch);
+  }
+}
+
+function emitMemoryChanged(subscribers: Set<WebSocketSubscription>, teamId: string): void {
+  for (const subscriber of subscribers) {
+    if (subscriberBelongsToTeam(subscriber, teamId)) {
+      subscriber.socket.emit?.(WEB_EVENTS.memory.changed, { teamId });
+    }
   }
 }
 
