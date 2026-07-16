@@ -40,6 +40,7 @@ vi.mock('@/lib/store', () => ({
 
 vi.mock('@/lib/socket', () => ({
   authEvents: () => ({ changePassword: vi.fn() }),
+  clearStoredAuth: vi.fn(),
   getWebSocket: () => ({ disconnect: vi.fn() }),
   joinEvents: () => ({
     list: vi.fn(async () => ({ ok: true, links: [] })),

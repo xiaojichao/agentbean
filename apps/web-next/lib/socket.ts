@@ -11,6 +11,7 @@ import {
 const configuredUrl = process.env.NEXT_PUBLIC_AGENT_BEAN_SERVER_URL;
 const TOKEN_STORAGE_KEY = 'agentbean.token';
 const DEVICE_ID_STORAGE_KEY = 'agentbean.deviceId';
+const DEVICE_TOKEN_STORAGE_KEY = 'agentbean.deviceToken';
 
 let webSocket: Socket | null = null;
 const webToken = process.env.NEXT_PUBLIC_AGENT_BEAN_WEB_TOKEN ?? process.env.NEXT_PUBLIC_AGENT_BEAN_AGENT_TOKEN ?? '';
@@ -32,6 +33,23 @@ export function getStoredDeviceId(): string | null {
 export function setStoredDeviceId(deviceId: string): void {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(DEVICE_ID_STORAGE_KEY, deviceId);
+}
+
+function getStoredDeviceToken(): string {
+  if (typeof window === 'undefined') return '';
+  return window.localStorage.getItem(DEVICE_TOKEN_STORAGE_KEY) ?? '';
+}
+
+export function setStoredDeviceToken(deviceToken: string): void {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(DEVICE_TOKEN_STORAGE_KEY, deviceToken);
+}
+
+export function clearStoredAuth(): void {
+  if (typeof window === 'undefined') return;
+  window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+  window.localStorage.removeItem(DEVICE_TOKEN_STORAGE_KEY);
+  window.localStorage.removeItem(DEVICE_ID_STORAGE_KEY);
 }
 
 export function resolveDeviceLoginDeviceId(complete: { invite?: { deviceId?: string }; credentials?: { deviceId?: string; machineId?: string } }): string | undefined {
@@ -171,15 +189,15 @@ export async function fetchWorkspaceRunLog(
 export function getWebSocket(): Socket {
   if (webSocket) return webSocket;
   let retriedWithWebToken = false;
-  webSocket = io(`${getServerUrl()}/web`, { transports: ['websocket'], autoConnect: true, auth: { token: getStoredToken(), currentDeviceId: getStoredDeviceId() } });
+  webSocket = io(`${getServerUrl()}/web`, { transports: ['websocket'], autoConnect: true, auth: { token: getStoredToken(), currentDeviceId: getStoredDeviceId(), deviceToken: getStoredDeviceToken() } });
   webSocket.on('connect_error', () => {
     if (typeof window === 'undefined' || retriedWithWebToken || !webToken) return;
     const storedToken = window.localStorage.getItem(TOKEN_STORAGE_KEY);
     if (!storedToken || storedToken === webToken) return;
     retriedWithWebToken = true;
-    window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+    clearStoredAuth();
     webSocket?.disconnect();
-    webSocket!.auth = { token: webToken, currentDeviceId: getStoredDeviceId() };
+    webSocket!.auth = { token: webToken, currentDeviceId: getStoredDeviceId(), deviceToken: '' };
     webSocket?.connect();
   });
   return webSocket;
@@ -380,10 +398,10 @@ export interface AuthEvents {
   login(payload: { username: string; password: string; joinCode?: string }): Promise<{ ok: boolean; token?: string; user?: UserInfo; currentTeam?: { id: string; name: string; path: string }; error?: string }>;
   whoami(): Promise<{ ok: boolean; user?: UserInfo; currentTeam?: TeamSummary; error?: string }>;
   inviteCreate(payload?: { teamId?: string; purpose?: 'user' | 'device' }): Promise<{ ok: boolean; invite?: InviteInfo; error?: string }>;
-  deviceLogin(payload: { inviteCode: string; username: string; password: string }): Promise<{ ok: boolean; token?: string; teamId?: string; teamPath?: string; userId?: string; username?: string; role?: 'admin' | 'user'; deviceId?: string; error?: string }>;
+  deviceLogin(payload: { inviteCode: string; username: string; password: string }): Promise<{ ok: boolean; token?: string; deviceToken?: string; teamId?: string; teamPath?: string; userId?: string; username?: string; role?: 'admin' | 'user'; deviceId?: string; error?: string }>;
   changePassword(payload: { currentPassword: string; newPassword: string }): Promise<{ ok: boolean; error?: string }>;
   // 已登录用户直接用现有 token 完成 device invite（不需再输密码），用于让 web 关联本机设备。
-  completeDeviceInvite(payload: { code: string }): Promise<{ ok: boolean; invite?: { deviceId?: string }; credentials?: { deviceId?: string; machineId?: string }; team?: { id: string; name: string; path: string }; error?: string }>;
+  completeDeviceInvite(payload: { code: string }): Promise<{ ok: boolean; invite?: { deviceId?: string }; credentials?: { token?: string; deviceId?: string; machineId?: string }; team?: { id: string; name: string; path: string }; error?: string }>;
 }
 
 export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
@@ -395,7 +413,7 @@ export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
       return emitWithTimeout(socket, WEB_EVENTS.auth.login, payload, 20000);
     },
     whoami() {
-      return emitWithTimeout(socket, WEB_EVENTS.auth.whoami, { token: getStoredAuthToken() });
+      return emitWithTimeout(socket, WEB_EVENTS.auth.whoami, { token: getStoredAuthToken(), deviceToken: getStoredDeviceToken() });
     },
     inviteCreate(payload = {}) {
       const { teamId, ...rest } = payload;
@@ -419,6 +437,7 @@ export function authEvents(socket: Socket = getWebSocket()): AuthEvents {
       return {
         ok: true,
         token: login.token,
+        deviceToken: credentials.token,
         teamId: team?.id ?? credentials.teamId,
         teamPath: team?.path ?? team?.id ?? credentials.teamId,
         userId: login.user.id,

@@ -60,6 +60,83 @@ describe('server-next first-slice migrations', () => {
   });
 });
 
+describe('workspace run Memory provenance visibility', () => {
+  test('omits Capsule metadata unless every manifest scope is currently visible', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 100 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    await repositories.teams.addMember({
+      teamId: 'team-1', userId: 'user-2', username: 'member', role: 'member', joinedAt: 2,
+    });
+    await repositories.channels.create({
+      id: 'private-1', teamId: 'team-1', kind: 'channel', name: 'private', visibility: 'private',
+      humanMemberIds: ['user-1'], agentMemberIds: ['agent-1'], createdAt: 2,
+    });
+    await repositories.management.runs.create({
+      schemaVersion: 1, id: 'run-1', teamId: 'team-1', channelId: 'channel-1', rootMessageId: 'message-1',
+      mode: 'managed', status: 'running',
+      placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true },
+      checkpointRevision: 0, budget: { maxSubtasks: 20, maxDepth: 3, maxExternalInvocations: 20 },
+      createdAt: 2, updatedAt: 2,
+    });
+    const capsuleRef = {
+      id: 'capsule-1', teamId: 'team-1', managementRunId: 'run-1', targetAgentId: 'agent-1',
+      contentHash: 'sha256:capsule', authorizationDecisionId: 'decision-1', expiresAt: 1_000,
+    };
+    await repositories.memory.items.create({
+      schemaVersion: 1, id: 'memory-private', teamId: 'team-1', kind: 'semantic', status: 'active',
+      scopeType: 'channel', scopeRef: 'private-1', content: 'private memory', createdByUserId: 'user-1',
+      createdAt: 2, updatedAt: 2,
+    });
+    await repositories.memory.capsuleRefs.create({ ...capsuleRef, issuedAt: 2, createdAt: 2 });
+    await repositories.memory.capsuleItems.create({
+      capsuleId: 'capsule-1', teamId: 'team-1', requesterUserId: 'user-1', memoryId: 'memory-private',
+      position: 0, scopeType: 'channel', scopeRef: 'private-1', sourceVisibility: 'private',
+      contentKind: 'summary', redactionLevel: 'summary-only', contentField: 'summary',
+      authorization: {
+        schemaVersion: 1, decisionId: 'decision-1', mode: 'scope-policy', policyVersion: 1,
+        targetAgentId: 'agent-1', sourceScopeType: 'channel', sourceScopeRef: 'private-1',
+        sourceRefsHash: 'sha256:refs', contentHash: 'sha256:content', authorizedContentKind: 'summary',
+        authorizedRedactionLevel: 'summary-only', issuedAt: 2, expiresAt: 1_000,
+      },
+      createdAt: 2,
+    });
+    await repositories.management.invocations.create({
+      schemaVersion: 1, id: 'invocation-1', managementRunId: 'run-1', intent: {
+        schemaVersion: 1, teamId: 'team-1', channelId: 'channel-1', targetAgentId: 'agent-1',
+        targetKind: 'custom', objective: 'run', acceptanceCriteria: [], dependencyResults: [],
+        memoryCapsuleRef: capsuleRef, attachmentIds: [],
+      }, intentHash: 'hash', idempotencyKey: 'invoke-1', createdAt: 2,
+    });
+    await repositories.dispatches.create({
+      id: 'dispatch-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
+      agentId: 'agent-1', status: 'succeeded', requestId: 'request-1', prompt: 'run',
+      createdAt: 2, updatedAt: 3, completedAt: 3,
+    });
+    await repositories.management.dispatchAttempts.create({
+      id: 'attempt-1', invocationId: 'invocation-1', dispatchId: 'dispatch-1', attemptNumber: 1,
+      status: 'succeeded', startedAt: 2, completedAt: 3,
+    });
+    await repositories.workspaceRuns.create({
+      id: 'workspace-1', teamId: 'team-1', channelId: 'channel-1', dispatchId: 'dispatch-1',
+      agentId: 'agent-1', status: 'succeeded', createdAt: 2, updatedAt: 3, artifactIds: [],
+    });
+
+    await expect(app.getWorkspaceRunDetail({
+      userId: 'user-1', teamId: 'team-1', runId: 'workspace-1',
+    })).resolves.toMatchObject({ ok: true, workspaceRun: { memoryCapsuleRef: { id: 'capsule-1' } } });
+    const hidden = await app.getWorkspaceRunDetail({
+      userId: 'user-2', teamId: 'team-1', runId: 'workspace-1',
+    });
+    expect(hidden).toMatchObject({ ok: true, workspaceRun: { id: 'workspace-1' } });
+    expect(hidden).not.toHaveProperty('workspaceRun.memoryCapsuleRef');
+  });
+});
+
 describe('server-next first-slice use cases', () => {
   test('registers a user with a private team, owner membership, current team, and default all channel', async () => {
     const app = createInMemoryServerNext({
@@ -5045,6 +5122,23 @@ describe('server-next first-slice use cases', () => {
     if (!hello.ok || !hello.credentials) {
       throw new Error('device hello did not issue refreshed credentials');
     }
+    const login = await app.loginUser({ username: 'shaw', password: 'secret' });
+    if (!login.ok) throw new Error('login failed');
+    await expect(app.whoami({
+      token: login.token,
+      deviceToken: hello.credentials.token,
+    })).resolves.toMatchObject({
+      ok: true,
+      verifiedCurrentDeviceId: 'device-1',
+      deviceCredentialStatus: 'verified',
+    });
+    await expect(app.whoami({
+      token: login.token,
+      deviceToken: 'abn_device.invalid.signature',
+    })).resolves.toMatchObject({
+      ok: true,
+      deviceCredentialStatus: 'invalid',
+    });
     await app.reportDeviceRuntimes({
       teamId: 'team-1',
       deviceId: 'device-1',

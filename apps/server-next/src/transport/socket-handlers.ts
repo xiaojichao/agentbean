@@ -25,6 +25,12 @@ export interface AuthenticatedUserIdentity {
   currentTeamId: string | null;
   /** web 连接上报的本机设备 id（socket.auth.currentDeviceId），用于 device DTO 的 isLocal 判定。 */
   currentDeviceId: string | null;
+  /** 由 Server 校验 device invite 凭证后解析出的 canonical Device id。 */
+  verifiedCurrentDeviceId?: string | null;
+  /** 当前连接是否提供了 device bearer credential。 */
+  hasDeviceToken?: boolean;
+  /** Device bearer credential 的服务端校验状态。 */
+  deviceCredentialStatus?: 'verified' | 'pending' | 'invalid';
 }
 
 export interface AuthenticatedUserProvider {

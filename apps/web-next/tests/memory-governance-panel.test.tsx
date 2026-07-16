@@ -92,4 +92,15 @@ describe('MemoryGovernancePanel', () => {
     await waitFor(() => expect(screen.getByText('无权查看该 Team 的 Memory')).toBeTruthy());
     expect(screen.queryByText('Use Node 24')).toBeNull();
   });
+
+  test('guides legacy browsers through secure Device re-linking', async () => {
+    mocks.localSummaries.mockResolvedValueOnce({ ok: false, error: 'DEVICE_ATTESTATION_REQUIRED' });
+    const { MemoryGovernancePanel } = await import('../app/[teamPath]/settings/MemoryGovernancePanel');
+    render(React.createElement(MemoryGovernancePanel));
+
+    await screen.findByText('Use Node 24');
+    fireEvent.click(screen.getByRole('button', { name: '当前 Device' }));
+    expect(await screen.findByText('需要重新关联当前 Device')).toBeTruthy();
+    expect(screen.getByRole('link', { name: '前往设备页' }).getAttribute('href')).toBe('./devices');
+  });
 });

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/sidebar';
 import { ConnectionBanner } from '@/components/connection-banner';
-import { authEvents, teamEvents } from '@/lib/socket';
+import { authEvents, clearStoredAuth, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import { readStoredTeamPath, writeStoredTeamPath } from '@/lib/team-path';
 
@@ -52,7 +52,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         });
       } else if (res.error === 'UNAUTHENTICATED') {
         // 仅 token 真正无效才登出；超时('timeout')/网络错误保持登录态，下次重试
-        localStorage.removeItem('agentbean.token');
+        clearStoredAuth();
         useAgentBeanStore.getState().setAuthToken(null);
         useAgentBeanStore.getState().setCurrentUser(null);
       }
