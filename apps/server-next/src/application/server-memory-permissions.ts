@@ -55,7 +55,7 @@ export function createServerMemoryWritePermissions(
 ): MemoryPermissions {
   return {
     async assertWriteAuthority(input) {
-      if (!await canReadMemoryScope(repositories, {
+      if (!await canWriteMemoryScope(repositories, {
         teamId: input.teamId,
         requesterUserId: input.actorId,
         scopeType: input.scopeType,
@@ -73,7 +73,7 @@ export function createServerMemoryWritePermissions(
         && (input.sourceScopeType !== input.targetScopeType || input.sourceScopeRef !== input.targetScopeRef)) {
         throw new Error('MEMORY_SOURCE_PERMISSION_DENIED');
       }
-      if (!await canReadMemoryScope(repositories, {
+      if (!await canWriteMemoryScope(repositories, {
         teamId: input.teamId,
         requesterUserId: input.actorId,
         scopeType: input.targetScopeType,
@@ -81,7 +81,7 @@ export function createServerMemoryWritePermissions(
       })) throw new Error('MEMORY_PERMISSION_DENIED');
     },
     async assertGrantAuthority(input) {
-      if (!await canReadMemoryScope(repositories, {
+      if (!await canWriteMemoryScope(repositories, {
         teamId: input.teamId,
         requesterUserId: input.actorId,
         scopeType: input.sourceScopeType,
@@ -108,7 +108,7 @@ export function createServerMemoryCandidatePermissions(
     },
     async assertDecideAuthority(input) {
       const candidate = await repositories.memory.candidates.getById({ teamId: input.teamId, id: input.candidateId });
-      if (!candidate || !await canReadMemoryScope(repositories, {
+      if (!candidate || !await canWriteMemoryScope(repositories, {
         teamId: input.teamId,
         requesterUserId: input.actorId,
         scopeType: candidate.scopeType,
@@ -162,6 +162,67 @@ export async function canReadMemoryScope(
         && (channel.visibility === 'public' || channel.humanMemberIds.includes(input.requesterUserId));
     }
   }
+}
+
+/**
+ * Governance mutations intentionally use a stricter rule than reads: public channels are readable
+ * by every Team member, but only explicit channel members may write or grant their Memory scope.
+ */
+export async function canWriteMemoryScope(
+  repositories: ServerMemoryPermissionRepositories,
+  input: {
+    readonly teamId: ID;
+    readonly requesterUserId: ID;
+    readonly scopeType: MemoryScopeType;
+    readonly scopeRef: ID;
+  },
+): Promise<boolean> {
+  if (!await repositories.teams.isMember(input.teamId, input.requesterUserId)) return false;
+  switch (input.scopeType) {
+    case 'team':
+      return input.scopeRef === input.teamId;
+    case 'user':
+      return input.scopeRef === input.requesterUserId;
+    case 'agent': {
+      const agent = await repositories.agents.getById(input.scopeRef);
+      return Boolean(agent && agent.deletedAt === undefined && agent.visibleTeamIds.includes(input.teamId));
+    }
+    case 'task': {
+      const task = await repositories.tasks.getById(input.scopeRef);
+      if (!task || task.teamId !== input.teamId) return false;
+      if (!task.channelId) return true;
+      const channel = await repositories.channels.getById(task.channelId);
+      return Boolean(channel && channel.teamId === input.teamId
+        && channel.humanMemberIds.includes(input.requesterUserId));
+    }
+    case 'channel':
+    case 'dm': {
+      const channel = await repositories.channels.getById(input.scopeRef);
+      if (!channel || channel.teamId !== input.teamId
+        || !channel.humanMemberIds.includes(input.requesterUserId)) return false;
+      return input.scopeType === 'dm' ? channel.kind === 'direct' : channel.kind === 'channel';
+    }
+  }
+}
+
+export async function canReadMemoryCapsule(
+  repositories: ServerMemoryPermissionRepositories,
+  input: { readonly teamId: ID; readonly requesterUserId: ID; readonly capsuleId: ID },
+): Promise<boolean> {
+  const manifests = await repositories.memory.capsuleItems.listByCapsule({
+    teamId: input.teamId,
+    capsuleId: input.capsuleId,
+  });
+  if (manifests.length === 0) return false;
+  for (const manifest of manifests) {
+    if (!await canReadMemoryScope(repositories, {
+      teamId: input.teamId,
+      requesterUserId: input.requesterUserId,
+      scopeType: manifest.scopeType,
+      scopeRef: manifest.scopeRef,
+    })) return false;
+  }
+  return true;
 }
 
 async function sourceRecordForAvailability(

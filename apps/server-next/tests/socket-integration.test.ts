@@ -1465,9 +1465,7 @@ describe('server-next Socket.IO namespaces', () => {
 
     await expect(socket.trigger(WEB_EVENTS.memory.localSummary, { teamId: 'team-1' }))
       .resolves.toEqual({ ok: false, error: 'PERMISSION_DENIED' });
-    expect(listDevices).toHaveBeenCalledWith({
-      teamId: 'team-1', userId: 'user-1', currentDeviceId: 'device-other',
-    });
+    expect(listDevices).not.toHaveBeenCalled();
   });
 
   test('handles DM start, list, and snapshot through custom socket handlers', async () => {

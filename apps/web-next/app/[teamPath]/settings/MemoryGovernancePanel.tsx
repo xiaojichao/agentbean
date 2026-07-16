@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type {
   LocalMemoryGovernanceSummaryDto,
   MemoryGovernanceSnapshotDto,
@@ -33,13 +33,12 @@ export function MemoryGovernancePanel() {
   const [state, setState] = useState<LoadState>('loading');
   const [localState, setLocalState] = useState<'idle' | 'loading' | 'ready' | 'offline' | 'denied' | 'error'>('idle');
   const [message, setMessage] = useState('');
-  const [connected, setConnected] = useState(() => getWebSocket().connected);
-  const api = useMemo(() => memoryEvents(), []);
+  const [connected, setConnected] = useState(false);
 
   const load = useCallback(async (quiet = false) => {
     if (!teamId) return;
     if (!quiet) setState('loading');
-    const result = await api.snapshot(teamId);
+    const result = await memoryEvents().snapshot(teamId);
     if (result.ok && result.snapshot) {
       setSnapshot(result.snapshot);
       setState('ready');
@@ -50,12 +49,12 @@ export function MemoryGovernancePanel() {
     setMessage(error);
     setState(error.includes('PERMISSION') || error === 'FORBIDDEN' ? 'permission-denied' : 'error');
     setSnapshot(null);
-  }, [api, teamId]);
+  }, [teamId]);
 
   const loadLocal = useCallback(async () => {
     if (!teamId) return;
     setLocalState('loading');
-    const result = await api.localSummaries(teamId);
+    const result = await memoryEvents().localSummaries(teamId);
     if (result.ok) {
       setLocal(result.summaries ?? []);
       setLocalState('ready');
@@ -65,11 +64,13 @@ export function MemoryGovernancePanel() {
     else if (result.error === 'PERMISSION_DENIED') setLocalState('denied');
     else setLocalState('error');
     setLocal([]);
-  }, [api, teamId]);
+  }, [teamId]);
 
   useEffect(() => {
     void load();
     const socket = getWebSocket();
+    setConnected(socket.connected);
+    const api = memoryEvents(socket);
     const onConnect = () => { setConnected(true); void load(true); };
     const onDisconnect = () => setConnected(false);
     socket.on('connect', onConnect);
@@ -82,7 +83,7 @@ export function MemoryGovernancePanel() {
       socket.off('disconnect', onDisconnect);
       offChanged();
     };
-  }, [api, load, teamId]);
+  }, [load, teamId]);
 
   useEffect(() => {
     if (tab === 'local' && localState === 'idle') void loadLocal();

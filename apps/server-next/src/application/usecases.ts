@@ -15,7 +15,7 @@ import { createMemorySourceInvalidationService } from './memory-source-invalidat
 import { createCollaborativeMemoryService, type MemoryView } from './collaborative-memory-service.js';
 import { createMemoryCandidateService, type MemoryCandidateView } from './memory-candidate-service.js';
 import { createMemoryGovernanceService } from './memory-governance-service.js';
-import { createServerMemoryCandidatePermissions, createServerMemoryWritePermissions } from './server-memory-permissions.js';
+import { canReadMemoryCapsule, createServerMemoryCandidatePermissions, createServerMemoryWritePermissions } from './server-memory-permissions.js';
 import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
 
@@ -244,11 +244,13 @@ export interface LoginUserResult {
 
 export interface WhoamiInput {
   token: string;
+  deviceToken?: string;
 }
 
 export interface WhoamiResult {
   user: UserDto;
   currentTeam: TeamDto;
+  verifiedCurrentDeviceId?: string;
 }
 
 export interface ListTeamsResult {
@@ -1080,9 +1082,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!currentTeam) {
         return makeFailure('FORBIDDEN', 'User has no team membership');
       }
+      let verifiedCurrentDeviceId: string | undefined;
+      if (whoamiInput.deviceToken) {
+        const credentials = verifyDeviceToken(whoamiInput.deviceToken, sessionSecret);
+        if (credentials?.ownerId === userId) {
+          const device = credentials.deviceId
+            ? await repositories.devices.getById(credentials.deviceId)
+            : await findDeviceByCredentials(repositories, credentials.teamId, credentials);
+          if (device?.ownerId === userId && device.teamId === credentials.teamId) {
+            verifiedCurrentDeviceId = device.id;
+          }
+        }
+      }
       return makeSuccess({
         user: { ...toUserDto(user), primaryTeamId: currentTeam.id },
         currentTeam: toTeamDto(currentTeam, currentTeam.currentUserRole),
+        ...(verifiedCurrentDeviceId ? { verifiedCurrentDeviceId } : {}),
       });
     },
 
@@ -3501,7 +3516,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async getWorkspaceRun(runInput) {
       const result = await getAuthorizedWorkspaceRun(repositories, runInput);
       if (!result.ok) return result;
-      return makeSuccess({ workspaceRun: await toWorkspaceRunDto(repositories, result.workspaceRun) });
+      return makeSuccess({ workspaceRun: await toWorkspaceRunDto(repositories, result.workspaceRun, runInput.userId) });
     },
 
     async getWorkspaceRunDetail(runInput) {
@@ -3513,7 +3528,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         runId: result.workspaceRun.id,
       });
       return makeSuccess({
-        workspaceRun: await toWorkspaceRunDto(repositories, result.workspaceRun),
+        workspaceRun: await toWorkspaceRunDto(repositories, result.workspaceRun, runInput.userId),
         artifacts: artifacts.map(toArtifactDto),
       });
     },
@@ -5156,15 +5171,24 @@ function toDispatchDto(dispatch: DispatchDto): DispatchDto {
 async function toWorkspaceRunDto(
   repositories: ServerNextRepositories,
   run: WorkspaceRunRecord,
+  requesterUserId: string,
 ): Promise<WorkspaceRunDto> {
   const dispatch = await repositories.dispatches.getById(run.dispatchId);
   const attempt = await repositories.management.dispatchAttempts.getByDispatchId(run.dispatchId);
   const invocation = attempt ? await repositories.management.invocations.getById(attempt.invocationId) : null;
+  const memoryCapsuleRef = invocation?.intent.memoryCapsuleRef;
+  const canReadCapsule = memoryCapsuleRef
+    ? await canReadMemoryCapsule(repositories, {
+        teamId: run.teamId,
+        requesterUserId,
+        capsuleId: memoryCapsuleRef.id,
+      })
+    : false;
   return {
     ...run,
     ...(dispatch?.messageId && dispatch.messageId !== run.messageId ? { sourceMessageId: dispatch.messageId } : {}),
     ...(invocation ? { managementInvocationId: invocation.id } : {}),
-    ...(invocation?.intent.memoryCapsuleRef ? { memoryCapsuleRef: invocation.intent.memoryCapsuleRef } : {}),
+    ...(memoryCapsuleRef && canReadCapsule ? { memoryCapsuleRef } : {}),
   };
 }
 

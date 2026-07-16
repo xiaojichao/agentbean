@@ -172,14 +172,14 @@ export function attachServerNextNamespaces(
       try {
         const identity = await authenticatedUser();
         const teamId = payloadTeamId(payload);
-        if (!identity.hasToken || !identity.userId || !identity.currentDeviceId || !teamId) {
+        if (!identity.hasToken || !identity.userId || !identity.verifiedCurrentDeviceId || !teamId) {
           ack?.({ ok: false, error: 'PERMISSION_DENIED' });
           return;
         }
         const devices = await app.listDevices({
           teamId,
           userId: identity.userId,
-          currentDeviceId: identity.currentDeviceId,
+          currentDeviceId: identity.verifiedCurrentDeviceId,
         });
         const localDevice = devices.ok
           ? devices.devices.find((device) => device.isLocal && device.ownerId === identity.userId)
@@ -907,12 +907,17 @@ function createAuthenticatedUserResolver(
       cached = { hasToken: true, userId: null, currentTeamId: null, currentDeviceId };
       return cached;
     }
-    const result = await app.whoami({ token: authToken.token });
+    const deviceToken = socketDeviceToken(socket);
+    const result = await app.whoami({
+      token: authToken.token,
+      ...(deviceToken ? { deviceToken } : {}),
+    });
     cached = {
       hasToken: true,
       userId: result.ok ? result.user.id : null,
       currentTeamId: result.ok ? (result.currentTeam?.id ?? null) : null,
       currentDeviceId,
+      verifiedCurrentDeviceId: result.ok ? (result.verifiedCurrentDeviceId ?? null) : null,
     };
     return cached;
   }) as AuthenticatedUserProvider;
@@ -940,6 +945,12 @@ function socketAuthToken(socket: SocketLike): { hasToken: boolean; token: string
 function socketCurrentDeviceId(socket: SocketLike): string | null {
   const auth = (socket as { handshake?: { auth?: Record<string, unknown> } }).handshake?.auth;
   const value = auth?.currentDeviceId;
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function socketDeviceToken(socket: SocketLike): string | null {
+  const auth = (socket as { handshake?: { auth?: Record<string, unknown> } }).handshake?.auth;
+  const value = auth?.deviceToken;
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 

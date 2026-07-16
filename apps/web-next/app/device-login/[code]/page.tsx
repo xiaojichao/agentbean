@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { createInviteSocket, authEvents, resetWebSocket, setStoredDeviceId, resolveDeviceLoginDeviceId } from '@/lib/socket';
+import { createInviteSocket, authEvents, resetWebSocket, setStoredDeviceId, setStoredDeviceToken, resolveDeviceLoginDeviceId } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import { readStoredTeamPath } from '@/lib/team-path';
 
@@ -37,6 +37,7 @@ export default function DeviceLoginPage() {
         }
         const deviceId = resolveDeviceLoginDeviceId(complete);
         if (deviceId) setStoredDeviceId(deviceId);
+        if (complete.credentials?.token) setStoredDeviceToken(complete.credentials.token);
         resetWebSocket();
         const np = complete.team?.path ?? complete.team?.id ?? readStoredTeamPath(localStorage) ?? 'default';
         router.push(`/${np}/devices`);
@@ -59,6 +60,7 @@ export default function DeviceLoginPage() {
         }
         localStorage.setItem('agentbean.token', res.token);
         if (res.deviceId) setStoredDeviceId(res.deviceId);
+        if (res.deviceToken) setStoredDeviceToken(res.deviceToken);
         useAgentBeanStore.getState().setAuthToken(res.token);
         useAgentBeanStore.getState().setCurrentTeamId(res.teamId ?? 'default');
         useAgentBeanStore.getState().setCurrentUser({
