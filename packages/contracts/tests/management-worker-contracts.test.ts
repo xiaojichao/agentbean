@@ -171,6 +171,7 @@ const validPayloads: { [K in keyof ManagementWorkerPayloadMapV1]: ManagementWork
     schemaVersion: 1,
     commandId: 'command-1',
     requestHash: 'sha256:request-1',
+    toolName: 'memory.create_capsule',
     ...authority,
   },
   'outbox-replay-ack': {

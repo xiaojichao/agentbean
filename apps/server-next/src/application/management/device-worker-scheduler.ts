@@ -29,6 +29,7 @@ import type { DeviceRepository, MessageRepository } from '../repositories.js';
 import type { ManagementRepositories } from '../management-repositories.js';
 import type { MemoryRepositories } from '../memory-repositories.js';
 import type { TaskCoordinationUnitOfWork } from '../task-coordination-unit-of-work.js';
+import type { ManagementMemoryUnitOfWork } from '../management-memory-unit-of-work.js';
 import { ManagementConflictError, type createManagementKernel } from './management-kernel.js';
 import { collectManagementCheckpointFacts, restoreOrRebuildManagementCheckpoint, toManagementCheckpointAuthoritative } from './management-checkpoint.js';
 
@@ -48,6 +49,7 @@ export interface DeviceWorkerSchedulerDependencies {
   readonly management: ManagementRepositories;
   readonly memory?: MemoryRepositories;
   readonly taskCoordinationUnitOfWork?: TaskCoordinationUnitOfWork;
+  readonly managementMemoryUnitOfWork: ManagementMemoryUnitOfWork;
   readonly kernel: ManagementKernel;
   readonly executeTool: ManagementToolExecutor;
   readonly clock: { now(): number };
@@ -103,6 +105,9 @@ interface PendingOffer {
 
 const DEFAULT_LEASE_TTL_MS = 5 * 60_000;
 const DEFAULT_OFFER_TIMEOUT_MS = 10_000;
+const PHASE_3_MEMORY_WRITE_TOOL_NAMES = new Set([
+  'memory.create_capsule', 'memory.propose_candidate', 'memory.link_sources',
+]);
 
 export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerDependencies) {
   const leaseTtlMs = dependencies.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
@@ -506,6 +511,19 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
         await dependencies.kernel.authorizeWrite(input);
       } catch {
         return { ...base, disposition: 'rejected' };
+      }
+      if (input.toolName && PHASE_3_MEMORY_WRITE_TOOL_NAMES.has(input.toolName)) {
+        return dependencies.managementMemoryUnitOfWork.run(async ({ management }) => {
+          const event = (await management.events.list(input.managementRunId))
+            .find((record) => record.event.idempotencyKey === input.idempotencyKey);
+          if (event?.event.type !== 'memory-tool-completed') return { ...base, disposition: 'rejected' };
+          if (event.event.payload.requestHash !== input.requestHash) {
+            return { ...base, disposition: 'conflict' };
+          }
+          return event.event.payload.output
+            ? { ...base, disposition: 'committed', resultReferenceId: event.event.payload.resultReferenceId }
+            : { ...base, disposition: 'rejected' };
+        });
       }
       const invocation = await dependencies.management.invocations.getByIdempotencyKey({
         managementRunId: input.managementRunId,

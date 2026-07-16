@@ -1286,6 +1286,7 @@ function createDefaultManagementRuntime(
     management: repositories.management,
     memory: repositories.memory,
     taskCoordinationUnitOfWork: repositories.taskCoordinationUnitOfWork,
+    managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
     kernel,
     executeTool: createManagementToolExecutor({
       kernel,

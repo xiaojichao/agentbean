@@ -162,6 +162,32 @@ describe('management worker socket integration', () => {
       idempotencyKey: 'handoff-command',
       requestHash: 'handoff-request-hash',
     })).resolves.toMatchObject({ disposition: 'existing', resultReferenceId: 'handoff-1' });
+    let markTransactionStarted!: () => void;
+    let releaseTransaction!: () => void;
+    const transactionStarted = new Promise<void>((resolve) => { markTransactionStarted = resolve; });
+    const transactionRelease = new Promise<void>((resolve) => { releaseTransaction = resolve; });
+    const inFlightMemoryWrite = harness.repositories.managementMemoryUnitOfWork.run(async ({ management }) => {
+      markTransactionStarted();
+      await transactionRelease;
+      await harness.kernel.recordMemoryToolReceiptInTransaction(management, {
+        authority, idempotencyKey: 'racing-memory-command', toolName: 'memory.create_capsule',
+        resultReferenceId: 'capsule-racing', requestHash: 'racing-memory-request-hash',
+        output: { capsuleRef: { schemaVersion: 1, id: 'capsule-racing', teamId: 'team-1',
+          managementRunId: harness.runId, targetAgentId: 'agent-1', contentHash: 'sha256:racing',
+          authorizationDecisionId: 'decision-racing', expiresAt: 100 } },
+      });
+    });
+    await transactionStarted;
+    const racingReplay = socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
+      ...authority, commandId: 'racing-memory-command', idempotencyKey: 'racing-memory-command',
+      requestHash: 'racing-memory-request-hash', toolName: 'memory.create_capsule',
+    });
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    releaseTransaction();
+    await inFlightMemoryWrite;
+    await expect(racingReplay).resolves.toMatchObject({
+      disposition: 'committed', resultReferenceId: 'capsule-racing',
+    });
     await harness.kernel.recordMemoryToolReceipt({
       authority, idempotencyKey: 'memory-command', toolName: 'memory.create_capsule',
       resultReferenceId: 'capsule-1', requestHash: 'memory-request-hash',
@@ -171,11 +197,11 @@ describe('management worker socket integration', () => {
     });
     await expect(socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
       ...authority, commandId: 'memory-command', idempotencyKey: 'memory-command',
-      requestHash: 'memory-request-hash',
+      requestHash: 'memory-request-hash', toolName: 'memory.create_capsule',
     })).resolves.toMatchObject({ disposition: 'committed', resultReferenceId: 'capsule-1' });
     await expect(socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
       ...authority, commandId: 'memory-command', idempotencyKey: 'memory-command',
-      requestHash: 'changed-request-hash',
+      requestHash: 'changed-request-hash', toolName: 'memory.create_capsule',
     })).resolves.toMatchObject({ disposition: 'conflict' });
     await harness.repositories.management.events.append({
       event: {
@@ -190,7 +216,7 @@ describe('management worker socket integration', () => {
     });
     await expect(socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
       ...authority, commandId: 'legacy-memory-command', idempotencyKey: 'legacy-memory-command',
-      requestHash: 'legacy-memory-request-hash',
+      requestHash: 'legacy-memory-request-hash', toolName: 'memory.create_capsule',
     })).resolves.toMatchObject({ disposition: 'rejected' });
     await expect(socket.trigger(AGENT_EVENTS.managementWorker.leaseRelease, {
       ...authority,
@@ -504,6 +530,7 @@ async function createHarness(input: { devices: ReturnType<typeof device>[]; allo
     devices: repositories.devices,
     messages: repositories.messages,
     management: repositories.management,
+    managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
     kernel,
     executeTool,
     memory: repositories.memory,

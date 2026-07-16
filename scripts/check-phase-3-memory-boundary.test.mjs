@@ -358,6 +358,30 @@ test('fails closed when the atomic Memory transaction becomes optional', () => {
   assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
 });
 
+test('fails closed when Memory replay no longer joins the authoritative transaction queue', () => {
+  const result = withFixture('agentbean-phase3-memory-replay-transaction-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/management/device-worker-scheduler.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replace(
+      'return dependencies.managementMemoryUnitOfWork.run',
+      'return removedManagementMemoryUnitOfWork.run',
+    ));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
+test('fails closed when daemon replay omits the original Memory tool name', () => {
+  const result = withFixture('agentbean-phase3-memory-replay-tool-name-', (fixture) => {
+    const path = join(fixture, 'apps/daemon-next/src/pi-manager-worker-host.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replace(
+      'toolName: item.toolName,',
+      '',
+    ));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
 test('fails closed when Memory search skips lease proof validation', () => {
   const result = withFixture('agentbean-phase3-memory-search-lease-', (fixture) => {
     const path = join(fixture, 'apps/server-next/src/application/management/management-tool-executor.ts');
@@ -397,7 +421,7 @@ test('fails closed when replay errors no longer block Session recovery for Memor
 test('fails closed when replay treats legacy Memory receipts without output as committed', () => {
   const result = withFixture('agentbean-phase3-memory-legacy-receipt-replay-', (fixture) => {
     const path = join(fixture, 'apps/server-next/src/application/management/device-worker-scheduler.ts');
-    writeFileSync(path, readFileSync(path, 'utf8').replace('event.event.payload.output', 'true'));
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('event.event.payload.output', 'true'));
   });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);

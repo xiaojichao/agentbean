@@ -324,6 +324,8 @@ export interface ManagementOutboxReplayV1 extends ManagementWorkerAuthorityV1 {
   readonly schemaVersion: 1;
   readonly commandId: ID;
   readonly requestHash: string;
+  /** Added compatibly so the server can serialize Phase 3 Memory verdict checks. */
+  readonly toolName?: string;
 }
 
 export interface ManagementOutboxReplayAckV1 {
@@ -894,6 +896,7 @@ const schemas: { readonly [K in ManagementWorkerPayloadKind]: Validator } = {
     schemaVersion: required(literal(1)),
     commandId: required(id),
     requestHash: required(hash),
+    toolName: optional(text(128)),
     ...authorityFields,
   }),
   'outbox-replay-ack': exactObject({

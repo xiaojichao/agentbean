@@ -419,6 +419,7 @@ export async function replayManagementOutboxForLease(input: {
       idempotencyKey: item.idempotencyKey,
       commandId: item.commandId,
       requestHash: item.requestHash,
+      toolName: item.toolName,
     };
     try {
       const result = await input.protocol.replayOutbox(payload);

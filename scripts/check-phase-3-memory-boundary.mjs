@@ -42,6 +42,7 @@ const memoryCandidateTests = read('apps/server-next/tests/memory-candidate-servi
 const memoryCandidatePolicy = read('packages/domain/src/memory-candidate-policy.ts');
 const memoryCandidateMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0019_management_phase_3_candidate_lifecycle.sql');
 const invocationContract = read('packages/contracts/src/invocation.ts');
+const managementWorkerV1 = read('packages/contracts/src/management-worker.ts');
 const managementWorkerV2 = read('packages/contracts/src/management-worker-v2.ts');
 const managementEventContract = read('packages/contracts/src/management-event.ts');
 const invocationGateway = read('apps/server-next/src/application/management/invocation-gateway.ts');
@@ -281,6 +282,7 @@ if (!managementToolExecutor.includes('Phase3ToolHandlers')
   || !daemonWorkerHost.includes('checkpointManagementPhase')
   || !daemonWorkerHost.includes('PHASE_3_MANAGEMENT_TOOL_NAMES')
   || !daemonWorkerHost.includes('includeMemoryCapsules')
+  || !daemonWorkerHost.includes('toolName: item.toolName')
   || daemonWorkerHost.includes("result.disposition === 'rejected' && PHASE_3_MEMORY_WRITE_TOOL_NAMES")
   || (outboxReplayBody.match(/PHASE_3_MEMORY_WRITE_TOOL_NAMES\.has\(item\.toolName\)/g)?.length ?? 0) < 1
   || !daemonWorkerHost.includes('replay.unresolvedMemoryWriteCount > 0')
@@ -291,6 +293,7 @@ if (!managementToolExecutor.includes('Phase3ToolHandlers')
   || !deviceWorkerScheduler.includes('event?.event.type === \'memory-tool-completed\'')
   || !deviceWorkerScheduler.includes('event.event.payload.requestHash !== input.requestHash')
   || !deviceWorkerScheduler.includes('event.event.payload.output')
+  || !deviceWorkerScheduler.includes('return dependencies.managementMemoryUnitOfWork.run')
   || !deviceWorkerScheduler.includes('dependencies.memory, dependencies.clock.now()')
   || !serverNextUsecases.includes('managementPhase >= 2')
   || !serverNextUsecases.includes('run.managementPhase < 2')
@@ -303,7 +306,9 @@ if (!managementToolExecutor.includes('Phase3ToolHandlers')
   || !managementToolExecutor.includes('recordMemoryToolReceiptInTransaction')
   || !managementToolExecutor.includes("receipt.disposition === 'existing'")
   || !managementMemoryUnitOfWork.includes('ManagementMemoryTransactionRepositories')
-  || !serverDevRuntime.includes('managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork')
+  || (serverDevRuntime.match(/managementMemoryUnitOfWork: repositories\.managementMemoryUnitOfWork/g)?.length ?? 0) < 2
+  || !managementWorkerV1.includes('readonly toolName?: string')
+  || !managementWorkerV1.includes('toolName: optional(text(128))')
   || !inMemoryRepositories.includes('AsyncLocalStorage<ManagementMemoryTransactionRepositories>')
   || !sqliteRepositories.includes('AsyncLocalStorage<ManagementMemoryTransactionRepositories>')
   || !managementKernel.includes("type: 'memory-tool-completed'")

@@ -41,6 +41,7 @@ describe('management worker recovery', () => {
       idempotencyKey: 'invoke-1',
       commandId: 'command-1',
       requestHash: 'request-hash-1',
+      toolName: 'agents.invoke',
     });
     expect(remove).toHaveBeenCalledWith(item);
   });
