@@ -458,6 +458,12 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
             },
             updatedAt: dependencies.clock.now(),
           };
+      const runPhase = 'managementPhase' in run ? run.managementPhase : 1;
+      // V2 workers predate the explicit context phase. Preserve their exact-key protocol while
+      // keeping the established Phase 2 discriminator: rootTaskId present, frozenTarget absent.
+      const legacyPhase2Context = runPhase === 2
+        && supportsManagementPhase(worker.capability, 2)
+        && !supportsManagementPhase(worker.capability, 3);
       return {
         schemaVersion: 1,
         managementRunId: run.id,
@@ -465,13 +471,13 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
         context: {
           schemaVersion: 1,
           ...(supportsManagementPhase(worker.capability, 3)
-            ? { managementPhase: 'managementPhase' in run ? run.managementPhase : 1 }
+            ? { managementPhase: runPhase }
             : {}),
           teamId: run.teamId,
           channelId: run.channelId,
           rootMessageId: run.rootMessageId,
           ...(run.rootTaskId ? { rootTaskId: run.rootTaskId } : {}),
-          ...(run.frozenTarget ? { frozenTarget: run.frozenTarget } : {}),
+          ...(run.frozenTarget && !legacyPhase2Context ? { frozenTarget: run.frozenTarget } : {}),
           visibleThread: {
             revision: messages.at(-1)?.updatedAt ?? messages.at(-1)?.createdAt ?? 0,
             messages: messages.map((message) => ({

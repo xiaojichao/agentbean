@@ -117,11 +117,14 @@ export function createManagementToolExecutor(input: {
         ? hashManagementCommandInput({ toolName: request.toolName, input: request.input })
         : undefined;
       if (memoryWrite) {
-        await input.kernel.inspectMemoryToolReceipt({
+        const receipt = await input.kernel.inspectMemoryToolReceipt({
           authority: authority(request), idempotencyKey: request.idempotencyKey,
           toolName: request.toolName as 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources',
           requestHash: requestHash!,
         });
+        if (receipt.disposition === 'existing') {
+          return { ...base, ok: true, output: receipt.output } as ManagementToolResult;
+        }
       }
       const output = await handler(request);
       if (memoryWrite) {
@@ -129,6 +132,9 @@ export function createManagementToolExecutor(input: {
           authority: authority(request), idempotencyKey: request.idempotencyKey,
           toolName: request.toolName as 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources',
           resultReferenceId: memoryToolResultReference(request.toolName, output), requestHash: requestHash!,
+          output: output as Phase3ManagementWorkerToolOutputMapV1[
+            'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources'
+          ],
         });
       }
       return { ...base, ok: true, output } as ManagementToolResult;
@@ -924,7 +930,7 @@ function capsuleRefRecordDto(record: MemoryCapsuleRefRecord): MemoryCapsuleRefDt
 
 function isConflictDiagnostic(code: string): boolean {
   return code.includes('CONFLICT') || code.includes('STALE') || code.includes('FUTURE')
-    || code.includes('ALREADY_') || code.endsWith('_ACTIVE');
+    || code.includes('ALREADY_') || code.endsWith('_ACTIVE') || code.endsWith('_TERMINAL');
 }
 
 async function requireRun(repositories: ServerNextRepositories, managementRunId: string): Promise<ManagementRunRecord> {

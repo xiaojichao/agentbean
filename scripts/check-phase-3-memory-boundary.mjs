@@ -41,6 +41,7 @@ const memoryCandidatePolicy = read('packages/domain/src/memory-candidate-policy.
 const memoryCandidateMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0019_management_phase_3_candidate_lifecycle.sql');
 const invocationContract = read('packages/contracts/src/invocation.ts');
 const managementWorkerV2 = read('packages/contracts/src/management-worker-v2.ts');
+const managementEventContract = read('packages/contracts/src/management-event.ts');
 const invocationGateway = read('apps/server-next/src/application/management/invocation-gateway.ts');
 const managementCheckpoint = read('apps/server-next/src/application/management/management-checkpoint.ts');
 const managementToolExecutor = read('apps/server-next/src/application/management/management-tool-executor.ts');
@@ -272,8 +273,11 @@ if (!managementToolExecutor.includes('Phase3ToolHandlers')
   || !daemonWorkerHost.includes('checkpointManagementPhase')
   || !daemonWorkerHost.includes('PHASE_3_MANAGEMENT_TOOL_NAMES')
   || !daemonWorkerHost.includes('includeMemoryCapsules')
+  || !daemonWorkerHost.includes('PHASE_3_MEMORY_WRITE_TOOL_NAMES.has(item.toolName)')
+  || !daemonWorkerHost.includes('.filter(([, nested]) => nested !== undefined)')
   || !runtimeTypes.includes('memoryCapsuleIds?: readonly string[]')
   || !deviceWorkerScheduler.includes('managementPhase:')
+  || !deviceWorkerScheduler.includes('legacyPhase2Context')
   || !deviceWorkerScheduler.includes('event?.event.type === \'memory-tool-completed\'')
   || !deviceWorkerScheduler.includes('event.event.payload.requestHash === input.requestHash')
   || !deviceWorkerScheduler.includes('dependencies.memory, dependencies.clock.now()')
@@ -282,8 +286,11 @@ if (!managementToolExecutor.includes('Phase3ToolHandlers')
   || !managementToolExecutor.includes('sourceRequesterUserId')
   || !managementToolExecutor.includes('inspectMemoryToolReceipt')
   || !managementToolExecutor.includes('recordMemoryToolReceipt')
+  || !managementToolExecutor.includes("receipt.disposition === 'existing'")
   || !managementKernel.includes("type: 'memory-tool-completed'")
-  || !managementEventValidator.includes('parseMemoryToolManagementEvent')) {
+  || !managementKernel.includes('assertMemoryToolRunWritable(run)')
+  || !managementEventContract.includes('readonly output:')
+  || !managementEventValidator.includes('assertPhase3MemoryToolOutput')) {
   violations.push('P3_CAPABILITY_GATE_INVALID: V3 capability 门禁接线（server preflight/DAG/checkpoint/receipt + daemon register/parser/host/recovery + requester authority）is required');
 }
 

@@ -112,17 +112,24 @@ describe('management tool executor', () => {
 
     await expect(execute(request)).resolves.toMatchObject({ ok: true,
       output: { capsuleRef: { id: 'capsule-1' } } });
-    await expect(execute(request)).resolves.toMatchObject({ ok: true });
+    await expect(execute(request)).resolves.toMatchObject({ ok: true,
+      output: { capsuleRef: { id: 'capsule-1' } } });
     await expect(execute({ ...request, input: { ...request.input, prompt: 'changed prompt' } }))
       .resolves.toMatchObject({ ok: false, errorCode: 'CONFLICT',
         diagnosticCode: 'MANAGEMENT_EVENT_IDEMPOTENCY_CONFLICT' });
-    expect(createCapsule).toHaveBeenCalledTimes(2);
+    expect(createCapsule).toHaveBeenCalledTimes(1);
     await expect(persistence.repositories.events.list(run.id)).resolves.toMatchObject([
       { event: { type: 'run-started' } },
       { event: { type: 'worker-leased' } },
       { event: { type: 'memory-tool-completed', idempotencyKey: 'memory-command',
-        payload: { resultReferenceId: 'capsule-1' } } },
+        payload: { resultReferenceId: 'capsule-1', output: { capsuleRef: { id: 'capsule-1' } } } } },
     ]);
+    await persistence.repositories.runs.update({ ...run, status: 'cancelled', updatedAt: 11, completedAt: 11 });
+    await expect(execute({ ...request, commandId: 'command-after-terminal', toolCallId: 'call-after-terminal',
+      idempotencyKey: 'memory-after-terminal' })).resolves.toMatchObject({
+      ok: false, errorCode: 'CONFLICT', diagnosticCode: 'MANAGEMENT_RUN_TERMINAL',
+    });
+    expect(createCapsule).toHaveBeenCalledTimes(1);
   });
 
   test('does not echo arbitrary handler errors through client diagnostics', async () => {

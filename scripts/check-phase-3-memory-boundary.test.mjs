@@ -271,6 +271,55 @@ test('fails closed when Phase 3 Memory write receipts disappear', () => {
   assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
 });
 
+test('fails closed when an existing Memory receipt no longer short-circuits the handler', () => {
+  const result = withFixture('agentbean-phase3-memory-receipt-short-circuit-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/management/management-tool-executor.ts');
+    writeFileSync(path, readFileSync(path, 'utf8')
+      .replace("receipt.disposition === 'existing'", "receipt.disposition === 'removed'"));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
+test('fails closed when terminal runs can start new Memory writes', () => {
+  const result = withFixture('agentbean-phase3-memory-terminal-run-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/management/management-kernel.ts');
+    writeFileSync(path, readFileSync(path, 'utf8')
+      .replaceAll('assertMemoryToolRunWritable(run)', 'allowTerminalMemoryWrite(run)'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
+test('fails closed when legacy V2 checkpoint phase inference disappears', () => {
+  const result = withFixture('agentbean-phase3-v2-checkpoint-compat-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/management/device-worker-scheduler.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('legacyPhase2Context', 'removedLegacyPhase2Context'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
+test('fails closed when rejected Memory outbox entries are discarded', () => {
+  const result = withFixture('agentbean-phase3-memory-outbox-retention-', (fixture) => {
+    const path = join(fixture, 'apps/daemon-next/src/pi-manager-worker-host.ts');
+    writeFileSync(path, readFileSync(path, 'utf8')
+      .replace('PHASE_3_MEMORY_WRITE_TOOL_NAMES.has(item.toolName)', 'false'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
+test('fails closed when daemon Memory request hashing retains undefined keys', () => {
+  const result = withFixture('agentbean-phase3-memory-hash-canonical-', (fixture) => {
+    const path = join(fixture, 'apps/daemon-next/src/pi-manager-worker-host.ts');
+    writeFileSync(path, readFileSync(path, 'utf8')
+      .replace('.filter(([, nested]) => nested !== undefined)', ''));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
 test('fails closed when restored V3 sessions lose Capsule IDs', () => {
   const result = withFixture('agentbean-phase3-capsule-recovery-', (fixture) => {
     const path = join(fixture, 'apps/daemon-next/src/pi-manager-worker-host.ts');

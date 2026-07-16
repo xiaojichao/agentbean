@@ -165,6 +165,9 @@ describe('management worker socket integration', () => {
     await harness.kernel.recordMemoryToolReceipt({
       authority, idempotencyKey: 'memory-command', toolName: 'memory.create_capsule',
       resultReferenceId: 'capsule-1', requestHash: 'memory-request-hash',
+      output: { capsuleRef: { schemaVersion: 1, id: 'capsule-1', teamId: 'team-1',
+        managementRunId: harness.runId, targetAgentId: 'agent-1', contentHash: 'sha256:content',
+        authorizationDecisionId: 'decision-1', expiresAt: 100 } },
     });
     await expect(socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
       ...authority, commandId: 'memory-command', idempotencyKey: 'memory-command',
@@ -330,12 +333,15 @@ describe('management worker socket integration', () => {
       schemaVersion: 1, offerId: offer.offerId, workerInstanceId: 'worker-instance-v2',
     });
     expect(acquired).toMatchObject({ ok: true, leaseToken: expect.any(String), fencingToken: 1 });
-    await expect(phase2.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
+    const phase2Checkpoint = await phase2.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
       schemaVersion: 1, managementRunId: runId,
       workerId: (phase2Registration as { workerId: string }).workerId,
       leaseToken: (acquired as { leaseToken: string }).leaseToken, fencingToken: 1,
-    })).resolves.toMatchObject({ managementRunId: runId,
+    });
+    expect(phase2Checkpoint).toMatchObject({ managementRunId: runId,
       context: { rootTaskId: 'root-task', visibleThread: { messages: expect.any(Array) } } });
+    expect((phase2Checkpoint as { context: object }).context).not.toHaveProperty('managementPhase');
+    expect((phase2Checkpoint as { context: object }).context).not.toHaveProperty('frozenTarget');
   });
 
   test('Phase 3 preflight 只选择明确声明 V3 capability 的真实 Device worker', async () => {

@@ -107,6 +107,12 @@ const PHASE_3_MEMORY_TOOL_NAMES = new Set<ManagementToolName>([
   'memory.link_sources',
 ]);
 
+const PHASE_3_MEMORY_WRITE_TOOL_NAMES = new Set<ManagementToolName>([
+  'memory.create_capsule',
+  'memory.propose_candidate',
+  'memory.link_sources',
+]);
+
 export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput): PiManagerWorkerHost {
   const maxConcurrentLeases = normalizeCapacity(input.maxConcurrentLeases ?? 1);
   const now = input.now ?? Date.now;
@@ -276,7 +282,7 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
         managementRunId: lease.managementRunId,
         commandId,
         idempotencyKey,
-        requestHash: hashRequest(toolName, call.input),
+        requestHash: hashManagementToolRequest(toolName, call.input),
         toolName,
         createdAt: now(),
       };
@@ -410,6 +416,11 @@ export async function replayManagementOutboxForLease(input: {
     };
     try {
       const result = await input.protocol.replayOutbox(payload);
+      if (result.disposition === 'rejected' && PHASE_3_MEMORY_WRITE_TOOL_NAMES.has(item.toolName)) {
+        // A Memory side effect may have committed immediately before its receipt. Retain the
+        // body-free durable entry until the server can prove committed/conflict on a later lease.
+        continue;
+      }
       if (result.disposition === 'existing' || result.disposition === 'committed'
         || result.disposition === 'conflict' || result.disposition === 'rejected') {
         await input.outbox.remove(item);
@@ -462,7 +473,7 @@ function runtimeContext(restored: ManagementCheckpointResultV1): ManagementSessi
   };
 }
 
-function checkpointManagementPhase(restored: ManagementCheckpointResultV1): 1 | 2 | 3 {
+export function checkpointManagementPhase(restored: ManagementCheckpointResultV1): 1 | 2 | 3 {
   if (restored.context.managementPhase !== undefined) return restored.context.managementPhase;
   return restored.context.rootTaskId && (!restored.context.frozenTarget
     || restored.checkpoint?.authoritative.taskSnapshots?.length)
@@ -504,7 +515,7 @@ function restoreObjective(restored: ManagementCheckpointResultV1): string {
     ?? '继续当前管理任务。';
 }
 
-function hashRequest(toolName: string, input: Record<string, unknown>): string {
+export function hashManagementToolRequest(toolName: string, input: Record<string, unknown>): string {
   return createHash('sha256').update(canonicalJson({ toolName, input })).digest('hex');
 }
 
@@ -512,6 +523,7 @@ function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   if (value && typeof value === 'object') {
     return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, nested]) => nested !== undefined)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`)
       .join(',')}}`;

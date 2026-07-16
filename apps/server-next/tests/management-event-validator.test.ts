@@ -14,11 +14,17 @@ describe('Phase 3 Memory tool receipt validator', () => {
       type: 'memory-tool-completed', actorKind: 'manager', actorId: 'worker-1',
       idempotencyKey: 'memory-command', payload: {
         toolName: 'memory.create_capsule', resultReferenceId: 'capsule-1', requestHash: 'sha256:request',
+        output: { capsuleRef: { schemaVersion: 1, id: 'capsule-1', teamId: 'team-1',
+          managementRunId: 'run-1', targetAgentId: 'agent-1', contentHash: 'sha256:content',
+          authorizationDecisionId: 'decision-1', expiresAt: 100 } },
       }, createdAt: 10,
     } as const;
     expect(parseMemoryToolManagementEvent(event)).toEqual(event);
     expect(() => parseMemoryToolManagementEvent({ ...event,
       payload: { ...event.payload, prompt: 'must-not-persist' } })).toThrow(/INVALID_MANAGEMENT_EVENT/);
+    expect(() => parseMemoryToolManagementEvent({ ...event,
+      payload: { ...event.payload, output: { ...event.payload.output, content: 'must-not-persist' } } }))
+      .toThrow(/INVALID_MANAGEMENT_EVENT/);
   });
 });
 

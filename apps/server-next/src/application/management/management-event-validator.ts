@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
-import type { ManagementEventTypeV1, ManagementEventV1 } from '../../../../../packages/contracts/src/index.js';
+import {
+  assertPhase3MemoryToolOutput,
+  type ManagementEventTypeV1,
+  type ManagementEventV1,
+} from '../../../../../packages/contracts/src/index.js';
 
 export const PHASE_1_WRITABLE_MANAGEMENT_EVENT_TYPES = [
   'run-started',
@@ -49,7 +53,7 @@ const payloadKeys: Record<WritableEventType, { required: readonly string[]; opti
   'worker-leased': { required: ['workerId', 'leaseFingerprint', 'expiresAt'] },
   'worker-lost': { required: ['workerId', 'lastHeartbeatAt', 'reasonCode'] },
   'checkpoint-updated': { required: ['checkpointRevision', 'lastEventSequence'] },
-  'memory-tool-completed': { required: ['toolName', 'resultReferenceId', 'requestHash'] },
+  'memory-tool-completed': { required: ['toolName', 'resultReferenceId', 'requestHash', 'output'] },
   'invocation-created': { required: ['invocationId', 'intentHash'], optional: ['taskRevision'] },
   'dispatch-attempt-started': { required: ['invocationId', 'dispatchId', 'attemptNumber'] },
   'dispatch-attempt-completed': { required: ['invocationId', 'dispatchId', 'attemptNumber', 'status'] },
@@ -138,6 +142,12 @@ function validatePayload(type: WritableEventType, payload: Record<string, unknow
         .includes(string(payload.toolName, 'payload.toolName'))) fail('payload.toolName');
       string(payload.resultReferenceId, 'payload.resultReferenceId');
       string(payload.requestHash, 'payload.requestHash');
+      try {
+        assertPhase3MemoryToolOutput(payload.toolName as
+          'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources', payload.output);
+      } catch {
+        fail('payload.output');
+      }
       return;
     case 'invocation-created':
       string(payload.invocationId, 'payload.invocationId'); string(payload.intentHash, 'payload.intentHash'); optionalPositiveInteger(payload.taskRevision, 'payload.taskRevision'); return;

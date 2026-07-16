@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 import type { ManagementRuntimeFactory, ManagementSession } from '@agentbean/pi-management-runtime';
-import { createPiManagerWorkerHost } from '../src/pi-manager-worker-host';
+import { checkpointManagementPhase, createPiManagerWorkerHost } from '../src/pi-manager-worker-host';
 import type { PiManagerWorkerProtocol, PiManagerWorkerProtocolHandlers } from '../src/management-worker-protocol';
 
 function createProtocolHarness() {
@@ -61,6 +61,17 @@ function createProtocolHarness() {
 }
 
 describe('PiManagerWorkerHost', () => {
+  test('旧 V2 checkpoint 通过 rootTaskId 且省略 frozenTarget 恢复 Phase 2', async () => {
+    const baseline = await createProtocolHarness().protocol.fetchCheckpoint({
+      schemaVersion: 1, managementRunId: 'run-1', workerId: 'worker-1',
+      leaseToken: 'raw-lease-token', fencingToken: 1,
+    });
+    expect(checkpointManagementPhase({ ...baseline, context: {
+      ...baseline.context, rootTaskId: 'root-task', frozenTarget: undefined,
+    } })).toBe(2);
+    expect(checkpointManagementPhase(baseline)).toBe(1);
+  });
+
   test('一个 lease 创建一个 typed-context PI Session；断线立即 abort/dispose 并清除 lease', async () => {
     const { protocol, handlers } = createProtocolHarness();
     let keepPromptActive: (() => void) | undefined;

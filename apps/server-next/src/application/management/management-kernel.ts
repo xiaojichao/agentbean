@@ -275,19 +275,28 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
       idempotencyKey: string;
       toolName: 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources';
       requestHash: string;
-    }): Promise<{ disposition: 'new' } | { disposition: 'existing'; resultReferenceId: string }> {
+    }): Promise<{ disposition: 'new' } | {
+      disposition: 'existing';
+      resultReferenceId: string;
+      output: ManagementEventPayloadMapV1['memory-tool-completed']['output'];
+    }> {
       return unitOfWork.run(async (transactionRepositories) => {
         await authorizeManagementWrite(transactionRepositories, input.authority, clock.now());
         const existing = (await transactionRepositories.events.list(input.authority.managementRunId))
           .find(({ event }) => event.idempotencyKey === input.idempotencyKey);
-        if (!existing) return { disposition: 'new' as const };
-        if (existing.event.type !== 'memory-tool-completed'
-          || existing.event.payload.toolName !== input.toolName
-          || existing.event.payload.requestHash !== input.requestHash) {
-          throw new ManagementConflictError('MANAGEMENT_EVENT_IDEMPOTENCY_CONFLICT');
+        if (existing) {
+          if (existing.event.type !== 'memory-tool-completed'
+            || existing.event.payload.toolName !== input.toolName
+            || existing.event.payload.requestHash !== input.requestHash) {
+            throw new ManagementConflictError('MANAGEMENT_EVENT_IDEMPOTENCY_CONFLICT');
+          }
+          return { disposition: 'existing' as const,
+            resultReferenceId: existing.event.payload.resultReferenceId,
+            output: structuredClone(existing.event.payload.output) };
         }
-        return { disposition: 'existing' as const,
-          resultReferenceId: existing.event.payload.resultReferenceId };
+        const run = await requireRun(transactionRepositories, input.authority.managementRunId);
+        assertMemoryToolRunWritable(run);
+        return { disposition: 'new' as const };
       });
     },
 
@@ -297,12 +306,13 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
       toolName: 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources';
       resultReferenceId: string;
       requestHash: string;
+      output: ManagementEventPayloadMapV1['memory-tool-completed']['output'];
     }): Promise<ManagementEventRecord> {
       return unitOfWork.run(async (transactionRepositories) => {
         const now = clock.now();
         await authorizeManagementWrite(transactionRepositories, input.authority, now);
         const payload = { toolName: input.toolName, resultReferenceId: input.resultReferenceId,
-          requestHash: input.requestHash } as const;
+          requestHash: input.requestHash, output: structuredClone(input.output) } as const;
         const payloadHash = hashManagementEventPayload({ type: 'memory-tool-completed', payload });
         return appendValidatedManagementEventInTransaction(transactionRepositories, {
           managementRunId: input.authority.managementRunId,
@@ -460,4 +470,8 @@ function proof(input: LeaseAuthorityInput): ManagerLeaseAuthorizationProof {
 function hashSecret(secret: string): string { return createHash('sha256').update(secret).digest('hex'); }
 function leaseError(reason: ManagerLeaseAuthorizationFailure): ManagementConflictError { return new ManagementConflictError(`LEASE_${reason.toUpperCase().replaceAll('-', '_')}`); }
 function isTerminalRun(run: ManagementRunRecord): boolean { return run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled'; }
+
+function assertMemoryToolRunWritable(run: ManagementRunRecord): void {
+  if (isTerminalRun(run)) throw new ManagementConflictError('MANAGEMENT_RUN_TERMINAL');
+}
 function requireValue(value: string | undefined, code: string): string { if (!value) throw new ManagementConflictError(code); return value; }
