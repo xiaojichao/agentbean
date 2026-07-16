@@ -124,6 +124,9 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
   return {
     async registerWorker(input: RegisterManagementWorkerInput): Promise<ManagementWorkerRegisterAckV1> {
       if (!input.deviceId) return failure('MANAGEMENT_WORKER_DEVICE_HELLO_REQUIRED', false);
+      if (input.capability.host?.kind === 'server') {
+        return failure('MANAGEMENT_WORKER_SERVER_HOST_NOT_ALLOWED', false, 'NOT_AUTHORIZED');
+      }
       const device = await dependencies.devices.getById(input.deviceId);
       if (!device || device.status !== 'online') return failure('MANAGEMENT_WORKER_DEVICE_OFFLINE', true);
       if (!device.profileId || device.profileId !== input.capability.profileId) {
