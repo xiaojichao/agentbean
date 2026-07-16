@@ -9,6 +9,10 @@ import type {
   Phase2ManagementWorkerToolOutputMapV1,
   Phase2TaskToolRequestV2,
   Phase2TaskToolResultV2,
+  Phase3ManagementWorkerToolInputMapV1,
+  Phase3ManagementWorkerToolOutputMapV1,
+  Phase3MemoryToolRequestV3,
+  Phase3MemoryToolResultV3,
 } from '../../../../../packages/contracts/src/index.js';
 import type { MessageRecord, ServerNextRepositories } from '../repositories.js';
 import type { ManagementRunRecord } from '../management-repositories.js';
@@ -22,8 +26,8 @@ import { createCollaborationService } from './collaboration-service.js';
 type ManagementKernel = ReturnType<typeof createManagementKernel>;
 type TaskCoordinationKernel = ReturnType<typeof createTaskCoordinationKernel>;
 type SubtaskAcceptanceService = ReturnType<typeof createSubtaskAcceptanceService>;
-type ManagementToolRequest = ManagementWorkerToolRequestV1 | Phase2TaskToolRequestV2;
-type ManagementToolResult = ManagementWorkerToolResultV1 | Phase2TaskToolResultV2;
+type ManagementToolRequest = ManagementWorkerToolRequestV1 | Phase2TaskToolRequestV2 | Phase3MemoryToolRequestV3;
+type ManagementToolResult = ManagementWorkerToolResultV1 | Phase2TaskToolResultV2 | Phase3MemoryToolResultV3;
 type ToolHandler<K extends Phase1ManagementWorkerToolName> = (
   input: Extract<ManagementWorkerToolRequestV1, { toolName: K }>,
 ) => Promise<Phase1ManagementWorkerToolOutputMapV1[K]>;
@@ -33,6 +37,12 @@ type Phase2ToolHandler<K extends keyof Phase2ManagementWorkerToolInputMapV1> = (
 ) => Promise<Phase2ManagementWorkerToolOutputMapV1[K]>;
 export type Phase2ToolHandlers = {
   [K in keyof Phase2ManagementWorkerToolInputMapV1]?: Phase2ToolHandler<K>;
+};
+type Phase3ToolHandler<K extends keyof Phase3ManagementWorkerToolInputMapV1> = (
+  input: Extract<Phase3MemoryToolRequestV3, { toolName: K }>,
+) => Promise<Phase3ManagementWorkerToolOutputMapV1[K]>;
+export type Phase3ToolHandlers = {
+  [K in keyof Phase3ManagementWorkerToolInputMapV1]?: Phase3ToolHandler<K>;
 };
 export type AnyToolHandlers = Omit<ToolHandlers, 'agents.invoke'>
   & Omit<Phase2ToolHandlers, 'agents.invoke'>
@@ -46,17 +56,21 @@ const readTools = new Set<string>([
   'agents.list_capabilities',
   'agents.get_status',
   'tasks.wait',
+  'memory.search',
 ]);
 
 export function createManagementToolExecutor(input: {
   readonly kernel: ManagementKernel;
   readonly handlers: AnyToolHandlers;
   readonly phase2Handlers?: Phase2ToolHandlers;
+  readonly phase3Handlers?: Phase3ToolHandlers;
 }) {
   return async (request: ManagementToolRequest): Promise<ManagementToolResult> => {
+    const isPhase3 = 'managementPhase' in request && request.managementPhase === 3;
     const base = {
       schemaVersion: request.schemaVersion,
-      ...('managementPhase' in request ? { managementPhase: 2 as const } : {}),
+      // 回显实际 phase（2 或 3），不再硬编码 2——否则 phase 3 结果错标 phase 2。
+      ...('managementPhase' in request ? { managementPhase: request.managementPhase } : {}),
       commandId: request.commandId,
       managementRunId: request.managementRunId,
       workerId: request.workerId,
@@ -73,9 +87,13 @@ export function createManagementToolExecutor(input: {
           fencingToken: request.fencingToken,
         });
       }
-      const selectedHandlers = 'managementPhase' in request ? input.phase2Handlers ?? input.handlers : input.handlers;
-      const handler = (selectedHandlers as Partial<Record<string,
-        (value: ManagementToolRequest) => Promise<unknown>>>)[request.toolName];
+      const selectedHandlers = isPhase3
+        ? input.phase3Handlers
+        : 'managementPhase' in request ? input.phase2Handlers ?? input.handlers : input.handlers;
+      const handler = selectedHandlers
+        ? (selectedHandlers as Partial<Record<string,
+            (value: ManagementToolRequest) => Promise<unknown>>>)[request.toolName]
+        : undefined;
       if (!handler) {
         return { ...base, ok: false, errorCode: 'UNAVAILABLE', diagnosticCode: 'TOOL_NOT_WIRED', retryable: false } as ManagementToolResult;
       }

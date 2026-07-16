@@ -148,7 +148,7 @@ export interface ManagementSessionContextV1 {
 
 export interface ManagementSessionContextV2 {
   readonly schemaVersion: 2;
-  readonly managementPhase: 2;
+  readonly managementPhase: 2 | 3;
   readonly scope: Omit<Extract<ManagementSessionScopeV1, { kind: 'managed' }>, 'rootTaskId'> & {
     readonly rootTaskId: string;
   };

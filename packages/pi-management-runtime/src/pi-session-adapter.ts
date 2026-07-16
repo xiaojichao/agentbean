@@ -30,6 +30,7 @@ import {
   MANAGEMENT_TOOL_NAMES,
   PHASE_1_MANAGEMENT_TOOL_NAMES,
   PHASE_2_MANAGEMENT_TOOL_NAMES,
+  PHASE_3_MANAGEMENT_TOOL_NAMES,
   type CreateManagementRuntimeFactoryInput,
   type CreateManagementSessionInput,
   type ManagementCompactionRequest,
@@ -69,7 +70,9 @@ function assertSessionContext(input: CreateManagementSessionInput): void {
     ? context?.schemaVersion === 2
     : isNonEmptyString(context.frozenTarget.agentId)
       && (context.frozenTarget.kind === 'custom' || context.frozenTarget.kind === 'agentos-hosted');
-  const validCommon = (context?.schemaVersion === 1 || (context?.schemaVersion === 2 && context.managementPhase === 2))
+  const validCommon = (context?.schemaVersion === 1
+    || (context?.schemaVersion === 2
+      && (context.managementPhase === 2 || context.managementPhase === 3)))
     && isNonEmptyString(scope?.teamId)
     && isNonEmptyString(scope?.channelId)
     && isNonEmptyString(scope?.rootMessageId)
@@ -386,7 +389,9 @@ class PiManagementRuntimeFactory implements ManagementRuntimeFactory {
     runtimeSequence += 1;
     const sessionContext = cloneAndFreeze(input.context);
     const effectiveToolNames = [...(input.context.schemaVersion === 2
-      ? PHASE_2_MANAGEMENT_TOOL_NAMES
+      ? (input.context.managementPhase === 3
+        ? PHASE_3_MANAGEMENT_TOOL_NAMES
+        : PHASE_2_MANAGEMENT_TOOL_NAMES)
       : PHASE_1_MANAGEMENT_TOOL_NAMES)];
     const providerId = `agentbean-management-runtime-${runtimeSequence}`;
     const apiId = providerId;

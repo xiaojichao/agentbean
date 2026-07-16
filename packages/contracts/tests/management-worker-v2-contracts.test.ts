@@ -34,7 +34,7 @@ describe('Phase 2 management worker contracts', () => {
     expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).not.toContain('memory.search' as never);
   });
 
-  test('parses an exact V2 worker registration and rejects phase drift', () => {
+  test('parses exact V2/V3 capabilities and rejects phase drift', () => {
     const value = {
       schemaVersion: 2,
       workerInstanceId: 'worker-instance-1',
@@ -48,7 +48,13 @@ describe('Phase 2 management worker contracts', () => {
       capacity: { maxConcurrentLeases: 2, activeLeaseCount: 0 },
     };
     expect(parseManagementWorkerRegisterV2(value)).toEqual(value);
+    expect(parseManagementWorkerRegisterV2({ ...value, supportedPhases: [1, 2, 3] }))
+      .toMatchObject({ supportedPhases: [1, 2, 3] });
     expect(() => parseManagementWorkerRegisterV2({ ...value, supportedPhases: [1] }))
+      .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    expect(() => parseManagementWorkerRegisterV2({ ...value, supportedPhases: [1, 3] }))
+      .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    expect(() => parseManagementWorkerRegisterV2({ ...value, supportedPhases: [1, 2, 3, 4] }))
       .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
     expect(() => parseManagementWorkerRegisterV2({ ...value, secret: 'forbidden' }))
       .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);

@@ -19,6 +19,8 @@ import type {
   ManagementWorkerToolResultV1,
   Phase2TaskToolRequestV2,
   Phase2TaskToolResultV2,
+  Phase3MemoryToolRequestV3,
+  Phase3MemoryToolResultV3,
 } from '../../../../../packages/contracts/src/index.js';
 import { inspectManagerLease } from '../../../../../packages/domain/src/index.js';
 import type { ManagementPreflight } from '../../../../../packages/domain/src/index.js';
@@ -30,8 +32,8 @@ import { ManagementConflictError, type createManagementKernel } from './manageme
 import { collectManagementCheckpointFacts, restoreOrRebuildManagementCheckpoint, toManagementCheckpointAuthoritative } from './management-checkpoint.js';
 
 type ManagementKernel = ReturnType<typeof createManagementKernel>;
-type ManagementToolRequest = ManagementWorkerToolRequestV1 | Phase2TaskToolRequestV2;
-type ManagementToolResult = ManagementWorkerToolResultV1 | Phase2TaskToolResultV2;
+type ManagementToolRequest = ManagementWorkerToolRequestV1 | Phase2TaskToolRequestV2 | Phase3MemoryToolRequestV3;
+type ManagementToolResult = ManagementWorkerToolResultV1 | Phase2TaskToolResultV2 | Phase3MemoryToolResultV3;
 type ManagementToolExecutor = (request: ManagementToolRequest) => Promise<ManagementToolResult>;
 type ManagementWorkerCapability = ManagementWorkerRegisterV1 | ManagementWorkerRegisterV2;
 
@@ -216,6 +218,44 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
       };
     },
 
+    async managementPhase3Preflight(input: {
+      teamId: string;
+      placementPolicy: ManagerPlacementPolicyDto;
+      targetAvailable: boolean;
+    }): Promise<{ preflight: ManagementPreflight; profileId?: string }> {
+      // 镜像 managementPhase2Preflight，但要求 worker 声明支持 phase 3（V3 capability）。
+      const teamWorkers = [...workersById.values()].filter((worker) =>
+        worker.connected
+        && worker.teamId === input.teamId
+        && supportsManagementPhase(worker.capability, 3)
+        && effectiveActiveLeaseCount(worker) < worker.capability.capacity.maxConcurrentLeases,
+      );
+      const allowedWorkers = teamWorkers.filter((worker) =>
+        input.placementPolicy.placement !== 'managed'
+        && (!input.placementPolicy.allowedDeviceIds
+          || input.placementPolicy.allowedDeviceIds.includes(worker.deviceId)),
+      );
+      const availableWorkers: RegisteredWorker[] = [];
+      for (const worker of allowedWorkers) {
+        const device = await dependencies.devices.getById(worker.deviceId);
+        if (device?.status === 'online' && device.teamId === input.teamId
+          && device.profileId === worker.profileId) availableWorkers.push(worker);
+      }
+      availableWorkers.sort(compareWorkers);
+      const selected = availableWorkers.find((worker) =>
+        credentialReady(worker.capability, input.placementPolicy.requireLocalModelCredentials));
+      return {
+        preflight: {
+          workerAvailable: availableWorkers.length > 0,
+          credentialAvailable: Boolean(selected),
+          placementAllowed: allowedWorkers.length > 0,
+          budgetAvailable: true,
+          targetAvailable: input.targetAvailable,
+        },
+        ...(selected ? { profileId: selected.profileId } : {}),
+      };
+    },
+
     async scheduleManagementRun(input: ScheduleManagementRunInput): Promise<ScheduleManagementRunResult> {
       const run = await dependencies.management.runs.getById(input.managementRunId);
       if (!run) return failure('MANAGEMENT_RUN_NOT_FOUND', false);
@@ -352,6 +392,12 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
     async executeTool(connectionId: string, input: ManagementToolRequest): Promise<ManagementToolResult> {
       const worker = connectedWorker(connectionId, input.workerId, workersById, workerIdByConnection);
       if (!worker) return toolFailure(input, 'MANAGEMENT_WORKER_CONNECTION_MISMATCH');
+      const run = await dependencies.management.runs.getById(input.managementRunId);
+      const requestPhase = 'managementPhase' in input ? input.managementPhase : 1;
+      const runPhase = run && 'managementPhase' in run ? run.managementPhase : 1;
+      if (!run || requestPhase > runPhase || !supportsManagementPhase(worker.capability, requestPhase)) {
+        return toolFailure(input, 'MANAGEMENT_WORKER_PHASE_MISMATCH');
+      }
       const lease = await dependencies.management.leases.get(input.managementRunId);
       const leaseStatus = inspectManagerLease(lease ?? undefined, dependencies.clock.now());
       if (!worker.activeRunIds.has(input.managementRunId)
@@ -528,7 +574,7 @@ function credentialReady(capability: ManagementWorkerCapability, requireProducti
     : capability.credentialStatus !== 'unavailable';
 }
 
-function supportsManagementPhase(capability: ManagementWorkerCapability, phase: 1 | 2): boolean {
+function supportsManagementPhase(capability: ManagementWorkerCapability, phase: 1 | 2 | 3): boolean {
   return capability.supportedPhases.some((candidate) => candidate === phase);
 }
 
@@ -571,7 +617,7 @@ function failure(
 function toolFailure(input: ManagementToolRequest, diagnosticCode: string): ManagementToolResult {
   return {
     schemaVersion: input.schemaVersion,
-    ...('managementPhase' in input ? { managementPhase: 2 as const } : {}),
+    ...('managementPhase' in input ? { managementPhase: input.managementPhase } : {}),
     commandId: input.commandId,
     managementRunId: input.managementRunId,
     workerId: input.workerId,

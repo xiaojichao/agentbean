@@ -49,7 +49,7 @@ export interface ManagementWorkerRegisterV2 {
   readonly profileId: ID;
   readonly runtimeVersion: string;
   readonly supportedProtocolVersions: readonly [1, 2];
-  readonly supportedPhases: readonly [1, 2];
+  readonly supportedPhases: readonly [1, 2] | readonly [1, 2, 3];
   readonly credentialStatus: 'production_ready' | 'test_only' | 'unavailable';
   readonly providerId?: string;
   readonly modelId?: string;
@@ -58,7 +58,7 @@ export interface ManagementWorkerRegisterV2 {
 
 export interface ManagementWorkerSessionContextV2 {
   readonly schemaVersion: 2;
-  readonly managementPhase: 2;
+  readonly managementPhase: 2 | 3;
   readonly teamId: ID;
   readonly channelId: ID;
   readonly rootMessageId: ID;
@@ -753,9 +753,10 @@ function assertPhase3MemoryToolOutput(
 
 export function parseManagementWorkerRegisterV2(value: unknown): ManagementWorkerRegisterV2 {
   assertExactKeys(value, registerKeys, registerKeys.filter((key) => !['providerId', 'modelId'].includes(key)));
+  const supportedPhases = JSON.stringify(value.supportedPhases);
   if (value.schemaVersion !== 2 || !nonEmpty(value.workerInstanceId) || !nonEmpty(value.profileId)
     || !nonEmpty(value.runtimeVersion) || JSON.stringify(value.supportedProtocolVersions) !== '[1,2]'
-    || JSON.stringify(value.supportedPhases) !== '[1,2]'
+    || (supportedPhases !== '[1,2]' && supportedPhases !== '[1,2,3]')
     || !['production_ready', 'test_only', 'unavailable'].includes(String(value.credentialStatus))) {
     throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
   }
@@ -774,7 +775,7 @@ export function parseManagementWorkerRegisterV2(value: unknown): ManagementWorke
 
 export function parseManagementWorkerSessionContextV2(value: unknown): ManagementWorkerSessionContextV2 {
   assertExactKeys(value, contextKeys, contextKeys.filter((key) => key !== 'frozenTarget'));
-  if (value.schemaVersion !== 2 || value.managementPhase !== 2 || !nonEmpty(value.teamId)
+  if (value.schemaVersion !== 2 || (value.managementPhase !== 2 && value.managementPhase !== 3) || !nonEmpty(value.teamId)
     || !nonEmpty(value.channelId) || !nonEmpty(value.rootMessageId) || !nonEmpty(value.rootTaskId)) {
     throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
   }

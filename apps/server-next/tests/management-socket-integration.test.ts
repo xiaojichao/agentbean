@@ -109,6 +109,25 @@ describe('management worker socket integration', () => {
       input: {},
     })).resolves.toMatchObject({ ok: true, output: { status: 'running' } });
     expect(harness.toolHandler).toHaveBeenCalledOnce();
+    await expect(socket.trigger(AGENT_EVENTS.managementWorker.toolRequest, {
+      schemaVersion: 2,
+      managementPhase: 3,
+      commandId: 'command-phase-3',
+      managementRunId: harness.runId,
+      workerId: authority.workerId,
+      toolCallId: 'tool-phase-3',
+      toolName: 'memory.search',
+      leaseToken: 'lease-secret-1',
+      fencingToken: 1,
+      idempotencyKey: 'memory-search-1',
+      input: { query: '目标', limit: 5 },
+    })).resolves.toMatchObject({
+      schemaVersion: 2,
+      managementPhase: 3,
+      ok: false,
+      errorCode: 'NOT_AUTHORIZED',
+      diagnosticCode: 'MANAGEMENT_WORKER_PHASE_MISMATCH',
+    });
     await expect(socket.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
       schemaVersion: 1,
       managementRunId: harness.runId,
@@ -304,6 +323,40 @@ describe('management worker socket integration', () => {
     })).resolves.toMatchObject({ managementRunId: runId,
       context: { rootTaskId: 'root-task', visibleThread: { messages: expect.any(Array) } } });
   });
+
+  test('Phase 3 preflight 只选择明确声明 V3 capability 的真实 Device worker', async () => {
+    const harness = await createHarness({
+      devices: [device('device-v2', 'profile-1'), device('device-v3', 'profile-1')],
+      allowedDeviceIds: ['device-v2', 'device-v3'],
+    });
+    const phase2 = harness.connect('device-v2');
+    const phase3 = harness.connect('device-v3');
+    await phase2.trigger(AGENT_EVENTS.device.hello, { deviceId: 'device-v2' });
+    await phase3.trigger(AGENT_EVENTS.device.hello, { deviceId: 'device-v3' });
+    await expect(phase2.trigger(AGENT_EVENTS.managementWorker.register, phase2WorkerRegistration()))
+      .resolves.toMatchObject({ ok: true });
+
+    await expect(harness.scheduler.managementPhase3Preflight({
+      teamId: 'team-1',
+      placementPolicy: { placement: 'device', allowedDeviceIds: ['device-v2', 'device-v3'],
+        allowServerContext: false, requireLocalModelCredentials: true },
+      targetAvailable: true,
+    })).resolves.toMatchObject({
+      preflight: { workerAvailable: false, credentialAvailable: false },
+    });
+
+    await expect(phase3.trigger(AGENT_EVENTS.managementWorker.register, phase3WorkerRegistration()))
+      .resolves.toMatchObject({ ok: true });
+    await expect(harness.scheduler.managementPhase3Preflight({
+      teamId: 'team-1',
+      placementPolicy: { placement: 'device', allowedDeviceIds: ['device-v2', 'device-v3'],
+        allowServerContext: false, requireLocalModelCredentials: true },
+      targetAvailable: true,
+    })).resolves.toMatchObject({
+      preflight: { workerAvailable: true, credentialAvailable: true, placementAllowed: true },
+      profileId: 'profile-1',
+    });
+  });
 });
 
 function workerRegistration(overrides: Partial<ManagementWorkerRegisterV1> = {}): ManagementWorkerRegisterV1 {
@@ -347,6 +400,14 @@ function phase2WorkerRegistration(): ManagementWorkerRegisterV2 {
     providerId: 'test-provider',
     modelId: 'test-model',
     capacity: { maxConcurrentLeases: 2, activeLeaseCount: 0 },
+  };
+}
+
+function phase3WorkerRegistration(): ManagementWorkerRegisterV2 {
+  return {
+    ...phase2WorkerRegistration(),
+    workerInstanceId: 'worker-instance-v3',
+    supportedPhases: [1, 2, 3],
   };
 }
 
