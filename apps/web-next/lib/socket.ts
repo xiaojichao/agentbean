@@ -45,6 +45,13 @@ export function setStoredDeviceToken(deviceToken: string): void {
   window.localStorage.setItem(DEVICE_TOKEN_STORAGE_KEY, deviceToken);
 }
 
+export function clearStoredAuth(): void {
+  if (typeof window === 'undefined') return;
+  window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+  window.localStorage.removeItem(DEVICE_TOKEN_STORAGE_KEY);
+  window.localStorage.removeItem(DEVICE_ID_STORAGE_KEY);
+}
+
 export function resolveDeviceLoginDeviceId(complete: { invite?: { deviceId?: string }; credentials?: { deviceId?: string; machineId?: string } }): string | undefined {
   return complete.invite?.deviceId ?? complete.credentials?.deviceId ?? complete.credentials?.machineId;
 }
@@ -188,8 +195,7 @@ export function getWebSocket(): Socket {
     const storedToken = window.localStorage.getItem(TOKEN_STORAGE_KEY);
     if (!storedToken || storedToken === webToken) return;
     retriedWithWebToken = true;
-    window.localStorage.removeItem(TOKEN_STORAGE_KEY);
-    window.localStorage.removeItem(DEVICE_TOKEN_STORAGE_KEY);
+    clearStoredAuth();
     webSocket?.disconnect();
     webSocket!.auth = { token: webToken, currentDeviceId: getStoredDeviceId(), deviceToken: '' };
     webSocket?.connect();

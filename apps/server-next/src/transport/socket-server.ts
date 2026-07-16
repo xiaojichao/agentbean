@@ -173,7 +173,12 @@ export function attachServerNextNamespaces(
         const identity = await authenticatedUser();
         const teamId = payloadTeamId(payload);
         if (!identity.hasToken || !identity.userId || !identity.verifiedCurrentDeviceId || !teamId) {
-          ack?.({ ok: false, error: 'PERMISSION_DENIED' });
+          ack?.({
+            ok: false,
+            error: identity.currentDeviceId && !identity.hasDeviceToken
+              ? 'DEVICE_ATTESTATION_REQUIRED'
+              : 'PERMISSION_DENIED',
+          });
           return;
         }
         const devices = await app.listDevices({
@@ -894,7 +899,10 @@ function createAuthenticatedUserResolver(
 ): AuthenticatedUserProvider {
   let cached: AuthenticatedUserIdentity | undefined;
   const resolve = (async () => {
-    if (cached) {
+    const deviceToken = socketDeviceToken(socket);
+    // An invite credential may not resolve until the daemon completes deviceHello. Keep the
+    // authenticated user cache, but re-check an unresolved device credential on later requests.
+    if (cached && (!deviceToken || cached.verifiedCurrentDeviceId)) {
       return cached;
     }
     const currentDeviceId = socketCurrentDeviceId(socket);
@@ -907,7 +915,6 @@ function createAuthenticatedUserResolver(
       cached = { hasToken: true, userId: null, currentTeamId: null, currentDeviceId };
       return cached;
     }
-    const deviceToken = socketDeviceToken(socket);
     const result = await app.whoami({
       token: authToken.token,
       ...(deviceToken ? { deviceToken } : {}),
@@ -918,6 +925,7 @@ function createAuthenticatedUserResolver(
       currentTeamId: result.ok ? (result.currentTeam?.id ?? null) : null,
       currentDeviceId,
       verifiedCurrentDeviceId: result.ok ? (result.verifiedCurrentDeviceId ?? null) : null,
+      hasDeviceToken: Boolean(deviceToken),
     };
     return cached;
   }) as AuthenticatedUserProvider;

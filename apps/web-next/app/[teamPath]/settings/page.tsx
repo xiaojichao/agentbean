@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2, Bell, Volume2, Keyboard, PanelRight, RotateCcw, Terminal, Database } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
-import { authEvents, getWebSocket, joinEvents, teamEvents } from '@/lib/socket';
+import { authEvents, clearStoredAuth, getWebSocket, joinEvents, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import type { JoinLinkInfo } from '@/lib/schema';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
@@ -121,7 +121,7 @@ function AccountPanel() {
   };
 
   const logout = () => {
-    localStorage.removeItem('agentbean.token');
+    clearStoredAuth();
     useAgentBeanStore.getState().setAuthToken(null);
     useAgentBeanStore.getState().setCurrentUser(null);
     getWebSocket().disconnect();

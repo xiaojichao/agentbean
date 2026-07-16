@@ -27,6 +27,8 @@ export interface AuthenticatedUserIdentity {
   currentDeviceId: string | null;
   /** 由 Server 校验 device invite 凭证后解析出的 canonical Device id。 */
   verifiedCurrentDeviceId?: string | null;
+  /** 当前连接是否提供了 device bearer credential。 */
+  hasDeviceToken?: boolean;
 }
 
 export interface AuthenticatedUserProvider {
