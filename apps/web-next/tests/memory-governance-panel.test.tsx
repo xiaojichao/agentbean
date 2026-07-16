@@ -101,6 +101,6 @@ describe('MemoryGovernancePanel', () => {
     await screen.findByText('Use Node 24');
     fireEvent.click(screen.getByRole('button', { name: '当前 Device' }));
     expect(await screen.findByText('需要重新关联当前 Device')).toBeTruthy();
-    expect(screen.getByRole('link', { name: '前往设备页' }).getAttribute('href')).toBe('../devices');
+    expect(screen.getByRole('link', { name: '前往设备页' }).getAttribute('href')).toBe('./devices');
   });
 });
