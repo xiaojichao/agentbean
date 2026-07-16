@@ -58,7 +58,7 @@ export function createManagementCheckpointService(dependencies: ManagementCheckp
         : [];
       const save = (repositories: ManagementRepositories, phase2?: {
         tasks: TaskRepository; coordination: TaskCoordinationRepositories;
-      }) => saveCheckpoint(dependencies, repositories, input, { now, validMemoryCapsuleIds }, phase2);
+      }) => saveCheckpoint(dependencies, repositories, input, { validMemoryCapsuleIds }, phase2);
       return dependencies.taskCoordinationUnitOfWork
         ? dependencies.taskCoordinationUnitOfWork.run((repositories) => save(repositories.management, {
             tasks: repositories.tasks, coordination: repositories.coordination,
@@ -76,10 +76,10 @@ async function saveCheckpoint(
     idempotencyKey: string;
     contextHints: ManagementCheckpointContextHintsV1;
   },
-  memorySnapshot: { readonly now: number; readonly validMemoryCapsuleIds: readonly string[] },
+  memorySnapshot: { readonly validMemoryCapsuleIds: readonly string[] },
   phase2?: { tasks: TaskRepository; coordination: TaskCoordinationRepositories },
 ): Promise<ManagementCheckpointV1> {
-  const now = memorySnapshot.now;
+  const now = dependencies.clock.now();
   await authorizeManagementWrite(repositories, input.authority, now);
   const run = await requireRun(repositories, input.authority.managementRunId);
   const latest = await repositories.checkpoints.getLatest(run.id);

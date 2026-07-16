@@ -435,7 +435,6 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
         threadId: run.rootMessageId,
         limit: 200,
       });
-      const now = dependencies.clock.now();
       const managementSnapshot = dependencies.taskCoordinationUnitOfWork
         ? await dependencies.taskCoordinationUnitOfWork.run(async (repositories) => ({
             latest: await repositories.management.checkpoints.getLatest(run.id),
@@ -447,6 +446,7 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
             latest: await dependencies.management.checkpoints.getLatest(run.id),
             facts: await collectManagementCheckpointFacts(dependencies.management, run),
           };
+      const now = dependencies.clock.now();
       // Capsule runtime revalidation owns its own Memory Unit of Work. Run it after the management/task
       // snapshot transaction to avoid nesting two transactions on the same Team SQLite database.
       const facts = dependencies.memoryCapsules
